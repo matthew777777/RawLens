@@ -1,0 +1,36 @@
+*.iml
+.gradle/
+.idea/
+.kotlin/
+.DS_Store
+local.properties
+build/
+**/build/
+captures/
+*.dng
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Native and external build output
+.cxx/
+.externalNativeBuild/
+
+# Fastlane and release artifacts
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+*.apk
+*.aab
+*.apks
+*.sha256
+
+# Local upstream research checkouts (documented in references/README.md)
+/references/PhotonCamera/
+
+# Project exclude paths
+/app/
+/gradle/
+/references/
