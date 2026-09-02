@@ -1,0 +1,2 @@
+#version 310 es
+precision highp float;precision highp int;precision highp image2D;layout(local_size_x=8,local_size_y=8) in;layout(rgba16f,binding=0) uniform readonly highp image2D u_opponent;layout(rgba16f,binding=1) uniform writeonly highp image2D u_rgb;uniform ivec2 u_inner_offset,u_output_offset,u_output_size;void main(){ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,u_output_size)))return;vec3 v=imageLoad(u_opponent,p+u_inner_offset).rgb;float t=v.x-.5*v.z,g=v.z+t,b=t-.5*v.y,r=b+v.y;imageStore(u_rgb,p+u_output_offset,vec4(r,g,b,1));}

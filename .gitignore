@@ -27,10 +27,5 @@ fastlane/test_output/
 *.apks
 *.sha256
 
-# Local upstream research checkouts (documented in references/README.md)
+# Local upstream research checkouts
 /references/PhotonCamera/
-
-# Project exclude paths
-/app/
-/gradle/
-/references/

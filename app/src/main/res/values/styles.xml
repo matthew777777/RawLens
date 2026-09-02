@@ -1,0 +1,13 @@
+<resources>
+    <style name="ExposureControl">
+        <item name="android:layout_width">0dp</item><item name="android:layout_height">44dp</item><item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/control_chip</item><item name="android:gravity">center</item><item name="android:maxLines">2</item>
+        <item name="android:paddingStart">2dp</item><item name="android:paddingEnd">2dp</item><item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">9sp</item><item name="android:textStyle">bold</item>
+    </style>
+    <style name="QuickControlTile">
+        <item name="android:layout_width">0dp</item><item name="android:layout_height">58dp</item><item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/control_chip</item><item name="android:gravity">center</item><item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/text_primary</item><item name="android:textSize">9sp</item><item name="android:textStyle">bold</item>
+    </style>
+</resources>

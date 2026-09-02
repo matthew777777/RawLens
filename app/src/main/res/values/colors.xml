@@ -1,0 +1,13 @@
+<resources>
+    <color name="surface">#070809</color>
+    <color name="panel">#F207090B</color>
+    <color name="panel_raised">#F216191D</color>
+    <color name="panel_soft">#CC20242A</color>
+    <color name="text_primary">#F7F8F4</color>
+    <color name="text_secondary">#9DA4A8</color>
+    <color name="text_muted">#6E757B</color>
+    <color name="accent">#D6FF33</color>
+    <color name="accent_dark">#151B00</color>
+    <color name="focus">#D6FF33</color>
+    <color name="metering">#FFB342</color>
+</resources>
