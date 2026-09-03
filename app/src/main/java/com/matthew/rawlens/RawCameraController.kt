@@ -7,6 +7,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
@@ -197,6 +198,7 @@ class RawCameraController(
     private var rawZslRequestEpoch = 0L
     private var rawZslCapacity = 0
     private var rawZslTargetFpsRange: Range<Int>? = null
+    private var rawZslStreamFpsCeiling: Int = 0
     private var rawZslRealtimeTimestamps = false
     private var rawZslBuffer: RawZslBuffer? = null
     private var rawZslWatchdog: Runnable? = null
@@ -405,25 +407,28 @@ class RawCameraController(
             it.setOnImageAvailableListener({ reader ->
                 if (!isCurrent(generation)) return@setOnImageAvailableListener
                 try {
-                    // A continuous ZSL stream only needs the newest queued candidate. This
-                    // closes superseded HAL buffers before they can consume every maxImages
-                    // slot. Forward capture still acquires each burst frame in order.
-                    val acquired = if (rawZslStreaming && activeFramesRemaining.get() <= 0) {
-                        reader.acquireLatestImage()
-                    } else {
-                        reader.acquireNextImage()
-                    }
-                    acquired?.let { image ->
+                    // Consume every queued RAW in timestamp order while ZSL is running.
+                    // acquireLatestImage() implicitly discards intermediate RAW buffers. At a
+                    // 30 fps repeating stream that can also discard the exact image whose
+                    // TotalCaptureResult is waiting in pendingZslResults, delaying both ring
+                    // fill and the first RAW histogram until a later capture. Keeping the loop
+                    // on this camera Handler drains the ImageReader quickly; RawZslBuffer owns
+                    // only the configured ring and closes its oldest frame on every overflow.
+                    do {
+                        val image = reader.acquireNextImage() ?: break
                         if (rawZslStreaming && activeFramesRemaining.get() <= 0) {
                             val timestamp = image.timestamp
                             pendingImages.put(timestamp, image)?.close()
-                            schedulePairTimeout(timestamp, reportCaptureFailure = false)
-                            pairAvailableFrame(timestamp)
-                            return@let
+                            if (pendingZslResults.containsKey(timestamp)) {
+                                pairAvailableFrame(timestamp)
+                            } else {
+                                schedulePairTimeout(timestamp, reportCaptureFailure = false)
+                            }
+                            continue
                         }
                         if (activeFramesRemaining.get() <= 0) {
                             image.close()
-                            return@let
+                            continue
                         }
                         val timestamp = image.timestamp
                         if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
@@ -436,7 +441,7 @@ class RawCameraController(
                         pendingImages.put(timestamp, image)?.close()
                         schedulePairTimeout(timestamp, reportCaptureFailure = false)
                         pairAvailableFrame(timestamp)
-                    }
+                    } while (rawZslStreaming && activeFramesRemaining.get() <= 0)
                 } catch (_: IllegalStateException) {
                     if (rawZslStreaming) disableRawZslForSession("RAW buffer limit reached")
                     else {
@@ -1122,7 +1127,11 @@ class RawCameraController(
             cameraHandler.post { setRawZslEnabled(enabled) }
             return
         }
+        val wasRawZslRequested = rawZslRequested
         rawZslRequested = enabled
+        if (enabled && !wasRawZslRequested) {
+            lastRawHistogramSampleMs = Long.MIN_VALUE
+        }
         if (!enabled) {
             rawZslStreaming = false
             clearRawZslBuffer()
@@ -1151,7 +1160,13 @@ class RawCameraController(
             return
         }
         captureExposureMode = mode
+        val wasRawZslRequested = rawZslRequested
         rawZslRequested = mode == CaptureExposureMode.ZSL || rawSuperResolutionSettings.enabled
+        if (rawZslRequested && !wasRawZslRequested) {
+            // The first paired RAW frame should immediately replace the processed-preview
+            // histogram when entering ZSL, rather than waiting for the periodic throttle.
+            lastRawHistogramSampleMs = Long.MIN_VALUE
+        }
         dynamicExposureSettings = dynamicExposureSettings.copy(enabled = mode == CaptureExposureMode.PROGRAM)
         dynamicIso = null
         dynamicShutterNanos = null
@@ -1368,18 +1383,27 @@ class RawCameraController(
                 if (activeFramesRemaining.get() <= 0) closeUnmatchedRawImages()
                 drainQueuedRawImages(reader)
             }
-            val template = if (useRawZsl && supportsAppOperatedZslTemplate()) {
-                CameraDevice.TEMPLATE_ZERO_SHUTTER_LAG
-            } else {
-                CameraDevice.TEMPLATE_PREVIEW
-            }
-            val request = device.createCaptureRequest(template).apply {
+            // Keep the SurfaceTexture on a real PREVIEW request even while RAW ZSL is active.
+            // Several Camera2 HALs treat TEMPLATE_ZERO_SHUTTER_LAG as a reprocessing/still path
+            // and stop advancing the preview target once a full-resolution RAW target is added.
+            // RAW ZSL here is app-operated (our ImageReader + ring buffer), so PREVIEW is the
+            // correct repeating template and both targets continue to receive every frame.
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 if (useRawZsl) addTarget(reader!!.surface)
                 applyCameraControls(this)
                 if (useRawZsl) {
-                    rawZslTargetFpsRange?.let {
-                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                    // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the TextureView never
+                    // freezes, but tell 3A/HAL scheduling that this repeating request is serving
+                    // a zero-shutter-lag capture pipeline. Request the best advertised 30 fps
+                    // range whenever the configured RAW+preview streams can physically sustain
+                    // it; slower RAW sensors fall back to their measured stream ceiling.
+                    set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG)
+                    rawZslTargetFpsRange?.let { range ->
+                        val streamCeiling = rawZslStreamFpsCeiling
+                        if (streamCeiling <= 0 || range.lower <= streamCeiling || range.upper <= streamCeiling) {
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                        }
                     }
                     requestLensShadingMap(this)
                 }
@@ -1436,8 +1460,14 @@ class RawCameraController(
                             rawZslRealtimeTimestamps
                         )
                         pendingZslResults[timestamp] = PendingZslResult(result, motion, requestEpoch)
-                        schedulePairTimeout(timestamp, reportCaptureFailure = false)
-                        pairAvailableFrame(timestamp)
+                        // Most HALs deliver image/result very close together. Pair immediately
+                        // when the image is already present instead of posting then cancelling a
+                        // timeout Runnable on every 30 fps ZSL frame.
+                        if (pendingImages.containsKey(timestamp)) {
+                            pairAvailableFrame(timestamp)
+                        } else {
+                            schedulePairTimeout(timestamp, reportCaptureFailure = false)
+                        }
                     }
                 }
                 val wb = result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let(::estimateKelvin)
@@ -2356,6 +2386,7 @@ class RawCameraController(
         } else {
             RAW_ZSL_TARGET_FPS
         }
+        rawZslStreamFpsCeiling = streamCeiling
         val requestedFps = minOf(RAW_ZSL_TARGET_FPS, streamCeiling)
         val selected = ranges
             .filter { it.upper >= requestedFps }
@@ -2717,12 +2748,18 @@ class RawCameraController(
             ?: pool.maxByOrNull { it.width.toLong() * it.height }!!
     }
 
-    /** Keeps the native camera buffer mapped into the portrait-locked preview view. */
+    /** Keeps the camera preview in the portrait-locked 4:3 viewbox. */
     private fun configurePreviewTransform(viewWidth: Int, viewHeight: Int) {
-        if (previewSize == null) return
-        if (viewWidth == 0 || viewHeight == 0) return
-        // Photon leaves its preview transform unset and rotates only foreground controls. Reset
-        // explicitly because TextureView retains a previous matrix across layout/session changes.
+        if (previewSize == null || viewWidth <= 0 || viewHeight <= 0) return
+
+        // The Activity/viewbox is portrait locked and SurfaceTexture/Camera2 already supplies the
+        // camera buffer transform for this preview surface. Applying an additional sensor/display
+        // rotation here double-rotates the image on devices such as Xiaomi/MediaTek (the previous
+        // implementation produced a 90-degree sideways preview). Keep the TextureView transform
+        // neutral; physical device orientation is used only for controls and DNG EXIF orientation.
+        //
+        // Reset explicitly because TextureView retains a previously assigned matrix across
+        // relayouts and camera-session changes.
         viewfinder.setTransform(Matrix())
     }
 

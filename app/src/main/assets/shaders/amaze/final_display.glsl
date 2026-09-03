@@ -8,6 +8,9 @@ uniform ivec2 u_outoff;
 uniform ivec2 u_inner;
 uniform ivec2 u_output_size;
 uniform highp mat3 u_camera_to_acescg;
+// Camera-space neutral white (AsShotNeutral / max component). Highlight neutralization MUST
+// happen before white balance / color conversion to prevent clipped-channel magenta casts.
+uniform highp vec3 u_camera_white_normalized;
 
 const int HALO = 2;
 const int TW = LW + 2 * HALO;
@@ -62,6 +65,14 @@ void main() {
     ivec2 outputPixel = o + u_outoff;
     // Match RawTherapee's AMaZE output boundary before applying the camera matrix.
     highp vec3 cameraRgb = max(vec3(r, g, b), vec3(0.0));
+
+    // Sensor-domain white-point protection, identical to the non-fused path. Detect clipping
+    // from 70%..99% in demosaiced camera RGB and blend toward camera-space neutral white before
+    // WB/calibration/color conversion. This turns clipped magenta highlights into neutral white.
+    highp vec3 whiteBlendRgb = smoothstep(vec3(0.70), vec3(0.99), cameraRgb);
+    highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
+    cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
+
     highp vec3 rec2020DisplayLinear = agx_base(u_camera_to_acescg * cameraRgb);
     highp mat3 outputMatrix = u_display_p3 != 0 ? REC2020_TO_DISPLAY_P3 : REC2020_TO_SRGB;
     highp vec3 baseLinear = clamp(

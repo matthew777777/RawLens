@@ -9,7 +9,6 @@ uniform highp ivec2 u_size;
 uniform highp ivec2 u_gainmap_size;
 uniform highp int u_display_p3;
 uniform highp float u_agx_purity_boost;
-uniform highp int u_agx_look;
 uniform highp float u_agx_contrast;
 uniform highp float u_agx_saturation;
 uniform highp float u_agx_hue_preservation;
@@ -22,7 +21,10 @@ uniform highp float u_grain_amount;
 uniform highp float u_grain_size;
 uniform highp uint u_grain_seed;
 
-// Pinned Google Filament AgX, commit 2a8018f54d5154ceb1bf7005c6c01b13aa70e7ad.
+// Google Filament AgX Base. RawLens intentionally exposes only the BASE view transform.
+// Filament's optional GOLDEN/PUNCHY creative looks are applied after the AgX sigmoid and can
+// magnify low-level chroma variation (especially when the log-domain shadow range is extended),
+// so they are deliberately not part of the camera development path.
 // Filament's matrices are Rec.2020. RawLens explicitly converts ACEScg D60 to Rec.2020 D65.
 const highp mat3 ACESCG_TO_REC2020_D65 = mat3(
     1.025877552449, -0.002232441770, -0.005013950857,
@@ -59,16 +61,6 @@ highp vec3 agx_contrast(highp vec3 x) {
          - 28.72 * x2 * x + 4.361 * x2 - 0.1718 * x + 0.002857;
 }
 
-highp vec3 agx_look(highp vec3 value) {
-    if (u_agx_look == 0) return value;
-    highp float luma = dot(value, vec3(0.2126, 0.7152, 0.0722));
-    highp vec3 slope = u_agx_look == 1 ? vec3(1.0, 0.9, 0.5) : vec3(1.0);
-    highp float power = u_agx_look == 1 ? 0.8 : 1.35;
-    highp float saturation = u_agx_look == 1 ? 1.3 : 1.4;
-    highp vec3 adjusted = pow(max(value * slope, vec3(0.0)), vec3(power));
-    return vec3(luma) + saturation * (adjusted - vec3(luma));
-}
-
 highp vec3 agx_base(highp vec3 acescg) {
     highp vec3 scene = max(ACESCG_TO_REC2020_D65 * acescg, vec3(0.0));
     highp vec3 v = AGX_INSET * scene;
@@ -79,7 +71,6 @@ highp vec3 agx_base(highp vec3 acescg) {
     highp float pivot = u_agx_shadow_ev / evRange;
     v = clamp(vec3(pivot) + (v - vec3(pivot)) * u_agx_contrast, 0.0, 1.0);
     v = agx_contrast(v);
-    v = agx_look(v);
     // darktable AgX-style master purity control: 100% reproduces the pinned base outset,
     // while 0% bypasses it and 200% extrapolates the post-curve primary recovery.
     v = mix(v, AGX_OUTSET * v, u_agx_purity_boost);

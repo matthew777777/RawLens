@@ -5,15 +5,12 @@ package com.matthew.rawlens
 
 import android.os.Build
 
-enum class AgxLook { BASE, GOLDEN, PUNCHY }
-
 /** Output contract captured with each shutter press; it never changes while that RAW is queued. */
 data class JpegOutputSettings(
     val ultraHdr: Boolean = false,
     val displayP3: Boolean = false,
     /** darktable-style post-tone-map AgX primary outset multiplier: 0.0 = none, 1.0 = base, 2.0 = maximum. */
     val agxPurityBoost: Float = 1f,
-    val agxLook: AgxLook = AgxLook.BASE,
     val agxContrast: Float = 1f,
     val agxSaturation: Float = 1f,
     val agxHuePreservation: Float = 0f,

@@ -221,6 +221,39 @@ class SceneLinearColorProcessorTest {
         )
     }
 
+    @Test
+    fun cameraWhiteIsAsShotNeutralNormalizedInSensorSpace() {
+        val transform = SceneLinearColorProcessor.resolve(
+            metadata(neutral = doubleArrayOf(0.5, 1.0, 0.25), forward1 = IDENTITY)
+        )
+
+        assertArrayEquals(
+            floatArrayOf(0.5f, 1.0f, 0.25f),
+            transform.glslCameraWhiteNormalized(),
+            1e-6f
+        )
+    }
+
+    @Test
+    fun clippedCameraHighlightConvergesToNeutralBeforeColorMatrix() {
+        val white = floatArrayOf(0.5f, 1.0f, 0.25f)
+
+        assertArrayEquals(
+            floatArrayOf(0.6f, 0.55f, 0.45f),
+            SceneLinearColorProcessor.neutralizeCameraHighlight(
+                floatArrayOf(0.6f, 0.55f, 0.45f), white
+            ),
+            1e-6f
+        )
+        assertArrayEquals(
+            white,
+            SceneLinearColorProcessor.neutralizeCameraHighlight(
+                floatArrayOf(1.0f, 0.70f, 0.72f), white
+            ),
+            1e-6f
+        )
+    }
+
     private fun metadata(
         neutral: DoubleArray? = null,
         gains: FloatArray? = null,

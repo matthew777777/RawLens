@@ -50,6 +50,8 @@ data class ResolvedSceneLinearTransform(
     /** Mathematical row-major matrix; CPU vectors are columns: acescg = M * cameraRgb. */
     val cameraToAcescg: ImmutableDoubleValues,
     val cameraToXyzD50: ImmutableDoubleValues,
+    /** Sensor/camera-space neutral white, normalized so its largest channel is 1.0. */
+    val cameraWhiteNormalized: ImmutableDoubleValues,
     val whiteBalance: ImmutableDoubleValues,
     val exposureEv: Double,
     val interpolationFactor: Double,
@@ -59,7 +61,7 @@ data class ResolvedSceneLinearTransform(
 ) {
     init {
         require(cameraToAcescg.size == 9 && cameraToXyzD50.size == 9)
-        require(whiteBalance.size == 3)
+        require(cameraWhiteNormalized.size == 3 && whiteBalance.size == 3)
         require(exposureEv.isFinite() && interpolationFactor.isFinite())
     }
 
@@ -72,6 +74,8 @@ data class ResolvedSceneLinearTransform(
             rowMajor[row * 3 + column].toFloat()
         }
     }
+
+    fun glslCameraWhiteNormalized(): FloatArray = FloatArray(3) { cameraWhiteNormalized[it].toFloat() }
 }
 
 /**
@@ -96,6 +100,12 @@ object SceneLinearColorProcessor {
         }
         val warnings = mutableListOf<String>()
         val (neutral, neutralSource) = resolveNeutral(metadata, warnings)
+        val neutralMax = neutral.maxComponent()
+        val cameraWhiteNormalized = Vec3(
+            neutral.x / neutralMax,
+            neutral.y / neutralMax,
+            neutral.z / neutralMax
+        )
         val analogBalance = diagonalOrIdentity(metadata.analogBalance, "AnalogBalance", warnings)
         val calibration1 = camera2MatrixOrNull(metadata.cameraCalibration1)
         val calibration2 = camera2MatrixOrNull(metadata.cameraCalibration2)
@@ -175,6 +185,7 @@ object SceneLinearColorProcessor {
         return ResolvedSceneLinearTransform(
             cameraToAcescg = ImmutableDoubleValues(cameraToAces.values()),
             cameraToXyzD50 = ImmutableDoubleValues(cameraToXyz.values()),
+            cameraWhiteNormalized = ImmutableDoubleValues(cameraWhiteNormalized.values()),
             whiteBalance = ImmutableDoubleValues(whiteBalance.values()),
             exposureEv = exposureEv,
             interpolationFactor = interpolation,
@@ -214,6 +225,24 @@ object SceneLinearColorProcessor {
             glslColumnMajorMatrix[row] * rgb[0] +
                 glslColumnMajorMatrix[3 + row] * rgb[1] +
                 glslColumnMajorMatrix[6 + row] * rgb[2]
+        }
+    }
+
+    /** Mirrors the pre-WB shader highlight neutralization used by both JPEG paths. */
+    fun neutralizeCameraHighlight(
+        rgb: FloatArray,
+        cameraWhiteNormalized: FloatArray,
+        start: Float = 0.70f,
+        end: Float = 0.99f
+    ): FloatArray {
+        require(rgb.size == 3 && cameraWhiteNormalized.size == 3)
+        require(start.isFinite() && end.isFinite() && start < end)
+        val nonNegative = FloatArray(3) { rgb[it].coerceAtLeast(0f) }
+        val peak = nonNegative.maxOrNull() ?: 0f
+        val t = ((peak - start) / (end - start)).coerceIn(0f, 1f)
+        val blend = t * t * (3f - 2f * t)
+        return FloatArray(3) { channel ->
+            nonNegative[channel] + (cameraWhiteNormalized[channel] - nonNegative[channel]) * blend
         }
     }
 

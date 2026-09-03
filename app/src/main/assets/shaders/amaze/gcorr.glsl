@@ -38,7 +38,7 @@ void load_tile() {
     barrier();
 }
 
-layout(binding = 0, rgba16f) writeonly uniform highp image2D img_out;
+layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
 void emit(ivec2 p, vec4 v) { imageStore(img_out, p, v); }
 
 float d0_new(ivec2 s) {   // re-interpolated colour difference at R/B site s

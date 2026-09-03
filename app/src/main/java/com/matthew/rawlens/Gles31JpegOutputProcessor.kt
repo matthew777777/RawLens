@@ -65,6 +65,7 @@ class Gles31JpegOutputProcessor(context: Context) {
                 "baseRead=${base.readPixelsMs}ms baseBitmap=${base.bitmapCopyMs}ms " +
                 "gain+attach=${completedAt - baseReadyAt}ms total=${completedAt - startedAt}ms"
         )
+        MemoryLeakDiagnostics.sample("jpeg-frame-complete")
         return DevelopedJpeg(base.bitmap, resolved)
     }
 
@@ -74,6 +75,10 @@ class Gles31JpegOutputProcessor(context: Context) {
         val resolved = settings.resolvedForPlatform()
         val encodedTexture = IntArray(1)
         val gainTexture = IntArray(1)
+        val encodedBytes = scene.width.toLong() * scene.height * 4L
+        var encodedTracked = false
+        var gainTracked = false
+        var gainBytes = 0L
         GLES31.glGenTextures(1, encodedTexture, 0)
         check(encodedTexture[0] != 0) { "Could not allocate encoded output texture" }
         try {
@@ -81,6 +86,8 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MIN_FILTER, GLES31.GL_NEAREST)
             GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MAG_FILTER, GLES31.GL_NEAREST)
             GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D, 1, GLES30.GL_RGBA8, scene.width, scene.height)
+            MemoryLeakDiagnostics.glTextureAllocated(encodedBytes)
+            encodedTracked = true
             if (resolved.ultraHdr) {
                 val gainWidth = ceilDiv(scene.width, GAINMAP_DOWNSCALE)
                 val gainHeight = ceilDiv(scene.height, GAINMAP_DOWNSCALE)
@@ -90,6 +97,9 @@ class Gles31JpegOutputProcessor(context: Context) {
                 GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MIN_FILTER, GLES31.GL_NEAREST)
                 GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MAG_FILTER, GLES31.GL_NEAREST)
                 GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D, 1, GLES30.GL_RGBA8, gainWidth, gainHeight)
+                gainBytes = gainWidth.toLong() * gainHeight * 4L
+                MemoryLeakDiagnostics.glTextureAllocated(gainBytes)
+                gainTracked = true
             }
             checkGl("encoded texture allocation")
             val allocatedAt = SystemClock.elapsedRealtime()
@@ -112,7 +122,6 @@ class Gles31JpegOutputProcessor(context: Context) {
             )
             GLES31.glUniform1i(location(outputProgram, "u_display_p3"), if (resolved.displayP3) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolved.agxPurityBoost)
-            GLES31.glUniform1i(location(outputProgram, "u_agx_look"), resolved.agxLook.ordinal)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolved.agxContrast)
             GLES31.glUniform1f(location(outputProgram, "u_agx_saturation"), resolved.agxSaturation)
             GLES31.glUniform1f(
@@ -123,8 +132,8 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glUniform1f(
                 location(outputProgram, "u_agx_gamut_compression"), resolved.agxGamutCompression
             )
-            GLES31.glUniform1f(location(outputProgram, "u_grain_amount"), if (denoise.enabled && denoise.filmGrainEnabled) denoise.filmGrainAmount else 0f)
-            GLES31.glUniform1f(location(outputProgram, "u_grain_size"), denoise.filmGrainSize)
+            GLES31.glUniform1f(location(outputProgram, "u_grain_amount"), 0f)
+            GLES31.glUniform1f(location(outputProgram, "u_grain_size"), 0f)
             GLES31.glUniform1ui(location(outputProgram, "u_grain_seed"), System.nanoTime().toInt())
             GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 0)
             GLES31.glUniform1i(location(outputProgram, "u_gainmap_only"), 0)
@@ -164,10 +173,14 @@ class Gles31JpegOutputProcessor(context: Context) {
                     "baseRead=${base.readPixelsMs}ms baseBitmap=${base.bitmapCopyMs}ms " +
                     "gain+attach=${completedAt - baseReadyAt}ms total=${completedAt - startedAt}ms"
             )
+            MemoryLeakDiagnostics.sample("jpeg-frame-complete")
             return DevelopedJpeg(base.bitmap, resolved)
         } finally {
             GLES31.glDeleteTextures(1, encodedTexture, 0)
+            if (encodedTracked) MemoryLeakDiagnostics.glTextureReleased(encodedBytes)
             if (gainTexture[0] != 0) GLES31.glDeleteTextures(1, gainTexture, 0)
+            if (gainTracked) MemoryLeakDiagnostics.glTextureReleased(gainBytes)
+            MemoryLeakDiagnostics.sample("jpeg-temporaries-released")
         }
     }
 
@@ -178,11 +191,13 @@ class Gles31JpegOutputProcessor(context: Context) {
                 "JPEG output program must be closed by its owning worker thread"
             }
             GLES31.glDeleteProgram(program)
+            MemoryLeakDiagnostics.glProgramReleased()
             program = 0
             programThreadId = null
         }
         if (framebuffer != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(framebuffer), 0)
+            MemoryLeakDiagnostics.glFramebufferReleased()
             framebuffer = 0
         }
         baseReadback = null
@@ -199,6 +214,7 @@ class Gles31JpegOutputProcessor(context: Context) {
         if (framebuffer == 0) {
             framebuffer = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
             check(framebuffer != 0) { "Could not allocate output readback framebuffer" }
+            MemoryLeakDiagnostics.glFramebufferAllocated()
         }
         try {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
@@ -286,6 +302,7 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glDeleteProgram(program)
             error("AgX/output shader link failed: $log")
         }
+        MemoryLeakDiagnostics.glProgramAllocated()
         return program
     }
 

@@ -6,6 +6,7 @@ package com.matthew.rawlens
 enum class AmazeTextureFormat(val bytesPerPixel: Int) {
     R32F(4),
     RGBA16F(8),
+    RGBA32F(16),
     RGBA8(4)
 }
 
@@ -116,7 +117,7 @@ object AmazePipelineContract {
         val windowPixels = WINDOW.toLong() * WINDOW
         val scratch = windowPixels * (
             SCALAR_SCRATCH_TEXTURES * AmazeTextureFormat.R32F.bytesPerPixel +
-                VECTOR_SCRATCH_TEXTURES * AmazeTextureFormat.RGBA16F.bytesPerPixel
+                VECTOR_SCRATCH_TEXTURES * AmazeTextureFormat.RGBA32F.bytesPerPixel
             )
         val fullFrame = width.toLong() * height * (
             AmazeTextureFormat.R32F.bytesPerPixel + AmazeTextureFormat.RGBA16F.bytesPerPixel

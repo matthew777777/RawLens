@@ -37,9 +37,9 @@ void load_tile() {
 
 // no trailing comments on layout lines: GLInterface.getLayouts derives the
 // uniform key from the last token of the line
-layout(binding = 0, rgba16f) writeonly uniform highp image2D img_grad;
-layout(binding = 1, rgba16f) writeonly uniform highp image2D img_a;
-layout(binding = 2, rgba16f) writeonly uniform highp image2D img_b;
+layout(binding = 0, rgba32f) writeonly uniform highp image2D img_grad;
+layout(binding = 1, rgba32f) writeonly uniform highp image2D img_a;
+layout(binding = 2, rgba32f) writeonly uniform highp image2D img_b;
 // img_grad: d0, d1, delhvsqsum, cfa (in .a); img_a: vcd, hcd, vcdalt, hcdalt; img_b: dgintv, dginth
 
 // gradient weights at texel q; zero outside inside(q, 2)
@@ -68,8 +68,8 @@ void main() {
     barrier();
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= u_size.x || p.y >= u_size.y) return;
-    // .a carries the CFA forward at fp16 cost (lossless: the input is fp16),
-    // so the r32f padded CFA texture dies with this pass
+    // .a carries the CFA forward in RGBA32F. RawTherapee keeps CFA and all AMaZE
+    // working arrays as float, so do not quantize this path to fp16.
     imageStore(img_grad, p, vec4(s_grad[SIDX(p)].rgb, Cf(p)));
     if (!inside(p, 4)) {
         imageStore(img_a, p, vec4(0.0));

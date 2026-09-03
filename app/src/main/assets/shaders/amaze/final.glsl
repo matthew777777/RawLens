@@ -13,6 +13,9 @@ uniform ivec2 u_inner;        // interior origin in window coords (PAD + BORDER)
 // GLSL column-vector matrix. Fusing this transform into AMaZE's final write avoids an
 // illegal read-write rgba16f image and a second full-resolution RGBA16F allocation.
 uniform highp mat3 u_camera_to_acescg;
+// Camera-space neutral white (AsShotNeutral / max component). Highlight neutralization MUST
+// happen before white balance / color conversion to prevent clipped-channel magenta casts.
+uniform highp vec3 u_camera_white_normalized;
 
 const int HALO = 2;   // half-grid reads hpos(q) can land one column left of q
 const int TW = LW + 2 * HALO;
@@ -66,6 +69,16 @@ void main() {
     }
     // RawTherapee clips negative AMaZE reconstruction excursions here. Otherwise a
     // camera matrix can turn one channel's edge undershoot into a complementary fringe.
-    highp vec3 acescg = u_camera_to_acescg * max(vec3(r, g, b), vec3(0.0));
+    highp vec3 cameraRgb = max(vec3(r, g, b), vec3(0.0));
+
+    // Sensor-domain white-point protection. As any demosaiced channel approaches RAW clipping,
+    // progressively remove chroma by converging on the camera's measured neutral white. This is
+    // deliberately before WB/calibration/color matrices: doing it afterwards cannot undo the
+    // magenta generated when a clipped channel is amplified by white balance.
+    highp vec3 whiteBlendRgb = smoothstep(vec3(0.70), vec3(0.99), cameraRgb);
+    highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
+    cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
+
+    highp vec3 acescg = u_camera_to_acescg * cameraRgb;
     imageStore(img_out, o + u_outoff, vec4(acescg, 1.0));
 }

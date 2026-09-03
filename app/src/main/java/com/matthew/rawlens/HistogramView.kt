@@ -36,6 +36,24 @@ class HistogramView @JvmOverloads constructor(
     private var lastRawUpdateMillis = 0L
     private var sourceLabel = PREVIEW_LABEL
 
+    /** Allow the next preview bitmap to replace RAW immediately after leaving/falling out of ZSL. */
+    fun allowPreviewImmediately() {
+        lastRawUpdateMillis = 0L
+        sourceLabel = PREVIEW_LABEL
+        invalidate()
+    }
+
+    /**
+     * Switch the UI source immediately when ZSL is selected. The existing bins remain visible
+     * for a few milliseconds, but are explicitly marked as warming until the first real
+     * RAW_SENSOR histogram arrives; preview readback is blocked by MainActivity in this state.
+     */
+    fun expectRawImmediately() {
+        lastRawUpdateMillis = SystemClock.uptimeMillis()
+        sourceLabel = RAW_WARMING_LABEL
+        invalidate()
+    }
+
     fun update(bitmap: Bitmap?) {
         if (bitmap == null || bitmap.width == 0 || bitmap.height == 0) return
         if (lastRawUpdateMillis != 0L &&
@@ -105,6 +123,7 @@ class HistogramView @JvmOverloads constructor(
         const val BIN_COUNT = 48
         const val RAW_HOLD_MILLIS = 2_000L
         const val RAW_LABEL = "RAW SENSOR"
+        const val RAW_WARMING_LABEL = "RAW SENSOR • WARMING"
         const val PREVIEW_LABEL = "PREVIEW • PROCESSED YUV"
         const val RED = 0
         const val GREEN = 1

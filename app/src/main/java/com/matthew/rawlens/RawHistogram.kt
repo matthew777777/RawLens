@@ -14,10 +14,17 @@ data class RgbHistogram(
     val fromRaw: Boolean
 )
 
-/** Samples the sensor mosaic without demosaicing; green combines both green CFA sites. */
+/**
+ * Samples the sensor mosaic without demosaicing; green combines both green CFA sites.
+ *
+ * Keep the live ZSL sampler deliberately sparse. This runs on the camera callback thread because
+ * the Image must remain owned by the ZSL ring, so excessive sampling directly increases callback
+ * latency. ~8k Bayer blocks (up to ~32k channel samples) is ample for a 64-bin live histogram
+ * while leaving significantly more headroom for preview composition and RAW pairing.
+ */
 object RawHistogramSampler {
     private const val BIN_COUNT = 64
-    private const val TARGET_BLOCKS = 24_000
+    private const val TARGET_BLOCKS = 8_000
 
     fun sample(image: Image, characteristics: CameraCharacteristics): RgbHistogram? {
         val plane = image.planes.singleOrNull() ?: return null

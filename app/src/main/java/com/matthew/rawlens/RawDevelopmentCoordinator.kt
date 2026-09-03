@@ -134,6 +134,7 @@ class RawDevelopmentCoordinator(context: Context) {
                     rawPlane, layout, geometry.processingCrop, normalization, lensModel
                 ),
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 denoise = settings.denoise,
                 noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
                 fusedOutputSettings = fusedOutputSettings,
@@ -143,6 +144,7 @@ class RawDevelopmentCoordinator(context: Context) {
             amaze.process(
                 requireNotNull(cpuCfa),
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 denoise = settings.denoise,
                 noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
                 fusedOutputSettings = fusedOutputSettings,
@@ -189,6 +191,7 @@ class RawDevelopmentCoordinator(context: Context) {
     fun close() {
         jpegOutput.close()
         amaze.close()
+        MemoryLeakDiagnostics.sample("development-coordinator-closed", expectGlReleased = true)
     }
 
     companion object {
@@ -210,10 +213,12 @@ class RawDevelopmentCoordinator(context: Context) {
             val gainPixels = ((width + 3) / 4).toLong() * ((height + 3) / 4).toLong()
             // GPU gain texture + direct readback + Android Bitmap, all RGBA8.
             val gainmap = if (ultraHdr) gainPixels * 12L else 0L
-            // Denoise peak: original + final RGBA16F frames and four 544² RGBA16F tile
-            // scratch images. Both full-resolution CFA textures are released before this phase.
+            // Denoise peak: original + final RGBA16F frames plus five 768² RGBA32F
+            // scratch images (512 tile + 128 px halo on each side).  The recursive
+            // wavelet pyramid deliberately stays fp32 to avoid quantizing shadow chroma.
+            // Both full-resolution CFA textures are released before this phase.
             val denoisePeak = if (denoise) {
-                raw + cfa + pixels * 16L + 4L * 544L * 544L * 8L
+                raw + cfa + pixels * 16L + 5L * 768L * 768L * 16L
             } else 0L
             val accountedPeak = maxOf(
                 raw + 2L * cfa,

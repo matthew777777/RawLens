@@ -28,6 +28,7 @@ class JpegProcessingService : Service() {
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:jpeg-processing")
             .apply { acquire() }
+        MemoryLeakDiagnostics.sample("jpeg-service-created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
@@ -37,6 +38,7 @@ class JpegProcessingService : Service() {
     override fun onDestroy() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+        MemoryLeakDiagnostics.sample("jpeg-service-destroyed")
         super.onDestroy()
     }
 

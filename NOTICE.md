@@ -48,11 +48,11 @@ Google Filament:
 - Source SHA-256: `1e3212b67f2954721a4336c68fef1904204873835896e25c9ba77f9030aa42cd`
 - License: Apache License 2.0
 
-RawLens uses the pinned AgX inset, log2 exposure range, polynomial contrast curve, Base/no-look
+RawLens uses the pinned AgX inset, log2 exposure range, polynomial contrast curve, Base view
 outset, and display-linear 2.2 conversion. Because Filament's implementation operates in linear
 Rec.2020, RawLens explicitly converts scene-linear ACEScg/AP1 D60 to Rec.2020 D65 before AgX and
 converts the result to output-linear sRGB or Display P3 afterward. The JPEG output tab keeps the
-official Base result at its defaults and adds optional Golden/Punchy looks, contrast, saturation,
+official Base result at its defaults and adds optional contrast, saturation,
 purity, hue preservation, adjustable tone-range limits, and bounded gamut compression. RawLens then
 performs the sRGB OETF and encoded-space dithering.
 

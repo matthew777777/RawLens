@@ -34,7 +34,7 @@ void load_tile() {
     barrier();
 }
 
-layout(binding = 0, rgba16f) writeonly uniform highp image2D img_out;
+layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
 void emit(ivec2 p, vec4 v) { imageStore(img_out, p, v); }
 
 // delp/delm + Dgrbsq1p/1m at half-grid slot q (even column); both pattern
@@ -63,10 +63,13 @@ vec4 delpm_val(ivec2 q) {
 
 void compute_delpm() {
     ivec2 t0 = T0();
-    // block origin (tile origin + halo); sites of the block span
-    // [b, b+7] x [b, b+8), so the reachable slots are (site +/- 2):
-    // [b-2, b+8] x [b-2, b+9] -> tile coords below; their Cf taps stay
-    // inside the staged tile
+    // The 8-wide output block only launches rbpm math from even output columns
+    // b..b+6. site_x() can move those anchors by +1, so the last R/B site is
+    // b+7. The farthest half-grid read is site+2, whose (indx>>1) storage lands
+    // at even column b+8. Do NOT extend this to b+10: delpm_val(b+10) itself
+    // reads CFA at b+12, outside this HALO=4 shared tile, and SIDX then aliases
+    // the next shared-memory row. That creates an 8-pixel workgroup-periodic
+    // false-colour stripe pattern.
     ivec2 b = ivec2(gl_WorkGroupID.xy * uvec2(LW, LH));
     for (int i = int(gl_LocalInvocationIndex); i < TN; i += LW * LH) {
         ivec2 q = t0 + ivec2(i % TW, i / TW);

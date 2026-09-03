@@ -21,7 +21,14 @@ uniform sampler2D u_in;       // RawLens full-resolution R32F CFA; scene-linear,
 uniform ivec2 u_insize;       // full (W, H)
 uniform ivec2 u_off;          // window origin in full-image coords (ox - B - 16, oy - B - 16)
 uniform ivec2 u_size;         // padded window size (tile + 2*B + 32)
+uniform ivec4 u_fc;           // cropped-image CFA phase: 0=R, 1=G, 2=B
+uniform highp vec3 u_demosaic_balance; // RT-style pre-demosaic channel balance, max gain = 1
 layout(binding = 0, r32f) writeonly uniform highp image2D img_out;
+
+int FC(int y, int x) {
+    return (y & 1) == 0 ? ((x & 1) == 0 ? u_fc.x : u_fc.y)
+                        : ((x & 1) == 0 ? u_fc.z : u_fc.w);
+}
 
 int srcRow(int r, int n) {
     if (r < 16) return 32 - r;
@@ -41,5 +48,14 @@ void main() {
     ivec2 fp = clamp(p + u_off + ivec2(16), ivec2(0), u_insize + ivec2(31));
     ivec2 s = ivec2(srcCol(fp.x, u_insize.x), srcRow(fp.y, u_insize.y));
     s = clamp(s, ivec2(0), u_insize - 1);
-    imageStore(img_out, p, vec4(texelFetch(u_in, s, 0).r));
+    float raw = texelFetch(u_in, s, 0).r;
+    int c = FC(s.y, s.x);
+    float balance = c == 0 ? u_demosaic_balance.r : (c == 2 ? u_demosaic_balance.b : u_demosaic_balance.g);
+    // RawTherapee's AMaZE works on CFA values after white-balance multipliers
+    // have been applied.  Use an equivalent normalized balance (largest gain=1)
+    // here, then compensate the final camera matrix so overall scene-linear
+    // colorimetry is unchanged.  This is important for AMaZE's colour-ratio,
+    // variance and saturation tests and avoids treating ordinary sensor-channel
+    // imbalance as chroma edges/noise.
+    imageStore(img_out, p, vec4(raw * balance));
 }

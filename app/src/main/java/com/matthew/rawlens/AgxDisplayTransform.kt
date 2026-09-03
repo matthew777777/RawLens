@@ -66,7 +66,6 @@ object AgxDisplayTransform {
             value[channel] = (pivot + (normalized - pivot) * settings.agxContrast).coerceIn(0f, 1f)
         }
         value = FloatArray(3) { contrast(value[it]) }
-        value = applyLook(value, settings.agxLook)
         val outset = map(AGX_OUTSET, value)
         value = FloatArray(3) { value[it] + settings.agxPurityBoost * (outset[it] - value[it]) }
         value = FloatArray(3) { max(0f, value[it]).pow(2.2f) }
@@ -88,17 +87,6 @@ object AgxDisplayTransform {
         value = gamutCompress(value, settings.agxGamutCompression)
         require(value.all(Float::isFinite)) { "AgX produced NaN or infinity" }
         return value
-    }
-
-    private fun applyLook(value: FloatArray, look: AgxLook): FloatArray {
-        if (look == AgxLook.BASE) return value
-        val luma = dot(value, SRGB_LUMA)
-        val slope = if (look == AgxLook.GOLDEN) floatArrayOf(1f, 0.9f, 0.5f)
-            else floatArrayOf(1f, 1f, 1f)
-        val power = if (look == AgxLook.GOLDEN) 0.8f else 1.35f
-        val saturation = if (look == AgxLook.GOLDEN) 1.3f else 1.4f
-        val adjusted = FloatArray(3) { max(0f, value[it] * slope[it]).pow(power) }
-        return FloatArray(3) { luma + saturation * (adjusted[it] - luma) }
     }
 
     private fun gamutCompress(value: FloatArray, strength: Float): FloatArray {

@@ -4,39 +4,22 @@
 package com.matthew.rawlens
 
 /**
- * Capture-frozen controls for the deliberately chroma-first denoise pipeline.
- * Strengths are perceptual multipliers, not pixel radii: 1 is the calibrated default.
+ * Capture-frozen controls for the denoise pipeline.
+ *
+ * The old RawLens denoiser has intentionally been removed.  The only denoise
+ * path is now a scene-linear Y0U0V0 a-trous wavelet chroma denoiser modelled on
+ * darktable's "denoise (profiled)" / "wavelets: chroma only" preset.
  */
 data class DenoiseSettings(
     val enabled: Boolean = false,
-    val rawPrefilterEnabled: Boolean = true,
-    val rawPrefilterStrength: Float = 0.20f,
-    val chromaEnabled: Boolean = true,
-    val chromaStrength: Float = 1f,
-    val lumaEnabled: Boolean = true,
-    val lumaCleanup: Float = 0.55f,
-    val grainRetention: Float = 0.85f,
-    val edgeProtection: Float = 0.90f,
-    val filmGrainEnabled: Boolean = true,
-    val filmGrainAmount: Float = 0.22f,
-    val filmGrainSize: Float = 0.35f
+    val strength: Float = 0.20f
 ) {
-    init {
-        require(rawPrefilterStrength in 0f..1f)
-        require(chromaStrength in 0f..2f)
-        require(lumaCleanup in 0f..1f)
-        require(grainRetention in 0f..1f)
-        require(edgeProtection in 0f..1f)
-        require(filmGrainAmount in 0f..1f)
-        require(filmGrainSize in 0f..1f)
-    }
+    init { require(strength in 0f..4f) }
 }
 
 /** Camera2/DNG normalized Poisson-Gaussian model, in CFA order R, Gr, Gb, B. */
 data class CfaNoiseModel(val scale: FloatArray, val offset: FloatArray) {
-    init {
-        require(scale.size == 4 && offset.size == 4)
-    }
+    init { require(scale.size == 4 && offset.size == 4) }
 
     val averageScale: Float get() = scale.average().toFloat()
     val averageOffset: Float get() = offset.average().toFloat()

@@ -74,6 +74,10 @@ class MainActivity : Activity(), SensorEventListener {
     private var gridEnabled = true
     private var levelEnabled = false
     private var histogramEnabled = true
+    // During a mode transition keep showing the live preview histogram until the first
+    // timestamp-paired RAW_SENSOR frame actually arrives. This prevents the last YUV graph
+    // from looking frozen while the RAW ZSL stream warms up.
+    private var rawHistogramLive = false
     private var aeMeteringMode = AeMeteringMode.AUTO
     private var timerSeconds = 0
     private var burstRelease = false
@@ -265,6 +269,11 @@ class MainActivity : Activity(), SensorEventListener {
             { zslStatus ->
                 rawZslStatus = zslStatus
                 runOnUiThread {
+                    if (zslStatus.state == RawZslState.OFF || zslStatus.state == RawZslState.FALLBACK) {
+                        rawHistogramLive = false
+                        histogramView.allowPreviewImmediately()
+                        updatePreviewHistogramOnce()
+                    }
                     refreshCaptureFormatControl()
                     updateQuickControls()
                     rawZslSettingsStatus?.text = rawZslSettingsText(zslStatus)
@@ -279,7 +288,14 @@ class MainActivity : Activity(), SensorEventListener {
                 runOnUiThread { meteringOverlay.clearTargets() }
             },
             { histogram ->
-                if (histogramEnabled) runOnUiThread { histogramView.update(histogram) }
+                if (histogramEnabled) runOnUiThread {
+                    // A forward still capture can also publish a RAW histogram. Outside the
+                    // ZSL/RAW-SR live stream that must not replace the live preview histogram.
+                    if (captureExposureMode == CaptureExposureMode.ZSL || rawSuperResolutionSettings.enabled) {
+                        rawHistogramLive = true
+                        histogramView.update(histogram)
+                    }
+                }
             }
         )
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
@@ -547,6 +563,7 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onDestroy() {
         lensDiscovery.close()
         controller.destroy()
+        MemoryLeakDiagnostics.sample("activity-destroyed")
         super.onDestroy()
     }
 
@@ -558,6 +575,11 @@ class MainActivity : Activity(), SensorEventListener {
         val clearance = dp(16)
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         viewfinder.fillViewport = false
+        // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
+        // is opened so a cold start (including phone flat/upside-down) never gets measured first
+        // as an unconstrained tall TextureView. Camera stream selection can then use stable 4:3
+        // portrait geometry from its very first frame.
+        viewfinder.setAspectRatio(3, 4)
         // Reserve real screen space for controls.  The preview and its overlays are measured
         // only in the remaining viewport, so neither the image nor the thirds grid continues
         // behind ISO/shutter controls.
@@ -867,6 +889,19 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun applyCaptureExposureMode(mode: CaptureExposureMode) {
+        // Entering ZSL changes the histogram source immediately: stop TextureView/YUV readback
+        // now and mark RAW as warming. The first timestamp-paired RAW_SENSOR frame replaces the
+        // bins immediately. Leaving ZSL releases the RAW hold and resumes processed YUV.
+        val enteringRawZsl = mode == CaptureExposureMode.ZSL
+        rawHistogramLive = enteringRawZsl && histogramEnabled
+        if (::histogramView.isInitialized) {
+            if (enteringRawZsl && histogramEnabled) {
+                histogramView.expectRawImmediately()
+            } else {
+                histogramView.allowPreviewImmediately()
+                updatePreviewHistogramOnce()
+            }
+        }
         if (mode != CaptureExposureMode.ZSL && rawSuperResolutionSettings.enabled) {
             applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
         }
@@ -1039,6 +1074,12 @@ class MainActivity : Activity(), SensorEventListener {
         timerBadge.visibility = if (timerSeconds > 0) View.VISIBLE else View.GONE
     }
 
+    private fun updatePreviewHistogramOnce() {
+        if (!histogramEnabled || !::histogramView.isInitialized) return
+        val preview = findViewById<AutoFitTextureView>(R.id.viewfinder)
+        if (preview.isAvailable) histogramView.update(preview.getBitmap(96, 54))
+    }
+
     private fun scheduleHistogram() {
         if (!::histogramView.isInitialized) return
         histogramRunnable?.let(histogramView::removeCallbacks)
@@ -1047,8 +1088,10 @@ class MainActivity : Activity(), SensorEventListener {
         histogramRunnable = object : Runnable {
             override fun run() {
                 if (!isFinishing && !isDestroyed && histogramEnabled) {
-                    val preview = findViewById<AutoFitTextureView>(R.id.viewfinder)
-                    if (preview.isAvailable) histogramView.update(preview.getBitmap(96, 54))
+                    // Keep YUV moving while ZSL warms up. The first exact timestamp-paired RAW
+                    // histogram flips rawHistogramLive, after which we stop TextureView readback
+                    // completely so full-resolution RAW streaming does not compete with the UI.
+                    if (!rawHistogramLive) updatePreviewHistogramOnce()
                     histogramView.postDelayed(this, HISTOGRAM_INTERVAL_MS)
                 }
             }
@@ -1219,9 +1262,6 @@ class MainActivity : Activity(), SensorEventListener {
         ultraHdr = lensPreferences().getBoolean(KEY_JPEG_ULTRA_HDR, false),
         displayP3 = lensPreferences().getBoolean(KEY_JPEG_DISPLAY_P3, false),
         agxPurityBoost = lensPreferences().getFloat(KEY_JPEG_AGX_PURITY, 1f),
-        agxLook = runCatching {
-            AgxLook.valueOf(lensPreferences().getString(KEY_JPEG_AGX_LOOK, AgxLook.BASE.name)!!)
-        }.getOrDefault(AgxLook.BASE),
         agxContrast = lensPreferences().getFloat(KEY_JPEG_AGX_CONTRAST, 1f),
         agxSaturation = lensPreferences().getFloat(KEY_JPEG_AGX_SATURATION, 1f),
         agxHuePreservation = lensPreferences().getFloat(KEY_JPEG_AGX_HUE, 0f),
@@ -1242,17 +1282,7 @@ class MainActivity : Activity(), SensorEventListener {
         val prefs = lensPreferences()
         return DenoiseSettings(
             enabled = prefs.getBoolean(KEY_DENOISE_ENABLED, false),
-            rawPrefilterEnabled = prefs.getBoolean(KEY_DENOISE_RAW_ENABLED, true),
-            rawPrefilterStrength = prefs.getFloat(KEY_DENOISE_RAW_STRENGTH, 0.20f).coerceIn(0f, 1f),
-            chromaEnabled = prefs.getBoolean(KEY_DENOISE_CHROMA_ENABLED, true),
-            chromaStrength = prefs.getFloat(KEY_DENOISE_CHROMA_STRENGTH, 1f).coerceIn(0f, 2f),
-            lumaEnabled = prefs.getBoolean(KEY_DENOISE_LUMA_ENABLED, true),
-            lumaCleanup = prefs.getFloat(KEY_DENOISE_LUMA_CLEANUP, 0.55f).coerceIn(0f, 1f),
-            grainRetention = prefs.getFloat(KEY_DENOISE_GRAIN, 0.85f).coerceIn(0f, 1f),
-            edgeProtection = prefs.getFloat(KEY_DENOISE_EDGE, 0.90f).coerceIn(0f, 1f),
-            filmGrainEnabled = prefs.getBoolean(KEY_DENOISE_FILM_GRAIN_ENABLED, true),
-            filmGrainAmount = prefs.getFloat(KEY_DENOISE_FILM_GRAIN_AMOUNT, 0.22f).coerceIn(0f, 1f),
-            filmGrainSize = prefs.getFloat(KEY_DENOISE_FILM_GRAIN_SIZE, 0.35f).coerceIn(0f, 1f)
+            strength = prefs.getFloat(KEY_DENOISE_STRENGTH, 0.20f).coerceIn(0f, 4f)
         )
     }
 
@@ -1263,17 +1293,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         lensPreferences().edit()
             .putBoolean(KEY_DENOISE_ENABLED, settings.enabled)
-            .putBoolean(KEY_DENOISE_RAW_ENABLED, settings.rawPrefilterEnabled)
-            .putFloat(KEY_DENOISE_RAW_STRENGTH, settings.rawPrefilterStrength)
-            .putBoolean(KEY_DENOISE_CHROMA_ENABLED, settings.chromaEnabled)
-            .putFloat(KEY_DENOISE_CHROMA_STRENGTH, settings.chromaStrength)
-            .putBoolean(KEY_DENOISE_LUMA_ENABLED, settings.lumaEnabled)
-            .putFloat(KEY_DENOISE_LUMA_CLEANUP, settings.lumaCleanup)
-            .putFloat(KEY_DENOISE_GRAIN, settings.grainRetention)
-            .putFloat(KEY_DENOISE_EDGE, settings.edgeProtection)
-            .putBoolean(KEY_DENOISE_FILM_GRAIN_ENABLED, settings.filmGrainEnabled)
-            .putFloat(KEY_DENOISE_FILM_GRAIN_AMOUNT, settings.filmGrainAmount)
-            .putFloat(KEY_DENOISE_FILM_GRAIN_SIZE, settings.filmGrainSize)
+            .putFloat(KEY_DENOISE_STRENGTH, settings.strength)
             .apply()
         return true
     }
@@ -1332,7 +1352,6 @@ class MainActivity : Activity(), SensorEventListener {
                     .putBoolean(KEY_JPEG_ULTRA_HDR, resolved.ultraHdr)
                     .putBoolean(KEY_JPEG_DISPLAY_P3, resolved.displayP3)
                     .putFloat(KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
-                    .putString(KEY_JPEG_AGX_LOOK, resolved.agxLook.name)
                     .putFloat(KEY_JPEG_AGX_CONTRAST, resolved.agxContrast)
                     .putFloat(KEY_JPEG_AGX_SATURATION, resolved.agxSaturation)
                     .putFloat(KEY_JPEG_AGX_HUE, resolved.agxHuePreservation)
@@ -1369,17 +1388,6 @@ class MainActivity : Activity(), SensorEventListener {
                     if (!applyJpegOutputSettings(currentJpegSettings.copy(displayP3 = enabled))) {
                         button.isChecked = currentJpegSettings.displayP3
                     }
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "AgX look: ${currentJpegSettings.agxLook.name.lowercase().replaceFirstChar(Char::uppercase)}"
-                }
-                refresh()
-                setOnClickListener {
-                    val looks = AgxLook.entries
-                    val next = looks[(currentJpegSettings.agxLook.ordinal + 1) % looks.size]
-                    if (applyJpegOutputSettings(currentJpegSettings.copy(agxLook = next))) refresh()
                 }
             })
             fun addAgxSlider(
@@ -1712,149 +1720,60 @@ class MainActivity : Activity(), SensorEventListener {
             var settings = denoiseSettings()
             val subordinate = ArrayList<View>()
 
-            fun heading(title: String, description: String) {
-                content.addView(TextView(this).apply {
-                    text = title
-                    setTextColor(getColor(R.color.text_primary))
-                    textSize = 16f
-                    setPadding(0, dp(14), 0, dp(2))
-                })
-                content.addView(TextView(this).apply {
-                    text = description
-                    setTextColor(getColor(R.color.text_secondary))
-                    textSize = 12f
-                    setPadding(dp(12), 0, dp(12), dp(6))
-                })
-            }
-
-            fun switch(
-                title: String,
-                description: String,
-                checked: () -> Boolean,
-                update: (Boolean) -> DenoiseSettings
-            ): CheckBox {
-                val box = CheckBox(this).apply {
-                    text = "$title\n$description"
-                    setTextColor(getColor(R.color.text_primary))
-                    isChecked = checked()
-                    setOnCheckedChangeListener { button, value ->
-                        val previous = settings
-                        val proposed = update(value)
-                        if (persistDenoiseSettings(proposed)) settings = proposed
-                        else if (button.isChecked != checked()) button.isChecked = checked()
-                        if (previous.enabled != settings.enabled) {
-                            subordinate.forEach { it.isEnabled = settings.enabled }
-                        }
-                    }
-                }
-                content.addView(box)
-                return box
-            }
-
-            fun slider(
-                title: String,
-                description: String,
-                maximum: Int,
-                initial: Int,
-                suffix: String = "%",
-                update: (Int) -> DenoiseSettings
-            ) {
-                var selected = initial
-                val label = TextView(this).apply {
-                    text = "$title: $selected$suffix"
-                    setTextColor(getColor(R.color.text_primary))
-                    textSize = 14f
-                    setPadding(dp(12), dp(6), dp(12), 0)
-                }
-                val explanation = TextView(this).apply {
-                    text = description
-                    setTextColor(getColor(R.color.text_secondary))
-                    textSize = 12f
-                    setPadding(dp(12), 0, dp(12), 0)
-                }
-                val bar = SeekBar(this).apply {
-                    max = maximum
-                    progress = initial.coerceIn(0, maximum)
-                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                        override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                            selected = progress
-                            label.text = "$title: $selected$suffix"
-                        }
-                        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                        override fun onStopTrackingTouch(seekBar: SeekBar) {
-                            val proposed = update(selected)
-                            if (persistDenoiseSettings(proposed)) settings = proposed
-                        }
-                    })
-                }
-                content.addView(label); content.addView(explanation); content.addView(bar)
-                subordinate += label; subordinate += explanation; subordinate += bar
-            }
-
             content.addView(TextView(this).apply {
-                text = "Detail-preserving RAW denoise"
+                text = "darktable profiled wavelet chroma denoise"
                 setTextColor(getColor(R.color.text_primary)); textSize = 17f
             })
             content.addView(TextView(this).apply {
-                text = "Noise-model-aware processing removes colored speckles, protects supported detail, and adds clean monochrome grain after tone mapping. Settings are frozen with each shutter press."
+                text = "Fresh denoise path based on darktable denoise (profiled) → wavelets → Y0U0V0 → chroma only. Luminance wavelet coefficients are passed through unchanged. Default strength is 0.200."
                 setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                setPadding(0, dp(4), 0, dp(8))
+                setPadding(0, dp(4), 0, dp(10))
             })
-            val master = switch(
-                "Enable denoising",
-                "Master bypass. Off runs the original AMaZE and JPEG pipeline without any denoise dispatches.",
-                { settings.enabled }, { settings.copy(enabled = it) }
-            )
 
-            heading("RAW impulse correction", "A robust same-color CFA median/MAD detector removes isolated hot or pepper samples before AMaZE. Normal samples receive only slight stabilization at high modeled noise.")
-            subordinate += switch(
-                "Pre-demosaic stabilization",
-                "Corrects isolated sensor impulses before they can spread through demosaicing. It does not perform ordinary spatial smoothing at low noise.",
-                { settings.rawPrefilterEnabled }, { settings.copy(rawPrefilterEnabled = it) }
-            )
-            slider(
-                "High-noise stabilization", "Impulse correction remains active. This controls only the capped stabilization of ordinary samples when the camera noise model reports severe noise.",
-                100, (settings.rawPrefilterStrength * 100).toInt()
-            ) { settings.copy(rawPrefilterStrength = it / 100f) }
+            val master = CheckBox(this).apply {
+                text = "Enable denoising\nOff bypasses every denoise dispatch and keeps the original AMaZE output."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = settings.enabled
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = settings.copy(enabled = value)
+                    if (persistDenoiseSettings(proposed)) {
+                        settings = proposed
+                        subordinate.forEach { it.isEnabled = settings.enabled }
+                    } else if (button.isChecked != settings.enabled) {
+                        button.isChecked = settings.enabled
+                    }
+                }
+            }
+            content.addView(master)
 
-            heading("Color noise", "Local luma-guided chroma regression removes color that is unsupported by neighboring pixels. Isoluminant consensus and luma edges preserve real colored detail.")
-            subordinate += switch(
-                "Chroma denoise", "Independent bypass for color cleanup while leaving luma controls active.",
-                { settings.chromaEnabled }, { settings.copy(chromaEnabled = it) }
-            )
-            slider(
-                "Color cleanup", "100% is the calibrated chroma-first default. Above 100% targets severe shadow color noise; edge guards still retain supported color boundaries.",
-                200, (settings.chromaStrength * 100).toInt()
-            ) { settings.copy(chromaStrength = it / 100f) }
-
-            heading("Luma detail", "Two-pass overlapping 4x4 Walsh-Hadamard shrinkage uses a clean pilot to distinguish repeatable structure from noise. There is no Gaussian blur and no sensor residual is copied back as grain.")
-            subordinate += switch(
-                "Luma cleanup", "Independent bypass for monochromatic cleanup. Turn off to preserve the original AMaZE luma exactly apart from the optional RAW stabilizer.",
-                { settings.lumaEnabled }, { settings.copy(lumaEnabled = it) }
-            )
-            slider(
-                "Luma cleanup", "Controls noise-normalized coefficient shrinkage. The 55% default cleans blotches while the second-pass pilot preserves repeatable fine structure.",
-                100, (settings.lumaCleanup * 100).toInt()
-            ) { settings.copy(lumaCleanup = it / 100f) }
-            slider(
-                "Microdetail protection", "Lowers shrinkage for supported high-frequency structure. This no longer retains isolated sensor speckles, so increasing it does not deliberately create pepper noise.",
-                100, (settings.grainRetention * 100).toInt()
-            ) { settings.copy(grainRetention = it / 100f) }
-            slider(
-                "Edge protection", "Raises retention around both luminance and isoluminant color edges. Higher values preserve detail more aggressively but may retain noise along boundaries.",
-                100, (settings.edgeProtection * 100).toInt()
-            ) { settings.copy(edgeProtection = it / 100f) }
-
-            heading("Film grain", "Grain is synthesized after AgX in display space, is exactly monochrome, and is strongest in midtones. It cannot introduce red/green/blue speckles or alter hue.")
-            subordinate += switch(
-                "Monochrome film grain", "Independent grain bypass. Denoising remains active when this is off.",
-                { settings.filmGrainEnabled }, { settings.copy(filmGrainEnabled = it) }
-            )
-            slider("Grain amount", "Amplitude of neutral display grain. 22% is subtle; it does not restore removed sensor noise.", 100, (settings.filmGrainAmount * 100).toInt()) { settings.copy(filmGrainAmount = it / 100f) }
-            slider("Grain clumping", "0% is fine pixel grain; higher values blend in small two-pixel clumps resembling film dye-cloud density variation.", 100, (settings.filmGrainSize * 100).toInt()) { settings.copy(filmGrainSize = it / 100f) }
-
+            val label = TextView(this).apply {
+                text = "Strength: ${"%.3f".format(settings.strength)}"
+                setTextColor(getColor(R.color.text_primary)); textSize = 14f
+                setPadding(dp(12), dp(10), dp(12), 0)
+            }
+            val explanation = TextView(this).apply {
+                text = "Matches the requested darktable control scale. 0.200 is the default. The filter uses seven 5-tap à-trous wavelet bands and applies BayesShrink only to U0/V0 chroma coefficients."
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+                setPadding(dp(12), 0, dp(12), 0)
+            }
+            val strength = SeekBar(this).apply {
+                max = 4000
+                progress = (settings.strength * 1000f).toInt().coerceIn(0, max)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        label.text = "Strength: ${"%.3f".format(progress / 1000f)}"
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        val proposed = settings.copy(strength = seekBar.progress / 1000f)
+                        if (persistDenoiseSettings(proposed)) settings = proposed
+                    }
+                })
+            }
+            content.addView(label); content.addView(explanation); content.addView(strength)
+            subordinate += label; subordinate += explanation; subordinate += strength
             subordinate.forEach { it.isEnabled = settings.enabled }
-            master.isEnabled = true
+
             generalTab.isEnabled = true
             denoiseTab.isEnabled = false
             lensesTab.isEnabled = true
@@ -2225,7 +2144,6 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
         const val KEY_JPEG_AGX_PURITY = "jpeg_agx_purity"
-        const val KEY_JPEG_AGX_LOOK = "jpeg_agx_look"
         const val KEY_JPEG_AGX_CONTRAST = "jpeg_agx_contrast"
         const val KEY_JPEG_AGX_SATURATION = "jpeg_agx_saturation"
         const val KEY_JPEG_AGX_HUE = "jpeg_agx_hue"
@@ -2236,17 +2154,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_JPEG_ADAPTIVE_PROGRAM = "jpeg_adaptive_program"
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
         const val KEY_DENOISE_ENABLED = "denoise_enabled"
-        const val KEY_DENOISE_RAW_ENABLED = "denoise_raw_enabled"
-        const val KEY_DENOISE_RAW_STRENGTH = "denoise_raw_strength"
-        const val KEY_DENOISE_CHROMA_ENABLED = "denoise_chroma_enabled"
-        const val KEY_DENOISE_CHROMA_STRENGTH = "denoise_chroma_strength"
-        const val KEY_DENOISE_LUMA_ENABLED = "denoise_luma_enabled"
-        const val KEY_DENOISE_LUMA_CLEANUP = "denoise_luma_cleanup"
-        const val KEY_DENOISE_GRAIN = "denoise_grain_retention"
-        const val KEY_DENOISE_EDGE = "denoise_edge_protection"
-        const val KEY_DENOISE_FILM_GRAIN_ENABLED = "denoise_film_grain_enabled"
-        const val KEY_DENOISE_FILM_GRAIN_AMOUNT = "denoise_film_grain_amount"
-        const val KEY_DENOISE_FILM_GRAIN_SIZE = "denoise_film_grain_size"
+        const val KEY_DENOISE_STRENGTH = "denoise_profiled_wavelet_strength"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L

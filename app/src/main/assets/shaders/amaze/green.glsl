@@ -37,7 +37,7 @@ void load_tile() {
     barrier();
 }
 
-layout(binding = 0, rgba16f) writeonly uniform highp image2D img_gd;
+layout(binding = 0, rgba32f) writeonly uniform highp image2D img_gd;
 layout(binding = 1, r32f) writeonly uniform highp image2D img_hv;
 void emit_gd(ivec2 p, vec4 v) { imageStore(img_gd, p, v); }
 void emit_hv(ivec2 p, float v) { imageStore(img_hv, p, vec4(v)); }
