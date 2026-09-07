@@ -170,6 +170,7 @@ class RawCameraController(
     private val captureSequence = AtomicInteger(0)
     private val activeFramesRemaining = AtomicInteger(0)
     private var activeHdrBracket = false
+    private var activeHdrSaveEachBracket = false
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
     private val pendingSaveCount = AtomicInteger(0)
     private val pendingJpegCount = AtomicInteger(0)
@@ -661,7 +662,7 @@ class RawCameraController(
     }
 
     /** Captures the default handheld bracket (-2, 0, +2 EV) around the latest metered pair. */
-    fun captureHdrBracket() {
+    fun captureHdrBracket(saveEachBracket: Boolean = false) {
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         cameraHandler.post {
@@ -674,6 +675,7 @@ class RawCameraController(
                 return@post
             }
             activeHdrBracket = true
+            activeHdrSaveEachBracket = saveEachBracket
             captureFrames(3, outputFormat = outputFormat, orientationSnapshot = orientationSnapshot)
         }
     }
@@ -2163,7 +2165,9 @@ class RawCameraController(
         if (remaining <= 0) {
             if (activeHdrBracket) {
                 activeHdrBracket = false
-                saveHdrBracket(pendingHdrFrames.toList())
+                val saveEachBracket = activeHdrSaveEachBracket
+                activeHdrSaveEachBracket = false
+                saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket)
                 pendingHdrFrames.clear()
             }
             finishCapture()
@@ -2171,7 +2175,7 @@ class RawCameraController(
         }
     }
 
-    private fun saveHdrBracket(pending: List<PendingHdrFrame>) {
+    private fun saveHdrBracket(pending: List<PendingHdrFrame>, saveEachBracket: Boolean) {
         val c = characteristics ?: return pending.forEach { it.image.close() }
         if (pending.size < 2) return pending.forEach { it.image.close() }
         val ownership = CloseOnceOwner(pending) { it.image.close() }
@@ -2181,9 +2185,25 @@ class RawCameraController(
         val outputSettings = activeJpegOutputSettings
         val denoise = activeDenoiseSettings
         pendingSaveCount.incrementAndGet()
-        if (outputFormat.includesJpeg) beginJpegProcessing()
+        if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
         val job = OwnedCaptureJob(ownership) {
             try {
+                if (saveEachBracket) {
+                    val saver = DngSaver(context)
+                    val backend = dngWriterBackend()
+                    val overrides = dngMetadataOverrides(cameraId)
+                    val names = pending.mapIndexed { index, frame ->
+                        val metadata = RawFrameMetadataFactory.capture(
+                            cameraId, frame.image, c, frame.result, orientation
+                        )
+                        saver.save(
+                            frame.image, c, frame.result, orientation, overrides, metadata, backend,
+                            fileNameSuffix = HDR_BRACKET_SUFFIXES[index]
+                        )
+                    }
+                    onState("HDR BRACKETS SAVED • ${names.joinToString(" • ")}")
+                    return@OwnedCaptureJob
+                }
                 val snapshots = pending.map { frame ->
                     val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
                     val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
@@ -2249,16 +2269,16 @@ class RawCameraController(
                     onState("HDR FLOAT DNG • $referenceDng")
                 }
             } catch (failure: Exception) {
-                Log.e(LOG_TAG, "HDR bracket merge failed", failure)
-                onState("HDR MERGE ERROR • ${failure.message ?: failure.javaClass.simpleName}")
+                Log.e(LOG_TAG, "HDR bracket output failed", failure)
+                onState("HDR SAVE ERROR • ${failure.message ?: failure.javaClass.simpleName}")
             } finally {
-                if (outputFormat.includesJpeg) endJpegProcessing()
+                if (!saveEachBracket && outputFormat.includesJpeg) endJpegProcessing()
                 cameraHandler.post { pendingSaveCount.decrementAndGet(); refreshCaptureAvailability(); resumeRawZslIfIdle() }
             }
         }
         try { writer.execute(job) } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun(); pendingSaveCount.decrementAndGet()
-            if (outputFormat.includesJpeg) endJpegProcessing()
+            if (!saveEachBracket && outputFormat.includesJpeg) endJpegProcessing()
             onState("SAVE QUEUE FULL: wait for storage")
         }
     }
@@ -2556,6 +2576,7 @@ class RawCameraController(
         cancelCaptureTimeout()
         if (activeHdrBracket) {
             activeHdrBracket = false
+            activeHdrSaveEachBracket = false
             activeFramesRemaining.set(0)
             captureSequence.incrementAndGet()
             pendingHdrFrames.forEach { it.image.close() }
@@ -3118,6 +3139,7 @@ class RawCameraController(
         private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
         private const val MAX_ZSL_FRAMES = 30
         private const val RAW_ZSL_TARGET_FPS = 30
+        private val HDR_BRACKET_SUFFIXES = listOf("HDR_-2EV", "HDR_0EV", "HDR_+2EV")
         /** One RAW candidate followed by preview-only frames; bounds HAL RAW bandwidth pressure. */
         private const val RAW_ZSL_REQUEST_PERIOD = 3
         private const val RAW_BYTES_PER_PIXEL = 2L

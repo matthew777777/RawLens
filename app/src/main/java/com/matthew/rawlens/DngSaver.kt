@@ -55,12 +55,14 @@ class DngSaver(private val context: Context) {
         orientation: Int,
         overrides: DngMetadataOverrides = DngMetadataOverrides(),
         metadata: RawFrameMetadata,
-        backend: DngWriterBackend = DngWriterBackend.ANDROID
+        backend: DngWriterBackend = DngWriterBackend.ANDROID,
+        fileNameSuffix: String? = null
     ): String {
         check(orientation == metadata.exifOrientation) { "DNG orientation snapshot mismatch" }
         overrides.validate()
 
-        val displayName = "RAW_${System.currentTimeMillis()}.dng"
+        val suffix = fileNameSuffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
+        val displayName = "RAW_${System.currentTimeMillis()}$suffix.dng"
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)

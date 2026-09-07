@@ -789,7 +789,9 @@ class MainActivity : Activity(), SensorEventListener {
         )
         when (selected) {
             1 -> controller.captureBurst()
-            2 -> controller.captureHdrBracket()
+            2 -> controller.captureHdrBracket(
+                lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)
+            )
             else -> controller.capture()
         }
     }
@@ -811,7 +813,11 @@ class MainActivity : Activity(), SensorEventListener {
         Log.i(LOG_TAG, "Release mode=${releaseModeLabel(releaseMode)}")
         status.text = when (releaseMode) {
             1 -> "BURST • 6 RAW FRAMES"
-            2 -> "HDR • 3 RAW • −2/0/+2 EV • FLOWNET"
+            2 -> if (lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)) {
+                "HDR • SAVE 3 DNG • −2/0/+2 EV"
+            } else {
+                "HDR • 3 RAW • −2/0/+2 EV • FLOWNET"
+            }
             else -> "SINGLE FRAME"
         }
         updateQuickControls()
@@ -1626,6 +1632,16 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             })
             content.addView(CheckBox(this).apply {
+                text = "HDR: save all 3 brackets as separate DNGs (do not merge)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_HDR_SAVE_EACH_BRACKET, enabled).apply()
+                    status.text = if (enabled) "HDR OUTPUT • 3 SEPARATE DNGS" else "HDR OUTPUT • MERGED"
+                    updateQuickControls()
+                }
+            })
+            content.addView(CheckBox(this).apply {
                 text = "RAW zero shutter lag"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = captureExposureMode == CaptureExposureMode.ZSL
@@ -2243,6 +2259,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_RELEASE_MODE = "release_mode"
+        const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
         const val KEY_JPEG_QUALITY = "jpeg_quality"
