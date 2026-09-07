@@ -84,7 +84,9 @@ class AmazePipelineContractTest {
 
     @Test
     fun memoryBudgetIncludesFixedScratchAndFullFrameTextures() {
-        val scratch = 1120L * 1120L * (6L * 4L + 10L * 8L)
+        // RawTherapee's AMaZE intermediates are float. RawLens therefore uses RGBA32F vector
+        // scratch rather than PhotonCamera's lower-precision RGBA16F adaptation.
+        val scratch = 1120L * 1120L * (6L * 4L + 10L * 16L)
         val fullFrame = 8000L * 6000L * 12L
         assertEquals(scratch + fullFrame, AmazePipelineContract.estimatedGpuBytes(8000, 6000))
     }

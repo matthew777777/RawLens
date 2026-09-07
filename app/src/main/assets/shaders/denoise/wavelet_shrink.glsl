@@ -5,7 +5,8 @@ precision highp image2D;
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform highp sampler2D u_detail;
 layout(binding = 1) uniform highp sampler2D u_coarse;
-layout(rgba32f, binding = 0) uniform coherent highp image2D u_accum;
+layout(rgba32f, binding = 0) uniform readonly highp image2D u_accum_read;
+layout(rgba32f, binding = 1) uniform writeonly highp image2D u_accum_write;
 uniform ivec2 u_size;
 uniform vec3 u_noise_s;
 uniform vec3 u_noise_o;
@@ -41,6 +42,6 @@ void main() {
     vec2 threshold = 8.0 * noiseVar / signalStd;
 
     vec3 kept = vec3(d.x, shrink(d.y, threshold.x), shrink(d.z, threshold.y));
-    vec4 a = imageLoad(u_accum, p);
-    imageStore(u_accum, p, vec4(a.rgb + kept, 1.0));
+    vec4 a = imageLoad(u_accum_read, p);
+    imageStore(u_accum_write, p, vec4(a.rgb + kept, 1.0));
 }

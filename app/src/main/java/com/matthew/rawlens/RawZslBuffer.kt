@@ -97,16 +97,6 @@ internal class RawZslBuffer(private val capacity: Int) {
         cutoffNanos: Long,
         realtimeTimestamps: Boolean
     ): Double {
-        val afScore = when (frame.result.get(CaptureResult.CONTROL_AF_STATE)) {
-            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> 4.0
-            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> 3.0
-            CaptureResult.CONTROL_AF_STATE_INACTIVE, null -> 0.0
-            CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN,
-            CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN -> -2.0
-            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
-            CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> -4.0
-            else -> 0.0
-        }
         val aeScore = when (frame.result.get(CaptureResult.CONTROL_AE_STATE)) {
             CaptureResult.CONTROL_AE_STATE_CONVERGED,
             CaptureResult.CONTROL_AE_STATE_LOCKED -> 2.0
@@ -127,7 +117,7 @@ internal class RawZslBuffer(private val capacity: Int) {
         val motionPenalty = min(8.0, angularTravel * 120.0)
         val completedAt = completedAt(frame, realtimeTimestamps)
         val agePenalty = min(10.0, (cutoffNanos - completedAt).coerceAtLeast(0L) / 100_000_000.0)
-        return afScore + aeScore + lensScore - isoPenalty - motionPenalty - agePenalty
+        return aeScore + lensScore - isoPenalty - motionPenalty - agePenalty
     }
 
     private fun completedAt(frame: BufferedRawFrame, realtimeTimestamps: Boolean): Long {

@@ -36,6 +36,12 @@ RawLens adaptations are maintained separately and may differ substantially from 
 
 PhotonCamera and its contributors provide their work without endorsement of RawLens.
 
+RawLens's HDR bracket alignment also compiles PhotonCamera's FlowNet-v2 NCNN implementation from
+the pinned `54d9febc596b34376b8be242a388f386d97e8f5d` checkout. Relevant sources are
+`processing/ml/FlowNetNcnnProcessor.java`, `cpp/ncnnMl.cpp`, `cpp/flownet/`, the ABI-specific NCNN
+static libraries, and `assets/models/flownet_flat.ncnn.{param,bin}`. RawLens supplies its own
+normalized-CFA input renderer and CFA-parity-preserving warp.
+
 ## Google Filament AgX
 
 RawLens's SDR display transform is a Kotlin/GLSL adaptation of the AgX Base implementation in
@@ -89,3 +95,12 @@ RawLens adapts the scalar clipping threshold to a spatial saturation map because
 lens-shading correction occurs before highlight reconstruction. The adapted source
 remains licensed under GPL-3.0-or-later; darktable and its contributors do not endorse
 RawLens.
+
+RawLens's exposure-bracket radiance merge is additionally adapted from darktable commit
+`52435b9a0c6bcf470f683e0c4455ecd321b9aec5`, primarily
+`src/control/jobs/control_jobs.c::_control_merge_hdr_process()` and `_envelope()`. It retains the
+exposure/aperture/ISO calibration, photon-count weighting, highlight envelope, clipped-pixel
+fallback, and final white-level normalization, with FlowNet registration replacing darktable's
+desktop OpenCV alignment. `FloatCfaDngWriter` adapts `src/imageio/imageio_dng.c`'s
+`dt_imageio_dng_write_float()` layout: uncompressed little-endian TIFF/DNG, one 32-bit IEEE-float
+CFA sample per pixel, `SampleFormat=3`, normalized black level zero, and white level one.

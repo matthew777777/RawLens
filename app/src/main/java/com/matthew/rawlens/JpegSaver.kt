@@ -39,11 +39,17 @@ class JpegSaver(private val context: Context) {
             ?: throw IOException("Could not create pending JPEG media entry")
         val insertedAt = SystemClock.elapsedRealtime()
         try {
-            resolver.openOutputStream(uri, "w")?.use { stream ->
-                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)) {
-                    throw IOException("Android JPEG encoder rejected the developed bitmap")
-                }
-            } ?: throw IOException("Could not open JPEG output stream")
+            if (developed.settings.ultraHdr) {
+                resolver.openOutputStream(uri, "w")?.use { stream ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, developed.settings.jpegQuality, stream)) {
+                        throw IOException("Android Ultra HDR JPEG encoder rejected the developed bitmap")
+                    }
+                } ?: throw IOException("Could not open Ultra HDR JPEG output stream")
+            } else {
+                resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
+                    NativeJpegEncoder.encode(bitmap, descriptor, developed.settings)
+                } ?: throw IOException("Could not open native JPEG output descriptor")
+            }
             val encodedAt = SystemClock.elapsedRealtime()
 
             resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
@@ -106,8 +112,10 @@ class JpegSaver(private val context: Context) {
             val publishedAt = SystemClock.elapsedRealtime()
             Log.i(
                 LOG_TAG,
-                "JPEG save ${bitmap.width}x${bitmap.height}: insert=${insertedAt - startedAt}ms " +
-                    "encode=${encodedAt - insertedAt}ms exif=${exifAt - encodedAt}ms " +
+                "JPEG save ${bitmap.width}x${bitmap.height} q=${developed.settings.jpegQuality} " +
+                    "subsampling=${developed.settings.chromaSubsampling.label} " +
+                    "encoder=${if (developed.settings.ultraHdr) "Android JPEG/R" else "libjpeg-turbo"}: " +
+                    "insert=${insertedAt - startedAt}ms encode=${encodedAt - insertedAt}ms exif=${exifAt - encodedAt}ms " +
                     "publish=${publishedAt - exifAt}ms total=${publishedAt - startedAt}ms"
             )
             return displayName
@@ -125,7 +133,6 @@ class JpegSaver(private val context: Context) {
     }
 
     private companion object {
-        const val JPEG_QUALITY = 95
         const val LOG_TAG = "RawLensDevelop"
         val EXIF_DATE_FORMAT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
     }

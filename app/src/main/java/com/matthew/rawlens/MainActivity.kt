@@ -80,7 +80,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var rawHistogramLive = false
     private var aeMeteringMode = AeMeteringMode.AUTO
     private var timerSeconds = 0
-    private var burstRelease = false
+    private var releaseMode = 0 // 0 single, 1 burst, 2 HDR bracket
     private var captureExposureMode = CaptureExposureMode.AUTO
     private var rawSuperResolutionSettings = RawSuperResolutionSettings()
     private var countdownRunnable: Runnable? = null
@@ -107,7 +107,8 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        burstRelease = lensPreferences().getBoolean(KEY_BURST_RELEASE, false)
+        releaseMode = lensPreferences().getInt(KEY_RELEASE_MODE,
+            if (lensPreferences().getBoolean(KEY_BURST_RELEASE, false)) 1 else 0)
         rawSuperResolutionSettings = RawSuperResolutionSettings(
             enabled = lensPreferences().getBoolean(KEY_RAW_SR_ENABLED, false),
             dngMode = RawSrDngMode.fromPreference(
@@ -265,6 +266,7 @@ class MainActivity : Activity(), SensorEventListener {
             dynamicExposureSettings(),
             aeMeteringMode,
             histogramEnabled,
+            { dngWriterBackend() },
             { cameraId -> dngMetadataOverrideStore.get(cameraId) },
             { zslStatus ->
                 rawZslStatus = zslStatus
@@ -780,13 +782,16 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun captureNow(forceBurst: Boolean) {
-        val useBurst = forceBurst || burstRelease
+        val selected = if (forceBurst) 1 else releaseMode
         Log.i(
             LOG_TAG,
-            "Shutter mode=${if (useBurst) "BURST_6" else "SINGLE"} " +
-                "forceBurst=$forceBurst selectedBurst=$burstRelease"
+            "Shutter mode=${releaseModeLabel(selected)} forceBurst=$forceBurst"
         )
-        if (useBurst) controller.captureBurst() else controller.capture()
+        when (selected) {
+            1 -> controller.captureBurst()
+            2 -> controller.captureHdrBracket()
+            else -> controller.capture()
+        }
     }
 
     private fun cycleTimer() {
@@ -801,11 +806,19 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleReleaseMode() {
-        burstRelease = !burstRelease
-        lensPreferences().edit().putBoolean(KEY_BURST_RELEASE, burstRelease).apply()
-        Log.i(LOG_TAG, "Release mode=${if (burstRelease) "BURST_6" else "SINGLE"}")
-        status.text = if (burstRelease) "BURST • 6 RAW FRAMES" else "SINGLE FRAME"
+        releaseMode = (releaseMode + 1) % 3
+        lensPreferences().edit().putInt(KEY_RELEASE_MODE, releaseMode).apply()
+        Log.i(LOG_TAG, "Release mode=${releaseModeLabel(releaseMode)}")
+        status.text = when (releaseMode) {
+            1 -> "BURST • 6 RAW FRAMES"
+            2 -> "HDR • 3 RAW • −2/0/+2 EV • FLOWNET"
+            else -> "SINGLE FRAME"
+        }
         updateQuickControls()
+    }
+
+    private fun releaseModeLabel(mode: Int) = when (mode) {
+        1 -> "BURST_6"; 2 -> "HDR_3"; else -> "SINGLE"
     }
 
     private fun toggleRawSuperResolution() {
@@ -1039,7 +1052,7 @@ class MainActivity : Activity(), SensorEventListener {
         ois.isEnabled = oisSupported
         ois.alpha = if (oisSupported) 1f else 0.4f
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
-        release.text = "RELEASE\n${if (burstRelease) "BURST 6" else "SINGLE"}"
+        release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±2"; else -> "SINGLE" }}"
         rawSr.text = rawSuperResolutionQuickText()
         val rawSrAvailable = rawZslStatus.state != RawZslState.FALLBACK
         rawSr.isEnabled = rawSrAvailable
@@ -1050,7 +1063,7 @@ class MainActivity : Activity(), SensorEventListener {
         setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
         setQuickTileState(ois, oisEnabled)
         setQuickTileState(timer, timerSeconds > 0)
-        setQuickTileState(release, burstRelease)
+        setQuickTileState(release, releaseMode != 0)
         setQuickTileState(rawSr, rawSuperResolutionSettings.enabled)
         updateTimerBadge()
         modeButton.text = when (captureExposureMode) {
@@ -1261,6 +1274,10 @@ class MainActivity : Activity(), SensorEventListener {
     private fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
         ultraHdr = lensPreferences().getBoolean(KEY_JPEG_ULTRA_HDR, false),
         displayP3 = lensPreferences().getBoolean(KEY_JPEG_DISPLAY_P3, false),
+        jpegQuality = lensPreferences().getInt(KEY_JPEG_QUALITY, 100),
+        chromaSubsampling = JpegChromaSubsampling.fromPreference(
+            lensPreferences().getString(KEY_JPEG_CHROMA_SUBSAMPLING, null)
+        ),
         agxPurityBoost = lensPreferences().getFloat(KEY_JPEG_AGX_PURITY, 1f),
         agxContrast = lensPreferences().getFloat(KEY_JPEG_AGX_CONTRAST, 1f),
         agxSaturation = lensPreferences().getFloat(KEY_JPEG_AGX_SATURATION, 1f),
@@ -1335,6 +1352,36 @@ class MainActivity : Activity(), SensorEventListener {
                 setOnClickListener { showDngMetadataOverrideEditor() }
             })
             content.addView(TextView(this).apply {
+                text = "DNG writer backend"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 13f
+                setPadding(0, dp(12), 0, 0)
+            })
+            content.addView(Button(this).apply {
+                fun refresh() { text = dngWriterBackend().label }
+                refresh()
+                setOnClickListener {
+                    val entries = DngWriterBackend.entries.toTypedArray()
+                    val current = dngWriterBackend()
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("DNG writer backend")
+                        .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
+                            val selected = entries[which]
+                            lensPreferences().edit().putString(KEY_DNG_WRITER_BACKEND, selected.preferenceValue).apply()
+                            status.text = "DNG WRITER • ${selected.label}"
+                            refresh()
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Android DngCreator is the default. AUTO falls back to patched TinyDNG only if the platform writer fails."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
+            content.addView(TextView(this).apply {
                 text = "RAW JPEG output"
                 setTextColor(getColor(R.color.text_primary))
                 textSize = 14f
@@ -1351,6 +1398,8 @@ class MainActivity : Activity(), SensorEventListener {
                 lensPreferences().edit()
                     .putBoolean(KEY_JPEG_ULTRA_HDR, resolved.ultraHdr)
                     .putBoolean(KEY_JPEG_DISPLAY_P3, resolved.displayP3)
+                    .putInt(KEY_JPEG_QUALITY, resolved.jpegQuality)
+                    .putString(KEY_JPEG_CHROMA_SUBSAMPLING, resolved.chromaSubsampling.name)
                     .putFloat(KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
                     .putFloat(KEY_JPEG_AGX_CONTRAST, resolved.agxContrast)
                     .putFloat(KEY_JPEG_AGX_SATURATION, resolved.agxSaturation)
@@ -1389,6 +1438,53 @@ class MainActivity : Activity(), SensorEventListener {
                         button.isChecked = currentJpegSettings.displayP3
                     }
                 }
+            })
+            val chromaButton = Button(this).apply {
+                fun refresh() {
+                    text = "JPEG chroma subsampling: ${currentJpegSettings.chromaSubsampling.label}"
+                }
+                refresh()
+                setOnClickListener {
+                    val next = currentJpegSettings.chromaSubsampling.next()
+                    if (applyJpegOutputSettings(currentJpegSettings.copy(chromaSubsampling = next))) {
+                        refresh()
+                        status.text = "JPEG CHROMA • ${next.label}"
+                    }
+                }
+            }
+            content.addView(chromaButton)
+            var jpegQuality = currentJpegSettings.jpegQuality.coerceIn(1, 100)
+            val jpegQualityLabel = TextView(this).apply {
+                text = "JPEG quality: $jpegQuality%"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            content.addView(jpegQualityLabel)
+            content.addView(SeekBar(this).apply {
+                max = 99
+                progress = jpegQuality - 1
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        jpegQuality = progress + 1
+                        jpegQualityLabel.text = "JPEG quality: $jpegQuality%"
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        if (applyJpegOutputSettings(currentJpegSettings.copy(jpegQuality = jpegQuality))) {
+                            status.text = "JPEG QUALITY • $jpegQuality%"
+                        } else {
+                            jpegQuality = currentJpegSettings.jpegQuality
+                            seekBar.progress = jpegQuality - 1
+                        }
+                    }
+                })
+            })
+            content.addView(TextView(this).apply {
+                text = "Native libjpeg-turbo is used for SDR JPEG. Ultra HDR uses Android JPEG/R; quality still applies there, while chroma subsampling is controlled by the platform encoder."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(dp(12), dp(4), dp(12), dp(8))
             })
             fun addAgxSlider(
                 title: String,
@@ -2097,6 +2193,10 @@ class MainActivity : Activity(), SensorEventListener {
             .show()
     }
 
+    private fun dngWriterBackend(): DngWriterBackend = DngWriterBackend.fromPreference(
+        lensPreferences().getString(KEY_DNG_WRITER_BACKEND, DngWriterBackend.ANDROID.preferenceValue)
+    )
+
     private fun lensPreferences() = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun selectedLensIds(): Set<String> =
@@ -2140,9 +2240,13 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER = "dynamic_exposure_auto_shutter"
         const val KEY_CAPTURE_EXPOSURE_MODE = "capture_exposure_mode"
         const val KEY_CAPTURE_FORMAT = "capture_format"
+        const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_BURST_RELEASE = "burst_release"
+        const val KEY_RELEASE_MODE = "release_mode"
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
+        const val KEY_JPEG_QUALITY = "jpeg_quality"
+        const val KEY_JPEG_CHROMA_SUBSAMPLING = "jpeg_chroma_subsampling"
         const val KEY_JPEG_AGX_PURITY = "jpeg_agx_purity"
         const val KEY_JPEG_AGX_CONTRAST = "jpeg_agx_contrast"
         const val KEY_JPEG_AGX_SATURATION = "jpeg_agx_saturation"

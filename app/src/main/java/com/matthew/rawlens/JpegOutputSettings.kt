@@ -9,6 +9,8 @@ import android.os.Build
 data class JpegOutputSettings(
     val ultraHdr: Boolean = false,
     val displayP3: Boolean = false,
+    val jpegQuality: Int = 100,
+    val chromaSubsampling: JpegChromaSubsampling = JpegChromaSubsampling.YUV_422,
     /** darktable-style post-tone-map AgX primary outset multiplier: 0.0 = none, 1.0 = base, 2.0 = maximum. */
     val agxPurityBoost: Float = 1f,
     val agxContrast: Float = 1f,
@@ -28,6 +30,7 @@ data class JpegOutputSettings(
             value.takeIf(Float::isFinite)?.coerceIn(minimum, maximum) ?: fallback
         return copy(
             ultraHdr = ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+            jpegQuality = jpegQuality.coerceIn(1, 100),
             agxPurityBoost = bounded(agxPurityBoost, 0f, 2f, 1f),
             agxContrast = bounded(agxContrast, 0.5f, 1.5f, 1f),
             agxSaturation = bounded(agxSaturation, 0f, 2f, 1f),

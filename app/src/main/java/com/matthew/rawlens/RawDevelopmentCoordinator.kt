@@ -183,6 +183,35 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
+    /** Develops an unclamped, normalized CFA produced by RAW HDR/SR merging. */
+    fun developMergedJpeg(
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        outputSettings: JpegOutputSettings = JpegOutputSettings()
+    ): DevelopedJpeg {
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        cfa.requireAmazeCompatible()
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+        )
+        return amaze.process(
+            cfa,
+            clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+            cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+            cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+            denoise = settings.denoise,
+            noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
+            fusedOutputSettings = outputSettings.takeIf { !settings.denoise.enabled }
+        ) { output ->
+            if (output.internalFormat == AmazeTextureFormat.RGBA8) {
+                jpegOutput.processEncoded(output, outputSettings)
+            } else {
+                jpegOutput.process(output, outputSettings, settings.denoise)
+            }
+        }
+    }
+
     @Deprecated("Use developJpeg so output color/gainmap metadata is retained")
     fun developJpegBitmap(rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings = RawDevelopmentSettings()): Bitmap =
         developJpeg(rawPlane, metadata, settings).bitmap

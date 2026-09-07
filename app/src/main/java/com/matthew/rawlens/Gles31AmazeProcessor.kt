@@ -548,7 +548,8 @@ class Gles31AmazeProcessor(
                         BoundProgram(programs.get("denoise/wavelet_shrink.glsl")).apply {
                             sampler("u_detail", detail)
                             sampler("u_coarse", coarse)
-                            imageReadWrite(0, accum, GLES30.GL_RGBA32F)
+                            imageRead(0, accum, GLES30.GL_RGBA32F)
+                            image(1, accum, GLES30.GL_RGBA32F)
                             ivec2("u_size", workWidth, workHeight)
                             vec3("u_noise_s", noiseScale)
                             vec3("u_noise_o", noiseOffset)

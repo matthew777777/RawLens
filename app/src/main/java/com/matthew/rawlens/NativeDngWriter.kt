@@ -14,6 +14,7 @@ import kotlin.math.roundToInt
 
 /** Camera2 metadata/stride bridge into PhotonCamera's unchanged Java and native DNG saver. */
 object NativeDngWriter {
+    @Synchronized
     fun write(
         outputStream: OutputStream,
         image: Image,
@@ -67,8 +68,11 @@ object NativeDngWriter {
             ForwardTransform2 = matrix(overrides.forwardMatrix2, metadata.forwardMatrix2)
             ColorMatrix1 = matrix(overrides.colorMatrix1, metadata.colorMatrix1)
             ColorMatrix2 = matrix(overrides.colorMatrix2, metadata.colorMatrix2)
-            gainMap = lensMap?.gains?.toFloatArray() ?: floatArrayOf(1f, 1f, 1f, 1f)
-            mapSize = Point(lensMap?.columns ?: 1, lensMap?.rows ?: 1)
+            // Presence is represented by the actual map payload/dimensions. Do not depend on
+            // PhotonCamera Parameters.hasGainMap here: some vendored revisions do not expose
+            // that field to Kotlin, and an identity 1x1 map must not be advertised as real LSC.
+            gainMap = lensMap?.gains?.toFloatArray() ?: floatArrayOf()
+            mapSize = Point(lensMap?.columns ?: 0, lensMap?.rows ?: 0)
             sensorPix = Rect(active.left, active.top, active.left + active.width, active.top + active.height)
             noiseModeler = photonNoiseModel(
                 overrides.noiseProfile?.toDoubleArray() ?: metadata.noiseProfile?.toDoubleArray()
@@ -125,7 +129,14 @@ object NativeDngWriter {
             source.position(0)
             return source
         }
-        val output = ByteBuffer.allocateDirect(image.width * image.height * 2)
+        val requiredBytes = image.width * image.height * 2
+        var output = rawScratch
+        if (output == null || output.capacity() < requiredBytes) {
+            output = ByteBuffer.allocateDirect(requiredBytes)
+            rawScratch = output
+        }
+        output.clear()
+        output.limit(requiredBytes)
         for (y in 0 until image.height) {
             for (x in 0 until image.width) {
                 val index = offset + y * plane.rowStride + x * plane.pixelStride
@@ -143,6 +154,11 @@ object NativeDngWriter {
         8 -> 270
         else -> 0
     }
+
+    // Camera RAW buffers commonly have padded rows. Reuse one direct staging allocation instead
+    // of allocating ~width*height*2 native bytes for every DNG. JNI DNG writing is synchronous,
+    // and write() is synchronized so the shared staging storage cannot be overwritten concurrently.
+    private var rawScratch: ByteBuffer? = null
 
     private val IDENTITY = doubleArrayOf(
         1.0, 0.0, 0.0,
