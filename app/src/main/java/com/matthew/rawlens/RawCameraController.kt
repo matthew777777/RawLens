@@ -894,6 +894,22 @@ class RawCameraController(
         builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
         builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
         builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, time)
+
+        // DSLR-style exposure bracketing changes shutter only. Freeze the last settled focus
+        // position and AWB state so focus breathing or per-frame colour adaptation cannot become
+        // false motion/chroma during FlowNet registration and radiance merging.
+        val focus = selectedFocusDistanceDiopters
+            ?: latestPreviewResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
+        if (focus != null && focus.isFinite()) {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, focus)
+        }
+        if (selectedWbKelvin == null &&
+            characteristics?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+        ) {
+            builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+        }
+        Log.i(LOG_TAG, "HDR bracket frame=${frameIndex + 1}/3 ev=$stops iso=$iso shutterNs=$time")
     }
 
     fun setAfPoint(viewX: Float, viewY: Float) {
@@ -905,11 +921,9 @@ class RawCameraController(
         val currentSession = session ?: return
         val surface = previewSurface ?: return
         if ((characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) == 0) {
-            onState("FOCUS AREA NOT SUPPORTED")
-            return
-        }
-        if (!supportsOpenCameraTouchFocus()) {
-            onState("AUTOFOCUS NOT SUPPORTED")
+            // Matches Open Camera: AE metering may still have been installed even when the
+            // camera has no AF regions, and setFocusAndMeteringArea() reports no focus area.
+            if (!isAeMeteringSupported()) onState("FOCUS AREA NOT SUPPORTED")
             return
         }
 
@@ -922,6 +936,15 @@ class RawCameraController(
         openCameraTouchFocusActive = true
         openCameraTouchFocusCompleted = false
         publishControls()
+
+        if (!supportsOpenCameraTouchFocus()) {
+            // Open Camera still applies the focus/metering rectangles in modes where an explicit
+            // AUTO trigger is unavailable; continuous AF then keeps running with the new region.
+            openCameraTouchFocusActive = false
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+            onState("FOCUS AREA SET")
+            return
+        }
 
         try {
             updateRepeatingRequest(preserveRawZslBuffer = true)
@@ -965,14 +988,17 @@ class RawCameraController(
         return when {
             modes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            modes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
+                CaptureRequest.CONTROL_AF_MODE_AUTO
+            modes.contains(CaptureRequest.CONTROL_AF_MODE_MACRO) ->
+                CaptureRequest.CONTROL_AF_MODE_MACRO
+            modes.contains(CaptureRequest.CONTROL_AF_MODE_EDOF) ->
+                CaptureRequest.CONTROL_AF_MODE_EDOF
             else -> CaptureRequest.CONTROL_AF_MODE_OFF
         }
     }
 
     private fun supportsOpenCameraTouchFocus(): Boolean {
-        val minimumFocusDistance = characteristics
-            ?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-        if (minimumFocusDistance <= 0f) return false
         val modes = characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         return modes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO)
     }
@@ -1011,7 +1037,6 @@ class RawCameraController(
         }
         if (openCameraTouchFocusActive) {
             continuousFocusResetOpenCamera()
-            return
         }
         val hadTargets = afRegion != null || aeRegion != null
         afRegion = null
@@ -1035,12 +1060,15 @@ class RawCameraController(
         }
         val centerX = active.left + (sensorPoint.first * active.width()).toInt()
         val centerY = active.top + (sensorPoint.second * active.height()).toInt()
-        val halfSize = (minOf(active.width(), active.height()) * 0.06f).toInt()
+        // Open Camera uses a 100x100 area in its -1000..1000 coordinate system: 5% of
+        // each sensor dimension either side of the touched point.
+        val halfWidth = (active.width() * 0.05f).toInt().coerceAtLeast(1)
+        val halfHeight = (active.height() * 0.05f).toInt().coerceAtLeast(1)
         val rect = Rect(
-            (centerX - halfSize).coerceIn(active.left, active.right - 1),
-            (centerY - halfSize).coerceIn(active.top, active.bottom - 1),
-            (centerX + halfSize).coerceIn(active.left + 1, active.right),
-            (centerY + halfSize).coerceIn(active.top + 1, active.bottom)
+            (centerX - halfWidth).coerceIn(active.left, active.right - 1),
+            (centerY - halfHeight).coerceIn(active.top, active.bottom - 1),
+            (centerX + halfWidth).coerceIn(active.left + 1, active.right),
+            (centerY + halfHeight).coerceIn(active.top + 1, active.bottom)
         )
         return MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX)
     }

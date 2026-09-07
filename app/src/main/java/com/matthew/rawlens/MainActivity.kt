@@ -380,6 +380,7 @@ class MainActivity : Activity(), SensorEventListener {
         meteringOverlay.onAePointChanged = { x, y ->
             controller.setAePoint(x, y)
         }
+        meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
         manualSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
