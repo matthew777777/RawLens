@@ -790,7 +790,8 @@ class MainActivity : Activity(), SensorEventListener {
         when (selected) {
             1 -> controller.captureBurst()
             2 -> controller.captureHdrBracket(
-                lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)
+                saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
+                bracketStops = hdrBracketStops()
             )
             else -> controller.capture()
         }
@@ -814,9 +815,9 @@ class MainActivity : Activity(), SensorEventListener {
         status.text = when (releaseMode) {
             1 -> "BURST • 6 RAW FRAMES"
             2 -> if (lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)) {
-                "HDR • SAVE 3 DNG • −2/0/+2 EV"
+                "HDR • SAVE 3 DNG • −${hdrBracketStops()}/0/+${hdrBracketStops()} EV"
             } else {
-                "HDR • 3 RAW • −2/0/+2 EV • FLOWNET"
+                "HDR • 3 RAW • −${hdrBracketStops()}/0/+${hdrBracketStops()} EV • FLOWNET"
             }
             else -> "SINGLE FRAME"
         }
@@ -1058,7 +1059,7 @@ class MainActivity : Activity(), SensorEventListener {
         ois.isEnabled = oisSupported
         ois.alpha = if (oisSupported) 1f else 0.4f
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
-        release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±2"; else -> "SINGLE" }}"
+        release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±${hdrBracketStops()}"; else -> "SINGLE" }}"
         rawSr.text = rawSuperResolutionQuickText()
         val rawSrAvailable = rawZslStatus.state != RawZslState.FALLBACK
         rawSr.isEnabled = rawSrAvailable
@@ -1642,6 +1643,17 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             })
             content.addView(CheckBox(this).apply {
+                text = "HDR bracket range: −4 / 0 / +4 EV"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = hdrBracketStops() == 4
+                setOnCheckedChangeListener { _, enabled ->
+                    val stops = if (enabled) 4 else 2
+                    lensPreferences().edit().putInt(KEY_HDR_BRACKET_STOPS, stops).apply()
+                    status.text = "HDR BRACKET • −$stops / 0 / +$stops EV"
+                    updateQuickControls()
+                }
+            })
+            content.addView(CheckBox(this).apply {
                 text = "RAW zero shutter lag"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = captureExposureMode == CaptureExposureMode.ZSL
@@ -2215,6 +2227,9 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun lensPreferences() = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    private fun hdrBracketStops(): Int =
+        if (lensPreferences().getInt(KEY_HDR_BRACKET_STOPS, 2) == 4) 4 else 2
+
     private fun selectedLensIds(): Set<String> =
         lensPreferences().getStringSet(KEY_SELECTED_LENSES, emptySet())?.toSet().orEmpty()
 
@@ -2260,6 +2275,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_RELEASE_MODE = "release_mode"
         const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"
+        const val KEY_HDR_BRACKET_STOPS = "hdr_bracket_stops"
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
         const val KEY_JPEG_QUALITY = "jpeg_quality"

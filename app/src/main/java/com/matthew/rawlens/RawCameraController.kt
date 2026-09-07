@@ -171,6 +171,7 @@ class RawCameraController(
     private val activeFramesRemaining = AtomicInteger(0)
     private var activeHdrBracket = false
     private var activeHdrSaveEachBracket = false
+    private var activeHdrStops = 2
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
     private val pendingSaveCount = AtomicInteger(0)
     private val pendingJpegCount = AtomicInteger(0)
@@ -662,7 +663,8 @@ class RawCameraController(
     }
 
     /** Captures the default handheld bracket (-2, 0, +2 EV) around the latest metered pair. */
-    fun captureHdrBracket(saveEachBracket: Boolean = false) {
+    fun captureHdrBracket(saveEachBracket: Boolean = false, bracketStops: Int = 2) {
+        require(bracketStops == 2 || bracketStops == 4) { "HDR bracket must be ±2 or ±4 EV" }
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         cameraHandler.post {
@@ -676,6 +678,7 @@ class RawCameraController(
             }
             activeHdrBracket = true
             activeHdrSaveEachBracket = saveEachBracket
+            activeHdrStops = bracketStops
             captureFrames(3, outputFormat = outputFormat, orientationSnapshot = orientationSnapshot)
         }
     }
@@ -876,7 +879,7 @@ class RawCameraController(
     }
 
     private fun applyHdrExposure(builder: CaptureRequest.Builder, frameIndex: Int) {
-        val stops = intArrayOf(-2, 0, 2)[frameIndex]
+        val stops = intArrayOf(-activeHdrStops, 0, activeHdrStops)[frameIndex]
         val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
         val timeRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
         val useProgram = captureExposureMode == CaptureExposureMode.PROGRAM && dynamicExposureSettings.enabled
@@ -2166,8 +2169,10 @@ class RawCameraController(
             if (activeHdrBracket) {
                 activeHdrBracket = false
                 val saveEachBracket = activeHdrSaveEachBracket
+                val bracketStops = activeHdrStops
                 activeHdrSaveEachBracket = false
-                saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket)
+                activeHdrStops = 2
+                saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket, bracketStops)
                 pendingHdrFrames.clear()
             }
             finishCapture()
@@ -2175,7 +2180,11 @@ class RawCameraController(
         }
     }
 
-    private fun saveHdrBracket(pending: List<PendingHdrFrame>, saveEachBracket: Boolean) {
+    private fun saveHdrBracket(
+        pending: List<PendingHdrFrame>,
+        saveEachBracket: Boolean,
+        bracketStops: Int
+    ) {
         val c = characteristics ?: return pending.forEach { it.image.close() }
         if (pending.size < 2) return pending.forEach { it.image.close() }
         val ownership = CloseOnceOwner(pending) { it.image.close() }
@@ -2198,7 +2207,7 @@ class RawCameraController(
                         )
                         saver.save(
                             frame.image, c, frame.result, orientation, overrides, metadata, backend,
-                            fileNameSuffix = HDR_BRACKET_SUFFIXES[index]
+                            fileNameSuffix = hdrBracketSuffix(index, bracketStops)
                         )
                     }
                     onState("HDR BRACKETS SAVED • ${names.joinToString(" • ")}")
@@ -2577,6 +2586,7 @@ class RawCameraController(
         if (activeHdrBracket) {
             activeHdrBracket = false
             activeHdrSaveEachBracket = false
+            activeHdrStops = 2
             activeFramesRemaining.set(0)
             captureSequence.incrementAndGet()
             pendingHdrFrames.forEach { it.image.close() }
@@ -3139,7 +3149,11 @@ class RawCameraController(
         private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
         private const val MAX_ZSL_FRAMES = 30
         private const val RAW_ZSL_TARGET_FPS = 30
-        private val HDR_BRACKET_SUFFIXES = listOf("HDR_-2EV", "HDR_0EV", "HDR_+2EV")
+        private fun hdrBracketSuffix(index: Int, stops: Int): String = when (index) {
+            0 -> "HDR_-${stops}EV"
+            1 -> "HDR_0EV"
+            else -> "HDR_+${stops}EV"
+        }
         /** One RAW candidate followed by preview-only frames; bounds HAL RAW bandwidth pressure. */
         private const val RAW_ZSL_REQUEST_PERIOD = 3
         private const val RAW_BYTES_PER_PIXEL = 2L
