@@ -47,7 +47,8 @@ void main() {
     float sumcfa = 0.0, sumh = 0.0, sumv = 0.0, sumsqh = 0.0, sumsqv = 0.0, areawt = 0.0;
     for (int j = -6; j <= 6; j += 2) {
         for (int k = -6; k <= 6; k += 2) {
-            ivec2 q = s + ivec2(j, k);
+            // RawTherapee accumulates rows outside columns (float order matters).
+            ivec2 q = s + ivec2(k, j);
             if (n2(q) > 0.5) {
                 float cf = Cf(q);
                 sumcfa += cf;

@@ -742,6 +742,7 @@ class Gles31AmazeProcessor(
     ) : Closeable {
         val byteSize: Long = width.toLong() * height * when (internalFormat) {
             GLES30.GL_R32F -> 4L
+            GLES30.GL_R32UI -> 4L
             GLES30.GL_RGBA16F -> 8L
             GLES30.GL_RGBA32F -> 16L
             GLES30.GL_R16UI -> 2L

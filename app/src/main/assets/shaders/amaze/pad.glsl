@@ -1,10 +1,8 @@
 // AMaZE pass 0: fetch one tile of the CFA into its padded staging window.
 //
-// Reproduces amaze_glsl/pad.py exactly: the top border rows are sliced from
-// the image (border row j <- image row 32 - j, period-32 mirror) while the
-// side columns are sliced from the already row-padded buffer (left border
-// col j <- image col 16 - j, right border col j <- image col W - 2 - j;
-// bottom row j <- image row H - 2 - j).  All rules preserve the Bayer phase.
+// Match RawTherapee's tile initialization, including its distinct corner
+// rules. For the first tile top/left are -16, so 32-j+top is 16-j,
+// whereas the corner loops explicitly address 32-j without that offset.
 //
 // Tiled processing: u_off places the window anywhere in the full image.
 // Window texels are addressed in whole-image padded coordinates and clamped
@@ -30,24 +28,35 @@ int FC(int y, int x) {
                         : ((x & 1) == 0 ? u_fc.z : u_fc.w);
 }
 
-int srcRow(int r, int n) {
-    if (r < 16) return 32 - r;
+int srcRow(int r, int n, bool sideBorder) {
+    if (r < 16) return (sideBorder ? 32 : 16) - r;
     if (r < n + 16) return r - 16;
     return 2 * n + 14 - r;
 }
 
-int srcCol(int c, int n) {
-    if (c < 16) return 16 - c;
+int srcCol(int c, int n, bool rowBorder) {
+    if (c < 16) return (rowBorder ? 32 : 16) - c;
     if (c < n + 16) return c - 16;
     return 2 * n + 14 - c;
+}
+
+// RawTherapee's fixed border assumes a sufficiently large image. RawLens
+// also accepts 4x4 crops: reflect otherwise unavailable taps without changing
+// their Bayer parity (a plain clamp can fetch a different color).
+int reflectSmallImage(int p, int n) {
+    int period = 2 * (n - 1);
+    int q = ((p % period) + period) % period;
+    return q < n ? q : period - q;
 }
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= u_size.x || p.y >= u_size.y) return;
     ivec2 fp = clamp(p + u_off + ivec2(16), ivec2(0), u_insize + ivec2(31));
-    ivec2 s = ivec2(srcCol(fp.x, u_insize.x), srcRow(fp.y, u_insize.y));
-    s = clamp(s, ivec2(0), u_insize - 1);
+    bool sideBorder = fp.x < 16 || fp.x >= u_insize.x + 16;
+    bool rowBorder = fp.y < 16 || fp.y >= u_insize.y + 16;
+    ivec2 s = ivec2(srcCol(fp.x, u_insize.x, rowBorder), srcRow(fp.y, u_insize.y, sideBorder));
+    s = ivec2(reflectSmallImage(s.x, u_insize.x), reflectSmallImage(s.y, u_insize.y));
     float raw = texelFetch(u_in, s, 0).r;
     int c = FC(s.y, s.x);
     float balance = c == 0 ? u_demosaic_balance.r : (c == 2 ? u_demosaic_balance.b : u_demosaic_balance.g);

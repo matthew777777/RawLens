@@ -35,6 +35,9 @@ void main() {
     emit(p, 0.0);
     if ((p.x & 1) == 1) return;
     ivec2 s = ivec2(site_x(p), p.y);
+    // RawTherapee restricts nyquist2 to the eight-pixel interior. Besides
+    // matching that domain, this prevents negative half-grid shared reads.
+    if (!inside(s, 8)) return;
     float nb = (float(flag(s + ivec2(0, -2))) + float(flag(s + ivec2(-1, -1))) + float(flag(s + ivec2(1, -1)))
                 + float(flag(s + ivec2(-2, 0))) + float(flag(s + ivec2(2, 0)))
                 + float(flag(s + ivec2(-1, 1))) + float(flag(s + ivec2(1, 1))) + float(flag(s + ivec2(0, 2))));

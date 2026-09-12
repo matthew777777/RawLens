@@ -1,6 +1,6 @@
 // Common header of the AMaZE compute passes (amaze/*.glsl).
-// GLES 3.1 port of the verified GLSL 4.30 pipeline in amazeGLSL
-// (amaze_glsl/compute_shaders.py, CS_HEADER); the math is unchanged.
+// GLES 3.1 port derived from the GLSL 4.30 pipeline in amazeGLSL.
+// See docs/amaze-rawtherapee-audit.md for remaining differences from RawTherapee.
 //
 // AMaZE demosaicing: Copyright (c) 2008-2010 Emil Martinec,
 // (c) Ingo Weyrich - GPL-3.0-or-later.

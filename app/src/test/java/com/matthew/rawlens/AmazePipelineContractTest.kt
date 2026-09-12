@@ -67,11 +67,25 @@ class AmazePipelineContractTest {
             ),
             clipPasses
         )
-        assertTrue(AmazeUniform.CFA_PHASE !in
+        assertTrue(AmazeUniform.CFA_PHASE in
             AmazePipelineContract.uniformsFor("amaze/hvwt.glsl"))
         assertTrue(AmazeUniform.CFA_PHASE in
             AmazePipelineContract.uniformsFor("amaze/final.glsl"))
         assertTrue(AmazePipelineContract.passes.all { AmazeUniform.SIZE in it.uniforms })
+    }
+
+    @Test
+    fun everyPassUsingBayerHelpersReceivesTheCfaUniform() {
+        // These helpers all reach FC()/u_fc in import_amaze. An unbound ivec4
+        // defaults to zero: site_x then mistakes every even column for R/B.
+        val bayerHelperCall = Regex("\\b(?:site_x|isG|FC)\\s*\\(")
+        AmazePipelineContract.passes.filter { it.shader != "amaze/pad.glsl" }.forEach { pass ->
+            val source = File("src/main/assets/shaders/${pass.shader}").readText()
+            if (bayerHelperCall.containsMatchIn(source)) {
+                assertTrue("${pass.shader} reads CFA phase but does not bind it",
+                    AmazeUniform.CFA_PHASE in pass.uniforms)
+            }
+        }
     }
 
     @Test

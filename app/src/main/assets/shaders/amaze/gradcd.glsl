@@ -107,6 +107,12 @@ void main() {
     float vcd = sgn * (vwt * gdar + (1.0 - vwt) * guar - c);
     float hcd = sgn * (hwt * grar + (1.0 - hwt) * glar - c);
     if (c > clip8 || gintvha > clip8 || ginthha > clip8) {
+        // RawTherapee also replaces the directional estimates before computing
+        // dgintv/dginth. Keeping ratio estimates here changes highlight weights.
+        guar = guha;
+        gdar = gdha;
+        glar = glha;
+        grar = grha;
         vcd = vcdalt;
         hcd = hcdalt;
     }

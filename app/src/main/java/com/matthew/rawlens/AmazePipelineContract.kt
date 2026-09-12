@@ -36,7 +36,7 @@ sealed interface AmazeCapability {
     data class Unsupported(val reason: String) : AmazeCapability
 }
 
-/** Exact pass/resource contract of PhotonCamera's verified GLES 3.1 AMaZE node. */
+/** Pass/resource contract for the GLES 3.1 AMaZE port; not a claim of RawTherapee parity. */
 object AmazePipelineContract {
     const val LOCAL_SIZE_X = 8
     const val LOCAL_SIZE_Y = 8
@@ -59,15 +59,15 @@ object AmazePipelineContract {
         ),
         AmazePass(
             "amaze/hvwt.glsl", listOf("cd2", "cdB", "grad"), listOf("hvwt", "nyqTest"),
-            uniforms(AmazeUniform.SIZE)
+            uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
             "amaze/nyq2.glsl", listOf("nyqTest"), listOf("nyq2"),
-            uniforms(AmazeUniform.SIZE)
+            uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
             "amaze/area.glsl", listOf("grad", "nyq2", "hvwt"), listOf("hvwt2"),
-            uniforms(AmazeUniform.SIZE)
+            uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
             "amaze/green.glsl", listOf("grad", "hvwt2", "cd2", "nyq2"),
@@ -83,7 +83,7 @@ object AmazePipelineContract {
         ),
         AmazePass(
             "amaze/pmrbint.glsl", listOf("grad", "rbpm"), listOf("pmrbint"),
-            uniforms(AmazeUniform.SIZE)
+            uniforms(AmazeUniform.SIZE, AmazeUniform.CFA_PHASE)
         ),
         AmazePass(
             "amaze/gcorr.glsl", listOf("pmrbint", "greenD2", "hvwt3", "grad"),

@@ -38,7 +38,7 @@ layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
 void emit(ivec2 p, vec4 v) { imageStore(img_out, p, v); }
 
 // delp/delm + Dgrbsq1p/1m at half-grid slot q (even column); both pattern
-// branches share the Dgrbsq1p/1m formulas evaluated around column q.x+1
+// branches evaluate Dgrbsq1p/1m around the green site (q.x+1 or q.x).
 vec4 delpm_val(ivec2 q) {
     if (q.x < 6 || q.y < 6 || q.x > u_size.x - 8 || q.y > u_size.y - 8) return vec4(0.0);
     float delp, delm;

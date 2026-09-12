@@ -4,6 +4,12 @@ This directory is for isolated upstream source checkouts used to study camera al
 
 ## PhotonCamera
 
+For the separate SkyKing working Bayer-direct merge reference used by RAW SR
+Prompt 4 / future 4B–4D, see [the pinned source contract and adaptation notes](../docs/raw-sr-skyking-reference.md).
+Its research-only checkout is `Photon-Camera-SkyKing/`, branch
+`backup-26514-before-26515-short-bento-fix-20260820`, commit
+`e9855a3af7a79801a762ec3f99b441474926f009`. It is not a build dependency.
+
 `PhotonCamera/` is a single-branch checkout of PhotonCamera's `dev` branch. It is a research-only checkout and is not packaged into the RawLens app:
 
 ```bash
