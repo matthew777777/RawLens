@@ -19,14 +19,19 @@ object FloatCfaDngWriter {
     private const val RATIONAL = 5
     private const val SRATIONAL = 10
 
-    fun write(output: OutputStream, cfa: UnpackedRawCfa, metadata: RawFrameMetadata) {
+    fun write(
+        output: OutputStream,
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        gps: GpsLocation? = null
+    ) {
         cfa.requireAmazeCompatible()
         require(cfa.values.size == cfa.width * cfa.height)
         require(cfa.values.all(Float::isFinite)) { "Float DNG cannot contain NaN or infinity" }
 
         val neutral = metadata.neutralColorPoint?.toDoubleArray()
             ?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
-        val matrix = metadata.colorMatrix1?.toDoubleArray()
+        val matrix = metadata.colorMatrix1?.let(::dngMatrix)
             ?.takeIf { it.size == 9 } ?: IDENTITY
         val cameraName = "${Build.MANUFACTURER} ${Build.MODEL} (${metadata.cameraId})"
         require(metadata.exifOrientation in 1..8)
@@ -55,7 +60,7 @@ object FloatCfaDngWriter {
         // Preserve the full camera colour calibration. Omitting calibration/forward matrices
         // while retaining AsShotNeutral can change the rendering in external RAW developers.
         fun matrixTag(tag: Int, values: ImmutableDoubleValues?) {
-            values?.toDoubleArray()?.let {
+            values?.let(::dngMatrix)?.let {
                 require(it.size == 9 && it.all(Double::isFinite))
                 entries += Entry(tag, SRATIONAL, rationals(it, signed = true))
             }
@@ -68,6 +73,11 @@ object FloatCfaDngWriter {
             matrixTag(50965, metadata.forwardMatrix2)
             entries += Entry(50779, SHORT, shorts(metadata.referenceIlluminant2))
         }
+        if (gps != null) {
+            // Placeholder value: the GPS sub-IFD offset is patched during
+            // serialization once the external-data layout is known.
+            entries += Entry(GpsTiffDirectory.TAG_GPS_IFD_POINTER, LONG, ByteArray(4))
+        }
         entries.sortBy { it.tag }
 
         val ifdBytes = 2 + entries.size * 12 + 4
@@ -79,7 +89,9 @@ object FloatCfaDngWriter {
                 dataOffset += entry.payload.size + (entry.payload.size and 1)
             }
         }
-        val stripOffset = dataOffset
+        val gpsOffset = dataOffset
+        val gpsBlob = gps?.let { GpsTiffDirectory.build(it, gpsOffset) }
+        val stripOffset = gpsOffset + (gpsBlob?.size ?: 0)
         val header = ByteBuffer.allocate(stripOffset).order(ByteOrder.LITTLE_ENDIAN)
         header.put('I'.code.toByte()).put('I'.code.toByte()).putShort(42).putInt(8)
         header.putShort(entries.size.toShort())
@@ -88,6 +100,7 @@ object FloatCfaDngWriter {
             header.putInt(entry.count)
             when {
                 entry.patchStripOffset -> header.putInt(stripOffset)
+                entry.tag == GpsTiffDirectory.TAG_GPS_IFD_POINTER -> header.putInt(gpsOffset)
                 entry.payload.size <= 4 -> {
                     header.put(entry.payload)
                     repeat(4 - entry.payload.size) { header.put(0) }
@@ -101,6 +114,10 @@ object FloatCfaDngWriter {
             header.put(entry.payload)
             if (entry.payload.size and 1 == 1) header.put(0)
         } }
+        gpsBlob?.let {
+            header.position(gpsOffset)
+            header.put(it)
+        }
         output.write(header.array())
 
         val row = ByteBuffer.allocate(cfa.width * Float.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
@@ -110,6 +127,13 @@ object FloatCfaDngWriter {
             for (x in 0 until cfa.width) row.putFloat(cfa.values[start + x].coerceAtLeast(0f))
             output.write(row.array())
         }
+    }
+
+    // Match TinyDngMetadata's RAW_SENSOR serialization. Camera2 snapshots are column-major
+    // because getElement takes (column, row); TIFF/DNG matrix tags must be row-major.
+    private fun dngMatrix(values: ImmutableDoubleValues): DoubleArray {
+        require(values.size == 9)
+        return DoubleArray(9) { values[(it % 3) * 3 + it / 3] }
     }
 
     private data class Entry(

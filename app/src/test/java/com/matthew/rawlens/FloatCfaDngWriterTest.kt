@@ -10,6 +10,36 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class FloatCfaDngWriterTest {
+    @Test fun capturedMatricesAreWrittenInRawSensorRowMajorOrder() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant2).thenReturn(21)
+        val captured = ImmutableDoubleValues(doubleArrayOf(1.0, 4.0, 7.0, -2.0, 5.0, 8.0, 3.0, 6.0, 9.0))
+        `when`(metadata.colorMatrix1).thenReturn(captured)
+        `when`(metadata.colorMatrix2).thenReturn(captured)
+        `when`(metadata.forwardMatrix1).thenReturn(captured)
+        `when`(metadata.forwardMatrix2).thenReturn(captured)
+        `when`(metadata.cameraCalibration1).thenReturn(captured)
+        `when`(metadata.cameraCalibration2).thenReturn(captured)
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also { FloatCfaDngWriter.write(it, cfa, metadata) }.toByteArray()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val expected = doubleArrayOf(1.0, -2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+        val remaining = mutableSetOf(50721, 50722, 50723, 50724, 50964, 50965)
+        for (i in 0 until buffer.getShort(8).toInt()) {
+            val p = 10 + i * 12
+            val tag = buffer.getShort(p).toInt() and 0xffff
+            if (!remaining.remove(tag)) continue
+            assertEquals(10, buffer.getShort(p + 2).toInt())
+            assertEquals(9, buffer.getInt(p + 4))
+            val offset = buffer.getInt(p + 8)
+            for (j in expected.indices) assertEquals(expected[j],
+                buffer.getInt(offset + j * 8).toDouble() / buffer.getInt(offset + j * 8 + 4), 1e-6)
+        }
+        assertTrue(remaining.isEmpty())
+    }
+
     @Test fun writesFloatCfaDngTagsAndUnclampedSamples() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.cameraId).thenReturn("0")

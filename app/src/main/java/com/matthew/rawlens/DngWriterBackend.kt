@@ -11,8 +11,8 @@ enum class DngWriterBackend(val preferenceValue: String, val label: String) {
     /** Android's official Camera2 DngCreator. This is the RawLens default. */
     ANDROID("android", "ANDROID (official DngCreator)"),
 
-    /** RawLens' patched PhotonCamera/TinyDNG compatibility writer. */
-    TINY_DNG("tinydng", "TINYDNG (patched fallback)");
+    /** Pinned TinyDNG v3 with RawLens Camera2 metadata support. */
+    TINY_DNG("tinydng", "TINYDNG v3");
 
     companion object {
         fun fromPreference(value: String?): DngWriterBackend =

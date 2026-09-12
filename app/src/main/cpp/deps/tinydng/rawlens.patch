@@ -1,0 +1,52 @@
+--- a/tinydng.h
++++ b/tinydng.h
+@@ -700,6 +700,10 @@
+   size_t data_size;
+   const tinydng_cfa *cfa;      /* optional */
+   const tinydng_raw_info *raw; /* optional DNG metadata */
++  /* RawLens: additional tags, serialized in opts->big_endian byte order.
++     Must not duplicate generated tags. Payloads are copied at writer_create. */
++  const tinydng_field *fields;
++  size_t field_count;
+ } tinydng_write_image;
+ 
+ /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;
+--- a/tinydng_write.c
++++ b/tinydng_write.c
+@@ -26,7 +26,7 @@
+ #define TD_PHOTO_RGB 2u
+ #define TD_PHOTO_CFA 32803u
+ 
+-#define TD_WMAX_ENTRIES 48
++#define TD_WMAX_ENTRIES 64
+ #define TD_WMAX_EXTRAS (256u * 1024u)
+ 
+ static void* tdw_lj92_ctx_alloc(void* user, size_t size) {
+@@ -1497,7 +1497,27 @@
+         td_add_short(&w->w, TD_TAG_CALIBRATION_ILLUMINANT1,
+                      raw->calibration_illuminant1);
+       }
++    }
++  }
++
++  /* RawLens Camera2 metadata, including DOUBLE NoiseProfile and opaque opcodes. */
++  if (meta->field_count && !meta->fields) w->w.failed = 1;
++  for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
++    const tinydng_field *f = &meta->fields[i];
++    size_t unit = 0;
++    switch (f->type) {
++      case 1: case 2: case 7: unit = 1; break;
++      case 3: unit = 2; break;
++      case 4: case 9: case 11: unit = 4; break;
++      case 5: case 10: case 12: unit = 8; break;
++      default: w->w.failed = 1; break;
++    }
++    if (!f->data || !f->count || !unit || f->count > SIZE_MAX / unit ||
++        f->size != (size_t)f->count * unit) { w->w.failed = 1; break; }
++    for (size_t j = 0; j < w->w.entry_count; ++j) {
++      if (w->w.entries[j].tag == f->tag) w->w.failed = 1;
+     }
++    if (!w->w.failed) td_add(&w->w, f->tag, f->type, f->count, f->data, f->size);
+   }
+ 
+   if (w->w.failed) {

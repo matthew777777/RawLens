@@ -24,8 +24,10 @@ import java.io.IOException
  * TinyDNG path is retained as an explicit diagnostic/fallback backend.
  */
 class DngSaver(private val context: Context) {
-    fun saveMerged(cfa: UnpackedRawCfa, metadata: RawFrameMetadata): String {
-        val displayName = "RAW_${System.currentTimeMillis()}_HDR.dng"
+    fun saveMerged(cfa: UnpackedRawCfa, metadata: RawFrameMetadata,
+                   captureId: Long = System.currentTimeMillis(),
+                   gps: GpsLocation? = null): String {
+        val displayName = CaptureFileNames.hdrDng(captureId)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
@@ -36,7 +38,7 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create HDR DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata) }
+            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata, gps) }
                 ?: throw IOException("Could not open HDR DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish HDR DNG")
@@ -56,13 +58,18 @@ class DngSaver(private val context: Context) {
         overrides: DngMetadataOverrides = DngMetadataOverrides(),
         metadata: RawFrameMetadata,
         backend: DngWriterBackend = DngWriterBackend.ANDROID,
-        fileNameSuffix: String? = null
+        fileNameSuffix: String? = null,
+        captureId: Long = System.currentTimeMillis(),
+        gps: GpsLocation? = null
     ): String {
         check(orientation == metadata.exifOrientation) { "DNG orientation snapshot mismatch" }
         overrides.validate()
 
-        val suffix = fileNameSuffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
-        val displayName = "RAW_${System.currentTimeMillis()}$suffix.dng"
+        val displayName = if (fileNameSuffix.isNullOrBlank()) {
+            CaptureFileNames.singleDng(captureId)
+        } else {
+            CaptureFileNames.fileName(captureId, fileNameSuffix, "dng")
+        }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
@@ -77,7 +84,7 @@ class DngSaver(private val context: Context) {
             val actualBackend = when (backend) {
                 DngWriterBackend.ANDROID -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
-                        writeAndroid(output, image, characteristics, result, orientation)
+                        writeAndroid(output, image, characteristics, result, orientation, gps)
                     } ?: throw IOException("Could not open DNG output stream")
                     DngWriterBackend.ANDROID
                 }
@@ -96,8 +103,15 @@ class DngSaver(private val context: Context) {
                     result = result,
                     orientation = orientation,
                     overrides = overrides,
-                    metadata = metadata
+                    metadata = metadata,
+                    gps = gps
                 )
+            }
+            if (gps != null && actualBackend == DngWriterBackend.TINY_DNG) {
+                // The pinned TinyDNG writer emits a single flat IFD and cannot
+                // carry the GPS sub-IFD; the fix is dropped rather than written
+                // half-correctly. The platform backend remains the GPS path.
+                Log.w(LOG_TAG, "TinyDNG backend discards the GPS fix for $displayName")
             }
 
             // Android DngCreator deliberately follows device Camera2 metadata. Preserve RawLens'
@@ -132,11 +146,13 @@ class DngSaver(private val context: Context) {
         image: Image,
         characteristics: CameraCharacteristics,
         result: CaptureResult,
-        orientation: Int
+        orientation: Int,
+        gps: GpsLocation?
     ) {
         DngCreator(characteristics, result).use { creator ->
             creator.setOrientation(orientation)
             creator.setDescription("RawLens • Android Camera2 DngCreator")
+            gps?.let { creator.setLocation(it.toAndroidLocation()) }
             creator.writeImage(output, image)
         }
     }
@@ -153,14 +169,15 @@ class DngSaver(private val context: Context) {
         result: CaptureResult,
         orientation: Int,
         overrides: DngMetadataOverrides,
-        metadata: RawFrameMetadata
+        metadata: RawFrameMetadata,
+        gps: GpsLocation?
     ): DngWriterBackend {
         val resolver = context.contentResolver
         val temp = File.createTempFile("rawlens_android_dng_", ".dng", context.cacheDir)
         try {
             try {
                 FileOutputStream(temp).use { output ->
-                    writeAndroid(output, image, characteristics, result, orientation)
+                    writeAndroid(output, image, characteristics, result, orientation, gps)
                 }
                 resolver.openOutputStream(uri, "w")?.use { destination ->
                     FileInputStream(temp).use { source -> source.copyTo(destination, COPY_BUFFER_BYTES) }

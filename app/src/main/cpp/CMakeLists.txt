@@ -6,6 +6,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Reference kernel: checksum-verified upstream body, scalar arithmetic on all ABIs.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(AMAZE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
+set(AMAZE_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/amaze_reference.cpp")
+add_custom_command(OUTPUT "${AMAZE_GENERATED}"
+    COMMAND "${Python3_EXECUTABLE}" "${AMAZE_ROOT}/tools/build_amaze_reference.py"
+        "${AMAZE_ROOT}/references/RawTherapee/amaze_demosaic_RT.cc" "${AMAZE_GENERATED}"
+    DEPENDS "${AMAZE_ROOT}/tools/build_amaze_reference.py"
+        "${AMAZE_ROOT}/references/RawTherapee/amaze_demosaic_RT.cc")
+add_library(rawTherapeeAmaze SHARED "${AMAZE_GENERATED}"
+    amaze_reference_api.cpp amaze_reference_jni.cpp)
+target_include_directories(rawTherapeeAmaze PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(rawTherapeeAmaze PRIVATE -O2 -ffp-contract=off -fno-fast-math)
+target_link_options(rawTherapeeAmaze PRIVATE "-Wl,-z,max-page-size=16384")
+
 # libjpeg-turbo 3.x deliberately refuses add_subdirectory()/FetchContent_MakeAvailable().
 # Keep this compatible with Android SDK CMake 3.22.1: DOWNLOAD_EXTRACT_TIMESTAMP was
 # introduced later and CMake 3.22 mis-parses it as part of URL_HASH.
@@ -69,34 +84,14 @@ set_target_properties(jpeg_turbo_static PROPERTIES
 )
 add_dependencies(jpeg_turbo_static libjpeg_turbo_external)
 
-# Compile PhotonCamera's checked-in implementation directly. RawLens does not carry a modified
-# copy of dngCreator.cpp or tiny_dng_writer.h.
+# JPEG JNI keeps its existing library name; RAW DNG uses rawLensDng below.
 set(PHOTON_DNG_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../references/PhotonCamera/app/src/main/cpp")
 get_filename_component(PHOTON_DNG_DIR "${PHOTON_DNG_DIR}" ABSOLUTE)
-set(PHOTON_DEPS_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps")
-file(MAKE_DIRECTORY "${PHOTON_DEPS_DIR}")
-
-# Vendor the TinyDNG header used by RawLens so GainMap interoperability fixes are
-# deterministic and cannot disappear when upstream master changes. dngCreator.cpp
-# includes it as "deps/tiny_dng_writer.h" from the CMake binary include tree.
-foreach(DEP_HEADER tiny_dng_writer.h archive.h archive_entry.h)
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/deps/${DEP_HEADER}")
-        message(FATAL_ERROR "Required header ${DEP_HEADER} is missing from ${CMAKE_CURRENT_SOURCE_DIR}/deps/")
-    endif()
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/deps/${DEP_HEADER}"
-        "${PHOTON_DEPS_DIR}/${DEP_HEADER}"
-        COPYONLY)
-endforeach()
-
-add_library(dngCreator SHARED
-    "${PHOTON_DNG_DIR}/dngCreator.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp")
+add_library(dngCreator SHARED "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp")
 add_dependencies(dngCreator libjpeg_turbo_external)
 target_include_directories(dngCreator PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
-    "${PHOTON_DEPS_DIR}"
     "${PHOTON_DNG_DIR}"
     "${LIBJPEG_TURBO_INCLUDE_DIR}"
     "${LIBJPEG_TURBO_BINARY_DIR}")
@@ -153,3 +148,19 @@ else()
     add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/flownet_stub.cpp")
     target_link_libraries(ncnnMl PRIVATE log)
 endif()
+
+# Pinned TinyDNG v3 writer. The app supplies Camera2 metadata as checked TIFF fields.
+set(TINYDNG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/tinydng")
+add_library(tinydng_v3 STATIC
+    ${TINYDNG_DIR}/tinydng_api.c ${TINYDNG_DIR}/tinydng_io.c
+    ${TINYDNG_DIR}/tinydng_tiff.c ${TINYDNG_DIR}/tinydng_dng.c
+    ${TINYDNG_DIR}/tinydng_codec.c ${TINYDNG_DIR}/tinydng_write.c
+    ${TINYDNG_DIR}/tinydng_psd.c ${TINYDNG_DIR}/tinydng_psd_write.c
+    ${TINYDNG_DIR}/tiny_dng_ljpeg92_v2.c)
+target_include_directories(tinydng_v3 PUBLIC ${TINYDNG_DIR})
+target_compile_features(tinydng_v3 PUBLIC c_std_11)
+target_compile_definitions(tinydng_v3 PRIVATE TINYDNG_NO_ZIP
+    TINYDNG_NO_BASELINE_JPEG TINYDNG_NO_PSD TINYDNG_DISABLE_THREADS)
+add_library(rawLensDng SHARED tinydng_jni.cpp)
+target_link_libraries(rawLensDng PRIVATE tinydng_v3)
+target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")

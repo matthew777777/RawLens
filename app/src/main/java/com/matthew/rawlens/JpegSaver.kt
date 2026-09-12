@@ -21,16 +21,18 @@ import kotlin.math.roundToInt
 /** Pending-MediaStore JPEG writer. Every failure deletes its unpublished entry. */
 class JpegSaver(private val context: Context) {
     @Throws(IOException::class)
-    fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult): String {
+    fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult,
+             captureTimeMillis: Long = System.currentTimeMillis(),
+             typeSuffix: String? = null,
+             gps: GpsLocation? = null): String {
         val startedAt = SystemClock.elapsedRealtime()
         val bitmap = developed.bitmap
-        val now = System.currentTimeMillis()
-        val displayName = "RAW_${now}.jpg"
+        val displayName = CaptureFileNames.fileName(captureTimeMillis, typeSuffix, "jpg")
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
-            put(MediaStore.Images.Media.DATE_TAKEN, now)
+            put(MediaStore.Images.Media.DATE_TAKEN, captureTimeMillis)
             put(MediaStore.Images.Media.ORIENTATION, exifOrientationDegrees(metadata.exifOrientation))
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
@@ -89,7 +91,7 @@ class JpegSaver(private val context: Context) {
                             if (it == CaptureResult.CONTROL_AWB_MODE_AUTO) "0" else "1"
                         )
                     }
-                    val date = EXIF_DATE_FORMAT.format(Date(now))
+                    val date = EXIF_DATE_FORMAT.format(Date(captureTimeMillis))
                     setAttribute(ExifInterface.TAG_DATETIME, date)
                     setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, date)
                     setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, date)
@@ -99,6 +101,9 @@ class JpegSaver(private val context: Context) {
                             (if (developed.settings.displayP3) "Display P3" else "sRGB") +
                             if (developed.settings.ultraHdr) " -> Android Ultra HDR gainmap" else ""
                     )
+                    // A missing fix writes no GPS tags at all: an absent geotag
+                    // is truthful, a stale or zeroed one is not.
+                    gps?.writeTo(this)
                     saveAttributes()
                 }
             } ?: throw IOException("Could not reopen JPEG for EXIF metadata")

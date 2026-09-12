@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/matthew777777/tinydng",
+  "commit": "1f181699511e08e51baabd9fdab2311ea1253d4b",
+  "sha256": {
+    "LICENSE": "b5f92fc5b045ab2777fddc18890b431584347b2f4630cc3c6bad3d1a2fa607b7",
+    "td_internal.h": "285f058ca58bba176e6bc6d69dfd910f0e31f2fb17d8dd52bcdd92b0715e1129",
+    "tiny_dng_ljpeg92_v2.c": "4b725229457a23f284475d6652aaa076d2eaa727b327110bd1b4019e23f6df86",
+    "tiny_dng_ljpeg92_v2.h": "352a55118bd26501af6e82b65fb235e5ccb78d8481d94dc0e33483f5e3ff8f7d",
+    "tinydng.h": "7964167cbb9ed273974e02110cfbd44090e2f2cfb9b9eb0d3cd6b9293b451f9c",
+    "tinydng_api.c": "ef41dba47d156311696516133107c6e68a02f9291ce92cbe28611dfbe6295439",
+    "tinydng_codec.c": "c3a22869005898b3274b7bfe1b30df393a78326745aeb8f3ed3c04ba6dcdef24",
+    "tinydng_dng.c": "0f7749b877909219445ce28c4b623d734ac851f352aacce6768b2a9f00e7b806",
+    "tinydng_io.c": "dfe4cdaa60ae8dcc83b663ec6f9f040e64b9cb6edba53c4dbbad745085d569c1",
+    "tinydng_psd.c": "b48e93d661c1d5f14293434826987acfd2e09c0504581760acc573a301844d20",
+    "tinydng_psd_write.c": "9cf8ccd40d39ba4296734a1262af0e60b83dc6079453b0d463e962c136a9eb32",
+    "tinydng_tiff.c": "6c88a02df3813e135ad406a291cfcd7a75f6911ba5e5126b14f055ab753c2514",
+    "tinydng_write.c": "17b12d1af2a8f8d53581ebec093408336bd07584f55ada9735f71e38d785b7ad"
+  }
+}
