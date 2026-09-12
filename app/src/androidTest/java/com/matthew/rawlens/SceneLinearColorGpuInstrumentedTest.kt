@@ -147,6 +147,49 @@ class SceneLinearColorGpuInstrumentedTest {
     }
 
     @Test
+    fun amazeBayerPhaseFollowsTranslatedCrops() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val amaze = Gles31AmazeProcessor(context)
+        val size = 160
+        // A repeatable textured scene below highlight whitening, translated
+        // along with the Bayer origin. Compare identical physical pixels well
+        // inside the image so different border samples cannot affect the test.
+        fun input(dx: Int, dy: Int): UnpackedRawCfa {
+            val pattern = BayerPattern.RGGB.shifted(dx, dy)
+            return UnpackedRawCfa(size, size, pattern, FloatArray(size * size) { i ->
+                val x = i % size + dx
+                val y = i / size + dy
+                val texture = ((x * 17 + y * 29 + x * y * 3) % 101) / 101f
+                val scale = when (pattern.colorAt(i % size, i / size)) {
+                    CfaColor.RED -> 0.8f
+                    CfaColor.GREEN -> 1f
+                    CfaColor.BLUE -> 0.6f
+                }
+                (0.08f + 0.2f * texture) * scale
+            }, RawCrop(0, 0, size, size))
+        }
+        try {
+            val base = amaze.process(input(0, 0)) { readTexture(it) }
+            for (dy in 0..1) for (dx in 0..1) {
+                if (dx == 0 && dy == 0) continue
+                val shifted = amaze.process(input(dx, dy)) { readTexture(it) }
+                var error = 0f
+                for (y in 48 until size - 48) for (x in 48 until size - 48) {
+                    for (c in 0..2) {
+                        val expected = base[((y + dy) * size + x + dx) * 4 + c]
+                        val actual = shifted[(y * size + x) * 4 + c]
+                        assertTrue("Non-finite AMaZE output", actual.isFinite())
+                        error = maxOf(error, kotlin.math.abs(expected - actual))
+                    }
+                }
+                assertTrue("Bayer shift ($dx,$dy) maximum error $error", error <= 0.001f)
+            }
+        } finally {
+            amaze.close()
+        }
+    }
+
+    @Test
     fun amazePreservesRedAndBlueCfaChannelIdentity() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val amaze = Gles31AmazeProcessor(context)
@@ -178,7 +221,7 @@ class SceneLinearColorGpuInstrumentedTest {
     }
 
     @Test
-    fun rgba16fShaderMatchesCpuReferenceAndPreservesUnboundedRange() {
+    fun rgba16fShaderMatchesCpuReferenceAndPreservesHdrRange() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val input = UnpackedRawCfa(
             WIDTH,
@@ -230,7 +273,6 @@ class SceneLinearColorGpuInstrumentedTest {
                 assertTrue("GPU produced NaN/Inf at $index", actual[index].isFinite())
             }
             assertTrue("CPU/GPU maximum error $maximumError", maximumError <= GPU_TOLERANCE)
-            assertTrue("negative scene values were clipped", actual.any { it < 0f })
             assertTrue("highlight scene values were clipped", actual.any { it > 1f })
             assertTrue(actual.indices.filter { it % 4 == 3 }.all { actual[it] == 1f })
 
@@ -253,6 +295,34 @@ class SceneLinearColorGpuInstrumentedTest {
             } finally {
                 bitmap.recycle()
             }
+        }
+    }
+
+    @Test
+    fun amazeMatrixOutputPreservesNegativeAndHdrValues() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val size = 64
+        val input = UnpackedRawCfa(size, size, BayerPattern.RGGB,
+            FloatArray(size * size) { 0.25f }, RawCrop(0, 0, size, size))
+        val amaze = Gles31AmazeProcessor(context)
+        try {
+            // AMaZE intentionally clamps negative camera RGB before the matrix.
+            // Generate negative/HDR values AFTER that boundary to test storage,
+            // using a known transform and a flat field below highlight whitening.
+            amaze.process(input, cameraToAcescgColumnMajor = floatArrayOf(
+                -1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 8f
+            )) { output ->
+                val actual = readTexture(output)
+                for (y in 16 until size - 16) for (x in 16 until size - 16) {
+                    val i = (y * size + x) * 4
+                    assertEquals("negative matrix output", -0.25f, actual[i], 0.001f)
+                    assertEquals("green matrix output", 0.25f, actual[i + 1], 0.001f)
+                    assertEquals("HDR matrix output", 2f, actual[i + 2], 0.005f)
+                    assertEquals(1f, actual[i + 3], 0f)
+                }
+            }
+        } finally {
+            amaze.close()
         }
     }
 
