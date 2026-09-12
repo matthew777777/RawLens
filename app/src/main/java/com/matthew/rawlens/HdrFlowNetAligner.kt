@@ -18,9 +18,13 @@ class HdrFlowNetAligner(context: Context) {
         val a = reference.cfa
         val b = moving.cfa
         require(a.width == b.width && a.height == b.height && a.pattern == b.pattern)
-        val brightnessMatch = exposureScale(moving) / exposureScale(reference)
-        val base = renderModelInput(a, brightnessMatch)
-        val alter = renderModelInput(b, 1f)
+        val movingToReference = exposureScale(moving) / exposureScale(reference)
+        // Match both proxies to the darker exposure. Scaling the darker image upward creates
+        // artificial clipping precisely around lamps, where optical flow is already ambiguous.
+        val baseScale = if (movingToReference < 1f) movingToReference else 1f
+        val movingScale = if (movingToReference > 1f) 1f / movingToReference else 1f
+        val base = renderModelInput(a, baseScale)
+        val alter = renderModelInput(b, movingScale)
         val result = processor.runInference(base, alter, MODEL_WIDTH, MODEL_HEIGHT) ?: return null
         val flow = FloatArray(MODEL_WIDTH * MODEL_HEIGHT * 2)
         result.asFloatBuffer().get(flow)
@@ -32,6 +36,9 @@ class HdrFlowNetAligner(context: Context) {
     }
 
     fun isReady(): Boolean = processor.isReady
+
+    /** Flow arrays returned by [align] are independent copies; release the large ncnn/Vulkan net. */
+    fun close() = processor.close()
 
     private fun hasUsableCorrespondence(base: FloatBuffer, moving: FloatBuffer, flow: FloatArray): Boolean {
         var alignedError = 0.0
@@ -121,7 +128,7 @@ class HdrFlowNetAligner(context: Context) {
         private val scaleX: Float,
         private val scaleY: Float
     ) : HdrFlowField {
-        override fun displacement(x: Int, y: Int): Pair<Float, Float> {
+        override fun displacement(x: Int, y: Int): Long {
             val px = ((x + 0.5f) / scaleX - 0.5f).coerceIn(0f, MODEL_WIDTH - 1f)
             val py = ((y + 0.5f) / scaleY - 0.5f).coerceIn(0f, MODEL_HEIGHT - 1f)
             val mx = px.toInt(); val my = py.toInt()
@@ -136,7 +143,7 @@ class HdrFlowNetAligner(context: Context) {
                 return (a * (1f - fx) + b * fx) * (1f - fy) +
                     (c * (1f - fx) + d * fx) * fy
             }
-            return sample(0) * scaleX to sample(1) * scaleY
+            return packHdrDisplacement(sample(0) * scaleX, sample(1) * scaleY)
         }
     }
 

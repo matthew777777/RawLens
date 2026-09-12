@@ -21,7 +21,9 @@ class HdrFlowNetInstrumentedTest {
         val flow = aligner.align(frame, frame)
         assertNotNull("FlowNet model must execute, without identity fallback", flow)
         for (y in 32 until height - 32 step 32) for (x in 32 until width - 32 step 32) {
-            val (dx, dy) = requireNotNull(flow).displacement(x, y)
+            val displacement = requireNotNull(flow).displacement(x, y)
+            val dx = hdrDisplacementX(displacement)
+            val dy = hdrDisplacementY(displacement)
             assertTrue(dx.isFinite() && dy.isFinite())
             assertTrue("Identical frames should have near-zero flow: $dx,$dy",
                 kotlin.math.abs(dx) < 4f && kotlin.math.abs(dy) < 4f)
