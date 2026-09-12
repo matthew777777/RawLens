@@ -104,3 +104,23 @@ fallback, and final white-level normalization, with FlowNet registration replaci
 desktop OpenCV alignment. `FloatCfaDngWriter` adapts `src/imageio/imageio_dng.c`'s
 `dt_imageio_dng_write_float()` layout: uncompressed little-endian TIFF/DNG, one 32-bit IEEE-float
 CFA sample per pixel, `SampleFormat=3`, normalized black level zero, and white level one.
+
+## Sea real-RAW test fixture
+
+`app/src/androidTest/assets/rawsr/sea/` contains lossless Bayer-region extracts and
+metadata from the user-contributed Sea photographs. Data license: CC BY 4.0,
+separate from the application source license. Attribution: Sea burst contributor
+(RawLens user). See that directory's `LICENSE.md` and `manifest.json` for permission,
+original-file digests and the exact extraction changes. These are instrumentation
+assets only, not production APK assets.
+
+## Handheld burst super-resolution references
+
+RawLens's RAW-SR kernel covariance (`RawSrKernelCovariance`, `RawSrCovarianceGuide`,
+`assets/shaders/rawsr/kernel_covariance.glsl`, `assets/shaders/rawsr/guide_gray.glsl`)
+is a clean-room reimplementation of the published Wronski et al. SIGGRAPH 2019
+method and its IPOL 2023 transcription. The implementation was checked against
+Jamy Lafenetre's MIT-licensed `Handheld-Multi-Frame-Super-Resolution` reference
+(`handheld_super_resolution/kernels.py`, `linalg.py`, `utils_image.py`); no
+upstream code is copied into RawLens. Jamy Lafenetre and contributors provide
+that reference under the MIT License without endorsement of RawLens.

@@ -2,71 +2,68 @@
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-precision highp image2D;
-layout(local_size_x = 1, local_size_y = 1) in;
-uniform sampler2D u_reference;
-uniform sampler2D u_moving;
-uniform sampler2D u_flow;
-uniform ivec2 u_size;
-uniform ivec2 u_tile_grid;
+layout(local_size_x=1,local_size_y=1) in;
+uniform sampler2D u_reference,u_moving,u_flow;
+uniform ivec2 u_size,u_tile_grid;
 uniform int u_tile_size;
-uniform int u_iterations;
-uniform float u_min_determinant;
-uniform float u_max_residual;
-layout(binding = 0, rgba32f) writeonly uniform highp image2D img_refined;
-const int MAX_TILE = 32;
-const int MAX_ITERATIONS = 6;
-float sampleMoving(vec2 p) {
-    ivec2 p0 = ivec2(floor(p));
-    ivec2 p1 = min(p0 + ivec2(1), u_size - 1);
-    vec2 f = p - vec2(p0);
-    float top = mix(texelFetch(u_moving, p0, 0).r, texelFetch(u_moving, ivec2(p1.x, p0.y), 0).r, f.x);
-    float bottom = mix(texelFetch(u_moving, ivec2(p0.x, p1.y), 0).r, texelFetch(u_moving, p1, 0).r, f.x);
-    return mix(top, bottom, f.y);
+uniform float u_min_determinant,u_max_residual,u_min_condition,u_min_fraction;
+layout(binding=0,rgba32f) writeonly uniform highp image2D img_refined;
+bool finite(float x){return !isnan(x)&&!isinf(x);}
+bool inside(vec2 q){return all(greaterThanEqual(q,vec2(0)))&&all(lessThan(q,vec2(u_size-1)));}
+bool templateInside(ivec2 p){return all(greaterThan(p,ivec2(0)))&&all(lessThan(p,u_size-1));}
+vec2 gradient(ivec2 p){return 0.5*vec2(
+ texelFetch(u_reference,p+ivec2(1,0),0).r-texelFetch(u_reference,p-ivec2(1,0),0).r,
+ texelFetch(u_reference,p+ivec2(0,1),0).r-texelFetch(u_reference,p-ivec2(0,1),0).r);}
+float sampleMoving(vec2 p){
+ ivec2 q=ivec2(floor(p));vec2 f=p-vec2(q);
+ float a=texelFetch(u_moving,q,0).r*(1.0-f.x)+texelFetch(u_moving,q+ivec2(1,0),0).r*f.x;
+ float b=texelFetch(u_moving,q+ivec2(0,1),0).r*(1.0-f.x)+texelFetch(u_moving,q+ivec2(1,1),0).r*f.x;
+ return a*(1.0-f.y)+b*f.y;
 }
-void main() {
-    ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(tile, u_tile_grid))) return;
-    ivec2 origin = tile * u_tile_size;
-    vec2 flow = texelFetch(u_flow, tile, 0).xy;
-    float determinant = 0.0;
-    for (int iteration = 0; iteration < MAX_ITERATIONS; ++iteration) {
-        if (iteration >= u_iterations) break;
-        float hxx = 0.0, hxy = 0.0, hyy = 0.0, bx = 0.0, by = 0.0;
-        for (int y = 0; y < MAX_TILE; ++y) {
-            if (y >= u_tile_size) break;
-            for (int x = 0; x < MAX_TILE; ++x) {
-                if (x >= u_tile_size) break;
-                ivec2 p = origin + ivec2(x, y);
-                vec2 q = vec2(p) + flow;
-                if (any(lessThanEqual(p, ivec2(0))) || any(greaterThanEqual(p, u_size - 1)) ||
-                    any(lessThan(q, vec2(0.0))) || any(greaterThanEqual(q, vec2(u_size - 1)))) continue;
-                float gx = 0.5 * (texelFetch(u_reference, p + ivec2(1, 0), 0).r -
-                    texelFetch(u_reference, p - ivec2(1, 0), 0).r);
-                float gy = 0.5 * (texelFetch(u_reference, p + ivec2(0, 1), 0).r -
-                    texelFetch(u_reference, p - ivec2(0, 1), 0).r);
-                float e = sampleMoving(q) - texelFetch(u_reference, p, 0).r;
-                hxx += gx * gx; hxy += gx * gy; hyy += gy * gy; bx += gx * e; by += gy * e;
-            }
-        }
-        determinant = hxx * hyy - hxy * hxy;
-        if (determinant <= u_min_determinant) break;
-        vec2 step = vec2(hyy * bx - hxy * by, hxx * by - hxy * bx) / determinant;
-        flow -= clamp(step, vec2(-1.0), vec2(1.0));
+void main(){
+ ivec2 tile=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(tile,u_tile_grid)))return;
+ ivec2 origin=tile*u_tile_size,end=min(origin+ivec2(u_tile_size),u_size);
+ vec4 initial=texelFetch(u_flow,tile,0);vec2 flow=initial.xy;
+ float hxx=0.0,hxy=0.0,hyy=0.0;int samples=0;
+ for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
+  for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
+   ivec2 p=origin+ivec2(x,y);if(!templateInside(p))continue;
+   vec2 g=gradient(p);hxx+=g.x*g.x;hxy+=g.x*g.y;hyy+=g.y*g.y;samples++;
+  }
+ }
+ float determinant=hxx*hyy-hxy*hxy,trace=hxx+hyy;
+ bool valid=initial.w>0.0&&samples>=4&&finite(determinant)&&determinant>u_min_determinant&&determinant>u_min_condition*trace*trace;
+ // Exactly three finest-level IC updates; failed tiles stay rejected.
+ for(int iteration=0;iteration<3;iteration++){
+  float bx=0.0,by=0.0;int count=0;
+  if(valid){
+   for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
+    for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
+     ivec2 p=origin+ivec2(x,y);vec2 q=vec2(p)+flow;
+     if(!templateInside(p)||!inside(q))continue;
+     vec2 g=gradient(p);float e=sampleMoving(q)-texelFetch(u_reference,p,0).r;
+     bx+=g.x*e;by+=g.y*e;count++;
     }
-    float residual = 0.0; int count = 0;
-    for (int y = 0; y < MAX_TILE; ++y) {
-        if (y >= u_tile_size) break;
-        for (int x = 0; x < MAX_TILE; ++x) {
-            if (x >= u_tile_size) break;
-            ivec2 p = origin + ivec2(x, y); vec2 q = vec2(p) + flow;
-            if (all(greaterThanEqual(q, vec2(0.0))) && all(lessThan(q, vec2(u_size - 1))) &&
-                all(lessThan(p, u_size))) {
-                residual += abs(sampleMoving(q) - texelFetch(u_reference, p, 0).r); count++;
-            }
-        }
-    }
-    residual = count > 0 ? residual / float(count) : 3.402823e38;
-    float valid = determinant > u_min_determinant && residual <= u_max_residual ? 1.0 : 0.0;
-    imageStore(img_refined, tile, vec4(flow, residual, valid));
+   }
+   valid=count==samples&&finite(bx)&&finite(by);
+   if(valid){
+    vec2 step=vec2(hyy*bx-hxy*by,hxx*by-hxy*bx)/determinant;
+    valid=finite(step.x)&&finite(step.y);
+    if(valid)flow-=clamp(step,vec2(-1),vec2(1));
+   }
+  }
+ }
+ float residual=0.0;int count=0;
+ for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
+  for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
+   ivec2 p=origin+ivec2(x,y);vec2 q=vec2(p)+flow;
+   if(!inside(q))continue;
+   residual+=abs(sampleMoving(q)-texelFetch(u_reference,p,0).r);count++;
+  }
+ }
+ int area=(end.x-origin.x)*(end.y-origin.y);
+ bool enough=count>=max(4,int(ceil(float(area)*u_min_fraction)));
+ residual=enough&&finite(residual)?min(residual/float(count),1e6):1e6;
+ valid=valid&&enough&&residual<=u_max_residual;
+ imageStore(img_refined,tile,vec4(flow,residual,valid?1.0:0.0));
 }
