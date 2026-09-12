@@ -29,3 +29,10 @@ fastlane/test_output/
 
 # Local upstream research checkouts
 /references/PhotonCamera/
+/references/Photon-Camera-SkyKing/
+/references/rawsr-private/
+/references/Handheld-Multi-Frame-Super-Resolution-Jamy-L/
+/references/Handheld-Multi-Frame-Super-Resolution-JVision/
+/references/ImageStackAlignator/
+
+/references/tinydng/
