@@ -7,8 +7,6 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="center" />
-    <View android:layout_width="match_parent" android:layout_height="150dp" android:layout_gravity="top" android:background="@drawable/top_scrim" />
-    <View android:layout_width="match_parent" android:layout_height="240dp" android:layout_gravity="bottom" android:layout_marginBottom="220dp" android:background="@drawable/bottom_scrim" />
 
     <com.matthew.rawlens.CameraGuideOverlay
         android:id="@+id/guideOverlay"
@@ -71,9 +69,10 @@
                 android:layout_width="104dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
+                android:ellipsize="end"
                 android:gravity="end"
                 android:letterSpacing="0.08"
-                android:maxLines="3"
+                android:maxLines="2"
                 android:text="READY"
                 android:textColor="@color/text_primary"
                 android:textSize="8sp" />
@@ -136,6 +135,7 @@
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/rawSrQuick" style="@style/QuickControlTile" android:text="RAW SR\nOFF" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="ETTR\nOFF" />
         </LinearLayout>
     </LinearLayout>
 

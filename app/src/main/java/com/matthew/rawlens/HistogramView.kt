@@ -13,13 +13,15 @@ import android.util.AttributeSet
 import android.view.View
 import android.os.SystemClock
 
-/** Small live luminance histogram sampled from a low-resolution preview bitmap. */
+/** Live RGB + luminance histogram. Shows the processed preview (YUV) or the sensor
+ * mosaic (RAW); the source label tracks whichever updated the bins last. The white
+ * trace is Rec.709 luminance drawn on top. Tapping is handled by the host. */
 class HistogramView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
-    private val bins = Array(3) { IntArray(BIN_COUNT) }
-    private val paths = Array(3) { Path() }
+    private val bins = Array(4) { IntArray(BIN_COUNT) }
+    private val paths = Array(4) { Path() }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -43,17 +45,6 @@ class HistogramView @JvmOverloads constructor(
         invalidate()
     }
 
-    /**
-     * Switch the UI source immediately when ZSL is selected. The existing bins remain visible
-     * for a few milliseconds, but are explicitly marked as warming until the first real
-     * RAW_SENSOR histogram arrives; preview readback is blocked by MainActivity in this state.
-     */
-    fun expectRawImmediately() {
-        lastRawUpdateMillis = SystemClock.uptimeMillis()
-        sourceLabel = RAW_WARMING_LABEL
-        invalidate()
-    }
-
     fun update(bitmap: Bitmap?) {
         if (bitmap == null || bitmap.width == 0 || bitmap.height == 0) return
         if (lastRawUpdateMillis != 0L &&
@@ -66,9 +57,14 @@ class HistogramView @JvmOverloads constructor(
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         for (color in pixels) {
-            bins[RED][Color.red(color) * (BIN_COUNT - 1) / 255]++
-            bins[GREEN][Color.green(color) * (BIN_COUNT - 1) / 255]++
-            bins[BLUE][Color.blue(color) * (BIN_COUNT - 1) / 255]++
+            val r = Color.red(color)
+            val g = Color.green(color)
+            val b = Color.blue(color)
+            bins[RED][r * (BIN_COUNT - 1) / 255]++
+            bins[GREEN][g * (BIN_COUNT - 1) / 255]++
+            bins[BLUE][b * (BIN_COUNT - 1) / 255]++
+            bins[LUMINANCE][((0.2126 * r + 0.7152 * g + 0.0722 * b) + 0.5).toInt()
+                .coerceIn(0, 255) * (BIN_COUNT - 1) / 255]++
         }
         sourceLabel = PREVIEW_LABEL
         bitmap.recycle()
@@ -79,6 +75,7 @@ class HistogramView @JvmOverloads constructor(
         copyResampled(histogram.red, bins[RED])
         copyResampled(histogram.green, bins[GREEN])
         copyResampled(histogram.blue, bins[BLUE])
+        copyResampled(histogram.luminance, bins[LUMINANCE])
         if (histogram.fromRaw) {
             lastRawUpdateMillis = SystemClock.uptimeMillis()
             sourceLabel = RAW_LABEL
@@ -123,21 +120,23 @@ class HistogramView @JvmOverloads constructor(
         const val BIN_COUNT = 48
         const val RAW_HOLD_MILLIS = 2_000L
         const val RAW_LABEL = "RAW SENSOR"
-        const val RAW_WARMING_LABEL = "RAW SENSOR • WARMING"
         const val PREVIEW_LABEL = "PREVIEW • PROCESSED YUV"
         const val RED = 0
         const val GREEN = 1
         const val BLUE = 2
-        val DRAW_ORDER = intArrayOf(BLUE, RED, GREEN)
+        const val LUMINANCE = 3
+        val DRAW_ORDER = intArrayOf(BLUE, RED, GREEN, LUMINANCE)
         val FILL_COLORS = intArrayOf(
             Color.argb(64, 255, 70, 70),
             Color.argb(64, 70, 255, 110),
-            Color.argb(64, 70, 130, 255)
+            Color.argb(64, 70, 130, 255),
+            Color.argb(64, 225, 225, 225)
         )
         val LINE_COLORS = intArrayOf(
             Color.rgb(255, 90, 90),
             Color.rgb(90, 255, 125),
-            Color.rgb(90, 145, 255)
+            Color.rgb(90, 145, 255),
+            Color.rgb(235, 235, 235)
         )
     }
 }

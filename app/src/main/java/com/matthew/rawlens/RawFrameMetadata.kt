@@ -89,7 +89,10 @@ data class RawFrameMetadata(
     val noiseProfile: ImmutableDoubleValues?,
     val sensorPixelMode: Int?,
     val rawBinningFactorUsed: Boolean?,
-    val activePhysicalCameraId: String?
+    val activePhysicalCameraId: String?,
+    val afState: Int? = null,
+    val aeState: Int? = null,
+    val lensState: Int? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -247,7 +250,10 @@ object RawFrameMetadataFactory {
             } else null,
             rawBinningFactorUsed = rawBinning,
             activePhysicalCameraId = result
-                .get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+                .get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
+            afState = result.get(CaptureResult.CONTROL_AF_STATE),
+            aeState = result.get(CaptureResult.CONTROL_AE_STATE),
+            lensState = result.get(CaptureResult.LENS_STATE)
         )
     }
 

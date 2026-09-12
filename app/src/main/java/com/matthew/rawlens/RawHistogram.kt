@@ -11,8 +11,31 @@ data class RgbHistogram(
     val red: IntArray,
     val green: IntArray,
     val blue: IntArray,
+    /** Rec.709 luminance: Bayer-quad average for RAW, per-pixel for preview. */
+    val luminance: IntArray,
     val fromRaw: Boolean
 )
+
+/**
+ * Pure throttle decisions for the live RAW histogram, kept framework-free so the
+ * sentinel/overflow edge cases stay covered by unit tests.
+ *
+ * [lastMs] uses Long.MIN_VALUE as "never sampled". Subtracting it from any real
+ * timestamp overflows to a negative delta, so the sentinel must bypass the subtraction
+ * instead of flowing through inline `now - last` arithmetic.
+ */
+object RawHistogramThrottle {
+    fun shouldSample(nowMs: Long, lastMs: Long, intervalMs: Long, force: Boolean = false): Boolean {
+        if (force) return true
+        if (lastMs == Long.MIN_VALUE) return true
+        return nowMs - lastMs >= intervalMs
+    }
+
+    fun isStalled(nowMs: Long, lastMs: Long, holdMs: Long): Boolean {
+        if (lastMs == Long.MIN_VALUE) return true
+        return nowMs - lastMs > holdMs
+    }
+}
 
 /**
  * Samples the sensor mosaic without demosaicing; green combines both green CFA sites.
@@ -25,6 +48,10 @@ data class RgbHistogram(
 object RawHistogramSampler {
     private const val BIN_COUNT = 64
     private const val TARGET_BLOCKS = 8_000
+
+    /** Rec.709 luminance from linear channel values already normalized to 0..1. */
+    internal fun luminanceOf(red: Double, green: Double, blue: Double): Double =
+        0.2126 * red + 0.7152 * green + 0.0722 * blue
 
     fun sample(image: Image, characteristics: CameraCharacteristics): RgbHistogram? {
         val plane = image.planes.singleOrNull() ?: return null
@@ -39,6 +66,7 @@ object RawHistogramSampler {
         val red = IntArray(BIN_COUNT)
         val green = IntArray(BIN_COUNT)
         val blue = IntArray(BIN_COUNT)
+        val luminance = IntArray(BIN_COUNT)
         val blocksWide = image.width / 2
         val blocksHigh = image.height / 2
         val blockStep = kotlin.math.sqrt(
@@ -49,6 +77,11 @@ object RawHistogramSampler {
         while (blockY < blocksHigh) {
             var blockX = 0
             while (blockX < blocksWide) {
+                // One luminance sample per Bayer quad; the channel traces keep the
+                // existing per-pixel binning untouched.
+                val quad = DoubleArray(4)
+                val quadChannel = IntArray(4)
+                var quadSize = 0
                 for (dy in 0..1) for (dx in 0..1) {
                     val x = blockX * 2 + dx
                     val y = blockY * 2 + dy
@@ -56,19 +89,37 @@ object RawHistogramSampler {
                     if (offset + 1 >= buffer.limit()) continue
                     val value = buffer.getShort(offset).toInt() and 0xffff
                     val floor = black?.getOffsetForIndex(x, y) ?: 0
-                    val bin = (((value - floor).coerceAtLeast(0).toLong() * (BIN_COUNT - 1)) /
-                        (white - floor).coerceAtLeast(1)).toInt().coerceIn(0, BIN_COUNT - 1)
-                    when (colorAt(cfa, x and 1, y and 1)) {
+                    val normalized = ((value - floor).coerceAtLeast(0).toDouble() /
+                        (white - floor).coerceAtLeast(1)).coerceIn(0.0, 1.0)
+                    val bin = (normalized * (BIN_COUNT - 1)).toInt().coerceIn(0, BIN_COUNT - 1)
+                    val channel = channelAt(cfa, x and 1, y and 1)
+                    when (channel) {
                         0 -> red[bin]++
-                        1 -> green[bin]++
-                        2 -> blue[bin]++
+                        1, 2 -> green[bin]++
+                        else -> blue[bin]++
                     }
+                    quad[quadSize] = normalized
+                    quadChannel[quadSize] = channel
+                    quadSize++
+                }
+                if (quadSize == 4) {
+                    var r = 0.0
+                    var gSum = 0.0
+                    var b = 0.0
+                    for (i in 0..3) when (quadChannel[i]) {
+                        0 -> r = quad[i]
+                        1, 2 -> gSum += quad[i]
+                        else -> b = quad[i]
+                    }
+                    val lumBin = (luminanceOf(r, gSum / 2.0, b) * (BIN_COUNT - 1))
+                        .toInt().coerceIn(0, BIN_COUNT - 1)
+                    luminance[lumBin]++
                 }
                 blockX += blockStep
             }
             blockY += blockStep
         }
-        return RgbHistogram(red, green, blue, fromRaw = true)
+        return RgbHistogram(red, green, blue, luminance, fromRaw = true)
     }
 
     private fun colorAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {
@@ -79,5 +130,16 @@ object RawHistogramSampler {
         CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG ->
             if (y == 0) if (x == 0) 1 else 2 else if (x == 0) 0 else 1
         else -> if (y == 0) if (x == 0) 2 else 1 else if (x == 0) 1 else 0
+    }
+
+    /** Canonical R/Gr/Gb/B for one Bayer phase, matching the ETTR sampler. */
+    private fun channelAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->
+            if (y == 0) if (x == 0) 0 else 1 else if (x == 0) 2 else 3
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG ->
+            if (y == 0) if (x == 0) 1 else 0 else if (x == 0) 3 else 2
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG ->
+            if (y == 0) if (x == 0) 1 else 3 else if (x == 0) 0 else 2
+        else -> if (y == 0) if (x == 0) 3 else 1 else if (x == 0) 2 else 0
     }
 }
