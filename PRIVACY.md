@@ -1,6 +1,6 @@
 # RawLens privacy statement
 
-Effective date: 2026-08-31
+Effective date: 2026-09-12
 
 RawLens processes camera preview frames, RAW images, camera metadata, and—when RAW ZSL or the level guide is enabled—sensor motion samples locally on the user's device. Optional adaptive RAW development analyzes luminance locally before JPEG output; these statistics are not transmitted or stored as a separate database. It does not include analytics, advertising, user accounts, or runtime network communication, and it does not collect or transmit personal information. Camera and lens preferences, including JPEG/AgX, adaptive-exposure, denoise, and per-camera DNG calibration settings, are stored locally in Android app preferences.
 

@@ -38,6 +38,15 @@ PhotonCamera is GPL-licensed. The local checkout retains its upstream `LICENSE`;
 
 Treat the commit hash—not the moving branch name—as the citation for research performed against this checkout.
 
+## Other research-only checkouts (not build dependencies)
+
+- `RawTherapee/` — pinned `amaze_demosaic_RT.cc @ 498f6237` used for the AMaZE audit and ordered-GLES oracle. See `../docs/amaze-rawtherapee-audit.md`.
+- `tinydng/` — upstream `matthew777777/tinydng` research clone (build uses the pinned vendored copy at `../app/src/main/cpp/deps/tinydng`, commit `1f18169951…`). See `../docs/tinydng-integration.md`.
+- `Photon-Camera-SkyKing/` above — Bayer-direct merge reference for RAW-SR Prompts 4/4B–4D. See `../docs/raw-sr-skyking-reference.md`.
+- `Handheld-Multi-Frame-Super-Resolution-Jamy-L/` and `Handheld-Multi-Frame-Super-Resolution-JVision/` — Wronski et al. SIGGRAPH 2019 / IPOL 2023 transcriptions checked by the RAW-SR kernel-covariance reimplementation (no upstream code copied). See `../NOTICE.md`.
+- `ImageStackAlignator/` — alignment reference consulted during RAW-SR work.
+- `rawsr-private/` — git-ignored original Sea/Forest DNGs used only to generate the compact instrumented fixtures at `../app/src/androidTest/assets/rawsr/` (never packaged, never committed).
+
 ### Reference map
 
 | Topic | Primary entry points |

@@ -69,12 +69,35 @@ RawLens development feature and does not alter DNG pixels or frozen Camera2 capt
 
 ## PhotonCamera DNG creator and TinyDNG
 
-The DNG target compiles PhotonCamera's checked-in `app/src/main/cpp/dngCreator.cpp` directly and
-generates its Java `processing/DngCreator.java` verbatim from the local reference at commit
-`54d9febc596b34376b8be242a388f386d97e8f5d`.
-That implementation uses the unmodified ParticlesDevs TinyDNG fork requested by PhotonCamera.
-TinyDNG is Copyright (c) 2016-present Syoyo Fujita and contributors and is distributed under
-the MIT License. PhotonCamera remains licensed under GPL-3.0-or-later. No stb code is used.
+Single-frame DNG output uses Android's official `DngCreator` by default, with
+AUTO falling back to the vendored TinyDNG v3 writer on platform failure.
+The vendored core at `app/src/main/cpp/deps/tinydng` is pinned to
+https://github.com/matthew777777/tinydng at commit
+`1f181699511e08e51baabd9fdab2311ea1253d4b` (file hashes in `UPSTREAM.json`,
+local changes in `rawlens.patch`). Upstream v3 parses NoiseProfile/GainMap but
+does not emit them; RawLens supplies NoiseProfile, GainMap/OpcodeList2,
+ActiveArea, and full Camera2 calibration as validated extra TIFF fields.
+TinyDNG is Copyright (c) 2016-present Syoyo Fujita and contributors and is
+distributed under the MIT License (see `app/src/main/cpp/deps/tinydng/LICENSE`
+and `miniz.LICENSE`). The old PhotonCamera DNG Java/native bridge is no longer
+compiled; the `dngCreator` native library name now holds only the JPEG encoder.
+PhotonCamera remains licensed under GPL-3.0-or-later. No stb code is used.
+See `docs/tinydng-integration.md` for backend selection and verification limits.
+
+## RawTherapee AMaZE reference
+
+RawLens's 13-pass tiled AMaZE GLES 3.1 executor was checked against a pinned
+RawTherapee reference (`references/RawTherapee/amaze_demosaic_RT.cc`):
+
+- Project: RawTherapee
+- Repository: https://github.com/RawTherapee/RawTherapee
+- Referenced commit: `498f6237`
+- License: GNU General Public License version 3 or later
+
+The audit, host oracle, and Mali-G615 parity runs are recorded in
+`docs/amaze-rawtherapee-audit.md`. RawTherapee-identical output is not claimed;
+see that audit for validation limits. RawTherapee and its contributors do not
+endorse RawLens.
 
 ## darktable
 
@@ -105,12 +128,20 @@ desktop OpenCV alignment. `FloatCfaDngWriter` adapts `src/imageio/imageio_dng.c`
 `dt_imageio_dng_write_float()` layout: uncompressed little-endian TIFF/DNG, one 32-bit IEEE-float
 CFA sample per pixel, `SampleFormat=3`, normalized black level zero, and white level one.
 
-## Sea real-RAW test fixture
+## Sea and Forest real-RAW test fixtures
 
 `app/src/androidTest/assets/rawsr/sea/` contains lossless Bayer-region extracts and
 metadata from the user-contributed Sea photographs. Data license: CC BY 4.0,
 separate from the application source license. Attribution: Sea burst contributor
-(RawLens user). See that directory's `LICENSE.md` and `manifest.json` for permission,
+(RawLens user). See that directory's `LICENSE.md` and `manifest.json` for permission
+(2026-09-10), original-file digests and the exact extraction changes. These are instrumentation
+assets only, not production APK assets.
+
+`app/src/androidTest/assets/rawsr/forest/` contains lossless Bayer-region extracts
+and metadata from the user-contributed Forest GCam ZSL burst (32 payloads, oldest
+30 extracted). Data license: CC BY 4.0, separate from the application source
+license. Attribution: RawLens user (forest GCam ZSL burst contributor). See that
+directory's `LICENSE.md` and `manifest.json` for permission (2026-09-11),
 original-file digests and the exact extraction changes. These are instrumentation
 assets only, not production APK assets.
 

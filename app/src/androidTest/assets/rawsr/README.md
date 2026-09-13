@@ -24,6 +24,26 @@ The originals were copied byte-for-byte into Git-ignored
 `references/rawsr-private/Sea/`. Only the compact extracts are test APK assets;
 neither dataset is included in the production APK.
 
+## Forest
+
+`forest/` holds lossless extracts from 30 frames (oldest 30 of 32 supplied forest
+DNG payloads, GCam ZSL debug dump with HDR+ port tuning on Redmi 25080RABDG).
+Redistribution was confirmed on 2026-09-11;
+see [license and attribution](forest/LICENSE.md).
+
+- Original dimensions: 4080×3060, 16-bit GBRG, 1/100 s, ISO 458, same exposure.
+- Stored region: 514×386 at (800,1200), in DNG active-array coordinates.
+- Processing crop: (1,1,512,384), testing odd-origin CFA shift to GRBG.
+- Each `frame-NN.raw16le.gzip` is gzip-compressed little-endian uint16, row-major.
+  No scaling, clipping, normalization, demosaic, resampling, alignment or fusion.
+- DNG metadata, sensor-clock timestamps (GCam T field), and pending lens-shading
+  maps are transcribed into `forest/manifest.json` with original filenames and
+  SHA-256 digests.
+
+The originals live in Git-ignored `references/rawsr-private/` (forest payloads).
+Only the compact extracts are test APK assets; neither dataset is included in
+the production APK.
+
 ## Manifest
 
 `manifest.json` contains `schemaVersion=1`, `dataKind=real-camera-bayer`,
@@ -58,6 +78,7 @@ the original frozen-Camera2-metadata or ZSL-cadence qualification.
 
 ```sh
 python3 tools/import_rawsr_sea.py references/rawsr-private/Sea --output app/src/androidTest/assets/rawsr/sea --roi 800 1200 514 386
+python3 tools/import_rawsr_forest.py <forest-originals> --output app/src/androidTest/assets/rawsr/forest --roi 800 1200 514 386
 ```
 
 Requires numpy, tifffile and exiftool. Optional rawpy/Pillow preview is solely for
