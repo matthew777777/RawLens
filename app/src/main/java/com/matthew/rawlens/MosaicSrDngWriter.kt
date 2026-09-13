@@ -67,6 +67,11 @@ data class MosaicSrProvenance(
  * round half up) via [LinearRgbDngWriter.quantize]: reconstructed samples are
  * already black-subtracted and normalized, so the scale describes the file
  * exactly.
+ *
+ * The NoiseProfile tag carries the same DNG RGB S/O pairs as the source-Bayer
+ * path and the Linear RGB prime writer (via [DngNoiseProfile]) so converters
+ * can apply profiled denoise; it is omitted — never fabricated — when the
+ * reference metadata carries no model.
  */
 object MosaicSrDngWriter {
     const val DERIVATION = "MosaicSrDerivedBayer"
@@ -77,6 +82,7 @@ object MosaicSrDngWriter {
     private const val LONG = 4
     private const val RATIONAL = 5
     private const val SRATIONAL = 10
+    private const val DOUBLE = 12
 
     fun write(
         output: OutputStream,
@@ -147,6 +153,14 @@ object MosaicSrDngWriter {
             matrixTag(50724, metadata.cameraCalibration2)
             matrixTag(50965, metadata.forwardMatrix2)
             entries += Entry(50779, SHORT, shorts(metadata.referenceIlluminant2))
+        }
+        // Sensor noise model for profiled denoise downstream; same RGB S/O
+        // pairs as the source-Bayer path and the Linear RGB prime writer.
+        // Omitted when the reference metadata carries no model (cfaPattern is
+        // nullable, so no requireNotNull).
+        metadata.cfaPattern?.let { pattern ->
+            DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern)
+                ?.let { entries += Entry(51041, DOUBLE, doubles(it)) }
         }
         if (gps != null) {
             // Placeholder value: the GPS sub-IFD offset is patched during
@@ -251,7 +265,7 @@ object MosaicSrDngWriter {
         val tag: Int, val type: Int, val payload: ByteArray, val patchStripOffset: Boolean = false
     ) {
         val count: Int = payload.size / when (type) {
-            SHORT -> 2; LONG -> 4; RATIONAL, SRATIONAL -> 8; else -> 1
+            SHORT -> 2; LONG -> 4; RATIONAL, SRATIONAL, DOUBLE -> 8; else -> 1
         }
     }
 
@@ -268,5 +282,7 @@ object MosaicSrDngWriter {
                 putInt(if (signed) numerator else numerator.coerceAtLeast(0)).putInt(denominator)
             }
         }.array()
+    private fun doubles(values: DoubleArray) = ByteBuffer.allocate(values.size * 8)
+        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach(::putDouble) }.array()
     private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 }
