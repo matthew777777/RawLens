@@ -162,16 +162,45 @@ constants in v1: at output quad `q` the relative reference weight is
 robustness (and hence `Rc`) falls. Where all moving frames are rejected
 (`Rc ≈ 0`), the output is reference-dominated automatically.
 
-Accumulated-robustness overwrite (Stacker parity): any quad with
-`Rc < MIN_SUPPORT` (half a frame-equivalent of moving-frame support,
-`RawSrBayerMerge.MIN_SUPPORT = 0.5`) joins the fallback set even where its
-denominators exceed eps, so ghost-prone sites keep no kernel blend. Since
+Accumulated-robustness overwrite (Stacker-inspired, not Stacker-identical):
+any quad with `Rc < MIN_SUPPORT` (half a frame-equivalent of moving-frame
+support, `RawSrBayerMerge.MIN_SUPPORT = 0.5`) joins the fallback set even
+where its denominators exceed eps, so ghost-prone sites keep no kernel
+blend. The inspiration is Stacker's `apply_cpu_accumulated_robustness_overwrite`
+(pinned v0.1.5-beta, commit 715d949e,
+app/src/main/cpp/wronski_cpu_merge.cpp lines 692-714), but the quantities
+are incommensurate: Stacker compares a per-pixel `accumulated_robustness`
+scalar against a caller-passed `max_frame_count`, while ours compares the
+per-quad `Rc` pure sum of moving-frame finite-sanitized robustness weights
+(`RawSrRobustness.accumulate`, reference excluded). Moreover, in the pinned
+Stacker the only `1.0` threshold is a self-test-harness literal
+(`nativeWronskiCpuAccumulatedOverwriteSample`); no production merge path
+calls the overwrite, and no threshold of `2` exists anywhere (the 2.0s in
+that sample are fixture data). So 0.5 is not matched to Stacker's 1.0 — it
+stands on our own threshold A/B below. Since
 the burst-nearest adoption the fallback set resolves through the
-nearest-backed value (saturation guard → nearest blend → nested ref-only),
-not a forced reference copy — the overwrite kills the kernel smear without
-zeroing the moving frames. A single frame at `r = 0.3` is caught; a full
-ghost (`Rc ≈ 0`) is caught; quads the reference already dominates keep
-blending. The 0.5 point sits clear of the `Rc = 1` saturation fixed point,
+nearest-backed value (censored-site white → saturation guard → zero-support
+ref-only → nearest blend → nested ref-only), not a forced reference copy —
+the overwrite kills the kernel smear without zeroing the moving frames. A
+single frame at `r = 0.3` is caught; a full ghost (`Rc ≈ 0`) is caught;
+quads the reference already dominates keep blending.
+
+Censored taps and the zero-support rule (2026-09-12, lamp/pole fix): taps at
+or above `SATURATED_REF_GUARD` (0.99) never enter any kernel mean — clipped
+values carry no trustworthy signal (SkyKing `CENSORED_UNKNOWN_CHROMA`), and
+the reference's own self-bleed at `r = 1` painted the lamp halo. A censored
+reference site outputs its measured tap (white for RGB triplets, site colour
+for mosaic — highlight desaturation, exact, no hue invented); quads with no
+moving support at all (`Rc ≤ eps`) resolve through the reference quotient,
+whose shared-weight mean cannot straddle edges the way per-channel nearest
+picks do (host probe: fallback speckle `BG = -0.5` → kernel-level residual).
+Before/after on synthetic scenes: lamp bleed 0.35 → 0.00 with core clip kept
+at 1.0 (before: 0.475), edge chroma 0.60 → 0.23, ghost mush 0.00 unchanged,
+and normal-content checksums bit-identical (fix is unreachable off clip and
+zero-support). The nearest rule itself is untouched (Stacker parity intact).
+Residual, structural: accepted-kernel pixels still show a one-pixel phase
+fringe (≤ 0.23 on a 0.6 step, two-frame worst case) — Bayer-domain scatter
+kernels mix phases; frame-count symmetrisation shrinks it on device. The 0.5 point sits clear of the `Rc = 1` saturation fixed point,
 where accepted GPU/CPU arithmetic differences would straddle a literal 1.0
 threshold routinely even though both sides agree within tolerance. The rule
 is inert with no moving frames (reference-only output already equals the
@@ -181,11 +210,14 @@ shared `MIN_SUPPORT`: eager reads support from each target site's source
 quad (the same quad whose robustness fed accumulation) and sets the fallback
 mask; streaming tracks Rc in a seventh, quad-sized mapped accumulator and
 routes values identically (StreamingMosaic carries no mask by design — the
-DNG saver consumes CFA only). Threshold A/B (2026-09-12, runlog): quads in
-the discriminating band [0.5, 1.0) are 1–6% of sea/forest frames while up to
-55% sit within 1e-7 of Rc = 1.0, so a literal 1.0 would plant the boundary
-on the most common real-world value, with eager-float/streaming-double flips
-and no excuse gate on the DNG path; 0.5 stands.
+DNG saver consumes CFA only). Threshold A/B (2026-09-12, runlog): 0.5
+leaves the discriminating band [0.5, 1.0) kernel-merged — kernel mush up to
+0.053 there on worst-case content — but quads in that band are only 1–6%
+of sea/forest frames while up to 55% sit within 1e-7 of Rc = 1.0, so a 1.0
+boundary would sit on the single most common real-world value, inviting
+eager-float/streaming-double flips with no excuse gate on the DNG path and
+trading genuine kernel SR detail for nearest snaps; 0.5 stands on this
+measurement, not on parity with any Stacker threshold.
 
 Local fallback semantics: where `den_c(p) ≤ eps` for channel `c` (no usable
 support from any frame — only possible at borders or under total rejection),

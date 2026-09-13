@@ -14,6 +14,14 @@
 //   CFA channel: num_c += w*r*sample, den_c += w*r, with independent R/G/B
 //   denominators. Samples are linear Bayer observations from u_cfa, never
 //   demosaiced RGB. Non-finite samples, weights, and robustness are skipped.
+//   Censored taps (>= 0.99) are skipped like non-finite ones: clipped values
+//   must not bleed through kernel means, not even from the reference at
+//   r = 1 (SkyKing CENSORED_UNKNOWN_CHROMA; the nearest path below keeps
+//   finite-only sampling per Stacker parity).
+// - the reference pass additionally records its center tap per pixel into
+//   the num .w lane (the site's direct sample; the reference runs with zero
+//   shift; call-site discipline: img_num is refNumerator here). Moving
+//   passes leave that texture untouched. Cleared texels read 0.0.
 // - black/white normalization and lens shading run exactly once upstream in
 //   the normalize path; this pass consumes its output unchanged.
 precision highp float;
@@ -128,6 +136,7 @@ void main() {
             if (any(lessThan(t, ivec2(0))) || any(greaterThanEqual(t, u_size))) continue;
             float obs = texelFetch(u_cfa, t, 0).r;
             if (!finite(obs)) continue;
+            if (obs >= 0.99) continue;
             vec2 d = (vec2(t) + vec2(0.5) - source) * 0.5;
             float z = mat.x * d.x * d.x + (mat.y + mat.z) * d.x * d.y + mat.w * d.y * d.y;
             if (!finite(z)) continue;
@@ -190,6 +199,16 @@ void main() {
     }
     if (bestD2[2] < 1e29) {
         nearNum.z += r * bestS[2]; nearDen.z += r;
+    }
+    if (u_is_reference == 1) {
+        // The reference pass records its center tap (the site's direct
+        // sample; the reference runs with zero shift) in the .w lane for the
+        // censored-site rule. Call-site discipline: img_num is the
+        // refNumerator texture here, which moving passes never touch;
+        // cleared texels read 0.0 = uncensored. Finalize reads the tap back
+        // from u_ref_num.w — no extra texture (Mali allows 8 compute images
+        // and the clear pass already binds 8).
+        num.w = texelFetch(u_cfa, p, 0).r;
     }
     imageStore(img_num, p, num);
     imageStore(img_den, p, den);

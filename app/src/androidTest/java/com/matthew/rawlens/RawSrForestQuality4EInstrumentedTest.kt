@@ -24,7 +24,7 @@ import kotlin.math.max
 import kotlin.math.round
 
 /**
- * Prompt 4E: real-scene scale-1 merge image-quality gate on the Sea fixture.
+ * Prompt 4E: real-scene scale-1 merge image-quality gate on the Forest fixture.
  * Criteria and method were declared in docs/raw-sr-4e-runlog.md BEFORE judging.
  * Test-only exports under cacheDir/rawsr-debug/forest4e; production saving untouched.
  */
@@ -42,7 +42,7 @@ class RawSrForestQuality4EInstrumentedTest {
         val outDir = File(instrumentation.targetContext.cacheDir, "rawsr-debug/forest4e")
         outDir.mkdirs()
 
-        val report = JSONObject().put("gate", "4E").put("fixture", "sea")
+        val report = JSONObject().put("gate", "4E").put("fixture", "forest")
             .put("referenceIndex", fixture.referenceIndex).put("adreno", "UNTESTED")
         val allFailures = mutableListOf<String>()
         var tuningRecorded = false

@@ -137,6 +137,100 @@ class RawSrBayerMergeTest {
         for (c in 0..2) assertEquals(expected, channelMean(out, c), 1e-6)
     }
 
+    @Test fun supportOverwriteBoundaryIsStrictlyBelowHalf() {
+        // Pins the MIN_SUPPORT decision boundary (merge contract §9): rc
+        // exactly 0.5 keeps the kernel blend (strict `<`), rc one float-ulp
+        // below joins the fallback set. Uniform scenes keep kernel and
+        // nearest blends well-defined on both sides, so the mask alone is
+        // the assertion — this is our own 0.5 boundary, not a Stacker match
+        // (their threshold is a per-pixel self-test literal; see the
+        // MIN_SUPPORT KDoc).
+        val ref = sceneFrame(scene = constScene(0.4f, 0.4f, 0.4f))
+        val atHalf = sceneFrame(
+            scene = constScene(0.6f, 0.6f, 0.6f),
+            robustness = robust(value = { _, _ -> 0.5f }))
+        val kept = RawSrBayerMerge.merge(ref, listOf(atHalf))
+        assertTrue(kept.rc.values.all { it == 0.5f })
+        assertTrue(kept.fallback.none { it })
+        // 0.49999997f is floatToIntBits(0.5f) - 1: the float adjacent below.
+        val belowHalf = sceneFrame(
+            scene = constScene(0.6f, 0.6f, 0.6f),
+            robustness = robust(value = { _, _ -> 0.49999997f }))
+        val dropped = RawSrBayerMerge.merge(ref, listOf(belowHalf))
+        assertTrue(dropped.fallback.all { it })
+    }
+
+    @Test fun zeroSupportFallbackEqualsReferenceOnly() {
+        // Pole-fix pin (merge contract §9): moving frames fully rejected
+        // (rc = 0) must resolve every fallback pixel through the reference
+        // kernel quotient — never the burst-nearest blend. On an achromatic
+        // step edge the independent per-channel nearest picks straddle the
+        // edge and invent chroma (host probe measured BG = -0.5); the
+        // shared-weight kernel quotient stays achromatic. Bit-exact vs the
+        // reference-only run: same denominators (rejected frames add exact
+        // zeros), same branch, same doubles.
+        val step: (Int, Int, CfaColor) -> Float =
+            { x, _, _ -> if (x < W / 2) 0.15f else 0.75f }
+        val ref = sceneFrame(scene = step)
+        val mov = sceneFrame(
+            scene = constScene(0.9f, 0.9f, 0.9f),
+            robustness = robust(value = { _, _ -> 0f }))
+        val out = RawSrBayerMerge.merge(ref, listOf(mov))
+        assertTrue(out.fallback.all { it })
+        assertArrayEquals(refOnlyOf(ref).rgb, out.rgb, 0f)
+    }
+
+    @Test fun acceptedEdgeKernelFringeStaysBounded() {
+        // Structural residual pin (merge contract §9): on ACCEPTED edge
+        // pixels the Bayer-domain scatter kernel mixes phases within its 3x3
+        // window, so a one-pixel fringe remains — measured 0.227 on a 0.6
+        // step with identical frames and isotropic precision (the worst
+        // case: no subpixel diversity to symmetrise the per-channel tap
+        // sets, no edge steering). The bound documents the residual; the
+        // fallback speckle it is not: that path is achromatic by
+        // zeroSupportFallbackEqualsReferenceOnly above.
+        val step: (Int, Int, CfaColor) -> Float =
+            { x, _, _ -> if (x < W / 2) 0.15f else 0.75f }
+        val ref = sceneFrame(scene = step)
+        val mov = sceneFrame(scene = step)
+        val out = RawSrBayerMerge.merge(ref, listOf(mov))
+        var worst = 0.0
+        for (y in 0 until H) for (x in 0 until W) {
+            if (out.fallback[y * W + x]) continue
+            val o = (y * W + x) * 3
+            val r = out.rgb[o].toDouble()
+            val g = out.rgb[o + 1].toDouble()
+            val b = out.rgb[o + 2].toDouble()
+            worst = maxOf(worst, abs(r - g), abs(b - g))
+        }
+        assertTrue("kernel fringe worst=$worst", worst < 0.25)
+    }
+
+    @Test fun censoredCoreKeepsClipWithoutHalo() {
+        // Lamp-fix pin: normalised taps at/above SATURATED_REF_GUARD carry no
+        // trustworthy signal (SkyKing CENSORED_UNKNOWN_CHROMA) and must not
+        // enter any kernel mean — not even the reference at r = 1, whose
+        // self-bleed painted the halo. A clipped core keeps its exact clip
+        // via the site-direct branch; the surrounding ring keeps the
+        // background level exactly (no bleed in either direction).
+        val core = (W / 2 - 2) until (W / 2 + 2)
+        val scene: (Int, Int, CfaColor) -> Float =
+            { x, y, _ -> if (x in core && y in (H / 2 - 2) until (H / 2 + 2)) 1f else 0.3f }
+        val ref = sceneFrame(scene = scene)
+        val mov = sceneFrame(scene = scene)
+        val out = RawSrBayerMerge.merge(ref, listOf(mov))
+        for (y in 0 until H) for (x in 0 until W) for (c in 0..2) {
+            val v = out.rgb[(y * W + x) * 3 + c].toDouble()
+            if (x in core && y in (H / 2 - 2) until (H / 2 + 2)) {
+                assertEquals("core ($x,$y,$c)", 1.0, v, 1e-9)
+            } else {
+                // 0.3f is not an exact decimal: the kernel mean lands on the
+                // float32 input value, not the double literal.
+                assertEquals("ring ($x,$y,$c)", 0.3f.toDouble(), v, 1e-9)
+            }
+        }
+    }
+
     @Test fun fallbackPicksNearestMatchingPhaseSample() {
         // Checkerboard reference, fully rejected moving frame: nearest must
         // return the center texel itself (distance 0, unique minimum) where
@@ -345,11 +439,12 @@ class RawSrBayerMergeTest {
 
     @Test fun foregroundOcclusionStaysGhostFreeOnNearestFallback() {
         // Occluded block (robustness 0): the moving frame is fully rejected,
-        // so the fallback path backs the block with the reference-anchored
-        // burst-nearest value — the zero-shift nearest pick, i.e. the
-        // reference texel itself — never the +0.5 ghost content. Nearest is
-        // sharper than the old reference-only kernel mean on texture, so the
-        // assertion is ghost distance, not kernel equality.
+        // so with no moving support the fallback path backs the block with
+        // the reference kernel quotient — never the +0.5 ghost content. The
+        // ghost frame (r = 0) contributes nothing, so every output must lie
+        // within the reference window's own value range: any ghost admixture
+        // would exceed its maximum, since every ghost sample sits exactly
+        // +0.5 above the reference texture.
         fun textured(sx: Int, sy: Int, color: CfaColor): Float = 0.15f + ((sx * 31 + sy * 17) % 23) / 23f * 0.5f
         val ref = sceneFrame(scene = ::textured)
         val inBlock = { x: Int, y: Int -> x in 12..21 && y in 8..15 }
@@ -361,20 +456,20 @@ class RawSrBayerMergeTest {
         for (y in 10..13) for (x in 14..19) {
             assertTrue("fallback ($x,$y)", out.fallback[y * W + x])
             for (c in 0..2) {
-                val v = out.rgb[(y * W + x) * 3 + c]
-                // The pick must be exactly one of the reference window's
-                // same-colour texels (zero shift ⇒ center window). The ghost
-                // frame (r = 0) contributes nothing, so ghost content cannot
-                // appear: every ghost sample is exactly +0.5 above any ref
-                // sample, and v is bit-identical to a ref texel.
-                var ok = false
+                val v = out.rgb[(y * W + x) * 3 + c].toDouble()
+                var lo = Double.POSITIVE_INFINITY
+                var hi = Double.NEGATIVE_INFINITY
                 for (oy in -1..1) for (ox in -1..1) {
                     val tx = x + ox
                     val ty = y + oy
-                    if (BayerPattern.RGGB.colorAt(tx, ty).ordinal == c &&
-                        refSamples[ty * W + tx] == v) ok = true
+                    if (BayerPattern.RGGB.colorAt(tx, ty).ordinal == c) {
+                        val s = refSamples[ty * W + tx].toDouble()
+                        lo = minOf(lo, s)
+                        hi = maxOf(hi, s)
+                    }
                 }
-                assertTrue("ref-anchored nearest ($x,$y,$c) v=$v", ok)
+                assertTrue("ghost-free ($x,$y,$c) v=$v range=[$lo,$hi]",
+                    v >= lo - 1e-9 && v <= hi + 1e-9)
             }
         }
     }
