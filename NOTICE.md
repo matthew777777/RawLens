@@ -36,10 +36,11 @@ RawLens adaptations are maintained separately and may differ substantially from 
 
 PhotonCamera and its contributors provide their work without endorsement of RawLens.
 
-RawLens's HDR bracket alignment also compiles PhotonCamera's FlowNet-v2 NCNN implementation from
-the pinned `54d9febc596b34376b8be242a388f386d97e8f5d` checkout. Relevant sources are
+RawLens's HDR bracket alignment vendors PhotonCamera's FlowNet-v2 NCNN implementation from
+commit `9efb24a44119b04223b4a2eef50c7837ad643970`. Relevant sources are
 `processing/ml/FlowNetNcnnProcessor.java`, `cpp/ncnnMl.cpp`, `cpp/flownet/`, the ABI-specific NCNN
-static libraries, and `assets/models/flownet_flat.ncnn.{param,bin}`. RawLens supplies its own
+static libraries, and `assets/models/flownet_flat.ncnn.{param,bin}`. The vendored implementation
+is recorded in `app/src/main/cpp/flownet/UPSTREAM.md`. RawLens supplies its own
 normalized-CFA input renderer and CFA-parity-preserving warp.
 
 ## Google Filament AgX

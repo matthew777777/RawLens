@@ -9,8 +9,8 @@ a Kotlin adaptation, not a verbatim compilation of Darktable's desktop pipeline.
 
 PhotonCamera's checked-in FlowNet model, JNI runtime and custom NCNN layers are compiled
 directly. RawLens supplies the normalized Bayer proxy renderer and warp adapter.
-The reference directory has no Git metadata in this workspace; its recorded commit is
-provenance supplied by `references/README.md`, not independently verified checkout HEAD.
+The vendored files record their independently verified PhotonCamera source commit in
+`app/src/main/cpp/flownet/UPSTREAM.md`; builds no longer require a local reference checkout.
 
 ## Corrections
 

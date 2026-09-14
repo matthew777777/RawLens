@@ -36,30 +36,6 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
-    sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/photonFlowNet/java"))
-    // The pinned PhotonCamera checkout supplies FlowNet; DNG uses vendored TinyDNG v3.
-    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/photonFlowNet/assets"))
-}
-
-val syncPhotonFlowNet by tasks.registering(Sync::class) {
-    from(file("../references/PhotonCamera/app/src/main/java/com/particlesdevs/photoncamera/processing/ml/FlowNetNcnnProcessor.java"))
-    filter { line: String ->
-        line.replace("import com.particlesdevs.photoncamera.util.Log;", "import android.util.Log;")
-    }
-    into(layout.buildDirectory.dir(
-        "generated/photonFlowNet/java/com/particlesdevs/photoncamera/processing/ml"
-    ))
-}
-
-val syncPhotonFlowNetModels by tasks.registering(Sync::class) {
-    from(file("../references/PhotonCamera/app/src/main/assets/models")) {
-        include("flownet_flat.ncnn.param", "flownet_flat.ncnn.bin")
-    }
-    into(layout.buildDirectory.dir("generated/photonFlowNet/assets/models"))
-}
-
-tasks.named("preBuild").configure {
-    dependsOn(syncPhotonFlowNet, syncPhotonFlowNetModels)
 }
 
 dependencies {

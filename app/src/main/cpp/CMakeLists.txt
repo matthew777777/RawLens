@@ -85,23 +85,19 @@ set_target_properties(jpeg_turbo_static PROPERTIES
 add_dependencies(jpeg_turbo_static libjpeg_turbo_external)
 
 # JPEG JNI keeps its existing library name; RAW DNG uses rawLensDng below.
-set(PHOTON_DNG_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../references/PhotonCamera/app/src/main/cpp")
-get_filename_component(PHOTON_DNG_DIR "${PHOTON_DNG_DIR}" ABSOLUTE)
 add_library(dngCreator SHARED "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp")
 add_dependencies(dngCreator libjpeg_turbo_external)
 target_include_directories(dngCreator PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
-    "${PHOTON_DNG_DIR}"
     "${LIBJPEG_TURBO_INCLUDE_DIR}"
     "${LIBJPEG_TURBO_BINARY_DIR}")
 target_link_libraries(dngCreator log dl m jnigraphics jpeg_turbo_static)
 target_link_options(dngCreator PRIVATE "-Wl,-z,max-page-size=16384")
 
-# PhotonCamera FlowNet-v2/ncnn port. The pinned reference checkout supplies the model runtime,
-# custom correlation layers, and ABI-specific ncnn static libraries without duplicating 179 MB.
-set(PHOTON_FLOW_DIR "${PHOTON_DNG_DIR}/flownet")
-set(PHOTON_NCNN_DIR "${PHOTON_DNG_DIR}/ncnn/${ANDROID_ABI}")
+# Vendored PhotonCamera FlowNet-v2/ncnn port: model runtime, custom correlation layers,
+# and ABI-specific ncnn static libraries. See app/src/main/cpp/flownet/UPSTREAM.md.
+set(PHOTON_FLOW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flownet")
+set(PHOTON_NCNN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/${ANDROID_ABI}")
 set(PHOTON_NCNN_LIB "${PHOTON_NCNN_DIR}/lib")
 if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a")
     set(FLOW_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/flownet-generated")
@@ -130,7 +126,7 @@ if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a")
             "${PHOTON_NCNN_LIB}/libSPIRV.a")
     endif()
     add_library(ncnnMl SHARED
-        "${PHOTON_DNG_DIR}/ncnnMl.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp"
         "${PHOTON_FLOW_DIR}/layer/flownetupsample.cpp"
         "${PHOTON_FLOW_DIR}/layer/flownetcorrlookup.cpp"
         "${PHOTON_FLOW_DIR}/layer/flownetcorrfused.cpp"
