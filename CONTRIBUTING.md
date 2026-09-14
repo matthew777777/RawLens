@@ -14,15 +14,15 @@ Camera behavior varies significantly across Android devices, so camera-pipeline 
 
 The current activity is portrait-locked in the source manifest. Preview and control positioning still account for sensor/display rotation, but contributions should not assume that the activity can rotate into a separate landscape layout.
 
-The app currently supports AUTO, PROGRAM shutter-first AE, ZSL RAW motion selection, and MANUAL exposure modes; single-frame, six-frame forward, and three-frame HDR bracket capture (±2/±4 EV); optional 1–30-frame ZSL output targeting up to 30 FPS; AE metering modes; OIS; RAW-based ETTR; experimental RAW super-resolution (forces ZSL) with linear/mosaic DNG outputs; adaptive development exposure; AgX JPEG controls; denoise controls; DNG writer backend selection (Android default, TinyDNG v3 fallback); opt-in GPS geotagging; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior (ZSL fallback, HDR abort/MFSR fallback, SR reference fallback).
+The app currently supports AUTO, PROGRAM shutter-first AE, ZSL RAW motion selection, and MANUAL exposure modes; single-frame and six-frame forward capture; optional 1–30-frame ZSL output targeting up to 30 FPS; AE metering modes; OIS; adaptive development exposure; AgX JPEG controls; denoise controls; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
 
 ## Pull requests
 
 - Keep changes focused and explain the user-visible behavior.
 - Preserve existing copyright, attribution, and SPDX notices.
 - Identify copied or adapted third-party code and confirm that its license is GPLv3-compatible.
-- Update all affected project documentation (`README.md`, `CHANGELOG.md`, `PRIVACY.md`, `NOTICE.md`, `references/README.md`, and `docs/` contracts/audits) when behavior, requirements, data handling, or research references change.
-- Do not commit keystores, signing passwords, local SDK paths, captured DNG files, device logs containing personal data, or ignored `references/` checkouts and `rawsr-private/` originals.
+- Update all affected project documentation (`README.md`, `CHANGELOG.md`, `PRIVACY.md`, `NOTICE.md`, and `references/README.md`) when behavior, requirements, data handling, or research references change.
+- Do not commit keystores, signing passwords, local SDK paths, captured DNG files, or device logs containing personal data.
 - Include device model, Android version, Camera2 ID, and reproduction steps for camera-specific fixes.
 
 ## Commit and release hygiene

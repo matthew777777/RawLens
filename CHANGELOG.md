@@ -2,34 +2,6 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [Unreleased] — post-1.0.0 source state (2026-09-03 … 2026-09-13)
-
-### Added
-
-- HDR three-frame bracket capture (±2 EV default, ±4 EV option) with shutter-only exposure, frozen ISO/focus, and AWB lock
-- Darktable-adapted exposure-bracket radiance merge with PhotonCamera FlowNet-v2 alignment, MFSR robustness fallback, and 32-bit float CFA DNG (`*HDR.dng`) plus compensated `*HDR.jpg` output
-- HDR settings: save-all-brackets, save-debug-frames, and bracket-range controls; grouped `IMG_…_HDR` filenames with one GPS fix per bracket set
-- Experimental handheld RAW super-resolution (Wronski-style Bayer-direct merge): burst planner, CPU alignment oracle, kernel-covariance guide, robustness maps, packed GLES executor, censored-tap merge rule (`SATURATED_REF_GUARD = 0.99`), and zero-support reference-quotient fallback
-- Mosaic-SR direct-CFA reconstruction and Linear-RGB develop path (`*MOSAIC.dng`, `*LINEAR.dng`), both carrying the source DNG noise profile when available
-- RAW-based ETTR single-exposure control (SAFE/REC, 0.3 EV headroom default) and `RAW SR` / `ETTR` viewfinder quick tiles
-- Opt-in GPS geotagging for JPEG (EXIF GPS) and DNG (GPS tags); off by default, 5-minute freshness gate, single fix shared across HDR/SR sets
-- Vendored TinyDNG v3 DNG stack (`matthew777777/tinydng@1f18169`): Android `DngCreator` default, AUTO → TinyDNG fallback, validated extra TIFF fields (NoiseProfile, GainMap/OpcodeList2, ActiveArea, calibration)
-- DNG writer backend selector, per-capture grouped filenames, merge-debug payloads, and time-based ZSL overflow guard
-- Sea (30-frame) and Forest (30-frame) real-RAW instrumented fixtures with CC BY 4.0 manifests
-- RawTherapee AMaZE reference pipeline with ordered-GLES oracle and Mali-G615 parity runs; RAW-SR alignment/merge/robustness contracts and 4E runlog
-
-### Changed
-
-- Capture pipeline, metering (RAW histogram/ETTR), status text, and viewfinder UX reworked; capture mode (AUTO/PROGRAM/ZSL/MANUAL) is now the single source of truth for ZSL (legacy Settings toggle removed)
-- Release tile cycles SINGLE → BURST 6 → HDR ±2/±4; RAW SR forces ZSL while enabled
-- Native `dngCreator` library now holds only the JPEG encoder; PhotonCamera DNG bridge and `tiny_dng_writer.h` header removed
-- Removed dead vendored PhotonCamera stubs; local upstream reference checkouts are git-ignored research-only inputs
-
-### Behavior and documentation
-
-- See `docs/hdr-port-audit.md`, `docs/tinydng-integration.md`, `docs/amaze-rawtherapee-audit.md`, and `docs/raw-sr-*.md` for port boundaries, verification limits, and merge contracts
-- PRIVACY, NOTICE, and references docs updated for GPS, TinyDNG v3, darktable HDR merge, RawTherapee AMaZE, Wronski/IPOL reimplementation, and Sea/Forest fixtures
-
 ## [1.0.0] - 2026-08-31
 
 ### Added
