@@ -366,12 +366,6 @@ Before switching the feature on by default, validate both modes in Lightroom/Ado
 
 ## 9. Threading, memory, and lifecycle
 
-Packed-executor update (2026-09-10): original RAW16 plane input, immutable metadata,
-sequential moving-frame workspaces and fixed accumulator ping-pong are implemented.
-See [packed executor contract and Mali validation](raw-sr-packed-executor.md).
-The capture fallback remains unchanged; this is not final Bayer-direct fusion or
-full-resolution/Adreno device qualification.
-
 1. Keep one serialized writer/merge worker. A merge must never overlap another full-resolution development or merge job.
 2. Reserve queue capacity by **logical artifact**, not by selected-frame count, when SR is on. The job itself owns up to 30 camera images.
 3. Extend memory estimation to include target-grid `num`, `den`, merged RGB, `Rc`, reference pyramid/gradients, and one non-reference frame workspace.
@@ -424,8 +418,7 @@ Implemented:
 1. `RawSrAlignment` is the deterministic CPU oracle for Bayer-quad grayscale construction,
    image pyramids, coarse-to-fine tile search, inverse-compositional translation refinement,
    residual scoring, and per-tile rejection masks. Flow is always expressed in Bayer-quad pixels.
-2. `RawSrTuning` centralizes the IPOL schedule and selects 64/32/16 RAW-pixel tiles
-   (32/16/8 Bayer quads) from captured-reference linear SNR; see Prompt 4A below.
+2. `RawSrAlignmentTuning` selects 64/32/16-RAW-pixel-equivalent tiles from estimated SNR.
 3. `RawSrMergePrototype` provides the required phase-safe 1x RGB numerator/denominator merge and
    reference-only A/B mode. Unreliable tiles do not contribute non-reference samples.
 4. GLES 3.1 shader contracts live under `shaders/rawsr`: Bayer-quad reduction, pyramid reduction,
@@ -446,11 +439,9 @@ Remaining before Phase B can be called device-complete:
    MAE was below 0.00000025, and reliable interior coverage was 100%. Flat-field rejection,
    reference-only accumulation across all four Bayer phases, and two-frame RGB accumulation also
    passed. Adreno hardware validation remains required when a device becomes available.
-3. As of 2026-09-10, the user-contributed Sea fixture contains lossless **unnormalized**
-   Bayer-region extracts from all 30 original DNGs, with CC BY 4.0 permission and
-   checksummed per-frame manifests. Flow/residual/confidence PNGs and CSVs are exported.
-   See Prompt 3E below for real-burst results and missing original Camera2 metadata.
-   Synthetic fixtures are still explicitly separate from real captures.
+3. `RawSrDebugExporter` now emits flow/confidence PNGs and the androidTest fixture directory defines
+   the lossless normalized-Bayer manifest contract. A redistributable real RAW burst still needs to
+   be captured and checked in; synthetic Bayer fixtures must not be mislabeled as real captures.
 4. Replace Phase A's truthful reference fallback only after those device and real-fixture comparisons pass. The
    current capture path intentionally continues to save/develop the reference frame.
 
@@ -552,227 +543,9 @@ Use these as bounded work requests. Run the test/build checks stated in each pro
 
 ### Prompt 3 - alignment foundation
 
-2026-09-10 update: CPU/GLES Gaussian pyramid, coarse L2/fine L1 matching,
-noninterpolating three-parent propagation, three finest-level IC updates and
-deterministic forward/reverse rejection are implemented. See the
-[alignment contract and strict Mali results](raw-sr-alignment-contract.md)
-for exact scale/radius/border conventions, tests and CSV/PNG exports.
-
 > Add a GLES 3.1 `RawSuperResolutionProcessor` foundation. Implement normalized Bayer-quad grayscale creation, a four-level pyramid, tile-wise coarse-to-fine block matching, and three inverse-compositional Lucas-Kanade refinements. Output debug flow/residual textures behind a debug flag. Use only captured per-frame metadata, honor CFA phase and crop origin, and add synthetic fractional-shift instrumented tests. Do not write DNG output yet.
 
-### Prompt 3E status — Sea real RAW fixture and target GPUs (2026-09-10)
-
-The fixture/importer/loader and instrumentation comparisons are implemented:
-[fixture format and metadata limitations](../app/src/androidTest/assets/rawsr/README.md),
-[license](../app/src/androidTest/assets/rawsr/sea/LICENSE.md),
-and [machine-readable Mali summary](rawsr-sea-mali-results-2026-09-10.json).
-The 30 full original DNGs were copied and byte-verified in ignored
-`references/rawsr-private/Sea/`. Test assets contain only lossless measured
-514×386 Bayer regions, not rendered images; the odd processing crop is 512×384.
-
-**Mali run:** vendor **ARM**, renderer **Mali-G615 MC2**. Complete headless matrix:
-**11 tests, 0 failures, 28.752 s**, with 110 unit tests and debug/test APK builds
-passing. Eight existing synthetic tests retain their strict acceptance thresholds;
-three additional tests cover real-fixture metadata/checksums, corruption rejection
-and real CPU/GLES alignment plus reference-only CFA/lens verification.
-
-**Sea real comparison:** 29 moving frames against captured reference index 15:
-
-| Measurement | Result |
-|---|---:|
-| Corresponding reliable interior tiles | 2708 / 4060 |
-| Reliable interior coverage | 66.6995% (per-frame 62.8571–70.0%) |
-| All-tile rejection rate | 42.9239% |
-| X / Y GPU-minus-CPU bias, quad pixels | 5.6664e−8 / 5.7062e−9 |
-| X / Y MAE, quad pixels | 2.6384e−7 / 2.1893e−7 |
-| Maximum absolute axis error, quad pixels | 1.72555e−5 |
-| CPU/GPU confidence disagreements | 0 |
-| Reference-only normalized RGB maximum error | 1.78814e−7 |
-| Fixture test elapsed, including load/CPU/GPU/export | 21.736 s |
-| Tracked peak texture storage | 12,048,592 bytes |
-
-This is a **diagnostic parity pass**, not an 80% real-scene coverage pass or a
-ground-truth motion accuracy claim. No tolerance was relaxed. The synthetic
-80% coverage gate still passes; Sea's lower coverage/rejection is explicitly
-reported and needs real-scene quality investigation before any output-path gate.
-Do not mark Phase B device-complete on these results.
-
-Per-frame metrics and CSV + flow/residual/confidence PNGs are in
-`app/build/reports/rawsr-sea-mali-2026-09-10/rawsr-debug/`; device source:
-`cache/rawsr-debug/`. The JSON report is `sea_metrics.json`. Exports occur before
-comparison assertions. Tests use a headless EGL context and do not launch an Activity.
-
-Original Camera2 SENSOR_TIMESTAMP, HAL row/pixel strides, camera/physical IDs and
-physical sensor-buffer origin are absent from the supplied DNGs and recorded as
-null—not reconstructed or invented. Filename milliseconds are save-time evidence;
-they do not establish sensor capture cadence. DNG active-array coordinates are
-explicitly distinguished from physical HAL origin. A future frozen-metadata
-capture fixture is still needed to exercise that original Camera2 contract fully.
-
-**Adreno: UNTESTED for the time being.** No Adreno hardware run has occurred;
-no Adreno completion is claimed or scheduled without an available device.
-DNG/JPEG saving and the truthful Phase-A reference fallback are unchanged.
-
 ### Prompt 4 - robust Bayer merge
-
-#### Prompt 4A — centralized IPOL tuning (2026-09-10)
-
-`RawSrTuning` replaces the prototype tuning object. Linear SNR is clipped to
-6–30; tiles are 64 RAW pixels for SNR ≤14, 32 for 14<SNR≤22, and 16 above 22.
-The alignment adapter explicitly divides tile width by two to obtain Bayer quads.
-Interpolation across 6–30 resolves kDetail 0.33→0.25, kDenoise 5→3,
-Dth 0.81→0.71 and Dtr 1.24→1. Constants are centralized at
-kStretch=4, kShrink=2, t=0.12, s1=2, s2=12 and Mth=0.8.
-
-Reference estimation uses mean normalized sensor brightness and the captured
-noise profile, before additional lens-shading correction and white balance.
-The packed plane is scanned directly with frozen black/white, stride and crop
-metadata; no full-resolution CPU float copy is allocated. Brightness statistics
-clamp codes to [0,1] without modifying the plane. Noise variance is the average
-per-CFA-sample `S*b+O`; eight Camera2 raster-order coefficients have equal phase
-weights, while six DNG RGB coefficients have R:G:B weights 1:2:1. There is no
-extra ISO/exposure multiplication and no fictitious quad-averaging SNR gain.
-
-Use **linear `b/sqrt(variance)`**, per IPOL equations 22–24, not the newer Jamy-L
-checkout's dB/power estimator. Camera2's analytic variance is the requested
-captured-model estimate; this does not claim to implement IPOL's clipped-noise
-Monte Carlo sigma table, which remains separate robustness work.
-
-Missing/invalid profiles or nonfinite brightness produce explicitly labelled
-conservative SNR-6 settings, not invented noise coefficients. Zero brightness
-maps to SNR 6; positive signal with an explicitly zero-noise model saturates at 30
-and is labelled ZERO_NOISE. All resolved parameters/status and active tile units
-are logged under `RawLensRawSrTuning` only when the application is debuggable.
-
-`processPacked` resolves the reference settings by default. Explicit alignment
-configurations remain available for deterministic oracle/device tests and are
-identified in logs. Search radii, residual/Hessian gates and strict Mali acceptance
-limits are not retuned. Fusion/kernel consumers will use these centralized values
-in later prompts; saving and the reference fallback are unchanged.
-
-References: [IPOL paper, p.247, equations 22–24](https://www.ipol.im/pub/art/2023/460/article_lr.pdf),
-[Camera2 SENSOR_NOISE_PROFILE](https://developer.android.com/reference/android/hardware/camera2/CaptureResult#SENSOR_NOISE_PROFILE),
-and pinned Jamy-L `params.py::update_snr_config` (schedule, not its newer dB estimator).
-No parameter was fitted to a synthetic scene or the Sea fixture.
-
-Validation on 2026-09-10: complete JVM suite **127 tests passed**, including eight
-dedicated tuning tests covering boundaries, interpolation, noise profiles and
-packed CFA/crop sampling. Debug app and instrumentation APK builds passed.
-The complete headless ARM Mali-G615 MC2 RAW-SR class passed **12 tests in 19.641 s**,
-including default packed-executor tile-grid checks at SNR 10, 18 and 26.
-No Activity was launched. Existing strict acceptance limits remain unchanged;
-this does not remove the previously documented real-fixture coverage limitation.
-Adreno remains **UNTESTED**.
-
-Implementation reference for Prompt 4 and its future 4B–4D substeps: the SkyKing
-Photon-Camera Bayer-direct accumulator **and its producer/finalizer pipeline**.
-See [reference contract and adaptation caveats](raw-sr-skyking-reference.md).
-Study the complete pipeline, not the accumulation shader in isolation; its
-opponent-space accumulators cannot be interpreted as ordinary camera RGB.
-
-#### Prompt 4B — structure-tensor kernel covariance (2026-09-10)
-
-`RawSrKernelCovariance` is the CPU oracle for Wronski/IPOL Alg. 5: separable 2x2
-gradients on the Bayer-quad alignment representation, 2x2 structure-tensor
-windows, analytic eigendecomposition (Jamy-L `linalg.py` averaging formula),
-linear selection law, and exact matrix-inverse precision packing that matches the
-SkyKing `alterCov` consumer (`mat2(v.x, v.y, v.z, v.w)`). No GAT preprocessing:
-the prompt starts from quad-gray, and a quad-averaged GAT variant would be
-invented scope. Exact-flat and non-finite tensors stabilize to the isotropic
-denoise kernel instead of propagating NaN. Only kDetail, kDenoise, Dth, Dtr,
-kStretch, kShrink are consumed; robustness constants (t, s1, s2, Mth) belong to
-a later prompt.
-
-`Gles31RawSrProcessor` computes one packed RGBA32F precision texture per frame
-(reference and moving, new `rawsr/kernel_covariance.glsl` pass) from pyramid
-level 0 and reports it through `onCovariance`; textures are arena-owned and live
-only inside the callback. No burst fusion consumes them yet.
-
-Validation on 2026-09-10: 11 JVM oracle tests pass (flat/line/stripe analytics,
-D-gate pinning for isolated diagonal/corner, PD + inverse checks, NaN/Inf
-finiteness, determinism); 4 headless instrumented tests pass on 25080RABDG
-(CPU/GPU agreement, per-frame coverage, determinism); full suites green with no
-regressions (169 unit, 12 existing GPU). Saving and the reference fallback are
-unchanged.
-
-#### Prompt 4B.1 — covariance input domain and units (2026-09-10)
-
-`RawSrCovarianceGuide` builds the kernel input IPOL Alg. 5 expects: the
-generalized Anscombe transform on normalized, lens-shading-free Bayer
-observations before quad reduction, with the captured per-phase model converted
-exactly to the normalization domain (`a' = S/(W-b)`, `b' = (S*b+O)/(W-b)^2`).
-Zero shot noise uses the affine limit `v/sqrt(b')`; missing, invalid,
-inconsistent, and exactly-zero-noise profiles fall back to the plain 4B average,
-each with its own tested status. New `rawsr/guide_gray.glsl` produces the guide
-from raw codes on device; the alignment pyramid still uses the shaded CFA path
-and no GAT reaches fusion samples or saved RAW. Dth/Dtr and the centralized
-schedule are unchanged. The written RAW/quad coordinate contract (storage grid
-vs spatial units, `P_raw = P_quad/4` exponent invariance) lives on
-`RawSrCovarianceGuide`; the solver allocates no per-pixel objects.
-
-Validation on 2026-09-10: 9 JVM guide tests pass (GAT analytic, all five
-statuses, 4 CFA patterns x 4 origins, shift equivalence, dark/bright
-directional ordering, matched-noise isotropy, exponent invariance); 5 headless
-packed-path instrumented tests pass on 25080RABDG (origins, 6-coefficient
-profiles, missing/zero-shot fallbacks, dark/bright ordering); full suites green
-with no regressions (178 unit; 12 + 4 + 5 GPU). Adreno remains UNTESTED. No
-fusion; saving unchanged.
-
-#### Prompt 4D — Bayer-direct merge (2026-09-10)
-
-`docs/raw-sr-merge.md` (written before any merge code) is the normative
-contract: native 1x grid; reference-anchored quad flow with x2 conversion and
-nearest-tile lookup; source-anchored bilinear precision interpolation with
-quad-unit `z` and `w = exp(-0.5z)` (no SkyKing floor); 3x3 RAW support with
-per-tap sensor-coordinate CFA routing (all phases, no rggb hardcode);
-independent R/G/B numerators/denominators, eps = 1e-8; OOB preserve + counter;
-r == 0 contributes nothing (no merge-side validity test); reference-last order
-with r_ref = 1; den <= eps falls back to the reference-only A/B value on the
-same path; 1 + Rc support estimate. No WB, no opponent transform, no highlight
-reconstruction inside the merge in v1 (SkyKing opponent space deliberately
-rejected; see raw-sr-skyking-reference.md).
-
-`RawSrBayerMerge` is the CPU oracle (constant-memory streaming with
-`RawSrTextureMemory` accounting and per-row cancellation). New
-`rawsr/merge_accumulate.glsl` (Bayer-direct, mirrors the oracle tap for tap)
-+ `rawsr/merge_finalize.glsl` (reference-last add, per-channel normalize,
-local fallback, mask) + extended `clear_accumulators.glsl`; deleted the
-superseded `accumulate_rgb.glsl` / `diagnostic_demosaic.glsl`.
-`Gles31RawSrProcessor.execute` keeps persistent num/den + ref A/B + fallback +
-OOB + merged accumulators, one moving-frame workspace at a time with glFinish,
-reference accumulating last; reference-only A/B runs the same path with Rc
-zero. The `process` adapter path merges with bypassed (unit) robustness; only
-`processPacked` exercises evaluated robustness end to end.
-
-Validation on 2026-09-10 (this session): full JVM suite **210 tests, 0
-failures/errors/skips (30 classes)**, including `RawSrBayerMergeTest` **18/18**
-(colour incl. gray-ramp 1% + 99%-within-0.01 static and 4 patterns x 4
-origins; 3-seed 8-frame noise with Rc >= 6 and variance <= 0.25x at fixed
-K = 1.0; step/corner/checker static-exact + slanted contrast >= 90%;
-foreground occlusion 95%-within-0.02; saturation bit-exact; nearest-tile
-discontinuity bit-exact; OOB preserve + count; fallback bit-exact; exact
-Rc/support; determinism; poisoned-input finiteness; memory constancy at
-2/8/15/30 frames with failure/cancel cleanup; integration through the real
-PackedFrame -> CovarianceGuide -> KernelCovariance -> Robustness oracles).
-CPU oracle working set is **constant 41,472 bytes** on the 32x24 test crop at
-2/8/15/30 frames. Instrumentation compiles clean
-(`:app:compileDebugAndroidTestKotlin` BUILD SUCCESSFUL); 9 new headless
-merge-mirror tests + packed-path merge assertions (2e-3 + 2e-3 per-element
-agreement, bit-exact fallback/OOB sets) are written but **UNRUN on device**:
-`connectedDebugAndroidTest` install blocked once by HyperOS user-restricted
-install prompt (per brief, stopped after one attempt; both APKs prebuilt, needs
-one on-device tap then a re-run). Mali-G615 numbers remain the pre-merge
-Sea/alignment fixture (peakTextureBytes 12048592); **no post-merge GPU memory
-measurement exists yet**. Adreno remains **UNTESTED**.
-
-Remaining limitations (causes): (1) edge criterion uses a slanted-contrast
->= 90% proxy — no true slanted-edge MTF50 measurement exists; (2) adapter-path
-GPU tests merge with unit robustness by construction, so GPU ghost close02 is
-record-only and GPU Rc >= 6 is N/A there — real-robustness rejection is gated
-only on CPU and in the (unrun) packed-path tests; (3) no critic findings were
-available to address (verdict arrived content-free); (4) device merge parity,
-GPU determinism rerun, and GPU peak-memory constancy are unverified pending the
-install approval. Saving and the reference fallback are unchanged.
 
 > Implement the Wronski/IPOL Bayer-direct merge in `RawSuperResolutionProcessor`: structure-tensor anisotropic kernels, noise-profile-aware per-pixel robustness, sequential RGB numerator/denominator accumulation, accumulated robustness, and reference-last local fallback. Start at output scale 1. Expose merged camera-RGB and effective-frame-count textures. Add synthetic static/moving-scene tests proving channel correctness, noise reduction, and no ghost blending.
 

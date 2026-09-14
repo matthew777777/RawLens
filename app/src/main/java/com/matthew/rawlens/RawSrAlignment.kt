@@ -18,26 +18,29 @@ data class RawSrAlignmentConfig(
     val levels: Int = 4,
     val tileSize: Int = 12,
     val searchRadius: Int = 4,
-    val lkIterations: Int = 3,
+    val lkIterations: Int = 4,
     val minHessianDeterminant: Float = 1e-5f,
-    val maxMeanAbsoluteResidual: Float = 0.12f,
-    val minConditionRatio: Float = 1e-4f,
-    val minSampleFraction: Float = 0.75f,
-    val maxFlowConsistencyError: Float = 1.5f
+    val maxMeanAbsoluteResidual: Float = 0.12f
 ) {
     init {
         require(levels in 1..6)
-        require(tileSize in 4..32 && searchRadius in 1..6 && lkIterations == 3)
-        require(minHessianDeterminant.isFinite() && minHessianDeterminant > 0f)
-        require(maxMeanAbsoluteResidual.isFinite() && maxMeanAbsoluteResidual > 0f)
-        require(minConditionRatio.isFinite() && minConditionRatio > 0f && minConditionRatio < 0.25f)
-        require(minSampleFraction in 0.5f..1f)
-        require(maxFlowConsistencyError.isFinite() && maxFlowConsistencyError > 0f)
+        require(tileSize >= 4 && searchRadius >= 1 && lkIterations >= 0)
     }
-    /** Finest-first schedule: [1, searchRadius, searchRadius, ...]. */
-    fun radiusAt(level: Int) = if (level == 0) 1 else searchRadius
-    /** Jamy-L [1,2,4,4] reduction schedule, extended with 4 for optional levels. */
-    fun factorAt(level: Int) = if (level == 0) 1 else if (level == 1) 2 else 4
+}
+
+object RawSrAlignmentTuning {
+    /** Wronski-style SNR schedule; tile sizes are expressed in Bayer-quad pixels. */
+    fun forSnr(snr: Float): RawSrAlignmentConfig {
+        val safe = snr.coerceAtLeast(0f)
+        return when {
+            safe < 2f -> RawSrAlignmentConfig(tileSize = 32, searchRadius = 5,
+                maxMeanAbsoluteResidual = 0.18f)
+            safe < 8f -> RawSrAlignmentConfig(tileSize = 16, searchRadius = 4,
+                maxMeanAbsoluteResidual = 0.12f)
+            else -> RawSrAlignmentConfig(tileSize = 8, searchRadius = 3,
+                maxMeanAbsoluteResidual = 0.08f)
+        }
+    }
 }
 
 data class RawSrTileFlow(
@@ -65,56 +68,6 @@ data class RawSrAlignmentField(
         val ty = (y / tileSize).toInt().coerceIn(0, rows - 1)
         return tiles[ty * columns + tx]
     }
-
-    /**
-     * Bilinear flow for merge/robustness consumption (reference-faithful: no
-     * tile borders visible to the merge). Tile centers sit at integer lattice
-     * points of u = (p + 0.5) / tileSize - 0.5; the four surrounding tiles
-     * blend dx/dy, and confidence blends the reliable bits with a 0.5 gate
-     * (an isoline, not a grid line). Residual stays nearest (containing
-     * tile): the residual gate is a threshold, and thresholding a blended
-     * approximately-agreeing value would shift gate boundaries between CPU
-     * and GPU — the gate keeps its exact old boundary. Any non-finite corner
-     * flow falls back to the containing tile, preserving invalid-flow
-     * propagation. Bitwise-agreeing twins live in robustness.glsl and
-     * merge_accumulate.glsl; [flowAt] stays nearest for alignment internals.
-     */
-    fun flowAtSmooth(x: Float, y: Float): RawSrTileFlow {
-        val ux = (x + 0.5f) / tileSize - 0.5f
-        val uy = (y + 0.5f) / tileSize - 0.5f
-        val x0 = floor(ux).toInt()
-        val y0 = floor(uy).toInt()
-        val fx = (ux - x0).coerceIn(0f, 1f)
-        val fy = (uy - y0).coerceIn(0f, 1f)
-        val xa = x0.coerceIn(0, columns - 1)
-        val xb = (x0 + 1).coerceIn(0, columns - 1)
-        val ya = y0.coerceIn(0, rows - 1)
-        val yb = (y0 + 1).coerceIn(0, rows - 1)
-        val t00 = tiles[ya * columns + xa]
-        val t10 = tiles[ya * columns + xb]
-        val t01 = tiles[yb * columns + xa]
-        val t11 = tiles[yb * columns + xb]
-        if (!t00.dx.isFinite() || !t00.dy.isFinite() ||
-            !t10.dx.isFinite() || !t10.dy.isFinite() ||
-            !t01.dx.isFinite() || !t01.dy.isFinite() ||
-            !t11.dx.isFinite() || !t11.dy.isFinite()
-        ) return flowAt(x, y)
-        val w00 = (1f - fx) * (1f - fy)
-        val w10 = fx * (1f - fy)
-        val w01 = (1f - fx) * fy
-        val w11 = fx * fy
-        fun blend(get: (RawSrTileFlow) -> Float): Float =
-            get(t00) * w00 + get(t10) * w10 + get(t01) * w01 + get(t11) * w11
-        val conf = blend { if (it.reliable) 1f else 0f }
-        return RawSrTileFlow(
-            centerX = x,
-            centerY = y,
-            dx = blend { it.dx },
-            dy = blend { it.dy },
-            residual = flowAt(x, y).residual,
-            reliable = conf >= 0.5f
-        )
-    }
 }
 
 object RawSrAlignment {
@@ -132,72 +85,34 @@ object RawSrAlignment {
         return RawSrGrayImage(width, height, out)
     }
 
-    /** Half-sample reflect borders, sigma=factor/2, truncate=4 sigma, origin at factor*p. */
-    internal fun gaussianWeights(factor: Int): FloatArray {
-        val sigma = factor * 0.5
-        val radius = factor * 2
-        val weights = DoubleArray(radius * 2 + 1) { i ->
-            val x = (i - radius).toDouble()
-            kotlin.math.exp(-x * x / (2.0 * sigma * sigma))
-        }
-        val total = weights.sum()
-        return FloatArray(weights.size) { (weights[it] / total).toFloat() }
-    }
-
-    private fun reflect(p: Int, size: Int): Int = when {
-        p < 0 -> -p - 1
-        p >= size -> 2 * size - p - 1
-        else -> p
-    }
-
     fun pyramid(base: RawSrGrayImage, requestedLevels: Int): List<RawSrGrayImage> {
-        require(requestedLevels in 1..6)
+        require(requestedLevels >= 1)
         val result = arrayListOf(base)
         while (result.size < requestedLevels) {
             val source = result.last()
-            val factor = if (result.size == 1) 2 else 4
-            if (source.width / factor < 4 || source.height / factor < 4) break
-            val width = source.width / factor; val height = source.height / factor
-            val weights = gaussianWeights(factor); val radius = factor * 2
-            val horizontal = FloatArray(width * source.height)
-            for (y in 0 until source.height) for (x in 0 until width) {
-                var sum = 0f
-                for (k in weights.indices) sum += source[reflect(x * factor + k - radius, source.width), y] * weights[k]
-                horizontal[y * width + x] = sum
-            }
+            if (source.width < 8 || source.height < 8) break
+            val width = source.width / 2
+            val height = source.height / 2
             val values = FloatArray(width * height)
             for (y in 0 until height) for (x in 0 until width) {
-                var sum = 0f
-                for (k in weights.indices) sum += horizontal[reflect(y * factor + k - radius, source.height) * width + x] * weights[k]
-                values[y * width + x] = sum
+                val sx = x * 2
+                val sy = y * 2
+                values[y * width + x] = (source[sx, sy] + source[sx + 1, sy] +
+                    source[sx, sy + 1] + source[sx + 1, sy + 1]) * 0.25f
             }
             result += RawSrGrayImage(width, height, values)
         }
         return result
     }
 
-    fun align(reference: RawSrGrayImage, moving: RawSrGrayImage,
-              config: RawSrAlignmentConfig = RawSrAlignmentConfig()): RawSrAlignmentField {
+    fun align(
+        reference: RawSrGrayImage,
+        moving: RawSrGrayImage,
+        config: RawSrAlignmentConfig = RawSrAlignmentConfig()
+    ): RawSrAlignmentField {
         require(reference.width == moving.width && reference.height == moving.height)
-        val refs = pyramid(reference, config.levels); val movs = pyramid(moving, refs.size)
-        val forward = alignDirectional(refs, movs, config)
-        val reverse = alignDirectional(movs, refs, config)
-        return checkConsistency(forward, reverse, config)
-    }
-
-    internal fun checkConsistency(forward: RawSrAlignmentField, reverse: RawSrAlignmentField,
-                                  config: RawSrAlignmentConfig): RawSrAlignmentField {
-        return forward.copy(tiles = forward.tiles.map { tile ->
-            val x = tile.centerX + tile.dx; val y = tile.centerY + tile.dy
-            val inBounds = x >= 0f && y >= 0f && x < reverse.imageWidth && y < reverse.imageHeight
-            val back = reverse.flowAt(x, y)
-            val consistent = max(abs(tile.dx + back.dx), abs(tile.dy + back.dy)) <= config.maxFlowConsistencyError
-            tile.copy(reliable = tile.reliable && inBounds && back.reliable && consistent)
-        })
-    }
-
-    private fun alignDirectional(refs: List<RawSrGrayImage>, movs: List<RawSrGrayImage>,
-                                 config: RawSrAlignmentConfig): RawSrAlignmentField {
+        val refs = pyramid(reference, config.levels)
+        val movs = pyramid(moving, refs.size)
         var previous: RawSrAlignmentField? = null
         for (level in refs.indices.reversed()) {
             val ref = refs[level]; val mov = movs[level]
@@ -206,117 +121,94 @@ object RawSrAlignment {
             val flows = ArrayList<RawSrTileFlow>(columns * rows)
             for (ty in 0 until rows) for (tx in 0 until columns) {
                 val left = tx * config.tileSize; val top = ty * config.tileSize
-                val right = min(left + config.tileSize, ref.width); val bottom = min(top + config.tileSize, ref.height)
-                val bounds = intArrayOf(left, top, right, bottom)
-                var seedX = 0; var seedY = 0
-                previous?.let { prior ->
-                    // Integer subdivision, never normalized grid ratios or interpolated flow.
-                    val factor = config.factorAt(level + 1)
-                    val px = tx / factor; val py = ty / factor
-                    val nx = if (tx % factor < factor / 2) -1 else 1
-                    val ny = if (ty % factor < factor / 2) -1 else 1
-                    var best = INVALID_RESIDUAL
-                    for ((cx, cy) in listOf(px to py, (px + nx) to py, px to (py + ny))) {
-                        if (cx !in 0 until prior.columns || cy !in 0 until prior.rows) continue
-                        val candidate = prior.tiles[cy * prior.columns + cx]
-                        if (!candidate.reliable) continue
-                        val dx = (candidate.dx * factor).toInt(); val dy = (candidate.dy * factor).toInt()
-                        val score = score(ref, mov, bounds, dx, dy, true, config)
-                        if (score < best) { best = score; seedX = dx; seedY = dy }
-                    }
+                val right = min(left + config.tileSize, ref.width)
+                val bottom = min(top + config.tileSize, ref.height)
+                val seed = previous?.let { prior ->
+                    val px = (((tx + 0.5f) * prior.columns / columns).toInt()).coerceIn(0, prior.columns - 1)
+                    val py = (((ty + 0.5f) * prior.rows / rows).toInt()).coerceIn(0, prior.rows - 1)
+                    prior.tiles[py * prior.columns + px]
                 }
-                val best = blockMatch(ref, mov, bounds, seedX, seedY, config.radiusAt(level), level == 0, config)
-                val refined = if (level == 0) refineLk(ref, mov, bounds, best, config) else best
+                val initialDx = (seed?.dx ?: 0f) * if (previous == null) 1f else 2f
+                val initialDy = (seed?.dy ?: 0f) * if (previous == null) 1f else 2f
+                val best = blockMatch(ref, mov, intArrayOf(left, top, right, bottom),
+                    initialDx, initialDy, config.searchRadius)
+                val refined = refineLk(ref, mov, left, top, right, bottom,
+                    best.first, best.second, config)
                 flows += RawSrTileFlow((left + right - 1) * 0.5f, (top + bottom - 1) * 0.5f,
                     refined[0], refined[1], refined[2], refined[3] > 0f)
             }
             previous = RawSrAlignmentField(ref.width, ref.height, config.tileSize, columns, rows, flows)
         }
-        return requireNotNull(previous)
-    }
-
-    internal const val INVALID_RESIDUAL = 1e6f
-
-    private fun score(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                      dx: Int, dy: Int, l1: Boolean, config: RawSrAlignmentConfig): Float {
-        var error = 0f; var count = 0
-        for (y in bounds[1] until bounds[3]) for (x in bounds[0] until bounds[2]) {
-            val mx = x + dx; val my = y + dy
-            if (mx !in 0 until mov.width || my !in 0 until mov.height) continue
-            val d = mov[mx, my] - ref[x, y]
-            if (!d.isFinite()) return INVALID_RESIDUAL
-            error += if (l1) abs(d) else d * d
-            count++
-        }
-        val area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1])
-        return if (count >= max(4, kotlin.math.ceil(area * config.minSampleFraction).toInt()) && error.isFinite())
-            (error / count).coerceAtMost(INVALID_RESIDUAL) else INVALID_RESIDUAL
+        val final = requireNotNull(previous)
+        return RawSrAlignmentField(reference.width, reference.height, config.tileSize,
+            final.columns, final.rows, final.tiles)
     }
 
     private fun blockMatch(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                           baseX: Int, baseY: Int, radius: Int, l1: Boolean,
-                           config: RawSrAlignmentConfig): FloatArray {
-        var bestX = baseX; var bestY = baseY
-        var best = INVALID_RESIDUAL; var distance = Int.MAX_VALUE
-        for (oy in -radius..radius) for (ox in -radius..radius) {
-            val score = score(ref, mov, bounds, baseX + ox, baseY + oy, l1, config)
-            val d = ox * ox + oy * oy
-            if (score < best || (score == best && score < INVALID_RESIDUAL && d < distance)) {
-                best = score; bestX = baseX + ox; bestY = baseY + oy; distance = d
-            }
-        }
-        return floatArrayOf(bestX.toFloat(), bestY.toFloat(), best, if (best < INVALID_RESIDUAL) 1f else 0f)
-    }
-
-    private fun refineLk(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                         start: FloatArray, config: RawSrAlignmentConfig): FloatArray {
-        val left = bounds[0]; val top = bounds[1]; val right = bounds[2]; val bottom = bounds[3]
-        var dx = start[0]; var dy = start[1]
-        // Fixed template gradients/Hessian: inverse-compositional translation, not forward-additive LK.
-        var hxx = 0f; var hxy = 0f; var hyy = 0f; var samples = 0
-        for (y in max(1, top) until min(bottom, ref.height - 1))
-            for (x in max(1, left) until min(right, ref.width - 1)) {
-                val gx = (ref[x + 1, y] - ref[x - 1, y]) * 0.5f
-                val gy = (ref[x, y + 1] - ref[x, y - 1]) * 0.5f
-                hxx += gx * gx; hxy += gx * gy; hyy += gy * gy; samples++
-            }
-        val determinant = hxx * hyy - hxy * hxy
-        val trace = hxx + hyy
-        var valid = start[3] > 0f && samples >= 4 && determinant.isFinite() &&
-            determinant > config.minHessianDeterminant &&
-            determinant > config.minConditionRatio * trace * trace
-        repeat(3) {
-            var bx = 0f; var by = 0f; var count = 0
-            if (valid) {
-                for (y in max(1, top) until min(bottom, ref.height - 1))
-                    for (x in max(1, left) until min(right, ref.width - 1)) {
-                        val sample = bilinearOrNull(mov, x + dx, y + dy) ?: continue
-                        val gx = (ref[x + 1, y] - ref[x - 1, y]) * 0.5f
-                        val gy = (ref[x, y + 1] - ref[x, y - 1]) * 0.5f
-                        val error = sample - ref[x, y]
-                        bx += gx * error; by += gy * error; count++
-                    }
-                // Never silently change the template support/Hessian when a warp leaves bounds.
-                valid = count == samples && bx.isFinite() && by.isFinite()
-                if (valid) {
-                    val stepX = (hyy * bx - hxy * by) / determinant
-                    val stepY = (hxx * by - hxy * bx) / determinant
-                    valid = stepX.isFinite() && stepY.isFinite()
-                    if (valid) { dx -= stepX.coerceIn(-1f, 1f); dy -= stepY.coerceIn(-1f, 1f) }
+                           initialDx: Float, initialDy: Float, radius: Int): Pair<Float, Float> {
+        val baseX = initialDx.toInt()
+        val baseY = initialDy.toInt()
+        var bestX = baseX
+        var bestY = baseY
+        var best = Float.POSITIVE_INFINITY
+        for (oy in baseY - radius..baseY + radius) for (ox in baseX - radius..baseX + radius) {
+            var error = 0f
+            var count = 0
+            for (y in bounds[1] until min(bounds[3], ref.height)) for (x in bounds[0] until min(bounds[2], ref.width)) {
+                val mx = x + ox
+                val my = y + oy
+                if (mx in 0 until mov.width && my in 0 until mov.height) {
+                    val d = mov[mx, my] - ref[x, y]
+                    error += d * d
+                    count++
                 }
             }
+            if (count >= 4 && error / count < best) {
+                best = error / count
+                bestX = ox
+                bestY = oy
+            }
         }
-        var residual = 0f; var count = 0
+        return bestX.toFloat() to bestY.toFloat()
+    }
+
+    private fun refineLk(ref: RawSrGrayImage, mov: RawSrGrayImage, left: Int, top: Int,
+                         right: Int, bottom: Int, startDx: Float, startDy: Float,
+                         config: RawSrAlignmentConfig): FloatArray {
+        var dx = startDx
+        var dy = startDy
+        var determinant = 0f
+        repeat(config.lkIterations) {
+            var hxx = 0f; var hxy = 0f; var hyy = 0f
+            var bx = 0f; var by = 0f
+            for (y in max(1, top) until min(bottom, ref.height - 1)) {
+                for (x in max(1, left) until min(right, ref.width - 1)) {
+                    val sample = bilinearOrNull(mov, x + dx, y + dy) ?: continue
+                    val gx = (ref[x + 1, y] - ref[x - 1, y]) * 0.5f
+                    val gy = (ref[x, y + 1] - ref[x, y - 1]) * 0.5f
+                    val error = sample - ref[x, y]
+                    hxx += gx * gx; hxy += gx * gy; hyy += gy * gy
+                    bx += gx * error; by += gy * error
+                }
+            }
+            determinant = hxx * hyy - hxy * hxy
+            if (determinant <= config.minHessianDeterminant) return@repeat
+            val stepX = (hyy * bx - hxy * by) / determinant
+            val stepY = (hxx * by - hxy * bx) / determinant
+            dx -= stepX.coerceIn(-1f, 1f)
+            dy -= stepY.coerceIn(-1f, 1f)
+        }
+        var residual = 0f
+        var count = 0
         for (y in top until bottom) for (x in left until right) {
             bilinearOrNull(mov, x + dx, y + dy)?.let {
                 residual += abs(it - ref[x, y]); count++
             }
         }
-        val area = (right - left) * (bottom - top)
-        val enough = count >= max(4, kotlin.math.ceil(area * config.minSampleFraction).toInt())
-        val mean = if (enough && residual.isFinite()) (residual / count).coerceAtMost(INVALID_RESIDUAL) else INVALID_RESIDUAL
-        valid = valid && enough && mean <= config.maxMeanAbsoluteResidual
-        return floatArrayOf(dx, dy, mean, if (valid) 1f else 0f)
+        val mean = if (count == 0) Float.POSITIVE_INFINITY else residual / count
+        val reliable = determinant > config.minHessianDeterminant &&
+            mean <= config.maxMeanAbsoluteResidual
+        return floatArrayOf(dx, dy, mean, if (reliable) 1f else 0f)
     }
 
     internal fun bilinearOrNull(image: RawSrGrayImage, x: Float, y: Float): Float? {
