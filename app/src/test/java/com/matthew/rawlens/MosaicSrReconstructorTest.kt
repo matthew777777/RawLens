@@ -158,41 +158,12 @@ class MosaicSrReconstructorTest {
         assertArrayEquals(alone.cfa, withDead.cfa, 1e-6f)
     }
 
-    @Test fun censoredCoreKeepsClipWithoutHalo() {
-        // Mosaic twin of the oracle lamp pin: a censored tap (>= 0.99) never
-        // enters kernel means, and sites mapping onto it keep its exact
-        // value. The target grid differs from the source grid, so the pin is
-        // global: every output is either the background level or the exact
-        // clip, with the clip's footprint bounded (pre-fix the 1.0 tap bled
-        // into every kernel window in reach). Same-colour gate untouched —
-        // the output stays a true CFA.
-        val scene = FloatArray(48) { i -> if (i == 3 * 8 + 4) 1f else 0.3f }
-        val ref = frame(8, 6, BayerPattern.RGGB, scene)
-        val mov = frame(8, 6, BayerPattern.RGGB, scene.copyOf())
-        val result = MosaicSrReconstructor.reconstruct(ref, listOf(mov))
-        var clips = 0
-        for (v in result.cfa) {
-            val d = v.toDouble()
-            if (abs(d - 1.0) < 1e-9) {
-                clips++
-            } else {
-                assertEquals("halo at $v", 0.3, d, 1e-6)
-            }
-        }
-        assertTrue("clip lost, clips=$clips", clips in 1..4)
-    }
-
     @Test fun flowShiftsObservationsInTargetSpace() {
         // Source ramp value=x. The shift is exactly one red period (2 px), so
         // same-colour tap windows keep their shape and parity: interior site
-        // means rise by exactly 2 units in the moving contribution. The zero
-        // reference dilutes the rise by half, hence the net 1 unit. The ramp
-        // stays in physical normalised range (< 0.99): values at/above the
-        // censor level are excluded from kernel means by design, so an
-        // unphysical 0..7 ramp would measure censoring, not geometry. Kernel
-        // weights are value-independent, so the geometry pin is level-
-        // invariant.
-        fun ramp() = FloatArray(48) { i -> (i % 8).toFloat() * 0.1f }
+        // means rise by exactly 2 in the moving contribution. The zero
+        // reference dilutes the rise by half, hence the net 1.0.
+        fun ramp() = FloatArray(48) { i -> (i % 8).toFloat() }
         val ref = frame(8, 6, BayerPattern.RGGB, FloatArray(48))
         val still = frame(8, 6, BayerPattern.RGGB, ramp())
         val shifted = frame(8, 6, BayerPattern.RGGB, ramp(), dx = 1.0f)
@@ -208,7 +179,7 @@ class MosaicSrReconstructorTest {
                 sum += moved.cfa[i] - plain.cfa[i]; n++
             }
         }
-        assertEquals(0.1, sum / n, 0.001)
+        assertEquals(1.0, sum / n, 0.01)
         // The +2 px shift pushes right-edge sites out of bounds: the OOB
         // counter must be non-zero exactly there, corroborating the direction.
         assertTrue(moved.oob.sum() > 0)
@@ -301,7 +272,7 @@ class MosaicSrReconstructorTest {
         // inverse step at zero shift (aligned by flow, conflicting in
         // content) with uniform r = 0.3, so rc = 0.3 < MIN_SUPPORT while den
         // stays above eps everywhere (the reference contributes). BEFORE the
-        // accumulated-robustness overwrite (contract §9, Stacker-inspired) the
+        // accumulated-robustness overwrite (contract §9, Stacker parity) the
         // kernel merges the conflicting step into a ghost mush band and the
         // mask stays clean. AFTER, every site joins the fallback set and the
         // output is exactly one of the two nearest-blend levels — never a
@@ -336,14 +307,10 @@ class MosaicSrReconstructorTest {
 
     @Test fun supportThresholdABDiscriminatingBandIsGhosty() {
         // Threshold A/B fixture: r = 0.7 sits in the discriminating band
-        // [0.5, 1.0) — merged at MIN_SUPPORT 0.5, overwritten at a
-        // hypothetical 1.0. (Stacker's own 1.0 is a self-test-harness literal
-        // over a per-pixel quantity, not a production threshold over Rc —
-        // see merge contract §9 — so the comparison here is against 1.0 as a
-        // number, not as Stacker's rule.) Pins what 1.0 would rescue: the
-        // kernel mush magnitude in the 0.5 output. (Cost side — extra fallback
-        // fraction on real scenes — is measured from device rc textures in
-        // the runlog, not here.)
+        // [0.5, 1.0) — merged at MIN_SUPPORT 0.5, overwritten at Stacker's
+        // 1.0. Pins what 1.0 would rescue: the kernel mush magnitude in the
+        // 0.5 output. (Cost side — extra fallback fraction on real scenes —
+        // is measured from device rc textures in the runlog, not here.)
         val (ref, mov) = inverseStepScene(0.7f)
         val result = MosaicSrReconstructor.reconstruct(ref, listOf(mov))
         assertTrue(result.rc.values.all { it == 0.7f })

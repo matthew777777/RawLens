@@ -45,33 +45,23 @@ object RawSrBayerMerge {
      * near the threshold stay near the reference and a straddling decision
      * cannot hurt; at the same time the threshold sits clear of the Rc = 1
      * saturation fixed point, where accepted GPU/CPU arithmetic differences
-     * would straddle it routinely. This is deliberately NOT matched to
-     * Stacker's 1.0: Stacker's pinned overwrite compares a per-pixel
-     * accumulated-robustness scalar against a caller max_frame_count whose
-     * only 1.0 is a self-test-harness literal with no production caller
-     * (Stacker v0.1.5-beta, commit 715d949e) — an incommensurate quantity in
-     * an incommensurate context. 0.5 stands on our own threshold A/B
-     * (runlog 2026-09-12, supportThresholdABDiscriminatingBandIsGhosty).
-     * The rule is inert with no moving frames: reference-only output already
-     * equals the reference, and the fallback mask stays clean.
+     * would straddle it routinely (Stacker passes a literal 1.0 against its
+     * own accumulated-robustness normalization, which we could not verify
+     * commensurate with ours). The rule is inert with no moving frames:
+     * reference-only output already equals the reference, and the fallback
+     * mask stays clean.
      */
     const val MIN_SUPPORT = 0.5f
 
     /**
-     * Saturation censor level (SkyKing CENSORED_UNKNOWN_CHROMA): a normalised
-     * tap at or above this level carries no trustworthy signal. Three duties:
-     * censored taps never enter kernel means (any frame, including the
-     * reference at r = 1 — reference self-bleed painted the lamp halo);
-     * a censored reference site outputs its measured clip for all channels
-     * (highlight desaturation to white, exact); and the fallback path keeps
-     * the reference value instead of the burst-nearest blend there.
-     * Robustness already forces r == 0 at railed quads; without the kernel
-     * exclusion the unattenuated means smear misregistered neighbours into
-     * highlights (device-measured deviations up to ~1.2 with dark speckle
-     * down to 0.19). Deliberate, documented deviation from pure Stacker
-     * parity (whose nearest rule stays finite-only); mirrored in
-     * merge_finalize.glsl and MosaicSrReconstructor. Matches the 4E Q6
-     * saturation level. Not tuning: a sensor-physics rail, frozen.
+     * Saturation guard: a reference channel at or above this level keeps the
+     * reference-only value on the fallback path instead of the burst-nearest
+     * blend. Clipped sites carry no trustworthy signal (robustness forces
+     * r == 0 there), while the unattenuated nearest mean would smear
+     * misregistered neighbours into highlights (device-measured deviations
+     * up to ~1.2 with dark speckle down to 0.19). Deliberate, documented
+     * deviation from pure Stacker parity; mirrored in merge_finalize.glsl
+     * and MosaicSrReconstructor. Matches the 4E Q6 saturation level.
      */
     const val SATURATED_REF_GUARD = 0.99
 
@@ -222,28 +212,9 @@ object RawSrBayerMerge {
                 val quad = (p / width / 2) * quadsW + (p % width / 2)
                 val unsupported = overwrite && rc.values[quad] < MIN_SUPPORT
                 var fellBack = unsupported
-                // Censored-site white: the reference tap at this site is
-                // clipped (>= SATURATED_REF_GUARD), so its true value is
-                // unknown-but-bright; the honest output is the measured clip
-                // for all three channels (highlight desaturation to white),
-                // never a kernel mean polluted by neighbours nor a nearest
-                // blend mixing sides. Takes precedence over every path below
-                // and joins the fallback set (it is a reference-direct
-                // override, not a kernel blend).
-                val siteDirect = reference.samples[p].toDouble()
-                val siteWhite = siteDirect >= SATURATED_REF_GUARD
-                if (siteWhite) fellBack = true
-                // No moving-frame support at all at this quad (every moving
-                // frame rejected or skipped): the burst contributes nothing,
-                // so the reference kernel quotient stands — the shared-weight
-                // mean stays achromatic where per-channel nearest picks would
-                // straddle edges and invent chroma.
-                val movSupported = rc.values[quad].toDouble() > EPS
                 for (c in 0..2) {
                     val o = p * 3 + c
-                    val value = if (siteWhite) {
-                        siteDirect
-                    } else if (!unsupported && den[o] > EPS) {
+                    val value = if (!unsupported && den[o] > EPS) {
                         num[o] / maxOf(den[o], EPS)
                     } else {
                         if (den[o] <= EPS) fellBack = true
@@ -254,11 +225,9 @@ object RawSrBayerMerge {
                         // matching-phase samples across the burst instead of
                         // smearing kernels — no covariance, no
                         // interpolation. Nested ref-only fallback where even
-                        // the nearest path has no support, where the
-                        // reference channel is clipped (SATURATED_REF_GUARD),
-                        // or where the burst carries no moving support at all.
+                        // the nearest path has no support, or where the
+                        // reference channel is clipped (SATURATED_REF_GUARD).
                         if (refValue >= SATURATED_REF_GUARD) refValue
-                        else if (!movSupported) refValue
                         else if (nearDen[o] > EPS) nearNum[o] / maxOf(nearDen[o], EPS)
                         else refValue
                     }
@@ -353,12 +322,7 @@ object RawSrBayerMerge {
                     val ty = centerY + oy
                     if (tx < 0 || ty < 0 || tx >= width || ty >= height) continue
                     val sample = samples[ty * width + tx].toDouble()
-                    // Censored taps (>= SATURATED_REF_GUARD) carry no
-                    // trustworthy signal (SkyKing CENSORED_UNKNOWN_CHROMA):
-                    // clipped values must not bleed through kernel means —
-                    // not even from the reference at r = 1. The nearest path
-                    // below keeps finite-only sampling (Stacker parity).
-                    if (!sample.isFinite() || sample >= SATURATED_REF_GUARD) continue
+                    if (!sample.isFinite()) continue
                     val distX = (tx + 0.5 - sourceX) / 2.0
                     val distY = (ty + 0.5 - sourceY) / 2.0
                     val z = interpolated[0] * distX * distX +
@@ -389,13 +353,9 @@ object RawSrBayerMerge {
      * (sourceX, sourceY), weighted by [r]. Nearest by texel-center distance
      * squared with a strictly-less update, so the oy-outer/ox-inner loop
      * order deterministically breaks ties (Stacker nearest_cfa_sample rule,
-     * mirrored in merge_accumulate.glsl). Pinned to Stacker v0.1.5-beta
-     * (commit 715d949e), app/src/main/cpp/wronski_cpu_merge.cpp:
-     * nearest_cfa_sample lines 48-87, merge_cpu_bayer_nearest_burst lines
-     * 539-617; parity pinned by StackerNearestParityTest. Internal for that
-     * test; not a call-site API.
+     * mirrored in merge_accumulate.glsl).
      */
-    internal fun accumulateNearest(
+    private fun accumulateNearest(
         frame: MergeFrame,
         sourceX: Double,
         sourceY: Double,

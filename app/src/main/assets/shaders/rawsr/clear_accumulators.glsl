@@ -3,8 +3,6 @@
 // denominators, the reference-only A/B accumulators, the per-pixel fallback
 // mask, and the per-pixel out-of-bounds diagnostic counter. Rc is cleared by a
 // zero upload on the host so its lifetime matches the robustness ping-pong.
-// (The censored-site tap rides refNumerator.w — cleared with it, no extra
-// binding: Mali allows 8 compute images.)
 precision highp float;
 precision highp int;
 layout(local_size_x = 8, local_size_y = 8) in;

@@ -203,45 +203,26 @@ object MosaicSrReconstructor {
         // the reference.
         val overwrite = frames.isNotEmpty()
         for (p in 0 until pixels) {
-            val qx = p % outW
-            val qy = p / outW
-            val quadX = (((qx + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsW - 1)
-            val quadY = (((qy + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsH - 1)
+            val quadX = (((p % outW + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsW - 1)
+            val quadY = (((p / outW + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsH - 1)
             val unsupported =
                 overwrite && rc.values[quadY * quadsW + quadX] < RawSrBayerMerge.MIN_SUPPORT
-            // Censored-site direct: the reference site tap itself is clipped,
-            // so its true value is unknown-but-bright; the honest output is
-            // the measured tap (a mosaic site carries one colour only, so no
-            // triple-white applies here). Same expression the streaming pass
-            // captures during accumulation — bitwise-identical.
-            val siteTap = refSiteTap(reference, pattern, qx, qy, width, height)
-            val siteWhite = siteTap >= RawSrBayerMerge.SATURATED_REF_GUARD
             // Accumulator reads widen to Double at the decision boundary (one
             // narrowing on store, identically on both paths).
             val denD = den[p].toDouble()
-            val rcQuad = rc.values[quadY * quadsW + quadX].toDouble()
-            val value = if (siteWhite) {
-                fallback[p] = true
-                siteTap
-            } else if (!unsupported && denD > EPS) {
+            val value = if (!unsupported && denD > EPS) {
                 num[p] / maxOf(denD, EPS)
             } else {
                 fallback[p] = true
                 // Burst-nearest fallback: average the nearest matching-phase
                 // samples across the burst instead of the reference-only
                 // value; nested ref-only fallback where even the nearest
-                // path has no support, where the reference sample is
+                // path has no support, or where the reference sample is
                 // clipped (saturation guard, mirrors the oracle packed path:
-                // clipped sites carry no trustworthy signal), where the
-                // kernel is blind (fully censored window), or where the burst
-                // carries no moving support at all (shared-weight quotient
-                // stays achromatic where per-channel picks would straddle).
+                // clipped sites carry no trustworthy signal).
                 val refValue = refNum[p] / maxOf(refDen[p].toDouble(), EPS)
-                val nd = nearDen[p].toDouble()
                 if (refValue >= RawSrBayerMerge.SATURATED_REF_GUARD) refValue
-                else if (refDen[p].toDouble() <= EPS && nd > EPS) nearNum[p] / maxOf(nd, EPS)
-                else if (rcQuad <= EPS) refValue
-                else if (nd > EPS) nearNum[p] / maxOf(nd, EPS)
+                else if (nearDen[p].toDouble() > EPS) nearNum[p] / maxOf(nearDen[p].toDouble(), EPS)
                 else refValue
             }
             cfa[p] = if (value.isFinite()) value.toFloat() else 0f
@@ -314,11 +295,7 @@ object MosaicSrReconstructor {
         // Six pixel-sized pairs plus one quad-sized support accumulator: the
         // streaming path tracks Rc exactly like the eager path (plain
         // per-quad sums, cf. RawSrRobustness.accumulate) so the
-        // accumulated-robustness overwrite decides identically. One heap
-        // float array (~50MB at full res, freed with the result) captures
-        // the reference site taps for the censored-site rule — the reference
-        // frame itself is dropped before the finalizer.
-        val siteTaps = FloatArray(pixels) { Float.NaN }
+        // accumulated-robustness overwrite decides identically.
         return useMappedFloats(tempDir, IntArray(6) { pixels } + quadsW * quadsH) { acc ->
             val num = acc[0]
             val den = acc[1]
@@ -336,8 +313,7 @@ object MosaicSrReconstructor {
             checkFrame(ref, "Reference")
             accumulateFrame(ref, null, null, pattern,
                 refNum, refDen, nearNum, nearDen, null, null,
-                width, height, quadsW, outW, outH, true,
-                siteTaps = FloatBuffer.wrap(siteTaps))
+                width, height, quadsW, outW, outH, true)
             reference = null
             // Canonical order (mirrors eager): the reference pass already ran
             // above, so its pair joins the shared accumulators before any
@@ -387,29 +363,17 @@ object MosaicSrReconstructor {
                 val quadY = (((p / outW + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsH - 1)
                 val unsupported = rcAcc.get(quadY * quadsW + quadX) < RawSrBayerMerge.MIN_SUPPORT
                 val d = den.get(p).toDouble()
-                // Censored-site direct (mirrors the eager path): the captured
-                // site tap is clipped, so the honest output is the measured
-                // tap. NaN where colours disagreed — never >= guard.
-                val siteTap = siteTaps[p].toDouble()
-                val siteWhite = siteTap >= RawSrBayerMerge.SATURATED_REF_GUARD
-                val rcQuad = rcAcc.get(quadY * quadsW + quadX).toDouble()
-                val value = if (siteWhite) {
-                    siteTap
-                } else if (!unsupported && d > EPS) {
+                val value = if (!unsupported && d > EPS) {
                     num.get(p) / maxOf(d, EPS)
                 } else {
                     // Burst-nearest fallback (mirrors the eager path): the
                     // nearest matching-phase average across the burst, else
                     // the reference-only value; clipped reference samples
                     // keep the reference value (saturation guard, mirrors
-                    // the oracle packed path); kernel-blind or zero-support
-                    // sites resolve through the reference quotient.
+                    // the oracle packed path).
                     val nd = nearDen.get(p).toDouble()
-                    val refDenD = refDen.get(p).toDouble()
-                    val refValue = refNum.get(p) / maxOf(refDenD, EPS)
+                    val refValue = refNum.get(p) / maxOf(refDen.get(p).toDouble(), EPS)
                     if (refValue >= RawSrBayerMerge.SATURATED_REF_GUARD) refValue
-                    else if (refDenD <= EPS && nd > EPS) nearNum.get(p) / maxOf(nd, EPS)
-                    else if (rcQuad <= EPS) refValue
                     else if (nd > EPS) nearNum.get(p) / maxOf(nd, EPS)
                     else refValue
                 }
@@ -470,14 +434,7 @@ object MosaicSrReconstructor {
         outW: Int,
         outH: Int,
         isReference: Boolean,
-        onRow: (() -> Boolean)? = null,
-        // Streaming-only: reference-pass site taps for the censored-site
-        // rule. The reference frame is dropped before the streaming
-        // finalizer, so its direct site samples are captured here; the eager
-        // path recomputes the identical expression inline (reference alive),
-        // keeping both bitwise-identical. NaN where the floor tap's colour
-        // mismatches the site colour (no direct sample exists there).
-        siteTaps: FloatBuffer? = null
+        onRow: (() -> Boolean)? = null
     ) {
         val samples = frame.samples
         val precision = frame.precision.values
@@ -533,13 +490,6 @@ object MosaicSrReconstructor {
                     if (oob != null) oob[p]++
                     continue
                 }
-                if (siteTaps != null && isReference) {
-                    // Reference pass has zero shift: capture the site's
-                    // direct sample (NaN where colours disagree) for the
-                    // censored-site rule. Same expression the eager finalizer
-                    // recomputes inline — bitwise-identical by construction.
-                    siteTaps.put(p, refSiteTap(frame, pattern, qx, qy, width, height).toFloat())
-                }
                 // Burst-nearest accumulation (Stacker delta-kernel rule): the
                 // nearest finite sample of the site colour in the
                 // floor-centered 3x3 window, weighted by robustness. Nearest
@@ -564,10 +514,7 @@ object MosaicSrReconstructor {
                     val tapColor = frame.sensorPattern.colorAt(frame.sensorLeft + tx, frame.sensorTop + ty)
                     if (tapColor != siteColor) continue
                     val sample = samples[ty * width + tx].toDouble()
-                    // Censored taps (>= guard) carry no trustworthy signal and
-                    // must not bleed through kernel means — mirrors the packed
-                    // oracle; the nearest path keeps finite-only sampling.
-                    if (!sample.isFinite() || sample >= RawSrBayerMerge.SATURATED_REF_GUARD) continue
+                    if (!sample.isFinite()) continue
                     val distX = (tx + 0.5 - sourceX) / 2.0
                     val distY = (ty + 0.5 - sourceY) / 2.0
                     val z = interpolated[0] * distX * distX +
@@ -629,33 +576,6 @@ object MosaicSrReconstructor {
             nearNum.put(p, (nearNum.get(p) + r * bestSample).toFloat())
             nearDen.put(p, (nearDen.get(p) + r).toFloat())
         }
-    }
-
-    /**
-     * Reference-pass direct site sample for the censored-site rule: the floor
-     * source tap when its sensor colour matches the target site colour, NaN
-     * otherwise (no direct sample exists there). Reference passes run with
-     * zero shift, so the source is the plain scaled site position. The
-     * streaming fill and the eager inline recompute share this exact
-     * expression (same Float32 in, same Double out).
-     */
-    private fun refSiteTap(
-        frame: RawSrBayerMerge.MergeFrame,
-        pattern: BayerPattern,
-        qx: Int, qy: Int,
-        width: Int, height: Int
-    ): Double {
-        val sourceX = (qx + 0.5) / LINEAR_SCALE
-        val sourceY = (qy + 0.5) / LINEAR_SCALE
-        if (!sourceX.isFinite() || !sourceY.isFinite() ||
-            sourceX < 0.0 || sourceY < 0.0 || sourceX >= width || sourceY >= height
-        ) return Double.NaN
-        val sx = floor(sourceX).toInt()
-        val sy = floor(sourceY).toInt()
-        if (frame.sensorPattern.colorAt(frame.sensorLeft + sx, frame.sensorTop + sy) !=
-            pattern.colorAt(qx, qy)
-        ) return Double.NaN
-        return frame.samples[sy * width + sx].toDouble()
     }
 
     private fun interpolatePrecision(
