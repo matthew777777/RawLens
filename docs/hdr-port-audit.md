@@ -16,8 +16,29 @@ The vendored files record their independently verified PhotonCamera source commi
 
 - Apply sensor black/white normalization before merge; bake lens correction after merge.
 - Include focal length in Darktable's aperture-area calibration and clamp final negative noise.
+- Use darktable's f/22 + 8mm fallbacks when EXIF aperture/focal length are missing.
 - Preserve CFA parity even when a warped position hits an image border.
 - Warp once per frame before the 3x3 saturation envelope.
+- Use smooth same-colour bilinear warp (never mixes R/G/B) instead of 2px-quantized
+  nearest warp; evaluate darktable's 3x3 block extremes per 2x2 cell, then bilinearly
+  interpolate the saturation mask per pixel so shadow/highlight blending is smooth
+  (no 2px teeth edges or hard per-block clip verdicts on signs).
+- HDR+-style deghosting: noise-aware Wiener weight on the exposure-compensated residual
+  against the reference collapses moving outliers to the reference; a residual floor
+  keeps flat shadows merging, and reference-clipped highlights bypass deghosting so the
+  short exposure still rescues them via darktable's clipped fallback.
+- `HdrRawMerge.mergeExact()` retains the verbatim darktable loop (border behaviour,
+  negative-weight clipped bookkeeping, white-level normalization) for audit/tests.
+- Fast exposure-compensated translation pre-align always runs (no native deps);
+  FlowNet stays as the dense coarse-to-fine refinement: the moving frame is
+  translation-compensated first, FlowNet estimates the residual, and the chained flow
+  feeds the merge. FlowNet rejection falls back to translation, never to identity.
+- Single-resample chain (2026-09-16 bracket validation): the pre-shift is snapped to
+  even integers and applied as a lossless pure reindex (`warpShiftedEven`); the merge
+  performs the only interpolating resample. Double bilinear cost ~25% Nyquist power
+  loss on real brackets (HDR.dng vs F01); single resample simulates at ~0.79 vs 0.72
+  kept. FlowNet-rejected frames fall back to the full-precision shift warp.
+- Accumulation is input-ordered like darktable (no reference-first reordering).
 - Use bilinear proxy and flow interpolation, with the shortest exposure as reference.
 - Abort HDR on missing/nonfinite FlowNet output; reject fields that worsen proxy correspondence
   by more than 1% of the input range or leave fewer than 80% of sampled points in bounds.

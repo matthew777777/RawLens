@@ -14,24 +14,73 @@ import kotlin.math.floor
 class HdrFlowNetAligner(context: Context) {
     private val processor = FlowNetNcnnProcessor.start(context.applicationContext)
 
+    /** Per-stage cost of the last [align] call (any thread). */
+    data class Timings(val renderMs: Long, val inferMs: Long, val checkMs: Long)
+    @Volatile var lastTimings = Timings(0, 0, 0)
+        private set
+
     fun align(reference: HdrMergeFrame, moving: HdrMergeFrame): HdrFlowField? {
-        val a = reference.cfa
-        val b = moving.cfa
-        require(a.width == b.width && a.height == b.height && a.pattern == b.pattern)
         val brightnessMatch = exposureScale(moving) / exposureScale(reference)
-        val base = renderModelInput(a, brightnessMatch)
-        val alter = renderModelInput(b, 1f)
-        val result = processor.runInference(base, alter, MODEL_WIDTH, MODEL_HEIGHT) ?: return null
+        val base = scaleInput(renderRawInput(reference.cfa), brightnessMatch)
+        return alignWithBase(base, moving)
+    }
+
+    /**
+     * Unscaled RGBA model input for [cfa] (alpha 255; RGB raw×255, unclamped).
+     * Render once per bracket; per-frame exposure matching is a cheap linear
+     * pass in [scaleInput]. Removes ~1s of repeated reference renders per bracket.
+     */
+    fun renderRawInput(cfa: UnpackedRawCfa): FloatBuffer = renderModelInput(cfa, 1f, raw = true)
+
+    /** Exposure-matches a [renderRawInput] buffer (RGB×exposure→255 clamp; alpha kept). */
+    fun scaleInput(raw: FloatBuffer, exposure: Float): FloatBuffer {
+        val dup = raw.duplicate()
+        val out = ByteBuffer.allocateDirect(dup.remaining() * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        var i = 0
+        while (dup.hasRemaining()) {
+            val v = dup.get()
+            out.put(if (i % 4 == 3) v else (v * exposure).coerceIn(0f, 255f))
+            i++
+        }
+        return out.apply { rewind() }
+    }
+
+    fun alignWithBase(base: FloatBuffer, moving: HdrMergeFrame): HdrFlowField? {
+        // Base carries the reference frame's pixels; geometry must match it.
+        val a = moving.cfa
+        require(a.width % 2 == 0 && a.height % 2 == 0)
+        var t = System.nanoTime()
+        val alter = renderModelInput(moving.cfa, 1f)
+        val renderMs = (System.nanoTime() - t) / 1_000_000
+        t = System.nanoTime()
+        val result = processor.runInference(base, alter, MODEL_WIDTH, MODEL_HEIGHT)
+        val inferMs = (System.nanoTime() - t) / 1_000_000
+        if (result == null) {
+            lastTimings = Timings(renderMs, inferMs, 0)
+            return null
+        }
+        t = System.nanoTime()
         val flow = FloatArray(MODEL_WIDTH * MODEL_HEIGHT * 2)
         result.asFloatBuffer().get(flow)
-        if (!flow.all(Float::isFinite)) return null
+        if (!flow.all(Float::isFinite)) {
+            lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
+            return null
+        }
         // A successful native call can still yield an unusable field (e.g. periodic texture).
         // Reject a field that makes exposure-matched proxy correspondence materially worse.
-        if (!hasUsableCorrespondence(base, alter, flow)) return null
+        if (!hasUsableCorrespondence(base, alter, flow)) {
+            lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
+            return null
+        }
+        lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
         return DenseField(flow, a.width.toFloat() / MODEL_WIDTH, a.height.toFloat() / MODEL_HEIGHT)
     }
 
     fun isReady(): Boolean = processor.isReady
+
+    internal fun exposureMatchScale(moving: HdrMergeFrame, reference: HdrMergeFrame): Float =
+        exposureScale(moving) / exposureScale(reference)
 
     private fun hasUsableCorrespondence(base: FloatBuffer, moving: FloatBuffer, flow: FloatArray): Boolean {
         var alignedError = 0.0
@@ -63,43 +112,60 @@ class HdrFlowNetAligner(context: Context) {
         return alignedError / (valid * 3) <= identityError / (valid * 3) + 2.55
     }
 
-    private fun renderModelInput(cfa: UnpackedRawCfa, exposure: Float): FloatBuffer {
+    private fun renderModelInput(cfa: UnpackedRawCfa, exposure: Float, raw: Boolean = false): FloatBuffer {
         val out = ByteBuffer.allocateDirect(MODEL_WIDTH * MODEL_HEIGHT * 4 * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder()).asFloatBuffer()
         val quadWidth = cfa.width / 2f
         val quadHeight = cfa.height / 2f
+        // Scratch reused across all model pixels (was: 9 small arrays per pixel).
+        val qa = FloatArray(3)
+        val qb = FloatArray(3)
+        val qc = FloatArray(3)
+        val qd = FloatArray(3)
+        val counts = IntArray(3)
+        val rgb = FloatArray(3)
         for (y in 0 until MODEL_HEIGHT) for (x in 0 until MODEL_WIDTH) {
             val qx = ((x + 0.5f) * quadWidth / MODEL_WIDTH).coerceIn(0f, quadWidth - 1f)
             val qy = ((y + 0.5f) * quadHeight / MODEL_HEIGHT).coerceIn(0f, quadHeight - 1f)
-            val rgb = sampleQuadRgb(cfa, qx, qy)
-            out.put((rgb[2] * exposure).coerceIn(0f, 1f) * 255f)
-            out.put((rgb[1] * exposure).coerceIn(0f, 1f) * 255f)
-            out.put((rgb[0] * exposure).coerceIn(0f, 1f) * 255f)
+            sampleQuadRgb(cfa, qx, qy, qa, qb, qc, qd, counts, rgb)
+            if (raw) {
+                out.put(rgb[2] * 255f)
+                out.put(rgb[1] * 255f)
+                out.put(rgb[0] * 255f)
+            } else {
+                out.put((rgb[2] * exposure).coerceIn(0f, 1f) * 255f)
+                out.put((rgb[1] * exposure).coerceIn(0f, 1f) * 255f)
+                out.put((rgb[0] * exposure).coerceIn(0f, 1f) * 255f)
+            }
             out.put(255f)
         }
         return out.apply { rewind() }
     }
 
-    private fun sampleQuadRgb(cfa: UnpackedRawCfa, qx: Float, qy: Float): FloatArray {
+    private fun sampleQuadRgb(
+        cfa: UnpackedRawCfa, qx: Float, qy: Float,
+        a: FloatArray, b: FloatArray, c: FloatArray, d: FloatArray,
+        counts: IntArray, out: FloatArray
+    ) {
         val x0 = floor(qx).toInt().coerceIn(0, cfa.width / 2 - 1)
         val y0 = floor(qy).toInt().coerceIn(0, cfa.height / 2 - 1)
         val x1 = (x0 + 1).coerceAtMost(cfa.width / 2 - 1)
         val y1 = (y0 + 1).coerceAtMost(cfa.height / 2 - 1)
-        val a = quadRgb(cfa, x0, y0)
-        val b = quadRgb(cfa, x1, y0)
-        val c = quadRgb(cfa, x0, y1)
-        val d = quadRgb(cfa, x1, y1)
+        quadRgb(cfa, x0, y0, a, counts)
+        quadRgb(cfa, x1, y0, b, counts)
+        quadRgb(cfa, x0, y1, c, counts)
+        quadRgb(cfa, x1, y1, d, counts)
         val fx = qx - x0
         val fy = qy - y0
-        return FloatArray(3) { i ->
-            (a[i] * (1f - fx) + b[i] * fx) * (1f - fy) +
+        for (i in 0..2) {
+            out[i] = (a[i] * (1f - fx) + b[i] * fx) * (1f - fy) +
                 (c[i] * (1f - fx) + d[i] * fx) * fy
         }
     }
 
-    private fun quadRgb(cfa: UnpackedRawCfa, qx: Int, qy: Int): FloatArray {
-        val rgb = FloatArray(3)
-        val counts = IntArray(3)
+    private fun quadRgb(cfa: UnpackedRawCfa, qx: Int, qy: Int, rgb: FloatArray, counts: IntArray) {
+        rgb[0] = 0f; rgb[1] = 0f; rgb[2] = 0f
+        counts[0] = 0; counts[1] = 0; counts[2] = 0
         for (dy in 0..1) for (dx in 0..1) {
             val x = qx * 2 + dx
             val y = qy * 2 + dy
@@ -110,18 +176,23 @@ class HdrFlowNetAligner(context: Context) {
             counts[channel]++
         }
         for (i in 0..2) rgb[i] /= counts[i].coerceAtLeast(1)
-        return rgb
     }
 
     private fun exposureScale(frame: HdrMergeFrame): Float =
         frame.exposureTimeNanos.toFloat() * frame.sensitivityIso / (frame.aperture * frame.aperture)
 
-    private class DenseField(
+    internal class DenseField(
         private val flow: FloatArray,
         private val scaleX: Float,
         private val scaleY: Float
-    ) : HdrFlowField {
+    ) : FastFlow {
         override fun displacement(x: Int, y: Int): Pair<Float, Float> {
+            val tmp = FloatArray(2)
+            sampleInto(x, y, tmp)
+            return tmp[0] to tmp[1]
+        }
+
+        override fun sampleInto(x: Int, y: Int, out: FloatArray) {
             val px = ((x + 0.5f) / scaleX - 0.5f).coerceIn(0f, MODEL_WIDTH - 1f)
             val py = ((y + 0.5f) / scaleY - 0.5f).coerceIn(0f, MODEL_HEIGHT - 1f)
             val mx = px.toInt(); val my = py.toInt()
@@ -136,7 +207,8 @@ class HdrFlowNetAligner(context: Context) {
                 return (a * (1f - fx) + b * fx) * (1f - fy) +
                     (c * (1f - fx) + d * fx) * fy
             }
-            return sample(0) * scaleX to sample(1) * scaleY
+            out[0] = sample(0) * scaleX
+            out[1] = sample(1) * scaleY
         }
     }
 
