@@ -13,6 +13,14 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - PROGRAM brightness bias (default +0.5 EV) against stock + spektra underexposure
 - Viewfinder PROGRAM editor via ISO/S chips; ETTR overrides PROGRAM still exposure when converged
 - Chip contract: hold ISO/SHUTTER to lock, tap for slider, slider Auto releases both, lock-both enters MANUAL seeded from live pair
+- Quick panel refreshes in place after PROGRAM profile and mode changes instead of waiting for collapse/reopen
+- PROGRAM metering modes center / average / spot (median renamed to full-frame average with silent migration); AE METER quick tile cycles RAW metering in PROGRAM and hardware metering elsewhere
+- PROGRAM metering sampling moved off the camera thread (bounded single in-flight frame, stale generations dropped): fixes ~1 fps viewfinder/whole-app stall on sensors where a full-res sample costs hundreds of ms
+- Quick panel tile lookups cached; lens switcher skips redundant rebuilds
+- PROGRAM defaults: ISO priority (0.0) and neutral 0.0 EV bias; per-lens store bumped to v2 so old 0.5/+0.5 EV defaults do not linger
+- PROGRAM highlight guard: brightening never pushes the hottest channel past 0.9
+- PROGRAM exposure glide: small capped measurements plus EMA feed a solver target that the live pair eases toward in ~1/6 EV steps (~1 stop/s), unified for ETTR-driven preview; still frames match the preview pair
+- Converged ETTR freezes PROGRAM and meters from actual sensor exposure; PROGRAM seeds until convergence and resumes after
 - Synchronous per-lens profile load on active-camera change; PROGRAM bounds linked from each lens's calibration editor
 - No-manual-sensor cameras keep Android AE with locks/limits disabled and explanatory copy
 
