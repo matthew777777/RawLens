@@ -7,7 +7,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -68,6 +70,15 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var histogramView: HistogramView
     private lateinit var meteringOverlay: FocusMeteringOverlay
     private lateinit var quickPanel: LinearLayout
+    private lateinit var gridQuick: TextView
+    private lateinit var levelQuick: TextView
+    private lateinit var histogramQuick: TextView
+    private lateinit var aeMeteringQuick: TextView
+    private lateinit var oisQuick: TextView
+    private lateinit var timerQuick: TextView
+    private lateinit var releaseQuick: TextView
+    private lateinit var ettrQuick: TextView
+    private var lastLensSwitcherSignature: String? = null
     private lateinit var timerBadge: TextView
     private lateinit var modeButton: TextView
     private lateinit var flashButton: ImageButton
@@ -91,6 +102,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var releaseMode = 0 // 0 single, 1 burst, 2 HDR bracket
     private var captureExposureMode = CaptureExposureMode.AUTO
     private var programHintShown = false
+    private var sidecarSettingsStatus: TextView? = null
     private var countdownRunnable: Runnable? = null
     private var histogramRunnable: Runnable? = null
     private lateinit var sensorManager: SensorManager
@@ -191,6 +203,14 @@ class MainActivity : Activity(), SensorEventListener {
         levelGravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         quickPanel = findViewById(R.id.quickSettingsPanel)
+        gridQuick = findViewById(R.id.gridQuick)
+        levelQuick = findViewById(R.id.levelQuick)
+        histogramQuick = findViewById(R.id.histogramQuick)
+        aeMeteringQuick = findViewById(R.id.aeMeteringQuick)
+        oisQuick = findViewById(R.id.oisQuick)
+        timerQuick = findViewById(R.id.timerQuick)
+        releaseQuick = findViewById(R.id.releaseQuick)
+        ettrQuick = findViewById(R.id.ettrQuick)
         timerBadge = findViewById(R.id.timerBadge)
         modeButton = findViewById(R.id.modeButton)
         flashButton = findViewById(R.id.flashButton)
@@ -337,6 +357,7 @@ class MainActivity : Activity(), SensorEventListener {
                         controller.setProgramAeProfile(programProfile())
                         refreshLensSwitcher()
                         updateProgramChipStates()
+                        updateQuickControls()
                     }
                 }
             }
@@ -371,13 +392,13 @@ class MainActivity : Activity(), SensorEventListener {
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
         findViewById<View>(R.id.quickButton).setOnClickListener { toggleQuickControls() }
-        findViewById<View>(R.id.gridQuick).setOnClickListener {
+        gridQuick.setOnClickListener {
             gridEnabled = !gridEnabled
             guideOverlay.gridEnabled = gridEnabled
             lensPreferences().edit().putBoolean(KEY_GRID, gridEnabled).apply()
             updateQuickControls()
         }
-        findViewById<View>(R.id.levelQuick).setOnClickListener {
+        levelQuick.setOnClickListener {
             levelEnabled = !levelEnabled
             guideOverlay.levelEnabled = levelEnabled
             if (levelEnabled) {
@@ -388,7 +409,7 @@ class MainActivity : Activity(), SensorEventListener {
             lensPreferences().edit().putBoolean(KEY_LEVEL, levelEnabled).apply()
             updateQuickControls()
         }
-        findViewById<View>(R.id.histogramQuick).setOnClickListener {
+        histogramQuick.setOnClickListener {
             histogramEnabled = !histogramEnabled
             histogramView.visibility = if (histogramEnabled) View.VISIBLE else View.GONE
             lensPreferences().edit().putBoolean(KEY_HISTOGRAM, histogramEnabled).apply()
@@ -396,9 +417,9 @@ class MainActivity : Activity(), SensorEventListener {
             updateQuickControls()
             scheduleHistogram()
         }
-        findViewById<View>(R.id.aeMeteringQuick).setOnClickListener { cycleAeMeteringMode() }
-        findViewById<View>(R.id.ettrQuick).setOnClickListener { toggleEttr() }
-        findViewById<View>(R.id.oisQuick).setOnClickListener {
+        aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
+        ettrQuick.setOnClickListener { toggleEttr() }
+        oisQuick.setOnClickListener {
             if (controller.isOisSupported()) {
                 controller.toggleOis()
                 lensPreferences().edit().putBoolean(KEY_OIS, controller.isOisEnabled()).apply()
@@ -407,8 +428,8 @@ class MainActivity : Activity(), SensorEventListener {
                 setStatus("OIS N/A")
             }
         }
-        findViewById<View>(R.id.timerQuick).setOnClickListener { cycleTimer() }
-        findViewById<View>(R.id.releaseQuick).setOnClickListener { toggleReleaseMode() }
+        timerQuick.setOnClickListener { cycleTimer() }
+        releaseQuick.setOnClickListener { toggleReleaseMode() }
         findViewById<View>(R.id.resetTargetsQuick).setOnClickListener {
             controller.resetMeteringTargets()
             setStatus("AF / AE TARGETS RESET")
@@ -494,6 +515,49 @@ class MainActivity : Activity(), SensorEventListener {
             startCameraWhenReady()
         }
         else setStatus("CAMERA PERMISSION NEEDED")
+    }
+
+    @Deprecated("Use picker intent result for the sidecar folder grant")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SIDECAR_TREE_REQUEST && resultCode == RESULT_OK) {
+            val tree: Uri? = data?.data
+            if (tree != null) {
+                SidecarTreeAccess.saveTreeUri(this, tree)
+                sidecarSettingsStatus?.text = sidecarFolderText()
+                setStatus("SIDECARS • SAME FOLDER")
+            } else {
+                setStatus("SIDECAR FOLDER NOT CHOSEN")
+            }
+        }
+    }
+
+    private fun sidecarFolderText(): String {
+        val tree = SidecarTreeAccess.savedTreeUri(this)
+        return if (tree != null && SidecarTreeAccess.hasWriteAccess(this, tree)) {
+            "Gyro sidecars: same folder as DNGs " +
+                "(${(SidecarTreeAccess.displayPath(tree) ?: "granted folder")}/<burst>)"
+        } else {
+            "Gyro sidecars: Download/RawLens/<burst> " +
+                "(grant the photo folder to save next to DNGs)"
+        }
+    }
+
+    private fun pickSidecarFolder() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                )
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, SIDECAR_TREE_REQUEST)
+        } catch (_: Exception) {
+            setStatus("FOLDER PICKER UNAVAILABLE")
+        }
     }
 
     override fun onResume() {
@@ -1253,6 +1317,18 @@ class MainActivity : Activity(), SensorEventListener {
         ProgramLockMode.SHUTTER_LOCK -> "Lock: SHUTTER (ISO auto)"
     }
 
+    private fun programMeteringLabel(metering: ProgramMetering): String = when (metering) {
+        ProgramMetering.CENTER_WEIGHTED -> "CENTER"
+        ProgramMetering.AVERAGE -> "AVERAGE"
+        ProgramMetering.SPOT -> "SPOT"
+    }
+
+    private fun nextProgramMetering(metering: ProgramMetering): ProgramMetering = when (metering) {
+        ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.AVERAGE
+        ProgramMetering.AVERAGE -> ProgramMetering.SPOT
+        ProgramMetering.SPOT -> ProgramMetering.CENTER_WEIGHTED
+    }
+
     private fun programEvBiasText(bias: Float): String =
         String.format(Locale.US, "Brightness bias: %+.1f EV", bias)
 
@@ -1467,17 +1543,11 @@ class MainActivity : Activity(), SensorEventListener {
         })
         val meteringButton = Button(this)
         fun refreshMetering() {
-            meteringButton.text = "Metering: " + when (profile.metering) {
-                ProgramMetering.CENTER_WEIGHTED -> "CENTER WEIGHTED"
-                ProgramMetering.MEDIAN -> "MEDIAN"
-            } + " • tap to switch"
+            meteringButton.text = "Metering: ${programMeteringLabel(profile.metering)} • tap to switch"
         }
         refreshMetering()
         meteringButton.setOnClickListener {
-            profile = profile.copy(metering = when (profile.metering) {
-                ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.MEDIAN
-                ProgramMetering.MEDIAN -> ProgramMetering.CENTER_WEIGHTED
-            })
+            profile = profile.copy(metering = nextProgramMetering(profile.metering))
             refreshMetering(); apply()
             setStatus("PROGRAM METER ${profile.metering.name}")
         }
@@ -1509,7 +1579,23 @@ class MainActivity : Activity(), SensorEventListener {
         return indices.minByOrNull { kotlin.math.abs(this[it] - value) } ?: 0
     }
 
+    /**
+     * Dual-function AE metering button: in PROGRAM it cycles the RAW exposure
+     * metering (center → average → spot); in every other mode it cycles the
+     * hardware AE metering exactly as before.
+     */
     private fun cycleAeMeteringMode() {
+        if (captureExposureMode == CaptureExposureMode.PROGRAM) {
+            if (!controller.hasManualSensorControl()) {
+                setStatus("ANDROID AE • NO MANUAL SENSOR")
+                return
+            }
+            val next = nextProgramMetering(programProfile().metering)
+            saveProgramProfile(programProfile().copy(metering = next))
+            setStatus("PROGRAM METER ${next.name}")
+            updateQuickControls()
+            return
+        }
         val modes = AeMeteringMode.entries
         val next = modes[(modes.indexOf(aeMeteringMode) + 1) % modes.size]
         if (!controller.setAeMeteringMode(next)) return
@@ -1547,22 +1633,38 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun updateQuickControls() {
-        val grid = findViewById<TextView>(R.id.gridQuick)
-        val level = findViewById<TextView>(R.id.levelQuick)
-        val histogram = findViewById<TextView>(R.id.histogramQuick)
-        val aeMetering = findViewById<TextView>(R.id.aeMeteringQuick)
-        val ois = findViewById<TextView>(R.id.oisQuick)
-        val timer = findViewById<TextView>(R.id.timerQuick)
-        val release = findViewById<TextView>(R.id.releaseQuick)
-        val ettr = findViewById<TextView>(R.id.ettrQuick)
+        if (!::gridQuick.isInitialized) return
+        val grid = gridQuick
+        val level = levelQuick
+        val histogram = histogramQuick
+        val aeMetering = aeMeteringQuick
+        val ois = oisQuick
+        val timer = timerQuick
+        val release = releaseQuick
+        val ettr = ettrQuick
         grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
         level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
         histogram.text = "HISTOGRAM\n${if (histogramEnabled) "ON" else "OFF"}"
         aeMeteringMode = controller.getAeMeteringMode()
-        aeMetering.text = "AE METER\n${aeMeteringMode.label}"
-        val aeMeteringSupported = controller.isAeMeteringSupported()
-        aeMetering.isEnabled = aeMeteringSupported
-        aeMetering.alpha = if (aeMeteringSupported) 1f else 0.4f
+        if (captureExposureMode == CaptureExposureMode.PROGRAM) {
+            val rawMetering = runCatching { controller.getProgramAeProfile().metering }
+                .getOrDefault(ProgramMetering.CENTER_WEIGHTED)
+            aeMetering.text = "AE METER\n${programMeteringLabel(rawMetering)}"
+            val manualSensor = controller.hasManualSensorControl()
+            aeMetering.isEnabled = manualSensor
+            aeMetering.alpha = if (manualSensor) 1f else 0.4f
+            aeMetering.contentDescription =
+                "RAW exposure metering ${programMeteringLabel(rawMetering)}. Tap to switch center, average, spot."
+            setQuickTileState(aeMetering, rawMetering != ProgramMetering.CENTER_WEIGHTED)
+        } else {
+            aeMetering.text = "AE METER\n${aeMeteringMode.label}"
+            val aeMeteringSupported = controller.isAeMeteringSupported()
+            aeMetering.isEnabled = aeMeteringSupported
+            aeMetering.alpha = if (aeMeteringSupported) 1f else 0.4f
+            aeMetering.contentDescription =
+                "Hardware AE metering ${aeMeteringMode.label}. Tap to switch."
+            setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
+        }
         val oisSupported = controller.isOisSupported()
         val oisEnabled = controller.isOisEnabled()
         ois.text = "OIS\n${if (oisSupported) if (oisEnabled) "ON" else "OFF" else "N/A"}"
@@ -1580,7 +1682,6 @@ class MainActivity : Activity(), SensorEventListener {
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(level, levelEnabled)
         setQuickTileState(histogram, histogramEnabled)
-        setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
         setQuickTileState(ois, oisEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
@@ -1674,6 +1775,11 @@ class MainActivity : Activity(), SensorEventListener {
     private fun refreshLensSwitcher() {
         val options = controller.lensOptions()
         if (options.isEmpty()) return
+        // Rebuilding the switcher view hierarchy on every controls publication is
+        // wasted layout work; only rebuild when the lens set or selection changed.
+        val signature = options.joinToString("|") { "${it.cameraId}:${it.selected}" }
+        if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
+        lastLensSwitcherSignature = signature
         lensSwitcher.removeAllViews()
         options.forEachIndexed { index, option ->
             val button = RotatingTextView(this).apply {
@@ -1878,6 +1984,9 @@ class MainActivity : Activity(), SensorEventListener {
             .apply()
         controller.setProgramAeProfile(validated)
         updateProgramChipStates()
+        // The quick panel may be open above the editor dialog: refresh it now so tiles
+        // (AE metering, and any future PROGRAM state) never wait for collapse/reopen.
+        updateQuickControls()
     }
 
     private fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
@@ -2402,10 +2511,8 @@ class MainActivity : Activity(), SensorEventListener {
                     autoSafe = programSettings.useAutoSafeShutter)
                 programLockButton.text = programLockText(programSettings.lockMode)
                 programBiasLabel.text = programEvBiasText(programSettings.evBias)
-                programMeteringButton.text = "Metering: " + when (programSettings.metering) {
-                    ProgramMetering.CENTER_WEIGHTED -> "CENTER WEIGHTED"
-                    ProgramMetering.MEDIAN -> "MEDIAN"
-                }
+                programMeteringButton.text =
+                    "Metering: ${programMeteringLabel(programSettings.metering)}"
                 val manualSensor = controller.hasManualSensorControl()
                 programLockButton.isEnabled = manualSensor
                 programIsoMinButton.isEnabled = manualSensor
@@ -2458,10 +2565,7 @@ class MainActivity : Activity(), SensorEventListener {
             content.addView(programLockButton)
             content.addView(programMeteringButton)
             programMeteringButton.setOnClickListener {
-                programSettings = programSettings.copy(metering = when (programSettings.metering) {
-                    ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.MEDIAN
-                    ProgramMetering.MEDIAN -> ProgramMetering.CENTER_WEIGHTED
-                })
+                programSettings = programSettings.copy(metering = nextProgramMetering(programSettings.metering))
                 refreshProgramButtons(); applyProgramSettings()
             }
             content.addView(programIsoMinButton)
@@ -2561,6 +2665,37 @@ class MainActivity : Activity(), SensorEventListener {
                 setPadding(dp(12), 0, dp(12), dp(16))
             }.also(content::addView)
             content.addView(TextView(this).apply {
+                text = "Burst gyro sidecars"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+            })
+            sidecarSettingsStatus = TextView(this).apply {
+                text = sidecarFolderText()
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+            }.also(content::addView)
+            content.addView(Button(this).apply {
+                text = "Save sidecars next to DNGs (choose photo folder)"
+                setOnClickListener { pickSidecarFolder() }
+            })
+            content.addView(Button(this).apply {
+                text = "Use Downloads folder for sidecars"
+                setOnClickListener {
+                    SidecarTreeAccess.clearTreeUri(this@MainActivity)
+                    sidecarSettingsStatus?.text = sidecarFolderText()
+                    setStatus("SIDECARS • DOWNLOADS")
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Android forbids text sidecars under DCIM via MediaStore. " +
+                    "Choose DCIM/RawLens when prompted; burst.json + gyro/ then land " +
+                    "in DCIM/RawLens/<burst> next to the DNGs. No extra permission " +
+                    "is needed beyond this one folder grant."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+                setPadding(0, 0, 0, dp(16))
+            })
+            content.addView(TextView(this).apply {
                 text = "Camera diagnostics"
                 setTextColor(getColor(R.color.text_primary))
                 textSize = 14f
@@ -2575,6 +2710,7 @@ class MainActivity : Activity(), SensorEventListener {
                     if (enabled) debugOverlay.post { positionWholeRotatedPanels() }
                 }
             })
+
             generalTab.isEnabled = false
             denoiseTab.isEnabled = true
             lensesTab.isEnabled = true
@@ -2582,6 +2718,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fun showDenoiseTab() {
             rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
             content.removeAllViews()
             var settings = denoiseSettings()
             val subordinate = ArrayList<View>()
@@ -2647,6 +2784,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fun showLensesTab() {
             rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
             content.removeAllViews()
             val count = selectedLensIds().size
             content.addView(TextView(this).apply {
@@ -2668,6 +2806,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fun showAboutTab() {
             rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
             content.removeAllViews()
             content.addView(TextView(this).apply {
                 @Suppress("DEPRECATION")
@@ -3017,6 +3156,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val LOG_TAG = "RawLensCamera"
         const val CAMERA_PERMISSION = 42
         const val LOCATION_PERMISSION = 43
+        const val SIDECAR_TREE_REQUEST = 44
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = "rawlens_settings"
         const val KEY_SELECTED_LENSES = "selected_lens_ids"
