@@ -51,6 +51,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var flashControl: TextView
     private lateinit var lensDiscovery: LensDiscovery
     private lateinit var dngMetadataOverrideStore: DngMetadataOverrideStore
+    private lateinit var programAeProfileStore: ProgramAeProfileStore
     private var gpsProvider: GpsLocationProvider? = null
     private lateinit var manualPanel: LinearLayout
     private lateinit var manualName: TextView
@@ -89,7 +90,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var timerSeconds = 0
     private var releaseMode = 0 // 0 single, 1 burst, 2 HDR bracket
     private var captureExposureMode = CaptureExposureMode.AUTO
-    private var rawSuperResolutionSettings = RawSuperResolutionSettings()
+    private var programHintShown = false
     private var countdownRunnable: Runnable? = null
     private var histogramRunnable: Runnable? = null
     private lateinit var sensorManager: SensorManager
@@ -117,7 +118,6 @@ class MainActivity : Activity(), SensorEventListener {
         releaseMode = lensPreferences().getInt(KEY_RELEASE_MODE,
             if (lensPreferences().getBoolean(KEY_BURST_RELEASE, false)) 1 else 0)
         preloadFlowNetForMergedHdr()
-        rawSuperResolutionSettings = RawSuperResolutionSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)
         ) { CaptureExposureMode.AUTO }
@@ -127,7 +127,6 @@ class MainActivity : Activity(), SensorEventListener {
         if (lensPreferences().getBoolean(KEY_RAW_ZSL, false)) {
             captureExposureMode = CaptureExposureMode.ZSL
         }
-        if (rawSuperResolutionSettings.enabled) captureExposureMode = CaptureExposureMode.ZSL
         // Capture mode is now the single source of truth for ZSL.  Keeping the legacy flag in
         // sync also makes a process restart reproduce exactly what the mode button shows.
         lensPreferences().edit()
@@ -170,6 +169,7 @@ class MainActivity : Activity(), SensorEventListener {
         val shutter = findViewById<View>(R.id.shutter)
         lensDiscovery = LensDiscovery(this)
         dngMetadataOverrideStore = DngMetadataOverrideStore(this)
+        programAeProfileStore = ProgramAeProfileStore(this)
         gpsProvider = GpsLocationProvider(this)
         manualPanel = findViewById(R.id.manualControlPanel)
         manualName = findViewById(R.id.manualControlName)
@@ -226,8 +226,16 @@ class MainActivity : Activity(), SensorEventListener {
             { message -> runOnUiThread { setStatus(message) } },
             { iso, shutterSpeed, wb ->
                 runOnUiThread {
-                    isoControl.text = controlText("ISO", iso.toString())
-                    shutterControl.text = controlText("S", formatShutter(shutterSpeed))
+                    val lock = if (::controller.isInitialized &&
+                        captureExposureMode == CaptureExposureMode.PROGRAM
+                    ) {
+                        runCatching { controller.getProgramAeProfile().lockMode }
+                            .getOrDefault(ProgramLockMode.NONE)
+                    } else ProgramLockMode.NONE
+                    val isoLabel = if (lock == ProgramLockMode.ISO_LOCK) "ISO🔒" else "ISO"
+                    val shutterLabel = if (lock == ProgramLockMode.SHUTTER_LOCK) "S🔒" else "S"
+                    isoControl.text = controlText(isoLabel, iso.toString())
+                    shutterControl.text = controlText(shutterLabel, formatShutter(shutterSpeed))
                     if (wb > 0) wbControl.text = controlText("WB", "${wb}K")
                     updateAutomaticPanelValue(iso, shutterSpeed, wb)
                 }
@@ -273,12 +281,12 @@ class MainActivity : Activity(), SensorEventListener {
             lensPreferences().getBoolean(KEY_OIS, true),
             lensPreferences().getBoolean(KEY_RAW_ZSL, false),
             lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawSuperResolutionSettings,
             dynamicExposureSettings(),
             ettrSettings(),
             aeMeteringMode,
             histogramEnabled,
             histogramSourceRaw,
+            programProfile(),
             { dngWriterBackend() },
             { cameraId -> dngMetadataOverrideStore.get(cameraId) },
             { zslStatus ->
@@ -318,7 +326,20 @@ class MainActivity : Activity(), SensorEventListener {
                     refreshHistogramContentDescription()
                 }
             },
-            { currentGpsLocation() }
+            { currentGpsLocation() },
+            { cameraId ->
+                runOnUiThread {
+                    // Single authoritative hook: whenever the active camera resolves
+                    // (startup, lens switch, configuration change), load that lens's
+                    // PROGRAM profile synchronously instead of timed re-pushes.
+                    if (cameraId != null) {
+                        lensPreferences().edit().putString(KEY_LAST_CAMERA_ID, cameraId).apply()
+                        controller.setProgramAeProfile(programProfile())
+                        refreshLensSwitcher()
+                        updateProgramChipStates()
+                    }
+                }
+            }
         )
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
@@ -332,7 +353,9 @@ class MainActivity : Activity(), SensorEventListener {
             true
         }
         isoControl.setOnClickListener { openIsoControl() }
+        isoControl.setOnLongClickListener { toggleProgramAxisLock(isIso = true); true }
         shutterControl.setOnClickListener { openShutterControl() }
+        shutterControl.setOnLongClickListener { toggleProgramAxisLock(isIso = false); true }
         wbControl.setOnClickListener { showManualControl(ManualControl.WHITE_BALANCE) }
         focusControl.setOnClickListener { showManualControl(ManualControl.FOCUS_DISTANCE) }
         evControl.setOnClickListener { showManualControl(ManualControl.EXPOSURE_COMPENSATION) }
@@ -374,7 +397,6 @@ class MainActivity : Activity(), SensorEventListener {
             scheduleHistogram()
         }
         findViewById<View>(R.id.aeMeteringQuick).setOnClickListener { cycleAeMeteringMode() }
-        findViewById<View>(R.id.rawSrQuick).setOnClickListener { toggleRawSuperResolution() }
         findViewById<View>(R.id.ettrQuick).setOnClickListener { toggleEttr() }
         findViewById<View>(R.id.oisQuick).setOnClickListener {
             if (controller.isOisSupported()) {
@@ -754,7 +776,7 @@ class MainActivity : Activity(), SensorEventListener {
         findViewById(R.id.gridQuick), findViewById(R.id.levelQuick),
         findViewById(R.id.histogramQuick), findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
-        findViewById(R.id.resetTargetsQuick), findViewById(R.id.oisQuick), findViewById(R.id.rawSrQuick),
+        findViewById(R.id.resetTargetsQuick), findViewById(R.id.oisQuick),
         findViewById(R.id.ettrQuick),
         findViewById(R.id.manualControlName), findViewById(R.id.manualControlValue),
         findViewById(R.id.manualControlMin), findViewById(R.id.manualControlMax),
@@ -897,46 +919,6 @@ class MainActivity : Activity(), SensorEventListener {
         1 -> "BURST_6"; 2 -> "HDR_3"; else -> "SINGLE"
     }
 
-    private fun toggleRawSuperResolution() {
-        val enabled = !rawSuperResolutionSettings.enabled
-        if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-            applyCaptureExposureMode(CaptureExposureMode.ZSL)
-        }
-        if (applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = enabled))) {
-            setStatus(if (enabled) {
-                "RAW SR • WARMING"
-            } else {
-                "RAW SR OFF"
-            })
-        }
-    }
-
-    private fun applyRawSuperResolutionSettings(settings: RawSuperResolutionSettings): Boolean {
-        if (!controller.setRawSuperResolutionSettings(settings)) {
-            setStatus("SR LOCKED • SAVING")
-            return false
-        }
-        rawSuperResolutionSettings = settings
-        lensPreferences().edit().apply {
-            settings.toPreferences().forEach { (key, value) ->
-                when (value) {
-                    is Boolean -> putBoolean(key, value)
-                    is String -> putString(key, value)
-                    is Float -> putFloat(key, value)
-                }
-            }
-        }.apply()
-        updateQuickControls()
-        return true
-    }
-
-    private fun rawSuperResolutionQuickText(): String {
-        return rawSuperResolutionSettings.quickText(
-            lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawZslStatus.bufferedFrames, rawZslStatus.srAvailable, rawZslStatus.srBusy
-        )
-    }
-
     /**
      * RAW-based ETTR single exposure: OFF → SAFE (nothing clips) → REC (one channel
      * may kiss white for highlight reconstruction) → OFF.
@@ -1024,9 +1006,6 @@ class MainActivity : Activity(), SensorEventListener {
             histogramView.allowPreviewImmediately()
             updatePreviewHistogramOnce()
         }
-        if (mode != CaptureExposureMode.ZSL && rawSuperResolutionSettings.enabled) {
-            applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
-        }
         captureExposureMode = mode
         val dynamic = dynamicExposureSettings().copy(enabled = mode == CaptureExposureMode.PROGRAM)
         lensPreferences().edit()
@@ -1036,6 +1015,11 @@ class MainActivity : Activity(), SensorEventListener {
             .apply()
         closeFloatingPanels()
         controller.setCaptureExposureMode(mode)
+        if (mode == CaptureExposureMode.PROGRAM) {
+            // Ensure the live loop uses this lens's profile (migrated on first entry).
+            controller.setProgramAeProfile(programProfile())
+            isoControl.postDelayed({ showProgramPanelHintOnce() }, 400L)
+        }
         modeButton.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         setStatus(when (mode) {
             CaptureExposureMode.AUTO -> "AUTO AE"
@@ -1044,16 +1028,12 @@ class MainActivity : Activity(), SensorEventListener {
             CaptureExposureMode.MANUAL -> "MANUAL"
         })
         updateQuickControls()
+        updateProgramChipStates()
     }
 
     private fun openIsoControl() {
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            val values = intArrayOf(0, 400, 800, 1600, 3200, 6400)
-            val settings = dynamicExposureSettings()
-            val current = values.indexOf(settings.isoLimit).takeIf { it >= 0 } ?: 0
-            val updated = settings.copy(isoLimit = values[(current + 1) % values.size])
-            saveDynamicExposureSettings(updated)
-            setStatus("ISO MAX ${updated.isoLimit.takeIf { it > 0 } ?: "AUTO"}")
+            showProgramAxisSlider(isIso = true)
             return
         }
         openManualModeThen(ManualControl.ISO)
@@ -1061,33 +1041,181 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun openShutterControl() {
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            val values = longArrayOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30,
-                1_000_000_000L / 60, 1_000_000_000L / 125, 1_000_000_000L / 250)
-            val settings = dynamicExposureSettings()
-            val updated = if (settings.useAutoSafeShutter) {
-                settings.copy(useAutoSafeShutter = false, shutterLimitNanos = 0L)
-            } else {
-                val current = values.indexOf(settings.shutterLimitNanos).takeIf { it >= 0 } ?: 0
-                val next = values[(current + 1) % values.size]
-                settings.copy(
-                    shutterLimitNanos = next,
-                    useAutoSafeShutter = next == 0L && current == values.lastIndex
-                )
-            }
-            saveDynamicExposureSettings(updated)
-            setStatus("S MAX " + when {
-                updated.shutterLimitNanos > 0L -> formatShutter(updated.shutterLimitNanos)
-                updated.useAutoSafeShutter -> "AUTO"
-                else -> "AUTO"
-            })
+            showProgramAxisSlider(isIso = false)
             return
         }
         openManualModeThen(ManualControl.SHUTTER)
     }
 
+    /**
+     * Spec chip contract: hold ISO/SHUTTER to lock that axis (the other keeps
+     * adjusting); hold the second locked axis to lock both, which enters MANUAL
+     * seeded from the live pair. Holding a locked axis releases it.
+     */
+    private fun toggleProgramAxisLock(isIso: Boolean) {
+        if (captureExposureMode != CaptureExposureMode.PROGRAM) {
+            setStatus(if (isIso) "ISO HOLD IN PROGRAM" else "S HOLD IN PROGRAM")
+            return
+        }
+        if (!controller.hasManualSensorControl()) {
+            setStatus("ANDROID AE • NO MANUAL SENSOR")
+            return
+        }
+        isoControl.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        var profile = programProfile()
+        val want = if (isIso) ProgramLockMode.ISO_LOCK else ProgramLockMode.SHUTTER_LOCK
+        when {
+            profile.lockMode == ProgramLockMode.NONE -> {
+                profile = if (isIso) {
+                    val range = controller.manualControlRange(ManualControl.ISO)
+                    profile.copy(
+                        lockMode = ProgramLockMode.ISO_LOCK,
+                        lockedIso = profile.lockedIso.takeIf { it > 0 }
+                            ?: (range?.current?.toInt() ?: 0)
+                    )
+                } else {
+                    val range = controller.manualControlRange(ManualControl.SHUTTER)
+                    profile.copy(
+                        lockMode = ProgramLockMode.SHUTTER_LOCK,
+                        lockedShutterNanos = profile.lockedShutterNanos.takeIf { it > 0L }
+                            ?: (range?.current ?: 0L)
+                    )
+                }
+                saveProgramProfile(profile)
+                setStatus(if (isIso) "ISO LOCK • SHUTTER AUTO" else "SHUTTER LOCK • ISO AUTO")
+            }
+            profile.lockMode == want -> {
+                saveProgramProfile(profile.copy(lockMode = ProgramLockMode.NONE))
+                setStatus("PROGRAM • BOTH AUTO")
+            }
+            else -> {
+                // Second axis held while the other is locked: manual exposure,
+                // seeded from the live PROGRAM pair by the controller.
+                saveProgramProfile(profile.copy(lockMode = ProgramLockMode.NONE))
+                applyCaptureExposureMode(CaptureExposureMode.MANUAL)
+                setStatus("MANUAL • ISO+SHUTTER")
+            }
+        }
+        updateProgramChipStates()
+    }
+
+    /**
+     * Spec chip contract: tap ISO/SHUTTER for that axis's slider. Moving the slider
+     * engages the axis lock; the slider's Auto button releases both locks.
+     */
+    private fun showProgramAxisSlider(isIso: Boolean) {
+        closeFloatingPanels()
+        if (!controller.hasManualSensorControl()) {
+            setStatus("ANDROID AE • NO MANUAL SENSOR")
+            return
+        }
+        val range = controller.manualControlRange(
+            if (isIso) ManualControl.ISO else ManualControl.SHUTTER
+        )
+        if (range == null) {
+            setStatus("${if (isIso) "ISO" else "S"} N/A")
+            return
+        }
+        var profile = programProfile()
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val title = if (isIso) "ISO lock" else "Shutter lock"
+        val valueLabel = TextView(this).apply {
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        fun currentValue(): Long = if (isIso) {
+            (profile.lockedIso.takeIf { it > 0 }?.toLong() ?: range.current)
+                .coerceIn(range.minimum, range.maximum)
+        } else {
+            (profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current)
+                .coerceIn(range.minimum, range.maximum)
+        }
+        fun labelFor(value: Long): String =
+            "$title\n" + if (isIso) "ISO $value" else formatShutter(value)
+        valueLabel.text = labelFor(currentValue())
+        container.addView(valueLabel)
+        container.addView(TextView(this).apply {
+            text = if (isIso) "Slide to lock ISO • the shutter keeps adjusting"
+            else "Slide to lock shutter • ISO keeps adjusting"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+        })
+        val slider = SeekBar(this).apply {
+            max = SLIDER_STEPS
+            progress = sliderProgress(
+                if (isIso) ManualControl.ISO else ManualControl.SHUTTER,
+                range.copy(current = currentValue())
+            )
+        }
+        container.addView(slider)
+        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val value = sliderValue(
+                    if (isIso) ManualControl.ISO else ManualControl.SHUTTER, range, progress
+                )
+                profile = if (isIso) {
+                    profile.copy(lockMode = ProgramLockMode.ISO_LOCK, lockedIso = value.toInt())
+                } else {
+                    profile.copy(lockMode = ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = value)
+                }
+                valueLabel.text = labelFor(value)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                saveProgramProfile(profile)
+                updateProgramChipStates()
+            }
+        })
+        container.addView(Button(this).apply {
+            text = "Limits…"
+            setOnClickListener { showProgramPanel() }
+        })
+        AlertDialog.Builder(this)
+            .setTitle(if (isIso) "ISO • PROGRAM" else "Shutter • PROGRAM")
+            .setView(ScrollView(this).apply { addView(container) })
+            .setNeutralButton("Auto") { _, _ ->
+                saveProgramProfile(profile.copy(lockMode = ProgramLockMode.NONE))
+                updateProgramChipStates()
+                setStatus("PROGRAM • BOTH AUTO")
+            }
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun updateProgramChipStates() {
+        if (!::isoControl.isInitialized) return
+        val lock = runCatching { controller.getProgramAeProfile().lockMode }
+            .getOrDefault(ProgramLockMode.NONE)
+        val inProgram = captureExposureMode == CaptureExposureMode.PROGRAM
+        isoControl.contentDescription = when {
+            !inProgram -> "ISO control"
+            lock == ProgramLockMode.ISO_LOCK -> "ISO locked. Tap for slider, hold to release. Auto in slider releases both locks."
+            else -> "ISO auto. Tap for slider, hold to lock ISO and let shutter adjust."
+        }
+        shutterControl.contentDescription = when {
+            !inProgram -> "Shutter control"
+            lock == ProgramLockMode.SHUTTER_LOCK -> "Shutter locked. Tap for slider, hold to release. Auto in slider releases both locks."
+            else -> "Shutter auto. Tap for slider, hold to lock shutter and let ISO adjust."
+        }
+    }
+
     private fun openManualModeThen(control: ManualControl) {
         if (captureExposureMode != CaptureExposureMode.MANUAL) applyCaptureExposureMode(CaptureExposureMode.MANUAL)
         isoControl.post { showManualControl(control) }
+    }
+
+    private fun showProgramPanelHintOnce() {
+        if (programHintShown) return
+        programHintShown = true
+        val profile = programProfile()
+        setStatus("P ${programLockText(profile.lockMode).substringAfter("Lock: ")} " +
+            "${String.format(Locale.US, "%.2f", profile.balance)} " +
+            "${programEvBiasText(profile.evBias)} • ISO/S edits")
     }
 
     private fun saveDynamicExposureSettings(settings: DynamicExposureSettings) {
@@ -1099,6 +1227,286 @@ class MainActivity : Activity(), SensorEventListener {
             .putBoolean(KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER, settings.useAutoSafeShutter)
             .apply()
         controller.setDynamicExposureSettings(settings)
+    }
+
+    private fun programBalanceText(balance: Float): String = when {
+        balance > 0.55f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • faster shutter"
+        balance < 0.45f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • lower ISO"
+        else -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • balanced"
+    }
+
+    private fun programIsoBoundText(value: Int, isMin: Boolean): String =
+        (if (isMin) "ISO min: " else "ISO max: ") +
+            (value.takeIf { it > 0 }?.toString() ?: if (isMin) "SENSOR MIN" else "SENSOR MAX")
+
+    private fun programShutterBoundText(value: Long, isMin: Boolean, autoSafe: Boolean): String =
+        (if (isMin) "Shutter min: " else "Shutter max: ") + when {
+            value > 0L -> formatShutter(value)
+            !isMin && autoSafe -> "AUTO HANDHELD"
+            isMin -> "SENSOR MIN"
+            else -> "SENSOR MAX"
+        }
+
+    private fun programLockText(mode: ProgramLockMode): String = when (mode) {
+        ProgramLockMode.NONE -> "Lock: NONE (both auto)"
+        ProgramLockMode.ISO_LOCK -> "Lock: ISO (shutter auto)"
+        ProgramLockMode.SHUTTER_LOCK -> "Lock: SHUTTER (ISO auto)"
+    }
+
+    private fun programEvBiasText(bias: Float): String =
+        String.format(Locale.US, "Brightness bias: %+.1f EV", bias)
+
+    /** Viewfinder PROGRAM editor: priority slider, locks, per-lens min/max, brightness bias. */
+    private fun showProgramPanel() {
+        closeFloatingPanels()
+        var profile = programProfile()
+        fun apply() = saveProgramProfile(profile)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        val lensLabel = TextView(this).apply {
+            text = "PROGRAM • per-lens ${activeProfileLensId() ?: "default"} • RAW-driven (sensor ISO + shutter)"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+        }
+        container.addView(lensLabel)
+        if (!controller.hasManualSensorControl()) {
+            container.addView(TextView(this).apply {
+                text = "Android AE • this camera has no manual sensor control; " +
+                    "locks and limits are unavailable."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(0, dp(8), 0, 0)
+            })
+        }
+        container.addView(TextView(this).apply {
+            text = "Hold ISO / SHUTTER chips to lock • tap for slider • Auto releases both • " +
+                "lock both for manual"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+            setPadding(0, dp(4), 0, 0)
+        })
+        val balanceLabel = TextView(this).apply {
+            text = programBalanceText(profile.balance)
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 14f
+            setPadding(0, dp(12), 0, 0)
+        }
+        container.addView(balanceLabel)
+        container.addView(TextView(this).apply {
+            text = "← ISO priority   |   balanced   |   shutter priority →"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+        })
+        val balanceSlider = SeekBar(this).apply {
+            max = 100
+            progress = (profile.balance * 100).toInt().coerceIn(0, max)
+        }
+        container.addView(balanceSlider)
+        balanceSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                profile = profile.copy(balance = progress / 100f)
+                balanceLabel.text = programBalanceText(profile.balance)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar) = apply()
+        })
+        val lockButton = Button(this)
+        val lockedIsoButton = Button(this)
+        val lockedShutterButton = Button(this)
+        fun refreshLock() {
+            lockButton.text = programLockText(profile.lockMode) + " • tap to cycle"
+        }
+        fun refreshLockedButtons() {
+            val isoRange = controller.manualControlRange(ManualControl.ISO)
+            val shutterRange = controller.manualControlRange(ManualControl.SHUTTER)
+            lockedIsoButton.text = "Locked ISO: " + when {
+                profile.lockMode != ProgramLockMode.ISO_LOCK -> "-- (ISO lock off)"
+                profile.lockedIso > 0 -> "ISO ${profile.lockedIso}"
+                isoRange != null -> "ISO ${isoRange.current} (live)"
+                else -> "--"
+            }
+            lockedIsoButton.isEnabled = profile.lockMode == ProgramLockMode.ISO_LOCK
+            lockedShutterButton.text = "Locked shutter: " + when {
+                profile.lockMode != ProgramLockMode.SHUTTER_LOCK -> "-- (shutter lock off)"
+                profile.lockedShutterNanos > 0L -> formatShutter(profile.lockedShutterNanos)
+                shutterRange != null -> "${formatShutter(shutterRange.current)} (live)"
+                else -> "--"
+            }
+            lockedShutterButton.isEnabled = profile.lockMode == ProgramLockMode.SHUTTER_LOCK
+        }
+        refreshLock()
+        refreshLockedButtons()
+        lockButton.setOnClickListener {
+            profile = profile.copy(lockMode = when (profile.lockMode) {
+                ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
+                ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
+                ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
+            })
+            // Default the locked value to the opposite bound so the lock takes hold immediately.
+            if (profile.lockMode == ProgramLockMode.ISO_LOCK && profile.lockedIso <= 0) {
+                val range = controller.manualControlRange(ManualControl.ISO)
+                profile = profile.copy(lockedIso = (range?.current?.toInt() ?: 0))
+            }
+            if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK && profile.lockedShutterNanos <= 0L) {
+                val range = controller.manualControlRange(ManualControl.SHUTTER)
+                profile = profile.copy(lockedShutterNanos = range?.current ?: 0L)
+            }
+            refreshLock(); refreshLockedButtons(); apply()
+            setStatus("PROGRAM ${profile.lockMode.name}")
+        }
+        container.addView(lockButton)
+        lockedIsoButton.setOnClickListener {
+            val range = controller.manualControlRange(ManualControl.ISO) ?: return@setOnClickListener
+            val steps = listOf(100, 200, 400, 800, 1600, 3200, 6400)
+                .filter { it in range.minimum..range.maximum }
+            if (steps.isEmpty()) return@setOnClickListener
+            val current = profile.lockedIso.takeIf { it > 0 } ?: range.current.toInt()
+            val next = steps[(steps.indexOfClosest(current) + 1) % steps.size]
+            profile = profile.copy(lockedIso = next)
+            refreshLockedButtons(); apply()
+        }
+        lockedShutterButton.setOnClickListener {
+            val range = controller.manualControlRange(ManualControl.SHUTTER) ?: return@setOnClickListener
+            val steps = listOf(
+                1_000_000_000L / 1000, 1_000_000_000L / 500, 1_000_000_000L / 250,
+                1_000_000_000L / 125, 1_000_000_000L / 60, 1_000_000_000L / 30,
+                1_000_000_000L / 15, 1_000_000_000L / 8, 1_000_000_000L / 4
+            ).filter { it in range.minimum..range.maximum }
+            if (steps.isEmpty()) return@setOnClickListener
+            val current = profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current
+            val next = steps[(steps.indexOfClosest(current) + 1) % steps.size]
+            profile = profile.copy(lockedShutterNanos = next)
+            refreshLockedButtons(); apply()
+        }
+        refreshLockedButtons()
+        container.addView(lockedIsoButton)
+        container.addView(lockedShutterButton)
+        val isoMinButton = Button(this)
+        val isoMaxButton = Button(this)
+        val shutterMinButton = Button(this)
+        val shutterMaxButton = Button(this)
+        fun refreshBounds() {
+            isoMinButton.text = programIsoBoundText(profile.isoMin, isMin = true)
+            isoMaxButton.text = programIsoBoundText(profile.isoMax, isMin = false)
+            shutterMinButton.text = programShutterBoundText(profile.shutterMinNanos, isMin = true, autoSafe = false)
+            shutterMaxButton.text = programShutterBoundText(
+                profile.shutterMaxNanos, isMin = false, autoSafe = profile.useAutoSafeShutter
+            )
+        }
+        isoMinButton.setOnClickListener {
+            val range = controller.manualControlRange(ManualControl.ISO)
+            val sensorMin = range?.minimum?.toInt() ?: 100
+            val values = listOf(0, sensorMin, 100, 200, 400, 800).distinct()
+            profile = profile.copy(isoMin = values[(values.indexOf(profile.isoMin).takeIf { it >= 0 } ?: 0)
+                .let { (it + 1) % values.size }])
+            if (profile.isoMax > 0 && profile.isoMin > profile.isoMax) profile = profile.copy(isoMax = 0)
+            refreshBounds(); apply()
+        }
+        isoMaxButton.setOnClickListener {
+            val values = listOf(0, 400, 800, 1600, 3200, 6400)
+            profile = profile.copy(isoMax = values[(values.indexOf(profile.isoMax).takeIf { it >= 0 } ?: 0)
+                .let { (it + 1) % values.size }])
+            if (profile.isoMin > 0 && profile.isoMax > 0 && profile.isoMin > profile.isoMax) {
+                profile = profile.copy(isoMin = 0)
+            }
+            refreshBounds(); apply()
+        }
+        shutterMinButton.setOnClickListener {
+            val values = listOf(0L, 1_000_000_000L / 1000, 1_000_000_000L / 500,
+                1_000_000_000L / 250, 1_000_000_000L / 125, 1_000_000_000L / 60)
+            profile = profile.copy(shutterMinNanos = values[
+                (values.indexOf(profile.shutterMinNanos).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
+            refreshBounds(); apply()
+        }
+        shutterMaxButton.setOnClickListener {
+            val values = listOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30,
+                1_000_000_000L / 60, 1_000_000_000L / 125, 1_000_000_000L / 250)
+            if (profile.useAutoSafeShutter) {
+                profile = profile.copy(useAutoSafeShutter = false, shutterMaxNanos = 0L)
+            } else {
+                val next = values[(values.indexOf(profile.shutterMaxNanos).takeIf { it >= 0 } ?: 0)
+                    .let { (it + 1) % values.size }]
+                profile = profile.copy(
+                    shutterMaxNanos = next,
+                    useAutoSafeShutter = next == 0L
+                )
+            }
+            refreshBounds(); apply()
+        }
+        refreshBounds()
+        container.addView(isoMinButton)
+        container.addView(isoMaxButton)
+        container.addView(shutterMinButton)
+        container.addView(shutterMaxButton)
+        val biasLabel = TextView(this).apply {
+            text = programEvBiasText(profile.evBias)
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 14f
+            setPadding(0, dp(12), 0, 0)
+        }
+        container.addView(biasLabel)
+        container.addView(SeekBar(this).apply {
+            max = 60
+            progress = ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
+                    biasLabel.text = programEvBiasText(profile.evBias)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar) = apply()
+            })
+        })
+        container.addView(TextView(this).apply {
+            text = "ETTR overrides PROGRAM still exposure when converged."
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+            setPadding(0, dp(8), 0, 0)
+        })
+        val meteringButton = Button(this)
+        fun refreshMetering() {
+            meteringButton.text = "Metering: " + when (profile.metering) {
+                ProgramMetering.CENTER_WEIGHTED -> "CENTER WEIGHTED"
+                ProgramMetering.MEDIAN -> "MEDIAN"
+            } + " • tap to switch"
+        }
+        refreshMetering()
+        meteringButton.setOnClickListener {
+            profile = profile.copy(metering = when (profile.metering) {
+                ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.MEDIAN
+                ProgramMetering.MEDIAN -> ProgramMetering.CENTER_WEIGHTED
+            })
+            refreshMetering(); apply()
+            setStatus("PROGRAM METER ${profile.metering.name}")
+        }
+        container.addView(meteringButton)
+        container.addView(Button(this).apply {
+            text = "Reset per-lens defaults"
+            setOnClickListener {
+                profile = ProgramAeProfile()
+                balanceSlider.progress = (profile.balance * 100).toInt()
+                balanceLabel.text = programBalanceText(profile.balance)
+                biasLabel.text = programEvBiasText(profile.evBias)
+                refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); apply()
+            }
+        })
+        AlertDialog.Builder(this)
+            .setTitle("PROGRAM AE • custom")
+            .setView(ScrollView(this).apply { addView(container) })
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun List<Int>.indexOfClosest(value: Int): Int {
+        if (isEmpty()) return 0
+        return indices.minByOrNull { kotlin.math.abs(this[it] - value) } ?: 0
+    }
+
+    private fun List<Long>.indexOfClosest(value: Long): Int {
+        if (isEmpty()) return 0
+        return indices.minByOrNull { kotlin.math.abs(this[it] - value) } ?: 0
     }
 
     private fun cycleAeMeteringMode() {
@@ -1147,7 +1555,6 @@ class MainActivity : Activity(), SensorEventListener {
         val timer = findViewById<TextView>(R.id.timerQuick)
         val release = findViewById<TextView>(R.id.releaseQuick)
         val ettr = findViewById<TextView>(R.id.ettrQuick)
-        val rawSr = findViewById<TextView>(R.id.rawSrQuick)
         grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
         level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
         histogram.text = "HISTOGRAM\n${if (histogramEnabled) "ON" else "OFF"}"
@@ -1163,10 +1570,6 @@ class MainActivity : Activity(), SensorEventListener {
         ois.alpha = if (oisSupported) 1f else 0.4f
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
         release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±${hdrBracketStops()}"; else -> "SINGLE" }}"
-        rawSr.text = rawSuperResolutionQuickText()
-        val rawSrAvailable = rawZslStatus.state != RawZslState.FALLBACK
-        rawSr.isEnabled = rawSrAvailable
-        rawSr.alpha = if (rawSrAvailable) 1f else 0.4f
         val ettrMode = controller.getEttrSettings()
         val ettrEnabled = ettrMode.enabled
         ettr.text = "ETTR\n" + when {
@@ -1181,7 +1584,6 @@ class MainActivity : Activity(), SensorEventListener {
         setQuickTileState(ois, oisEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
-        setQuickTileState(rawSr, rawSuperResolutionSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         updateTimerBadge()
         modeButton.text = when (captureExposureMode) {
@@ -1441,6 +1843,41 @@ class MainActivity : Activity(), SensorEventListener {
             shutterLimitNanos = prefs.getLong(KEY_DYNAMIC_EXPOSURE_SHUTTER_LIMIT, 0L),
             useAutoSafeShutter = prefs.getBoolean(KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER, true)
         )
+    }
+
+    private fun activeProfileLensId(): String? =
+        controllerIfReady?.activeCameraId()
+            ?: lensPreferences().getString(KEY_LAST_CAMERA_ID, null)
+
+    private val controllerIfReady: RawCameraController?
+        get() = if (::controller.isInitialized) controller else null
+
+    /** Per-lens PROGRAM profile with one-time migration from legacy global keys. */
+    private fun programProfile(): ProgramAeProfile {
+        val lensId = activeProfileLensId()
+        if (lensId != null && programAeProfileStore.hasProfile(lensId)) {
+            return programAeProfileStore.get(lensId)
+        }
+        val legacy = dynamicExposureSettings()
+        val migrated = ProgramAeProfile.fromLegacy(
+            legacy.balance, legacy.isoLimit, legacy.shutterLimitNanos, legacy.useAutoSafeShutter
+        )
+        if (lensId != null) programAeProfileStore.save(lensId, migrated)
+        return migrated
+    }
+
+    private fun saveProgramProfile(profile: ProgramAeProfile) {
+        val validated = profile.validated()
+        activeProfileLensId()?.let { programAeProfileStore.save(it, validated) }
+        // Keep legacy globals in sync so older builds / debug tooling still see ceilings.
+        lensPreferences().edit()
+            .putFloat(KEY_DYNAMIC_EXPOSURE_BALANCE, ProgramAeProfile.balanceToMultiplier(validated.balance))
+            .putInt(KEY_DYNAMIC_EXPOSURE_ISO_LIMIT, validated.isoMax)
+            .putLong(KEY_DYNAMIC_EXPOSURE_SHUTTER_LIMIT, validated.shutterMaxNanos)
+            .putBoolean(KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER, validated.useAutoSafeShutter)
+            .apply()
+        controller.setProgramAeProfile(validated)
+        updateProgramChipStates()
     }
 
     private fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
@@ -1887,59 +2324,6 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                 }
             })
-            content.addView(CheckBox(this).apply {
-                text = "RAW super-resolution merge"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = rawSuperResolutionSettings.enabled
-                setOnCheckedChangeListener { button, enabled ->
-                    if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-                        applyCaptureExposureMode(CaptureExposureMode.ZSL)
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(enabled = enabled)
-                    )
-                    if (applied) {
-                        setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
-                    } else if (button.isChecked != rawSuperResolutionSettings.enabled) {
-                        button.isChecked = rawSuperResolutionSettings.enabled
-                    }
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "RAW SR DNG: " + when (rawSuperResolutionSettings.dngMode) {
-                        RawSrDngMode.LINEAR_RGB -> "LINEAR RGB (RECOMMENDED)"
-                        RawSrDngMode.MOSAIC_SR -> "MOSAIC SR • RAWTHERAPEE"
-                    }
-                }
-                refresh()
-                setOnClickListener {
-                    val mode = when (rawSuperResolutionSettings.dngMode) {
-                        RawSrDngMode.LINEAR_RGB -> RawSrDngMode.MOSAIC_SR
-                        RawSrDngMode.MOSAIC_SR -> RawSrDngMode.LINEAR_RGB
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(dngMode = mode)
-                    )
-                    refresh()
-                    if (applied) setStatus("RAW SR DNG • ${mode.label}")
-                }
-            })
-            content.addView(CheckBox(this).apply {
-                text = "Save merge debug frames (GCam payload)"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = rawSuperResolutionSettings.saveMergeDebugFrames
-                setOnCheckedChangeListener { _, enabled ->
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(saveMergeDebugFrames = enabled)
-                    )
-                    if (applied) setStatus(
-                        if (enabled) "MERGE DEBUG • FRAMES+DNG SAVED PER SHOT"
-                        else "MERGE DEBUG OFF"
-                    )
-                    else isChecked = rawSuperResolutionSettings.saveMergeDebugFrames
-                }
-            })
             var dynamicSettings = dynamicExposureSettings()
             fun applyDynamicSettings() {
                 lensPreferences().edit()
@@ -1952,7 +2336,7 @@ class MainActivity : Activity(), SensorEventListener {
                 controller.setDynamicExposureSettings(dynamicSettings)
             }
             content.addView(CheckBox(this).apply {
-                text = "Dynamic exposure balance"
+                text = "PROGRAM custom AE (RAW-driven)"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = dynamicSettings.enabled
                 setOnCheckedChangeListener { _, enabled ->
@@ -1960,59 +2344,144 @@ class MainActivity : Activity(), SensorEventListener {
                     applyDynamicSettings()
                 }
             })
-            val balanceLabel = TextView(this).apply {
-                text = dynamicExposureBalanceText(dynamicSettings.balance)
+            content.addView(TextView(this).apply {
+                text = "PROGRAM custom AE is RAW-driven per-lens (sensor ISO + shutter). " +
+                    "Hold ISO/SHUTTER chips to lock, tap for slider, Auto releases both. " +
+                    "Cameras without manual sensor control keep using Android AE. " +
+                    "Use ISO/S chips for the full editor; ETTR overrides PROGRAM when converged."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
+            if (!controller.hasManualSensorControl()) {
+                content.addView(TextView(this).apply {
+                    text = "Android AE • this camera has no manual sensor control; " +
+                        "PROGRAM locks and limits are unavailable."
+                    setTextColor(getColor(R.color.text_secondary))
+                    textSize = 12f
+                })
+            }
+            var programSettings = programProfile()
+            fun applyProgramSettings() = saveProgramProfile(programSettings)
+            val programBalanceLabel = TextView(this).apply {
+                text = programBalanceText(programSettings.balance)
                 setTextColor(getColor(R.color.text_primary))
                 textSize = 14f
                 setPadding(dp(12), dp(4), dp(12), 0)
             }
-            content.addView(balanceLabel)
+            content.addView(programBalanceLabel)
             content.addView(SeekBar(this).apply {
-                max = 150
-                progress = ((dynamicSettings.balance - 0.5f) * 100f).toInt().coerceIn(0, max)
+                max = 100
+                progress = (programSettings.balance * 100).toInt().coerceIn(0, max)
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        dynamicSettings = dynamicSettings.copy(balance = 0.5f + progress / 100f)
-                        balanceLabel.text = dynamicExposureBalanceText(dynamicSettings.balance)
+                        programSettings = programSettings.copy(balance = progress / 100f)
+                        programBalanceLabel.text = programBalanceText(programSettings.balance)
                     }
                     override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar) = applyDynamicSettings()
+                    override fun onStopTrackingTouch(seekBar: SeekBar) = applyProgramSettings()
                 })
             })
-            val isoLimitButton = Button(this)
-            val shutterLimitButton = Button(this)
-            fun refreshDynamicButtons() {
-                isoLimitButton.text = "ISO ceiling: " +
-                    (dynamicSettings.isoLimit.takeIf { it > 0 }?.toString() ?: "SENSOR MAX")
-                shutterLimitButton.text = "Shutter ceiling: " + when {
-                    dynamicSettings.shutterLimitNanos > 0L -> formatShutter(dynamicSettings.shutterLimitNanos)
-                    dynamicSettings.useAutoSafeShutter -> "AUTO HANDHELD"
-                    else -> "SENSOR MAX"
+            val programIsoMinButton = Button(this)
+            val programIsoMaxButton = Button(this)
+            val programShutterMinButton = Button(this)
+            val programShutterMaxButton = Button(this)
+            val programLockButton = Button(this)
+            val programMeteringButton = Button(this)
+            val programBiasLabel = TextView(this).apply {
+                text = programEvBiasText(programSettings.evBias)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 13f
+            }
+            fun refreshProgramButtons() {
+                programIsoMinButton.text = programIsoBoundText(programSettings.isoMin, isMin = true)
+                programIsoMaxButton.text = programIsoBoundText(programSettings.isoMax, isMin = false)
+                programShutterMinButton.text = programShutterBoundText(
+                    programSettings.shutterMinNanos, isMin = true, autoSafe = false)
+                programShutterMaxButton.text = programShutterBoundText(
+                    programSettings.shutterMaxNanos, isMin = false,
+                    autoSafe = programSettings.useAutoSafeShutter)
+                programLockButton.text = programLockText(programSettings.lockMode)
+                programBiasLabel.text = programEvBiasText(programSettings.evBias)
+                programMeteringButton.text = "Metering: " + when (programSettings.metering) {
+                    ProgramMetering.CENTER_WEIGHTED -> "CENTER WEIGHTED"
+                    ProgramMetering.MEDIAN -> "MEDIAN"
                 }
+                val manualSensor = controller.hasManualSensorControl()
+                programLockButton.isEnabled = manualSensor
+                programIsoMinButton.isEnabled = manualSensor
+                programIsoMaxButton.isEnabled = manualSensor
+                programShutterMinButton.isEnabled = manualSensor
+                programShutterMaxButton.isEnabled = manualSensor
+                programMeteringButton.isEnabled = manualSensor
             }
-            isoLimitButton.setOnClickListener {
-                val values = intArrayOf(0, 400, 800, 1600, 3200, 6400)
-                val next = (values.indexOf(dynamicSettings.isoLimit).takeIf { it >= 0 } ?: 0)
-                dynamicSettings = dynamicSettings.copy(isoLimit = values[(next + 1) % values.size])
-                refreshDynamicButtons(); applyDynamicSettings()
+            programLockButton.setOnClickListener {
+                programSettings = programSettings.copy(lockMode = when (programSettings.lockMode) {
+                    ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
+                    ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
+                    ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
+                })
+                refreshProgramButtons(); applyProgramSettings()
             }
-            shutterLimitButton.setOnClickListener {
-                val values = longArrayOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30, 1_000_000_000L / 60,
-                    1_000_000_000L / 125, 1_000_000_000L / 250)
-                if (dynamicSettings.useAutoSafeShutter) {
-                    dynamicSettings = dynamicSettings.copy(useAutoSafeShutter = false, shutterLimitNanos = 0L)
+            programIsoMinButton.setOnClickListener {
+                val values = listOf(0, 100, 200, 400, 800)
+                programSettings = programSettings.copy(isoMin = values[
+                    (values.indexOf(programSettings.isoMin).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
+                refreshProgramButtons(); applyProgramSettings()
+            }
+            programIsoMaxButton.setOnClickListener {
+                val values = listOf(0, 400, 800, 1600, 3200, 6400)
+                programSettings = programSettings.copy(isoMax = values[
+                    (values.indexOf(programSettings.isoMax).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
+                refreshProgramButtons(); applyProgramSettings()
+            }
+            programShutterMinButton.setOnClickListener {
+                val values = listOf(0L, 1_000_000_000L / 1000, 1_000_000_000L / 500,
+                    1_000_000_000L / 250, 1_000_000_000L / 125, 1_000_000_000L / 60)
+                programSettings = programSettings.copy(shutterMinNanos = values[
+                    (values.indexOf(programSettings.shutterMinNanos).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
+                refreshProgramButtons(); applyProgramSettings()
+            }
+            programShutterMaxButton.setOnClickListener {
+                val values = listOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30,
+                    1_000_000_000L / 60, 1_000_000_000L / 125, 1_000_000_000L / 250)
+                if (programSettings.useAutoSafeShutter) {
+                    programSettings = programSettings.copy(useAutoSafeShutter = false, shutterMaxNanos = 0L)
                 } else {
-                    val next = (values.indexOf(dynamicSettings.shutterLimitNanos).takeIf { it >= 0 } ?: 0)
-                    dynamicSettings = dynamicSettings.copy(shutterLimitNanos = values[(next + 1) % values.size])
-                    if (dynamicSettings.shutterLimitNanos == 0L && next == values.lastIndex) {
-                        dynamicSettings = dynamicSettings.copy(useAutoSafeShutter = true)
-                    }
+                    val next = values[(values.indexOf(programSettings.shutterMaxNanos).takeIf { it >= 0 } ?: 0)
+                        .let { (it + 1) % values.size }]
+                    programSettings = programSettings.copy(
+                        shutterMaxNanos = next, useAutoSafeShutter = next == 0L)
                 }
-                refreshDynamicButtons(); applyDynamicSettings()
+                refreshProgramButtons(); applyProgramSettings()
             }
-            refreshDynamicButtons()
-            content.addView(isoLimitButton)
-            content.addView(shutterLimitButton)
+            refreshProgramButtons()
+            content.addView(programLockButton)
+            content.addView(programMeteringButton)
+            programMeteringButton.setOnClickListener {
+                programSettings = programSettings.copy(metering = when (programSettings.metering) {
+                    ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.MEDIAN
+                    ProgramMetering.MEDIAN -> ProgramMetering.CENTER_WEIGHTED
+                })
+                refreshProgramButtons(); applyProgramSettings()
+            }
+            content.addView(programIsoMinButton)
+            content.addView(programIsoMaxButton)
+            content.addView(programShutterMinButton)
+            content.addView(programShutterMaxButton)
+            content.addView(programBiasLabel)
+            content.addView(SeekBar(this).apply {
+                max = 60
+                progress = ((programSettings.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        programSettings = programSettings.copy(
+                            evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
+                        programBiasLabel.text = programEvBiasText(programSettings.evBias)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) = applyProgramSettings()
+                })
+            })
             var ettr = ettrSettings()
             fun applyEttr() = saveEttrSettings(ettr)
             content.addView(CheckBox(this).apply {
@@ -2299,6 +2768,7 @@ class MainActivity : Activity(), SensorEventListener {
             showDngMatrixEditor(cameraId, "Forward matrices", "ForwardMatrix", defaults.forwardMatrix1, defaults.forwardMatrix2,
                 { it.forwardMatrix1 }, { it.forwardMatrix2 }, { profile, first, second -> profile.copy(forwardMatrix1 = first, forwardMatrix2 = second) })
         }
+        row("PROGRAM AE limits\nISO/shutter bounds for this lens") { showProgramPanel() }
         AlertDialog.Builder(this).setTitle("RAW DNG calibration")
             .setView(content).setNeutralButton("Reset all", null).setNegativeButton("Close", null)
             .show().also { dialog ->
@@ -2560,8 +3030,6 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"
         const val KEY_RAW_ZSL_FRAME_COUNT = "raw_zsl_frame_count"
-        const val KEY_RAW_SR_ENABLED = "raw_super_resolution_enabled"
-        const val KEY_RAW_SR_DNG_MODE = "raw_super_resolution_dng_mode"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"
         const val KEY_DYNAMIC_EXPOSURE_ISO_LIMIT = "dynamic_exposure_iso_limit"

@@ -12,8 +12,8 @@ import kotlin.math.pow
 /**
  * Settings for RAW-based Expose-To-The-Right single capture.
  *
- * Unlike the PROGRAM shutter-first curve (which rebalances the Camera2 hardware AE
- * meter), ETTR measures the sensor mosaic itself: per-channel saturation after black
+ * Unlike the PROGRAM custom curve (which drives sensor ISO + shutter live from
+ * RAW mid-tone brightness), ETTR measures the sensor mosaic itself: per-channel saturation after black
  * subtraction at the 99.9th percentile, then pushes total exposure until the hottest
  * meaningful CFA channel sits [headroomEv] below clipping.
  */
@@ -273,12 +273,15 @@ internal object RawEttrMeter {
 
 /** One ETTR metering sample: per-channel percentiles plus the raw material for the
  * reconstruction-allowance gain search (bins, measured-saturated counts, totals,
- * all in canonical R/Gr/Gb/B order). */
+ * all in canonical R/Gr/Gb/B order). [centerWeightedGreen] is the pooled-green
+ * spatial mean weighted toward the frame center (mirrors center-weighted AE zones);
+ * NaN when no green samples were taken. */
 class EttrRawSample(
     val levels: EttrChannelLevels,
     val bins: Array<IntArray>,
     val saturated: IntArray,
-    val totals: IntArray
+    val totals: IntArray,
+    val centerWeightedGreen: Float = Float.NaN
 )
 
 /**
@@ -308,6 +311,8 @@ object RawEttrSampler {
         val bins = Array(4) { IntArray(BIN_COUNT) }
         val saturated = IntArray(4)
         val totals = IntArray(4)
+        var weightedGreenSum = 0.0
+        var weightedGreenWeight = 0.0
         val blocksWide = image.width / 2
         val blocksHigh = image.height / 2
         val blockStep = kotlin.math.sqrt(
@@ -332,6 +337,11 @@ object RawEttrSampler {
                     if (value >= white) saturated[channel]++
                     bins[channel][(normalized * (BIN_COUNT - 1)).toInt()]++
                     totals[channel]++
+                    if (channel == 1 || channel == 2) {
+                        val weight = centerWeight(x, y, image.width, image.height)
+                        weightedGreenSum += weight * normalized
+                        weightedGreenWeight += weight
+                    }
                 }
                 blockX += blockStep
             }
@@ -346,7 +356,10 @@ object RawEttrSampler {
             gb = percentileLevel(bins[2], totals[2], RawEttrMeter.TARGET_PERCENTILE),
             b = percentileLevel(bins[3], totals[3], RawEttrMeter.TARGET_PERCENTILE)
         )
-        return EttrRawSample(levels, bins, saturated, totals)
+        val centerWeightedGreen = if (weightedGreenWeight > 0.0) {
+            (weightedGreenSum / weightedGreenWeight).toFloat().coerceIn(0f, 1f)
+        } else Float.NaN
+        return EttrRawSample(levels, bins, saturated, totals, centerWeightedGreen)
     }
 
     /**
@@ -365,9 +378,26 @@ object RawEttrSampler {
         return 0f
     }
 
+    /**
+     * Center weight for PROGRAM metering, mirroring the hardware center-weighted AE
+     * zones (nested 20/45/70% rectangles, innermost strongest). Chebyshev distance
+     * keeps the zones rectangular like [centeredMeteringRectangle].
+     */
+    fun centerWeight(x: Int, y: Int, width: Int, height: Int): Double {
+        if (width <= 0 || height <= 0) return 1.0
+        val nx = kotlin.math.abs((x + 0.5) / width * 2.0 - 1.0)
+        val ny = kotlin.math.abs((y + 0.5) / height * 2.0 - 1.0)
+        val zone = maxOf(nx, ny)
+        return when {
+            zone <= 0.20 -> 500.0
+            zone <= 0.45 -> 300.0
+            zone <= 0.70 -> 200.0
+            else -> 50.0
+        }
+    }
+
     /** Canonical channel order R=0, Gr=1, Gb=2, B=3 for every CFA layout. */
-    private fun channelAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {
-        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->
+    private fun channelAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->
             if (y == 0) if (x == 0) 0 else 1 else if (x == 0) 2 else 3
         CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG ->
             if (y == 0) if (x == 0) 1 else 0 else if (x == 0) 3 else 2

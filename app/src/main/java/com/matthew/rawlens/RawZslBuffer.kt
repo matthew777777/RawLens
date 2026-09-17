@@ -92,6 +92,20 @@ internal class RawZslBuffer(private val capacity: Int) {
         while (frames.isNotEmpty()) frames.removeFirst().image.close()
     }
 
+    /**
+     * Frees exactly one gralloc slot under ImageReader back-pressure by closing
+     * the oldest buffered frame. Returns true when a frame was evicted. The
+     * ZSL overflow path must free a held slot before draining: with the queue
+     * full because maxImages are outstanding, acquiring-and-closing queued
+     * images alone frees nothing and the stream never recovers.
+     */
+    @Synchronized
+    fun evictOldest(): Boolean {
+        if (frames.isEmpty()) return false
+        frames.removeFirst().image.close()
+        return true
+    }
+
     private fun qualityScore(
         frame: BufferedRawFrame,
         cutoffNanos: Long,
