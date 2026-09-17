@@ -40,8 +40,18 @@ android {
 
 dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
+    implementation("androidx.core:core-ktx:1.9.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.21.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
+}
+
+configurations.all {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "androidx.core" && (requested.name == "core" || requested.name == "core-ktx")) {
+            useVersion("1.9.0")
+            because("pin for AGP 8.7.3 / compileSdk 35 (exifinterface 1.4.2 pulls core 1.18 which needs SDK36/AGP8.9)")
+        }
+    }
 }
