@@ -60,10 +60,15 @@ class DngSaver(private val context: Context) {
         backend: DngWriterBackend = DngWriterBackend.ANDROID,
         fileNameSuffix: String? = null,
         captureId: Long = System.currentTimeMillis(),
-        gps: GpsLocation? = null
+        gps: GpsLocation? = null,
+        // Burst folder grouping: null keeps the legacy flat DCIM/RawLens
+        // layout; non-null must pass BurstSidecar.requireSubfolder and
+        // places this frame under DCIM/RawLens/<subfolder>/.
+        subfolder: String? = null
     ): String {
         check(orientation == metadata.exifOrientation) { "DNG orientation snapshot mismatch" }
         overrides.validate()
+        if (subfolder != null) BurstSidecar.requireSubfolder(subfolder)
 
         val displayName = if (fileNameSuffix.isNullOrBlank()) {
             CaptureFileNames.singleDng(captureId)
@@ -71,10 +76,11 @@ class DngSaver(private val context: Context) {
             CaptureFileNames.fileName(captureId, fileNameSuffix, "dng")
         }
         val resolver = context.contentResolver
+        val relativePath = if (subfolder != null) "DCIM/RawLens/$subfolder" else "DCIM/RawLens"
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)

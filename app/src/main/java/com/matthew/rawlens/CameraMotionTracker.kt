@@ -76,6 +76,12 @@ internal class CameraMotionTracker(context: Context) : SensorEventListener {
 
     fun currentMotion(): Float = filteredMotion
 
+    /** Diagnostics for sidecar skip logging: is the sensor listener alive? */
+    fun isRunning(): Boolean = running
+
+    /** Diagnostics for sidecar skip logging: live ring depth (~3s at GAME rate). */
+    fun bufferedSampleCount(): Int = synchronized(samples) { samples.size }
+
     /**
      * Immutable xyz snapshot covering one frame exposure plus the
      * rolling-shutter readout interval, in boot-time nanos. Empty when
@@ -101,6 +107,37 @@ internal class CameraMotionTracker(context: Context) : SensorEventListener {
         }
     }
 
+    /**
+     * Desktop sidecar payload for one frame: the xyz window mapped into the
+     * desktop camera frame and serialized as gyro CSV text, or null when
+     * there is nothing to write (non-realtime timestamps or an empty
+     * window). Callers skip the .csv file in that case; the desktop treats
+     * a missing file as no-gyro and falls back to the image-only path, so
+     * this never fabricates synchronization.
+     *
+     * Rotation parameters come from the capture ([sensorOrientationDeg] =
+     * CameraCharacteristics.SENSOR_ORIENTATION, [frontFacing] = lens facing);
+     * see [GyroCameraFrameMapper] for conventions and validation status.
+     */
+    fun gyroCsvForFrame(
+        timestampNanos: Long,
+        exposureNanos: Long,
+        rollingShutterSkewNanos: Long,
+        realtimeTimestamps: Boolean,
+        sensorOrientationDeg: Int,
+        frontFacing: Boolean
+    ): String? {
+        val window = gyroWindowForFrame(
+            timestampNanos, exposureNanos, rollingShutterSkewNanos, realtimeTimestamps)
+        if (window.isEmpty()) return null
+        val mapped = window.map { s ->
+            val (x, y, z) = GyroCameraFrameMapper.map(
+                s.xRadiansPerSecond, s.yRadiansPerSecond, s.zRadiansPerSecond,
+                sensorOrientationDeg, frontFacing)
+            GyroSample(s.timestampNanos, x, y, z)
+        }
+        return GyroCsvWriter.format(mapped)
+    }
     /** JVM test seam: injects one xyz sample without sensor hardware. */
     internal fun addSampleForTest(timestampNanos: Long, x: Float, y: Float, z: Float) {
         synchronized(samples) {

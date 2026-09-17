@@ -24,14 +24,18 @@ class JpegSaver(private val context: Context) {
     fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult,
              captureTimeMillis: Long = System.currentTimeMillis(),
              typeSuffix: String? = null,
-             gps: GpsLocation? = null): String {
+             gps: GpsLocation? = null,
+             // Burst folder grouping, mirrors DngSaver.save: null keeps flat.
+             subfolder: String? = null): String {
         val startedAt = SystemClock.elapsedRealtime()
         val bitmap = developed.bitmap
         val displayName = CaptureFileNames.fileName(captureTimeMillis, typeSuffix, "jpg")
+        if (subfolder != null) BurstSidecar.requireSubfolder(subfolder)
+        val relativePath = if (subfolder != null) "DCIM/RawLens/$subfolder" else "DCIM/RawLens"
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
             put(MediaStore.Images.Media.DATE_TAKEN, captureTimeMillis)
             put(MediaStore.Images.Media.ORIENTATION, exifOrientationDegrees(metadata.exifOrientation))
             put(MediaStore.Images.Media.IS_PENDING, 1)
