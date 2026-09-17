@@ -23,10 +23,7 @@ import java.util.TimeZone
 object CaptureFileNames {
     const val PREFIX = "IMG"
     const val TYPE_HDR = "HDR"
-    const val TYPE_SR = "SR"
     const val TYPE_RAW = "RAW"
-    const val TYPE_LINEAR = "LINEAR"
-    const val TYPE_MOSAIC = "MOSAIC"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -42,7 +39,7 @@ object CaptureFileNames {
 
     /**
      * Full display name. [typeSuffix] must be null/blank or `[A-Za-z0-9]+`
-     * (e.g. `HDR`, `SR`, `F00`); anything else is rejected so exposure metadata
+     * (e.g. `HDR`, `F00`); anything else is rejected so exposure metadata
      * (`-2EV`, `+`, spaces) can never leak back into file names.
      */
     fun fileName(captureTimeMillis: Long, typeSuffix: String?, extension: String): String {
@@ -64,15 +61,6 @@ object CaptureFileNames {
     fun hdrDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDR, "dng")
 
     fun hdrJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDR, "jpg")
-
-    /** Super-resolution merged output: `IMG_<ts>_SR.dng`. */
-    fun srDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_SR, "dng")
-
-    /** Linear RGB prime DNG from burst merge: `IMG_<ts>_LINEAR.dng`. */
-    fun linearRgbDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_LINEAR, "dng")
-
-    /** Mosaic SR CFA DNG from burst reconstruction: `IMG_<ts>_MOSAIC.dng`. */
-    fun mosaicSrDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_MOSAIC, "dng")
 
     /** Burst/bracket source frame: `IMG_<ts>_F00.dng`, `IMG_<ts>_F01.dng`, … */
     fun bracketDng(captureTimeMillis: Long, index: Int): String {

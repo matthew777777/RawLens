@@ -54,11 +54,6 @@ data class RawDevelopmentMemoryEstimate(
 class RawDevelopmentCoordinator(context: Context) {
     private val amaze = Gles31AmazeProcessor(context)
     private val jpegOutput = Gles31JpegOutputProcessor(context)
-    // Prompt 5A: separate instances for the merge EGL context. GL program and
-    // texture names are context-local, so the AMaZE-context instances above
-    // must never touch merge-texture work even on the same thread.
-    private val mergedDevelop = Gles31MergedDevelopProcessor(context)
-    private val mergedJpegOutput = Gles31JpegOutputProcessor(context)
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
 
     fun probe(width: Int, height: Int): AmazeCapability = amaze.probe(width, height)
@@ -188,7 +183,7 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
-    /** Develops an unclamped, normalized CFA produced by RAW HDR/SR merging. */
+    /** Develops an unclamped, normalized CFA produced by RAW HDR merging. */
     fun developMergedJpeg(
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
@@ -217,37 +212,12 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
-    /**
-     * Prompt 5A: develops the live merged camera-RGB texture straight to a
-     * JPEG-ready Bitmap without a second demosaic or repeated RAW corrections.
-     *
-     * Must run on the merge EGL context (inside
-     * `Gles31RawSrProcessor.processPacked.consume`) while [input] textures are
-     * live. Applies the reference camera-to-working-colour transform, then the
-     * confidence-weighted spatial denoise only on this JPEG path — the merged
-     * texture already carries reference fallback, and prime DNG pixels are
-     * never read here. Orientation is EXIF-carried via [input] reference
-     * metadata at save time; output pixels are never rotated.
-     */
-    fun developMergedTextureJpeg(
-        input: MergedTextureJpegInput,
-        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
-        outputSettings: JpegOutputSettings = JpegOutputSettings()
-    ): DevelopedJpeg = mergedDevelop.develop(input, settings) { scene ->
-        require(scene.internalFormat == AmazeTextureFormat.RGBA16F) {
-            "Merged develop must emit scene-linear RGBA16F"
-        }
-        mergedJpegOutput.process(scene, outputSettings)
-    }
-
     @Deprecated("Use developJpeg so output color/gainmap metadata is retained")
     fun developJpegBitmap(rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings = RawDevelopmentSettings()): Bitmap =
         developJpeg(rawPlane, metadata, settings).bitmap
 
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {
-        mergedJpegOutput.close()
-        mergedDevelop.close()
         jpegOutput.close()
         amaze.close()
         MemoryLeakDiagnostics.sample("development-coordinator-closed", expectGlReleased = true)
