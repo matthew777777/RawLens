@@ -10,10 +10,10 @@ RawLens is a photography-first, open-source Android camera built around a scene-
 - Full-resolution `RAW_SENSOR` capture saved as DNG
 - Optional RAW zero-shutter-lag capture from a bounded pre-shutter frame buffer
 - Single-frame and six-frame burst release modes
-- AUTO AE, PROGRAM shutter-first AE, ZSL RAW motion selection, and MANUAL exposure modes
+- AUTO AE, PROGRAM custom RAW-driven AE, ZSL RAW motion selection, and MANUAL exposure modes
 - Manual ISO, shutter speed, white balance, and exposure compensation
 - Auto, Center Weighted, Frame Average, and Spot AE metering
-- Dynamic exposure balance with ISO and shutter ceilings, including an automatic handheld shutter limit
+- PROGRAM custom AE: shutter-vs-ISO priority slider, center-weighted / median RAW metering, per-lens ISO/shutter min/max, ISO-lock / shutter-lock auto, brightness bias, automatic handheld shutter limit; ETTR overrides PROGRAM still exposure when converged
 - Adaptive RAW development exposure for AUTO/ZSL and adjustable PROGRAM strength, shared across bursts
 - Tap/drag focus and exposure metering targets
 - RAW-capable lens discovery and lens switching
@@ -30,11 +30,11 @@ The ZSL implementation continuously pairs full-resolution RAW images with Camera
 
 RawLens uses the Camera2 application-operated ZSL request template where the camera advertises a compatible reprocessing capability, and a direct preview-plus-RAW repeating request otherwise. If the full-resolution stream combination is rejected, does not produce paired frames, or exceeds the memory budget, capture automatically falls back to an ordinary forward RAW request.
 
-ZSL and dynamic PROGRAM exposure are mutually exclusive; MANUAL disables exposure compensation and uses the current metered pair when entered. Adaptive development exposure is independent of camera capture exposure: AUTO/ZSL use it by default, PROGRAM has a configurable strength, and MANUAL bypasses it.
+ZSL and PROGRAM custom AE are mutually exclusive; MANUAL disables exposure compensation and uses the current metered pair when entered. ETTR overrides PROGRAM still exposure when converged; otherwise PROGRAM falls back to its own RAW-measured pair. Automatic digital capture exposure is suspended under PROGRAM (sensor ISO + shutter are driven directly); JPEG development keeps its adjustable adaptive-exposure trim. Cameras without manual sensor control keep using Android AE, with PROGRAM locks and limits disabled.
 
 ## Current UI
 
-The viewfinder includes the mode switcher, RAW status, lens switcher, manual control chips, focus/exposure metering targets, histogram, guide overlays, quick controls, and shutter. Settings contains General, Denoise, Lens discovery, and About tabs. General includes JPEG output, AgX, adaptive exposure, and RAW ZSL controls. Lens discovery filters Camera2 IDs to rear-facing cameras that advertise RAW support and lets the user save a subset of those IDs.
+The viewfinder includes the mode switcher, RAW status, lens switcher, manual control chips, focus/exposure metering targets, histogram, guide overlays, quick controls, and shutter. In PROGRAM, tap an ISO/S chip for that axis's slider (Auto releases both locks); hold a chip to lock that axis and let the other adjust; hold the second locked axis to enter MANUAL. The full per-lens editor (priority slider, metering, locks, min/max bounds, brightness bias) opens from the axis sliders and Settings; ISO/shutter bounds are also linked from each lens's RAW DNG calibration editor. Settings contains General, Denoise, Lens discovery, and About tabs. General includes JPEG output, AgX, adaptive exposure, per-lens PROGRAM bounds, and RAW ZSL controls. Lens discovery filters Camera2 IDs to rear-facing cameras that advertise RAW support and lets the user save a subset of those IDs.
 
 The DNG sensor calibration editor is guided by the active camera's declared metadata. Overrides are stored per Camera2 ID and are injected into native DNG metadata without changing the RAW pixel payload. Resetting a camera returns it to device-declared defaults; undeclared tags are not offered as safe overrides.
 

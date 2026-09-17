@@ -14,7 +14,7 @@ Camera behavior varies significantly across Android devices, so camera-pipeline 
 
 The current activity is portrait-locked in the source manifest. Preview and control positioning still account for sensor/display rotation, but contributions should not assume that the activity can rotate into a separate landscape layout.
 
-The app currently supports AUTO, PROGRAM shutter-first AE, ZSL RAW motion selection, and MANUAL exposure modes; single-frame and six-frame forward capture; optional 1–30-frame ZSL output targeting up to 30 FPS; AE metering modes; OIS; adaptive development exposure; AgX JPEG controls; denoise controls; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
+The app currently supports AUTO, PROGRAM custom RAW-driven AE, ZSL RAW motion selection, and MANUAL exposure modes; single-frame and six-frame forward capture; optional 1–30-frame ZSL output targeting up to 30 FPS; AE metering modes; OIS; adaptive development exposure; AgX JPEG controls; denoise controls; per-lens PROGRAM AE profiles; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
 
 ## Pull requests
 

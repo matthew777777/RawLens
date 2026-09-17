@@ -2,6 +2,20 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [Unreleased]
+
+### Added
+
+- PROGRAM custom RAW-driven AE: center-weighted / median metering sets sensor ISO + shutter live (AE_OFF), replacing the hardware-AE rebalance
+- Shutter-vs-ISO priority slider (0=ISO priority … 0.5=balanced … 1=shutter priority)
+- Per-lens PROGRAM profiles (metering, ISO/shutter min/max, locks, balance, brightness bias) with migration from legacy global ceilings
+- ISO-lock (shutter auto) and shutter-lock (ISO auto) single-axis modes
+- PROGRAM brightness bias (default +0.5 EV) against stock + spektra underexposure
+- Viewfinder PROGRAM editor via ISO/S chips; ETTR overrides PROGRAM still exposure when converged
+- Chip contract: hold ISO/SHUTTER to lock, tap for slider, slider Auto releases both, lock-both enters MANUAL seeded from live pair
+- Synchronous per-lens profile load on active-camera change; PROGRAM bounds linked from each lens's calibration editor
+- No-manual-sensor cameras keep Android AE with locks/limits disabled and explanatory copy
+
 ## [1.0.0] - 2026-08-31
 
 ### Added
