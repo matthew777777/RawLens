@@ -72,6 +72,40 @@ internal object AutoExposureBalance {
         limits, lockMode, lockedIso, lockedShutterNanos
     )
 
+    /**
+     * One glide step in log-energy from [current] toward [target], capped at
+     * [maxStepEv] per tick; snaps to target inside [snapEv]. Pure stepping so the
+     * exposure glides instead of jumping between metering updates.
+     */
+    fun rampStepEnergy(current: Double, target: Double, maxStepEv: Double, snapEv: Double): Double {
+        if (current <= 0.0 || target <= 0.0) return target
+        val remaining = ln(target / current) / ln(2.0)
+        if (kotlin.math.abs(remaining) < snapEv) return target
+        return current * 2.0.pow(remaining.coerceIn(-maxStepEv, maxStepEv))
+    }
+
+    /**
+     * Ratio-preserving energy split for the glide: holds the target's ISO/shutter
+     * character (gain vs motion-blur tradeoff) while energy moves toward it.
+     */
+    fun splitEnergyRatio(
+        energy: Double,
+        targetIso: Int,
+        targetShutterNanos: Long,
+        limits: ExposureBalanceLimits
+    ): Pair<Int, Long> {
+        val ratio = targetIso.toDouble() / targetShutterNanos.coerceAtLeast(1L).toDouble()
+        val safeEnergy = energy.coerceAtLeast(1.0)
+        var shutter = kotlin.math.sqrt(safeEnergy / ratio)
+            .coerceIn(limits.shutterMinNanos.toDouble(), limits.shutterMaxNanos.toDouble())
+        var iso = (safeEnergy / shutter)
+            .coerceIn(limits.isoMin.toDouble(), limits.isoMax.toDouble())
+        shutter = (safeEnergy / iso)
+            .coerceIn(limits.shutterMinNanos.toDouble(), limits.shutterMaxNanos.toDouble())
+        return iso.roundToInt().coerceIn(limits.isoMin, limits.isoMax) to
+            shutter.toLong().coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
+    }
+
     private fun applyInternal(
         energy: Double,
         multiplier: Float,

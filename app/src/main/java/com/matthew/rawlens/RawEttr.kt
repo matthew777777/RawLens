@@ -275,13 +275,15 @@ internal object RawEttrMeter {
  * reconstruction-allowance gain search (bins, measured-saturated counts, totals,
  * all in canonical R/Gr/Gb/B order). [centerWeightedGreen] is the pooled-green
  * spatial mean weighted toward the frame center (mirrors center-weighted AE zones);
- * NaN when no green samples were taken. */
+ * [spotGreen] is the pooled-green mean over the small center spot (mirrors the SPOT
+ * AE region); both are NaN when no green samples were taken. */
 class EttrRawSample(
     val levels: EttrChannelLevels,
     val bins: Array<IntArray>,
     val saturated: IntArray,
     val totals: IntArray,
-    val centerWeightedGreen: Float = Float.NaN
+    val centerWeightedGreen: Float = Float.NaN,
+    val spotGreen: Float = Float.NaN
 )
 
 /**
@@ -296,9 +298,35 @@ class EttrRawSample(
  */
 object RawEttrSampler {
     const val BIN_COUNT = 256
+    /** Center-spot scale for PROGRAM spot metering; mirrors the hardware SPOT region. */
+    const val SPOT_SCALE = 0.158
     private const val TARGET_BLOCKS = 32_000
+    /** Sparse PROGRAM-only density; ETTR-grade tails keep full density. */
+    private const val TARGET_BLOCKS_PROGRAM = 4_000
 
-    fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? {
+    fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
+        sampleGrid(image, characteristics, TARGET_BLOCKS * 4)
+
+    /**
+     * Sparse metering for PROGRAM alone (~4k blocks): means need far fewer pixels
+     * than ETTR's 99.9th-percentile tail and clip band, so the PROGRAM-only loop
+     * costs a fraction of a full sample.
+     */
+    fun sampleProgram(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
+        sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4)
+
+    /**
+     * Systematic pixel-grid sampler shared by the full and sparse paths. The hot loop
+     * performs zero divisions and zero virtual calls per pixel: black floors,
+     * reciprocal ranges and CFA channels are 4-entry phase LUTs, and spatial zones
+     * come from precomputed column/row tables. Rows advance sequentially for cache
+     * locality across the ~25 MB Bayer buffer.
+     */
+    private fun sampleGrid(
+        image: Image,
+        characteristics: CameraCharacteristics,
+        targetPixels: Int
+    ): EttrRawSample? {
         val plane = image.planes.singleOrNull() ?: return null
         if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -307,45 +335,62 @@ object RawEttrSampler {
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
         val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.coerceAtLeast(1) ?: return null
+        val width = image.width
+        val height = image.height
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val limit = buffer.limit()
+        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
+        val invLut = FloatArray(4) { i -> invRange(white, blackLut[i]) }
+        val channelLut = phaseChannelLut(cfa)
         val bins = Array(4) { IntArray(BIN_COUNT) }
         val saturated = IntArray(4)
         val totals = IntArray(4)
         var weightedGreenSum = 0.0
         var weightedGreenWeight = 0.0
-        val blocksWide = image.width / 2
-        val blocksHigh = image.height / 2
-        val blockStep = kotlin.math.sqrt(
-            (blocksWide.toLong() * blocksHigh / TARGET_BLOCKS.toDouble()).coerceAtLeast(1.0)
+        var spotGreenSum = 0.0
+        var spotGreenCount = 0L
+        val step = kotlin.math.sqrt(
+            (width.toLong() * height / targetPixels.toDouble()).coerceAtLeast(1.0)
         ).toInt().coerceAtLeast(1)
+        val colCount = (width + step - 1) / step
+        val colZone = DoubleArray(colCount) { i -> zoneCoord((i * step).coerceAtMost(width - 1), width) }
 
-        var blockY = 0
-        while (blockY < blocksHigh) {
-            var blockX = 0
-            while (blockX < blocksWide) {
-                for (dy in 0..1) for (dx in 0..1) {
-                    val x = blockX * 2 + dx
-                    val y = blockY * 2 + dy
-                    val offset = y * plane.rowStride + x * plane.pixelStride
-                    if (offset + 1 >= buffer.limit()) continue
+        var y = 0
+        while (y < height) {
+            val nyZone = zoneCoord(y, height)
+            val phaseRow = (y and 1) shl 1
+            var xi = 0
+            var x = 0
+            while (x < width) {
+                val phase = phaseRow or (x and 1)
+                val offset = y * rowStride + x * pixelStride
+                if (offset + 1 < limit) {
                     val value = buffer.getShort(offset).toInt() and 0xffff
-                    val floor = black?.getOffsetForIndex(x, y) ?: 0
-                    val normalized = ((value - floor).coerceAtLeast(0).toDouble() /
-                        (white - floor).coerceAtLeast(1))
-                        .coerceIn(0.0, 1.0)
-                    val channel = channelAt(cfa, x and 1, y and 1)
+                    val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
+                        .coerceIn(0f, 1f)
+                    val channel = channelLut[phase]
                     if (value >= white) saturated[channel]++
                     bins[channel][(normalized * (BIN_COUNT - 1)).toInt()]++
                     totals[channel]++
                     if (channel == 1 || channel == 2) {
-                        val weight = centerWeight(x, y, image.width, image.height)
+                        // One table lookup serves both the center-weighted mean and
+                        // the spot mean; no coordinate math remains in the loop.
+                        val zone = maxOf(colZone[xi], nyZone)
+                        val weight = weightForZone(zone)
                         weightedGreenSum += weight * normalized
                         weightedGreenWeight += weight
+                        if (zone <= SPOT_SCALE) {
+                            spotGreenSum += normalized
+                            spotGreenCount++
+                        }
                     }
                 }
-                blockX += blockStep
+                xi++
+                x += step
             }
-            blockY += blockStep
+            y += step
         }
         if (totals.any { it == 0 }) return null
         // Bins are stored in canonical order (R=0, Gr=1, Gb=2, B=3); channelAt()
@@ -359,7 +404,28 @@ object RawEttrSampler {
         val centerWeightedGreen = if (weightedGreenWeight > 0.0) {
             (weightedGreenSum / weightedGreenWeight).toFloat().coerceIn(0f, 1f)
         } else Float.NaN
-        return EttrRawSample(levels, bins, saturated, totals, centerWeightedGreen)
+        val spotGreen = if (spotGreenCount > 0) {
+            (spotGreenSum / spotGreenCount).toFloat().coerceIn(0f, 1f)
+        } else Float.NaN
+        return EttrRawSample(levels, bins, saturated, totals, centerWeightedGreen, spotGreen)
+    }
+
+    /** Canonical 2x2 Bayer-phase channels for one CFA layout; index is `(y&1)*2+(x&1)`. */
+    internal fun phaseChannelLut(cfa: Int): IntArray =
+        IntArray(4) { i -> channelAt(cfa, i % 2, i / 2) }
+
+    /** Reciprocal normalization range so the hot loop multiplies instead of dividing. */
+    internal fun invRange(whiteLevel: Int, blackFloor: Int): Float =
+        1f / (whiteLevel - blackFloor).coerceAtLeast(1)
+
+    /** Normalized sample level 0..1 without branching into framework accessors. */
+    internal fun normalizeSample(value: Int, blackFloor: Int, invRange: Float): Float =
+        ((value - blackFloor).coerceAtLeast(0) * invRange).coerceIn(0f, 1f)
+
+    /** Chebyshev half-extent from the frame center in 0..1 (1 at the frame edge). */
+    internal fun zoneCoord(v: Int, size: Int): Double {
+        if (size <= 0) return 1.0
+        return kotlin.math.abs((v + 0.5) / size * 2.0 - 1.0)
     }
 
     /**
@@ -383,18 +449,23 @@ object RawEttrSampler {
      * zones (nested 20/45/70% rectangles, innermost strongest). Chebyshev distance
      * keeps the zones rectangular like [centeredMeteringRectangle].
      */
-    fun centerWeight(x: Int, y: Int, width: Int, height: Int): Double {
-        if (width <= 0 || height <= 0) return 1.0
-        val nx = kotlin.math.abs((x + 0.5) / width * 2.0 - 1.0)
-        val ny = kotlin.math.abs((y + 0.5) / height * 2.0 - 1.0)
-        val zone = maxOf(nx, ny)
-        return when {
-            zone <= 0.20 -> 500.0
-            zone <= 0.45 -> 300.0
-            zone <= 0.70 -> 200.0
-            else -> 50.0
-        }
+    fun centerWeight(x: Int, y: Int, width: Int, height: Int): Double =
+        weightForZone(maxOf(zoneCoord(x, width), zoneCoord(y, height)))
+
+    private fun weightForZone(zone: Double): Double = when {
+        zone <= 0.20 -> 500.0
+        zone <= 0.45 -> 300.0
+        zone <= 0.70 -> 200.0
+        else -> 50.0
     }
+
+    /**
+     * True inside the small center spot used for PROGRAM spot metering. Same scale
+     * as the hardware SPOT region (0.158 of the frame), Chebyshev distance keeping
+     * it rectangular like [centeredMeteringRectangle].
+     */
+    fun isSpot(x: Int, y: Int, width: Int, height: Int): Boolean =
+        maxOf(zoneCoord(x, width), zoneCoord(y, height)) <= SPOT_SCALE
 
     /** Canonical channel order R=0, Gr=1, Gb=2, B=3 for every CFA layout. */
     private fun channelAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB ->

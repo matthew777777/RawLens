@@ -21,11 +21,14 @@ enum class ProgramLockMode {
 /** RAW metering statistic for PROGRAM custom AE. Center-weighted mirrors the AE regions. */
 enum class ProgramMetering {
     CENTER_WEIGHTED,
-    MEDIAN;
+    AVERAGE,
+    SPOT;
 
     companion object {
         fun fromName(name: String?): ProgramMetering =
-            values().firstOrNull { it.name == name } ?: CENTER_WEIGHTED
+            values().firstOrNull { it.name == name }
+                // v2 stored MEDIAN, which became AVERAGE.
+                ?: (if (name == "MEDIAN") AVERAGE else CENTER_WEIGHTED)
     }
 }
 
@@ -36,10 +39,10 @@ enum class ProgramMetering {
  * not digital gain. [balance] 0..1 maps to the internal 0.25x..4x multiplier
  * (0 = ISO priority / lower gain, 0.5 = balanced, 1 = shutter priority / faster shutter).
  * Zero bounds mean "sensor bound" (or auto-safe handheld for [shutterMaxNanos]).
- * [evBias] compensates stock Android + spektra underexposure (default slightly bright).
+ * [evBias] trims the mid-gray target up/down; default is neutral (0.0 EV).
  */
 data class ProgramAeProfile(
-    val balance: Float = 0.5f,
+    val balance: Float = 0f,
     val isoMin: Int = 0,
     val isoMax: Int = 0,
     val shutterMinNanos: Long = 0L,
@@ -48,7 +51,7 @@ data class ProgramAeProfile(
     val lockMode: ProgramLockMode = ProgramLockMode.NONE,
     val lockedIso: Int = 0,
     val lockedShutterNanos: Long = 0L,
-    val evBias: Float = 0.5f,
+    val evBias: Float = 0f,
     val metering: ProgramMetering = ProgramMetering.CENTER_WEIGHTED
 ) {
     fun validated(): ProgramAeProfile {
@@ -111,7 +114,7 @@ data class ProgramAeProfile(
                     Regex("\"$key\"\\s*:\\s*(true|false)")
                         .find(json)?.groupValues?.getOrNull(1)?.toBoolean() ?: default
                 ProgramAeProfile(
-                    balance = number("balance")?.toFloatOrNull() ?: 0.5f,
+                    balance = number("balance")?.toFloatOrNull() ?: 0f,
                     isoMin = number("isoMin")?.toDoubleOrNull()?.toInt() ?: 0,
                     isoMax = number("isoMax")?.toDoubleOrNull()?.toInt() ?: 0,
                     shutterMinNanos = number("shutterMinNanos")?.toDoubleOrNull()?.toLong() ?: 0L,
@@ -120,7 +123,7 @@ data class ProgramAeProfile(
                     lockMode = ProgramLockMode.fromName(text("lockMode")),
                     lockedIso = number("lockedIso")?.toDoubleOrNull()?.toInt() ?: 0,
                     lockedShutterNanos = number("lockedShutterNanos")?.toDoubleOrNull()?.toLong() ?: 0L,
-                    evBias = number("evBias")?.toFloatOrNull() ?: 0.5f,
+                    evBias = number("evBias")?.toFloatOrNull() ?: 0f,
                     metering = ProgramMetering.fromName(text("metering"))
                 ).validated()
             }.getOrNull() ?: ProgramAeProfile()
@@ -137,7 +140,7 @@ data class ProgramAeProfile(
                 shutterMaxNanos = shutterLimitNanos,
                 useAutoSafeShutter = useAutoSafeShutter,
                 lockMode = ProgramLockMode.NONE,
-                evBias = 0.5f
+                evBias = 0f
             ).validated()
     }
 }
@@ -162,6 +165,6 @@ class ProgramAeProfileStore(context: Context) {
     private fun key(cameraId: String) = "profile_$cameraId"
 
     companion object {
-        const val PREFS_NAME = "rawlens_program_ae"
+        const val PREFS_NAME = "rawlens_program_ae_v2"
     }
 }
