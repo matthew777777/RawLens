@@ -108,13 +108,33 @@ class ProgramAeSolverTest {
     }
 
     @Test
+    fun isoPriorityNeverUsesMoreGainThanNeutral() {
+        // Across the whole energy range, balance 0.0 must hold the shutter at least
+        // as long and the ISO at most as high as neutral 0.5 (clamp-backs may equalize).
+        var energy = 100.0 * 500_000L
+        while (energy <= 6400.0 * 66_000_000L) {
+            val prio = AutoExposureBalance.applyProgramEnergy(energy, 0f, limits)
+            val neutral = AutoExposureBalance.applyProgramEnergy(energy, 0.5f, limits)
+            assertTrue(
+                "energy=$energy prio iso=${prio.iso} neutral iso=${neutral.iso}",
+                prio.iso <= neutral.iso
+            )
+            assertTrue(
+                "energy=$energy prio shutter=${prio.shutterNanos} neutral=${neutral.shutterNanos}",
+                prio.shutterNanos >= neutral.shutterNanos
+            )
+            energy *= 1.5
+        }
+    }
+
+    @Test
     fun profileJsonRoundTrips() {
         val profile = ProgramAeProfile(
             balance = 0.7f, isoMin = 100, isoMax = 1600,
             shutterMinNanos = 2_000_000L, shutterMaxNanos = 33_000_000L,
             useAutoSafeShutter = false, lockMode = ProgramLockMode.SHUTTER_LOCK,
             lockedIso = 0, lockedShutterNanos = 10_000_000L, evBias = 0.7f,
-            metering = ProgramMetering.MEDIAN
+            metering = ProgramMetering.AVERAGE
         )
         assertEquals(profile, ProgramAeProfile.fromJson(profile.toJson()))
     }
@@ -125,5 +145,45 @@ class ProgramAeSolverTest {
         assertEquals(0.5f, migrated.balance, 0.02f)
         assertEquals(1600, migrated.isoMax)
         assertEquals(33_000_000L, migrated.shutterMaxNanos)
+    }
+
+    @Test
+    fun rampStepMovesTowardTargetWithinCap() {
+        // +2 EV demand with a 1/6-stop cap: one tick moves exactly the cap.
+        val stepped = AutoExposureBalance.rampStepEnergy(1000.0, 4000.0, 1.0 / 6.0, 1.0 / 24.0)
+        assertEquals(1000.0 * Math.pow(2.0, 1.0 / 6.0), stepped, 1e-6)
+        // Darkening mirrors it.
+        val down = AutoExposureBalance.rampStepEnergy(4000.0, 1000.0, 1.0 / 6.0, 1.0 / 24.0)
+        assertEquals(4000.0 / Math.pow(2.0, 1.0 / 6.0), down, 1e-6)
+    }
+
+    @Test
+    fun rampStepSnapsInsideDeadband() {
+        assertEquals(
+            2000.0,
+            AutoExposureBalance.rampStepEnergy(2000.0 * Math.pow(2.0, 1.0 / 48.0), 2000.0, 1.0 / 6.0, 1.0 / 24.0),
+            1e-9
+        )
+        // Degenerate input cannot step, so it yields the target directly.
+        assertEquals(2000.0, AutoExposureBalance.rampStepEnergy(0.0, 2000.0, 1.0 / 6.0, 1.0 / 24.0), 0.0)
+    }
+
+    @Test
+    fun rampSplitPreservesTargetRatioInsideLimits() {
+        // Target ISO 400 @ 10 ms; half energy must keep the 40 ISO/ms character.
+        val (iso, shutter) = AutoExposureBalance.splitEnergyRatio(
+            400.0 * 10_000_000L / 2, 400, 10_000_000L, limits
+        )
+        assertEquals(400.0 / 10_000_000L, iso.toDouble() / shutter, 0.05 * 400.0 / 10_000_000L)
+        assertEquals(400.0 * 10_000_000L / 2, iso.toDouble() * shutter, 0.05 * 400.0 * 10_000_000L)
+    }
+
+    @Test
+    fun rampSplitRespectsLimits() {
+        val (iso, shutter) = AutoExposureBalance.splitEnergyRatio(
+            6400.0 * 66_000_000L * 4, 6400, 66_000_000L, limits
+        )
+        assertEquals(6400, iso)
+        assertEquals(66_000_000L, shutter)
     }
 }
