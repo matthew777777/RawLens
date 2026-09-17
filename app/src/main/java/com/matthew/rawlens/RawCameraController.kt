@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executor
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 enum class ManualControl { ISO, SHUTTER, WHITE_BALANCE, FOCUS_DISTANCE, EXPOSURE_COMPENSATION }
 
@@ -132,6 +133,16 @@ class RawCameraController(
     private val writer = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_QUEUED_SAVES)
     )
+    // Metering sampler worker: full-resolution Bayer sampling costs hundreds of ms on
+    // some sensors and must never run on the camera handler (see dispatchMeteringSample).
+    // Below-normal priority so it never contends with acquisition, pairing, or saves.
+    private val meteringExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "RawLensMetering").apply {
+            isDaemon = true
+            priority = Thread.NORM_PRIORITY - 1
+        }
+    }
+    private val meteringInFlight = AtomicBoolean(false)
     @Volatile private var rawDeveloper: RawDevelopmentCoordinator? = null
     private val pendingImages = ConcurrentHashMap<Long, Image>()
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
@@ -180,9 +191,18 @@ class RawCameraController(
     private var programStreaming = false
     private var lastProgramUpdateMs = Long.MIN_VALUE
     private var programBrightness = Float.NaN
+    /** EMA of sampled brightness; single-sample noise must not yank the target. */
+    private var programBrightnessEma = Float.NaN
     private var programConverged = false
-    private var programPushedIso: Int? = null
-    private var programPushedShutterNanos: Long? = null
+    // Glide target: the solver output the applied pair (dynamicIso/dynamicShutterNanos)
+    // eases toward in ~1/6 EV steps, so exposure moves continuously like stock AE.
+    private var programTargetIso: Int? = null
+    private var programTargetShutterNanos: Long? = null
+    private var programTargetLimits: ExposureBalanceLimits? = null
+    private var programTargetLockMode: ProgramLockMode = ProgramLockMode.NONE
+    private var programTargetLockedIso: Int = 0
+    private var programTargetLockedShutterNanos: Long = 0L
+    private var programRampCallback: Runnable? = null
     // RAW-based ETTR single-exposure state. The repeating preview keeps running under
     // hardware AE; every sampled RAW frame refreshes this pair, which the next still
     // capture (and HDR bracket base) uses instead of the Camera2 meter.
@@ -473,9 +493,13 @@ class RawCameraController(
                                 image.close()
                                 continue
                             }
-                            if (ettrStreaming || programStreaming) updateCustomAeFromRaw(image, cameraCharacteristics)
+                            // Histogram sampling is small (~8k blocks) and stays inline.
+                            // AE metering (~32k blocks, hundreds of ms on some sensors)
+                            // runs on the metering executor: blocking the camera handler
+                            // here stalls RAW acquisition and the HAL backpressures the
+                            // whole preview pipeline down to ~1 fps.
                             if (rawHistogramStreaming) publishRawHistogramIfDue(image, cameraCharacteristics)
-                            image.close()
+                            dispatchMeteringSample(image, cameraCharacteristics)
                             continue
                         }
                         if (activeFramesRemaining.get() <= 0) {
@@ -851,12 +875,141 @@ class RawCameraController(
         activeFramesRemaining.set(0)
 
         onState("SAVING ZSL ×${selected.size}")
+        // One shared stem so the burst's DNGs/JPEGs (DCIM/RawLens/<stem>)
+        // and gyro CSVs/burst.json sort together. With a granted photo-folder
+        // Uri (Settings → General → sidecars) the sidecars land next to the
+        // DNGs via SAF; otherwise scoped storage forces the Downloads split
+        // (Download/RawLens/<stem>, copied next to the DNGs for import).
+        // Gyro windows are snapshotted synchronously here (the motion ring
+        // holds ~3s; writer jobs run later), while file names stay
+        // deterministic so the sidecar matches whatever actually finishes.
+        val stemMillis = System.currentTimeMillis()
+        val stem = CaptureFileNames.stem(stemMillis)
+        val sidecar = snapshotBurstSidecar(selected, stemMillis, stem)
         selected.forEachIndexed { index, frame ->
-            saveRawFrame(frame.image, frame.result, "ZSL ${index + 1}/${selected.size}")
+            val suffix = "F%02d".format(index)
+            saveRawFrame(frame.image, frame.result, "ZSL ${index + 1}/${selected.size}",
+                captureTimeMillis = stemMillis, fileNameSuffix = suffix, subfolder = stem)
+        }
+        // Best-effort and last: sidecar failures must never fail the burst
+        // (the DNGs above are already safe in the queue).
+        if (sidecar != null) {
+            try {
+                val tree = SidecarTreeAccess.savedTreeUri(context)
+                if (tree != null && SidecarTreeAccess.hasWriteAccess(context, tree)) {
+                    try {
+                        SidecarTreeAccess.writeViaTree(
+                            context, tree, stem, sidecar.metaJson, sidecar.gyroCsvByName)
+                        Log.i(LOG_TAG, "Burst sidecar written same-folder " +
+                            "DCIM/RawLens/$stem frames=${sidecar.frameCount}")
+                    } catch (treeFailure: Exception) {
+                        Log.w(LOG_TAG, "Same-folder sidecar failed; falling back to Downloads", treeFailure)
+                        BurstSidecar.writeFiles(context, stem, sidecar.metaJson, sidecar.gyroCsvByName)
+                        Log.i(LOG_TAG, "Burst sidecar written dir=${BurstSidecar.sidecarDir(stem)} " +
+                            "dngs=DCIM/RawLens/$stem frames=${sidecar.frameCount}")
+                    }
+                } else {
+                    BurstSidecar.writeFiles(context, stem, sidecar.metaJson, sidecar.gyroCsvByName)
+                    Log.i(LOG_TAG, "Burst sidecar written dir=${BurstSidecar.sidecarDir(stem)} " +
+                        "dngs=DCIM/RawLens/$stem frames=${sidecar.frameCount}")
+                }
+            } catch (failure: Exception) {
+                Log.e(LOG_TAG, "Burst sidecar write failed (DNGs unaffected)", failure)
+            }
         }
         finishCapture()
         publishRawZslStatus()
         return true
+    }
+
+    /** Preassembled sidecar payload: meta JSON plus CSV text by file name. */
+    private data class BurstSidecarPayload(
+        val metaJson: String,
+        val gyroCsvByName: Map<String, String>,
+        val frameCount: Int
+    )
+
+    /**
+     * Snapshots gyro windows + per-frame timing/ISO and renders burst.json.
+     * Returns null (caller skips sidecars, DNGs save exactly as legacy)
+     * when the burst cannot be described coherently: missing characteristics
+     * (no axis mapping or intrinsics), missing ISO/exposure on any frame,
+     * or no usable gyro on every frame (a burst with zero gyro windows
+     * carries no sync value; desktop treats missing files as no-gyro).
+     */
+    private fun snapshotBurstSidecar(
+        selected: List<BufferedRawFrame>,
+        stemMillis: Long,
+        stem: String
+    ): BurstSidecarPayload? {
+        if (selected.size < 2) {
+            Log.w(LOG_TAG, "Burst sidecar skipped: ${selected.size} frame(s), need 2+")
+            return null
+        }
+        val c = characteristics
+        if (c == null) {
+            Log.w(LOG_TAG, "Burst sidecar skipped: no camera characteristics")
+            return null
+        }
+        val sensorDeg = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val front = c.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        data class Row(val file: String, val ts: Long, val exp: Long, val skew: Long, val iso: Int, val csv: String?)
+        val rows = ArrayList<Row>(selected.size)
+        selected.forEachIndexed { index, frame ->
+            val iso = frame.result.get(CaptureResult.SENSOR_SENSITIVITY)?.takeIf { it > 0 }
+            if (iso == null) {
+                Log.w(LOG_TAG, "Burst sidecar skipped: frame $index missing ISO")
+                return null
+            }
+            if (frame.exposureNanos <= 0L || frame.rollingShutterSkewNanos < 0L) {
+                Log.w(LOG_TAG, "Burst sidecar skipped: frame $index bad timing " +
+                    "exp=${frame.exposureNanos} skew=${frame.rollingShutterSkewNanos}")
+                return null
+            }
+            val file = CaptureFileNames.fileName(stemMillis, "F%02d".format(index), "dng")
+            val csv = try {
+                motionTracker.gyroCsvForFrame(
+                    frame.timestampNanos, frame.exposureNanos,
+                    frame.rollingShutterSkewNanos, rawZslRealtimeTimestamps,
+                    sensorDeg, front)
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+            rows.add(Row(file, frame.timestampNanos, frame.exposureNanos,
+                frame.rollingShutterSkewNanos, iso, csv))
+        }
+        if (rows.none { it.csv != null }) {
+            Log.w(LOG_TAG, "Burst sidecar skipped: no gyro windows " +
+                "(trackerRunning=${motionTracker.isRunning()} " +
+                "buffered=${motionTracker.bufferedSampleCount()} " +
+                "realtimeTs=$rawZslRealtimeTimestamps)")
+            return null
+        }
+        val first = selected.first()
+        val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+        val phys = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val intrinsics = BurstSidecar.intrinsicsOrNull(
+            focal, phys?.width, phys?.height,
+            first.image.width, first.image.height, activeOutputOrientation)
+        val gyroByName = LinkedHashMap<String, String>()
+        val metas = rows.map { r ->
+            val gyroFile = r.csv?.let {
+                val name = BurstSidecar.gyroFileName(r.file)
+                gyroByName[name] = it
+                name
+            }
+            BurstSidecar.FrameMeta(r.file, r.ts, r.exp, r.skew, r.iso, gyroFile)
+        }
+        val json = BurstSidecar.buildMetaJson(
+            burstName = stem, sensorOrientationDeg = sensorDeg, frontFacing = front,
+            deviceOrientationDeg = deviceOrientationDegrees,
+            exifOrientation = activeOutputOrientation,
+            intrinsics = intrinsics, frames = metas)
+        val gyroFrames = gyroByName.size
+        Log.i(LOG_TAG, "Burst sidecar ready stem=$stem frames=${metas.size} " +
+            "gyro=$gyroFrames/${metas.size} intrinsics=${intrinsics != null}")
+        return BurstSidecarPayload(json, gyroByName, metas.size)
     }
 
     private fun captureFrames(
@@ -1269,10 +1422,13 @@ class RawCameraController(
         // the next sampled RAW frame reconverges from the current sensor exposure.
         dynamicIso = null
         dynamicShutterNanos = null
-        programPushedIso = null
-        programPushedShutterNanos = null
+        cancelProgramRampTick()
+        programTargetIso = null
+        programTargetShutterNanos = null
+        programTargetLimits = null
         programConverged = false
         programBrightness = Float.NaN
+        programBrightnessEma = Float.NaN
         lastProgramUpdateMs = Long.MIN_VALUE
         cancelDynamicExposureProbe()
         updateRepeatingRequest()
@@ -1313,44 +1469,90 @@ class RawCameraController(
             ettrIso != null && ettrShutterNanos != null
 
     /**
-     * Shared RAW sampling for the custom-AE loops. One full-resolution Bayer sample
-     * feeds both PROGRAM (mid-tone target) and ETTR (highlight target) so the two
-     * loops never triple-sample the same frame. PROGRAM always updates first so an
-     * active ETTR override uses the PROGRAM live pair as its baseline instead of
-     * fighting stock hardware AE.
+     * Dispatches one shared metering sample for the custom-AE loops. The caller is the
+     * camera-thread ImageReader drain: it only decides *whether* a sample is due and
+     * hands the frame over. Heavy Bayer sampling runs on [meteringExecutor] and the
+     * resulting pair is applied back on the camera thread, so metering can never
+     * stall RAW acquisition (a ~300 ms sample at 2 Hz used to occupy most of the
+     * camera handler and backpressure the HAL into ~1 fps preview).
+     *
+     * At most one sample is ever in flight: while the executor is busy, frames are
+     * closed immediately instead of queueing, bounding held gralloc buffers to one.
+     * Stale results (lens switch, mode change, stop) are dropped by generation.
      */
-    private fun updateCustomAeFromRaw(image: Image, cameraCharacteristics: CameraCharacteristics) {
-        if (captureInProgress.get()) return
+    private fun dispatchMeteringSample(image: Image, cameraCharacteristics: CameraCharacteristics) {
+        if (captureInProgress.get()) {
+            image.close()
+            return
+        }
         val now = SystemClock.elapsedRealtime()
-        val wantProgram = programCustomActive()
+        val wantProgram = programCustomActive() && !ettrCaptureActive()
         val wantEttr = ettrSettings.enabled && selectedIso == null && selectedExposureNanos == null &&
             captureExposureMode != CaptureExposureMode.MANUAL
-        if (!wantProgram && !wantEttr) return
-        val programDue = wantProgram &&
-            RawHistogramThrottle.shouldSample(now, lastProgramUpdateMs, PROGRAM_UPDATE_INTERVAL_MS)
-        val ettrDue = wantEttr &&
-            RawHistogramThrottle.shouldSample(now, lastEttrUpdateMs, ETTR_UPDATE_INTERVAL_MS)
-        if (!programDue && !ettrDue) return
-        val sample = RawEttrSampler.sample(image, cameraCharacteristics) ?: return
-        if (programDue) {
-            lastProgramUpdateMs = now
-            updateProgramFromSample(sample)
+        if (!wantProgram && !wantEttr) {
+            image.close()
+            return
         }
-        if (ettrDue) {
-            lastEttrUpdateMs = now
-            updateEttrFromSample(sample)
+        val programDue = wantProgram &&
+            RawHistogramThrottle.shouldSample(
+                now, lastProgramUpdateMs,
+                if (programConverged) PROGRAM_CONVERGED_INTERVAL_MS else PROGRAM_UPDATE_INTERVAL_MS
+            )
+        val ettrDue = wantEttr &&
+            RawHistogramThrottle.shouldSample(
+                now, lastEttrUpdateMs,
+                if (ettrConverged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS
+            )
+        if ((!programDue && !ettrDue) || !meteringInFlight.compareAndSet(false, true)) {
+            image.close()
+            return
+        }
+        if (programDue) lastProgramUpdateMs = now
+        if (ettrDue) lastEttrUpdateMs = now
+        val generation = lifecycleGeneration
+        try {
+        meteringExecutor.execute {
+            try {
+                val sampleStartMs = SystemClock.elapsedRealtime()
+                // ETTR needs full-density tails; PROGRAM alone is served by the
+                // sparse path, which shares one sample when both loops are due.
+                val sample = if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
+                else RawEttrSampler.sampleProgram(image, cameraCharacteristics)
+                    val sampleMs = SystemClock.elapsedRealtime() - sampleStartMs
+                    if (sampleMs > SICK_SAMPLE_LOG_MS) {
+                        Log.w(LOG_TAG, "Slow RAW metering sample: ${sampleMs}ms (image ${image.width}x${image.height})")
+                    }
+                    if (sample != null) {
+                        cameraHandler.post {
+                            if (generation == lifecycleGeneration && running && !destroyed) {
+                                if (programDue) updateProgramFromSample(sample)
+                                if (ettrDue) updateEttrFromSample(sample)
+                            }
+                        }
+                    }
+                } finally {
+                    runCatching { image.close() }
+                    meteringInFlight.set(false)
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            meteringInFlight.set(false)
+            runCatching { image.close() }
         }
     }
 
     /**
-     * One PROGRAM custom-AE iteration: RAW brightness (center-weighted mean or median
-     * per profile) vs biased mid-gray target gives an EV shift; the closed-loop energy
+     * One PROGRAM custom-AE iteration: RAW brightness (center/average/spot per
+     * profile) vs biased mid-gray target gives an EV shift; the closed-loop energy
      * is redistributed by balance/limits/locks directly into sensor ISO + shutter.
      * The repeating preview runs AE_OFF with this pair (see applyCameraControls),
      * so the next sample closes the loop.
+     *
+     * Runs on the camera thread; callers must sample off-thread (see
+     * [dispatchMeteringSample]) and post the result here.
      */
     private fun updateProgramFromSample(sample: EttrRawSample) {
-        if (!programCustomActive()) return
+        if (!programCustomActive() || ettrCaptureActive()) return
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
@@ -1360,9 +1562,21 @@ class RawCameraController(
         val baselineShutter = dynamicShutterNanos ?: lastExposureNanos
         if (baselineIso <= 0 || baselineShutter <= 0L) return
         val brightness = RawProgramMeter.brightness(sample, profile.metering)
-        programBrightness = brightness
-        val shift = RawProgramMeter.correctionEv(brightness, profile.evBias)
+        programBrightnessEma = if (programBrightnessEma.isFinite()) {
+            (PROGRAM_EMA_ALPHA * brightness + (1.0 - PROGRAM_EMA_ALPHA) * programBrightnessEma)
+                .toFloat().coerceIn(0f, 1f)
+        } else brightness
+        programBrightness = programBrightnessEma
+        val shift = RawProgramMeter.guardShiftEv(
+            RawProgramMeter.correctionEv(
+                programBrightnessEma, profile.evBias,
+                RawProgramMeter.PROGRAM_MAX_STEP_EV
+            ),
+            sample.levels.hottest
+        )
         val baselineEnergy = baselineIso.toDouble() * baselineShutter
+        // Small capped steps only (PROGRAM_MAX_STEP_EV): the ramp below owns
+        // smoothness, so the full measured nudge becomes the glide target.
         val targetEnergy = baselineEnergy * 2.0.pow(shift)
         val (lockedIsoEff, lockedShutterEff) = resolveProgramLockedValues(
             profile, limits, baselineIso, baselineShutter
@@ -1375,14 +1589,100 @@ class RawCameraController(
             lockedIsoEff,
             lockedShutterEff
         )
-        val changed = dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos
-        dynamicIso = result.iso
-        dynamicShutterNanos = result.shutterNanos
+        programTargetIso = result.iso
+        programTargetShutterNanos = result.shutterNanos
+        programTargetLimits = limits
+        programTargetLockMode = profile.lockMode
+        programTargetLockedIso = lockedIsoEff
+        programTargetLockedShutterNanos = lockedShutterEff
         dynamicIsoLimited = result.isoLimited
         dynamicShutterLimited = result.shutterLimited
         programConverged = shift == 0.0 && !result.isoLimited && !result.shutterLimited ||
             kotlin.math.abs(shift) <= RawProgramMeter.CONVERGED_TOLERANCE_EV
-        if (changed) maybePushProgramRepeating()
+        if (dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos) {
+            scheduleProgramRampTick()
+        } else {
+            cancelProgramRampTick()
+        }
+    }
+
+    /**
+     * One glide tick: ease the applied (live) pair toward the solver target by at
+     * most [PROGRAM_RAMP_MAX_STEP_EV], preserving the target's ISO/shutter ratio
+     * (or the locked axis), then push the live repeating request. Reschedules
+     * itself until the applied pair snaps to target.
+     */
+    private fun programRampTick() {
+        programRampCallback = null
+        if (!programCustomActive() || ettrCaptureActive() || captureInProgress.get() ||
+            !running || destroyed
+        ) return
+        val targetIso = programTargetIso ?: return
+        val targetShutter = programTargetShutterNanos ?: return
+        val limits = programTargetLimits ?: return
+        val curIso = dynamicIso ?: targetIso
+        val curShutter = dynamicShutterNanos ?: targetShutter
+        val steppedEnergy = AutoExposureBalance.rampStepEnergy(
+            curIso.toDouble() * curShutter,
+            targetIso.toDouble() * targetShutter,
+            PROGRAM_RAMP_MAX_STEP_EV,
+            PROGRAM_RAMP_SNAP_EV
+        )
+        val targetEnergy = targetIso.toDouble() * targetShutter
+        val (iso, shutter) = if (steppedEnergy == targetEnergy) {
+            targetIso to targetShutter
+        } else when (programTargetLockMode) {
+            ProgramLockMode.ISO_LOCK -> {
+                val fixedIso = programTargetLockedIso.coerceIn(limits.isoMin, limits.isoMax)
+                val glidingShutter = (steppedEnergy / fixedIso)
+                    .coerceIn(limits.shutterMinNanos.toDouble(), limits.shutterMaxNanos.toDouble())
+                fixedIso to glidingShutter.toLong().coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
+            }
+            ProgramLockMode.SHUTTER_LOCK -> {
+                val fixedShutter = programTargetLockedShutterNanos
+                    .coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
+                val glidingIso = (steppedEnergy / fixedShutter)
+                    .coerceIn(limits.isoMin.toDouble(), limits.isoMax.toDouble())
+                glidingIso.roundToInt().coerceIn(limits.isoMin, limits.isoMax) to fixedShutter
+            }
+            ProgramLockMode.NONE -> AutoExposureBalance.splitEnergyRatio(
+                steppedEnergy, targetIso, targetShutter, limits
+            )
+        }
+        val snapped = steppedEnergy == targetEnergy
+        if (dynamicIso != iso || dynamicShutterNanos != shutter) {
+            dynamicIso = iso
+            dynamicShutterNanos = shutter
+            pushProgramPairLive()
+        }
+        if (!snapped) scheduleProgramRampTick()
+    }
+
+    private fun scheduleProgramRampTick() {
+        cancelProgramRampTick()
+        val generation = lifecycleGeneration
+        programRampCallback = Runnable {
+            programRampCallback = null
+            if (generation == lifecycleGeneration) programRampTick()
+        }.also { cameraHandler.postDelayed(it, PROGRAM_RAMP_INTERVAL_MS) }
+    }
+
+    private fun cancelProgramRampTick() {
+        programRampCallback?.let(cameraHandler::removeCallbacks)
+        programRampCallback = null
+    }
+
+    /** Lightweight live push: rebuild only the repeating request with the gliding
+     * pair. Unlike a full [updateRepeatingRequest], it never drains RAW buffers,
+     * so ~10 Hz micro-pushes stay cheap. Failures snap straight to target. */
+    private fun pushProgramPairLive() {
+        try {
+            updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+        } catch (_: Exception) {
+            cancelProgramRampTick()
+            programTargetIso?.let { dynamicIso = it }
+            programTargetShutterNanos?.let { dynamicShutterNanos = it }
+        }
     }
 
     private fun resolveProgramLimits(
@@ -1435,52 +1735,20 @@ class RawCameraController(
     }
 
     /**
-     * Push a new AE_OFF repeating request when the live PROGRAM pair moves enough to
-     * matter (~1/12 stop). Throttles stream restarts: converged 1/8-stop hunting never
-     * rebuilds the session.
+     * One ETTR iteration from a shared RAW sample. The baseline is always the actual
+     * sensor exposure ([lastIso]/[lastExposureNanos]): when ETTR is active the
+     * repeating preview already runs its pair, and PROGRAM is frozen, so the live
+     * PROGRAM pair would be a stale value that was never applied.
+     *
+     * Runs on the camera thread; callers must sample off-thread (see
+     * [dispatchMeteringSample]) and post the result here.
      */
-    private fun maybePushProgramRepeating() {
-        if (!programCustomActive() || captureInProgress.get()) return
-        val iso = dynamicIso ?: return
-        val shutter = dynamicShutterNanos ?: return
-        val pushedIso = programPushedIso
-        val pushedShutter = programPushedShutterNanos
-        if (pushedIso != null && pushedShutter != null) {
-            val evDelta = kotlin.math.abs(
-                kotlin.math.ln((iso.toDouble() * shutter) / (pushedIso * pushedShutter)) / kotlin.math.ln(2.0)
-            )
-            if (evDelta < PROGRAM_PUSH_THRESHOLD_EV) return
-        }
-        programPushedIso = iso
-        programPushedShutterNanos = shutter
-        updateRepeatingRequest(preserveRawZslBuffer = true)
-    }
-
-    /**
-     * One ETTR iteration from a shared RAW sample. Baseline is the PROGRAM live pair
-     * when PROGRAM custom AE is active (so ETTR overrides PROGRAM instead of fighting
-     * stock AE), else the last hardware-AE preview values.
-     */
-    private fun updateEttrFromRaw(image: Image, cameraCharacteristics: CameraCharacteristics) {
-        if (!ettrSettings.enabled) return
-        val now = SystemClock.elapsedRealtime()
-        if (!RawHistogramThrottle.shouldSample(now, lastEttrUpdateMs, ETTR_UPDATE_INTERVAL_MS)) return
-        lastEttrUpdateMs = now
-        val sample = RawEttrSampler.sample(image, cameraCharacteristics) ?: return
-        updateEttrFromSample(sample)
-    }
-
     private fun updateEttrFromSample(sample: EttrRawSample) {
         if (!ettrSettings.enabled) return
         if (captureInProgress.get()) return
         val levels = sample.levels
-        // ETTR overrides PROGRAM: when the custom loop is live its pair is the baseline.
-        val baselineIso = if (programCustomActive()) {
-            dynamicIso ?: lastIso
-        } else lastIso
-        val baselineShutter = if (programCustomActive()) {
-            dynamicShutterNanos ?: lastExposureNanos
-        } else lastExposureNanos
+        val baselineIso = lastIso
+        val baselineShutter = lastExposureNanos
         if (baselineIso <= 0 || baselineShutter <= 0L || captureInProgress.get()) return
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
@@ -1511,6 +1779,25 @@ class RawCameraController(
         ettrShutterNanos = result.shutterNanos
         ettrConverged = result.converged
         ettrHottest = levels.hottest
+        // Unified glide: when the PROGRAM preview is live, ease toward the ETTR
+        // pair instead of jumping the repeating request once per sample.
+        if (programCustomActive()) {
+            programTargetIso = result.iso
+            programTargetShutterNanos = result.shutterNanos
+            programTargetLimits = ExposureBalanceLimits(
+                isoMin = isoRange.lower,
+                isoMax = isoRange.upper,
+                shutterMinNanos = shutterRange.lower,
+                shutterMaxNanos = shutterRange.upper,
+                shutterStartNanos = shutterRange.upper
+            )
+            programTargetLockMode = ProgramLockMode.NONE
+            if (dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos) {
+                scheduleProgramRampTick()
+            } else {
+                cancelProgramRampTick()
+            }
+        }
     }
 
     /**
@@ -1622,9 +1909,12 @@ class RawCameraController(
         dynamicShutterNanos = null
         dynamicIsoLimited = false
         dynamicShutterLimited = false
-        programPushedIso = null
-        programPushedShutterNanos = null
+        cancelProgramRampTick()
+        programTargetIso = null
+        programTargetShutterNanos = null
+        programTargetLimits = null
         programBrightness = Float.NaN
+        programBrightnessEma = Float.NaN
         programConverged = false
         lastProgramUpdateMs = Long.MIN_VALUE
         cancelDynamicExposureProbe()
@@ -1816,10 +2106,11 @@ class RawCameraController(
 
     private fun updateRepeatingRequest(
         allowRawZsl: Boolean = true,
-        preserveRawZslBuffer: Boolean = false
+        preserveRawZslBuffer: Boolean = false,
+        light: Boolean = false
     ) {
         if (!isOnCameraThread()) {
-            cameraHandler.post { updateRepeatingRequest(allowRawZsl, preserveRawZslBuffer) }
+            cameraHandler.post { updateRepeatingRequest(allowRawZsl, preserveRawZslBuffer, light) }
             return
         }
         val device = camera ?: return
@@ -1866,8 +2157,9 @@ class RawCameraController(
             rawHistogramStreaming = false
             ettrStreaming = false
             programStreaming = false
-            val requestEpoch = ++rawZslRequestEpoch
-            if (!preserveBuffer) {
+            val requestEpoch = if (light) rawZslRequestEpoch else ++rawZslRequestEpoch
+            // Light pushes only swap the live pair: never disturb buffered/draining RAW.
+            if (!light && !preserveBuffer) {
                 clearRawZslBuffer()
                 if (activeFramesRemaining.get() <= 0) closeUnmatchedRawImages()
                 drainQueuedRawImages(reader)
@@ -2076,7 +2368,13 @@ class RawCameraController(
             dynamicIso != null && dynamicShutterNanos != null
         // RAW-measured ETTR overrides the PROGRAM custom pair: the still
         // request exposes so the hottest CFA channel lands just below clipping.
-        val ettrExposure = (applyDynamicCurve || programLive) && !manualExposure && ettrCaptureActive()
+        // While the glide is mid-flight the live (ramping) pair wins over both
+        // targets, so every repeating rebuild keeps moving smoothly instead of
+        // jumping straight to the endpoint.
+        val rampGliding = programTargetIso != null && programTargetShutterNanos != null &&
+            (dynamicIso != programTargetIso || dynamicShutterNanos != programTargetShutterNanos)
+        val ettrExposure = (applyDynamicCurve || programLive) && !manualExposure && ettrCaptureActive() &&
+            !rampGliding
         if ((manualExposure || dynamicExposure || ettrExposure) &&
             supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
         ) {
@@ -2416,10 +2714,16 @@ class RawCameraController(
                 "EV ${String.format(java.util.Locale.US, "%+.1f", programAeProfile.evBias)} " +
                 "ISO_CAP ${if (dynamicIsoLimited) "HIT" else "OK"} " +
                 "S_CAP ${if (dynamicShutterLimited) "HIT" else "OK"}\n" +
-                "P_TARGET " + (dynamicIso?.let { targetIso ->
-                    dynamicShutterNanos?.let { targetShutter ->
-                        "ISO $targetIso  EXP ${formatExposure(targetShutter)}" +
-                            (if (programConverged) " LOCKED" else " TRACKING") +
+                "P_TARGET " + (if (ettrCaptureActive()) "FROZEN>ETTR"
+                else programTargetIso?.let { targetIso ->
+                    programTargetShutterNanos?.let { targetShutter ->
+                        val live = dynamicIso?.let { liveIso ->
+                            dynamicShutterNanos?.let { liveShutter ->
+                                "LIVE ISO $liveIso EXP ${formatExposure(liveShutter)}"
+                            }
+                        } ?: "LIVE --"
+                        "TGT ISO $targetIso EXP ${formatExposure(targetShutter)} $live " +
+                            (if (programConverged) "LOCKED" else "TRACKING") +
                             " BR ${if (programBrightness.isFinite()) String.format(java.util.Locale.US, "%.2f", programBrightness) else "--"}"
                     }
                 } ?: "METERING") + "\n" +
@@ -2851,7 +3155,12 @@ class RawCameraController(
         image: Image,
         result: TotalCaptureResult,
         captureLabel: String?,
-        ownership: AutoCloseable
+        ownership: AutoCloseable = AutoCloseable {},
+        // Burst grouping: shared stem + per-frame suffix + subfolder. All
+        // default to legacy behavior (fresh millis stem, flat folder).
+        captureTimeMillis: Long = System.currentTimeMillis(),
+        fileNameSuffix: String? = null,
+        subfolder: String? = null
     ) {
         val c = characteristics ?: run {
             ownership.close()
@@ -2888,9 +3197,9 @@ class RawCameraController(
             CaptureExposureMode.MANUAL -> 0f
         }
         val sharedAdaptiveExposure = activeAdaptiveExposure
-        // One timestamp for every output of this capture so the single-shot DNG and its
-        // developed JPEG share the IMG_YYYYMMDD_HHMMSS_mmm stem and sort together.
-        val captureTimeMillis = System.currentTimeMillis()
+        // Burst callers pass one timestamp for every output of the capture
+        // so DNGs, JPEGs, and sidecars share the IMG_YYYYMMDD_HHMMSS_mmm
+        // stem and sort together; legacy callers mint per-frame time.
         val captureGps = gpsLocation()
         pendingSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
@@ -2905,7 +3214,8 @@ class RawCameraController(
                             dngName = DngSaver(context).save(
                                 image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
                                 frameMetadata, dngWriterBackend(), captureId = captureTimeMillis,
-                                gps = captureGps
+                                gps = captureGps, fileNameSuffix = fileNameSuffix,
+                                subfolder = subfolder
                             )
                             Log.i(
                                 LOG_TAG,
@@ -2942,7 +3252,9 @@ class RawCameraController(
                                 jpegName = JpegSaver(context).save(
                                     developed, frameMetadata, result,
                                     captureTimeMillis = captureTimeMillis,
-                                    gps = captureGps
+                                    typeSuffix = fileNameSuffix,
+                                    gps = captureGps,
+                                    subfolder = subfolder
                                 )
                                 Log.i(
                                     LOG_TAG,
@@ -3374,6 +3686,7 @@ class RawCameraController(
             removeOpenCameraTouchFocusTimeout()
             removeOpenCameraContinuousFocusReset()
             cancelRawZslWatchdog()
+            cancelProgramRampTick()
             motionTracker.stop()
             rawZslStreaming = false
             rawZslRequestEpoch++
@@ -3423,6 +3736,10 @@ class RawCameraController(
             // graceful teardown during Activity destruction.
         }
         writer.shutdown()
+        // A metering sample may still be running; it closes its own image and its
+        // posted result is dropped by the destroyed flag. Interrupt promptly so a
+        // ~300 ms sample cannot outlive the activity.
+        meteringExecutor.shutdownNow()
     }
 
     private fun isCurrent(generation: Int): Boolean =
@@ -3782,10 +4099,22 @@ class RawCameraController(
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */
         private const val ETTR_UPDATE_INTERVAL_MS = 500L
+        /** Metering samples slower than this are logged so sick streams show in logcat. */
+        private const val SICK_SAMPLE_LOG_MS = 150L
         /** PROGRAM custom AE tracks RAW mid-tone at the same rate as ETTR. */
         private const val PROGRAM_UPDATE_INTERVAL_MS = 500L
-        /** Rebuild the AE_OFF repeating request only past ~1/12 stop of movement. */
-        private const val PROGRAM_PUSH_THRESHOLD_EV = 1.0 / 12.0
+        /** Relaxed metering once the loop has converged; any correction snaps back. */
+        private const val PROGRAM_CONVERGED_INTERVAL_MS = 1000L
+        /** Relaxed metering once ETTR has converged; any correction snaps back. */
+        private const val ETTR_CONVERGED_INTERVAL_MS = 1000L
+        /** Glide tick cadence: applied pair eases toward target at ~1 stop/s. */
+        private const val PROGRAM_RAMP_INTERVAL_MS = 100L
+        /** Maximum glide per tick. */
+        private const val PROGRAM_RAMP_MAX_STEP_EV = 1.0 / 6.0
+        /** Remaining distance that snaps straight to target. */
+        private const val PROGRAM_RAMP_SNAP_EV = 1.0 / 24.0
+        /** EMA weight for sampled brightness; halves single-sample noise. */
+        private const val PROGRAM_EMA_ALPHA = 0.5
         private const val DYNAMIC_EXPOSURE_PROBE_INTERVAL_MS = 750L
         private const val PROGRAM_SHUTTER_START_NANOS = 1_000_000_000L / 30
         private const val PROGRAM_SHUTTER_END_NANOS = 1_000_000_000L / 15
