@@ -1,11 +1,14 @@
 //
 // Created by eszdman on 16.08.2026.
 //
-// Single JNI wrapper around ncnn (Vulkan backend) for the two ML models
-// used by PhotonCamera:
+// Single JNI wrapper around ncnn (Vulkan backend) for the three ML models
+// used by RawLens:
 //
 //   * FlowNet-v2 dense optical flow (flownet_flat.ncnn.param/.bin)
 //   * KernelNet anisotropic parameter model (kernelnet_aniso_v2_2_params.ncnn.param/.bin)
+//   * RawNIND-tiny single-frame Bayer denoiser (rawnind_tiny.ncnn.param/.bin,
+//     trained on Mac via python/rawnind-train; paste the converted files into
+//     app/src/main/assets/models/ — absent files simply report unavailable)
 //
 // Both networks share one ncnn runtime linked statically into this library
 // (see ncnn/<ABI>/lib/libncnn.a). The FlowNet model requires three custom
@@ -599,5 +602,350 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeDestroy(
     JNIEnv*, jclass, jlong handle) {
     auto* ctx = reinterpret_cast<KernelNetCtx*>(handle);
+    if (ctx != nullptr) delete ctx;
+}
+
+// ===========================================================================
+// RawNIND-tiny single-frame Bayer denoiser (python/rawnind-train export).
+//
+// Contract (see export.py --help and RawNindDenoiser.kt):
+//   input  (1,5,H/2,W/2) packed [R,G1,G2,B] + sigma plane, normalized [0,1]-ish
+//          floats AFTER black/white normalization and lens-shading correction,
+//          BEFORE demosaic. Java passes channel-last H2xW2x5 (R,G1,G2,B,S).
+//   output (1,4,H/2,W/2) denoised packed Bayer, same layout minus sigma.
+//
+// Like KernelNet this runs on FIXED-SIZE tiles so Vulkan blob/workspace
+// allocators reuse the same device-memory blocks for every capture: TILE is
+// constant (core + 2*border, packed px), tiles overlap by tileBorder (>= the
+// model's RF radius of 23 packed px), and only each tile's interior core is
+// written out. Packed origins always map to even Bayer origins, so no
+// stride-phase correction is needed (the net has no stride-2 layers with
+// absolute phase; all downsamples are symmetric).
+//
+// GPU is the default backend (flagship target; fp16 Vulkan like FlowNet).
+// Env knobs (debug/experimentation):
+//   RN_CPU=1    force CPU backend
+//   RN_FP32=1   disable fp16 storage/arithmetic
+//   RN_TILE=N   packed-px tile core, rounded up to /16 (default 512 = 1024 Bayer)
+//   RN_BORDER=N tile overlap in packed px (default 32, minimum 24)
+//   RN_NOTILE=1 fall back to a single full-res pass (A/B comparison only)
+// ===========================================================================
+
+struct RawNindCtx {
+    ncnn::Net net;
+    int tileCore = 512;    // packed-px interior advance (~512 gives a 4x3-ish
+                           // tile grid at 12MP packed 2000x1500)
+    int tileBorder = 32;   // overlap margin per side (packed px, >= RF 23)
+    bool stageTiming = false;
+    // Fixed-size tile Mats, allocated on first run and reused for every tile
+    // of every capture (identical shapes -> stable GPU memory).
+    ncnn::Mat inTile;      // TILE x TILE x 5
+};
+
+static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
+                               int w2, int h2, float* outPtr);
+static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
+                                int w2, int h2, float* outPtr);
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCreate(
+    JNIEnv* env, jclass, jobject assetManager, jstring paramPath) {
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
+    if (mgr == nullptr) {
+        LOGE("AAssetManager_fromJava failed");
+        return 0;
+    }
+    const char* path = env->GetStringUTFChars(paramPath, nullptr);
+    if (path == nullptr) return 0;
+    std::string paramStr = path;
+    env->ReleaseStringUTFChars(paramPath, path);
+
+    auto* ctx = new (std::nothrow) RawNindCtx();
+    if (ctx == nullptr) return 0;
+
+    // GPU-first: the net is a ~1M-param U-Net that is compute-bound at full
+    // res, so Vulkan fp16 wins on flagship Adreno/Mali (unlike tiny KernelNet).
+    ctx->net.opt.use_vulkan_compute = true;
+    ctx->net.opt.use_fp16_packed = true;
+    ctx->net.opt.use_fp16_storage = true;
+    ctx->net.opt.use_fp16_arithmetic = true;
+    ctx->net.opt.use_bf16_storage = false;
+    ctx->net.opt.use_subgroup_ops = false;
+    ctx->net.opt.num_threads = 4;
+    ctx->net.opt.lightmode = false;
+    pinOpenMPThreads(ctx->net.opt.num_threads);
+
+    if (getenv("RN_CPU") && getenv("RN_CPU")[0] == '1') {
+        ctx->net.opt.use_vulkan_compute = false;
+        LOGI("rawnind: Vulkan disabled by RN_CPU=1, using CPU");
+    }
+    if (getenv("RN_FP32") && getenv("RN_FP32")[0] == '1') {
+        ctx->net.opt.use_fp16_packed = false;
+        ctx->net.opt.use_fp16_storage = false;
+        ctx->net.opt.use_fp16_arithmetic = false;
+        LOGI("rawnind: fp32 storage path selected by RN_FP32=1");
+    }
+
+    std::string binPath = paramToBinPath(paramStr);
+
+    if (ctx->net.load_param(mgr, paramStr.c_str()) != 0) {
+        LOGE("rawnind load_param(%s) failed", paramStr.c_str());
+        delete ctx;
+        return 0;
+    }
+    if (ctx->net.load_model(mgr, binPath.c_str()) != 0) {
+        LOGE("rawnind load_model(%s) failed", binPath.c_str());
+        delete ctx;
+        return 0;
+    }
+
+    if (const char* t = getenv("RN_TILE")) {
+        int v = atoi(t);
+        if (v >= 128) ctx->tileCore = (v + 15) / 16 * 16;
+    }
+    if (const char* b = getenv("RN_BORDER")) {
+        int v = atoi(b);
+        if (v >= 24) ctx->tileBorder = v;
+    }
+    if (const char* st = getenv("RN_STAGETIMING")) {
+        ctx->stageTiming = strcmp(st, "0") != 0;
+    }
+
+#if NCNN_VULKAN
+    // Persistent, device-pooled Vulkan allocators (same rationale as
+    // KernelNet): every tile reuses blocks instead of paying
+    // vkAllocateMemory per extraction.
+    if (ctx->net.opt.use_vulkan_compute &&
+        !(getenv("RN_NOALLOC") && getenv("RN_NOALLOC")[0] == '1')) {
+        const ncnn::VulkanDevice* vkdev = ctx->net.vulkan_device();
+        if (vkdev != nullptr) {
+            ncnn::VkAllocator* blobPool = vkdev->acquire_blob_allocator();
+            ctx->net.opt.blob_vkallocator = blobPool;
+            ctx->net.opt.workspace_vkallocator = blobPool;
+            ctx->net.opt.staging_vkallocator = vkdev->acquire_staging_allocator();
+            LOGI("rawnind: persistent vk allocators attached (pooled)");
+        } else {
+            LOGE("rawnind: vulkan_device null, cannot attach pooled allocators");
+        }
+    }
+#endif
+
+    LOGI("rawnind model loaded (tile core=%d border=%d)", ctx->tileCore, ctx->tileBorder);
+
+#if NCNN_VULKAN
+    if (ctx->net.opt.use_vulkan_compute) {
+        LOGI("rawnind backend: vulkan (gpu_count=%d)", ncnn::get_gpu_count());
+        LOGI("rawnind vulkan_device=%s",
+             ctx->net.vulkan_device() ? "created (GPU ops in use)" : "NULL (running on CPU!)");
+    } else {
+        LOGI("rawnind backend: cpu (%d threads)", ctx->net.opt.num_threads);
+    }
+#else
+    LOGI("rawnind backend: cpu, ncnn built without vulkan (%d threads)",
+         ctx->net.opt.num_threads);
+#endif
+    return (jlong)ctx;
+}
+
+// packed: [w2*h2*5] channel-last floats (R,G1,G2,B,S), normalized domain.
+// out:    [w2*h2*4] channel-last floats (R,G1,G2,B).
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeRun(
+    JNIEnv* env, jclass, jlong handle, jobject packedBuffer, jint w2, jint h2,
+    jobject outBuffer) {
+    auto* ctx = reinterpret_cast<RawNindCtx*>(handle);
+    if (ctx == nullptr) return JNI_FALSE;
+    if (w2 <= 0 || h2 <= 0) return JNI_FALSE;
+    pinOpenMPThreads(ctx->net.opt.num_threads);
+
+    const float* inPtr = static_cast<const float*>(env->GetDirectBufferAddress(packedBuffer));
+    float* outPtr = static_cast<float*>(env->GetDirectBufferAddress(outBuffer));
+    if (inPtr == nullptr || outPtr == nullptr) {
+        LOGE("GetDirectBufferAddress failed");
+        return JNI_FALSE;
+    }
+
+    if (getenv("RN_NOTILE") && getenv("RN_NOTILE")[0] == '1')
+        return rawnindRunFull(ctx, inPtr, w2, h2, outPtr);
+    return rawnindRunTiled(ctx, inPtr, w2, h2, outPtr);
+}
+
+// Single full-res pass. Kept for A/B comparison via RN_NOTILE=1; production
+// uses the tiled path (stable Vulkan footprint across captures).
+static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
+                               int w2, int h2, float* outPtr) {
+    ncnn::Mat in(w2, h2, 5);
+    for (int c = 0; c < 5; c++) {
+        float* ch = (float*)in.channel(c);
+        for (int i = 0, n = w2 * h2; i < n; i++) ch[i] = inPtr[5 * i + c];
+    }
+
+    int64_t tStart = nowMs();
+
+    ncnn::Extractor ex = ctx->net.create_extractor();
+    if (ex.input("input", in) != 0) {
+        LOGE("rawnind input failed");
+        return JNI_FALSE;
+    }
+
+    ncnn::Mat out;
+    if (ex.extract("output", out) != 0) {
+        LOGE("rawnind extract failed");
+        return JNI_FALSE;
+    }
+
+    LOGI("rawnind forward %dx%d took %lld ms", w2, h2,
+         (long long)(nowMs() - tStart));
+
+    if (out.c != 4 || out.w != w2 || out.h != h2) {
+        LOGE("unexpected rawnind output dims=%d w=%d h=%d c=%d (want 4x%dx%d)",
+             out.dims, out.w, out.h, out.c, w2, h2);
+        return JNI_FALSE;
+    }
+    const float* ch0 = (const float*)out.channel(0);
+    const float* ch1 = (const float*)out.channel(1);
+    const float* ch2 = (const float*)out.channel(2);
+    const float* ch3 = (const float*)out.channel(3);
+    for (int i = 0, n = w2 * h2; i < n; i++) {
+        outPtr[4 * i + 0] = ch0[i];
+        outPtr[4 * i + 1] = ch1[i];
+        outPtr[4 * i + 2] = ch2[i];
+        outPtr[4 * i + 3] = ch3[i];
+    }
+
+    return JNI_TRUE;
+}
+
+// Fill one TILE x TILE 5-channel tile from the channel-last full-res plane
+// with clamp-to-edge padding. Tile origins are always >= 0, so only
+// right/bottom can overflow.
+static void fillTileClamped5(float* dst, const float* src, int W, int H,
+                             int x0, int y0, int T) {
+    for (int y = 0; y < T; y++) {
+        int sy = y0 + y;
+        if (sy > H - 1) sy = H - 1;
+        const int xSpan = (x0 + T <= W) ? T : (W - x0);
+        const float* srow = src + (size_t)sy * W * 5 + (size_t)x0 * 5;
+        float* drow = dst + (size_t)y * T * 5;
+        memcpy(drow, srow, (size_t)xSpan * 5 * sizeof(float));
+        if (xSpan < T) {
+            const float* edge = src + (size_t)sy * W * 5 + (size_t)(W - 1) * 5;
+            for (int x = xSpan; x < T; x++)
+                memcpy(drow + (size_t)x * 5, edge, 5 * sizeof(float));
+        }
+    }
+}
+
+static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
+                                int w2, int h2, float* outPtr) {
+    const int B = ctx->tileBorder;      // overlap per side (packed px)
+    const int STEP = ctx->tileCore;     // interior advance (packed px)
+    const int TILE = STEP + 2 * B;      // fixed net input size
+
+    if (ctx->inTile.empty()) {
+        ctx->inTile.create(TILE, TILE, 5);
+    }
+
+    // Number of tiles such that the last tile's core reaches the image edge.
+    auto tileCount = [TILE, STEP](int dim) -> int {
+        return dim <= TILE ? 1 : (dim - TILE + STEP - 1) / STEP + 1;
+    };
+    const int nx = tileCount(w2);
+    const int ny = tileCount(h2);
+
+    int64_t tStart = nowMs();
+    int64_t tFill = 0, tInput = 0, tExtract = 0, tCopy = 0;
+    int64_t worstExtract = 0;
+
+    // Reused deinterleaved tile input: split the interleaved inTile into 5
+    // channel planes without reallocating per tile.
+    ncnn::Mat tile5(TILE, TILE, 5);
+
+    for (int iy = 0; iy < ny; iy++) {
+        const int ty0 = iy * STEP;
+        const int vy0 = (iy == 0) ? 0 : ty0 + B;
+        const int vy1 = (iy == ny - 1) ? h2 : ty0 + TILE - B;
+        for (int ix = 0; ix < nx; ix++) {
+            const int tx0 = ix * STEP;
+            const int vx0 = (ix == 0) ? 0 : tx0 + B;
+            const int vx1 = (ix == nx - 1) ? w2 : tx0 + TILE - B;
+
+            int64_t s0 = nowUs();
+            fillTileClamped5((float*)ctx->inTile.data, inPtr, w2, h2, tx0, ty0, TILE);
+            // Deinterleave tile (channel-last -> 5 planes).
+            {
+                const float* inter = (const float*)ctx->inTile.data;
+                for (int c = 0; c < 5; c++) {
+                    float* ch = (float*)tile5.channel(c);
+                    for (int i = 0, n = TILE * TILE; i < n; i++) ch[i] = inter[5 * i + c];
+                }
+            }
+            int64_t s1 = nowUs();
+
+            ncnn::Extractor ex = ctx->net.create_extractor();
+            if (ex.input("input", tile5) != 0) {
+                LOGE("rawnind tile input failed");
+                return JNI_FALSE;
+            }
+            int64_t s2 = nowUs();
+            ncnn::Mat out;
+            if (ex.extract("output", out) != 0) {
+                LOGE("rawnind tile extract failed");
+                return JNI_FALSE;
+            }
+            int64_t s3 = nowUs();
+            if (out.c != 4 || out.w != TILE || out.h != TILE) {
+                LOGE("unexpected rawnind tile output dims=%d w=%d h=%d c=%d",
+                     out.dims, out.w, out.h, out.c);
+                return JNI_FALSE;
+            }
+            int64_t s4 = nowUs();
+
+            // Core of this tile -> global channel-last output.
+            const int lx0 = vx0 - tx0, ly0 = vy0 - ty0;
+            const float* o0 = (const float*)out.channel(0);
+            const float* o1 = (const float*)out.channel(1);
+            const float* o2 = (const float*)out.channel(2);
+            const float* o3 = (const float*)out.channel(3);
+            for (int y = vy0; y < vy1; y++) {
+                float* dst = outPtr + ((size_t)y * w2 + vx0) * 4;
+                const int ly = ly0 + (y - vy0);
+                for (int x = vx0; x < vx1; x++) {
+                    const int li = ly * TILE + (lx0 + (x - vx0));
+                    dst[0] = o0[li];
+                    dst[1] = o1[li];
+                    dst[2] = o2[li];
+                    dst[3] = o3[li];
+                    dst += 4;
+                }
+            }
+            int64_t s5 = nowUs();
+
+            tFill += s1 - s0;
+            tInput += s2 - s1;
+            tExtract += s3 - s2;
+            tCopy += s5 - s4;
+            if (s3 - s2 > worstExtract) worstExtract = s3 - s2;
+        }
+    }
+
+    LOGI("rawnind tiled %dx%d (%dx%d tiles of %dpx, core=%d border=%d)"
+         " took %lld ms", w2, h2, nx, ny, TILE, STEP, B,
+         (long long)(nowMs() - tStart));
+    if (ctx->stageTiming) {
+        const int n = nx * ny;
+        LOGI("rawnind stages (%d tiles): fill=%lldus input=%lldus extract=%lldus"
+             " (worst %lldus) copy=%lldus", n,
+             (long long)tFill / n, (long long)tInput / n,
+             (long long)tExtract / n, (long long)worstExtract,
+             (long long)tCopy / n);
+    }
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeDestroy(
+    JNIEnv*, jclass, jlong handle) {
+    auto* ctx = reinterpret_cast<RawNindCtx*>(handle);
     if (ctx != nullptr) delete ctx;
 }
