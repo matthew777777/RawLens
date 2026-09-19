@@ -52,9 +52,11 @@ data class RawDevelopmentMemoryEstimate(
  * are deliberately omitted. The intermediate scene-linear callback remains unclamped ACEScg.
  */
 class RawDevelopmentCoordinator(context: Context) {
+    private val appContext = context.applicationContext
     private val amaze = Gles31AmazeProcessor(context)
     private val jpegOutput = Gles31JpegOutputProcessor(context)
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
+    private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
 
     fun probe(width: Int, height: Int): AmazeCapability = amaze.probe(width, height)
 
@@ -85,6 +87,11 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         // Sparse metadata defects and the optional MAD detector still require the reference CPU
         // implementation. Normal captures take the zero-copy-to-JVM direct GPU path.
+        // NOTE: AI Bayer denoise is applied by the caller (denoiseCaptureCfa /
+        // denoiseCfa, then developCfaJpeg) so one capture pays for exactly one
+        // inference shared by the denoised DNG and the JPEG. develop() itself
+        // stays AI-free on purpose: an internal hook here would re-run
+        // inference on CFAs the controller already denoised.
         val directGpu = pixelStride == Short.SIZE_BYTES && rowStride % Short.SIZE_BYTES == 0 &&
             metadata.hotPixels.isEmpty() && !settings.preDemosaic.defectCorrection.autoDetect
         val lensModel = RawPreDemosaicPipeline.lensShadingModel(metadata)
@@ -183,6 +190,109 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
+    /**
+     * AI Bayer denoise for an already unpacked, pre-demosaic CFA (the exact
+     * training domain: normalized, lens-shading-corrected). Returns the
+     * denoised CFA (always RGGB in the local frame) or null when AI is
+     * unavailable — inference failure, OOM, or unsupported geometry all fall
+     * back silently. Never throws for AI reasons; callers use `?: cfa`.
+     */
+    fun denoiseCfa(cfa: UnpackedRawCfa, metadata: RawFrameMetadata): UnpackedRawCfa? {
+        if (!aiDenoiser.isReady()) return null
+        return try {
+            aiDenoiser.denoise(cfa, CfaNoiseModel.from(metadata.noiseProfile))
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "AI CFA denoise failed, falling back", failure)
+            null
+        }
+    }
+
+    /**
+     * Runs unpack + pre-demosaic + AI denoise for a fresh capture plane and
+     * returns the denoised CFA for shared use (denoised-DNG write-back and
+     * JPEG-from-denoised), so one capture pays for exactly one inference.
+     * Returns null when AI is disabled/unavailable; any failure falls back
+     * silently and the caller runs the normal development path instead.
+     */
+    fun denoiseCaptureCfa(
+        rawPlane: ByteBuffer,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings()
+    ): UnpackedRawCfa? {
+        if (!settings.denoise.aiEnabled || !aiDenoiser.isReady()) return null
+        return try {
+            metadata.rawDevelopmentUnsupportedReason?.let { return null }
+            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+                ?: return null
+            val normalization = metadata.normalizationOrNull() ?: return null
+            val rowStride = metadata.rawPlaneRowStride ?: return null
+            val pixelStride = metadata.rawPlanePixelStride ?: return null
+            val layout = RawPlaneLayout(
+                metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride,
+                geometry.sensorOriginX, geometry.sensorOriginY
+            )
+            val unpacked = RawSensorUnpacker.unpackNormalized(
+                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            )
+            val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
+            val cfa = prepared.cfa ?: return null
+            denoiseCfa(cfa, metadata)
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "AI capture denoise failed, falling back", failure)
+            null
+        } catch (oom: OutOfMemoryError) {
+            Log.w(LOG_TAG, "AI capture denoise OOM, falling back", oom)
+            null
+        }
+    }
+
+    /**
+     * Develops a JPEG from an in-memory CFA (AI-denoised capture or HDR
+     * merge) honoring the full development settings, including adaptive
+     * exposure analyzed on the given CFA.
+     */
+    fun developCfaJpeg(
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        outputSettings: JpegOutputSettings = JpegOutputSettings()
+    ): DevelopedJpeg {
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        cfa.requireAmazeCompatible()
+        val adaptive = if (settings.adaptiveExposureStrength > 0f) {
+            (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
+                AdaptiveDevelopmentExposure.analyze(cfa, adaptiveWorkspace)
+            }
+        } else null
+        val resolvedExposureEv = settings.exposureEv +
+            (adaptive?.correctionEv ?: 0.0) * settings.adaptiveExposureStrength.coerceIn(0f, 1f)
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), resolvedExposureEv
+        )
+        return amaze.process(
+            cfa,
+            clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+            cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+            cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+            denoise = settings.denoise,
+            noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
+            fusedOutputSettings = outputSettings.takeIf { !settings.denoise.enabled }
+        ) { output -> finishJpeg(output, outputSettings, settings.denoise) }
+    }
+
+    private fun finishJpeg(
+        output: AmazeGpuOutput,
+        outputSettings: JpegOutputSettings,
+        denoise: DenoiseSettings
+    ): DevelopedJpeg {
+        return if (output.internalFormat == AmazeTextureFormat.RGBA8) {
+            jpegOutput.processEncoded(output, outputSettings)
+        } else {
+            jpegOutput.process(output, outputSettings, denoise)
+        }
+    }
+
     /** Develops an unclamped, normalized CFA produced by RAW HDR merging. */
     fun developMergedJpeg(
         cfa: UnpackedRawCfa,
@@ -192,6 +302,9 @@ class RawDevelopmentCoordinator(context: Context) {
     ): DevelopedJpeg {
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
+        // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
+        // between the merged-DNG write and this develop; no internal hook here
+        // so inference never runs twice for one capture.
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), settings.exposureEv
         )
@@ -229,7 +342,8 @@ class RawDevelopmentCoordinator(context: Context) {
             width: Int,
             height: Int,
             ultraHdr: Boolean = false,
-            denoise: Boolean = false
+            denoise: Boolean = false,
+            aiDenoise: Boolean = false
         ): RawDevelopmentMemoryEstimate {
             require(width > 0 && height > 0)
             val pixels = width.toLong() * height
@@ -249,11 +363,19 @@ class RawDevelopmentCoordinator(context: Context) {
             val denoisePeak = if (denoise) {
                 raw + cfa + pixels * 16L + 5L * 768L * 768L * 16L
             } else 0L
+            // AI peak (managed heap + direct buffers, transient): unpacked CFA
+            // + channel-last packed input (5ch @ quarter res = 5B/px) + packed
+            // output (4ch = 4B/px) + denoised CFA. Native tiled inference adds
+            // only fixed-size tile workspace on top (flat vs MP count).
+            val aiPeak = if (aiDenoise) {
+                raw + 2L * cfa + 9L * pixels
+            } else 0L
             val accountedPeak = maxOf(
                 raw + 2L * cfa,
                 raw + cfa + cfa + amaze + if (denoise) cfa else 0L,
                 raw + cfa + pixels * 8L + rgba8 + readback + bitmap + gainmap,
-                denoisePeak
+                denoisePeak,
+                aiPeak
             )
             val overheadReserve = 96L * 1024L * 1024L
             return RawDevelopmentMemoryEstimate(

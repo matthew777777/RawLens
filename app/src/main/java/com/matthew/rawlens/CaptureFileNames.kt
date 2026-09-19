@@ -24,6 +24,7 @@ object CaptureFileNames {
     const val PREFIX = "IMG"
     const val TYPE_HDR = "HDR"
     const val TYPE_RAW = "RAW"
+    const val TYPE_AI = "AI"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -61,6 +62,16 @@ object CaptureFileNames {
     fun hdrDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDR, "dng")
 
     fun hdrJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDR, "jpg")
+
+    /**
+     * AI-denoised DNG sharing its capture's stem: `IMG_<ts>_AI.dng`, or
+     * `IMG_<ts>_F00AI.dng` when [frameSuffix] carries a burst/bracket frame
+     * tag (e.g. `F00`). Groups with the original DNG/JPEG in listings.
+     */
+    fun aiDng(captureTimeMillis: Long, frameSuffix: String? = null): String {
+        val suffix = if (frameSuffix.isNullOrBlank()) TYPE_AI else "${frameSuffix.uppercase(Locale.US)}$TYPE_AI"
+        return fileName(captureTimeMillis, suffix, "dng")
+    }
 
     /** Burst/bracket source frame: `IMG_<ts>_F00.dng`, `IMG_<ts>_F01.dng`, … */
     fun bracketDng(captureTimeMillis: Long, index: Int): String {

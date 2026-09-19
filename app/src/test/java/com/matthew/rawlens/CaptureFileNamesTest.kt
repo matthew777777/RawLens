@@ -40,6 +40,14 @@ class CaptureFileNamesTest {
     }
 
     @Test
+    fun aiDenoisedDngSharesStem() {
+        val ts = 1_786_269_212_527L
+        val stem = CaptureFileNames.stem(ts)
+        assertEquals("${stem}_AI.dng", CaptureFileNames.aiDng(ts))
+        assertEquals("${stem}_F00AI.dng", CaptureFileNames.aiDng(ts, "F00"))
+    }
+
+    @Test
     fun bracketFramesAreUniqueAndShareStem() {
         val ts = 1_786_269_212_527L
         val stem = CaptureFileNames.stem(ts)

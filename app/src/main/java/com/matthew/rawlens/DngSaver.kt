@@ -24,6 +24,44 @@ import java.io.IOException
  * TinyDNG path is retained as an explicit diagnostic/fallback backend.
  */
 class DngSaver(private val context: Context) {
+    /**
+     * Writes an AI-denoised CFA as a float DNG next to its capture stem
+     * (`IMG_<ts>_AI.dng`, or `IMG_<ts>_F00AI.dng` for burst frames).
+     * Same float-DNG flavor as [saveMerged] (normalized values, zero black
+     * level, preserved CFA pattern); the CFA must already be denoised.
+     */
+    fun saveAiDenoised(
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        captureId: Long = System.currentTimeMillis(),
+        fileNameSuffix: String? = null,
+        gps: GpsLocation? = null,
+        subfolder: String? = null
+    ): String {
+        if (subfolder != null) BurstSidecar.requireSubfolder(subfolder)
+        val displayName = CaptureFileNames.aiDng(captureId, fileNameSuffix)
+        val resolver = context.contentResolver
+        val relativePath = if (subfolder != null) "DCIM/RawLens/$subfolder" else "DCIM/RawLens"
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
+            put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Could not create AI DNG media entry")
+        try {
+            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata, gps) }
+                ?: throw IOException("Could not open AI DNG output stream")
+            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish AI DNG")
+            return displayName
+        } catch (failure: Exception) {
+            resolver.delete(uri, null, null)
+            throw failure
+        }
+    }
+
     fun saveMerged(cfa: UnpackedRawCfa, metadata: RawFrameMetadata,
                    captureId: Long = System.currentTimeMillis(),
                    gps: GpsLocation? = null): String {
