@@ -27,14 +27,7 @@ data class EttrSettings(
      * hand-motion shutter cap and accepts a darker (sharp) frame rather than
      * trading noise for blur.
      */
-    val isoLimit: Int = 0,
-    /**
-     * Reconstruction allowance: the hottest CFA channel may kiss white (a small
-     * clipped fraction) while every other channel must stay valid, so highlight
-     * inpainting has donor channels to rebuild from. Off by default; this
-     * deliberately trades a whisper of green (usually) for fatter shadows.
-     */
-    val allowSingleChannelClip: Boolean = false
+    val isoLimit: Int = 0
 )
 
 /** Per-channel mosaic levels, normalized to 0..1 after black subtraction. */
@@ -179,96 +172,6 @@ internal object RawEttrMeter {
     const val MOTION_DEADBAND_RPS = 0.01f
     private const val BASE_BLUR_ALLOWANCE_RADIANS = 0.006f
     private const val OIS_BLUR_RELAXATION = 2f
-
-    /**
-     * Reconstruction-allowance band: the hottest color may clip up to [REC_CLIP_HI]
-     * (0.1%) while every other color must stay below [REC_SECOND_EPS]. Colors are
-     * R, pooled green, B — Gr/Gb are one color for reconstruction, so green
-     * blowing in both Bayer phases still leaves R and B as donors. The search
-     * walks down from +[MAX_STEP_EV] in [REC_STEP_EV] increments and takes the
-     * largest gain satisfying both, so a cliff tail (no gain inside the band) holds
-     * at unity instead of jumping it, and a second color touching white vetoes
-     * any brightening. Measured saturation counts at every gain: the AE frame
-     * proved those pixels, so no lower estimate un-proves them.
-     */
-    const val REC_CLIP_HI = 1e-3
-    const val REC_SECOND_EPS = 1e-4
-    const val REC_STEP_EV = 1.0 / 12.0
-
-    /**
-     * Fraction of this channel's samples that would sit at white under [gain]:
-     * measured-saturated pixels plus bins the gain pushes over the top. Bin 255
-     * holds both, so its non-saturated part is prorated by how far past white the
-     * gain reaches into it.
-     */
-    fun clipFractionAtGain(bins: IntArray, saturated: Int, total: Int, gain: Double): Double {
-        if (total <= 0 || gain <= 0.0) return 0.0
-        var tail = saturated.toDouble()
-        for (b in bins.size - 2 downTo 0) {
-            if ((b + 0.5) / bins.size * gain < 1.0) break
-            tail += bins[b]
-        }
-        if (gain >= 1.0) {
-            val topBin = (bins[bins.size - 1] - saturated).coerceAtLeast(0)
-            tail += topBin * ((1.0 - 1.0 / gain) * bins.size).coerceIn(0.0, 1.0)
-        }
-        return tail / total
-    }
-
-    fun gainForClipBand(
-        bins: Array<IntArray>,
-        saturated: IntArray,
-        totals: IntArray,
-        hi: Double = REC_CLIP_HI,
-        secondEps: Double = REC_SECOND_EPS,
-        maxGainEv: Double = MAX_STEP_EV,
-        minGainEv: Double = -MAX_STEP_EV,
-        stepEv: Double = REC_STEP_EV
-    ): Double {
-        // Judge R, pooled green, B: bins arrive in canonical R/Gr/Gb/B order.
-        val pooled = poolGreen(bins, saturated, totals)
-        var gainDb = maxGainEv
-        while (gainDb >= minGainEv - 1e-9) {
-            val gain = 2.0.pow(gainDb)
-            var hottest = 0.0
-            var second = 0.0
-            for (entry in pooled) {
-                val fraction = clipFractionAtGain(entry.bins, entry.saturated, entry.total, gain)
-                if (fraction > hottest) {
-                    second = hottest
-                    hottest = fraction
-                } else if (fraction > second) {
-                    second = fraction
-                }
-            }
-            if (hottest <= hi && second <= secondEps) return gain
-            gainDb -= stepEv
-        }
-        return 2.0.pow(minGainEv)
-    }
-
-    private class PooledChannel(val bins: IntArray, val saturated: Int, val total: Int)
-
-    private fun poolGreen(
-        bins: Array<IntArray>,
-        saturated: IntArray,
-        totals: IntArray
-    ): List<PooledChannel> {
-        fun channelBins(index: Int): IntArray = bins.getOrElse(index) { IntArray(0) }
-        fun channelCount(counts: IntArray, index: Int): Int = counts.getOrElse(index) { 0 }
-        val greenBins = IntArray(RawEttrSampler.BIN_COUNT) { b ->
-            channelBins(1).getOrElse(b) { 0 } + channelBins(2).getOrElse(b) { 0 }
-        }
-        return listOf(
-            PooledChannel(channelBins(0), channelCount(saturated, 0), channelCount(totals, 0)),
-            PooledChannel(
-                greenBins,
-                channelCount(saturated, 1) + channelCount(saturated, 2),
-                channelCount(totals, 1) + channelCount(totals, 2)
-            ),
-            PooledChannel(channelBins(3), channelCount(saturated, 3), channelCount(totals, 3))
-        )
-    }
 }
 
 /** One ETTR metering sample: per-channel percentiles plus the raw material for the
