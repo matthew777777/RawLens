@@ -114,6 +114,7 @@ class RawCameraController(
     private val onRawZslStatus: (RawZslStatus) -> Unit,
     private val onDebugState: (String) -> Unit,
     private val onMeteringReleased: () -> Unit,
+    private val onFocusLock: (locked: Boolean, indefinite: Boolean, deadlineMs: Long) -> Unit,
     private val onRawHistogram: (RgbHistogram) -> Unit,
     private val gpsLocation: () -> GpsLocation? = { null },
     private val onActiveCameraChanged: (cameraId: String?) -> Unit = { }
@@ -187,7 +188,7 @@ class RawCameraController(
     private var dynamicShutterLimited = false
     private var dynamicExposureProbe: Runnable? = null
     // PROGRAM custom-AE live state: RAW brightness drives sensor ISO + shutter directly
-    // (AE_OFF repeating + still). ETTR overrides this pair when converged.
+    // (AE_OFF repeating + still). ETTR is AUTO-only and never touches this pair.
     private var programStreaming = false
     private var lastProgramUpdateMs = Long.MIN_VALUE
     private var programBrightness = Float.NaN
@@ -215,6 +216,8 @@ class RawCameraController(
     private var ettrClipHot = Float.NaN
     private var ettrClipSecond = Float.NaN
     private var lastEttrUpdateMs = Long.MIN_VALUE
+    /** Wall time of the last metering sample; slow samplers back off (see dispatch). */
+    @Volatile private var lastMeteringSampleMs = 0L
     private var ettrStreaming = false
     private var torchEnabled = false
     private var oisEnabled = initialOisEnabled
@@ -254,10 +257,21 @@ class RawCameraController(
     private var aeRegion: MeteringRectangle? = null
 
     // Open Camera continuous-picture autofocus port.
+    // Touch focus is held (AF_MODE_AUTO + regions) until an explicit release:
+    // retap elsewhere, double-tap/button reset, manual focus, lens switch, or stop().
     private var openCameraTouchFocusActive = false
     private var openCameraTouchFocusCompleted = false
     private var openCameraTouchFocusTimeout: Runnable? = null
     private var openCameraContinuousFocusReset: Runnable? = null
+    private var pendingTouchFocusStart: Runnable? = null
+    private var touchFocusStartElapsedMs = 0L
+    private var touchFocusStartSent = false
+    /** True once FOCUSED_LOCKED is held (badge-worthy); false while scanning or on failure. */
+    private var touchFocusLockedSharp = false
+    /** Long-press locks ignore the auto-release timer until double-tap. */
+    private var focusLockIndefinite = false
+    /** Elapsed-realtime expiry of a timed lock; 0 when indefinite or unlocked. */
+    private var focusLockDeadlineMs = 0L
 
     private var lastDebugUpdateMs = 0L
     @Volatile private var deviceOrientationDegrees = 0
@@ -816,9 +830,42 @@ class RawCameraController(
                     captureFrames(1, captureAlreadyStarted = true)
                 }
             }, ZSL_SELECTION_WAIT_MS)
+        } else if (rawZslRequested && !rawZslDisabledForSession) {
+            // ZSL wanted but the ring is warming or re-arming after saves:
+            // wait for recovery instead of degrading to a forward single.
+            // Falls back only if the ring never returns (timeout/disabled).
+            onState("ZSL QUEUED")
+            Log.i(
+                LOG_TAG,
+                "ZSL not streaming at shutter (saves=${pendingSaveCount.get()} " +
+                    "buffered=${rawZslBuffer?.size ?: 0}/$rawZslCapacity); waiting for ring"
+            )
+            val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+            retryZslSelectionUntil(pressElapsedNanos, sensorCutoffSnapshot, deadlineMs)
         } else {
             captureFrames(1, captureAlreadyStarted = true)
         }
+    }
+
+    private fun retryZslSelectionUntil(
+        pressElapsedNanos: Long,
+        sensorCutoffSnapshot: Long,
+        deadlineMs: Long
+    ) {
+        cameraHandler.postDelayed({
+            if (!captureInProgress.get()) return@postDelayed
+            if (rawZslDisabledForSession) {
+                captureFrames(1, captureAlreadyStarted = true)
+                return@postDelayed
+            }
+            if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return@postDelayed
+            if (SystemClock.elapsedRealtime() >= deadlineMs) {
+                Log.w(LOG_TAG, "ZSL ring did not recover in time; falling back to single capture")
+                captureFrames(1, captureAlreadyStarted = true)
+                return@postDelayed
+            }
+            retryZslSelectionUntil(pressElapsedNanos, sensorCutoffSnapshot, deadlineMs)
+        }, ZSL_SELECTION_WAIT_MS)
     }
 
     private fun beginCapture(
@@ -870,7 +917,17 @@ class RawCameraController(
             rawZslRealtimeTimestamps,
             selectedFrameCount
         ).orEmpty()
-        if (selected.isEmpty()) return false
+        if (selected.isEmpty()) {
+            if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                Log.d(
+                    LOG_TAG,
+                    "ZSL selection empty buffered=${rawZslBuffer?.size ?: 0}/$rawZslCapacity " +
+                        "need=$selectedFrameCount streaming=$rawZslStreaming " +
+                        "saves=${pendingSaveCount.get()}"
+                )
+            }
+            return false
+        }
         updateRepeatingRequest(allowRawZsl = false)
         activeFramesRemaining.set(0)
 
@@ -1113,28 +1170,70 @@ class RawCameraController(
     }
 
     fun setAfPoint(viewX: Float, viewY: Float) {
+        // Legacy entry point: a tap always carries both AF and AE at the same
+        // point (see FocusMeteringOverlay), so route through the coalesced path
+        // to avoid two back-to-back repeating rebuilds.
+        setFocusAndMeteringPoint(viewX, viewY)
+    }
+
+    /**
+     * Coalesced tap-to-focus + tap-to-meter: installs the AF and AE regions
+     * together, issues a single repeating update, then a single AF START.
+     * Same visible behavior as the old split setAePoint()+setAfPoint() pair,
+     * but 2-3 fewer HAL round-trips per tap. Every tap refocuses; the sharp
+     * lock auto-releases after [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
+     */
+    fun setFocusAndMeteringPoint(viewX: Float, viewY: Float) {
+        startTouchFocus(viewX, viewY, indefinite = false)
+    }
+
+    /**
+     * Press-and-hold variant: focuses at the point like a tap but the sharp
+     * lock ignores the auto-release timer and holds until double-tap reset,
+     * manual focus, lens switch, or stop.
+     */
+    fun setFocusAndMeteringHold(viewX: Float, viewY: Float) {
+        startTouchFocus(viewX, viewY, indefinite = true)
+    }
+
+    private fun startTouchFocus(viewX: Float, viewY: Float, indefinite: Boolean) {
         if (!isOnCameraThread()) {
-            cameraHandler.post { setAfPoint(viewX, viewY) }
+            cameraHandler.post { startTouchFocus(viewX, viewY, indefinite) }
             return
         }
-        val device = camera ?: return
-        val currentSession = session ?: return
-        val surface = previewSurface ?: return
-        if ((characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) == 0) {
+        if (camera == null || session == null || previewSurface == null) return
+        val hasAfRegions = (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
+        if (!hasAfRegions) {
             // Matches Open Camera: AE metering may still have been installed even when the
             // camera has no AF regions, and setFocusAndMeteringArea() reports no focus area.
-            if (!isAeMeteringSupported()) onState("FOCUS AREA NOT SUPPORTED")
+            if (isAeMeteringSupported()) {
+                aeRegion = meteringRegion(viewX, viewY)
+                if (aeRegion != null) updateRepeatingRequest(preserveRawZslBuffer = true)
+            } else {
+                onState("FOCUS AREA NOT SUPPORTED")
+            }
             return
         }
 
+        val wasTouchActive = openCameraTouchFocusActive
         removeOpenCameraContinuousFocusReset()
-        cancelOpenCameraAutoFocusForNewTouch()
+        removeOpenCameraTouchFocusTimeout()
+        removePendingTouchFocusStart()
+        // A CANCEL is only needed to interrupt a previous touch scan/lock.
+        // First taps skip it entirely: one less capture + one less repeating
+        // rebuild on the critical path.
+        if (wasTouchActive) sendAfCancelCapture()
         selectedFocusDistanceDiopters = null
         val region = meteringRegion(viewX, viewY) ?: return
         afRegion = region
         if (isAeMeteringSupported()) aeRegion = region
         openCameraTouchFocusActive = true
         openCameraTouchFocusCompleted = false
+        touchFocusStartSent = false
+        touchFocusLockedSharp = false
+        focusLockIndefinite = indefinite
+        focusLockDeadlineMs = 0L
+        onFocusLock(false, false, 0L)
         publishControls()
 
         if (!supportsOpenCameraTouchFocus()) {
@@ -1146,8 +1245,46 @@ class RawCameraController(
             return
         }
 
+        if (captureInProgress.get() || cameraCaptureSequenceActive) {
+            // An AF trigger issued mid-still would be ignored or fail. Keep the
+            // new regions/mode in the repeating stream and retry START shortly.
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+            onState("FOCUSING")
+            scheduleOpenCameraTouchFocusTimeout()
+            pendingTouchFocusStart = Runnable {
+                pendingTouchFocusStart = null
+                if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
+            }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_RETRY_MS) }
+            return
+        }
+
         try {
             updateRepeatingRequest(preserveRawZslBuffer = true)
+            // Let the AUTO-mode repeating commit before START is queued so the
+            // HAL cannot observe START while still in CONT_PICTURE.
+            onState("FOCUSING")
+            scheduleOpenCameraTouchFocusTimeout()
+            pendingTouchFocusStart = Runnable {
+                pendingTouchFocusStart = null
+                if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
+            }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_SETTLE_MS) }
+        } catch (failure: CameraAccessException) {
+            openCameraTouchFocusActive = false
+            touchFocusLockedSharp = false
+            focusLockIndefinite = false
+            focusLockDeadlineMs = 0L
+            onFocusLock(false, false, 0L)
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+            onState("FOCUS ERROR")
+        }
+    }
+
+    /** One-shot AF START built from the current repeating state (AUTO + regions). */
+    private fun sendTouchFocusStart() {
+        val device = camera ?: return
+        val currentSession = session ?: return
+        val surface = previewSurface ?: return
+        try {
             val start = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 applyCameraControls(this)
@@ -1156,14 +1293,40 @@ class RawCameraController(
                 }
                 set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
             }
+            touchFocusStartSent = true
+            touchFocusStartElapsedMs = SystemClock.elapsedRealtime()
             currentSession.capture(start.build(), debugCaptureCallback, cameraHandler)
-            scheduleOpenCameraTouchFocusTimeout()
-            onState("FOCUSING")
         } catch (failure: CameraAccessException) {
             openCameraTouchFocusActive = false
+            touchFocusStartSent = false
+            touchFocusLockedSharp = false
+            focusLockIndefinite = false
+            focusLockDeadlineMs = 0L
+            onFocusLock(false, false, 0L)
             updateRepeatingRequest(preserveRawZslBuffer = true)
             onState("FOCUS ERROR")
         }
+    }
+
+    /** Single CANCEL capture with no repeating rebuild; caller re-asserts state once. */
+    private fun sendAfCancelCapture() {
+        val device = camera ?: return
+        val currentSession = session ?: return
+        val surface = previewSurface ?: return
+        try {
+            val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                applyCameraControls(this)
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
+            }
+            currentSession.capture(cancel.build(), debugCaptureCallback, cameraHandler)
+        } catch (_: CameraAccessException) {
+        }
+    }
+
+    private fun removePendingTouchFocusStart() {
+        pendingTouchFocusStart?.let(cameraHandler::removeCallbacks)
+        pendingTouchFocusStart = null
     }
 
     fun setAePoint(viewX: Float, viewY: Float) {
@@ -1447,24 +1610,32 @@ class RawCameraController(
             return
         }
         ettrSettings = settings.copy(headroomEv = settings.headroomEv.coerceIn(0f, 1f))
-        if (!ettrSettings.enabled) {
-            ettrIso = null
-            ettrShutterNanos = null
-            ettrConverged = false
-            ettrHottest = Float.NaN
-            ettrClipHot = Float.NaN
-            ettrClipSecond = Float.NaN
-        }
+        if (!ettrSettings.enabled) clearEttrLiveState()
         lastEttrUpdateMs = Long.MIN_VALUE
         updateRepeatingRequest()
     }
 
+    /** Drops the converged ETTR pair; the enabled preference is preserved. */
+    private fun clearEttrLiveState() {
+        ettrIso = null
+        ettrShutterNanos = null
+        ettrConverged = false
+        ettrHottest = Float.NaN
+        ettrClipHot = Float.NaN
+        ettrClipSecond = Float.NaN
+    }
+
     /**
      * True when a RAW-measured ETTR pair is ready for the next forward capture.
-     * Manual exposure always wins; ZSL saves buffered frames as metered.
+     * ETTR is an AUTO-mode feature only: PROGRAM owns exposure through its own
+     * RAW loop, MANUAL freezes the metered pair, and ZSL saves buffered frames
+     * as metered.
      */
+    private fun ettrModeAvailable(): Boolean =
+        captureExposureMode == CaptureExposureMode.AUTO
+
     private fun ettrCaptureActive(): Boolean =
-        ettrSettings.enabled && !rawZslRequested &&
+        ettrSettings.enabled && ettrModeAvailable() && !rawZslRequested &&
             selectedIso == null && selectedExposureNanos == null &&
             ettrIso != null && ettrShutterNanos != null
 
@@ -1487,8 +1658,8 @@ class RawCameraController(
         }
         val now = SystemClock.elapsedRealtime()
         val wantProgram = programCustomActive() && !ettrCaptureActive()
-        val wantEttr = ettrSettings.enabled && selectedIso == null && selectedExposureNanos == null &&
-            captureExposureMode != CaptureExposureMode.MANUAL
+        val wantEttr = ettrSettings.enabled && ettrModeAvailable() &&
+            selectedIso == null && selectedExposureNanos == null
         if (!wantProgram && !wantEttr) {
             image.close()
             return
@@ -1496,12 +1667,12 @@ class RawCameraController(
         val programDue = wantProgram &&
             RawHistogramThrottle.shouldSample(
                 now, lastProgramUpdateMs,
-                if (programConverged) PROGRAM_CONVERGED_INTERVAL_MS else PROGRAM_UPDATE_INTERVAL_MS
+                meteringInterval(if (programConverged) PROGRAM_CONVERGED_INTERVAL_MS else PROGRAM_UPDATE_INTERVAL_MS)
             )
         val ettrDue = wantEttr &&
             RawHistogramThrottle.shouldSample(
                 now, lastEttrUpdateMs,
-                if (ettrConverged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS
+                meteringInterval(if (ettrConverged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS)
             )
         if ((!programDue && !ettrDue) || !meteringInFlight.compareAndSet(false, true)) {
             image.close()
@@ -1519,6 +1690,7 @@ class RawCameraController(
                 val sample = if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
                 else RawEttrSampler.sampleProgram(image, cameraCharacteristics)
                     val sampleMs = SystemClock.elapsedRealtime() - sampleStartMs
+                    lastMeteringSampleMs = sampleMs
                     if (sampleMs > SICK_SAMPLE_LOG_MS) {
                         Log.w(LOG_TAG, "Slow RAW metering sample: ${sampleMs}ms (image ${image.width}x${image.height})")
                     }
@@ -1540,6 +1712,16 @@ class RawCameraController(
             runCatching { image.close() }
         }
     }
+
+    /**
+     * Effective metering cadence. On sensors where one Bayer sample costs more
+     * than [SLOW_METERING_BACKOFF_MS] (e.g. ~466 ms for 12 MP on some
+     * MediaTek parts), sampling at the base 2 Hz would saturate the single
+     * metering thread and starve convergence updates. Halve the rate there;
+     * fast devices are unaffected.
+     */
+    private fun meteringInterval(baseMs: Long): Long =
+        if (lastMeteringSampleMs > SLOW_METERING_BACKOFF_MS) baseMs * 2 else baseMs
 
     /**
      * One PROGRAM custom-AE iteration: RAW brightness (center/average/spot per
@@ -1617,6 +1799,12 @@ class RawCameraController(
         if (!programCustomActive() || ettrCaptureActive() || captureInProgress.get() ||
             !running || destroyed
         ) return
+        if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) {
+            // A ~10 Hz repeating rebuild mid-scan restarts the HAL AF sweep.
+            // Defer the exposure glide until the touch lock settles or times out.
+            scheduleProgramRampTick()
+            return
+        }
         val targetIso = programTargetIso ?: return
         val targetShutter = programTargetShutterNanos ?: return
         val limits = programTargetLimits ?: return
@@ -1744,7 +1932,7 @@ class RawCameraController(
      * [dispatchMeteringSample]) and post the result here.
      */
     private fun updateEttrFromSample(sample: EttrRawSample) {
-        if (!ettrSettings.enabled) return
+        if (!ettrSettings.enabled || !ettrModeAvailable()) return
         if (captureInProgress.get()) return
         val levels = sample.levels
         val baselineIso = lastIso
@@ -1754,13 +1942,7 @@ class RawCameraController(
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
         updateEttrClipState(sample)
-        val shift = if (ettrSettings.allowSingleChannelClip) {
-            val gain = RawEttrMeter.gainForClipBand(sample.bins, sample.saturated, sample.totals)
-            (kotlin.math.ln(gain) / kotlin.math.ln(2.0))
-                .coerceIn(-RawEttrMeter.MAX_STEP_EV, RawEttrMeter.MAX_STEP_EV)
-        } else {
-            RawEttrMeter.correctionEv(levels.hottest, ettrSettings.headroomEv)
-        }
+        val shift = RawEttrMeter.correctionEv(levels.hottest, ettrSettings.headroomEv)
         val result = RawEttrMeter.solve(
             baselineIso,
             baselineShutter,
@@ -1779,29 +1961,10 @@ class RawCameraController(
         ettrShutterNanos = result.shutterNanos
         ettrConverged = result.converged
         ettrHottest = levels.hottest
-        // Unified glide: when the PROGRAM preview is live, ease toward the ETTR
-        // pair instead of jumping the repeating request once per sample.
-        if (programCustomActive()) {
-            programTargetIso = result.iso
-            programTargetShutterNanos = result.shutterNanos
-            programTargetLimits = ExposureBalanceLimits(
-                isoMin = isoRange.lower,
-                isoMax = isoRange.upper,
-                shutterMinNanos = shutterRange.lower,
-                shutterMaxNanos = shutterRange.upper,
-                shutterStartNanos = shutterRange.upper
-            )
-            programTargetLockMode = ProgramLockMode.NONE
-            if (dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos) {
-                scheduleProgramRampTick()
-            } else {
-                cancelProgramRampTick()
-            }
-        }
     }
 
     /**
-     * Hottest/second measured clipped fractions for the REC debug readout, judged
+     * Hottest/second measured clipped fractions for the ETTR debug readout, judged
      * over R, pooled green, B — both greens are one color for reconstruction.
      */
     private fun updateEttrClipState(sample: EttrRawSample) {
@@ -1919,6 +2082,12 @@ class RawCameraController(
         lastProgramUpdateMs = Long.MIN_VALUE
         cancelDynamicExposureProbe()
         lastEttrUpdateMs = Long.MIN_VALUE
+        if (mode != CaptureExposureMode.AUTO) {
+            // ETTR is AUTO-only: drop any settled pair so returning to AUTO
+            // reconverges from live metering instead of a stale exposure.
+            // The enabled preference is kept and resumes automatically.
+            clearEttrLiveState()
+        }
         when (mode) {
             CaptureExposureMode.MANUAL -> {
                 // Entering M freezes the currently metered pair, like a DSLR's manual mode.
@@ -2077,6 +2246,20 @@ class RawCameraController(
                 selectedFocusDistanceDiopters = value?.let { raw ->
                     (raw.toFloat() / FOCUS_DISTANCE_SCALE).coerceIn(0f, minimumDistance)
                 }
+                if (value != null && openCameraTouchFocusActive) {
+                    // Manual focus takes over: drop the held touch lock silently
+                    // (no CANCEL needed, AF_MODE_OFF wins in applyCameraControls).
+                    removeOpenCameraContinuousFocusReset()
+                    removeOpenCameraTouchFocusTimeout()
+                    removePendingTouchFocusStart()
+                    touchFocusStartSent = false
+                    touchFocusLockedSharp = false
+                    focusLockIndefinite = false
+                    focusLockDeadlineMs = 0L
+                    onFocusLock(false, false, 0L)
+                    openCameraTouchFocusActive = false
+                    openCameraTouchFocusCompleted = false
+                }
             }
             ManualControl.EXPOSURE_COMPENSATION -> exposureCompensation = value?.toInt() ?: 0
         }
@@ -2135,16 +2318,15 @@ class RawCameraController(
         )
         // RAW-based ETTR needs the same metering stream even when the histogram is off
         // or showing YUV: sampled frames update the still-capture pair and are closed.
-        // Manual exposure wins over ETTR, so no stream is needed there.
-        val useRawEttr = !useRawZsl && ettrSettings.enabled && shouldRunRawStream(
+        // ETTR is AUTO-only; PROGRAM drives exposure through its own RAW loop.
+        val useRawEttr = !useRawZsl && ettrSettings.enabled && ettrModeAvailable() && shouldRunRawStream(
             true, false, readerReady, captureActive
         ) &&
             selectedIso == null && selectedExposureNanos == null &&
             captureExposureMode != CaptureExposureMode.MANUAL
         // PROGRAM custom AE needs the same metering stream: RAW brightness (center-weighted
         // mean or median per profile) drives sensor ISO + shutter directly (AE_OFF live).
-        // Runs alongside ETTR; ETTR overrides the pair when converged. Manual exposure
-        // wins, ZSL is mutually exclusive.
+        // Manual exposure wins, ZSL is mutually exclusive.
         val useRawProgram = !useRawZsl && programCustomActive() && shouldRunRawStream(
             true, false, readerReady, captureActive
         )
@@ -2295,8 +2477,7 @@ class RawCameraController(
                 // In Program mode the saved RAW uses the calculated pair, not these hardware-AE
                 // preview values. Show that pair on the ISO/shutter controls so the main UI does
                 // not contradict the capture result. ZSL intentionally keeps showing live AE.
-                // ETTR wins over the Program curve when both are armed: the still capture
-                // uses the RAW-measured pair.
+                // In AUTO mode a settled ETTR pair replaces the display (and the capture).
                 val showEttr = ettrCaptureActive()
                 val showDynamic = !showEttr && dynamicExposureDisplayActive()
                 val displayIso = when {
@@ -2330,7 +2511,7 @@ class RawCameraController(
 
     /**
      * PROGRAM custom AE drives the sensor directly from RAW brightness (AE_OFF live).
-     * Preview and still share the same live pair; ETTR overrides it when converged.
+     * Preview and still share the same live pair.
      * Legacy hardware-AE rebalance is retained only as a seed before the first RAW
      * sample arrives.
      */
@@ -2366,8 +2547,8 @@ class RawCameraController(
         val dynamicExposure = (applyDynamicCurve || programLive) && !manualExposure &&
             dynamicExposureSettings.enabled && !rawZslRequested &&
             dynamicIso != null && dynamicShutterNanos != null
-        // RAW-measured ETTR overrides the PROGRAM custom pair: the still
-        // request exposes so the hottest CFA channel lands just below clipping.
+        // RAW-measured ETTR (AUTO mode only): the still request exposes so the
+        // hottest CFA channel lands just below clipping.
         // While the glide is mid-flight the live (ramping) pair wins over both
         // targets, so every repeating rebuild keeps moving smoothly instead of
         // jumping straight to the endpoint.
@@ -2509,6 +2690,8 @@ class RawCameraController(
     private fun scheduleDynamicExposureProbe() {
         cancelDynamicExposureProbe()
         if (!dynamicExposureSettings.enabled || captureInProgress.get()) return
+        // Probes are one-shot captures; keep them out of the touch-AF scan window.
+        if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) return
         dynamicExposureProbe = Runnable {
             val device = camera ?: return@Runnable
             val currentSession = session ?: return@Runnable
@@ -2590,8 +2773,36 @@ class RawCameraController(
             CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
                 openCameraTouchFocusCompleted = true
                 removeOpenCameraTouchFocusTimeout()
-                onState(if (state == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) "FOCUS LOCKED" else "FOCUS NOT LOCKED")
-                scheduleOpenCameraContinuousFocusReset()
+                removePendingTouchFocusStart()
+                if (state == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
+                    touchFocusLockedSharp = true
+                    if (focusLockIndefinite) {
+                        focusLockDeadlineMs = 0L
+                        onState("FOCUS LOCKED ∞")
+                    } else {
+                        focusLockDeadlineMs =
+                            SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
+                        scheduleOpenCameraContinuousFocusReset()
+                        onState("FOCUS LOCKED")
+                    }
+                    onFocusLock(true, focusLockIndefinite, focusLockDeadlineMs)
+                } else {
+                    completeTouchFocusUnlocked("FOCUS NOT LOCKED")
+                    return
+                }
+                // Re-assert the repeating request once so the HAL keeps
+                // IDLE/AUTO instead of drifting; circles stay until cleared.
+                updateRepeatingRequest(preserveRawZslBuffer = true)
+            }
+            CaptureResult.CONTROL_AF_STATE_INACTIVE -> {
+                // Some HALs return to INACTIVE after START without ever reporting
+                // a locked state. Treat that as a failed lock once START is known
+                // to have been sent, instead of hanging until the full timeout.
+                if (touchFocusStartSent &&
+                    SystemClock.elapsedRealtime() - touchFocusStartElapsedMs > TOUCH_FOCUS_INACTIVE_GRACE_MS
+                ) {
+                    completeTouchFocusUnlocked("FOCUS NOT LOCKED")
+                }
             }
         }
     }
@@ -2606,33 +2817,38 @@ class RawCameraController(
         openCameraTouchFocusTimeout = null
     }
 
+    /**
+     * Failed scan that still holds the touch point (AF_MODE_AUTO + regions, no
+     * badge): the lock timer returns to continuous unless the user retaps or
+     * double-taps first.
+     */
+    private fun completeTouchFocusUnlocked(status: String) {
+        openCameraTouchFocusCompleted = true
+        touchFocusStartSent = false
+        touchFocusLockedSharp = false
+        removeOpenCameraTouchFocusTimeout()
+        removePendingTouchFocusStart()
+        onState(status)
+        focusLockDeadlineMs = SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
+        scheduleOpenCameraContinuousFocusReset()
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+    }
+
     private fun scheduleOpenCameraTouchFocusTimeout() {
         removeOpenCameraTouchFocusTimeout()
         openCameraTouchFocusTimeout = Runnable {
             openCameraTouchFocusTimeout = null
             if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) {
-                openCameraTouchFocusCompleted = true
-                onState("FOCUS NOT LOCKED")
-                scheduleOpenCameraContinuousFocusReset()
+                completeTouchFocusUnlocked("FOCUS NOT LOCKED")
             }
         }.also { cameraHandler.postDelayed(it, OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS) }
     }
 
     private fun cancelOpenCameraAutoFocusForNewTouch() {
         removeOpenCameraTouchFocusTimeout()
-        val device = camera ?: return
-        val currentSession = session ?: return
-        val surface = previewSurface ?: return
-        try {
-            val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
-                applyCameraControls(this)
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
-            }
-            currentSession.capture(cancel.build(), debugCaptureCallback, cameraHandler)
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-        } catch (_: CameraAccessException) {
-        }
+        // Lightweight legacy path: single CANCEL, no repeating rebuild.
+        // New taps use sendAfCancelCapture() + one shared repeating update.
+        sendAfCancelCapture()
     }
 
     private fun scheduleOpenCameraContinuousFocusReset() {
@@ -2640,13 +2856,15 @@ class RawCameraController(
         openCameraContinuousFocusReset = Runnable {
             openCameraContinuousFocusReset = null
             continuousFocusResetOpenCamera()
-        }.also { cameraHandler.postDelayed(it, OPEN_CAMERA_CONTINUOUS_FOCUS_RESET_MS) }
+        }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_LOCK_TIMEOUT_MS) }
     }
 
     private fun continuousFocusResetOpenCamera() {
         if (!openCameraTouchFocusActive) return
         removeOpenCameraContinuousFocusReset()
         removeOpenCameraTouchFocusTimeout()
+        removePendingTouchFocusStart()
+        touchFocusStartSent = false
         val device = camera
         val currentSession = session
         val surface = previewSurface
@@ -2667,8 +2885,12 @@ class RawCameraController(
         }
         openCameraTouchFocusActive = false
         openCameraTouchFocusCompleted = false
+        touchFocusLockedSharp = false
+        focusLockIndefinite = false
+        focusLockDeadlineMs = 0L
+        onFocusLock(false, false, 0L)
         updateRepeatingRequest(preserveRawZslBuffer = true)
-        // UI-only notification: clear the AF/AE target circles when the automatic
+        // UI-only notification: clear the AF/AE target circles when the explicit
         // touch-focus release completes. This does not alter Camera2 AF behavior.
         onMeteringReleased()
         onState("CONTINUOUS AF")
@@ -2700,7 +2922,7 @@ class RawCameraController(
             "AF_MODE  ${afModeName(afMode)}\n" +
                 "AF_TRIGGER ${afTriggerName(afTrigger)}\n" +
                 "AF_STATE ${afStateName(afState)}\n" +
-                "AF_POLICY OPEN_CAMERA/CONT_PICTURE  CAMERA_SEQ ${if (cameraCaptureSequenceActive) "BUSY" else "IDLE"}\n" +
+                "AF_POLICY TOUCH_HOLD/CONT_PICTURE  CAMERA_SEQ ${if (cameraCaptureSequenceActive) "BUSY" else "IDLE"}\n" +
                 "SAVE_QUEUE ${pendingSaveCount.get()}/$MAX_IN_FLIGHT_JPEG_SAVES\n" +
                 "AE_MODE  ${aeModeName(aeMode)}\n" +
                 "AE_TRIGGER ${aeTriggerName(aeTrigger)}\n" +
@@ -2729,17 +2951,15 @@ class RawCameraController(
                 } ?: "METERING") + "\n" +
                 "ETTR " + when {
                     !ettrSettings.enabled -> "OFF"
-                    ettrSettings.allowSingleChannelClip -> "ON REC>PROGRAM"
-                    else -> "ON SAFE>PROGRAM"
+                    !ettrModeAvailable() -> "OFF (AUTO ONLY)"
+                    else -> "ON"
                 } + " " +
                 (ettrIso?.let { targetIso ->
                     ettrShutterNanos?.let { targetShutter ->
                         "ISO $targetIso EXP ${formatExposure(targetShutter)} " +
                             (if (ettrConverged) "LOCKED" else "TRACKING") +
                             " HOT ${if (ettrHottest.isFinite()) String.format(java.util.Locale.US, "%.2f", ettrHottest) else "--"}" +
-                            if (ettrSettings.allowSingleChannelClip) {
-                                " CLIP ${clipPercent(ettrClipHot)}/${clipPercent(ettrClipSecond)}"
-                            } else ""
+                            " CLIP ${clipPercent(ettrClipHot)}/${clipPercent(ettrClipSecond)}"
                     }
                 } ?: "METERING") + "\n" +
                 "RAW_ZSL ${if (rawZslStreaming) "ON" else "OFF"} " +
@@ -3095,9 +3315,16 @@ class RawCameraController(
                 val merged = requireNotNull(RawPreDemosaicPipeline.process(
                     mergedRaw, snapshots[referenceIndex].first, PreDemosaicSettings()).cfa)
                 var referenceDng: String? = null
+                val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+                // Merged CFA is lens-corrected normalized data: the exact AI
+                // training domain. Denoise once here and share the result
+                // between the merged-DNG write and the JPEG below.
+                val effectiveMerged = if (denoise.aiEnabled) {
+                    developer.denoiseCfa(merged, snapshots[referenceIndex].first) ?: merged
+                } else merged
                 if (outputFormat.includesDng || saveDebugFrames) {
                     referenceDng = DngSaver(context).saveMerged(
-                        merged, snapshots[referenceIndex].first, captureId, gps = captureGps
+                        effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps
                     )
                 }
                 if (outputFormat.includesJpeg) {
@@ -3106,8 +3333,7 @@ class RawCameraController(
                     }.sorted()
                     val displayEv = kotlin.math.ln(exposures[exposures.size / 2] / exposures.first()) /
                         kotlin.math.ln(2.0)
-                    val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
-                    val developed = developer.developMergedJpeg(merged, snapshots[referenceIndex].first,
+                    val developed = developer.developMergedJpeg(effectiveMerged, snapshots[referenceIndex].first,
                         RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv), outputSettings)
                     try {
                         val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
@@ -3209,22 +3435,65 @@ class RawCameraController(
                     var jpegName: String? = null
                     var dngFailure: Exception? = null
                     var jpegFailure: Exception? = null
-                    if (outputFormat.includesDng) {
-                        try {
-                            dngName = DngSaver(context).save(
-                                image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
-                                frameMetadata, dngWriterBackend(), captureId = captureTimeMillis,
-                                gps = captureGps, fileNameSuffix = fileNameSuffix,
-                                subfolder = subfolder
-                            )
+                    val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also {
+                        rawDeveloper = it
+                    }
+                    val devSettings = RawDevelopmentSettings(
+                        denoise = captureDenoiseSettings,
+                        adaptiveExposureStrength = adaptiveExposureStrength,
+                        sharedAdaptiveExposure = sharedAdaptiveExposure
+                    )
+                    // AI denoise-once: one inference whose CFA is shared by the
+                    // denoised-DNG write and the JPEG. Null when AI is off or
+                    // unavailable -> legacy paths below run unchanged.
+                    val aiCfa: UnpackedRawCfa? = if (captureDenoiseSettings.aiEnabled &&
+                        (outputFormat.includesDng || outputFormat.includesJpeg)
+                    ) {
+                        val aiPlane = image.planes.singleOrNull()?.buffer
+                        if (aiPlane != null) {
+                            developer.denoiseCaptureCfa(aiPlane, frameMetadata, devSettings)
+                        } else null
+                    } else null
+                    fun saveOriginalDng(): String? = try {
+                        DngSaver(context).save(
+                            image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
+                            frameMetadata, dngWriterBackend(), captureId = captureTimeMillis,
+                            gps = captureGps, fileNameSuffix = fileNameSuffix,
+                            subfolder = subfolder
+                        ).also {
                             Log.i(
                                 LOG_TAG,
-                                "DNG saved name=$dngName pendingSaves=${pendingSaveCount.get()}"
+                                "DNG saved name=$it pendingSaves=${pendingSaveCount.get()}"
                             )
-                        } catch (failure: Exception) {
-                            dngFailure = failure
-                            Log.e(LOG_TAG, "DNG save failed", failure)
                         }
+                    } catch (failure: Exception) {
+                        dngFailure = failure
+                        Log.e(LOG_TAG, "DNG save failed", failure)
+                        null
+                    }
+                    if (aiCfa != null) {
+                        if (outputFormat.includesDng) {
+                            try {
+                                dngName = DngSaver(context).saveAiDenoised(
+                                    aiCfa, frameMetadata, captureId = captureTimeMillis,
+                                    fileNameSuffix = fileNameSuffix, gps = captureGps,
+                                    subfolder = subfolder
+                                )
+                                Log.i(
+                                    LOG_TAG,
+                                    "AI DNG saved name=$dngName pendingSaves=${pendingSaveCount.get()}"
+                                )
+                            } catch (failure: Exception) {
+                                dngFailure = failure
+                                Log.e(LOG_TAG, "AI DNG save failed", failure)
+                            }
+                            if (captureDenoiseSettings.saveOriginalDng) {
+                                val ogName = saveOriginalDng()
+                                if (dngName == null) dngName = ogName
+                            }
+                        }
+                    } else if (outputFormat.includesDng) {
+                        dngName = saveOriginalDng()
                     }
                     if (outputFormat.includesJpeg) {
                         try {
@@ -3232,22 +3501,24 @@ class RawCameraController(
                                 LOG_TAG,
                                 "RAW development input timestamp=${frameMetadata.timestampNanos} " +
                                     "frame=${frameMetadata.frameNumber} cfa=${frameMetadata.cfaPattern} " +
-                                    "geometry=${frameMetadata.bufferGeometry}"
+                                    "geometry=${frameMetadata.bufferGeometry}" +
+                                    if (aiCfa != null) " aiDenoised" else ""
                             )
-                            val rawPlane = image.planes.singleOrNull()?.buffer
-                                ?: throw UnsupportedOperationException("RAW image must have one plane")
-                            val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also {
-                                rawDeveloper = it
+                            val developed = if (aiCfa != null) {
+                                developer.developCfaJpeg(
+                                    aiCfa, frameMetadata,
+                                    settings = devSettings,
+                                    outputSettings = outputSettings
+                                )
+                            } else {
+                                val rawPlane = image.planes.singleOrNull()?.buffer
+                                    ?: throw UnsupportedOperationException("RAW image must have one plane")
+                                developer.developJpeg(
+                                    rawPlane, frameMetadata,
+                                    settings = devSettings,
+                                    outputSettings = outputSettings
+                                )
                             }
-                            val developed = developer.developJpeg(
-                                rawPlane, frameMetadata,
-                                settings = RawDevelopmentSettings(
-                                    denoise = captureDenoiseSettings,
-                                    adaptiveExposureStrength = adaptiveExposureStrength,
-                                    sharedAdaptiveExposure = sharedAdaptiveExposure
-                                ),
-                                outputSettings = outputSettings
-                            )
                             try {
                                 jpegName = JpegSaver(context).save(
                                     developed, frameMetadata, result,
@@ -3272,7 +3543,8 @@ class RawCameraController(
                             Log.e(LOG_TAG, "RAW JPEG development/save failed", failure)
                         }
                     }
-                    val label = captureLabel?.let { " • $it" }.orEmpty()
+                    val label = captureLabel?.let { " • $it" }.orEmpty() +
+                        if (aiCfa != null) " • AI" else ""
                     val shadingNote = if (
                         frameMetadata.lensShadingMap == null &&
                         !frameMetadata.lensShadingAlreadyApplied
@@ -3430,19 +3702,38 @@ class RawCameraController(
 
     private fun resumeRawZslIfIdle() {
         if (!running || session == null || captureInProgress.get()) return
-        if (rawZslStreaming || rawHistogramStreaming || ettrStreaming) return
+        val savesPending = pendingSaveCount.get() > 0
+        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !savesPending
+        // ZSL owns the RAW stream once saves have drained: preempt any
+        // histogram/ETTR/PROGRAM metering stream started while saves were
+        // pending. Without this, the first post-burst resume starts metering
+        // (allowRawZsl=false) and every later call early-returns on
+        // rawHistogramStreaming/ettrStreaming, wedging ZSL off until the next
+        // session (first burst works, every later shutter is a single).
+        if (wantZsl) {
+            if (rawZslStreaming) return
+            Log.i(
+                LOG_TAG,
+                "Resuming RAW ZSL ring (preempt metering " +
+                    "hist=$rawHistogramStreaming ettr=$ettrStreaming prog=$programStreaming)"
+            )
+            updateRepeatingRequest(allowRawZsl = true)
+            return
+        }
+        if (rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
         // Selected ZSL frames are owned by the serialized writer until each save
         // completes, and they still count toward ImageReader maxImages. Restarting
         // the ring on the first completion (while 29 siblings are still held)
         // re-wedges the gralloc queue into overflow + Mali unlock errors.
         // Metering streams sample-and-close, so they may resume immediately;
         // the ZSL ring re-arms when the last save completes and calls us again.
-        val savesPending = pendingSaveCount.get() > 0
-        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !savesPending
+        // (wantZsl handled above with preemption; here saves are pending or ZSL
+        // is off, so only metering may resume.)
         val wantHistogram = rawHistogramEnabled && histogramSourceRaw &&
             !rawHistogramDisabledForSession
-        val wantEttr = ettrSettings.enabled
-        if (!wantZsl && !wantHistogram && !wantEttr) return
+        val wantEttr = ettrSettings.enabled && ettrModeAvailable()
+        val wantProgram = programCustomActive()
+        if (!wantHistogram && !wantEttr && !wantProgram) return
         updateRepeatingRequest(allowRawZsl = !savesPending)
     }
 
@@ -3683,8 +3974,13 @@ class RawCameraController(
             lifecycleGeneration++
             openCameraTouchFocusActive = false
             openCameraTouchFocusCompleted = false
+            touchFocusStartSent = false
+            touchFocusLockedSharp = false
+            focusLockIndefinite = false
+            focusLockDeadlineMs = 0L
             removeOpenCameraTouchFocusTimeout()
             removeOpenCameraContinuousFocusReset()
+            removePendingTouchFocusStart()
             cancelRawZslWatchdog()
             cancelProgramRampTick()
             motionTracker.stop()
@@ -4033,6 +4329,7 @@ class RawCameraController(
          * so the ring itself can always fill to its configured capacity. */
         private const val ZSL_PAIR_WINDOW_SLOTS = 6
         private const val ZSL_SELECTION_WAIT_MS = 120L
+        private const val ZSL_RECOVERY_WAIT_MS = 3_000L
         private const val ZSL_STARTUP_TIMEOUT_MS = 4_000L
         private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
         private const val MAX_ZSL_FRAMES = 30
@@ -4092,8 +4389,15 @@ class RawCameraController(
         private const val RAW_READER_TRANSITION_SLOTS = 2
         private const val MIN_ACQUIRED_RAW_IMAGES = BURST_FRAME_COUNT + 2
         private const val LOG_TAG = "RawLensCamera"
-        private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = 1_000L
-        private const val OPEN_CAMERA_CONTINUOUS_FOCUS_RESET_MS = 3_000L
+        private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = 2_500L
+        /** Timed tap-lock hold before auto-return to continuous AF. */
+        private const val TOUCH_FOCUS_LOCK_TIMEOUT_MS = 10_000L
+        /** Settle between the AUTO repeating commit and the one-shot AF START. */
+        private const val TOUCH_FOCUS_START_SETTLE_MS = 60L
+        /** Retry delay when START is deferred because a still is executing. */
+        private const val TOUCH_FOCUS_START_RETRY_MS = 400L
+        /** Grace before INACTIVE-after-START counts as a failed lock. */
+        private const val TOUCH_FOCUS_INACTIVE_GRACE_MS = 200L
         private const val DEBUG_UPDATE_INTERVAL_MS = 200L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
@@ -4101,6 +4405,8 @@ class RawCameraController(
         private const val ETTR_UPDATE_INTERVAL_MS = 500L
         /** Metering samples slower than this are logged so sick streams show in logcat. */
         private const val SICK_SAMPLE_LOG_MS = 150L
+        /** Samples slower than this halve the metering cadence (see meteringInterval). */
+        private const val SLOW_METERING_BACKOFF_MS = 300L
         /** PROGRAM custom AE tracks RAW mid-tone at the same rate as ETTR. */
         private const val PROGRAM_UPDATE_INTERVAL_MS = 500L
         /** Relaxed metering once the loop has converged; any correction snaps back. */
