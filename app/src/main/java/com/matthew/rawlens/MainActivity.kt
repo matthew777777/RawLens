@@ -22,6 +22,7 @@ import android.view.KeyEvent
 import android.view.OrientationEventListener
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.TextView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -33,6 +34,7 @@ import android.widget.EditText
 import android.widget.ScrollView
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
+import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.util.Locale
 
 import android.view.WindowInsets
@@ -126,10 +128,13 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Viewfinder must never let the phone auto-lock mid-shoot.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
         releaseMode = lensPreferences().getInt(KEY_RELEASE_MODE,
             if (lensPreferences().getBoolean(KEY_BURST_RELEASE, false)) 1 else 0)
         preloadFlowNetForMergedHdr()
+        preloadRawNindIfEnabled()
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)
         ) { CaptureExposureMode.AUTO }
@@ -335,6 +340,9 @@ class MainActivity : Activity(), SensorEventListener {
             {
                 runOnUiThread { meteringOverlay.clearTargets() }
             },
+            { locked, indefinite, deadlineMs ->
+                runOnUiThread { meteringOverlay.setFocusLock(locked, indefinite, deadlineMs) }
+            },
             { histogram ->
                 // The RAW histogram is live in every capture mode while the RAW source is
                 // selected (repeating histogram-only stream plus saved-frame snapshots).
@@ -439,12 +447,16 @@ class MainActivity : Activity(), SensorEventListener {
             hideManualControl()
             showSettings()
         }
+        // One tap installs AF + AE at the same point. Route through the coalesced
+        // controller path so a tap costs one repeating update + one AF START
+        // instead of separate AE and AF rebuilds. Long-press locks indefinitely.
         meteringOverlay.onAfPointChanged = { x, y ->
-            controller.setAfPoint(x, y)
+            controller.setFocusAndMeteringPoint(x, y)
         }
-        meteringOverlay.onAePointChanged = { x, y ->
-            controller.setAePoint(x, y)
+        meteringOverlay.onAfLockHold = { x, y ->
+            controller.setFocusAndMeteringHold(x, y)
         }
+        meteringOverlay.onAePointChanged = null
         meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
         manualSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -984,24 +996,18 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     /**
-     * RAW-based ETTR single exposure: OFF → SAFE (nothing clips) → REC (one channel
-     * may kiss white for highlight reconstruction) → OFF.
+     * RAW-based ETTR single exposure: OFF → ON → OFF.
+     * AUTO mode only: PROGRAM owns exposure through its own RAW loop.
      */
     private fun toggleEttr() {
-        val current = ettrSettings()
-        val next = when {
-            !current.enabled -> current.copy(enabled = true, allowSingleChannelClip = false)
-            !current.allowSingleChannelClip -> current.copy(allowSingleChannelClip = true)
-            else -> current.copy(enabled = false, allowSingleChannelClip = false)
+        if (captureExposureMode != CaptureExposureMode.AUTO) {
+            setStatus("ETTR NEEDS AUTO")
+            return
         }
+        val current = ettrSettings()
+        val next = current.copy(enabled = !current.enabled)
         saveEttrSettings(next)
-        setStatus(
-            when {
-                !next.enabled -> "ETTR OFF"
-                next.allowSingleChannelClip -> "ETTR • REC SINGLE-CHANNEL CLIP"
-                else -> "ETTR • RAW SINGLE EXPOSURE"
-            }
-        )
+        setStatus(if (next.enabled) "ETTR ON" else "ETTR OFF")
         findViewById<View>(R.id.ettrQuick)
             .performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
@@ -1011,7 +1017,6 @@ class MainActivity : Activity(), SensorEventListener {
             .putBoolean(KEY_ETTR_ENABLED, settings.enabled)
             .putFloat(KEY_ETTR_HEADROOM_EV, settings.headroomEv)
             .putInt(KEY_ETTR_ISO_LIMIT, settings.isoLimit)
-            .putBoolean(KEY_ETTR_ALLOW_CLIP, settings.allowSingleChannelClip)
             .apply()
         controller.setEttrSettings(settings)
         updateQuickControls()
@@ -1673,12 +1678,11 @@ class MainActivity : Activity(), SensorEventListener {
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
         release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±${hdrBracketStops()}"; else -> "SINGLE" }}"
         val ettrMode = controller.getEttrSettings()
-        val ettrEnabled = ettrMode.enabled
-        ettr.text = "ETTR\n" + when {
-            !ettrEnabled -> "OFF"
-            ettrMode.allowSingleChannelClip -> "REC"
-            else -> "SAFE"
-        }
+        val ettrAvailable = captureExposureMode == CaptureExposureMode.AUTO
+        val ettrEnabled = ettrMode.enabled && ettrAvailable
+        ettr.text = "ETTR\n" + if (ettrEnabled) "ON" else "OFF"
+        ettr.isEnabled = ettrAvailable
+        ettr.alpha = if (ettrAvailable) 1f else 0.4f
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(level, levelEnabled)
         setQuickTileState(histogram, histogramEnabled)
@@ -1935,8 +1939,7 @@ class MainActivity : Activity(), SensorEventListener {
         return EttrSettings(
             enabled = prefs.getBoolean(KEY_ETTR_ENABLED, false),
             headroomEv = prefs.getFloat(KEY_ETTR_HEADROOM_EV, 0.3f).coerceIn(0f, 1f),
-            isoLimit = prefs.getInt(KEY_ETTR_ISO_LIMIT, 0),
-            allowSingleChannelClip = prefs.getBoolean(KEY_ETTR_ALLOW_CLIP, false)
+            isoLimit = prefs.getInt(KEY_ETTR_ISO_LIMIT, 0)
         )
     }
 
@@ -2017,7 +2020,9 @@ class MainActivity : Activity(), SensorEventListener {
         val prefs = lensPreferences()
         return DenoiseSettings(
             enabled = prefs.getBoolean(KEY_DENOISE_ENABLED, false),
-            strength = prefs.getFloat(KEY_DENOISE_STRENGTH, 0.20f).coerceIn(0f, 4f)
+            strength = prefs.getFloat(KEY_DENOISE_STRENGTH, 0.20f).coerceIn(0f, 4f),
+            aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
+            saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true)
         )
     }
 
@@ -2029,8 +2034,32 @@ class MainActivity : Activity(), SensorEventListener {
         lensPreferences().edit()
             .putBoolean(KEY_DENOISE_ENABLED, settings.enabled)
             .putFloat(KEY_DENOISE_STRENGTH, settings.strength)
+            .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
+            .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .apply()
         return true
+    }
+
+    /**
+     * Warm-starts the RawNIND-tiny model when AI denoise is enabled
+     * (process-wide singleton, background init): model load plus Vulkan
+     * pipeline creation are slow on first use and must never block the
+     * save thread. No-op when AI is off so non-AI users pay nothing.
+     */
+    private fun preloadRawNindIfEnabled() {
+        if (lensPreferences().getBoolean(KEY_AI_DENOISE_ENABLED, false)) {
+            runCatching { RawNindNcnnProcessor.start(applicationContext) }
+        }
+    }
+
+    /** One-line AI model state for the Denoise tab; never blocks (no waitReady). */
+    private fun aiModelStatus(): String {
+        val proc = RawNindNcnnProcessor.getInstance()
+        return when {
+            proc?.isReady() == true -> "AI model: ready (GPU)"
+            proc != null -> "AI model: loading…"
+            else -> "AI model: not installed — train via python/rawnind-train, then paste rawnind_tiny.ncnn.param/.bin into assets/models/"
+        }
     }
 
     private fun showSettings() {
@@ -2749,6 +2778,46 @@ class MainActivity : Activity(), SensorEventListener {
             }
             content.addView(master)
 
+            val aiStatus = TextView(this).apply {
+                text = aiModelStatus()
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+                setPadding(dp(12), dp(10), dp(12), 0)
+            }
+            val aiSubordinate = ArrayList<View>()
+            val aiMaster = CheckBox(this).apply {
+                text = "AI RAW denoise (RawNIND-tiny)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = settings.aiEnabled
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = settings.copy(aiEnabled = value)
+                    if (persistDenoiseSettings(proposed)) {
+                        settings = proposed
+                        if (value) preloadRawNindIfEnabled()
+                        aiStatus.text = aiModelStatus()
+                        subordinate.forEach { it.isEnabled = settings.enabled }
+                        aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
+                    } else if (button.isChecked != settings.aiEnabled) {
+                        button.isChecked = settings.aiEnabled
+                    }
+                }
+            }
+            val keepOriginal = CheckBox(this).apply {
+                text = "Save original DNG alongside\nOff halves storage; the untouched sensor DNG is skipped."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = settings.saveOriginalDng
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = settings.copy(saveOriginalDng = value)
+                    if (persistDenoiseSettings(proposed)) {
+                        settings = proposed
+                    } else if (button.isChecked != settings.saveOriginalDng) {
+                        button.isChecked = settings.saveOriginalDng
+                    }
+                }
+            }
+            content.addView(aiMaster); content.addView(aiStatus); content.addView(keepOriginal)
+            aiSubordinate += keepOriginal
+            aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
+
             val label = TextView(this).apply {
                 text = "Strength: ${"%.3f".format(settings.strength)}"
                 setTextColor(getColor(R.color.text_primary)); textSize = 14f
@@ -3178,7 +3247,6 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_ETTR_ENABLED = "ettr_enabled"
         const val KEY_ETTR_HEADROOM_EV = "ettr_headroom_ev"
         const val KEY_ETTR_ISO_LIMIT = "ettr_iso_limit"
-        const val KEY_ETTR_ALLOW_CLIP = "ettr_allow_single_channel_clip"
         const val KEY_CAPTURE_EXPOSURE_MODE = "capture_exposure_mode"
         const val KEY_CAPTURE_FORMAT = "capture_format"
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
@@ -3203,6 +3271,8 @@ class MainActivity : Activity(), SensorEventListener {
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
         const val KEY_DENOISE_ENABLED = "denoise_enabled"
         const val KEY_DENOISE_STRENGTH = "denoise_profiled_wavelet_strength"
+        const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
+        const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L
