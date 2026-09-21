@@ -35,6 +35,20 @@ class LogcatFileWriterTest {
         assertTrue(LogcatFileWriter.sessionsToDelete(names, 5).isEmpty())
     }
 
+    @Test fun `session names accept the writer format and reject traversal`() {
+        assertTrue(LogcatFileWriter.isSessionName("logcat-20260921_143005_042.txt"))
+        assertTrue(!LogcatFileWriter.isSessionName("notes.txt"))
+        assertTrue(!LogcatFileWriter.isSessionName("logcat-20260921_143005_042.log"))
+        assertTrue(!LogcatFileWriter.isSessionName("../logcat-20260921_143005_042.txt"))
+        assertTrue(!LogcatFileWriter.isSessionName("sub/logcat-20260921_143005_042.txt"))
+    }
+
+    @Test fun `mirror is due after the interval and overdue from zero`() {
+        assertTrue(LogcatFileWriter.mirrorDue(0L, LogcatFileWriter.MIRROR_INTERVAL_MS))
+        assertTrue(LogcatFileWriter.mirrorDue(1000L, 1000L + LogcatFileWriter.MIRROR_INTERVAL_MS))
+        assertTrue(!LogcatFileWriter.mirrorDue(1000L, 1000L + LogcatFileWriter.MIRROR_INTERVAL_MS - 1))
+    }
+
     @Test fun `rotation budget constants stay bounded`() {
         assertEquals(8L * 1024L * 1024L, LogcatFileWriter.MAX_BYTES)
         assertEquals(5, LogcatFileWriter.KEEP_SESSIONS)
