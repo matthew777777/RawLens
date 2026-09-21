@@ -108,6 +108,39 @@ class ProgramAeSolverTest {
     }
 
     @Test
+    fun shutterLockHoldsAcrossSceneBrightness() {
+        // Locked 1/15 s must not drift when the scene brightens or darkens, even
+        // though the fully-automatic low-light cap would move underneath it.
+        val bright = AutoExposureBalance.applyProgram(
+            100, 5_000_000L, 0.5f, limits,
+            ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = 66_000_000L
+        )
+        val dark = AutoExposureBalance.applyProgram(
+            6400, 66_000_000L, 0.5f, limits,
+            ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = 66_000_000L
+        )
+        assertEquals(66_000_000L, bright.shutterNanos)
+        assertEquals(66_000_000L, dark.shutterNanos)
+        assertTrue(dark.iso > bright.iso)
+    }
+
+    @Test
+    fun isoLockHoldsAcrossSceneBrightness() {
+        val bright = AutoExposureBalance.applyProgram(
+            100, 5_000_000L, 0.5f, limits, ProgramLockMode.ISO_LOCK, lockedIso = 100
+        )
+        // 50 ms at ISO 100 sits below the static ceiling but above the moving
+        // low-light cap: the locked path must still honor the full 50 ms.
+        val dark = AutoExposureBalance.applyProgram(
+            100, 50_000_000L, 0.5f, limits, ProgramLockMode.ISO_LOCK, lockedIso = 100
+        )
+        assertEquals(100, bright.iso)
+        assertEquals(100, dark.iso)
+        assertEquals(50_000_000L, dark.shutterNanos)
+        assertTrue(dark.shutterNanos > bright.shutterNanos)
+    }
+
+    @Test
     fun isoPriorityNeverUsesMoreGainThanNeutral() {
         // Across the whole energy range, balance 0.0 must hold the shutter at least
         // as long and the ISO at most as high as neutral 0.5 (clamp-backs may equalize).
@@ -166,6 +199,30 @@ class ProgramAeSolverTest {
         )
         // Degenerate input cannot step, so it yields the target directly.
         assertEquals(2000.0, AutoExposureBalance.rampStepEnergy(0.0, 2000.0, 1.0 / 6.0, 1.0 / 24.0), 0.0)
+    }
+
+    @Test
+    fun adaptiveRampIsFastFarAndGentleNear() {
+        // 3 stops away with proportion 0.5: capped at the 1/3-stop maximum.
+        assertEquals(
+            1000.0 * Math.pow(2.0, 1.0 / 3.0),
+            AutoExposureBalance.rampStepEnergyAdaptive(1000.0, 8000.0, 0.5, 1.0 / 3.0, 1.0 / 24.0),
+            1e-6
+        )
+        // 0.1 stop away: shrinks to the snap-floor multiple, well under the cap.
+        assertEquals(
+            1000.0 * Math.pow(2.0, 1.0 / 12.0),
+            AutoExposureBalance.rampStepEnergyAdaptive(
+                1000.0, 1000.0 * Math.pow(2.0, 0.1), 0.5, 1.0 / 3.0, 1.0 / 24.0
+            ),
+            1e-6
+        )
+        // Inside the snap band it lands exactly on target.
+        assertEquals(
+            2000.0 * Math.pow(2.0, 1.0 / 48.0),
+            AutoExposureBalance.rampStepEnergyAdaptive(2000.0, 2000.0 * Math.pow(2.0, 1.0 / 48.0), 0.5, 1.0 / 3.0, 1.0 / 24.0),
+            1e-9
+        )
     }
 
     @Test
