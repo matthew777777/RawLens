@@ -132,6 +132,28 @@ class HdrRawMergeTest {
         assertTrue("ghost leaked: $ghosted", ghosted < 0.45f && ghosted > 0.15f)
     }
 
+    @Test fun highlightFallbackWinnerIsCoherentPerCell() {
+        // Short frame fully clipped; long frame clipped except one dark pixel
+        // in cell (0,0). Darktable awards the whole cell to the long frame
+        // (smallest block minimum); per-pixel winners would checkerboard the
+        // fallback into contour lines.
+        val size = 8
+        val short = cfa(1f, size)
+        val longVals = FloatArray(size * size) { 1f }.also { it[0] = 0.5f }
+        val long = UnpackedRawCfa(size, size, BayerPattern.RGGB, longVals, RawCrop(0, 0, size, size))
+        val merged = HdrRawMerge.merge(listOf(
+            HdrMergeFrame(short, 2_500_000L, 100),
+            HdrMergeFrame(long, 10_000_000L, 100)
+        ), referenceIndex = 1)
+        // White is the short frame's calibration: long fallback = in/4.
+        assertEquals(0.125f, merged.values[0], 1e-4f)
+        assertEquals(0.25f, merged.values[1], 1e-4f)
+        assertEquals(0.25f, merged.values[size], 1e-4f)
+        assertEquals(0.25f, merged.values[size + 1], 1e-4f)
+        // Other interior cells: short frame wins the fully-clipped fallback.
+        assertEquals(1f, merged.values[4 * size + 4], 1e-4f)
+    }
+
     @Test fun shadowsStillMergeWithoutOutliers() {
         // Identical dark frames must average (denoise), not collapse to reference.
         val a = cfa(0.05f, 8)
