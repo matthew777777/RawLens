@@ -63,6 +63,19 @@ object RawHistogramSampler {
         val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.coerceAtLeast(1) ?: return null
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val limit = buffer.limit()
+        // Same bulk-row discipline as the ETTR sampler: one bounds-checked memcpy
+        // per visited row, then LUT-indexed pixels. This runs on the camera thread
+        // at ~4 Hz, so per-pixel divisions and framework calls stay out of the loop.
+        val shortView = buffer.asShortBuffer()
+        val shortCapacity = shortView.capacity()
+        val bulkRows = plane.pixelStride == 2 && plane.rowStride % 2 == 0
+        val rowEven = if (bulkRows) ShortArray(image.width) else null
+        val rowOdd = if (bulkRows) ShortArray(image.width) else null
+        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
+        val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
+        val colorLut = IntArray(4) { i -> colorAt(cfa, i % 2, i / 2) }
+        val channelLut = IntArray(4) { i -> channelAt(cfa, i % 2, i / 2) }
         val red = IntArray(BIN_COUNT)
         val green = IntArray(BIN_COUNT)
         val blue = IntArray(BIN_COUNT)
@@ -75,6 +88,21 @@ object RawHistogramSampler {
 
         var blockY = 0
         while (blockY < blocksHigh) {
+            // Bulk-fetch both Bayer rows for this block row once; pixels below
+            // index the arrays instead of issuing checked reads one by one.
+            var bulkEven: ShortArray? = null
+            var bulkOdd: ShortArray? = null
+            if (bulkRows && rowEven != null && rowOdd != null) {
+                val y0 = blockY * 2
+                val start0 = y0 * (plane.rowStride / 2)
+                val start1 = start0 + plane.rowStride / 2
+                if (start0 >= 0 && start1 + image.width <= shortCapacity) {
+                    shortView.get(start0, rowEven, 0, image.width)
+                    shortView.get(start1, rowOdd, 0, image.width)
+                    bulkEven = rowEven
+                    bulkOdd = rowOdd
+                }
+            }
             var blockX = 0
             while (blockX < blocksWide) {
                 // One luminance sample per Bayer quad; the channel traces keep the
@@ -85,21 +113,25 @@ object RawHistogramSampler {
                 for (dy in 0..1) for (dx in 0..1) {
                     val x = blockX * 2 + dx
                     val y = blockY * 2 + dy
-                    val offset = y * plane.rowStride + x * plane.pixelStride
-                    if (offset + 1 >= buffer.limit()) continue
-                    val value = buffer.getShort(offset).toInt() and 0xffff
-                    val floor = black?.getOffsetForIndex(x, y) ?: 0
-                    val normalized = ((value - floor).coerceAtLeast(0).toDouble() /
-                        (white - floor).coerceAtLeast(1)).coerceIn(0.0, 1.0)
+                    val phase = ((y and 1) shl 1) or (x and 1)
+                    val row = if (dy == 0) bulkEven else bulkOdd
+                    val value: Int = if (row != null) {
+                        row[x].toInt() and 0xffff
+                    } else {
+                        val offset = y * plane.rowStride + x * plane.pixelStride
+                        if (offset + 1 >= limit) continue
+                        buffer.getShort(offset).toInt() and 0xffff
+                    }
+                    val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
+                        .coerceIn(0.0, 1.0)
                     val bin = (normalized * (BIN_COUNT - 1)).toInt().coerceIn(0, BIN_COUNT - 1)
-                    val channel = channelAt(cfa, x and 1, y and 1)
-                    when (channel) {
+                    when (colorLut[phase]) {
                         0 -> red[bin]++
-                        1, 2 -> green[bin]++
+                        1 -> green[bin]++
                         else -> blue[bin]++
                     }
                     quad[quadSize] = normalized
-                    quadChannel[quadSize] = channel
+                    quadChannel[quadSize] = channelLut[phase]
                     quadSize++
                 }
                 if (quadSize == 4) {
