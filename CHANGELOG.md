@@ -27,6 +27,7 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Converged ETTR freezes PROGRAM and meters from actual sensor exposure; PROGRAM seeds until convergence and resumes after
 - Synchronous per-lens profile load on active-camera change; PROGRAM bounds linked from each lens's calibration editor
 - No-manual-sensor cameras keep Android AE with locks/limits disabled and explanatory copy
+- App logcat streams to a session text file from launch (no permission needed), with crashes appended before the process dies; 8 MB rotation keeping the newest 5 sessions, plus one-tap share to Download/RawLens/logs/
 
 ## [1.0.0] - 2026-08-31
 

@@ -131,6 +131,10 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // App logcat streams to a session file from the first line of every
+        // launch (no permission needed); the crash handler below flushes the
+        // fatal trace before the process dies, so the file survives crashes.
+        if (lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)) LogcatFileWriter.start(this)
         // Viewfinder must never let the phone auto-lock mid-shoot.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
@@ -2260,6 +2264,24 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
 
+    private fun shareLatestLog() {
+        val uri = try {
+            LogcatFileWriter.exportLatestToDownloads(this)
+        } catch (failure: Exception) {
+            setStatus("LOG SHARE FAILED")
+            return
+        }
+        if (uri == null) {
+            setStatus("NO LOG YET")
+            return
+        }
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }, "Share RawLens log"))
+    }
+
     private fun showSettings() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2973,6 +2995,28 @@ class MainActivity : Activity(), SensorEventListener {
                     if (enabled) rawVfDebugOverlay.post { positionWholeRotatedPanels() }
                 }
             })
+            content.addView(CheckBox(this).apply {
+                text = "Save app log to file (survives crashes)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_LOGCAT_FILE, enabled).apply()
+                    if (enabled) LogcatFileWriter.start(this@MainActivity)
+                    else LogcatFileWriter.stop()
+                }
+            })
+            content.addView(Button(this).apply {
+                text = "Share latest log"
+                setOnClickListener { shareLatestLog() }
+            })
+            content.addView(TextView(this).apply {
+                text = "The app's own logcat streams to its private folder (no permission " +
+                    "needed) in 8 MB sessions, keeping the newest 5; crashes are appended " +
+                    "before the process dies. Sharing copies the latest session to " +
+                    "Download/RawLens/logs/."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
 
             generalTab.isEnabled = false
             denoiseTab.isEnabled = true
@@ -3476,6 +3520,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"
         const val KEY_DEBUG_OVERLAY = "camera_debug_overlay"
+        const val KEY_LOGCAT_FILE = "logcat_file_enabled"
         const val KEY_RAW_VF_DEBUG_OVERLAY = "raw_vf_debug_overlay"
         const val KEY_GRID = "viewfinder_grid"
         const val KEY_LEVEL = "viewfinder_level"
