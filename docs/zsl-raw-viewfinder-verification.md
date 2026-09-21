@@ -1,6 +1,6 @@
 # ZSL capture/save and RAW viewfinder verification
 
-Capture admission is sequential: a new press is accepted after physical capture and all image-owning save jobs finish. Repeated presses are discarded. Hybrid ON transfers a partial buffered selection to a forward top-up, including a fully forward burst when no selection is available. Hybrid OFF retains incomplete selections in the ring during its bounded refill wait.
+Capture admission is capacity-based: physical capture remains serialized, while prior images develop/save in the background. Up to six JPEG inputs (one developing plus five waiting) are allowed; a multi-frame ZSL selection reserves room for its whole selection. The shutter rearms as soon as capture finishes and sufficient input slots remain. Sidecar-only jobs do not consume image slots. Repeated presses during physical capture or a full queue are discarded. Hybrid OFF retains incomplete selections in the ring during its bounded refill wait.
 
 Grouped ZSL saves now have an explicit image owner. Save admission releases only after that owner closes. Session teardown retires readers until outstanding saves and metering release their images. Completion invalidates capture callbacks and closes pending pairs and top-up holdings.
 
@@ -47,3 +47,22 @@ Also validate on hardware:
 - Larger strict-buffered bursts may need more than the default three-second prefill delay in the test at low sensor frame rates.
 
 The initial CPU-viewfinder build passed 50 default ZSL cycles on Xiaomi 25080RABDG: 100 DNG artifacts, no queued duplicate presses, automatic rearm and advancing previews (106.805 seconds). That result predates the Vulkan changes and does not validate GPU image lifetime. The Vulkan-integrated runs are recorded below after execution.
+
+## Six-JPEG admission regression (2026-09-21)
+
+```sh
+adb shell am instrument -w \
+  -e class com.matthew.rawlens.JpegQueueInstrumentedTest \
+  -e rawlensQueue true -e mode ZSL \
+  com.matthew.rawlens.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+This test pauses the JPEG writer, captures six separate one-frame shots, verifies the seventh is refused, then resumes the writer and checks all six JPEG artifacts and automatic rearming. Repeat with `-e mode AUTO` to exercise forward still capture. `-e minFps 20` additionally asserts the measured preview rate while waiting.
+
+The input queue and reader headroom are separate from the total save-job count. Reader sizing supports six JPEG inputs even when the selected ring contains only one or two frames. Ring refill can run during saving when the complete ring plus preview/pairing/GPU headroom fits.
+
+Device evidence (Xiaomi 25080RABDG): six independent JPEG inputs were admitted before the paused writer ran; the seventh was rejected; six JPEG artifacts were saved and capture rearmed. With repeating-request resets removed, acquisition stayed at 29–31 FPS. The 20 FPS assertion still failed during the first JPEG development (minimum 14.88 FPS, final 27.47 FPS). This is evidence for the queue fix, not a claim that processing-time preview contention is resolved.
+
+The focused JVM suite and debug/instrumentation builds pass. The full JVM suite currently has an unrelated missing-model failure in `RawNindNcnnContractTest` (`models/rawnind_tiny.ncnn.param`).
+
+Final build: 59 focused JVM tests passed; debug and instrumentation APKs built and installed. AUTO six-JPEG instrumentation passed in 82.836 seconds. ZSL passed every queue/artifact/rearm assertion, but its additional 20 FPS assertion failed at 15.60 FPS after applying display priority to camera/render threads. No claim is made that the remaining JPEG-development FPS dips are fixed.
