@@ -169,7 +169,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var vulkanExport: android.hardware.HardwareBuffer? = null
     private var vulkanExportWidth = 0
     private var vulkanExportHeight = 0
-    private val thread = HandlerThread("RawViewfinderGL").apply { start() }
+    private val thread = HandlerThread("RawViewfinderGL", android.os.Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
     private var epoch = 0L
     private var lastSample = 0L
