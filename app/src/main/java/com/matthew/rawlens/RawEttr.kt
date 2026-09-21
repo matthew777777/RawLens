@@ -186,7 +186,13 @@ class EttrRawSample(
     val saturated: IntArray,
     val totals: IntArray,
     val centerWeightedGreen: Float = Float.NaN,
-    val spotGreen: Float = Float.NaN
+    val spotGreen: Float = Float.NaN,
+    /**
+     * Full-frame highlight level backing the PROGRAM guard when the main scan is
+     * region-cropped (SPOT/CENTER): a dark center must not blind the loop to bright
+     * surroundings. NaN when the main scan already covers the full frame.
+     */
+    val guardHottest: Float = Float.NaN
 )
 
 /**
@@ -206,17 +212,56 @@ object RawEttrSampler {
     private const val TARGET_BLOCKS = 32_000
     /** Sparse PROGRAM-only density; ETTR-grade tails keep full density. */
     private const val TARGET_BLOCKS_PROGRAM = 4_000
+    /** Full-frame guard density backing the highlight guard for cropped scans. */
+    private const val GUARD_PIXELS = 4_096
 
     fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
-        sampleGrid(image, characteristics, TARGET_BLOCKS * 4)
+        sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
 
     /**
      * Sparse metering for PROGRAM alone (~4k blocks): means need far fewer pixels
      * than ETTR's 99.9th-percentile tail and clip band, so the PROGRAM-only loop
-     * costs a fraction of a full sample.
+     * costs a fraction of a full sample. The scan is cropped to the metering
+     * mode's region; a full-frame ultra-sparse guard scan backs the highlight
+     * guard for cropped modes.
      */
-    fun sampleProgram(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
-        sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4)
+    fun sampleProgram(
+        image: Image,
+        characteristics: CameraCharacteristics,
+        metering: ProgramMetering
+    ): EttrRawSample? {
+        val region = meteringScanRegion(image.width, image.height, metering)
+        val sample = sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4, region)
+            ?: return null
+        if (metering == ProgramMetering.AVERAGE) return sample
+        val guardHottest = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height))
+            ?.levels?.hottest ?: Float.NaN
+        return EttrRawSample(
+            sample.levels, sample.bins, sample.saturated, sample.totals,
+            sample.centerWeightedGreen, sample.spotGreen, guardHottest
+        )
+    }
+
+    /**
+     * Scan rectangle for one metering mode as [left, top, right, bottomExclusive]:
+     * spot/center crop to their zones, average covers the frame. Pure geometry,
+     * frame-relative like the weighting zones.
+     */
+    internal fun meteringScanRegion(width: Int, height: Int, metering: ProgramMetering): IntArray {
+        if (width <= 0 || height <= 0) return intArrayOf(0, 0, 0, 0)
+        val half = when (metering) {
+            ProgramMetering.SPOT -> SPOT_SCALE / 2
+            ProgramMetering.CENTER_WEIGHTED -> 0.35
+            ProgramMetering.AVERAGE -> 0.5
+        }
+        val left = ((0.5 - half) * width).toInt().coerceIn(0, width - 1)
+        val top = ((0.5 - half) * height).toInt().coerceIn(0, height - 1)
+        val right = ((0.5 + half) * width).toInt().coerceIn(left + 1, width)
+        val bottom = ((0.5 + half) * height).toInt().coerceIn(top + 1, height)
+        return intArrayOf(left, top, right, bottom)
+    }
+
+    private fun fullFrame(width: Int, height: Int) = intArrayOf(0, 0, width, height)
 
     /**
      * Systematic pixel-grid sampler shared by the full and sparse paths. The hot loop
@@ -228,7 +273,8 @@ object RawEttrSampler {
     private fun sampleGrid(
         image: Image,
         characteristics: CameraCharacteristics,
-        targetPixels: Int
+        targetPixels: Int,
+        region: IntArray
     ): EttrRawSample? {
         val plane = image.planes.singleOrNull() ?: return null
         if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
@@ -244,6 +290,12 @@ object RawEttrSampler {
         val pixelStride = plane.pixelStride
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val limit = buffer.limit()
+        // Bulk row reads: one bounds check + memcpy per visited row instead of a
+        // checked getShort per pixel. Only valid for packed 2-byte pixels.
+        val shortView = buffer.asShortBuffer()
+        val shortCapacity = shortView.capacity()
+        val bulkRows = pixelStride == 2 && rowStride % 2 == 0
+        val rowSamples = if (bulkRows) ShortArray(width) else null
         val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
         val invLut = FloatArray(4) { i -> invRange(white, blackLut[i]) }
         val channelLut = phaseChannelLut(cfa)
@@ -254,23 +306,49 @@ object RawEttrSampler {
         var weightedGreenWeight = 0.0
         var spotGreenSum = 0.0
         var spotGreenCount = 0L
+        val regionLeft = region.getOrElse(0) { 0 }.coerceIn(0, width - 1)
+        val regionTop = region.getOrElse(1) { 0 }.coerceIn(0, height - 1)
+        val regionRight = region.getOrElse(2) { width }.coerceIn(regionLeft + 1, width)
+        val regionBottom = region.getOrElse(3) { height }.coerceIn(regionTop + 1, height)
+        val regionWidth = regionRight - regionLeft
+        val regionHeight = regionBottom - regionTop
         val step = kotlin.math.sqrt(
-            (width.toLong() * height / targetPixels.toDouble()).coerceAtLeast(1.0)
+            (regionWidth.toLong() * regionHeight / targetPixels.toDouble()).coerceAtLeast(1.0)
         ).toInt().coerceAtLeast(1)
-        val colCount = (width + step - 1) / step
-        val colZone = DoubleArray(colCount) { i -> zoneCoord((i * step).coerceAtMost(width - 1), width) }
+        val colCount = (regionWidth + step - 1) / step
+        val colZone = DoubleArray(colCount) { i ->
+            zoneCoord((regionLeft + i * step).coerceAtMost(width - 1), width)
+        }
 
-        var y = 0
-        while (y < height) {
+        var y = regionTop
+        while (y < regionBottom) {
             val nyZone = zoneCoord(y, height)
             val phaseRow = (y and 1) shl 1
+            // Bulk-fetch the whole row once; strided pixels index into the array.
+            // A short row that would overrun the buffer disables bulk for that row.
+            var bulkRow: ShortArray? = null
+            if (bulkRows && rowSamples != null) {
+                val rowStart = y * (rowStride / 2)
+                if (rowStart >= 0 && rowStart + width <= shortCapacity) {
+                    shortView.get(rowStart, rowSamples, 0, width)
+                    bulkRow = rowSamples
+                }
+            }
             var xi = 0
-            var x = 0
-            while (x < width) {
+            var x = regionLeft
+            while (x < regionRight) {
                 val phase = phaseRow or (x and 1)
-                val offset = y * rowStride + x * pixelStride
-                if (offset + 1 < limit) {
-                    val value = buffer.getShort(offset).toInt() and 0xffff
+                val value: Int = if (bulkRow != null) {
+                    bulkRow[x].toInt() and 0xffff
+                } else {
+                    val offset = y * rowStride + x * pixelStride
+                    if (offset + 1 >= limit) {
+                        xi++
+                        x += step
+                        continue
+                    }
+                    buffer.getShort(offset).toInt() and 0xffff
+                }
                     val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
                         .coerceIn(0f, 1f)
                     val channel = channelLut[phase]
@@ -289,7 +367,6 @@ object RawEttrSampler {
                             spotGreenCount++
                         }
                     }
-                }
                 xi++
                 x += step
             }
