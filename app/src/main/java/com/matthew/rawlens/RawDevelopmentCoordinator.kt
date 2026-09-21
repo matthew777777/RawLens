@@ -142,8 +142,6 @@ class RawDevelopmentCoordinator(context: Context) {
                 ),
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                denoise = settings.denoise,
-                noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
                 fusedOutputSettings = fusedOutputSettings,
                 consume = consumeOutput
             )
@@ -152,8 +150,6 @@ class RawDevelopmentCoordinator(context: Context) {
                 requireNotNull(cpuCfa),
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                denoise = settings.denoise,
-                noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
                 fusedOutputSettings = fusedOutputSettings,
                 consume = consumeOutput
             )
@@ -181,12 +177,12 @@ class RawDevelopmentCoordinator(context: Context) {
         rawPlane,
         metadata,
         settings,
-        fusedOutputSettings = outputSettings.takeIf { !settings.denoise.enabled }
+        fusedOutputSettings = outputSettings
     ) { frame ->
         if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
             jpegOutput.processEncoded(frame.texture, outputSettings)
         } else {
-            jpegOutput.process(frame.texture, outputSettings, settings.denoise)
+            jpegOutput.process(frame.texture, outputSettings)
         }
     }
 
@@ -275,21 +271,18 @@ class RawDevelopmentCoordinator(context: Context) {
             clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
             cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
             cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-            denoise = settings.denoise,
-            noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
-            fusedOutputSettings = outputSettings.takeIf { !settings.denoise.enabled }
-        ) { output -> finishJpeg(output, outputSettings, settings.denoise) }
+            fusedOutputSettings = outputSettings
+        ) { output -> finishJpeg(output, outputSettings) }
     }
 
     private fun finishJpeg(
         output: AmazeGpuOutput,
-        outputSettings: JpegOutputSettings,
-        denoise: DenoiseSettings
+        outputSettings: JpegOutputSettings
     ): DevelopedJpeg {
         return if (output.internalFormat == AmazeTextureFormat.RGBA8) {
             jpegOutput.processEncoded(output, outputSettings)
         } else {
-            jpegOutput.process(output, outputSettings, denoise)
+            jpegOutput.process(output, outputSettings)
         }
     }
 
@@ -313,14 +306,12 @@ class RawDevelopmentCoordinator(context: Context) {
             clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
             cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
             cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-            denoise = settings.denoise,
-            noiseModel = CfaNoiseModel.from(metadata.noiseProfile),
-            fusedOutputSettings = outputSettings.takeIf { !settings.denoise.enabled }
+            fusedOutputSettings = outputSettings
         ) { output ->
             if (output.internalFormat == AmazeTextureFormat.RGBA8) {
                 jpegOutput.processEncoded(output, outputSettings)
             } else {
-                jpegOutput.process(output, outputSettings, settings.denoise)
+                jpegOutput.process(output, outputSettings)
             }
         }
     }
@@ -342,7 +333,6 @@ class RawDevelopmentCoordinator(context: Context) {
             width: Int,
             height: Int,
             ultraHdr: Boolean = false,
-            denoise: Boolean = false,
             aiDenoise: Boolean = false
         ): RawDevelopmentMemoryEstimate {
             require(width > 0 && height > 0)
@@ -356,13 +346,6 @@ class RawDevelopmentCoordinator(context: Context) {
             val gainPixels = ((width + 3) / 4).toLong() * ((height + 3) / 4).toLong()
             // GPU gain texture + direct readback + Android Bitmap, all RGBA8.
             val gainmap = if (ultraHdr) gainPixels * 12L else 0L
-            // Denoise peak: original + final RGBA16F frames plus five 768² RGBA32F
-            // scratch images (512 tile + 128 px halo on each side).  The recursive
-            // wavelet pyramid deliberately stays fp32 to avoid quantizing shadow chroma.
-            // Both full-resolution CFA textures are released before this phase.
-            val denoisePeak = if (denoise) {
-                raw + cfa + pixels * 16L + 5L * 768L * 768L * 16L
-            } else 0L
             // AI peak (managed heap + direct buffers, transient): unpacked CFA
             // + channel-last packed input (5ch @ quarter res = 5B/px) + packed
             // output (4ch = 4B/px) + denoised CFA. Native tiled inference adds
@@ -372,9 +355,8 @@ class RawDevelopmentCoordinator(context: Context) {
             } else 0L
             val accountedPeak = maxOf(
                 raw + 2L * cfa,
-                raw + cfa + cfa + amaze + if (denoise) cfa else 0L,
+                raw + cfa + cfa + amaze,
                 raw + cfa + pixels * 8L + rgba8 + readback + bitmap + gainmap,
-                denoisePeak,
                 aiPeak
             )
             val overheadReserve = 96L * 1024L * 1024L
