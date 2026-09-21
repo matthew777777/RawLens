@@ -44,6 +44,12 @@ class RawProgramMeterTest {
     }
 
     @Test
+    fun programStepCapBoundsGlideAuthority() {
+        // The retune fixes the cap at a full stop; the ramp + EMA absorb it.
+        assertEquals(1.0, RawProgramMeter.PROGRAM_MAX_STEP_EV, 0.0)
+    }
+
+    @Test
     fun programStepCapNudgesInsteadOfJumping() {
         // Same dark scene: default clamp allows the full +2 EV jump…
         assertEquals(2.0, RawProgramMeter.correctionEv(0.001f, 0.5f), 1e-9)
