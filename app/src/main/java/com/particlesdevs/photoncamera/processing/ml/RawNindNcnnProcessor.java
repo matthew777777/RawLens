@@ -24,10 +24,10 @@ import java.util.concurrent.TimeUnit;
  * Geometry is dynamic (fully convolutional net, batch 1); tiling is handled
  * natively with fixed-size tiles so GPU memory stays flat at any MP count.
  *
- * The model files (models/rawnind_tiny.ncnn.param/.bin) are NOT shipped in
- * the repo until trained; when absent the processor reports unavailable and
- * the Kotlin side falls back to wavelet/bypass. Same contract on emulator
- * ABIs (native stub returns 0).
+ * The model files live in app/src/main/assets/models/ (rawnind_tiny.ncnn.param
+ * /.bin, exported via python/rawnind-train); when absent the processor reports
+ * unavailable and the Kotlin side falls back to wavelet/bypass. Same contract
+ * on emulator ABIs (native stub returns 0).
  *
  * Process-wide singleton loading on a background thread, mirroring
  * FlowNetNcnnProcessor. Call {@link #start(Context)} from Application
@@ -144,16 +144,31 @@ public final class RawNindNcnnProcessor {
 
     private ByteBuffer runInferenceLocked(FloatBuffer packed, int w2, int h2) {
         if (nativeHandle == 0 || packed == null || w2 <= 0 || h2 <= 0) return null;
+        // Native reads w2*h2*5 floats via GetDirectBufferAddress (position and
+        // limit are ignored across JNI), so reject short/heap buffers here
+        // instead of over-reading native memory.
+        long need = (long) w2 * h2 * 5;
+        if (!packed.isDirect() || packed.capacity() < need) {
+            Log.e(TAG, "RawNindNcnn: packed buffer too small: cap=" + packed.capacity()
+                    + " need=" + need);
+            return null;
+        }
         long start = System.nanoTime();
         ByteBuffer outBuf = ByteBuffer.allocateDirect(w2 * h2 * 4 * 4)
                 .order(ByteOrder.nativeOrder());
         packed.rewind();
+        // Native reuses one shared tile scratch (RawNindCtx::inTile) across
+        // extractors, so concurrent runs would corrupt each other; serialize
+        // here and against close() (same monitor).
         boolean ok;
-        try {
-            ok = nativeRun(nativeHandle, packed, w2, h2, outBuf.asFloatBuffer());
-        } catch (Throwable t) {
-            Log.e(TAG, "RawNindNcnn: inference failed", t);
-            return null;
+        synchronized (this) {
+            if (nativeHandle == 0) return null;
+            try {
+                ok = nativeRun(nativeHandle, packed, w2, h2, outBuf.asFloatBuffer());
+            } catch (Throwable t) {
+                Log.e(TAG, "RawNindNcnn: inference failed", t);
+                return null;
+            }
         }
         if (!ok) {
             Log.e(TAG, "RawNindNcnn: inference returned an error");
@@ -169,11 +184,13 @@ public final class RawNindNcnnProcessor {
         synchronized (sLock) {
             if (sInstance == this) sInstance = null;
         }
-        long h = nativeHandle;
-        if (h != 0) {
-            nativeHandle = 0;
-            ready = false;
-            nativeDestroy(h);
+        synchronized (this) {
+            long h = nativeHandle;
+            if (h != 0) {
+                nativeHandle = 0;
+                ready = false;
+                nativeDestroy(h);
+            }
         }
     }
 
