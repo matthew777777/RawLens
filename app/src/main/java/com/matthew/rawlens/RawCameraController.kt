@@ -48,6 +48,36 @@ enum class ManualControl { ISO, SHUTTER, WHITE_BALANCE, FOCUS_DISTANCE, EXPOSURE
 /** DSLR-style capture intent exposed by the viewfinder mode switcher. */
 enum class CaptureExposureMode { AUTO, PROGRAM, ZSL, MANUAL }
 
+/**
+ * Adaptive development-exposure strength shared by saves and the JPEG VF
+ * preview, so the preview shows the exposure the capture will develop with.
+ */
+internal fun adaptivePreviewStrength(mode: CaptureExposureMode, settings: JpegOutputSettings): Float =
+    when (mode) {
+        CaptureExposureMode.AUTO, CaptureExposureMode.ZSL ->
+            if (settings.adaptiveExposureAuto) 1f else 0f
+        CaptureExposureMode.PROGRAM -> settings.adaptiveExposureProgramStrength
+        CaptureExposureMode.MANUAL -> 0f
+    }
+
+/**
+ * VF overlay effect bits. AGX+ shows only when the JPEG tonemap actually
+ * renders the sliders — the RAW Reinhard path ignores them, so flagging AGX+
+ * there would claim an effect the displayed frame does not have.
+ */
+internal fun vfOverlayEffectBits(
+    jpegTonemap: Boolean,
+    denoiseEnabled: Boolean,
+    settings: JpegOutputSettings
+): List<String> = buildList {
+    if (denoiseEnabled) add("DENOISE")
+    if (settings.ultraHdr) add("UHDR")
+    if (jpegTonemap && (settings.agxContrast != 1f ||
+        settings.agxSaturation != 1f ||
+        settings.agxPurityBoost != 1f)
+    ) add("AGX+")
+}
+
 enum class AeMeteringMode(val preferenceValue: Int, val label: String) {
     AUTO(-1, "AUTO"),
     CENTER_WEIGHTED(0, "CENTER"),
@@ -117,7 +147,9 @@ class RawCameraController(
     private val onFocusLock: (locked: Boolean, indefinite: Boolean, deadlineMs: Long) -> Unit,
     private val onRawHistogram: (RgbHistogram) -> Unit,
     private val gpsLocation: () -> GpsLocation? = { null },
-    private val onActiveCameraChanged: (cameraId: String?) -> Unit = { }
+    private val onActiveCameraChanged: (cameraId: String?) -> Unit = { },
+    private val rawViewfinder: RawViewfinder? = null,
+    private val onRawVfDebug: (String) -> Unit = { }
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
@@ -128,11 +160,24 @@ class RawCameraController(
     @Volatile private var destroyed = false
     @Volatile private var opening = false
     @Volatile private var lifecycleGeneration = 0
-    // Keep exactly one worker so DNG writes remain ordered and JPEG development never overlaps
-    // two full-resolution CPU/GPU allocation peaks. The physical queue accepts a complete ZSL
-    // DNG selection; hasProcessingCapacity() applies the smaller JPEG-development safety bound.
+    // Serial worker for JPEG development, HDR merges and AI-denoised saves: one at a
+    // time so full-resolution CPU/GPU allocation peaks never overlap. The physical
+    // queue accepts a complete ZSL DNG selection; hasProcessingCapacity() applies
+    // the smaller JPEG-development safety bound.
     private val writer = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_QUEUED_SAVES)
+    )
+    // Parallel worker for plain DNG-only saves (no JPEG develop, no AI inference:
+    // each job owns an independent DngCreator + MediaStore entry). A 30-frame ZSL
+    // burst drains ~2x faster than serially, so the gap between back-to-back
+    // bursts is the short ring refill, not the whole queue. Kept at 2 threads:
+    // 3 concurrent full-res native writes spiked CPU/binder load enough to stall
+    // capture results on MediaTek HALs (overflow storm -> session fallback).
+    // JPEG/HDR/AI work stays on the serial writer above and never contends with
+    // these threads on the GPU.
+    private val dngWriter = ThreadPoolExecutor(
+        DNG_WRITER_THREADS, DNG_WRITER_THREADS,
+        0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(DNG_WRITER_QUEUE_SLOTS)
     )
     // Metering sampler worker: full-resolution Bayer sampling costs hundreds of ms on
     // some sensors and must never run on the camera handler (see dispatchMeteringSample).
@@ -155,12 +200,58 @@ class RawCameraController(
     // for AF trigger safety.
     private var cameraCaptureSequenceActive = false
     private val captureSequence = AtomicInteger(0)
+    private var streamCapture: ForwardRawSelection? = null
+    private val previewRawTimestamps = ConcurrentHashMap.newKeySet<Long>()
+
     private val activeFramesRemaining = AtomicInteger(0)
     private var activeHdrBracket = false
     private var activeHdrSaveEachBracket = false
     private var activeHdrSaveDebugFrames = false
     private var activeHdrStops = 2
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
+    /**
+     * Hybrid top-up (GCam ZSL+PSL style): ring frames held aside while fresh
+     * forward stills complete the burst under one stem. Empty unless a top-up
+     * capture is in flight; guarded by [topupActive]. Fresh arrivals accumulate
+     * in [topupFrames] via pairAndSave until the remainder is filled.
+     */
+    private var topupActive = false
+    private var topupHoldout: List<BufferedRawFrame> = emptyList()
+    private val topupFrames = ArrayList<BufferedRawFrame>()
+    /**
+     * Last take size observed by selectAndSaveRawZsl (selected.size, or -1 when
+     * blocked before touching the ring). Drives the wait-loop empty-ring
+     * escalation counter; -1 pauses it so queue-full waits don't force bursts.
+     */
+    private var lastZslTakeSize: Int = -1
+    /**
+     * Serialized still-burst chain (MediaTek HAL hardening). A pipelined
+     * N-frame captureBurst overruns this HAL's gralloc pool (reader full with
+     * ~2 frames paired, 5 frames aborted in flight, log-proven), so stills are
+     * submitted one at a time: each pair completion submits the next. In flight
+     * stays at ~2 buffers instead of N+. Prebuilt requests wait here; cleared
+     * in finishCapture (the choke point of every chain end).
+     */
+    private val pendingStillRequests = ArrayDeque<CaptureRequest>()
+    private var activeStillCallback: CameraCaptureSession.CaptureCallback? = null
+    /**
+     * Consecutive forward chains that paired zero frames before dying
+     * (failed/aborted/timed-out/overflowed with nothing arrived). Any paired
+     * frame proves the HAL is producing and resets this: only a HAL that
+     * produces NOTHING twice in a row triggers a session rebuild, the sole
+     * recovery proven (log: MediaTek P2 heap errors persisting across aborts).
+     * [chainPairedAny] tracks the in-flight chain.
+     */
+    private var consecutiveDeadChains = 0
+    private var chainPairedAny = false
+    /**
+     * Consecutive transient cooldowns with zero paired frames since. A single
+     * park is prudence (lag spike); a second consecutive fruitless one proves
+     * request-level recovery cannot fix this HAL state — only a session
+     * rebuild can (user-proven via manual frame-count changes). Reset on any
+     * pair, save-completion rearm, and session open.
+     */
+    private var fruitlessCooldowns = 0
     private val pendingSaveCount = AtomicInteger(0)
     private val pendingJpegCount = AtomicInteger(0)
     private val jpegServiceLock = Any()
@@ -169,6 +260,13 @@ class RawCameraController(
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var rawReader: ImageReader? = null
+    private val retiredRawReaders = java.util.concurrent.ConcurrentLinkedQueue<ImageReader>()
+
+    private fun closeRetiredRawReaders() {
+        retiredRawReaders.toList().forEach { reader ->
+            if (RawImageOwnership.count(reader) == 0 && retiredRawReaders.remove(reader)) reader.close()
+        }
+    }
     private var rawReaderMaxImages = 0
     private var previewSurface: Surface? = null
     private var previewSize: Size? = null
@@ -196,7 +294,7 @@ class RawCameraController(
     private var programBrightnessEma = Float.NaN
     private var programConverged = false
     // Glide target: the solver output the applied pair (dynamicIso/dynamicShutterNanos)
-    // eases toward in ~1/6 EV steps, so exposure moves continuously like stock AE.
+    // eases toward in adaptive steps (fast far away, gentle up close).
     private var programTargetIso: Int? = null
     private var programTargetShutterNanos: Long? = null
     private var programTargetLimits: ExposureBalanceLimits? = null
@@ -204,6 +302,12 @@ class RawCameraController(
     private var programTargetLockedIso: Int = 0
     private var programTargetLockedShutterNanos: Long = 0L
     private var programRampCallback: Runnable? = null
+    /**
+     * Fast start: the first metering result after (re)entry applies immediately
+     * instead of gliding in, so the preview never sits overexposed while the ramp
+     * would otherwise walk stops toward the target. Tracking glides from there.
+     */
+    private var programFastStart = true
     // RAW-based ETTR single-exposure state. The repeating preview keeps running under
     // hardware AE; every sampled RAW frame refreshes this pair, which the next still
     // capture (and HDR bracket base) uses instead of the Camera2 meter.
@@ -226,6 +330,31 @@ class RawCameraController(
     @Volatile private var rawZslFrameCount = initialRawZslFrameCount.coerceIn(1, MAX_ZSL_FRAMES)
     private var rawZslDisabledForSession = false
     private var rawZslFallbackDetail: String? = null
+    /**
+     * Transient ZSL outage (PhotonCamera/GCam style: failures are per-shot, never
+     * session-fatal). Overflow storms, watchdog misses and isolated repeating-
+     * request failures park the ring here instead of latching
+     * [rawZslDisabledForSession]; every later press re-attempts ZSL once this
+     * wall-clock deadline passes. Only a rejected stream combination (which can
+     * never succeed) still latches the session fallback.
+     */
+    private var rawZslCooldownUntilMs = 0L
+    /**
+     * Repeating-RAW-stream health latch (GCam non-ZSL style degradation). Set when
+     * a freshly started stream never becomes productive (overflow storm or
+     * watchdog trip with zero paired frames): this HAL cannot sustain the
+     * continuous RAW stream, so presses fire instant forward bursts under the
+     * ZSL stem instead of waiting on a ring that will never fill. A stream that
+     * filled and only later sickened is NOT marked — it keeps per-shot retry.
+     * Cleared on session open and on ZSL (re-)entry.
+     */
+    private var rawZslStreamBroken = false
+    /** Hybrid top-up (GCam ZSL+PSL style): complete a thin ring with fresh forward
+     * captures under one stem instead of refusing the shutter. User-toggled. */
+    @Volatile private var zslHybridTopupEnabled = true
+    @Volatile private var vfPreviewMode: VfPreviewMode = VfPreviewMode.FOLLOW
+    @Volatile private var vfTargetLongEdge: Int = VfResolution.MAX
+    private var rawViewfinderStreaming = false
     private var rawZslStreaming = false
     private var rawZslRequestEpoch = 0L
     private var rawZslCapacity = 0
@@ -274,6 +403,7 @@ class RawCameraController(
     private var focusLockDeadlineMs = 0L
 
     private var lastDebugUpdateMs = 0L
+    private var lastRawVfDebugMs = 0L
     @Volatile private var deviceOrientationDegrees = 0
     @Volatile private var captureFormat = CaptureFormat.DNG_ONLY
     private var activeCaptureFormat = CaptureFormat.DNG_ONLY
@@ -317,7 +447,13 @@ class RawCameraController(
             }
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
         }
-        if (viewfinder.isAvailable) open()
+        if (viewfinder.isAvailable) {
+            Log.i(LOG_TAG, "Viewfinder surface ready at start; opening camera")
+            open()
+        } else {
+            Log.i(LOG_TAG, "Viewfinder surface not yet available; waiting for surface callback")
+            onState("WAITING FOR VIEWFINDER")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -356,6 +492,15 @@ class RawCameraController(
         latestPreviewResult = null
         rawZslDisabledForSession = false
         rawZslFallbackDetail = null
+        rawZslCooldownUntilMs = 0L
+        rawPreviewRetryUntilMs = 0L
+        rawPreviewFailures = 0
+        rawViewfinder?.invalidateSession()
+        // A fresh session deserves a fresh verdict on the repeating stream.
+        rawZslStreamBroken = false
+        consecutiveDeadChains = 0
+        chainPairedAny = false
+        fruitlessCooldowns = 0
         rawZslHasFrame = false
         rawHistogramDisabledForSession = false
         rawHistogramStreaming = false
@@ -374,12 +519,15 @@ class RawCameraController(
         onActiveCameraChanged(id)
         
         onState("OPENING RAW")
+        Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id)")
         cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
-        } catch (_: CameraAccessException) {
+        } catch (failure: CameraAccessException) {
             opening = false
+            Log.w(LOG_TAG, "openCamera failed: ${cameraAccessReason(failure)}")
             if (running) onState("CAMERA UNAVAILABLE")
-        } catch (_: SecurityException) {
+        } catch (failure: SecurityException) {
             opening = false
+            Log.w(LOG_TAG, "openCamera denied", failure)
             if (running) onState("CAMERA PERMISSION NEEDED")
         }
     }
@@ -394,6 +542,7 @@ class RawCameraController(
                 opening = false
                 camera = device
             }
+            Log.i(LOG_TAG, "Camera device opened: ${device.id}")
             createSession(device, generation)
         }
         override fun onDisconnected(device: CameraDevice) {
@@ -403,6 +552,7 @@ class RawCameraController(
             }
             if (!isCurrent(generation)) return
             opening = false
+            Log.w(LOG_TAG, "Camera device disconnected: ${device.id}")
             onState("CAMERA DISCONNECTED")
         }
         override fun onError(device: CameraDevice, error: Int) {
@@ -412,9 +562,12 @@ class RawCameraController(
             }
             if (!isCurrent(generation)) return
             opening = false
+            Log.w(LOG_TAG, "Camera device error on ${device.id}: $error")
             onState(if (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE) "CAMERA IN USE" else "CAMERA ERROR")
         }
     }
+
+    private var lastSessionWaitStatusMs = 0L
 
     private fun createSession(device: CameraDevice, generation: Int) {
         if (!isCurrent(generation) || camera !== device || session != null) return
@@ -422,16 +575,38 @@ class RawCameraController(
         // cold launch the device can open first; wait for the surface and let its listener call
         // us again instead of leaving an open camera with no session until the next Activity.
         if (!viewfinder.isAvailable || viewfinder.surfaceTexture == null) {
+            Log.i(LOG_TAG, "Session deferred: viewfinder surface not available " +
+                "(available=${viewfinder.isAvailable} visibility=${viewfinder.visibility})")
             onState("WAITING FOR VIEWFINDER")
             return
         }
         if (!viewfinder.isLaidOut || viewfinder.width <= 0 || viewfinder.height <= 0) {
+            // Reposts every frame while unlaid-out: throttle the user-visible status.
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastSessionWaitStatusMs > 500L) {
+                lastSessionWaitStatusMs = now
+                Log.i(LOG_TAG, "Session deferred: viewfinder not laid out " +
+                    "(laidOut=${viewfinder.isLaidOut} ${viewfinder.width}x${viewfinder.height})")
+                onState("WAITING FOR LAYOUT")
+            }
             viewfinder.post { createSession(device, generation) }
             return
         }
-        val c = characteristics ?: return
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
-        val rawSize = largestRawSize(map) ?: run { onState("RAW UNAVAILABLE"); return }
+        val c = characteristics ?: run {
+            Log.e(LOG_TAG, "Session aborted: no camera characteristics")
+            onState("NO SENSOR DATA")
+            return
+        }
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: run {
+            Log.e(LOG_TAG, "Session aborted: no stream configuration map")
+            onState("NO SENSOR DATA")
+            return
+        }
+        val rawSize = largestRawSize(map) ?: run {
+            Log.e(LOG_TAG, "Session aborted: no RAW_SENSOR size")
+            onState("RAW UNAVAILABLE")
+            return
+        }
         rawZslCapacity = calculateRawZslCapacity(rawSize)
         rawZslRealtimeTimestamps = c.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
@@ -459,13 +634,21 @@ class RawCameraController(
 
         // maxImages must fit the whole ring plus frames still waiting for their
         // capture result (~5 at 30 fps with ZSL_PAIR_TIMEOUT_MS) plus transition
-        // slack. Without the pairing headroom a full 30-frame ring plus normal
-        // result lag exceeds maxImages and wedges the gralloc queue into
-        // overflow + Mali unlock errors.
+        // slack, plus a small rearm overlap so the ring refills during the drain
+        // tail of a burst (see resumeRawZslIfIdle). Without the pairing headroom
+        // a full 30-frame ring plus normal result lag exceeds maxImages and wedges
+        // the gralloc queue into overflow + Mali unlock errors.
         val readerMaxImages = maxOf(
             MIN_ACQUIRED_RAW_IMAGES,
-            rawZslCapacity + ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS
+            rawZslCapacity + ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS +
+                ZSL_REARM_OVERLAP_SLOTS + 2
         )
+        // NOTE (Step 2 finding): adding USAGE_GPU_SAMPLED_IMAGE here starves this
+        // reader completely on the test HAL (Xiaomi 25080RABDG / MT6878) — session
+        // configures but no RAW images are ever delivered, killing ZSL + VF + RAW
+        // histogram. Zero-copy EGL import of these buffers (4-arg default usage) fails
+        // with EGL_BAD_ALLOC, so the GPU VF path stays fenced behind runtime probing
+        // with the CPU sampler as the healthy default. See VfGpuImport.
         val reader = ImageReader.newInstance(
             rawSize.width,
             rawSize.height,
@@ -483,8 +666,20 @@ class RawCameraController(
                     // fill and the first RAW histogram until a later capture. Keeping the loop
                     // on this camera Handler drains the ImageReader quickly; RawZslBuffer owns
                     // only the configured ring and closes its oldest frame on every overflow.
+                    // A continuously replenished reader must yield to result, shutter and
+                    // timeout messages. Sampling makes an unbounded drain loop self-starve.
+                    var drained = 0
                     do {
+                        drained++
                         val image = reader.acquireNextImage() ?: break
+                        RawImageOwnership.adopt(image, reader) {
+                            cameraHandler.post { closeRetiredRawReaders() }
+                        }
+                        characteristics?.let { rawViewfinder?.offer(image, it, latestPreviewResult) }
+                        if (previewRawTimestamps.remove(image.timestamp)) {
+                            RawImageOwnership.release(image)
+                            continue
+                        }
                         if (rawZslStreaming && activeFramesRemaining.get() <= 0) {
                             // Bound outstanding gralloc buffers before they hit maxImages:
                             // each unmatched image waits up to ZSL_PAIR_TIMEOUT_MS for its
@@ -493,7 +688,7 @@ class RawCameraController(
                             // BufferQueues into unlock errors.
                             relieveZslReaderPressureIfNeeded()
                             val timestamp = image.timestamp
-                            pendingImages.put(timestamp, image)?.close()
+                            pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
                             if (pendingZslResults.containsKey(timestamp)) {
                                 pairAvailableFrame(timestamp)
                             } else {
@@ -504,7 +699,7 @@ class RawCameraController(
                         if ((rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0) {
                             val cameraCharacteristics = characteristics
                             if (cameraCharacteristics == null) {
-                                image.close()
+                                RawImageOwnership.release(image)
                                 continue
                             }
                             // Histogram sampling is small (~8k blocks) and stays inline.
@@ -517,7 +712,7 @@ class RawCameraController(
                             continue
                         }
                         if (activeFramesRemaining.get() <= 0) {
-                            image.close()
+                            RawImageOwnership.release(image)
                             continue
                         }
                         val timestamp = image.timestamp
@@ -528,10 +723,10 @@ class RawCameraController(
                                     "zsl=$rawZslStreaming pending=${pendingImages.size}"
                             )
                         }
-                        pendingImages.put(timestamp, image)?.close()
+                        pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
                         schedulePairTimeout(timestamp, reportCaptureFailure = false)
                         pairAvailableFrame(timestamp)
-                    } while ((rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0)
+                    } while (drained < 2 && (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0)
                 } catch (_: IllegalStateException) {
                     if (rawZslStreaming) {
                         // At 30 fps a brief handler stall (or lagging capture results) can
@@ -541,7 +736,16 @@ class RawCameraController(
                         // unmatched, else oldest ring frame) and then drain. Only a
                         // persistently sick stream falls back.
                         if (zslOverflowTracker.onOverflow()) {
-                            disableRawZslForSession("RAW buffer limit reached")
+                            // A storm on a stream that never filled means this HAL
+                            // cannot sustain repeating RAW right now: degrade to
+                            // burst-mode instead of parking a stream that will
+                            // only storm again. A filled-then-sickened stream
+                            // keeps transient per-shot retry.
+                            if (!rawZslHasFrame) {
+                                rawZslStreamBroken = true
+                                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                            }
+                            cooldownRawZslForRetry("RAW buffer limit reached")
                         } else {
                             Log.w(LOG_TAG, "RAW ImageReader overflowed during ZSL stream; draining")
                             relieveZslReaderPressure()
@@ -554,15 +758,25 @@ class RawCameraController(
                     } else {
                         Log.e(LOG_TAG, "RAW ImageReader reached maxImages during forward capture")
                         activeFramesRemaining.set(0)
+                        cameraCaptureSequenceActive = false
                         captureSequence.incrementAndGet()
                         try {
                             session?.abortCaptures()
                         } catch (_: CameraAccessException) {
                             // The normal capture error path below restores preview/ZSL if possible.
                         }
+                        // Release HAL-queued frames too, so the next press does
+                        // not inherit a full reader from this aborted burst.
+                        drainQueuedRawImages(rawReader)
                         closeAllPendingPairs()
-                        finishCapture("CAPTURE ERROR: RAW buffer limit reached")
-                        resumeRawZslIfIdle()
+                        // A top-up chain keeps its holdout plus arrivals as a
+                        // partial burst; anything else was already closed above.
+                        if (topupActive) finishTopupBurst()
+                        else {
+                            finishCapture("CAPTURE ERROR: RAW buffer limit reached")
+                            resumeRawZslIfIdle()
+                        }
+                        noteChainDeadAndMaybeRecover()
                     }
                 }
             }, cameraHandler)
@@ -712,21 +926,59 @@ class RawCameraController(
                 } catch (failure: CameraAccessException) {
                     configured.close()
                     if (session === configured) session = null
+                    Log.w(LOG_TAG, "Repeating request failed after configure: ${cameraAccessReason(failure)}")
                     if (isCurrent(generation)) onState("SESSION ERROR")
                     return
-                } catch (_: IllegalStateException) {
+                } catch (failure: IllegalStateException) {
                     configured.close()
                     if (session === configured) session = null
+                    Log.w(LOG_TAG, "Session raced a closed camera", failure)
                     if (isCurrent(generation)) onState("CAMERA CLOSED")
                     return
                 }
             }
+            Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
             if (!isCurrent(generation)) return
+            Log.e(LOG_TAG, "Camera session configuration rejected by HAL")
             onState("SESSION ERROR")
         }
+    }
+
+    private var rawPreviewRetryUntilMs = 0L
+    private var rawPreviewFailures = 0
+
+    private fun recoverRawPreview(reason: String) {
+        if (!running || captureInProgress.get()) return
+        val generation = lifecycleGeneration
+        val shot = captureSequence.get()
+        rawPreviewFailures++
+        val delayMs = 1000L * rawPreviewFailures
+        rawPreviewRetryUntilMs = if (rawPreviewFailures <= 3) SystemClock.elapsedRealtime() + delayMs else Long.MAX_VALUE
+        Log.w(LOG_TAG, "RAW preview recovery $rawPreviewFailures: $reason")
+        updateRepeatingRequest(allowRawZsl = false)
+        if (rawPreviewFailures <= 3) cameraHandler.postDelayed({
+            if (isCurrent(generation) && shot == captureSequence.get() && !captureInProgress.get()) updateRepeatingRequest()
+        }, delayMs)
+    }
+
+    init {
+        rawViewfinder?.onStarvation = { cameraHandler.post { recoverRawPreview("No fresh RAW display frame") } }
+    }
+
+    private val shutterDispatchPending = AtomicBoolean(false)
+
+    private fun postShutter(action: () -> Unit) {
+        if (!running || captureInProgress.get() || pendingSaveCount.get() > 0 ||
+            !shutterDispatchPending.compareAndSet(false, true)) return
+        val generation = lifecycleGeneration
+        if (!cameraHandler.post {
+            try {
+                if (isCurrent(generation) && !captureInProgress.get() && pendingSaveCount.get() == 0) action()
+            } finally { shutterDispatchPending.set(false) }
+        }) shutterDispatchPending.set(false)
     }
 
     fun capture() {
@@ -736,7 +988,7 @@ class RawCameraController(
         // Freeze physical orientation with the shutter press. ZSL selection and asynchronous RAW
         // saving may run later; they must never observe a newer handset orientation.
         val orientationSnapshot = deviceOrientationDegrees
-        cameraHandler.post {
+        postShutter {
             beginSingleCapture(pressElapsedNanos, sensorCutoffSnapshot, outputFormat, orientationSnapshot)
         }
     }
@@ -745,7 +997,7 @@ class RawCameraController(
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         Log.i(LOG_TAG, "Burst requested frames=$BURST_FRAME_COUNT")
-        cameraHandler.post {
+        postShutter {
             captureFrames(
                 BURST_FRAME_COUNT,
                 outputFormat = outputFormat,
@@ -760,14 +1012,14 @@ class RawCameraController(
         require(bracketStops == 2 || bracketStops == 4) { "HDR bracket must be ±2 or ±4 EV" }
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
-        cameraHandler.post {
+        postShutter {
             if (captureInProgress.get() || pendingSaveCount.get() > 0 || !hasPreviewMetadata) {
                 onState("HDR WAIT")
-                return@post
+                return@postShutter
             }
             if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)) {
                 onState("HDR NEEDS MANUAL")
-                return@post
+                return@postShutter
             }
             activeHdrBracket = true
             activeHdrSaveEachBracket = saveEachBracket && !saveDebugFrames
@@ -789,6 +1041,9 @@ class RawCameraController(
             return true
         }
         captureFormat = format
+        // FOLLOW may flip the tonemap (DNG_ONLY <-> JPEG): push so the next sampled
+        // frame renders the contract being saved.
+        pushVfRenderState()
         return true
     }
 
@@ -800,6 +1055,9 @@ class RawCameraController(
             return true
         }
         jpegOutputSettings = settings.resolvedForPlatform()
+        // Live-link AgX sliders + adaptive strength to the JPEG preview: the next
+        // sampled frame carries them.
+        pushVfRenderState()
         return true
     }
 
@@ -820,52 +1078,149 @@ class RawCameraController(
         outputFormat: CaptureFormat,
         orientationSnapshot: Int
     ) {
-        if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
-        if (rawZslStreaming) {
-            onState("SELECTING RAW ZSL")
-            if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
-            cameraHandler.postDelayed({
-                if (!captureInProgress.get()) return@postDelayed
-                if (!selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) {
-                    captureFrames(1, captureAlreadyStarted = true)
+        // ZSL purity: when ZSL is requested and usable, reserve the full burst
+        // up front. A 30-frame burst needs 30 slots; checking only 1 would lock
+        // the shutter, spin the 3s recovery wait with no capacity, then degrade
+        // to a single that further delays the rearm. With the full reservation,
+        // a busy queue fails fast with QUEUE FULL and the shutter stays free.
+        if (rawZslRequested) {
+            val need = zslSelectedFrameCount(outputFormat)
+            if (!beginCapture(outputFormat, requiredSaveSlots = need, orientationSnapshot = orientationSnapshot)) return
+            if (zslHybridTopupEnabled) {
+                if (!selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot, forceTopup = true)) {
+                    startTopupBurst(emptyList(), need)
                 }
-            }, ZSL_SELECTION_WAIT_MS)
-        } else if (rawZslRequested && !rawZslDisabledForSession) {
-            // ZSL wanted but the ring is warming or re-arming after saves:
-            // wait for recovery instead of degrading to a forward single.
-            // Falls back only if the ring never returns (timeout/disabled).
-            onState("ZSL QUEUED")
-            Log.i(
-                LOG_TAG,
-                "ZSL not streaming at shutter (saves=${pendingSaveCount.get()} " +
-                    "buffered=${rawZslBuffer?.size ?: 0}/$rawZslCapacity); waiting for ring"
-            )
-            val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
-            retryZslSelectionUntil(pressElapsedNanos, sensorCutoffSnapshot, deadlineMs)
+                return
+            }
+            if (rawZslStreaming) {
+                onState("SELECTING RAW ZSL")
+                if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
+                val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                retryZslSelectionUntil(deadlineMs)
+            } else {
+                // ZSL wanted but the ring is warming or re-arming after saves:
+                // wait for recovery instead of degrading to a forward single.
+                // Never falls back to single; releases with NOT READY on timeout.
+                onState("ZSL QUEUED")
+                Log.i(
+                    LOG_TAG,
+                    "ZSL not streaming at shutter (saves=${pendingSaveCount.get()} " +
+                        "buffered=${rawZslBuffer?.size ?: 0}/$rawZslCapacity need=$need); waiting for ring"
+                )
+                val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                retryZslSelectionUntil(deadlineMs)
+            }
         } else {
+            if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
             captureFrames(1, captureAlreadyStarted = true)
         }
     }
 
+    /**
+     * Retries a ZSL selection until [deadlineMs]. Every tick uses a fresh cutoff
+     * (now), because this loop exists to cover ring refill happening after the
+     * press: post-press frames would carry negative ages against a press-time
+     * cutoff and be rejected forever. The initial attempt with the true
+     * press-time cutoff happens in beginSingleCapture before this loop starts.
+     *
+     * With hybrid top-up ON the loop always ends in a capture: ~1s of
+     * consecutive empty takes escalates to a pure forward burst (empty
+     * holdout), the GCam bottom rung. NOT READY only survives with the toggle
+     * OFF. [emptyStreak] counts those consecutive empties.
+     */
     private fun retryZslSelectionUntil(
-        pressElapsedNanos: Long,
-        sensorCutoffSnapshot: Long,
-        deadlineMs: Long
+        deadlineMs: Long,
+        restartAttempted: Boolean = false,
+        emptyStreak: Int = 0
     ) {
+        val shot = captureSequence.get()
+        val generation = lifecycleGeneration
         cameraHandler.postDelayed({
-            if (!captureInProgress.get()) return@postDelayed
-            if (rawZslDisabledForSession) {
-                captureFrames(1, captureAlreadyStarted = true)
+            if (!isCurrent(generation) || shot != captureSequence.get() || !captureInProgress.get()) return@postDelayed
+            if (rawZslDisabledForSession && zslHybridTopupEnabled) {
+                Log.w(
+                    LOG_TAG,
+                    "ZSL disabled for session (${rawZslFallbackDetail ?: "unknown"}); " +
+                        "falling back to single capture"
+                )
+                startTopupBurst(emptyList(), zslSelectedFrameCount(activeCaptureFormat))
                 return@postDelayed
             }
-            if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return@postDelayed
+            // Per-shot recovery (PhotonCamera/GCam style): the stream may be down
+            // from a transient outage whose cooldown has expired. Every press
+            // re-attempts the ZSL stream once instead of wedging until reopen.
+            // Restarting alongside save-held Images would re-wedge the gralloc
+            // queue, so the restart is allowed only when a full ring plus the
+            // remaining saves provably fit maxImages (same headroom rule as the
+            // reader sizing); otherwise the wait rides out the drain and the
+            // save completions rearm via resumeRawZslIfIdle.
+            var restartDone = restartAttempted
+            if (!rawZslStreaming && !restartAttempted && !isRawZslBlocked() &&
+                zslRestartFitsReader()
+            ) {
+                Log.i(LOG_TAG, "ZSL stream down at shutter; attempting per-shot restart")
+                updateRepeatingRequest(allowRawZsl = true)
+                restartDone = true
+            }
+            // Refresh the cutoff every tick: the retry exists to cover ring
+            // refill AFTER the press (restart, rearm), and frames completing
+            // after a stale press-time cutoff carry negative ages that the
+            // eligibility filter would reject forever — observed as an
+            // eternal empty selection on a filling ring (buffered 3/8, never
+            // eligible) ending in ZSL NOT READY.
+            val tickElapsedNanos = SystemClock.elapsedRealtimeNanos()
+            val tickSensorCutoff = lastPreviewSensorTimestamp
+            if (selectAndSaveRawZsl(tickElapsedNanos, tickSensorCutoff)) return@postDelayed
+            // Empty-ring escalation (P0 liveness): a ring that yields nothing
+            // for ~1s is not going to refill (wedged HAL, dead stream), so fire
+            // the full burst forward instead of riding out the whole deadline
+            // into NOT READY. Capacity was reserved up front, so slots exist.
+            val nextEmptyStreak = if (lastZslTakeSize == 0) emptyStreak + 1 else 0
+            if (nextEmptyStreak >= EMPTY_TOPUP_ESCALATION_TICKS && zslHybridTopupEnabled) {
+                Log.i(LOG_TAG, "ZSL ring empty for ~1s; escalating to forward burst")
+                if (selectAndSaveRawZsl(tickElapsedNanos, tickSensorCutoff, forceTopup = true)) {
+                    return@postDelayed
+                }
+            }
             if (SystemClock.elapsedRealtime() >= deadlineMs) {
-                Log.w(LOG_TAG, "ZSL ring did not recover in time; falling back to single capture")
-                captureFrames(1, captureAlreadyStarted = true)
+                // ZSL purity: never degrade to a forward single on timeout.
+                // A timeout single would add queue pressure, flush/abort the
+                // session (Xiaomi code-3 errors) and push the rearm even later.
+                // With top-up ON this line is nearly unreachable (empty-ring
+                // escalation fires first); reaching it means the session is
+                // sick, so count it toward rebuild like any dead chain.
+                Log.w(LOG_TAG, "ZSL ring did not recover in time; releasing (no single fallback)")
+                if (zslHybridTopupEnabled) {
+                    startTopupBurst(emptyList(), zslSelectedFrameCount(activeCaptureFormat))
+                    return@postDelayed
+                }
+                finishCapture("ZSL NOT READY")
+                noteChainDeadAndMaybeRecover()
                 return@postDelayed
             }
-            retryZslSelectionUntil(pressElapsedNanos, sensorCutoffSnapshot, deadlineMs)
+            retryZslSelectionUntil(deadlineMs, restartDone, nextEmptyStreak)
         }, ZSL_SELECTION_WAIT_MS)
+    }
+
+    /**
+     * True when restarting the ZSL stream right now provably fits the reader:
+     * held saves + a full ring + pairing window + transition slack stay within
+     * maxImages. Guards the per-shot restart against re-creating the overflow
+     * storms that the cooldown just parked.
+     */
+    private fun zslRestartFitsReader(): Boolean {
+        if (rawReaderMaxImages <= 0 || rawZslCapacity <= 0) return false
+        return pendingSaveCount.get() + rawZslCapacity +
+            ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS <= rawReaderMaxImages
+    }
+
+    private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int {
+        val requestedFrameCount = rawZslFrameCount
+        return if (outputFormat.includesJpeg) {
+            minOf(requestedFrameCount, MAX_IN_FLIGHT_JPEG_SAVES)
+        } else {
+            requestedFrameCount
+        }
     }
 
     private fun beginCapture(
@@ -873,6 +1228,7 @@ class RawCameraController(
         requiredSaveSlots: Int,
         orientationSnapshot: Int = deviceOrientationDegrees
     ): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
         if (!hasProcessingCapacity(requiredSaveSlots, outputFormat)) {
             onState("QUEUE FULL")
             onCaptureEnabled(false)
@@ -882,6 +1238,11 @@ class RawCameraController(
             if (captureInProgress.get()) onState("CAPTURE IN PROGRESS")
             return false
         }
+        // Every capture starts unproven: dead-chain accounting (session rebuild
+        // after consecutive zero-pair captures) keys off pairs produced by THIS
+        // press, never a previous one.
+        captureSequence.incrementAndGet()
+        chainPairedAny = false
         onCaptureEnabled(false)
         activeCaptureFormat = outputFormat
         activeOutputOrientation = dngOrientation(characteristics, orientationSnapshot)
@@ -896,27 +1257,34 @@ class RawCameraController(
         return true
     }
 
-    private fun selectAndSaveRawZsl(pressElapsedNanos: Long, sensorCutoffSnapshot: Long): Boolean {
+    private fun selectAndSaveRawZsl(
+        pressElapsedNanos: Long,
+        sensorCutoffSnapshot: Long,
+        forceTopup: Boolean = false
+    ): Boolean {
         val cutoff = if (rawZslRealtimeTimestamps) pressElapsedNanos else sensorCutoffSnapshot
-        if (cutoff == Long.MIN_VALUE) return false
-        val requestedFrameCount = rawZslFrameCount
-        val selectedFrameCount = if (activeCaptureFormat.includesJpeg) {
-            minOf(requestedFrameCount, MAX_IN_FLIGHT_JPEG_SAVES)
-        } else {
-            requestedFrameCount
+        if (cutoff == Long.MIN_VALUE) {
+            lastZslTakeSize = -1
+            return false
         }
+        val selectedFrameCount = zslSelectedFrameCount(activeCaptureFormat)
         // A ZSL request saves the configured selection as one logical capture. Do not remove
         // frames from the ring unless all of them fit in the bounded development queue.
         val requiredSaveSlots = selectedFrameCount
         if (!hasProcessingCapacity(requiredSaveSlots, activeCaptureFormat)) {
             onState("ZSL QUEUED")
+            lastZslTakeSize = -1
             return false
         }
-        val selected = rawZslBuffer?.takeBest(
-            cutoff,
-            rawZslRealtimeTimestamps,
-            selectedFrameCount
-        ).orEmpty()
+        // PhotonCamera partial take: use whatever the ring holds instead of
+        // all-or-nothing. A full ring saves immediately; a thin ring either tops
+        // up with fresh captures (hybrid, below) or keeps waiting for refill.
+        // An empty ring with forceTopup fires a pure forward burst (GCam bottom
+        // rung): the wait loop escalates here after ~1s of empties so every
+        // press ends in DNGs, never NOT READY, while the toggle is ON.
+        val selected = rawZslBuffer?.takeForCapture(cutoff, rawZslRealtimeTimestamps,
+            selectedFrameCount, zslHybridTopupEnabled).orEmpty()
+        lastZslTakeSize = selected.size
         if (selected.isEmpty()) {
             if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
                 Log.d(
@@ -926,12 +1294,42 @@ class RawCameraController(
                         "saves=${pendingSaveCount.get()}"
                 )
             }
+            if (forceTopup && zslHybridTopupEnabled) {
+                return startTopupBurst(emptyList(), selectedFrameCount)
+            }
             return false
         }
+        if (selected.size < selectedFrameCount && zslHybridTopupEnabled) {
+            return startTopupBurst(selected, selectedFrameCount)
+        }
+        if (selected.size < selectedFrameCount) return false
         updateRepeatingRequest(allowRawZsl = false)
         activeFramesRemaining.set(0)
 
+        saveSelectedZslBurst(selected)
+        finishCapture()
+        publishRawZslStatus()
+        return true
+    }
+
+    /**
+     * Saves one ZSL burst (ring frames, top-up mix, or full ring alike) under a
+     * single stem: DNGs/JPEGs plus best-effort gyro sidecars sort together.
+     * Every frame is handed to the bounded writer with its own ownership; the
+     * caller must already hold any queue capacity the burst needs.
+     */
+    private fun saveSelectedZslBurst(selected: List<BufferedRawFrame>) {
+        if (selected.isEmpty()) return
         onState("SAVING ZSL ×${selected.size}")
+        val approximateCount = selected.count { it.metadataApproximate }
+        if (approximateCount > 0) {
+            Log.w(
+                LOG_TAG,
+                "ZSL burst holds $approximateCount/${selected.size} frames with approximate " +
+                    "metadata (capture-result stall admitted on grace); pixels are exact, " +
+                    "AE-dependent tags come from the latest preview result"
+            )
+        }
         // One shared stem so the burst's DNGs/JPEGs (DCIM/RawLens/<stem>)
         // and gyro CSVs/burst.json sort together. With a granted photo-folder
         // Uri (Settings → General → sidecars) the sidecars land next to the
@@ -942,15 +1340,28 @@ class RawCameraController(
         // deterministic so the sidecar matches whatever actually finishes.
         val stemMillis = System.currentTimeMillis()
         val stem = CaptureFileNames.stem(stemMillis)
-        val sidecar = snapshotBurstSidecar(selected, stemMillis, stem)
+        val sidecar = runCatching { snapshotBurstSidecar(selected, stemMillis, stem) }
+            .onFailure { Log.w(LOG_TAG, "Could not snapshot burst sidecar", it) }.getOrNull()
         selected.forEachIndexed { index, frame ->
             val suffix = "F%02d".format(index)
             saveRawFrame(frame.image, frame.result, "ZSL ${index + 1}/${selected.size}",
                 captureTimeMillis = stemMillis, fileNameSuffix = suffix, subfolder = stem)
         }
-        // Best-effort and last: sidecar failures must never fail the burst
-        // (the DNGs above are already safe in the queue).
+        // Snapshot above is camera-thread work; SAF/file I/O must not block RAW delivery.
         if (sidecar != null) {
+            pendingSaveCount.incrementAndGet()
+            try {
+                writer.execute {
+                    try { writeZslSidecar(stem, sidecar) } finally { postSaveCompletion() }
+                }
+            } catch (failure: RejectedExecutionException) {
+                Log.w(LOG_TAG, "Sidecar queue rejected; RAW artifacts remain saved", failure)
+                postSaveCompletion()
+            }
+        }
+    }
+
+    private fun writeZslSidecar(stem: String, sidecar: BurstSidecarPayload) {
             try {
                 val tree = SidecarTreeAccess.savedTreeUri(context)
                 if (tree != null && SidecarTreeAccess.hasWriteAccess(context, tree)) {
@@ -973,10 +1384,107 @@ class RawCameraController(
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "Burst sidecar write failed (DNGs unaffected)", failure)
             }
+    }
+
+    /** Runs only after an accepted save/sidecar has released everything it owns. */
+    private fun postSaveCompletion() {
+        cameraHandler.post {
+            pendingSaveCount.decrementAndGet()
+            closeRetiredRawReaders()
+            if (running && !destroyed) {
+                refreshCaptureAvailability()
+                resumeRawZslIfIdle()
+                publishRawZslStatus()
+            }
         }
+    }
+
+    /**
+     * Hybrid top-up (GCam ZSL+PSL style): the ring held [holdout] of [need]
+     * frames, so capture the remainder as fresh forward stills and save the
+     * mix under one stem. The holdout is already removed from the ring and is
+     * owned here until the combined save (or an abort) releases it.
+     */
+    private fun startTopupBurst(holdout: List<BufferedRawFrame>, need: Int): Boolean {
+        val remainder = need - holdout.size
+        if (remainder <= 0) return false
+        topupActive = true
+        topupHoldout = holdout
+        topupFrames.clear()
+        Log.i(
+            LOG_TAG,
+            "ZSL hybrid top-up: ring held ${holdout.size}/$need, capturing $remainder fresh frames"
+        )
+        onState("ZSL TOP-UP ×$need")
+        // The capture timeout already scales with chain length inside
+        // captureFrames, so slow shutters degrade to a partial save instead of
+        // a false timeout here.
+        if (rawViewfinderStreaming && session != null && lastPreviewSensorTimestamp != Long.MIN_VALUE &&
+            SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs) {
+            // These are genuinely forward frames, but the sensor already delivers them.
+            // Do not flush a healthy 30 Hz stream just to submit identical RAW stills.
+            val captureId = captureSequence.incrementAndGet()
+            streamCapture = ForwardRawSelection(captureId, lastPreviewSensorTimestamp, remainder)
+            activeFramesRemaining.set(remainder)
+            updateRepeatingRequest(allowRawZsl = false)
+            scheduleCaptureTimeout(captureId, remainder * maxOf(lastExposureNanos / 1_000_000L, 100L))
+            Log.i(LOG_TAG, "Continuous RAW top-up id=$captureId frames=$remainder")
+        } else {
+            captureFrames(remainder, captureAlreadyStarted = true)
+        }
+        return true
+    }
+
+    /** Takes ownership of one freshly captured top-up frame (Image + result). */
+    private fun accumulateTopupFrame(image: Image, result: TotalCaptureResult) {
+        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
+        // The motion tracker is stopped across forward captures, so per-frame
+        // gyro integration is unavailable here; scoring already happened at
+        // selection time and sidecars key off timestamps, making 0 safe.
+        topupFrames += BufferedRawFrame(
+            image,
+            result,
+            timestamp,
+            result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
+            result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
+            0f
+        )
+    }
+
+    /**
+     * Completes a hybrid top-up: ring holdout + arrived fresh frames, timestamp
+     * ordered, saved under one stem. Partial on timeout/failure (GCam's bottom
+     * rung is a picture, never a wedge); empty only when nothing arrived, which
+     * releases the shutter with an error instead of hanging it.
+     */
+    private fun finishTopupBurst() {
+        val holdout = topupHoldout
+        val fresh = topupFrames.toList()
+        topupActive = false
+        topupHoldout = emptyList()
+        topupFrames.clear()
+        val combined = (holdout + fresh).sortedBy { it.timestampNanos }
+        if (combined.isEmpty()) {
+            finishCapture("CAPTURE ERROR")
+            resumeRawZslIfIdle()
+            return
+        }
+        Log.i(
+            LOG_TAG,
+            "ZSL hybrid top-up complete ring=${holdout.size} fresh=${fresh.size} " +
+                "total=${combined.size}"
+        )
+        saveSelectedZslBurst(combined)
         finishCapture()
         publishRawZslStatus()
-        return true
+    }
+
+    /** Releases a top-up in flight without saving (session teardown paths). */
+    private fun abortTopupFrames() {
+        topupActive = false
+        (topupHoldout + topupFrames).forEach { runCatching { RawImageOwnership.release(it.image) } }
+        topupHoldout = emptyList()
+        topupFrames.clear()
     }
 
     /** Preassembled sidecar payload: meta JSON plus CSV text by file name. */
@@ -1089,16 +1597,20 @@ class RawCameraController(
             finishCapture("CAPTURE ERROR: camera not ready")
             return
         }
-        stopRepeatingRawBeforeForwardCapture(currentSession, reader)
+        // Repeating RAW stays attached. Preview-result timestamps are discarded
+        // independently from exact still-result pairing below.
+        closeAllPendingPairs()
+        activeFramesRemaining.set(frameCount)
         updateRepeatingRequest(allowRawZsl = false)
         val generation = lifecycleGeneration
         val captureId = captureSequence.incrementAndGet()
-        activeFramesRemaining.set(frameCount)
-        Log.i(LOG_TAG, "Submitting RAW capture id=$captureId frames=$frameCount")
+        chainPairedAny = false
+        Log.i(LOG_TAG, "Submitting RAW capture id=$captureId frames=$frameCount (serialized)")
         try {
             val requests = List(frameCount) { frameIndex ->
                 device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
+                    previewSurface?.let { addTarget(it) }
                     setTag(CaptureTag(captureId, frameIndex + 1, frameCount))
                     // Same split as PhotonCamera Photo mode: preview meters under hardware AE;
                     // the shutter-first pair is applied only to the submitted still request.
@@ -1108,27 +1620,101 @@ class RawCameraController(
                 }.build()
             }
             onState(if (frameCount == 1) "CAPTURING" else "BURST ×$frameCount")
+            // Serialized chains take frameCount × exposure instead of one pipeline
+            // burst: scale the timeout up from the 8s base (never down), so slow
+            // shutters degrade to a partial save instead of a false timeout.
             val bracketDurationMs = if (activeHdrBracket) requests.sumOf {
                 (it.get(CaptureRequest.SENSOR_EXPOSURE_TIME) ?: 0L) / 1_000_000L
             } else 0L
-            scheduleCaptureTimeout(captureId, bracketDurationMs)
-            cameraCaptureSequenceActive = true
+            val chainMs = frameCount * maxOf(lastExposureNanos / 1_000_000L, 100L) + 2_000L
+            scheduleCaptureTimeout(
+                captureId, maxOf(bracketDurationMs, chainMs - CAPTURE_TIMEOUT_MS).coerceAtLeast(0L))
             val callback = captureCallback(generation, captureId)
-            if (frameCount == 1) currentSession.capture(requests.single(), callback, cameraHandler)
-            else currentSession.captureBurst(requests, callback, cameraHandler)
+            activeStillCallback = callback
+            pendingStillRequests.clear()
+            pendingStillRequests.addAll(requests)
+            submitNextStill()
             Log.i(LOG_TAG, "RAW capture submitted id=$captureId frames=$frameCount")
 
         } catch (failure: CameraAccessException) {
             cameraCaptureSequenceActive = false
             finishCapture("CAPTURE ERROR")
             resumeRawZslIfIdle()
+            noteChainDeadAndMaybeRecover()
         } catch (failure: IllegalArgumentException) {
             cameraCaptureSequenceActive = false
             finishCapture("NOT SUPPORTED")
             resumeRawZslIfIdle()
+            noteChainDeadAndMaybeRecover()
         } catch (_: IllegalStateException) {
             cameraCaptureSequenceActive = false
             finishCapture("CAPTURE ERROR")
+            noteChainDeadAndMaybeRecover()
+        }
+    }
+
+    /**
+     * Records a dead chain end (zero paired frames): after two in a row the
+     * HAL is wedged past what aborts can clear, so rebuild the whole camera
+     * session instead of failing red forever. No-op when the chain paired
+     * anything or another capture is already running.
+     */
+    private fun noteChainDeadAndMaybeRecover() {
+        if (chainPairedAny) return
+        consecutiveDeadChains++
+        Log.w(LOG_TAG, "Forward chain produced zero frames " +
+            "($consecutiveDeadChains consecutive)")
+        if (consecutiveDeadChains >= 2 && !captureInProgress.get()) {
+            Log.w(LOG_TAG, "Recovering camera session after consecutive dead chains")
+            onState("RECOVERING CAMERA")
+            consecutiveDeadChains = 0
+            chainPairedAny = false
+            restartCameraForConfigurationChange()
+        }
+    }
+
+    /** Submits the next prebuilt still of the serialized chain, if any remain. */
+    private fun submitNextStill() {
+        if (!running) return
+        val next = pendingStillRequests.removeFirstOrNull() ?: return
+        val currentSession = session
+        val callback = activeStillCallback
+        if (currentSession == null || callback == null) {
+            if (topupActive) {
+                Log.w(LOG_TAG, "Still chain lost its session; saving partial burst")
+                finishTopupBurst()
+            } else {
+                finishCapture("CAPTURE ERROR")
+                resumeRawZslIfIdle()
+            }
+            noteChainDeadAndMaybeRecover()
+            return
+        }
+        cameraCaptureSequenceActive = true
+        try {
+            currentSession.capture(next, callback, cameraHandler)
+            if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                val tag = next.tag as? CaptureTag
+                Log.d(LOG_TAG, "Chained still submitted frame=${tag?.frameNumber}/${tag?.frameCount}")
+            }
+        } catch (failure: CameraAccessException) {
+            cameraCaptureSequenceActive = false
+            if (topupActive) finishTopupBurst() else {
+                finishCapture("CAPTURE ERROR")
+                resumeRawZslIfIdle()
+            }
+            noteChainDeadAndMaybeRecover()
+        } catch (_: IllegalArgumentException) {
+            cameraCaptureSequenceActive = false
+            if (topupActive) finishTopupBurst() else {
+                finishCapture("NOT SUPPORTED")
+                resumeRawZslIfIdle()
+            }
+            noteChainDeadAndMaybeRecover()
+        } catch (_: IllegalStateException) {
+            cameraCaptureSequenceActive = false
+            if (topupActive) finishTopupBurst() else finishCapture("CAPTURE ERROR")
+            noteChainDeadAndMaybeRecover()
         }
     }
 
@@ -1409,18 +1995,14 @@ class RawCameraController(
     }
 
     private fun meteringRegion(viewX: Float, viewY: Float): MeteringRectangle? {
-        val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+        val active = latestPreviewResult?.get(CaptureResult.SCALER_CROP_REGION)
+            ?: characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
         if (viewfinder.width == 0 || viewfinder.height == 0) return null
         val x = (viewX / viewfinder.width).coerceIn(0f, 1f)
         val y = (viewY / viewfinder.height).coerceIn(0f, 1f)
-        val relativeRotation = ((characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0) -
-            deviceOrientationDegrees + 360) % 360
-        val sensorPoint = when (relativeRotation) {
-            90 -> y to (1f - x)
-            180 -> (1f - x) to (1f - y)
-            270 -> (1f - y) to x
-            else -> x to y
-        }
+        val relativeRotation = characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val mirrored = characteristics?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+        val sensorPoint = RawPreviewGeometry.sensorPoint(x, y, relativeRotation, mirrored)
         val centerX = active.left + (sensorPoint.first * active.width()).toInt()
         val centerY = active.top + (sensorPoint.second * active.height()).toInt()
         // Open Camera uses a 100x100 area in its -1000..1000 coordinate system: 5% of
@@ -1592,6 +2174,7 @@ class RawCameraController(
         programConverged = false
         programBrightness = Float.NaN
         programBrightnessEma = Float.NaN
+        programFastStart = true
         lastProgramUpdateMs = Long.MIN_VALUE
         cancelDynamicExposureProbe()
         updateRepeatingRequest()
@@ -1653,7 +2236,7 @@ class RawCameraController(
      */
     private fun dispatchMeteringSample(image: Image, cameraCharacteristics: CameraCharacteristics) {
         if (captureInProgress.get()) {
-            image.close()
+            RawImageOwnership.release(image)
             return
         }
         val now = SystemClock.elapsedRealtime()
@@ -1661,7 +2244,7 @@ class RawCameraController(
         val wantEttr = ettrSettings.enabled && ettrModeAvailable() &&
             selectedIso == null && selectedExposureNanos == null
         if (!wantProgram && !wantEttr) {
-            image.close()
+            RawImageOwnership.release(image)
             return
         }
         val programDue = wantProgram &&
@@ -1675,7 +2258,7 @@ class RawCameraController(
                 meteringInterval(if (ettrConverged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS)
             )
         if ((!programDue && !ettrDue) || !meteringInFlight.compareAndSet(false, true)) {
-            image.close()
+            RawImageOwnership.release(image)
             return
         }
         if (programDue) lastProgramUpdateMs = now
@@ -1686,13 +2269,19 @@ class RawCameraController(
             try {
                 val sampleStartMs = SystemClock.elapsedRealtime()
                 // ETTR needs full-density tails; PROGRAM alone is served by the
-                // sparse path, which shares one sample when both loops are due.
+                // sparse region-cropped path, which shares one sample when both
+                // loops are due.
                 val sample = if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
-                else RawEttrSampler.sampleProgram(image, cameraCharacteristics)
+                else RawEttrSampler.sampleProgram(
+                    image, cameraCharacteristics, programAeProfile.metering
+                )
                     val sampleMs = SystemClock.elapsedRealtime() - sampleStartMs
                     lastMeteringSampleMs = sampleMs
                     if (sampleMs > SICK_SAMPLE_LOG_MS) {
                         Log.w(LOG_TAG, "Slow RAW metering sample: ${sampleMs}ms (image ${image.width}x${image.height})")
+                    } else if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                        Log.d(LOG_TAG, "Metering sample ${sampleMs}ms ${image.width}x${image.height} " +
+                            (if (ettrDue) "full" else "sparse"))
                     }
                     if (sample != null) {
                         cameraHandler.post {
@@ -1703,25 +2292,24 @@ class RawCameraController(
                         }
                     }
                 } finally {
-                    runCatching { image.close() }
+                    runCatching { RawImageOwnership.release(image) }
                     meteringInFlight.set(false)
+                    cameraHandler.post { closeRetiredRawReaders() }
                 }
             }
         } catch (_: RejectedExecutionException) {
             meteringInFlight.set(false)
-            runCatching { image.close() }
+            runCatching { RawImageOwnership.release(image) }
         }
     }
 
     /**
-     * Effective metering cadence. On sensors where one Bayer sample costs more
-     * than [SLOW_METERING_BACKOFF_MS] (e.g. ~466 ms for 12 MP on some
-     * MediaTek parts), sampling at the base 2 Hz would saturate the single
-     * metering thread and starve convergence updates. Halve the rate there;
-     * fast devices are unaffected.
+     * Effective metering cadence. Self-tuning: a slow sensor naturally serializes
+     * through the single in-flight slot, so the base rate only doubles when one
+     * sample costs more than the base interval itself. Fast devices are unaffected.
      */
     private fun meteringInterval(baseMs: Long): Long =
-        if (lastMeteringSampleMs > SLOW_METERING_BACKOFF_MS) baseMs * 2 else baseMs
+        if (lastMeteringSampleMs > baseMs) baseMs * 2 else baseMs
 
     /**
      * One PROGRAM custom-AE iteration: RAW brightness (center/average/spot per
@@ -1749,12 +2337,17 @@ class RawCameraController(
                 .toFloat().coerceIn(0f, 1f)
         } else brightness
         programBrightness = programBrightnessEma
+        // Cropped scans carry a full-frame guard level so a dark metered region
+        // cannot blind the highlight guard to bright surroundings; full-frame
+        // scans already report the global hottest channel.
+        val hottest = sample.guardHottest.takeIf { it.isFinite() } ?: sample.levels.hottest
+        // Loop (re)entry measures with full authority so one snap lands on the
+        // correct exposure; tracking nudges stay capped for smoothness.
+        val stepCap = if (programFastStart) RawProgramMeter.MAX_STEP_EV
+        else RawProgramMeter.PROGRAM_MAX_STEP_EV
         val shift = RawProgramMeter.guardShiftEv(
-            RawProgramMeter.correctionEv(
-                programBrightnessEma, profile.evBias,
-                RawProgramMeter.PROGRAM_MAX_STEP_EV
-            ),
-            sample.levels.hottest
+            RawProgramMeter.correctionEv(programBrightnessEma, profile.evBias, stepCap),
+            hottest
         )
         val baselineEnergy = baselineIso.toDouble() * baselineShutter
         // Small capped steps only (PROGRAM_MAX_STEP_EV): the ramp below owns
@@ -1781,7 +2374,21 @@ class RawCameraController(
         dynamicShutterLimited = result.shutterLimited
         programConverged = shift == 0.0 && !result.isoLimited && !result.shutterLimited ||
             kotlin.math.abs(shift) <= RawProgramMeter.CONVERGED_TOLERANCE_EV
-        if (dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos) {
+        if (programFastStart) {
+            // Loop (re)entry: land on the measured exposure immediately instead of
+            // gliding in from whatever the previous engine left behind. Tracking
+            // glides from there.
+            programFastStart = false
+            dynamicIso = result.iso
+            dynamicShutterNanos = result.shutterNanos
+            pushProgramPairLive()
+            cancelProgramRampTick()
+            Log.i(
+                LOG_TAG,
+                "PROGRAM fast-start ISO ${result.iso} EXP ${formatExposure(result.shutterNanos)} " +
+                    "(shift ${String.format(java.util.Locale.US, "%+.2f", shift)} EV)"
+            )
+        } else if (dynamicIso != result.iso || dynamicShutterNanos != result.shutterNanos) {
             scheduleProgramRampTick()
         } else {
             cancelProgramRampTick()
@@ -1789,10 +2396,10 @@ class RawCameraController(
     }
 
     /**
-     * One glide tick: ease the applied (live) pair toward the solver target by at
-     * most [PROGRAM_RAMP_MAX_STEP_EV], preserving the target's ISO/shutter ratio
-     * (or the locked axis), then push the live repeating request. Reschedules
-     * itself until the applied pair snaps to target.
+     * One glide tick: ease the applied (live) pair toward the solver target with
+     * an adaptive step (fast far away, gentle up close), preserving the target's
+     * ISO/shutter ratio (or the locked axis), then push the live repeating
+     * request. Reschedules itself until the applied pair snaps to target.
      */
     private fun programRampTick() {
         programRampCallback = null
@@ -1810,9 +2417,10 @@ class RawCameraController(
         val limits = programTargetLimits ?: return
         val curIso = dynamicIso ?: targetIso
         val curShutter = dynamicShutterNanos ?: targetShutter
-        val steppedEnergy = AutoExposureBalance.rampStepEnergy(
+        val steppedEnergy = AutoExposureBalance.rampStepEnergyAdaptive(
             curIso.toDouble() * curShutter,
             targetIso.toDouble() * targetShutter,
+            PROGRAM_RAMP_PROPORTION,
             PROGRAM_RAMP_MAX_STEP_EV,
             PROGRAM_RAMP_SNAP_EV
         )
@@ -1903,6 +2511,13 @@ class RawCameraController(
         )
     }
 
+    /**
+     * Effective locked values for the solver. An explicitly stored locked value
+     * always wins; otherwise the actual sensor exposure seeds the lock (a stable
+     * reference, unlike the moving live pair, which would let a "locked" axis
+     * drift with the scene). UI lock engagement is expected to store explicit
+     * values via [programProfile]; this fallback only covers legacy profiles.
+     */
     private fun resolveProgramLockedValues(
         profile: ProgramAeProfile,
         limits: ExposureBalanceLimits,
@@ -1911,12 +2526,12 @@ class RawCameraController(
     ): Pair<Int, Long> {
         val lockedIsoEff = when (profile.lockMode) {
             ProgramLockMode.ISO_LOCK -> profile.lockedIso.takeIf { it > 0 }
-                ?: dynamicIso ?: fallbackIso.coerceIn(limits.isoMin, limits.isoMax)
+                ?: lastIso.coerceIn(limits.isoMin, limits.isoMax)
             else -> fallbackIso.coerceIn(limits.isoMin, limits.isoMax)
         }.coerceIn(limits.isoMin, limits.isoMax)
         val lockedShutterEff = when (profile.lockMode) {
             ProgramLockMode.SHUTTER_LOCK -> profile.lockedShutterNanos.takeIf { it > 0L }
-                ?: dynamicShutterNanos ?: fallbackShutter.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
+                ?: lastExposureNanos.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
             else -> fallbackShutter.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
         }.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
         return lockedIsoEff to lockedShutterEff
@@ -2040,6 +2655,8 @@ class RawCameraController(
         } else {
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
+            rawZslCooldownUntilMs = 0L
+            rawZslStreamBroken = false
             if (rawZslCapacity == 0) {
                 publishRawZslStatus(
                     RawZslState.FALLBACK,
@@ -2079,6 +2696,7 @@ class RawCameraController(
         programBrightness = Float.NaN
         programBrightnessEma = Float.NaN
         programConverged = false
+        programFastStart = true
         lastProgramUpdateMs = Long.MIN_VALUE
         cancelDynamicExposureProbe()
         lastEttrUpdateMs = Long.MIN_VALUE
@@ -2108,10 +2726,15 @@ class RawCameraController(
         } else {
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
+            rawZslCooldownUntilMs = 0L
+            rawZslStreamBroken = false
             updateRepeatingRequest()
         }
         publishControls()
         publishRawZslStatus()
+        // The exposure mode feeds the VF adaptive-strength rule: re-push so the
+        // JPEG preview tracks the development exposure of the new mode.
+        pushVfRenderState()
     }
 
     fun cycleLens() {
@@ -2306,9 +2929,23 @@ class RawCameraController(
         // leave the viewfinder without RAW (stale histogram, YUV graph) for the
         // whole development queue. Only an active forward capture stops them.
         val captureActive = captureInProgress.get()
-        val readerReady = rawZslCapacity > 0 && reader != null
-        val useRawZsl = allowRawZsl && shouldRunRawStream(
-            rawZslRequested, rawZslDisabledForSession, readerReady, captureActive
+        // Split gate: a reserved capture slot (ZSL burst being assembled in the
+        // retry wait) must NOT block the ZSL ring itself — otherwise a per-shot
+        // restart during the wait rebuilds preview-only and the ring can never
+        // refill (observed as ZSL NOT READY with saves=0). Only a physically
+        // executing still sequence blocks it, since interleaved repeating RAW
+        // frames would steal reader slots from the in-flight still captures.
+        // Metering streams keep the strict gate: they must stay down across any
+        // held capture so forward captures keep full reader headroom.
+        val stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0
+        val rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs
+        val readerReady = rawZslCapacity > 0 && reader != null && rawRetryReady
+        // A transient cooldown parks ZSL exactly like the latched fallback while
+        // it runs; every later press retries from scratch instead (per-shot).
+        val zslBlocked = rawZslDisabledForSession || rawZslStreamBroken ||
+            SystemClock.elapsedRealtime() < rawZslCooldownUntilMs
+        val useRawZsl = allowRawZsl && pendingSaveCount.get() == 0 && shouldRunRawStream(
+            rawZslRequested, zslBlocked, readerReady, captureActive && stillExecuting
         )
         // Live RAW histogram for every capture mode while the user selects the RAW source.
         // Never competes with the ZSL ring: histogram-only frames are sampled and closed.
@@ -2330,7 +2967,11 @@ class RawCameraController(
         val useRawProgram = !useRawZsl && programCustomActive() && shouldRunRawStream(
             true, false, readerReady, captureActive
         )
-        val useRawStream = useRawZsl || useRawHistogram || useRawEttr || useRawProgram
+        // WYSIWYG preview: BOTH modes render our scene-referred pipeline from the RAW
+        // feed — raw-clean Reinhard for DNG_ONLY, cheap AgX for JPEG/JPEG_DNG. Never
+        // ISP YUV. The tonemap is a per-frame VF uniform, so the stream stays identical.
+        val useRawViewfinder = rawViewfinder != null && reader != null && rawRetryReady
+        val useRawStream = useRawViewfinder || useRawZsl || useRawHistogram || useRawEttr || useRawProgram
         try {
             val preserveBuffer = preserveRawZslBuffer && rawZslStreaming && useRawZsl
             // Keep existing paired candidates through benign control changes (tap focus and
@@ -2357,6 +2998,7 @@ class RawCameraController(
                 if (includeRaw) addTarget(reader!!.surface)
                 setTag(includeRaw)
                 applyCameraControls(this)
+                if (includeRaw) rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 if (useRawZsl) {
                     // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the TextureView never
                     // freezes, but tell 3A/HAL scheduling that this repeating request is serving
@@ -2403,10 +3045,20 @@ class RawCameraController(
                     previewRequest(includeRaw = false), callback, cameraHandler
                 )
             }
+            val wasZslStreaming = rawZslStreaming
+            rawViewfinderStreaming = useRawViewfinder
             rawZslStreaming = useRawZsl
             rawHistogramStreaming = useRawHistogram
             ettrStreaming = useRawEttr
             programStreaming = useRawProgram
+            if (useRawZsl != wasZslStreaming) {
+                Log.i(
+                    LOG_TAG,
+                    "ZSL stream ${if (useRawZsl) "STARTED" else "STOPPED"} " +
+                        "(allow=$allowRawZsl epoch=$requestEpoch saves=${pendingSaveCount.get()} " +
+                        "buffered=${rawZslBuffer?.size ?: 0}/$rawZslCapacity maxImages=$rawReaderMaxImages)"
+                )
+            }
             if (useRawZsl) {
                 if (!preserveBuffer) rawZslHasFrame = false
                 if (!preserveBuffer) {
@@ -2422,14 +3074,24 @@ class RawCameraController(
                 publishRawZslStatus()
             }
         } catch (failure: CameraAccessException) {
-            if (useRawZsl) disableRawZslForSession(cameraAccessReason(failure))
+            Log.w(LOG_TAG, "Repeating request failed: ${cameraAccessReason(failure)}")
+            if (useRawStream && !captureInProgress.get()) recoverRawPreview(cameraAccessReason(failure))
+            else if (useRawZsl) disableRawZslForSession(cameraAccessReason(failure))
             else if (useRawHistogram) disableRawHistogramForSession(cameraAccessReason(failure))
             else if (running) onState("CONTROL ERROR")
         } catch (failure: IllegalArgumentException) {
-            if (useRawZsl) disableRawZslForSession(failure.message ?: "stream combination rejected")
+            Log.w(LOG_TAG, "Repeating request rejected: ${failure.message}", failure)
+            if (useRawStream && !captureInProgress.get()) recoverRawPreview(failure.message ?: "stream combination rejected")
+            else if (useRawZsl) disableRawZslForSession(failure.message ?: "stream combination rejected")
             else if (useRawHistogram) {
                 disableRawHistogramForSession(failure.message ?: "stream combination rejected")
             } else onState("NOT SUPPORTED")
+        } catch (failure: IllegalStateException) {
+            // stop()/lens replacement can close the device after our initial snapshot.
+            if (isCurrent(generation)) {
+                Log.w(LOG_TAG, "Preview request raced a closed camera", failure)
+                onState("CAMERA CLOSED")
+            }
         }
     }
 
@@ -2440,15 +3102,34 @@ class RawCameraController(
                 request: CaptureRequest,
                 result: TotalCaptureResult
             ) {
-                if (!isCurrent(generation)) return
+                if (!isCurrent(generation) || requestEpoch != rawZslRequestEpoch) return
                 val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
                 val shutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                rawViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { lastPreviewSensorTimestamp = it }
                 if (iso > 0) lastIso = iso
                 if (shutter > 0) lastExposureNanos = shutter
                 latestPreviewResult = result
                 val includesRaw = rawSurface != null && request.tag == true
-                if (includesRaw && rawZslStreaming && requestEpoch == rawZslRequestEpoch) {
+                val rawTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                if (includesRaw && rawTimestamp != null && activeFramesRemaining.get() > 0) {
+                    val collecting = streamCapture
+                    if (collecting != null && collecting.captureId == captureSequence.get() &&
+                        collecting.accept(rawTimestamp)) {
+                        pendingResults[rawTimestamp] = result
+                        schedulePairTimeout(rawTimestamp, reportCaptureFailure = true)
+                        pairAvailableFrame(rawTimestamp)
+                    } else {
+                        // A repeating result can never consume a still capture's slot.
+                        val previewImage = pendingImages.remove(rawTimestamp)
+                        pendingTimeouts.remove(rawTimestamp)?.let(cameraHandler::removeCallbacks)
+                        if (previewImage != null) RawImageOwnership.release(previewImage)
+                        else {
+                            previewRawTimestamps.add(rawTimestamp)
+                            if (previewRawTimestamps.size > 64) previewRawTimestamps.minOrNull()?.let(previewRawTimestamps::remove)
+                        }
+                    }
+                } else if (includesRaw && rawZslStreaming && requestEpoch == rawZslRequestEpoch) {
                     result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
                         val motion = motionTracker.motionForFrame(
                             timestamp,
@@ -2504,7 +3185,7 @@ class RawCameraController(
                 if (isCurrent(generation) && includesRaw && rawZslStreaming &&
                     requestEpoch == rawZslRequestEpoch
                 ) {
-                    disableRawZslForSession("repeating RAW capture failed (${failure.reason})")
+                    cooldownRawZslForRetry("repeating RAW capture failed (${failure.reason})")
                 }
             }
         }
@@ -2966,6 +3647,39 @@ class RawCameraController(
                 "BUF ${rawZslBuffer?.size ?: 0}/$rawZslCapacity " +
                 String.format(java.util.Locale.US, "GYRO %.3f", motionTracker.currentMotion())
         )
+        publishRawVfDebug(force = force)
+    }
+
+    private fun publishRawVfDebug(force: Boolean = false) {
+        val vf = rawViewfinder ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastRawVfDebugMs < RAW_VF_DEBUG_INTERVAL_MS) return
+        lastRawVfDebugMs = now
+        onRawVfDebug(formatRawVfDebug(vf.snapshot()))
+    }
+
+    internal fun formatRawVfDebug(stats: RawVfStats): String {
+        val fpsText = if (stats.fps > 0f) {
+            String.format(java.util.Locale.US, "%.1f FPS", stats.fps)
+        } else "-- FPS"
+        val msText = if (stats.frameMs > 0f) {
+            String.format(java.util.Locale.US, "%.1f ms", stats.frameMs)
+        } else "-- ms"
+        val modeText = if (stats.jpeg) {
+            "JPG " + String.format(java.util.Locale.US, "%+.1fEV", stats.exposureEv)
+        } else "RAW"
+        val vfText = if (stats.vfWidth > 0 && stats.vfHeight > 0) {
+            "VF: ${stats.vfWidth}×${stats.vfHeight} ${if (stats.gpu) "GPU" else "CPU"} $modeText"
+        } else "VF: --"
+        val rawText = if (stats.rawWidth > 0 && stats.rawHeight > 0) {
+            "RAW: ${stats.rawWidth}×${stats.rawHeight}"
+        } else "RAW: --"
+        val devBits = vfOverlayEffectBits(stats.jpeg, denoiseSettings.enabled, jpegOutputSettings)
+        val glLabel = if (stats.glActive) "RAW" else "FALLBACK"
+        val effects = if (!stats.glActive || devBits.isNotEmpty()) {
+            "Yes ($glLabel${if (devBits.isNotEmpty()) " +" + devBits.joinToString("+") else ""})"
+        } else "No"
+        return "$fpsText $msText\n$vfText · $rawText\nEffects: $effects"
     }
 
     private fun oisModeName(value: Int?): String = when (value) {
@@ -3074,16 +3788,30 @@ class RawCameraController(
                 "RAW capture failed id=$captureId reason=${failure.reason} frame=${failure.frameNumber}"
             )
             cameraCaptureSequenceActive = false
+            if (topupActive) {
+                Log.w(LOG_TAG, "Top-up capture failed; saving partial burst")
+                finishTopupBurst()
+                noteChainDeadAndMaybeRecover()
+                return
+            }
             finishCapture("CAPTURE FAILED: reason ${failure.reason}, frame ${failure.frameNumber}")
             resumeRawZslIfIdle()
+            noteChainDeadAndMaybeRecover()
         }
 
         override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
             if (!isCurrent(generation) || captureId != captureSequence.get()) return
             Log.e(LOG_TAG, "RAW capture aborted id=$captureId sequence=$sequenceId")
             cameraCaptureSequenceActive = false
+            if (topupActive) {
+                Log.w(LOG_TAG, "Top-up capture aborted; saving partial burst")
+                finishTopupBurst()
+                noteChainDeadAndMaybeRecover()
+                return
+            }
             finishCapture("CAPTURE ABORTED")
             resumeRawZslIfIdle()
+            noteChainDeadAndMaybeRecover()
         }
     }
 
@@ -3098,19 +3826,80 @@ class RawCameraController(
         val image = pendingImages.remove(timestamp) ?: return
         pendingZslResults.remove(timestamp)
         pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
-        if (!rawZslStreaming || rawZslDisabledForSession || !rawZslRequested ||
+        if (!rawZslStreaming || rawZslDisabledForSession || rawZslStreamBroken || !rawZslRequested ||
             pending.requestEpoch != rawZslRequestEpoch
         ) {
-            image.close()
+            RawImageOwnership.release(image)
             return
         }
         if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
             Log.d(LOG_TAG, "RAW ZSL paired exact timestamp=$timestamp")
         }
+        admitToRing(image, pending.result, pending.motionRadiansPerSecond, timestamp, approximate = false)
+    }
+
+    /**
+     * Shared ring admission: histogram sample, ownership transfer, stall-clock
+     * tick, buffer-state publish. Returns false (caller closes) only when the
+     * controller cannot retain the frame.
+     */
+    private fun admitToRing(
+        image: Image,
+        result: TotalCaptureResult,
+        motionRadiansPerSecond: Float,
+        timestampNanos: Long,
+        approximate: Boolean
+    ): Boolean {
+        if (!running) {
+            RawImageOwnership.release(image)
+            return false
+        }
+        val c = characteristics ?: run {
+            RawImageOwnership.release(image)
+            return false
+        }
+        publishRawHistogramIfDue(image, c)
+        val buffer = rawZslBuffer ?: run {
+            RawImageOwnership.release(image)
+            return false
+        }
+        buffer.add(image, result, motionRadiansPerSecond, timestampNanos, approximate)
         zslOverflowTracker.onPaired()
-        publishRawHistogramIfDue(image, characteristics ?: return image.close())
-        rawZslBuffer?.add(image, pending.result, pending.motionRadiansPerSecond) ?: image.close()
+        fruitlessCooldowns = 0
         publishRawZslBufferState()
+        return true
+    }
+
+    /**
+     * PhotonCamera-style grace admission for a ZSL image whose capture result
+     * never arrived before the pairing window expired. Admits it carrying the
+     * latest preview result (flagged approximate) instead of dropping it, so a
+     * capture-result stall starves neither the ring nor the reader budget. A
+     * result that arrived but could not pair (blocked moment) still admits as
+     * exact. Never admits while the stream is down, parked, or latched — those
+     * frames belong to nobody and are closed by the caller.
+     */
+    private fun admitStaleZslFrame(
+        timestamp: Long,
+        image: Image,
+        exactResult: TotalCaptureResult?
+    ): Boolean {
+        if (!running || !rawZslStreaming || !rawZslRequested ||
+            rawZslDisabledForSession || rawZslStreamBroken || isRawZslBlocked()
+        ) return false
+        val result = exactResult ?: latestPreviewResult ?: return false
+        val approximate = exactResult == null
+        val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+        val skew = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L
+        val motion = motionTracker.motionForFrame(timestamp, exposure, skew, rawZslRealtimeTimestamps)
+        if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+            Log.d(
+                LOG_TAG,
+                "RAW ZSL admitted ${if (approximate) "approximate" else "late exact"} " +
+                    "timestamp=$timestamp"
+            )
+        }
+        return admitToRing(image, result, motion, timestamp, approximate)
     }
 
     private fun publishRawZslBufferState() {
@@ -3155,12 +3944,27 @@ class RawCameraController(
         pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
         val remaining = activeFramesRemaining.decrementAndGet()
         Log.i(LOG_TAG, "RAW paired timestamp=$timestamp remaining=$remaining")
+        // Any paired frame proves the HAL is producing: chains that pair then
+        // die are partials, never session-wedge candidates (see
+        // noteChainDeadAndMaybeRecover).
+        chainPairedAny = true
+        consecutiveDeadChains = 0
+        fruitlessCooldowns = 0
         if (remaining <= 0) cancelCaptureTimeout()
-        if (activeHdrBracket) pendingHdrFrames += PendingHdrFrame(image, result)
+        if (topupActive) accumulateTopupFrame(image, result)
+        else if (activeHdrBracket) pendingHdrFrames += PendingHdrFrame(image, result)
         else saveRawFrame(image, result, null)
+        // Serialized still chain: each pair completion submits the next prebuilt
+        // still, keeping a single frame in flight for HALs whose gralloc pool
+        // cannot survive a pipelined N-frame burst (log-proven on MediaTek).
+        if (remaining > 0) {
+            if (streamCapture == null) submitNextStill()
+            return
+        }
         // The RAW Image and its exact TotalCaptureResult are now owned by the bounded writer.
         // Reopen the shutter immediately; do not make capture latency depend on development.
-        if (remaining <= 0) {
+        if (topupActive) finishTopupBurst()
+        else {
             if (activeHdrBracket) {
                 activeHdrBracket = false
                 val saveEachBracket = activeHdrSaveEachBracket
@@ -3181,9 +3985,9 @@ class RawCameraController(
         saveEachBracket: Boolean,
         saveDebugFrames: Boolean
     ) {
-        val c = characteristics ?: return pending.forEach { it.image.close() }
-        if (pending.size < 2) return pending.forEach { it.image.close() }
-        val ownership = CloseOnceOwner(pending) { it.image.close() }
+        val c = characteristics ?: return pending.forEach { RawImageOwnership.release(it.image) }
+        if (pending.size < 2) return pending.forEach { RawImageOwnership.release(it.image) }
+        val ownership = CloseOnceOwner(pending) { RawImageOwnership.release(it.image) }
         val orientation = activeOutputOrientation
         val cameraId = selectedCameraId ?: "unknown"
         val outputFormat = activeCaptureFormat
@@ -3195,7 +3999,16 @@ class RawCameraController(
         val captureGps = gpsLocation()
         pendingSaveCount.incrementAndGet()
         if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
-        val job = OwnedCaptureJob(ownership) {
+        val saveGeneration = lifecycleGeneration
+        fun reportSaveState(message: String) {
+            cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
+        }
+        val releasedOwnership = AutoCloseable {
+            try { ownership.close() } finally {
+                postSaveCompletion()
+            }
+        }
+        val job = OwnedCaptureJob(releasedOwnership) {
             try {
                 if (saveEachBracket || saveDebugFrames) {
                     val saver = DngSaver(context)
@@ -3224,7 +4037,7 @@ class RawCameraController(
                     }
                     Log.i(LOG_TAG, "HDR set=$captureId sources=${names.joinToString()} " +
                         "sensorTimestamps=${pending.map { it.image.timestamp }}")
-                    onState("HDR ×${names.size} SAVED")
+                    reportSaveState("HDR ×${names.size} SAVED")
                     if (saveEachBracket) return@OwnedCaptureJob
                 }
                 val snapshots = pending.map { frame ->
@@ -3339,7 +4152,7 @@ class RawCameraController(
                         val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
                             snapshots[referenceIndex].second, captureTimeMillis = captureId,
                             typeSuffix = CaptureFileNames.TYPE_HDR, gps = captureGps)
-                        onState(if (referenceDng != null) "HDR MERGED+DNG" else "HDR MERGED")
+                        reportSaveState(if (referenceDng != null) "HDR MERGED+DNG" else "HDR MERGED")
                     } finally {
                         if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                             recycleUltraHdrGainmapContents(developed.bitmap)
@@ -3347,33 +4160,32 @@ class RawCameraController(
                         developed.bitmap.recycle()
                     }
                 } else {
-                    onState("HDR DNG SAVED")
+                    reportSaveState("HDR DNG SAVED")
                 }
             } catch (failure: OutOfMemoryError) {
                 // A full-resolution HDR bracket is close to the managed-heap ceiling on some
                 // devices. Always release the owned Images and restore capture state instead of
                 // allowing the writer thread's Error to terminate the whole application.
                 Log.e(LOG_TAG, "HDR bracket output ran out of memory", failure)
-                onState("HDR SAVE ERROR")
+                reportSaveState("HDR SAVE ERROR")
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "HDR bracket output failed", failure)
-                onState("HDR SAVE ERROR")
+                reportSaveState("HDR SAVE ERROR")
             } finally {
                 if (!saveEachBracket && outputFormat.includesJpeg) endJpegProcessing()
-                cameraHandler.post { pendingSaveCount.decrementAndGet(); refreshCaptureAvailability(); resumeRawZslIfIdle() }
             }
         }
         try { writer.execute(job) } catch (_: RejectedExecutionException) {
-            job.cancelBeforeRun(); pendingSaveCount.decrementAndGet()
+            job.cancelBeforeRun()
             if (!saveEachBracket && outputFormat.includesJpeg) endJpegProcessing()
-            onState("QUEUE FULL")
+            reportSaveState("QUEUE FULL")
         }
     }
 
     private fun saveRawFrame(image: Image, result: TotalCaptureResult, captureLabel: String?) {
         saveRawFrame(
             image, result, captureLabel,
-            CloseOnceOwner(listOf(image)) { owned -> owned.close() }
+            CloseOnceOwner(listOf(image), RawImageOwnership::release)
         )
     }
 
@@ -3381,7 +4193,7 @@ class RawCameraController(
         image: Image,
         result: TotalCaptureResult,
         captureLabel: String?,
-        ownership: AutoCloseable = AutoCloseable {},
+        ownership: AutoCloseable = CloseOnceOwner(listOf(image), RawImageOwnership::release),
         // Burst grouping: shared stem + per-frame suffix + subfolder. All
         // default to legacy behavior (fresh millis stem, flat folder).
         captureTimeMillis: Long = System.currentTimeMillis(),
@@ -3416,12 +4228,7 @@ class RawCameraController(
         val outputFormat = activeCaptureFormat
         val outputSettings = activeJpegOutputSettings
         val captureDenoiseSettings = activeDenoiseSettings
-        val adaptiveExposureStrength = when (activeCaptureExposureMode) {
-            CaptureExposureMode.AUTO, CaptureExposureMode.ZSL ->
-                if (outputSettings.adaptiveExposureAuto) 1f else 0f
-            CaptureExposureMode.PROGRAM -> outputSettings.adaptiveExposureProgramStrength
-            CaptureExposureMode.MANUAL -> 0f
-        }
+        val adaptiveExposureStrength = adaptivePreviewStrength(activeCaptureExposureMode, outputSettings)
         val sharedAdaptiveExposure = activeAdaptiveExposure
         // Burst callers pass one timestamp for every output of the capture
         // so DNGs, JPEGs, and sidecars share the IMG_YYYYMMDD_HHMMSS_mmm
@@ -3429,7 +4236,16 @@ class RawCameraController(
         val captureGps = gpsLocation()
         pendingSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
-        val job = OwnedCaptureJob(ownership) {
+        val saveGeneration = lifecycleGeneration
+        fun reportSaveState(message: String) {
+            cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
+        }
+        val releasedOwnership = AutoCloseable {
+            try { ownership.close() } finally {
+                postSaveCompletion()
+            }
+        }
+        val job = OwnedCaptureJob(releasedOwnership) {
                 try {
                     var dngName: String? = null
                     var jpegName: String? = null
@@ -3549,29 +4365,28 @@ class RawCameraController(
                         frameMetadata.lensShadingMap == null &&
                         !frameMetadata.lensShadingAlreadyApplied
                     ) " • NO LENS MAP" else ""
-                    onState(formatSaveOutcome(
+                    reportSaveState(formatSaveOutcome(
                         jpegName, dngName, jpegFailure, dngFailure, label, shadingNote
                     ))
                 } catch (failure: Exception) {
                     Log.e(LOG_TAG, "Capture artifact save failed", failure)
-                    onState("SAVE ERROR")
+                    reportSaveState("SAVE ERROR: ${failure.message ?: failure.javaClass.simpleName}")
                 } finally {
                     if (outputFormat.includesJpeg) endJpegProcessing()
-                    cameraHandler.post {
-                        pendingSaveCount.decrementAndGet()
-                        refreshCaptureAvailability()
-                        resumeRawZslIfIdle()
-                        publishRawZslStatus()
-                    }
                 }
         }
+        // Plain DNG-only saves (no JPEG develop, no AI inference) run on the
+        // parallel DNG worker so a 30-frame burst drains ~3x faster and the next
+        // burst waits out the refill, not the whole queue. Everything touching
+        // the shared GPU developer stays serialized on [writer].
+        val fastDngOnly = outputFormat.includesDng && !outputFormat.includesJpeg &&
+            !captureDenoiseSettings.aiEnabled
         try {
-            writer.execute(job)
+            (if (fastDngOnly) dngWriter else writer).execute(job)
         } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
             if (outputFormat.includesJpeg) endJpegProcessing()
-            pendingSaveCount.decrementAndGet()
-            onState("QUEUE FULL")
+            reportSaveState("QUEUE FULL")
             finishCapture()
             resumeRawZslIfIdle()
         }
@@ -3631,8 +4446,15 @@ class RawCameraController(
     private fun scheduleCaptureTimeout(captureId: Int, exposureDurationMs: Long = 0L) {
         val timeout = Runnable {
             if (captureId == captureSequence.get() && captureInProgress.get()) {
+                if (topupActive) {
+                    Log.w(LOG_TAG, "Top-up capture timed out; saving partial burst")
+                    finishTopupBurst()
+                    noteChainDeadAndMaybeRecover()
+                    return@Runnable
+                }
                 finishCapture("CAPTURE TIMEOUT")
                 resumeRawZslIfIdle()
+                noteChainDeadAndMaybeRecover()
             }
         }
         captureTimeout = timeout
@@ -3646,15 +4468,29 @@ class RawCameraController(
 
     private fun schedulePairTimeout(timestamp: Long, reportCaptureFailure: Boolean) {
         pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
+        val shot = captureSequence.get()
+        val generation = lifecycleGeneration
         val timeout = Runnable {
+            if (!isCurrent(generation)) return@Runnable
             pendingTimeouts.remove(timestamp)
             val image = pendingImages.remove(timestamp)
             val result = pendingResults.remove(timestamp)
-            pendingZslResults.remove(timestamp)
-            image?.close()
-            if (reportCaptureFailure && (image != null || result != null)) {
-                finishCapture("CAPTURE TIMEOUT")
-                resumeRawZslIfIdle()
+            val zslPending = pendingZslResults.remove(timestamp)
+            // Grace admission (see admitStaleZslFrame): only for ZSL expiries
+            // carrying a live image. Forward-capture expiries keep exact
+            // pairing and close below, untouched.
+            val admitted = if (!reportCaptureFailure && image != null) {
+                admitStaleZslFrame(timestamp, image, zslPending?.result)
+            } else false
+            if (!admitted) image?.let(RawImageOwnership::release)
+            if (reportCaptureFailure && shot == captureSequence.get() && captureInProgress.get() && (image != null || result != null)) {
+                // A top-up chain loses one frame here; save the partial burst
+                // instead of dropping the holdout plus everything arrived.
+                if (topupActive) finishTopupBurst()
+                else {
+                    finishCapture("CAPTURE TIMEOUT")
+                    resumeRawZslIfIdle()
+                }
             }
         }
         pendingTimeouts[timestamp] = timeout
@@ -3665,7 +4501,16 @@ class RawCameraController(
     }
 
     private fun finishCapture(message: String? = null) {
+        streamCapture = null
         cancelCaptureTimeout()
+        // End of any serialized still chain (normal, timeout, or error): no
+        // further chained submits may run after this point.
+        pendingStillRequests.clear()
+        activeStillCallback = null
+        // Never leak top-up holdout frames: normal completion clears the state
+        // inside finishTopupBurst first, so this is a no-op there and a release
+        // everywhere else (errors, teardown).
+        abortTopupFrames()
         if (activeHdrBracket) {
             activeHdrBracket = false
             activeHdrSaveEachBracket = false
@@ -3673,10 +4518,15 @@ class RawCameraController(
             activeHdrStops = 2
             activeFramesRemaining.set(0)
             captureSequence.incrementAndGet()
-            pendingHdrFrames.forEach { it.image.close() }
+            pendingHdrFrames.forEach { RawImageOwnership.release(it.image) }
             pendingHdrFrames.clear()
         }
+        activeFramesRemaining.set(0)
+        cameraCaptureSequenceActive = false
+        captureSequence.incrementAndGet()
+        closeAllPendingPairs()
         captureInProgress.getAndSet(false)
+        resumeRawZslIfIdle()
         refreshCaptureAvailability()
         if (message != null) onState(message)
     }
@@ -3695,15 +4545,32 @@ class RawCameraController(
     }
 
     private fun refreshCaptureAvailability() {
+        // ZSL-aware shutter: a 30-frame burst needs 30 slots, so the 1-slot
+        // default would leave the shutter enabled through the whole save drain
+        // and invite futile presses (QUEUE FULL). Gate on the full burst.
+        val hasCapacity = if (rawZslRequested && !rawZslDisabledForSession) {
+            hasProcessingCapacity(zslSelectedFrameCount(captureFormat), captureFormat)
+        } else {
+            hasProcessingCapacity()
+        }
         onCaptureEnabled(
-            running && !destroyed && !captureInProgress.get() && hasProcessingCapacity()
+            running && !destroyed && session != null && !captureInProgress.get() && pendingSaveCount.get() == 0 && hasCapacity
         )
     }
 
     private fun resumeRawZslIfIdle() {
         if (!running || session == null || captureInProgress.get()) return
-        val savesPending = pendingSaveCount.get() > 0
-        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !savesPending
+        val pending = pendingSaveCount.get()
+        // Rearm only once no save-held Images remain. Every held save eats
+        // lag-absorption slack inside maxImages (proven by log: rearm with 3
+        // saves held + full ring + a result-lag spike wedged a MediaTek reader
+        // into a 2s overflow storm -> permanent session fallback). The overlap
+        // slots stay as pure lag insurance for the streaming ring, and the
+        // parallel DNG worker keeps the drain short so the refill (~1s for 30
+        // frames, ~270ms for 8) is the only gap between bursts.
+        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !rawZslStreamBroken &&
+            rawZslCapacity > 0 &&
+            pending == 0 && SystemClock.elapsedRealtime() >= rawZslCooldownUntilMs
         // ZSL owns the RAW stream once saves have drained: preempt any
         // histogram/ETTR/PROGRAM metering stream started while saves were
         // pending. Without this, the first post-burst resume starts metering
@@ -3720,21 +4587,18 @@ class RawCameraController(
             updateRepeatingRequest(allowRawZsl = true)
             return
         }
-        if (rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
-        // Selected ZSL frames are owned by the serialized writer until each save
-        // completes, and they still count toward ImageReader maxImages. Restarting
-        // the ring on the first completion (while 29 siblings are still held)
-        // re-wedges the gralloc queue into overflow + Mali unlock errors.
-        // Metering streams sample-and-close, so they may resume immediately;
-        // the ZSL ring re-arms when the last save completes and calls us again.
-        // (wantZsl handled above with preemption; here saves are pending or ZSL
-        // is off, so only metering may resume.)
+        if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
+        // Save-held Images still count toward ImageReader maxImages, so while any
+        // save is outstanding only metering (sample-and-close, no retained frames)
+        // may resume; the ZSL ring re-arms above once the last save completes.
+        // (wantZsl handled above with preemption; here saves are still pending
+        // or ZSL is off, so only metering resumes.)
         val wantHistogram = rawHistogramEnabled && histogramSourceRaw &&
             !rawHistogramDisabledForSession
         val wantEttr = ettrSettings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
-        if (!wantHistogram && !wantEttr && !wantProgram) return
-        updateRepeatingRequest(allowRawZsl = !savesPending)
+        if (!wantHistogram && !wantEttr && !wantProgram && rawViewfinder == null) return
+        updateRepeatingRequest(allowRawZsl = pending == 0)
     }
 
     private fun calculateRawZslCapacity(rawSize: Size): Int {
@@ -3789,7 +4653,11 @@ class RawCameraController(
             if (isCurrent(generation) && requestEpoch == rawZslRequestEpoch &&
                 rawZslStreaming && !rawZslHasFrame
             ) {
-                disableRawZslForSession("No paired RAW frame arrived within ${timeoutMs}ms")
+                // Zero pairs in the whole startup window: same never-productive
+                // signature as a stillborn storm — burst-mode, not blind retry.
+                rawZslStreamBroken = true
+                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                cooldownRawZslForRetry("No paired RAW frame arrived within ${timeoutMs}ms")
             }
         }.also { cameraHandler.postDelayed(it, timeoutMs) }
     }
@@ -3799,6 +4667,92 @@ class RawCameraController(
         rawZslWatchdog = null
     }
 
+    /** True while the ZSL ring must not be attempted: latched session fallback,
+     * burst-mode degradation, or a transient cooldown that has not expired yet. */
+    private fun isRawZslBlocked(): Boolean =
+        rawZslDisabledForSession || rawZslStreamBroken ||
+            SystemClock.elapsedRealtime() < rawZslCooldownUntilMs
+
+    /**
+     * Parks the ZSL ring for [cooldownMs] after a transient outage (overflow
+     * storm, watchdog miss, isolated repeating failure) instead of killing the
+     * session like [disableRawZslForSession]. The repeating request is rebuilt
+     * without the RAW target, the buffer is dropped, and the next press past
+     * the deadline re-attempts ZSL from scratch. Second consecutive fruitless
+     * park (zero pairs since) escalates to a session rebuild instead — request
+     * rebuilds provably cannot fix that HAL state.
+     */
+    private fun cooldownRawZslForRetry(
+        reason: String,
+        cooldownMs: Long = ZSL_RETRY_COOLDOWN_MS
+    ) {
+        if (!rawZslRequested) return
+        fruitlessCooldowns++
+        if (fruitlessCooldowns >= FRUITLESS_COOLDOWN_REBUILDS && !captureInProgress.get()) {
+            Log.w(LOG_TAG, "ZSL cooldown fruitless twice in a row; rebuilding camera session")
+            onState("RECOVERING CAMERA")
+            fruitlessCooldowns = 0
+            restartCameraForConfigurationChange()
+            return
+        }
+        Log.w(LOG_TAG, "ZSL transient outage ($reason); retrying in ${cooldownMs}ms, no session fallback")
+        rawZslCooldownUntilMs = SystemClock.elapsedRealtime() + cooldownMs
+        rawZslStreaming = false
+        clearRawZslBuffer()
+        updateRepeatingRequest(allowRawZsl = false)
+        publishRawZslStatus(RawZslState.WARMING_UP, "Recovering: $reason — retrying ZSL")
+        onState("ZSL RETRY")
+    }
+
+    fun setZslHybridTopup(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setZslHybridTopup(enabled) }
+            return
+        }
+        zslHybridTopupEnabled = enabled
+    }
+
+    fun isZslHybridTopupEnabled(): Boolean = zslHybridTopupEnabled
+
+    /**
+     * Push the WYSIWYG render state to the VF. Both tonemaps share one RAW stream, so a
+     * mode switch is a uniform flip on the next sampled frame — no session rebuild, no
+     * buffer drop, no flicker. Must be called on the camera thread.
+     */
+    private fun pushVfRenderState() {
+        val vf = rawViewfinder ?: return
+        vf.setRenderJpeg(!vfPreviewMode.resolve(captureFormat))
+        vf.setAgx(jpegOutputSettings)
+        vf.setPreviewExposureStrength(adaptivePreviewStrength(captureExposureMode, jpegOutputSettings))
+    }
+
+    /** WYSIWYG VF mode + selectable resolution. Mode switches never rebuild the stream. */
+    fun setVfPreviewMode(mode: VfPreviewMode) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setVfPreviewMode(mode) }
+            return
+        }
+        if (vfPreviewMode == mode) return
+        vfPreviewMode = mode
+        pushVfRenderState()
+    }
+
+    fun setVfTargetLongEdge(longEdge: Int) {
+        val validated = VfResolution.validated(longEdge)
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setVfTargetLongEdge(validated) }
+            return
+        }
+        vfTargetLongEdge = validated
+        rawViewfinder?.setTargetLongEdge(validated)
+    }
+
+    /**
+     * Durable session fallback, reserved for a rejected stream combination that
+     * can never succeed. Everything transient (overflow storms, watchdog misses,
+     * isolated repeating failures) goes through [cooldownRawZslForRetry] so
+     * every later press re-attempts ZSL per-shot, PhotonCamera/GCam style.
+     */
     private fun disableRawZslForSession(reason: String) {
         if (!rawZslRequested) return
         Log.w(LOG_TAG, "ZSL fallback: $reason")
@@ -3828,7 +4782,7 @@ class RawCameraController(
         val zslTimestamps = pendingZslResults.keys.toList()
         zslTimestamps.forEach { timestamp ->
             pendingZslResults.remove(timestamp)
-            pendingImages.remove(timestamp)?.close()
+            pendingImages.remove(timestamp)?.let(RawImageOwnership::release)
             pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
         }
     }
@@ -3839,7 +4793,7 @@ class RawCameraController(
         try {
             while (true) {
                 val image = reader.acquireNextImage() ?: break
-                image.close()
+                RawImageOwnership.release(image)
             }
         } catch (_: IllegalStateException) {
             // A concurrently closing reader has no buffers that remain safe to retain.
@@ -3856,7 +4810,7 @@ class RawCameraController(
             .filter { !pendingResults.containsKey(it) && !pendingZslResults.containsKey(it) }
             .minOrNull()
         if (unmatched != null) {
-            pendingImages.remove(unmatched)?.close()
+            pendingImages.remove(unmatched)?.let(RawImageOwnership::release)
             pendingTimeouts.remove(unmatched)?.let(cameraHandler::removeCallbacks)
             return true
         }
@@ -3870,7 +4824,7 @@ class RawCameraController(
         // queue into persistent Mali/Adreno unlock errors.
         val oldest = pendingImages.keys.minOrNull()
         if (oldest != null) {
-            pendingImages.remove(oldest)?.close()
+            pendingImages.remove(oldest)?.let(RawImageOwnership::release)
             pendingResults.remove(oldest)
             pendingZslResults.remove(oldest)
             pendingTimeouts.remove(oldest)?.let(cameraHandler::removeCallbacks)
@@ -3882,7 +4836,7 @@ class RawCameraController(
     /** Proactive guard: keep at least one free ImageReader slot for the HAL. */
     private fun relieveZslReaderPressureIfNeeded() {
         val max = rawReaderMaxImages.takeIf { it > 0 } ?: return
-        val held = pendingImages.size + (rawZslBuffer?.size ?: 0)
+        val held = rawReader?.let(RawImageOwnership::count) ?: 0
         if (held >= max - 1) relieveZslReaderPressure()
     }
 
@@ -3892,6 +4846,7 @@ class RawCameraController(
     ) {
         // Invalidate callbacks first: frames completing while the HAL flushes belong to the
         // previous repeating RAW request and must not be mistaken for burst frames.
+        rawViewfinderStreaming = false
         rawZslStreaming = false
         rawHistogramStreaming = false
         programStreaming = false
@@ -3913,10 +4868,11 @@ class RawCameraController(
     }
 
     private fun closeAllPendingPairs() {
-        pendingImages.values.forEach(Image::close)
+        pendingImages.values.forEach(RawImageOwnership::release)
         pendingImages.clear()
         pendingResults.clear()
         pendingZslResults.clear()
+        previewRawTimestamps.clear()
         pendingTimeouts.values.forEach(cameraHandler::removeCallbacks)
         pendingTimeouts.clear()
         rawZslBuffer?.clear()
@@ -3927,7 +4883,7 @@ class RawCameraController(
     private fun closeUnmatchedRawImages() {
         pendingImages.keys.toList().forEach { timestamp ->
             if (!pendingResults.containsKey(timestamp) && !pendingZslResults.containsKey(timestamp)) {
-                pendingImages.remove(timestamp)?.close()
+                pendingImages.remove(timestamp)?.let(RawImageOwnership::release)
                 pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
             }
         }
@@ -3953,6 +4909,10 @@ class RawCameraController(
                 RawZslState.FALLBACK,
                 "Full-resolution RAW frames exceed the safe memory budget"
             )
+            rawZslStreamBroken -> RawZslStatus(
+                RawZslState.WARMING_UP,
+                "ZSL burst mode: streaming unavailable on this HAL, captures fire instantly"
+            )
             rawZslStreaming && rawZslHasFrame -> RawZslStatus(
                 RawZslState.ACTIVE,
                 "${rawZslBuffer?.size ?: 0}/${rawZslCapacity} RAW frames buffered"
@@ -3967,6 +4927,8 @@ class RawCameraController(
     }
 
     fun stop() {
+        rawViewfinder?.invalidateSession()
+        rawViewfinderStreaming = false
         synchronized(cameraStateLock) {
             if (!running && !opening && camera == null) return
             running = false
@@ -3993,20 +4955,22 @@ class RawCameraController(
             // Close outstanding Images before the ImageReader: closing the reader
             // with acquired gralloc buffers still held wedges Mali/Adreno queues
             // into "unlock() on a buffer locked with invalid write locks".
-            pendingImages.values.forEach { runCatching { it.close() } }
+            pendingImages.values.forEach { runCatching { RawImageOwnership.release(it) } }
             pendingImages.clear()
             pendingResults.clear()
             pendingZslResults.clear()
             pendingTimeouts.values.forEach(cameraHandler::removeCallbacks)
             pendingTimeouts.clear()
             rawReader?.setOnImageAvailableListener(null, null)
-            session?.close(); camera?.close(); rawReader?.close(); previewSurface?.release()
+            session?.close(); camera?.close(); previewSurface?.release()
+            rawReader?.let(retiredRawReaders::add)
+            closeRetiredRawReaders()
             session = null; camera = null; rawReader = null; previewSurface = null
             rawReaderMaxImages = 0
             activePhysicalCameraId = null
             characteristics = null
         }
-        pendingImages.values.forEach { it.close() }; pendingImages.clear(); pendingResults.clear()
+        pendingImages.values.forEach(RawImageOwnership::release); pendingImages.clear(); pendingResults.clear()
         pendingZslResults.clear()
         pendingTimeouts.values.forEach(cameraHandler::removeCallbacks); pendingTimeouts.clear()
         rawZslBuffer = null
@@ -4019,6 +4983,7 @@ class RawCameraController(
         if (destroyed) return
         stop()
         destroyed = true
+        rawViewfinder?.onStarvation = null
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.surfaceTextureListener = null
         // Queue teardown behind any accepted saves. The executor is serial, so EGL resources are
@@ -4032,10 +4997,13 @@ class RawCameraController(
             // graceful teardown during Activity destruction.
         }
         writer.shutdown()
-        // A metering sample may still be running; it closes its own image and its
-        // posted result is dropped by the destroyed flag. Interrupt promptly so a
-        // ~300 ms sample cannot outlive the activity.
-        meteringExecutor.shutdownNow()
+        // Plain DNG jobs touch neither EGL nor the shared developer (AI/JPEG stay
+        // on the serial writer), so no ordered teardown is needed here; queued
+        // DNGs simply finish or are dropped with the process.
+        dngWriter.shutdown()
+        // Accepted samples own Images, including queued samples. Let them finish and
+        // release those Images before retired readers close; stale results are ignored.
+        meteringExecutor.shutdown()
     }
 
     private fun isCurrent(generation: Int): Boolean =
@@ -4328,8 +5296,29 @@ class RawCameraController(
          * ZSL_PAIR_TIMEOUT_MS window (~5 frames at 30 fps) plus one spare slot,
          * so the ring itself can always fill to its configured capacity. */
         private const val ZSL_PAIR_WINDOW_SLOTS = 6
+        /** Overlap/lag headroom inside ImageReader maxImages: absorbs result-lag
+         * spikes while the ZSL ring streams at full rate (plus the pairing
+         * window and transition slack), so transient HAL stalls degrade to
+         * dropped ring frames instead of overflow storms. Small enough (+4
+         * full-res buffers) to stay clear of gralloc/Mali pressure. The ring
+         * itself is only ever restarted with zero saves held (see
+         * resumeRawZslIfIdle), so these slots never cover save-held Images. */
+        private const val ZSL_REARM_OVERLAP_SLOTS = 4
         private const val ZSL_SELECTION_WAIT_MS = 120L
         private const val ZSL_RECOVERY_WAIT_MS = 3_000L
+        /**
+         * Empty-take ticks (≈120ms each) before the wait loop escalates to a
+         * pure forward burst with top-up ON. ~1s covers one full ring fill at
+         * 30 fps, so only a truly non-filling ring escalates — never a merely
+         * warming one.
+         */
+        private const val EMPTY_TOPUP_ESCALATION_TICKS = 8
+        /** Consecutive fruitless ZSL cooldowns before a session rebuild. */
+        private const val FRUITLESS_COOLDOWN_REBUILDS = 2
+        /** Transient ZSL outage parking (overflow storm, watchdog miss, isolated
+         * repeating failure): failures stay per-shot, PhotonCamera/GCam style.
+         * Only a rejected stream combination latches the session fallback. */
+        private const val ZSL_RETRY_COOLDOWN_MS = 2_000L
         private const val ZSL_STARTUP_TIMEOUT_MS = 4_000L
         private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
         private const val MAX_ZSL_FRAMES = 30
@@ -4385,6 +5374,13 @@ class RawCameraController(
         private const val MAX_IN_FLIGHT_JPEG_SAVES = 6
         private const val MAX_IN_FLIGHT_DNG_SAVES = MAX_ZSL_FRAMES
         private const val MAX_QUEUED_SAVES = MAX_IN_FLIGHT_DNG_SAVES - 1
+        /** Parallel DNG-only save workers (see [dngWriter]): plain DNG writes are
+         * independent (own DngCreator + MediaStore entry), so a 30-frame burst
+         * drains ~2x faster than serially. Sized so workers + queue still cover
+         * exactly one in-flight DNG budget and admission stays governed by
+         * hasProcessingCapacity(). */
+        private const val DNG_WRITER_THREADS = 2
+        private const val DNG_WRITER_QUEUE_SLOTS = MAX_IN_FLIGHT_DNG_SAVES - DNG_WRITER_THREADS
         private const val BURST_FRAME_COUNT = 6
         private const val RAW_READER_TRANSITION_SLOTS = 2
         private const val MIN_ACQUIRED_RAW_IMAGES = BURST_FRAME_COUNT + 2
@@ -4399,24 +5395,25 @@ class RawCameraController(
         /** Grace before INACTIVE-after-START counts as a failed lock. */
         private const val TOUCH_FOCUS_INACTIVE_GRACE_MS = 200L
         private const val DEBUG_UPDATE_INTERVAL_MS = 200L
+        private const val RAW_VF_DEBUG_INTERVAL_MS = 500L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */
         private const val ETTR_UPDATE_INTERVAL_MS = 500L
         /** Metering samples slower than this are logged so sick streams show in logcat. */
         private const val SICK_SAMPLE_LOG_MS = 150L
-        /** Samples slower than this halve the metering cadence (see meteringInterval). */
-        private const val SLOW_METERING_BACKOFF_MS = 300L
-        /** PROGRAM custom AE tracks RAW mid-tone at the same rate as ETTR. */
-        private const val PROGRAM_UPDATE_INTERVAL_MS = 500L
+        /** PROGRAM custom AE tracks RAW mid-tone; cheap samples allow 4 Hz. */
+        private const val PROGRAM_UPDATE_INTERVAL_MS = 250L
         /** Relaxed metering once the loop has converged; any correction snaps back. */
         private const val PROGRAM_CONVERGED_INTERVAL_MS = 1000L
         /** Relaxed metering once ETTR has converged; any correction snaps back. */
         private const val ETTR_CONVERGED_INTERVAL_MS = 1000L
-        /** Glide tick cadence: applied pair eases toward target at ~1 stop/s. */
+        /** Glide tick cadence: fine gradient steps at ~1 stop/s catch-up. */
         private const val PROGRAM_RAMP_INTERVAL_MS = 100L
-        /** Maximum glide per tick. */
-        private const val PROGRAM_RAMP_MAX_STEP_EV = 1.0 / 6.0
+        /** Glide step is proportional to remaining distance (fast far, gentle near). */
+        private const val PROGRAM_RAMP_PROPORTION = 0.4
+        /** Maximum glide per tick: small enough to read as a gradient, not layers. */
+        private const val PROGRAM_RAMP_MAX_STEP_EV = 1.0 / 8.0
         /** Remaining distance that snaps straight to target. */
         private const val PROGRAM_RAMP_SNAP_EV = 1.0 / 24.0
         /** EMA weight for sampled brightness; halves single-sample noise. */
