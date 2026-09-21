@@ -91,14 +91,12 @@ class Gles31AmazeProcessor(
         clipPoint: Float = 1f,
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
-        denoise: DenoiseSettings = DenoiseSettings(),
-        noiseModel: CfaNoiseModel = CfaNoiseModel.from(null),
         fusedOutputSettings: JpegOutputSettings? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         AmazePipelineContract.validateInput(input)
         return processInput(
-            CpuAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized, denoise, noiseModel,
+            CpuAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
             fusedOutputSettings, consume
         )
     }
@@ -108,8 +106,6 @@ class Gles31AmazeProcessor(
         clipPoint: Float = 1f,
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
-        denoise: DenoiseSettings = DenoiseSettings(),
-        noiseModel: CfaNoiseModel = CfaNoiseModel.from(null),
         fusedOutputSettings: JpegOutputSettings? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
@@ -117,7 +113,7 @@ class Gles31AmazeProcessor(
             "AMaZE requires an even Bayer crop of at least 4x4 pixels"
         }
         return processInput(
-            DirectRawAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized, denoise, noiseModel,
+            DirectRawAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
             fusedOutputSettings, consume
         )
     }
@@ -127,8 +123,6 @@ class Gles31AmazeProcessor(
         clipPoint: Float,
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
-        denoise: DenoiseSettings,
-        noiseModel: CfaNoiseModel,
         fusedOutputSettings: JpegOutputSettings?,
         consume: (AmazeGpuOutput) -> T
     ): T {
@@ -159,9 +153,7 @@ class Gles31AmazeProcessor(
                 clipPoint,
                 cameraToAcescgColumnMajor,
                 cameraWhiteNormalized,
-                denoise,
-                noiseModel,
-                fusedOutputSettings?.resolvedForPlatform()?.takeIf { !denoise.enabled },
+                fusedOutputSettings?.resolvedForPlatform(),
                 session.programs,
                 session.textures,
                 session.uploads
@@ -259,8 +251,6 @@ class Gles31AmazeProcessor(
         private val clipPoint: Float,
         private val cameraToAcescgColumnMajor: FloatArray,
         private val cameraWhiteNormalized: FloatArray,
-        private val denoise: DenoiseSettings,
-        private val noiseModel: CfaNoiseModel,
         private val fusedSettings: JpegOutputSettings?,
         private val programs: ProgramCache,
         private val texturePool: TexturePool,
@@ -273,7 +263,7 @@ class Gles31AmazeProcessor(
         // RawTherapee documents AMaZE's CFA input as already white-balanced.  Feeding
         // unbalanced sensor channels makes its adaptive colour-ratio/variance tests see
         // the sensor's normal R/G/B sensitivity difference as chroma structure, which
-        // shows up as magenta/yellow zippering and coloured "noise" even with denoise off.
+        // shows up as magenta/yellow zippering and coloured "noise" in flat areas.
         //
         // Normalize the balance so no channel is amplified above the normalized RAW white
         // point.  For AsShotNeutral ~= (0.50, 1.0, 0.67), this is approximately
@@ -315,9 +305,8 @@ class Gles31AmazeProcessor(
         val gainmapOutput = if (fusedSettings?.ultraHdr == true) {
             texture(ceilDiv(input.width, GAINMAP_DOWNSCALE), ceilDiv(input.height, GAINMAP_DOWNSCALE), GLES30.GL_RGBA8)
         } else null
-        private var denoisedOutput: GlTexture? = null
         val fusedOutput: Boolean get() = encodedOutput != null
-        val output: GlTexture get() = encodedOutput ?: denoisedOutput ?: requireNotNull(rawOutput)
+        val output: GlTexture get() = encodedOutput ?: requireNotNull(rawOutput)
         private val cfa = scalar()
         private val grad = vector()
         private val cdA = vector()
@@ -375,15 +364,6 @@ class Gles31AmazeProcessor(
                 for (tileX in 0 until ceilDiv(input.width, AmazePipelineContract.TILE)) {
                     runTile(tileX * AmazePipelineContract.TILE, tileY * AmazePipelineContract.TILE, source)
                 }
-            }
-            if (denoise.enabled) {
-                // The opponent stage never reads CFA data. Retire both full-resolution R32F
-                // allocations before its RGBA16F destination and tile scratch are needed.
-                GLES31.glFinish()
-                releaseTexture(inputTexture)
-                if (source !== inputTexture) releaseTexture(source)
-                denoisedOutput = texture(input.width, input.height, GLES30.GL_RGBA16F)
-                runOpponentDenoise()
             }
         }
 
@@ -491,108 +471,6 @@ class Gles31AmazeProcessor(
                 gainmapOutput?.let { finalProgram.image(1, it, GLES30.GL_RGBA8) }
             }
             finalProgram.dispatch(tileWidth, tileHeight)
-        }
-
-        private fun runOpponentDenoise() {
-            // darktable denoise(profiled) wavelets: chroma only uses seven a-trous bands.
-            // Radius at the coarsest band is 2 * 2^6 = 128 pixels, so every output tile
-            // carries that exact halo and cannot show tile seams.
-            val border = 128
-            val tile = 512
-            val scratchSize = tile + 2 * border
-            // darktable performs the wavelet decomposition in 32-bit float.  Keeping the
-            // recursive seven-scale pyramid in RGBA16F quantizes small shadow/chroma
-            // coefficients at every pass and turns random sensor noise into structured
-            // blotches/banding.  Only the AMaZE input/final scene texture remains fp16.
-            val fineA = texture(scratchSize, scratchSize, GLES30.GL_RGBA32F)
-            val fineB = texture(scratchSize, scratchSize, GLES30.GL_RGBA32F)
-            val horizontal = texture(scratchSize, scratchSize, GLES30.GL_RGBA32F)
-            val detail = texture(scratchSize, scratchSize, GLES30.GL_RGBA32F)
-            val accum = texture(scratchSize, scratchSize, GLES30.GL_RGBA32F)
-            val (noiseScale, noiseOffset) = opponentNoiseModel()
-            for (originY in 0 until input.height step tile) {
-                for (originX in 0 until input.width step tile) {
-                    val outWidth = minOf(tile, input.width - originX)
-                    val outHeight = minOf(tile, input.height - originY)
-                    val workWidth = outWidth + 2 * border
-                    val workHeight = outHeight + 2 * border
-                    BoundProgram(programs.get("denoise/opponent_split.glsl")).apply {
-                        imageRead(0, requireNotNull(rawOutput), GLES30.GL_RGBA16F)
-                        image(1, fineA, GLES30.GL_RGBA32F)
-                        image(2, accum, GLES30.GL_RGBA32F)
-                        ivec2("u_size", workWidth, workHeight)
-                        ivec2("u_source_size", input.width, input.height)
-                        ivec2("u_source_offset", originX - border, originY - border)
-                        dispatch(workWidth, workHeight)
-                    }
-                    var fine = fineA
-                    var coarse = fineB
-                    for (scale in 0 until 7) {
-                        val step = 1 shl scale
-                        BoundProgram(programs.get("denoise/wavelet_horizontal.glsl")).apply {
-                            sampler("u_input", fine)
-                            image(0, horizontal, GLES30.GL_RGBA32F)
-                            ivec2("u_size", workWidth, workHeight)
-                            integer("u_step", step)
-                            dispatch(workWidth, workHeight)
-                        }
-                        BoundProgram(programs.get("denoise/wavelet_vertical_detail.glsl")).apply {
-                            sampler("u_horizontal", horizontal)
-                            sampler("u_fine", fine)
-                            image(0, coarse, GLES30.GL_RGBA32F)
-                            image(1, detail, GLES30.GL_RGBA32F)
-                            ivec2("u_size", workWidth, workHeight)
-                            integer("u_step", step)
-                            dispatch(workWidth, workHeight)
-                        }
-                        BoundProgram(programs.get("denoise/wavelet_shrink.glsl")).apply {
-                            sampler("u_detail", detail)
-                            sampler("u_coarse", coarse)
-                            imageRead(0, accum, GLES30.GL_RGBA32F)
-                            image(1, accum, GLES30.GL_RGBA32F)
-                            ivec2("u_size", workWidth, workHeight)
-                            vec3("u_noise_s", noiseScale)
-                            vec3("u_noise_o", noiseOffset)
-                            float("u_strength", denoise.strength)
-                            integer("u_scale", scale)
-                            dispatch(workWidth, workHeight)
-                        }
-                        val swap = fine
-                        fine = coarse
-                        coarse = swap
-                    }
-                    BoundProgram(programs.get("denoise/opponent_reconstruct.glsl")).apply {
-                        imageRead(0, fine, GLES30.GL_RGBA32F)
-                        imageRead(1, accum, GLES30.GL_RGBA32F)
-                        image(2, output, GLES30.GL_RGBA16F)
-                        ivec2("u_inner_offset", border, border)
-                        ivec2("u_output_offset", originX, originY)
-                        ivec2("u_output_size", outWidth, outHeight)
-                        dispatch(outWidth, outHeight)
-                    }
-                }
-            }
-        }
-
-        /** Diagonal of T M diag(a,b) M' T': RAW Poisson-Gaussian noise in darktable-style Y0U0V0. */
-        private fun opponentNoiseModel(): Pair<FloatArray, FloatArray> {
-            val sensorScale = floatArrayOf(noiseModel.scale[0], .5f * (noiseModel.scale[1] + noiseModel.scale[2]), noiseModel.scale[3])
-            val sensorOffset = floatArrayOf(noiseModel.offset[0], .5f * (noiseModel.offset[1] + noiseModel.offset[2]), noiseModel.offset[3])
-            val t = arrayOf(
-                floatArrayOf(1f / 3f, 1f / 3f, 1f / 3f),
-                floatArrayOf(.5f, 0f, -.5f),
-                floatArrayOf(.25f, -.5f, .25f)
-            )
-            fun diagonal(noise: FloatArray) = FloatArray(3) { row ->
-                var variance = 0f
-                for (sensor in 0..2) {
-                    var coefficient = 0f
-                    for (rgb in 0..2) coefficient += t[row][rgb] * cameraToAcescgColumnMajor[sensor * 3 + rgb]
-                    variance += coefficient * coefficient * noise[sensor]
-                }
-                variance.coerceAtLeast(1e-12f)
-            }
-            return diagonal(sensorScale) to diagonal(sensorOffset)
         }
 
         private inline fun pass(

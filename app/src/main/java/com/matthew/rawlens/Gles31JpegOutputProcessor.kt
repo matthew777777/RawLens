@@ -69,7 +69,7 @@ class Gles31JpegOutputProcessor(context: Context) {
         return DevelopedJpeg(base.bitmap, resolved)
     }
 
-    fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings(), denoise: DenoiseSettings = DenoiseSettings()): DevelopedJpeg {
+    fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg {
         val startedAt = SystemClock.elapsedRealtime()
         require(scene.internalFormat == AmazeTextureFormat.RGBA16F)
         val resolved = settings.resolvedForPlatform()
