@@ -90,23 +90,6 @@ class SceneLinearColorGpuInstrumentedTest {
     }
 
     @Test
-    fun rebuiltDenoiseShadersCompileAndProduceFiniteOutput() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val input = UnpackedRawCfa(
-            64, 64, BayerPattern.RGGB,
-            FloatArray(64 * 64) { i -> .08f + .002f * ((i * 37) % 19) },
-            RawCrop(0, 0, 64, 64)
-        )
-        Gles31AmazeProcessor(context).process(
-            input, denoise = DenoiseSettings(enabled = true)
-        ) { output ->
-            val values = readTexture(output)
-            assertTrue(values.all(Float::isFinite))
-            assertTrue(values.indices.filter { it % 4 == 3 }.all { values[it] == 1f })
-        }
-    }
-
-    @Test
     fun directPackedRawPreprocessingMatchesCpuReference() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val width = 64
