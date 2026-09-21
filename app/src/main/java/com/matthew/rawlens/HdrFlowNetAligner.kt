@@ -67,8 +67,15 @@ class HdrFlowNetAligner(context: Context) {
             lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
             return null
         }
+        // Bound outlier damage (e.g. periodic texture runaway): model pixels
+        // past this are never plausible residuals, let alone full shifts.
+        // Clamping happens before validation so the check judges the field
+        // that would actually warp.
+        clampFlow(flow)
         // A successful native call can still yield an unusable field (e.g. periodic texture).
-        // Reject a field that makes exposure-matched proxy correspondence materially worse.
+        // Reject anything that does not strictly improve exposure-matched
+        // proxy correspondence: a field that merely ties identity still
+        // resamples (softens) with zero geometric benefit.
         if (!hasUsableCorrespondence(base, alter, flow)) {
             lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
             return null
@@ -108,8 +115,14 @@ class HdrFlowNetAligner(context: Context) {
             }
             valid++
         }
-        if (valid < tested * 0.8) return false
-        return alignedError / (valid * 3) <= identityError / (valid * 3) + 2.55
+        if (valid < tested * 0.85) return false
+        return alignedError <= identityError
+    }
+
+    private fun clampFlow(flow: FloatArray) {
+        for (i in flow.indices) {
+            flow[i] = flow[i].coerceIn(-MAX_MODEL_FLOW, MAX_MODEL_FLOW)
+        }
     }
 
     private fun renderModelInput(cfa: UnpackedRawCfa, exposure: Float, raw: Boolean = false): FloatBuffer {
@@ -215,5 +228,7 @@ class HdrFlowNetAligner(context: Context) {
     companion object {
         const val MODEL_WIDTH = 512
         const val MODEL_HEIGHT = 384
+        /** Per-axis model-px clamp for raw FlowNet output (outlier bound). */
+        const val MAX_MODEL_FLOW = 32f
     }
 }
