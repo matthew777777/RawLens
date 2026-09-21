@@ -160,3 +160,9 @@ target_compile_definitions(tinydng_v3 PRIVATE TINYDNG_NO_ZIP
 add_library(rawLensDng SHARED tinydng_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Zero-copy viewfinder: EGL import bridge and the Vulkan superpixel compute
+# module (import HAL RAW -> RGBA8 superpixel export buffer).
+add_library(rawLensVfEgl SHARED vf_egl_jni.cpp vf_vulkan_vf.cpp)
+target_link_libraries(rawLensVfEgl PRIVATE EGL GLESv2 android log vulkan)
+target_link_options(rawLensVfEgl PRIVATE "-Wl,-z,max-page-size=16384")
