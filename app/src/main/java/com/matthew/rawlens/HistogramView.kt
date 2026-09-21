@@ -14,8 +14,9 @@ import android.view.View
 import android.os.SystemClock
 
 /** Live RGB + luminance histogram. Shows the processed preview (YUV) or the sensor
- * mosaic (RAW); the source label tracks whichever updated the bins last. The white
- * trace is Rec.709 luminance drawn on top. Tapping is handled by the host. */
+ * mosaic (RAW); the source is exposed via accessibility only so the graph stays
+ * compact. The white trace is Rec.709 luminance drawn on top. Tapping is handled
+ * by the host. */
 class HistogramView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -29,19 +30,11 @@ class HistogramView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = resources.displayMetrics.density
     }
-    private val sourcePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(220, 255, 255, 255)
-        textSize = 7f * resources.displayMetrics.scaledDensity
-        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
-        textAlign = Paint.Align.RIGHT
-    }
     private var lastRawUpdateMillis = 0L
-    private var sourceLabel = PREVIEW_LABEL
 
     /** Allow the next preview bitmap to replace RAW immediately after leaving/falling out of ZSL. */
     fun allowPreviewImmediately() {
         lastRawUpdateMillis = 0L
-        sourceLabel = PREVIEW_LABEL
         invalidate()
     }
 
@@ -66,7 +59,6 @@ class HistogramView @JvmOverloads constructor(
             bins[LUMINANCE][((0.2126 * r + 0.7152 * g + 0.0722 * b) + 0.5).toInt()
                 .coerceIn(0, 255) * (BIN_COUNT - 1) / 255]++
         }
-        sourceLabel = PREVIEW_LABEL
         bitmap.recycle()
         invalidate()
     }
@@ -78,35 +70,42 @@ class HistogramView @JvmOverloads constructor(
         copyResampled(histogram.luminance, bins[LUMINANCE])
         if (histogram.fromRaw) {
             lastRawUpdateMillis = SystemClock.uptimeMillis()
-            sourceLabel = RAW_LABEL
         }
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // Stay inside the rounded background box: the drawable carries padding
+        // (8dp sides, 6dp top/bottom) and the graph must not paint over it.
+        val left = paddingLeft.toFloat()
+        val top = paddingTop.toFloat()
+        val right = (width - paddingRight).toFloat().coerceAtLeast(left)
+        val bottom = (height - paddingBottom).toFloat().coerceAtLeast(top)
+        if (right <= left || bottom <= top) return
         val max = bins.maxOf { channel -> channel.maxOrNull() ?: 0 }.coerceAtLeast(1)
-        val baseline = height.toFloat()
+        val plotHeight = bottom - top
+        val plotWidth = right - left
+        canvas.save()
+        canvas.clipRect(left, top, right, bottom)
         for (channel in DRAW_ORDER) {
             val path = paths[channel]
             path.reset()
-            path.moveTo(0f, baseline)
+            path.moveTo(left, bottom)
             bins[channel].forEachIndexed { index, count ->
-                val x = index * width.toFloat() / (BIN_COUNT - 1)
+                val x = left + index * plotWidth / (BIN_COUNT - 1)
                 val normalized = kotlin.math.sqrt(count.toFloat() / max)
-                path.lineTo(x, baseline - normalized * height)
+                path.lineTo(x, bottom - normalized * plotHeight)
             }
-            path.lineTo(width.toFloat(), baseline)
+            path.lineTo(right, bottom)
             path.close()
             fillPaint.color = FILL_COLORS[channel]
             linePaint.color = LINE_COLORS[channel]
             canvas.drawPath(path, fillPaint)
             canvas.drawPath(path, linePaint)
         }
-        canvas.drawText(sourceLabel, width - dp(5f), dp(10f), sourcePaint)
+        canvas.restore()
     }
-
-    private fun dp(value: Float): Float = value * resources.displayMetrics.density
 
     private fun copyResampled(source: IntArray, target: IntArray) {
         target.fill(0)
@@ -119,8 +118,6 @@ class HistogramView @JvmOverloads constructor(
     private companion object {
         const val BIN_COUNT = 48
         const val RAW_HOLD_MILLIS = 2_000L
-        const val RAW_LABEL = "RAW SENSOR"
-        const val PREVIEW_LABEL = "PREVIEW • PROCESSED YUV"
         const val RED = 0
         const val GREEN = 1
         const val BLUE = 2
