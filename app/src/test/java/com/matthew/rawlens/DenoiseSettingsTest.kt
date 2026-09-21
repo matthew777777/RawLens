@@ -5,10 +5,10 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 class DenoiseSettingsTest {
-    @Test fun defaultsAreOptInDarktableChromaOnlyStrength() {
+    @Test fun defaultsAreAiOffWithArchivalDng() {
         val settings = DenoiseSettings()
-        assertEquals(false, settings.enabled)
-        assertEquals(0.20f, settings.strength)
+        assertEquals(false, settings.aiEnabled)
+        assertEquals(true, settings.saveOriginalDng)
     }
     @Test fun cameraRgbNoiseExpandsToBothGreenCfaPlanes() {
         val model = CfaNoiseModel.from(ImmutableDoubleValues(doubleArrayOf(1.0,0.1,2.0,0.2,3.0,0.3)))

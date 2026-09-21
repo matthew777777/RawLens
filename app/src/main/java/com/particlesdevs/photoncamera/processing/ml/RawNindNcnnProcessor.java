@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  *
  * The model files live in app/src/main/assets/models/ (rawnind_tiny.ncnn.param
  * /.bin, exported via python/rawnind-train); when absent the processor reports
- * unavailable and the Kotlin side falls back to wavelet/bypass. Same contract
+ * unavailable and the Kotlin side uses the plain path. Same contract
  * on emulator ABIs (native stub returns 0).
  *
  * Process-wide singleton loading on a background thread, mirroring

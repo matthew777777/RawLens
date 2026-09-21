@@ -96,7 +96,7 @@ object RawNindPack {
  * returns a denoised CFA that is always RGGB in the local frame (safe for
  * AMaZE and FloatCfaDngWriter, which both read the pattern in local
  * coordinates). Returns null when the model is unavailable or inference
- * fails/OOMs — callers fall back to wavelet/bypass.
+ * fails/OOMs — callers fall back to the plain (non-denoised) path.
  */
 class RawNindDenoiser(context: Context) {
     private val processor = RawNindNcnnProcessor.start(context.applicationContext)
@@ -165,7 +165,7 @@ class RawNindDenoiser(context: Context) {
             )
         } catch (oom: OutOfMemoryError) {
             // Full-frame packed buffers peak near ~17B/px; low-RAM devices fall
-            // back to wavelet/bypass instead of dying on the writer thread.
+            // back to the plain path instead of dying on the writer thread.
             Log.w(LOG_TAG, "AI denoise OOM, falling back", oom)
             return null
         } catch (failure: Exception) {

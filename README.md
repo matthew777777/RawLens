@@ -21,7 +21,7 @@ RawLens is a photography-first, open-source Android camera built around a scene-
 - Per-camera DNG calibration overrides for black/white levels, noise profile, and color/calibration/forward matrices
 - RAW JPEG development with AgX Base, Golden, and Punchy looks; contrast, saturation, purity, hue preservation,
   highlight/shadow range, and gamut-compression controls
-- Optional RAW prefilter, chroma cleanup, luma cleanup, grain retention, and edge-protection denoise controls
+- Optional AI RAW denoise (RawNIND-tiny): writes a denoised DNG and develops the JPEG from it, with an option to keep the original sensor DNG
 - Portrait viewfinder layout
 
 RAW ZSL is opt-in under **Settings → General → RAW zero shutter lag**, or by selecting the `ZSL` capture mode. The ZSL buffer can be set from 1 to 30 saved frames (2 by default), targeting a 30 FPS stream where the device advertises a compatible Camera2 range. At 30 FPS, 30 frames represent approximately one second of pre-shutter history. JPEG/JPEG+DNG selections are bounded to six frames for development memory; DNG-only can save all 30. The RAW badge changes to `RAW • ZSL` after the first paired frame is buffered. `ZSL …` means the buffer is warming, `ZSL OFF` means the setting is disabled, and `ZSL N/A` means RawLens has automatically fallen back to ordinary RAW capture.

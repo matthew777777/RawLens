@@ -29,6 +29,10 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - No-manual-sensor cameras keep Android AE with locks/limits disabled and explanatory copy
 - App logcat streams to a session text file from launch (no permission needed), with crashes appended before the process dies; 8 MB rotation keeping the newest 5 sessions, plus one-tap share to Download/RawLens/logs/. The live session mirrors itself into Download/RawLens/logs/ every 30 s and on stop/crash with no taps, the logcat child respawns if killed, and a crash on launch auto-exports that session on the next run and offers to share it, so the log is reachable without opening Settings
 
+### Removed
+
+- Wavelet chroma denoise (darktable profiled à-trous path, strength slider, and `denoise_enabled` / `denoise_profiled_wavelet_strength` preferences): AMaZE output is now always the plain demosaic and the fused JPEG path is always eligible. AI RAW denoise (RawNIND-tiny) is untouched and remains the only denoise stage.
+
 ## [1.0.0] - 2026-08-31
 
 ### Added

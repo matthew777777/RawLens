@@ -15,7 +15,7 @@ Java_com_particlesdevs_photoncamera_processing_ml_FlowNetNcnnProcessor_nativeDes
     JNIEnv*, jclass, jlong) {}
 
 // Emulator ABIs have no prebuilt ncnn archive: the RawNIND-tiny denoiser is
-// unavailable there and the Kotlin side falls back to wavelet/bypass.
+// unavailable there and the Kotlin side skips AI denoise (plain path).
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCreate(
     JNIEnv*, jclass, jobject, jstring) { return 0; }
