@@ -19,7 +19,11 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Quick panel tile lookups cached; lens switcher skips redundant rebuilds
 - PROGRAM defaults: ISO priority (0.0) and neutral 0.0 EV bias; per-lens store bumped to v2 so old 0.5/+0.5 EV defaults do not linger
 - PROGRAM highlight guard: brightening never pushes the hottest channel past 0.9
-- PROGRAM exposure glide: small capped measurements plus EMA feed a solver target that the live pair eases toward in ~1/6 EV steps (~1 stop/s), unified for ETTR-driven preview; still frames match the preview pair
+- PROGRAM exposure glide: small capped measurements plus EMA feed a solver target that the live pair eases toward with adaptive steps (fast far away, gentle near, 1/8 EV max at 10 Hz); still frames match the preview pair
+- Histogram sampler shares the bulk-row discipline (LUTs, no per-pixel divisions/calls)
+- PROGRAM fast start: first metering result after mode/profile/lens entry applies immediately instead of gliding in from the previous engine's exposure
+- PROGRAM metering performance: bulk row reads (zero per-pixel divisions/calls), region-cropped scans per metering mode with full-frame guard scan, 250 ms unconverged cadence with self-tuning backoff, 1.0 EV step cap
+- PROGRAM locks honor static user bounds: a locked axis no longer drifts with the moving low-light cap; every lock engagement seeds from live values; unseeded legacy locks fall back to actual sensor exposure
 - Converged ETTR freezes PROGRAM and meters from actual sensor exposure; PROGRAM seeds until convergence and resumes after
 - Synchronous per-lens profile load on active-camera change; PROGRAM bounds linked from each lens's calibration editor
 - No-manual-sensor cameras keep Android AE with locks/limits disabled and explanatory copy
