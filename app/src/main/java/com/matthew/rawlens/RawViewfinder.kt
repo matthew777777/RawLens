@@ -202,6 +202,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var lastPreviewEvMs = 0L
     private var previewEvSeeded = false
     private var sampleIntervalMs = 16L
+    private var lastSlowOfferLogMs = 0L
+    private var lastSlowRenderLogMs = 0L
     var onStarvation: (() -> Unit)? = null
     private var recoveryAttempts = 0
     private var recoverySinceMs = SystemClock.elapsedRealtime()
@@ -532,7 +534,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.timestamp = now
             // Leave camera-handler time for metadata, shutter and timeout callbacks on
             // slower devices. Rendering stays latest-only instead of building latency.
-            noteSampleCost(now)
+            noteSampleCost(now, throttleCpuCopy = false)
             synchronized(lock) {
                 frame.epoch = epoch
                 // Only one path renders: a GPU frame supersedes any queued CPU frame.
@@ -656,8 +658,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     /** Shared camera-thread cost accounting driving the debug overlay and throttle. */
-    private fun noteSampleCost(now: Long) {
+    private fun noteSampleCost(now: Long, throttleCpuCopy: Boolean = true) {
         val costMs = (SystemClock.elapsedRealtime() - now).toFloat()
+        if (costMs >= 34f && now - lastSlowOfferLogMs >= 1000L) {
+            lastSlowOfferLogMs = now
+            Log.i("RawViewfinder", "Slow RAW offer: ${costMs}ms interval=${sampleIntervalMs}ms")
+        }
         copyAccumMs += costMs
         copySamples++
         if (copySamples >= 10) {
@@ -669,7 +675,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         // 30 Hz budget: floor at one vsync (16 ms), back off only when the
         // copy itself exceeds it. Previously max(34, copy*2) capped at ~15-25 fps.
-        sampleIntervalMs = max(16L, (SystemClock.elapsedRealtime() - now) * 2)
+        sampleIntervalMs = if (throttleCpuCopy) max(16L, (SystemClock.elapsedRealtime() - now) * 2) else 16L
     }
 
     /**
@@ -786,6 +792,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      * CPU sampler. The controller defers Image.close until our frame lease closes. Runs on the GL worker.
      */
     private val gpuDraw = Runnable {
+        val drawStarted = SystemClock.elapsedRealtime()
+        var computeMs = 0L
         val frame = synchronized(lock) { gpuPending.also { gpuPending = null } } ?: return@Runnable
         try {
             if (frame.epoch != synchronized(lock) { epoch } || window == null || !hasSurface) return@Runnable
@@ -794,7 +802,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             var importBuffer: android.hardware.HardwareBuffer? = null
             var bayer = false
             if (!vulkanDisabledForSession) {
+                val computeStarted = SystemClock.elapsedRealtime()
                 val code = runVulkanSuperpixel(frame)
+                computeMs = SystemClock.elapsedRealtime() - computeStarted
                 if (code == VfVulkan.OK && vulkanExport != null) {
                     importBuffer = vulkanExport
                 } else {
@@ -872,6 +882,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     Log.i("RawViewfinder", "VF GPU zero-copy active (" + (if (bayer) "egl" else "vulkan") + ")")
                 }
                 noteFrameRendered(frame.epoch, gpu = true)
+                val drawFinished = SystemClock.elapsedRealtime()
+                val drawMs = drawFinished - drawStarted
+                if (drawMs >= 34L && drawFinished - lastSlowRenderLogMs >= 1000L) {
+                    lastSlowRenderLogMs = drawFinished
+                    Log.i("RawViewfinder", "Slow RAW draw: total=${drawMs}ms compute=${computeMs}ms age=${drawStarted - frame.timestamp}ms")
+                }
             } finally {
                 try {
                     VfEglImport.destroyEGLImage(eglImage)
