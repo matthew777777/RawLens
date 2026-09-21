@@ -39,7 +39,14 @@ data class HdrMergeFrame(
     val aperture: Float = 1f,
     /** Reference-to-this-frame flow. Null means identity (the reference frame). */
     val flow: HdrFlowField? = null,
-    val focalLength: Float = 1f
+    val focalLength: Float = 1f,
+    /**
+     * Normalized Poisson-Gaussian noise model for robust alignment/deghost
+     * weighting. Null selects a data-driven MAD fallback (see
+     * [HdrTileDeghost]); callers with DNG metadata should pass
+     * `CfaNoiseModel.from(metadata.noiseProfile)`.
+     */
+    val noiseModel: CfaNoiseModel? = null
 ) {
     init {
         require(exposureTimeNanos > 0L)
@@ -59,21 +66,23 @@ data class HdrMergeFrame(
  * saturation envelope, clipped-pixel fallback with negative-weight bookkeeping, and final
  * white-level normalization. [mergeExact] is the verbatim port used for audit/tests.
  *
- * [merge] (production) keeps that structure but fixes three known artifact sources:
+ * [merge] (production) keeps that structure but fixes known artifact sources:
  *  1. Teeth edges: darktable evaluates one max/min per 2px block origin, so the saturation
- *     mask steps every 2px. We evaluate the same 3x3 block extremes, then bilinear-sample
- *     them per pixel, so the mask is C0-continuous (no 2px stair on diagonal/sign edges).
- *  2. Black patches on high-contrast signs: same fix — the clip decision rides the smoothed
- *     block maximum instead of a hard per-block verdict, and warp is smooth (below).
- *  3. Jagged warp: the old nearest-CFA-cell warp snapped flow to 2px steps. Warp is now
+ *     mask steps every 2px. The envelope *weight* rides a bilinearly interpolated block
+ *     maximum, so shadow/highlight blending is C0-continuous (no 2px stair) — but the
+ *     clip *branch* and the clipped-winner bookkeeping stay block-exact like darktable,
+ *     so adjacent pixels never pick different fallback winners (no contour lines).
+ *  2. Jagged warp: the old nearest-CFA-cell warp snapped flow to 2px steps. Warp is now
  *     same-colour bilinear (only taps of the destination pixel's own Bayer colour), so
  *     sub-pixel flow from translation pre-align / FlowNet stays smooth and never mixes
  *     R/G/B.
- *  4. Ghosts/misalignment (HDR+-style): each non-reference frame gets a noise-aware Wiener
- *     robust weight from its exposure-compensated residual against the reference. Flat
- *     shadows keep merging (floor term); true outliers collapse to the reference instead
- *     of smearing. Highlights clipped in the reference bypass deghosting so the short
- *     exposure still rescues them (darktable fallback path).
+ *  3. Ghosts/misalignment/blur (HDR+ deghost): each warped non-reference frame first
+ *     passes through [HdrTileDeghost], a pairwise frequency-domain Wiener merge toward
+ *     the reference. Bins that match keep the alternate (photon-weighted denoise
+ *     downstream); bins broken by motion blur, ghosts, or misregistration collapse to
+ *     the sharp reference instead of smearing. Highlights clipped in the reference are
+ *     still rescued by the short exposure via darktable's fallback path, which the
+ *     tile blend preserves (clipped tiles have no matchable structure).
  */
 object HdrRawMerge {
     internal const val EPS_WEIGHT = 1e-8f
@@ -85,10 +94,14 @@ object HdrRawMerge {
     data class Options(
         val smoothMask: Boolean = true,
         val deghost: Boolean = true,
-        /** Residual floor (output-normalized units) so shadows still average. */
-        val ghostFloor: Float = 0.02f,
-        /** Residual variance slope with signal level (photon-like term). */
-        val ghostGain: Float = 0.10f
+        /**
+         * HDR+ Wiener strength for the [HdrTileDeghost] pre-pass. Mismatched
+         * bins collapse to the reference regardless; [wienerStrength] sets
+         * how much alternate frame survives on matched bins (reference
+         * weight near `1 / (1 + strength)`): larger keeps more alternate
+         * (cleaner, less ghost-robust), smaller more reference.
+         */
+        val wienerStrength: Float = 8f
     )
 
     fun merge(
@@ -114,7 +127,7 @@ object HdrRawMerge {
         // ties. The geometric reference only defines flow coordinates, never order.
         // Row strips run on a thread pool (disjoint writes, deterministic output).
         for ((k, frame) in frames.withIndex()) {
-            val registered = FloatArray(count)
+            var registered = FloatArray(count)
             val flow = frame.flow
             if (flow == null) {
                 System.arraycopy(frame.cfa.values, 0, registered, 0, count)
@@ -131,21 +144,35 @@ object HdrRawMerge {
                     }
                 }
             }
-            // Same 3x3 block extremes as darktable, evaluated per 2x2 cell then
-            // bilinearly interpolated per pixel for a smooth mask.
+            if (k != referenceIndex && options.deghost) {
+                // HDR+ robust pre-pass: collapse blurred/ghosted/misregistered
+                // bins to the reference before photon weighting (which would
+                // otherwise trust a motion-blurred long exposure most).
+                registered = HdrTileDeghost.deghost(
+                    frames[referenceIndex], frame,
+                    frame.cfa.copy(values = registered),
+                    options.wienerStrength
+                ).values
+            }
+            // Same 3x3 block extremes as darktable, evaluated per 2x2 cell with
+            // darktable's border rule (cells past width/height-2 contribute no
+            // envelope). The clip branch and fallback bookkeeping below use
+            // these block-exact values verbatim, so every pixel of a cell
+            // agrees on the winner; only the envelope weight rides the
+            // interpolated maximum for C0-continuous blending.
             val cw = width / 2
             val ch = height / 2
             val blockMax = FloatArray(cw * ch)
-            val blockMin = FloatArray(cw * ch)
+            val blockMin = FloatArray(cw * ch) { Float.MAX_VALUE }
             parallelRows(ch) { cy0, cy1 ->
                 for (cy in cy0 until cy1) for (cx in 0 until cw) {
-                    var mx = 0f
-                    var mn = Float.MAX_VALUE
                     val ox = cx * 2
                     val oy = cy * 2
+                    if (ox >= width - 2 || oy >= height - 2) continue
+                    var mx = 0f
+                    var mn = Float.MAX_VALUE
                     for (dy in 0..2) for (dx in 0..2) {
-                        val v = registered[
-                            min(oy + dy, height - 1) * width + min(ox + dx, width - 1)]
+                        val v = registered[(oy + dy) * width + ox + dx]
                         mx = max(mx, v)
                         mn = min(mn, v)
                     }
@@ -155,37 +182,28 @@ object HdrRawMerge {
             }
             val cal = cals[k]
             val photon = photons[k]
-            val isRef = k == referenceIndex
             parallelRows(height) { y0, y1 ->
                 val mm = FloatArray(2)
                 for (y in y0 until y1) for (x in 0 until width) {
                     val i = y * width + x
                     val sample = registered[i]
-                    sampleBlockSmoothInto(blockMax, blockMin, cw, ch, x, y, mm)
-                    val mMax = mm[0]
-                    val mMin = mm[1]
+                    val cell = (y / 2) * cw + x / 2
+                    val cellMax = blockMax[cell]
+                    val cellMin = blockMin[cell]
+                    val interior = (x and -2) < width - 2 && (y and -2) < height - 2
                     var weight = photon
-                    weight *= EPS_WEIGHT + envelope((mMax + QUANTIZATION_MARGIN) / 1f)
-                    if (!isRef && options.deghost && mMax + QUANTIZATION_MARGIN < 1f) {
-                        // Exposure-compensated residual against the reference in output units.
-                        val refIn = reference.values[i]
-                        val refR = refIn * cals[referenceIndex] / whiteLevel
-                        val movR = sample * cal / whiteLevel
-                        // Skip deghost where the reference itself is clipped: the short
-                        // exposure must win via the fallback path below.
-                        val refClip = mMaxRefHint(reference, width, height, x, y)
-                        if (!refClip) {
-                            val diff = movR - refR
-                            val scale = options.ghostFloor * options.ghostFloor +
-                                options.ghostGain * (max(refR, 0f) + max(movR, 0f)) * 0.5f
-                            weight *= (1f / (1f + diff * diff / max(scale, 1e-12f)))
-                        }
+                    if (interior) {
+                        val envMax = if (options.smoothMask) {
+                            sampleBlockSmoothInto(blockMax, blockMin, cw, ch, x, y, mm)
+                            mm[0]
+                        } else cellMax
+                        weight *= EPS_WEIGHT + envelope(envMax + QUANTIZATION_MARGIN)
                     }
-                    if (mMax + QUANTIZATION_MARGIN >= 1f) {
-                        if (weights[i] <= 0f && (weights[i] == 0f || mMin < -weights[i])) {
-                            pixels[i] = if (mMin + QUANTIZATION_MARGIN >= 1f) 1f
+                    if (cellMax + QUANTIZATION_MARGIN >= 1f) {
+                        if (weights[i] <= 0f && (weights[i] == 0f || cellMin < -weights[i])) {
+                            pixels[i] = if (cellMin + QUANTIZATION_MARGIN >= 1f) 1f
                             else sample * cal / whiteLevel
-                            weights[i] = -mMin
+                            weights[i] = -cellMin
                         }
                     } else {
                         if (weights[i] <= 0f) {
@@ -403,17 +421,6 @@ object HdrRawMerge {
         val c = g[y1 * cw + x0]
         val d = g[y1 * cw + x1]
         return (a * (1f - fx) + b * fx) * (1f - fy) + (c * (1f - fx) + d * fx) * fy
-    }
-
-    private fun mMaxRefHint(ref: UnpackedRawCfa, w: Int, h: Int, x: Int, y: Int): Boolean {
-        // Cheap reference-clip hint: 3x3 max around (x,y) on the unwarped reference.
-        var m = 0f
-        for (dy in -1..1) for (dx in -1..1) {
-            val xx = (x + dx).coerceIn(0, w - 1)
-            val yy = (y + dy).coerceIn(0, h - 1)
-            m = max(m, ref.values[yy * w + xx])
-        }
-        return m + QUANTIZATION_MARGIN >= 1f
     }
 
     internal fun envelope(value: Float): Float {
