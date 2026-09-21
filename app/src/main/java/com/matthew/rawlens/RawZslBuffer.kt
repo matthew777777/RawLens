@@ -15,7 +15,15 @@ internal data class BufferedRawFrame(
     val timestampNanos: Long,
     val exposureNanos: Long,
     val rollingShutterSkewNanos: Long,
-    val motionRadiansPerSecond: Float
+    val motionRadiansPerSecond: Float,
+    /**
+     * PhotonCamera-style approximation flag: the paired result never arrived
+     * (capture-result stall) so this frame carries the latest preview result
+     * instead of its own. Pixels are exact; AE-dependent tags (ISO/exposure
+     * derived) may be stale. Penalized in scoring, logged per burst, never
+     * silent.
+     */
+    val metadataApproximate: Boolean = false
 )
 
 /** Owns every Image added to it. Evicted, rejected, and unselected images are closed immediately. */
@@ -30,13 +38,15 @@ internal class RawZslBuffer(private val capacity: Int) {
         image: Image,
         result: TotalCaptureResult,
         motionRadiansPerSecond: Float,
-        timestampNanos: Long = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
+        timestampNanos: Long = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp,
+        metadataApproximate: Boolean = false
     ) {
         addSnapshot(
             image, result, timestampNanos,
             result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
             result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
-            motionRadiansPerSecond
+            motionRadiansPerSecond,
+            metadataApproximate
         )
     }
 
@@ -48,11 +58,12 @@ internal class RawZslBuffer(private val capacity: Int) {
         timestampNanos: Long,
         exposureNanos: Long,
         rollingShutterSkewNanos: Long,
-        motionRadiansPerSecond: Float
+        motionRadiansPerSecond: Float,
+        metadataApproximate: Boolean = false
     ) {
         val timestamp = timestampNanos
         val duplicate = frames.indexOfFirst { it.timestampNanos == timestamp }
-        if (duplicate >= 0) frames.removeAt(duplicate).image.close()
+        if (duplicate >= 0) RawImageOwnership.release(frames.removeAt(duplicate).image)
         frames.addLast(
             BufferedRawFrame(
                 image,
@@ -60,11 +71,18 @@ internal class RawZslBuffer(private val capacity: Int) {
                 timestamp,
                 exposureNanos,
                 rollingShutterSkewNanos,
-                motionRadiansPerSecond
+                motionRadiansPerSecond,
+                metadataApproximate
             )
         )
-        while (frames.size > capacity) frames.removeFirst().image.close()
+        while (frames.size > capacity) RawImageOwnership.release(frames.removeFirst().image)
     }
+
+    /** OFF retains incomplete selections; ON transfers every returned frame to the caller. */
+    fun takeForCapture(cutoffNanos: Long, realtimeTimestamps: Boolean, count: Int,
+                       hybridTopup: Boolean): List<BufferedRawFrame> =
+        if (hybridTopup) takeUpTo(cutoffNanos, realtimeTimestamps, count)
+        else takeBest(cutoffNanos, realtimeTimestamps, count)
 
     @Synchronized
     fun takeBest(
@@ -72,12 +90,46 @@ internal class RawZslBuffer(private val capacity: Int) {
         realtimeTimestamps: Boolean,
         count: Int
     ): List<BufferedRawFrame> {
-        val eligible = frames.filter { frame ->
+        val eligible = eligibleFrames(cutoffNanos, realtimeTimestamps)
+        if (eligible.size < count) return emptyList()
+        return takeRanked(eligible, cutoffNanos, realtimeTimestamps, count)
+    }
+
+    /**
+     * PhotonCamera-style partial take (GCam's available-capacity rung): returns the
+     * best up to [maxCount] eligible frames, or empty when the ring holds nothing
+     * usable. Backs hybrid top-up, where a thin ring is completed with fresh
+     * forward captures instead of refusing the shutter.
+     */
+    @Synchronized
+    fun takeUpTo(
+        cutoffNanos: Long,
+        realtimeTimestamps: Boolean,
+        maxCount: Int
+    ): List<BufferedRawFrame> {
+        if (maxCount <= 0) return emptyList()
+        val eligible = eligibleFrames(cutoffNanos, realtimeTimestamps)
+        if (eligible.isEmpty()) return emptyList()
+        return takeRanked(eligible, cutoffNanos, realtimeTimestamps, minOf(maxCount, eligible.size))
+    }
+
+    private fun eligibleFrames(
+        cutoffNanos: Long,
+        realtimeTimestamps: Boolean
+    ): List<BufferedRawFrame> {
+        return frames.filter { frame ->
             val completedAt = completedAt(frame, realtimeTimestamps)
             val ageNanos = cutoffNanos - completedAt
             ageNanos in 0L..MAX_FRAME_AGE_NANOS
         }
-        if (eligible.size < count) return emptyList()
+    }
+
+    private fun takeRanked(
+        eligible: List<BufferedRawFrame>,
+        cutoffNanos: Long,
+        realtimeTimestamps: Boolean,
+        count: Int
+    ): List<BufferedRawFrame> {
         val selected = eligible
             .sortedByDescending { qualityScore(it, cutoffNanos, realtimeTimestamps) }
             .take(count)
@@ -89,7 +141,7 @@ internal class RawZslBuffer(private val capacity: Int) {
 
     @Synchronized
     fun clear() {
-        while (frames.isNotEmpty()) frames.removeFirst().image.close()
+        while (frames.isNotEmpty()) RawImageOwnership.release(frames.removeFirst().image)
     }
 
     /**
@@ -102,7 +154,7 @@ internal class RawZslBuffer(private val capacity: Int) {
     @Synchronized
     fun evictOldest(): Boolean {
         if (frames.isEmpty()) return false
-        frames.removeFirst().image.close()
+        RawImageOwnership.release(frames.removeFirst().image)
         return true
     }
 
@@ -131,7 +183,12 @@ internal class RawZslBuffer(private val capacity: Int) {
         val motionPenalty = min(8.0, angularTravel * 120.0)
         val completedAt = completedAt(frame, realtimeTimestamps)
         val agePenalty = min(10.0, (cutoffNanos - completedAt).coerceAtLeast(0L) / 100_000_000.0)
-        return aeScore + lensScore - isoPenalty - motionPenalty - agePenalty
+        // Approximate metadata (paired result never arrived; carrying the latest
+        // preview result) sorts below clean equals but above genuinely bad frames
+        // (hunting AF/AE at -2, moving lens at -2): pixels are exact, only the
+        // AE-dependent tags may be stale.
+        val approxPenalty = if (frame.metadataApproximate) 1.5 else 0.0
+        return aeScore + lensScore - isoPenalty - motionPenalty - agePenalty - approxPenalty
     }
 
     private fun completedAt(frame: BufferedRawFrame, realtimeTimestamps: Boolean): Long {
