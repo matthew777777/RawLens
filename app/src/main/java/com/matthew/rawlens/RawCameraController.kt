@@ -147,7 +147,9 @@ class RawCameraController(
     private val gpsLocation: () -> GpsLocation? = { null },
     private val onActiveCameraChanged: (cameraId: String?) -> Unit = { },
     private val rawViewfinder: RawViewfinder? = null,
-    private val onRawVfDebug: (String) -> Unit = { }
+    private val onRawVfDebug: (String) -> Unit = { },
+    initialRawStreamCompatMode: Boolean = false,
+    private val onRawStreamCompatMode: () -> Unit = { }
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
@@ -672,6 +674,9 @@ class RawCameraController(
                     do {
                         drained++
                         val image = reader.acquireNextImage() ?: break
+                        if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
+                            Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
+                        }
                         RawImageOwnership.adopt(image, reader) {
                             cameraHandler.post { closeRetiredRawReaders() }
                         }
@@ -781,6 +786,10 @@ class RawCameraController(
                 }
             }, cameraHandler)
         }
+        rawStreamImages = 0
+        rawStreamResults = 0
+        rawStreamFailures = 0
+        logRawStreamCombo(map, rawSize, previewSize)
         val texture = viewfinder.surfaceTexture ?: run {
             reader.setOnImageAvailableListener(null, null)
             reader.close()
@@ -809,6 +818,24 @@ class RawCameraController(
                 reader.close()
                 surface.release()
                 if (isCurrent(generation)) onState("SESSION ERROR")
+            } catch (failure: IllegalArgumentException) {
+                Log.w(LOG_TAG, "Session surfaces rejected by HAL", failure)
+                rawReader = null
+                rawReaderMaxImages = 0
+                previewSurface = null
+                reader.setOnImageAvailableListener(null, null)
+                reader.close()
+                surface.release()
+                if (isCurrent(generation)) onState("SESSION ERROR")
+            } catch (failure: UnsupportedOperationException) {
+                Log.w(LOG_TAG, "Session creation unsupported by HAL", failure)
+                rawReader = null
+                rawReaderMaxImages = 0
+                previewSurface = null
+                reader.setOnImageAvailableListener(null, null)
+                reader.close()
+                surface.release()
+                if (isCurrent(generation)) onState("SESSION ERROR")
             } catch (_: IllegalStateException) {
                 rawReader = null
                 rawReaderMaxImages = 0
@@ -827,6 +854,28 @@ class RawCameraController(
      * buffers.  We only attach stream-use-case hints when the exact configuration is reported as
      * supported; otherwise the same modern session is submitted without hints.
      */
+    /**
+     * One-line stream inventory per session: the sizes, queue depth and HAL
+     * timing the RAW repeating stream runs under. This is the field evidence
+     * that separates a stillborn stream (unsatisfiable combo) from a dead
+     * viewfinder (delivery works, rendering fails).
+     */
+    private fun logRawStreamCombo(map: StreamConfigurationMap, rawSize: Size, previewSize: Size) {
+        val minFrameNs = runCatching {
+            map.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, rawSize)
+        }.getOrNull()
+        val stallNs = runCatching {
+            map.getOutputStallDuration(android.graphics.ImageFormat.RAW_SENSOR, rawSize)
+        }.getOrNull()
+        Log.i(
+            LOG_TAG,
+            "RAW stream combo raw=${rawSize.width}x${rawSize.height} preview=${previewSize.width}x${previewSize.height} " +
+                "maxImages=$rawReaderMaxImages minFrameNs=${minFrameNs ?: "?"} stallNs=${stallNs ?: "?"} " +
+                "compat=$rawStreamCompatMode"
+        )
+    }
+
+    @Suppress("DEPRECATION")
     private fun createPerformanceSession(
         device: CameraDevice,
         preview: Surface,
@@ -835,8 +884,25 @@ class RawCameraController(
     ) {
         val callback = sessionCallback(device, generation)
         val plan = chooseSessionPerformancePlan(device, preview, raw, callback)
-        device.createCaptureSession(plan.configuration)
-        Log.i(LOG_TAG, "Camera session configured: ${plan.label}")
+        lastSessionPlanLabel = plan.label
+        try {
+            device.createCaptureSession(plan.configuration)
+            Log.i(LOG_TAG, "Camera session configured: ${plan.label}")
+        } catch (failure: UnsupportedOperationException) {
+            // Legacy / vendor HALs (e.g. Snapdragon 685 on Redmi Note 13 4G) accept
+            // SessionConfiguration creation but not execution, or reject the modern
+            // entry point outright. The deprecated surface-list API is equivalent
+            // when no stream-use-case / physical-routing hints are attached.
+            Log.w(LOG_TAG, "Modern session API unsupported (${plan.label}); using legacy surfaces", failure)
+            device.createCaptureSession(listOf(preview, raw), callback, cameraHandler)
+            lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
+            Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
+        } catch (failure: IllegalArgumentException) {
+            Log.w(LOG_TAG, "Modern session config rejected (${plan.label}); using legacy surfaces", failure)
+            device.createCaptureSession(listOf(preview, raw), callback, cameraHandler)
+            lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
+            Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
+        }
     }
 
     private data class SessionPerformancePlan(
@@ -882,6 +948,14 @@ class RawCameraController(
             )
         }
 
+        if (rawStreamCompatMode) {
+            // Stillborn-stream fallback (Samsung): no stream-use-case hints at
+            // all. A RAW output tagged STILL_CAPTURE can stall repeating
+            // delivery on HALs that schedule it as a still-only stream; DEFAULT
+            // is the documented compatibility baseline.
+            return SessionPerformancePlan(configuration(null, null), "DEFAULT (compat)")
+        }
+
         val candidates = buildList<Triple<Long?, Long?, String>> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val previewUseCase = CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
@@ -903,6 +977,14 @@ class RawCameraController(
                 }
             } catch (failure: CameraAccessException) {
                 Log.w(LOG_TAG, "Could not probe session plan $label", failure)
+            } catch (failure: UnsupportedOperationException) {
+                // Vendor HALs without session-query support (e.g. Redmi Note 13 4G /
+                // Snapdragon 685 throws "Session configuration query not supported").
+                // Probing can never succeed here: stop and use DEFAULT unverified.
+                Log.w(LOG_TAG, "Session query unsupported; using DEFAULT without hints", failure)
+                break
+            } catch (failure: IllegalArgumentException) {
+                Log.w(LOG_TAG, "Session plan $label rejected during probe", failure)
             }
         }
         // DEFAULT is required to be our compatibility baseline. Avoid a deprecated session API
@@ -919,6 +1001,10 @@ class RawCameraController(
                 }
                 try {
                     session = configured
+                    // A fresh session gets fresh RAW-preview retries: starvation
+                    // callbacks during the open gap must not consume them.
+                    rawPreviewFailures = 0
+                    rawPreviewRetryUntilMs = 0L
                     updateRepeatingRequest()
                     // stop() disables the shutter while the Activity is backgrounded. A new
                     // camera session must explicitly restore it when the Activity resumes.
@@ -949,19 +1035,58 @@ class RawCameraController(
 
     private var rawPreviewRetryUntilMs = 0L
     private var rawPreviewFailures = 0
+    /**
+     * Stillborn-stream detection: repeating-RAW health for the current session.
+     * [rawStreamImages] counts repeating-path buffers only — an in-flight
+     * forward capture proves nothing about the repeating stream the VF needs.
+     * All three reset in [createSession]; all are camera-thread only.
+     */
+    private var rawStreamImages = 0
+    private var rawStreamResults = 0
+    private var rawStreamFailures = 0
+    private var lastSessionPlanLabel = "?"
+    /**
+     * Session-level compat: DEFAULT plan without stream-use-case hints and a
+     * HAL-default frame rate (no forced 30 fps). Engaged once a repeating RAW
+     * stream proves stillborn; sticky afterwards and persisted by the host so
+     * the next cold start skips the stillborn attempt entirely.
+     */
+    private var rawStreamCompatMode = initialRawStreamCompatMode
 
     private fun recoverRawPreview(reason: String) {
         if (!running || captureInProgress.get()) return
+        // A repeating RAW stream that delivered zero buffers cannot recover at
+        // the request level: the stall is the session/stream configuration
+        // itself (Samsung: request retries 1..4 change nothing while zero RAW
+        // buffers arrive). Escalate once to a compat session, then let
+        // request-level recovery run its course there.
+        if (shouldEscalateRawPreviewToCompatSession(rawPreviewFailures, rawStreamImages, rawStreamCompatMode)) {
+            rawStreamCompatMode = true
+            Log.w(
+                LOG_TAG,
+                "RAW preview stillborn (images=0 results=$rawStreamResults failures=$rawStreamFailures " +
+                    "plan=$lastSessionPlanLabel); rebuilding compat session"
+            )
+            onState("RECOVERING PREVIEW")
+            onRawStreamCompatMode()
+            restartCameraForConfigurationChange()
+            return
+        }
         val generation = lifecycleGeneration
         val shot = captureSequence.get()
         rawPreviewFailures++
         val delayMs = 1000L * rawPreviewFailures
         rawPreviewRetryUntilMs = if (rawPreviewFailures <= 3) SystemClock.elapsedRealtime() + delayMs else Long.MAX_VALUE
-        Log.w(LOG_TAG, "RAW preview recovery $rawPreviewFailures: $reason")
+        Log.w(
+            LOG_TAG,
+            "RAW preview recovery $rawPreviewFailures: $reason " +
+                "(images=$rawStreamImages results=$rawStreamResults failures=$rawStreamFailures plan=$lastSessionPlanLabel)"
+        )
         updateRepeatingRequest(allowRawZsl = false)
         if (rawPreviewFailures <= 3) cameraHandler.postDelayed({
             if (isCurrent(generation) && shot == captureSequence.get() && !captureInProgress.get()) updateRepeatingRequest()
         }, delayMs)
+        else if (rawStreamImages == 0) onState("RAW VF UNAVAILABLE")
     }
 
     init {
@@ -3019,7 +3144,10 @@ class RawCameraController(
                 if (includeRaw) addTarget(reader!!.surface)
                 setTag(includeRaw)
                 applyCameraControls(this)
-                if (includeRaw) rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                // Compat sessions omit the forced range: the HAL runs the
+                // RAW+preview combo at its own sustainable rate instead of a
+                // fixed 30 fps the full-resolution RAW readout may not meet.
+                if (includeRaw && !rawStreamCompatMode) rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 if (useRawZsl) {
                     // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the TextureView never
                     // freezes, but tell 3A/HAL scheduling that this repeating request is serving
@@ -3031,7 +3159,7 @@ class RawCameraController(
                         if (includeRaw) CaptureRequest.CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG
                         else CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
                     )
-                    rawZslTargetFpsRange?.let { range ->
+                    if (!rawStreamCompatMode) rawZslTargetFpsRange?.let { range ->
                         set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
                     }
                     if (includeRaw) requestLensShadingMap(this)
@@ -3132,6 +3260,7 @@ class RawCameraController(
                 if (shutter > 0) lastExposureNanos = shutter
                 latestPreviewResult = result
                 val includesRaw = rawSurface != null && request.tag == true
+                if (includesRaw) rawStreamResults++
                 val rawTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
                 if (includesRaw && rawTimestamp != null && activeFramesRemaining.get() > 0) {
                     val collecting = streamCapture
@@ -3203,10 +3332,16 @@ class RawCameraController(
                 failure: CaptureFailure
             ) {
                 val includesRaw = rawSurface != null && request.tag == true
-                if (isCurrent(generation) && includesRaw && rawZslStreaming &&
+                if (isCurrent(generation) && includesRaw &&
                     requestEpoch == rawZslRequestEpoch
                 ) {
-                    cooldownRawZslForRetry("repeating RAW capture failed (${failure.reason})")
+                    rawStreamFailures++
+                    if (rawStreamFailures <= 3) {
+                        Log.w(LOG_TAG, "Repeating RAW capture failed (${failure.reason}) #$rawStreamFailures")
+                    }
+                    if (rawZslStreaming) {
+                        cooldownRawZslForRetry("repeating RAW capture failed (${failure.reason})")
+                    }
                 }
             }
         }
@@ -5380,6 +5515,22 @@ class RawCameraController(
                     )
                 ) ?: ranges.maxWithOrNull(compareBy<IntRange> { it.last }.thenBy { it.first })
         }
+
+        /**
+         * Stillborn-stream escalation: request-level RAW preview recovery already
+         * had its chance ([RAW_PREVIEW_COMPAT_ESCALATION_FAILURES] attempts) and
+         * zero repeating buffers arrived, so only a session rebuild can help.
+         * Fires at most once: compat mode sticks once engaged.
+         */
+        internal fun shouldEscalateRawPreviewToCompatSession(
+            failures: Int,
+            deliveredImages: Int,
+            compatMode: Boolean
+        ): Boolean = !compatMode && deliveredImages == 0 &&
+            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
+
+        /** Request-level recoveries before a stillborn stream rebuilds the session. */
+        private const val RAW_PREVIEW_COMPAT_ESCALATION_FAILURES = 1
         private const val RAW_BYTES_PER_PIXEL = 2L
         // JPEG development retains large intermediate CPU/GPU buffers, so keep one serialized
         // development worker while allowing five additional retained RAW inputs. DNG-only writes
