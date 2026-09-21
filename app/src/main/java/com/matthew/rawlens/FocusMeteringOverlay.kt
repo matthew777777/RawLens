@@ -16,7 +16,11 @@ import android.view.View
 import android.view.ViewConfiguration
 import kotlin.math.hypot
 
-/** Open Camera-style touch focus overlay with separately reported AF and AE areas. */
+/**
+ * Reference-style tap-to-focus: thin white rounded squares, separate for AF and AE.
+ * AF is the larger square, AE the smaller one with a center dot.
+ * The RawLens touch is the small lime lock dot shown while focus is locked.
+ */
 class FocusMeteringOverlay @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -34,19 +38,36 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private var touchDownX = 0f
     private var touchDownY = 0f
     private var focusAreaTime = -1L
-    private val radius = 34f * resources.displayMetrics.density
+    private val density = resources.displayMetrics.density
+    private val afHalfSide = 32f * density
+    private val aeHalfSide = 24f * density
+    private val afCornerRadius = 12f * density
+    private val aeCornerRadius = 10f * density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
-    private val afPaint = targetPaint(Color.rgb(76, 220, 120))
-    private val aePaint = targetPaint(Color.rgb(255, 177, 66))
-    private val lockPaint = targetPaint(Color.rgb(76, 220, 120)).apply {
-        style = Paint.Style.FILL_AND_STROKE
+    private val afPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(230, 255, 255, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+    }
+    private val aePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(200, 255, 255, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.25f * density
+    }
+    private val aeDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(200, 255, 255, 255)
+        style = Paint.Style.FILL
+    }
+    private val lockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(214, 255, 51)
+        style = Paint.Style.FILL
     }
     private val lockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(76, 220, 120)
-        textSize = 11f * resources.displayMetrics.density
+        color = Color.rgb(214, 255, 51)
+        textSize = 10f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
     }
-    private val lockRect = RectF()
+    private val focusRect = RectF()
 
     /** Sharp AF lock badge state, driven by the camera controller. */
     private var focusLocked = false
@@ -54,6 +75,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private var lockDeadlineMs = 0L
     private var longPressFired = false
     private var longPressPending: Runnable? = null
+    private var fadePending: Runnable? = null
     private val ticker = object : Runnable {
         override fun run() {
             if (!focusLocked || lockIndefinite) return
@@ -66,12 +88,14 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     fun clearTargets() {
         targetsVisible = false
         focusAreaTime = -1L
+        fadePending?.let(::removeCallbacks)
+        fadePending = null
         setFocusLock(locked = false, indefinite = false, deadlineMs = 0L)
         invalidate()
     }
 
     /**
-     * Shows or hides the small lock badge next to the AF reticle.
+     * Shows or hides the small lime lock dot under the reticle.
      * @param deadlineMs elapsed-realtime expiry for timed locks (ignored when indefinite).
      */
     fun setFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) {
@@ -80,39 +104,60 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         lockIndefinite = indefinite
         lockDeadlineMs = deadlineMs
         if (locked && !indefinite && deadlineMs > 0L) postDelayed(ticker, LOCK_TICK_MS)
+        fadePending?.let(::removeCallbacks)
+        fadePending = null
+        if (targetsVisible && !locked) scheduleFade()
+        invalidate()
+    }
+
+    private fun scheduleFade() {
+        fadePending?.let(::removeCallbacks)
+        fadePending = Runnable {
+            fadePending = null
+            // A fresh lock or retarget cancels the fade by replacing this runnable.
+            if (!focusLocked && targetsVisible) {
+                targetsVisible = false
+                invalidate()
+            }
+        }.also { postDelayed(it, FADE_DELAY_MS) }
+    }
+
+    private fun showReticleAt(x: Float, y: Float) {
+        afPoint.set(x, y)
+        aePoint.set(x, y)
+        clamp(afPoint, afHalfSide)
+        clamp(aePoint, aeHalfSide)
+        targetsVisible = true
+        focusAreaTime = System.currentTimeMillis()
+        scheduleFade()
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         if (!targetsVisible) return
-        canvas.drawCircle(afPoint.x, afPoint.y, radius, afPaint)
-        canvas.drawLine(afPoint.x - radius * 0.45f, afPoint.y, afPoint.x + radius * 0.45f, afPoint.y, afPaint)
-        canvas.drawLine(afPoint.x, afPoint.y - radius * 0.45f, afPoint.x, afPoint.y + radius * 0.45f, afPaint)
-
-        canvas.drawCircle(aePoint.x, aePoint.y, radius * 0.82f, aePaint)
-        canvas.drawCircle(aePoint.x, aePoint.y, radius * 0.18f, aePaint)
-
+        focusRect.set(
+            afPoint.x - afHalfSide, afPoint.y - afHalfSide,
+            afPoint.x + afHalfSide, afPoint.y + afHalfSide
+        )
+        canvas.drawRoundRect(focusRect, afCornerRadius, afCornerRadius, afPaint)
+        focusRect.set(
+            aePoint.x - aeHalfSide, aePoint.y - aeHalfSide,
+            aePoint.x + aeHalfSide, aePoint.y + aeHalfSide
+        )
+        canvas.drawRoundRect(focusRect, aeCornerRadius, aeCornerRadius, aePaint)
+        canvas.drawCircle(aePoint.x, aePoint.y, 2.5f * density, aeDotPaint)
         if (focusLocked) drawLockBadge(canvas)
     }
 
-    /** Small padlock above the AF reticle; timed locks also show seconds remaining. */
+    /** Small lime dot below the AF reticle; timed locks also show seconds remaining. */
     private fun drawLockBadge(canvas: Canvas) {
-        val density = resources.displayMetrics.density
-        val w = 9f * density
-        val h = 7f * density
         val cx = afPoint.x
-        val top = (afPoint.y - radius - 16f * density).coerceAtLeast(h + 8f * density)
-        // Shackle.
-        canvas.drawArc(cx - w * 0.55f, top - h * 1.1f, cx + w * 0.55f, top + h * 0.1f,
-            180f, 180f, false, lockPaint.apply { style = Paint.Style.STROKE })
-        // Body.
-        lockRect.set(cx - w / 2f, top - h / 2f, cx + w / 2f, top + h / 2f)
-        canvas.drawRoundRect(lockRect, 2f * density, 2f * density,
-            lockPaint.apply { style = Paint.Style.FILL_AND_STROKE })
+        val cy = afPoint.y + afHalfSide + 10f * density
+        canvas.drawCircle(cx, cy, 4f * density, lockDotPaint)
         if (!lockIndefinite && lockDeadlineMs > 0L) {
             val remaining = ((lockDeadlineMs - SystemClock.elapsedRealtime()) / 1000L)
                 .coerceIn(0L, 99L)
-            canvas.drawText("${remaining}s", cx, top + h / 2f + 12f * density, lockTextPaint)
+            canvas.drawText("${remaining}s", cx, cy + 14f * density, lockTextPaint)
         }
     }
 
@@ -129,14 +174,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 longPressPending = Runnable {
                     longPressPending = null
                     longPressFired = true
-                    afPoint.set(downX, downY)
-                    aePoint.set(downX, downY)
-                    clamp(afPoint)
-                    clamp(aePoint)
-                    targetsVisible = true
-                    focusAreaTime = System.currentTimeMillis()
+                    showReticleAt(downX, downY)
                     onAfLockHold?.invoke(afPoint.x, afPoint.y)
-                    invalidate()
                 }.also { postDelayed(it, ViewConfiguration.getLongPressTimeout().toLong()) }
                 return true
             }
@@ -160,23 +199,23 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 }
                 if (hypot(event.x - touchDownX, event.y - touchDownY) > touchSlop) return true
                 val now = System.currentTimeMillis()
+                // Same-spot double-tap releases the lock. A tap anywhere else
+                // always refocuses — even inside the lock timer or the
+                // double-tap window — so rapid corrections never clear instead.
+                val nearCurrentTarget =
+                    hypot(event.x - afPoint.x, event.y - afPoint.y) < afHalfSide
                 val clearFocusAreas = targetsVisible && focusAreaTime != -1L &&
-                    now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout()
+                    now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout() &&
+                    nearCurrentTarget
                 if (clearFocusAreas) {
                     clearTargets()
                     onTargetsCleared?.invoke()
                 } else {
-                    // Open Camera installs one touch rectangle for both subsystems. Keep separate
+                    // One touch rectangle drives both subsystems. Keep separate
                     // coordinates/callbacks so AF-only and AE-only camera capabilities remain valid.
-                    afPoint.set(event.x, event.y)
-                    aePoint.set(event.x, event.y)
-                    clamp(afPoint)
-                    clamp(aePoint)
-                    targetsVisible = true
-                    focusAreaTime = now
+                    showReticleAt(event.x, event.y)
                     onAePointChanged?.invoke(aePoint.x, aePoint.y)
                     onAfPointChanged?.invoke(afPoint.x, afPoint.y)
-                    invalidate()
                 }
                 return true
             }
@@ -193,21 +232,19 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         longPressPending?.let(::removeCallbacks)
         longPressPending = null
+        fadePending?.let(::removeCallbacks)
+        fadePending = null
         removeCallbacks(ticker)
         super.onDetachedFromWindow()
     }
 
-    private fun clamp(point: PointF) {
-        point.x = point.x.coerceIn(radius, (width - radius).coerceAtLeast(radius))
-        point.y = point.y.coerceIn(radius, (height - radius).coerceAtLeast(radius))
-    }
-    private fun targetPaint(color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        this.color = color
-        style = Paint.Style.STROKE
-        strokeWidth = 2f * resources.displayMetrics.density
+    private fun clamp(point: PointF, half: Float = afHalfSide) {
+        point.x = point.x.coerceIn(half, (width - half).coerceAtLeast(half))
+        point.y = point.y.coerceIn(half, (height - half).coerceAtLeast(half))
     }
 
     companion object {
         private const val LOCK_TICK_MS = 500L
+        private const val FADE_DELAY_MS = 1_500L
     }
 }
