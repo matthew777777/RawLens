@@ -32,9 +32,9 @@ PhotonCamera is GPL-licensed. The local checkout retains its upstream `LICENSE`;
 ### Current checkout
 
 - Branch: `dev`
-- Commit: `54d9febc596b34376b8be242a388f386d97e8f5d`
-- Upstream commit date: `2026-08-27T01:07:28+06:00`
-- Commit subject: `Merge pull request #178 from v1p3rrrrr/dev`
+- Commit: `ba55cec509e812cd5c7924972cfb71ca31dc292f`
+- Upstream commit date: `2026-09-19T18:53:31+06:00`
+- Commit subject: `Add background`
 
 Treat the commit hash—not the moving branch name—as the citation for research performed against this checkout.
 
