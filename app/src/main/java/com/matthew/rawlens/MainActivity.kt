@@ -58,16 +58,16 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var programAeProfileStore: ProgramAeProfileStore
     private var gpsProvider: GpsLocationProvider? = null
     private lateinit var manualPanel: LinearLayout
-    private lateinit var manualName: TextView
-    private lateinit var manualValue: TextView
-    private lateinit var manualMin: TextView
-    private lateinit var manualMax: TextView
-    private lateinit var manualSlider: SeekBar
+    private lateinit var manualSlider: RuleSliderView
     private lateinit var manualAuto: Button
+    private lateinit var manualLimits: Button
     private var activeManualControl: ManualControl? = null
+    /** PROGRAM axis lock slider reuses the bottom ruler; null when the ruler drives MANUAL. */
+    private var activeProgramAxis: ManualControl? = null
     private var pendingSliderUpdate: Runnable? = null
     private var manualPanelHide: Runnable? = null
     private lateinit var debugOverlay: TextView
+    private lateinit var rawVfDebugOverlay: TextView
     private lateinit var guideOverlay: CameraGuideOverlay
     private lateinit var histogramView: HistogramView
     private lateinit var meteringOverlay: FocusMeteringOverlay
@@ -87,6 +87,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var rawBadge: TextView
     private lateinit var rawStatusGroup: View
     private var captureFormat = CaptureFormat.DNG_ONLY
+    private var vfPreviewMode = VfPreviewMode.FOLLOW
+    private var vfResolution = VfResolution.MAX
+    private var vfPreviewButton: TextView? = null
     private var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     private var rawZslSettingsStatus: TextView? = null
     private var gridEnabled = true
@@ -153,6 +156,12 @@ class MainActivity : Activity(), SensorEventListener {
         captureFormat = CaptureFormat.fromPreference(
             lensPreferences().getString(KEY_CAPTURE_FORMAT, null)
         )
+        vfPreviewMode = VfPreviewMode.fromPreference(
+            lensPreferences().getString(KEY_VF_PREVIEW_MODE, null)
+        )
+        vfResolution = VfResolution.validated(
+            lensPreferences().getInt(KEY_VF_RESOLUTION, VfResolution.MAX)
+        )
         
         // Full screen immersive mode
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -189,14 +198,13 @@ class MainActivity : Activity(), SensorEventListener {
         programAeProfileStore = ProgramAeProfileStore(this)
         gpsProvider = GpsLocationProvider(this)
         manualPanel = findViewById(R.id.manualControlPanel)
-        manualName = findViewById(R.id.manualControlName)
-        manualValue = findViewById(R.id.manualControlValue)
-        manualMin = findViewById(R.id.manualControlMin)
-        manualMax = findViewById(R.id.manualControlMax)
         manualSlider = findViewById(R.id.manualControlSlider)
         manualAuto = findViewById(R.id.manualAutoButton)
+        manualLimits = findViewById(R.id.manualLimitsButton)
         debugOverlay = findViewById(R.id.debugOverlay)
         debugOverlay.visibility = if (lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
+        rawVfDebugOverlay = findViewById(R.id.rawVfDebugOverlay)
+        rawVfDebugOverlay.visibility = if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
         guideOverlay = findViewById(R.id.guideOverlay)
         histogramView = findViewById(R.id.histogramView)
@@ -368,14 +376,27 @@ class MainActivity : Activity(), SensorEventListener {
                         updateQuickControls()
                     }
                 }
+            },
+            findViewById<RawViewfinder>(R.id.rawViewfinder),
+            { rawVfText ->
+                if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) {
+                    runOnUiThread { rawVfDebugOverlay.text = rawVfText }
+                }
             }
         )
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
+        controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
         controller.setDenoiseSettings(denoiseSettings())
+        controller.setVfPreviewMode(vfPreviewMode)
+        controller.setVfTargetLongEdge(vfResolution)
+        vfPreviewButton = findViewById<TextView?>(R.id.vfPreviewButton)?.apply {
+            setOnClickListener { cycleVfPreviewMode() }
+        }
+        refreshVfPreviewButton()
         shutter.setOnClickListener { triggerCapture(shutter, forceBurst = false) }
         shutter.setOnLongClickListener {
             triggerCapture(shutter, forceBurst = true)
@@ -459,37 +480,57 @@ class MainActivity : Activity(), SensorEventListener {
         meteringOverlay.onAePointChanged = null
         meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
-        manualSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val control = activeManualControl ?: return
-                val range = controller.manualControlRange(control) ?: return
-                val value = sliderValue(control, range, progress)
-                manualValue.text = formatManualValue(control, value)
-                manualAuto.isEnabled = true
-                pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-                pendingSliderUpdate = Runnable { controller.setManualControl(control, value) }.also {
-                    manualSlider.postDelayed(it, SLIDER_UPDATE_DELAY_MS)
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) {
-                cancelManualPanelHide()
-            }
-            override fun onStopTrackingTouch(seekBar: SeekBar) {
-                pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-                activeManualControl?.let { control ->
-                    controller.manualControlRange(control)?.let { range ->
-                        controller.setManualControl(control, sliderValue(control, range, seekBar.progress))
+        manualSlider.max = SLIDER_STEPS
+        manualSlider.onProgressChanged = { progress, fromUser ->
+            if (fromUser) {
+                // PROGRAM lock slider and MANUAL slider share the bottom ruler.
+                activeProgramAxis?.let { axis ->
+                    onProgramAxisScrubbed(axis, progress)
+                } ?: run {
+                    val control = activeManualControl
+                    val range = control?.let { controller.manualControlRange(it) }
+                    if (control != null && range != null) {
+                        manualAuto.isEnabled = true
+                        pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+                        val value = sliderValue(control, range, progress)
+                        pendingSliderUpdate = Runnable { controller.setManualControl(control, value) }.also {
+                            manualSlider.postDelayed(it, SLIDER_UPDATE_DELAY_MS)
+                        }
                     }
                 }
-                scheduleManualPanelHide()
+                refreshRuleSliderAccessibility()
             }
-        })
+        }
+        manualSlider.onStartTracking = { cancelManualPanelHide() }
+        manualSlider.onStopTracking = { progress ->
+            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+            activeProgramAxis?.let { axis ->
+                commitProgramAxis(axis, progress)
+            } ?: run {
+                activeManualControl?.let { control ->
+                    controller.manualControlRange(control)?.let { range ->
+                        controller.setManualControl(control, sliderValue(control, range, progress))
+                    }
+                }
+            }
+            scheduleManualPanelHide()
+        }
         manualAuto.setOnClickListener {
+            activeProgramAxis?.let {
+                saveProgramProfile(programProfile().copy(lockMode = ProgramLockMode.NONE))
+                updateProgramChipStates()
+                setStatus("PROGRAM • BOTH AUTO")
+                hideManualControl()
+                return@setOnClickListener
+            }
             activeManualControl?.let { control ->
                 controller.setManualControl(control, null)
                 showManualControl(control, allowToggle = false)
             }
+        }
+        // PROGRAM ruler limits/metering editor shortcut; visible only while a PROGRAM axis is up.
+        manualLimits.setOnClickListener {
+            if (activeProgramAxis != null) showProgramPanel()
         }
         updateQuickControls()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
@@ -712,6 +753,7 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onDestroy() {
         lensDiscovery.close()
         controller.destroy()
+        findViewById<RawViewfinder>(R.id.rawViewfinder).dispose()
         MemoryLeakDiagnostics.sample("activity-destroyed")
         super.onDestroy()
     }
@@ -723,6 +765,10 @@ class MainActivity : Activity(), SensorEventListener {
         val root = panel.parent as View
         val clearance = dp(16)
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
+        // System preview is a stream target only: keep it attached and flowing for the HAL
+        // while fully transparent so ISP pixels never reach the eye. VISIBLE (not INVISIBLE)
+        // is load-bearing — some HALs never create the SurfaceTexture otherwise.
+        viewfinder.alpha = 0f
         viewfinder.fillViewport = false
         // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
@@ -766,14 +812,39 @@ class MainActivity : Activity(), SensorEventListener {
             marginEnd = dp(14)
             bottomMargin = panelHeight + dp(12)
         }
+        updateOverlayStack()
+        guideOverlay.setContentInsets(top = 0, end = 0, bottom = 0)
+        applyDeviceOrientation(deviceOrientationDegrees, animate = false)
+    }
+
+    /**
+     * Single stacking authority: histogram/lens row always sits above the rule-slider
+     * row or quick panel, never behind them. Called after every visibility change.
+     */
+    private fun updateOverlayStack() {
+        if (!::histogramView.isInitialized || !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
+        val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(247)
+        val floatingHeight = when {
+            manualPanel.visibility == View.VISIBLE ->
+                (manualPanel.height.takeIf { it > 0 } ?: dp(110))
+            quickPanel.visibility == View.VISIBLE ->
+                (quickPanel.height.takeIf { it > 0 } ?: dp(190))
+            else -> 0
+        }
+        val lift = if (floatingHeight > 0) floatingHeight + dp(8) else 0
         (histogramView.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
             params.gravity = Gravity.START or Gravity.BOTTOM
             params.marginStart = dp(16)
-            params.bottomMargin = panelHeight + dp(16)
+            params.bottomMargin = panelHeight + dp(16) + lift
             histogramView.layoutParams = params
         }
-        guideOverlay.setContentInsets(top = 0, end = 0, bottom = 0)
-        applyDeviceOrientation(deviceOrientationDegrees, animate = false)
+        // Lens switcher shares the floating row; keep it clear of the slider as well.
+        if (::lensSwitcher.isInitialized) {
+            (lensSwitcher.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.bottomMargin = panelHeight + dp(16) + lift
+                lensSwitcher.layoutParams = params
+            }
+        }
     }
 
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
@@ -825,14 +896,27 @@ class MainActivity : Activity(), SensorEventListener {
         debugOverlay.layoutParams = debugParams
         debugOverlay.translationX = 0f
         debugOverlay.translationY = 0f
+        if (::rawVfDebugOverlay.isInitialized) {
+            val vfParams = (rawVfDebugOverlay.layoutParams as? FrameLayout.LayoutParams)
+                ?: FrameLayout.LayoutParams(wrapContent(), wrapContent())
+            vfParams.gravity = Gravity.TOP or Gravity.START
+            vfParams.leftMargin = dp(16)
+            val vfRotationInset = if (quarterTurn && rawVfDebugOverlay.width > rawVfDebugOverlay.height) {
+                (rawVfDebugOverlay.width - rawVfDebugOverlay.height) / 2
+            } else 0
+            vfParams.topMargin = dp(84) + vfRotationInset
+            rawVfDebugOverlay.layoutParams = vfParams
+            rawVfDebugOverlay.translationX = 0f
+            rawVfDebugOverlay.translationY = 0f
+        }
         val histogram = histogramView
         if (histogram.width > 0 && histogram.height > 0) {
+            updateOverlayStack()
             (histogram.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(247)
                 val rotationInset = if (quarterTurn && histogram.width > histogram.height) {
                     (histogram.width - histogram.height) / 2
                 } else 0
-                params.bottomMargin = panelHeight + dp(16) + rotationInset
+                params.bottomMargin = params.bottomMargin + rotationInset
                 histogram.layoutParams = params
             }
             histogram.translationX = 0f
@@ -848,14 +932,15 @@ class MainActivity : Activity(), SensorEventListener {
         findViewById(R.id.focusControl), findViewById(R.id.evControl), findViewById(R.id.flashControl),
         findViewById(R.id.dngInfo), findViewById(R.id.sensorInfo),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
+        findViewById(R.id.vfPreviewButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
         findViewById(R.id.gridQuick), findViewById(R.id.levelQuick),
         findViewById(R.id.histogramQuick), findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
         findViewById(R.id.resetTargetsQuick), findViewById(R.id.oisQuick),
         findViewById(R.id.ettrQuick),
-        findViewById(R.id.manualControlName), findViewById(R.id.manualControlValue),
-        findViewById(R.id.manualControlMin), findViewById(R.id.manualControlMax),
+        findViewById(R.id.manualLimitsButton),
+        findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton)
     )
 
@@ -864,6 +949,7 @@ class MainActivity : Activity(), SensorEventListener {
         findViewById(R.id.rawBadge),
         findViewById(R.id.status),
         findViewById(R.id.debugOverlay),
+        findViewById(R.id.rawVfDebugOverlay),
         findViewById(R.id.histogramView)
     )
 
@@ -891,6 +977,7 @@ class MainActivity : Activity(), SensorEventListener {
         params.leftMargin = viewfinder.left
         params.topMargin = viewfinder.top
         guideOverlay.layoutParams = params
+        findViewById<RawViewfinder>(R.id.rawViewfinder).layoutParams = FrameLayout.LayoutParams(params)
         guideOverlay.translationX = 0f
         guideOverlay.translationY = 0f
         guideOverlay.setContentInsets(0, 0, 0)
@@ -1043,11 +1130,52 @@ class MainActivity : Activity(), SensorEventListener {
         lensPreferences().edit().putString(KEY_CAPTURE_FORMAT, selected.name).apply()
         rawStatusGroup.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         refreshCaptureFormatControl()
+        // FOLLOW tonemap follows the format inside the controller (setCaptureFormat pushes
+        // the render state); just refresh the badge label here.
+        refreshVfPreviewButton()
         setStatus(when (selected) {
             CaptureFormat.JPEG -> "JPG"
             CaptureFormat.JPEG_DNG -> "JPG+DNG"
             CaptureFormat.DNG_ONLY -> "DNG ONLY"
         })
+    }
+
+    /** Shutter-side WYSIWYG switch: FOLLOW -> RAW -> JPEG -> FOLLOW. */
+    private fun cycleVfPreviewMode() {
+        vfPreviewMode = when (vfPreviewMode) {
+            VfPreviewMode.FOLLOW -> VfPreviewMode.RAW
+            VfPreviewMode.RAW -> VfPreviewMode.JPEG
+            VfPreviewMode.JPEG -> VfPreviewMode.FOLLOW
+        }
+        lensPreferences().edit().putString(KEY_VF_PREVIEW_MODE, vfPreviewMode.name).apply()
+        controller.setVfPreviewMode(vfPreviewMode)
+        vfPreviewButton?.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        refreshVfPreviewButton()
+        setStatus("VF • ${vfPreviewButton?.text ?: vfPreviewMode.name}")
+    }
+
+    private fun refreshVfPreviewButton() {
+        vfPreviewButton?.apply {
+            text = when (vfPreviewMode) {
+                VfPreviewMode.FOLLOW -> if (vfPreviewMode.resolve(captureFormat)) "RAW•A" else "JPG•A"
+                VfPreviewMode.RAW -> "RAW"
+                VfPreviewMode.JPEG -> "JPG"
+            }
+            contentDescription = "Viewfinder preview ${vfPreviewMode.name}. Tap to change. " +
+                "RAW shows the raw-clean render, JPG shows the cheap AgX preview matching the saved JPEG."
+        }
+    }
+
+    private fun cycleVfResolution() {
+        val next = when (vfResolution) {
+            VfResolution.MIN -> VfResolution.MID
+            VfResolution.MID -> VfResolution.MAX
+            else -> VfResolution.MIN
+        }
+        vfResolution = next
+        lensPreferences().edit().putInt(KEY_VF_RESOLUTION, next).apply()
+        controller.setVfTargetLongEdge(next)
+        setStatus("VF • ${next}PX")
     }
 
     private fun refreshCaptureFormatControl() {
@@ -1171,89 +1299,79 @@ class MainActivity : Activity(), SensorEventListener {
     /**
      * Spec chip contract: tap ISO/SHUTTER for that axis's slider. Moving the slider
      * engages the axis lock; the slider's Auto button releases both locks.
+     * Uses the same bottom transparent ruler as MANUAL (tick-only; values in chips).
      */
     private fun showProgramAxisSlider(isIso: Boolean) {
-        closeFloatingPanels()
+        hideQuickControls()
         if (!controller.hasManualSensorControl()) {
             setStatus("ANDROID AE • NO MANUAL SENSOR")
             return
         }
-        val range = controller.manualControlRange(
-            if (isIso) ManualControl.ISO else ManualControl.SHUTTER
-        )
+        val axis = if (isIso) ManualControl.ISO else ManualControl.SHUTTER
+        val range = controller.manualControlRange(axis)
         if (range == null) {
             setStatus("${if (isIso) "ISO" else "S"} N/A")
             return
         }
-        var profile = programProfile()
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
+        if (activeProgramAxis == axis && manualPanel.visibility == View.VISIBLE) {
+            hideManualControl()
+            return
         }
-        val title = if (isIso) "ISO lock" else "Shutter lock"
-        val valueLabel = TextView(this).apply {
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 15f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-        }
-        fun currentValue(): Long = if (isIso) {
+        val profile = programProfile()
+        val current = if (isIso) {
             (profile.lockedIso.takeIf { it > 0 }?.toLong() ?: range.current)
                 .coerceIn(range.minimum, range.maximum)
         } else {
             (profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current)
                 .coerceIn(range.minimum, range.maximum)
         }
-        fun labelFor(value: Long): String =
-            "$title\n" + if (isIso) "ISO $value" else formatShutter(value)
-        valueLabel.text = labelFor(currentValue())
-        container.addView(valueLabel)
-        container.addView(TextView(this).apply {
-            text = if (isIso) "Slide to lock ISO • the shutter keeps adjusting"
-            else "Slide to lock shutter • ISO keeps adjusting"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
-        val slider = SeekBar(this).apply {
-            max = SLIDER_STEPS
-            progress = sliderProgress(
-                if (isIso) ManualControl.ISO else ManualControl.SHUTTER,
-                range.copy(current = currentValue())
+        activeManualControl = null
+        activeProgramAxis = axis
+        // No text label under the histogram: the ruler tick code (ISO/S) plus the
+        // exposure chips carry the values. LIMITS opens the full PROGRAM editor.
+        manualLimits.visibility = View.VISIBLE
+        manualLimits.contentDescription = if (isIso) {
+            "ISO lock limits and metering editor."
+        } else {
+            "Shutter lock limits and metering editor."
+        }
+        manualSlider.label = shortControlName(axis)
+        manualSlider.max = SLIDER_STEPS
+        manualSlider.setProgressFromUser(sliderProgress(axis, range.copy(current = current)), fromUser = false)
+        manualAuto.text = "AUTO"
+        manualAuto.isEnabled = true
+        refreshRuleSliderAccessibility()
+        manualPanel.visibility = View.VISIBLE
+        lensSwitcher.visibility = View.INVISIBLE
+        updateOverlayStack()
+        manualPanel.post { updateOverlayStack() }
+        scheduleManualPanelHide()
+    }
+
+    /** Live-scrub a PROGRAM axis lock: engage the lock immediately, persist on release. */
+    private fun onProgramAxisScrubbed(axis: ManualControl, progress: Int) {
+        val range = controller.manualControlRange(axis) ?: return
+        val value = sliderValue(axis, range, progress)
+        val current = programProfile()
+        val next = when (axis) {
+            ManualControl.ISO -> current.copy(
+                lockMode = ProgramLockMode.ISO_LOCK, lockedIso = value.toInt()
+            )
+            else -> current.copy(
+                lockMode = ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = value
             )
         }
-        container.addView(slider)
-        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val value = sliderValue(
-                    if (isIso) ManualControl.ISO else ManualControl.SHUTTER, range, progress
-                )
-                profile = if (isIso) {
-                    profile.copy(lockMode = ProgramLockMode.ISO_LOCK, lockedIso = value.toInt())
-                } else {
-                    profile.copy(lockMode = ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = value)
-                }
-                valueLabel.text = labelFor(value)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar) {
-                saveProgramProfile(profile)
-                updateProgramChipStates()
-            }
-        })
-        container.addView(Button(this).apply {
-            text = "Limits…"
-            setOnClickListener { showProgramPanel() }
-        })
-        AlertDialog.Builder(this)
-            .setTitle(if (isIso) "ISO • PROGRAM" else "Shutter • PROGRAM")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNeutralButton("Auto") { _, _ ->
-                saveProgramProfile(profile.copy(lockMode = ProgramLockMode.NONE))
-                updateProgramChipStates()
-                setStatus("PROGRAM • BOTH AUTO")
-            }
-            .setPositiveButton("Done", null)
-            .show()
+        saveProgramProfile(next)
+        manualAuto.isEnabled = true
+    }
+
+    private fun commitProgramAxis(axis: ManualControl, progress: Int) {
+        onProgramAxisScrubbed(axis, progress)
+        updateProgramChipStates()
+        setStatus(
+            if (axis == ManualControl.ISO) "ISO LOCK • SHUTTER AUTO"
+            else "SHUTTER LOCK • ISO AUTO"
+        )
     }
 
     private fun updateProgramChipStates() {
@@ -1322,6 +1440,23 @@ class MainActivity : Activity(), SensorEventListener {
         ProgramLockMode.SHUTTER_LOCK -> "Lock: SHUTTER (ISO auto)"
     }
 
+    /**
+     * Seeds a freshly engaged lock from the live sensor values so it holds a real
+     * exposure instead of 0 (which would make the "locked" axis follow the scene).
+     */
+    private fun seedLockedValuesFor(profile: ProgramAeProfile): ProgramAeProfile {
+        var seeded = profile
+        if (profile.lockMode == ProgramLockMode.ISO_LOCK && profile.lockedIso <= 0) {
+            val range = controller.manualControlRange(ManualControl.ISO)
+            seeded = seeded.copy(lockedIso = (range?.current?.toInt() ?: 0))
+        }
+        if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK && profile.lockedShutterNanos <= 0L) {
+            val range = controller.manualControlRange(ManualControl.SHUTTER)
+            seeded = seeded.copy(lockedShutterNanos = range?.current ?: 0L)
+        }
+        return seeded
+    }
+
     private fun programMeteringLabel(metering: ProgramMetering): String = when (metering) {
         ProgramMetering.CENTER_WEIGHTED -> "CENTER"
         ProgramMetering.AVERAGE -> "AVERAGE"
@@ -1368,10 +1503,21 @@ class MainActivity : Activity(), SensorEventListener {
             textSize = 11f
             setPadding(0, dp(4), 0, 0)
         })
+        fun styleDialogButton(button: Button, active: Boolean = false) {
+            button.background = getDrawable(
+                if (active) R.drawable.control_chip_active else R.drawable.control_chip
+            )
+            button.setTextColor(
+                getColor(if (active) R.color.accent_dark else R.color.text_primary)
+            )
+            button.textSize = 12f
+            button.setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
         val balanceLabel = TextView(this).apply {
             text = programBalanceText(profile.balance)
             setTextColor(getColor(R.color.text_primary))
-            textSize = 14f
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, dp(12), 0, 0)
         }
         container.addView(balanceLabel)
@@ -1380,24 +1526,28 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
         })
-        val balanceSlider = SeekBar(this).apply {
+        val balanceSlider = RuleSliderView(this).apply {
+            label = "BAL"
             max = 100
-            progress = (profile.balance * 100).toInt().coerceIn(0, max)
+            setProgressFromUser((profile.balance * 100).toInt().coerceIn(0, max), fromUser = false)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
+            )
         }
         container.addView(balanceSlider)
-        balanceSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+        balanceSlider.onProgressChanged = { progress, fromUser ->
+            if (fromUser) {
                 profile = profile.copy(balance = progress / 100f)
                 balanceLabel.text = programBalanceText(profile.balance)
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar) = apply()
-        })
-        val lockButton = Button(this)
-        val lockedIsoButton = Button(this)
-        val lockedShutterButton = Button(this)
+        }
+        balanceSlider.onStopTracking = { apply() }
+        val lockButton = Button(this).also { styleDialogButton(it) }
+        val lockedIsoButton = Button(this).also { styleDialogButton(it) }
+        val lockedShutterButton = Button(this).also { styleDialogButton(it) }
         fun refreshLock() {
             lockButton.text = programLockText(profile.lockMode) + " • tap to cycle"
+            styleDialogButton(lockButton, active = profile.lockMode != ProgramLockMode.NONE)
         }
         fun refreshLockedButtons() {
             val isoRange = controller.manualControlRange(ManualControl.ISO)
@@ -1409,6 +1559,8 @@ class MainActivity : Activity(), SensorEventListener {
                 else -> "--"
             }
             lockedIsoButton.isEnabled = profile.lockMode == ProgramLockMode.ISO_LOCK
+            styleDialogButton(lockedIsoButton, active = profile.lockMode == ProgramLockMode.ISO_LOCK)
+            lockedIsoButton.alpha = if (profile.lockMode == ProgramLockMode.ISO_LOCK) 1f else 0.6f
             lockedShutterButton.text = "Locked shutter: " + when {
                 profile.lockMode != ProgramLockMode.SHUTTER_LOCK -> "-- (shutter lock off)"
                 profile.lockedShutterNanos > 0L -> formatShutter(profile.lockedShutterNanos)
@@ -1416,24 +1568,17 @@ class MainActivity : Activity(), SensorEventListener {
                 else -> "--"
             }
             lockedShutterButton.isEnabled = profile.lockMode == ProgramLockMode.SHUTTER_LOCK
+            styleDialogButton(lockedShutterButton, active = profile.lockMode == ProgramLockMode.SHUTTER_LOCK)
+            lockedShutterButton.alpha = if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK) 1f else 0.6f
         }
         refreshLock()
         refreshLockedButtons()
         lockButton.setOnClickListener {
-            profile = profile.copy(lockMode = when (profile.lockMode) {
+            profile = seedLockedValuesFor(profile.copy(lockMode = when (profile.lockMode) {
                 ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
                 ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
                 ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
-            })
-            // Default the locked value to the opposite bound so the lock takes hold immediately.
-            if (profile.lockMode == ProgramLockMode.ISO_LOCK && profile.lockedIso <= 0) {
-                val range = controller.manualControlRange(ManualControl.ISO)
-                profile = profile.copy(lockedIso = (range?.current?.toInt() ?: 0))
-            }
-            if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK && profile.lockedShutterNanos <= 0L) {
-                val range = controller.manualControlRange(ManualControl.SHUTTER)
-                profile = profile.copy(lockedShutterNanos = range?.current ?: 0L)
-            }
+            }))
             refreshLock(); refreshLockedButtons(); apply()
             setStatus("PROGRAM ${profile.lockMode.name}")
         }
@@ -1464,16 +1609,23 @@ class MainActivity : Activity(), SensorEventListener {
         refreshLockedButtons()
         container.addView(lockedIsoButton)
         container.addView(lockedShutterButton)
-        val isoMinButton = Button(this)
-        val isoMaxButton = Button(this)
-        val shutterMinButton = Button(this)
-        val shutterMaxButton = Button(this)
+        val isoMinButton = Button(this).also { styleDialogButton(it) }
+        val isoMaxButton = Button(this).also { styleDialogButton(it) }
+        val shutterMinButton = Button(this).also { styleDialogButton(it) }
+        val shutterMaxButton = Button(this).also { styleDialogButton(it) }
         fun refreshBounds() {
             isoMinButton.text = programIsoBoundText(profile.isoMin, isMin = true)
             isoMaxButton.text = programIsoBoundText(profile.isoMax, isMin = false)
             shutterMinButton.text = programShutterBoundText(profile.shutterMinNanos, isMin = true, autoSafe = false)
             shutterMaxButton.text = programShutterBoundText(
                 profile.shutterMaxNanos, isMin = false, autoSafe = profile.useAutoSafeShutter
+            )
+            styleDialogButton(isoMinButton, active = profile.isoMin > 0)
+            styleDialogButton(isoMaxButton, active = profile.isoMax > 0)
+            styleDialogButton(shutterMinButton, active = profile.shutterMinNanos > 0L)
+            styleDialogButton(
+                shutterMaxButton,
+                active = profile.shutterMaxNanos > 0L || profile.useAutoSafeShutter
             )
         }
         isoMinButton.setOnClickListener {
@@ -1524,29 +1676,37 @@ class MainActivity : Activity(), SensorEventListener {
         val biasLabel = TextView(this).apply {
             text = programEvBiasText(profile.evBias)
             setTextColor(getColor(R.color.text_primary))
-            textSize = 14f
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
             setPadding(0, dp(12), 0, 0)
         }
         container.addView(biasLabel)
-        container.addView(SeekBar(this).apply {
+        val biasSlider = RuleSliderView(this).apply {
+            label = "EV"
             max = 60
-            progress = ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                    profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
-                    biasLabel.text = programEvBiasText(profile.evBias)
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) = apply()
-            })
-        })
+            setProgressFromUser(
+                ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max),
+                fromUser = false
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
+            )
+        }
+        container.addView(biasSlider)
+        biasSlider.onProgressChanged = { progress, fromUser ->
+            if (fromUser) {
+                profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
+                biasLabel.text = programEvBiasText(profile.evBias)
+            }
+        }
+        biasSlider.onStopTracking = { apply() }
         container.addView(TextView(this).apply {
             text = "ETTR overrides PROGRAM still exposure when converged."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 11f
             setPadding(0, dp(8), 0, 0)
         })
-        val meteringButton = Button(this)
+        val meteringButton = Button(this).also { styleDialogButton(it) }
         fun refreshMetering() {
             meteringButton.text = "Metering: ${programMeteringLabel(profile.metering)} • tap to switch"
         }
@@ -1557,11 +1717,15 @@ class MainActivity : Activity(), SensorEventListener {
             setStatus("PROGRAM METER ${profile.metering.name}")
         }
         container.addView(meteringButton)
-        container.addView(Button(this).apply {
+        container.addView(Button(this).also { styleDialogButton(it) }.apply {
             text = "Reset per-lens defaults"
             setOnClickListener {
                 profile = ProgramAeProfile()
-                balanceSlider.progress = (profile.balance * 100).toInt()
+                balanceSlider.setProgressFromUser((profile.balance * 100).toInt(), fromUser = false)
+                biasSlider.setProgressFromUser(
+                    ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, 60),
+                    fromUser = false
+                )
                 balanceLabel.text = programBalanceText(profile.balance)
                 biasLabel.text = programEvBiasText(profile.evBias)
                 refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); apply()
@@ -1621,6 +1785,7 @@ class MainActivity : Activity(), SensorEventListener {
         quickPanel.translationY = dp(18).toFloat()
         quickPanel.visibility = View.VISIBLE
         quickPanel.animate().alpha(1f).translationY(0f).setDuration(180L).start()
+        quickPanel.post { updateOverlayStack() }
     }
 
     private fun hideQuickControls() {
@@ -1630,6 +1795,7 @@ class MainActivity : Activity(), SensorEventListener {
         quickPanel.alpha = 1f
         quickPanel.translationY = 0f
         lensSwitcher.visibility = View.VISIBLE
+        updateOverlayStack()
     }
 
     private fun closeFloatingPanels() {
@@ -1820,16 +1986,40 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         activeManualControl = control
-        manualName.text = controlName(control)
-        manualValue.text = formatManualValue(control, range.current)
-        manualMin.text = formatManualValue(control, range.minimum)
-        manualMax.text = formatManualValue(control, range.maximum)
+        activeProgramAxis = null
+        // Tick-only ruler with no text label: values live in the exposure chips, never
+        // in the slider strip, so landscape stays compact. Full values remain in
+        // accessibility descriptions.
+        manualLimits.visibility = View.GONE
+        manualSlider.label = shortControlName(control)
+        manualSlider.max = SLIDER_STEPS
+        manualSlider.setProgressFromUser(sliderProgress(control, range), fromUser = false)
         manualAuto.text = if (control == ManualControl.EXPOSURE_COMPENSATION) "RESET" else "AUTO"
         manualAuto.isEnabled = !range.automatic
-        manualSlider.progress = sliderProgress(control, range)
+        refreshRuleSliderAccessibility()
         manualPanel.visibility = View.VISIBLE
         lensSwitcher.visibility = View.INVISIBLE
+        updateOverlayStack()
+        manualPanel.post { updateOverlayStack() }
         scheduleManualPanelHide()
+    }
+
+    /** Full value stays available to accessibility even though the ruler draws ticks only. */
+    private fun refreshRuleSliderAccessibility() {
+        activeProgramAxis?.let { axis ->
+            val range = runCatching { controller.manualControlRange(axis) }.getOrNull() ?: return
+            val value = sliderValue(axis, range, manualSlider.progress)
+            val valueText = formatManualValue(axis, value)
+            manualSlider.contentDescription =
+                "${controlName(axis)} lock slider, $valueText. Current value also shown in the ${shortControlName(axis)} chip."
+            return
+        }
+        val control = activeManualControl ?: return
+        val range = runCatching { controller.manualControlRange(control) }.getOrNull() ?: return
+        val value = sliderValue(control, range, manualSlider.progress)
+        val valueText = formatManualValue(control, value)
+        manualSlider.contentDescription =
+            "${controlName(control)} slider, $valueText. Current value also shown in the ${shortControlName(control)} chip."
     }
 
     private fun scheduleManualPanelHide() {
@@ -1847,11 +2037,15 @@ class MainActivity : Activity(), SensorEventListener {
     private fun hideManualControl() {
         if (!::manualPanel.isInitialized) return
         cancelManualPanelHide()
-        pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+        if (::manualSlider.isInitialized) {
+            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+        }
         pendingSliderUpdate = null
         manualPanel.visibility = View.GONE
         lensSwitcher.visibility = View.VISIBLE
         activeManualControl = null
+        activeProgramAxis = null
+        updateOverlayStack()
     }
 
     private fun sliderProgress(control: ManualControl, range: ManualControlRange): Int {
@@ -1885,6 +2079,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun updateAutomaticPanelValue(iso: Int, shutter: Long, wb: Int) {
         val control = activeManualControl ?: return
+        if (manualPanel.visibility != View.VISIBLE) return
         val range = controller.manualControlRange(control) ?: return
         if (!range.automatic) return
         val value = when (control) {
@@ -1895,8 +2090,11 @@ class MainActivity : Activity(), SensorEventListener {
             ManualControl.EXPOSURE_COMPENSATION -> range.current
         }
         if (value > 0 || control == ManualControl.EXPOSURE_COMPENSATION) {
-            manualValue.text = formatManualValue(control, value)
-            manualSlider.progress = sliderProgress(control, range.copy(current = value.coerceIn(range.minimum, range.maximum)))
+            manualSlider.setProgressFromUser(
+                sliderProgress(control, range.copy(current = value.coerceIn(range.minimum, range.maximum))),
+                fromUser = false
+            )
+            refreshRuleSliderAccessibility()
         }
     }
 
@@ -2551,11 +2749,11 @@ class MainActivity : Activity(), SensorEventListener {
                 programMeteringButton.isEnabled = manualSensor
             }
             programLockButton.setOnClickListener {
-                programSettings = programSettings.copy(lockMode = when (programSettings.lockMode) {
+                programSettings = seedLockedValuesFor(programSettings.copy(lockMode = when (programSettings.lockMode) {
                     ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
                     ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
                     ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
-                })
+                }))
                 refreshProgramButtons(); applyProgramSettings()
             }
             programIsoMinButton.setOnClickListener {
@@ -2687,6 +2885,32 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                 })
             })
+            var hybridTopup = lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true)
+            content.addView(Button(this).apply {
+                text = zslHybridTopupText(hybridTopup)
+                setOnClickListener {
+                    hybridTopup = !hybridTopup
+                    lensPreferences().edit().putBoolean(KEY_ZSL_HYBRID_TOPUP, hybridTopup).apply()
+                    controller.setZslHybridTopup(hybridTopup)
+                    text = zslHybridTopupText(hybridTopup)
+                    setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
+                }
+            })
+            // GPU VF: selectable superpixel resolution (480 full-rate / 640 balanced / 960 detail).
+            content.addView(Button(this).apply {
+                text = vfResolutionText(vfResolution)
+                setOnClickListener {
+                    cycleVfResolution()
+                    text = vfResolutionText(vfResolution)
+                }
+            })
+            content.addView(Button(this).apply {
+                text = vfPreviewModeText()
+                setOnClickListener {
+                    cycleVfPreviewMode()
+                    text = vfPreviewModeText()
+                }
+            })
             rawZslSettingsStatus = TextView(this).apply {
                 text = rawZslSettingsText(rawZslStatus)
                 setTextColor(getColor(R.color.text_secondary))
@@ -2737,6 +2961,16 @@ class MainActivity : Activity(), SensorEventListener {
                     lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, enabled).apply()
                     debugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
                     if (enabled) debugOverlay.post { positionWholeRotatedPanels() }
+                }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "RAW viewfinder debug overlay"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, enabled).apply()
+                    rawVfDebugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
+                    if (enabled) rawVfDebugOverlay.post { positionWholeRotatedPanels() }
                 }
             })
 
@@ -3111,6 +3345,16 @@ class MainActivity : Activity(), SensorEventListener {
         "ZSL frames saved: $frameCount\n" +
             "Approx. ${frameCount * 25} MB at 4080×3060; higher values need more camera memory."
 
+    private fun zslHybridTopupText(enabled: Boolean): String =
+        if (enabled) "Top-up: ON • thin ring completes with fresh frames"
+        else "Top-up: OFF • thin ring waits for refill"
+
+    private fun vfResolutionText(res: Int): String =
+        "VF resolution: ${res}px long edge (tap: 480→640→960)"
+
+    private fun vfPreviewModeText(): String =
+        "VF preview: ${vfPreviewMode.name} (${vfPreviewMode.label(captureFormat)})"
+
     private fun dynamicExposureBalanceText(balance: Float): String = when {
         balance > 1.01f -> "Exposure balance: ${String.format(Locale.US, "%.2f", balance)}× • faster shutter"
         balance < 0.99f -> "Exposure balance: ${String.format(Locale.US, "%.2f", balance)}× • lower ISO"
@@ -3232,6 +3476,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"
         const val KEY_DEBUG_OVERLAY = "camera_debug_overlay"
+        const val KEY_RAW_VF_DEBUG_OVERLAY = "raw_vf_debug_overlay"
         const val KEY_GRID = "viewfinder_grid"
         const val KEY_LEVEL = "viewfinder_level"
         const val KEY_HISTOGRAM = "viewfinder_histogram"
@@ -3239,6 +3484,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"
         const val KEY_RAW_ZSL_FRAME_COUNT = "raw_zsl_frame_count"
+        const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"
         const val KEY_DYNAMIC_EXPOSURE_ISO_LIMIT = "dynamic_exposure_iso_limit"
@@ -3249,6 +3495,8 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_ETTR_ISO_LIMIT = "ettr_iso_limit"
         const val KEY_CAPTURE_EXPOSURE_MODE = "capture_exposure_mode"
         const val KEY_CAPTURE_FORMAT = "capture_format"
+        const val KEY_VF_PREVIEW_MODE = "vf_preview_mode"
+        const val KEY_VF_RESOLUTION = "vf_resolution"
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_RELEASE_MODE = "release_mode"
