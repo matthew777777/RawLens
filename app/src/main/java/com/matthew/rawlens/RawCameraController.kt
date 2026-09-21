@@ -67,10 +67,8 @@ internal fun adaptivePreviewStrength(mode: CaptureExposureMode, settings: JpegOu
  */
 internal fun vfOverlayEffectBits(
     jpegTonemap: Boolean,
-    denoiseEnabled: Boolean,
     settings: JpegOutputSettings
 ): List<String> = buildList {
-    if (denoiseEnabled) add("DENOISE")
     if (settings.ultraHdr) add("UHDR")
     if (jpegTonemap && (settings.agxContrast != 1f ||
         settings.agxSaturation != 1f ||
@@ -3697,7 +3695,7 @@ class RawCameraController(
         val rawText = if (stats.rawWidth > 0 && stats.rawHeight > 0) {
             "RAW: ${stats.rawWidth}×${stats.rawHeight}"
         } else "RAW: --"
-        val devBits = vfOverlayEffectBits(stats.jpeg, denoiseSettings.enabled, jpegOutputSettings)
+        val devBits = vfOverlayEffectBits(stats.jpeg, jpegOutputSettings)
         val glLabel = if (stats.glActive) "RAW" else "FALLBACK"
         val effects = if (!stats.glActive || devBits.isNotEmpty()) {
             "Yes ($glLabel${if (devBits.isNotEmpty()) " +" + devBits.joinToString("+") else ""})"
@@ -4087,7 +4085,8 @@ class RawCameraController(
                         metadata.exposureTimeNanos ?: error("HDR exposure time missing"),
                         metadata.sensitivityIso ?: error("HDR ISO missing"), aperture,
                         focalLength = frame.result.get(CaptureResult.LENS_FOCAL_LENGTH)
-                            ?.takeIf { it.isFinite() && it > 0f } ?: HdrRawMerge.FALLBACK_FOCAL_LENGTH))
+                            ?.takeIf { it.isFinite() && it > 0f } ?: HdrRawMerge.FALLBACK_FOCAL_LENGTH,
+                        noiseModel = CfaNoiseModel.from(metadata.noiseProfile)))
                 }
                 // Use the bracket's neutral/middle exposure as the geometric reference. Sorting
                 // by actual exposure remains correct if the camera clamps one requested shutter.

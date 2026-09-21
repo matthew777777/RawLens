@@ -2231,8 +2231,6 @@ class MainActivity : Activity(), SensorEventListener {
     private fun denoiseSettings(): DenoiseSettings {
         val prefs = lensPreferences()
         return DenoiseSettings(
-            enabled = prefs.getBoolean(KEY_DENOISE_ENABLED, false),
-            strength = prefs.getFloat(KEY_DENOISE_STRENGTH, 0.20f).coerceIn(0f, 4f),
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
             saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true)
         )
@@ -2244,8 +2242,6 @@ class MainActivity : Activity(), SensorEventListener {
             return false
         }
         lensPreferences().edit()
-            .putBoolean(KEY_DENOISE_ENABLED, settings.enabled)
-            .putFloat(KEY_DENOISE_STRENGTH, settings.strength)
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .apply()
@@ -3092,40 +3088,18 @@ class MainActivity : Activity(), SensorEventListener {
             sidecarSettingsStatus = null
             content.removeAllViews()
             var settings = denoiseSettings()
-            val subordinate = ArrayList<View>()
+            val aiSubordinate = ArrayList<View>()
 
             content.addView(TextView(this).apply {
-                text = "darktable profiled wavelet chroma denoise"
+                text = "AI RAW denoise (RawNIND-tiny)"
                 setTextColor(getColor(R.color.text_primary)); textSize = 17f
             })
-            content.addView(TextView(this).apply {
-                text = "Fresh denoise path based on darktable denoise (profiled) → wavelets → Y0U0V0 → chroma only. Luminance wavelet coefficients are passed through unchanged. Default strength is 0.200."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                setPadding(0, dp(4), 0, dp(10))
-            })
-
-            val master = CheckBox(this).apply {
-                text = "Enable denoising\nOff bypasses every denoise dispatch and keeps the original AMaZE output."
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = settings.enabled
-                setOnCheckedChangeListener { button, value ->
-                    val proposed = settings.copy(enabled = value)
-                    if (persistDenoiseSettings(proposed)) {
-                        settings = proposed
-                        subordinate.forEach { it.isEnabled = settings.enabled }
-                    } else if (button.isChecked != settings.enabled) {
-                        button.isChecked = settings.enabled
-                    }
-                }
-            }
-            content.addView(master)
 
             val aiStatus = TextView(this).apply {
                 text = aiModelStatus()
                 setTextColor(getColor(R.color.text_secondary)); textSize = 12f
                 setPadding(dp(12), dp(10), dp(12), 0)
             }
-            val aiSubordinate = ArrayList<View>()
             val aiMaster = CheckBox(this).apply {
                 text = "AI RAW denoise (RawNIND-tiny)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
                 setTextColor(getColor(R.color.text_primary))
@@ -3136,7 +3110,6 @@ class MainActivity : Activity(), SensorEventListener {
                         settings = proposed
                         if (value) preloadRawNindIfEnabled()
                         aiStatus.text = aiModelStatus()
-                        subordinate.forEach { it.isEnabled = settings.enabled }
                         aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
                     } else if (button.isChecked != settings.aiEnabled) {
                         button.isChecked = settings.aiEnabled
@@ -3159,34 +3132,6 @@ class MainActivity : Activity(), SensorEventListener {
             content.addView(aiMaster); content.addView(aiStatus); content.addView(keepOriginal)
             aiSubordinate += keepOriginal
             aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
-
-            val label = TextView(this).apply {
-                text = "Strength: ${"%.3f".format(settings.strength)}"
-                setTextColor(getColor(R.color.text_primary)); textSize = 14f
-                setPadding(dp(12), dp(10), dp(12), 0)
-            }
-            val explanation = TextView(this).apply {
-                text = "Matches the requested darktable control scale. 0.200 is the default. The filter uses seven 5-tap à-trous wavelet bands and applies BayesShrink only to U0/V0 chroma coefficients."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                setPadding(dp(12), 0, dp(12), 0)
-            }
-            val strength = SeekBar(this).apply {
-                max = 4000
-                progress = (settings.strength * 1000f).toInt().coerceIn(0, max)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        label.text = "Strength: ${"%.3f".format(progress / 1000f)}"
-                    }
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
-                        val proposed = settings.copy(strength = seekBar.progress / 1000f)
-                        if (persistDenoiseSettings(proposed)) settings = proposed
-                    }
-                })
-            }
-            content.addView(label); content.addView(explanation); content.addView(strength)
-            subordinate += label; subordinate += explanation; subordinate += strength
-            subordinate.forEach { it.isEnabled = settings.enabled }
 
             generalTab.isEnabled = true
             denoiseTab.isEnabled = false
@@ -3626,8 +3571,6 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_JPEG_ADAPTIVE_EXPOSURE = "jpeg_adaptive_exposure"
         const val KEY_JPEG_ADAPTIVE_PROGRAM = "jpeg_adaptive_program"
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
-        const val KEY_DENOISE_ENABLED = "denoise_enabled"
-        const val KEY_DENOISE_STRENGTH = "denoise_profiled_wavelet_strength"
         const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"

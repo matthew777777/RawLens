@@ -6,29 +6,20 @@ package com.matthew.rawlens
 /**
  * Capture-frozen controls for the denoise pipeline.
  *
- * Two independent stages, applied in order:
- * 1. AI Bayer denoise ([aiEnabled]): RawNIND-tiny single-frame inference on
- *    the normalized pre-demosaic CFA via NCNN (GPU-first). Produces the CFA
- *    that both the developed JPEG and the denoised DNG are built from.
- *    Unavailable model/inference failure falls back silently (then behaves
- *    as if AI were off for that capture).
- * 2. Wavelet chroma denoise ([enabled]/[strength]): the scene-linear Y0U0V0
- *    a-trous wavelet chroma denoiser modelled on darktable's
- *    "denoise (profiled)" / "wavelets: chroma only" preset. May stack on top
- *    of AI output.
+ * Single stage: AI Bayer denoise ([aiEnabled]): RawNIND-tiny single-frame
+ * inference on the normalized pre-demosaic CFA via NCNN (GPU-first).
+ * Produces the CFA that both the developed JPEG and the denoised DNG are
+ * built from. Unavailable model/inference failure falls back silently (then
+ * behaves as if AI were off for that capture).
  *
  * [saveOriginalDng] only matters when [aiEnabled]: the denoised DNG is
  * always written (subject to the capture format including DNG); this flag
  * additionally keeps the untouched archival sensor DNG.
  */
 data class DenoiseSettings(
-    val enabled: Boolean = false,
-    val strength: Float = 0.20f,
     val aiEnabled: Boolean = false,
     val saveOriginalDng: Boolean = true
-) {
-    init { require(strength in 0f..4f) }
-}
+)
 
 /** Camera2/DNG normalized Poisson-Gaussian model, in CFA order R, Gr, Gb, B. */
 data class CfaNoiseModel(val scale: FloatArray, val offset: FloatArray) {
