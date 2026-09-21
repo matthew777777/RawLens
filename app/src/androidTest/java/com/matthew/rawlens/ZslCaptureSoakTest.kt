@@ -121,6 +121,11 @@ class ZslCaptureSoakTest {
                 monitorFps = false
                 assertTrue("Cycle $cycle RAW VF dropped to $minObservedFps FPS (required $minimumFps)",
                     minObservedFps >= minimumFps)
+                // This soak deliberately waits for the entire save; production admission
+                // can now rearm sooner whenever the bounded input queue has room.
+                val allSaves = RawCameraController::class.java.getDeclaredField("pendingSaveCount")
+                    .apply { isAccessible = true }.get(controller) as java.util.concurrent.atomic.AtomicInteger
+                awaitCondition("Cycle $cycle saves did not drain") { allSaves.get() == 0 }
                 val inspected = java.util.concurrent.CountDownLatch(1)
                 var heldPairs = -1
                 var heldSaves = -1
