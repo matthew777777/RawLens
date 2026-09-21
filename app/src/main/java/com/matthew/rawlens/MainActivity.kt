@@ -387,6 +387,13 @@ class MainActivity : Activity(), SensorEventListener {
                 if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) {
                     runOnUiThread { rawVfDebugOverlay.text = rawVfText }
                 }
+            },
+            lensPreferences().getBoolean(KEY_RAW_STREAM_COMPAT_MODE, false),
+            {
+                // A stillborn repeating RAW stream engaged the compat session
+                // (DEFAULT plan, HAL-default frame rate). Persist it so the
+                // next cold start skips the stillborn attempt entirely.
+                lensPreferences().edit().putBoolean(KEY_RAW_STREAM_COMPAT_MODE, true).apply()
             }
         )
         if (gpsEnabled()) gpsProvider?.start()
@@ -3551,6 +3558,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_CAPTURE_FORMAT = "capture_format"
         const val KEY_VF_PREVIEW_MODE = "vf_preview_mode"
         const val KEY_VF_RESOLUTION = "vf_resolution"
+        const val KEY_RAW_STREAM_COMPAT_MODE = "raw_stream_compat_mode"
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_RELEASE_MODE = "release_mode"
