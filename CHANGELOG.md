@@ -33,6 +33,12 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 
 - Wavelet chroma denoise (darktable profiled à-trous path, strength slider, and `denoise_enabled` / `denoise_profiled_wavelet_strength` preferences): AMaZE output is now always the plain demosaic and the fused JPEG path is always eligible. AI RAW denoise (RawNIND-tiny) is untouched and remains the only denoise stage.
 
+### Fixed
+
+- Black RAW viewfinder on HALs whose repeating RAW stream stays stillborn (Samsung): after one fruitless request-level recovery with zero delivered buffers, the camera rebuilds once into a compat session (DEFAULT plan without stream-use-case hints, HAL-default frame rate instead of forced 30 fps) instead of retrying forever. Compat mode persists, so later cold starts skip the stillborn attempt; the status shows RAW VF UNAVAILABLE if the compat session also delivers nothing
+- RAW stream field diagnostics: each session logs its stream inventory (RAW/preview sizes, queue depth, HAL min-frame/stall timing) and first-buffer arrival, and every preview recovery reports delivered-image / result / failure counters with the session plan, so a stillborn stream is distinguishable from a rendering failure in logcat
+- Instant crash on launch on HALs without session-configuration-query support (Redmi Note 13 4G / Snapdragon 685 throws `UnsupportedOperationException` from `isSessionConfigurationSupported`): the session-plan probe now stops and uses the DEFAULT plan without hints, modern session creation falls back to the legacy surface-list API, and any residual failure lands in SESSION ERROR state instead of a FATAL on the camera thread
+
 ## [1.0.0] - 2026-08-31
 
 ### Added
