@@ -6,20 +6,24 @@ package com.matthew.rawlens
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
- * HDR+-style fast translation pre-align for exposure brackets.
+ * Fast translation pre-align for exposure brackets, following PhotonCamera's
+ * pyramid tile matcher cost model (`alignment/normalize.glsl` +
+ * `alignment/align2.glsl`).
  *
- * Pure Kotlin, no native dependencies: exposure-compensated quad-gray proxies with
- * coarse-to-fine SAD search. This always runs (even where FlowNet is unavailable —
- * emulator stubs, failed init, periodic textures) and doubles as the safety net when
- * dense flow is rejected. FlowNet remains the dense refinement on top; see
- * RawCameraController bracket wiring.
+ * Pure Kotlin, no native dependencies: exposure-compensated 4-channel quad
+ * mosaics (R/G1/G2/B kept separate, never averaged to gray) under a Gaussian
+ * prefilter, with coarse-to-fine noise-normalized L1 search. This always runs
+ * (even where FlowNet is unavailable — emulator stubs, failed init, periodic
+ * textures) and doubles as the safety net when dense flow is rejected. FlowNet
+ * remains the dense refinement on top; see RawCameraController bracket wiring.
  *
- * CFA safety: proxies average each 2x2 quad, so translation is estimated in a
- * colour-blind domain. The resulting shift is applied through [HdrRawMerge.sampleSmooth]
- * (same-colour bilinear), which never mixes Bayer colours for arbitrary sub-pixel
- * shifts — no 2px snap needed.
+ * CFA safety: matching runs on whole quads, so translation is estimated
+ * without Bayer phase bias. The resulting shift is applied through
+ * [HdrRawMerge.sampleSmooth] (same-colour bilinear), which never mixes Bayer
+ * colours for arbitrary sub-pixel shifts — no 2px snap needed.
  */
 object HdrBracketAligner {
     data class Shift(val dx: Float, val dy: Float) {
@@ -30,6 +34,11 @@ object HdrBracketAligner {
     data class Timings(val proxyMs: Long, val coarseMs: Long, val fineMs: Long)
     @Volatile var lastTimings = Timings(0, 0, 0)
         private set
+
+    /** Gaussian prefilter sigma in quad px (PhotonCamera normalize.glsl). */
+    private const val PREFILTER_SIGMA = 1.5
+    /** Reference quads darker than this carry no matchable signal. */
+    private const val BLACK_FLOOR = 0.001f
 
     private fun workerCount(): Int = max(1, min(4, Runtime.getRuntime().availableProcessors()))
 
@@ -130,21 +139,20 @@ object HdrBracketAligner {
         val ref = reference.cfa
         val mov = moving.cfa
         require(ref.width == mov.width && ref.height == mov.height)
+        require(ref.pattern == mov.pattern) { "Bracket frames must share the CFA pattern" }
         // Exposure-match moving onto reference so EV gaps don't read as motion.
         val scale = exposureScale(reference) / exposureScale(moving)
         val qScaleW = ref.width / 2
         val qScaleH = ref.height / 2
-        // Quad-gray proxies at 1/2 res (one value per Bayer cell).
+        // 4-channel quad mosaics at 1/2 res (R/G1/G2/B planes, never averaged:
+        // gray averaging destroys the texture the matcher runs on) under a
+        // Gaussian prefilter (PhotonCamera normalize.glsl: sigma 1.5 quads).
         var t = System.nanoTime()
-        val rq = FloatArray(qScaleW * qScaleH)
-        val mq = FloatArray(qScaleW * qScaleH)
-        parRows(qScaleH) { y0, y1 ->
-            for (qy in y0 until y1) for (qx in 0 until qScaleW) {
-                rq[qy * qScaleW + qx] = quadGray(ref, qx, qy)
-                mq[qy * qScaleW + qx] =
-                    (quadGray(mov, qx, qy) * scale).coerceIn(0.0, 1.0).toFloat()
-            }
-        }
+        val rq = packQuads(ref)
+        val mq = packQuads(mov)
+        prefilter(rq, qScaleW, qScaleH)
+        prefilter(mq, qScaleW, qScaleH)
+        val noise = reference.noiseModel
         val proxyMs = (System.nanoTime() - t) / 1_000_000
         // Two-level search (logcat 2026-09-16: full-SAD cost 37s align on 12MP;
         // stride-2 SAD + float + threads target low single digits — a coarser
@@ -164,7 +172,7 @@ object HdrBracketAligner {
         val coarseOffsets = ArrayList<Pair<Int, Int>>((2 * coarseRange + 1) * (2 * coarseRange + 1))
         for (dy in -coarseRange..coarseRange) for (dx in -coarseRange..coarseRange)
             coarseOffsets += dx to dy
-        val coarseCosts = parEval(coarseOffsets) { (dx, dy) -> sad(rc, mc, cw, ch, dx, dy) }
+        val coarseCosts = parEval(coarseOffsets) { (dx, dy) -> sad(rc, mc, cw, ch, dx, dy, scale, noise) }
         val (bestDx, bestDy) = argmin(coarseOffsets, coarseCosts)
         val coarseMs = (System.nanoTime() - t) / 1_000_000
         t = System.nanoTime()
@@ -174,18 +182,18 @@ object HdrBracketAligner {
         run {
             val fineOffsets = ArrayList<Pair<Int, Int>>(25)
             for (dy in -2..2) for (dx in -2..2) fineOffsets += (qdx + dx) to (qdy + dy)
-            val fineCosts = parEval(fineOffsets) { (dx, dy) -> sad(rq, mq, qScaleW, qScaleH, dx, dy) }
+            val fineCosts = parEval(fineOffsets) { (dx, dy) -> sad(rq, mq, qScaleW, qScaleH, dx, dy, scale, noise) }
             val (bx, by) = argmin(fineOffsets, fineCosts)
             qdx = bx
             qdy = by
         }
         // Sub-pixel parabola refine per axis.
-        val fx = parabola(sad(rq, mq, qScaleW, qScaleH, qdx - 1, qdy),
-            sad(rq, mq, qScaleW, qScaleH, qdx, qdy),
-            sad(rq, mq, qScaleW, qScaleH, qdx + 1, qdy))
-        val fy = parabola(sad(rq, mq, qScaleW, qScaleH, qdx, qdy - 1),
-            sad(rq, mq, qScaleW, qScaleH, qdx, qdy),
-            sad(rq, mq, qScaleW, qScaleH, qdx, qdy + 1))
+        val fx = parabola(sad(rq, mq, qScaleW, qScaleH, qdx - 1, qdy, scale, noise),
+            sad(rq, mq, qScaleW, qScaleH, qdx, qdy, scale, noise),
+            sad(rq, mq, qScaleW, qScaleH, qdx + 1, qdy, scale, noise))
+        val fy = parabola(sad(rq, mq, qScaleW, qScaleH, qdx, qdy - 1, scale, noise),
+            sad(rq, mq, qScaleW, qScaleH, qdx, qdy, scale, noise),
+            sad(rq, mq, qScaleW, qScaleH, qdx, qdy + 1, scale, noise))
         val fineMs = (System.nanoTime() - t) / 1_000_000
         lastTimings = Timings(proxyMs, coarseMs, fineMs)
         // Quad units -> full-res pixels.
@@ -196,48 +204,120 @@ object HdrBracketAligner {
         frame.exposureTimeNanos.toDouble() * frame.sensitivityIso /
             (frame.aperture.toDouble() * frame.aperture.toDouble())
 
-    private fun quadGray(cfa: UnpackedRawCfa, qx: Int, qy: Int): Float {
-        var sum = 0f
-        var n = 0
-        for (dy in 0..1) for (dx in 0..1) {
-            val x = qx * 2 + dx
-            val y = qy * 2 + dy
-            if (x < cfa.width && y < cfa.height) {
-                sum += cfa.values[y * cfa.width + x]
-                n++
-            }
-        }
-        return if (n == 0) 0f else sum / n
-    }
-
-    private fun downsample(src: FloatArray, w: Int, h: Int, step: Int): FloatArray {
-        val cw = (w + step - 1) / step
-        val ch = (h + step - 1) / step
-        val out = FloatArray(cw * ch)
-        parRows(ch) { y0, y1 ->
-            for (cy in y0 until y1) for (cx in 0 until cw) {
-                var sum = 0f
-                var n = 0
-                for (dy in 0 until step) for (dx in 0 until step) {
-                    val x = cx * step + dx
-                    val y = cy * step + dy
-                    if (x < w && y < h) {
-                        sum += src[y * w + x]
-                        n++
+    /**
+     * Packs a CFA frame into a 4-channel quad mosaic (channel-last
+     * R/G1/G2/B per quad, top-green first) at half resolution.
+     */
+    private fun packQuads(cfa: UnpackedRawCfa): FloatArray {
+        val qw = cfa.width / 2
+        val qh = cfa.height / 2
+        val out = FloatArray(qw * qh * 4)
+        parRows(qh) { y0, y1 ->
+            for (qy in y0 until y1) for (qx in 0 until qw) {
+                val base = (qy * qw + qx) * 4
+                for (k in 0..3) {
+                    val x = qx * 2 + (k and 1)
+                    val y = qy * 2 + (k shr 1)
+                    val slot = when (cfa.pattern.colorAt(x, y)) {
+                        CfaColor.RED -> 0
+                        CfaColor.BLUE -> 3
+                        CfaColor.GREEN -> if ((k shr 1) == 0) 1 else 2
                     }
+                    out[base + slot] = cfa.values[y * cfa.width + x]
                 }
-                out[cy * cw + cx] = if (n == 0) 0f else sum / n
             }
         }
         return out
     }
 
     /**
-     * Mean absolute residual over valid (mid-tone) reference cells only.
-     * Stride-2 sampling with float accumulation: ~4x cheaper, translation
-     * fixpoint unchanged (verified by HdrBracketAlignerTest tolerances).
+     * In-place separable 5-tap Gaussian (sigma 1.5 quads) over packed
+     * channels, matching PhotonCamera's alignment prefilter: hot pixels and
+     * noise average out while edges survive for the block matcher.
      */
-    private fun sad(a: FloatArray, b: FloatArray, w: Int, h: Int, dx: Int, dy: Int): Float {
+    private fun prefilter(packed: FloatArray, w: Int, h: Int) {
+        val s2 = 2.0 * PREFILTER_SIGMA * PREFILTER_SIGMA
+        val k = DoubleArray(5) { i ->
+            val d = (i - 2).toDouble()
+            kotlin.math.exp(-d * d / s2)
+        }
+        val sum = k.sum()
+        val w0 = (k[0] / sum).toFloat()
+        val w1 = (k[1] / sum).toFloat()
+        val w2 = (k[2] / sum).toFloat()
+        val tmp = FloatArray(packed.size)
+        parRows(h) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w) for (c in 0..3) {
+                var acc = 0f
+                for (t in -2..2) {
+                    val xx = (x + t).coerceIn(0, w - 1)
+                    val wt = when (t) {
+                        0 -> w2
+                        -1, 1 -> w1
+                        else -> w0
+                    }
+                    acc += wt * packed[(y * w + xx) * 4 + c]
+                }
+                tmp[(y * w + x) * 4 + c] = acc
+            }
+        }
+        parRows(h) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w) for (c in 0..3) {
+                var acc = 0f
+                for (t in -2..2) {
+                    val yy = (y + t).coerceIn(0, h - 1)
+                    val wt = when (t) {
+                        0 -> w2
+                        -1, 1 -> w1
+                        else -> w0
+                    }
+                    acc += wt * tmp[(yy * w + x) * 4 + c]
+                }
+                packed[(y * w + x) * 4 + c] = acc
+            }
+        }
+    }
+
+    private fun downsample(src: FloatArray, w: Int, h: Int, step: Int): FloatArray {
+        val cw = (w + step - 1) / step
+        val ch = (h + step - 1) / step
+        val out = FloatArray(cw * ch * 4)
+        parRows(ch) { y0, y1 ->
+            for (cy in y0 until y1) for (cx in 0 until cw) for (c in 0..3) {
+                var sum = 0f
+                var n = 0
+                for (dy in 0 until step) for (dx in 0 until step) {
+                    val x = cx * step + dx
+                    val y = cy * step + dy
+                    if (x < w && y < h) {
+                        sum += src[(y * w + x) * 4 + c]
+                        n++
+                    }
+                }
+                out[(cy * cw + cx) * 4 + c] = if (n == 0) 0f else sum / n
+            }
+        }
+        return out
+    }
+
+    /**
+     * Noise-normalized L1 over valid reference quads (PhotonCamera
+     * `align2.glsl` cost without truncation): per-channel absolute residual
+     * against the exposure-matched moving quad, divided by the reference
+     * noise sigma. Quads below the black floor or above the moving frame's
+     * matchable range (clipped there) contribute nothing instead of locking
+     * onto garbage. Stride-2 sampling: ~4x cheaper, translation fixpoint
+     * unchanged (verified by HdrBracketAlignerTest tolerances).
+     */
+    private fun sad(
+        a: FloatArray, b: FloatArray, w: Int, h: Int, dx: Int, dy: Int,
+        scale: Double, noise: CfaNoiseModel?
+    ): Float {
+        // Moving values saturate at 1 -> scale after matching; brighter
+        // reference quads have no correspondence in this frame.
+        val matchCeil = scale.toFloat()
+        val avgScale = noise?.averageScale
+        val avgOffset = noise?.averageOffset
         var sum = 0f
         var n = 0
         var y = 0
@@ -247,9 +327,21 @@ object HdrBracketAligner {
                 val xx = x + dx
                 val yy = y + dy
                 if (xx >= 0 && yy >= 0 && xx < w && yy < h) {
-                    val ra = a[y * w + x]
-                    if (ra >= 0.02f && ra <= 0.98f) {
-                        sum += abs(ra - b[yy * w + xx])
+                    val ai = (y * w + x) * 4
+                    val brightness =
+                        (a[ai] + a[ai + 1] + a[ai + 2] + a[ai + 3]) * 0.25f
+                    if (brightness >= BLACK_FLOOR && brightness <= matchCeil) {
+                        val bi = (yy * w + xx) * 4
+                        var d = 0f
+                        for (c in 0..3) {
+                            val matched = (b[bi + c] * scale).coerceIn(0.0, 1.0).toFloat()
+                            d += abs(a[ai + c] - matched)
+                        }
+                        d *= 0.25f
+                        val sigma = if (avgScale != null && avgOffset != null) {
+                            sqrt(max(avgScale * max(brightness, 0f) + avgOffset, 1e-10f))
+                        } else 1f
+                        sum += d / max(sigma, 1e-5f)
                         n++
                     }
                 }
