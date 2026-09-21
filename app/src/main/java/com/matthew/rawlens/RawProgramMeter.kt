@@ -26,8 +26,9 @@ internal object RawProgramMeter {
     /**
      * Per-measurement clamp for the PROGRAM glide: one sample only ever nudges the
      * target, so exposure moves in small steps even when the scene jumps stops.
+     * The ramp and EMA absorb it, so this can span a full stop.
      */
-    const val PROGRAM_MAX_STEP_EV = 0.5
+    const val PROGRAM_MAX_STEP_EV = 1.0
     /** Residual below this counts as converged (about 1/8 stop). */
     const val CONVERGED_TOLERANCE_EV = 0.12
     /**
