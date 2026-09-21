@@ -90,7 +90,8 @@ object AdaptiveDevelopmentExposure {
         return analyzeSamples(samples, count)
     }
 
-    private fun analyzeSamples(samples: FloatArray, count: Int): AdaptiveExposureResult {
+    /** Shared with the VF live preview estimator ([VfGpuImport.estimatePreviewCorrectionEv]). */
+    internal fun analyzeSamples(samples: FloatArray, count: Int): AdaptiveExposureResult {
         if (count < MIN_SAMPLES) {
             return AdaptiveExposureResult(0.0, 0.0, 0.0, false)
         }
@@ -129,7 +130,7 @@ object AdaptiveDevelopmentExposure {
 
     private const val MAX_SAMPLES = 65_536
     private const val MIN_SAMPLES = 64
-    private const val SHADOW_FLOOR = 1e-4f
+    internal const val SHADOW_FLOOR = 1e-4f
     private const val TARGET_MIDDLE = 0.18
     // Preserve room for AgX's shoulder instead of forcing the RAW upper tail below display white.
     private const val HIGHLIGHT_HEADROOM = 4.0
