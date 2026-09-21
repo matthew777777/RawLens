@@ -253,6 +253,8 @@ class RawCameraController(
      */
     private var fruitlessCooldowns = 0
     private val pendingSaveCount = AtomicInteger(0)
+    // Acquired RAW inputs awaiting development; excludes sidecar-only jobs.
+    private val pendingFrameSaveCount = AtomicInteger(0)
     private val pendingJpegCount = AtomicInteger(0)
     private val jpegServiceLock = Any()
     @Volatile private var captureTimeout: Runnable? = null
@@ -640,8 +642,8 @@ class RawCameraController(
         // the gralloc queue into overflow + Mali unlock errors.
         val readerMaxImages = maxOf(
             MIN_ACQUIRED_RAW_IMAGES,
-            rawZslCapacity + ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS +
-                ZSL_REARM_OVERLAP_SLOTS + 2
+            maxOf(rawZslCapacity, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
+                ZSL_REARM_OVERLAP_SLOTS
         )
         // NOTE (Step 2 finding): adding USAGE_GPU_SAMPLED_IMAGE here starves this
         // reader completely on the test HAL (Xiaomi 25080RABDG / MT6878) — session
@@ -971,12 +973,12 @@ class RawCameraController(
     private val shutterDispatchPending = AtomicBoolean(false)
 
     private fun postShutter(action: () -> Unit) {
-        if (!running || captureInProgress.get() || pendingSaveCount.get() > 0 ||
+        if (!running || captureInProgress.get() ||
             !shutterDispatchPending.compareAndSet(false, true)) return
         val generation = lifecycleGeneration
         if (!cameraHandler.post {
             try {
-                if (isCurrent(generation) && !captureInProgress.get() && pendingSaveCount.get() == 0) action()
+                if (isCurrent(generation) && !captureInProgress.get()) action()
             } finally { shutterDispatchPending.set(false) }
         }) shutterDispatchPending.set(false)
     }
@@ -1013,7 +1015,7 @@ class RawCameraController(
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         postShutter {
-            if (captureInProgress.get() || pendingSaveCount.get() > 0 || !hasPreviewMetadata) {
+            if (captureInProgress.get() || !hasPreviewMetadata) {
                 onState("HDR WAIT")
                 return@postShutter
             }
@@ -1208,11 +1210,9 @@ class RawCameraController(
      * maxImages. Guards the per-shot restart against re-creating the overflow
      * storms that the cooldown just parked.
      */
-    private fun zslRestartFitsReader(): Boolean {
-        if (rawReaderMaxImages <= 0 || rawZslCapacity <= 0) return false
-        return pendingSaveCount.get() + rawZslCapacity +
-            ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS <= rawReaderMaxImages
-    }
+    private fun zslRestartFitsReader(): Boolean = CaptureQueueCapacity.ringFits(
+        pendingFrameSaveCount.get(), rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS
+    )
 
     private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int {
         val requestedFrameCount = rawZslFrameCount
@@ -1228,10 +1228,10 @@ class RawCameraController(
         requiredSaveSlots: Int,
         orientationSnapshot: Int = deviceOrientationDegrees
     ): Boolean {
-        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
+        if (captureInProgress.get()) return false
         if (!hasProcessingCapacity(requiredSaveSlots, outputFormat)) {
             onState("QUEUE FULL")
-            onCaptureEnabled(false)
+            refreshCaptureAvailability()
             return false
         }
         if (!running || !captureInProgress.compareAndSet(false, true)) {
@@ -1303,7 +1303,12 @@ class RawCameraController(
             return startTopupBurst(selected, selectedFrameCount)
         }
         if (selected.size < selectedFrameCount) return false
-        updateRepeatingRequest(allowRawZsl = false)
+        // Taking ownership from the ring does not change the sensor request.
+        // Keep the stream and its epoch intact when refill and saves fit together.
+        if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + selected.size,
+                rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+            updateRepeatingRequest(allowRawZsl = false)
+        }
         activeFramesRemaining.set(0)
 
         saveSelectedZslBurst(selected)
@@ -1387,8 +1392,9 @@ class RawCameraController(
     }
 
     /** Runs only after an accepted save/sidecar has released everything it owns. */
-    private fun postSaveCompletion() {
+    private fun postSaveCompletion(frameSlots: Int = 0) {
         cameraHandler.post {
+            if (frameSlots > 0) pendingFrameSaveCount.addAndGet(-frameSlots)
             pendingSaveCount.decrementAndGet()
             closeRetiredRawReaders()
             if (running && !destroyed) {
@@ -1426,7 +1432,12 @@ class RawCameraController(
             val captureId = captureSequence.incrementAndGet()
             streamCapture = ForwardRawSelection(captureId, lastPreviewSensorTimestamp, remainder)
             activeFramesRemaining.set(remainder)
-            updateRepeatingRequest(allowRawZsl = false)
+            // Callback routing already diverts forward frames from the ring. Replacing
+            // the identical repeating request drains preview and discards its metadata.
+            if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + need,
+                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                updateRepeatingRequest(allowRawZsl = false)
+            }
             scheduleCaptureTimeout(captureId, remainder * maxOf(lastExposureNanos / 1_000_000L, 100L))
             Log.i(LOG_TAG, "Continuous RAW top-up id=$captureId frames=$remainder")
         } else {
@@ -1755,22 +1766,29 @@ class RawCameraController(
         Log.i(LOG_TAG, "HDR bracket frame=${frameIndex + 1}/3 ev=$stops iso=$iso shutterNs=$time")
     }
 
+    /**
+     * AF-only drag: moves the AF square, keeps the AE square where it was,
+     * and restarts the AF scan. A single tap elsewhere while locked routes
+     * through [setFocusAndMeteringPoint] instead and moves both together.
+     */
     fun setAfPoint(viewX: Float, viewY: Float) {
-        // Legacy entry point: a tap always carries both AF and AE at the same
-        // point (see FocusMeteringOverlay), so route through the coalesced path
-        // to avoid two back-to-back repeating rebuilds.
-        setFocusAndMeteringPoint(viewX, viewY)
+        startTouchFocus(viewX, viewY, indefinite = false, updateAe = false)
     }
+
+    /** AE-only drag: moves the metering square without touching the AF scan/lock. */
+    fun setAfPointOnly(viewX: Float, viewY: Float) = setAfPoint(viewX, viewY)
 
     /**
      * Coalesced tap-to-focus + tap-to-meter: installs the AF and AE regions
      * together, issues a single repeating update, then a single AF START.
      * Same visible behavior as the old split setAePoint()+setAfPoint() pair,
-     * but 2-3 fewer HAL round-trips per tap. Every tap refocuses; the sharp
-     * lock auto-releases after [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
+     * but 2-3 fewer HAL round-trips per tap. Every tap refocuses — including
+     * a single tap while locked, which cancels the old scan/lock and starts
+     * a new one at the new point; the sharp lock auto-releases after
+     * [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
      */
     fun setFocusAndMeteringPoint(viewX: Float, viewY: Float) {
-        startTouchFocus(viewX, viewY, indefinite = false)
+        startTouchFocus(viewX, viewY, indefinite = false, updateAe = true)
     }
 
     /**
@@ -1779,12 +1797,17 @@ class RawCameraController(
      * manual focus, lens switch, or stop.
      */
     fun setFocusAndMeteringHold(viewX: Float, viewY: Float) {
-        startTouchFocus(viewX, viewY, indefinite = true)
+        startTouchFocus(viewX, viewY, indefinite = true, updateAe = true)
     }
 
-    private fun startTouchFocus(viewX: Float, viewY: Float, indefinite: Boolean) {
+    private fun startTouchFocus(
+        viewX: Float,
+        viewY: Float,
+        indefinite: Boolean,
+        updateAe: Boolean = true
+    ) {
         if (!isOnCameraThread()) {
-            cameraHandler.post { startTouchFocus(viewX, viewY, indefinite) }
+            cameraHandler.post { startTouchFocus(viewX, viewY, indefinite, updateAe) }
             return
         }
         if (camera == null || session == null || previewSurface == null) return
@@ -1812,7 +1835,7 @@ class RawCameraController(
         selectedFocusDistanceDiopters = null
         val region = meteringRegion(viewX, viewY) ?: return
         afRegion = region
-        if (isAeMeteringSupported()) aeRegion = region
+        if (updateAe && isAeMeteringSupported()) aeRegion = region
         openCameraTouchFocusActive = true
         openCameraTouchFocusCompleted = false
         touchFocusStartSent = false
@@ -2944,7 +2967,7 @@ class RawCameraController(
         // it runs; every later press retries from scratch instead (per-shot).
         val zslBlocked = rawZslDisabledForSession || rawZslStreamBroken ||
             SystemClock.elapsedRealtime() < rawZslCooldownUntilMs
-        val useRawZsl = allowRawZsl && pendingSaveCount.get() == 0 && shouldRunRawStream(
+        val useRawZsl = allowRawZsl && zslRestartFitsReader() && shouldRunRawStream(
             rawZslRequested, zslBlocked, readerReady, captureActive && stillExecuting
         )
         // Live RAW histogram for every capture mode while the user selects the RAW source.
@@ -3604,7 +3627,7 @@ class RawCameraController(
                 "AF_TRIGGER ${afTriggerName(afTrigger)}\n" +
                 "AF_STATE ${afStateName(afState)}\n" +
                 "AF_POLICY TOUCH_HOLD/CONT_PICTURE  CAMERA_SEQ ${if (cameraCaptureSequenceActive) "BUSY" else "IDLE"}\n" +
-                "SAVE_QUEUE ${pendingSaveCount.get()}/$MAX_IN_FLIGHT_JPEG_SAVES\n" +
+                "SAVE_QUEUE ${pendingFrameSaveCount.get()}/${if (captureFormat.includesJpeg) MAX_IN_FLIGHT_JPEG_SAVES else MAX_IN_FLIGHT_DNG_SAVES}\n" +
                 "AE_MODE  ${aeModeName(aeMode)}\n" +
                 "AE_TRIGGER ${aeTriggerName(aeTrigger)}\n" +
                 "AE_STATE ${aeStateName(aeState)}\n" +
@@ -3998,6 +4021,7 @@ class RawCameraController(
         // One fix for the whole set: every bracket shares the same geotag.
         val captureGps = gpsLocation()
         pendingSaveCount.incrementAndGet()
+        pendingFrameSaveCount.addAndGet(pending.size)
         if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
@@ -4005,7 +4029,7 @@ class RawCameraController(
         }
         val releasedOwnership = AutoCloseable {
             try { ownership.close() } finally {
-                postSaveCompletion()
+                postSaveCompletion(pending.size)
             }
         }
         val job = OwnedCaptureJob(releasedOwnership) {
@@ -4235,6 +4259,7 @@ class RawCameraController(
         // stem and sort together; legacy callers mint per-frame time.
         val captureGps = gpsLocation()
         pendingSaveCount.incrementAndGet()
+        pendingFrameSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
@@ -4242,7 +4267,7 @@ class RawCameraController(
         }
         val releasedOwnership = AutoCloseable {
             try { ownership.close() } finally {
-                postSaveCompletion()
+                postSaveCompletion(1)
             }
         }
         val job = OwnedCaptureJob(releasedOwnership) {
@@ -4541,36 +4566,31 @@ class RawCameraController(
         } else {
             MAX_IN_FLIGHT_DNG_SAVES
         }
-        return requiredSaveSlots > 0 && pendingSaveCount.get() + requiredSaveSlots <= limit
+        return CaptureQueueCapacity.accepts(pendingFrameSaveCount.get(), requiredSaveSlots,
+            limit, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)
     }
 
     private fun refreshCaptureAvailability() {
         // ZSL-aware shutter: a 30-frame burst needs 30 slots, so the 1-slot
         // default would leave the shutter enabled through the whole save drain
         // and invite futile presses (QUEUE FULL). Gate on the full burst.
-        val hasCapacity = if (rawZslRequested && !rawZslDisabledForSession) {
+        val hasCapacity = if (rawZslRequested) {
             hasProcessingCapacity(zslSelectedFrameCount(captureFormat), captureFormat)
         } else {
             hasProcessingCapacity()
         }
         onCaptureEnabled(
-            running && !destroyed && session != null && !captureInProgress.get() && pendingSaveCount.get() == 0 && hasCapacity
+            running && !destroyed && session != null && !captureInProgress.get() && hasCapacity
         )
     }
 
     private fun resumeRawZslIfIdle() {
         if (!running || session == null || captureInProgress.get()) return
-        val pending = pendingSaveCount.get()
-        // Rearm only once no save-held Images remain. Every held save eats
-        // lag-absorption slack inside maxImages (proven by log: rearm with 3
-        // saves held + full ring + a result-lag spike wedged a MediaTek reader
-        // into a 2s overflow storm -> permanent session fallback). The overlap
-        // slots stay as pure lag insurance for the streaming ring, and the
-        // parallel DNG worker keeps the drain short so the refill (~1s for 30
-        // frames, ~270ms for 8) is the only gap between bursts.
+        // Refill while prior images save only when the complete ring and preview
+        // headroom still fit. JPEG admission remains bounded independently at six.
         val wantZsl = rawZslRequested && !rawZslDisabledForSession && !rawZslStreamBroken &&
             rawZslCapacity > 0 &&
-            pending == 0 && SystemClock.elapsedRealtime() >= rawZslCooldownUntilMs
+            zslRestartFitsReader() && SystemClock.elapsedRealtime() >= rawZslCooldownUntilMs
         // ZSL owns the RAW stream once saves have drained: preempt any
         // histogram/ETTR/PROGRAM metering stream started while saves were
         // pending. Without this, the first post-burst resume starts metering
@@ -4588,17 +4608,13 @@ class RawCameraController(
             return
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
-        // Save-held Images still count toward ImageReader maxImages, so while any
-        // save is outstanding only metering (sample-and-close, no retained frames)
-        // may resume; the ZSL ring re-arms above once the last save completes.
-        // (wantZsl handled above with preemption; here saves are still pending
-        // or ZSL is off, so only metering resumes.)
+        // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
         val wantHistogram = rawHistogramEnabled && histogramSourceRaw &&
             !rawHistogramDisabledForSession
         val wantEttr = ettrSettings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
         if (!wantHistogram && !wantEttr && !wantProgram && rawViewfinder == null) return
-        updateRepeatingRequest(allowRawZsl = pending == 0)
+        updateRepeatingRequest(allowRawZsl = zslRestartFitsReader())
     }
 
     private fun calculateRawZslCapacity(rawSize: Size): Int {
@@ -5383,6 +5399,7 @@ class RawCameraController(
         private const val DNG_WRITER_QUEUE_SLOTS = MAX_IN_FLIGHT_DNG_SAVES - DNG_WRITER_THREADS
         private const val BURST_FRAME_COUNT = 6
         private const val RAW_READER_TRANSITION_SLOTS = 2
+        private const val RAW_PREVIEW_RESERVED_SLOTS = ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS + 2
         private const val MIN_ACQUIRED_RAW_IMAGES = BURST_FRAME_COUNT + 2
         private const val LOG_TAG = "RawLensCamera"
         private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = 2_500L
@@ -5432,7 +5449,7 @@ class RawCameraController(
             1_000_000_000L / 2, 1_000_000_000L
         )
         private val WB_STEPS = listOf(3200, 4500, 5500, 6500)
-        private val cameraThread = HandlerThread("RawCamera").apply { start() }
+        private val cameraThread = HandlerThread("RawCamera", android.os.Process.THREAD_PRIORITY_DISPLAY).apply { start() }
         private val cameraHandler = Handler(cameraThread.looper)
     }
 }
