@@ -783,14 +783,18 @@ static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
     int64_t tStart = nowMs();
 
     ncnn::Extractor ex = ctx->net.create_extractor();
-    if (ex.input("input", in) != 0) {
-        LOGE("rawnind input failed");
+    // Blob names follow the pnnx export (model.ncnn.param: Input in0 ... out0),
+    // NOT the ONNX input/output names from export.py.
+    int ret_in = ex.input("in0", in);
+    if (ret_in != 0) {
+        LOGE("rawnind input failed ret=%d", ret_in);
         return JNI_FALSE;
     }
 
     ncnn::Mat out;
-    if (ex.extract("output", out) != 0) {
-        LOGE("rawnind extract failed");
+    int ret_out = ex.extract("out0", out);
+    if (ret_out != 0) {
+        LOGE("rawnind extract failed ret=%d", ret_out);
         return JNI_FALSE;
     }
 
@@ -883,14 +887,16 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
             int64_t s1 = nowUs();
 
             ncnn::Extractor ex = ctx->net.create_extractor();
-            if (ex.input("input", tile5) != 0) {
-                LOGE("rawnind tile input failed");
+            int ret_in = ex.input("in0", tile5);
+            if (ret_in != 0) {
+                LOGE("rawnind tile input failed ret=%d", ret_in);
                 return JNI_FALSE;
             }
             int64_t s2 = nowUs();
             ncnn::Mat out;
-            if (ex.extract("output", out) != 0) {
-                LOGE("rawnind tile extract failed");
+            int ret_out = ex.extract("out0", out);
+            if (ret_out != 0) {
+                LOGE("rawnind tile extract failed ret=%d", ret_out);
                 return JNI_FALSE;
             }
             int64_t s3 = nowUs();
