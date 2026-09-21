@@ -36,7 +36,7 @@ class CameraGuideOverlay @JvmOverloads constructor(
     private var contentEnd = 0f
     private var contentBottom = 0f
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(92, 255, 255, 255)
+        color = Color.argb(64, 255, 255, 255)
         strokeWidth = density
     }
     private val levelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
