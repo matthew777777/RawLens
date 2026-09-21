@@ -135,6 +135,7 @@ class MainActivity : Activity(), SensorEventListener {
         // launch (no permission needed); the crash handler below flushes the
         // fatal trace before the process dies, so the file survives crashes.
         if (lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)) LogcatFileWriter.start(this)
+        offerCrashedLogIfAny()
         // Viewfinder must never let the phone auto-lock mid-shoot.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
@@ -472,16 +473,25 @@ class MainActivity : Activity(), SensorEventListener {
             hideManualControl()
             showSettings()
         }
-        // One tap installs AF + AE at the same point. Route through the coalesced
-        // controller path so a tap costs one repeating update + one AF START
-        // instead of separate AE and AF rebuilds. Long-press locks indefinitely.
-        meteringOverlay.onAfPointChanged = { x, y ->
+        // Single tap (or joint drag) installs AF + AE together: one repeating
+        // update + one AF START, retargeting instantly even while locked.
+        // Dragging one square moves only that subsystem (AF rescans, AE re-meters).
+        // Long-press locks indefinitely.
+        meteringOverlay.onTapBoth = { x, y ->
             controller.setFocusAndMeteringPoint(x, y)
+        }
+        meteringOverlay.onBothDragged = { x, y ->
+            controller.setFocusAndMeteringPoint(x, y)
+        }
+        meteringOverlay.onAfDragged = { x, y ->
+            controller.setAfPoint(x, y)
+        }
+        meteringOverlay.onAeDragged = { x, y ->
+            controller.setAePoint(x, y)
         }
         meteringOverlay.onAfLockHold = { x, y ->
             controller.setFocusAndMeteringHold(x, y)
         }
-        meteringOverlay.onAePointChanged = null
         meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
         manualSlider.max = SLIDER_STEPS
@@ -2264,6 +2274,57 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
 
+    /**
+     * Crash-on-launch recovery: the dying run left a marker naming its session.
+     * Auto-export it to Downloads (reachable in the Files app with no taps) and
+     * offer to share it, so a log is obtainable even when Settings is
+     * unreachable. Runs off the main thread; the dialog lands when ready.
+     */
+    private fun offerCrashedLogIfAny() {
+        val crashedSession = LogcatFileWriter.consumeCrashMarker(this) ?: return
+        Thread {
+            val uri = runCatching {
+                LogcatFileWriter.exportSessionToDownloads(this, crashedSession)
+            }.getOrNull()
+            runOnUiThread { showCrashLogPrompt(crashedSession, uri?.toString()) }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun showCrashLogPrompt(sessionName: String, exportedUri: String?) {
+        val exportedNote = if (exportedUri != null) {
+            "A copy was saved to Download/RawLens/logs/$sessionName."
+        } else {
+            "Auto-export failed; the session is still in the app's private log folder."
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("RawLens crashed last run")
+            .setMessage("The crash log ($sessionName) was captured. $exportedNote")
+            .setPositiveButton(if (exportedUri != null) "Share log" else "OK", null)
+            .apply {
+                if (exportedUri != null) {
+                    setNeutralButton("Later", null)
+                }
+            }
+            .show()
+        if (exportedUri != null) {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                shareLogUri(android.net.Uri.parse(exportedUri))
+                dialog.dismiss()
+            }
+        }
+    }
+
+    private fun shareLogUri(uri: android.net.Uri) {
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }, "Share RawLens log"))
+    }
+
     private fun shareLatestLog() {
         val uri = try {
             LogcatFileWriter.exportLatestToDownloads(this)
@@ -2275,11 +2336,7 @@ class MainActivity : Activity(), SensorEventListener {
             setStatus("NO LOG YET")
             return
         }
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }, "Share RawLens log"))
+        shareLogUri(uri)
     }
 
     private fun showSettings() {
@@ -3010,10 +3067,17 @@ class MainActivity : Activity(), SensorEventListener {
                 setOnClickListener { shareLatestLog() }
             })
             content.addView(TextView(this).apply {
-                text = "The app's own logcat streams to its private folder (no permission " +
-                    "needed) in 8 MB sessions, keeping the newest 5; crashes are appended " +
-                    "before the process dies. Sharing copies the latest session to " +
-                    "Download/RawLens/logs/."
+                text = LogcatFileWriter.statusLine()
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 11f
+                setPadding(0, dp(4), 0, 0)
+            })
+            content.addView(TextView(this).apply {
+                text = "The app's own logcat streams to its private folder and is " +
+                    "mirrored to Download/RawLens/logs/ by itself (no permission " +
+                    "needed, no taps): 8 MB sessions, newest 5 kept, crashes " +
+                    "appended before the process dies. After a crash on launch, " +
+                    "the next start re-exports that session and offers to share it."
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
             })
