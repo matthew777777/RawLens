@@ -51,4 +51,26 @@ class RawEttrSamplerTest {
         assertTrue(RawEttrSampler.isSpot(500, 500, 1000, 1000))
         assertTrue(!RawEttrSampler.isSpot(990, 990, 1000, 1000))
     }
+
+    @Test
+    fun meteringScanRegionCropsPerMode() {
+        // Spot covers the 0.158-center rectangle.
+        val spot = RawEttrSampler.meteringScanRegion(4080, 3060, ProgramMetering.SPOT)
+        assertArrayEquals(intArrayOf(1717, 1288, 2362, 1771), spot)
+        // Center covers the 70% zone.
+        val center = RawEttrSampler.meteringScanRegion(4080, 3060, ProgramMetering.CENTER_WEIGHTED)
+        assertArrayEquals(intArrayOf(612, 459, 3468, 2601), center)
+        // Average covers the full frame.
+        assertArrayEquals(
+            intArrayOf(0, 0, 4080, 3060),
+            RawEttrSampler.meteringScanRegion(4080, 3060, ProgramMetering.AVERAGE)
+        )
+    }
+
+    @Test
+    fun meteringScanRegionNeverDegenerates() {
+        val tiny = RawEttrSampler.meteringScanRegion(4, 4, ProgramMetering.SPOT)
+        assertTrue(tiny[2] > tiny[0] && tiny[3] > tiny[1])
+        assertArrayEquals(intArrayOf(0, 0, 0, 0), RawEttrSampler.meteringScanRegion(0, 0, ProgramMetering.SPOT))
+    }
 }
