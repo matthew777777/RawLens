@@ -85,6 +85,24 @@ internal object AutoExposureBalance {
     }
 
     /**
+     * Adaptive glide step: far from target it moves proportionally (fast catch-up),
+     * near target it shrinks toward the snap floor (no visible stepping).
+     */
+    fun rampStepEnergyAdaptive(
+        current: Double,
+        target: Double,
+        proportion: Double,
+        maxStepEv: Double,
+        snapEv: Double
+    ): Double {
+        if (current <= 0.0 || target <= 0.0) return target
+        val remaining = ln(target / current) / ln(2.0)
+        if (kotlin.math.abs(remaining) < snapEv) return target
+        val cap = (kotlin.math.abs(remaining) * proportion).coerceIn(snapEv * 2, maxStepEv)
+        return current * 2.0.pow(remaining.coerceIn(-cap, cap))
+    }
+
+    /**
      * Ratio-preserving energy split for the glide: holds the target's ISO/shutter
      * character (gain vs motion-blur tradeoff) while energy moves toward it.
      */
@@ -128,31 +146,34 @@ internal object AutoExposureBalance {
             capStart.toDouble() * (limits.shutterMaxNanos.toDouble() / capStart).pow(ramp)
         }
         // Single-axis locks: one control is fixed, the other absorbs the metered
-        // energy within its own [min, max]. The fixed axis never compensates when
+        // energy within its own [min, max]. Bounds are the static user limits —
+        // deliberately NOT the moving low-light cap, which would let a locked
+        // axis drift with scene brightness. The fixed axis never compensates when
         // the free axis clamps — the frame accepts under/over exposure instead,
         // which is exactly "lock shutter and let ISO do auto" and vice versa.
+        // The dynamic cap below only shapes the fully-automatic (NONE) path.
         if (lockMode == ProgramLockMode.ISO_LOCK) {
             val iso = lockedIso.coerceIn(limits.isoMin, limits.isoMax).toDouble()
             val clampedLow = energy / iso < limits.shutterMinNanos
-            val clampedHigh = energy / iso > dynamicCap
-            val shutter = (energy / iso).coerceIn(limits.shutterMinNanos.toDouble(), dynamicCap)
+            val clampedHigh = energy / iso > limits.shutterMaxNanos
+            val shutter = (energy / iso).coerceIn(limits.shutterMinNanos.toDouble(), limits.shutterMaxNanos.toDouble())
             return ExposureBalanceResult(
                 iso.roundToInt().coerceIn(limits.isoMin, limits.isoMax),
-                shutter.toLong().coerceIn(limits.shutterMinNanos, dynamicCap.toLong()),
+                shutter.toLong().coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos),
                 isoLimited = true,
                 shutterLimited = clampedLow || clampedHigh
             )
         }
         if (lockMode == ProgramLockMode.SHUTTER_LOCK) {
             val shutter = lockedShutterNanos
-                .coerceIn(limits.shutterMinNanos, dynamicCap.toLong()).toDouble()
+                .coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos).toDouble()
             var iso = energy / shutter
             val clampedLow = iso < limits.isoMin
             val clampedHigh = iso > limits.isoMax
             iso = iso.coerceIn(limits.isoMin.toDouble(), limits.isoMax.toDouble())
             return ExposureBalanceResult(
                 iso.roundToInt().coerceIn(limits.isoMin, limits.isoMax),
-                shutter.toLong().coerceIn(limits.shutterMinNanos, dynamicCap.toLong()),
+                shutter.toLong().coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos),
                 isoLimited = clampedLow || clampedHigh,
                 shutterLimited = true
             )
