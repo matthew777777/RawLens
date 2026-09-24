@@ -1,0 +1,55 @@
+{
+  "alignment": false,
+  "motion_rejection": false,
+  "high_to_low_exposure_scale": 0.9999999100000072,
+  "fused_sources": [
+    "merge-route0-0.dng",
+    "merge-route3-0.dng"
+  ],
+  "cfa_sites": [
+    {
+      "y": 0,
+      "x": 0,
+      "variances": [
+        2.997373082165112e-06,
+        2.1475856229225217e-05
+      ],
+      "low_gain_weight_unclipped": 0.8775244147788018
+    },
+    {
+      "y": 0,
+      "x": 1,
+      "variances": [
+        1.9801444141341047e-06,
+        1.3117225874071603e-05
+      ],
+      "low_gain_weight_unclipped": 0.8688417667227104
+    },
+    {
+      "y": 1,
+      "x": 0,
+      "variances": [
+        1.8547499021185924e-06,
+        1.221056237347913e-05
+      ],
+      "low_gain_weight_unclipped": 0.8681330449138732
+    },
+    {
+      "y": 1,
+      "x": 1,
+      "variances": [
+        3.00658884767871e-06,
+        2.1597464273469967e-05
+      ],
+      "low_gain_weight_unclipped": 0.877801074771117
+    }
+  ],
+  "width": 4080,
+  "height": 3060,
+  "output": "captures/dcg/RawLens_0_3-0_simple_merge.dng",
+  "output_black": 1024,
+  "output_white": 65535,
+  "clipped_fraction": 0.0,
+  "source_scene_variance_includes_motion_and_flicker": true,
+  "reference_gain_map_preserved": true
+}

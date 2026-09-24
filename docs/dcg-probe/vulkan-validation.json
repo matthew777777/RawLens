@@ -1,0 +1,9 @@
+{
+  "pixels_verified": 12484800,
+  "max_error_16bit": 1,
+  "mean_error_16bit": 0.0008583237216455209,
+  "fraction_exact": 0.9991416762783545,
+  "clipped_fraction": 0.04590165641419967,
+  "low_mean_normalized": 0.3617403209209442,
+  "high_mean_normalized": 0.36288079619407654
+}

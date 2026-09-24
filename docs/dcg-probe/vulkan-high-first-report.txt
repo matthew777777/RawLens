@@ -1,0 +1,15 @@
+VULKAN initialized; RAW 4080x3060 minFrameDurationNs=50000000 highFirst=true
+FENCE frame=0 valid=false signalTime=-1
+FRAME 0 timestamp=4556604910333 resultTimestamp=4556604910333 iso=800 exposure=4166667 duration=33350000 skew=12685090 focus=0.20877743 af=6
+FENCE frame=1 valid=false signalTime=-1
+FRAME 1 timestamp=4556609222667 resultTimestamp=4556609222667 iso=100 exposure=33333333 duration=33350000 skew=12685090 focus=0.20877743 af=6
+FENCE frame=2 valid=false signalTime=-1
+FRAME 2 timestamp=4556671718333 resultTimestamp=4556671718333 iso=800 exposure=4166667 duration=33350000 skew=12685090 focus=0.20877743 af=6
+FENCE frame=3 valid=false signalTime=-1
+FRAME 3 timestamp=4556676030667 resultTimestamp=4556676030667 iso=100 exposure=33333333 duration=33350000 skew=12685090 focus=0.20877743 af=6
+PAIR 0 gapMs=4.312334 exposureMidpointGapMs=18.895667 importSetupMs=5.388923 submitFenceMs=16.741538 outputReadbackMs=31.966693 lowWeightRatio=7.999999
+VALIDATION pair=0 sampledMaxError16bit=1
+SAVED RawLens_Vulkan_adjacent_pair0.dng bytes=24971300
+PAIR 1 gapMs=4.312334 exposureMidpointGapMs=18.895667 importSetupMs=1.790693 submitFenceMs=19.319154 outputReadbackMs=15.752538 lowWeightRatio=7.999999
+VALIDATION pair=1 sampledMaxError16bit=1
+SAVED RawLens_Vulkan_adjacent_pair1.dng bytes=24971300

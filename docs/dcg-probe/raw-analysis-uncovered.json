@@ -1,0 +1,69 @@
+{
+  "captures": [
+    {
+      "route": "0",
+      "iso": 100,
+      "mean_above_black_dn": 93.32046508789062,
+      "max_dn": 496,
+      "clipped_fraction": 0.0,
+      "pair_difference_sigma_dn_by_cfa_site": [
+        1.828926413427921,
+        1.4419952476249298,
+        1.4491538055508082,
+        1.8303482795092845
+      ]
+    },
+    {
+      "route": "0",
+      "iso": 800,
+      "mean_above_black_dn": 92.90812683105469,
+      "max_dn": 524,
+      "clipped_fraction": 0.0,
+      "pair_difference_sigma_dn_by_cfa_site": [
+        4.957937106733681,
+        3.7579391166020564,
+        3.7910520410157313,
+        4.9613604423571305
+      ]
+    },
+    {
+      "route": "3/0",
+      "iso": 100,
+      "mean_above_black_dn": 92.40634155273438,
+      "max_dn": 493,
+      "clipped_fraction": 0.0,
+      "pair_difference_sigma_dn_by_cfa_site": [
+        1.817714677374447,
+        1.4338575341144464,
+        1.438908412439992,
+        1.8207499248168075
+      ]
+    },
+    {
+      "route": "3/0",
+      "iso": 800,
+      "mean_above_black_dn": 92.59071350097656,
+      "max_dn": 513,
+      "clipped_fraction": 0.0,
+      "pair_difference_sigma_dn_by_cfa_site": [
+        4.9283500190790335,
+        3.741168379817389,
+        3.7725168685650043,
+        4.936530216612816
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "gain": "low",
+      "unregistered_same_cfa_route_correlation": 0.9997285096481151,
+      "route3_to_route0_mean_signal_ratio": 0.990458607673645
+    },
+    {
+      "gain": "high",
+      "unregistered_same_cfa_route_correlation": 0.9982782286649009,
+      "route3_to_route0_mean_signal_ratio": 0.9966732263565063
+    }
+  ],
+  "caveat": "Sequential, unregistered scene captures; differences include motion, flicker and drift. Pair-difference sigma is not pure read noise."
+}

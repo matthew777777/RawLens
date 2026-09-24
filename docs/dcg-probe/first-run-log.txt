@@ -1,0 +1,27 @@
+--------- beginning of main
+09-23 12:44:35.534 24678 24702 I DCGPROBE: DEVICE Xiaomi 25080RABDG SDK=36
+09-23 12:44:35.583 24678 24702 I DCGPROBE: IDS [0, 1] concurrent={{0, 1}}
+09-23 12:44:35.625 24678 24702 I DCGPROBE: CHAR 0 physical=[] capabilities=[0, 1, 2, 5, 3, 6, 4, 7, 9, 19, 20] level=3 iso=[50, 12800] analogMax=12800 exposure=[100000, 400000000] white=1023 black=BlackLevelPattern([64, 64], [64, 64]) cfa=2 focal=[6.06] raw=[4080x3060] physicalKeys=[CaptureRequest.Key(com.mediatek.control.capture.singleYuvNr), CaptureRequest.Key(com.mediatek.control.capture.hintForIspTuning)]
+09-23 12:44:35.633 24678 24702 I DCGPROBE: CHAR 3 physical=[0, 2] capabilities=[0, 1, 2, 5, 3, 6, 4, 7, 9, 11, 19, 20] level=3 iso=[50, 12800] analogMax=12800 exposure=[100000, 400000000] white=1023 black=BlackLevelPattern([64, 64], [64, 64]) cfa=2 focal=[6.185] raw=[4080x3060] physicalKeys=null
+09-23 12:44:35.633 24678 24702 I DCGPROBE: BEGIN separate 0/null
+09-23 12:44:36.261 24678 24702 I DCGPROBE: CONFIGURED 0/null RAW=4080x3060 outputs=1
+09-23 12:44:36.263 24678 24702 I DCGPROBE: REQUEST route0-low-0 iso=100 exposure=33333333
+09-23 12:44:36.665 24678 24702 I DCGPROBE: RESULT route0-low-0 timestamp=3056879537667 iso=100 exposure=33333333 duration=33350000 black=[64.0, 64.0, 64.0, 64.0] white=1023 noise=[Pair{1.8348840169677428E-4 3.9034266895659203E-7}, Pair{3.4937017454715765E-4 3.786387282892513E-7}, Pair{3.4917788663459625E-4 3.809872229872226E-7}, Pair{1.5198520549892746E-4 4.0234677211821937E-7}]
+09-23 12:44:36.666 24678 24702 I DCGPROBE: FAIL separate 0/null: java.util.concurrent.ExecutionException: java.io.FileNotFoundException: /data/user/0/com.matthew.rawlens.test/files/dcg-probe/route0-low-0-0.raw16: open failed: EACCES (Permission denied)
+09-23 12:44:37.358 24678 24702 I DCGPROBE: BEGIN separate 3/0
+09-23 12:44:37.436 24678 24702 I DCGPROBE: CONFIGURED 3/0 RAW=4080x3060 outputs=1
+09-23 12:44:37.438 24678 24702 I DCGPROBE: REQUEST route3-low-0 iso=100 exposure=33333333
+09-23 12:44:38.055 24678 24702 I DCGPROBE: RESULT route3-low-0 timestamp=3058277905667 iso=100 exposure=33333333 duration=33350000 black=[64.0, 64.0, 64.0, 64.0] white=1023 noise=[Pair{1.8348840169677428E-4 3.9034266895659203E-7}, Pair{3.4937017454715765E-4 3.786387282892513E-7}, Pair{3.4917788663459625E-4 3.809872229872226E-7}, Pair{1.5198520549892746E-4 4.0234677211821937E-7}]
+09-23 12:44:38.055 24678 24702 I DCGPROBE: RESULT route3-low-0/physical0 timestamp=3058277905667 iso=100 exposure=33333333 duration=33350000 black=[64.0, 64.0, 64.0, 64.0] white=1023 noise=[Pair{1.8348840169677428E-4 3.9034266895659203E-7}, Pair{3.4937017454715765E-4 3.786387282892513E-7}, Pair{3.4917788663459625E-4 3.809872229872226E-7}, Pair{1.5198520549892746E-4 4.0234677211821937E-7}]
+09-23 12:44:38.055 24678 24702 I DCGPROBE: FAIL separate 3/0: java.util.concurrent.ExecutionException: java.io.FileNotFoundException: /data/user/0/com.matthew.rawlens.test/files/dcg-probe/route3-low-0-0.raw16: open failed: EACCES (Permission denied)
+09-23 12:44:38.803 24678 24702 I DCGPROBE: BEGIN two RAW outputs physical 0
+09-23 12:44:38.911 24678 24702 I DCGPROBE: CONFIGURED 3/0 RAW=4080x3060 outputs=2
+09-23 12:44:38.913 24678 24702 I DCGPROBE: REQUEST dual-output iso=100 exposure=33333333
+09-23 12:44:44.713 24678 24705 I DCGPROBE: DISCONNECTED 3
+09-23 12:44:50.917 24678 24702 I DCGPROBE: FAIL two RAW outputs physical 0: java.util.concurrent.TimeoutException
+09-23 12:44:51.518 24678 24702 I DCGPROBE: BEGIN concurrent 0 then 3
+09-23 12:44:51.589 24678 24705 I DCGPROBE: DEVICE_ERROR 3 code=2
+09-23 12:44:51.590 24678 24702 I DCGPROBE: FAIL concurrent 0 then 3: java.util.concurrent.ExecutionException: java.lang.Exception: camera 3 error 2
+09-23 12:44:52.380 24678 24702 I DCGPROBE: BEGIN concurrent 3 then 0
+09-23 12:44:52.426 24678 24705 I DCGPROBE: DEVICE_ERROR 0 code=2
+09-23 12:44:52.427 24678 24702 I DCGPROBE: FAIL concurrent 3 then 0: java.util.concurrent.ExecutionException: java.lang.Exception: camera 0 error 2
