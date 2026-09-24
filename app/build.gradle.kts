@@ -16,6 +16,45 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // Local performance/release testing signs with the debug key so no
+        // secret is needed. CI/Play builds override via environment:
+        // RAWLENS_KEYSTORE, RAWLENS_KEY_ALIAS, RAWLENS_KEYSTORE_PASSWORD,
+        // RAWLENS_KEY_PASSWORD.
+        create("releaseLocal") {
+            val keystoreFile = System.getenv("RAWLENS_KEYSTORE")?.let { file(it) }
+            if (keystoreFile != null && keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = System.getenv("RAWLENS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("RAWLENS_KEY_ALIAS")
+                keyPassword = System.getenv("RAWLENS_KEY_PASSWORD")
+            } else {
+                val debugKey = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storeFile = debugKey
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // No minify/shrink: the app carries JNI entry points (ncnn,
+            // amaze_reference, jpeg, vulkan) that R8 would need explicit
+            // keep rules for, and perf comparisons stay on identical code.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = false
+            isJniDebuggable = false
+            signingConfig = signingConfigs.getByName("releaseLocal")
+            // Full ART optimization at install (vs quicken+JIT for debuggable)
+            // plus CMake Release (-O3) native code. Force complete AOT on the
+            // device after install with:
+            //   adb shell cmd package compile -m speed -f com.matthew.rawlens
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -35,6 +74,9 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    // Optional on-device DCG probe library, built by tools/build_dcg_vulkan_probe.sh.
+    sourceSets.getByName("androidTest").jniLibs.srcDir("build/dcg-probe/jniLibs")
 
 }
 

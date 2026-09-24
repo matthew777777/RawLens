@@ -118,6 +118,19 @@ class Gles31AmazeProcessor(
         )
     }
 
+    /** PhotonCamera-derived Quad-Bayer demosaic, retaining every input pixel. */
+    fun <T> processQuadBayer(
+        input: QuadBayerFrame,
+        cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
+        cameraWhiteNormalized: FloatArray = UNIT_WHITE,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(input.samples.width >= 4 && input.samples.height >= 4)
+        require(input.samples.values.size == input.samples.width * input.samples.height)
+        return processInput(QuadInput(input), 1f, cameraToAcescgColumnMajor,
+            cameraWhiteNormalized, null, consume)
+    }
+
     private fun <T> processInput(
         input: AmazeInput,
         clipPoint: Float,
@@ -139,6 +152,12 @@ class Gles31AmazeProcessor(
         val session = processingSession()
         return session.egl.run {
             makeCurrent()
+            if (input is QuadInput) {
+                // Full-frame normalized CFA + green + RGBA16F; AMaZE tile scratch
+                // is lazy and is never allocated by the Quad-Bayer graph.
+                val quadBytes = input.width.toLong() * input.height * 16L
+                require(quadBytes <= maxGpuBytes) { "Quad-Bayer needs $quadBytes GPU bytes, above budget $maxGpuBytes" }
+            }
             val capability = AmazePipelineContract.evaluate(
                 queryLimits(), input.width, input.height, maxGpuBytes
             )
@@ -246,6 +265,12 @@ class Gles31AmazeProcessor(
         override val pattern: BayerPattern get() = raw.pattern
     }
 
+    private data class QuadInput(val frame: QuadBayerFrame) : AmazeInput {
+        override val width get() = frame.samples.width
+        override val height get() = frame.samples.height
+        override val pattern get() = frame.sensorPattern
+    }
+
     private class AmazeExecutor(
         private val input: AmazeInput,
         private val clipPoint: Float,
@@ -293,6 +318,7 @@ class Gles31AmazeProcessor(
         private val inputTexture = texture(input.width, input.height, GLES30.GL_R32F).also {
             when (input) {
                 is CpuAmazeInput -> it.uploadR32f(input.cfa.values, uploadBuffers)
+                is QuadInput -> it.uploadR32f(input.frame.samples.values, uploadBuffers)
                 is DirectRawAmazeInput -> preprocessRaw(input.raw, it)
             }
         }
@@ -307,22 +333,22 @@ class Gles31AmazeProcessor(
         } else null
         val fusedOutput: Boolean get() = encodedOutput != null
         val output: GlTexture get() = encodedOutput ?: requireNotNull(rawOutput)
-        private val cfa = scalar()
-        private val grad = vector()
-        private val cdA = vector()
-        private val cdB = vector()
-        private val cd2 = vector()
-        private val hvwt = scalar()
-        private val nyqTest = scalar()
-        private val nyq2 = scalar()
-        private val hvwt2 = scalar()
-        private val hvwt3 = scalar()
-        private val greenD = vector()
-        private val greenD2 = vector()
-        private val rbpm = vector()
-        private val pmrbint = vector()
-        private val greenD3 = vector()
-        private val dgrb01 = vector()
+        private val cfa by lazy { scalar() }
+        private val grad by lazy { vector() }
+        private val cdA by lazy { vector() }
+        private val cdB by lazy { vector() }
+        private val cd2 by lazy { vector() }
+        private val hvwt by lazy { scalar() }
+        private val nyqTest by lazy { scalar() }
+        private val nyq2 by lazy { scalar() }
+        private val hvwt2 by lazy { scalar() }
+        private val hvwt3 by lazy { scalar() }
+        private val greenD by lazy { vector() }
+        private val greenD2 by lazy { vector() }
+        private val rbpm by lazy { vector() }
+        private val pmrbint by lazy { vector() }
+        private val greenD3 by lazy { vector() }
+        private val dgrb01 by lazy { vector() }
         private fun preprocessRaw(raw: GpuRawAmazeInput, destination: GlTexture) {
             val codes = texture(raw.width, raw.height, GLES30.GL_R16UI)
             codes.uploadRaw16(raw.buffer, raw.layout, raw.crop)
@@ -359,11 +385,37 @@ class Gles31AmazeProcessor(
         }
 
         fun run() {
+            if (input is QuadInput) {
+                runQuad(input.frame)
+                return
+            }
             val source = inputTexture
             for (tileY in 0 until ceilDiv(input.height, AmazePipelineContract.TILE)) {
                 for (tileX in 0 until ceilDiv(input.width, AmazePipelineContract.TILE)) {
                     runTile(tileX * AmazePipelineContract.TILE, tileY * AmazePipelineContract.TILE, source)
                 }
+            }
+        }
+
+        private fun runQuad(frame: QuadBayerFrame) {
+            val green = texture(input.width, input.height, GLES30.GL_R32F)
+            fun bind(asset: String) = BoundProgram(programs.get(asset)).apply {
+                sampler("u_raw", inputTexture)
+                ivec2("u_size", input.width, input.height)
+                ivec2("u_origin", frame.samples.sensorCropLeft, frame.samples.sensorCropTop)
+                ivec4("u_fc", cfaUniform)
+                vec3("u_balance", demosaicBalance)
+            }
+            bind("quad/green.glsl").apply {
+                image(0, green, GLES30.GL_R32F)
+                dispatch(input.width, input.height)
+            }
+            bind("quad/color.glsl").apply {
+                sampler("u_green", green)
+                mat3("u_camera_to_acescg", demosaicCameraToAcescg)
+                vec3("u_camera_white_normalized", demosaicCameraWhiteNormalized)
+                image(0, requireNotNull(rawOutput), GLES30.GL_RGBA16F)
+                dispatch(input.width, input.height)
             }
         }
 
@@ -466,6 +518,7 @@ class Gles31AmazeProcessor(
                 finalProgram.float("u_agx_shadow_ev", settings.agxShadowEv)
                 finalProgram.float("u_agx_highlight_ev", settings.agxHighlightEv)
                 finalProgram.float("u_agx_gamut_compression", settings.agxGamutCompression)
+                finalProgram.float("u_highlight_shoulder", settings.resolvedForPlatform().highlightShoulder)
                 finalProgram.integer("u_write_gainmap", if (gainmapOutput != null) 1 else 0)
                 finalProgram.image(0, requireNotNull(encodedOutput), GLES30.GL_RGBA8)
                 gainmapOutput?.let { finalProgram.image(1, it, GLES30.GL_RGBA8) }
@@ -557,7 +610,7 @@ class Gles31AmazeProcessor(
         private fun ceilDiv(value: Int, divisor: Int): Int = (value + divisor - 1) / divisor
     }
 
-    internal class ProgramCache(private val context: Context) : Closeable {
+    internal class ProgramCache(private val context: Context, private val slicedDispatch: Boolean = false) : Closeable {
         private val programs = LinkedHashMap<String, Int>()
         private val common by lazy { read("shaders/utils/import_amaze.glsl") }
         private val agxOutputCommon by lazy {
@@ -571,8 +624,10 @@ class Gles31AmazeProcessor(
         fun get(asset: String): Int = programs.getOrPut(asset) {
             val body = read("shaders/$asset")
                 .replace("#import amaze", common)
+                .replace("#import quad", if ("quad/" in asset) read("shaders/quad/common.glsl") else "")
                 .replace("#import agx_output", agxOutputCommon)
-            compile(if (body.startsWith("#version")) body else "#version 310 es\n$body", asset)
+            val source = if (body.startsWith("#version")) body else "#version 310 es\n$body"
+            compile(if (slicedDispatch) RawSrGpuScheduling.shaderSource(source) else source, asset)
         }.also(GLES31::glUseProgram)
 
         private fun read(path: String): String =

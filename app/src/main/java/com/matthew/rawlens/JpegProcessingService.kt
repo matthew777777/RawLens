@@ -31,7 +31,13 @@ class JpegProcessingService : Service() {
         MemoryLeakDiagnostics.sample("jpeg-service-created")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every foreground start must be acknowledged, including a new start delivered
+        // to an existing instance. A fast failed job can queue STOP before onCreate runs.
+        startForeground(NOTIFICATION_ID, notification())
+        if (intent?.action == ACTION_STOP) stopSelf(startId)
+        return START_NOT_STICKY
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -79,13 +85,18 @@ class JpegProcessingService : Service() {
     companion object {
         private const val CHANNEL_ID = "jpeg_processing"
         private const val NOTIFICATION_ID = 1001
+        private const val ACTION_STOP = "com.matthew.rawlens.STOP_JPEG_PROCESSING"
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, JpegProcessingService::class.java))
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, JpegProcessingService::class.java))
+            // Deliver shutdown after startup on the service main thread. stopService()
+            // here can cancel a pending foreground start before it is acknowledged.
+            context.startService(Intent(context, JpegProcessingService::class.java).apply {
+                action = ACTION_STOP
+            })
         }
     }
 }

@@ -14,11 +14,11 @@ import android.view.View
 import kotlin.math.roundToInt
 
 /**
- * Transparent ruler-style slider matching the reference camera app.
- *
- * Tick-only: no numeric value is drawn here on purpose. Values live in the
- * exposure chips (ISO/S/WB/AF/EV) so the strip stays compact in landscape.
- * The lime center needle is the RawLens touch; ticks/label stay reference-white.
+ * Minimal floating ruler slider, after the reference camera apps:
+ * a translucent dark strip with the axis code + live value stacked on top,
+ * a slim tick band, edge min/max hints, and a lime needle. Values are fed in
+ * via [valueText]/[minText]/[maxText] so the strip stays self-sufficient and
+ * the exposure chips are free for status.
  */
 class RuleSliderView @JvmOverloads constructor(
     context: Context,
@@ -42,8 +42,28 @@ class RuleSliderView @JvmOverloads constructor(
             }
         }
 
-    /** Short code only (SS / ISO / WB / MF / EV) — never a value. */
+    /** Short code (SS / ISO / WB / MF / EV). */
     var label: String = ""
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** Live formatted value drawn bold under the code (e.g. "1/60", "+0.2"). */
+    var valueText: String = ""
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** Edge hints for the tick band (range min / max). Empty hides them. */
+    var minText: String = ""
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    var maxText: String = ""
         set(value) {
             field = value
             invalidate()
@@ -62,37 +82,57 @@ class RuleSliderView @JvmOverloads constructor(
     private val density = resources.displayMetrics.density
     private val backgroundRect = RectF()
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(102, 16, 18, 20)
+        color = Color.argb(105, 10, 12, 14)
         style = Paint.Style.FILL
     }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(40, 255, 255, 255)
+        color = Color.argb(28, 255, 255, 255)
         style = Paint.Style.STROKE
         strokeWidth = 1f * density
     }
     private val minorTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(140, 255, 255, 255)
+        color = Color.argb(110, 255, 255, 255)
         strokeWidth = 1f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val majorTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 255, 255, 255)
+        color = Color.argb(200, 255, 255, 255)
         strokeWidth = 1.5f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val needlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(214, 255, 51)
-        strokeWidth = 2f * density
+        strokeWidth = 2.5f * density
         strokeCap = Paint.Cap.ROUND
     }
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(220, 255, 255, 255)
-        textSize = 9f * resources.displayMetrics.scaledDensity
+    private val needleGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(64, 214, 255, 51)
+        strokeWidth = 6f * density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(150, 255, 255, 255)
+        textSize = 8.5f * resources.displayMetrics.scaledDensity
         typeface = android.graphics.Typeface.create(
             android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
         )
         textAlign = Paint.Align.CENTER
-        letterSpacing = 0.08f
+        letterSpacing = 0.14f
+    }
+    private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(245, 255, 255, 255)
+        textSize = 14f * resources.displayMetrics.scaledDensity
+        typeface = android.graphics.Typeface.create(
+            android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
+        )
+        textAlign = Paint.Align.CENTER
+    }
+    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(120, 255, 255, 255)
+        textSize = 8f * resources.displayMetrics.scaledDensity
+        typeface = android.graphics.Typeface.create(
+            android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL
+        )
     }
 
     private var tracking = false
@@ -103,7 +143,7 @@ class RuleSliderView @JvmOverloads constructor(
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val desiredHeight = (64f * density).roundToInt()
+        val desiredHeight = (68f * density).roundToInt()
         val height = resolveSize(desiredHeight, heightMeasureSpec)
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), height)
     }
@@ -117,17 +157,21 @@ class RuleSliderView @JvmOverloads constructor(
         canvas.drawRoundRect(backgroundRect, radius, radius, borderPaint)
 
         val centerX = backgroundRect.centerX()
-        // Label stays readable in landscape: rotate only the glyph, never the ruler.
+        // Code + live value stacked on top, reference style. Only the glyphs
+        // rotate in landscape; the strip itself never does.
         canvas.save()
-        canvas.rotate(contentRotation, centerX, backgroundRect.top + 16f * density)
-        canvas.drawText(label, centerX, backgroundRect.top + 16f * density, labelPaint)
+        canvas.rotate(contentRotation, centerX, backgroundRect.top + 20f * density)
+        canvas.drawText(label, centerX, backgroundRect.top + 12f * density, codePaint)
+        if (valueText.isNotEmpty()) {
+            canvas.drawText(valueText, centerX, backgroundRect.top + 28f * density, valuePaint)
+        }
         canvas.restore()
 
-        val tickTop = backgroundRect.top + 24f * density
-        val tickBottom = backgroundRect.bottom - 10f * density
+        val tickTop = backgroundRect.top + 36f * density
+        val tickBottom = backgroundRect.bottom - 12f * density
         val tickCenterY = (tickTop + tickBottom) / 2f
-        val minorHalf = 4f * density
-        val majorHalf = 7f * density
+        val minorHalf = 3f * density
+        val majorHalf = 5.5f * density
         val tickCount = 21
         val span = backgroundRect.width() - 24f * density
         val startX = backgroundRect.left + 12f * density
@@ -139,10 +183,29 @@ class RuleSliderView @JvmOverloads constructor(
                 if (isMajor) majorTickPaint else minorTickPaint)
         }
 
+        // Edge min/max hints along the bottom of the strip. Each glyph rotates
+        // around its own anchor so it stays in place in landscape, exactly
+        // like the rotating button values.
+        edgePaint.textAlign = Paint.Align.LEFT
+        if (minText.isNotEmpty()) {
+            canvas.save()
+            canvas.rotate(contentRotation, startX, backgroundRect.bottom - 3f * density)
+            canvas.drawText(minText, startX, backgroundRect.bottom - 3f * density, edgePaint)
+            canvas.restore()
+        }
+        edgePaint.textAlign = Paint.Align.RIGHT
+        if (maxText.isNotEmpty()) {
+            canvas.save()
+            canvas.rotate(contentRotation, startX + span, backgroundRect.bottom - 3f * density)
+            canvas.drawText(maxText, startX + span, backgroundRect.bottom - 3f * density, edgePaint)
+            canvas.restore()
+        }
+
         // Lime needle marks the current position; the fill track is intentionally omitted
         // so the strip reads as a ruler rather than a progress bar.
         val fraction = if (max > 0) progress.toFloat() / max.toFloat() else 0f
         val needleX = startX + span * fraction.coerceIn(0f, 1f)
+        canvas.drawLine(needleX, tickTop - 2f * density, needleX, tickBottom + 2f * density, needleGlowPaint)
         canvas.drawLine(needleX, tickTop - 2f * density, needleX, tickBottom + 2f * density, needlePaint)
     }
 

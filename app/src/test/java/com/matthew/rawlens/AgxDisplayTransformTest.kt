@@ -35,8 +35,10 @@ class AgxDisplayTransformTest {
             floatArrayOf(0.21487383f, 0.21484137f, 0.21480779f),
             AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0.18f, 0.18f, 0.18f))
         )
+        // Scene-linear soft shoulder (knee 0.9, scale 0.8) compresses 16->1.7 before AgX,
+        // so extreme neutrals plateau at ~0.699 instead of the pinned 0.96 white.
         assertRgb(
-            floatArrayOf(0.96036871f, 0.96036246f, 0.96035598f),
+            floatArrayOf(0.69943166f, 0.69943148f, 0.69943166f),
             AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(16f, 16f, 16f))
         )
     }
@@ -71,15 +73,17 @@ class AgxDisplayTransformTest {
 
     @Test
     fun saturatedPrimariesMatchPinnedReferenceBeforeFinalGamutClip() {
+        // Soft shoulder compresses channel 1.0->0.994, shifting primaries slightly
+        // darker vs the pinned Filament reference; midtones stay bit-exact.
         assertRgb(
-            floatArrayOf(0.93724963f, 0.08135831f, 0.09592096f),
+            floatArrayOf(0.93440771f, 0.08021203f, 0.09488785f),
             AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(1f, 0f, 0f))
         )
         val green = AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0f, 1f, 0f))
-        assertRgb(floatArrayOf(-0.20396495f, 0.68157699f, 0.01622087f), green)
+        assertRgb(floatArrayOf(-0.20412612f, 0.67982507f, 0.01576497f), green)
         assertTrue("pre-gamut negative was clipped", green[0] < 0f)
         assertRgb(
-            floatArrayOf(-0.05175894f, 0.14882473f, 0.79458245f),
+            floatArrayOf(-0.05184369f, 0.14744416f, 0.79181671f),
             AgxDisplayTransform.acescgToOutputLinearSrgb(floatArrayOf(0f, 0f, 1f))
         )
     }
@@ -129,6 +133,24 @@ class AgxDisplayTransformTest {
         val oetfLow = AgxDisplayTransform.srgbOetf(0.0031308f - 1e-7f)
         val oetfHigh = AgxDisplayTransform.srgbOetf(0.0031308f + 1e-7f)
         assertTrue(abs(oetfHigh - oetfLow) < 1e-4f)
+    }
+
+    @Test
+    fun sceneHighlightSoftShoulderPreservesMidtonesAndCompressesSun() {
+        // Knee 0.9 / scale 0.8: C1 at knee, asymptote 1.7. Mirrors GLSL in
+        // agx_srgb8.glsl and VfGpuImport tail; garden sky 0.69 untouched.
+        assertEquals(0.18f, AgxDisplayTransform.compressHighlight(0.18f), 1e-6f)
+        assertEquals(0.9f, AgxDisplayTransform.compressHighlight(0.9f), 1e-6f)
+        assertEquals(0.99400246f, AgxDisplayTransform.compressHighlight(1f), 1e-5f)
+        assertEquals(1.4846829f, AgxDisplayTransform.compressHighlight(1.95f), 1e-4f)
+        assertEquals(1.7f, AgxDisplayTransform.compressHighlight(16f), 1e-4f)
+        assertEquals(1.7f, AgxDisplayTransform.compressHighlight(65_504f), 1e-4f)
+        var prev = Float.NEGATIVE_INFINITY
+        listOf(0.18f, 0.9f, 1f, 1.95f, 16f, 65_504f).forEach {
+            val v = AgxDisplayTransform.compressHighlight(it)
+            assertTrue("not monotonic at $it -> $v", v >= prev)
+            prev = v
+        }
     }
 
     @Test

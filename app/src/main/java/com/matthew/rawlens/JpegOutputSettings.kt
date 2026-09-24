@@ -22,7 +22,24 @@ data class JpegOutputSettings(
     val agxHighlightEv: Float = 6.5f,
     val agxGamutCompression: Float = 0f,
     val adaptiveExposureAuto: Boolean = true,
-    val adaptiveExposureProgramStrength: Float = 0.5f
+    val adaptiveExposureProgramStrength: Float = 0.5f,
+    /**
+     * Hard white guard for the p99.5 RAW spike: exposure is capped so the tail
+     * lands at this level before AgX. 1.0 = never push past white (sky-safe).
+     * Range 0.5..1.5; higher lifts mids but risks flat skies.
+     */
+    val highlightHeadroom: Float = 1f,
+    /**
+     * Soft shoulder for broad highlights (p95 sky/wall mass): exposure is capped
+     * so large bright areas land at this level. Range 0.6..1.0; lower protects
+     * skies, higher keeps foliage bright. Default 0.85.
+     */
+    val highlightSoftHeadroom: Float = 0.85f,
+    /**
+     * Scene-linear highlight shoulder strength: 0 = pinned Filament AgX only,
+     * 1 = full exponential soft shoulder (knee 0.9, scale 0.8). Default 1.
+     */
+    val highlightShoulder: Float = 1f
 ) {
     /** Ultra HDR is an Android 14 (API 34) platform JPEG feature. */
     fun resolvedForPlatform(): JpegOutputSettings {
@@ -38,7 +55,10 @@ data class JpegOutputSettings(
             agxShadowEv = bounded(agxShadowEv, 4f, 14f, 10f),
             agxHighlightEv = bounded(agxHighlightEv, 3f, 10f, 6.5f),
             agxGamutCompression = bounded(agxGamutCompression, 0f, 1f, 0f),
-            adaptiveExposureProgramStrength = bounded(adaptiveExposureProgramStrength, 0f, 1f, 0.5f)
+            adaptiveExposureProgramStrength = bounded(adaptiveExposureProgramStrength, 0f, 1f, 0.5f),
+            highlightHeadroom = bounded(highlightHeadroom, 0.5f, 1.5f, 1f),
+            highlightSoftHeadroom = bounded(highlightSoftHeadroom, 0.6f, 1f, 0.85f),
+            highlightShoulder = bounded(highlightShoulder, 0f, 1f, 1f)
         )
     }
 }

@@ -12,8 +12,63 @@ import android.util.Log
 import java.util.Locale
 import java.util.concurrent.Executors
 
+/** Route kind drives grouping in the lens picker UI. */
+enum class LensRouteKind(val sectionTitle: String) {
+    STANDALONE("Direct cameras"),
+    LOGICAL_PHYSICAL("Logical → physical"),
+    VENDOR_COMPOSITE("Vendor routes"),
+    UNAVAILABLE("Currently unavailable")
+}
+
+/** Coarse optical role derived from 35mm-equivalent focal length. */
+enum class LensRole(val displayName: String) {
+    ULTRA_WIDE("Ultra-wide"),
+    WIDE("Wide"),
+    NORMAL("Normal"),
+    TELE("Tele"),
+    SUPER_TELE("Super-tele"),
+    UNKNOWN("Lens");
+
+    companion object {
+        fun forEquivalentMm(equivalentMm: Float?): LensRole = when {
+            equivalentMm == null || !equivalentMm.isFinite() || equivalentMm <= 0f -> UNKNOWN
+            equivalentMm < 20f -> ULTRA_WIDE
+            equivalentMm < 32f -> WIDE
+            equivalentMm < 60f -> NORMAL
+            equivalentMm < 100f -> TELE
+            else -> SUPER_TELE
+        }
+    }
+}
+
 /** A selectable camera route. `id` remains persistence-compatible with the old UI. */
-data class DiscoveredLens(val id: String, val label: String, val opticalMetric: Float = Float.MAX_VALUE)
+data class DiscoveredLens(
+    val id: String,
+    val label: String,
+    val opticalMetric: Float = Float.MAX_VALUE,
+    val kind: LensRouteKind = LensRouteKind.STANDALONE,
+    val role: LensRole = LensRole.UNKNOWN,
+    val logicalId: String? = null,
+    val physicalId: String? = null,
+    val focalMm: Float? = null,
+    val equivalentMm: Float? = null,
+    val resolutionLabel: String? = null,
+    val megapixels: Float? = null,
+    /** Short prominent line, e.g. "Wide · 24 mm eq". */
+    val title: String = label,
+    /** One or two detail lines, e.g. "4.35 mm lens · 4000×3000 · 12.0 MP". */
+    val details: String = "",
+    /** Route explanation, e.g. "Direct camera 0" or "Logical 0 → physical 2". */
+    val route: String = ""
+)
+
+/** A picker section with a header and an explanatory subtitle. */
+data class LensGroup(
+    val kind: LensRouteKind,
+    val title: String,
+    val subtitle: String,
+    val lenses: List<DiscoveredLens>
+)
 
 /**
  * Universal Camera2 lens discovery.
@@ -177,14 +232,74 @@ class LensDiscovery(context: Context) {
         val equivalent = if (focal != null && sensor != null && sensor.width > 0f) {
             36f * focal / sensor.width
         } else null
+        val megapixels = if (pixels != null) pixels.width * pixels.height / 1_000_000f else null
+        val resolutionLabel = pixels?.let { "${it.width}×${it.height}" }
+        val role = LensRole.forEquivalentMm(equivalent)
+        val (kind, logicalId, physicalId) = parseRoute(id, route)
+        val routeText = when (kind) {
+            LensRouteKind.STANDALONE -> "Direct camera $id"
+            LensRouteKind.LOGICAL_PHYSICAL -> {
+                val logical = logicalId ?: id.substringBefore('/')
+                val physical = physicalId ?: id.substringAfter('/')
+                "Logical $logical → physical $physical"
+            }
+            LensRouteKind.VENDOR_COMPOSITE -> "Vendor route $id"
+            LensRouteKind.UNAVAILABLE -> route
+        }
+        val title = if (equivalent != null) {
+            "${role.displayName} · ≈${String.format(Locale.US, "%.0f", equivalent)} mm eq"
+        } else if (focal != null) {
+            "${role.displayName} · ${String.format(Locale.US, "%.2f", focal)} mm lens"
+        } else {
+            "${role.displayName} · Camera $id"
+        }
         val details = buildList {
-            if (focal != null) add(String.format(Locale.US, "%.2f mm lens", focal))
+            if (focal != null) add(String.format(Locale.US, "%.2f mm", focal))
             if (equivalent != null) add(String.format(Locale.US, "≈%.0f mm eq", equivalent))
-            if (pixels != null) add("${pixels.width}×${pixels.height}")
-            add(route)
-        }.joinToString(" • ")
+            if (resolutionLabel != null) add(resolutionLabel)
+            if (megapixels != null) add(String.format(Locale.US, "%.1f MP", megapixels))
+        }.joinToString(" · ").ifEmpty { "Characteristics unavailable" }
+        // Legacy single-line label stays for callers/tests that only render `label`.
+        val label = "Camera $id · $title • $details • $routeText"
         val metric = if (focal != null && sensor != null && sensor.width > 0f) focal / sensor.width else Float.MAX_VALUE
-        return DiscoveredLens(id, "Camera $id • $details", metric)
+        return DiscoveredLens(
+            id = id,
+            label = label,
+            opticalMetric = metric,
+            kind = kind,
+            role = role,
+            logicalId = logicalId,
+            physicalId = physicalId,
+            focalMm = focal,
+            equivalentMm = equivalent,
+            resolutionLabel = resolutionLabel,
+            megapixels = megapixels,
+            title = title,
+            details = details,
+            route = routeText
+        )
+    }
+
+    private fun parseRoute(id: String, route: String): Triple<LensRouteKind, String?, String?> {
+        if (route == "standalone") return Triple(LensRouteKind.STANDALONE, null, null)
+        if (route.startsWith("logical")) {
+            // id form is "logical/physical".
+            val logical = id.substringBefore('/').ifEmpty { null }
+            val physical = id.substringAfter('/', "").ifEmpty { null }
+            return Triple(LensRouteKind.LOGICAL_PHYSICAL, logical, physical)
+        }
+        // Vendor composite: "3/2" or "A-B".
+        val separator = when {
+            '/' in id -> '/'
+            '-' in id && id.length > 2 -> '-'
+            else -> null
+        }
+        if (separator != null) {
+            val logical = id.substringBefore(separator).ifEmpty { null }
+            val physical = id.substringAfter(separator).ifEmpty { null }
+            return Triple(LensRouteKind.VENDOR_COMPOSITE, logical, physical)
+        }
+        return Triple(LensRouteKind.VENDOR_COMPOSITE, null, null)
     }
 
     private fun summary(c: CameraCharacteristics): String {
@@ -204,4 +319,74 @@ class LensDiscovery(context: Context) {
         const val MAX_COMPOSITE_PHYSICAL_ID = 10
         const val LOG_TAG = "RawLensDiscovery"
     }
+}
+
+/** Placeholder for a previously saved lens that discovery did not report this run. */
+fun unavailableLens(id: String): DiscoveredLens = DiscoveredLens(
+    id = id,
+    label = "Camera $id • currently unavailable",
+    opticalMetric = Float.MAX_VALUE,
+    kind = LensRouteKind.UNAVAILABLE,
+    role = LensRole.UNKNOWN,
+    title = "Camera $id",
+    details = "Saved earlier · not reported by the camera service right now",
+    route = "Currently unavailable"
+)
+
+/**
+ * Groups lenses into readable picker sections, ordered for display.
+ *
+ * - Direct cameras first (wide → tele).
+ * - One section per logical parent for logical → physical routes.
+ * - Vendor composites next (wide → tele).
+ * - Unavailable entries (explicit kind or "unavailable" label fallback) last.
+ */
+fun groupLenses(lenses: List<DiscoveredLens>): List<LensGroup> {
+    val sorted = lenses.sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
+    fun effectiveKind(lens: DiscoveredLens): LensRouteKind =
+        if (lens.kind == LensRouteKind.UNAVAILABLE || "unavailable" in lens.label.lowercase()) {
+            LensRouteKind.UNAVAILABLE
+        } else lens.kind
+
+    val groups = mutableListOf<LensGroup>()
+    val direct = sorted.filter { effectiveKind(it) == LensRouteKind.STANDALONE }
+    if (direct.isNotEmpty()) {
+        groups += LensGroup(
+            kind = LensRouteKind.STANDALONE,
+            title = "Direct cameras · ${direct.size}",
+            subtitle = "Open straight from the camera service. Pick these first when in doubt.",
+            lenses = direct
+        )
+    }
+    val logical = sorted.filter { effectiveKind(it) == LensRouteKind.LOGICAL_PHYSICAL }
+        .groupBy { it.logicalId ?: it.id.substringBefore('/') }
+        .toSortedMap()
+    logical.forEach { (logicalId, items) ->
+        groups += LensGroup(
+            kind = LensRouteKind.LOGICAL_PHYSICAL,
+            title = "Logical $logicalId · ${items.size} lens${if (items.size == 1) "" else "es"}",
+            subtitle = "Opens logical camera $logicalId and binds output to one physical lens.",
+            lenses = items
+        )
+    }
+    val vendor = sorted.filter { effectiveKind(it) == LensRouteKind.VENDOR_COMPOSITE }
+    if (vendor.isNotEmpty()) {
+        groups += LensGroup(
+            kind = LensRouteKind.VENDOR_COMPOSITE,
+            title = "Vendor routes · ${vendor.size}",
+            subtitle = "OEM composite IDs (such as 3/2 or A-B). Only needed when direct routes miss a lens.",
+            lenses = vendor
+        )
+    }
+    val unavailable = sorted.filter { effectiveKind(it) == LensRouteKind.UNAVAILABLE }
+        .map { if (it.kind == LensRouteKind.UNAVAILABLE) it else it.copy(kind = LensRouteKind.UNAVAILABLE) }
+    if (unavailable.isNotEmpty()) {
+        groups += LensGroup(
+            kind = LensRouteKind.UNAVAILABLE,
+            title = "Currently unavailable · ${unavailable.size}",
+            subtitle = "Saved before but not reported now. Keep checked to preserve them, uncheck to forget.",
+            lenses = unavailable.sortedBy { it.id }
+        )
+    }
+    return groups
 }

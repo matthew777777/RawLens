@@ -34,6 +34,28 @@ class AdaptiveDevelopmentExposureTest {
     }
 
     @Test
+    fun brightSkyGardenKeepsHighlightHeadroomInsteadOfFullLift() {
+        // Garden DNG IMG_20260919_151022_831: dark foliage (geom ~0.03) + broad sky
+        // (p95=0.45, p99.5=0.69). Old HEADROOM=4.0 gave +1.5EV -> sky 1.95x white.
+        // New hard 1.0 + soft p95->0.85 guard must keep correction <= 0.
+        val values = FloatArray(10_240) { index ->
+            when {
+                index < 9_216 -> 0.03f
+                index < 10_112 -> 0.5f
+                else -> 0.75f
+            }
+        }
+        val result = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        // Hard spike guard (p99.5->1.0) + soft broad guard (p95->0.85): tail must
+        // land at/below white instead of the old +1.5EV blowout (0.75->2.12).
+        val pushedSpike = result.highlight * Math.pow(2.0, result.correctionEv)
+        assertTrue("garden sky blown out: $result pushed=$pushedSpike", pushedSpike <= 1.001)
+        assertTrue("over-darkened: $result", result.correctionEv >= -1.5)
+        assertTrue("old headroom would have lifted +1.5EV", result.correctionEv < 1.0)
+        assertTrue(result.highlight in 0.5..1.0)
+    }
+
+    @Test
     fun sharedStateComputesOnlyTheFirstFrameCorrection() {
         val state = SharedAdaptiveExposure()
         var analyses = 0

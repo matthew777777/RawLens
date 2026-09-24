@@ -29,7 +29,10 @@ class JpegOutputSettingsTest {
             agxHuePreservation = 3f,
             agxShadowEv = 1f,
             agxHighlightEv = 20f,
-            agxGamutCompression = Float.NaN
+            agxGamutCompression = Float.NaN,
+            highlightHeadroom = 9f,
+            highlightSoftHeadroom = 0f,
+            highlightShoulder = -1f
         ).resolvedForPlatform()
         assertEquals(1.5f, resolved.agxContrast, 0f)
         assertEquals(0f, resolved.agxSaturation, 0f)
@@ -37,6 +40,36 @@ class JpegOutputSettingsTest {
         assertEquals(4f, resolved.agxShadowEv, 0f)
         assertEquals(10f, resolved.agxHighlightEv, 0f)
         assertEquals(0f, resolved.agxGamutCompression, 0f)
+        assertEquals(1.5f, resolved.highlightHeadroom, 0f)
+        assertEquals(0.6f, resolved.highlightSoftHeadroom, 0f)
+        assertEquals(0f, resolved.highlightShoulder, 0f)
+    }
+
+    @Test
+    fun highlightControlsDefaultToSkySafeAndShoulderOn() {
+        val resolved = JpegOutputSettings().resolvedForPlatform()
+        assertEquals(1f, resolved.highlightHeadroom, 0f)
+        assertEquals(0.85f, resolved.highlightSoftHeadroom, 0f)
+        assertEquals(1f, resolved.highlightShoulder, 0f)
+    }
+
+    @Test
+    fun shoulderOffReproducesPinnedAgxWhite() {
+        val white = floatArrayOf(16f, 16f, 16f)
+        val pinned = AgxDisplayTransform.acescgToOutputLinearSrgb(
+            white, JpegOutputSettings(highlightShoulder = 0f)
+        ).average().toFloat()
+        // Pinned Filament Base maps 16x to near-white; full shoulder compresses to ~0.70.
+        assertTrue("shoulder-off should stay near white, was $pinned", pinned > 0.9f)
+        val soft = AgxDisplayTransform.acescgToOutputLinearSrgb(
+            white, JpegOutputSettings(highlightShoulder = 1f)
+        ).average().toFloat()
+        assertTrue("shoulder-on should compress sun, was $soft", soft < pinned - 0.1f)
+        // Midtones are bit-exact either way.
+        val mid = floatArrayOf(0.18f, 0.18f, 0.18f)
+        val midOff = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(highlightShoulder = 0f))
+        val midOn = AgxDisplayTransform.acescgToOutputLinearSrgb(mid, JpegOutputSettings(highlightShoulder = 1f))
+        assertArrayEquals(midOff, midOn, 1e-6f)
     }
 
     @Test

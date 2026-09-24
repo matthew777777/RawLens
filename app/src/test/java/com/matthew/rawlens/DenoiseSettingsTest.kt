@@ -9,6 +9,7 @@ class DenoiseSettingsTest {
         val settings = DenoiseSettings()
         assertEquals(false, settings.aiEnabled)
         assertEquals(true, settings.saveOriginalDng)
+        assertEquals(1f, settings.aiStrength, 0f)
     }
     @Test fun cameraRgbNoiseExpandsToBothGreenCfaPlanes() {
         val model = CfaNoiseModel.from(ImmutableDoubleValues(doubleArrayOf(1.0,0.1,2.0,0.2,3.0,0.3)))

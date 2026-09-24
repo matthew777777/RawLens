@@ -197,19 +197,31 @@ object SceneLinearColorProcessor {
 
     fun processRgba(input: FloatArray, transform: ResolvedSceneLinearTransform): FloatArray {
         require(input.size % 4 == 0) { "Scene-linear RGBA input must contain four floats per pixel" }
-        val matrix = Matrix3(transform.cameraToAcescg.toDoubleArray())
+        // Direct row-major multiply (same operations, same order as
+        // Matrix3 * Vec3) with no object per pixel (was: 2 Vec3 per pixel).
+        // Pixel-sharded: disjoint pixels, bitwise-identical.
+        val m = transform.cameraToAcescg.toDoubleArray()
+        val m00 = m[0]; val m01 = m[1]; val m02 = m[2]
+        val m10 = m[3]; val m11 = m[4]; val m12 = m[5]
+        val m20 = m[6]; val m21 = m[7]; val m22 = m[8]
         val output = FloatArray(input.size)
-        for (offset in input.indices step 4) {
-            val mapped = matrix * Vec3(
-                input[offset].toDouble(),
-                input[offset + 1].toDouble(),
-                input[offset + 2].toDouble()
-            )
-            require(mapped.isFinite()) { "Scene-linear color conversion produced NaN or infinity" }
-            output[offset] = mapped.x.toFloat()
-            output[offset + 1] = mapped.y.toFloat()
-            output[offset + 2] = mapped.z.toFloat()
-            output[offset + 3] = 1f
+        RawSrWorkers.forEachShard(input.size / 4) { p0, p1 ->
+            for (p in p0 until p1) {
+                val offset = p * 4
+                val x = input[offset].toDouble()
+                val y = input[offset + 1].toDouble()
+                val z = input[offset + 2].toDouble()
+                val ox = m00 * x + m01 * y + m02 * z
+                val oy = m10 * x + m11 * y + m12 * z
+                val oz = m20 * x + m21 * y + m22 * z
+                require(ox.isFinite() && oy.isFinite() && oz.isFinite()) {
+                    "Scene-linear color conversion produced NaN or infinity"
+                }
+                output[offset] = ox.toFloat()
+                output[offset + 1] = oy.toFloat()
+                output[offset + 2] = oz.toFloat()
+                output[offset + 3] = 1f
+            }
         }
         return output
     }

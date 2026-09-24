@@ -35,11 +35,15 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
         android:layout_marginStart="16dp"
-        android:layout_marginTop="84dp"
+        android:layout_marginTop="96dp"
         android:background="@drawable/manual_control_panel"
+        android:clickable="true"
+        android:focusable="true"
         android:fontFamily="monospace"
         android:maxWidth="280dp"
-        android:padding="10dp"
+        android:minHeight="48dp"
+        android:gravity="center_vertical"
+        android:padding="12dp"
         android:textColor="@color/text_primary"
         android:textSize="10sp"
         android:visibility="gone" />
@@ -49,21 +53,24 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="78dp"
+        android:layout_marginTop="96dp"
         android:background="@drawable/manual_control_panel"
         android:fontFamily="monospace"
-        android:maxWidth="280dp"
-        android:padding="10dp"
+        android:maxWidth="300dp"
+        android:minHeight="48dp"
+        android:gravity="center_vertical"
+        android:padding="12dp"
         android:textColor="@color/text_primary"
-        android:textSize="9sp"
+        android:textSize="10sp"
         android:visibility="gone" />
 
-    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="68dp" android:layout_gravity="top" android:background="@color/surface" android:gravity="center_vertical" android:orientation="horizontal" android:paddingStart="16dp" android:paddingTop="10dp" android:paddingEnd="16dp">
-        <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" android:layout_width="44dp" android:layout_height="44dp" android:background="@drawable/glass_button" android:contentDescription="Settings" android:padding="11dp" android:src="@drawable/ic_settings" />
-        <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" android:layout_width="44dp" android:layout_height="44dp" android:layout_marginStart="8dp" android:background="@drawable/glass_button" android:contentDescription="Toggle light" android:padding="11dp" android:src="@drawable/ic_flash" />
-        <FrameLayout android:layout_width="44dp" android:layout_height="44dp" android:layout_marginStart="8dp">
-            <com.matthew.rawlens.RotatingImageButton android:id="@+id/timerButton" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/glass_button" android:contentDescription="Capture timer" android:padding="11dp" android:src="@drawable/ic_timer" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/timerBadge" android:layout_width="18dp" android:layout_height="18dp" android:layout_gravity="top|end" android:background="@drawable/control_chip_active" android:gravity="center" android:text="2" android:textColor="@color/accent_dark" android:textSize="9sp" android:textStyle="bold" android:visibility="gone" />
+    <!-- Top bar: 48dp targets, 12dp rhythm, status readable at 10sp. -->
+    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@color/surface" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="72dp" android:paddingStart="12dp" android:paddingTop="12dp" android:paddingEnd="12dp" android:paddingBottom="12dp">
+        <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
+        <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" style="@style/TopBarButton" android:layout_marginStart="8dp" android:contentDescription="Toggle light" android:src="@drawable/ic_flash" />
+        <FrameLayout android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="8dp">
+            <com.matthew.rawlens.RotatingImageButton android:id="@+id/timerButton" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/glass_button" android:contentDescription="Capture timer" android:padding="12dp" android:src="@drawable/ic_timer" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/timerBadge" android:layout_width="20dp" android:layout_height="20dp" android:layout_gravity="top|end" android:background="@drawable/control_chip_active" android:gravity="center" android:text="2" android:textColor="@color/accent_dark" android:textSize="10sp" android:textStyle="bold" android:visibility="gone" />
         </FrameLayout>
         <Space android:id="@+id/topSpacer" android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
@@ -71,12 +78,18 @@
             android:id="@+id/rawStatusGroup"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:minWidth="96dp"
             android:clickable="true"
             android:clipChildren="false"
             android:clipToPadding="false"
             android:focusable="true"
-            android:gravity="end"
-            android:orientation="vertical">
+            android:gravity="end|center_vertical"
+            android:orientation="vertical"
+            android:paddingStart="12dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="4dp">
 
             <TextView
                 android:id="@+id/rawBadge"
@@ -92,90 +105,103 @@
 
             <TextView
                 android:id="@+id/status"
-                android:layout_width="104dp"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="5dp"
+                android:layout_marginTop="4dp"
                 android:ellipsize="end"
                 android:gravity="end"
-                android:letterSpacing="0.08"
-                android:maxLines="2"
+                android:letterSpacing="0.06"
+                android:maxLines="1"
+                android:maxWidth="140dp"
+                android:singleLine="true"
                 android:text="READY"
                 android:textColor="@color/text_primary"
-                android:textSize="8sp" />
+                android:textSize="10sp" />
 
         </LinearLayout>
 
     </LinearLayout>
 
+    <!-- Floating histogram: larger tap target, consistent 16dp lift above panel. -->
     <com.matthew.rawlens.HistogramView
         android:id="@+id/histogramView"
-        android:layout_width="104dp"
-        android:layout_height="52dp"
+        android:layout_width="124dp"
+        android:layout_height="64dp"
         android:layout_gravity="start|bottom"
         android:layout_marginStart="16dp"
-        android:layout_marginBottom="250dp"
-        android:background="@drawable/histogram_panel" />
+        android:layout_marginBottom="262dp"
+        android:background="@drawable/histogram_panel"
+        android:clickable="true"
+        android:focusable="true"
+        android:contentDescription="Histogram" />
 
-    <LinearLayout android:id="@+id/lensSwitcher" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|bottom" android:layout_marginEnd="16dp" android:layout_marginBottom="246dp" android:gravity="end" android:orientation="vertical">
+    <!-- Lens pill: fixed wrap_content pill, 48dp min touch, no match_parent child bug. -->
+    <LinearLayout android:id="@+id/lensSwitcher" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|bottom" android:layout_marginEnd="16dp" android:layout_marginBottom="258dp" android:gravity="end" android:minHeight="48dp" android:orientation="vertical">
 
         <com.matthew.rawlens.RotatingTextView
             android:id="@+id/lensControl"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:background="@drawable/lens_switcher"
+            android:gravity="center"
+            android:minWidth="56dp"
+            android:minHeight="44dp"
             android:text="1×"
             android:textColor="@color/text_primary"
-            android:textSize="14sp"
+            android:textSize="13sp"
             android:textStyle="bold" />
     </LinearLayout>
 
-    <LinearLayout android:id="@+id/manualControlPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:layout_marginBottom="238dp" android:background="@android:color/transparent" android:orientation="vertical" android:visibility="gone">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical|end" android:orientation="horizontal" android:paddingStart="4dp" android:paddingEnd="4dp" android:paddingBottom="6dp">
-            <com.matthew.rawlens.RotatingButton android:id="@+id/manualLimitsButton" android:layout_width="wrap_content" android:layout_height="32dp" android:layout_marginEnd="8dp" android:background="@drawable/control_chip" android:minWidth="0dp" android:paddingStart="13dp" android:paddingEnd="13dp" android:text="LIMITS" android:textColor="@color/text_primary" android:textSize="9sp" android:textStyle="bold" android:visibility="gone" />
-            <com.matthew.rawlens.RotatingButton android:id="@+id/manualAutoButton" android:layout_width="wrap_content" android:layout_height="32dp" android:background="@drawable/control_chip_active" android:minWidth="0dp" android:paddingStart="13dp" android:paddingEnd="13dp" android:text="AUTO" android:textColor="@color/accent_dark" android:textSize="9sp" android:textStyle="bold" />
+    <!-- Floating minimal ruler: transparent container, the strip itself is the pill. -->
+    <LinearLayout android:id="@+id/manualControlPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="250dp" android:background="@android:color/transparent" android:orientation="vertical" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical|end" android:orientation="horizontal" android:paddingStart="4dp" android:paddingEnd="4dp" android:paddingBottom="8dp">
+            <com.matthew.rawlens.RotatingButton android:id="@+id/manualLimitsButton" android:layout_width="wrap_content" android:layout_height="40dp" android:layout_marginEnd="8dp" android:background="@drawable/control_chip" android:minWidth="0dp" android:minHeight="40dp" android:paddingStart="16dp" android:paddingEnd="16dp" android:text="LIMITS" android:textColor="@color/text_primary" android:textSize="10sp" android:textStyle="bold" android:visibility="gone" />
+            <com.matthew.rawlens.RotatingButton android:id="@+id/manualAutoButton" android:layout_width="wrap_content" android:layout_height="40dp" android:background="@drawable/control_chip_active" android:minWidth="88dp" android:minHeight="40dp" android:paddingStart="16dp" android:paddingEnd="16dp" android:text="AUTO" android:textColor="@color/accent_dark" android:textSize="10sp" android:textStyle="bold" />
         </LinearLayout>
-        <com.matthew.rawlens.RuleSliderView android:id="@+id/manualControlSlider" android:layout_width="match_parent" android:layout_height="64dp" />
+        <com.matthew.rawlens.RuleSliderView android:id="@+id/manualControlSlider" android:layout_width="match_parent" android:layout_height="68dp" />
     </LinearLayout>
 
-    <LinearLayout android:id="@+id/quickSettingsPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="14dp" android:layout_marginEnd="14dp" android:layout_marginBottom="238dp" android:background="@drawable/quick_panel" android:orientation="vertical" android:visibility="gone">
+    <LinearLayout android:id="@+id/quickSettingsPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="250dp" android:background="@drawable/quick_panel" android:orientation="vertical" android:visibility="gone">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:letterSpacing="0.12" android:text="QUICK CONTROL" android:textColor="@color/text_primary" android:textSize="9sp" android:textStyle="bold" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tap live view to close" android:textColor="@color/text_muted" android:textSize="9sp" />
         </LinearLayout>
+        <!-- Balanced 3 x 3 grid: every row same weight so tiles never stretch. -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/gridQuick" style="@style/QuickControlTile" android:text="GRID\nTHIRDS" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/levelQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LEVEL\nOFF" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/histogramQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="HISTOGRAM\nON" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/aeMeteringQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AE METER\nAUTO" />
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/timerQuick" style="@style/QuickControlTile" android:text="TIMER\nOFF" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/releaseQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="RELEASE\nSINGLE" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/oisQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="OIS\nON" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/hdrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="HDR\nOFF" />
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:text="ETTR\nOFF" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/rawSrQuick" style="@style/QuickControlTile" android:text="RAW SR\nOFF" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="ETTR\nOFF" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
         </LinearLayout>
     </LinearLayout>
 
     <LinearLayout
         android:id="@+id/controlPanel"
         android:layout_width="match_parent"
-        android:layout_height="247dp"
+        android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:background="@drawable/control_panel"
         android:gravity="top"
+        android:minHeight="232dp"
         android:orientation="vertical"
-        android:paddingStart="12dp"
-        android:paddingTop="6dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="26dp">
+        android:paddingStart="16dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="28dp">
 
         <LinearLayout
             android:id="@+id/exposureControls"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
+            android:layout_height="wrap_content"
             android:gravity="center"
             android:orientation="horizontal">
 
@@ -187,137 +213,146 @@
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/shutterControl"
                 style="@style/ExposureControl"
-                android:layout_marginStart="5dp"
+                android:layout_marginStart="6dp"
                 android:text="S A" />
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/wbControl"
                 style="@style/ExposureControl"
-                android:layout_marginStart="5dp"
+                android:layout_marginStart="6dp"
                 android:text="WB A" />
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/focusControl"
                 style="@style/ExposureControl"
-                android:layout_marginStart="5dp"
+                android:layout_marginStart="6dp"
                 android:text="AF" />
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/evControl"
                 style="@style/ExposureControl"
-                android:layout_marginStart="5dp"
+                android:layout_marginStart="6dp"
                 android:text="EV +0.0" />
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/flashControl"
-                style="@style/ExposureControl"
-                android:layout_width="1dp"
-                android:layout_height="2dp"
-                android:layout_marginStart="5dp"
-                android:text="LIGHT OFF"
-                android:visibility="gone" />
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone"
+                android:text="LIGHT OFF" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/captureInfoRow"
             android:layout_width="match_parent"
-            android:layout_height="29dp"
+            android:layout_height="wrap_content"
+            android:minHeight="28dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="4dp"
-            android:paddingEnd="4dp">
+            android:paddingEnd="4dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="2dp">
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/dngInfo"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:letterSpacing="0.08"
+                android:ellipsize="end"
+                android:letterSpacing="0.06"
                 android:singleLine="true"
                 android:text="DNG • 12-BIT"
                 android:textColor="@color/text_secondary"
-                android:textSize="9sp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:letterSpacing="0.06"
-                android:text="TAP AF  •  DRAG AF / AE"
-                android:textColor="@color/text_muted"
-                android:textSize="8sp" />
+                android:textSize="10sp" />
 
             <com.matthew.rawlens.RotatingTextView
                 android:id="@+id/sensorInfo"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:ellipsize="end"
                 android:gravity="end"
-                android:letterSpacing="0.08"
+                android:letterSpacing="0.06"
                 android:singleLine="true"
                 android:text="RAW SENSOR"
                 android:textColor="@color/text_secondary"
-                android:textSize="9sp" />
+                android:textSize="10sp" />
         </LinearLayout>
 
-        <FrameLayout
+        <LinearLayout
             android:id="@+id/capturePanel"
             android:layout_width="match_parent"
-            android:layout_height="122dp">
+            android:layout_height="wrap_content"
+            android:minHeight="104dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingTop="6dp">
 
             <com.matthew.rawlens.RotatingImageButton
                 android:id="@+id/quickButton"
-                android:layout_width="52dp"
-                android:layout_height="52dp"
-                android:layout_gravity="start|top"
-                android:layout_marginStart="10dp"
-                android:layout_marginTop="17dp"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
                 android:background="@drawable/glass_button"
                 android:contentDescription="Quick controls"
-                android:padding="14dp"
+                android:padding="15dp"
                 android:src="@drawable/ic_tune" />
 
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
             <FrameLayout
-                android:layout_width="86dp"
-                android:layout_height="86dp"
-                android:layout_gravity="top|center_horizontal"
+                android:layout_width="88dp"
+                android:layout_height="88dp"
                 android:background="@drawable/shutter_ring"
                 android:padding="8dp">
 
                 <View
                     android:id="@+id/shutter"
-                    android:layout_width="70dp"
-                    android:layout_height="70dp"
+                    android:layout_width="72dp"
+                    android:layout_height="72dp"
                     android:background="@drawable/shutter_core"
                     android:contentDescription="Capture RAW photo" />
             </FrameLayout>
 
-            <com.matthew.rawlens.RotatingTextView
-                android:id="@+id/modeButton"
-                android:layout_width="68dp"
-                android:layout_height="52dp"
-                android:layout_gravity="end|top"
-                android:layout_marginTop="17dp"
-                android:layout_marginEnd="2dp"
-                android:background="@drawable/control_chip"
-                android:gravity="center"
-                android:text="S\nSINGLE"
-                android:textColor="@color/text_primary"
-                android:textSize="9sp"
-                android:textStyle="bold" />
+            <Space
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
 
-            <com.matthew.rawlens.RotatingTextView
-                android:id="@+id/vfPreviewButton"
-                android:layout_width="68dp"
-                android:layout_height="32dp"
-                android:layout_gravity="end|bottom"
-                android:layout_marginEnd="2dp"
-                android:layout_marginBottom="8dp"
-                android:background="@drawable/control_chip"
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
                 android:gravity="center"
-                android:text="RAW•A"
-                android:textColor="@color/text_primary"
-                android:textSize="9sp"
-                android:textStyle="bold" />
-        </FrameLayout>
+                android:orientation="vertical">
+
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/modeButton"
+                    android:layout_width="72dp"
+                    android:layout_height="56dp"
+                    android:background="@drawable/control_chip"
+                    android:gravity="center"
+                    android:minHeight="48dp"
+                    android:text="S\nSINGLE"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/vfPreviewButton"
+                    android:layout_width="72dp"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/control_chip"
+                    android:gravity="center"
+                    android:minHeight="36dp"
+                    android:text="RAW•A"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

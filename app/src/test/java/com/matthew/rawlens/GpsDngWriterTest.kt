@@ -9,12 +9,44 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * GPS sub-IFD coverage for the hand-rolled Kotlin DNG writer. The platform
+ * GPS sub-IFD coverage for the hand-rolled Kotlin DNG writers. The platform
  * DngCreator path is owned by Android's writer (setLocation) and the JPEG
  * path by ExifInterface; both are pinned in [GpsLocationTest].
  */
 class GpsDngWriterTest {
     private val gps = GpsLocation(48.858222, 2.2945, 35.5, timeMillis = 1780276800000L)
+
+    @Test fun linearRgbCarriesGpsSubIfd() {
+        val bytes = ByteArrayOutputStream().also {
+            LinearRgbDngWriter.write(it, linearRgb(), metadata(), provenance(), gps)
+        }.toByteArray()
+        val tiff = Tiff(bytes)
+        assertTrue(tiff.has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
+        val gpsIfd = tiff.subIfd(GpsTiffDirectory.TAG_GPS_IFD_POINTER)
+        assertGpsContents(gpsIfd, gps)
+        // The pixel strip still starts exactly after the full header.
+        assertEquals(tiff.entry(273).value + tiff.entry(279).value, bytes.size)
+    }
+
+    @Test fun mosaicSrCarriesGpsSubIfd() {
+        val bytes = ByteArrayOutputStream().also {
+            MosaicSrDngWriter.write(
+                it,
+                MosaicSrCfa(2, 2, BayerPattern.RGGB, FloatArray(4) { 0.25f }),
+                metadata(),
+                MosaicSrProvenance(
+                    selectedFrames = 2, acceptedFrames = 2, rejectedFrames = 0,
+                    referenceTimestampNs = 123L, sourceWidth = 2, sourceHeight = 2,
+                    sourceCameraId = "0", lensShadingApplied = false
+                ),
+                gps
+            )
+        }.toByteArray()
+        val tiff = Tiff(bytes)
+        assertTrue(tiff.has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
+        assertGpsContents(tiff.subIfd(GpsTiffDirectory.TAG_GPS_IFD_POINTER), gps)
+        assertEquals(tiff.entry(273).value + tiff.entry(279).value, bytes.size)
+    }
 
     @Test fun floatCfaCarriesGpsSubIfd() {
         val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16) { 0.5f }, RawCrop(0, 0, 4, 4))
@@ -28,17 +60,33 @@ class GpsDngWriterTest {
     }
 
     @Test fun writersOmitGpsPointerWithoutAFix() {
+        val linear = ByteArrayOutputStream().also {
+            LinearRgbDngWriter.write(it, linearRgb(), metadata(), provenance())
+        }.toByteArray()
+        assertFalse(Tiff(linear).has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
         val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
         val float = ByteArrayOutputStream().also {
             FloatCfaDngWriter.write(it, cfa, metadata())
         }.toByteArray()
         assertFalse(Tiff(float).has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
+        val mosaic = ByteArrayOutputStream().also {
+            MosaicSrDngWriter.write(
+                it,
+                MosaicSrCfa(2, 2, BayerPattern.RGGB, FloatArray(4) { 0.25f }),
+                metadata(),
+                MosaicSrProvenance(
+                    selectedFrames = 2, acceptedFrames = 2, rejectedFrames = 0,
+                    referenceTimestampNs = 123L, sourceWidth = 2, sourceHeight = 2,
+                    sourceCameraId = "0", lensShadingApplied = false
+                )
+            )
+        }.toByteArray()
+        assertFalse(Tiff(mosaic).has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
     }
 
     @Test fun gpsPointerEntryIsSortedAndInline() {
-        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16) { 0.5f }, RawCrop(0, 0, 4, 4))
         val bytes = ByteArrayOutputStream().also {
-            FloatCfaDngWriter.write(it, cfa, metadata(), gps)
+            LinearRgbDngWriter.write(it, linearRgb(), metadata(), provenance(), gps)
         }.toByteArray()
         val tiff = Tiff(bytes)
         val tags = tiff.tags
@@ -73,6 +121,15 @@ class GpsDngWriterTest {
         `when`(metadata.exifOrientation).thenReturn(1)
         return metadata
     }
+
+    private fun linearRgb() = MergedLinearRgb(2, 2, FloatArray(12) { 0.25f })
+
+    private fun provenance() = MergeProvenance(
+        algorithmVersion = LinearRgbDngWriter.ALGORITHM_VERSION,
+        selectedFrames = 4, acceptedFrames = 3, rejectedFrames = 1,
+        referenceTimestampNs = 123456789L, outputScale = 1,
+        sourceCameraId = "0", lensShadingApplied = true
+    )
 
     /** Minimal little-endian TIFF reader for the writer round trips. */
     private class Tiff(val bytes: ByteArray) {

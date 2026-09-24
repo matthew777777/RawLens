@@ -54,7 +54,24 @@ object AgxDisplayTransform {
         // AgX's log domain is non-negative. This is the pinned view-transform domain guard,
         // not the final display-gamut boundary.
         val positiveScene = FloatArray(3) { max(0f, sceneRec2020[it]) }
-        var value = positiveScene
+        // Scene-linear soft shoulder: per-channel exponential compression above the knee.
+        // Keeps 0.18 bit-exact, maps 1.0->~0.994, 1.95->~1.49, 16->1.7 asymptote at full
+        // strength, so skies keep gradation instead of flattening when exposure pushes
+        // tails near white. Strength 0 = pinned Filament AgX only.
+        // Must stay in sync with agx_srgb8.glsl agx_base() and VfGpuImport tail.
+        val shoulder = settings.resolvedForPlatform().highlightShoulder.coerceIn(0f, 1f)
+        val softScene = FloatArray(3) {
+            val p = positiveScene[it]
+            // Branch on the extremes: p + 1.0*(c-p) is not identity in float
+            // arithmetic for large p (cancellation loses the fraction and breaks
+            // the highlight plateau monotonicity), so select directly.
+            when {
+                shoulder >= 1f -> compressHighlight(p)
+                shoulder <= 0f -> p
+                else -> { val c = compressHighlight(p); p + shoulder * (c - p) }
+            }
+        }
+        var value = softScene
         value = map(AGX_INSET, value)
         val minimumEv = MIDDLE_GRAY_LOG2 - settings.agxShadowEv
         val maximumEv = MIDDLE_GRAY_LOG2 + settings.agxHighlightEv
@@ -71,9 +88,9 @@ object AgxDisplayTransform {
         value = FloatArray(3) { max(0f, value[it]).pow(2.2f) }
         val mappedLuma = dot(value, REC2020_LUMA)
         if (settings.agxHuePreservation > 0f) {
-            val sceneLuma = dot(positiveScene, REC2020_LUMA)
+            val sceneLuma = dot(softScene, REC2020_LUMA)
             if (sceneLuma > 1e-9f) {
-                val ratioMapped = FloatArray(3) { positiveScene[it] * mappedLuma / sceneLuma }
+                val ratioMapped = FloatArray(3) { softScene[it] * mappedLuma / sceneLuma }
                 value = FloatArray(3) {
                     value[it] + settings.agxHuePreservation * (ratioMapped[it] - value[it])
                 }
@@ -149,6 +166,16 @@ object AgxDisplayTransform {
     }
 
     private fun log2(value: Float): Float = (ln(value.toDouble()) / LN_2).toFloat()
+
+    /** Scene-linear highlight soft shoulder; keep in sync with GLSL mirrors. */
+    fun compressHighlight(value: Float): Float {
+        if (!value.isFinite() || value <= HIGHLIGHT_SOFT_KNEE) return value
+        val t = (value - HIGHLIGHT_SOFT_KNEE) / HIGHLIGHT_SOFT_SCALE
+        return HIGHLIGHT_SOFT_KNEE + HIGHLIGHT_SOFT_SCALE * (1f - kotlin.math.exp(-t.toDouble()).toFloat())
+    }
+
+    const val HIGHLIGHT_SOFT_KNEE = 0.9f
+    const val HIGHLIGHT_SOFT_SCALE = 0.8f
 
     private const val MIDDLE_GRAY_LOG2 = -2.473931188f
     private const val LN_2 = 0.6931471805599453

@@ -15,6 +15,7 @@ uniform highp float u_agx_hue_preservation;
 uniform highp float u_agx_shadow_ev;
 uniform highp float u_agx_highlight_ev;
 uniform highp float u_agx_gamut_compression;
+uniform highp float u_highlight_shoulder;
 uniform highp int u_write_gainmap;
 uniform highp int u_gainmap_only;
 uniform highp float u_grain_amount;
@@ -63,6 +64,18 @@ highp vec3 agx_contrast(highp vec3 x) {
 
 highp vec3 agx_base(highp vec3 acescg) {
     highp vec3 scene = max(ACESCG_TO_REC2020_D65 * acescg, vec3(0.0));
+    // Scene-linear soft shoulder, mirror of AgxDisplayTransform.compressHighlight.
+    // C1 at knee 0.9, asymptote 1.7: 1.0->0.994, 1.95->1.49, 16->1.7 at full strength.
+    // Strength 0 = pinned Filament AgX only.
+    if (u_highlight_shoulder > 0.0) {
+        for (int c = 0; c < 3; ++c) {
+            if (scene[c] > 0.9) {
+                highp float t = (scene[c] - 0.9) / 0.8;
+                highp float compressed = 0.9 + 0.8 * (1.0 - exp(-t));
+                scene[c] = mix(scene[c], compressed, clamp(u_highlight_shoulder, 0.0, 1.0));
+            }
+        }
+    }
     highp vec3 v = AGX_INSET * scene;
     v = log2(max(v, vec3(1e-10)));
     highp float minimumEv = -2.473931188 - u_agx_shadow_ev;

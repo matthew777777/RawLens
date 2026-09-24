@@ -11,7 +11,6 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.util.AttributeSet
 import android.view.View
-import android.os.SystemClock
 
 /** Live RGB + luminance histogram. Shows the processed preview (YUV) or the sensor
  * mosaic (RAW); the source is exposed via accessibility only so the graph stays
@@ -30,24 +29,28 @@ class HistogramView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = resources.displayMetrics.density
     }
-    private var lastRawUpdateMillis = 0L
+    private var rawSourceSelected = true
+    private var previewPixels = IntArray(0)
 
-    /** Allow the next preview bitmap to replace RAW immediately after leaving/falling out of ZSL. */
-    fun allowPreviewImmediately() {
-        lastRawUpdateMillis = 0L
+    /** Source selection is persistent until the user changes it, including capture gaps. */
+    fun setSourceRaw(raw: Boolean) {
+        if (rawSourceSelected == raw) return
+        rawSourceSelected = raw
+        bins.forEach { it.fill(0) }
         invalidate()
     }
 
-    fun update(bitmap: Bitmap?) {
+    /** Reads synchronously; pass false when the caller owns a reusable bitmap. */
+    fun update(bitmap: Bitmap?, recycleBitmap: Boolean = true) {
         if (bitmap == null || bitmap.width == 0 || bitmap.height == 0) return
-        if (lastRawUpdateMillis != 0L &&
-            SystemClock.uptimeMillis() - lastRawUpdateMillis < RAW_HOLD_MILLIS
-        ) {
-            bitmap.recycle()
+        if (rawSourceSelected) {
+            if (recycleBitmap) bitmap.recycle()
             return
         }
         bins.forEach { it.fill(0) }
-        val pixels = IntArray(bitmap.width * bitmap.height)
+        val count = Math.multiplyExact(bitmap.width, bitmap.height)
+        if (previewPixels.size != count) previewPixels = IntArray(count)
+        val pixels = previewPixels
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         for (color in pixels) {
             val r = Color.red(color)
@@ -59,18 +62,16 @@ class HistogramView @JvmOverloads constructor(
             bins[LUMINANCE][((0.2126 * r + 0.7152 * g + 0.0722 * b) + 0.5).toInt()
                 .coerceIn(0, 255) * (BIN_COUNT - 1) / 255]++
         }
-        bitmap.recycle()
+        if (recycleBitmap) bitmap.recycle()
         invalidate()
     }
 
     fun update(histogram: RgbHistogram) {
+        if (histogram.fromRaw != rawSourceSelected) return
         copyResampled(histogram.red, bins[RED])
         copyResampled(histogram.green, bins[GREEN])
         copyResampled(histogram.blue, bins[BLUE])
         copyResampled(histogram.luminance, bins[LUMINANCE])
-        if (histogram.fromRaw) {
-            lastRawUpdateMillis = SystemClock.uptimeMillis()
-        }
         invalidate()
     }
 
@@ -117,7 +118,6 @@ class HistogramView @JvmOverloads constructor(
 
     private companion object {
         const val BIN_COUNT = 48
-        const val RAW_HOLD_MILLIS = 2_000L
         const val RED = 0
         const val GREEN = 1
         const val BLUE = 2

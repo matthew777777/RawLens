@@ -16,6 +16,30 @@ data class AdaptiveExposureResult(
     val lowKey: Boolean
 )
 
+/** Tunable highlight guards, wired from [JpegOutputSettings]; defaults are sky-safe. */
+data class AdaptiveExposureTuning(
+    /** Hard white guard for the p99.5 spike. 1.0 = never push past white. */
+    val highlightHeadroom: Double = 1.0,
+    /** Soft shoulder for broad p95 highlight mass (skies/walls). */
+    val highlightSoftHeadroom: Double = 0.85
+) {
+    init {
+        require(highlightHeadroom.isFinite() && highlightSoftHeadroom.isFinite())
+    }
+
+    fun bounded(): AdaptiveExposureTuning = copy(
+        highlightHeadroom = highlightHeadroom.coerceIn(0.5, 1.5),
+        highlightSoftHeadroom = highlightSoftHeadroom.coerceIn(0.6, 1.0)
+    )
+
+    companion object {
+        fun fromOutputSettings(settings: JpegOutputSettings): AdaptiveExposureTuning =
+            AdaptiveExposureTuning(
+                highlightHeadroom = settings.resolvedForPlatform().highlightHeadroom.toDouble(),
+                highlightSoftHeadroom = settings.resolvedForPlatform().highlightSoftHeadroom.toDouble()
+            ).bounded()
+    }
+}
 /** One instance is frozen per shutter press and shared by every frame in that logical capture. */
 class SharedAdaptiveExposure {
     private var correctionEv: Double? = null
@@ -37,7 +61,11 @@ object AdaptiveDevelopmentExposure {
 
     fun workspace(): Workspace = Workspace()
 
-    fun analyze(cfa: UnpackedRawCfa, workspace: Workspace = Workspace()): AdaptiveExposureResult {
+    fun analyze(
+        cfa: UnpackedRawCfa,
+        workspace: Workspace = Workspace(),
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+    ): AdaptiveExposureResult {
         require(cfa.values.size == cfa.width * cfa.height)
         val stride = maxOf(1, cfa.values.size / MAX_SAMPLES)
         val samples = workspace.samples
@@ -48,7 +76,7 @@ object AdaptiveDevelopmentExposure {
             if (value.isFinite() && value > SHADOW_FLOOR) samples[count++] = value
             index += stride
         }
-        return analyzeSamples(samples, count)
+        return analyzeSamples(samples, count, tuning)
     }
 
     /** Samples packed RAW directly, applying the same normalization and lens gain as GLES. */
@@ -58,7 +86,8 @@ object AdaptiveDevelopmentExposure {
         normalization: RawNormalization,
         crop: RawCrop,
         lensShading: LensShadingModel?,
-        workspace: Workspace = Workspace()
+        workspace: Workspace = Workspace(),
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
     ): AdaptiveExposureResult {
         require(crop.left + crop.width <= layout.width && crop.top + crop.height <= layout.height)
         val input = source.duplicate().order(ByteOrder.nativeOrder())
@@ -87,11 +116,15 @@ object AdaptiveDevelopmentExposure {
             if (value.isFinite() && value > SHADOW_FLOOR) samples[count++] = value
             index += stride
         }
-        return analyzeSamples(samples, count)
+        return analyzeSamples(samples, count, tuning)
     }
 
     /** Shared with the VF live preview estimator ([VfGpuImport.estimatePreviewCorrectionEv]). */
-    internal fun analyzeSamples(samples: FloatArray, count: Int): AdaptiveExposureResult {
+    internal fun analyzeSamples(
+        samples: FloatArray,
+        count: Int,
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+    ): AdaptiveExposureResult {
         if (count < MIN_SAMPLES) {
             return AdaptiveExposureResult(0.0, 0.0, 0.0, false)
         }
@@ -110,9 +143,16 @@ object AdaptiveDevelopmentExposure {
         if (logCount == 0) return AdaptiveExposureResult(0.0, 0.0, 0.0, false)
         val logAverage = logSum / logCount
         val highlight = percentile(samples, count, 0.995).toDouble()
+        // Broad-area highlight level (sky, walls): keeps large bright regions
+        // from flattening even when the p99.5 spike itself is still safe.
+        val highlightBroad = percentile(samples, count, 0.95).toDouble()
         var correction = log2(TARGET_MIDDLE / exp2(logAverage))
         // Do not move the measured upper tail past display-referred white before AgX rolls it off.
-        correction = min(correction, log2(HIGHLIGHT_HEADROOM / highlight.coerceAtLeast(1e-6)))
+        // Hard guard on the spike (p99.5 -> headroom) plus a soft shoulder on the broad
+        // highlight mass (p95 -> soft headroom) so skies keep gradation instead of flat white.
+        val bounded = tuning.bounded()
+        correction = min(correction, log2(bounded.highlightHeadroom / highlight.coerceAtLeast(1e-6)))
+        correction = min(correction, log2(bounded.highlightSoftHeadroom / highlightBroad.coerceAtLeast(1e-6)))
 
         val median = percentile(samples, count, 0.50).toDouble()
         val upper = percentile(samples, count, 0.90).toDouble()
@@ -132,8 +172,13 @@ object AdaptiveDevelopmentExposure {
     private const val MIN_SAMPLES = 64
     internal const val SHADOW_FLOOR = 1e-4f
     private const val TARGET_MIDDLE = 0.18
-    // Preserve room for AgX's shoulder instead of forcing the RAW upper tail below display white.
-    private const val HIGHLIGHT_HEADROOM = 4.0
+    // Defaults for [AdaptiveExposureTuning]; wired from JpegOutputSettings.
+    // Previously hard 4.0 to "preserve room for AgX's shoulder", but that lifted garden
+    // skies (p99.5=0.69) by +1.5EV to ~1.95x white which AgX maps to flat white.
+    const val DEFAULT_HIGHLIGHT_HEADROOM = 1.0
+    // Soft shoulder for broad highlights (p95 -> 0.85): large skies/walls keep
+    // gradation instead of clipping when the spike guard alone would allow +1EV.
+    const val DEFAULT_HIGHLIGHT_SOFT_HEADROOM = 0.85
     private const val MAX_CORRECTION_EV = 1.5
     private const val LOW_KEY_MEDIAN = 0.012
     private const val LOW_KEY_UPPER = 0.05

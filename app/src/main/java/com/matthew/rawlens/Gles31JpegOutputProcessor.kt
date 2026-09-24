@@ -132,6 +132,9 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glUniform1f(
                 location(outputProgram, "u_agx_gamut_compression"), resolved.agxGamutCompression
             )
+            GLES31.glUniform1f(
+                location(outputProgram, "u_highlight_shoulder"), resolved.highlightShoulder
+            )
             GLES31.glUniform1f(location(outputProgram, "u_grain_amount"), 0f)
             GLES31.glUniform1f(location(outputProgram, "u_grain_size"), 0f)
             GLES31.glUniform1ui(location(outputProgram, "u_grain_seed"), System.nanoTime().toInt())

@@ -1,13 +1,19 @@
 <resources>
+    <!-- Core theme: cozy dark + lime. New tokens derive from these two. -->
     <color name="surface">#070809</color>
-    <color name="panel">#F207090B</color>
-    <color name="panel_raised">#F216191D</color>
+    <color name="surface_container">#121417</color>
+    <color name="panel">#F2121417</color>
+    <color name="panel_raised">#F51B1F24</color>
     <color name="panel_soft">#CC20242A</color>
+    <color name="outline">#29FFFFFF</color>
+    <color name="outline_strong">#45FFFFFF</color>
     <color name="text_primary">#F7F8F4</color>
     <color name="text_secondary">#9DA4A8</color>
     <color name="text_muted">#6E757B</color>
     <color name="accent">#D6FF33</color>
     <color name="accent_dark">#151B00</color>
+    <color name="accent_soft">#1AD6FF33</color>
     <color name="focus">#D6FF33</color>
     <color name="metering">#FFB342</color>
+    <color name="danger">#FF7A7A</color>
 </resources>

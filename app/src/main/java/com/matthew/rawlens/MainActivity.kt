@@ -10,14 +10,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.KeyEvent
 import android.view.OrientationEventListener
 import android.view.View
@@ -31,7 +29,9 @@ import android.widget.SeekBar
 import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ScrollView
+import android.graphics.Typeface
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
@@ -42,7 +42,7 @@ import android.view.WindowInsetsController
 import android.os.Build
 import android.os.SystemClock
 
-class MainActivity : Activity(), SensorEventListener {
+class MainActivity : Activity() {
     private lateinit var controller: RawCameraController
     private lateinit var status: TextView
 
@@ -73,13 +73,14 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var meteringOverlay: FocusMeteringOverlay
     private lateinit var quickPanel: LinearLayout
     private lateinit var gridQuick: TextView
-    private lateinit var levelQuick: TextView
     private lateinit var histogramQuick: TextView
     private lateinit var aeMeteringQuick: TextView
-    private lateinit var oisQuick: TextView
+    private lateinit var hdrQuick: TextView
     private lateinit var timerQuick: TextView
     private lateinit var releaseQuick: TextView
+    private lateinit var rawSrQuick: TextView
     private lateinit var ettrQuick: TextView
+    private var dualRawEnabled = false // Experimental, deliberately session-only.
     private var lastLensSwitcherSignature: String? = null
     private lateinit var timerBadge: TextView
     private lateinit var modeButton: TextView
@@ -93,39 +94,29 @@ class MainActivity : Activity(), SensorEventListener {
     private var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     private var rawZslSettingsStatus: TextView? = null
     private var gridEnabled = true
-    private var levelEnabled = false
     private var histogramEnabled = true
-    // True once a recent RAW_SENSOR histogram arrived while the RAW source is selected.
-    // Until then (and whenever the YUV source is selected) the live preview histogram keeps
-    // updating so the graph never looks frozen while the RAW stream warms up, in any mode.
+    // True once a RAW_SENSOR histogram arrived while the RAW source is selected.
+    // Freshness is reported separately; the selected source never changes on a timeout.
     private var rawHistogramLive = false
     private var lastRawHistogramMs = Long.MIN_VALUE
     /** User-selected histogram source, persisted. Tapping the histogram toggles it. */
     private var histogramSourceRaw = true
     private var aeMeteringMode = AeMeteringMode.AUTO
     private var timerSeconds = 0
-    private var releaseMode = 0 // 0 single, 1 burst, 2 HDR bracket
+    private var releaseMode = 0 // 0 single, 1 burst
+    private var hdrEnabled = false
     private var captureExposureMode = CaptureExposureMode.AUTO
+    private var rawSuperResolutionSettings = RawSuperResolutionSettings()
     private var programHintShown = false
     private var sidecarSettingsStatus: TextView? = null
     private var countdownRunnable: Runnable? = null
     private var histogramRunnable: Runnable? = null
-    private lateinit var sensorManager: SensorManager
-    private var levelRotationSensor: Sensor? = null
-    private var levelGravitySensor: Sensor? = null
-    private var levelSensorRegistered = false
+    private var previewHistogramBitmap: android.graphics.Bitmap? = null
+    private val quickTileStates = java.util.IdentityHashMap<TextView, Boolean>()
+    private lateinit var orientationListener: OrientationEventListener
     private var activityResumed = false
     /** Camera stream sizing must use the final viewport, not the full-screen XML placeholder. */
     private var cameraViewportReady = false
-    private val filteredGravity = FloatArray(3)
-    private var hasGravitySample = false
-    private val levelRotationMatrix = FloatArray(9)
-    private val levelRemappedMatrix = FloatArray(9)
-    private val levelOrientationAngles = FloatArray(3)
-    private var filteredLevelRoll = 0f
-    private var filteredLevelPitch = 0f
-    private var hasLevelAngles = false
-    private lateinit var orientationListener: OrientationEventListener
     private var deviceOrientationDegrees = 0
     private var controlRotationDegrees = 0f
 
@@ -139,10 +130,26 @@ class MainActivity : Activity(), SensorEventListener {
         // Viewfinder must never let the phone auto-lock mid-shoot.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
-        releaseMode = lensPreferences().getInt(KEY_RELEASE_MODE,
+        val storedReleaseMode = lensPreferences().getInt(KEY_RELEASE_MODE,
             if (lensPreferences().getBoolean(KEY_BURST_RELEASE, false)) 1 else 0)
+        hdrEnabled = lensPreferences().getBoolean(KEY_HDR_ENABLED, storedReleaseMode == 2)
+        releaseMode = when (storedReleaseMode) {
+            1 -> 1
+            else -> 0
+        }
+        if (storedReleaseMode == 2 || storedReleaseMode !in 0..1) {
+            // Legacy HDR-bracket release mode is now the separate HDR tile.
+            lensPreferences().edit()
+                .putInt(KEY_RELEASE_MODE, releaseMode)
+                .putBoolean(KEY_HDR_ENABLED, hdrEnabled)
+                .apply()
+        }
         preloadFlowNetForMergedHdr()
         preloadRawNindIfEnabled()
+        // KernelNet is tiny (19KB model); preload alongside the other ML nets so
+        // SR saves never wait for init. Unavailable model => silent analytic fallback.
+        RawSrKernelNetAniso.preload(applicationContext)
+        rawSuperResolutionSettings = RawSuperResolutionSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)
         ) { CaptureExposureMode.AUTO }
@@ -152,6 +159,7 @@ class MainActivity : Activity(), SensorEventListener {
         if (lensPreferences().getBoolean(KEY_RAW_ZSL, false)) {
             captureExposureMode = CaptureExposureMode.ZSL
         }
+        if (rawSuperResolutionSettings.enabled) captureExposureMode = CaptureExposureMode.ZSL
         // Capture mode is now the single source of truth for ZSL.  Keeping the legacy flag in
         // sync also makes a process restart reproduce exactly what the mode button shows.
         lensPreferences().edit()
@@ -213,21 +221,14 @@ class MainActivity : Activity(), SensorEventListener {
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
         guideOverlay = findViewById(R.id.guideOverlay)
         histogramView = findViewById(R.id.histogramView)
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        // The rotation vector gives a stable horizon even while the activity remains portrait.
-        // Gravity remains a fallback for devices that do not expose it.
-        levelRotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        levelGravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
-            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         quickPanel = findViewById(R.id.quickSettingsPanel)
         gridQuick = findViewById(R.id.gridQuick)
-        levelQuick = findViewById(R.id.levelQuick)
         histogramQuick = findViewById(R.id.histogramQuick)
         aeMeteringQuick = findViewById(R.id.aeMeteringQuick)
-        oisQuick = findViewById(R.id.oisQuick)
+        hdrQuick = findViewById(R.id.hdrQuick)
         timerQuick = findViewById(R.id.timerQuick)
         releaseQuick = findViewById(R.id.releaseQuick)
+        rawSrQuick = findViewById(R.id.rawSrQuick)
         ettrQuick = findViewById(R.id.ettrQuick)
         timerBadge = findViewById(R.id.timerBadge)
         modeButton = findViewById(R.id.modeButton)
@@ -236,14 +237,13 @@ class MainActivity : Activity(), SensorEventListener {
         rawStatusGroup = findViewById(R.id.rawStatusGroup)
         refreshCaptureFormatControl()
         gridEnabled = lensPreferences().getBoolean(KEY_GRID, true)
-        levelEnabled = lensPreferences().getBoolean(KEY_LEVEL, false)
         histogramEnabled = lensPreferences().getBoolean(KEY_HISTOGRAM, true)
         histogramSourceRaw = lensPreferences().getBoolean(KEY_HISTOGRAM_SOURCE_RAW, true)
+        histogramView.setSourceRaw(histogramSourceRaw)
         aeMeteringMode = AeMeteringMode.fromPreference(
             lensPreferences().getInt(KEY_AE_METERING_MODE, AeMeteringMode.AUTO.preferenceValue)
         )
         guideOverlay.gridEnabled = gridEnabled
-        guideOverlay.levelEnabled = levelEnabled
         histogramView.visibility = if (histogramEnabled) View.VISIBLE else View.GONE
         // Tap the histogram to switch between the processed preview (YUV) and the live
         // sensor (RAW) source. The choice is remembered across restarts.
@@ -272,9 +272,9 @@ class MainActivity : Activity(), SensorEventListener {
                     } else ProgramLockMode.NONE
                     val isoLabel = if (lock == ProgramLockMode.ISO_LOCK) "ISO🔒" else "ISO"
                     val shutterLabel = if (lock == ProgramLockMode.SHUTTER_LOCK) "S🔒" else "S"
-                    isoControl.text = controlText(isoLabel, iso.toString())
-                    shutterControl.text = controlText(shutterLabel, formatShutter(shutterSpeed))
-                    if (wb > 0) wbControl.text = controlText("WB", "${wb}K")
+                    isoControl.setTextIfChanged(controlText(isoLabel, iso.toString()))
+                    shutterControl.setTextIfChanged(controlText(shutterLabel, formatShutter(shutterSpeed)))
+                    if (wb > 0) wbControl.setTextIfChanged(controlText("WB", "${wb}K"))
                     updateAutomaticPanelValue(iso, shutterSpeed, wb)
                 }
             },
@@ -316,9 +316,10 @@ class MainActivity : Activity(), SensorEventListener {
             },
             { selectedLensIds() },
             { lensPreferences().getString(KEY_LAST_CAMERA_ID, null) },
-            lensPreferences().getBoolean(KEY_OIS, true),
+            true,
             lensPreferences().getBoolean(KEY_RAW_ZSL, false),
             lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
+            rawSuperResolutionSettings,
             dynamicExposureSettings(),
             ettrSettings(),
             aeMeteringMode,
@@ -337,7 +338,6 @@ class MainActivity : Activity(), SensorEventListener {
                         !histogramSourceRaw
                     ) {
                         rawHistogramLive = false
-                        histogramView.allowPreviewImmediately()
                         updatePreviewHistogramOnce()
                     }
                     refreshCaptureFormatControl()
@@ -360,7 +360,8 @@ class MainActivity : Activity(), SensorEventListener {
                 // The RAW histogram is live in every capture mode while the RAW source is
                 // selected (repeating histogram-only stream plus saved-frame snapshots).
                 // With the YUV source selected RAW frames never replace the preview graph.
-                if (histogramEnabled && histogramSourceRaw) runOnUiThread {
+                runOnUiThread {
+                    if (!histogramEnabled || !histogramSourceRaw) return@runOnUiThread
                     rawHistogramLive = true
                     lastRawHistogramMs = SystemClock.elapsedRealtime()
                     histogramView.update(histogram)
@@ -405,10 +406,18 @@ class MainActivity : Activity(), SensorEventListener {
         controller.setDenoiseSettings(denoiseSettings())
         controller.setVfPreviewMode(vfPreviewMode)
         controller.setVfTargetLongEdge(vfResolution)
+        controller.setVfEngineMode(
+            VfEngineMode.fromPreference(lensPreferences().getString(KEY_VF_ENGINE_MODE, null))
+        )
         vfPreviewButton = findViewById<TextView?>(R.id.vfPreviewButton)?.apply {
             setOnClickListener { cycleVfPreviewMode() }
         }
         refreshVfPreviewButton()
+        // The RAW VF debug overlay is the engine switch: tap to cycle AUTO/GPU/CPU.
+        rawVfDebugOverlay.isClickable = true
+        rawVfDebugOverlay.isFocusable = true
+        rawVfDebugOverlay.setOnClickListener { cycleVfEngineMode() }
+        refreshVfEngineContentDescription()
         shutter.setOnClickListener { triggerCapture(shutter, forceBurst = false) }
         shutter.setOnLongClickListener {
             triggerCapture(shutter, forceBurst = true)
@@ -439,17 +448,6 @@ class MainActivity : Activity(), SensorEventListener {
             lensPreferences().edit().putBoolean(KEY_GRID, gridEnabled).apply()
             updateQuickControls()
         }
-        levelQuick.setOnClickListener {
-            levelEnabled = !levelEnabled
-            guideOverlay.levelEnabled = levelEnabled
-            if (levelEnabled) {
-                if (!registerLevelSensor()) setStatus("LEVEL N/A")
-            } else {
-                unregisterLevelSensor()
-            }
-            lensPreferences().edit().putBoolean(KEY_LEVEL, levelEnabled).apply()
-            updateQuickControls()
-        }
         histogramQuick.setOnClickListener {
             histogramEnabled = !histogramEnabled
             histogramView.visibility = if (histogramEnabled) View.VISIBLE else View.GONE
@@ -459,16 +457,9 @@ class MainActivity : Activity(), SensorEventListener {
             scheduleHistogram()
         }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
+        rawSrQuick.setOnClickListener { toggleRawSuperResolution() }
         ettrQuick.setOnClickListener { toggleEttr() }
-        oisQuick.setOnClickListener {
-            if (controller.isOisSupported()) {
-                controller.toggleOis()
-                lensPreferences().edit().putBoolean(KEY_OIS, controller.isOisEnabled()).apply()
-                updateQuickControls()
-            } else {
-                setStatus("OIS N/A")
-            }
-        }
+        hdrQuick.setOnClickListener { toggleHdrEnabled() }
         timerQuick.setOnClickListener { cycleTimer() }
         releaseQuick.setOnClickListener { toggleReleaseMode() }
         findViewById<View>(R.id.resetTargetsQuick).setOnClickListener {
@@ -587,6 +578,13 @@ class MainActivity : Activity(), SensorEventListener {
         }
         if (requestCode == CAMERA_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             startCameraWhenReady()
+            // First-install path: WelcomeActivity only forwards here once camera access
+            // is granted, but a direct MainActivity launch can reach this callback with
+            // lens setup still pending (permission was missing when onCreate ran
+            // showLensDiscovery and found nothing). Re-run discovery now that IDs are queryable.
+            if (!lensPreferences().getBoolean(KEY_LENS_SETUP_COMPLETE, false)) {
+                showLensDiscovery(firstRun = true)
+            }
         }
         else setStatus("CAMERA PERMISSION NEEDED")
     }
@@ -639,7 +637,6 @@ class MainActivity : Activity(), SensorEventListener {
         activityResumed = true
         startCameraWhenReady()
         if (gpsEnabled()) gpsProvider?.start()
-        if (levelEnabled) registerLevelSensor()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
         scheduleHistogram()
     }
@@ -670,106 +667,16 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onPause() {
         activityResumed = false
         gpsProvider?.stop()
-        unregisterLevelSensor()
         orientationListener.disable()
         countdownRunnable?.let(window.decorView::removeCallbacks)
         countdownRunnable = null
         histogramRunnable?.let(histogramView::removeCallbacks)
         histogramRunnable = null
+        previewHistogramBitmap?.recycle()
+        previewHistogramBitmap = null
         controller.stop()
         super.onPause()
     }
-
-    private fun registerLevelSensor(): Boolean {
-        if (!activityResumed) return levelRotationSensor != null || levelGravitySensor != null
-        if (levelSensorRegistered) return true
-        hasGravitySample = false
-        hasLevelAngles = false
-        val sensor = levelRotationSensor ?: levelGravitySensor ?: return false
-        levelSensorRegistered = sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
-        return levelSensorRegistered
-    }
-
-    private fun unregisterLevelSensor() {
-        if (!levelSensorRegistered) return
-        sensorManager.unregisterListener(this)
-        levelSensorRegistered = false
-        hasGravitySample = false
-        hasLevelAngles = false
-    }
-
-    override fun onSensorChanged(event: SensorEvent) {
-        if (!levelEnabled || event.values.size < 3) return
-        if (event.sensor.type == Sensor.TYPE_GAME_ROTATION_VECTOR ||
-            event.sensor.type == Sensor.TYPE_ROTATION_VECTOR
-        ) {
-            updateLevelFromRotationVector(event.values)
-            return
-        }
-
-        // Fallback for devices without a rotation-vector sensor.
-        val smoothing = if (event.sensor.type == Sensor.TYPE_GRAVITY) 0.22f else 0.12f
-        for (index in 0..2) {
-            filteredGravity[index] = if (hasGravitySample) {
-                filteredGravity[index] + smoothing * (event.values[index] - filteredGravity[index])
-            } else {
-                event.values[index]
-            }
-        }
-        hasGravitySample = true
-
-        val x = filteredGravity[0]
-        val y = filteredGravity[1]
-        val (screenX, screenY) = when (deviceOrientationDegrees) {
-            90 -> -y to x
-            180 -> -x to -y
-            270 -> y to -x
-            else -> x to y
-        }
-        val roll = Math.toDegrees(kotlin.math.atan2(-screenX, screenY).toDouble()).toFloat()
-        val pitch = Math.toDegrees(
-            kotlin.math.atan2(-filteredGravity[2], kotlin.math.sqrt(screenX * screenX + screenY * screenY)).toDouble()
-        ).toFloat()
-        publishLevelAngles(roll, pitch)
-    }
-
-    /** Matches PhotonCamera's horizon approach: remap a rotation vector into the current UI axes. */
-    private fun updateLevelFromRotationVector(rotationVector: FloatArray) {
-        SensorManager.getRotationMatrixFromVector(levelRotationMatrix, rotationVector)
-        val (xAxis, yAxis) = when (deviceOrientationDegrees) {
-            90 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
-            180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
-            270 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
-            else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
-        }
-        if (!SensorManager.remapCoordinateSystem(
-                levelRotationMatrix, xAxis, yAxis, levelRemappedMatrix
-            )
-        ) return
-        SensorManager.getOrientation(levelRemappedMatrix, levelOrientationAngles)
-        publishLevelAngles(
-            Math.toDegrees(levelOrientationAngles[2].toDouble()).toFloat(),
-            Math.toDegrees(levelOrientationAngles[1].toDouble()).toFloat()
-        )
-    }
-
-    private fun publishLevelAngles(roll: Float, pitch: Float) {
-        val smoothing = 0.18f
-        if (hasLevelAngles) {
-            filteredLevelRoll += smoothing * shortestAngleDelta(filteredLevelRoll, roll)
-            filteredLevelPitch += smoothing * shortestAngleDelta(filteredLevelPitch, pitch)
-        } else {
-            filteredLevelRoll = roll
-            filteredLevelPitch = pitch
-            hasLevelAngles = true
-        }
-        guideOverlay.updateLevel(filteredLevelRoll, filteredLevelPitch)
-    }
-
-    private fun shortestAngleDelta(from: Float, to: Float): Float =
-        ((to - from + 540f) % 360f) - 180f
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     override fun onDestroy() {
         lensDiscovery.close()
@@ -784,13 +691,16 @@ class MainActivity : Activity(), SensorEventListener {
         val topBar = findViewById<LinearLayout>(R.id.topBar)
         val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
         val root = panel.parent as View
-        val clearance = dp(16)
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         // System preview is a stream target only: keep it attached and flowing for the HAL
         // while fully transparent so ISP pixels never reach the eye. VISIBLE (not INVISIBLE)
         // is load-bearing — some HALs never create the SurfaceTexture otherwise.
         viewfinder.alpha = 0f
-        viewfinder.fillViewport = false
+        // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
+        // black strip between the preview and the bottom panel on tall screens.
+        // The panel is flush/square-topped and tucks 2dp over the preview so the
+        // joint never shows a hairline, on any aspect ratio.
+        viewfinder.fillViewport = true
         // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
         // as an unconstrained tall TextureView. Camera stream selection can then use stable 4:3
@@ -799,8 +709,10 @@ class MainActivity : Activity(), SensorEventListener {
         // Reserve real screen space for controls.  The preview and its overlays are measured
         // only in the remaining viewport, so neither the image nor the thirds grid continues
         // behind ISO/shutter controls.
-        val panelHeight = panel.height.takeIf { it > 0 } ?: dp(247)
-        val availablePreviewHeight = (root.height - topBar.height - panelHeight).coerceAtLeast(0)
+        val panelHeight = panel.height.takeIf { it > 0 } ?: dp(232)
+        val sealOverlap = dp(2)
+        val availablePreviewHeight =
+            (root.height - topBar.height - panelHeight + sealOverlap).coerceAtLeast(0)
         val viewfinderParams = (viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
             width = ViewGroup.LayoutParams.MATCH_PARENT
             height = availablePreviewHeight
@@ -812,26 +724,28 @@ class MainActivity : Activity(), SensorEventListener {
         viewfinder.translationY = 0f
         syncMeteringOverlayToViewfinder(viewfinder)
         syncGuideOverlayToViewfinder(viewfinder)
+        // Floating row sits on one 16dp rhythm above the bottom panel; the lens pill
+        // gets an extra 10dp so it clears the 124x64 histogram on narrow screens.
         lensSwitcher.layoutParams = FrameLayout.LayoutParams(wrapContent(), wrapContent(),
             Gravity.END or Gravity.BOTTOM).apply {
-            marginEnd = dp(18)
-            bottomMargin = panelHeight + clearance
+            marginEnd = dp(16)
+            bottomMargin = panelHeight + dp(26)
         }
         manualPanel.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             wrapContent(), Gravity.END or Gravity.BOTTOM
         ).apply {
-            marginStart = dp(18)
-            marginEnd = dp(18)
-            bottomMargin = panelHeight + clearance
+            marginStart = dp(16)
+            marginEnd = dp(16)
+            bottomMargin = panelHeight + dp(16)
         }
         quickPanel.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             wrapContent(), Gravity.END or Gravity.BOTTOM
         ).apply {
-            marginStart = dp(14)
-            marginEnd = dp(14)
-            bottomMargin = panelHeight + dp(12)
+            marginStart = dp(16)
+            marginEnd = dp(16)
+            bottomMargin = panelHeight + dp(16)
         }
         updateOverlayStack()
         guideOverlay.setContentInsets(top = 0, end = 0, bottom = 0)
@@ -844,15 +758,15 @@ class MainActivity : Activity(), SensorEventListener {
      */
     private fun updateOverlayStack() {
         if (!::histogramView.isInitialized || !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
-        val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(247)
+        val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
         val floatingHeight = when {
             manualPanel.visibility == View.VISIBLE ->
-                (manualPanel.height.takeIf { it > 0 } ?: dp(110))
+                (manualPanel.height.takeIf { it > 0 } ?: dp(124))
             quickPanel.visibility == View.VISIBLE ->
-                (quickPanel.height.takeIf { it > 0 } ?: dp(190))
+                (quickPanel.height.takeIf { it > 0 } ?: dp(200))
             else -> 0
         }
-        val lift = if (floatingHeight > 0) floatingHeight + dp(8) else 0
+        val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
         (histogramView.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
             params.gravity = Gravity.START or Gravity.BOTTOM
             params.marginStart = dp(16)
@@ -862,7 +776,7 @@ class MainActivity : Activity(), SensorEventListener {
         // Lens switcher shares the floating row; keep it clear of the slider as well.
         if (::lensSwitcher.isInitialized) {
             (lensSwitcher.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                params.bottomMargin = panelHeight + dp(16) + lift
+                params.bottomMargin = panelHeight + dp(26) + lift
                 lensSwitcher.layoutParams = params
             }
         }
@@ -891,6 +805,13 @@ class MainActivity : Activity(), SensorEventListener {
             if (animate) view.animate().rotation(controlRotationDegrees).setDuration(180L).start()
             else view.rotation = controlRotationDegrees
         }
+        // Fixed labels must never carry rotation from a previous state: pin to 0 so
+        // topBar / info-row text always stays inside its bar and visible.
+        fixedOrientationViews().forEach { view ->
+            view.animate().cancel()
+            view.rotation = 0f
+            (view as? RotatingContent)?.contentRotation = 0f
+        }
         if (::lensSwitcher.isInitialized) {
             for (index in 0 until lensSwitcher.childCount) {
                 (lensSwitcher.getChildAt(index) as? RotatingContent)?.contentRotation =
@@ -913,7 +834,7 @@ class MainActivity : Activity(), SensorEventListener {
         val debugRotationInset = if (quarterTurn && debugOverlay.width > debugOverlay.height) {
             (debugOverlay.width - debugOverlay.height) / 2
         } else 0
-        debugParams.topMargin = dp(84) + debugRotationInset
+        debugParams.topMargin = dp(96) + debugRotationInset
         debugOverlay.layoutParams = debugParams
         debugOverlay.translationX = 0f
         debugOverlay.translationY = 0f
@@ -925,7 +846,7 @@ class MainActivity : Activity(), SensorEventListener {
             val vfRotationInset = if (quarterTurn && rawVfDebugOverlay.width > rawVfDebugOverlay.height) {
                 (rawVfDebugOverlay.width - rawVfDebugOverlay.height) / 2
             } else 0
-            vfParams.topMargin = dp(84) + vfRotationInset
+            vfParams.topMargin = dp(96) + vfRotationInset
             rawVfDebugOverlay.layoutParams = vfParams
             rawVfDebugOverlay.translationX = 0f
             rawVfDebugOverlay.translationY = 0f
@@ -934,10 +855,22 @@ class MainActivity : Activity(), SensorEventListener {
         if (histogram.width > 0 && histogram.height > 0) {
             updateOverlayStack()
             (histogram.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                // Idempotent: recompute from the base stack position every time instead
+                // of adding to the previous margin, so repeated rotations never drift.
+                val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
+                val floatingHeight = when {
+                    manualPanel.visibility == View.VISIBLE ->
+                        (manualPanel.height.takeIf { it > 0 } ?: dp(124))
+                    quickPanel.visibility == View.VISIBLE ->
+                        (quickPanel.height.takeIf { it > 0 } ?: dp(200))
+                    else -> 0
+                }
+                val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
+                val baseBottomMargin = panelHeight + dp(16) + lift
                 val rotationInset = if (quarterTurn && histogram.width > histogram.height) {
                     (histogram.width - histogram.height) / 2
                 } else 0
-                params.bottomMargin = params.bottomMargin + rotationInset
+                params.bottomMargin = baseBottomMargin + rotationInset
                 histogram.layoutParams = params
             }
             histogram.translationX = 0f
@@ -950,28 +883,39 @@ class MainActivity : Activity(), SensorEventListener {
         findViewById(R.id.timerButton), findViewById(R.id.timerBadge),
         findViewById(R.id.isoControl),
         findViewById(R.id.shutterControl), findViewById(R.id.wbControl),
-        findViewById(R.id.focusControl), findViewById(R.id.evControl), findViewById(R.id.flashControl),
-        findViewById(R.id.dngInfo), findViewById(R.id.sensorInfo),
+        findViewById(R.id.focusControl), findViewById(R.id.evControl),
+        // dngInfo/sensorInfo intentionally fixed: wide thin labels (0dp weight=1,
+        // singleLine) cannot fit 90-degree canvas-rotated text in their bounds and
+        // would clip to invisible. Keep horizontal so they stay visible above panel.
+        // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
         findViewById(R.id.vfPreviewButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
-        findViewById(R.id.gridQuick), findViewById(R.id.levelQuick),
+        findViewById(R.id.gridQuick),
         findViewById(R.id.histogramQuick), findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
-        findViewById(R.id.resetTargetsQuick), findViewById(R.id.oisQuick),
-        findViewById(R.id.ettrQuick),
+        findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
+        findViewById(R.id.rawSrQuick), findViewById(R.id.ettrQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton)
     )
 
-    /** These overlays need their backgrounds/graphs rotated with their content. */
+    /** Debug overlays + histogram rotate with the device; top/bottom status labels
+     * stay fixed horizontal so wide thin text never clips off-screen. */
     private fun wholeRotatingOverlays(): List<View> = listOfNotNull(
-        findViewById(R.id.rawBadge),
-        findViewById(R.id.status),
         findViewById(R.id.debugOverlay),
         findViewById(R.id.rawVfDebugOverlay),
         findViewById(R.id.histogramView)
+    )
+
+    /** Wide thin status labels stay fixed horizontal in their bars (topBar,
+     * info row) so rotated text can never clip them to invisible. */
+    private fun fixedOrientationViews(): List<View> = listOfNotNull(
+        findViewById(R.id.rawBadge),
+        findViewById(R.id.status),
+        findViewById(R.id.dngInfo),
+        findViewById(R.id.sensorInfo)
     )
 
     private fun syncMeteringOverlayToViewfinder(viewfinder: View) {
@@ -1043,18 +987,25 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun captureNow(forceBurst: Boolean) {
-        val selected = if (forceBurst) 1 else releaseMode
+        if (dualRawEnabled) {
+            controller.captureDualRaw()
+            return
+        }
+        // Long-press always forces a burst; otherwise HDR is an independent
+        // toggle and release only selects SINGLE vs BURST 6.
+        val useHdr = !forceBurst && hdrEnabled
+        val useBurst = forceBurst || releaseMode == 1
         Log.i(
             LOG_TAG,
-            "Shutter mode=${releaseModeLabel(selected)} forceBurst=$forceBurst"
+            "Shutter mode=${captureModeLabel(useHdr, useBurst)} forceBurst=$forceBurst"
         )
-        when (selected) {
-            1 -> controller.captureBurst()
-            2 -> controller.captureHdrBracket(
+        when {
+            useHdr -> controller.captureHdrBracket(
                 saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
                 bracketStops = hdrBracketStops(),
                 saveDebugFrames = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
             )
+            useBurst -> controller.captureBurst()
             else -> controller.capture()
         }
     }
@@ -1071,36 +1022,40 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleReleaseMode() {
-        releaseMode = (releaseMode + 1) % 3
+        releaseMode = (releaseMode + 1) % 2
         lensPreferences().edit().putInt(KEY_RELEASE_MODE, releaseMode).apply()
-        preloadFlowNetForMergedHdr()
         Log.i(LOG_TAG, "Release mode=${releaseModeLabel(releaseMode)}")
-        setStatus(when (releaseMode) {
-            1 -> "BURST ×6"
-            2 -> if (lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)) {
-                "HDR DBG ×3"
-            } else if (lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)) {
-                "HDR ×3 DNG"
-            } else {
-                "HDR ×3"
-            }
-            else -> "SINGLE"
-        })
+        setStatus(if (releaseMode == 1) "BURST ×6" else "SINGLE")
+        updateQuickControls()
+    }
+
+    private fun toggleHdrEnabled() {
+        hdrEnabled = !hdrEnabled
+        lensPreferences().edit().putBoolean(KEY_HDR_ENABLED, hdrEnabled).apply()
+        preloadFlowNetForMergedHdr()
+        Log.i(LOG_TAG, "HDR enabled=$hdrEnabled")
+        setStatus(if (hdrEnabled) "HDR ON" else "HDR OFF")
         updateQuickControls()
     }
 
     private fun preloadFlowNetForMergedHdr() {
-        if (releaseMode == 2 &&
+        if (hdrEnabled &&
             (!lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false) ||
                 lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false))) {
             // Model loading and Vulkan pipeline creation are asynchronous and can be slow on
-            // first use. Start as soon as merged HDR is selected instead of after capture.
+            // first use. Start as soon as HDR is enabled instead of after capture.
             FlowNetNcnnProcessor.start(applicationContext)
         }
     }
 
     private fun releaseModeLabel(mode: Int) = when (mode) {
-        1 -> "BURST_6"; 2 -> "HDR_3"; else -> "SINGLE"
+        1 -> "BURST_6"; else -> "SINGLE"
+    }
+
+    private fun captureModeLabel(useHdr: Boolean, useBurst: Boolean) = when {
+        useHdr -> "HDR_3"
+        useBurst -> "BURST_6"
+        else -> "SINGLE"
     }
 
     /**
@@ -1118,6 +1073,42 @@ class MainActivity : Activity(), SensorEventListener {
         setStatus(if (next.enabled) "ETTR ON" else "ETTR OFF")
         findViewById<View>(R.id.ettrQuick)
             .performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+
+    private fun toggleRawSuperResolution() {
+        val enabled = !rawSuperResolutionSettings.enabled
+        if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
+            applyCaptureExposureMode(CaptureExposureMode.ZSL)
+        }
+        if (applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = enabled))) {
+            setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
+        }
+    }
+
+    private fun applyRawSuperResolutionSettings(settings: RawSuperResolutionSettings): Boolean {
+        if (!controller.setRawSuperResolutionSettings(settings)) {
+            setStatus("SR LOCKED • SAVING")
+            return false
+        }
+        rawSuperResolutionSettings = settings
+        lensPreferences().edit().apply {
+            settings.toPreferences().forEach { (key, value) ->
+                when (value) {
+                    is Boolean -> putBoolean(key, value)
+                    is String -> putString(key, value)
+                    is Float -> putFloat(key, value)
+                }
+            }
+        }.apply()
+        updateQuickControls()
+        return true
+    }
+
+    private fun rawSuperResolutionQuickText(): String {
+        return rawSuperResolutionSettings.quickText(
+            lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
+            rawZslStatus.bufferedFrames, rawZslStatus.srAvailable, rawZslStatus.srBusy
+        )
     }
 
     private fun saveEttrSettings(settings: EttrSettings) {
@@ -1187,10 +1178,26 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
 
+    /** RAW VF debug-overlay tap: cycle the engine AUTO -> GPU -> CPU. */
+    private fun cycleVfEngineMode() {
+        val next = controller.cycleVfEngineMode()
+        lensPreferences().edit().putString(KEY_VF_ENGINE_MODE, next.name).apply()
+        rawVfDebugOverlay.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        refreshVfEngineContentDescription()
+        setStatus("VF • ${next.name}")
+    }
+
+    private fun refreshVfEngineContentDescription() {
+        val mode = runCatching { controller.vfEngineMode() }.getOrDefault(VfEngineMode.AUTO)
+        rawVfDebugOverlay.contentDescription =
+            "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU engine."
+    }
+
     private fun cycleVfResolution() {
         val next = when (vfResolution) {
             VfResolution.MIN -> VfResolution.MID
-            VfResolution.MID -> VfResolution.MAX
+            VfResolution.MID -> VfResolution.HIGH
+            VfResolution.HIGH -> VfResolution.MAX
             else -> VfResolution.MIN
         }
         vfResolution = next
@@ -1215,16 +1222,16 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun applyCaptureExposureMode(mode: CaptureExposureMode) {
-        // The histogram source is owned by the tap toggle, not the capture mode: the RAW
-        // stream runs live in every mode while selected. Across a mode change keep the
-        // preview histogram updating until the first RAW frame of the new mode arrives,
-        // so the graph never freezes on stale bins.
+        // Keep the chosen source across capture-mode transitions. A RAW gap holds
+        // the last RAW bins until new sensor samples arrive.
         if (::histogramView.isInitialized && histogramEnabled) {
             rawHistogramLive = false
-            histogramView.allowPreviewImmediately()
             updatePreviewHistogramOnce()
         }
         captureExposureMode = mode
+        if (mode != CaptureExposureMode.ZSL && rawSuperResolutionSettings.enabled) {
+            applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
+        }
         val dynamic = dynamicExposureSettings().copy(enabled = mode == CaptureExposureMode.PROGRAM)
         lensPreferences().edit()
             .putInt(KEY_CAPTURE_EXPOSURE_MODE, mode.ordinal)
@@ -1549,6 +1556,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         val balanceSlider = RuleSliderView(this).apply {
             label = "BAL"
+            contentRotation = controlRotationDegrees
             max = 100
             setProgressFromUser((profile.balance * 100).toInt().coerceIn(0, max), fromUser = false)
             layoutParams = LinearLayout.LayoutParams(
@@ -1827,15 +1835,17 @@ class MainActivity : Activity(), SensorEventListener {
     private fun updateQuickControls() {
         if (!::gridQuick.isInitialized) return
         val grid = gridQuick
-        val level = levelQuick
         val histogram = histogramQuick
         val aeMetering = aeMeteringQuick
-        val ois = oisQuick
+        val hdr = hdrQuick
         val timer = timerQuick
         val release = releaseQuick
+        val rawSr = rawSrQuick
         val ettr = ettrQuick
+        if (dualRawEnabled && controller.activeCameraId() != "0") dualRawEnabled = false
+        release.isEnabled = !dualRawEnabled
+        release.alpha = if (dualRawEnabled) .4f else 1f
         grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
-        level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
         histogram.text = "HISTOGRAM\n${if (histogramEnabled) "ON" else "OFF"}"
         aeMeteringMode = controller.getAeMeteringMode()
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
@@ -1857,13 +1867,14 @@ class MainActivity : Activity(), SensorEventListener {
                 "Hardware AE metering ${aeMeteringMode.label}. Tap to switch."
             setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
         }
-        val oisSupported = controller.isOisSupported()
-        val oisEnabled = controller.isOisEnabled()
-        ois.text = "OIS\n${if (oisSupported) if (oisEnabled) "ON" else "OFF" else "N/A"}"
-        ois.isEnabled = oisSupported
-        ois.alpha = if (oisSupported) 1f else 0.4f
+        hdr.text = "HDR\n${if (hdrEnabled) "ON" else "OFF"}"
+        hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
-        release.text = "RELEASE\n${when (releaseMode) { 1 -> "BURST 6"; 2 -> "HDR ±${hdrBracketStops()}"; else -> "SINGLE" }}"
+        release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
+        rawSr.text = rawSuperResolutionQuickText()
+        val rawSrAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
+        rawSr.isEnabled = rawSrAvailable
+        rawSr.alpha = if (rawSrAvailable) 1f else 0.4f
         val ettrMode = controller.getEttrSettings()
         val ettrAvailable = captureExposureMode == CaptureExposureMode.AUTO
         val ettrEnabled = ettrMode.enabled && ettrAvailable
@@ -1871,11 +1882,11 @@ class MainActivity : Activity(), SensorEventListener {
         ettr.isEnabled = ettrAvailable
         ettr.alpha = if (ettrAvailable) 1f else 0.4f
         setQuickTileState(grid, gridEnabled)
-        setQuickTileState(level, levelEnabled)
         setQuickTileState(histogram, histogramEnabled)
-        setQuickTileState(ois, oisEnabled)
+        setQuickTileState(hdr, hdrEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
+        setQuickTileState(rawSr, rawSuperResolutionSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         updateTimerBadge()
         modeButton.text = when (captureExposureMode) {
@@ -1885,11 +1896,11 @@ class MainActivity : Activity(), SensorEventListener {
             CaptureExposureMode.MANUAL -> "M\nMANUAL"
         }
         val exposureModeActive = captureExposureMode != CaptureExposureMode.AUTO
-        modeButton.background = getDrawable(if (exposureModeActive) R.drawable.control_chip_active else R.drawable.control_chip)
-        modeButton.setTextColor(getColor(if (exposureModeActive) R.color.accent_dark else R.color.text_primary))
+        setQuickTileState(modeButton, exposureModeActive)
     }
 
     private fun setQuickTileState(tile: TextView, active: Boolean) {
+        if (quickTileStates.put(tile, active) == active) return
         tile.background = getDrawable(if (active) R.drawable.control_chip_active else R.drawable.control_chip)
         tile.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
     }
@@ -1900,9 +1911,14 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun updatePreviewHistogramOnce() {
-        if (!histogramEnabled || !::histogramView.isInitialized) return
+        if (!activityResumed || !histogramEnabled || histogramSourceRaw || !::histogramView.isInitialized) return
         val preview = findViewById<AutoFitTextureView>(R.id.viewfinder)
-        if (preview.isAvailable) histogramView.update(preview.getBitmap(96, 54))
+        if (preview.isAvailable) {
+            val bitmap = previewHistogramBitmap ?: android.graphics.Bitmap.createBitmap(
+                96, 54, android.graphics.Bitmap.Config.ARGB_8888
+            ).also { previewHistogramBitmap = it }
+            histogramView.update(preview.getBitmap(bitmap), recycleBitmap = false)
+        }
     }
 
     /** Tap the histogram to switch between processed-preview (YUV) and live-sensor (RAW).
@@ -1913,10 +1929,10 @@ class MainActivity : Activity(), SensorEventListener {
         lensPreferences().edit().putBoolean(KEY_HISTOGRAM_SOURCE_RAW, histogramSourceRaw).apply()
         controller.setHistogramSourceRaw(histogramSourceRaw)
         histogramView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        // Keep the preview histogram updating until the first RAW frame arrives (or
-        // indefinitely for YUV) so the toggle never leaves a frozen graph on screen.
+        // Source is explicit: capture stalls must never substitute YUV for RAW.
         rawHistogramLive = false
-        histogramView.allowPreviewImmediately()
+        lastRawHistogramMs = Long.MIN_VALUE
+        histogramView.setSourceRaw(histogramSourceRaw)
         updatePreviewHistogramOnce()
         refreshHistogramContentDescription()
         setStatus(if (histogramSourceRaw) "HISTO RAW" else "HISTO YUV")
@@ -1925,14 +1941,15 @@ class MainActivity : Activity(), SensorEventListener {
     private fun refreshHistogramContentDescription() {
         if (!::histogramView.isInitialized) return
         histogramView.contentDescription = if (histogramSourceRaw) {
-            "Histogram, live RAW sensor source. Tap to switch to preview source."
+            if (rawHistogramLive && !rawHistogramStalled())
+                "Histogram, live RAW sensor source. Tap to switch to preview source."
+            else "Histogram, RAW sensor source; waiting for a fresh RAW frame. Tap to switch to preview source."
         } else {
             "Histogram, processed preview source. Tap to switch to RAW sensor source."
         }
     }
 
-    /** A stalled RAW stream (no frame within the view hold window) falls back to YUV so a
-     * rejected or warming RAW configuration never leaves a frozen graph. */
+    /** Freshness changes the accessibility status, never the user's selected source. */
     private fun rawHistogramStalled(): Boolean =
         RawHistogramThrottle.isStalled(SystemClock.elapsedRealtime(), lastRawHistogramMs, HISTOGRAM_RAW_HOLD_MS)
 
@@ -1944,14 +1961,8 @@ class MainActivity : Activity(), SensorEventListener {
         histogramRunnable = object : Runnable {
             override fun run() {
                 if (!isFinishing && !isDestroyed && histogramEnabled) {
-                    // YUV always for the YUV source. For the RAW source keep YUV moving while
-                    // the RAW stream warms up or stalls; once live RAW frames arrive we stop
-                    // TextureView readback completely so full-resolution RAW streaming does
-                    // not compete with the UI.
-                    if (!histogramSourceRaw || !rawHistogramLive || rawHistogramStalled()) {
-                        if (histogramSourceRaw && rawHistogramLive) rawHistogramLive = false
-                        updatePreviewHistogramOnce()
-                    }
+                    if (!histogramSourceRaw) updatePreviewHistogramOnce()
+                    else refreshHistogramContentDescription()
                     histogramView.postDelayed(this, HISTOGRAM_INTERVAL_MS)
                 }
             }
@@ -1961,6 +1972,10 @@ class MainActivity : Activity(), SensorEventListener {
     private fun controlText(label: String, rawValue: String): String {
         val value = rawValue.removePrefix(label).trim().ifEmpty { "--" }
         return "$label\n$value"
+    }
+
+    private fun TextView.setTextIfChanged(value: String) {
+        if (!android.text.TextUtils.equals(text, value)) text = value
     }
 
     private fun refreshLensSwitcher() {
@@ -1976,11 +1991,14 @@ class MainActivity : Activity(), SensorEventListener {
             val button = RotatingTextView(this).apply {
                 text = option.label
                 setTextColor(getColor(if (option.selected) R.color.accent else R.color.text_primary))
-                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
                 background = getDrawable(R.drawable.lens_switcher)
                 alpha = if (option.selected) 1f else 0.78f
+                minWidth = dp(56)
+                minimumHeight = dp(44)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
                 contentDescription = "Switch to ${option.label} lens"
                 setOnClickListener {
                     hideManualControl()
@@ -2031,6 +2049,9 @@ class MainActivity : Activity(), SensorEventListener {
             val range = runCatching { controller.manualControlRange(axis) }.getOrNull() ?: return
             val value = sliderValue(axis, range, manualSlider.progress)
             val valueText = formatManualValue(axis, value)
+            manualSlider.valueText = rulerValueText(axis, value)
+            manualSlider.minText = rulerValueText(axis, range.minimum)
+            manualSlider.maxText = rulerValueText(axis, range.maximum)
             manualSlider.contentDescription =
                 "${controlName(axis)} lock slider, $valueText. Current value also shown in the ${shortControlName(axis)} chip."
             return
@@ -2039,8 +2060,24 @@ class MainActivity : Activity(), SensorEventListener {
         val range = runCatching { controller.manualControlRange(control) }.getOrNull() ?: return
         val value = sliderValue(control, range, manualSlider.progress)
         val valueText = formatManualValue(control, value)
+        manualSlider.valueText = rulerValueText(control, value)
+        manualSlider.minText = rulerValueText(control, range.minimum)
+        manualSlider.maxText = rulerValueText(control, range.maximum)
         manualSlider.contentDescription =
             "${controlName(control)} slider, $valueText. Current value also shown in the ${shortControlName(control)} chip."
+    }
+
+    /**
+     * Compact value for the floating ruler: the axis code already sits above it,
+     * so "ISO 7964" becomes "7964" and "+0.2 EV" becomes "+0.2".
+     */
+    private fun rulerValueText(control: ManualControl, value: Long): String {
+        val full = formatManualValue(control, value)
+        return when (control) {
+            ManualControl.ISO -> full.removePrefix("ISO ").trim()
+            ManualControl.EXPOSURE_COMPENSATION -> full.removeSuffix(" EV").trim()
+            else -> full
+        }.ifEmpty { "--" }
     }
 
     private fun scheduleManualPanelHide() {
@@ -2232,14 +2269,18 @@ class MainActivity : Activity(), SensorEventListener {
             } else {
                 preferences.getFloat(LEGACY_KEY_JPEG_ADAPTIVE_PHOTO, 0.5f)
             }
-        }
+        },
+        highlightHeadroom = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_HEADROOM, 1f),
+        highlightSoftHeadroom = lensPreferences().getFloat(KEY_JPEG_SKY_PROTECTION, 0.85f),
+        highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f)
     ).resolvedForPlatform()
 
     private fun denoiseSettings(): DenoiseSettings {
         val prefs = lensPreferences()
         return DenoiseSettings(
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
-            saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true)
+            saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
+            aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f
         )
     }
 
@@ -2251,12 +2292,13 @@ class MainActivity : Activity(), SensorEventListener {
         lensPreferences().edit()
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
+            .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))
             .apply()
         return true
     }
 
     /**
-     * Warm-starts the RawNIND-tiny model when AI denoise is enabled
+     * Warm-starts the available RawNIND models when AI denoise is enabled
      * (process-wide singleton, background init): model load plus Vulkan
      * pipeline creation are slow on first use and must never block the
      * save thread. No-op when AI is off so non-AI users pay nothing.
@@ -2270,10 +2312,12 @@ class MainActivity : Activity(), SensorEventListener {
     /** One-line AI model state for the Denoise tab; never blocks (no waitReady). */
     private fun aiModelStatus(): String {
         val proc = RawNindNcnnProcessor.getInstance()
+        if (proc == null) return "AI denoise: starts when enabled"
         return when {
-            proc?.isReady() == true -> "AI model: ready (GPU)"
-            proc != null -> "AI model: loading…"
-            else -> "AI model: not installed — train via python/rawnind-train, then paste rawnind_tiny.ncnn.param/.bin into assets/models/"
+            proc.isReady -> "AI denoise: ready"
+            proc.isBayerReady -> "AI denoise: Bayer model ready"
+            proc.isLoading || proc.isBayerLoading -> "AI denoise: loading…"
+            else -> "AI denoise: unavailable; captures use standard processing"
         }
     }
 
@@ -2347,32 +2391,136 @@ class MainActivity : Activity(), SensorEventListener {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), dp(8))
         }
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val generalTab = Button(this).apply { text = "General" }
-        val denoiseTab = Button(this).apply { text = "Denoise" }
-        val lensesTab = Button(this).apply { text = "Lens discovery" }
-        val aboutTab = Button(this).apply { text = "About" }
-        tabs.addView(generalTab, LinearLayout.LayoutParams(0, wrapContent(), 1f))
-        tabs.addView(denoiseTab, LinearLayout.LayoutParams(0, wrapContent(), 1f))
-        tabs.addView(lensesTab, LinearLayout.LayoutParams(0, wrapContent(), 1f))
-        tabs.addView(aboutTab, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+        // Modern chip tab row (mirrors PROGRAM AE panel styling): scrollable so
+        // seven tabs fit without squeezing. Active tab uses the accent chip.
+        fun styleSettingsButton(button: Button, active: Boolean = false) {
+            button.background = getDrawable(
+                if (active) R.drawable.control_chip_active else R.drawable.control_chip
+            )
+            button.setTextColor(
+                getColor(if (active) R.color.accent_dark else R.color.text_primary)
+            )
+            button.textSize = 12f
+            button.isAllCaps = false
+            button.setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        fun sectionTitle(text: String): TextView = TextView(this).apply {
+            this.text = text
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(16), 0, dp(4))
+        }
+        fun sectionDesc(text: String): TextView = TextView(this).apply {
+            this.text = text
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+            setPadding(0, 0, 0, dp(4))
+        }
+        fun settingsButton(label: String, active: Boolean = false): Button =
+            Button(this).apply {
+                text = label
+                styleSettingsButton(this, active)
+            }
+        fun settingsCheck(label: String, checked: Boolean): CheckBox =
+            CheckBox(this).apply {
+                text = label
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = checked
+                setPadding(0, dp(2), 0, dp(2))
+            }
+        fun sliderLabel(text: String): TextView = TextView(this).apply {
+            this.text = text
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(4), dp(8), dp(4), 0)
+        }
+        val tabRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            showDividers = LinearLayout.SHOW_DIVIDER_NONE
+        }
+        val tabScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(tabRow, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        fun chipTab(label: String): Button = Button(this).apply {
+            text = label
+            styleSettingsButton(this, active = false)
+        }.also { button ->
+            val params = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            params.marginEnd = dp(8)
+            tabRow.addView(button, params)
+        }
+        val generalTab = chipTab("General")
+        val jpegTab = chipTab("JPEG")
+        val exposureTab = chipTab("Exposure")
+        val burstTab = chipTab("Burst")
+        val denoiseTab = chipTab("Denoise")
+        val lensesTab = chipTab("Lenses")
+        val debugTab = chipTab("Debug")
+        val aboutTab = chipTab("About")
+        val allTabs = listOf(generalTab, jpegTab, exposureTab, burstTab, denoiseTab, lensesTab, debugTab, aboutTab)
+        fun markActive(active: Button) {
+            allTabs.forEach { styleSettingsButton(it, active = it === active) }
+        }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(16), 0, dp(8))
+            setPadding(0, dp(12), 0, dp(8))
         }
-        container.addView(tabs)
-        container.addView(ScrollView(this).apply {
+        fun polish() {
+            for (index in 0 until content.childCount) {
+                val child = content.getChildAt(index)
+                if (child is Button) styleSettingsButton(child, active = false)
+            }
+        }
+        // MATCH_PARENT so the full chip row scrolls inside the dialog instead of
+        // stretching the window beyond the screen edges.
+        container.addView(tabScroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        container.addView(TextView(this).apply {
+            text = "PROGRAM • per-lens limits live under Exposure; RAW DNG calibration under General; overlays, logs, and HDR debug frames under Debug"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 11f
+            setPadding(0, dp(6), 0, 0)
+        })
+        val settingsScroll = ScrollView(this).apply {
             isFillViewport = true
             addView(content)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        container.addView(settingsScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         lateinit var dialog: AlertDialog
+        var currentTab = 0
         fun showGeneralTab() {
             content.removeAllViews()
-            content.addView(TextView(this).apply {
-                text = "RAW capture"
+            content.addView(sectionTitle("RAW capture"))
+            content.addView(CheckBox(this).apply {
+                text = "Experimental two-exposure RAW HDR"
                 setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
+                isChecked = dualRawEnabled
+                isEnabled = controller.supportsDualRaw() || dualRawEnabled
+                setOnCheckedChangeListener { button, enabled ->
+                    if (enabled && !controller.supportsDualRaw()) {
+                        button.isChecked = false
+                        setStatus("RAW HDR TEST NEEDS CAMERA 0")
+                    } else {
+                        dualRawEnabled = enabled
+                        setStatus(if (enabled) "TWO-EXPOSURE RAW HDR ON" else "TWO-EXPOSURE RAW HDR OFF")
+                        updateQuickControls()
+                    }
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Camera 0 only. Saves a 16-bit DNG from two sequential exposures, " +
+                    "using the short exposure to recover clipped highlights. " +
+                    "Does not reduce shadow noise. No alignment or motion correction; " +
+                    "keep the phone and scene still. Overrides the release mode and RAW SR " +
+                    "while enabled. Resets when the app restarts or you change cameras."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
             })
             content.addView(Button(this).apply {
                 text = "DNG sensor calibration (levels • noise • color)"
@@ -2408,12 +2556,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
             })
-            content.addView(TextView(this).apply {
-                text = "Location"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                setPadding(0, dp(16), 0, 0)
-            })
+            content.addView(sectionTitle("Location"))
             var suppressGpsToggle = false
             content.addView(CheckBox(this).apply {
                 text = "Save GPS location in photos (DNG + JPEG)"
@@ -2444,12 +2587,32 @@ class MainActivity : Activity(), SensorEventListener {
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
             })
-            content.addView(TextView(this).apply {
-                text = "RAW JPEG output"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                setPadding(0, dp(16), 0, 0)
+            content.addView(sectionTitle("Viewfinder"))
+            // GPU VF: selectable superpixel resolution (480/640 full-rate / 960 balanced / 1080 detail).
+            content.addView(Button(this).apply {
+                text = vfResolutionText(vfResolution)
+                setOnClickListener {
+                    cycleVfResolution()
+                    text = vfResolutionText(vfResolution)
+                }
             })
+            content.addView(Button(this).apply {
+                text = vfPreviewModeText()
+                setOnClickListener {
+                    cycleVfPreviewMode()
+                    text = vfPreviewModeText()
+                }
+            })
+            content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))
+            markActive(generalTab)
+            polish()
+        }
+        fun showJpegTab() {
+            rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
+            content.removeAllViews()
+            content.addView(sectionTitle("JPEG output"))
+            content.addView(sectionDesc("Ultra HDR and Display P3 targets, quality, chroma, AgX look, adaptive exposure and highlight handling."))
             var currentJpegSettings = jpegOutputSettings()
             fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
                 val resolved = settings.resolvedForPlatform()
@@ -2472,6 +2635,9 @@ class MainActivity : Activity(), SensorEventListener {
                     .putFloat(KEY_JPEG_AGX_GAMUT, resolved.agxGamutCompression)
                     .putBoolean(KEY_JPEG_ADAPTIVE_EXPOSURE, resolved.adaptiveExposureAuto)
                     .putFloat(KEY_JPEG_ADAPTIVE_PROGRAM, resolved.adaptiveExposureProgramStrength)
+                    .putFloat(KEY_JPEG_HIGHLIGHT_HEADROOM, resolved.highlightHeadroom)
+                    .putFloat(KEY_JPEG_SKY_PROTECTION, resolved.highlightSoftHeadroom)
+                    .putFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, resolved.highlightShoulder)
                     .apply()
                 return true
             }
@@ -2673,6 +2839,30 @@ class MainActivity : Activity(), SensorEventListener {
                 { "$it%" },
                 { settings, value -> settings.copy(adaptiveExposureProgramStrength = value / 100f) }
             )
+            content.addView(TextView(this).apply {
+                text = "Highlights: headroom caps the p99.5 spike at white; sky protection caps broad p95 skies; shoulder rolls off near-white into AgX."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            })
+            addAgxSlider(
+                "Highlight headroom", 100,
+                ((currentJpegSettings.highlightHeadroom - 0.5f) * 100f).toInt(),
+                { String.format(Locale.US, "%.2f", 0.5f + it / 100f) },
+                { settings, value -> settings.copy(highlightHeadroom = 0.5f + value / 100f) }
+            )
+            addAgxSlider(
+                "Sky protection", 40,
+                ((currentJpegSettings.highlightSoftHeadroom - 0.6f) * 100f).toInt(),
+                { String.format(Locale.US, "%.2f", 0.6f + it / 100f) },
+                { settings, value -> settings.copy(highlightSoftHeadroom = 0.6f + value / 100f) }
+            )
+            addAgxSlider(
+                "Highlight shoulder", 100,
+                (currentJpegSettings.highlightShoulder * 100f).toInt(),
+                { "$it%" },
+                { settings, value -> settings.copy(highlightShoulder = value / 100f) }
+            )
             content.addView(Button(this).apply {
                 text = "Reset official AgX Base"
                 setOnClickListener {
@@ -2680,14 +2870,27 @@ class MainActivity : Activity(), SensorEventListener {
                         ultraHdr = currentJpegSettings.ultraHdr,
                         displayP3 = currentJpegSettings.displayP3,
                         adaptiveExposureAuto = currentJpegSettings.adaptiveExposureAuto,
-                        adaptiveExposureProgramStrength = currentJpegSettings.adaptiveExposureProgramStrength
+                        adaptiveExposureProgramStrength = currentJpegSettings.adaptiveExposureProgramStrength,
+                        highlightHeadroom = currentJpegSettings.highlightHeadroom,
+                        highlightSoftHeadroom = currentJpegSettings.highlightSoftHeadroom,
+                        highlightShoulder = currentJpegSettings.highlightShoulder
                     )
                     if (applyJpegOutputSettings(official)) {
                         setStatus("AGX RESET • OFFICIAL BASE")
-                        showGeneralTab()
+                        currentTab = 1
+                        showJpegTab()
                     }
                 }
             })
+            markActive(jpegTab)
+            polish()
+        }
+        fun showExposureTab() {
+            rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
+            content.removeAllViews()
+            content.addView(sectionTitle("HDR brackets"))
+            content.addView(sectionDesc("Merged HDR saves one DNG by default; optionally keep every bracket. Frame-level debug output lives under the Debug tab."))
             content.addView(CheckBox(this).apply {
                 text = "HDR: save all 3 brackets as separate DNGs (do not merge)"
                 setTextColor(getColor(R.color.text_primary))
@@ -2702,22 +2905,6 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             })
             content.addView(CheckBox(this).apply {
-                text = "Save debug HDR frames"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
-                setOnCheckedChangeListener { _, enabled ->
-                    lensPreferences().edit().putBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, enabled).apply()
-                    setStatus(if (enabled) "HDR DBG ×3"
-                        else "HDR DBG OFF")
-                    preloadFlowNetForMergedHdr()
-                    updateQuickControls()
-                }
-            })
-            content.addView(TextView(this).apply {
-                text = "Debug saves all 3 source DNGs and a merged DNG with matching filenames, plus JPEG when selected. Overrides do not merge; uses extra storage."
-                setTextColor(getColor(R.color.text_primary))
-            })
-            content.addView(CheckBox(this).apply {
                 text = "HDR bracket range: −4 / 0 / +4 EV"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = hdrBracketStops() == 4
@@ -2728,20 +2915,8 @@ class MainActivity : Activity(), SensorEventListener {
                     updateQuickControls()
                 }
             })
-            content.addView(CheckBox(this).apply {
-                text = "RAW zero shutter lag"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = captureExposureMode == CaptureExposureMode.ZSL
-                setOnCheckedChangeListener { _, enabled ->
-                    // Do not update the old ZSL preference independently: doing so left the
-                    // Settings UI enabled while the capture mode restored AUTO on reopen.
-                    if (enabled != (captureExposureMode == CaptureExposureMode.ZSL)) {
-                        applyCaptureExposureMode(
-                            if (enabled) CaptureExposureMode.ZSL else CaptureExposureMode.AUTO
-                        )
-                    }
-                }
-            })
+            content.addView(sectionTitle("PROGRAM custom AE"))
+            content.addView(sectionDesc("RAW-driven per-lens sensor ISO + shutter. Full per-lens editor (priority, locks, bounds, bias) mirrors the PROGRAM panel; ISO/S chips open it too."))
             var dynamicSettings = dynamicExposureSettings()
             fun applyDynamicSettings() {
                 lensPreferences().edit()
@@ -2933,6 +3108,27 @@ class MainActivity : Activity(), SensorEventListener {
             refreshEttrButtons()
             content.addView(ettrHeadroomButton)
             content.addView(ettrIsoLimitButton)
+            markActive(exposureTab)
+            polish()
+        }
+        fun showBurstTab() {
+            content.removeAllViews()
+            content.addView(sectionTitle("Zero shutter lag"))
+            content.addView(CheckBox(this).apply {
+                text = "RAW zero shutter lag"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = captureExposureMode == CaptureExposureMode.ZSL
+                setOnCheckedChangeListener { _, enabled ->
+                    // Do not update the old ZSL preference independently: doing so left the
+                    // Settings UI enabled while the capture mode restored AUTO on reopen.
+                    if (enabled != (captureExposureMode == CaptureExposureMode.ZSL)) {
+                        applyCaptureExposureMode(
+                            if (enabled) CaptureExposureMode.ZSL else CaptureExposureMode.AUTO
+                        )
+                    }
+                }
+            })
+            content.addView(sectionDesc("Keeps full-resolution RAW frames in camera memory. Unsupported devices fall back to normal RAW."))
             var selectedFrameCount = lensPreferences()
                 .getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT)
                 .coerceIn(MIN_RAW_ZSL_FRAMES, MAX_RAW_ZSL_FRAMES)
@@ -2978,19 +3174,42 @@ class MainActivity : Activity(), SensorEventListener {
                     setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
                 }
             })
-            // GPU VF: selectable superpixel resolution (480 full-rate / 640 balanced / 960 detail).
-            content.addView(Button(this).apply {
-                text = vfResolutionText(vfResolution)
-                setOnClickListener {
-                    cycleVfResolution()
-                    text = vfResolutionText(vfResolution)
+            content.addView(CheckBox(this).apply {
+                text = "RAW super-resolution merge"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = rawSuperResolutionSettings.enabled
+                setOnCheckedChangeListener { button, enabled ->
+                    if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
+                        applyCaptureExposureMode(CaptureExposureMode.ZSL)
+                    }
+                    val applied = applyRawSuperResolutionSettings(
+                        rawSuperResolutionSettings.copy(enabled = enabled)
+                    )
+                    if (applied) {
+                        setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
+                    } else if (button.isChecked != rawSuperResolutionSettings.enabled) {
+                        button.isChecked = rawSuperResolutionSettings.enabled
+                    }
                 }
             })
             content.addView(Button(this).apply {
-                text = vfPreviewModeText()
+                fun refresh() {
+                    text = "RAW SR DNG: " + when (rawSuperResolutionSettings.dngMode) {
+                        RawSrDngMode.LINEAR_RGB -> "LINEAR RGB (RECOMMENDED)"
+                        RawSrDngMode.MOSAIC_SR -> "MOSAIC SR • RAWTHERAPEE"
+                    }
+                }
+                refresh()
                 setOnClickListener {
-                    cycleVfPreviewMode()
-                    text = vfPreviewModeText()
+                    val mode = when (rawSuperResolutionSettings.dngMode) {
+                        RawSrDngMode.LINEAR_RGB -> RawSrDngMode.MOSAIC_SR
+                        RawSrDngMode.MOSAIC_SR -> RawSrDngMode.LINEAR_RGB
+                    }
+                    val applied = applyRawSuperResolutionSettings(
+                        rawSuperResolutionSettings.copy(dngMode = mode)
+                    )
+                    refresh()
+                    if (applied) setStatus("RAW SR DNG • ${mode.label}")
                 }
             })
             rawZslSettingsStatus = TextView(this).apply {
@@ -2999,11 +3218,7 @@ class MainActivity : Activity(), SensorEventListener {
                 textSize = 12f
                 setPadding(dp(12), 0, dp(12), dp(16))
             }.also(content::addView)
-            content.addView(TextView(this).apply {
-                text = "Burst gyro sidecars"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-            })
+            content.addView(sectionTitle("Burst gyro sidecars"))
             sidecarSettingsStatus = TextView(this).apply {
                 text = sidecarFolderText()
                 setTextColor(getColor(R.color.text_secondary))
@@ -3030,65 +3245,8 @@ class MainActivity : Activity(), SensorEventListener {
                 textSize = 11f
                 setPadding(0, 0, 0, dp(16))
             })
-            content.addView(TextView(this).apply {
-                text = "Camera diagnostics"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-            })
-            content.addView(CheckBox(this).apply {
-                text = "Camera2 debug overlay"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)
-                setOnCheckedChangeListener { _, enabled ->
-                    lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, enabled).apply()
-                    debugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
-                    if (enabled) debugOverlay.post { positionWholeRotatedPanels() }
-                }
-            })
-            content.addView(CheckBox(this).apply {
-                text = "RAW viewfinder debug overlay"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
-                setOnCheckedChangeListener { _, enabled ->
-                    lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, enabled).apply()
-                    rawVfDebugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
-                    if (enabled) rawVfDebugOverlay.post { positionWholeRotatedPanels() }
-                }
-            })
-            content.addView(CheckBox(this).apply {
-                text = "Save app log to file (survives crashes)"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)
-                setOnCheckedChangeListener { _, enabled ->
-                    lensPreferences().edit().putBoolean(KEY_LOGCAT_FILE, enabled).apply()
-                    if (enabled) LogcatFileWriter.start(this@MainActivity)
-                    else LogcatFileWriter.stop()
-                }
-            })
-            content.addView(Button(this).apply {
-                text = "Share latest log"
-                setOnClickListener { shareLatestLog() }
-            })
-            content.addView(TextView(this).apply {
-                text = LogcatFileWriter.statusLine()
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 11f
-                setPadding(0, dp(4), 0, 0)
-            })
-            content.addView(TextView(this).apply {
-                text = "The app's own logcat streams to its private folder and is " +
-                    "mirrored to Download/RawLens/logs/ by itself (no permission " +
-                    "needed, no taps): 8 MB sessions, newest 5 kept, crashes " +
-                    "appended before the process dies. After a crash on launch, " +
-                    "the next start re-exports that session and offers to share it."
-                setTextColor(getColor(R.color.text_secondary))
-                textSize = 11f
-            })
-
-            generalTab.isEnabled = false
-            denoiseTab.isEnabled = true
-            lensesTab.isEnabled = true
-            aboutTab.isEnabled = true
+            markActive(burstTab)
+            polish()
         }
         fun showDenoiseTab() {
             rawZslSettingsStatus = null
@@ -3097,10 +3255,7 @@ class MainActivity : Activity(), SensorEventListener {
             var settings = denoiseSettings()
             val aiSubordinate = ArrayList<View>()
 
-            content.addView(TextView(this).apply {
-                text = "AI RAW denoise (RawNIND-tiny)"
-                setTextColor(getColor(R.color.text_primary)); textSize = 17f
-            })
+            content.addView(sectionTitle("AI RAW denoise (RawNIND Bayer)"))
 
             val aiStatus = TextView(this).apply {
                 text = aiModelStatus()
@@ -3108,7 +3263,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setPadding(dp(12), dp(10), dp(12), 0)
             }
             val aiMaster = CheckBox(this).apply {
-                text = "AI RAW denoise (RawNIND-tiny)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
+                text = "AI RAW denoise (RawNIND Bayer)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = settings.aiEnabled
                 setOnCheckedChangeListener { button, value ->
@@ -3138,12 +3293,48 @@ class MainActivity : Activity(), SensorEventListener {
             }
             content.addView(aiMaster); content.addView(aiStatus); content.addView(keepOriginal)
             aiSubordinate += keepOriginal
+            var aiStrengthPct = (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100)
+            val aiStrengthLabel = TextView(this).apply {
+                text = "AI strength: $aiStrengthPct%"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            content.addView(aiStrengthLabel)
+            val aiStrengthBar = SeekBar(this).apply {
+                max = 100
+                progress = aiStrengthPct
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        aiStrengthPct = progress
+                        aiStrengthLabel.text = "AI strength: $aiStrengthPct%"
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        val proposed = settings.copy(aiStrength = aiStrengthPct / 100f)
+                        if (persistDenoiseSettings(proposed)) {
+                            settings = proposed
+                            setStatus("AI STRENGTH • $aiStrengthPct%")
+                        } else {
+                            aiStrengthPct = (settings.aiStrength * 100 + 0.5f).toInt()
+                            seekBar.progress = aiStrengthPct
+                        }
+                    }
+                })
+            }
+            content.addView(aiStrengthBar)
+            content.addView(TextView(this).apply {
+                text = "0% = untouched source, 100% = full AI output (darktable neural-restore semantics; moving the slider never re-runs the model)."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(dp(12), dp(4), dp(12), dp(8))
+            })
+            aiSubordinate += aiStrengthLabel
+            aiSubordinate += aiStrengthBar
             aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
 
-            generalTab.isEnabled = true
-            denoiseTab.isEnabled = false
-            lensesTab.isEnabled = true
-            aboutTab.isEnabled = true
+            markActive(denoiseTab)
+            polish()
         }
         fun showLensesTab() {
             rawZslSettingsStatus = null
@@ -3162,10 +3353,83 @@ class MainActivity : Activity(), SensorEventListener {
                     showLensDiscovery(firstRun = false)
                 }
             })
-            generalTab.isEnabled = true
-            denoiseTab.isEnabled = true
-            lensesTab.isEnabled = false
-            aboutTab.isEnabled = true
+            markActive(lensesTab)
+            polish()
+        }
+        fun showDebugTab() {
+            rawZslSettingsStatus = null
+            sidecarSettingsStatus = null
+            content.removeAllViews()
+            content.addView(sectionTitle("HDR debug frames"))
+            content.addView(CheckBox(this).apply {
+                text = "Save debug HDR frames"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, enabled).apply()
+                    setStatus(if (enabled) "HDR DBG ×3"
+                        else "HDR DBG OFF")
+                    preloadFlowNetForMergedHdr()
+                    updateQuickControls()
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Debug saves all 3 source DNGs and a merged DNG with matching filenames, plus JPEG when selected. Overrides do not merge; uses extra storage."
+                setTextColor(getColor(R.color.text_primary))
+            })
+            content.addView(sectionTitle("Camera diagnostics"))
+            content.addView(CheckBox(this).apply {
+                text = "Camera2 debug overlay"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, enabled).apply()
+                    debugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
+                    if (enabled) debugOverlay.post { positionWholeRotatedPanels() }
+                }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "RAW viewfinder debug overlay"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, enabled).apply()
+                    rawVfDebugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
+                    if (enabled) rawVfDebugOverlay.post { positionWholeRotatedPanels() }
+                }
+            })
+            content.addView(sectionTitle("App log"))
+            content.addView(CheckBox(this).apply {
+                text = "Save app log to file (survives crashes)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_LOGCAT_FILE, enabled).apply()
+                    if (enabled) LogcatFileWriter.start(this@MainActivity)
+                    else LogcatFileWriter.stop()
+                }
+            })
+            content.addView(Button(this).apply {
+                text = "Share latest log"
+                setOnClickListener { shareLatestLog() }
+            })
+            content.addView(TextView(this).apply {
+                text = LogcatFileWriter.statusLine()
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 11f
+                setPadding(0, dp(4), 0, 0)
+            })
+            content.addView(TextView(this).apply {
+                text = "The app's own logcat streams to its private folder and is " +
+                    "mirrored to Download/RawLens/logs/ by itself (no permission " +
+                    "needed, no taps): 8 MB sessions, newest 5 kept, crashes " +
+                    "appended before the process dies. After a crash on launch, " +
+                    "the next start re-exports that session and offers to share it."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
+            markActive(debugTab)
+            polish()
         }
         fun showAboutTab() {
             rawZslSettingsStatus = null
@@ -3195,16 +3459,82 @@ class MainActivity : Activity(), SensorEventListener {
                         .show()
                 }
             })
-            generalTab.isEnabled = true
-            denoiseTab.isEnabled = true
-            lensesTab.isEnabled = true
-            aboutTab.isEnabled = false
+            markActive(aboutTab)
+            polish()
         }
-        generalTab.setOnClickListener { showGeneralTab() }
-        denoiseTab.setOnClickListener { showDenoiseTab() }
-        lensesTab.setOnClickListener { showLensesTab() }
-        aboutTab.setOnClickListener { showAboutTab() }
-        showGeneralTab()
+        val tabPages: List<() -> Unit> = listOf(
+            { showGeneralTab() },
+            { showJpegTab() },
+            { showExposureTab() },
+            { showBurstTab() },
+            { showDenoiseTab() },
+            { showLensesTab() },
+            { showDebugTab() },
+            { showAboutTab() }
+        )
+        fun goTab(index: Int) {
+            val clamped = index.coerceIn(tabPages.indices)
+            val changed = clamped != currentTab
+            currentTab = clamped
+            tabPages[clamped]()
+            if (changed) content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            // Keep the top tab strip following the page (taps and swipes alike)
+            // so the active tab is always visible, centered when possible.
+            tabRow.post {
+                val active = allTabs[clamped]
+                val centered = active.left - (tabScroll.width - active.width) / 2
+                tabScroll.smoothScrollTo(centered.coerceAtLeast(0), 0)
+            }
+        }
+        generalTab.setOnClickListener { goTab(0) }
+        jpegTab.setOnClickListener { goTab(1) }
+        exposureTab.setOnClickListener { goTab(2) }
+        burstTab.setOnClickListener { goTab(3) }
+        denoiseTab.setOnClickListener { goTab(4) }
+        lensesTab.setOnClickListener { goTab(5) }
+        debugTab.setOnClickListener { goTab(6) }
+        aboutTab.setOnClickListener { goTab(7) }
+        // Swipe left/right anywhere on background space (tab strip, labels, gaps,
+        // dialog padding) flips tabs like book pages: left goes forward, right
+        // goes back. Touches that start on buttons, sliders, or checkboxes are
+        // consumed by those controls, so they never reach this detector. Both
+        // fast flings and slow drags count (DOWN/UP distance check), and the
+        // listeners always return false so scrolling is unaffected.
+        val swipeDistance = dp(64).toFloat()
+        var swipeDownX = 0f
+        var swipeDownY = 0f
+        var swipeTracking = false
+        val swipeTouch = View.OnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    swipeDownX = event.x
+                    swipeDownY = event.y
+                    swipeTracking = true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (swipeTracking) {
+                        swipeTracking = false
+                        val dx = event.x - swipeDownX
+                        val dy = event.y - swipeDownY
+                        if (kotlin.math.abs(dx) >= swipeDistance &&
+                            kotlin.math.abs(dx) >= kotlin.math.abs(dy) * 1.5f
+                        ) {
+                            if (dx < 0f && currentTab < tabPages.lastIndex) goTab(currentTab + 1)
+                            else if (dx > 0f && currentTab > 0) goTab(currentTab - 1)
+                        }
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> swipeTracking = false
+            }
+            false
+        }
+        settingsScroll.setOnTouchListener(swipeTouch)
+        content.setOnTouchListener(swipeTouch)
+        tabScroll.setOnTouchListener(swipeTouch)
+        tabRow.setOnTouchListener(swipeTouch)
+        container.setOnTouchListener(swipeTouch)
+        tabScroll.contentDescription = "Settings tabs. Swipe left or right anywhere to flip tabs."
+        goTab(0)
         dialog = AlertDialog.Builder(this)
             .setTitle("Settings")
             .setView(container)
@@ -3212,6 +3542,14 @@ class MainActivity : Activity(), SensorEventListener {
             .create()
         dialog.setOnDismissListener { rawZslSettingsStatus = null }
         dialog.show()
+        // Keep the sheet compact and floating: fixed width with side margins
+        // and capped height instead of stretching edge to edge.
+        dialog.window?.let { window ->
+            val metrics = resources.displayMetrics
+            val targetWidth = (metrics.widthPixels - dp(48)).coerceAtLeast(dp(280))
+            val targetHeight = (metrics.heightPixels * 0.85f).toInt()
+            window.setLayout(targetWidth, targetHeight)
+        }
     }
 
     private fun rawZslSettingsText(status: RawZslStatus): String {
@@ -3410,7 +3748,7 @@ class MainActivity : Activity(), SensorEventListener {
         else "Top-up: OFF • thin ring waits for refill"
 
     private fun vfResolutionText(res: Int): String =
-        "VF resolution: ${res}px long edge (tap: 480→640→960)"
+        "VF resolution: ${res}px long edge (tap: 480→640→960→1080)"
 
     private fun vfPreviewModeText(): String =
         "VF preview: ${vfPreviewMode.name} (${vfPreviewMode.label(captureFormat)})"
@@ -3423,8 +3761,8 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showLensDiscovery(firstRun: Boolean) {
         val progress = AlertDialog.Builder(this)
-            .setTitle("Lens discovery")
-            .setMessage("Checking Camera2 IDs and RAW capabilities…")
+            .setTitle("Finding RAW lenses")
+            .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
             .setCancelable(!firstRun)
             .show()
         lensDiscovery.discover { lenses ->
@@ -3441,7 +3779,7 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 val missingSaved = selectedLensIds()
                     .filterNot { savedId -> lenses.any { it.id == savedId } }
-                    .map { DiscoveredLens(it, "Camera $it • currently unavailable") }
+                    .map { unavailableLens(it) }
                 showLensSelection(lenses + missingSaved, firstRun)
             }
         }
@@ -3449,31 +3787,225 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showLensSelection(lenses: List<DiscoveredLens>, firstRun: Boolean) {
         val selected = selectedLensIds()
-        val checked = BooleanArray(lenses.size) { index ->
-            if (firstRun && selected.isEmpty()) true else lenses[index].id in selected
+        val groups = groupLenses(lenses)
+        val availableCount = lenses.count { it.kind != LensRouteKind.UNAVAILABLE }
+        // First run with nothing saved yet: pre-check everything currently available.
+        val checked = lenses.associate { lens ->
+            val initial = if (firstRun && selected.isEmpty()) {
+                lens.kind != LensRouteKind.UNAVAILABLE
+            } else {
+                lens.id in selected
+            }
+            lens.id to initial
+        }.toMutableMap()
+        val checkBoxes = mutableListOf<CheckBox>()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
         }
-        AlertDialog.Builder(this)
-            .setTitle(if (firstRun) "Add RAW lenses" else "Lens discovery")
-            .setMultiChoiceItems(lenses.map { it.label }.toTypedArray(), checked) { _, which, enabled ->
-                checked[which] = enabled
-            }
-            .setPositiveButton("Save") { _, _ ->
-                val ids = lenses.indices.filter { checked[it] }.mapTo(mutableSetOf()) { lenses[it].id }
-                if (ids.isEmpty()) {
-                    setStatus("PICK A RAW LENS")
-                    return@setPositiveButton
+        container.addView(TextView(this).apply {
+            text = "$availableCount RAW lens${if (availableCount == 1) "" else "es"} · ${groups.size} group${if (groups.size == 1) "" else "s"}"
+            setTextColor(getColor(R.color.text_primary))
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        container.addView(TextView(this).apply {
+            text = "Checked lenses appear in the viewfinder switcher. Widest first inside each group."
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(8))
+        })
+
+        val quickRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(8))
+        }
+        val selectAll = Button(this).apply {
+            text = "Select all"
+            isAllCaps = false
+            textSize = 12f
+        }
+        val clear = Button(this).apply {
+            text = "Clear"
+            isAllCaps = false
+            textSize = 12f
+        }
+        val selectParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
+        val clearParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
+        quickRow.addView(selectAll, selectParams)
+        quickRow.addView(clear, clearParams)
+        container.addView(quickRow)
+
+        val listScroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.52).toInt()
+            )
+            isFillViewport = true
+        }
+        val listBody = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(8))
+        }
+        listScroll.addView(listBody)
+
+        fun refreshQuickState() {
+            val values = checked.values
+            selectAll.isEnabled = values.any { !it }
+            clear.isEnabled = values.any { it }
+        }
+
+        groups.forEach { group ->
+            // ---- Section header ----
+            listBody.addView(TextView(this).apply {
+                text = group.title.uppercase(Locale.US)
+                setTextColor(getColor(R.color.accent))
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.1f
+                setPadding(0, dp(12), 0, 0)
+            })
+            listBody.addView(TextView(this).apply {
+                text = group.subtitle
+                setTextColor(getColor(R.color.text_muted))
+                textSize = 12f
+                setPadding(0, dp(2), 0, dp(8))
+            })
+            group.lenses.forEach { lens ->
+                val dimmed = lens.kind == LensRouteKind.UNAVAILABLE
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setBackgroundResource(R.drawable.control_chip)
+                    setPadding(dp(8), dp(10), dp(12), dp(10))
+                    val cardParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(8) }
+                    layoutParams = cardParams
+                    alpha = if (dimmed) 0.72f else 1f
                 }
-                lensPreferences().edit()
-                    .putStringSet(KEY_SELECTED_LENSES, ids)
-                    .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
-                    .apply()
-                controller.reloadLenses()
-                setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
+                val box = CheckBox(this).apply {
+                    isChecked = checked[lens.id] == true
+                    contentDescription = lens.label
+                }
+                checkBoxes += box
+                val textCol = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
+                }
+                val topRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                topRow.addView(TextView(this).apply {
+                    text = lens.title
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 14f
+                    typeface = Typeface.DEFAULT_BOLD
+                    layoutParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
+                })
+                topRow.addView(TextView(this).apply {
+                    text = "ID ${lens.id}"
+                    setTextColor(getColor(R.color.text_muted))
+                    textSize = 11f
+                    typeface = Typeface.MONOSPACE
+                    setPadding(dp(8), 0, 0, 0)
+                })
+                textCol.addView(topRow)
+                textCol.addView(TextView(this).apply {
+                    text = lens.details.ifEmpty { lens.label }
+                    setTextColor(getColor(R.color.text_secondary))
+                    textSize = 12f
+                    setPadding(0, dp(2), 0, 0)
+                })
+                val bottomRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(4), 0, 0)
+                }
+                bottomRow.addView(TextView(this).apply {
+                    text = lensKindChip(lens)
+                    setTextColor(getColor(R.color.text_muted))
+                    textSize = 10f
+                    typeface = Typeface.DEFAULT_BOLD
+                    letterSpacing = 0.06f
+                    layoutParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
+                })
+                bottomRow.addView(TextView(this).apply {
+                    text = lens.route.ifEmpty { lens.kind.sectionTitle }
+                    setTextColor(getColor(R.color.text_muted))
+                    textSize = 11f
+                })
+                textCol.addView(bottomRow)
+                card.addView(box)
+                card.addView(textCol)
+                box.setOnCheckedChangeListener { _, enabled -> checked[lens.id] = enabled; refreshQuickState() }
+                card.setOnClickListener { box.toggle() }
+                listBody.addView(card)
             }
-            .setNegativeButton(if (firstRun) "Use default" else "Cancel") { _, _ ->
-                if (firstRun) lensPreferences().edit().putBoolean(KEY_LENS_SETUP_COMPLETE, true).apply()
+            // Hairline separator between sections.
+            listBody.addView(View(this).apply {
+                setBackgroundColor(getColor(R.color.text_muted))
+                alpha = 0.35f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+                ).apply { topMargin = dp(4) }
+            })
+        }
+        container.addView(listScroll)
+        container.addView(TextView(this).apply {
+            text = "Tip: start with Direct cameras. Vendor routes are only for lenses missing above."
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 11f
+            setPadding(0, dp(8), 0, dp(4))
+        })
+
+        selectAll.setOnClickListener {
+            checked.keys.forEach { checked[it] = true }
+            checkBoxes.forEach { it.isChecked = true }
+            refreshQuickState()
+        }
+        clear.setOnClickListener {
+            checked.keys.forEach { checked[it] = false }
+            checkBoxes.forEach { it.isChecked = false }
+            refreshQuickState()
+        }
+        refreshQuickState()
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (firstRun) "Add RAW lenses" else "Lens discovery")
+            .setView(container)
+            .setPositiveButton("Save", null)
+            .setNegativeButton(if (firstRun) "Use default" else "Cancel", null)
+            .create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val ids = checked.filterValues { it }.keys.toMutableSet()
+            if (ids.isEmpty()) {
+                setStatus("PICK A RAW LENS")
+                return@setOnClickListener
             }
-            .show()
+            lensPreferences().edit()
+                .putStringSet(KEY_SELECTED_LENSES, ids)
+                .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
+                .apply()
+            controller.reloadLenses()
+            setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
+            dialog.dismiss()
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+            if (firstRun) lensPreferences().edit().putBoolean(KEY_LENS_SETUP_COMPLETE, true).apply()
+            dialog.dismiss()
+        }
+    }
+
+    private fun lensKindChip(lens: DiscoveredLens): String = when (lens.kind) {
+        LensRouteKind.STANDALONE -> "● DIRECT"
+        LensRouteKind.LOGICAL_PHYSICAL -> "● LOGICAL ${lens.logicalId ?: "?"} → ${lens.physicalId ?: "?"}"
+        LensRouteKind.VENDOR_COMPOSITE -> "● VENDOR"
+        LensRouteKind.UNAVAILABLE -> "○ UNAVAILABLE"
     }
 
     private fun dngWriterBackend(): DngWriterBackend = DngWriterBackend.fromPreference(
@@ -3538,13 +4070,15 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_DEBUG_OVERLAY = "camera_debug_overlay"
         const val KEY_LOGCAT_FILE = "logcat_file_enabled"
         const val KEY_RAW_VF_DEBUG_OVERLAY = "raw_vf_debug_overlay"
+        const val KEY_VF_ENGINE_MODE = "vf_engine_mode"
         const val KEY_GRID = "viewfinder_grid"
-        const val KEY_LEVEL = "viewfinder_level"
         const val KEY_HISTOGRAM = "viewfinder_histogram"
         const val KEY_HISTOGRAM_SOURCE_RAW = "histogram_source_raw"
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"
         const val KEY_RAW_ZSL_FRAME_COUNT = "raw_zsl_frame_count"
+        const val KEY_RAW_SR_ENABLED = "raw_super_resolution_enabled"
+        const val KEY_RAW_SR_DNG_MODE = "raw_super_resolution_dng_mode"
         const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"
@@ -3562,6 +4096,7 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_RELEASE_MODE = "release_mode"
+        const val KEY_HDR_ENABLED = "hdr_enabled"
         const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"
         const val KEY_HDR_SAVE_DEBUG_FRAMES = "hdr_save_debug_frames"
         const val KEY_HDR_BRACKET_STOPS = "hdr_bracket_stops"
@@ -3578,9 +4113,13 @@ class MainActivity : Activity(), SensorEventListener {
         const val KEY_JPEG_AGX_GAMUT = "jpeg_agx_gamut"
         const val KEY_JPEG_ADAPTIVE_EXPOSURE = "jpeg_adaptive_exposure"
         const val KEY_JPEG_ADAPTIVE_PROGRAM = "jpeg_adaptive_program"
+        const val KEY_JPEG_HIGHLIGHT_HEADROOM = "jpeg_highlight_headroom"
+        const val KEY_JPEG_SKY_PROTECTION = "jpeg_sky_protection"
+        const val KEY_JPEG_HIGHLIGHT_SHOULDER = "jpeg_highlight_shoulder"
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
         const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
+        const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L
