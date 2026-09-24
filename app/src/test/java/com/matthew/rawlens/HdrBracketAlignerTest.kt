@@ -58,6 +58,29 @@ class HdrBracketAlignerTest {
         assertEquals(-6f, s.dy, 0f)
     }
 
+    @Test fun rejectedDenseFlowKeepsFractionalTranslation() {
+        val shift = HdrBracketAligner.Shift(3.2f, -5.7f)
+        val flow = HdrBracketAligner.refinedFlow(shift, null)!!
+        assertEquals(shift.dx, flow.displacement(10, 10).first, 0f)
+        assertEquals(shift.dy, flow.displacement(10, 10).second, 0f)
+        val refined = HdrBracketAligner.refinedFlow(shift, TranslationFlow(-0.8f, 0.3f))!!
+        assertEquals(shift.dx, refined.displacement(10, 10).first, 1e-6f)
+        assertEquals(shift.dy, refined.displacement(10, 10).second, 1e-6f)
+    }
+
+    @Test fun evenPreShiftPreservesCfaAtBorders() {
+        val size = 16
+        for (pattern in BayerPattern.entries) {
+            val input = UnpackedRawCfa(size, size, pattern,
+                FloatArray(size * size) { ((it / size and 1) * 2 + (it % size and 1)) / 4f },
+                RawCrop(0, 0, size, size))
+            for (shift in listOf(-20f, -2f, 2f, 20f)) {
+                val out = HdrBracketAligner.warpShiftedEven(input, HdrBracketAligner.Shift(shift, -shift))
+                for (i in input.values.indices) assertEquals(input.values[i], out.values[i], 0f)
+            }
+        }
+    }
+
     @Test fun evenPreShiftIsLossless() {
         val size = 16
         val values = FloatArray(size * size) { it.toFloat() / (size * size) }

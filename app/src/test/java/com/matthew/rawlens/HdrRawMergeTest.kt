@@ -194,6 +194,50 @@ class HdrRawMergeTest {
         assertTrue(a.zip(b.toList()).all { (x, y) -> x == y })
     }
 
+    @Test fun clippedColourChannelCannotBecomeEligibleAfterDeghosting() {
+        val size = 64
+        for (pattern in BayerPattern.entries) {
+            val ref = cfa(0.1f, size).copy(pattern = pattern)
+            val long = ref.copy(values = FloatArray(size * size) { i ->
+                val x = i % size
+                val y = i / size
+                if (x in 24..39 && y in 24..39 &&
+                    pattern.colorAt(x, y) == CfaColor.RED) 1f else 0.4f
+            })
+            val merged = HdrRawMerge.merge(listOf(
+                HdrMergeFrame(ref, 1_000_000L, 100),
+                HdrMergeFrame(long, 4_000_000L, 100)), referenceIndex = 0)
+            // All four CFA sites must use the valid short exposure in a
+            // clipped cell, even if deghosting has reduced the red samples.
+            for (y in 26..37) for (x in 26..37)
+                assertEquals("clipped channel leaked at $x,$y ($pattern)",
+                    0.1f, merged.values[y * size + x], 1e-5f)
+        }
+    }
+
+    @Test fun displacedEdgeCannotCreateHaloWhereExposuresAgree() {
+        val size = 96
+        for (pattern in BayerPattern.entries) {
+            val ref = cfa(0f, size).copy(pattern = pattern, values = FloatArray(size * size) { i ->
+                if (i % size < 46) 0.04f else 0.2f
+            })
+            val frames = listOf(0.25f, 1f, 4f).map { ratio ->
+                val edge = if (ratio == 1f) 46 else 50
+                val raw = ref.copy(values = FloatArray(size * size) { i ->
+                    (if (i % size < edge) 0.04f else 0.2f) * ratio
+                })
+                HdrMergeFrame(raw, (4_000_000L * ratio).toLong(), 100)
+            }
+            val out = HdrRawMerge.merge(frames, 1)
+            // Output radiance is expressed in the shortest exposure domain.
+            for (y in 0 until size) for (x in 0 until size) {
+                if (x in 46..49) continue
+                val expected = ref.values[y * size + x] * 0.25f
+                assertEquals("halo at $x,$y ($pattern)", expected, out.values[y * size + x], 1e-5f)
+            }
+        }
+    }
+
     private fun cfa(value: Float, size: Int = 6) = UnpackedRawCfa(
         size, size, BayerPattern.RGGB, FloatArray(size * size) { value },
         RawCrop(0, 0, size, size)

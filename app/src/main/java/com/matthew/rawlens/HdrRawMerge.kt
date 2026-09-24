@@ -101,7 +101,12 @@ object HdrRawMerge {
          * weight near `1 / (1 + strength)`): larger keeps more alternate
          * (cleaner, less ghost-robust), smaller more reference.
          */
-        val wienerStrength: Float = 8f
+        val wienerStrength: Float = 8f,
+        /**
+         * Per-channel deghost tile edge: [HdrTileDeghost.TILE] (8, default)
+         * or [HdrTileDeghost.TILE_LARGE] (16, fallback for heavy blur).
+         */
+        val deghostTileSize: Int = HdrTileDeghost.TILE
     )
 
     fun merge(
@@ -122,16 +127,26 @@ object HdrRawMerge {
 
         val pixels = FloatArray(count)
         val weights = FloatArray(count)
+        // Reused across frames (sequential loop): avoids re-allocating and
+        // zeroing ~48MB warp + ~2x12MB block buffers per frame. Values fed to
+        // the accumulate loop are identical; only allocation churn is removed.
+        val warpBuf = FloatArray(count)
+        val cw = width / 2
+        val ch = height / 2
+        val blockMax = FloatArray(cw * ch)
+        val blockMin = FloatArray(cw * ch)
 
         // Accumulate in input order like darktable: the first frame wins clipped
         // ties. The geometric reference only defines flow coordinates, never order.
-        // Row strips run on a thread pool (disjoint writes, deterministic output).
+        // Row strips run on the shared pool (disjoint writes, deterministic output).
         for ((k, frame) in frames.withIndex()) {
-            var registered = FloatArray(count)
+            // Identity frames read the source directly: no 48MB copy.
+            var registered: FloatArray
             val flow = frame.flow
             if (flow == null) {
-                System.arraycopy(frame.cfa.values, 0, registered, 0, count)
+                registered = frame.cfa.values
             } else {
+                registered = warpBuf
                 parallelRows(height) { y0, y1 ->
                     val tmp = FloatArray(2)
                     val scratch = FloatArray(2)
@@ -144,26 +159,16 @@ object HdrRawMerge {
                     }
                 }
             }
-            if (k != referenceIndex && options.deghost) {
-                // HDR+ robust pre-pass: collapse blurred/ghosted/misregistered
-                // bins to the reference before photon weighting (which would
-                // otherwise trust a motion-blurred long exposure most).
-                registered = HdrTileDeghost.deghost(
-                    frames[referenceIndex], frame,
-                    frame.cfa.copy(values = registered),
-                    options.wienerStrength
-                ).values
-            }
             // Same 3x3 block extremes as darktable, evaluated per 2x2 cell with
             // darktable's border rule (cells past width/height-2 contribute no
             // envelope). The clip branch and fallback bookkeeping below use
             // these block-exact values verbatim, so every pixel of a cell
             // agrees on the winner; only the envelope weight rides the
             // interpolated maximum for C0-continuous blending.
-            val cw = width / 2
-            val ch = height / 2
-            val blockMax = FloatArray(cw * ch)
-            val blockMin = FloatArray(cw * ch) { Float.MAX_VALUE }
+            // Buffers are reused across frames: reset to the same fresh-array
+            // defaults (0 / MAX_VALUE) so border cells match exactly.
+            blockMax.fill(0f)
+            blockMin.fill(Float.MAX_VALUE)
             parallelRows(ch) { cy0, cy1 ->
                 for (cy in cy0 until cy1) for (cx in 0 until cw) {
                     val ox = cx * 2
@@ -179,6 +184,20 @@ object HdrRawMerge {
                     blockMax[cy * cw + cx] = mx
                     blockMin[cy * cw + cx] = mn
                 }
+            }
+            // Saturation belongs to the observed exposure, not the Wiener
+            // reconstruction: filtering can pull a clipped channel below white.
+            // Keep the original extrema for highlight eligibility and weighting.
+            if (k != referenceIndex && options.deghost) {
+                // HDR+ robust pre-pass: collapse blurred/ghosted/misregistered
+                // bins to the reference before photon weighting (which would
+                // otherwise trust a motion-blurred long exposure most).
+                registered = HdrTileDeghost.deghost(
+                    frames[referenceIndex], frame,
+                    frame.cfa.copy(values = registered),
+                    options.wienerStrength,
+                    options.deghostTileSize
+                ).values
             }
             val cal = cals[k]
             val photon = photons[k]
@@ -434,25 +453,11 @@ object HdrRawMerge {
     }
 
     /**
-     * Static row-strip fan-out over a per-call pool (max 8 threads). Strips write
+     * Static row-strip fan-out over the shared pool (max 8 threads). Strips write
      * disjoint rows, so output is bit-deterministic regardless of thread count.
      */
-    private fun parallelRows(height: Int, block: (y0: Int, y1: Int) -> Unit) {
-        val cores = max(1, min(8, Runtime.getRuntime().availableProcessors()))
-        if (cores == 1 || height < cores * 2) {
-            block(0, height)
-            return
-        }
-        val pool = java.util.concurrent.Executors.newFixedThreadPool(cores)
-        try {
-            val futures = (0 until cores).map { t ->
-                pool.submit { block(t * height / cores, (t + 1) * height / cores) }
-            }
-            futures.forEach { it.get() }
-        } finally {
-            pool.shutdown()
-        }
-    }
+    private fun parallelRows(height: Int, block: (y0: Int, y1: Int) -> Unit) =
+        HdrPools.runStriped(height, 8, block)
 
     private fun checkFrames(frames: List<HdrMergeFrame>, referenceIndex: Int) {        require(frames.size >= 2) { "HDR merge requires at least two exposures" }
         require(referenceIndex in frames.indices)
@@ -464,6 +469,25 @@ object HdrRawMerge {
                 it.cfa.sensorCropLeft == reference.sensorCropLeft &&
                 it.cfa.sensorCropTop == reference.sensorCropTop
         }) { "HDR frames must have identical dimensions, crop, and CFA phase" }
+        // Normalized-domain guard: inputs must be sensor black/white
+        // normalized (roughly [0,1] with small negative noise overshoot),
+        // never raw digital numbers. Catches callers feeding un-normalized
+        // CFA (e.g. double black subtraction or missing white scaling),
+        // which would silently corrupt calibration/photon weighting.
+        // Geometry uses frames[referenceIndex] (middle exposure by default
+        // in RawCameraController); accumulation stays input-ordered like
+        // darktable, so the first frame still wins clipped ties.
+        for ((k, frame) in frames.withIndex()) {
+            var min = Float.MAX_VALUE
+            var max = -Float.MAX_VALUE
+            for (v in frame.cfa.values) {
+                if (v < min) min = v
+                if (v > max) max = v
+            }
+            require(min >= -0.5f && max <= 1.5f) {
+                "HDR frame $k looks un-normalized (range $min..$max, expected ~0..1)"
+            }
+        }
     }
 
     private fun sq(x: Float) = x * x

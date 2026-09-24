@@ -32,11 +32,11 @@ data class LensShadingModel(
         }
     }
 
-    fun gainAt(sensorX: Int, sensorY: Int, color: CfaColor): Float {
+    fun gainAt(sensorX: Int, sensorY: Int, color: CfaColor, greenRow: Int = sensorY): Float {
         if (alreadyApplied) return 1f
         val channel = when (color) {
             CfaColor.RED -> 0
-            CfaColor.GREEN -> if (sensorY and 1 == 0) 1 else 2
+            CfaColor.GREEN -> if (greenRow and 1 == 0) 1 else 2
             CfaColor.BLUE -> 3
         }
         val nx = if (activeArray.width == 1) 0f else
@@ -102,10 +102,17 @@ object LensShadingCorrector {
             }
         }
         if (model != null && !model.alreadyApplied) {
-            for (y in 0 until input.height) {
-                for (x in 0 until input.width) {
-                    val index = y * input.width + x
-                    output[index] *= saturationMap.levelAt(x, y)
+            // Row-sharded with the gain inlined (same gainAt values the
+            // saturation map returns, without a virtual call per pixel).
+            RawSrWorkers.forEachShard(input.height) { y0, y1 ->
+                for (y in y0 until y1) {
+                    val sensorY = input.sensorCropTop + y
+                    for (x in 0 until input.width) {
+                        val index = y * input.width + x
+                        output[index] *= model.gainAt(
+                            input.sensorCropLeft + x, sensorY, input.pattern.colorAt(x, y)
+                        )
+                    }
                 }
             }
         }
@@ -133,8 +140,10 @@ object RawDefectCorrector {
     fun correctInPlace(
         cfa: UnpackedRawCfa,
         metadataDefects: List<IntPointSnapshot>,
-        settings: DefectCorrectionSettings = DefectCorrectionSettings()
+        settings: DefectCorrectionSettings = DefectCorrectionSettings(),
+        sameColorPeriod: Int = 2
     ): DefectCorrectionStats {
+        require(sameColorPeriod == 2 || sameColorPeriod == 4)
         require(cfa.values.size == cfa.width * cfa.height) { "CFA buffer size mismatch" }
         if (metadataDefects.isEmpty() && !settings.autoDetect) {
             return DefectCorrectionStats(0, 0)
@@ -153,7 +162,7 @@ object RawDefectCorrector {
             known.forEach { key ->
                 val x = key.toInt()
                 val y = (key shr 32).toInt()
-                val neighbors = sameColorNeighbors(source, cfa.width, cfa.height, x, y)
+                val neighbors = sameColorNeighbors(source, cfa.width, cfa.height, x, y, sameColorPeriod)
                 if (neighbors.size >= MIN_NEIGHBORS) {
                     cfa.values[y * cfa.width + x] = median(neighbors)
                     corrected++
@@ -166,7 +175,7 @@ object RawDefectCorrector {
         var automaticCount = 0
         for (y in 0 until cfa.height) {
             for (x in 0 until cfa.width) {
-                val neighbors = sameColorNeighbors(source, cfa.width, cfa.height, x, y)
+                val neighbors = sameColorNeighbors(source, cfa.width, cfa.height, x, y, sameColorPeriod)
                 if (neighbors.size < MIN_NEIGHBORS) continue
                 val median = median(neighbors)
                 val key = coordinateKey(x, y)
@@ -191,12 +200,13 @@ object RawDefectCorrector {
         width: Int,
         height: Int,
         x: Int,
-        y: Int
+        y: Int,
+        period: Int
     ): FloatArray {
         val collected = FloatArray(8)
         var count = 0
-        for (dy in -2..2 step 2) {
-            for (dx in -2..2 step 2) {
+        for (dy in -period..period step period) {
+            for (dx in -period..period step period) {
                 if (dx == 0 && dy == 0) continue
                 val nx = x + dx
                 val ny = y + dy

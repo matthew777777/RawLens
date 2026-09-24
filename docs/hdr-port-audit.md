@@ -53,7 +53,67 @@ The vendored files record their independently verified PhotonCamera source commi
   loss on real brackets (HDR.dng vs F01); single resample simulates at ~0.79 vs 0.72
   kept. FlowNet-rejected frames fall back to the full-precision shift warp.
 - Accumulation is input-ordered like darktable (no reference-first reordering).
-- Use bilinear proxy and flow interpolation, with the shortest exposure as reference.
+  Geometry uses the middle exposure as reference
+  (`RawCameraController` sorts by exposure*ISO and picks `size/2`); the first
+  frame still wins clipped ties like darktable.
+- Phase 1 detail upgrades (2026-09-23, validated on 4080x3060 2EV ISO50
+  bracket): Fourier subpixel refinement inside `HdrTileDeghost.processTile`
+  (3x3 grid at +-0.5 channel-px via phase ramp on existing spectra, no extra
+  FFTs, energy-gated); trimmed mid-mean shared Wiener weight instead of
+  channel max; unified uncalibrated noise fallback on
+  `CfaNoiseModel.FALLBACK_*` plus 1.25x warp-variance inflation on the moving
+  term; `checkFrames` normalized-domain guard (-0.5..1.5) catching
+  un-normalized callers.
+- Phase 2 robust averaging (2026-09-23, same bracket set; formulas checked
+  against upstream `burstphoto/merge/frequency.metal`): per-tile mismatch in
+  noise-sigma units mapped to upstream's 0.12 operating point (fixed scale,
+  not global mean — boost engages only where residual is truly at noise
+  floor); motion boost up to 6x on static tiles / 1x cut on motion (Liba
+  Fig. 9f shape); per-bin Delbracio magnitude preference (ratio^4 via
+  squared mags, AC-only, gated mismatch<0.3, no uniform-exposure gate since
+  spectra are gain-matched); mismatch-gated deconvolution lift (upstream
+  cw[] for TILE=16, per pairwise blend); soft highlight handoff both sides
+  (refTrust hands clipped ref to alternate preserving darktable rescue,
+  altShrink discounts clipped mapped alternate) replacing the hard 0.95
+  bypass. Real-bracket operating point: mid-bright static tiles mismatch
+  ~0.07-0.14 (boosted ~57%), dark tiles ~0.3-0.56 (conservative, likely
+  pedestal drift the multiplicative gain trim only partly absorbs),
+  clipped tiles cut to 1x; refTrust touches ~0.3% of tiles (F01 rarely
+  clips). Full suite 734/734 green.
+- Phase 3 locality (2026-09-24, same bracket set): 8px/channel default
+  (upstream `tile_size_merge`), 16/channel fallback via
+  `deghost(tileSize)` / `HdrRawMerge.Options.deghostTileSize`; Hann
+  analysis window (window-aware `binNoise` via window power sum) with
+  triangular synthesis over a full half-tile 4-phase grid, analytic
+  pattern-aware product-sum normalization (numerically verified exact);
+  per-site anti-ringing clamp moved into windowed-domain bounds (clamping
+  to unwindowed bounds inflated output ~2.2x — caught by passthrough
+  tests). Real-bracket operating point transfers cleanly (boosted ~30% at
+  both sizes). Host profile on 256px: 8px ~41ms vs 16px ~108ms (small
+  tiles are cache-friendlier — the feared 2-4x cost went the other way).
+  Full suite 738/738 green.
+- Phase 3 validation on real brackets (2026-09-24,
+  `HdrRealBracketValidationTest`, F00/F01/F02 2EV ISO50 4080x3060, identical
+  alignment both runs, HEAD-vs-worktree A/B): sharpness tie (0.00994 vs
+  0.00996 mean gradient), noise MAD -2.6%, shadow variance -1.1%,
+  reference fidelity tie, highlight rescue parity (this set has no true
+  clipped scene content — only hot pixels, rescued to short-frame values
+  both sides), no stuck-bright leak (max 0.208 vs 0.210). The A/B caught
+  one real regression first (fraction-only highlight trust leaked
+  single-pixel clips at 0.25); fixed with max-aware trust plus a dedicated
+  unit test. Merge cost ~1.5x on full frame (4-phase overlap), inside the
+  quality-first budget. Full suite 743/743 green.
+- Second set (2026-09-24, IMG_20260923_145207_528 F00/F01/F02, 1/1961 +
+  1/490 + 1/123 ISO50, real handshake shifts (2.62,0.55)/(-3.45,-1.49)):
+  all metrics tie within 0.5% (sharpness, noise, fidelity, shadows), no
+  clipped scene content in F01. Full-res spectral A/B: LF/VHF tied, HF
+  band -5.5% with a measured step edge identical (rise within 0.05px,
+  overshoot within 0.001) — less HF noise, not less detail. Side-by-side
+  PGMs show no ghosts/smear; rock texture and cracks preserved equally.
+  Conclusion across both sets: no worse anywhere, cleaner shadows, edges
+  intact — both scenes are alignment-limited, so gains materialize as
+  noise rather than sharpness. A fast-motion bracket set would be needed
+  to separate sharpness.
 - Abort HDR on missing/nonfinite FlowNet output; clamp raw model flow to ±32 model px
   and reject fields that do not strictly improve exposure-matched proxy correspondence
   or leave fewer than 85% of sampled points in bounds (a field that merely ties

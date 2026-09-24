@@ -92,7 +92,8 @@ data class RawFrameMetadata(
     val activePhysicalCameraId: String?,
     val afState: Int? = null,
     val aeState: Int? = null,
-    val lensState: Int? = null
+    val lensState: Int? = null,
+    val quadBayer: Boolean = false
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -175,10 +176,21 @@ object RawFrameMetadataFactory {
                 if (index and 1 == 0) pairs[index / 2].first else pairs[index / 2].second
             })
         }
-        val rawBinning = if (Build.VERSION.SDK_INT >= 35) {
+        val rawBinning = if (Build.VERSION.SDK_INT >= 31) {
             result.get(CaptureResult.SENSOR_RAW_BINNING_FACTOR_USED)
         } else null
 
+        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        val groupSize = if (Build.VERSION.SDK_INT >= 31 && rawBinning == true) {
+            characteristics.get(CameraCharacteristics.SENSOR_INFO_BINNING_FACTOR)
+        } else null
+        val groupedBayer = RawBayerLayout.requiresRemosaic(
+            rawBinning,
+            capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR) == true,
+            capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_REMOSAIC_REPROCESSING) == true,
+            groupSize?.width, groupSize?.height
+        )
+        val quadBayer = groupedBayer && groupSize?.width == 2 && groupSize.height == 2
         val unsupported = when {
             plane == null -> "RAW_SENSOR must expose exactly one image plane"
             plane.pixelStride < 2 -> "RAW_SENSOR pixel stride cannot hold a 16-bit sample"
@@ -186,10 +198,12 @@ object RawFrameMetadataFactory {
                 "RAW_SENSOR row stride is shorter than the image width"
             cfaValue == null -> "Camera2 did not report a CFA arrangement"
             cfaResult.isFailure -> cfaResult.exceptionOrNull()?.message
-            rawBinning == true -> "RAW binning/Quad-Bayer remosaic is not supported"
             geometry is RawBufferGeometry.Unsupported -> geometry.reason
             black == null -> "Camera2 did not report black levels"
             white == null -> "Camera2 did not report a white level"
+            quadBayer -> RawBayerLayout.QUAD_REQUIRES_DEMOSAIC
+            groupedBayer && (groupSize?.width != 1 || groupSize.height != 1) ->
+                "Unsupported or missing RAW CFA group size: $groupSize"
             else -> null
         }
 
@@ -253,7 +267,8 @@ object RawFrameMetadataFactory {
                 .get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
             afState = result.get(CaptureResult.CONTROL_AF_STATE),
             aeState = result.get(CaptureResult.CONTROL_AE_STATE),
-            lensState = result.get(CaptureResult.LENS_STATE)
+            lensState = result.get(CaptureResult.LENS_STATE),
+            quadBayer = quadBayer
         )
     }
 

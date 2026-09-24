@@ -134,17 +134,30 @@ object RawSensorUnpacker {
         }
 
         val output = FloatArray(crop.width * crop.height)
-        var outputIndex = 0
-        for (y in 0 until crop.height) {
-            val planeY = crop.top + y
-            val sensorY = layout.sensorOriginY + planeY
-            val rowStart = dataOrigin + planeY * layout.rowStride + crop.left * layout.pixelStride
-            for (x in 0 until crop.width) {
-                val planeX = crop.left + x
-                val sensorX = layout.sensorOriginX + planeX
-                val code = input.getShort(rowStart + x * layout.pixelStride).toInt() and 0xffff
-                val black = normalization.blackAt(sensorX, sensorY)
-                output[outputIndex++] = (code - black) / (normalization.whiteLevel - black)
+        // Row-sharded: disjoint output rows, same per-pixel math (absolute
+        // ByteBuffer reads are position-free and thread-safe for reads).
+        // Hoists the per-row sensor/black terms out of the pixel loop.
+        val whiteLevel = normalization.whiteLevel
+        RawSrWorkers.forEachShard(crop.height) { y0, y1 ->
+            for (y in y0 until y1) {
+                val planeY = crop.top + y
+                val sensorY = layout.sensorOriginY + planeY
+                val rowStart = dataOrigin + planeY * layout.rowStride + crop.left * layout.pixelStride
+                // Two black levels per row (even/odd sensor columns); the
+                // white denominator likewise. Same values blackAt returns.
+                val blackEven = normalization.blackLevels[((sensorY and 1) shl 1) or ((layout.sensorOriginX + crop.left) and 1)]
+                val blackOdd = normalization.blackLevels[((sensorY and 1) shl 1) or (((layout.sensorOriginX + crop.left + 1) and 1))]
+                val denomEven = whiteLevel - blackEven
+                val denomOdd = whiteLevel - blackOdd
+                var outputIndex = y * crop.width
+                for (x in 0 until crop.width) {
+                    val code = input.getShort(rowStart + x * layout.pixelStride).toInt() and 0xffff
+                    if ((x and 1) == 0) {
+                        output[outputIndex++] = (code - blackEven) / denomEven
+                    } else {
+                        output[outputIndex++] = (code - blackOdd) / denomOdd
+                    }
+                }
             }
         }
         val sensorCropX = layout.sensorOriginX + crop.left

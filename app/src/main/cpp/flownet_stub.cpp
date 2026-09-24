@@ -14,6 +14,20 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_FlowNetNcnnProcessor_nativeDestroy(
     JNIEnv*, jclass, jlong) {}
 
+// Emulator ABIs have no prebuilt ncnn archive: KernelNet is unavailable
+// there and the Kotlin side falls back to the analytic kernel path.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeCreate(
+    JNIEnv*, jclass, jobject, jstring) { return 0; }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeRun(
+    JNIEnv*, jclass, jlong, jobject, jint, jint, jfloat, jobject) { return JNI_FALSE; }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeDestroy(
+    JNIEnv*, jclass, jlong) {}
+
 // Emulator ABIs have no prebuilt ncnn archive: the RawNIND-tiny denoiser is
 // unavailable there and the Kotlin side skips AI denoise (plain path).
 extern "C" JNIEXPORT jlong JNICALL

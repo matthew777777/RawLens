@@ -42,39 +42,13 @@ object HdrBracketAligner {
 
     private fun workerCount(): Int = max(1, min(4, Runtime.getRuntime().availableProcessors()))
 
-    /** Row fan-out with join; disjoint writes keep output deterministic. */
-    private fun parRows(height: Int, block: (y0: Int, y1: Int) -> Unit) {
-        val n = workerCount()
-        if (n == 1 || height < n * 2) {
-            block(0, height)
-            return
-        }
-        val threads = (0 until n).map { t ->
-            Thread { block(t * height / n, (t + 1) * height / n) }.also { it.start() }
-        }
-        threads.forEach { it.join() }
-    }
+    /** Row fan-out on the shared pool; disjoint writes keep output deterministic. */
+    private fun parRows(height: Int, block: (y0: Int, y1: Int) -> Unit) =
+        HdrPools.runStriped(height, workerCount(), block)
 
     /** Parallel candidate costs in list order; caller argmins sequentially. */
-    private fun parEval(offsets: List<Pair<Int, Int>>, fn: (Pair<Int, Int>) -> Float): FloatArray {
-        val out = FloatArray(offsets.size)
-        val n = workerCount()
-        if (n == 1 || offsets.size <= 1) {
-            offsets.forEachIndexed { i, o -> out[i] = fn(o) }
-            return out
-        }
-        val threads = (0 until n).map { t ->
-            Thread {
-                var i = t
-                while (i < offsets.size) {
-                    out[i] = fn(offsets[i])
-                    i += n
-                }
-            }.also { it.start() }
-        }
-        threads.forEach { it.join() }
-        return out
-    }
+    private fun parEval(offsets: List<Pair<Int, Int>>, fn: (Pair<Int, Int>) -> Float): FloatArray =
+        HdrPools.evalEach(offsets, workerCount(), fn)
 
     private fun argmin(offsets: List<Pair<Int, Int>>, costs: FloatArray): Pair<Int, Int> {
         var bi = 0
@@ -91,11 +65,24 @@ object HdrBracketAligner {
         return CombinedFlow(first, second)
     }
 
+    /** Dense residual is measured after the even pre-shift; a rejected residual
+     * must fall back to the original measured shift, including its fraction. */
+    internal fun refinedFlow(shift: Shift?, residual: HdrFlowField?): HdrFlowField? =
+        if (residual == null) shift?.asFlow()
+        else chain(shift?.let { snapEven(it).asFlow() }, residual)
+
     /** Warp [cfa] by [shift] with the merge's CFA-safe smooth sampler. */
     fun warpTranslated(cfa: UnpackedRawCfa, shift: Shift): UnpackedRawCfa {
         val flow = shift.asFlow()
-        val out = FloatArray(cfa.width * cfa.height) { i ->
-            HdrRawMerge.sampleSmooth(cfa, flow, i % cfa.width, i / cfa.width)
+        val w = cfa.width
+        val h = cfa.height
+        val out = FloatArray(w * h)
+        // Same per-pixel values as the old single-threaded init lambda, striped
+        // over rows (nested loops also avoid per-pixel div/mod).
+        parRows(h) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w) {
+                out[y * w + x] = HdrRawMerge.sampleSmooth(cfa, flow, x, y)
+            }
         }
         return cfa.copy(values = out)
     }
@@ -123,10 +110,15 @@ object HdrBracketAligner {
         require(dx % 2 == 0 && dy % 2 == 0) { "Pre-shift must be even (got $dx,$dy)" }
         val w = cfa.width
         val h = cfa.height
-        val out = FloatArray(w * h) { i ->
-            val x = i % w
-            val y = i / w
-            cfa.values[(y + dy).coerceIn(0, h - 1) * w + (x + dx).coerceIn(0, w - 1)]
+        val src = cfa.values
+        val out = FloatArray(w * h)
+        // Same values as the old single-threaded init lambda; row strips keep
+        // output identical while using all cores (this is a full-res pass).
+        parRows(h) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until w) {
+                out[y * w + x] = src[(y + dy).coerceIn(y and 1, h - 2 + (y and 1)) * w +
+                    (x + dx).coerceIn(x and 1, w - 2 + (x and 1))]
+            }
         }
         return cfa.copy(values = out)
     }
@@ -150,8 +142,11 @@ object HdrBracketAligner {
         var t = System.nanoTime()
         val rq = packQuads(ref)
         val mq = packQuads(mov)
-        prefilter(rq, qScaleW, qScaleH)
-        prefilter(mq, qScaleW, qScaleH)
+        // One reusable scratch for both passes (same size); halves the ~24MB
+        // transient on 12MP frames. Filtered values are identical.
+        val prefilterTmp = FloatArray(rq.size)
+        prefilter(rq, qScaleW, qScaleH, prefilterTmp)
+        prefilter(mq, qScaleW, qScaleH, prefilterTmp)
         val noise = reference.noiseModel
         val proxyMs = (System.nanoTime() - t) / 1_000_000
         // Two-level search (logcat 2026-09-16: full-SAD cost 37s align on 12MP;
@@ -235,7 +230,8 @@ object HdrBracketAligner {
      * channels, matching PhotonCamera's alignment prefilter: hot pixels and
      * noise average out while edges survive for the block matcher.
      */
-    private fun prefilter(packed: FloatArray, w: Int, h: Int) {
+    private fun prefilter(packed: FloatArray, w: Int, h: Int, tmp: FloatArray) {
+        require(tmp.size == packed.size)
         val s2 = 2.0 * PREFILTER_SIGMA * PREFILTER_SIGMA
         val k = DoubleArray(5) { i ->
             val d = (i - 2).toDouble()
@@ -245,7 +241,6 @@ object HdrBracketAligner {
         val w0 = (k[0] / sum).toFloat()
         val w1 = (k[1] / sum).toFloat()
         val w2 = (k[2] / sum).toFloat()
-        val tmp = FloatArray(packed.size)
         parRows(h) { y0, y1 ->
             for (y in y0 until y1) for (x in 0 until w) for (c in 0..3) {
                 var acc = 0f

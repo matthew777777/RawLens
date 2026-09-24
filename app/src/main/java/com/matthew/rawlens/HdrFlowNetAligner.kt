@@ -34,14 +34,20 @@ class HdrFlowNetAligner(context: Context) {
 
     /** Exposure-matches a [renderRawInput] buffer (RGB×exposure→255 clamp; alpha kept). */
     fun scaleInput(raw: FloatBuffer, exposure: Float): FloatBuffer {
-        val dup = raw.duplicate()
-        val out = ByteBuffer.allocateDirect(dup.remaining() * Float.SIZE_BYTES)
+        val src = raw.duplicate()
+        val n = src.remaining()
+        val out = ByteBuffer.allocateDirect(n * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder()).asFloatBuffer()
-        var i = 0
-        while (dup.hasRemaining()) {
-            val v = dup.get()
-            out.put(if (i % 4 == 3) v else (v * exposure).coerceIn(0f, 255f))
-            i++
+        // Same per-element values as the old sequential pass; row-striped over
+        // pixels (4 floats each) with absolute indexing (disjoint writes).
+        HdrPools.runStriped(n / 4, 8) { y0, y1 ->
+            for (p in y0 until y1) {
+                val base = p * 4
+                for (k in 0..3) {
+                    val v = src.get(base + k)
+                    out.put(base + k, if (k == 3) v else (v * exposure).coerceIn(0f, 255f))
+                }
+            }
         }
         return out.apply { rewind() }
     }
@@ -63,15 +69,22 @@ class HdrFlowNetAligner(context: Context) {
         t = System.nanoTime()
         val flow = FloatArray(MODEL_WIDTH * MODEL_HEIGHT * 2)
         result.asFloatBuffer().get(flow)
-        if (!flow.all(Float::isFinite)) {
+        // Fused finite-check + outlier clamp: one sweep instead of two over
+        // ~393k floats. Identical outcome (null when any non-finite; clamped
+        // field otherwise) — the check judges the field that warps.
+        var allFinite = true
+        for (i in flow.indices) {
+            val v = flow[i]
+            if (!v.isFinite()) {
+                allFinite = false
+                break
+            }
+            flow[i] = v.coerceIn(-MAX_MODEL_FLOW, MAX_MODEL_FLOW)
+        }
+        if (!allFinite) {
             lastTimings = Timings(renderMs, inferMs, (System.nanoTime() - t) / 1_000_000)
             return null
         }
-        // Bound outlier damage (e.g. periodic texture runaway): model pixels
-        // past this are never plausible residuals, let alone full shifts.
-        // Clamping happens before validation so the check judges the field
-        // that would actually warp.
-        clampFlow(flow)
         // A successful native call can still yield an unusable field (e.g. periodic texture).
         // Reject anything that does not strictly improve exposure-matched
         // proxy correspondence: a field that merely ties identity still
@@ -119,38 +132,40 @@ class HdrFlowNetAligner(context: Context) {
         return alignedError <= identityError
     }
 
-    private fun clampFlow(flow: FloatArray) {
-        for (i in flow.indices) {
-            flow[i] = flow[i].coerceIn(-MAX_MODEL_FLOW, MAX_MODEL_FLOW)
-        }
-    }
-
     private fun renderModelInput(cfa: UnpackedRawCfa, exposure: Float, raw: Boolean = false): FloatBuffer {
         val out = ByteBuffer.allocateDirect(MODEL_WIDTH * MODEL_HEIGHT * 4 * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder()).asFloatBuffer()
         val quadWidth = cfa.width / 2f
         val quadHeight = cfa.height / 2f
-        // Scratch reused across all model pixels (was: 9 small arrays per pixel).
-        val qa = FloatArray(3)
-        val qb = FloatArray(3)
-        val qc = FloatArray(3)
-        val qd = FloatArray(3)
-        val counts = IntArray(3)
-        val rgb = FloatArray(3)
-        for (y in 0 until MODEL_HEIGHT) for (x in 0 until MODEL_WIDTH) {
-            val qx = ((x + 0.5f) * quadWidth / MODEL_WIDTH).coerceIn(0f, quadWidth - 1f)
-            val qy = ((y + 0.5f) * quadHeight / MODEL_HEIGHT).coerceIn(0f, quadHeight - 1f)
-            sampleQuadRgb(cfa, qx, qy, qa, qb, qc, qd, counts, rgb)
-            if (raw) {
-                out.put(rgb[2] * 255f)
-                out.put(rgb[1] * 255f)
-                out.put(rgb[0] * 255f)
-            } else {
-                out.put((rgb[2] * exposure).coerceIn(0f, 1f) * 255f)
-                out.put((rgb[1] * exposure).coerceIn(0f, 1f) * 255f)
-                out.put((rgb[0] * exposure).coerceIn(0f, 1f) * 255f)
+        // Row-striped over model rows on the shared pool (was: single-threaded
+        // ~0.7s per frame). Each model pixel is a pure function of the CFA, so
+        // disjoint rows with per-thread scratch compute identical values;
+        // absolute puts keep buffer positions race-free.
+        HdrPools.runStriped(MODEL_HEIGHT, 8) { y0, y1 ->
+            // Scratch reused across this strip's pixels (was: 9 small arrays
+            // shared across all pixels, now per-thread).
+            val qa = FloatArray(3)
+            val qb = FloatArray(3)
+            val qc = FloatArray(3)
+            val qd = FloatArray(3)
+            val counts = IntArray(3)
+            val rgb = FloatArray(3)
+            for (y in y0 until y1) for (x in 0 until MODEL_WIDTH) {
+                val qx = ((x + 0.5f) * quadWidth / MODEL_WIDTH).coerceIn(0f, quadWidth - 1f)
+                val qy = ((y + 0.5f) * quadHeight / MODEL_HEIGHT).coerceIn(0f, quadHeight - 1f)
+                sampleQuadRgb(cfa, qx, qy, qa, qb, qc, qd, counts, rgb)
+                val base = (y * MODEL_WIDTH + x) * 4
+                if (raw) {
+                    out.put(base, rgb[2] * 255f)
+                    out.put(base + 1, rgb[1] * 255f)
+                    out.put(base + 2, rgb[0] * 255f)
+                } else {
+                    out.put(base, (rgb[2] * exposure).coerceIn(0f, 1f) * 255f)
+                    out.put(base + 1, (rgb[1] * exposure).coerceIn(0f, 1f) * 255f)
+                    out.put(base + 2, (rgb[0] * exposure).coerceIn(0f, 1f) * 255f)
+                }
+                out.put(base + 3, 255f)
             }
-            out.put(255f)
         }
         return out.apply { rewind() }
     }
