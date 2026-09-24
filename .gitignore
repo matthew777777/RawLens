@@ -28,6 +28,7 @@ fastlane/test_output/
 *.sha256
 
 # Local upstream research checkouts
+/references/upstream/
 /references/PhotonCamera/
 /references/Photon-Camera-SkyKing/
 /references/rawsr-private/
