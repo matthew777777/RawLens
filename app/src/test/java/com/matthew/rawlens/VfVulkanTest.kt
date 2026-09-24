@@ -5,6 +5,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VfVulkanTest {
+    @Test fun `device loss bypasses retries and schedules recreation`() {
+        val lost = VfVulkan.describe(VfVulkan.DEVICE_LOST)
+        assertEquals("device-lost", lost)
+        assertTrue(VfVulkan.shouldDisableImmediately(lost))
+        assertTrue(VfVulkan.shouldRecover(lost))
+        assertFalse(VfVulkan.shouldDisableImmediately(VfVulkan.describe(VfVulkan.SUBMIT_FAILED)))
+        assertFalse(VfVulkan.shouldDisableImmediately("input-import"))
+    }
+
+    @Test fun `only device failures schedule recreation`() {
+        assertTrue(VfVulkan.shouldRecover(VfVulkan.describe(VfVulkan.SUBMIT_FAILED)))
+        assertTrue(VfVulkan.shouldRecover(VfVulkan.describe(VfVulkan.DEVICE_FAILED)))
+        assertFalse(VfVulkan.shouldRecover(VfVulkan.describe(VfVulkan.INPUT_IMPORT_FAILED)))
+        assertFalse(VfVulkan.shouldRecover(VfVulkan.describe(VfVulkan.OUTPUT_IMPORT_FAILED)))
+        assertFalse(VfVulkan.shouldRecover("egl-import"))
+    }
+
     @Test fun `param packing matches the native push-constant layout`() {
         val (iparams, fparams) = VfVulkan.packParams(
             intArrayOf(0, 1, 2, 3), 0, 0, 680, 510, 6, 4080,
@@ -13,7 +30,7 @@ class VfVulkanTest {
         assertArrayEquals(intArrayOf(0, 1, 2, 3, 0, 0, 680, 510, 6, 4080), iparams)
         assertEquals(8, fparams.size)
         assertArrayEquals(floatArrayOf(64f, 64f, 64f, 64f), fparams.copyOfRange(0, 4), 0f)
-        // Reciprocal normalization identical to RawPreviewSampler.copy.
+        // Reciprocal normalization identical to VfCpuNeon.copy.
         val expected = 1f / (1023f - 64f)
         for (i in 4..7) assertEquals(expected, fparams[i], 1e-7f)
     }

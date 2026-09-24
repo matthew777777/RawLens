@@ -10,7 +10,7 @@ import android.hardware.HardwareBuffer
  *
  * All calls must run on the viewfinder GL worker while its EGL context is current.
  * Every function fails soft (0 handle / GL error code) so the caller falls back to
- * the CPU sampler; a missing library disables the GPU path via [available].
+ * the NEON sampler; a missing library disables the GPU path via [available].
  */
 internal object VfEglImport {
     val available: Boolean

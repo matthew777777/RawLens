@@ -161,8 +161,17 @@ add_library(rawLensDng SHARED tinydng_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
 
-# Zero-copy viewfinder: EGL import bridge and the Vulkan superpixel compute
-# module (import HAL RAW -> RGBA8 superpixel export buffer).
-add_library(rawLensVfEgl SHARED vf_egl_jni.cpp vf_vulkan_vf.cpp)
+# Zero-copy viewfinder: EGL import bridge, the Vulkan superpixel compute
+# module (import HAL RAW -> RGBA8 superpixel export buffer), and the NEON CPU
+# fallback sampler (fast native replacement for the old Kotlin copy).
+add_library(rawLensVfEgl SHARED vf_egl_jni.cpp vf_vulkan_vf.cpp vf_cpu_neon.cpp)
+add_library(rawLensDualRaw SHARED dual_raw_vulkan.cpp)
+target_link_libraries(rawLensDualRaw PRIVATE android log vulkan)
+target_link_options(rawLensDualRaw PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_libraries(rawLensVfEgl PRIVATE EGL GLESv2 android log vulkan)
 target_link_options(rawLensVfEgl PRIVATE "-Wl,-z,max-page-size=16384")
+# armeabi-v7a needs an explicit NEON FPU for the arm_neon.h path; arm64 has
+# NEON unconditionally and x86 emulators take the scalar tier in the same file.
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(rawLensVfEgl PRIVATE -mfpu=neon)
+endif()

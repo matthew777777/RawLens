@@ -21,6 +21,7 @@ internal object VfVulkan {
     const val OUTPUT_IMPORT_FAILED = 6
     const val SUBMIT_FAILED = 7
     const val BAD_ARGUMENT = 8
+    const val DEVICE_LOST = 9
 
     val available: Boolean
 
@@ -45,8 +46,16 @@ internal object VfVulkan {
         OUTPUT_IMPORT_FAILED -> "output-import"
         SUBMIT_FAILED -> "submit"
         BAD_ARGUMENT -> "bad-argument"
+        DEVICE_LOST -> "device-lost"
         else -> "code-$code"
     }
+
+    // Recreating the device cannot repair incompatible HAL buffer metadata.
+    fun shouldRecover(reason: String): Boolean =
+        reason == "submit" || reason == "device-failed" || reason == "not-initialized" || reason == "device-lost"
+
+    // Retrying submissions on a lost VkDevice cannot recover it.
+    fun shouldDisableImmediately(reason: String): Boolean = reason == "device-lost"
 
     /**
      * Pack compute params. Layout must match `vf_vulkan_vf.cpp` and the push-constant
@@ -75,6 +84,14 @@ internal object VfVulkan {
 
     /** Create the persistent device + superpixel pipeline from SPIR-V bytes. Idempotent. */
     external fun initNative(spv: ByteArray): Int
+
+    /**
+     * Tear down and recreate the device + pipeline from SPIR-V bytes after
+     * persistent submit failures (wedged queue or lost device). Imports are
+     * dropped and re-created on demand, so the next frame re-probes a fresh
+     * device instead of failing on a dead one forever.
+     */
+    external fun reinitNative(spv: ByteArray): Int
 
     /** Import (or reuse) the export buffer as the compute shader's RGBA8 target. */
     external fun ensureOutputNative(outputBuffer: HardwareBuffer): Int

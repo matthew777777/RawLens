@@ -33,8 +33,16 @@
 #define VFVK_OUTPUT_IMPORT_FAILED 6
 #define VFVK_SUBMIT_FAILED 7
 #define VFVK_BAD_ARGUMENT 8
+#define VFVK_DEVICE_LOST 9
 
-#define INPUT_CACHE_CAP 8
+// Maximum VF extent per axis. Must match VfCpuNeon.MAX_EDGE (Kotlin validates
+// first; this is the native backstop).
+#define VFVK_MAX_EDGE 1080
+
+// Covers the full ImageReader pool (maxImages=22): the ZSL ring alone pins 8
+// buffers, so a smaller cap FIFO-thrashes and re-imports 25 MB every frame
+// (imports map existing pool memory; they allocate no new pages).
+#define INPUT_CACHE_CAP 24
 
 namespace {
 
@@ -258,6 +266,15 @@ int importInputBuffer(Context* ctx, AHardwareBuffer* buf, ImportedBuffer* out) {
     }
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(ctx->device, out->buffer, &req);
+    // The imported allocation AND the storage buffer must support this type.
+    // Choosing from AHB properties alone can make vkBindBufferMemory invalid.
+    memType = pickMemoryType(ahbProps.memoryTypeBits & req.memoryTypeBits,
+                             memProps.memoryTypeCount);
+    if (memType == UINT32_MAX) {
+        LOGW("vf-vk: input: no compatible buffer memory type");
+        destroyImportedBuffer(ctx, out);
+        return VFVK_INPUT_IMPORT_FAILED;
+    }
     if (req.size > ahbProps.allocationSize) {
         LOGW("vf-vk: input: requirements %llu exceed allocation %llu",
              (unsigned long long)req.size, (unsigned long long)ahbProps.allocationSize);
@@ -297,15 +314,16 @@ int importInputBuffer(Context* ctx, AHardwareBuffer* buf, ImportedBuffer* out) {
 void layoutBarrier(VkCommandBuffer cmd, VkImage image,
                    VkPipelineStageFlags srcStage, VkAccessFlags srcAccess,
                    VkPipelineStageFlags dstStage, VkAccessFlags dstAccess,
-                   VkImageLayout oldLayout, VkImageLayout newLayout) {
+                   VkImageLayout oldLayout, VkImageLayout newLayout,
+                   uint32_t srcFamily, uint32_t dstFamily) {
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.srcAccessMask = srcAccess;
     barrier.dstAccessMask = dstAccess;
     barrier.oldLayout = oldLayout;
     barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
     barrier.image = image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.levelCount = 1;
@@ -393,10 +411,66 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {
 
 }  // namespace
 
+// Shared device bring-up for initNative (first use) and reinitNative (recovery
+// after the queue wedges or the device is lost mid-session). Requires g == nullptr.
+static int initContext(JNIEnv* env, jbyteArray spv);
+
+static void teardownContext() {
+    if (g == nullptr) return;
+    Context* ctx = g;
+    g = nullptr;
+    // Best-effort idle first: returns promptly (with an error) on a lost device.
+    vkDeviceWaitIdle(ctx->device);
+    for (auto& entry : ctx->inputs) destroyImportedBuffer(ctx, &entry.second);
+    for (AHardwareBuffer* b : ctx->inputOrder) AHardwareBuffer_release(b);
+    ctx->inputs.clear();
+    ctx->inputOrder.clear();
+    destroyImported(ctx, &ctx->output);
+    if (ctx->outputBuffer) AHardwareBuffer_release(ctx->outputBuffer);
+    ctx->outputBuffer = nullptr;
+    if (ctx->fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, ctx->fence, nullptr);
+    if (ctx->commandPool != VK_NULL_HANDLE)
+        vkDestroyCommandPool(ctx->device, ctx->commandPool, nullptr);
+    if (ctx->pipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->pipeline, nullptr);
+    if (ctx->pipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(ctx->device, ctx->pipelineLayout, nullptr);
+    if (ctx->setLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->setLayout, nullptr);
+    if (ctx->descriptorPool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(ctx->device, ctx->descriptorPool, nullptr);
+    VkDevice device = ctx->device;
+    VkInstance instance = ctx->instance;
+    delete ctx;
+    if (device != VK_NULL_HANDLE) vkDestroyDevice(device, nullptr);
+    if (instance != VK_NULL_HANDLE) vkDestroyInstance(instance, nullptr);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfVulkan_initNative(
     JNIEnv* env, jobject, jbyteArray spv) {
     if (g != nullptr) return VFVK_OK;
+    return initContext(env, spv);
+}
+
+// Full teardown + bring-up after persistent submit failures (wedged queue or
+// lost device): imports are dropped and re-created on demand, so the next
+// frame re-probes a fresh device instead of failing on a dead one forever.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_reinitNative(
+    JNIEnv* env, jobject, jbyteArray spv) {
+    if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
+    LOGW("vf-vk: reinitializing device after submit failures");
+    teardownContext();
+    int r = initContext(env, spv);
+    if (r == VFVK_OK) {
+        LOGI("vf-vk: device reinit ok");
+    } else {
+        LOGW("vf-vk: device reinit failed %d", r);
+    }
+    return r;
+}
+
+static int initContext(JNIEnv* env, jbyteArray spv) {
     if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
     jsize bytes = env->GetArrayLength(spv);
     std::vector<uint32_t> code(bytes / 4);
@@ -445,12 +519,14 @@ Java_com_matthew_rawlens_VfVulkan_initNative(
     }
     uint32_t extCount = 0;
     vkEnumerateDeviceExtensionProperties(ctx->gpu, nullptr, &extCount, nullptr);
-    bool hasExternalMem = false, hasAhb = false;
+    bool hasExternalMem = false, hasAhb = false, hasForeign = false;
     {
         uint32_t cap = extCount > 256 ? 256 : extCount;
         std::vector<VkExtensionProperties> exts(cap);
         if (vkEnumerateDeviceExtensionProperties(ctx->gpu, nullptr, &cap, exts.data()) == VK_SUCCESS) {
             for (uint32_t i = 0; i < cap; ++i) {
+                if (!std::strcmp(exts[i].extensionName, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
+                    hasForeign = true;
                 if (!std::strcmp(exts[i].extensionName, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME))
                     hasExternalMem = true;
                 if (!std::strcmp(exts[i].extensionName,
@@ -459,7 +535,7 @@ Java_com_matthew_rawlens_VfVulkan_initNative(
             }
         }
     }
-    if (!hasExternalMem || !hasAhb) {
+    if (!hasExternalMem || !hasAhb || !hasForeign) {
         vkDestroyInstance(ctx->instance, nullptr);
         delete ctx;
         return VFVK_NO_EXTENSION;
@@ -471,12 +547,13 @@ Java_com_matthew_rawlens_VfVulkan_initNative(
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
     const char* devExt[] = {VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-                            VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME};
+                            VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+                            VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME};
     VkDeviceCreateInfo devInfo{};
     devInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &queueInfo;
-    devInfo.enabledExtensionCount = 2;
+    devInfo.enabledExtensionCount = 3;
     devInfo.ppEnabledExtensionNames = devExt;
     if (vkCreateDevice(ctx->gpu, &devInfo, nullptr, &ctx->device) != VK_SUCCESS) {
         vkDestroyInstance(ctx->instance, nullptr);
@@ -607,7 +684,7 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
     params.step = ipairs[8];
     params.pitch = ipairs[9];
     if (params.frameSize[0] <= 0 || params.frameSize[1] <= 0 ||
-        params.frameSize[0] > 960 || params.frameSize[1] > 960 ||
+        params.frameSize[0] > VFVK_MAX_EDGE || params.frameSize[1] > VFVK_MAX_EDGE ||
         params.pitch <= 0 || params.pitch > 16384) {
         return VFVK_BAD_ARGUMENT;
     }
@@ -639,14 +716,18 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkBeginCommandBuffer(g->commandBuffer, &begin) != VK_SUCCESS) return VFVK_SUBMIT_FAILED;
+    VkResult vr = vkBeginCommandBuffer(g->commandBuffer, &begin);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: begin failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
     // Adopt the HAL's fresh contents (buffer barrier + cache invalidate).
     VkBufferMemoryBarrier bufBarrier{};
     bufBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     bufBarrier.srcAccessMask = 0;
     bufBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    bufBarrier.dstQueueFamilyIndex = g->queueFamily;
     bufBarrier.buffer = input.buffer;
     bufBarrier.offset = 0;
     bufBarrier.size = VK_WHOLE_SIZE;
@@ -655,7 +736,8 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
     layoutBarrier(g->commandBuffer, g->output.image,
                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     vkCmdBindPipeline(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, g->pipeline);
     vkCmdBindDescriptorSets(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->pipelineLayout, 0, 1, &g->descriptorSet, 0, nullptr);
@@ -668,21 +750,40 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
     layoutBarrier(g->commandBuffer, g->output.image,
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                   VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
-                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
-    if (vkEndCommandBuffer(g->commandBuffer) != VK_SUCCESS) return VFVK_SUBMIT_FAILED;
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    // Return the borrowed RAW allocation to Camera2/CPU as well. A fence alone
+    // orders execution; it does not transfer external-memory ownership.
+    bufBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    bufBarrier.dstAccessMask = 0;
+    bufBarrier.srcQueueFamilyIndex = g->queueFamily;
+    bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    vkCmdPipelineBarrier(g->commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &bufBarrier, 0, nullptr);
+    vr = vkEndCommandBuffer(g->commandBuffer);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: end failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &g->commandBuffer;
-    if (vkQueueSubmit(g->queue, 1, &submit, g->fence) != VK_SUCCESS) return VFVK_SUBMIT_FAILED;
+    vr = vkQueueSubmit(g->queue, 1, &submit, g->fence);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: submit failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
     // Serial correctness over pipelining for v1: the GL import below must see
     // finished writes. A timeline-semaphore export is the follow-up, not v1.
-    if (vkWaitForFences(g->device, 1, &g->fence, VK_TRUE, 2000000000ull) != VK_SUCCESS) {
-        LOGW("vf-vk: fence wait failed; retiring submitted RAW reads before release");
+    vr = vkWaitForFences(g->device, 1, &g->fence, VK_TRUE, 2000000000ull);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: fence wait failed %d; retiring submitted RAW reads before release", vr);
         // The caller releases its camera Image lease on return. A timed-out fence
         // alone is not permission to let the HAL overwrite that allocation.
-        vkQueueWaitIdle(g->queue);
-        return VFVK_SUBMIT_FAILED;
+        const VkResult retired = vkQueueWaitIdle(g->queue);
+        if (retired == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
     }
     return VFVK_OK;
 }

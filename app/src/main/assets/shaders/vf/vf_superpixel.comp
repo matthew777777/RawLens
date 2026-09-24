@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Zero-copy RAW viewfinder superpixel: 2x2 Bayer quad -> canonical R/Gr/Gb/B,
-// normalized exactly like RawPreviewSampler.copy (float, no 8-bit quantization
+// normalized exactly like VfCpuNeon.copy (float, no 8-bit quantization
 // until the RGBA8 store). One invocation per display texel; Vulkan 1.1.
 //
 // Regenerate the SPIR-V with:
@@ -34,11 +34,14 @@ uint fetchCode(ivec2 s) {
     return ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
 }
 
+// Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
+// into u_black/u_invRange on the CPU, so this is a straight-line fetch + MAD
+// with dynamic uniform indexing and no per-channel branches.
 float fetchN(ivec2 q, int ch) {
     ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
     float code = float(fetchCode(s));
-    float blk = ch == 0 ? p.u_black.x : ch == 1 ? p.u_black.y : ch == 2 ? p.u_black.z : p.u_black.w;
-    float inv = ch == 0 ? p.u_invRange.x : ch == 1 ? p.u_invRange.y : ch == 2 ? p.u_invRange.z : p.u_invRange.w;
+    float blk = p.u_black[ch];
+    float inv = p.u_invRange[ch];
     return clamp((code - blk) * inv, 0.0, 1.0);
 }
 

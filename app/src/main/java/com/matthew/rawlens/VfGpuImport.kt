@@ -10,18 +10,33 @@ import java.nio.ByteOrder
  *
  * GPU path: `Image.getHardwareBuffer()` → EGLImage import (see [VfEglImport]) →
  * `R16UI` texture sampled by an ESSL 3.00 fragment shader that performs the same
- * per-quad Bayer fetch + normalize as [RawPreviewSampler.copy], then shares the exact
+ * per-quad Bayer fetch + normalize as [VfCpuNeon.copy], then shares the exact
  * WB/CCM + Reinhard/AgX-lite tail with the CPU path (WYSIWYG parity by construction).
  */
 internal object VfGpuImport {
-    /** Consecutive GPU failures before the session sticks to the CPU fallback. */
+    /** Consecutive GPU failures before the session sticks to the NEON fallback. */
     const val MAX_CONSECUTIVE_FAILURES = 3
+    /** First Vulkan device-recovery attempt after the session latch. */
+    const val VULKAN_RECOVER_INITIAL_DELAY_MS = 5000L
+    /** Recovery backoff cap: a dead GPU costs one cheap reinit attempt per 30 s. */
+    const val VULKAN_RECOVER_MAX_DELAY_MS = 30000L
     /** Preview-EV grid long edge in VF texels: at most 32×32 sampled quads. */
     const val PREVIEW_GRID = 32
     /** Preview-EV scratch capacity: 32×32 quads × 4 sites. */
     const val MAX_PREVIEW_SAMPLES = PREVIEW_GRID * PREVIEW_GRID * 4
 
     data class Eligibility(val eligible: Boolean, val reason: String)
+
+    /**
+     * Vulkan recovery backoff: double the delay per failed reinit, capped so a
+     * permanently dead GPU is re-probed every 30 s. The viewfinder resets to
+     * [VULKAN_RECOVER_INITIAL_DELAY_MS] on the next rendered Vulkan frame, so a
+     * recovered device never inherits a stale backoff.
+     */
+    fun nextVulkanRecoverDelayMs(currentDelayMs: Long): Long {
+        require(currentDelayMs > 0) { "Recovery delay must stay positive" }
+        return (currentDelayMs * 2).coerceAtMost(VULKAN_RECOVER_MAX_DELAY_MS)
+    }
 
     /**
      * Zero-copy needs a packed 16-bit layout (1:1 texel mapping for `texelFetch`),
@@ -67,7 +82,12 @@ internal object VfGpuImport {
     fun estimatePreviewCorrectionEv(
         source: ByteBuffer, rowStride: Int, pixelStride: Int,
         left: Int, top: Int, width: Int, height: Int, step: Int,
-        levels: FloatArray, white: Float, samples: FloatArray
+        levels: FloatArray, white: Float, samples: FloatArray,
+        lens: LensShadingModel? = null,
+        pattern: BayerPattern? = null,
+        sensorOriginX: Int = 0,
+        sensorOriginY: Int = 0,
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
     ): Double {
         require(left % 2 == 0 && top % 2 == 0 && step >= 2 && step % 2 == 0)
         require(width > 0 && height > 0 && levels.size == 4)
@@ -89,6 +109,10 @@ internal object VfGpuImport {
         }
         val stride = maxOf(1, (maxOf(width, height) + PREVIEW_GRID - 1) / PREVIEW_GRID)
         val invRange = FloatArray(4) { i -> 1f / (white - levels[i]).coerceAtLeast(1f) }
+        // Mirror the save path (AdaptiveDevelopmentExposure.analyzeRaw): when a lens
+        // map is present and not already applied, the same per-site gain multiplies
+        // the normalized sample. Null/identity keeps the legacy behavior bit-exact.
+        val applyLens = lens != null && pattern != null && !lens.alreadyApplied
         var count = 0
         if (pixelStride == 2 && rowStride % 2 == 0) {
             val shorts = input.asShortBuffer()
@@ -102,7 +126,12 @@ internal object VfGpuImport {
                     for (dy in 0..1) for (dx in 0..1) {
                         val code = shorts.get((quadTop + dy) * shortsPerRow + quadLeft + dx).toInt() and 0xffff
                         // left/top/step are even, so sensor parity == quad-local parity.
-                        val n = (code - levels[dy * 2 + dx]) * invRange[dy * 2 + dx]
+                        var n = (code - levels[dy * 2 + dx]) * invRange[dy * 2 + dx]
+                        if (applyLens) {
+                            val sx = sensorOriginX + quadLeft + dx
+                            val sy = sensorOriginY + quadTop + dy
+                            n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
+                        }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
                             samples[count++] = n
                         }
@@ -120,7 +149,12 @@ internal object VfGpuImport {
                     val quadLeft = left + x * step
                     for (dy in 0..1) for (dx in 0..1) {
                         val code = input.getShort(base + (quadTop + dy) * rowStride + (quadLeft + dx) * pixelStride).toInt() and 0xffff
-                        val n = (code - levels[dy * 2 + dx]) * invRange[dy * 2 + dx]
+                        var n = (code - levels[dy * 2 + dx]) * invRange[dy * 2 + dx]
+                        if (applyLens) {
+                            val sx = sensorOriginX + quadLeft + dx
+                            val sy = sensorOriginY + quadTop + dy
+                            n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
+                        }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
                             samples[count++] = n
                         }
@@ -130,7 +164,7 @@ internal object VfGpuImport {
                 y += stride
             }
         }
-        return AdaptiveDevelopmentExposure.analyzeSamples(samples, count).correctionEv
+        return AdaptiveDevelopmentExposure.analyzeSamples(samples, count, tuning).correctionEv
     }
 
     // Shared AgX-lite helpers + tonemap tail. Both fragment shaders are composed from
@@ -156,13 +190,23 @@ internal object VfGpuImport {
         "uniform int u_jpeg;" +
             "uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
             "uniform float u_agxHue; uniform float u_agxShadowEv; uniform float u_agxHighlightEv;" +
-            "uniform float u_agxGamut; uniform float u_exposureEv;"
+            "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;"
+
+    /** RAW VF brightness lift: the linear Reinhard preview meters ~1 EV dark, so the
+     * shared tail applies +1 EV (×2.0) in RAW mode only. JPEG/AgX keeps its own
+     * adaptive preview EV and is untouched. */
+    const val RAW_VF_EV_GAIN = 2.0f
 
     private const val TONEMAP_TAIL_TEMPLATE =
         " vec3 rgb = max(color * vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
-            " if (u_jpeg == 0) { rgb = rgb / (vec3(1.0) + rgb);" +
+            " if (u_jpeg == 0) { rgb *= 2.0;" +
+            "  rgb = rgb / (vec3(1.0) + rgb);" +
             "  @OUT@ = vec4(pow(rgb, vec3(1.0 / 2.2)), 1.0); return; }" +
             " rgb *= exp2(u_exposureEv);" +
+            " for (int c = 0; c < 3; ++c) { if (rgb[c] > 0.9 && u_highlightShoulder > 0.0) {" +
+            "  float t = (rgb[c] - 0.9) / 0.8;" +
+            "  float comp = 0.9 + 0.8 * (1.0 - exp(-t));" +
+            "  rgb[c] = mix(rgb[c], comp, clamp(u_highlightShoulder, 0.0, 1.0)); } }" +
             " vec3 v = agxInset() * rgb;" +
             " v = log2(max(v, vec3(0.0001)));" +
             " float evRange = u_agxShadowEv + u_agxHighlightEv;" +
@@ -185,13 +229,108 @@ internal object VfGpuImport {
             " v = vec3(anchor) + sc * delta;" +
             " @OUT@ = vec4(srgbOetf(clamp(v, 0.0, 1.0)), 1.0); }"
 
+    // Zero-copy hardware-accelerated lens-shading (vignetting) correction.
+    // The HAL's STATISTICS_LENS_SHADING_CORRECTION_MAP is packed once per map
+    // change into a single tiny RGBA16F texture (R, G-even, G-odd, B in Camera2
+    // order, Mali-friendly: 8 bytes/texel vs 16 for RGBA32F, one hardware-filtered
+    // fetch per display texel). The GPU fixed-function sampler does the bilinear
+    // interpolation (LINEAR + CLAMP_TO_EDGE); the shader only remaps the sensor
+    // quad to the lens-map UV and swaps the green parity on odd rows. One fetch
+    // per display texel at the quad origin: the map is ~17x13 over the full
+    // sensor, so intra-quad variation is negligible. u_applyLens == 0 keeps the
+    // identity path (map missing or HAL already applied shading). Quad geometry
+    // (u_quadBase/u_frameSize/u_step) is in sensor coordinates; u_lensActive is
+    // SENSOR_INFO_ACTIVE_ARRAY_SIZE.
+    private const val LENS_UNIFORMS_COMMON =
+        "uniform sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
+            "uniform int u_applyLens; uniform ivec2 u_quadBase; uniform ivec2 u_frameSize;" +
+            "uniform int u_step;"
+
+    // ESSL 1.00 variant: single hardware-filtered texture2D fetch. No texelFetch
+    // and no integer bitwise ops, so parity uses mod(). ESSL 1.00 also has no
+    // integer max/min overloads, so the active-array clamp stays in float.
+    private const val LENS_GAIN_ES1 =
+        "vec4 vfLensGain(vec2 t) {" +
+            " if (u_applyLens == 0) return vec4(1.0);" +
+            " ivec2 ij = ivec2(floor(t * vec2(float(u_frameSize.x), float(u_frameSize.y))));" +
+            " ivec2 q = u_quadBase + ij * u_step;" +
+            " float aw = max(float(u_lensActive.z - u_lensActive.x - 1), 1.0);" +
+            " float ah = max(float(u_lensActive.w - u_lensActive.y - 1), 1.0);" +
+            " vec2 nuv = clamp(vec2((float(q.x - u_lensActive.x)) / aw," +
+            " (float(q.y - u_lensActive.y)) / ah), 0.0, 1.0);" +
+            " vec2 sz = vec2(float(u_lensSize.x), float(u_lensSize.y));" +
+            " vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
+            " vec4 g = texture2D(u_lens, uv);" +
+            " if (mod(float(q.y), 2.0) != 0.0) g = vec4(g.r, g.b, g.g, g.a);" +
+            " return g; }"
+
+    // ESSL 3.00 variant: single hardware-filtered texture() fetch. Integer
+    // bitwise ops are available here (unavailable in ESSL 1.00).
+    private const val LENS_GAIN_ES3 =
+        "highp vec4 vfLensGain(highp vec2 t) {" +
+            " if (u_applyLens == 0) return vec4(1.0);" +
+            " highp ivec2 ij = ivec2(floor(t * vec2(u_frameSize)));" +
+            " highp ivec2 q = u_quadBase + ij * u_step;" +
+            " highp float aw = float(max(u_lensActive.z - u_lensActive.x - 1, 1));" +
+            " highp float ah = float(max(u_lensActive.w - u_lensActive.y - 1, 1));" +
+            " highp vec2 nuv = clamp(vec2(float(q.x - u_lensActive.x) / aw," +
+            " float(q.y - u_lensActive.y) / ah), 0.0, 1.0);" +
+            " highp vec2 sz = vec2(u_lensSize);" +
+            " highp vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
+            " highp vec4 g = texture(u_lens, uv);" +
+            " if ((q.y & 1) != 0) g = vec4(g.r, g.b, g.g, g.a);" +
+            " return g; }"
+
+    // IEEE-754 float -> half-float bits for the RGBA16F lens pack. Branch-free
+    // exponent rebias with NaN/Inf saturation; subnormals flush to zero (lens
+    // gains are >= 1.0, so the preview path never exercises them).
+    fun floatToHalfBits(value: Float): Short {
+        val bits = value.toRawBits()
+        val sign = (bits ushr 16) and 0x8000
+        val exp = ((bits ushr 23) and 0xff) - 112
+        val mantissa = bits and 0x7fffff
+        return when {
+            exp >= 31 -> (sign or 0x7bff).toShort() // Inf/overflow -> max half
+            exp <= 0 -> sign.toShort() // subnormal/underflow -> signed zero
+            else -> (sign or (exp shl 10) or (mantissa ushr 13)).toShort()
+        }
+    }
+
+    fun halfBitsToFloat(bits: Short): Float {
+        val u = bits.toInt() and 0xffff
+        val sign = (u and 0x8000) shl 16
+        val exp = (u ushr 10) and 0x1f
+        val mantissa = u and 0x3ff
+        val fbits = when (exp) {
+            0 -> sign // zero/subnormal -> signed zero (preview-adequate)
+            31 -> sign or 0x7f800000 or (mantissa shl 13) // Inf/NaN
+            else -> sign or ((exp + 112) shl 23) or (mantissa shl 13)
+        }
+        return Float.fromBits(fbits)
+    }
+
+    /** Pack Camera2-order lens gains (rows*cols*4 floats) into RGBA16F half bits. */
+    fun packLensHalf(gains: FloatArray): ShortArray =
+        ShortArray(gains.size) { floatToHalfBits(gains[it]) }
+
+    /**
+     * Identity key for a lens-shading map: size mixed with content hash. The HAL
+     * map is static per session, so the VF uploads (and the camera thread
+     * re-snapshots) only when this key changes — never per frame.
+     */
+    fun lensContentKey(cols: Int, rows: Int, gains: FloatArray): Long =
+        (cols.toLong() shl 56) xor (rows.toLong() shl 48) xor
+            (gains.contentHashCode().toLong() and 0xffff_ffffL)
+
     /** ESSL 1.00 fragment shader for the CPU-sampled RGBA path. */
     fun cpuFragmentShader(): String =
         "precision mediump float;" +
             "varying vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
+            LENS_UNIFORMS_COMMON +
             TONEMAP_HELPERS +
-            "void main() { vec4 b = texture2D(raw, tex) * gains;" +
+            LENS_GAIN_ES1 +
+            "void main() { vec4 b = texture2D(raw, tex) * gains; b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
 
     /** ESSL 3.00 vertex shader for the GPU path (highp varyings for exact quad math). */
@@ -203,27 +342,36 @@ internal object VfGpuImport {
     /**
      * ESSL 3.00 fragment shader for the zero-copy path. Each display texel fetches its
      * Bayer quad from the imported `R16UI` texture with the same channel mapping and
-     * black/white normalization as [RawPreviewSampler.copy] (in float, without the
+     * black/white normalization as [VfCpuNeon.copy] (in float, without the
      * 8-bit quantization), then runs the shared tonemap tail. `highp` only for
      * unpack/normalize and quad coordinates; CCM/gamma/AgX-lite stay `mediump`.
      */
     fun gpuFragmentShader(): String =
         "#version 300 es\n" +
-            "precision mediump float; precision highp int;" +
+            "precision mediump float; precision highp int; precision highp sampler2D;" +
             "uniform highp usampler2D u_bayer;" +
             "uniform ivec2 u_quadBase; uniform ivec2 u_frameSize; uniform int u_step;" +
             "uniform ivec4 u_chans; uniform highp vec4 u_black; uniform highp vec4 u_invRange;" +
+            "uniform highp sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
+            "uniform int u_applyLens;" +
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
             TONEMAP_HELPERS +
+            LENS_GAIN_ES3 +
+            // Runtime-specialized unpack: black/white for the exact RAW bit depth
+            // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are
+            // baked into u_black/u_invRange on the CPU, so the shader is a single
+            // straight-line fetch + MAD with dynamic uniform indexing and no
+            // per-channel branches.
             "highp float vfFetch(highp ivec2 q, int ch) {" +
             " highp ivec2 p = q + ivec2(ch & 1, (ch >> 1) & 1);" +
             " highp float code = float(texelFetch(u_bayer, p, 0).r);" +
-            " highp float blk = ch == 0 ? u_black.x : ch == 1 ? u_black.y : ch == 2 ? u_black.z : u_black.w;" +
-            " highp float inv = ch == 0 ? u_invRange.x : ch == 1 ? u_invRange.y : ch == 2 ? u_invRange.z : u_invRange.w;" +
+            " highp float blk = u_black[ch];" +
+            " highp float inv = u_invRange[ch];" +
             " return clamp((code - blk) * inv, 0.0, 1.0); }" +
             "void main() { highp ivec2 q = u_quadBase + ivec2(floor(tex * vec2(u_frameSize))) * u_step;" +
             " highp vec4 b = vec4(vfFetch(q, u_chans.x), vfFetch(q, u_chans.y), vfFetch(q, u_chans.z), vfFetch(q, u_chans.w)) * gains;" +
+            " b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "fragColor")
 }

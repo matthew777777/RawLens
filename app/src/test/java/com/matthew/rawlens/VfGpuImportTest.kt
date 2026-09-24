@@ -32,7 +32,7 @@ class VfGpuImportTest {
             val offsets = VfGpuImport.quadOffsets(channels)
             assertEquals(8, offsets.size)
             for (c in 0..3) {
-                // Same derivation as RawPreviewSampler: site (channel % 2, channel / 2).
+                // Same derivation as VfCpuNeon: site (channel % 2, channel / 2).
                 assertEquals(channels[c] % 2, offsets[c * 2])
                 assertEquals(channels[c] / 2, offsets[c * 2 + 1])
             }
@@ -114,5 +114,44 @@ class VfGpuImportTest {
         val shader = VfGpuImport.gpuVertexShader()
         assertTrue(shader.startsWith("#version 300 es"))
         assertTrue(shader.contains("tex = uv"))
+    }
+
+    @Test fun `ESSL 1 lens clamp avoids integer max overload`() {
+        // ESSL 1.00 defines max/min only for float types; max(int, int) fails
+        // Mali compile ("No matching overload") and blacks the VF, which renders
+        // through the ESSL 1.00 program on every tier. The active-array clamp
+        // must stay in float. (The ESSL 3.00 Bayer program may use int max.)
+        val cpu = VfGpuImport.cpuFragmentShader()
+        assertFalse("int max() breaks ESSL 1.00 compile", cpu.contains("max(u_lensActive"))
+        assertTrue(cpu.contains("max(float(u_lensActive"))
+    }
+
+    @Test fun `lens content key is stable and size-sensitive`() {
+        val gains = FloatArray(17 * 17 * 4) { 1f + (it % 7) * 0.1f }
+        val base = VfGpuImport.lensContentKey(17, 17, gains)
+        assertEquals(base, VfGpuImport.lensContentKey(17, 17, gains.copyOf()))
+        assertFalse(base == VfGpuImport.lensContentKey(16, 17, gains))
+        assertFalse(base == VfGpuImport.lensContentKey(17, 16, gains))
+        val drifted = gains.copyOf().also { it[500] += 0.5f }
+        assertFalse(base == VfGpuImport.lensContentKey(17, 17, drifted))
+    }
+
+    @Test fun `Vulkan recovery backoff doubles then caps`() {
+        assertEquals(5000L, VfGpuImport.VULKAN_RECOVER_INITIAL_DELAY_MS)
+        assertEquals(30000L, VfGpuImport.VULKAN_RECOVER_MAX_DELAY_MS)
+        // 5s -> 10s -> 20s -> capped at 30s; a dead GPU is re-probed, never spun on.
+        assertEquals(10000L, VfGpuImport.nextVulkanRecoverDelayMs(5000L))
+        assertEquals(20000L, VfGpuImport.nextVulkanRecoverDelayMs(10000L))
+        assertEquals(30000L, VfGpuImport.nextVulkanRecoverDelayMs(20000L))
+        assertEquals(30000L, VfGpuImport.nextVulkanRecoverDelayMs(30000L))
+    }
+
+    @Test fun `Vulkan recovery backoff rejects non-positive delays`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            VfGpuImport.nextVulkanRecoverDelayMs(0L)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VfGpuImport.nextVulkanRecoverDelayMs(-1000L)
+        }
     }
 }
