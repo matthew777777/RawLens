@@ -31,7 +31,7 @@ object RawSrRobustness {
     const val FLAG_PHOTO_CONFLICT = 64
     const val FLAG_MODEL_MISSING = 128
     const val FLAG_MODEL_ZERO = 256
-    /** Hot-pixel rail: the quad holds a masked stuck-bright tap (see RawSrHotPixel). */
+    /** Defective-tap rail: the quad holds a masked stuck-bright or stuck-dark tap (see RawSrHotPixel). */
     const val FLAG_HOTPIXEL = 512
     /** Unblocker attenuation: the quad lost signal variance to blocking (see RawSrUnblocker). */
     const val FLAG_UNBLOCKED = 1024

@@ -68,10 +68,51 @@ class RawSrHotPixelTest {
     }
 
     @Test fun darkDipIsNeverFlagged() {
+        // Shallow dips below the gate stay untouched (bright dot test's
+        // mirror at these levels is photo texture, not a stuck tap).
         val mask = RawSrHotPixel.detectPacked(packed({ sx, sy ->
-            if (sx == 10 && sy == 10) 1100 else 1500
+            if (sx == 10 && sy == 10) 1470 else 1500
         }))
         assertFalse(mask.any { it })
+    }
+
+    @Test fun singleDarkTapFlaggedInEveryPhase() {
+        // Mirror of the bright-tap test: a −400-code dip clears both the
+        // sigma arm and the absolute floor against ring mean and minimum.
+        for ((hx, hy) in listOf(10 to 10, 11 to 10, 10 to 11, 11 to 11)) {
+            val mask = RawSrHotPixel.detectPacked(packed({ sx, sy ->
+                if (sx == hx && sy == hy) 1100 else 1500
+            }))
+            assertTrue("dark tap at ($hx,$hy) missed", mask[hy * 32 + hx])
+            val flagged = mask.count { it }
+            assertEquals("dark tap at ($hx,$hy) smeared to $flagged taps", 1, flagged)
+        }
+    }
+
+    @Test fun weakWarmTapFlaggedAtLowIsoFloor() {
+        // At base 1500 the photon sigma (~5.6) leaves 6σ ≈ 34 below
+        // the 1%-of-white floor (40): a +60-code warm tap — invisible to the
+        // old 2% floor, lifted into visibility by tone mapping — must flag.
+        val mask = RawSrHotPixel.detectPacked(packed({ sx, sy ->
+            if (sx == 10 && sy == 10) 1560 else 1500
+        }))
+        assertTrue(mask[10 * 32 + 10])
+        assertEquals(1, mask.count { it })
+    }
+
+    @Test fun darkClusterCenterKeepsOriginal() {
+        // 5x5 dead block: the center's whole ring is masked, so there is no
+        // trustworthy replacement — mirrors the bright-cluster rule.
+        val w = 20
+        val h = 20
+        val samples = FloatArray(w * h) { 0.5f }
+        val mask = BooleanArray(w * h)
+        for (y in 8..12) for (x in 8..12) {
+            samples[y * w + x] = 0.05f
+            mask[y * w + x] = true
+        }
+        RawSrHotPixel.inpaintNormalized(samples, mask, w, h, BayerPattern.RGGB)
+        assertEquals(0.05f, samples[10 * w + 10], 0f)
     }
 
     @Test fun subThresholdBumpIsNeverFlagged() {

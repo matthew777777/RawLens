@@ -7,7 +7,7 @@ import java.nio.ByteOrder
  * Hot-pixel pre-mask (Sabre `suppress_hot_pixels_bayer` analogue).
  * Implements [docs/raw-sr-hotpixels.md]; the document is normative.
  *
- * A stuck-bright sensor tap carries no scene signal, yet a single tap is
+ * A stuck sensor tap carries no scene signal, yet a single tap is
  * enough to corrupt everything downstream: the kernel means that smear it
  * into neighbours, the burst-nearest fallback that re-emits it, and the
  * third-party demosaic that reads it as chroma. The mask marks such taps so
@@ -16,8 +16,10 @@ import java.nio.ByteOrder
  *
  * Detection runs in the code domain on raw sensor codes, the same integer
  * inputs the GPU `hot_mask.glsl` pass consumes, so the CPU oracle and the
- * GPU pass agree exactly on unambiguous spikes. Bright-only by decision:
- * stuck-dark taps stay untouched (see the doc for the rationale).
+ * GPU pass agree exactly on unambiguous spikes. Both directions are gated:
+ * stuck-bright taps read as hot colour dots, stuck-dark taps as complementary
+ * (e.g. yellow) dots; the DNG forensics show both polarities phase-locked to
+ * the sensel lattice in comparable counts.
  *
  * Geometry note: in a 3x3 window the center tap has zero same-colour
  * neighbours (2x2 Bayer repeat), so the comparison ring is the 5x5
@@ -36,8 +38,13 @@ object RawSrHotPixel {
      */
     const val HOT_SIGMA = 6.0
 
-    /** Absolute floor in normalized units (fraction of the white level). */
-    const val HOT_ABS_FLOOR = 0.02
+    /**
+     * Absolute floor in normalized units (fraction of the white level).
+     * At low ISO the photon sigma is sub-code, so the floor governs: 1%
+     * still towers over read noise while catching weak warm/cool taps that
+     * tone mapping would lift into visible dots.
+     */
+    const val HOT_ABS_FLOOR = 0.01
 
     /**
      * Minimum distinct in-bounds ring taps. Exact-corner pixels only see
@@ -54,10 +61,11 @@ object RawSrHotPixel {
     )
 
     /**
-     * Core detection over an integer code plane. A tap is hot only when it
-     * clears the gate against BOTH its ring mean and its ring maximum: a
-     * stuck-high tap is the local maximum of its colour plane, while texture
-     * and step edges routinely clear a mean-only gate on one side. [sigmaAt]
+     * Core detection over an integer code plane. A tap is defective only
+     * when it clears the gate against BOTH its ring mean and its ring
+     * extreme on one side: a stuck-high tap is the local maximum of its
+     * colour plane, a stuck-low tap its local minimum, while texture and
+     * step edges routinely clear a mean-only gate on one side. [sigmaAt]
      * returns the code-domain noise sigma for the tap, or NaN when no valid
      * model covers it (that tap is never flagged). Returns one flag per
      * pixel, row-major.
@@ -80,6 +88,7 @@ object RawSrHotPixel {
                 if (!code.isFinite() || !sigma.isFinite() || sigma <= 0.0) continue
                 var sum = 0.0
                 var max = Double.NEGATIVE_INFINITY
+                var min = Double.POSITIVE_INFINITY
                 var count = 0
                 for (tap in RING) {
                     val nx = x + tap[0]
@@ -88,11 +97,15 @@ object RawSrHotPixel {
                     val v = codeAt(nx, ny).toDouble()
                     sum += v
                     if (v > max) max = v
+                    if (v < min) min = v
                     count++
                 }
                 if (count < MIN_RING_TAPS) continue
                 val gate = maxOf(HOT_SIGMA * sigma, absFloor)
-                if (code - sum / count > gate && code - max > gate) {
+                val mean = sum / count
+                if (code - mean > gate && code - max > gate ||
+                    mean - code > gate && min - code > gate
+                ) {
                     mask[y * width + x] = true
                 }
             }
