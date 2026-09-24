@@ -1,0 +1,185 @@
+Applications Graphics Acceleration Info:
+Uptime: 87182230 Realtime: 94573283
+
+** Graphics info for pid 17846 [com.matthew.rawlens] **
+
+Stats since: 87161967850886ns
+Total frames rendered: 152
+Janky frames: 48 (31.58%)
+Janky frames (legacy): 130 (85.53%)
+50th percentile: 17ms
+90th percentile: 21ms
+95th percentile: 23ms
+99th percentile: 25ms
+Number Missed Vsync: 0
+Number High input latency: 124
+Number Slow UI thread: 6
+Number Slow bitmap uploads: 1
+Number Slow issue draw commands: 27
+Number Frame deadline missed: 48
+Number Frame deadline missed (legacy): 65
+HISTOGRAM: 5ms=0 6ms=0 7ms=0 8ms=0 9ms=2 10ms=8 11ms=6 12ms=10 13ms=2 14ms=18 15ms=14 16ms=10 17ms=16 18ms=18 19ms=20 20ms=6 21ms=10 22ms=4 23ms=6 24ms=0 25ms=2 26ms=0 27ms=0 28ms=0 29ms=0 30ms=0 31ms=0 32ms=0 34ms=0 36ms=0 38ms=0 40ms=0 42ms=0 44ms=0 46ms=0 48ms=0 53ms=0 57ms=0 61ms=0 65ms=0 69ms=0 73ms=0 77ms=0 81ms=0 85ms=0 89ms=0 93ms=0 97ms=0 101ms=0 105ms=0 109ms=0 113ms=0 117ms=0 121ms=0 125ms=0 129ms=0 133ms=0 150ms=0 200ms=0 250ms=0 300ms=0 350ms=0 400ms=0 450ms=0 500ms=0 550ms=0 600ms=0 650ms=0 700ms=0 750ms=0 800ms=0 850ms=0 900ms=0 950ms=0 1000ms=0 1050ms=0 1100ms=0 1150ms=0 1200ms=0 1250ms=0 1300ms=0 1350ms=0 1400ms=0 1450ms=0 1500ms=0 1550ms=0 1600ms=0 1650ms=0 1700ms=0 1750ms=0 1800ms=0 1850ms=0 1900ms=0 1950ms=0 2000ms=0 2050ms=0 2100ms=0 2150ms=0 2200ms=0 2250ms=0 2300ms=0 2350ms=0 2400ms=0 2450ms=0 2500ms=0 2550ms=0 2600ms=0 2650ms=0 2700ms=0 2750ms=0 2800ms=0 2850ms=0 2900ms=0 2950ms=0 3000ms=0 3050ms=0 3100ms=0 3150ms=0 3200ms=0 3250ms=0 3300ms=0 3350ms=0 3400ms=0 3450ms=0 3500ms=0 3550ms=0 3600ms=0 3650ms=0 3700ms=0 3750ms=0 3800ms=0 3850ms=0 3900ms=0 3950ms=0 4000ms=0 4050ms=0 4100ms=0 4150ms=0 4200ms=0 4250ms=0 4300ms=0 4350ms=0 4400ms=0 4450ms=0 4500ms=0 4550ms=0 4600ms=0 4650ms=0 4700ms=0 4750ms=0 4800ms=0 4850ms=0 4900ms=0 4950ms=0
+50th gpu percentile: 8ms
+90th gpu percentile: 10ms
+95th gpu percentile: 11ms
+99th gpu percentile: 11ms
+GPU HISTOGRAM: 1ms=0 2ms=0 3ms=10 4ms=10 5ms=18 6ms=14 7ms=18 8ms=30 9ms=18 10ms=26 11ms=8 12ms=0 13ms=0 14ms=0 15ms=0 16ms=0 17ms=0 18ms=0 19ms=0 20ms=0 21ms=0 22ms=0 23ms=0 24ms=0 25ms=0 4950ms=0
+
+Pipeline=Skia (OpenGL)
+Memory policy:
+  Max surface area: 3675344
+  Max resource usage: 529.25MB (x144)
+  Background retention: 50% (altUiHidden = true)
+  GPU Context timeout: 10
+Contexts: 1 (stopped = 0)
+CPU Caches:
+  Glyph Cache: 208.04 KB (1 entry)
+  Glyph Count: 45 
+Total CPU memory usage:
+  213037 bytes, 208.04 KB (0.00 bytes is purgeable)
+
+GPU Caches:
+  Other:
+    Other: 9.02 KB (1 entry)
+    Buffer Object: 38.49 KB (5 entries)
+    StencilAttachment: 6.00 MB (2 entries)
+  Image:
+    Texture: 95.06 KB (4 entries)
+  Scratch:
+    RenderTarget: 1.14 MB (2 entries)
+    Texture: 2.00 MB (8 entries)
+    Buffer Object: 78.00 KB (2 entries)
+Layer Info:
+    GlLayer size 1280x1784
+  Layers Total         8920.00 KB (numLayers = 1)
+Total GPU memory usage:
+  9810502 bytes, 9.36 MB (3.13 MB is purgeable)
+Detail dimensions: 
+Buffer Object:				49152		{0x0}	1
+Texture:				2097152		{2048x1024}	1
+Buffer Object:				30720		{0x0}	1
+Texture:				0		{1440x1080}	7
+RenderTarget:				147456		{192x192}	1
+StencilAttachment:				4194304		{1024x1024}	1
+Buffer Object:				180		{0x0}	1
+Buffer Object:				1920		{0x0}	1
+StencilAttachment:				2097152		{512x1024}	1
+Texture:				24336		{78x78}	4
+Buffer Object:				36864		{0x0}	1
+Buffer Object:				186		{0x0}	1
+Buffer Object:				264		{0x0}	1
+RenderTarget:				1048576		{1024x1024}	1
+TextureView: 1280x1784
+
+GraphicBufferAllocator buffers:
+            Handle |         Size |     W (Stride) x H | Layers |   Format |      Usage | Requestor
+0xb4000071ffae3030 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffae9e30 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffaeb6f0 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffaedd70 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffaf0810 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffaf71f0 |  3060.00 KiB | 1020 (1024) x  765 |      1 |        1 | 0x 1000300 | HardwareBuffer pid [17846]
+0xb4000071ffaf8d70 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffafabb0 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffafb3f0 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffafc890 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffaffb70 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffb000f0 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffb00bf0 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb016f0 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffb01850 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffb019b0 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffb01dd0 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffb02610 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffb03110 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb037f0 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb03950 | 13860.00 KiB | 1280 (1280) x 2772 |      1 |        1 | 0x40000000000b00 | VRI[MainActivity]#6(BLAST Consumer)6
+0xb4000071ffb05210 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffb05e70 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb063f0 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+0xb4000071ffb06ad0 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb07890 |  8920.00 KiB | 1280 (1280) x 1784 |      1 |        1 | 0x40000000000b00 | 7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7
+0xb4000071ffb07b50 |      unknown | 4080 (4080) x 3060 |      1 |       20 | 0x   20033 | ImageReader-4080x3060f20m20-17846-1
+0xb4000071ffb07f70 |      unknown | 1440 (1472) x 1080 |      1 |       11 | 0x   20133 | SurfaceTexture-0-17846-0
+Total allocated by GraphicBufferAllocator (estimate): 162520.00 KB
+Imported gralloc buffers:
++ name:SurfaceTexture-0-17846-0, id:4801773514645, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514637, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514636, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514635, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514634, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514633, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514632, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514631, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514630, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514629, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:SurfaceTexture-0-17846-0, id:4801773514628, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:7bc11d SurfaceView[com.matthew.rawlens/com.matthew.rawlens.MainActivity]#7(BLAST Consumer)7, id:4801773514626, size:9100.00KiB, w/h:1280x1784, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x1792, stride:5120 bytes, size:9318400
++ name:HardwareBuffer pid [17846], id:4801773514625, size:3060.00KiB, w/h:1020x765, usage: 0x1000300, req fmt:1, fourcc/mod:875708993/0, dataspace: 0x0, compressed: false
+	planes: R/G/B/A:	 w/h:1020x765, stride:4096 bytes, size:3133440
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514623, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514621, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:SurfaceTexture-0-17846-0, id:4801773514622, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:SurfaceTexture-0-17846-0, id:4801773514620, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:SurfaceTexture-0-17846-0, id:4801773514624, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:SurfaceTexture-0-17846-0, id:4801773514618, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514617, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514619, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:SurfaceTexture-0-17846-0, id:4801773514616, size:2348.16KiB, w/h:1440x1080, usage: 0x20133, req fmt:17, fourcc/mod:825382478/0, dataspace: 0x8c20000, compressed: false
+	planes: Y:	 w/h:1440x1080, stride:1472 bytes, size:1589760
+	        Cr/Cb:	 w/h:720x540, stride:1472 bytes, size:814752
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514615, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514614, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514613, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:ImageReader-4080x3060f20m20-17846-1, id:4801773514627, size:24480.00KiB, w/h:4080x3060, usage: 0x20033, req fmt:32, fourcc/mod:540422482/0, dataspace: 0x1, compressed: false
+	planes: R:	 w/h:4080x3060, stride:8192 bytes, size:25067520
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514611, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
++ name:VRI[MainActivity]#6(BLAST Consumer)6, id:4801773514610, size:14138.00KiB, w/h:1280x2772, usage: 0x40000000000b00, req fmt:1, fourcc/mod:875708993/576460752303423602, dataspace: 0x0, compressed: true
+	planes: R/G/B/A:	 w/h:1280x2784, stride:5120 bytes, size:14477312
+Total imported by gralloc: 329043.09KiB
+
+Profile data in ms:
+
+	com.matthew.rawlens/com.matthew.rawlens.MainActivity/android.view.ViewRootImpl@bb4c2de (visibility=0)
+View hierarchy:
+
+  com.matthew.rawlens/com.matthew.rawlens.MainActivity/android.view.ViewRootImpl@bb4c2de
+  65 views, 137.53 kB of render nodes
+
+
+  Dynamic VRI BBQ Log.  render_draw: false  hdr_dimmer: false  blur_blend: false  hwui_window_decor: false  sync_barrier: false
+
+Total ViewRootImpl   : 1
+Total attached Views : 65
+Total RenderNode     : 137.53 kB (used) / 344.65 kB (capacity)
+

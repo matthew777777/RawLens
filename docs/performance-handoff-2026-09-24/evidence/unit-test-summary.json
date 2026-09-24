@@ -1,0 +1,10 @@
+{
+  "tests": 749,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 2,
+  "skipped_tests": [
+    "com.matthew.rawlens.RawNindNcnnContractTest.tinyParamIsLegacyContract",
+    "com.matthew.rawlens.RawNindNcnnContractTest.rawnindBlobsMatchExportedParam"
+  ]
+}

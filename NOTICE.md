@@ -43,6 +43,22 @@ static libraries, and `assets/models/flownet_flat.ncnn.{param,bin}`. The vendore
 is recorded in `app/src/main/cpp/flownet/UPSTREAM.md`. RawLens supplies its own
 normalized-CFA input renderer and CFA-parity-preserving warp.
 
+RawLens's SR anisotropic weights vendor PhotonCamera's KernelNet parameter model
+from the same commit `9efb24a44119b04223b4a2eef50c7837ad643970`: the JNI tiling
+runtime in `app/src/main/cpp/ncnnMl.cpp` (`KernelNetCtx`), the Java wrapper
+`app/src/main/java/com/particlesdevs/photoncamera/processing/ml/KernelNetNcnnProcessor.java`,
+and `assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}`. Deliberate
+divergences from upstream: the native side emits channel-major float32
+`[s1][s2][rho]` planes instead of upstream's RGBA-interleaved fp16 halves, and
+the Kotlin bridge (`RawSrKernelNetAniso`) converts the raw model output straight
+to the SR precision field as `P = 2*M(s)` per quad (the `mergeCombineWeight`
+convention, `s1`=y / `s2`=x, no transpose, no extra rescale). RawLens additionally
+guards the bridge: unusable triples (non-positive or non-finite axes) fall back
+to the analytic kernel, axes are capped at `KERNEL_SIGMA_MAX`, and narrow kernels
+are widened to a minimum area (`MIN_KERNEL_AREA`, overridable via the
+`kernelAreaFloor` developer knob) so packed-domain assumptions cannot collapse
+on the unpacked merge.
+
 ## Google Filament AgX
 
 RawLens's SDR display transform is a Kotlin/GLSL adaptation of the AgX Base implementation in
@@ -105,3 +121,73 @@ fallback, and final white-level normalization, with FlowNet registration replaci
 desktop OpenCV alignment. `FloatCfaDngWriter` adapts `src/imageio/imageio_dng.c`'s
 `dt_imageio_dng_write_float()` layout: uncompressed little-endian TIFF/DNG, one 32-bit IEEE-float
 CFA sample per pixel, `SampleFormat=3`, normalized black level zero, and white level one.
+
+## Sea real-RAW test fixture
+
+`app/src/androidTest/assets/rawsr/sea/` contains lossless Bayer-region extracts and
+metadata from the user-contributed Sea photographs. Data license: CC BY 4.0,
+separate from the application source license. Attribution: Sea burst contributor
+(RawLens user). See that directory's `LICENSE.md` and `manifest.json` for permission,
+original-file digests and the exact extraction changes. These are instrumentation
+assets only, not production APK assets.
+
+## Handheld burst super-resolution references
+
+RawLens's RAW-SR kernel covariance (`RawSrKernelCovariance`, `RawSrCovarianceGuide`,
+`assets/shaders/rawsr/kernel_covariance.glsl`) is a clean-room reimplementation
+of the published Wronski et al. SIGGRAPH 2019 method and its IPOL 2023
+transcription. The implementation was checked against Jamy Lafenetre's
+MIT-licensed `Handheld-Multi-Frame-Super-Resolution` reference
+(`handheld_super_resolution/kernels.py`, `linalg.py`, `utils_image.py`); no
+upstream code is copied into RawLens. Jamy Lafenetre and contributors provide
+that reference under the MIT License without endorsement of RawLens.
+
+## Full-resolution Quad-Bayer development
+
+The green-gradient and green-guided color reconstruction in
+`app/src/main/assets/shaders/quad/` is adapted from PhotonCamera at commit
+`4ee108e169496f429c0afa0cc33e57bb6b2ec724`, specifically
+`demosaicp0quad.glsl`, `demosaicp12quad.glsl`, and `demosaicp2quad.glsl`.
+PhotonCamera contributors' work is licensed under GPL-3.0; the adapted shaders
+remain GPL-3.0-or-later. RawLens adds compute dispatch, all Bayer orders, sensor
+crop phase, defined CFA-preserving border sampling, and its ACEScg output path.
+
+## Burst-reconstruction rewrite references (research-only, not shipped)
+
+The following checkouts live in git-ignored `references/upstream/` and are
+study references for the `tools/burst-reconstruction-desktop` full rewrite.
+No upstream code is copied into RawLens; algorithms are reimplemented
+clean-room in stdlib-only Kotlin/JVM. Pinned HEADs as cloned 2026-09-23
+(`--depth 1`); cite hashes, not branches.
+
+- timothybrooks/hdr-plus — https://github.com/timothybrooks/hdr-plus —
+  HEAD `ef4dd2ca53a51e105ed923557c726b253f05c13b` (2026-01-12) — MIT
+  (Copyright (c) 2017 Tim Brooks). Reference for FFT-based tile alignment
+  and pairwise Wiener temporal merge with calibrated noise thresholds.
+- martin-marek/hdr-plus-pytorch — https://github.com/martin-marek/hdr-plus-pytorch —
+  HEAD `e7091c33b0e3417f84e72d70ad2081b66daee56d` (2024-09-08) — MIT
+  (Copyright (c) 2021 Martin Marek). Reference for vectorized HDR+
+  align-and-merge structure.
+- amonod/hdrplus-python — https://github.com/amonod/hdrplus-python —
+  HEAD `98ebf1724196bc070c1248e0f8efa2df6c18b8ef` (2022-06-27) —
+  GNU AGPL-3.0. Ideas only; do not copy code into RawLens (AGPL copyleft).
+  Reference for HDR+ stage decomposition and test bursts.
+- GuoShi28/GCP-Net — https://github.com/GuoShi28/GCP-Net —
+  HEAD `cef7513fa242343055af64e612429e4384d3c1d7` (2021-08-09) — Apache-2.0.
+  Reference for green-channel-prior guided joint denoising/demosaicking
+  (GCP-Net, TIP 2021); classical reimplementation only, no model weights.
+- GuoShi28/2StageAlign — https://github.com/GuoShi28/2StageAlign —
+  HEAD `f39218a0be26f1de9e75021acef6c4ab3bdf8b06` (2022-12-08) — MIT
+  (Copyright (c) 2022 Shi Guo). Reference for coarse patch-level plus
+  refined pixel-level alignment scheme (CVPR 2022); classical port, no ML.
+- goutamgmb/deep-rep — https://github.com/goutamgmb/deep-rep —
+  HEAD `154c51ed4075880eb814df84d863614aa3922ae1` (2021-10-22) —
+  CC BY-NC-SA 4.0 (Huawei). Ideas and BurstSR eval/synthetic-data protocol
+  only; do not copy code (NonCommercial, incompatible with redistribution).
+- Pre-existing: Jamy Lafenetre Handheld-Multi-Frame-Super-Resolution
+  (`references/Handheld-Multi-Frame-Super-Resolution-Jamy-L`, HEAD `07bc3f2`,
+  MIT) — core Wronski SIGGRAPH 2019 steerable-kernel merge + robustness
+  model reference (see existing section above); ImageStackAlignator
+  (`b12e86e`) — global NCC pre-align reference.
+
+Upstream authors provide their work without endorsement of RawLens.
