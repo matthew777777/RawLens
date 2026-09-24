@@ -632,7 +632,8 @@ object RawSrMergeJob {
         val precision = MosaicSrReconstructor.clampMinorAxis(
             if (kernelNetSigma != null)
                 RawSrKernelNetAniso.precisionFor(cfa, analytic, kernelNetSigma)
-            else analytic
+            else analytic,
+            MosaicSrReconstructor.minorAxisSigmaFloor
         )
         return RawSrBayerMerge.MergeFrame(
             width = cfa.width,

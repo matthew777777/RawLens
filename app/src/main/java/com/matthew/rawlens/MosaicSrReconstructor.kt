@@ -34,7 +34,7 @@ import kotlin.math.floor
 object MosaicSrReconstructor {
     /** √2 linear scale: target area ≈ 2× source area. */
     const val LINEAR_SCALE = 1.4142135623730951
-    const val ALGORITHM_VERSION = "RawLens-MosaicSr/5H-neutral-highlights"
+    const val ALGORITHM_VERSION = "RawLens-MosaicSr/5J-neutral-highlights"
     const val EPS = 1e-8
 
     data class TargetGrid(
@@ -721,21 +721,24 @@ object MosaicSrReconstructor {
     }
 
     /**
-     * Narrow-axis clamp for merge-bound precision fields: no kernel axis
+     * Narrow-axis floor for merge-bound precision fields: no kernel axis
      * narrower than [MIN_MINOR_SIGMA] quad px. Sub-lattice across-axes
-     * (≈0.2) collapse each colour channel onto its own sparse taps and
-     * register each colour's edge separately (~±1px inter-channel straddle
-     * with non-monotonic ringing) — zipper and colour leaks on the 1x RGB
-     * merge itself, and single-target-row bright lines on the 1.4x mosaic
-     * target once demosaiced. The clamp widens only the narrow axis
-     * (orientation and the wide axis untouched), so transitions span an
-     * honest ~2 px while along-edge smoothing and flat kernels pass
-     * through. Applied in [RawSrMergeJob.mergeFrame] to analytic and
-     * KernelNet fields alike, and at the KernelNet producers
-     * ([RawSrKernelNetAniso]) so the 1x RGB GPU path — which uploads
-     * KernelNet fields verbatim — gets the same floor.
+     * collapse each colour channel onto its own sparse taps and register
+     * each colour's edge separately — zipper and colour leaks. The floor
+     * value is a measured tradeoff (mosaic oracle, period-4 grating):
+     * σ0.25 keeps 87% texture contrast, σ0.3 keeps 73%, σ0.4 keeps 51%,
+     * σ0.5 keeps 39%; step rise is 0/1/2 target px respectively. 0.3 keeps
+     * neighbour-tap pooling (w ≈ 0.004 at 1 quad — still
+     * nearest-dominated, no lottery) while restoring most micro-contrast.
+     * Lower it toward the analytic texture width only with a zipper A/B
+     * ([minorAxisSigmaFloor]).
      */
-    const val MIN_MINOR_SIGMA = 0.5
+    const val MIN_MINOR_SIGMA = 0.3
+    /**
+     * A/B override for the narrow-axis floor (tests / textured-target
+     * evaluation). Default is [MIN_MINOR_SIGMA]; read per call site.
+     */
+    @Volatile var minorAxisSigmaFloor = MIN_MINOR_SIGMA
 
     fun clampMinorAxis(
         field: RawSrKernelCovariance.MatrixField,

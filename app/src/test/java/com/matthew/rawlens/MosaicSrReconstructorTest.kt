@@ -590,26 +590,26 @@ class MosaicSrReconstructorTest {
     // ---- narrow-axis clamp ----
 
     @Test fun clampWidensSharpIsotropicTexel() {
-        // σ=0.25 both axes (P=16I) -> σ=0.5 (P=4I) at the default floor.
+        // σ=0.25 both axes (P=16I) -> σ=0.3 (P=1/0.09) at the default floor.
         val field = RawSrKernelCovariance.MatrixField(1, 1, floatArrayOf(16f, 0f, 0f, 16f))
         val out = MosaicSrReconstructor.clampMinorAxis(field).values
-        assertEquals(4f, out[0], 1e-5f)
+        assertEquals((1.0 / (0.3 * 0.3)).toFloat(), out[0], 1e-4f)
         assertEquals(0f, out[1], 1e-6f)
         assertEquals(0f, out[2], 1e-6f)
-        assertEquals(4f, out[3], 1e-5f)
+        assertEquals((1.0 / (0.3 * 0.3)).toFloat(), out[3], 1e-4f)
     }
 
     @Test fun clampWidensOnlyNarrowAxisOfEdgeTexel() {
-        // Edge-like P=diag(0.89, 50): σx≈1.06 untouched, σy≈0.14 -> 0.5.
+        // Edge-like P=diag(0.89, 50): σx≈1.06 untouched, σy≈0.14 -> 0.3.
         val field = RawSrKernelCovariance.MatrixField(1, 1, floatArrayOf(0.89f, 0f, 0f, 50f))
         val out = MosaicSrReconstructor.clampMinorAxis(field).values
         assertEquals(0.89f, out[0], 1e-4f)
         assertEquals(0f, out[1], 1e-6f)
-        assertEquals(4f, out[3], 1e-4f)
+        assertEquals((1.0 / (0.3 * 0.3)).toFloat(), out[3], 1e-3f)
     }
 
     @Test fun clampPreservesOrientationOfRotatedTexel() {
-        // Rotated narrow kernel: minor σ 0.2 at 30° -> 0.5 at 30°.
+        // Rotated narrow kernel: minor σ 0.2 at 30° -> 0.3 at 30°.
         val c = kotlin.math.cos(kotlin.math.PI / 6)
         val s = kotlin.math.sin(kotlin.math.PI / 6)
         // Σ = 1.0*e1e1ᵀ + 0.04*e2e2ᵀ with e2 at 30°; P = Σ^-1.
@@ -629,9 +629,9 @@ class MosaicSrReconstructorTest {
         val cross = abs(qx * e2y - qy * e2x)
         val norm = kotlin.math.sqrt(qx * qx + qy * qy)
         assertEquals(0.0, cross / norm, 1e-5)
-        // Minor σ is 0.5: e2ᵀP'e2 = 1/0.25.
+        // Minor σ is 0.3: e2ᵀP'e2 = 1/0.09.
         val q = out[0] * e2x * e2x + 2 * out[1] * e2x * e2y + out[3] * e2y * e2y
-        assertEquals(4.0, q, 1e-4)
+        assertEquals(1.0 / 0.09, q, 1e-3)
     }
 
     @Test fun clampLeavesWideTexelAlone() {
@@ -645,10 +645,11 @@ class MosaicSrReconstructorTest {
     @Test fun clampRepairsDegenerateTexel() {
         val field = RawSrKernelCovariance.MatrixField(1, 1, floatArrayOf(1f, 1f, 1f, 1f))
         val out = MosaicSrReconstructor.clampMinorAxis(field).values
-        assertEquals(4f, out[0], 1e-6f)
+        val f = (1.0 / (0.3 * 0.3)).toFloat()
+        assertEquals(f, out[0], 1e-4f)
         assertEquals(0f, out[1], 0f)
         assertEquals(0f, out[2], 0f)
-        assertEquals(4f, out[3], 1e-6f)
+        assertEquals(f, out[3], 1e-4f)
     }
 
     @Test fun clampRejectsNonPositiveFloor() {

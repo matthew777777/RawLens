@@ -373,12 +373,12 @@ class RawSrKernelNetAnisoTest {
         // anisotropy, so a strong-edge triple (0.2,1.5,0) keeps a
         // sub-lattice across-axis that collapses each colour channel onto
         // its own sparse taps (~1px inter-channel straddle plus ringing).
-        // The produced field must floor every kernel's narrow axis at 0.5
+        // The produced field must floor every kernel's narrow axis at 0.3
         // quads while leaving orientation and the wide axis untouched.
         val raw = FloatArray(4)
         assertTrue(RawSrKernelNetAniso.precisionOf(0.2f, 1.5f, 0f, raw, 0))
-        // The unclamped triple is narrow across y: p11 >> 1/0.25.
-        assertTrue("edge triple must be sub-lattice across y before the floor", raw[3] > 4f)
+        // The unclamped triple is narrow across y: p11 >> 1/0.09.
+        assertTrue("edge triple must be sub-lattice across y before the floor", raw[3] > 1f / 0.09f)
         // Constant 1x1 model plane resampled onto a 2x2 quad grid: every
         // quad samples the edge triple exactly (clamped-edge resampling).
         val planes = floatArrayOf(0.2f, 1.5f, 0f)
@@ -393,12 +393,12 @@ class RawSrKernelNetAnisoTest {
             val p11 = field.values[o + 3].toDouble()
             // Axis-aligned triple stays axis-aligned.
             assertEquals(0.0, p01, 1e-6)
-            // Minor sigma of Sigma = P^-1 is >= 0.5: lambda_max(P) <= 4.
+            // Minor sigma of Sigma = P^-1 is >= 0.3: lambda_max(P) <= 1/0.09.
             val trace = p00 + p11
             val det = p00 * p11 - p01 * p01
             val lambdaMax = (trace + kotlin.math.sqrt(maxOf(trace * trace - 4 * det, 0.0))) / 2
             assertTrue("quad $i minor sigma ${1 / kotlin.math.sqrt(lambdaMax)} below floor",
-                lambdaMax <= 4.0 * (1 + 1e-5))
+                lambdaMax <= (1.0 / 0.09) * (1 + 1e-5))
             // Wide (x) axis untouched by the floor.
             assertEquals(raw[0].toDouble(), p00, 1e-4)
         }
@@ -406,8 +406,8 @@ class RawSrKernelNetAnisoTest {
 
     @Test fun kernelNetFieldFloorsSharpIsotropicTriple() {
         // Isotropic-sharp triple (0.23,0.25,0): the area floor widens to
-        // sigma ~0.45, still below the 0.5 lattice floor — the field clamp
-        // finishes the job on both axes.
+        // σ≈0.45, already above the 0.3 lattice floor — the field clamp is
+        // then a no-op (at the old 0.5 floor it fired again).
         val planes = floatArrayOf(0.23f, 0.25f, 0f)
         val values = FloatArray(2 * 2 * 4)
         val field = RawSrKernelNetAniso.convertPlanesToField(planes, 1, 1, 2, 2, values)
@@ -415,16 +415,18 @@ class RawSrKernelNetAnisoTest {
             val o = i * 4
             val p00 = field.values[o].toDouble()
             val p11 = field.values[o + 3].toDouble()
-            assertTrue("quad $i p00=$p00 above 1/0.25", p00 <= 4.0 * (1 + 1e-5))
-            assertTrue("quad $i p11=$p11 above 1/0.25", p11 <= 4.0 * (1 + 1e-5))
+            // Area floor engaged (well below the unfloored 2/0.0625 = 32)
+            // but lattice floor idle (well below 1/0.09 ≈ 11.1).
+            assertTrue("quad $i p00=$p00", p00 > 4.0 && p00 < 11.0)
+            assertTrue("quad $i p11=$p11", p11 > 4.0 && p11 < 11.0)
             assertEquals(0.0, field.values[o + 1].toDouble(), 1e-6)
         }
     }
 
     @Test fun kernelNetFieldLeavesWideTripleAlone() {
         // Capped isotropic triple (1,1,0) -> (0.71,0.71): true sigma is
-        // s/sqrt(2) = 0.502, just above the 0.5 floor, so the field passes
-        // through to float tolerance (P -> Sigma -> P roundtrip only).
+        // s/sqrt(2) = 0.502, comfortably above the 0.3 floor, so the field
+        // passes through to float tolerance (P -> Sigma -> P roundtrip only).
         val planes = floatArrayOf(1f, 1f, 0f)
         val values = FloatArray(2 * 2 * 4)
         val field = RawSrKernelNetAniso.convertPlanesToField(planes, 1, 1, 2, 2, values)

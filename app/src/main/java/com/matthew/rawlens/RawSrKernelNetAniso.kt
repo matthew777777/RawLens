@@ -515,7 +515,8 @@ object RawSrKernelNetAniso {
         // (per-channel sparse taps, ~1px inter-channel straddle) exactly as
         // they did the mosaic target before its clamp. Same floor, in place:
         // the mosaic chain's downstream clamp is then an idempotent no-op.
-        MosaicSrReconstructor.clampMinorAxisInPlace(values)
+        MosaicSrReconstructor.clampMinorAxisInPlace(
+            values, MosaicSrReconstructor.minorAxisSigmaFloor)
         return RawSrKernelCovariance.MatrixField(outW, outH, values)
     }
 
@@ -621,7 +622,8 @@ object RawSrKernelNetAniso {
         val stats = KernelStats()
         statsQueue.forEach(stats::merge)
         Log.i(TAG, stats.logLine("${outW}x${outH} kernel-only"))
-        MosaicSrReconstructor.clampMinorAxisInPlace(values)
+        MosaicSrReconstructor.clampMinorAxisInPlace(
+            values, MosaicSrReconstructor.minorAxisSigmaFloor)
         return RawSrKernelCovariance.MatrixField(outW, outH, values)
     }
 
