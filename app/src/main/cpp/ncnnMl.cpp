@@ -6,9 +6,16 @@
 //
 //   * FlowNet-v2 dense optical flow (flownet_flat.ncnn.param/.bin)
 //   * KernelNet anisotropic parameter model (kernelnet_aniso_v2_2_params.ncnn.param/.bin)
-//   * RawNIND-tiny single-frame Bayer denoiser (rawnind_tiny.ncnn.param/.bin,
-//     trained on Mac via python/rawnind-train; paste the converted files into
-//     app/src/main/assets/models/ — absent files simply report unavailable)
+//   * RawNIND single-frame denoisers (two coexisting variants):
+//     - RawNIND-tiny (rawnind_tiny.ncnn.param/.bin, python/rawnind-train:
+//       5ch packed [R,G1,G2,B]+sigma in, 4ch packed Bayer out, same packed res)
+//     - RawNIND-bayer/UtNet2 (rawnind_bayer.ncnn.param/.bin, RawNIND upstream:
+//       4ch packed [R,G1,G2,B] in, no sigma, 3ch camRGB out at 2x packed res,
+//       i.e. full Bayer resolution, arbitrary gain)
+//     Paste converted files into app/src/main/assets/models/ — absent files
+//     simply report unavailable. Each handle auto-detects its variant from
+//     its own .param, so old and new models work through the same JNI entry
+//     points with per-variant buffer contracts (see RawNindCtx).
 //
 // Both networks share one ncnn runtime linked statically into this library
 // (see ncnn/<ABI>/lib/libncnn.a). The FlowNet model requires three custom
@@ -606,13 +613,20 @@ Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeD
 }
 
 // ===========================================================================
-// RawNIND-tiny single-frame Bayer denoiser (python/rawnind-train export).
+// RawNIND single-frame denoisers (python/rawnind-train tiny + upstream bayer).
 //
-// Contract (see export.py --help and RawNindDenoiser.kt):
-//   input  (1,5,H/2,W/2) packed [R,G1,G2,B] + sigma plane, normalized [0,1]-ish
-//          floats AFTER black/white normalization and lens-shading correction,
-//          BEFORE demosaic. Java passes channel-last H2xW2x5 (R,G1,G2,B,S).
-//   output (1,4,H/2,W/2) denoised packed Bayer, same layout minus sigma.
+// Variants (auto-detected per handle from its .param — see
+// detectRawNindVariant; both share in0/out0 blob names):
+//   TINY  input  (1,5,H/2,W/2) packed [R,G1,G2,B] + sigma plane, normalized
+//         [0,1]-ish floats AFTER black/white normalization and lens-shading
+//         correction, BEFORE demosaic. Java passes channel-last H2xW2x5.
+//         output (1,4,H/2,W/2) denoised packed Bayer, same layout minus sigma.
+//   BAYER input  (1,4,H/2,W/2) packed [R,G1,G2,B], same domain but NO sigma
+//         plane (arbitrary gain handled inside the net). Java passes
+//         channel-last H2xW2x4.
+//         output (1,3,H,W) denoised camRGB at 2x packed resolution, i.e.
+//         full Bayer resolution, channel-last HxWx3 (demosaiced — bypasses
+//         AMaZE instead of feeding it).
 //
 // Like KernelNet this runs on FIXED-SIZE tiles so Vulkan blob/workspace
 // allocators reuse the same device-memory blocks for every capture: TILE is
@@ -637,10 +651,42 @@ struct RawNindCtx {
                            // tile grid at 12MP packed 2000x1500)
     int tileBorder = 32;   // overlap margin per side (packed px, >= RF 23)
     bool stageTiming = false;
+    // Per-handle variant (see detectRawNindVariant):
+    //   tiny:  inChannels=5, outChannels=4, outScale=1
+    //   bayer: inChannels=4, outChannels=3, outScale=2
+    int inChannels = 5;
+    int outChannels = 4;
+    int outScale = 1;
     // Fixed-size tile Mats, allocated on first run and reused for every tile
     // of every capture (identical shapes -> stable GPU memory).
-    ncnn::Mat inTile;      // TILE x TILE x 5
+    ncnn::Mat inTile;      // TILE x TILE x inChannels (interleaved scratch)
 };
+
+// The JNI signature is identical for both variants, so each handle sniffs
+// its own .param asset: the bayer graph ends with a PixelShuffle
+// (DepthToSpace) upsampling tail, while legacy tiny ends with a residual
+// BinaryOp add and starts with a sigma-stripping Split/Crop. Unknown graphs
+// keep the legacy tiny contract (fail loudly on dims, never silently).
+struct RawNindVariant {
+    int inChannels;
+    int outChannels;
+    int outScale;
+};
+
+static RawNindVariant detectRawNindVariant(AAssetManager* mgr,
+                                           const std::string& paramPath) {
+    RawNindVariant v{5, 4, 1};
+    AAsset* asset = AAssetManager_open(mgr, paramPath.c_str(), AASSET_MODE_BUFFER);
+    if (asset == nullptr) return v;
+    size_t len = AAsset_getLength(asset);
+    const char* buf = static_cast<const char*>(AAsset_getBuffer(asset));
+    std::string text(buf != nullptr ? buf : "", len);
+    AAsset_close(asset);
+    if (text.find("PixelShuffle") != std::string::npos) {
+        v = {4, 3, 2};
+    }
+    return v;
+}
 
 static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
                                int w2, int h2, float* outPtr);
@@ -688,6 +734,21 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
 
     std::string binPath = paramToBinPath(paramStr);
 
+    RawNindVariant variant = detectRawNindVariant(mgr, paramStr);
+    ctx->inChannels = variant.inChannels;
+    ctx->outChannels = variant.outChannels;
+    ctx->outScale = variant.outScale;
+    if (ctx->outScale == 2) {
+        // RawNIND Bayer predicts arbitrary learned gain. Real outputs exceed
+        // FP16's 65504 limit before host gain matching: fp16 yielded Inf/NaN.
+        ctx->net.opt.use_fp16_packed = false;
+        ctx->net.opt.use_fp16_storage = false;
+        ctx->net.opt.use_fp16_arithmetic = false;
+        ctx->net.opt.lightmode = true;
+        ctx->tileCore = 384;
+        ctx->tileBorder = 64; // 512 packed-pixel input, as in the upstream export
+    }
+
     if (ctx->net.load_param(mgr, paramStr.c_str()) != 0) {
         LOGE("rawnind load_param(%s) failed", paramStr.c_str());
         delete ctx;
@@ -705,7 +766,7 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
     }
     if (const char* b = getenv("RN_BORDER")) {
         int v = atoi(b);
-        if (v >= 24) ctx->tileBorder = v;
+        if (v >= 24) ctx->tileBorder = (v + 15) / 16 * 16;
     }
     if (const char* st = getenv("RN_STAGETIMING")) {
         ctx->stageTiming = strcmp(st, "0") != 0;
@@ -730,7 +791,10 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
     }
 #endif
 
-    LOGI("rawnind model loaded (tile core=%d border=%d)", ctx->tileCore, ctx->tileBorder);
+    LOGI("rawnind model loaded (%s: %dch in, %dch out, x%d; tile core=%d border=%d)",
+         ctx->outScale == 2 ? "bayer" : "tiny",
+         ctx->inChannels, ctx->outChannels, ctx->outScale,
+         ctx->tileCore, ctx->tileBorder);
 
 #if NCNN_VULKAN
     if (ctx->net.opt.use_vulkan_compute) {
@@ -747,8 +811,12 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
     return (jlong)ctx;
 }
 
-// packed: [w2*h2*5] channel-last floats (R,G1,G2,B,S), normalized domain.
-// out:    [w2*h2*4] channel-last floats (R,G1,G2,B).
+// packed: [w2*h2*inChannels] channel-last floats, normalized domain.
+//   tiny:  5ch (R,G1,G2,B,S); out: [w2*h2*4] channel-last (R,G1,G2,B).
+//   bayer: 4ch (R,G1,G2,B);    out: [(2*w2)*(2*h2)*3] channel-last camRGB.
+// The variant travels with the handle (see RawNindCtx), so one entry point
+// serves both models; buffer sizes are validated Java-side and dims
+// double-checked here after extract.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeRun(
     JNIEnv* env, jclass, jlong handle, jobject packedBuffer, jint w2, jint h2,
@@ -774,16 +842,19 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeRun
 // uses the tiled path (stable Vulkan footprint across captures).
 static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
                                int w2, int h2, float* outPtr) {
-    ncnn::Mat in(w2, h2, 5);
-    for (int c = 0; c < 5; c++) {
+    const int C = ctx->inChannels;
+    const int OC = ctx->outChannels;
+    const int S = ctx->outScale;
+    ncnn::Mat in(w2, h2, C);
+    for (int c = 0; c < C; c++) {
         float* ch = (float*)in.channel(c);
-        for (int i = 0, n = w2 * h2; i < n; i++) ch[i] = inPtr[5 * i + c];
+        for (int i = 0, n = w2 * h2; i < n; i++) ch[i] = inPtr[C * i + c];
     }
 
     int64_t tStart = nowMs();
 
     ncnn::Extractor ex = ctx->net.create_extractor();
-    // Blob names follow the pnnx export (model.ncnn.param: Input in0 ... out0),
+    // Blob names follow the pnnx export (Input in0 ... out0),
     // NOT the ONNX input/output names from export.py.
     int ret_in = ex.input("in0", in);
     if (ret_in != 0) {
@@ -801,41 +872,45 @@ static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
     LOGI("rawnind forward %dx%d took %lld ms", w2, h2,
          (long long)(nowMs() - tStart));
 
-    if (out.c != 4 || out.w != w2 || out.h != h2) {
-        LOGE("unexpected rawnind output dims=%d w=%d h=%d c=%d (want 4x%dx%d)",
-             out.dims, out.w, out.h, out.c, w2, h2);
+    // Tiny: 4ch packed at the same resolution. Bayer: 3ch camRGB at 2x
+    // packed resolution (full Bayer size).
+    const int ow = w2 * S, oh = h2 * S;
+    if (out.c != OC || out.w != ow || out.h != oh) {
+        LOGE("unexpected rawnind output dims=%d w=%d h=%d c=%d (want %dch %dx%d)",
+             out.dims, out.w, out.h, out.c, OC, ow, oh);
         return JNI_FALSE;
     }
-    const float* ch0 = (const float*)out.channel(0);
-    const float* ch1 = (const float*)out.channel(1);
-    const float* ch2 = (const float*)out.channel(2);
-    const float* ch3 = (const float*)out.channel(3);
-    for (int i = 0, n = w2 * h2; i < n; i++) {
-        outPtr[4 * i + 0] = ch0[i];
-        outPtr[4 * i + 1] = ch1[i];
-        outPtr[4 * i + 2] = ch2[i];
-        outPtr[4 * i + 3] = ch3[i];
+    const float* chp[4];
+    for (int c = 0; c < OC; c++) chp[c] = (const float*)out.channel(c);
+    for (int i = 0, n = ow * oh; i < n; i++) {
+        for (int c = 0; c < OC; c++) {
+            if (!std::isfinite(chp[c][i])) {
+                LOGE("rawnind non-finite output");
+                return JNI_FALSE;
+            }
+            outPtr[OC * i + c] = chp[c][i];
+        }
     }
 
     return JNI_TRUE;
 }
 
-// Fill one TILE x TILE 5-channel tile from the channel-last full-res plane
+// Fill one TILE x TILE C-channel tile from the channel-last full-res plane
 // with clamp-to-edge padding. Tile origins are always >= 0, so only
 // right/bottom can overflow.
-static void fillTileClamped5(float* dst, const float* src, int W, int H,
-                             int x0, int y0, int T) {
+static void fillTileClamped(float* dst, const float* src, int W, int H,
+                            int x0, int y0, int T, int C) {
     for (int y = 0; y < T; y++) {
         int sy = y0 + y;
         if (sy > H - 1) sy = H - 1;
         const int xSpan = (x0 + T <= W) ? T : (W - x0);
-        const float* srow = src + (size_t)sy * W * 5 + (size_t)x0 * 5;
-        float* drow = dst + (size_t)y * T * 5;
-        memcpy(drow, srow, (size_t)xSpan * 5 * sizeof(float));
+        const float* srow = src + (size_t)sy * W * C + (size_t)x0 * C;
+        float* drow = dst + (size_t)y * T * C;
+        memcpy(drow, srow, (size_t)xSpan * C * sizeof(float));
         if (xSpan < T) {
-            const float* edge = src + (size_t)sy * W * 5 + (size_t)(W - 1) * 5;
+            const float* edge = src + (size_t)sy * W * C + (size_t)(W - 1) * C;
             for (int x = xSpan; x < T; x++)
-                memcpy(drow + (size_t)x * 5, edge, 5 * sizeof(float));
+                memcpy(drow + (size_t)x * C, edge, C * sizeof(float));
         }
     }
 }
@@ -845,9 +920,13 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
     const int B = ctx->tileBorder;      // overlap per side (packed px)
     const int STEP = ctx->tileCore;     // interior advance (packed px)
     const int TILE = STEP + 2 * B;      // fixed net input size
+    const int C = ctx->inChannels;
+    const int OC = ctx->outChannels;
+    const int S = ctx->outScale;
+    const int OTILE = TILE * S;         // net output tile (bayer: 2x input)
 
     if (ctx->inTile.empty()) {
-        ctx->inTile.create(TILE, TILE, 5);
+        ctx->inTile.create(TILE, TILE, C);
     }
 
     // Number of tiles such that the last tile's core reaches the image edge.
@@ -861,9 +940,9 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
     int64_t tFill = 0, tInput = 0, tExtract = 0, tCopy = 0;
     int64_t worstExtract = 0;
 
-    // Reused deinterleaved tile input: split the interleaved inTile into 5
-    // channel planes without reallocating per tile.
-    ncnn::Mat tile5(TILE, TILE, 5);
+    // Reused deinterleaved tile input: split the interleaved inTile into
+    // per-channel planes without reallocating per tile.
+    ncnn::Mat tileIn(TILE, TILE, C);
 
     for (int iy = 0; iy < ny; iy++) {
         const int ty0 = iy * STEP;
@@ -875,19 +954,19 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
             const int vx1 = (ix == nx - 1) ? w2 : tx0 + TILE - B;
 
             int64_t s0 = nowUs();
-            fillTileClamped5((float*)ctx->inTile.data, inPtr, w2, h2, tx0, ty0, TILE);
-            // Deinterleave tile (channel-last -> 5 planes).
+            fillTileClamped((float*)ctx->inTile.data, inPtr, w2, h2, tx0, ty0, TILE, C);
+            // Deinterleave tile (channel-last -> C planes).
             {
                 const float* inter = (const float*)ctx->inTile.data;
-                for (int c = 0; c < 5; c++) {
-                    float* ch = (float*)tile5.channel(c);
-                    for (int i = 0, n = TILE * TILE; i < n; i++) ch[i] = inter[5 * i + c];
+                for (int c = 0; c < C; c++) {
+                    float* ch = (float*)tileIn.channel(c);
+                    for (int i = 0, n = TILE * TILE; i < n; i++) ch[i] = inter[C * i + c];
                 }
             }
             int64_t s1 = nowUs();
 
             ncnn::Extractor ex = ctx->net.create_extractor();
-            int ret_in = ex.input("in0", tile5);
+            int ret_in = ex.input("in0", tileIn);
             if (ret_in != 0) {
                 LOGE("rawnind tile input failed ret=%d", ret_in);
                 return JNI_FALSE;
@@ -900,29 +979,34 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
                 return JNI_FALSE;
             }
             int64_t s3 = nowUs();
-            if (out.c != 4 || out.w != TILE || out.h != TILE) {
-                LOGE("unexpected rawnind tile output dims=%d w=%d h=%d c=%d",
-                     out.dims, out.w, out.h, out.c);
+            if (out.c != OC || out.w != OTILE || out.h != OTILE) {
+                LOGE("unexpected rawnind tile output dims=%d w=%d h=%d c=%d (want %dch %dx%d)",
+                     out.dims, out.w, out.h, out.c, OC, OTILE, OTILE);
                 return JNI_FALSE;
             }
             int64_t s4 = nowUs();
 
-            // Core of this tile -> global channel-last output.
-            const int lx0 = vx0 - tx0, ly0 = vy0 - ty0;
-            const float* o0 = (const float*)out.channel(0);
-            const float* o1 = (const float*)out.channel(1);
-            const float* o2 = (const float*)out.channel(2);
-            const float* o3 = (const float*)out.channel(3);
-            for (int y = vy0; y < vy1; y++) {
-                float* dst = outPtr + ((size_t)y * w2 + vx0) * 4;
-                const int ly = ly0 + (y - vy0);
-                for (int x = vx0; x < vx1; x++) {
-                    const int li = ly * TILE + (lx0 + (x - vx0));
-                    dst[0] = o0[li];
-                    dst[1] = o1[li];
-                    dst[2] = o2[li];
-                    dst[3] = o3[li];
-                    dst += 4;
+            // Core of this tile -> global channel-last output. Input valid
+            // range [vx0,vx1) maps to [vx0*S,vx1*S) in the output (S=2 for
+            // the bayer upsampling model, 1 for tiny).
+            const int ox0 = vx0 * S, ox1 = vx1 * S;
+            const int oy0 = vy0 * S, oy1 = vy1 * S;
+            const int lx0 = (vx0 - tx0) * S, ly0 = (vy0 - ty0) * S;
+            const float* och[4];
+            for (int c = 0; c < OC; c++) och[c] = (const float*)out.channel(c);
+            for (int y = oy0; y < oy1; y++) {
+                float* dst = outPtr + ((size_t)y * (w2 * S) + ox0) * OC;
+                const int ly = ly0 + (y - oy0);
+                for (int x = ox0; x < ox1; x++) {
+                    const int li = ly * OTILE + (lx0 + (x - ox0));
+                    for (int c = 0; c < OC; c++) {
+                        if (!std::isfinite(och[c][li])) {
+                            LOGE("rawnind non-finite tile output");
+                            return JNI_FALSE;
+                        }
+                        dst[c] = och[c][li];
+                    }
+                    dst += OC;
                 }
             }
             int64_t s5 = nowUs();
