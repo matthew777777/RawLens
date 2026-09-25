@@ -34,7 +34,7 @@ import kotlin.math.floor
 object MosaicSrReconstructor {
     /** √2 linear scale: target area ≈ 2× source area. */
     const val LINEAR_SCALE = 1.4142135623730951
-    const val ALGORITHM_VERSION = "RawLens-MosaicSr/5J-neutral-highlights"
+    const val ALGORITHM_VERSION = "RawLens-MosaicSr/5K-neutral-highlights"
     const val EPS = 1e-8
 
     data class TargetGrid(

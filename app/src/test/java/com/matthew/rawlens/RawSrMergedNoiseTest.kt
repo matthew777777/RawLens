@@ -37,6 +37,21 @@ class RawSrMergedNoiseTest {
         assertEquals(1.0, RawSrMergedNoise.effectiveFrames(Double.POSITIVE_INFINITY), 0.0)
     }
 
+    @Test fun meanSupportCapsAtBurstSize() {
+        // Sabre maximumSupport analogue: per-quad support never exceeds the
+        // true burst size, so the profile cannot understate noise.
+        assertEquals(3.0, RawSrMergedNoise.meanSupport(floatArrayOf(5f), 3.0), 0.0)
+        assertEquals(2.5, RawSrMergedNoise.meanSupport(floatArrayOf(0f, 1f, 2f, 3f), 4.0), 0.0)
+        assertEquals(1.0, RawSrMergedNoise.meanSupport(floatArrayOf(Float.NaN), 3.0), 0.0)
+    }
+
+    @Test fun effectiveFramesCeilingsAtAcceptedBurst() {
+        assertEquals(4.0, RawSrMergedNoise.effectiveFrames(9.0, 4.0), 0.0)
+        assertEquals(2.5, RawSrMergedNoise.effectiveFrames(2.5, 4.0), 0.0)
+        assertEquals(1.0, RawSrMergedNoise.effectiveFrames(9.0, 0.5), 0.0)
+        assertEquals(1.0, RawSrMergedNoise.effectiveFrames(Double.NaN, 4.0), 0.0)
+    }
+
     @Test fun scaleProfileDividesEightCoefPerPlane() {
         // RGGB raster phases: R(0.02,1) G(0.03,2) G(0.04,3) B(0.05,4); green
         // keeps the larger-slope pair, exactly DngNoiseProfile.toRgb.

@@ -164,16 +164,17 @@ camera RGB in the reference frame's color/shading/exposure state.
   out-of-bounds per `docs/raw-sr-robustness.md` §7): the frame contributes zero
   weight at every pixel of `q`. No separate merge-side validity test exists;
   alignment/robustness gates are authoritative.
-- Motion-edge stop (water / occlusion boundaries): neighbouring tiles whose
-  flow disagrees by more than `MOTION_EDGE_QUAD` (1.0 quad px) mean the
-  bilinear flow blends two motions, so every splat would misregister. The
-  pixel skips like `r == 0` (accumulators keep the reference-only value,
-  no OOB bump). Same 3x3 tile-spread test as the robustness irregularity
-  gate, at discontinuity scale; CPU oracle and GLSL mirror exactly. Only
-  demonstrated disagreement vetoes (two finite in-bounds tiles apart):
-  non-finite neighbours are missing data, not motion — those pixels merge,
-  with the robustness gates (residual, photo term, s1 scaling) as backstop,
-  so noisy night flow cannot carve single-frame patches into static scenes.
+- Motion-edge stop (water / occlusion boundaries): neighbouring RELIABLE
+  tiles whose flow disagrees by more than `MOTION_EDGE_QUAD` (1.0 quad px)
+  mean the bilinear flow blends two motions, so every splat would
+  misregister. The pixel skips like `r == 0` (accumulators keep the
+  reference-only value, no OOB bump). Same 3x3 tile-spread test as the
+  robustness irregularity gate, at discontinuity scale; CPU oracle and GLSL
+  mirror exactly. Only demonstrated disagreement vetoes (two finite
+  in-bounds reliable tiles apart): non-finite or unreliable neighbours are
+  missing data, not motion — those pixels merge, with the robustness gates
+  (residual, photo term, s1 scaling) as backstop, so noisy night flow
+  cannot carve single-frame patches into static scenes.
 - Invalid-flow tiles (confidence 0) contribute nothing for moving frames
   (their `r` is 0 via the zero-shift-hypothesis path when falsified).
 - Non-finite sample, weight, or robustness values: tap skipped; every
@@ -284,7 +285,14 @@ acceptance criterion below and the fallback source in §9.
 reference-only mode leaves `Rc` identically zero). `1 + Rc` is reported per
 quad as the robustness-based frame-support estimate for diagnostics and local
 output-denoising control. It is a support indicator, not a statistically exact
-effective sample count (robustness doc §8).
+effective sample count (robustness doc §8). Bounded support (Sabre
+`maximumSupport` analogue): no quad reports more than one frame-equivalent
+per moving frame — the excess is clamped, so the estimate and the downstream
+noise model never exceed the true burst size. Per-channel moving-frame
+support rides alongside as a per-pixel bitmask (R/G/B denominators above
+eps), the Sabre `support.g/b` analogue for denoising control; the
+normalization quotients themselves are unclamped (unbounded Double
+accumulators need no cap — only the reported support does).
 
 ## 12. Quantitative acceptance criteria (declared before evaluation)
 

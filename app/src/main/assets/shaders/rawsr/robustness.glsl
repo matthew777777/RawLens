@@ -216,7 +216,11 @@ void main() {
         value = d2 == 0.0 ? 1.0 : 0.0;
         if (d2 != 0.0) flag = FLAG_PHOTO_CONFLICT;
     } else {
-        // 3x3 tile flow spread, in-bounds tiles only; nonfinite forces s1.
+        // 3x3 tile flow spread, in-bounds RELIABLE tiles only; nonfinite
+        // poisons (conservative: scales weights down, never forfeits).
+        // Unreliable tiles carry garbage flow and must not poison their
+        // neighbours' verdict — they are judged by their own per-quad
+        // reliability gate instead (oracles twins in flowIrregular).
         bool irregular = true;
         {
             float minX = 1e30;
@@ -233,6 +237,7 @@ void main() {
                     poisoned = true;
                     break;
                 }
+                if (g.w < 0.5) continue;
                 ok = true;
                 minX = min(minX, g.x); minY = min(minY, g.y);
                 maxX = max(maxX, g.x); maxY = max(maxY, g.y);

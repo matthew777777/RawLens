@@ -40,6 +40,13 @@ import kotlin.math.sqrt
  *   accumulated-robustness overwrite. `Rc` folds through
  *   [RawSrRobustness.accumulate] unchanged over the effective
  *   (finite-sanitized) weights.
+ * - Bounded support (Sabre `maximumSupport` analogue): Rc sums [0, 1]
+ *   robustness weights, so no quad can exceed one frame-equivalent per
+ *   moving frame — the excess is clamped, and per-channel moving-frame
+ *   support is exposed as [MergeResult.channelEvidence] for denoising
+ *   control (Sabre `support.g/b` analogue). Unbounded Double accumulators
+ *   need no cap for normalization itself (quotients, not sums); the cap
+ *   guards only the reported support and the downstream noise model.
  * - The merge takes precomputed kernel precision fields and consumes no
  *   tuning: there is no per-scene covariance parameter to tune.
  * - Unclamped signal policy: negative samples are preserved, never clipped.
@@ -157,7 +164,16 @@ object RawSrBayerMerge {
          * the float64/float32 guard-boundary race without re-deriving the
          * quotient from inputs.
          */
-        val refQuotient: FloatArray = FloatArray(0)
+        val refQuotient: FloatArray = FloatArray(0),
+        /**
+         * Per-channel moving-frame support evidence, one byte per pixel:
+         * bit `c` is set when channel `c`'s moving-frame denominator exceeds
+         * [EPS] (bit 0 = R, 1 = G, 2 = B). Sabre `support.g/b` analogue:
+         * per-color validity for denoising control. Reference-only pixels
+         * (and reference-only mode) read 0 — the reference contribution is
+         * not evidence of multi-frame support.
+         */
+        val channelEvidence: ByteArray = ByteArray(0)
     )
 
     /**
@@ -204,8 +220,10 @@ object RawSrBayerMerge {
             }
         }
         val pixels = width * height
+        // Accumulator doubles, quad Rc floats, int OOB/fallback lanes, plus
+        // the per-pixel channel-evidence byte plane.
         val bytes = pixels * 3L * 8 * 8 + quadsW.toLong() * quadsH * 4 +
-            pixels * 4L + pixels
+            pixels * 4L + pixels + pixels.toLong()
         memory?.allocate(bytes)
         try {
             val num = DoubleArray(pixels * 3)
@@ -233,8 +251,18 @@ object RawSrBayerMerge {
             }
             accumulateFrame(reference, null, null, refNum, refDen, nearRefNum, nearRefDen,
                 oob, width, height, quadsW, true)
+            // Per-channel moving-frame evidence (Sabre support.g/b analogue):
+            // read off the moving-only denominators before the reference
+            // contribution joins them below. Bit c of pixel p is set when
+            // channel c saw moving-frame support above EPS.
+            val channelEvidence = ByteArray(pixels)
             RawSrWorkers.forEachShard(num.size) { i0, i1 ->
                 for (i in i0 until i1) {
+                    if (den[i] > EPS) {
+                        val p = i / 3
+                        channelEvidence[p] =
+                            (channelEvidence[p].toInt() or (1 shl (i % 3))).toByte()
+                    }
                     num[i] += refNum[i]
                     den[i] += refDen[i]
                     nearNum[i] += nearRefNum[i]
@@ -256,6 +284,20 @@ object RawSrBayerMerge {
                 rcValues = next
             }
             if (referenceOnly) rcValues = FloatArray(quadsW * quadsH)
+            // Bounded support (Sabre maximumSupport analogue): Rc sums
+            // [0, 1] robustness weights, so no quad exceeds one
+            // frame-equivalent per moving frame. Clamp the excess — reachable
+            // only through out-of-contract inputs (production weights never
+            // exceed 1), so the MIN_SUPPORT overwrite below (0.5) and the
+            // reference-only path (identically zero) are untouched. The
+            // support estimate and the noise model downstream never exceed
+            // the true burst size, instead of understating noise.
+            if (frames.isNotEmpty()) {
+                val cap = frames.size.toFloat()
+                for (i in rcValues.indices) {
+                    if (rcValues[i] > cap) rcValues[i] = cap
+                }
+            }
             val rc = RawSrRobustness.RcField(quadsW, quadsH, rcValues)
             val rgb = FloatArray(pixels * 3)
             val numerator = FloatArray(pixels * 3)
@@ -332,7 +374,7 @@ object RawSrBayerMerge {
                 if (v.isFinite()) v else 0f
             }
             return MergeResult(width, height, rgb, numerator, denominator, rc, support, oob, fallback,
-                refQuotient)
+                refQuotient, channelEvidence)
         } catch (t: Throwable) {
             memory?.release(bytes)
             throw t
