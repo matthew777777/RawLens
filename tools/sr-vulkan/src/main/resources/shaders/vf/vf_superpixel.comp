@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Zero-copy RAW viewfinder superpixel: 2x2 Bayer quad -> canonical R/Gr/Gb/B,
+// normalized exactly like VfCpuNeon.copy (float, no 8-bit quantization
+// until the RGBA8 store). One invocation per display texel; Vulkan 1.1.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_superpixel.comp -o vf_superpixel.spv
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Byte-exact buffer view of the sensor plane: the driver reports a padded
+// rowPitch (4096) for image imports of a packed 4080-pixel buffer, so images
+// sample skewed. Buffers have no pitch ambiguity; stride comes from the Image
+// plane (the same value the correct CPU path uses). Each uint holds 2 LE pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+layout(binding = 1, rgba8) uniform writeonly image2D img_out;
+
+// Packing order avoids std430 padding surprises: 16-byte members first.
+// Total 72 bytes; the C side mirrors this layout exactly.
+layout(push_constant) uniform Params {
+    ivec4 u_chans;
+    vec4 u_black;
+    vec4 u_invRange;
+    ivec2 u_quadBase;
+    ivec2 u_frameSize;
+    int u_step;
+    int u_pitch;
+} p;
+
+uint fetchCode(ivec2 s) {
+    uint idx = uint(s.y) * uint(p.u_pitch) + uint(s.x);
+    uint word = codes[idx >> 1u];
+    return ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+}
+
+// Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
+// into u_black/u_invRange on the CPU, so this is a straight-line fetch + MAD
+// with dynamic uniform indexing and no per-channel branches.
+float fetchN(ivec2 q, int ch) {
+    ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
+    float code = float(fetchCode(s));
+    float blk = p.u_black[ch];
+    float inv = p.u_invRange[ch];
+    return clamp((code - blk) * inv, 0.0, 1.0);
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_frameSize))) return;
+    ivec2 q = p.u_quadBase + ij * p.u_step;
+    vec4 b = vec4(fetchN(q, p.u_chans.x), fetchN(q, p.u_chans.y),
+                  fetchN(q, p.u_chans.z), fetchN(q, p.u_chans.w));
+    imageStore(img_out, ij, b);
+}

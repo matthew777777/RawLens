@@ -1,0 +1,32 @@
+#version 450
+layout(local_size_x=16, local_size_y=16) in;
+layout(binding=0) readonly buffer Low { uint lo[]; };
+layout(binding=1) readonly buffer High { uint hi[]; };
+layout(binding=2) writeonly buffer Out { uint outputCodes[]; };
+layout(push_constant) uniform Params {
+    ivec4 geometry; // width, height, low pitch in uint16, high pitch
+    vec4 blackLow;
+    vec4 blackHigh;
+    vec4 levels; // long white, short white, short-to-long exposure scale, HDR headroom
+} p;
+uint fetchLo(int x,int y) { uint i=uint(y*p.geometry.z+x); return (lo[i>>1]>>((i&1)*16))&65535; }
+uint fetchHi(int x,int y) { uint i=uint(y*p.geometry.w+x); return (hi[i>>1]>>((i&1)*16))&65535; }
+uint fuse(int x,int y) {
+    int c=(y&1)*2+(x&1);
+    float rawLong=float(fetchLo(x,y));
+    float range=p.levels.x-p.blackLow[c];
+    float v=(rawLong-p.blackLow[c])/range;
+    // No short-frame weight, even near saturation: preserve the base sample.
+    if(rawLong>=p.levels.x) {
+        float rawShort=float(fetchHi(x,y));
+        // Both samples saturated: mark unrecoverable rather than fabricate detail.
+        v=rawShort>=p.levels.y?p.levels.w:
+            (rawShort-p.blackHigh[c])*p.levels.z/range;
+    }
+    return uint(clamp(round(v/p.levels.w*64511.0+1024.0),0.0,65535.0));
+}
+void main() {
+    int x=int(gl_GlobalInvocationID.x)*2, y=int(gl_GlobalInvocationID.y);
+    if(x>=p.geometry.x || y>=p.geometry.y) return;
+    outputCodes[(y*p.geometry.x+x)/2]=fuse(x,y)|(fuse(x+1,y)<<16);
+}
