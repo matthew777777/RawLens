@@ -227,7 +227,7 @@ class RawCameraController(
     }
     private val meteringInFlight = AtomicBoolean(false)
     @Volatile private var rawDeveloper: RawDevelopmentCoordinator? = null
-    private var srMergeProcessor: Gles31RawSrProcessor? = null
+    private var srMergeProcessor: VkRawSrProcessor? = null
     @Volatile private var rawSuperResolutionSettings = initialRawSuperResolutionSettings
     private var rawSrCapability: Boolean? = null
     private var rawSrProbeStarted = false
@@ -1948,7 +1948,7 @@ class RawCameraController(
                 ?: throw MergeUnavailableException("RAW SR image must have one plane")
             RawSrPackedFrame.fromMetadata(plane, frame.metadata)
         }
-        val processor = srMergeProcessor ?: Gles31RawSrProcessor(context).also { srMergeProcessor = it }
+        val processor = srMergeProcessor ?: VkRawSrProcessor(context).also { srMergeProcessor = it }
         val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
         val noiseLut = resolveNoiseLut(refMetadata)
         processor.processPacked(packed, noiseLut = noiseLut) { output ->
@@ -1959,11 +1959,9 @@ class RawCameraController(
             }
             if (needJpeg) {
                 try {
-                    val developed = developer.developMergedTextureJpeg(
-                        MergedTextureJpegInput(
-                            output.mergedTextureId, output.width, output.height,
-                            output.rcTextureId, output.acceptedFrames, refMetadata
-                        ),
+                    val developed = developer.developMergedImagesJpeg(
+                        output.mergedTextureId, output.rcTextureId,
+                        output.width, output.height, output.acceptedFrames, refMetadata,
                         RawDevelopmentSettings(denoise = captureDenoiseSettings),
                         outputSettings
                     )
@@ -5827,8 +5825,8 @@ class RawCameraController(
             try {
                 writer.execute {
                     val supported = runCatching {
-                        Gles31AmazeProcessor.EglComputeContext().use {
-                            Gles31AmazeProcessor.ProgramCache(context).use { programs ->
+                        SrVulkan.open().use { vk ->
+                            VkProgramCache(vk, context.assets).use { programs ->
                                 listOf("bayer_quad_gray", "pyramid_downsample", "block_match",
                                     "lk_refine", "merge_accumulate", "merge_finalize").forEach {
                                     programs.get("rawsr/$it.glsl")
