@@ -50,7 +50,7 @@ class RawSrPreviewInstrumentedTest {
                 }
             }.also { it.start() }
             val start = SystemClock.elapsedRealtime()
-            Gles31RawSrProcessor(context).use { processor ->
+            VkRawSrProcessor(context).use { processor ->
                 processor.processPacked(List(8) { frame }) {
                     Log.i("RawLensSrPreview", "mergeMs=${SystemClock.elapsedRealtime() - start} peakTextureBytes=${it.peakTextureBytes}")
                 }

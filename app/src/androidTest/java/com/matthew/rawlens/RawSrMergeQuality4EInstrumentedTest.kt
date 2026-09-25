@@ -3,7 +3,6 @@ package com.matthew.rawlens
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.opengl.GLES20
 import android.opengl.GLES30
 import android.os.SystemClock
 import android.util.Log
@@ -53,15 +52,16 @@ class RawSrMergeQuality4EInstrumentedTest {
         val q3Ratios = mutableMapOf<Int, Double>()
         val countEntries = JSONArray()
 
-        Gles31RawSrProcessor(instrumentation.targetContext).use { processor ->
+        VkRawSrProcessor(instrumentation.targetContext).use { processor ->
             // Reference-only export first: matched baseline for every count.
             val refFrames = listOf(fixture.frames[fixture.referenceIndex])
             val refTuning = RawSrTuning.fromReference(refFrames.first()).tuning
             recordTuning(report, refTuning)
             tuningRecorded = true
             processor.processPacked(refFrames, config, referenceOnly = true) { output ->
-                glVendor = GLES20.glGetString(GLES20.GL_VENDOR) ?: "unknown"
-                glRenderer = GLES20.glGetString(GLES20.GL_RENDERER) ?: "unknown"
+                val (vkVendor, vkRenderer) = vkDeviceFields()
+                glVendor = vkVendor
+                glRenderer = vkRenderer
                 val rgb = readTexture(output.mergedTextureId, output.width, output.height, GLES30.GL_RGBA)
                 refOnlyRgb = rgb; refOnlyW = output.width; refOnlyH = output.height
                 writeRgbBin(File(outDir, "refonly_rgb_f32le.bin"), rgb, output.width, output.height)
@@ -715,25 +715,19 @@ class RawSrMergeQuality4EInstrumentedTest {
         }
     }
 
-    private fun readTexture(texture: Int, width: Int, height: Int, format: Int): FloatArray {
-        val framebuffer = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffer, 0)
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, texture, 0)
-            assertEquals(GLES30.GL_FRAMEBUFFER_COMPLETE, GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER))
-            val channels = if (format == GLES30.GL_RED) 1 else 4
-            val bytes = ByteBuffer.allocateDirect(width * height * channels * Float.SIZE_BYTES)
-                .order(ByteOrder.nativeOrder())
-            GLES30.glReadPixels(0, 0, width, height, format, GLES30.GL_FLOAT, bytes)
-            assertEquals(GLES30.GL_NO_ERROR, GLES30.glGetError())
-            return FloatArray(width * height * channels).also { bytes.asFloatBuffer().get(it) }
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+    /** Vulkan device identity for reports (replaces the GL vendor/renderer strings). */
+    private fun vkDeviceFields(): Pair<String, String> = runCatching {
+        SrVulkan.open().use { vk ->
+            val info = vk.deviceInfo()
+            info.substringAfter("vendor=").substringBefore(";") to
+                info.substringAfter("device=").substringBefore(";type=")
         }
-    }
+    }.getOrDefault("unknown" to "unknown")
+
+    // The GLES format constants at call sites are pure channel selectors now
+    // (call sites unchanged); the Int names a live Vulkan image.
+    private fun readTexture(image: Int, width: Int, height: Int, format: Int): FloatArray =
+        if (format == GLES30.GL_RED) vkDownloadR32f(image) else vkDownloadRgba32f(image)
 
     private companion object {
         const val TAG = "RawLensRawSr4E"
