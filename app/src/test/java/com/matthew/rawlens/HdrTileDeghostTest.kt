@@ -9,6 +9,33 @@ import kotlin.math.abs
 class HdrTileDeghostTest {
     private val noise = CfaNoiseModel(FloatArray(4) { 2.5e-4f }, FloatArray(4) { 2.5e-6f })
 
+    @Test fun movingTextureWithGlintsKeepsUnclippedReferenceDetail() {
+        val size = 64
+        for (pattern in BayerPattern.entries) for (tile in listOf(8, 16))
+            for (ratio in listOf(0.25f, 1f, 2f)) {
+            val values = FloatArray(size * size) { i ->
+                val x = i % size / 2
+                val y = i / size / 2
+                if ((x * 13 + y * 7) % 11 < 5) 0.12f else 0.48f
+            }
+            // A single specular Bayer quad must not switch off deghosting
+            // for the surrounding moving water/foliage.
+            for (y in 30..31) for (x in 30..31) values[y * size + x] = 1f
+            val ref = UnpackedRawCfa(size, size, pattern, values, RawCrop(0, 0, size, size))
+            val mov = ref.copy(values = FloatArray(size * size) { 0.3f * ratio })
+            val out = HdrTileDeghost.deghost(
+                HdrMergeFrame(ref, 10_000_000L, 100, noiseModel = noise),
+                HdrMergeFrame(mov, (10_000_000L * ratio).toLong(), 100, noiseModel = noise), mov, 8f, tile)
+            var error = 0f
+            for (y in 18..43) for (x in 18..43) {
+                val i = y * size + x
+                if (values[i] < 0.9f) error = maxOf(error, abs(out.values[i] / ratio - values[i]))
+            }
+            assertTrue("motion/glint leaked: pattern=$pattern tile=$tile ratio=$ratio error=$error", error < 0.015f)
+            assertEquals("clipped glint must still be rescued", 0.3f * ratio, out.values[30 * size + 30], 1e-5f)
+        }
+    }
+
     @Test fun movingWaterDoesNotCreateNewBrightOrDarkNeedlePoints() {
         val size = 96
         // Repeating wavelets with equal tile means but different phases. Both
@@ -375,6 +402,10 @@ class HdrTileDeghostTest {
         assertEquals(3f, HdrTileDeghost.magnitudeNorm(4f, 0.1f, false), 1e-5f)
         assertEquals(0.5f, HdrTileDeghost.magnitudeNorm(0.25f, 0.1f, false), 1e-5f)
         assertEquals(1f, HdrTileDeghost.magnitudeNorm(1f, 0.1f, false), 1e-5f)
+        // The preference fades to neutral continuously, never to zero
+        // followed by a discontinuous jump at mismatch=0.3.
+        assertEquals(1f, HdrTileDeghost.magnitudeNorm(1f, 0.29f, false), 1e-5f)
+        assertEquals(1.2f, HdrTileDeghost.magnitudeNorm(4f, 0.29f, false), 1e-5f)
         // DC never boosted; high mismatch gated off.
         assertEquals(1f, HdrTileDeghost.magnitudeNorm(4f, 0.1f, true), 0f)
         assertEquals(1f, HdrTileDeghost.magnitudeNorm(4f, 0.35f, false), 0f)
