@@ -27,31 +27,6 @@ data class AmazeGpuOutput(
     val gainmapTextureId: Int = 0
 )
 
-/** RAW plane description retained only until GLES has copied its integer sensor codes. */
-data class GpuRawAmazeInput(
-    val buffer: ByteBuffer,
-    val layout: RawPlaneLayout,
-    val crop: RawCrop,
-    val normalization: RawNormalization,
-    val lensShading: LensShadingModel?
-) {
-    val width: Int get() = crop.width
-    val height: Int get() = crop.height
-    val sensorCropLeft: Int get() = layout.sensorOriginX + crop.left
-    val sensorCropTop: Int get() = layout.sensorOriginY + crop.top
-    val pattern: BayerPattern get() = normalization.sensorPattern.shifted(sensorCropLeft, sensorCropTop)
-
-    init {
-        require(layout.pixelStride == Short.SIZE_BYTES) {
-            "Direct GPU RAW upload requires a packed 16-bit pixel stride"
-        }
-        require(layout.rowStride % Short.SIZE_BYTES == 0) {
-            "Direct GPU RAW upload requires an even byte row stride"
-        }
-        require(crop.left + crop.width <= layout.width && crop.top + crop.height <= layout.height)
-    }
-}
-
 /**
  * Headless GLES 3.1 executor for PhotonCamera's AMaZE compute graph. The output callback runs
  * synchronously on the calling thread while the owning EGL context and RGBA16F texture are alive.
@@ -793,27 +768,6 @@ class Gles31AmazeProcessor(
             available.asReversed().forEach(GlTexture::close)
             available.clear()
             retainedBytes = 0L
-        }
-    }
-
-    /** One direct client-upload allocation, grown only when a CPU fallback requires more space. */
-    internal class UploadBuffers : Closeable {
-        private var storage: ByteBuffer? = null
-
-        fun floats(count: Int): FloatBuffer {
-            val required = count * Float.SIZE_BYTES
-            var bytes = storage
-            if (bytes == null || bytes.capacity() < required) {
-                bytes = ByteBuffer.allocateDirect(required).order(ByteOrder.nativeOrder())
-                storage = bytes
-            }
-            bytes.clear()
-            bytes.limit(required)
-            return bytes.asFloatBuffer().apply { limit(count) }
-        }
-
-        override fun close() {
-            storage = null
         }
     }
 
