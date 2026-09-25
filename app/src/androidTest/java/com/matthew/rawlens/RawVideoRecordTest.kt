@@ -16,6 +16,7 @@ import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -87,6 +88,7 @@ class RawVideoRecordTest {
             assertTrue("No frames encoded for $crop", stats.framesEncoded > 0)
             assertTrue("File missing for $crop", file.exists() && file.length() > 0)
 
+            validateMetadata(file)
             val footer = validateMcraw(file)
             assertEquals(
                 "Footer count != encoded - skipped for $crop",
@@ -123,6 +125,44 @@ class RawVideoRecordTest {
                 )
             }
             file.delete()
+        }
+    }
+
+    private fun validateMetadata(file: File) {
+        RandomAccessFile(file, "r").use { raf ->
+            fun readIntLe() = Integer.reverseBytes(raf.readInt())
+            fun readJson(size: Int): JSONObject {
+                val bytes = ByteArray(size)
+                raf.readFully(bytes)
+                return JSONObject(String(bytes, Charsets.UTF_8))
+            }
+            raf.seek(8)
+            assertEquals(3, readIntLe())
+            val container = readJson(readIntLe())
+            assertTrue(container.getString("sensorArrangment") in listOf("rggb", "grbg", "gbrg", "bggr"))
+            assertEquals(4, container.getJSONArray("blackLevel").length())
+            assertTrue(container.getDouble("whiteLevel") > container.getJSONArray("blackLevel").getDouble(0))
+            assertEquals(9, container.getJSONArray("colorMatrix1").length())
+            val audio = container.getJSONObject("extraData")
+            assertEquals(48000, audio.getInt("audioSampleRate"))
+            assertEquals(1, audio.getInt("audioChannels"))
+            while (raf.filePointer < raf.length()) {
+                val type = readIntLe()
+                val size = readIntLe()
+                if (type == 2) {
+                    raf.seek(raf.filePointer + size)
+                    assertEquals(3, readIntLe())
+                    val frame = readJson(readIntLe())
+                    assertEquals(3, frame.getJSONArray("asShotNeutral").length())
+                    assertTrue(frame.getBoolean("metadataMatched"))
+                    assertEquals(frame.getLong("timestamp"), frame.getLong("metadataTimestamp"))
+                    assertTrue(frame.getLong("exposureTime") > 0)
+                    assertTrue(frame.getInt("iso") > 0)
+                    return
+                }
+                raf.seek(raf.filePointer + size)
+            }
+            error("No frame metadata")
         }
     }
 

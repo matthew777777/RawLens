@@ -127,6 +127,7 @@ class MainActivity : Activity() {
     private var lastPhotoExposureMode = CaptureExposureMode.AUTO
     private var videoRecorder: RawVideoRecorder? = null
     private var videoRecording = false
+    private var videoOutputFile: File? = null
     private var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
@@ -1275,7 +1276,9 @@ class MainActivity : Activity() {
             return
         }
         controller.stop()
-        val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES), "RawLens")
+        // Internal app storage avoids the shared-storage layer during capture.
+        // Keep takes out of cache: a failed export must not be evicted.
+        val dir = File(filesDir, "raw-video")
         if (!dir.exists() && !dir.mkdirs()) {
             setStatus("VIDEO DIR FAILED")
             controller.start()
@@ -1298,6 +1301,7 @@ class MainActivity : Activity() {
             return
         }
         videoRecorder = recorder
+        videoOutputFile = file
         videoRecording = true
         Log.i(LOG_TAG, "video start ${file.name} ${size.width}x${size.height} audio=$withAudio")
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
@@ -1326,6 +1330,7 @@ class MainActivity : Activity() {
 
     private fun stopVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
         val recorder = videoRecorder ?: return
+        val source = videoOutputFile
         if (!videoRecording) return
         videoRecording = false
         Log.i(LOG_TAG, "video stop requested rearm=$rearmPreview")
@@ -1347,17 +1352,30 @@ class MainActivity : Activity() {
                 Log.w(LOG_TAG, "video stop failed: ${e.message}")
                 null
             }
-            runOnUiThread { finishVideoStop(stats, rollingVf, rearmPreview, afterStop) }
+            var export: RawVideoSaver.Saved? = null
+            if (stats != null && source != null && stats.containerFrames > 0) {
+                runOnUiThread { setStatus("SAVING TO DCIM/RAWLENS…") }
+                try {
+                    export = RawVideoSaver.save(applicationContext.contentResolver, source)
+                    Log.i(LOG_TAG, "video exported uri=${export.uri} sourceRemoved=${export.sourceRemoved}")
+                } catch (e: Exception) {
+                    Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath}", e)
+                }
+            }
+            val saved = export
+            runOnUiThread { finishVideoStop(stats, saved, rollingVf, rearmPreview, afterStop) }
         }, "VideoStop").start()
     }
 
     private fun finishVideoStop(
         stats: RawVideoRecorder.Stats?,
+        export: RawVideoSaver.Saved?,
         rollingVf: RawVfStats?,
         rearmPreview: Boolean,
         afterStop: (() -> Unit)?
     ) {
         videoRecorder = null
+        videoOutputFile = null
         val mb = (stats?.fileBytes ?: 0L) / 1e6
         // Viewfinder proof: fps + GPU (Vulkan zero-copy) vs CPU path while rolling.
         val vf = rollingVf
@@ -1370,8 +1388,10 @@ class MainActivity : Activity() {
             rawBadge.text = "MCRAW"
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
-                if (stats == null) "REC FAILED"
-                else "SAVED • ${stats.framesEncoded}F • ${"%.0f".format(mb)}MB" +
+                if (stats == null) "REC FAILED • LOCAL FILE KEPT"
+                else if (export == null) "EXPORT FAILED • LOCAL FILE KEPT"
+                else if (!export.sourceRemoved) "SAVED TO DCIM • LOCAL COPY KEPT"
+                else "SAVED TO DCIM • ${stats.containerFrames}F • ${"%.0f".format(mb)}MB" +
                     (if (stats.hasAudio) "" else " • SILENT") +
                     (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "")
             )

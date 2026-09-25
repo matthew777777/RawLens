@@ -7,6 +7,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
@@ -140,6 +142,8 @@ internal class RawVideoRecorder(
     private var reader: ImageReader? = null
     private var encodeThreads: Array<Thread?> = emptyArray()
     private var commitThread: Thread? = null
+    private val resultLock = java.lang.Object()
+    private val captureResults = java.util.TreeMap<Long, TotalCaptureResult>()
     private var audio: AudioPcmRecorder? = null
     private var motion: MotionRecorder? = null
     private var writerHandle: Long = 0L
@@ -227,6 +231,7 @@ internal class RawVideoRecorder(
         nextSeq = 0L
         nextCommitSeq = 0L
         synchronized(reorderLock) { reorder.clear() }
+        synchronized(resultLock) { captureResults.clear() }
         encodeQueue.clear()
         audioQueue.clear()
         workersAlive.set(workers)
@@ -261,11 +266,11 @@ internal class RawVideoRecorder(
                 audioRate = AudioPcmRecorder.SAMPLE_RATE
             }
         }
-        val meta = buildMetadata(
-            containerMetadataJson, realtime, audioRate,
-            hasMotionStream, orientation
-        )
         writerHandle = try {
+            val meta = CinemaRawMetadata.container(
+                containerMetadataJson, chars, realtime, audioRate,
+                hasMotionStream, orientation
+            )
             CinemaRawWriter.open(output.absolutePath, meta)
         } catch (e: Exception) {
             shutdownStreams()
@@ -396,7 +401,17 @@ internal class RawVideoRecorder(
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
             }.build()
-            session!!.setRepeatingRequest(req, null, handler)
+            session!!.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(session: CameraCaptureSession,
+                    request: CaptureRequest, result: TotalCaptureResult) {
+                    val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    synchronized(resultLock) {
+                        captureResults[ts] = result
+                        while (captureResults.size > 64) captureResults.pollFirstEntry()
+                        resultLock.notifyAll()
+                    }
+                }
+            }, handler)
         } catch (e: Exception) {
             teardown()
             throw e
@@ -454,14 +469,13 @@ internal class RawVideoRecorder(
         }
         val handle = writerHandle
         writerHandle = 0L
-        if (handle != 0L) {
-            try {
-                CinemaRawWriter.close(handle)
-            } catch (e: Exception) {
-                Log.w(TAG, "container close failed: ${e.message}")
-            }
+        try {
+            if (handle != 0L) CinemaRawWriter.close(handle)
+        } finally {
+            teardown()
         }
-        teardown()
+        // Propagate finalization failures so callers retain, rather than publish,
+        // a potentially incomplete local recording.
         return Stats(
             framesAcquired = acquired.get(),
             framesEncoded = encoded.get(),
@@ -572,10 +586,22 @@ internal class RawVideoRecorder(
                     if (encodeMsAvg == 0f) ms else encodeMsAvg * 0.95f + ms * 0.05f
                 encodeMsMax =
                     if (ms > encodeMsMax) ms else encodeMsMax * 0.999f + ms * 0.001f
+                // Image and result callbacks can arrive in either order. Only write
+                // calibration from this exact exposure, never a stale AWB result.
+                val result = synchronized(resultLock) {
+                    val deadline = SystemClock.elapsedRealtime() + 100
+                    while (!captureResults.containsKey(task.timestampNs)) {
+                        val remaining = deadline - SystemClock.elapsedRealtime()
+                        if (remaining <= 0) break
+                        resultLock.wait(remaining)
+                    }
+                    captureResults.remove(task.timestampNs)
+                } ?: error("Missing capture result for ${task.timestampNs}")
+                val frameJson = CinemaRawMetadata.frame(task.frameJson, result)
                 buf.flip()
                 synchronized(reorderLock) {
                     reorder[task.seq] =
-                        PendingFrame(task.seq, buf, bytes, task.timestampNs, task.frameJson)
+                        PendingFrame(task.seq, buf, bytes, task.timestampNs, frameJson)
                     buf = null // ownership transferred to the committer
                     reorderLock.notifyAll()
                 }
@@ -781,22 +807,6 @@ internal class RawVideoRecorder(
                 break
             }
             accel = rec.drainAccel()
-        }
-    }
-
-    private fun buildMetadata(
-        baseJson: String, realtime: Boolean, audioRate: Int,
-        hasMotion: Boolean, orientation: Int
-    ): String {
-        val extra = "\"realtimeTimestamps\":$realtime," +
-            "\"audioSampleRate\":$audioRate,\"hasMotion\":$hasMotion," +
-            "\"sensorOrientation\":$orientation," +
-            "\"gyroMapperVersion\":${GyroCameraFrameMapper.MAPPER_VERSION}"
-        val trimmed = baseJson.trim()
-        return if (trimmed.endsWith("}")) {
-            trimmed.dropLast(1) + "," + extra + "}"
-        } else {
-            "{$extra}"
         }
     }
 
