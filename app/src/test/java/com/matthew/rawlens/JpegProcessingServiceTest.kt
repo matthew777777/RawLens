@@ -21,4 +21,14 @@ class JpegProcessingServiceTest {
             verify(context, never()).stopService(any(Intent::class.java))
         }
     }
+
+    @Test fun `stop releases directly when background delivery is rejected`() {
+        val context = mock(Context::class.java)
+        mockConstruction(Intent::class.java).use { intents ->
+            `when`(context.startService(any(Intent::class.java)))
+                .thenThrow(IllegalStateException("background start not allowed"))
+            JpegProcessingService.stop(context)
+            verify(context).stopService(intents.constructed()[1])
+        }
+    }
 }
