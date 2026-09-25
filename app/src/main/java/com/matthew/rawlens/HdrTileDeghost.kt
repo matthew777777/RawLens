@@ -42,14 +42,10 @@ import kotlin.math.sqrt
  *   reference. Bins where the alternate is sharper get a Delbracio-style
  *   magnitude preference, and the blended spectrum gets a mild
  *   mismatch-gated deconvolution lift (both capped, DC excluded).
- * - Clipped highlights are handled with soft per-tile factors instead of a
- *   hard bypass: tiles where the reference clips hand weight to the
- *   (usually shorter) alternate so darktable's fallback rescue survives,
- *   while tiles where the gain-mapped alternate clips discount it to avoid
- *   color casts. The reference handoff keys off both clipped fraction and
- *   tile maximum, so single-pixel clips (hot pixels, specular dots) rescue
- *   exactly like fully clipped tiles. Fully clipped reference tiles still
- *   resolve to pure alternate, fully clean tiles are untouched.
+ * - Highlight rescue is localized to each Bayer quad during synthesis:
+ *   clipped reference quads hand off to the alternate without disabling
+ *   motion rejection in surrounding water or foliage. Strong spatial
+ *   mismatch rejects all frequency bands, including DC.
  *
  * Tiling is 16x16 Bayer (8x8 per channel, [TILE]) with a full half-tile
  * phase grid and Hann analysis plus triangular synthesis windows,
@@ -396,8 +392,6 @@ object HdrTileDeghost {
         val t = p.t
         // Channel quad offsets for this pattern: slot 0=R,1=G-top,2=G-bottom,3=B.
         var movClipped = 0
-        var refMax = 0f
-        var refHi = 0.0
         var movHi = 0.0
         for (c in 0..3) {
             val (dx, dy) = s.quadOff[c] ?: pattern.quadOffset(c).also { s.quadOff[c] = it }
@@ -411,9 +405,7 @@ object HdrTileDeghost {
                 val m = raw * gain
                 s.refRe[c][ly * t + lx] = r
                 s.movRe[c][ly * t + lx] = m
-                if (r > refMax) refMax = r
                 if (raw >= TILE_GAIN_CLIP) movClipped++
-                refHi += ((r - REF_HI_LO) / (REF_HI_HI - REF_HI_LO)).coerceIn(0f, 1f)
                 movHi += ((m - MOV_HI_LO) / MOV_HI_SPAN).coerceIn(0f, 1f)
                 refMean += r
                 movMean += m
@@ -423,18 +415,9 @@ object HdrTileDeghost {
             s.refMean[c] = refMean.toFloat()
             s.movMean[c] = movMean.toFloat()
         }
-        // Soft highlight factors with darktable-parity rescue: refTrust -> 0
-        // hands clipped reference tiles to the alternate (darktable's
-        // short-exposure rescue survives); altShrink < 1 discounts a clipped
-        // gain-mapped alternate to avoid color casts. Fully clean tiles
-        // leave both at exactly 1 (bit-identical path). The maximum term
-        // matters as much as the fraction: a single clipped pixel (hot
-        // pixel, specular dot) must rescue like a fully clipped tile —
-        // fraction-only logic would keep the clipped reference there.
+        // Highlight rescue is applied per Bayer quad during synthesis. A
+        // specular site must not disable rejection across an entire FFT tile.
         val tileSites = (t * t * 4).toDouble()
-        val refMaxRamp = ((refMax - REF_HI_LO) / (REF_HI_HI - REF_HI_LO)).coerceIn(0f, 1f)
-        val refTrust = ((1.0 - max(refHi / tileSites, refMaxRamp.toDouble())).let { it * it })
-            .toFloat().coerceIn(0f, 1f)
         // Per-tile gain refinement around the global gain: blur and local
         // exposure bias shift tile means by a few percent; correcting them
         // keeps the long exposure's clean low frequencies (shadows) instead
@@ -519,6 +502,10 @@ object HdrTileDeghost {
             sqrt(0.5 * (refVarAvg + movVarAvg) + 1e-12).toFloat()
         )
         val motion = motionNorm(mismatch)
+        // A broken correspondence must reject every band, including DC.
+        // Independent Wiener bins otherwise keep unrelated low frequencies
+        // from moving water or a blurred branch and form tile-shaped holes.
+        val motionReject = ((mismatch - 0.3f) / 0.3f).coerceIn(0f, 1f)
         for (c in 0..3) {
             // The scratch FFT planes are reused across tiles: reset the
             // imaginary inputs, otherwise the previous tile's spectrum feeds
@@ -542,8 +529,8 @@ object HdrTileDeghost {
         // pairwise blend. The noise term carries the full upstream stack:
         // caller strength x per-tile motion boost (static averages harder)
         // x per-bin magnitude preference (sharper alternate earns weight)
-        // x alternate highlight discount. refTrust then hands clipped
-        // reference tiles to the alternate (soft highlight rescue).
+        // x alternate highlight discount. Highlight rescue happens locally
+        // during synthesis, after motion rejection.
         // Per-bin scratch (squared difference energy per channel).
         val binD = s.binD
         val bins = t * t
@@ -569,7 +556,7 @@ object HdrTileDeghost {
                 if (wc < wMin) wMin = wc
                 if (wc > wMax) wMax = wc
             }
-            s.weight[b] = ((wSum - wMin - wMax) * 0.5f * refTrust).coerceIn(0f, 1f)
+            s.weight[b] = ((wSum - wMin - wMax) * 0.5f).coerceIn(0f, 1f)
         }
         // The DC bin carries N^4 leverage on tile-mean errors, so blur
         // leakage across tile borders (not a gain error — no gain can fix
@@ -594,7 +581,7 @@ object HdrTileDeghost {
         for (c in 0..3) {
             val (dx, dy) = s.quadOff[c]!!
             for (b in 0 until bins) {
-                val w = s.weight[b]
+                val w = max(s.weight[b], motionReject)
                 s.movRe[c][b] = w * s.refRe[c][b] * referenceScale + (1f - w) * s.movRe[c][b]
                 s.movIm[c][b] = w * s.refIm[c][b] * referenceScale + (1f - w) * s.movIm[c][b]
             }
@@ -650,8 +637,15 @@ object HdrTileDeghost {
                 val hw = p.hann[lx] * p.hann[ly]
                 val lo = min(r, m) * hw
                 val hi = max(r, m) * hw
-                val v = (s.movRe[c][ly * t + lx] * invGain)
-                    .coerceIn(lo, hi)
+                // All colours in a Bayer quad share highlight trust, but
+                // neighbouring unclipped detail retains motion protection.
+                val qx = x and -2
+                val qy = y and -2
+                val peak = max(max(ref[qy * width + qx], ref[qy * width + qx + 1]),
+                    max(ref[(qy + 1) * width + qx], ref[(qy + 1) * width + qx + 1]))
+                val trust = 1f - ((peak - REF_HI_LO) / (REF_HI_HI - REF_HI_LO)).coerceIn(0f, 1f)
+                val filtered = (s.movRe[c][ly * t + lx] * invGain).coerceIn(lo, hi)
+                val v = trust * trust * filtered + (1f - trust * trust) * m * hw
                 if (v.isFinite()) out[y * outStride + x] += v * wx * wy
             }
         }
@@ -818,7 +812,7 @@ object HdrTileDeghost {
     internal fun magnitudeNorm(sqRatio: Float, mismatch: Float, isDc: Boolean): Float {
         if (isDc || !sqRatio.isFinite() || mismatch >= 0.3f) return 1f
         val mw = (1f - 10f * (mismatch - 0.2f)).coerceIn(0f, 1f)
-        return mw * (sqRatio * sqRatio).coerceIn(0.5f, 3f)
+        return 1f + mw * ((sqRatio * sqRatio).coerceIn(0.5f, 3f) - 1f)
     }
 
     private fun pixelVariance(noise: CfaNoiseModel?, channel: Int, level: Float): Float {
