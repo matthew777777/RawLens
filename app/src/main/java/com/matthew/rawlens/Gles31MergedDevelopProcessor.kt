@@ -132,9 +132,10 @@ object MergedDevelopWeights {
  *
  * Threading mirrors [Gles31JpegOutputProcessor]: exactly one instance per EGL
  * context, used only on the thread that owns that context — in production the
- * merge thread, inside `Gles31RawSrProcessor.processPacked.consume` while the
- * input textures are live. Textures are context-local, so this processor must
- * never run on the AMaZE context (or vice versa).
+ * merge thread, inside `VkRawSrProcessor.processPacked.consume` (through the
+ * coordinator's image bridge) while the input textures are live. Textures are
+ * context-local, so this processor must never run on the AMaZE context (or
+ * vice versa).
  */
 class Gles31MergedDevelopProcessor(context: Context) {
     private val shaderSource = context.applicationContext.assets.open(SHADER).bufferedReader().use {

@@ -5,6 +5,8 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.opengl.GLES30
+import android.opengl.GLES31
 import android.os.SystemClock
 import android.util.Log
 import java.nio.ByteBuffer
@@ -56,11 +58,14 @@ class RawDevelopmentCoordinator(context: Context) {
     private val appContext = context.applicationContext
     private val amaze = Gles31AmazeProcessor(context)
     private val jpegOutput = Gles31JpegOutputProcessor(context)
-    // SR merge path: separate instances for the merge EGL context. GL program and
-    // texture names are context-local, so the AMaZE-context instances above
-    // must never touch merge-texture work even on the same thread.
+    // SR merge path: separate instances for the retained develop EGL context.
+    // GL program and texture names are context-local, so the AMaZE-context
+    // instances above must never touch merged-frame work even on the same
+    // thread. The merge itself runs on Vulkan (no EGL); the bridge below
+    // downloads its images and re-uploads them here for the GLES develop.
     private val mergedDevelop = Gles31MergedDevelopProcessor(context)
     private val mergedJpegOutput = Gles31JpegOutputProcessor(context)
+    private var mergedEgl: Gles31AmazeProcessor.EglComputeContext? = null
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
     private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
 
@@ -431,12 +436,13 @@ class RawDevelopmentCoordinator(context: Context) {
      * Develops the live merged camera-RGB texture straight to a
      * JPEG-ready Bitmap without a second demosaic or repeated RAW corrections.
      *
-     * Must run on the merge EGL context (inside
-     * `Gles31RawSrProcessor.processPacked.consume`) while [input] textures are
-     * live. Applies the reference camera-to-working-colour transform. The merged
-     * texture already carries reference fallback, and prime DNG pixels are
-     * never read here. Orientation is EXIF-carried via [input] reference
-     * metadata at save time; output pixels are never rotated.
+     * Must run with a current EGL context holding [input] textures (call
+     * [developMergedImagesJpeg] from inside
+     * `VkRawSrProcessor.processPacked.consume`; it owns the develop
+     * context). Applies the reference camera-to-working-colour transform.
+     * The merged texture already carries reference fallback, and prime DNG
+     * pixels are never read here. Orientation is EXIF-carried via [input]
+     * reference metadata at save time; output pixels are never rotated.
      */
     fun developMergedTextureJpeg(
         input: MergedTextureJpegInput,
@@ -449,14 +455,121 @@ class RawDevelopmentCoordinator(context: Context) {
         mergedJpegOutput.process(scene, outputSettings)
     }
 
+    /**
+     * Vulkan-merge variant of [developMergedTextureJpeg]: downloads the live
+     * merged images in bands, re-uploads them as GL textures on the retained
+     * develop EGL context, and delegates to the texture engine. Must run
+     * inside `VkRawSrProcessor.processPacked.consume` while the images are
+     * live. Peak transient is one upload band (~17MB), never the whole
+     * ~200MB frame; the bridge textures are deleted before returning.
+     */
+    fun developMergedImagesJpeg(
+        mergedImageId: Int,
+        rcImageId: Int,
+        width: Int,
+        height: Int,
+        acceptedFrames: Int,
+        referenceMetadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        outputSettings: JpegOutputSettings = JpegOutputSettings()
+    ): DevelopedJpeg {
+        val egl = mergedEgl ?: Gles31AmazeProcessor.EglComputeContext().also { mergedEgl = it }
+        egl.makeCurrent()
+        val mergedTex = uploadBridgeRgba(mergedImageId, width, height)
+        try {
+            val rcTex = uploadBridgeR32(rcImageId, width / 2, height / 2)
+            try {
+                return developMergedTextureJpeg(
+                    MergedTextureJpegInput(
+                        mergedTex, width, height, rcTex, acceptedFrames, referenceMetadata
+                    ),
+                    settings,
+                    outputSettings
+                )
+            } finally {
+                GLES31.glDeleteTextures(1, intArrayOf(rcTex), 0)
+                MemoryLeakDiagnostics.glTextureReleased((width / 2).toLong() * (height / 2) * 4L)
+            }
+        } finally {
+            GLES31.glDeleteTextures(1, intArrayOf(mergedTex), 0)
+            MemoryLeakDiagnostics.glTextureReleased(width.toLong() * height * 16L)
+        }
+    }
+
+    private fun uploadBridgeRgba(imageId: Int, width: Int, height: Int): Int {
+        val tex = IntArray(1)
+        GLES31.glGenTextures(1, tex, 0)
+        check(tex[0] != 0) { "Could not allocate merged bridge texture" }
+        MemoryLeakDiagnostics.glTextureAllocated(width.toLong() * height * 16L)
+        try {
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, tex[0])
+            GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D, 1, GLES30.GL_RGBA32F, width, height)
+            var y = 0
+            while (y < height) {
+                val rows = minOf(BRIDGE_BAND_ROWS, height - y)
+                val band = vkDownloadRgba32fRegion(imageId, 0, y, width, rows)
+                GLES31.glTexSubImage2D(
+                    GLES31.GL_TEXTURE_2D, 0, 0, y, width, rows,
+                    GLES31.GL_RGBA, GLES31.GL_FLOAT, java.nio.FloatBuffer.wrap(band)
+                )
+                y += rows
+            }
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            check(GLES31.glGetError() == GLES31.GL_NO_ERROR) {
+                "Merged bridge upload failed; no merged JPEG may be produced"
+            }
+            return tex[0]
+        } catch (t: Throwable) {
+            GLES31.glDeleteTextures(1, tex, 0)
+            MemoryLeakDiagnostics.glTextureReleased(width.toLong() * height * 16L)
+            throw t
+        }
+    }
+
+    private fun uploadBridgeR32(imageId: Int, width: Int, height: Int): Int {
+        val tex = IntArray(1)
+        GLES31.glGenTextures(1, tex, 0)
+        check(tex[0] != 0) { "Could not allocate robustness bridge texture" }
+        MemoryLeakDiagnostics.glTextureAllocated(width.toLong() * height * 4L)
+        try {
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, tex[0])
+            GLES31.glTexStorage2D(GLES31.GL_TEXTURE_2D, 1, GLES30.GL_R32F, width, height)
+            var y = 0
+            while (y < height) {
+                val rows = minOf(BRIDGE_BAND_ROWS, height - y)
+                val band = vkDownloadR32fRegion(imageId, 0, y, width, rows)
+                GLES31.glTexSubImage2D(
+                    GLES31.GL_TEXTURE_2D, 0, 0, y, width, rows,
+                    GLES31.GL_RED, GLES31.GL_FLOAT, java.nio.FloatBuffer.wrap(band)
+                )
+                y += rows
+            }
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
+            check(GLES31.glGetError() == GLES31.GL_NO_ERROR) {
+                "Robustness bridge upload failed; no merged JPEG may be produced"
+            }
+            return tex[0]
+        } catch (t: Throwable) {
+            GLES31.glDeleteTextures(1, tex, 0)
+            MemoryLeakDiagnostics.glTextureReleased(width.toLong() * height * 4L)
+            throw t
+        }
+    }
+
     @Deprecated("Use developJpeg so output color/gainmap metadata is retained")
     fun developJpegBitmap(rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings = RawDevelopmentSettings()): Bitmap =
         developJpeg(rawPlane, metadata, settings).bitmap
 
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {
+        // The merged pair runs on the retained develop context (created on
+        // the first merged save); make it current before deleting its
+        // programs. With no merged save the closes are safe no-ops.
+        mergedEgl?.makeCurrent()
         mergedJpegOutput.close()
         mergedDevelop.close()
+        mergedEgl?.close()
+        mergedEgl = null
         jpegOutput.close()
         amaze.close()
         MemoryLeakDiagnostics.sample("development-coordinator-closed", expectGlReleased = true)
@@ -464,6 +577,8 @@ class RawDevelopmentCoordinator(context: Context) {
 
     companion object {
         private const val LOG_TAG = "RawLensDevelop"
+        /** Band height for the bridge uploads: 256 rows peak at ~17MB transient. */
+        private const val BRIDGE_BAND_ROWS = 256
         fun estimateMemory(
             width: Int,
             height: Int,
