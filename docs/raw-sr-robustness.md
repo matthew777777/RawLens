@@ -129,7 +129,11 @@ Over 3×3 tiles (in-bounds tiles only, mirroring the reference):
 - `spread² = (max dx − min dx)² + (max dy − min dy)²`; `spread > Mth → s1 else s2`.
 - `Mth = 0.4` quad pixels: the published `Mt = 0.8` is in raw pixels (§“State
   and convert Mth spatial units explicitly”). Nonfinite flow in the window
-  forces `s1`.
+  forces `s1`. Unreliable tiles are EXCLUDED from the spread (their flow is
+  garbage, not motion): a reliable quad surrounded by unreliable neighbours
+  is judged on the reliable subset, and falls back to `s2` when that agrees.
+  Unreliable quads themselves still take `s1` via their own per-quad gate —
+  only the halo they cast on neighbours is removed.
 - `R(q) = clamp(S·exp(−d²/σ²) − t, 0, 1)` with centralized `t = 0.12`,
   `s1 = 2`, `s2 = 12` (Jamy-L `RobustnessConfig` values, unchanged).
 - Unreliable-flow tiles do **not** use their flow: the zero-shift hypothesis is

@@ -577,6 +577,32 @@ class RawSrBayerMergeTest {
         assertEquals(0, out.oobCount[p])
     }
 
+    @Test fun motionEdgeGateIgnoresUnreliableTiles() {
+        // A wild flow vector on an UNRELIABLE tile is garbage, not motion:
+        // reliable neighbours must still fuse, with the robustness gates as
+        // backstop. Reference is uniform 0.4, moving uniform 0.6: any moving
+        // contribution pulls the mean clearly above reference-only.
+        val w = 32
+        val h = 32
+        val ref = sceneFrame(w, h, scene = constScene(0.4f, 0.4f, 0.4f))
+        val columns = 2
+        val rows = 2
+        val tiles = List(columns * rows) { i ->
+            val tx = i % columns
+            val ty = i / columns
+            if (tx == 1 && ty == 1) RawSrTileFlow(0f, 0f, 9f, -7f, 0f, false)
+            else RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true)
+        }
+        val flow = RawSrAlignmentField(16, 16, 8, columns, rows, tiles)
+        val mov = sceneFrame(w, h, scene = constScene(0.6f, 0.6f, 0.6f), flow = flow)
+        val out = RawSrBayerMerge.merge(ref, listOf(mov))
+        // Quad (2,2) in tile (0,0): window sees the wild tile, excluded.
+        val p = 4 * w + 4
+        assertTrue(out.denominator[p * 3] > 1e-8f)
+        assertEquals(0, out.oobCount[p])
+        assertTrue("mean=${channelMean(out, 0)}", channelMean(out, 0) > 0.45)
+    }
+
     @Test fun nearestSkipsCensoredTaps() {        // 4x4 RGGB, every tap clipped except one clean green tap at (2,1):
         // sourcing the clipped blue tap (1,1) must resolve green through the
         // clean tap, with red/blue denominators at zero — a clipped white
@@ -715,8 +741,7 @@ class RawSrBayerMergeTest {
         assertTrue("full-support corner must not fall back", !out.fallback[0])
     }
 
-    @Test fun rcAccumulationIsExactAndSupportIsOnePlusRc() {
-        val qw = 4
+    @Test fun rcAccumulationIsExactAndSupportIsOnePlusRc() {        val qw = 4
         val qh = 3
         val r1 = FloatArray(qw * qh) { (it + 1) * 0.05f }
         val r2 = FloatArray(qw * qh) { if (it % 3 == 0) 0f else 0.5f }
@@ -741,6 +766,47 @@ class RawSrBayerMergeTest {
         assertTrue(only.support.all { it == 1f })
     }
 
+    @Test fun supportNeverExceedsBurstSize() {
+        // Sabre maximumSupport analogue: out-of-contract robustness above 1
+        // clamps at one frame-equivalent per moving frame, so support never
+        // exceeds 1 + N and the noise model cannot understate noise.
+        val qw = 4
+        val qh = 3
+        val w = qw * 2
+        val h = qh * 2
+        fun frame(r: Float): RawSrBayerMerge.MergeFrame =
+            RawSrBayerMerge.MergeFrame(w, h, FloatArray(w * h) { 0.4f }, BayerPattern.RGGB, 0, 0,
+                isoPrecision(qw, qh), field(qw, qh),
+                RawSrRobustness.FrameRobustness(qw, qh, FloatArray(qw * qh) { r }, IntArray(qw * qh)))
+        val ref = frame(1f)
+        val out = RawSrBayerMerge.merge(ref, listOf(frame(5f), frame(5f)))
+        assertTrue(out.rc.values.all { it == 2f })
+        assertTrue(out.support.all { it == 3f })
+        // In-contract weights pass through untouched.
+        val honest = RawSrBayerMerge.merge(ref, listOf(frame(0.5f), frame(0.5f)))
+        assertTrue(honest.rc.values.all { it == 1f })
+        assertTrue(honest.support.all { it == 2f })
+    }
+
+    @Test fun channelEvidenceTracksMovingSupport() {
+        // Per-channel moving-frame evidence bits (Sabre support.g/b
+        // analogue): full support sets all three bits; a fully rejected
+        // frame sets none; reference-only mode reads zero everywhere.
+        val ref = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
+        val moving = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
+        val out = RawSrBayerMerge.merge(ref, listOf(moving))
+        assertEquals(W * H, out.channelEvidence.size)
+        for (y in 2 until H - 2) for (x in 2 until W - 2) {
+            assertEquals("evidence ($x,$y)", 0b111.toByte(), out.channelEvidence[y * W + x])
+        }
+        val rejected = sceneFrame(
+            robustness = robust { _, _ -> 0f }, scene = constScene(0.3f, 0.5f, 0.4f))
+        val outRejected = RawSrBayerMerge.merge(ref, listOf(rejected))
+        assertTrue(outRejected.channelEvidence.all { it == 0.toByte() })
+        val only = refOnlyOf(ref)
+        assertTrue(only.channelEvidence.all { it == 0.toByte() })
+    }
+
     @Test fun mergeIsDeterministicRunToRun() {
         fun textured(sx: Int, sy: Int, color: CfaColor): Float =
             0.2f + ((sx * 57 + sy * 23 + color.ordinal * 11) % 41) / 41f * 0.6f
@@ -757,6 +823,7 @@ class RawSrBayerMergeTest {
         assertArrayEquals(first.support, second.support, 0f)
         assertArrayEquals(first.oobCount, second.oobCount)
         assertArrayEquals(first.fallback, second.fallback)
+        assertArrayEquals(first.channelEvidence, second.channelEvidence)
     }
 
     @Test fun poisonedInputsStayFinite() {

@@ -146,14 +146,15 @@ void main() {
             return;
         }
         // Motion-edge stop (mirrors the oracle's flowDisagrees gate at
-        // MOTION_EDGE_QUAD): 3x3 tile spread around the containing tile.
-        // Neighbouring tiles disagreeing by more than a quad pixel mean the
-        // bilinear flow blends two motions (water, occlusion boundaries) and
-        // every splat would misregister — skip like r == 0 (accumulators
-        // keep prior values → reference-only downstream), with no OOB bump.
-        // Only demonstrated disagreement vetoes: non-finite neighbours are
-        // missing data, not motion — those pixels merge, with the robustness
-        // gates (residual, photo term, s1 scaling) as backstop.
+        // MOTION_EDGE_QUAD): 3x3 tile spread around the containing tile, over
+        // in-bounds RELIABLE tiles only. Neighbouring tiles disagreeing by
+        // more than a quad pixel mean the bilinear flow blends two motions
+        // (water, occlusion boundaries) and every splat would misregister —
+        // skip like r == 0 (accumulators keep prior values → reference-only
+        // downstream), with no OOB bump. Only demonstrated disagreement
+        // vetoes: non-finite or unreliable neighbours are missing data, not
+        // motion — those pixels merge, with the robustness gates (residual,
+        // photo term, s1 scaling) as backstop.
         {
             ivec2 tile = clamp(quad / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
             float minX = 1e30;
@@ -166,6 +167,7 @@ void main() {
                 if (any(lessThan(t, ivec2(0))) || any(greaterThanEqual(t, u_tile_grid))) continue;
                 vec4 tg = texelFetch(u_flow, t, 0);
                 if (!finite(tg.x) || !finite(tg.y)) continue;
+                if (tg.w < 0.5) continue;
                 finiteCount++;
                 minX = min(minX, tg.x); minY = min(minY, tg.y);
                 maxX = max(maxX, tg.x); maxY = max(maxY, tg.y);

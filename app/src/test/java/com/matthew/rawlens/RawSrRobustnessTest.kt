@@ -160,6 +160,30 @@ class RawSrRobustnessTest {
         assertFalse(RawSrRobustness.flowIrregular(calm, 5, 5, 1f))
     }
 
+    @Test fun unreliableTilesDoNotPoisonSpread() {
+        // Wild flow on unreliable tiles is garbage, not motion: a reliable
+        // quad surrounded by it must still fuse under s2 when content
+        // agrees — otherwise every night scene paints s1 halos around each
+        // unreliable tile and static regions never average.
+        val ref = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1600 }))
+        val mov = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1600 }))
+        val tiles = List(4) { i ->
+            val tx = i % 2
+            val ty = i / 2
+            if (tx == 1 && ty == 1) RawSrTileFlow(0f, 0f, 9f, -7f, 0f, false)
+            else RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true)
+        }
+        val flow = RawSrAlignmentField(16, 12, 8, 2, 2, tiles)
+        assertFalse(RawSrRobustness.flowDisagrees(flow, 5, 5, 1f))
+        val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
+        // Quad (5,5) sits in tile (0,0), reliable, agreeing: full weight,
+        // no motion-irregular bit (its window's wild tile is excluded).
+        val o = 5 * 16 + 5
+        assertEquals(1f, result.r[o], 0f)
+        assertEquals(0, result.flags[o] and RawSrRobustness.FLAG_MOTION_IRREGULAR)
+        assertEquals(0, result.flags[o])
+    }
+
     @Test fun staticNoisyPairRetainedAcrossBrightnessLevels() {
         for (base in listOf(300, 1500, 3000)) {
             fun noisy(seed: Int): (Int, Int) -> Int {

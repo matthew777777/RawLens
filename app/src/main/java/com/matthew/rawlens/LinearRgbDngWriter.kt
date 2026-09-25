@@ -114,7 +114,7 @@ data class MergeProvenance(
  * effective frame count). Null keeps the reference profile exactly.
  */
 object LinearRgbDngWriter {
-    const val ALGORITHM_VERSION = "RawLens-RawSr/4L-scale1-neutral-highlights"
+    const val ALGORITHM_VERSION = "RawLens-RawSr/4M-scale1-neutral-highlights"
     const val QUANTIZATION_SCALE = 65535.0
     const val DERIVATION = "DerivedFromRawBurst"
     /**

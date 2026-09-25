@@ -479,16 +479,24 @@ object RawSrRobustness {
             if (tx < 0 || ty < 0 || tx >= flow.columns || ty >= flow.rows) continue
             val dx: Float
             val dy: Float
+            val reliable: Boolean
             if (direct != null) {
                 val index = ty * flow.columns + tx
                 dx = direct.directDx(index)
                 dy = direct.directDy(index)
+                reliable = direct.directReliable(index)
             } else {
                 val tile = flow.tiles[ty * flow.columns + tx]
                 dx = tile.dx
                 dy = tile.dy
+                reliable = tile.reliable
             }
             if (!dx.isFinite() || !dy.isFinite()) return true
+            // Unreliable tiles carry garbage flow (night/low-texture
+            // estimates); counting them poisons the spread and paints s1
+            // halos around every unreliable tile. They are judged by their
+            // own per-quad reliability gate instead.
+            if (!reliable) continue
             finite = true
             minX = minOf(minX, dx)
             minY = minOf(minY, dy)
@@ -525,16 +533,20 @@ object RawSrRobustness {
             if (tx < 0 || ty < 0 || tx >= flow.columns || ty >= flow.rows) continue
             val dx: Float
             val dy: Float
+            val reliable: Boolean
             if (direct != null) {
                 val index = ty * flow.columns + tx
                 dx = direct.directDx(index)
                 dy = direct.directDy(index)
+                reliable = direct.directReliable(index)
             } else {
                 val tile = flow.tiles[ty * flow.columns + tx]
                 dx = tile.dx
                 dy = tile.dy
+                reliable = tile.reliable
             }
             if (!dx.isFinite() || !dy.isFinite()) continue
+            if (!reliable) continue
             finiteCount++
             minX = minOf(minX, dx)
             minY = minOf(minY, dy)
