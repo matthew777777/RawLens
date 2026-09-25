@@ -31,9 +31,15 @@
 //
 
 #include <jni.h>
+#ifdef __ANDROID__
 #include <android/log.h>
 #include <android/asset_manager_jni.h>
 #include <android/asset_manager.h>
+#else
+// Desktop host build (tools/sr-vulkan native ncnnMl): file-backed models,
+// stderr logging. Every inference line below is shared verbatim.
+#include <cstdio>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -57,8 +63,15 @@
 #endif
 
 #define LOG_TAG "NcnnML"
+#ifdef __ANDROID__
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+// Same messages, stderr instead of logcat (identical format/args at every
+// call site; only the sink differs).
+#define LOGI(...) do { fprintf(stderr, "[NcnnML] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+#define LOGE(...) do { fprintf(stderr, "[NcnnML][E] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+#endif
 
 // Pin the OpenMP runtime to a fixed number of threads. No CPU-count / core
 // topology probing here — the caller decides the thread count.
@@ -93,6 +106,60 @@ static std::string paramToBinPath(const std::string& paramPath) {
     return binPath;
 }
 
+#ifndef __ANDROID__
+// Desktop host: the shim android.content.res.AssetManager carries its APK-
+// asset root as a java.io.File (getRootDir). Model files resolve under it as
+// "<root>/<paramPath>" with the .bin derived by paramToBinPath, exactly the
+// layout the Android branch reads from the APK.
+static std::string desktopAssetRoot(JNIEnv* env, jobject assetManager) {
+    if (assetManager == nullptr) return std::string();
+    jclass amClass = env->GetObjectClass(assetManager);
+    if (amClass == nullptr) return std::string();
+    jmethodID getRoot = env->GetMethodID(amClass, "getRootDir", "()Ljava/io/File;");
+    if (getRoot == nullptr) return std::string();
+    jobject rootFile = env->CallObjectMethod(assetManager, getRoot);
+    if (rootFile == nullptr || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return std::string();
+    }
+    jclass fileClass = env->GetObjectClass(rootFile);
+    if (fileClass == nullptr) return std::string();
+    jmethodID getAbs = env->GetMethodID(fileClass, "getAbsolutePath", "()Ljava/lang/String;");
+    if (getAbs == nullptr) return std::string();
+    jstring absStr = (jstring)env->CallObjectMethod(rootFile, getAbs);
+    if (absStr == nullptr || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return std::string();
+    }
+    const char* utf = env->GetStringUTFChars(absStr, nullptr);
+    std::string root = (utf != nullptr) ? utf : "";
+    if (utf != nullptr) env->ReleaseStringUTFChars(absStr, utf);
+    return root;
+}
+
+// Desktop host: slurp a whole file (used to sniff the .param for the
+// RawNIND variant, mirroring the AAsset branch below).
+static bool desktopReadFile(const std::string& path, std::string* text) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) return false;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (len < 0) {
+        fclose(f);
+        return false;
+    }
+    text->resize((size_t)len);
+    if (len > 0 && fread(&(*text)[0], 1, (size_t)len, f) != (size_t)len) {
+        fclose(f);
+        text->clear();
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+#endif // __ANDROID__
+
 // ---------------------------------------------------------------------------
 // Shared init (no-op for ncnn; kept for Java compatibility).
 // ---------------------------------------------------------------------------
@@ -115,11 +182,19 @@ Java_com_particlesdevs_photoncamera_processing_ml_FlowNetNcnnProcessor_nativeCre
     JNIEnv* env, jclass, jobject assetManager, jstring paramPath) {
     int64_t t0 = nowMs();
 
+#ifdef __ANDROID__
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     if (mgr == nullptr) {
         LOGE("AAssetManager_fromJava failed");
         return 0;
     }
+#else
+    const std::string assetRoot = desktopAssetRoot(env, assetManager);
+    if (assetRoot.empty()) {
+        LOGE("flownet: cannot resolve shim AssetManager rootDir");
+        return 0;
+    }
+#endif
     const char* path = env->GetStringUTFChars(paramPath, nullptr);
     if (path == nullptr) {
         LOGE("paramPath null");
@@ -158,6 +233,7 @@ Java_com_particlesdevs_photoncamera_processing_ml_FlowNetNcnnProcessor_nativeCre
 
     std::string binPath = paramToBinPath(paramStr);
 
+#ifdef __ANDROID__
     if (ctx->net.load_param(mgr, paramStr.c_str()) != 0) {
         LOGE("flownet load_param(%s) failed", paramStr.c_str());
         delete ctx;
@@ -168,6 +244,21 @@ Java_com_particlesdevs_photoncamera_processing_ml_FlowNetNcnnProcessor_nativeCre
         delete ctx;
         return 0;
     }
+#else
+    // Desktop host: same files, resolved under the shim AssetManager root.
+    const std::string paramFull = assetRoot + "/" + paramStr;
+    const std::string binFull = assetRoot + "/" + binPath;
+    if (ctx->net.load_param(paramFull.c_str()) != 0) {
+        LOGE("flownet load_param(%s) failed", paramFull.c_str());
+        delete ctx;
+        return 0;
+    }
+    if (ctx->net.load_model(binFull.c_str()) != 0) {
+        LOGE("flownet load_model(%s) failed", binFull.c_str());
+        delete ctx;
+        return 0;
+    }
+#endif
 
     LOGI("flownet init took %lldms (vulkan=%d)", (long long)(nowMs() - t0),
          ctx->net.opt.use_vulkan_compute);
@@ -304,11 +395,19 @@ static jboolean kernelnetRunTiled(KernelNetCtx* ctx, const float* grayPtr,
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeCreate(
     JNIEnv* env, jclass, jobject assetManager, jstring paramPath) {
+#ifdef __ANDROID__
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     if (mgr == nullptr) {
         LOGE("AAssetManager_fromJava failed");
         return 0;
     }
+#else
+    const std::string assetRoot = desktopAssetRoot(env, assetManager);
+    if (assetRoot.empty()) {
+        LOGE("kernelnet: cannot resolve shim AssetManager rootDir");
+        return 0;
+    }
+#endif
     const char* path = env->GetStringUTFChars(paramPath, nullptr);
     if (path == nullptr) return 0;
     std::string paramStr = path;
@@ -321,7 +420,14 @@ Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeC
     // bandwidth-bound) and 4 CPU threads beat the Adreno Vulkan path at small
     // tile counts. Vulkan also shows a per-extraction stall under investigation
     // (suspected shader hang); KN_GPU=1 re-enables it for testing.
+#ifdef __ANDROID__
     ctx->net.opt.use_vulkan_compute = getenv("KN_GPU") && getenv("KN_GPU")[0] == '1';
+#else
+    // Desktop host: Vulkan is the default backend (unified "Vulkan to all";
+    // the Adreno-specific CPU rationale in the comment above does not
+    // transfer to MoltenVK/desktop drivers). KN_CPU=1 still forces CPU.
+    ctx->net.opt.use_vulkan_compute = true;
+#endif
     ctx->net.opt.use_fp16_packed = true;
     ctx->net.opt.use_fp16_storage = true;
     ctx->net.opt.use_fp16_arithmetic = true;
@@ -345,6 +451,7 @@ Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeC
 
     std::string binPath = paramToBinPath(paramStr);
 
+#ifdef __ANDROID__
     if (ctx->net.load_param(mgr, paramStr.c_str()) != 0) {
         LOGE("kernelnet load_param(%s) failed", paramStr.c_str());
         delete ctx;
@@ -355,6 +462,21 @@ Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeC
         delete ctx;
         return 0;
     }
+#else
+    // Desktop host: same files, resolved under the shim AssetManager root.
+    const std::string paramFull = assetRoot + "/" + paramStr;
+    const std::string binFull = assetRoot + "/" + binPath;
+    if (ctx->net.load_param(paramFull.c_str()) != 0) {
+        LOGE("kernelnet load_param(%s) failed", paramFull.c_str());
+        delete ctx;
+        return 0;
+    }
+    if (ctx->net.load_model(binFull.c_str()) != 0) {
+        LOGE("kernelnet load_model(%s) failed", binFull.c_str());
+        delete ctx;
+        return 0;
+    }
+#endif
 
     if (const char* t = getenv("KN_TILE")) {
         int v = atoi(t);
@@ -673,6 +795,7 @@ struct RawNindVariant {
     int outScale;
 };
 
+#ifdef __ANDROID__
 static RawNindVariant detectRawNindVariant(AAssetManager* mgr,
                                            const std::string& paramPath) {
     RawNindVariant v{5, 4, 1};
@@ -687,6 +810,19 @@ static RawNindVariant detectRawNindVariant(AAssetManager* mgr,
     }
     return v;
 }
+#endif
+
+#ifndef __ANDROID__
+static RawNindVariant detectRawNindVariantFromFile(const std::string& paramFullPath) {
+    RawNindVariant v{5, 4, 1};
+    std::string text;
+    if (!desktopReadFile(paramFullPath, &text)) return v;
+    if (text.find("PixelShuffle") != std::string::npos) {
+        v = {4, 3, 2};
+    }
+    return v;
+}
+#endif
 
 static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
                                int w2, int h2, float* outPtr);
@@ -696,11 +832,19 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCreate(
     JNIEnv* env, jclass, jobject assetManager, jstring paramPath) {
+#ifdef __ANDROID__
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     if (mgr == nullptr) {
         LOGE("AAssetManager_fromJava failed");
         return 0;
     }
+#else
+    const std::string assetRoot = desktopAssetRoot(env, assetManager);
+    if (assetRoot.empty()) {
+        LOGE("rawnind: cannot resolve shim AssetManager rootDir");
+        return 0;
+    }
+#endif
     const char* path = env->GetStringUTFChars(paramPath, nullptr);
     if (path == nullptr) return 0;
     std::string paramStr = path;
@@ -734,7 +878,11 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
 
     std::string binPath = paramToBinPath(paramStr);
 
+#ifdef __ANDROID__
     RawNindVariant variant = detectRawNindVariant(mgr, paramStr);
+#else
+    RawNindVariant variant = detectRawNindVariantFromFile(assetRoot + "/" + paramStr);
+#endif
     ctx->inChannels = variant.inChannels;
     ctx->outChannels = variant.outChannels;
     ctx->outScale = variant.outScale;
@@ -749,6 +897,7 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
         ctx->tileBorder = 64; // 512 packed-pixel input, as in the upstream export
     }
 
+#ifdef __ANDROID__
     if (ctx->net.load_param(mgr, paramStr.c_str()) != 0) {
         LOGE("rawnind load_param(%s) failed", paramStr.c_str());
         delete ctx;
@@ -759,6 +908,21 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
         delete ctx;
         return 0;
     }
+#else
+    // Desktop host: same files, resolved under the shim AssetManager root.
+    const std::string paramFull = assetRoot + "/" + paramStr;
+    const std::string binFull = assetRoot + "/" + binPath;
+    if (ctx->net.load_param(paramFull.c_str()) != 0) {
+        LOGE("rawnind load_param(%s) failed", paramFull.c_str());
+        delete ctx;
+        return 0;
+    }
+    if (ctx->net.load_model(binFull.c_str()) != 0) {
+        LOGE("rawnind load_model(%s) failed", binFull.c_str());
+        delete ctx;
+        return 0;
+    }
+#endif
 
     if (const char* t = getenv("RN_TILE")) {
         int v = atoi(t);
