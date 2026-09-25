@@ -32,6 +32,8 @@ import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.ScrollView
 import android.graphics.Typeface
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
@@ -4347,16 +4349,26 @@ class MainActivity : Activity() {
             .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
             .setCancelable(!firstRun)
             .show()
+        // First launch is a continuation of the black welcome screen and
+        // covers the camera app full-screen; later invocations keep the
+        // standard floating quick-panel dialog.
+        if (firstRun) {
+            makeFirstRunFullScreen(progress)
+        }
         lensDiscovery.discover { lenses ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
                 progress.dismiss()
                 if (lenses.isEmpty()) {
-                    AlertDialog.Builder(this)
+                    val emptyDialog = AlertDialog.Builder(this)
                         .setTitle("No RAW lenses found")
                         .setMessage("The camera service did not expose a RAW-capable camera ID.")
                         .setPositiveButton("OK", null)
+                        .setCancelable(!firstRun)
                         .show()
+                    if (firstRun) {
+                        makeFirstRunFullScreen(emptyDialog)
+                    }
                     return@runOnUiThread
                 }
                 val missingSaved = selectedLensIds()
@@ -4367,18 +4379,29 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * First-run onboarding covers the camera app full-screen with opaque
+     * black (welcome-screen continuity). Dismissed only by tapping Save /
+     * Use default; later opens stay floating and cancelable.
+     */
+    private fun makeFirstRunFullScreen(dialog: AlertDialog) {
+        dialog.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+            w.setLayout(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+    }
+
     private fun showLensSelection(lenses: List<DiscoveredLens>, firstRun: Boolean) {
         val selected = selectedLensIds()
         val groups = groupLenses(lenses)
         val availableCount = lenses.count { it.kind != LensRouteKind.UNAVAILABLE }
-        // First run with nothing saved yet: pre-check everything currently available.
+        // Nothing is pre-checked: the user explicitly picks what they want.
+        // On a fresh install the saved set is empty so all boxes start off.
         val checked = lenses.associate { lens ->
-            val initial = if (firstRun && selected.isEmpty()) {
-                lens.kind != LensRouteKind.UNAVAILABLE
-            } else {
-                lens.id in selected
-            }
-            lens.id to initial
+            lens.id to (lens.id in selected)
         }.toMutableMap()
         val checkBoxes = mutableListOf<CheckBox>()
 
@@ -4403,15 +4426,23 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, dp(8))
         }
+        fun styleQuickButton(button: Button) {
+            button.background = getDrawable(R.drawable.control_chip)
+            button.setTextColor(getColor(R.color.text_primary))
+            button.textSize = 12f
+            button.isAllCaps = false
+            button.setTypeface(button.typeface, Typeface.BOLD)
+            button.letterSpacing = 0.04f
+            button.setPadding(dp(14), dp(10), dp(14), dp(10))
+            button.minHeight = dp(40)
+        }
         val selectAll = Button(this).apply {
             text = "Select all"
-            isAllCaps = false
-            textSize = 12f
+            styleQuickButton(this)
         }
         val clear = Button(this).apply {
             text = "Clear"
-            isAllCaps = false
-            textSize = 12f
+            styleQuickButton(this)
         }
         val selectParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
         val clearParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
@@ -4436,6 +4467,8 @@ class MainActivity : Activity() {
             val values = checked.values
             selectAll.isEnabled = values.any { !it }
             clear.isEnabled = values.any { it }
+            selectAll.alpha = if (selectAll.isEnabled) 1f else 0.5f
+            clear.alpha = if (clear.isEnabled) 1f else 0.5f
         }
 
         groups.forEach { group ->
@@ -4561,8 +4594,16 @@ class MainActivity : Activity() {
             .setView(container)
             .setPositiveButton("Save", null)
             .setNegativeButton(if (firstRun) "Use default" else "Cancel", null)
+            .setCancelable(!firstRun)
             .create()
+        dialog.setCanceledOnTouchOutside(!firstRun)
         dialog.show()
+        // First launch continues the opaque black welcome screen full-screen
+        // so the onboarding feels like one flow and covers the camera app;
+        // later opens keep the floating panel. Gone on Save / Use default.
+        if (firstRun) {
+            makeFirstRunFullScreen(dialog)
+        }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val ids = checked.filterValues { it }.keys.toMutableSet()
             if (ids.isEmpty()) {
