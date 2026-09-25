@@ -302,6 +302,10 @@ class RawCameraController(
     private val pendingFrameSaveCount = AtomicInteger(0)
     private val pendingJpegCount = AtomicInteger(0)
     private val jpegServiceLock = Any()
+    // Route resolution hits CameraManager (binder + OEM overhead) per call while open(),
+    // the lens switcher, and zoom labels re-resolve the same IDs on the main thread.
+    // Characteristics are immutable per boot, so memoize per controller lifetime.
+    private val cameraRouteCache = CameraIdCache { id: String -> resolveCameraRoute(id) }
     @Volatile private var captureTimeout: Runnable? = null
     private var characteristics: CameraCharacteristics? = null
     private var camera: CameraDevice? = null
@@ -525,7 +529,7 @@ class RawCameraController(
             return
         }
         selectedCameraId = id
-        val route = resolveCameraRoute(id)
+        val route = cachedCameraRoute(id)
         if (route == null) {
             opening = false
             onState("RAW CAMERA $id UNAVAILABLE")
@@ -5927,6 +5931,7 @@ class RawCameraController(
         if (destroyed) return
         stop()
         destroyed = true
+        cameraRouteCache.clear()
         rawViewfinder?.onStarvation = null
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.surfaceTextureListener = null
@@ -6120,11 +6125,14 @@ class RawCameraController(
         }
     }
 
+    private fun cachedCameraRoute(cameraId: String): CameraRoute? =
+        cameraRouteCache.get(cameraId)
+
     private fun resolveOpenCameraId(cameraId: String): String? =
-        resolveCameraRoute(cameraId)?.openCameraId
+        cachedCameraRoute(cameraId)?.openCameraId
 
     private fun opticalMetric(cameraId: String): Float = try {
-        val c = resolveCameraRoute(cameraId)?.characteristics ?: return Float.MAX_VALUE
+        val c = cachedCameraRoute(cameraId)?.characteristics ?: return Float.MAX_VALUE
         val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
         val sensorWidth = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.width
         if (focal == null || sensorWidth == null || sensorWidth <= 0f) Float.MAX_VALUE else focal / sensorWidth
