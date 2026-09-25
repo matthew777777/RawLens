@@ -19,7 +19,9 @@ import kotlin.math.hypot
 /**
  * Reference-style tap-to-focus: thin white rounded squares, separate for AF and AE.
  * AF is the larger square, AE the smaller one with a center dot.
- * The RawLens touch is the small lime lock dot shown while focus is locked.
+ * A tap focuses with a timed lock (dot + countdown); press-and-hold freezes
+ * AE + AF indefinitely (padlock + ∞ badge) until a same-spot double-tap or the
+ * AE/AF reset button releases it. A single tap elsewhere always refocuses.
  *
  * Default together, draggable apart: a tap on empty area joins AF + AE at
  * that point; dragging (or tapping) a visible square moves only that
@@ -47,7 +49,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     var onAePointChanged: ((Float, Float) -> Unit)? = null
     var onTargetsCleared: (() -> Unit)? = null
     var onOverlayTouched: (() -> Unit)? = null
-    /** Press-and-hold: focus at the point and lock indefinitely (until double-tap). */
+    /** Press-and-hold: freeze AE + AF at the point indefinitely (until double-tap/reset). */
     var onAfLockHold: ((Float, Float) -> Unit)? = null
 
     private val afPoint = PointF()
@@ -56,6 +58,10 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private var touchDownX = 0f
     private var touchDownY = 0f
     private var focusAreaTime = -1L
+    /** Last tap lift, so a double-tap clears an indefinite lock of any age. */
+    private var lastTapUpMs = 0L
+    private var lastTapUpX = 0f
+    private var lastTapUpY = 0f
     private val density = resources.displayMetrics.density
     private val afHalfSide = 32f * density
     private val aeHalfSide = 24f * density
@@ -78,6 +84,16 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     }
     private val lockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(214, 255, 51)
+        style = Paint.Style.FILL
+    }
+    private val lockShacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(214, 255, 51)
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val lockKeyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(24, 28, 16)
         style = Paint.Style.FILL
     }
     private val lockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -108,6 +124,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     fun clearTargets() {
         targetsVisible = false
         focusAreaTime = -1L
+        lastTapUpMs = 0L
         fadePending?.let(::removeCallbacks)
         fadePending = null
         setFocusLock(locked = false, indefinite = false, deadlineMs = 0L)
@@ -193,12 +210,42 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private fun drawLockBadge(canvas: Canvas) {
         val cx = afPoint.x
         val cy = afPoint.y + afHalfSide + 10f * density
+        if (lockIndefinite) {
+            drawPadlock(canvas, cx, cy)
+            return
+        }
         canvas.drawCircle(cx, cy, 4f * density, lockDotPaint)
-        if (!lockIndefinite && lockDeadlineMs > 0L) {
+        if (lockDeadlineMs > 0L) {
             val remaining = ((lockDeadlineMs - SystemClock.elapsedRealtime()) / 1000L)
                 .coerceIn(0L, 99L)
             canvas.drawText("${remaining}s", cx, cy + 14f * density, lockTextPaint)
         }
+    }
+
+    /**
+     * Padlock badge for the indefinite AE/AF hold: shackle arc plus a filled
+     * body with a keyhole dot, all in the RawLens lime. Drawn with canvas
+     * primitives so no drawable asset is needed.
+     */
+    private fun drawPadlock(canvas: Canvas, cx: Float, cy: Float) {
+        val s = density
+        val bodyHalfW = 6f * s
+        val bodyHalfH = 5f * s
+        val shackleRadius = 4.5f * s
+        // Shackle: U-shape above the body.
+        canvas.drawArc(
+            cx - shackleRadius, cy - bodyHalfH - shackleRadius * 1.6f,
+            cx + shackleRadius, cy - bodyHalfH + shackleRadius * 0.4f,
+            180f, 180f, false, lockShacklePaint
+        )
+        // Body.
+        focusRect.set(cx - bodyHalfW, cy - bodyHalfH, cx + bodyHalfW, cy + bodyHalfH)
+        canvas.drawRoundRect(focusRect, 1.5f * s, 1.5f * s, lockDotPaint)
+        // Keyhole.
+        canvas.drawCircle(cx, cy - 1f * s, 1.4f * s, lockKeyholePaint)
+        canvas.drawRect(cx - 0.8f * s, cy - 1f * s, cx + 0.8f * s, cy + 3f * s, lockKeyholePaint)
+        // Infinity marker so a held lock reads differently from a timed dot.
+        canvas.drawText("∞", cx, cy + bodyHalfH + 11f * s, lockTextPaint)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -252,13 +299,13 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 longPressPending?.let(::removeCallbacks)
                 longPressPending = null
                 // A fired long-press already locked; the lift is not a tap.
-                // Restart the double-tap clock so a fast double-tap after the
-                // hold is read as a fresh pair, not as a continuation.
+                // Reset the tap-pair clock so the next two quick taps form the
+                // double-tap that releases the indefinite lock.
                 if (longPressFired) {
                     longPressFired = false
                     dragMode = DragNone
                     dragging = false
-                    focusAreaTime = -1L
+                    lastTapUpMs = 0L
                     return true
                 }
                 // A drag commits the moved square(s) on lift. This is the only
@@ -289,14 +336,22 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 // Same-spot double-tap releases the lock. A single tap anywhere
                 // else always refocuses — even while locked, even inside the
                 // double-tap window — so one tap switches place, never clears.
+                // Indefinite holds outlive focusAreaTime by design, so the pair
+                // clock (lastTapUpMs) — not the reticle age — decides the double.
                 val nearAf =
                     hypot(event.x - afPoint.x, event.y - afPoint.y) < afHalfSide + touchSlop
                 val nearAe =
                     hypot(event.x - aePoint.x, event.y - aePoint.y) < aeHalfSide + touchSlop
-                val clearFocusAreas = targetsVisible && focusAreaTime != -1L &&
-                    now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout() &&
-                    (nearAf || nearAe)
+                val nearLastTap =
+                    hypot(event.x - lastTapUpX, event.y - lastTapUpY) < touchSlop * 2f
+                val isDoubleTap = lastTapUpMs != 0L &&
+                    now - lastTapUpMs < ViewConfiguration.getDoubleTapTimeout() && nearLastTap
+                val clearFocusAreas = targetsVisible && (nearAf || nearAe) &&
+                    ((focusAreaTime != -1L &&
+                        now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout()) ||
+                        isDoubleTap)
                 if (clearFocusAreas) {
+                    lastTapUpMs = 0L
                     clearTargets()
                     onTargetsCleared?.invoke()
                 } else if (downMode == DragAf && nearAf) {
@@ -325,6 +380,9 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                         onAfPointChanged?.invoke(afPoint.x, afPoint.y)
                     }
                 }
+                lastTapUpMs = now
+                lastTapUpX = event.x
+                lastTapUpY = event.y
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
