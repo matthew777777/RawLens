@@ -41,7 +41,8 @@ head `068bfad8809d11f99db24f105dd1f8b636212c01`, open at review time,
 42 commits over this checkout) was studied for memory/speed techniques;
 its fetched head is available locally as `references/PhotonCamera`
 branch `pr-193`. Portable takeaway applied: drop the terminal queue
-drain on teardown (PR 193 `efa6e08a`), see `Gles31RawSrProcessor`.
+drain on teardown (PR 193 `efa6e08a`), see `VkRawSrProcessor` (the former
+`Gles31RawSrProcessor`, retired by the Vulkan cutover).
 Deliberately not taken: mirrored-tap folding (requires a symmetric tap
 lattice; our kernel offsets are fractional and asymmetric), RG16F
 gradient narrowing (our float32 precision is contract-pinned by the 4E
@@ -87,7 +88,7 @@ Never add the PhotonCamera checkout to RawLens's Gradle settings or copy upstrea
 
 ## Burst-reconstruction rewrite references (`upstream/`, research-only)
 
-Local-only checkouts for the `tools/burst-reconstruction-desktop` full rewrite.
+Local-only checkouts once used for the retired desktop rewrite.
 They are git-ignored (`/references/upstream/`), never build dependencies, never
 packaged. Study ideas, reimplement clean-room in stdlib-only Kotlin; do not
 copy code verbatim (license notes below). Cite commit hash, not branch.

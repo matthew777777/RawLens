@@ -4,9 +4,8 @@
 package com.matthew.rawlens
 
 /**
- * Serializes per-frame gyro windows to the exact sidecar format consumed by
- * `tools/burst-reconstruction-desktop` (`GyroCsv.HEADER`, parsed tolerantly
- * but written canonically here):
+ * Serializes per-frame gyro windows to the exact canonical sidecar format
+ * (`GyroCsv.HEADER`, parsed tolerantly but written canonically here):
  *
  * ```text
  * timestamp_ns,x_rad_s,y_rad_s,z_rad_s
