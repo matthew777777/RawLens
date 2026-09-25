@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
-import android.opengl.GLES20
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
@@ -61,12 +59,8 @@ class RawSrMergeJobInstrumentedTest {
         val ref = packed(w, h, seed = 7)
         val mov = packed(w, h, seed = 7)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.processPacked(listOf(ref.first, mov.first)) { output ->
-                // The merge session's context is current inside the callback;
-                // querying extensions anywhere earlier would run context-less.
-                val extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS).orEmpty()
-                assumeTrue("float FBO readback unavailable", "GL_EXT_color_buffer_float" in extensions)
                 assertTrue("merge kept ${output.acceptedFrames}", output.acceptedFrames >= 1)
                 val rgba = RawSrMergeJob.readRgbaFloat(output.mergedTextureId, output.width, output.height)
                 assertEquals(output.width * output.height * 4, rgba.size)
@@ -99,10 +93,8 @@ class RawSrMergeJobInstrumentedTest {
         val ref = packed(w, h, seed = 7)
         val mov = packed(w, h, seed = 7)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.processPacked(listOf(ref.first, mov.first)) { output ->
-                val extensions = GLES20.glGetString(GLES20.GL_EXTENSIONS).orEmpty()
-                assumeTrue("float FBO readback unavailable", "GL_EXT_color_buffer_float" in extensions)
                 val wOut = output.width; val hOut = output.height
                 val expected = MergedLinearRgb.toTriplets(
                     RawSrMergeJob.readRgbaFloat(output.mergedTextureId, wOut, hOut)
@@ -144,7 +136,7 @@ class RawSrMergeJobInstrumentedTest {
                     }
                 }.toByteArray()
                 assertArrayEquals(whole, striped)
-                // Strip geometry is validated before any GL call runs.
+                // Strip geometry is validated before any GPU call runs.
                 assertThrows(IllegalArgumentException::class.java) {
                     RawSrMergeJob.readMergedRgbStrip(
                         output.mergedTextureId, wOut, hOut, -1, 1, FloatArray(3)

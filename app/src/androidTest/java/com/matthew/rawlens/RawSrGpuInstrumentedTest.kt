@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
-import android.opengl.GLES20
 import android.opengl.GLES30
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -26,7 +25,7 @@ class RawSrGpuInstrumentedTest {
     @Test fun clippedHighlightsUseReferenceNeutralAcrossEveryBayerPhase() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val neutral = doubleArrayOf(0.749634, 1.0, 0.368611)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for (pattern in BayerPattern.entries) for (left in 0..1) for (top in 0..1) {
                 val w = 64; val h = 48
                 val plane = ByteBuffer.allocateDirect(w * h * 2).order(ByteOrder.nativeOrder())
@@ -55,7 +54,7 @@ class RawSrGpuInstrumentedTest {
 
     @Test fun packedDefaultAlignmentUsesResolvedSnrTileUnits() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for ((snr, tileQuads) in listOf(10.0 to 32, 18.0 to 16, 26.0 to 8)) {
                 val plane = ByteBuffer.allocateDirect(64 * 48 * 2).order(ByteOrder.nativeOrder())
                 repeat(64 * 48) { plane.putShort(500.toShort()) }; plane.flip()
@@ -137,7 +136,7 @@ class RawSrGpuInstrumentedTest {
             .put("referenceIndex", fixture.referenceIndex).put("adreno", "UNTESTED")
             .put("coveragePolicy", "Real-scene coverage and rejection are reported, not a ground-truth motion claim; synthetic 80% gate unchanged")
             .put("frames", records)
-        Gles31RawSrProcessor(instrumentation.targetContext).use { processor ->
+        VkRawSrProcessor(instrumentation.targetContext).use { processor ->
             // Reference-only phase/lens check independently of alignment rejection.
             val refTuning = RawSrTuning.fromReference(frames.first()).tuning
             processor.processPacked(listOf(frames.first()), config, referenceOnly = true) { output ->
@@ -153,7 +152,8 @@ class RawSrGpuInstrumentedTest {
                 val cpu = RawSrAlignment.align(gray[0], gray[index], config)
                 val flow = readTexture(id, columns, rows, GLES30.GL_RGBA)
                 val identity = gpuIdentity()
-                report.put("vendor", GLES20.glGetString(GLES20.GL_VENDOR)).put("renderer", GLES20.glGetString(GLES20.GL_RENDERER))
+                val (vkrVendor, vkrRenderer) = vkDeviceFields()
+                report.put("vendor", vkrVendor).put("renderer", vkrRenderer)
                 exportFlow(instrumentation.targetContext.cacheDir, identity, "sea_frame_${order[index]}", flow, columns, rows)
                 var eligible = 0; var paired = 0; var gpuValid = 0; var rejected = 0; var masks = 0
                 var biasX = 0.0; var biasY = 0.0; var maeX = 0.0; var maeY = 0.0; var maximum = 0f
@@ -201,7 +201,7 @@ class RawSrGpuInstrumentedTest {
 
     @Test fun packedRawMatchesCpuAcrossOffsetsAndLensShadingStates() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for (pattern in BayerPattern.entries) for (origin in 0..1) for (cropOffset in 0..1)
                 for (alreadyApplied in listOf(false, true)) {
                     val layout = RawPlaneLayout(68, 52, 144, 2, origin, 1 - origin)
@@ -237,7 +237,7 @@ class RawSrGpuInstrumentedTest {
             RawNormalization(raw.pattern, List(4) { 0f }, 60000f), null)
         val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
         val tuning = RawSrTuning.fromReference(frame).tuning
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             var peak = 0L
             for (count in listOf(2, 8, 15, 30)) {
                 var flows = 0
@@ -271,7 +271,7 @@ class RawSrGpuInstrumentedTest {
             FlowCase("integer_negative", -4f, -2f), FlowCase("subpixel_mixed", 1.2f, -0.6f),
             FlowCase("large_supported", 20f, -12f, width = 384, height = 288)
         )
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             cases.forEach { case ->
                 val reference = syntheticRaw(case.width, case.height, 0f, 0f)
                 val moving = syntheticRaw(case.width, case.height, case.rawShiftX, case.rawShiftY)
@@ -311,7 +311,7 @@ class RawSrGpuInstrumentedTest {
         val cpu = RawSrAlignment.align(RawSrAlignment.bayerQuadGray(flat),
             RawSrAlignment.bayerQuadGray(flat), config)
         assertTrue(cpu.tiles.none(RawSrTileFlow::reliable))
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(listOf(flat, flat), config) { output ->
                 val flow = readTexture(output.flowTextureIds.single(), cpu.columns, cpu.rows, GLES30.GL_RGBA)
                 assertTrue(flow.all(Float::isFinite))
@@ -331,7 +331,7 @@ class RawSrGpuInstrumentedTest {
             "textured_partial" to syntheticRaw(width, height, 0f, 0f)
         )
         val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 3)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for ((name, raw) in cases) {
                 val cpu = RawSrAlignment.align(RawSrAlignment.bayerQuadGray(raw), RawSrAlignment.bayerQuadGray(raw), config)
                 processor.process(listOf(raw, raw), config) { output ->
@@ -348,7 +348,7 @@ class RawSrGpuInstrumentedTest {
     @Test fun packedOddCropAlignmentAllCfaPhases() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 3)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for (pattern in BayerPattern.entries) {
                 fun packed(dx: Float, dy: Float): RawSrPackedFrame {
                     val raw = syntheticRaw(132, 100, dx, dy, pattern.shifted(1, 0))
@@ -397,7 +397,7 @@ class RawSrGpuInstrumentedTest {
             val reference = syntheticRaw(64, 48, 0f, 0f, pattern)
             val tuning = explicitTuning(listOf(reference))
             val expected = adapterOracle(reference, emptyList(), config, tuning, referenceOnly = true)
-            Gles31RawSrProcessor(context).use { processor ->
+            VkRawSrProcessor(context).use { processor ->
                 processor.process(listOf(reference), config, tuning, referenceOnly = true) { output ->
                     assertTrue(output.flowTextureIds.isEmpty())
                     assertEquals(1, output.acceptedFrames)
@@ -413,7 +413,7 @@ class RawSrGpuInstrumentedTest {
         val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(frames, config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "two-frame", checkRc = false)
                 Log.i(TAG, "${gpuIdentity()} two_frame mergedRgbMaxError=$maxError")
@@ -439,7 +439,7 @@ class RawSrGpuInstrumentedTest {
         val tuning = explicitTuning(frames)
         val chroma = RawSrBayerMerge.ChromaParams(0.0, 1e-6)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning, chroma = chroma)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(frames, config, tuning, chroma = chroma) { output ->
                 val maxError = assertBayerMerge(output, expected, "chroma-gated", checkRc = false)
                 assertTrue("chroma-gated max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -463,7 +463,7 @@ class RawSrGpuInstrumentedTest {
         val frames = shifts.map { (dx, dy) -> syntheticRaw(64, 48, dx, dy) }
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             val refOnly = processor.process(listOf(frames[0]), config, tuning, referenceOnly = true) {
                 readMerged(it)
             }
@@ -493,7 +493,7 @@ class RawSrGpuInstrumentedTest {
         val frames = shifts.mapIndexed { i, (dx, dy) -> noisyTexturedRaw(w, h, dx, dy, seed = 1000 + i) }
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(frames, config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "noisy-burst", checkRc = false)
                 assertTrue("noisy-burst max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -529,7 +529,7 @@ class RawSrGpuInstrumentedTest {
         fun corner(sx: Float, sy: Float) = if ((sx < w / 2) == (sy < h / 2)) 0.7f else 0.2f
         fun checker(sx: Float, sy: Float) =
             if (((sx / 2).toInt() + (sy / 2).toInt()) % 2 == 0) 0.65f else 0.25f
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             for ((name, scene) in listOf("step" to ::step, "corner" to ::corner, "checker" to ::checker)) {
                 val frames = List(3) { graySceneRaw(w, h, 0f, 0f, scene) }
                 val tuning = explicitTuning(frames)
@@ -581,7 +581,7 @@ class RawSrGpuInstrumentedTest {
         val w = 64; val h = 48
         val ref = syntheticRaw(w, h, 0f, 0f)
         val tuning = explicitTuning(listOf(ref))
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             val refOnly = processor.process(listOf(ref), config, tuning, referenceOnly = true) {
                 readMerged(it)
             }
@@ -618,7 +618,7 @@ class RawSrGpuInstrumentedTest {
         val frames = listOf(syntheticRaw(128, 96, 0f, 0f), syntheticRaw(128, 96, 20f, -12f))
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(frames, config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "large-shift", checkRc = false)
                 assertTrue("large-shift max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -639,7 +639,7 @@ class RawSrGpuInstrumentedTest {
         val moving = UnpackedRawCfa(w, h, BayerPattern.RGGB, movingValues, RawCrop(0, 0, w, h))
         val tuning = explicitTuning(listOf(ref))
         val expected = adapterOracle(ref, listOf(moving), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(listOf(ref, moving), config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "poisoned", checkRc = false)
                 assertTrue("poisoned max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -657,7 +657,7 @@ class RawSrGpuInstrumentedTest {
             syntheticRaw(64, 48, -0.4f, 0.35f))
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             val first = processor.process(frames, config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "deterministic", checkRc = false)
                 assertTrue("deterministic max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -693,7 +693,7 @@ class RawSrGpuInstrumentedTest {
         val frames = List(2) { constRaw() }
         val tuning = explicitTuning(frames)
         val expected = adapterOracle(frames[0], frames.drop(1), config, tuning)
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             processor.process(frames, config, tuning) { output ->
                 val maxError = assertBayerMerge(output, expected, "negatives", checkRc = false)
                 assertTrue("negatives max error=$maxError", maxError <= RGB_TOLERANCE)
@@ -722,7 +722,7 @@ class RawSrGpuInstrumentedTest {
         }
         val a = textured(0, BayerPattern.RGGB)
         val b = textured(1, BayerPattern.RGGB.shifted(1, 0))
-        Gles31RawSrProcessor(context).use { processor ->
+        VkRawSrProcessor(context).use { processor ->
             val tuning = explicitTuning(listOf(a))
             val outA = processor.process(listOf(a), config, tuning, referenceOnly = true) {
                 assertBayerMerge(it, adapterOracle(a, emptyList(), config, tuning, referenceOnly = true),
@@ -933,9 +933,8 @@ class RawSrGpuInstrumentedTest {
     }
 
     private fun gpuIdentity(): String {
-        val vendor = GLES20.glGetString(GLES20.GL_VENDOR)
-        val renderer = GLES20.glGetString(GLES20.GL_RENDERER)
-        assertTrue("Missing GLES identity", !vendor.isNullOrBlank() && !renderer.isNullOrBlank())
+        val (vendor, renderer) = vkDeviceFields()
+        assertTrue("Missing Vulkan identity", vendor.isNotBlank() && renderer.isNotBlank())
         return "$vendor/$renderer"
     }
 
@@ -974,25 +973,19 @@ class RawSrGpuInstrumentedTest {
         return ((bits ushr 8) and 0xffff) / 32767.5f - 1f
     }
 
-    private fun readTexture(texture: Int, width: Int, height: Int, format: Int): FloatArray {
-        val framebuffer = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffer, 0)
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
-            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, texture, 0)
-            assertEquals(GLES30.GL_FRAMEBUFFER_COMPLETE, GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER))
-            val channels = if (format == GLES30.GL_RED) 1 else 4
-            val bytes = ByteBuffer.allocateDirect(width * height * channels * Float.SIZE_BYTES)
-                .order(ByteOrder.nativeOrder())
-            GLES30.glReadPixels(0, 0, width, height, format, GLES30.GL_FLOAT, bytes)
-            assertEquals(GLES30.GL_NO_ERROR, GLES30.glGetError())
-            return FloatArray(width * height * channels).also { bytes.asFloatBuffer().get(it) }
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+    /** Vulkan device identity for reports (replaces the GL vendor/renderer strings). */
+    private fun vkDeviceFields(): Pair<String, String> = runCatching {
+        SrVulkan.open().use { vk ->
+            val info = vk.deviceInfo()
+            info.substringAfter("vendor=").substringBefore(";") to
+                info.substringAfter("device=").substringBefore(";type=")
         }
-    }
+    }.getOrDefault("unknown" to "unknown")
+
+    // The GLES format constants at call sites are pure channel selectors now
+    // (call sites unchanged); the Int names a live Vulkan image.
+    private fun readTexture(image: Int, width: Int, height: Int, format: Int): FloatArray =
+        if (format == GLES30.GL_RED) vkDownloadR32f(image) else vkDownloadRgba32f(image)
 
     private data class FlowCase(val name: String, val rawShiftX: Float, val rawShiftY: Float,
                                 val static: Boolean = false, val width: Int = 128, val height: Int = 96)
