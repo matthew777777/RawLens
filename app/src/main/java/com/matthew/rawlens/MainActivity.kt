@@ -35,6 +35,7 @@ import android.graphics.Typeface
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
+import java.io.File
 import java.util.Locale
 
 import android.view.WindowInsets
@@ -119,6 +120,25 @@ class MainActivity : Activity() {
     private var cameraViewportReady = false
     private var deviceOrientationDegrees = 0
     private var controlRotationDegrees = 0f
+    // RAW Video mode (orthogonal to the stills CaptureExposureMode enums so no
+    // stills state machine is touched): the stills controller keeps framing
+    // until REC, when the standalone RawVideoRecorder takes the camera.
+    private var isVideoMode = false
+    private var lastPhotoExposureMode = CaptureExposureMode.AUTO
+    private var videoRecorder: RawVideoRecorder? = null
+    private var videoRecording = false
+    private var videoCrop = VideoCrop.OPEN_GATE
+    private var videoStartPending = false
+    private var videoDebugRunnable: Runnable? = null
+    private var videoMeterRunnable: Runnable? = null
+    private var histogramBottomMarginDefault = -1
+    private var videoMeterBottomMarginDefault = -1
+    private lateinit var videoHudTop: View
+    private lateinit var videoHudLeft: TextView
+    private lateinit var videoHudTimecode: TextView
+    private lateinit var videoHudRight: TextView
+    private lateinit var videoAudioMeter: AudioMeterView
+    private lateinit var videoDebugOverlay: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -280,14 +300,27 @@ class MainActivity : Activity() {
             },
             { dng, sensor ->
                 runOnUiThread {
+                    // Video chrome is authoritative in VIDEO mode: stills info
+                    // publications (which keep arriving until the recorder
+                    // takes the camera) must not stomp the MCRAW labels.
+                    if (isVideoMode) {
+                        refreshVideoSensorInfo()
+                        return@runOnUiThread
+                    }
                     dngInfo.text = dng.replace('\n', ' ').replace("-bit RAW", "-BIT")
                     sensorInfo.text = sensor.replace('\n', ' ')
                 }
             },
             { enabled ->
                 runOnUiThread {
-                    shutter.isEnabled = enabled
-                    shutter.alpha = if (enabled) 1f else 0.45f
+                    // Video transport owns the shutter while rolling: the
+                    // stills session is stopped by design, so its disabled
+                    // state must never grey out (and deactivate) the record
+                    // toggle — a greyed shutter during a take means STOP IS
+                    // UNREACHABLE.
+                    val effective = enabled || isVideoMode
+                    shutter.isEnabled = effective
+                    shutter.alpha = if (effective) 1f else 0.45f
                     rawStatusGroup.isEnabled = enabled
                     rawStatusGroup.alpha = if (enabled) 1f else 0.6f
                 }
@@ -418,9 +451,23 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.isFocusable = true
         rawVfDebugOverlay.setOnClickListener { cycleVfEngineMode() }
         refreshVfEngineContentDescription()
-        shutter.setOnClickListener { triggerCapture(shutter, forceBurst = false) }
+        videoHudTop = findViewById(R.id.videoHudTop)
+        videoHudLeft = findViewById(R.id.videoHudLeft)
+        videoHudTimecode = findViewById(R.id.videoHudTimecode)
+        videoHudRight = findViewById(R.id.videoHudRight)
+        videoAudioMeter = findViewById(R.id.videoAudioMeter)
+        videoDebugOverlay = findViewById(R.id.videoDebugOverlay)
+        videoCrop = runCatching {
+            VideoCrop.valueOf(lensPreferences().getString(KEY_VIDEO_CROP, null) ?: "")
+        }.getOrDefault(VideoCrop.OPEN_GATE)
+        videoAudioMeter.setOnClickListener { toggleVideoSound() }
+        shutter.setOnClickListener {
+            if (isVideoMode) toggleVideoRecording()
+            else triggerCapture(shutter, forceBurst = false)
+        }
         shutter.setOnLongClickListener {
-            triggerCapture(shutter, forceBurst = true)
+            if (isVideoMode) toggleVideoRecording()
+            else triggerCapture(shutter, forceBurst = true)
             true
         }
         isoControl.setOnClickListener { openIsoControl() }
@@ -441,6 +488,18 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.timerButton).setOnClickListener { cycleTimer() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
+        // Dedicated red dot below the quick-panel access: a MODE toggle, never
+        // part of the switcher. Tap = photo <-> video, long-press in video =
+        // exit back to photo too. Recording itself lives on the shutter ring.
+        findViewById<View>(R.id.videoRecordButton).apply {
+            setOnClickListener {
+                if (!isVideoMode) enterVideoMode() else exitVideoMode()
+            }
+            setOnLongClickListener {
+                if (isVideoMode && !videoRecording) exitVideoMode()
+                true
+            }
+        }
         findViewById<View>(R.id.quickButton).setOnClickListener { toggleQuickControls() }
         gridQuick.setOnClickListener {
             gridEnabled = !gridEnabled
@@ -461,10 +520,16 @@ class MainActivity : Activity() {
         ettrQuick.setOnClickListener { toggleEttr() }
         hdrQuick.setOnClickListener { toggleHdrEnabled() }
         timerQuick.setOnClickListener { cycleTimer() }
-        releaseQuick.setOnClickListener { toggleReleaseMode() }
+        releaseQuick.setOnClickListener {
+            if (isVideoMode) cycleVideoCrop() else toggleReleaseMode()
+        }
         findViewById<View>(R.id.resetTargetsQuick).setOnClickListener {
+            // Releases the AE/AF hold (timed or indefinite padlock) and clears
+            // the reticle immediately; the controller re-asserts unlocked AE/AF
+            // on the camera thread and confirms via onMeteringReleased.
+            meteringOverlay.clearTargets()
             controller.resetMeteringTargets()
-            setStatus("AF / AE TARGETS RESET")
+            setStatus("AE/AF RESET")
             hideQuickControls()
         }
         findViewById<View>(R.id.settingsButton).setOnClickListener {
@@ -474,7 +539,8 @@ class MainActivity : Activity() {
         // Single tap (or joint drag) installs AF + AE together: one repeating
         // update + one AF START, retargeting instantly even while locked.
         // Dragging one square moves only that subsystem (AF rescans, AE re-meters).
-        // Long-press locks indefinitely.
+        // Press-and-hold freezes AE + AF indefinitely (padlock badge) until a
+        // same-spot double-tap or the AE/AF reset button releases it.
         meteringOverlay.onTapBoth = { x, y ->
             controller.setFocusAndMeteringPoint(x, y)
         }
@@ -567,6 +633,18 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AUDIO_PERMISSION) {
+            // Lazy mic grant for RAW video: granted -> start with sound,
+            // denied -> record silent (legal .mcraw), never block video.
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            if (videoStartPending) {
+                videoStartPending = false
+                doStartVideo(withAudio = granted)
+            } else {
+                setStatus(if (granted) "MIC ON" else "MIC OFF • SILENT")
+            }
+            return
+        }
         if (requestCode == LOCATION_PERMISSION) {
             if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) {
                 setGpsEnabled(true)
@@ -657,6 +735,13 @@ class MainActivity : Activity() {
     }
 
     private fun startCameraWhenReady() {
+        // The recorder owns the camera while video state exists (rolling or
+        // stopping): a stills start here would STEAL the session and kill the
+        // take silently (no frames, audio keeps running). Never touch it.
+        if (videoRecording || videoRecorder != null) {
+            Log.i(LOG_TAG, "startCameraWhenReady suppressed: video owns camera")
+            return
+        }
         if (activityResumed && cameraViewportReady &&
             checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         ) {
@@ -670,6 +755,9 @@ class MainActivity : Activity() {
         orientationListener.disable()
         countdownRunnable?.let(window.decorView::removeCallbacks)
         countdownRunnable = null
+        // A recording must be finalized before the stills session tears down;
+        // no preview rearm while the activity is going away.
+        if (videoRecording) stopVideoRecording(rearmPreview = false)
         histogramRunnable?.let(histogramView::removeCallbacks)
         histogramRunnable = null
         previewHistogramBitmap?.recycle()
@@ -680,6 +768,17 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         lensDiscovery.close()
+        // Safety net only (onPause already stops cleanly): never leak the
+        // container handle; the file stays valid, just shorter.
+        try {
+            videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+            videoDebugRunnable = null
+            videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
+            videoMeterRunnable = null
+            videoRecorder?.stop()
+        } catch (_: Exception) {
+        }
+        videoRecorder = null
         controller.destroy()
         findViewById<RawViewfinder>(R.id.rawViewfinder).dispose()
         MemoryLeakDiagnostics.sample("activity-destroyed")
@@ -898,7 +997,10 @@ class MainActivity : Activity() {
         findViewById(R.id.rawSrQuick), findViewById(R.id.ettrQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
-        findViewById(R.id.manualAutoButton)
+        findViewById(R.id.manualAutoButton),
+        findViewById(R.id.videoHudLeft),
+        findViewById(R.id.videoHudTimecode),
+        findViewById(R.id.videoHudRight)
     )
 
     /** Debug overlays + histogram rotate with the device; top/bottom status labels
@@ -906,6 +1008,7 @@ class MainActivity : Activity() {
     private fun wholeRotatingOverlays(): List<View> = listOfNotNull(
         findViewById(R.id.debugOverlay),
         findViewById(R.id.rawVfDebugOverlay),
+        findViewById(R.id.videoDebugOverlay),
         findViewById(R.id.histogramView)
     )
 
@@ -960,6 +1063,11 @@ class MainActivity : Activity() {
         shutter.animate().scaleX(0.9f).scaleY(0.9f).setDuration(70L).withEndAction {
             shutter.animate().scaleX(1f).scaleY(1f).setDuration(110L).start()
         }.start()
+        // Volume keys land here too: in VIDEO mode they toggle recording.
+        if (isVideoMode) {
+            toggleVideoRecording()
+            return
+        }
         if (countdownRunnable != null) {
             setStatus("TIMER ALREADY RUNNING")
             return
@@ -1008,6 +1116,441 @@ class MainActivity : Activity() {
             useBurst -> controller.captureBurst()
             else -> controller.capture()
         }
+    }
+
+    // ------------------------------------------------------------------
+    // RAW Video mode: Blackmagic-style full-bleed HUD (top strip with red
+    // timecode, bottom bar with crop + audio meter) over the live RAW
+    // viewfinder. The red dot under the quick access toggles photo <->
+    // video, the shutter ring toggles recording, and the photo switcher
+    // exits back to photo. Orthogonal to CaptureExposureMode so no stills
+    // state machine is touched.
+    // ------------------------------------------------------------------
+
+    private fun enterVideoMode() {
+        lastPhotoExposureMode = captureExposureMode
+        isVideoMode = true
+        Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
+        closeFloatingPanels()
+        guideOverlay.videoCrop = videoCrop
+        guideOverlay.videoActive = true
+        // Cinema chrome: photo top bar, exposure chips and lens pill hide for
+        // full-bleed framing; the capture panel (red dot / shutter / switcher)
+        // stays so transport and mode exit keep working.
+        findViewById<View>(R.id.topBar)?.visibility = View.GONE
+        findViewById<View>(R.id.exposureControls)?.visibility = View.GONE
+        findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
+        repositionHistogramForVideo(inVideo = true)
+        repositionMeterForVideo(inVideo = true)
+        videoHudTop.visibility = View.VISIBLE
+        videoAudioMeter.visibility = View.VISIBLE
+        videoDebugOverlay.visibility = View.VISIBLE
+        refreshVideoHudStatic()
+        findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
+        findViewById<View>(R.id.shutter).contentDescription = "Record RAW video"
+        refreshVideoButton()
+        rawBadge.text = "MCRAW"
+        rawBadge.setTextColor(getColor(R.color.danger))
+        findViewById<TextView>(R.id.dngInfo)?.text = "MCRAW • TYPE-7"
+        refreshVideoSensorInfo()
+        setStatus("VIDEO READY")
+        updateQuickControls()
+        scheduleVideoHud()
+    }
+
+    private fun exitVideoMode() {
+        // A rolling take is finalized first; the actual exit runs after the
+        // container closes so the stills session never races the recorder.
+        // Rearm is true: by finish time the recorder is dead, and exiting
+        // must land on a LIVE stills preview, not a black viewfinder.
+        if (videoRecording) {
+            stopVideoRecording(rearmPreview = true, afterStop = { exitVideoMode() })
+            return
+        }
+        Log.i(LOG_TAG, "video exit to $lastPhotoExposureMode")
+        isVideoMode = false
+        guideOverlay.videoActive = false
+        findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.shutter_core)
+        findViewById<View>(R.id.shutter).contentDescription = "Capture RAW photo"
+        videoHudTop.visibility = View.GONE
+        videoAudioMeter.visibility = View.GONE
+        videoDebugOverlay.visibility = View.GONE
+        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable = null
+        videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
+        videoMeterRunnable = null
+        videoAudioMeter.reset()
+        findViewById<View>(R.id.topBar)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.lensSwitcher)?.visibility = View.VISIBLE
+        repositionHistogramForVideo(inVideo = false)
+        repositionMeterForVideo(inVideo = false)
+        refreshVideoButton()
+        applyCaptureExposureMode(lastPhotoExposureMode)
+        refreshCaptureFormatControl()
+        refreshVideoSensorInfo()
+    }
+
+    /** Floating histogram drops above the capture panel in video, restored after. */
+    private fun repositionHistogramForVideo(inVideo: Boolean) {
+        val params = histogramView.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (inVideo) {
+            if (histogramBottomMarginDefault < 0) histogramBottomMarginDefault = params.bottomMargin
+            params.bottomMargin = dp(150)
+        } else if (histogramBottomMarginDefault >= 0) {
+            params.bottomMargin = histogramBottomMarginDefault
+        }
+        histogramView.layoutParams = params
+    }
+
+    /** Audio meter floats above the capture panel (same pattern as histogram). */
+    private fun repositionMeterForVideo(inVideo: Boolean) {
+        val params = videoAudioMeter.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (inVideo) {
+            if (videoMeterBottomMarginDefault < 0) {
+                videoMeterBottomMarginDefault = params.bottomMargin
+            }
+            val panelHeight =
+                findViewById<View>(R.id.controlPanel)?.height ?: dp(232)
+            params.bottomMargin = panelHeight + dp(16)
+        } else if (videoMeterBottomMarginDefault >= 0) {
+            params.bottomMargin = videoMeterBottomMarginDefault
+        }
+        videoAudioMeter.layoutParams = params
+    }
+
+    // Dedicated red dot under the quick-panel access: a MODE toggle with the
+    // app's chip language (dim entry dot / ready ring / rolling red).
+    // Tap toggles photo <-> video; shutter ring toggles recording.
+    private fun refreshVideoButton() {
+        val button = findViewById<View>(R.id.videoRecordButton) ?: return
+        when {
+            videoRecording -> {
+                button.background = getDrawable(R.drawable.record_active)
+                button.contentDescription = "Recording. Tap to go back to photo after stopping."
+            }
+            isVideoMode -> {
+                button.background = getDrawable(R.drawable.record_ready)
+                button.contentDescription =
+                    "Video mode on. Tap to go back to photo."
+            }
+            else -> {
+                button.background = getDrawable(R.drawable.video_enter)
+                button.contentDescription = "Enter RAW video mode"
+            }
+        }
+    }
+
+    private fun toggleVideoRecording() {
+        if (videoRecording) stopVideoRecording() else startVideoRecording()
+    }
+
+    private fun startVideoRecording() {
+        if (videoRecording) return
+        // A stop drains async (up to ~15s); starting over it would race the
+        // container close. LOUD reject, never silent: the user must see why
+        // the tap did nothing.
+        if (videoRecorder != null) {
+            setStatus("STOPPING…")
+            return
+        }
+        // Lazy mic grant: stills users are never prompted; denial records
+        // silent video (legal .mcraw) instead of blocking.
+        val wantAudio = lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true)
+        if (wantAudio &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            videoStartPending = true
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION)
+            setStatus("MIC PERMISSION…")
+            return
+        }
+        doStartVideo(withAudio = wantAudio)
+    }
+
+    private fun doStartVideo(withAudio: Boolean) {
+        val manager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        val (cameraId, size) = videoCameraInfo(manager) ?: run {
+            setStatus("NO RAW VIDEO CAMERA")
+            return
+        }
+        controller.stop()
+        val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES), "RawLens")
+        if (!dir.exists() && !dir.mkdirs()) {
+            setStatus("VIDEO DIR FAILED")
+            controller.start()
+            return
+        }
+        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.mcraw")
+        val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
+            crop = videoCrop
+            audioEnabled = withAudio
+            // Live RAW VF during the take: frames fan out to the viewfinder
+            // (Vulkan zero-copy lease) while the encode thread encodes.
+            attachViewfinder(findViewById(R.id.rawViewfinder))
+        }
+        try {
+            recorder.start(file, videoContainerMeta(manager, cameraId, size))
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "video start failed: ${e.message}")
+            setStatus("REC FAILED")
+            controller.start()
+            return
+        }
+        videoRecorder = recorder
+        videoRecording = true
+        Log.i(LOG_TAG, "video start ${file.name} ${size.width}x${size.height} audio=$withAudio")
+        findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
+        findViewById<View>(R.id.shutter).contentDescription = "Stop RAW video"
+        refreshVideoButton()
+        rawBadge.text = "● REC"
+        rawBadge.setTextColor(getColor(R.color.danger))
+        refreshVideoHudStatic()
+        setStatus("REC • ${videoCrop.label.uppercase(Locale.US)}")
+        scheduleVideoHud()
+        scheduleVideoMeter()
+        // Silent session death (stolen camera, dead HAL stream) looks
+        // identical to a healthy take with no UI feedback. Fail LOUD: no
+        // acquired frame within 2.5s aborts the take instead of recording
+        // minutes of audio-only .mcraw.
+        window.decorView.postDelayed({
+            if (videoRecording && videoRecorder === recorder &&
+                recorder.snapshot().framesAcquired == 0
+            ) {
+                Log.w(LOG_TAG, "video abort: no frames acquired in 2.5s")
+                stopVideoRecording()
+                setStatus("NO FRAMES • STOPPED")
+            }
+        }, 2_500L)
+    }
+
+    private fun stopVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
+        val recorder = videoRecorder ?: return
+        if (!videoRecording) return
+        videoRecording = false
+        Log.i(LOG_TAG, "video stop requested rearm=$rearmPreview")
+        setStatus("STOPPING…")
+        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable = null
+        videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
+        videoMeterRunnable = null
+        // Snapshot the viewfinder while still rolling: after the drain there
+        // are no offers for seconds, so a later snapshot would only show the
+        // watchdog-cleared state, not the rolling zero-copy path.
+        val rollingVf = findViewById<RawViewfinder>(R.id.rawViewfinder)?.snapshot()
+        // Container close blocks on the encode drain: off the UI thread, then
+        // restore on it (mirrors the stills save/rearm split).
+        Thread({
+            val stats = try {
+                recorder.stop()
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "video stop failed: ${e.message}")
+                null
+            }
+            runOnUiThread { finishVideoStop(stats, rollingVf, rearmPreview, afterStop) }
+        }, "VideoStop").start()
+    }
+
+    private fun finishVideoStop(
+        stats: RawVideoRecorder.Stats?,
+        rollingVf: RawVfStats?,
+        rearmPreview: Boolean,
+        afterStop: (() -> Unit)?
+    ) {
+        videoRecorder = null
+        val mb = (stats?.fileBytes ?: 0L) / 1e6
+        // Viewfinder proof: fps + GPU (Vulkan zero-copy) vs CPU path while rolling.
+        val vf = rollingVf
+        if (isVideoMode) {
+            findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
+            findViewById<View>(R.id.shutter).contentDescription = "Record RAW video"
+            refreshVideoButton()
+            refreshVideoHudStatic()
+            refreshCaptureFormatControl()
+            rawBadge.text = "MCRAW"
+            rawBadge.setTextColor(getColor(R.color.danger))
+            setStatus(
+                if (stats == null) "REC FAILED"
+                else "SAVED • ${stats.framesEncoded}F • ${"%.0f".format(mb)}MB" +
+                    (if (stats.hasAudio) "" else " • SILENT") +
+                    (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "")
+            )
+            Log.i(
+                LOG_TAG, "video saved frames=${stats?.framesEncoded} " +
+                    "dropped=${stats?.framesDropped} skipped=${stats?.commitSkipped} " +
+                    "audio=${stats?.audioFrames}f " +
+                    "gyro=${stats?.gyroSamples} accel=${stats?.accelSamples} " +
+                    "vf=${"%.1f".format(vf?.fps ?: 0f)}fps gpu=${vf?.gpu} " +
+                    "file=${"%.1f".format(mb)}MB"
+            )
+        }
+        if (rearmPreview) controller.start()
+        // onPause stops with rearm=false; if the user already came back
+        // while the drain was in flight, nobody else rearms — do it here.
+        // While still paused, starting the camera would run it in background.
+        else if (afterStop == null && activityResumed) controller.start()
+        afterStop?.invoke()
+    }
+
+    private fun scheduleVideoHud() {
+        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        val tick = object : Runnable {
+            override fun run() {
+                val snap = videoRecorder?.snapshot()
+                if (snap == null || !isVideoMode) return
+                videoHudTimecode.text =
+                    (if (videoRecording) "● " else "") + videoTimecode(snap.elapsedMs)
+                videoHudTimecode.setTextColor(
+                    getColor(if (videoRecording) R.color.danger else R.color.text_primary)
+                )
+                // Viewfinder proof, live: fps + GPU (Vulkan zero-copy) vs CPU.
+                val vf = findViewById<RawViewfinder>(R.id.rawViewfinder)?.snapshot()
+                videoDebugOverlay.text = formatVideoDebug(snap, vf?.fps ?: 0f, vf?.gpu == true)
+                videoDebugRunnable?.let { videoHudTimecode.postDelayed(it, 500L) }
+            }
+        }
+        videoDebugRunnable = tick
+        videoHudTimecode.post(tick)
+    }
+
+    /** 10 Hz audio meter feed; the view peak-holds and decays on its own. */
+    private fun scheduleVideoMeter() {
+        videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
+        val tick = object : Runnable {
+            override fun run() {
+                if (!isVideoMode) return
+                videoAudioMeter.setLevel(videoRecorder?.audioLevel() ?: 0f)
+                videoMeterRunnable?.let { videoAudioMeter.postDelayed(it, 100L) }
+            }
+        }
+        videoMeterRunnable = tick
+        videoAudioMeter.post(tick)
+    }
+
+    /** Static HUD labels: codec/fps left, crop+sound right, meter desc. */
+    private fun refreshVideoHudStatic() {
+        videoHudLeft.text = "MCRAW • ${RawVideoRecorder.FPS}FPS"
+        val sound = videoSoundOn()
+        videoHudRight.text = "${videoCropShort()} • ${if (sound) "A" else "S"}"
+        videoAudioMeter.contentDescription =
+            if (sound) "Sound on. Tap to mute next takes."
+            else "Sound off. Tap to record sound next takes."
+    }
+
+    private fun videoSoundOn(): Boolean =
+        lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun toggleVideoSound() {
+        val next = !lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true)
+        lensPreferences().edit().putBoolean(KEY_VIDEO_AUDIO, next).apply()
+        refreshVideoHudStatic()
+        setStatus(if (next) "SOUND ON • NEXT TAKE" else "SOUND OFF • NEXT TAKE")
+    }
+
+    /** Blackmagic-style timecode HH:MM:SS:FF at the record rate. */
+    private fun videoTimecode(elapsedMs: Long): String {
+        val fps = RawVideoRecorder.FPS
+        val frames = elapsedMs * fps / 1000
+        val ff = (frames % fps).toInt()
+        val totalSeconds = frames / fps
+        val ss = (totalSeconds % 60).toInt()
+        val mm = ((totalSeconds / 60) % 60).toInt()
+        val hh = (totalSeconds / 3600).toInt()
+        return String.format(Locale.US, "%02d:%02d:%02d:%02d", hh, mm, ss, ff)
+    }
+
+    /**
+     * Video debug overlay: the same mono contract as the RAW VF overlay —
+     * cadence, encode cost, drops, queue, file growth, stream rates, plus
+     * the live viewfinder path (GPU = Vulkan zero-copy, CPU = NEON).
+     */
+    private fun formatVideoDebug(s: RawVideoRecorder.VideoStats, vfFps: Float, vfGpu: Boolean): String {
+        val rec = videoRecorder
+        val w = rec?.frameSize?.width ?: 0
+        val resolved = try {
+            videoCrop.resolve(w.coerceAtLeast(2), rec?.frameSize?.height ?: 4)
+        } catch (_: Exception) {
+            null
+        }
+        val dims = if (resolved != null) "${w}x${resolved.height}" else ""
+        val mb = s.fileBytes / 1e6
+        val secs = (s.elapsedMs / 1000.0).coerceAtLeast(0.5)
+        val mbs = mb / secs
+        val audioKf = s.audioFrames / 1000
+        val gyroHz = (s.gyroSamples / secs).toInt()
+        return String.format(
+            Locale.US, "%.1fFPS %.1fms\n%s %s\nQ%d D%d F%d S%d\nA%dkf G%dHz\nVF %.0fFPS %s\n%.0fMB %.0fMB/s",
+            s.fps, s.encodeMsAvg, dims, videoCropShort(),
+            s.queueDepth, s.framesDropped, s.framesEncoded, s.commitSkipped,
+            audioKf, gyroHz, vfFps, if (vfGpu) "GPU" else "CPU", mb, mbs
+        )
+    }
+
+    private fun videoCropShort(): String = when (videoCrop) {
+        VideoCrop.OPEN_GATE -> "GATE"
+        VideoCrop.WIDE_16_9 -> "16:9"
+        VideoCrop.SCOPE_2_39 -> "2.39"
+        VideoCrop.UNIVISIUM_2_00 -> "2.00"
+    }
+
+    private fun cycleVideoCrop() {
+        val values = VideoCrop.entries
+        videoCrop = values[(values.indexOf(videoCrop) + 1) % values.size]
+        lensPreferences().edit().putString(KEY_VIDEO_CROP, videoCrop.name).apply()
+        videoRecorder?.crop = videoCrop // mid-record safe, no session reconfig
+        guideOverlay.videoCrop = videoCrop
+        refreshVideoSensorInfo()
+        refreshVideoHudStatic()
+        setStatus("CROP • ${videoCrop.label.uppercase(Locale.US)}")
+        updateQuickControls()
+    }
+
+    private fun refreshVideoSensorInfo() {
+        if (!isVideoMode) return
+        val rec = videoRecorder
+        val dims = if (rec != null) {
+            val r = runCatching {
+                videoCrop.resolve(rec.frameSize.width, rec.frameSize.height)
+            }.getOrNull()
+            if (r != null) "${r.width}x${r.height}" else "${rec.frameSize.width}x?"
+        } else {
+            "FULL SENSOR"
+        }
+        findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${RawVideoRecorder.FPS}FPS"
+        findViewById<TextView>(R.id.dngInfo)?.text = "MCRAW • ${videoCrop.label.uppercase(Locale.US)}"
+    }
+
+    private fun videoCameraInfo(
+        manager: android.hardware.camera2.CameraManager
+    ): Pair<String, android.util.Size>? {
+        for (id in manager.cameraIdList) {
+            val chars = manager.getCameraCharacteristics(id)
+            if (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) !=
+                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+            ) continue
+            val size = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)
+                ?.maxByOrNull { it.width * it.height }
+                ?: continue
+            return id to size
+        }
+        return null
+    }
+
+    private fun videoContainerMeta(
+        manager: android.hardware.camera2.CameraManager,
+        cameraId: String,
+        size: android.util.Size
+    ): String {
+        val chars = manager.getCameraCharacteristics(cameraId)
+        val orientation =
+            chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        return "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
+            "\"width\":${size.width},\"height\":${size.height}," +
+            "\"crop\":\"${videoCrop.name}\",\"fps\":${RawVideoRecorder.FPS}," +
+            "\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Video\"}"
     }
 
     private fun cycleTimer() {
@@ -1128,6 +1671,12 @@ class MainActivity : Activity() {
         "ISO ceiling: " + (isoLimit.takeIf { it > 0 }?.toString() ?: "SENSOR MAX")
 
     private fun cycleCaptureExposureMode() {
+        // The photo switcher doubles as the video exit: in VIDEO mode it
+        // returns straight to the last photo mode instead of cycling.
+        if (isVideoMode) {
+            exitVideoMode()
+            return
+        }
         val modes = CaptureExposureMode.entries
         applyCaptureExposureMode(modes[(modes.indexOf(captureExposureMode) + 1) % modes.size])
     }
@@ -1207,6 +1756,13 @@ class MainActivity : Activity() {
     }
 
     private fun refreshCaptureFormatControl() {
+        // Same authority rule as the info labels: in VIDEO mode the badge
+        // stays MCRAW/●REC no matter what the stills state machine reports.
+        if (isVideoMode) {
+            rawBadge.text = if (videoRecording) "● REC" else "MCRAW"
+            rawBadge.setTextColor(getColor(R.color.danger))
+            return
+        }
         rawBadge.text = captureFormat.badgeLabel
         rawBadge.setTextColor(getColor(R.color.accent))
         val zslLabel = when (rawZslStatus.state) {
@@ -1889,6 +2445,12 @@ class MainActivity : Activity() {
         setQuickTileState(rawSr, rawSuperResolutionSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         updateTimerBadge()
+        // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
+        // button itself stays photo-only (video is a separate red button).
+        if (isVideoMode) {
+            release.text = "CROP\n${videoCropShort()}"
+            setQuickTileState(release, videoCrop != VideoCrop.OPEN_GATE)
+        }
         modeButton.text = when (captureExposureMode) {
             CaptureExposureMode.AUTO -> "A\nAUTO"
             CaptureExposureMode.PROGRAM -> "P\nPROGRAM"
@@ -4062,6 +4624,9 @@ class MainActivity : Activity() {
         const val CAMERA_PERMISSION = 42
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
+        const val AUDIO_PERMISSION = 45
+        const val KEY_VIDEO_CROP = "video_crop"
+        const val KEY_VIDEO_AUDIO = "video_audio"
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = "rawlens_settings"
         const val KEY_SELECTED_LENSES = "selected_lens_ids"

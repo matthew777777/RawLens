@@ -3,6 +3,13 @@
     <!-- DNG-only remains available when the optional GLES 3.1 RAW developer is unavailable. -->
     <uses-feature android:glEsVersion="0x00030001" android:required="false" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- RAW video sound: PCM16 inside the .mcraw. Requested at runtime only
+        on first video-record press; stills never need the mic. No microphone
+        uses-feature: mic-less devices record silent video instead. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Full-rate gyro/accel for video motion tracks (API 31+ install-time
+        normal permission; game-rate fallback when unavailable). -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <!-- Optional geotagging: requested at runtime only when "Save location" is enabled. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

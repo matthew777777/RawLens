@@ -64,6 +64,95 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
+    <!-- RAW Video HUD (Blackmagic language): full-bleed image with overlaid
+         top strip (codec/fps | red timecode | crop/sound) and bottom bar
+         (crop chip | REC | audio meter). Shown in VIDEO mode only, while the
+         photo chrome (topBar, controlPanel) hides. Text rotates with the
+         device; meter and REC stay fixed like reference hardware. -->
+    <LinearLayout
+        android:id="@+id/videoHudTop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="16dp"
+        android:visibility="gone">
+
+        <com.matthew.rawlens.RotatingTextView
+            android:id="@+id/videoHudLeft"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="monospace"
+            android:letterSpacing="0.06"
+            android:text="MCRAW • 30FPS"
+            android:textColor="@color/text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <com.matthew.rawlens.RotatingTextView
+            android:id="@+id/videoHudTimecode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:letterSpacing="0.08"
+            android:text="00:00:00:00"
+            android:textColor="@color/text_primary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <com.matthew.rawlens.RotatingTextView
+            android:id="@+id/videoHudRight"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="monospace"
+            android:gravity="end"
+            android:letterSpacing="0.06"
+            android:text="GATE • A"
+            android:textColor="@color/text_primary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Floating audio meter: bottom-end above the capture panel in video
+         mode (runtime margin), mirroring the histogram's floating pattern.
+         Crop selection lives on the quick-panel CROP tile + top strip. -->
+    <com.matthew.rawlens.AudioMeterView
+        android:id="@+id/videoAudioMeter"
+        android:layout_width="110dp"
+        android:layout_height="40dp"
+        android:layout_gravity="end|bottom"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="230dp"
+        android:clickable="true"
+        android:contentDescription="Sound on. Tap to mute next takes."
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <!-- RAW Video debug overlay: same mono contract as rawVfDebugOverlay
+         (fps / encode ms / drops / queue / MB/s / audio+gyro rates). -->
+    <TextView
+        android:id="@+id/videoDebugOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="96dp"
+        android:background="@drawable/manual_control_panel"
+        android:fontFamily="monospace"
+        android:maxWidth="300dp"
+        android:minHeight="48dp"
+        android:gravity="center_vertical"
+        android:padding="12dp"
+        android:textColor="@color/text_primary"
+        android:textSize="10sp"
+        android:visibility="gone" />
+
     <!-- Top bar: 48dp targets, 12dp rhythm, status readable at 10sp. -->
     <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@color/surface" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="72dp" android:paddingStart="12dp" android:paddingTop="12dp" android:paddingEnd="12dp" android:paddingBottom="12dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
@@ -289,14 +378,34 @@
             android:orientation="horizontal"
             android:paddingTop="6dp">
 
-            <com.matthew.rawlens.RotatingImageButton
-                android:id="@+id/quickButton"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:background="@drawable/glass_button"
-                android:contentDescription="Quick controls"
-                android:padding="15dp"
-                android:src="@drawable/ic_tune" />
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical">
+
+                <com.matthew.rawlens.RotatingImageButton
+                    android:id="@+id/quickButton"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:background="@drawable/glass_button"
+                    android:contentDescription="Quick controls"
+                    android:padding="15dp"
+                    android:src="@drawable/ic_tune" />
+
+                <!-- Dedicated RAW Video entry: red record dot below the quick
+                     panel access. Never part of the mode switcher. Tap = enter
+                     video / toggle recording, long-press in video = exit. -->
+                <View
+                    android:id="@+id/videoRecordButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/video_enter"
+                    android:contentDescription="Enter RAW video mode"
+                    android:clickable="true"
+                    android:focusable="true" />
+            </LinearLayout>
 
             <Space
                 android:layout_width="0dp"

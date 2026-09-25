@@ -191,3 +191,21 @@ clean-room in stdlib-only Kotlin/JVM. Pinned HEADs as cloned 2026-09-23
   (`b12e86e`) — global NCC pre-align reference.
 
 Upstream authors provide their work without endorsement of RawLens.
+
+## MediaCinemaRAW-Encoder (vendored, RAW video P0 spike onward)
+
+- Project: MediaCinemaRAW-Encoder
+- Repository: https://github.com/matthew777777/MediaCinemaRAW-Encoder
+- Pinned commit: `14c3ddccef861be2d2a14dc5549915370f721257` (HEAD at vendoring, 2026)
+- License: GNU General Public License version 3 only
+- Vendored files (unmodified, SPDX headers intact):
+  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/Encoder.h`,
+  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/ContainerWriter.h`,
+  `app/src/main/cpp/cinemaraw/src/Encoder.cpp`,
+  `app/src/main/cpp/cinemaraw/src/ContainerWriter.cpp`
+- Purpose: lossless type-7 RAW-frame encoding (RAW16 / packed RAW10 input)
+  plus version-3 `.mcraw` container writing (PCM16 audio, gyro/accel motion)
+  for the planned RAW Video mode. Interop oracle during development:
+  https://github.com/mirsadm/motioncam-decoder (external, not vendored).
+- RawLens JNI bridge (`app/src/main/cpp/cinemaraw_spike_jni.cpp`,
+  `CinemaRawSpike.kt`) is RawLens's own code under the repository license.

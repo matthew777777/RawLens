@@ -161,6 +161,23 @@ add_library(rawLensDng SHARED tinydng_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
 
+# MediaCinemaRAW type-7 encoder (vendored, GPL-3.0-only; see NOTICE.md).
+# C++17 like ncnnMl; the P0 spike JNI rides in the same library so pack and
+# encode stages can be timed separately on device (CPU vs Vulkan verdict).
+add_library(rawLensCinemaRaw SHARED
+    cinemaraw/src/Encoder.cpp
+    cinemaraw/src/ContainerWriter.cpp
+    cinemaraw_spike_jni.cpp
+    cinemaraw_writer_jni.cpp)
+target_include_directories(rawLensCinemaRaw PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/cinemaraw/include")
+set_target_properties(rawLensCinemaRaw PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(rawLensCinemaRaw PRIVATE log)
+target_link_options(rawLensCinemaRaw PRIVATE "-Wl,-z,max-page-size=16384")
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(rawLensCinemaRaw PRIVATE -mfpu=neon)
+endif()
+
 # Zero-copy viewfinder: EGL import bridge, the Vulkan superpixel compute
 # module (import HAL RAW -> RGBA8 superpixel export buffer), and the NEON CPU
 # fallback sampler (fast native replacement for the old Kotlin copy).

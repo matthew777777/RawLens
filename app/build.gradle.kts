@@ -74,6 +74,10 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+    // On-device tests always run against release (CMake -O3): debug native
+    // code is ~40x slower and cannot hold record-mode cadence, so debug
+    // numbers never represent shipping performance.
+    testBuildType = "release"
 
     // Optional on-device DCG probe library, built by tools/build_dcg_vulkan_probe.sh.
     sourceSets.getByName("androidTest").jniLibs.srcDir("build/dcg-probe/jniLibs")
