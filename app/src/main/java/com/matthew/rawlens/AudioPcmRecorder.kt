@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Timestamp model: [AudioRecord] positions live in the audio clock, video
  * frames in boot-time ns. Each chunk's [Chunk.timestampNs] is mapped with
- * [AudioRecord.getTimestamp] ([AudioTimestamp.TIMEBASE_MONOTONIC] =
+ * [AudioRecord.getTimestamp] ([AudioTimestamp.TIMEBASE_BOOTTIME] =
  * `CLOCK_BOOTTIME`, the same domain as `Image.timestamp` when the sensor
  * uses realtime timestamps): `chunkTs = anchorNs +
  * (chunkStartFrame - anchorFrame) * 1e9 / SAMPLE_RATE`. When the anchor call
@@ -84,18 +84,21 @@ internal class AudioPcmRecorder {
             }
             return false
         }
+        // Establish a real recording stream before declaring embedded audio.
+        try {
+            rec.startRecording()
+            check(rec.recordingState == AudioRecord.RECORDSTATE_RECORDING)
+        } catch (e: Exception) {
+            Log.w(TAG, "startRecording failed: ${e.message}")
+            rec.release()
+            return false
+        }
         record = rec
+        anchorWarned = false
         chunkCount.set(0)
         frameCount.set(0)
         running = true
         thread = Thread({
-            try {
-                rec.startRecording()
-            } catch (e: Exception) {
-                Log.w(TAG, "startRecording failed: ${e.message}")
-                running = false
-                return@Thread
-            }
             val shorts = ShortArray(CHUNK_FRAMES)
             val anchor = AudioTimestamp()
             while (running) {
@@ -169,7 +172,7 @@ internal class AudioPcmRecorder {
         val readBased = endNs - readFrames * 1_000_000_000L / SAMPLE_RATE
         val total = frameCount.get() + readFrames // frames incl. this chunk
         val ok = try {
-            rec.getTimestamp(anchor, AudioTimestamp.TIMEBASE_MONOTONIC) ==
+            rec.getTimestamp(anchor, AudioTimestamp.TIMEBASE_BOOTTIME) ==
                 AudioRecord.SUCCESS && anchor.framePosition >= 0
         } catch (_: Exception) {
             false
