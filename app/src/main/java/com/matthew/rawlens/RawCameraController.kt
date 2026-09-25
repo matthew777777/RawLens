@@ -446,6 +446,8 @@ class RawCameraController(
     private var touchFocusLockedSharp = false
     /** Long-press locks ignore the auto-release timer until double-tap. */
     private var focusLockIndefinite = false
+    /** Long-press also freezes AE (CONTROL_AE_LOCK) until the same reset. */
+    private var aeLockIndefinite = false
     /** Elapsed-realtime expiry of a timed lock; 0 when indefinite or unlocked. */
     private var focusLockDeadlineMs = 0L
 
@@ -1995,7 +1997,8 @@ class RawCameraController(
                             output.rcTextureId, output.width / 2, output.height / 2)
                     }.getOrNull()
                     val effectiveFrames = if (rcMean != null)
-                        RawSrMergedNoise.effectiveFrames(rcMean) else 1.0
+                        RawSrMergedNoise.effectiveFrames(
+                            rcMean, output.acceptedFrames.toDouble()) else 1.0
                     val noiseOverride = if (rcMean != null) refMetadata.cfaPattern?.let { pattern ->
                         RawSrMergedNoise.scaleProfile(
                             refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames)
@@ -2063,7 +2066,8 @@ class RawCameraController(
             buildReference = { RawSrMergeJob.buildReferenceFrame(inputs[0]) },
             tempDir = context.cacheDir
         )
-        val effectiveFrames = RawSrMergedNoise.effectiveFrames(result.meanSupport)
+        val effectiveFrames = RawSrMergedNoise.effectiveFrames(
+            result.meanSupport, 1.0 + result.acceptedFrames)
         Log.i(LOG_TAG, "Mosaic SR merged ${stream.geometry.width}x${stream.geometry.height}" +
             " selected=${stream.selected} accepted=${result.acceptedFrames}" +
             " effectiveFrames=${LinearRgbDngWriter.formatEffectiveFrames(effectiveFrames)}" +
@@ -2586,8 +2590,9 @@ class RawCameraController(
 
     /**
      * Press-and-hold variant: focuses at the point like a tap but the sharp
-     * lock ignores the auto-release timer and holds until double-tap reset,
-     * manual focus, lens switch, or stop.
+     * AF lock ignores the auto-release timer and holds until double-tap reset,
+     * reset button, retap, manual focus, lens switch, or stop. Hardware AE
+     * (CONTROL_AE_LOCK) freezes with it, so exposure holds too.
      */
     fun setFocusAndMeteringHold(viewX: Float, viewY: Float) {
         startTouchFocus(viewX, viewY, indefinite = true, updateAe = true)
@@ -2608,9 +2613,12 @@ class RawCameraController(
         if (!hasAfRegions) {
             // Matches Open Camera: AE metering may still have been installed even when the
             // camera has no AF regions, and setFocusAndMeteringArea() reports no focus area.
+            // A hold still freezes AE indefinitely here (AF simply has nothing to lock).
             if (isAeMeteringSupported()) {
                 aeRegion = meteringRegion(viewX, viewY)
+                aeLockIndefinite = indefinite && updateAe && aeRegion != null
                 if (aeRegion != null) updateRepeatingRequest(preserveRawZslBuffer = true)
+                if (aeLockIndefinite) onState("AE LOCKED ∞") else onState("METERING EXPOSURE")
             } else {
                 onState("FOCUS AREA NOT SUPPORTED")
             }
@@ -2634,6 +2642,7 @@ class RawCameraController(
         touchFocusStartSent = false
         touchFocusLockedSharp = false
         focusLockIndefinite = indefinite
+        aeLockIndefinite = indefinite && updateAe
         focusLockDeadlineMs = 0L
         onFocusLock(false, false, 0L)
         publishControls()
@@ -2674,6 +2683,7 @@ class RawCameraController(
             openCameraTouchFocusActive = false
             touchFocusLockedSharp = false
             focusLockIndefinite = false
+            aeLockIndefinite = false
             focusLockDeadlineMs = 0L
             onFocusLock(false, false, 0L)
             updateRepeatingRequest(preserveRawZslBuffer = true)
@@ -2703,6 +2713,7 @@ class RawCameraController(
             touchFocusStartSent = false
             touchFocusLockedSharp = false
             focusLockIndefinite = false
+            aeLockIndefinite = false
             focusLockDeadlineMs = 0L
             onFocusLock(false, false, 0L)
             updateRepeatingRequest(preserveRawZslBuffer = true)
@@ -2802,12 +2813,15 @@ class RawCameraController(
         }
         if (openCameraTouchFocusActive) {
             continuousFocusResetOpenCamera()
+            return
         }
-        val hadTargets = afRegion != null || aeRegion != null
+        val hadTargets = afRegion != null || aeRegion != null || aeLockIndefinite
         afRegion = null
         aeRegion = null
+        aeLockIndefinite = false
         if (hadTargets) updateRepeatingRequest(preserveRawZslBuffer = true)
         onMeteringReleased()
+        onState("AE/AF RESET")
     }
 
     private fun meteringRegion(viewX: Float, viewY: Float): MeteringRectangle? {
@@ -3694,6 +3708,7 @@ class RawCameraController(
                     touchFocusStartSent = false
                     touchFocusLockedSharp = false
                     focusLockIndefinite = false
+                    aeLockIndefinite = false
                     focusLockDeadlineMs = 0L
                     onFocusLock(false, false, 0L)
                     openCameraTouchFocusActive = false
@@ -4085,6 +4100,11 @@ class RawCameraController(
         } else {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, exposureCompensation)
+            // Touch-hold AE lock: freeze hardware AE at the held metering point until
+            // double-tap / reset-button / retap / manual / lens-switch / stop.
+            // CONTROL_AE_LOCK is only meaningful with AE ON; manual/PROGRAM exposure
+            // already drives the sensor directly so the lock stays off there.
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, aeLockIndefinite)
         }
         val kelvin = selectedWbKelvin
         if (kelvin == null) {
@@ -4288,7 +4308,7 @@ class RawCameraController(
                     touchFocusLockedSharp = true
                     if (focusLockIndefinite) {
                         focusLockDeadlineMs = 0L
-                        onState("FOCUS LOCKED ∞")
+                        onState(if (aeLockIndefinite) "AE/AF LOCKED ∞" else "FOCUS LOCKED ∞")
                     } else {
                         focusLockDeadlineMs =
                             SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
@@ -4339,6 +4359,13 @@ class RawCameraController(
         removeOpenCameraTouchFocusTimeout()
         removePendingTouchFocusStart()
         onState(status)
+        // A failed indefinite hold keeps the held AE lock (no badge, no timer):
+        // the user asked to freeze exposure, AF just missed. Release stays manual
+        // (double-tap / reset / retap / manual / lens / stop).
+        if (focusLockIndefinite) {
+            updateRepeatingRequest(preserveRawZslBuffer = true)
+            return
+        }
         focusLockDeadlineMs = SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
         scheduleOpenCameraContinuousFocusReset()
         updateRepeatingRequest(preserveRawZslBuffer = true)
@@ -4370,11 +4397,14 @@ class RawCameraController(
     }
 
     private fun continuousFocusResetOpenCamera() {
-        if (!openCameraTouchFocusActive) return
+        if (!openCameraTouchFocusActive && !aeLockIndefinite) return
         removeOpenCameraContinuousFocusReset()
         removeOpenCameraTouchFocusTimeout()
         removePendingTouchFocusStart()
         touchFocusStartSent = false
+        // Clear before the CANCEL + repeating rebuild below so both carry
+        // AE_LOCK=false and the HAL actually releases a held exposure lock.
+        aeLockIndefinite = false
         val device = camera
         val currentSession = session
         val surface = previewSurface
@@ -5852,6 +5882,7 @@ class RawCameraController(
             touchFocusStartSent = false
             touchFocusLockedSharp = false
             focusLockIndefinite = false
+            aeLockIndefinite = false
             focusLockDeadlineMs = 0L
             removeOpenCameraTouchFocusTimeout()
             removeOpenCameraContinuousFocusReset()
