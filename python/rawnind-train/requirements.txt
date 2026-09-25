@@ -1,0 +1,10 @@
+# Mac training stack for python/rawnind-train (Apple Silicon MPS).
+# Install:  pip install -r requirements.txt
+torch>=2.2              # MPS backend for Apple Silicon; CPU fallback elsewhere
+numpy>=1.24
+# DNG reading: rawpy preferred (true black/white/CFA tags); tiffile fallback.
+rawpy>=0.18
+imageio>=2.30
+# Export verification only (conversion itself uses the external pnnx binary).
+onnx>=1.15
+onnxruntime>=1.17
