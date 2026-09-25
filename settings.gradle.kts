@@ -8,4 +8,5 @@ dependencyResolutionManagement {
 rootProject.name = "RawLens"
 include(":app")
 include(":tools:mosaic-desktop")
-include(":tools:burst-reconstruction-desktop")
+include(":tools:sr-vulkan")
+include(":tools:linear-sr-desktop")
