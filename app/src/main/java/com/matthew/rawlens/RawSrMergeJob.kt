@@ -3,8 +3,6 @@
 
 package com.matthew.rawlens
 
-import android.opengl.GLES30
-import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** Thrown when no merged artifact may be produced; the caller falls back or reports. */
@@ -82,7 +80,7 @@ object RawSrMergeDecisions {
  */
 object RawSrMergeJob {
     private const val TAG = "RawLensMosaic"
-    /** Band height for [readRgbaFloat]: 256 rows keep the direct scratch at ~17MB at 12MP. */
+    /** Band height for [readRgbaFloat]: 256 rows keep each band at ~17MB at 12MP. */
     private const val READBACK_STRIP_ROWS = 256
 
     /**
@@ -155,61 +153,35 @@ object RawSrMergeJob {
     }
 
     /**
-     * Full-resolution float readback for merged RGBA32F textures. Banded so
-     * the transient direct scratch stays small (~17MB per 256-row band at
-     * 12MP); only the returned array is full-frame.
+     * Full-resolution float readback for merged RGBA32F images. Banded so
+     * each transient band stays small (~17MB per 256-row band at 12MP);
+     * only the returned array is full-frame.
      */
-    fun readRgbaFloat(textureId: Int, width: Int, height: Int): FloatArray {
-        require(textureId != 0 && width > 0 && height > 0)
+    fun readRgbaFloat(imageId: Int, width: Int, height: Int): FloatArray {
+        require(imageId != 0 && width > 0 && height > 0)
         val out = FloatArray(Math.multiplyExact(Math.multiplyExact(width, height), 4))
-        val framebuffer = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffer, 0)
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, textureId, 0
-            )
-            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
-                GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                "Merged RGB framebuffer is incomplete; no merged artifact may be produced"
-            }
-            val bytes = ByteBuffer.allocateDirect(Math.multiplyExact(
-                Math.multiplyExact(width, minOf(READBACK_STRIP_ROWS, height)), 4 * Float.SIZE_BYTES
-            )).order(ByteOrder.nativeOrder())
-            val floats = bytes.asFloatBuffer()
-            var y = 0
-            while (y < height) {
-                val rows = minOf(READBACK_STRIP_ROWS, height - y)
-                val pixels = Math.multiplyExact(width, rows)
-                bytes.clear()
-                GLES30.glReadPixels(0, y, width, rows, GLES30.GL_RGBA, GLES30.GL_FLOAT, bytes)
-                check(GLES30.glGetError() == GLES30.GL_NO_ERROR) {
-                    "Merged RGB readback failed; no merged artifact may be produced"
-                }
-                floats.clear()
-                floats.get(out, Math.multiplyExact(Math.multiplyExact(y, width), 4), pixels * 4)
-                y += rows
-            }
-            return out
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+        var y = 0
+        while (y < height) {
+            val rows = minOf(READBACK_STRIP_ROWS, height - y)
+            vkDownloadRgba32fRegion(imageId, 0, y, width, rows)
+                .copyInto(out, Math.multiplyExact(Math.multiplyExact(y, width), 4))
+            y += rows
         }
+        return out
     }
 
     /**
-     * Memory-bounded single-band readback of a merged RGBA32F texture for
+     * Memory-bounded single-band readback of a merged RGBA32F image for
      * [LinearRgbDngWriter.writeStriped]: rows `[startY, startY+rows)` land
      * as RGB triplets at `rgb[rgbOffset, rgbOffset+width*rows*3)` in
      * [MergedLinearRgb] row order, with alpha dropped at the boundary. Peak
-     * transient per band is the direct scratch plus one RGBA row (~17MB
-     * for 256 rows at 12MP) instead of ~380MB for a whole-frame readback.
-     * Values are bitwise-identical to the corresponding slice of
+     * transient per band is one RGBA band (~17MB for 256 rows at 12MP)
+     * instead of ~380MB for a whole-frame readback. Values are
+     * bitwise-identical to the corresponding slice of
      * [MergedLinearRgb.toTriplets] over [readRgbaFloat].
      */
     fun readMergedRgbStrip(
-        textureId: Int,
+        imageId: Int,
         width: Int,
         height: Int,
         startY: Int,
@@ -217,7 +189,7 @@ object RawSrMergeJob {
         rgb: FloatArray,
         rgbOffset: Int = 0
     ) {
-        require(textureId != 0 && width > 0 && height > 0)
+        require(imageId != 0 && width > 0 && height > 0)
         require(startY in 0 until height && rows > 0 && startY + rows <= height) {
             "Strip [$startY, ${startY + rows}) must lie inside 0..$height"
         }
@@ -225,79 +197,32 @@ object RawSrMergeJob {
         require(rgbOffset >= 0 && rgb.size - rgbOffset >= samples) {
             "RGB strip buffer too small for $rows row(s) at width $width"
         }
-        val framebuffer = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffer, 0)
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, textureId, 0
-            )
-            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
-                GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                "Merged RGB framebuffer is incomplete; no merged artifact may be produced"
-            }
-            val pixels = Math.multiplyExact(width, rows)
-            val bytes = ByteBuffer.allocateDirect(Math.multiplyExact(pixels, 4 * Float.SIZE_BYTES))
-                .order(ByteOrder.nativeOrder())
-            GLES30.glReadPixels(0, startY, width, rows, GLES30.GL_RGBA, GLES30.GL_FLOAT, bytes)
-            check(GLES30.glGetError() == GLES30.GL_NO_ERROR) {
-                "Merged RGB readback failed; no merged artifact may be produced"
-            }
-            copyRgbaRowsToRgb(bytes.asFloatBuffer(), width, rows, rgb, rgbOffset)
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
-        }
+        val band = vkDownloadRgba32fRegion(imageId, 0, startY, width, rows)
+        copyRgbaRowsToRgb(java.nio.FloatBuffer.wrap(band), width, rows, rgb, rgbOffset)
     }
 
     /**
-     * Mean per-quad support (1 + Rc) from a merged R32F robustness texture,
+     * Mean per-quad support (1 + Rc) from a merged R32F robustness image,
      * for the merged noise model (see RawSrMergedNoise). Banded like
-     * [readMergedRgbStrip] so only one 256-row scratch (~3MB at 12MP quads)
-     * is transient; the texture itself is never retained. Throws on GL
-     * failure: callers fall back to the reference profile, never to a
-     * fabricated scale.
+     * [readMergedRgbStrip] so only one 256-row band (~3MB at 12MP quads)
+     * is transient; the image itself is never retained. Throws on GPU
+     * readback failure: callers fall back to the reference profile, never
+     * to a fabricated scale.
      */
-    fun readRcMeanSupport(textureId: Int, quadsW: Int, quadsH: Int): Double {
-        require(textureId != 0 && quadsW > 0 && quadsH > 0)
-        val framebuffer = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffer, 0)
-        try {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer[0])
-            GLES30.glFramebufferTexture2D(
-                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                GLES30.GL_TEXTURE_2D, textureId, 0
-            )
-            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
-                GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                "Robustness framebuffer is incomplete; no merged noise scale may be derived"
+    fun readRcMeanSupport(imageId: Int, quadsW: Int, quadsH: Int): Double {
+        require(imageId != 0 && quadsW > 0 && quadsH > 0)
+        var sum = 0.0
+        var y = 0
+        while (y < quadsH) {
+            val rows = minOf(READBACK_STRIP_ROWS, quadsH - y)
+            val band = vkDownloadR32fRegion(imageId, 0, y, quadsW, rows)
+            for (v in band) {
+                val s = 1.0 + v.toDouble()
+                sum += if (s.isFinite()) s else 1.0
             }
-            val bytes = ByteBuffer.allocateDirect(Math.multiplyExact(
-                Math.multiplyExact(quadsW, minOf(READBACK_STRIP_ROWS, quadsH)), Float.SIZE_BYTES
-            )).order(ByteOrder.nativeOrder())
-            val floats = bytes.asFloatBuffer()
-            var sum = 0.0
-            var y = 0
-            while (y < quadsH) {
-                val rows = minOf(READBACK_STRIP_ROWS, quadsH - y)
-                val count = Math.multiplyExact(quadsW, rows)
-                bytes.clear()
-                GLES30.glReadPixels(0, y, quadsW, rows, GLES30.GL_RED, GLES30.GL_FLOAT, bytes)
-                check(GLES30.glGetError() == GLES30.GL_NO_ERROR) {
-                    "Robustness readback failed; no merged noise scale may be derived"
-                }
-                for (i in 0 until count) {
-                    val s = 1.0 + floats.get(i).toDouble()
-                    sum += if (s.isFinite()) s else 1.0
-                }
-                y += rows
-            }
-            return sum / (quadsW.toLong() * quadsH)
-        } finally {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES30.glDeleteFramebuffers(1, framebuffer, 0)
+            y += rows
         }
+        return sum / (quadsW.toLong() * quadsH)
     }
 
     /** Bulk-copy one row at a time, preserving float bits and omitting only alpha. */
