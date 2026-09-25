@@ -9,10 +9,10 @@ import kotlin.math.sin
 /**
  * Device-frame gyroscope rates into the desktop pipeline's camera frame.
  *
- * The desktop (`tools/burst-reconstruction-desktop`) merges in STORED sensor
- * orientation and assumes gyro xyz is already expressed in the camera frame
- * (its words), i.e. in stored-image axes: X right along columns, Y down
- * along rows. Its seed convention is pinned operationally
+ * The desktop pipeline merges in STORED sensor orientation and assumes gyro
+ * xyz is already expressed in the camera frame (its words), i.e. in
+ * stored-image axes: X right along columns, Y down along rows. Its seed
+ * convention is pinned operationally
  * (`GlobalAlign.seedFromRotation`, `GyroSyncTest.seedRotatesAboutPrincipalPoint`):
  * content shift ∝ (+fx·ry, −fy·rx), and +rz rotates content clockwise on
  * screen. Feeding it device-frame rates unmapped (or wrong-signed) yields

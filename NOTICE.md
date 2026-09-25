@@ -154,8 +154,8 @@ crop phase, defined CFA-preserving border sampling, and its ACEScg output path.
 
 ## Burst-reconstruction rewrite references (research-only, not shipped)
 
-The following checkouts live in git-ignored `references/upstream/` and are
-study references for the `tools/burst-reconstruction-desktop` full rewrite.
+The following checkouts live in git-ignored `references/upstream/` and were
+study references for the retired desktop rewrite.
 No upstream code is copied into RawLens; algorithms are reimplemented
 clean-room in stdlib-only Kotlin/JVM. Pinned HEADs as cloned 2026-09-23
 (`--depth 1`); cite hashes, not branches.
