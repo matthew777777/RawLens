@@ -1,13 +1,13 @@
 # sr-vulkan — unified SR merging library + desktop CLIs
 
 One library for Android (NDK) and desktop (Linux/macOS): the phone's exact
-SR core (see `PARITY.md`) with CPU backends today and the unified Vulkan
-compute backend next. Thin CLIs iterate on burst DNGs with no device:
+SR core (see `PARITY.md`) with CPU and unified Vulkan compute backends.
+Thin CLIs iterate on burst DNGs with no device:
 
 - `tools/mosaic-desktop`: Mosaic SR → derived-Bayer DNG (CPU streaming,
   same calls as `runSrMosaicDng`)
 - `tools/linear-sr-desktop`: Linear RGB SR → LinearRaw DNG (CPU oracle
-  `RawSrBayerMerge.merge`; `--backend=vulkan` arrives with the GPU path)
+  `RawSrBayerMerge.merge`, or `--backend vulkan` for the GPU path)
 
 ## Prerequisites
 
@@ -40,8 +40,9 @@ $LINEAR --in <dng-dir> --out /tmp/lin --crop 0,0,512,512
 $MOSAIC --in <dng-dir> --out /tmp/mos-full
 $LINEAR --in <dng-dir> --out /tmp/lin-full --backend vulkan
 
-# Hand-picked files (order kept), explicit reference, cache dir
-$MOSAIC --in <dng-dir> --out /tmp/mos --files a.dng,b.dng,c.dng --ref 1
+# Hand-picked files (order kept; paths resolve against the working
+# directory, NOT --in), explicit reference, cache dir
+$MOSAIC --in <dng-dir> --out /tmp/mos --files <dng-dir>/a.dng,<dng-dir>/b.dng --ref 1
 ```
 
 Flags: `--in DIR` `--out DIR` `--ref N` (default middle) `--cache DIR`

@@ -63,6 +63,17 @@ The DNG target compiles the checked-in PhotonCamera `dngCreator.cpp` directly, g
 
 To create a distributable release, configure your own Android signing key and build a signed release APK or App Bundle using Android Studio. Signing credentials and keystores must never be committed.
 
+## Desktop super-resolution (no device)
+
+`tools/` hosts the unified SR library (`tools/sr-vulkan`, same sources the
+app compiles for NDK) plus mosaic/linear burst-DNG CLIs for Linux and macOS
+(M1 included). Start at [tools/README.md](tools/README.md):
+
+```bash
+./gradlew :tools:mosaic-desktop:installDist :tools:linear-sr-desktop:installDist
+./gradlew :tools:sr-vulkan:check   # parity + unit tests
+```
+
 ## GitHub release checklist
 
 1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
