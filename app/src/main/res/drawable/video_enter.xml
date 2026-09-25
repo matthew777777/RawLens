@@ -1,0 +1,20 @@
+<!-- RAW Video entry dot: red ring + red center dot on transparent. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@android:color/transparent" />
+            <stroke android:width="2dp" android:color="@color/danger" />
+            <size android:width="48dp" android:height="48dp" />
+        </shape>
+    </item>
+    <item
+        android:left="17dp"
+        android:top="17dp"
+        android:right="17dp"
+        android:bottom="17dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/danger" />
+            <size android:width="14dp" android:height="14dp" />
+        </shape>
+    </item>
+</layer-list>

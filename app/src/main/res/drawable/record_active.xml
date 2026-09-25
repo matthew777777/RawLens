@@ -1,0 +1,10 @@
+<!-- RAW Video recording core: solid cinema red with a darker red stroke. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/danger" />
+            <stroke android:width="3dp" android:color="#CC7A1A1A" />
+            <size android:width="72dp" android:height="72dp" />
+        </shape>
+    </item>
+</selector>
