@@ -145,6 +145,27 @@ else()
     target_link_libraries(ncnnMl PRIVATE log)
 endif()
 
+# Unified srvulkan compute backend: the SAME sources the desktop build
+# compiles (tools/sr-vulkan/src/main/cpp), referenced by path so the file
+# is literally shared. Serves the app's VkRawSrProcessor through the
+# com.matthew.rawlens.SrVulkan JNI facade (same package, same symbols).
+set(SRVK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/sr-vulkan/src/main/cpp")
+if(EXISTS "${SRVK_DIR}/srvk_compute.cpp")
+    add_library(srvulkan SHARED
+        "${SRVK_DIR}/srvk_compute.cpp"
+        "${SRVK_DIR}/srvk_resources.cpp"
+        "${SRVK_DIR}/srvk_jni.cpp")
+    target_include_directories(srvulkan PRIVATE "${SRVK_DIR}")
+    target_compile_options(srvulkan PRIVATE -Wall -Wextra -Werror=return-type)
+    find_library(SRVK_VULKAN_LIB vulkan REQUIRED)
+    find_library(SRVK_LOG_LIB log REQUIRED)
+    target_link_libraries(srvulkan PRIVATE ${SRVK_VULKAN_LIB} ${SRVK_LOG_LIB})
+    set_target_properties(srvulkan PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_link_options(srvulkan PRIVATE "-Wl,-z,max-page-size=16384")
+else()
+    message(FATAL_ERROR "shared srvulkan sources not found at ${SRVK_DIR} (repo layout changed?)")
+endif()
+
 # Pinned TinyDNG v3 writer. The app supplies Camera2 metadata as checked TIFF fields.
 set(TINYDNG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/tinydng")
 add_library(tinydng_v3 STATIC
