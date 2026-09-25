@@ -1,0 +1,7 @@
+# Apple-Silicon training stack for train_mlx.py (M1/M2/M3/M4 only).
+# Install:  pip install -r requirements-mlx.txt
+mlx>=0.20
+# Dataset reuse + weight transfer + ONNX export still need the base stack:
+#   pip install -r requirements.txt
+# (torch is required by train.py's streaming dataset, transfer_mlx_to_torch.py,
+# and export.py; onnxruntime verifies the export.)
