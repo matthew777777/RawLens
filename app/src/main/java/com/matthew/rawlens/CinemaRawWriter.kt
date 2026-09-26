@@ -111,19 +111,27 @@ internal object CinemaRawWriter {
     }
 
     /**
-     * Append one PCM16 mono chunk. [samples] holds [frames] little-endian
-     * int16 samples; [timestampNs] is the first sample's time on the video
-     * frame timeline (boot-time ns). Returns payload bytes written.
+     * Append one PCM16 chunk with [channels] interleaved channels (1 or 2).
+     * [samples] holds `frames * channels` little-endian int16 samples;
+     * [timestampNs] is the first frame's time on the video frame timeline
+     * (recording-relative ns). The container is channel-agnostic — it
+     * stores the int16 array verbatim; players interpret channels via
+     * `extraData.audioChannels`. Returns payload bytes written.
      */
-    fun writeAudio(handle: Long, samples: ByteBuffer, frames: Int, timestampNs: Long): Int {
+    fun writeAudio(
+        handle: Long, samples: ByteBuffer, frames: Int, channels: Int, timestampNs: Long
+    ): Int {
         require(frames > 0) { "Empty audio chunk" }
+        require(channels == 1 || channels == 2) { "Bad channel count $channels" }
         require(samples.isDirect) { "CinemaRawWriter needs a direct buffer" }
-        require(samples.remaining() >= frames * 2) {
-            "Audio buffer holds ${samples.remaining()}, needs ${frames * 2}"
+        require(samples.remaining() >= frames * channels * 2) {
+            "Audio buffer holds ${samples.remaining()}, needs ${frames * channels * 2}"
         }
         if (!available) throw IllegalStateException("cinemaraw native library unavailable")
         val written = try {
-            containerWriteAudio(handle, samples, samples.position(), frames, timestampNs)
+            containerWriteAudio(
+                handle, samples, samples.position(), frames * channels, timestampNs
+            )
         } catch (e: UnsatisfiedLinkError) {
             throw IllegalStateException("cinemaraw writer missing", e)
         }
@@ -132,9 +140,12 @@ internal object CinemaRawWriter {
     }
 
     /**
-     * Append one motion chunk: [count] samples, [timestampsNs] length [count],
-     * [axes] length `count * 3` (x/y/z triplets). Gyro axes are rad/s in the
-     * camera frame (map with [GyroCameraFrameMapper] before calling);
+     * Append motion samples: [count] samples, [timestampsNs] length [count],
+     * [axes] length `count * 3` (x/y/z triplets). The native writer buffers
+     * and coalesces them — at most one chunk per sensor per committed frame
+     * plus a trailing chunk at close — because motioncam-decoder rejects
+     * files with more motion chunks than frames + 1. Gyro axes are rad/s in
+     * the camera frame (map with [GyroCameraFrameMapper] before calling);
      * accel axes are m/s^2 including gravity, platform convention.
      * Timestamps are boot-time ns on the video frame timeline, ascending.
      * Returns samples written.
@@ -176,7 +187,7 @@ internal object CinemaRawWriter {
     ): Int
 
     external fun containerWriteAudio(
-        handle: Long, samples: ByteBuffer, offset: Int, frames: Int,
+        handle: Long, samples: ByteBuffer, offset: Int, totalShorts: Int,
         timestampNs: Long
     ): Int
 

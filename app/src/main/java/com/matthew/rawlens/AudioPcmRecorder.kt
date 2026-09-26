@@ -12,8 +12,10 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * P4 PCM16 audio capture for RAW video: 48 kHz mono from the camcorder mic,
- * chunked for the `.mcraw` container.
+ * P4 PCM16 audio capture for RAW video: 48 kHz stereo-first from the
+ * camcorder mic (mono fallback when stereo init fails), chunked for the
+ * `.mcraw` container. Stereo is the reference configuration — PhotonCamera
+ * records it and motioncam-decoder's own fixture declares it.
  *
  * Timestamp model: [AudioRecord] positions live in the audio clock, video
  * frames in boot-time ns. Each chunk's [Chunk.timestampNs] is mapped with
@@ -26,12 +28,17 @@ import java.util.concurrent.atomic.AtomicLong
  * frame ts; the record test asserts that loosely, not sample-exactness.
  *
  * Owns its thread and never touches [CinemaRawWriter]: chunks are handed to
- * the recorder's encode thread, which owns all container writes.
+ * the recorder's encode thread, which owns all container writes. Chunk
+ * timestamps stay boot-time here; the committer rebases them to
+ * recording-relative on write (absolute timestamps overflow 32-bit ms
+ * math in some readers, breaking audio sync).
  */
 internal class AudioPcmRecorder {
     data class Chunk(
-        val data: ByteBuffer, // direct, PCM16LE, position 0, limit frames*2
-        val frames: Int,
+        // direct PCM16LE, position 0, limit frames*channels*2 (interleaved)
+        val data: ByteBuffer,
+        val frames: Int, // per-channel frames; shorts = frames*channels
+        val channels: Int, // 1 or 2, always matches [AudioPcmRecorder.channels]
         val timestampNs: Long, // first sample, boot-time ns
     )
 
@@ -43,6 +50,10 @@ internal class AudioPcmRecorder {
     private val chunkCount = AtomicLong(0)
     private val frameCount = AtomicLong(0)
 
+    /** Selected channel count (2 preferred, 1 fallback). Valid after [start]. */
+    var channels = 0
+        private set
+
     /** Latest chunk peak 0..1 (mono max abs) for HUD meters. Stale-safe: HUD decays it. */
     @Volatile var lastPeak = 0f
         private set
@@ -53,57 +64,74 @@ internal class AudioPcmRecorder {
      */
     fun start(onChunk: (Chunk) -> Unit): Boolean {
         check(thread == null) { "Already started" }
-        val minBuf = try {
-            AudioRecord.getMinBufferSize(
-                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "mic unavailable: ${e.message}")
-            return false
-        }
-        if (minBuf <= 0) {
-            Log.w(TAG, "mic unavailable: bad min buffer $minBuf")
-            return false
-        }
-        val rec = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.CAMCORDER, SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                minBuf * 4
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "mic unavailable: ${e.message}")
-            return false
-        }
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            Log.w(TAG, "mic unavailable: state=${rec.state}")
-            try {
-                rec.release()
+        // Stereo first (the reference configuration), mono fallback.
+        // Each candidate must fully initialize AND record before it is
+        // kept; anything else is released and the next is tried.
+        val configs = listOf(
+            AudioFormat.CHANNEL_IN_STEREO to 2,
+            AudioFormat.CHANNEL_IN_MONO to 1,
+        )
+        var rec: AudioRecord? = null
+        var selected = 0
+        for ((mask, ch) in configs) {
+            val minBuf = try {
+                AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE, mask, AudioFormat.ENCODING_PCM_16BIT
+                )
             } catch (_: Exception) {
+                continue
             }
+            if (minBuf <= 0) continue
+            val candidate = try {
+                AudioRecord(
+                    MediaRecorder.AudioSource.CAMCORDER, SAMPLE_RATE,
+                    mask, AudioFormat.ENCODING_PCM_16BIT,
+                    minBuf * 4
+                )
+            } catch (_: Exception) {
+                continue
+            }
+            if (candidate.state != AudioRecord.STATE_INITIALIZED) {
+                try {
+                    candidate.release()
+                } catch (_: Exception) {
+                }
+                continue
+            }
+            // Establish a real recording stream before declaring audio.
+            try {
+                candidate.startRecording()
+                check(candidate.recordingState == AudioRecord.RECORDSTATE_RECORDING)
+            } catch (_: Exception) {
+                try {
+                    candidate.release()
+                } catch (_: Exception) {
+                }
+                continue
+            }
+            rec = candidate
+            selected = ch
+            break
+        }
+        if (rec == null) {
+            Log.w(TAG, "mic unavailable: no channel config records")
             return false
         }
-        // Establish a real recording stream before declaring embedded audio.
-        try {
-            rec.startRecording()
-            check(rec.recordingState == AudioRecord.RECORDSTATE_RECORDING)
-        } catch (e: Exception) {
-            Log.w(TAG, "startRecording failed: ${e.message}")
-            rec.release()
-            return false
-        }
-        record = rec
+        channels = selected
+        Log.i(TAG, "recording $selected channels")
+        val active = rec
+        record = active
         anchorWarned = false
         chunkCount.set(0)
         frameCount.set(0)
         running = true
         thread = Thread({
-            val shorts = ShortArray(CHUNK_FRAMES)
+            val ch = selected
+            val shorts = ShortArray(CHUNK_FRAMES * ch)
             val anchor = AudioTimestamp()
             while (running) {
                 val read: Int = try {
-                    rec.read(shorts, 0, CHUNK_FRAMES)
+                    active.read(shorts, 0, shorts.size)
                 } catch (e: Exception) {
                     Log.w(TAG, "audio read failed: ${e.message}")
                     break
@@ -112,28 +140,32 @@ internal class AudioPcmRecorder {
                     Log.w(TAG, "audio read error $read")
                     break
                 }
-                if (read == 0) continue
-                val tsNs = anchorFor(rec, anchor, read)
+                // Whole frames only: a trailing half-frame would shift
+                // every later channel alignment in the container.
+                val frames = read / ch
+                if (frames == 0) continue
+                val kept = frames * ch
+                val tsNs = anchorFor(active, anchor, frames)
                 var peak = 0
-                for (i in 0 until read) {
+                for (i in 0 until kept) {
                     val a = kotlin.math.abs(shorts[i].toInt())
                     if (a > peak) peak = a
                 }
                 lastPeak = (peak / 32768f).coerceIn(0f, 1f)
-                val direct = ByteBuffer.allocateDirect(read * 2)
+                val direct = ByteBuffer.allocateDirect(kept * 2)
                     .order(ByteOrder.nativeOrder())
-                for (i in 0 until read) direct.putShort(shorts[i])
+                for (i in 0 until kept) direct.putShort(shorts[i])
                 direct.flip()
                 chunkCount.incrementAndGet()
-                frameCount.addAndGet(read.toLong())
+                frameCount.addAndGet(frames.toLong())
                 try {
-                    onChunk(Chunk(direct, read, tsNs))
+                    onChunk(Chunk(direct, frames, ch, tsNs))
                 } catch (e: Exception) {
                     Log.w(TAG, "audio chunk dropped: ${e.message}")
                 }
             }
             try {
-                rec.stop()
+                active.stop()
             } catch (_: Exception) {
             }
         }, "RawVideoAudio").apply { start() }

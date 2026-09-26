@@ -36,22 +36,28 @@ import java.util.concurrent.atomic.AtomicLongArray
  * Pipeline (60fps-ready by design, 30fps sustained on MT6878 Open Gate):
  * - Camera thread acquires, assigns sequence numbers, fans out to the live
  *   Vulkan VF, and queues bounded (cap 8, drop-oldest): cadence over latency.
- * - N encode workers ([encodeWorkers], default 2, up to 4) encode RAW16
- *   planes concurrently into pooled payload buffers (~15ms effective at 2x).
+ * - N encode workers ([encodeWorkers], default 3, up to 4) encode RAW16
+ *   planes concurrently into pooled payload buffers (~10ms effective at 3x).
  * - One committer drains a sequence-numbered reorder buffer strictly in
  *   capture order (the container rejects timestamp regressions), plus audio
  *   and motion. A wedged head is skipped after [SKIP_TIMEOUT_MS] so one
- *   slow frame costs a gap, never a stall; footer == encoded - skipped.
+ *   slow frame costs a gap, never a stall; a dropped head is skipped
+ *   immediately once no stage can deliver it. Footer == encoded - latePurged.
  * - HAL RAW16 plane -> encoder -> container, no per-frame files (this is
  *   the PhotonCamera gap: no thread-per-DNG, no MediaStore churn).
  * - [crop] switches Open Gate / 16:9 / 2.39:1 / 2.00:1 via the encoder's
  *   crop args with no session reconfiguration. Safe to change
  *   mid-recording (fps locks at record start).
- * - P4 streams: PCM16 mono audio ([AudioPcmRecorder]) and continuous
- *   gyro/accel ([MotionRecorder]) share the video frame timeline
- *   (boot-time ns). All container writes happen on the committer — the
- *   native writer has no locking. Missing streams are legal: denial/missing
- *   hardware records silent/still video instead of failing.
+ * - P4 streams: PCM16 stereo-first audio ([AudioPcmRecorder]) and continuous
+ *   gyro/accel ([MotionRecorder]) share the video frame timeline. Capture
+ *   runs on boot-time ns, but every on-disk timestamp is
+ *   recording-relative (`ts - timeOriginNs`, the first queued frame's
+ *   sensor ts): readers do 32-bit ms math that absolute timestamps
+ *   overflow, breaking audio sync (PhotonCamera's fix). Audio/motion
+ *   pre-roll without video is dropped so all timelines start together.
+ *   All container writes happen on the committer — the native writer has
+ *   no locking. Missing streams are legal: denial/missing hardware
+ *   records silent/still video instead of failing.
  * - Live preview fan-out: frames are adopted into [RawImageOwnership] and
  *   offered to the RAW viewfinder ([attachViewfinder]) on the camera thread
  *   while workers encode the same frames. The Vulkan zero-copy GPU path
@@ -71,8 +77,10 @@ internal class RawVideoRecorder(
         val framesAcquired: Int,
         val framesEncoded: Int,
         val framesDropped: Int,
-        /** Encoded but never committed (reorder skip/timeout): footer == encoded - skipped. */
+        /** Capture gaps (dropped/wedged heads skipped over): committed in-order around them. */
         val commitSkipped: Int,
+        /** Encoded but never committed (arrived after its skip): footer == encoded - latePurged. */
+        val latePurged: Int,
         val audioChunks: Int,
         val audioFrames: Long,
         val audioDropped: Int,
@@ -92,10 +100,17 @@ internal class RawVideoRecorder(
         val frameIntervalMs: Float,
         val encodeMsAvg: Float,
         val encodeMsMax: Float,
+        val resultWaitMsAvg: Float,
+        val resultWaitMsMax: Float,
+        val closeMsAvg: Float,
+        val closeMsMax: Float,
+        val writeMsAvg: Float,
+        val writeMsMax: Float,
         val framesAcquired: Int,
         val framesEncoded: Int,
         val framesDropped: Int,
         val commitSkipped: Int,
+        val latePurged: Int,
         val queueDepth: Int,
         val reorderDepth: Int,
         val fileBytes: Long,
@@ -106,9 +121,13 @@ internal class RawVideoRecorder(
         val cropLabel: String,
     )
 
-    /** Encode worker count, set before [start]. 2 sustains 30fps Open Gate
-     * on MT6878; 3-4 targets 60fps gates on stronger SoCs (more heat). */
-    var encodeWorkers: Int = 2
+    /** Encode worker count, set before [start]. 3 sustains 30fps Open Gate
+     * with one worker to spare: a wedged/exiled worker is parked, and the
+     * two survivors still cover 30fps (~66ms each). 2 has no redundancy —
+     * one parked worker leaves a solo ~22fps feed. 4 targets 60fps gates on
+     * stronger SoCs (more heat). Idle workers block in take(), so
+     * steady-state CPU/heat is unchanged; only burst parallelism grows. */
+    var encodeWorkers: Int = 3
 
     /** Switchable any time, including mid-recording; no session reconfig. */
     @Volatile var crop: VideoCrop = VideoCrop.OPEN_GATE
@@ -189,10 +208,21 @@ internal class RawVideoRecorder(
     private val workerParked = java.util.concurrent.atomic.AtomicIntegerArray(MAX_WORKERS)
     private var nextSeq = 0L // camera thread only
     private var nextCommitSeq = 0L // committer thread only
+    /**
+     * Container timestamp origin: the first queued frame's sensor ts.
+     * Written once on the camera thread, read on workers (frame metadata)
+     * and the committer (frame/audio/motion rebasing). Every on-disk
+     * timestamp is recording-relative (`ts - origin`) because readers do
+     * 32-bit ms math that absolute boot-time timestamps overflow, breaking
+     * audio sync entirely (PhotonCamera's fix, our MotionCam Tools
+     * symptom). In-memory tracking (reorder, fps) stays absolute.
+     */
+    @Volatile private var timeOriginNs = Long.MIN_VALUE
     private val acquired = AtomicInteger(0)
     private val encoded = AtomicInteger(0)
     private val dropped = AtomicInteger(0)
     private val commitSkipped = AtomicInteger(0)
+    private val latePurged = AtomicInteger(0)
     private val audioChunks = AtomicInteger(0)
     private val audioFrames = AtomicLong(0)
     private val audioDropped = AtomicInteger(0)
@@ -203,6 +233,12 @@ internal class RawVideoRecorder(
     @Volatile private var intervalMsEstimate = 0f
     @Volatile private var encodeMsAvg = 0f
     @Volatile private var encodeMsMax = 0f
+    @Volatile private var resultWaitMsAvg = 0f
+    @Volatile private var resultWaitMsMax = 0f
+    @Volatile private var closeMsAvg = 0f
+    @Volatile private var closeMsMax = 0f
+    @Volatile private var writeMsAvg = 0f
+    @Volatile private var writeMsMax = 0f
     @Volatile private var hasAudioStream = false
     @Volatile private var hasMotionStream = false
     private var lastFrameTs = -1L // committer thread only
@@ -217,6 +253,7 @@ internal class RawVideoRecorder(
         encoded.set(0)
         dropped.set(0)
         commitSkipped.set(0)
+        latePurged.set(0)
         audioChunks.set(0)
         audioFrames.set(0)
         audioDropped.set(0)
@@ -225,11 +262,18 @@ internal class RawVideoRecorder(
         fpsEstimate = 0f
         encodeMsAvg = 0f
         encodeMsMax = 0f
+        resultWaitMsAvg = 0f
+        resultWaitMsMax = 0f
+        closeMsAvg = 0f
+        closeMsMax = 0f
+        writeMsAvg = 0f
+        writeMsMax = 0f
         lastFrameTs = -1L
         hasAudioStream = false
         hasMotionStream = false
         nextSeq = 0L
         nextCommitSeq = 0L
+        timeOriginNs = Long.MIN_VALUE
         synchronized(reorderLock) { reorder.clear() }
         synchronized(resultLock) { captureResults.clear() }
         encodeQueue.clear()
@@ -258,18 +302,20 @@ internal class RawVideoRecorder(
             Log.w(TAG, "motion skipped: no context")
         }
         var audioRate = 0
+        var audioChannels = 0
         if (audioEnabled) {
             val rec = AudioPcmRecorder()
             if (rec.start { chunk -> onAudioChunk(chunk) }) {
                 audio = rec
                 hasAudioStream = true
                 audioRate = AudioPcmRecorder.SAMPLE_RATE
+                audioChannels = rec.channels
             }
         }
         writerHandle = try {
             val meta = CinemaRawMetadata.container(
                 containerMetadataJson, chars, realtime, audioRate,
-                hasMotionStream, orientation
+                audioChannels, hasMotionStream, orientation
             )
             CinemaRawWriter.open(output.absolutePath, meta)
         } catch (e: Exception) {
@@ -277,7 +323,12 @@ internal class RawVideoRecorder(
             throw e
         }
 
-        val thread = HandlerThread("RawVideoCam").apply { start() }
+        // Urgent-display like the encode workers: this thread services 30fps
+        // acquisition, the VF fan-out and all result callbacks — preempting
+        // it (default priority) drops frames the encoders could have kept.
+        val thread = HandlerThread(
+            "RawVideoCam", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY
+        ).apply { start() }
         camThread = thread
         val handler = Handler(thread.looper)
         camHandler = handler
@@ -353,6 +404,11 @@ internal class RawVideoRecorder(
                 }
                 val resolved = crop.resolve(frameSize.width, frameSize.height)
                 val ts = img.timestamp
+                // Container timestamp origin: first queued frame (volatile
+                // write; the queue hands happens-before to the workers).
+                // A later-skipped head only shifts the first committed
+                // frame to a small positive offset — still relative.
+                if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
                 val task = EncodeTask(
                     seq = nextSeq++,
                     image = img,
@@ -476,11 +532,15 @@ internal class RawVideoRecorder(
         }
         // Propagate finalization failures so callers retain, rather than publish,
         // a potentially incomplete local recording.
+        // containerFrames = committed in-order frames (footer == encoded - latePurged).
+        val encodedCount = encoded.get()
+        val lateCount = latePurged.get()
         return Stats(
             framesAcquired = acquired.get(),
-            framesEncoded = encoded.get(),
+            framesEncoded = encodedCount,
             framesDropped = dropped.get(),
             commitSkipped = commitSkipped.get(),
+            latePurged = lateCount,
             audioChunks = audioChunks.get(),
             audioFrames = audioFrames.get(),
             audioDropped = audioDropped.get(),
@@ -489,7 +549,7 @@ internal class RawVideoRecorder(
             hasAudio = hasAudioStream,
             hasMotion = motionStats != null &&
                 (motionStats.gyroSamples > 0 || motionStats.accelSamples > 0),
-            containerFrames = -1L, // filled by container footer validation (test/P3 reader)
+            containerFrames = (encodedCount - lateCount).toLong(),
             fileBytes = outputFile?.length() ?: 0L,
         ).also {
             motion = null
@@ -511,10 +571,17 @@ internal class RawVideoRecorder(
         frameIntervalMs = intervalMsEstimate,
         encodeMsAvg = encodeMsAvg,
         encodeMsMax = encodeMsMax,
+        resultWaitMsAvg = resultWaitMsAvg,
+        resultWaitMsMax = resultWaitMsMax,
+        closeMsAvg = closeMsAvg,
+        closeMsMax = closeMsMax,
+        writeMsAvg = writeMsAvg,
+        writeMsMax = writeMsMax,
         framesAcquired = acquired.get(),
         framesEncoded = encoded.get(),
         framesDropped = dropped.get(),
         commitSkipped = commitSkipped.get(),
+        latePurged = latePurged.get(),
         queueDepth = encodeQueue.size,
         reorderDepth = synchronized(reorderLock) { reorder.size },
         fileBytes = outputFile?.length() ?: 0L,
@@ -588,6 +655,7 @@ internal class RawVideoRecorder(
                     if (ms > encodeMsMax) ms else encodeMsMax * 0.999f + ms * 0.001f
                 // Image and result callbacks can arrive in either order. Only write
                 // calibration from this exact exposure, never a stale AWB result.
+                val wait0 = SystemClock.elapsedRealtimeNanos()
                 val result = synchronized(resultLock) {
                     val deadline = SystemClock.elapsedRealtime() + 100
                     while (!captureResults.containsKey(task.timestampNs)) {
@@ -597,7 +665,13 @@ internal class RawVideoRecorder(
                     }
                     captureResults.remove(task.timestampNs)
                 } ?: error("Missing capture result for ${task.timestampNs}")
-                val frameJson = CinemaRawMetadata.frame(task.frameJson, result)
+                val waitMs = (SystemClock.elapsedRealtimeNanos() - wait0) / 1e6f
+                resultWaitMsAvg =
+                    if (resultWaitMsAvg == 0f) waitMs else resultWaitMsAvg * 0.95f + waitMs * 0.05f
+                resultWaitMsMax =
+                    if (waitMs > resultWaitMsMax) waitMs else resultWaitMsMax * 0.999f + waitMs * 0.001f
+                val frameJson =
+                    CinemaRawMetadata.frame(task.frameJson, result, timeOriginNs)
                 buf.flip()
                 synchronized(reorderLock) {
                     reorder[task.seq] =
@@ -613,7 +687,13 @@ internal class RawVideoRecorder(
                 inflightSeq.set(index, -1L)
                 // Registry-aware: closes directly when never adopted for
                 // the VF, waits out the GPU lease when borrowed.
+                val close0 = SystemClock.elapsedRealtimeNanos()
                 RawImageOwnership.release(task.image)
+                val closeMs = (SystemClock.elapsedRealtimeNanos() - close0) / 1e6f
+                closeMsAvg =
+                    if (closeMsAvg == 0f) closeMs else closeMsAvg * 0.95f + closeMs * 0.05f
+                closeMsMax =
+                    if (closeMs > closeMsMax) closeMs else closeMsMax * 0.999f + closeMs * 0.001f
             }
         }
         if (workersAlive.decrementAndGet() == 0) {
@@ -625,12 +705,18 @@ internal class RawVideoRecorder(
     /**
      * Single committer: writes frames strictly in capture order (the native
      * writer rejects timestamp regressions), drains audio, drains motion.
-     * A missing head with an arrived successor means a worker is wedged or
-     * failed on it: skip after [SKIP_TIMEOUT_MS] (or immediately once no
-     * worker can still deliver it) so one slow frame costs a gap, never a
-     * stall. Footer frame count == encoded - skipped.
+     * A missing head with an arrived successor is skipped immediately when
+     * no stage can still deliver it ([isHeadMissing]: dropped at the queue
+     * or pool, or a failed encode), so one dropped frame costs a gap, never
+     * a stall. A head still queued or in flight may yet arrive: skip after
+     * [SKIP_TIMEOUT_MS] so one slow frame costs a gap, never a spiral.
+     * Footer frame count == encoded - latePurged.
      */
     private fun commitLoop() {
+        // Urgent-display like the encode workers: the single committer must
+        // sustain the full frame rate (~30ms writes vs a 33ms budget), so it
+        // cannot wait behind default-priority scheduling under full load.
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
         var headWaitStart = -1L
         while (true) {
             commitReadyHeads()
@@ -646,6 +732,11 @@ internal class RawVideoRecorder(
             }
             if (successor) {
                 if (workersAlive.get() == 0) {
+                    skipHead()
+                    headWaitStart = -1L
+                    continue
+                }
+                if (isHeadMissing(nextCommitSeq)) {
                     skipHead()
                     headWaitStart = -1L
                     continue
@@ -674,18 +765,24 @@ internal class RawVideoRecorder(
             if (interrupted) break
         }
         // Final purge: late arrivals after skips are valid payloads with
-        // nowhere to go — count them skipped, return their buffers.
+        // nowhere to go — count them late-purged, return their buffers.
         synchronized(reorderLock) {
             for ((_, pend) in reorder) {
                 pend.payload.clear()
                 payloadPool.offer(pend.payload)
-                commitSkipped.incrementAndGet()
+                latePurged.incrementAndGet()
             }
             reorder.clear()
         }
     }
 
-    /** Write every consecutive head from [nextCommitSeq]; purge late arrivals. */
+    /**
+     * Write every consecutive head from [nextCommitSeq]; purge late
+     * arrivals. Committed frame timestamps are recording-relative
+     * (`ts - timeOriginNs`); the reorder buffer and fps tracking stay
+     * absolute. Rebasing preserves order, so the writer's strict
+     * increase still holds exactly when the capture order did.
+     */
     private fun commitReadyHeads() {
         while (true) {
             synchronized(reorderLock) {
@@ -696,15 +793,25 @@ internal class RawVideoRecorder(
                         e.value.payload.clear()
                         payloadPool.offer(e.value.payload)
                         it.remove()
-                        commitSkipped.incrementAndGet()
+                        latePurged.incrementAndGet()
                     }
                 }
             }
             val pend = synchronized(reorderLock) { reorder[nextCommitSeq] } ?: break
+            // Origin is always set here: a pending frame implies an
+            // acquired frame, which set it. Relative ts is >= 0 by
+            // capture order (a skipped head only shifts the start up).
+            val relTs = pend.timestampNs - timeOriginNs
             try {
+                val write0 = SystemClock.elapsedRealtimeNanos()
                 CinemaRawWriter.writeFrame(
-                    writerHandle, pend.payload, pend.bytes, pend.timestampNs, pend.frameJson
+                    writerHandle, pend.payload, pend.bytes, relTs, pend.frameJson
                 )
+                val writeMs = (SystemClock.elapsedRealtimeNanos() - write0) / 1e6f
+                writeMsAvg =
+                    if (writeMsAvg == 0f) writeMs else writeMsAvg * 0.95f + writeMs * 0.05f
+                writeMsMax =
+                    if (writeMs > writeMsMax) writeMs else writeMsMax * 0.999f + writeMs * 0.001f
                 updateCommitFps(pend.timestampNs)
             } catch (e: Exception) {
                 Log.w(TAG, "frame commit failed: ${e.message}")
@@ -717,16 +824,23 @@ internal class RawVideoRecorder(
         }
     }
 
-    /** Advance past a missing head; its buffer (if any) returns to the pool. */
+    /**
+     * Advance past a missing head; its buffer (if any) returns to the pool.
+     * A head that arrived while skipping counts late-purged (it was
+     * encoded); a genuinely absent head counts skipped (a capture gap).
+     */
     private fun skipHead() {
+        var late = false
         synchronized(reorderLock) {
             reorder.remove(nextCommitSeq)?.let {
                 it.payload.clear()
                 payloadPool.offer(it.payload)
+                late = true
             }
         }
         nextCommitSeq++
-        commitSkipped.incrementAndGet()
+        if (late) latePurged.incrementAndGet()
+        else commitSkipped.incrementAndGet()
     }
 
     /** Which worker (if any) is still grinding the given sequence. */
@@ -735,6 +849,27 @@ internal class RawVideoRecorder(
             if (inflightSeq.get(i) == seq) return i
         }
         return -1
+    }
+
+    /**
+     * True when no pipeline stage can still deliver [seq]: no worker holds
+     * it, it sits in neither the reorder buffer nor the encode queue. Only
+     * call with an arrived successor: sequence numbers are assigned in
+     * capture order and the queue is FIFO, so a successor in hand proves
+     * [seq] left every transit window long ago — it was dropped (queue or
+     * pool pressure) or its encode failed, never merely delayed.
+     */
+    private fun isHeadMissing(seq: Long): Boolean {
+        if (findInflightWorker(seq) >= 0) return false
+        synchronized(reorderLock) {
+            if (reorder.containsKey(seq)) return false
+        }
+        // Weakly-consistent scan: a missed racing offer only delays the
+        // skip to the timeout backstop, never corrupts order.
+        for (item in encodeQueue) {
+            if (item is EncodeTask && item.seq == seq) return false
+        }
+        return true
     }
 
     /**
@@ -763,11 +898,17 @@ internal class RawVideoRecorder(
 
     private fun drainAudioQueue() {
         if (writerHandle == 0L) return
+        val origin = timeOriginNs
         var chunk = audioQueue.poll()
         while (chunk != null) {
-            try {
+            // Recording-relative like frames; pre-roll without video is
+            // dropped so both timelines start together (PhotonCamera rule).
+            val rel = if (origin == Long.MIN_VALUE) -1 else chunk.timestampNs - origin
+            if (rel < 0) {
+                audioDropped.incrementAndGet()
+            } else try {
                 CinemaRawWriter.writeAudio(
-                    writerHandle, chunk.data, chunk.frames, chunk.timestampNs
+                    writerHandle, chunk.data, chunk.frames, chunk.channels, rel
                 )
                 audioChunks.incrementAndGet()
                 audioFrames.addAndGet(chunk.frames.toLong())
@@ -782,13 +923,16 @@ internal class RawVideoRecorder(
     private fun drainMotion() {
         val rec = motion ?: return
         if (writerHandle == 0L) return
+        val origin = timeOriginNs
         var chunk = rec.drainGyro()
         while (chunk != null) {
             try {
-                CinemaRawWriter.writeGyro(
-                    writerHandle, chunk.timestampsNs, chunk.axes, chunk.count
-                )
-                gyroSamples.addAndGet(chunk.count.toLong())
+                rebaseMotion(chunk, origin)?.let {
+                    CinemaRawWriter.writeGyro(
+                        writerHandle, it.timestampsNs, it.axes, it.count
+                    )
+                    gyroSamples.addAndGet(it.count.toLong())
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "gyro write failed: ${e.message}")
                 break
@@ -798,16 +942,34 @@ internal class RawVideoRecorder(
         var accel = rec.drainAccel()
         while (accel != null) {
             try {
-                CinemaRawWriter.writeAccel(
-                    writerHandle, accel.timestampsNs, accel.axes, accel.count
-                )
-                accelSamples.addAndGet(accel.count.toLong())
+                rebaseMotion(accel, origin)?.let {
+                    CinemaRawWriter.writeAccel(
+                        writerHandle, it.timestampsNs, it.axes, it.count
+                    )
+                    accelSamples.addAndGet(it.count.toLong())
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "accel write failed: ${e.message}")
                 break
             }
             accel = rec.drainAccel()
         }
+    }
+
+    /**
+     * Recording-relative copy of a motion chunk, or null when the whole
+     * chunk predates video. Samples are ascending and the origin is fixed,
+     * so pre-roll is always a leading run — skip it, keep the rest.
+     */
+    private fun rebaseMotion(chunk: MotionRecorder.Chunk, origin: Long): MotionRecorder.Chunk? {
+        if (origin == Long.MIN_VALUE) return null
+        var start = 0
+        while (start < chunk.count && chunk.timestampsNs[start] < origin) start++
+        if (start >= chunk.count) return null
+        val n = chunk.count - start
+        val ts = LongArray(n) { i -> chunk.timestampsNs[start + i] - origin }
+        val ax = chunk.axes.copyOfRange(start * 3, chunk.count * 3)
+        return MotionRecorder.Chunk(ts, ax, n)
     }
 
     private fun shutdownStreams() {

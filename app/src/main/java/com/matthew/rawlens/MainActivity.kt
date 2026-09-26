@@ -25,6 +25,7 @@ import android.widget.TextView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.CheckBox
 import android.widget.ImageButton
@@ -130,6 +131,8 @@ class MainActivity : Activity() {
     private var videoRecorder: RawVideoRecorder? = null
     private var videoRecording = false
     private var videoOutputFile: File? = null
+    /** True when the shared folder picker was opened to rescue staged video. */
+    private var folderPickerForVideo = false
     private var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
@@ -682,6 +685,11 @@ class MainActivity : Activity() {
             } else {
                 setStatus("SIDECAR FOLDER NOT CHOSEN")
             }
+            folderPickerForVideo = false
+            runVideoExportRetry()
+        } else if (requestCode == SIDECAR_TREE_REQUEST && folderPickerForVideo) {
+            folderPickerForVideo = false
+            setStatus("EXPORT FAILED • LOCAL FILE KEPT")
         }
     }
 
@@ -1271,6 +1279,13 @@ class MainActivity : Activity() {
         doStartVideo(withAudio = wantAudio)
     }
 
+    /**
+     * Staged takes live here until export publishes (then deletes) them.
+     * Keep takes out of cache: a failed export must not be evicted.
+     */
+    private fun videoStageDir(): File =
+        getExternalFilesDir("raw-video") ?: File(filesDir, "raw-video")
+
     private fun doStartVideo(withAudio: Boolean) {
         val manager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
         val (cameraId, size) = videoCameraInfo(manager) ?: run {
@@ -1278,9 +1293,11 @@ class MainActivity : Activity() {
             return
         }
         controller.stop()
-        // Internal app storage avoids the shared-storage layer during capture.
-        // Keep takes out of cache: a failed export must not be evicted.
-        val dir = File(filesDir, "raw-video")
+        // Stage in android/data (external files dir): visible under
+        // Android/data/<pkg>/files/raw-video, no MediaStore churn during
+        // capture. Keep takes out of cache: a failed export must not be evicted.
+        // RawVideoSaver copies to DCIM/RawLens and deletes the stage on success.
+        val dir = videoStageDir()
         if (!dir.exists() && !dir.mkdirs()) {
             setStatus("VIDEO DIR FAILED")
             controller.start()
@@ -1330,6 +1347,38 @@ class MainActivity : Activity() {
         }, 2_500L)
     }
 
+    /**
+     * Publishes one closed take: MediaStore first, granted-folder SAF
+     * fallback when MediaStore.Video rejects the custom MIME (some OEMs).
+     * Returns null when nothing could publish; the staged source is always
+     * retained on failure. Never throws for copy failures.
+     */
+    private fun tryExportVideo(source: File): RawVideoSaver.Saved? {
+        try {
+            val saved = RawVideoSaver.save(applicationContext.contentResolver, source)
+            Log.i(LOG_TAG, "video exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
+            return saved
+        } catch (mediaStoreFailure: Exception) {
+            Log.w(LOG_TAG, "video MediaStore export failed, trying granted folder", mediaStoreFailure)
+            // Reuse the burst sidecar tree grant (Settings → sidecars) when
+            // MediaStore.Video rejects the custom MIME on some OEMs.
+            val tree = SidecarTreeAccess.savedTreeUri(applicationContext)
+            if (tree != null && SidecarTreeAccess.hasWriteAccess(applicationContext, tree)) {
+                try {
+                    val saved = RawVideoSaver.saveViaTree(applicationContext, tree, source)
+                    Log.i(LOG_TAG, "video exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
+                    return saved
+                } catch (treeFailure: Exception) {
+                    mediaStoreFailure.addSuppressed(treeFailure)
+                    Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath}", mediaStoreFailure)
+                }
+            } else {
+                Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath} (grant photo folder under Settings for SAF fallback)", mediaStoreFailure)
+            }
+            return null
+        }
+    }
+
     private fun stopVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
         val recorder = videoRecorder ?: return
         val source = videoOutputFile
@@ -1355,14 +1404,12 @@ class MainActivity : Activity() {
                 null
             }
             var export: RawVideoSaver.Saved? = null
-            if (stats != null && source != null && stats.containerFrames > 0) {
+            val commited = stats?.containerFrames ?: 0L
+            if (stats != null && source != null && commited > 0 && source.isFile && source.length() > 0) {
                 runOnUiThread { setStatus("SAVING TO DCIM/RAWLENS…") }
-                try {
-                    export = RawVideoSaver.save(applicationContext.contentResolver, source)
-                    Log.i(LOG_TAG, "video exported uri=${export.uri} sourceRemoved=${export.sourceRemoved}")
-                } catch (e: Exception) {
-                    Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath}", e)
-                }
+                export = tryExportVideo(source)
+            } else if (stats != null && source != null) {
+                Log.w(LOG_TAG, "video export skipped: committed=$commited file=${source.absolutePath} bytes=${runCatching { source.length() }.getOrDefault(-1L)}")
             }
             val saved = export
             runOnUiThread { finishVideoStop(stats, saved, rollingVf, rearmPreview, afterStop) }
@@ -1397,6 +1444,7 @@ class MainActivity : Activity() {
                     (if (stats.hasAudio) "" else " • SILENT") +
                     (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "")
             )
+            if (stats != null && export == null) maybePromptVideoFolderGrant()
             Log.i(
                 LOG_TAG, "video saved frames=${stats?.framesEncoded} " +
                     "dropped=${stats?.framesDropped} skipped=${stats?.commitSkipped} " +
@@ -1412,6 +1460,45 @@ class MainActivity : Activity() {
         // While still paused, starting the camera would run it in background.
         else if (afterStop == null && activityResumed) controller.start()
         afterStop?.invoke()
+    }
+
+    /**
+     * Opens the shared photo-folder picker when a take failed to export for
+     * lack of a SAF grant (MediaStore rejects the custom MIME on some OEMs).
+     * The grant result retries every staged take (see onActivityResult), so
+     * one grant rescues the whole backlog. Never prompts when a usable grant
+     * already exists — a failed tree copy must not picker-loop.
+     */
+    private fun maybePromptVideoFolderGrant() {
+        if (isFinishing || isDestroyed) return
+        val tree = SidecarTreeAccess.savedTreeUri(this)
+        if (tree != null && SidecarTreeAccess.hasWriteAccess(this, tree)) return
+        folderPickerForVideo = true
+        setStatus("EXPORT FAILED • GRANT FOLDER TO SAVE TAKE")
+        pickSidecarFolder()
+    }
+
+    /**
+     * Exports every staged take (oldest first) after a folder grant arrives.
+     * The actively recording file, if any, is excluded by identity; the
+     * current take's own stop-export handles it at stop time.
+     */
+    private fun runVideoExportRetry() {
+        Thread({
+            val staged = RawVideoSaver.stagedTakes(videoStageDir(), videoOutputFile)
+            if (staged.isEmpty()) return@Thread
+            runOnUiThread { setStatus("SAVING ${staged.size} STAGED TAKE(S)…") }
+            var saved = 0
+            for (file in staged) {
+                if (tryExportVideo(file) != null) saved++
+            }
+            runOnUiThread {
+                setStatus(
+                    if (saved == staged.size) "SAVED TO DCIM • $saved TAKE(S)"
+                    else "SAVED $saved/${staged.size} • REST STAGED"
+                )
+            }
+        }, "VideoExportRetry").start()
     }
 
     private fun scheduleVideoHud() {
@@ -4344,53 +4431,104 @@ class MainActivity : Activity() {
     }
 
     private fun showLensDiscovery(firstRun: Boolean) {
-        val progress = AlertDialog.Builder(this)
-            .setTitle("Finding RAW lenses")
-            .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
-            .setCancelable(!firstRun)
-            .show()
-        // First launch is a continuation of the black welcome screen and
-        // covers the camera app full-screen; later invocations keep the
-        // standard floating quick-panel dialog.
+        // First launch covers the whole camera UI (including the top bar)
+        // with an opaque black overlay — a dialog window can't reliably do
+        // that — while later invocations keep the floating progress dialog.
+        var progressDialog: AlertDialog? = null
+        var progressOverlay: View? = null
         if (firstRun) {
-            makeFirstRunFullScreen(progress)
+            hideStatusBar()
+            progressOverlay = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setBackgroundColor(Color.BLACK)
+                elevation = 32f
+                isClickable = true
+                isFocusableInTouchMode = true
+                setPadding(dp(32), 0, dp(32), 0)
+                addView(ProgressBar(this@MainActivity).apply { isIndeterminate = true })
+                addView(TextView(this@MainActivity).apply {
+                    text = "Finding RAW lenses"
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 18f
+                    typeface = Typeface.DEFAULT_BOLD
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(16), 0, dp(8))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…"
+                    setTextColor(getColor(R.color.text_secondary))
+                    textSize = 13f
+                    gravity = Gravity.CENTER
+                })
+            }.also { overlay ->
+                blockBackKey(overlay)
+                findViewById<ViewGroup>(android.R.id.content)
+                    .addView(overlay, ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    ))
+                overlay.requestFocus()
+            }
+        } else {
+            progressDialog = AlertDialog.Builder(this)
+                .setTitle("Finding RAW lenses")
+                .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
+                .setCancelable(true)
+                .show()
         }
         lensDiscovery.discover { lenses ->
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-                progress.dismiss()
+                progressDialog?.dismiss()
+                progressOverlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
+                progressOverlay = null
                 if (lenses.isEmpty()) {
-                    val emptyDialog = AlertDialog.Builder(this)
+                    // No selection page follows, so hand the status bar back.
+                    if (firstRun) showStatusBar()
+                    AlertDialog.Builder(this)
                         .setTitle("No RAW lenses found")
                         .setMessage("The camera service did not expose a RAW-capable camera ID.")
                         .setPositiveButton("OK", null)
-                        .setCancelable(!firstRun)
                         .show()
-                    if (firstRun) {
-                        makeFirstRunFullScreen(emptyDialog)
-                    }
                     return@runOnUiThread
                 }
                 val missingSaved = selectedLensIds()
                     .filterNot { savedId -> lenses.any { it.id == savedId } }
                     .map { unavailableLens(it) }
+                // First run keeps the status bar hidden: the selection page
+                // restores it when Save / Use default dismisses it.
                 showLensSelection(lenses + missingSaved, firstRun)
             }
         }
     }
 
-    /**
-     * First-run onboarding covers the camera app full-screen with opaque
-     * black (welcome-screen continuity). Dismissed only by tapping Save /
-     * Use default; later opens stay floating and cancelable.
-     */
-    private fun makeFirstRunFullScreen(dialog: AlertDialog) {
-        dialog.window?.let { w ->
-            w.setBackgroundDrawable(ColorDrawable(Color.BLACK))
-            w.setLayout(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
+    /** First-run onboarding chrome: true full-screen black over the app. */
+    private fun hideStatusBar() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.hide(WindowInsets.Type.statusBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                WindowManager.LayoutParams.FLAG_FULLSCREEN
             )
+        }
+    }
+
+    private fun showStatusBar() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.show(WindowInsets.Type.statusBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        }
+    }
+
+    /** Overlay pages are modal: the back key must not escape onboarding. */
+    private fun blockBackKey(view: View) {
+        view.setOnKeyListener { _, keyCode, event ->
+            keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP
         }
     }
 
@@ -4451,11 +4589,20 @@ class MainActivity : Activity() {
         container.addView(quickRow)
 
         val listScroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.52).toInt()
-            )
+            layoutParams = if (firstRun) {
+                // Full-screen onboarding: fill everything between the header
+                // and the bottom action bar so actions pin to the bottom.
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            } else {
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    (resources.displayMetrics.heightPixels * 0.52).toInt()
+                )
+            }
             isFillViewport = true
+            isVerticalScrollBarEnabled = false
         }
         val listBody = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -4589,21 +4736,110 @@ class MainActivity : Activity() {
         }
         refreshQuickState()
 
+        // First initial setup: dedicated full-screen black page (welcome
+        // continuity) that scales to the bottom — the list fills the window
+        // and Save / Use default pin to the bottom. Gone on either tap.
+        // Later opens keep the floating panel below.
+        if (firstRun) {
+            container.setPadding(0, 0, 0, 0)
+            fun bottomAction(label: String, primary: Boolean): Button = Button(this).apply {
+                text = label
+                background = getDrawable(
+                    if (primary) R.drawable.control_chip_active else R.drawable.control_chip
+                )
+                setTextColor(
+                    getColor(if (primary) R.color.accent_dark else R.color.text_primary)
+                )
+                textSize = 13f
+                isAllCaps = false
+                setTypeface(typeface, Typeface.BOLD)
+                letterSpacing = 0.04f
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                minHeight = dp(48)
+            }
+            val saveButton = bottomAction("Save", primary = true)
+            val defaultButton = bottomAction("Use default", primary = false)
+            val bottomBar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(12), 0, 0)
+            }
+            bottomBar.addView(
+                defaultButton,
+                LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
+            )
+            bottomBar.addView(saveButton, LinearLayout.LayoutParams(0, wrapContent(), 1f))
+            val root = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.BLACK)
+                elevation = 32f
+                isClickable = true
+                isFocusableInTouchMode = true
+                setPadding(dp(20), dp(16), dp(20), dp(20))
+            }
+            root.addView(TextView(this).apply {
+                text = "Add RAW lenses"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 22f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, 0, 0, dp(8))
+            })
+            root.addView(
+                container,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            )
+            val saveHint = TextView(this).apply {
+                text = "Select at least one lens to continue"
+                setTextColor(getColor(R.color.danger))
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, 0)
+                visibility = View.GONE
+            }
+            root.addView(saveHint)
+            root.addView(bottomBar)
+            blockBackKey(root)
+            findViewById<ViewGroup>(android.R.id.content).addView(
+                root,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            root.requestFocus()
+            fun dismissPage() {
+                (root.parent as? ViewGroup)?.removeView(root)
+                showStatusBar()
+            }
+            saveButton.setOnClickListener {
+                val ids = checked.filterValues { it }.keys.toMutableSet()
+                if (ids.isEmpty()) {
+                    saveHint.visibility = View.VISIBLE
+                    return@setOnClickListener
+                }
+                lensPreferences().edit()
+                    .putStringSet(KEY_SELECTED_LENSES, ids)
+                    .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
+                    .apply()
+                controller.reloadLenses()
+                setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
+                dismissPage()
+            }
+            defaultButton.setOnClickListener {
+                lensPreferences().edit().putBoolean(KEY_LENS_SETUP_COMPLETE, true).apply()
+                dismissPage()
+            }
+            return
+        }
+
         val dialog = AlertDialog.Builder(this)
-            .setTitle(if (firstRun) "Add RAW lenses" else "Lens discovery")
+            .setTitle("Lens discovery")
             .setView(container)
             .setPositiveButton("Save", null)
-            .setNegativeButton(if (firstRun) "Use default" else "Cancel", null)
-            .setCancelable(!firstRun)
+            .setNegativeButton("Cancel", null)
             .create()
-        dialog.setCanceledOnTouchOutside(!firstRun)
         dialog.show()
-        // First launch continues the opaque black welcome screen full-screen
-        // so the onboarding feels like one flow and covers the camera app;
-        // later opens keep the floating panel. Gone on Save / Use default.
-        if (firstRun) {
-            makeFirstRunFullScreen(dialog)
-        }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val ids = checked.filterValues { it }.keys.toMutableSet()
             if (ids.isEmpty()) {
@@ -4619,7 +4855,6 @@ class MainActivity : Activity() {
             dialog.dismiss()
         }
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
-            if (firstRun) lensPreferences().edit().putBoolean(KEY_LENS_SETUP_COMPLETE, true).apply()
             dialog.dismiss()
         }
     }

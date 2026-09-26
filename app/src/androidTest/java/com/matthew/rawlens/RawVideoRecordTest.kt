@@ -26,7 +26,8 @@ import org.junit.runner.RunWith
  * end-to-end without the decoder:
  * - 8-byte magic `MOTION 3`
  * - footer item (type 0, len 16): magic `0x8A905612`, frame count, index offset
- * - frame index timestamps strictly increasing, count matches footer
+ * - frame index timestamps strictly increasing, count matches footer,
+ *   recording-relative (first frame ~0, never boot-time)
  * - achieved fps in a sane record-mode band
  *
  * Opt-in: `-e rawlensVideoRecord true [-e seconds 3]`. Writes app-private
@@ -35,7 +36,9 @@ import org.junit.runner.RunWith
  * P4 streams: with mic + motion granted, every clip must also carry an
  * audio index (item 4) and a gyro index (item 8) whose sample timestamps
  * sit on the video frame timeline (loosely: within the frame span ±1s,
- * not sample-exact). Accel (12) is asserted only when present.
+ * not sample-exact). Accel (12) is asserted only when present. Motion
+ * data chunks (9/13) must number <= frames + 1 — motioncam-decoder
+ * rejects more ("Invalid gyro index" aborts the open, hiding audio too).
  */
 @RunWith(AndroidJUnit4::class)
 class RawVideoRecordTest {
@@ -80,7 +83,25 @@ class RawVideoRecordTest {
                     "\"encoder\":\"RawLens-P2\"}"
             val t0 = SystemClock.elapsedRealtime()
             recorder.start(file, containerMeta)
-            SystemClock.sleep(seconds * 1000L)
+            repeat(seconds * 2) {
+                SystemClock.sleep(500)
+                val snap = recorder.snapshot()
+                Log.i(
+                    TAG, "SPIKE sample ${crop.name} t=${snap.elapsedMs}ms " +
+                        "acq=${snap.framesAcquired} enc=${snap.framesEncoded} " +
+                        "drop=${snap.framesDropped} skip=${snap.commitSkipped} " +
+                        "late=${snap.latePurged} " +
+                        "fps=${"%.1f".format(snap.fps)} " +
+                        "encAvg=${"%.1f".format(snap.encodeMsAvg)}ms " +
+                        "encMax=${"%.1f".format(snap.encodeMsMax)}ms " +
+                        "waitAvg=${"%.1f".format(snap.resultWaitMsAvg)}ms " +
+                        "closeAvg=${"%.1f".format(snap.closeMsAvg)}ms " +
+                        "wrAvg=${"%.1f".format(snap.writeMsAvg)}ms " +
+                        "wrMax=${"%.1f".format(snap.writeMsMax)}ms " +
+                        "q=${snap.queueDepth} r=${snap.reorderDepth} " +
+                        "file=${"%.1f".format(snap.fileBytes / 1e6)}MB"
+                )
+            }
             val stats = recorder.stop()
             val wallMs = SystemClock.elapsedRealtime() - t0
 
@@ -90,23 +111,48 @@ class RawVideoRecordTest {
 
             validateMetadata(file)
             val footer = validateMcraw(file)
+            // Recording-relative, not boot-time: readers do 32-bit ms
+            // math that absolute timestamps overflow, breaking audio
+            // sync entirely. First committed frame is ~0 (skipped heads
+            // shift it up by ~33ms each, never anywhere near 60s).
+            assertTrue(
+                "Frame timestamps not recording-relative for $crop " +
+                    "(first=${footer.firstTs})",
+                footer.firstTs < 60_000_000_000L
+            )
             assertEquals(
-                "Footer count != encoded - skipped for $crop",
-                stats.framesEncoded - stats.commitSkipped, footer.frameCount
+                "Footer count != encoded - latePurged for $crop",
+                stats.framesEncoded - stats.latePurged, footer.frameCount
             )
             assertTrue("No audio chunks for $crop: $stats", stats.hasAudio && stats.audioFrames > 0)
             assertTrue("No gyro samples for $crop: $stats", stats.gyroSamples > 0)
             validateStreams(file, footer, crop.name)
             val fps = footer.frameCount * 1000.0 / wallMs
+            // Container-truth cadence: (n-1) frames over the committed
+            // timestamp span. Gaps stretch the span, so this only screens
+            // the rate when nothing was dropped or skipped.
+            val spanFps = if (footer.frameCount > 1 && footer.lastTs > footer.firstTs)
+                (footer.frameCount - 1) * 1e9 / (footer.lastTs - footer.firstTs)
+            else Double.NaN
             Log.i(
                 TAG, "SPIKE rec ${crop.label} ${size.width}x${resolved.height} " +
                     "acq=${stats.framesAcquired} enc=${stats.framesEncoded} " +
                     "drop=${stats.framesDropped} skip=${stats.commitSkipped} " +
+                    "late=${stats.latePurged} " +
                     "file=${"%.1f".format(file.length() / 1e6)}MB " +
                     "audio=${stats.audioFrames}f/${stats.audioChunks}ch " +
                     "gyro=${stats.gyroSamples} accel=${stats.accelSamples} " +
-                    "fps=${"%.1f".format(fps)} tsOK=${footer.timestampsIncreasing}"
+                    "fps=${"%.1f".format(fps)} spanFps=${"%.1f".format(spanFps)} " +
+                    "tsOK=${footer.timestampsIncreasing}"
             )
+            if (stats.framesDropped == 0 && stats.commitSkipped == 0 &&
+                stats.latePurged == 0 && !spanFps.isNaN()
+            ) {
+                assertTrue(
+                    "Committed cadence $spanFps fps != 30 for $crop",
+                    spanFps in 25.0..35.0
+                )
+            }
             assertTrue("Timestamps not increasing for $crop", footer.timestampsIncreasing)
             // Debuggable (-O0) builds encode ~40x slower; the test then
             // validates the pipeline (no wedge, valid container) at reduced
@@ -145,7 +191,12 @@ class RawVideoRecordTest {
             assertEquals(9, container.getJSONArray("colorMatrix1").length())
             val audio = container.getJSONObject("extraData")
             assertEquals(48000, audio.getInt("audioSampleRate"))
-            assertEquals(1, audio.getInt("audioChannels"))
+            // Stereo-first like the audible reference; mono when the
+            // device refuses a stereo stream. Either is a real recording.
+            assertTrue(
+                "Bad audioChannels ${audio.getInt("audioChannels")}",
+                audio.getInt("audioChannels") in 1..2
+            )
             while (raf.filePointer < raf.length()) {
                 val type = readIntLe()
                 val size = readIntLe()
@@ -247,6 +298,35 @@ class RawVideoRecordTest {
         assertTrue("No audio data in $label", items.containsKey(5))
         assertTrue("No gyro index in $label (types=${items.keys})", items.containsKey(8))
         assertTrue("No gyro data in $label", items.containsKey(9))
+        // motioncam-decoder bound: more motion chunks than frames + 1
+        // aborts the open ("Invalid gyro/accelerometer index"), hiding
+        // audio too. The writer coalesces sensor drains to <= 1 chunk
+        // per frame plus a trailing chunk at close.
+        val gyroChunks = items.getValue(9).size
+        assertTrue(
+            "Gyro chunks $gyroChunks exceed frames+1 in $label",
+            gyroChunks <= footer.frameCount + 1
+        )
+        val accelChunks = items[13]?.size ?: 0
+        assertTrue(
+            "Accel chunks $accelChunks exceed frames+1 in $label",
+            accelChunks <= footer.frameCount + 1
+        )
+        // Tail order for pre-gyro readers (MotionCam Tools v1.0): their
+        // scan stops at the first motion item, so no motion data may sit
+        // between the last frame and the audio index — else they report
+        // no audio chunks and play silent video.
+        val lastFrameItem = items.getValue(2).maxOf { it.first - 8 }
+        val audioIndexItem = items.getValue(4).first().first - 8
+        for (kind in listOf(9, 13)) {
+            for ((pos, _) in items[kind] ?: emptyList()) {
+                val head = pos - 8
+                assertTrue(
+                    "Motion data between last frame and audio index in $label",
+                    head < lastFrameItem || head > audioIndexItem
+                )
+            }
+        }
 
         val lo = footer.firstTs - 1_000_000_000L
         val hi = footer.lastTs + 1_000_000_000L
@@ -264,6 +344,27 @@ class RawVideoRecordTest {
                 val ts = buf.long
                 assertTrue("Audio ts $ts outside frame span in $label", ts in lo..hi)
             }
+            // Audio index (item 4): [u64 count][u64 origin][entries]. The
+            // origin is the first chunk's FULL NANOSECOND timestamp —
+            // decoders use it as the audio timeline origin.
+            val audioIndex = items.getValue(4)
+            assertEquals("Audio index split in $label", 1, audioIndex.size)
+            raf.seek(audioIndex[0].first)
+            val head = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+            raf.channel.read(head)
+            head.flip()
+            assertEquals(
+                "Audio index count != data chunks in $label",
+                items.getValue(5).size.toLong(), head.long
+            )
+            raf.seek(audioTs[0].first)
+            buf.clear()
+            raf.channel.read(buf)
+            buf.flip()
+            assertEquals(
+                "Audio index origin != first chunk ts in $label",
+                buf.long, head.long
+            )
             // Gyro data: [u32 ver=1][u32 n][n x 24B: i64 ts + 3xf32 + u32 0].
             var checked = 0
             for ((pos, _) in items.getValue(9)) {

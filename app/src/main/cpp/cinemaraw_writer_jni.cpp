@@ -9,8 +9,8 @@
 //   12MP) since the encoder can only sink into std::vector.
 // - containerWriteFrame: commit an encoded payload. Called on the committer
 //   thread only, so frame timestamps hit the container in capture order
-//   (the writer rejects regressions). One copy into a vector for the same
-//   reason. Combined steady-state copy overhead ~4-6ms vs ~30ms encode.
+//   (the writer rejects regressions). No copy: the pooled payload addresses
+//   the frame directly, so commit cost is the file write alone.
 // RAW16 direct only (P0 verdict: packed-RAW10 input is scalar, 4x slower).
 // Audio/motion entry points below are committer-thread-only like writes.
 #include <jni.h>
@@ -87,9 +87,10 @@ Java_com_matthew_rawlens_CinemaRawWriter_containerWriteFrame(
         static_cast<const uint8_t*>(env->GetDirectBufferAddress(payload));
     if (!writer || !p || payloadBytes <= 0) return -2;
     try {
-        std::vector<uint8_t> data(p + payloadOffset,
-                                  p + payloadOffset + payloadBytes);
-        writer->writeFrame(data, timestampNs, jstr(env, frameJson));
+        // No copy: the pooled payload addresses the frame directly.
+        writer->writeFrame(p + payloadOffset,
+                           static_cast<size_t>(payloadBytes), timestampNs,
+                           jstr(env, frameJson));
         return payloadBytes;
     } catch (const std::invalid_argument&) {
         return -4;
@@ -103,15 +104,16 @@ Java_com_matthew_rawlens_CinemaRawWriter_containerWriteFrame(
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CinemaRawWriter_containerWriteAudio(
     JNIEnv* env, jobject /*thiz*/, jlong handle, jobject buf, jint offset,
-    jint frames, jlong timestampNs) {
+    jint totalShorts, jlong timestampNs) {
     auto* writer = writerFrom(handle);
     const uint8_t* b =
         static_cast<const uint8_t*>(env->GetDirectBufferAddress(buf));
-    if (!writer || !b || frames <= 0) return -2;
+    if (!writer || !b || totalShorts <= 0) return -2;
     try {
+        // Channel-agnostic: total interleaved int16 (frames * channels).
         writer->writeAudio(reinterpret_cast<const int16_t*>(b + offset),
-                           static_cast<size_t>(frames), timestampNs);
-        return frames * 2;
+                           static_cast<size_t>(totalShorts), timestampNs);
+        return totalShorts * 2;
     } catch (const std::logic_error&) {
         return -6;
     } catch (...) {

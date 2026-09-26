@@ -50,4 +50,33 @@ int main(int argc, char** argv) {
         assert(motion.numAudioChannels() == media.numAudioChannels());
         std::cout << "Audio rate=" << motion.audioSampleRateHz() << " channels=" << motion.numAudioChannels() << '\n';
     } else std::cout << "BROKEN audio declaration: extraData missing\n";
+
+    // Stereo configuration: the audible reference (PhotonCamera takes,
+    // motioncam-decoder's own fixture). L/R distinct so a swapped or
+    // dropped channel fails, not just the count.
+    {
+        const std::string spath = "/private/tmp/rawlens-interop-stereo.mcraw";
+        {
+            mediacinemaraw::ContainerWriter writer(spath,
+                R"({"extraData":{"audioSampleRate":48000,"audioChannels":2}})");
+            std::vector<uint8_t> raw(64*8*2, 17), payload;
+            mediacinemaraw::encode(raw.data(),raw.size(),64,8,128,false,0,8,false,payload);
+            writer.writeFrame(payload,1000000000,R"({"width":64,"height":8,"compressionType":7})");
+            int16_t stereo[] = {1000,-1000,2000,-2000,3000,-3000,4000,-4000};
+            writer.writeAudio(stereo,8,1000000000);
+            writer.close();
+        }
+        motioncam::Decoder smotion(spath);
+        mediacinemaraw::ContainerReader smedia(spath);
+        assert(smotion.audioSampleRateHz() == 48000 && smedia.audioSampleRateHz() == 48000);
+        assert(smotion.numAudioChannels() == 2 && smedia.numAudioChannels() == 2);
+        std::vector<motioncam::AudioChunk> sa;
+        std::vector<mediacinemaraw::AudioChunk> sb;
+        smotion.loadAudio(sa); smedia.loadAudio(sb);
+        assert(sa.size() == 1 && sb.size() == 1);
+        const std::vector<int16_t> expect = {1000,-1000,2000,-2000,3000,-3000,4000,-4000};
+        assert(sa[0].second == expect && sb[0].samples == expect);
+        assert(sa[0].first == 1000000000 && sb[0].timestampNs == 1000000000);
+        std::cout << "Stereo fixture: 2 channels, 8 interleaved samples agree\n";
+    }
 }
