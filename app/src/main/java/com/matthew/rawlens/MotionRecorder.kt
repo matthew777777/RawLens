@@ -22,7 +22,8 @@ import java.util.concurrent.atomic.AtomicLong
  * the same domain as `Image.timestamp` when
  * `SENSOR_INFO_TIMESTAMP_SOURCE == REALTIME`. The recorder checks that flag
  * (passed in from [RawVideoRecorder]) and refuses motion when timestamps
- * aren't realtime rather than writing a shifted timeline.
+ * aren't realtime rather than writing a shifted timeline. The committer
+ * rebases samples to recording-relative on write (see [RawVideoRecorder]).
  *
  * Gyro axes are mapped to the camera frame with [GyroCameraFrameMapper]
  * before chunking; accel keeps platform axes with gravity, per the
