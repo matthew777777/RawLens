@@ -29,7 +29,7 @@ class ShaderStagingTest {
                 checked++
             }
         }
-        assertTrue("no shaders checked", checked == 20)
+        assertTrue("no shaders checked", checked == 22)
     }
 
     @Test
