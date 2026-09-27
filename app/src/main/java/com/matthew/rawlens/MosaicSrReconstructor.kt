@@ -12,24 +12,26 @@ import kotlin.math.exp
 import kotlin.math.floor
 
 /**
- * Prompt 5C experimental Mosaic SR: direct CFA-target reconstruction.
+ * Mosaic SR: direct CFA-target reconstruction at [LINEAR_SCALE], sharing the
+ * reference-parity accumulation math with [RawSrBayerMerge] (Jamy-L Alg. 4:
+ * nearest-tile flow, covariance interpolation + per-pixel inversion, raw-unit
+ * Gaussian weights, one-quad-shifted robustness with r_ref = 1).
  *
  * This is NOT a re-mosaicing of merged RGB. Each target CFA site accumulates
  * only aligned same-colour source observations, routed by sensor colour
- * ([BayerPattern.colorAt]) exactly like [RawSrBayerMerge], and weighted by the
- * validated model: reference-anchored flow ([RawSrAlignmentField]), kernel
- * precision ([RawSrKernelCovariance.MatrixField]), and per-frame robustness
- * ([RawSrRobustness.FrameRobustness]). Reference merges last with r = 1;
- * sites with no support fall back to the reference-only value; Rc folds
+ * ([BayerPattern.colorAt]); the reference merges with r = 1; sites with no
+ * support divide to 0 like the reference NaN blacked downstream; Rc folds
  * through [RawSrRobustness.accumulate] unchanged.
  *
  * Target grid: linear scale [LINEAR_SCALE] (≈√2, so a ~12 MP source becomes a
- * ~24 MP target by AREA, not 2× width and height), rounded to the nearest even
- * grid to preserve the 2×2 Bayer phase and the source aspect ratio. The target
- * phase is the source phase at the shared origin (crop-origin aware).
+ * ~24 MP target by AREA, not 2× width and height), floored to the even grid
+ * at or below dim×s to preserve the 2×2 Bayer phase and the source aspect
+ * ratio. The target phase is the source phase at the shared origin
+ * (crop-origin aware).
  *
- * Scalar Double accumulation over flat arrays, mirroring the oracle. The RGB
- * merge stays the JPEG path; this reconstruction feeds only the Mosaic SR DNG.
+ * Single-precision accumulation over flat arrays, mirroring the linear merge.
+ * The RGB merge stays the JPEG path; this reconstruction feeds only the
+ * Mosaic SR DNG.
  */
 object MosaicSrReconstructor {
     /** √2 linear scale: target area ≈ 2× source area. */
@@ -118,8 +120,8 @@ object MosaicSrReconstructor {
                 "$label dimensions do not match $width x $height"
             }
             require(frame.samples.size == width * height) { "$label samples truncated" }
-            require(frame.precision.width == quadsW && frame.precision.height == quadsH) {
-                "$label precision grid must match the quad grid"
+            require(frame.covariance.width == quadsW && frame.covariance.height == quadsH) {
+                "$label covariance grid must match the quad grid"
             }
         }
         checkFrame(reference, "Reference")
@@ -140,52 +142,31 @@ object MosaicSrReconstructor {
         val outW = plan.width
         val outH = plan.height
         val pixels = outW * outH
-        // Single-precision accumulators (Stacker parity: references run
-        // float): halves eager heap and streaming temp with no gate-level
-        // impact. Arithmetic stays Double and narrows on store, identically
-        // on both paths, so eager/streaming agreement is still bitwise.
+        // Single-precision accumulators: arithmetic stays Double and narrows
+        // on store, identically on both paths, so eager/streaming agreement
+        // is still bitwise.
         val num = FloatArray(pixels)
         val den = FloatArray(pixels)
-        val refNum = FloatArray(pixels)
-        val refDen = FloatArray(pixels)
-        // Burst-nearest totals backing the fallback path (same delta-kernel
-        // rule as the RGB merge; the kernel totals above are untouched).
-        val nearNum = FloatArray(pixels)
-        val nearDen = FloatArray(pixels)
-        val nearRefNum = FloatArray(pixels)
-        val nearRefDen = FloatArray(pixels)
         val taps = IntArray(pixels)
         val oob = IntArray(pixels)
         var rowsDone = 0
         val numBuf = FloatBuffer.wrap(num)
         val denBuf = FloatBuffer.wrap(den)
-        val nearNumBuf = FloatBuffer.wrap(nearNum)
-        val nearDenBuf = FloatBuffer.wrap(nearDen)
-        // Canonical accumulation order (mirrors streaming exactly — ref
-        // contributions first, then moving frames in order — so the two
-        // paths agree bitwise even though every store narrows to float).
-        accumulateFrame(reference, null, null, pattern,
-            FloatBuffer.wrap(refNum), FloatBuffer.wrap(refDen),
-            FloatBuffer.wrap(nearRefNum), FloatBuffer.wrap(nearRefDen), taps, oob,
-            width, height, quadsW, outW, outH, true)
-        RawSrWorkers.forEachShard(num.size) { i0, i1 ->
-            for (i in i0 until i1) {
-                num[i] += refNum[i]
-                den[i] += refDen[i]
-                nearNum[i] += nearRefNum[i]
-                nearDen[i] += nearRefDen[i]
-            }
-        }
         for (frame in frames) {
             accumulateFrame(frame, frame.flow!!, frame.robustness!!, pattern,
-                numBuf, denBuf, nearNumBuf, nearDenBuf, taps, oob,
+                numBuf, denBuf, taps, oob,
                 width, height, quadsW, outW, outH, false)
             rowsDone += outH
             if (isCancelled?.invoke(rowsDone) == true) throw CancellationException("Mosaic SR cancelled")
         }
-        // Fused sanitize+accumulate: one alloc and one pass per frame instead
-        // of a sanitized copy plus accumulate's own copy (was: 2 allocs, 2
-        // passes). Same index order, same addition — bitwise-identical.
+        // Canonical accumulation order (mirrors streaming exactly — moving
+        // frames in order, then the reference — so the two paths agree
+        // bitwise even though every store narrows to float).
+        accumulateFrame(reference, null, null, pattern,
+            numBuf, denBuf, taps, oob,
+            width, height, quadsW, outW, outH, true)
+        // Rc over the effective (finite-sanitized) weights, like the linear
+        // merge; empty (hence zero) under referenceOnly.
         var rcValues = FloatArray(quadsW * quadsH)
         for (frame in frames) {
             val robust = frame.robustness!!
@@ -201,63 +182,28 @@ object MosaicSrReconstructor {
         val cfa = FloatArray(pixels)
         val weight = FloatArray(pixels)
         val fallback = BooleanArray(pixels)
-        // Accumulated-robustness overwrite (merge contract §9, mirrors the
-        // packed oracle): a target site reads support from its source quad —
-        // the same quad whose robustness fed accumulation. Below MIN_SUPPORT
-        // it joins the fallback set instead of keeping a ghost-prone kernel
-        // blend. Inert with no moving frames, where the output already equals
-        // the reference. Row-sharded: disjoint rows, bitwise-identical.
-        val overwrite = frames.isNotEmpty()
+        // Reference divide: plain per-site quotient, 0 at zero support.
+        // Row-sharded: disjoint rows, bitwise-identical.
         RawSrWorkers.forEachShard(outH) { y0, y1 ->
             for (qy in y0 until y1) {
-                // Hoisted row quad: the mapping depends on qy only through the
-                // row term, but the per-pixel expression is kept verbatim.
                 for (qx in 0 until outW) {
                     val p = qy * outW + qx
-                    val quadX = (((qx + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsW - 1)
-                    val quadY = (((qy + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsH - 1)
-                    val unsupported =
-                        overwrite && rc.values[quadY * quadsW + quadX] < RawSrBayerMerge.MIN_SUPPORT
-                    // All target colours use the same reference neighbourhood.
-                    // Resolve clipped chroma on the camera-neutral ray after
-                    // normal merging, including sites with censored kernel support.
-                    val highlightPeak = referenceHighlightPeak(reference, qx, qy, width, height)
-                    val highlight = RawSrHighlights.amount(highlightPeak) > 0.0
                     // Accumulator reads widen to Double at the decision boundary (one
                     // narrowing on store, identically on both paths).
                     val denD = den[p].toDouble()
-                    if (highlight) fallback[p] = true
-                    val value = if (!unsupported && denD > EPS) {
+                    val value = if (denD > EPS) {
                         num[p] / maxOf(denD, EPS)
                     } else {
                         fallback[p] = true
-                        // Reference-kernel fallback first: the reference-only
-                        // quotient is a full 3x3 kernel mean (smooth, honest
-                        // single-frame value), while the burst-nearest below
-                        // is one tap per frame (jagged on sparse distant
-                        // sites, blocky where the plane never filled — the
-                        // figure's resolve step only trusts filled regions).
-                        // Nearest survives solely where the reference kernel
-                        // itself has no support. Nested ref-only fallback
-                        // where even the nearest path has no support, and the
-                        // reference sample is clipped (saturation guard:
-                        // clipped sites carry no trustworthy signal).
-                        val refValue = refNum[p] / maxOf(refDen[p].toDouble(), EPS)
-                        val refSupported = refDen[p].toDouble() > EPS
-                        val nd = nearDen[p].toDouble()
-                        if (refValue >= RawSrBayerMerge.SATURATED_REF_GUARD) refValue
-                        else if (refSupported) refValue
-                        else if (nd > EPS) nearNum[p] / maxOf(nd, EPS)
-                        else refValue
+                        0.0
                     }
-                    cfa[p] = RawSrHighlights.resolve(value, highlightPeak,
-                        reference.highlightNeutral[RawSrHighlights.channel(pattern.colorAt(qx, qy))]).toFloat()
+                    val finite = if (value.isFinite()) value else 0.0
+                    if (!value.isFinite()) fallback[p] = true
+                    cfa[p] = finite.toFloat()
                     weight[p] = den[p].toFloat().let { if (it.isFinite()) it else 0f }
                 }
             }
         }
-        // rc accumulated above over `frames` (empty under referenceOnly,
-        // hence already zero there); nothing left to reset.
         return MosaicSrResult(outW, outH, pattern, cfa, weight, taps, rc, oob, fallback)
     }
 
@@ -282,19 +228,13 @@ object MosaicSrReconstructor {
      * Memory-bound production reconstruct: same math as [reconstruct] (same
      * accumulation order, same double operations — bitwise-identical CFA), but
      * frames stream one at a time (accumulate-then-drop, ~150MB peak per
-     * full-res frame instead of ~150MB × burst size) and the six double
-     * accumulators (kernel pair, reference pair, burst-nearest pair) live in
-     * memory-mapped temp files (~0.6GB at full res), costing zero Dalvik
-     * heap. Heap peak is ~415MB of a 512MB heap. Since the support-overwrite
-     * adoption the file set is eight: the six pixel-sized pairs, one
-     * quad-sized support (Rc) accumulator driving the overwrite, plus one
-     * pixel-sized reference highlight-peak capture
-     * (~100MB at full res — heap allocation here OOMs the save, see the
-     * highlight-plane note below).
+     * full-res frame instead of ~150MB × burst size) and the accumulators —
+     * one pixel-sized kernel pair plus one quad-sized Rc plane — live in
+     * memory-mapped temp files, costing zero Dalvik heap.
      *
-     * The reference frame is built once via [buildReference], accumulated
-     * first, then dropped; moving frames arrive via [moving] and are released
-     * as consumed, so the sequence must be single-use. With no surviving
+     * Moving frames arrive via [moving] and are released as consumed, so the
+     * sequence must be single-use; the reference frame is built once via
+     * [buildReference] and accumulated last, then dropped. With no surviving
      * moving frame this throws [MergeUnavailableException] exactly like the
      * eager chain, and the caller falls back to the reference DNG.
      */
@@ -318,8 +258,8 @@ object MosaicSrReconstructor {
                 "$label dimensions do not match $width x $height"
             }
             require(frame.samples.size == width * height) { "$label samples truncated" }
-            require(frame.precision.width == quadsW && frame.precision.height == quadsH) {
-                "$label precision grid must match the quad grid"
+            require(frame.covariance.width == quadsW && frame.covariance.height == quadsH) {
+                "$label covariance grid must match the quad grid"
             }
         }
         val plan = planTarget(width, height, geometry.pattern)
@@ -327,56 +267,14 @@ object MosaicSrReconstructor {
         val outW = plan.width
         val outH = plan.height
         val pixels = outW * outH
-        // Six pixel-sized pairs, one quad-sized support accumulator, one
-        // pixel-sized highlight-peak capture: the streaming path tracks Rc exactly
-        // like the eager path (plain per-quad sums, cf.
-        // RawSrRobustness.accumulate) so the accumulated-robustness
-        // overwrite decides identically. The highlight-peak capture (~100MB at full
-        // res) MUST stay mapped: a heap FloatArray here plus the reference
-        // frame plus the first moving-frame build peaks past the 512MB heap
-        // and every moving frame OOMs inside the chain (swallowed as a
-        // rejection), failing the save with "kept no moving frame". Mapped
-        // files start zeroed; the reference pass below overwrites every site
-        // (floor-to-even grids map strictly inside, so no site is born OOB),
-        // and zero leaves highlight rolloff disabled.
-        return useMappedFloats(tempDir, IntArray(6) { pixels } + quadsW * quadsH + pixels) { acc ->
+        // One pixel-sized kernel pair plus one quad-sized Rc plane: the
+        // streaming path tracks Rc exactly like the eager path (plain
+        // per-quad sums, cf. RawSrRobustness.accumulate).
+        return useMappedFloats(tempDir, intArrayOf(pixels, pixels, quadsW * quadsH)) { acc ->
             val num = acc[0]
             val den = acc[1]
-            val refNum = acc[2]
-            val refDen = acc[3]
-            val nearNum = acc[4]
-            val nearDen = acc[5]
-            val rcAcc = acc[6]
-            val highlightPeaks = acc[7]
+            val rcAcc = acc[2]
             var rowsDone = 0
-            var highlightNeutral = floatArrayOf(1f, 1f, 1f)
-            // Built once, accumulated first, then released before any moving
-            // frame materializes. The `run` scope is load-bearing: the
-            // reference MergeFrame (~100MB of samples + precision) must be
-            // unreachable — not merely nulled through one alias while another
-            // (`ref`) still roots it — so the first moving-frame build can
-            // reuse its heap.
-            run {
-                val ref = buildReference()
-                checkFrame(ref, "Reference")
-                highlightNeutral = ref.highlightNeutral.copyOf()
-                accumulateFrame(ref, null, null, pattern,
-                    refNum, refDen, nearNum, nearDen, null, null,
-                    width, height, quadsW, outW, outH, true,
-                    highlightPeaks = highlightPeaks)
-            }
-            // Canonical order (mirrors eager): the reference pass already ran
-            // above, so its pair joins the shared accumulators before any
-            // moving frame — bitwise-identical sequencing on both paths.
-            // Sharded: indexed get/put on disjoint indices (no position use).
-            RawSrWorkers.forEachShard(pixels) { i0, i1 ->
-                for (i in i0 until i1) {
-                    num.put(i, num.get(i) + refNum.get(i))
-                    den.put(i, den.get(i) + refDen.get(i))
-                    // No near add: the reference pass accumulates its nearest
-                    // contribution directly into the shared near pair above.
-                }
-            }
             var accepted = 0
             // Explicit iterator with a nulled slot (NOT a `for` loop): the
             // next sequence element is built by `next()` while the previous
@@ -401,7 +299,7 @@ object MosaicSrReconstructor {
                     }
                     val tAcc0 = android.os.SystemClock.elapsedRealtime()
                     accumulateFrame(current, current.flow, current.robustness, pattern,
-                        num, den, nearNum, nearDen, null, null,
+                        num, den, null, null,
                         width, height, quadsW, outW, outH, false)
                     val tAcc1 = android.os.SystemClock.elapsedRealtime()
                     val support = current.robustness.r
@@ -426,6 +324,17 @@ object MosaicSrReconstructor {
             if (accepted == 0) {
                 throw MergeUnavailableException("Mosaic stream kept no moving frame after alignment")
             }
+            // Canonical order (mirrors eager): the reference accumulates last
+            // into the shared pair. The `run` scope is load-bearing: the
+            // reference MergeFrame (~100MB) must be unreachable after the
+            // pass so its heap is reusable.
+            run {
+                val ref = buildReference()
+                checkFrame(ref, "Reference")
+                accumulateFrame(ref, null, null, pattern,
+                    num, den, null, null,
+                    width, height, quadsW, outW, outH, true)
+            }
             val cfa = FloatArray(pixels)
             // Mean support for the merged noise model: one scalar pass over
             // the mapped Rc accumulator (megabytes read once, no heap
@@ -436,43 +345,19 @@ object MosaicSrReconstructor {
                 supportSum += if (v.isFinite()) v else 1.0
             }
             val meanSupport = supportSum / (quadsW * quadsH)
-            // Accumulated-robustness overwrite (merge contract §9, mirrors
-            // the eager path and the packed oracle): accepted >= 1 here (the
-            // empty stream throws above), so the rule is unconditionally
-            // active. StreamingMosaic carries no mask by design (DNG saver
-            // consumes CFA only); the overwrite still routes values through
-            // the fallback branch. Row-sharded: disjoint rows/indices.
+            // Reference divide: plain per-site quotient, 0 at zero support.
+            // Row-sharded: disjoint rows/indices.
             RawSrWorkers.forEachShard(outH) { y0, y1 ->
                 for (qy in y0 until y1) {
                     for (qx in 0 until outW) {
                         val p = qy * outW + qx
-                        val quadX = (((qx + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsW - 1)
-                        val quadY = (((qy + 0.5) / LINEAR_SCALE) / 2.0).toInt().coerceIn(0, quadsH - 1)
-                        val unsupported = rcAcc.get(quadY * quadsW + quadX) < RawSrBayerMerge.MIN_SUPPORT
                         val d = den.get(p).toDouble()
-                        // Captured reference neighbourhood peak; the source
-                        // frame has already been released by the streaming path.
-                        val highlightPeak = highlightPeaks.get(p).toDouble()
-                        val value = if (!unsupported && d > EPS) {
+                        val value = if (d > EPS) {
                             num.get(p) / maxOf(d, EPS)
                         } else {
-                            // Reference-kernel fallback first (mirrors the eager
-                            // path): the reference-only quotient is a full 3x3
-                            // kernel mean, while burst-nearest is one tap per
-                            // frame. Nearest survives solely where the reference
-                            // kernel itself has no support; clipped reference
-                            // samples keep the reference value (saturation
-                            // guard).
-                            val nd = nearDen.get(p).toDouble()
-                            val refDenD = refDen.get(p).toDouble()
-                            val refValue = refNum.get(p) / maxOf(refDenD, EPS)
-                            if (refValue >= RawSrBayerMerge.SATURATED_REF_GUARD) refValue
-                            else if (refDenD > EPS) refValue
-                            else if (nd > EPS) nearNum.get(p) / maxOf(nd, EPS)
-                            else refValue
+                            0.0
                         }
-                        cfa[p] = RawSrHighlights.resolve(value, highlightPeak,
-                            highlightNeutral[RawSrHighlights.channel(pattern.colorAt(qx, qy))]).toFloat()
+                        cfa[p] = (if (value.isFinite()) value else 0.0).toFloat()
                     }
                 }
             }
@@ -521,8 +406,6 @@ object MosaicSrReconstructor {
         pattern: BayerPattern,
         num: FloatBuffer,
         den: FloatBuffer,
-        nearNum: FloatBuffer,
-        nearDen: FloatBuffer,
         taps: IntArray?,
         oob: IntArray?,
         width: Int,
@@ -531,36 +414,27 @@ object MosaicSrReconstructor {
         outW: Int,
         outH: Int,
         isReference: Boolean,
-        onRow: (() -> Boolean)? = null,
-        // Streaming-only reference neighbourhood peaks. Reuse the mapped
-        // plane so the reference CFA can be released before moving frames.
-        highlightPeaks: FloatBuffer? = null
+        onRow: (() -> Boolean)? = null
     ) {
         val samples = frame.samples
-        val precision = frame.precision.values
-        val guideW = frame.precision.width
-        val guideH = frame.precision.height
+        val covariance = frame.covariance.values
+        val guideW = frame.covariance.width
+        val guideH = frame.covariance.height
         val scaleX = guideW.toDouble() / width
         val scaleY = guideH.toDouble() / height
-        // All sites in an alignment tile ask the same 3x3-neighbour question.
-        // Cache it once per tile instead of scanning nine flows per output pixel.
-        val motionEdges = if (!isReference) RawSrRobustness.flowDisagreementTiles(
-            checkNotNull(flow), RawSrBayerMerge.MOTION_EDGE_QUAD) else null
         // Row-sharded across the shared worker pool: shards cover disjoint
         // output rows with the serial per-pixel code untouched, so the
         // accumulation is bitwise-identical at any worker count. The
-        // per-pixel precision scratch is shard-local (was: one DoubleArray
-        // allocation per pixel, a GC hotspot at full res).
+        // per-pixel scratch is shard-local (no per-pixel allocation).
         RawSrWorkers.forEachShard(outH) { y0, y1 ->
             val scratch = DoubleArray(4)
-            val flowScratch = FloatArray(4)
             for (qy in y0 until y1) {
                 if (onRow?.invoke() == true) throw CancellationException("Mosaic SR cancelled")
                 for (qx in 0 until outW) {
                 val p = qy * outW + qx
                 val siteColor = pattern.colorAt(qx, qy)
-                // Reference-source position of the site center (corner coords),
-                // plus the validated flow displacement in quad pixels.
+                // Reference-source position of the site center, plus the
+                // nearest-tile flow displacement in quad pixels.
                 val dxQuad: Double
                 val dyQuad: Double
                 val r: Double
@@ -571,28 +445,21 @@ object MosaicSrReconstructor {
                     val baseY = (qy + 0.5) / LINEAR_SCALE
                     val quadX = floor(baseX / 2.0).toInt()
                     val quadY = floor(baseY / 2.0).toInt()
-                    // Bilinear flow (flowAtSmoothInto), mirroring the packed
-                    // oracle and the GPU accumulate twin: nearest-tile lookup
-                    // imprints the 16px quilt at tile borders. Same quad
-                    // coordinate space — only the sampling changes. The Into
-                    // form is bitwise-identical to flowAtSmooth with no per-
-                    // pixel boxing (was: 6 objects per pixel per frame).
-                    flow!!.flowAtSmoothInto(quadX.toFloat(), quadY.toFloat(), flowScratch)
-                    if (!flowScratch[0].isFinite() || !flowScratch[1].isFinite()) {
+                    // Nearest-tile lookup, exactly like the reference (and
+                    // the linear merge twin).
+                    val tile = flow!!.flowAt(quadX.toFloat(), quadY.toFloat())
+                    if (!tile.dx.isFinite() || !tile.dy.isFinite()) {
                         if (oob != null) oob[p]++
                         continue
                     }
-                    dxQuad = flowScratch[0].toDouble()
-                    dyQuad = flowScratch[1].toDouble()
-                    val raw = robust!!.r[quadY.coerceIn(0, robust.height - 1) * quadsW +
-                        quadX.coerceIn(0, quadsW - 1)]
+                    dxQuad = tile.dx.toDouble()
+                    dyQuad = tile.dy.toDouble()
+                    // Reference bayer lookup verbatim: min(int(lr//2-0.5))
+                    // reads the quad one up-left (max(q-1, 0)), edge-clamped.
+                    val rqX = maxOf(quadX - 1, 0).coerceIn(0, quadsW - 1)
+                    val rqY = maxOf(quadY - 1, 0).coerceIn(0, robust!!.height - 1)
+                    val raw = robust!!.r[rqY * quadsW + rqX]
                     r = if (raw.isFinite()) raw.toDouble() else 0.0
-                    // Motion-edge stop (mirrors the packed oracle): skip
-                    // splats where neighbouring tiles demonstrably disagree —
-                    // no OOB bump. Unknown tiles merge (robustness backstop).
-                    val tileX = (quadX / flow.tileSize).coerceIn(0, flow.columns - 1)
-                    val tileY = (quadY / flow.tileSize).coerceIn(0, flow.rows - 1)
-                    if (motionEdges!![tileY * flow.columns + tileX]) continue
                 }
                 if (r == 0.0) continue
                 val sourceX = (qx + 0.5) / LINEAR_SCALE + 2.0 * dxQuad
@@ -603,21 +470,8 @@ object MosaicSrReconstructor {
                     if (oob != null) oob[p]++
                     continue
                 }
-                if (highlightPeaks != null && isReference) {
-                    // Same source-coordinate footprint as the eager finalizer.
-                    highlightPeaks.put(p, referenceHighlightPeak(frame, qx, qy, width, height).toFloat())
-                }
-                // Burst-nearest accumulation (Stacker delta-kernel rule): the
-                // nearest finite sample of the site colour in the
-                // floor-centered 3x3 window, weighted by robustness. Nearest
-                // by texel-center distance with a strictly-less update, so
-                // the oy-outer/ox-inner loop order deterministically breaks
-                // ties. Backs the fallback path; the kernel loop below is
-                // untouched.
-                accumulateNearestSite(frame, siteColor, sourceX, sourceY, r, p,
-                    width, height, nearNum, nearDen)
-                val interpolated = interpolatePrecision(
-                    precision, guideW, guideH, sourceX * scaleX - 0.5, sourceY * scaleY - 0.5, scratch)
+                val interpolated = interpolateCovariance(
+                    covariance, guideW, guideH, sourceX * scaleX - 0.5, sourceY * scaleY - 0.5, scratch)
                 if (interpolated == null) continue
                 val centerX = floor(sourceX).toInt()
                 val centerY = floor(sourceY).toInt()
@@ -633,13 +487,12 @@ object MosaicSrReconstructor {
                     val tapColor = frame.sensorPattern.colorAt(tx, ty)
                     if (tapColor != siteColor) continue
                     val sample = samples[ty * width + tx].toDouble()
-                    // Censored taps (>= guard) carry no trustworthy signal and
-                    // must not bleed through kernel means — the nearest path
-                    // below censors identically, so a clipped white tap can
-                    // never become a fallback value either.
-                    if (!sample.isFinite() || sample >= RawSrBayerMerge.SATURATED_REF_GUARD) continue
-                    val distX = (tx + 0.5 - sourceX) / 2.0
-                    val distY = (ty + 0.5 - sourceY) / 2.0
+                    // Every finite sample merges (no censor skip): the
+                    // reference defines none. Non-finite taps are
+                    // reference-undefined and skipped.
+                    if (!sample.isFinite()) continue
+                    val distX = tx + 0.5 - sourceX
+                    val distY = ty + 0.5 - sourceY
                     val z = interpolated[0] * distX * distX +
                         (interpolated[1] + interpolated[2]) * distX * distY +
                         interpolated[3] * distY * distY
@@ -657,81 +510,12 @@ object MosaicSrReconstructor {
     }
 
     /**
-     * Burst-nearest sample accumulation for one frame at one mosaic target
-     * site: the nearest finite sample whose sensor colour matches the site
-     * colour, in the floor-centered 3x3 window around (sourceX, sourceY),
-     * weighted by [r]. Nearest by texel-center distance squared with a
-     * strictly-less update, so the oy-outer/ox-inner loop order
-     * deterministically breaks ties.
-     */
-    private fun accumulateNearestSite(
-        frame: RawSrBayerMerge.MergeFrame,
-        siteColor: CfaColor,
-        sourceX: Double,
-        sourceY: Double,
-        r: Double,
-        p: Int,
-        width: Int,
-        height: Int,
-        nearNum: FloatBuffer,
-        nearDen: FloatBuffer
-    ) {
-        val centerX = floor(sourceX).toInt()
-        val centerY = floor(sourceY).toInt()
-        var best = Double.POSITIVE_INFINITY
-        var bestSample = Double.NaN
-        for (oy in -1..1) for (ox in -1..1) {
-            val tx = centerX + ox
-            val ty = centerY + oy
-            if (tx < 0 || ty < 0 || tx >= width || ty >= height) continue
-            if (frame.sensorPattern.colorAt(tx, ty) != siteColor) continue
-            val sample = frame.samples[ty * width + tx].toDouble()
-            // Censored taps carry no trustworthy signal: a clipped white tap
-            // must not become the site's fallback value (mirrors the kernel
-            // loop's censor rule above and the packed oracle's nearest rule).
-            if (!sample.isFinite() || sample >= RawSrBayerMerge.SATURATED_REF_GUARD) continue
-            val dx = tx + 0.5 - sourceX
-            val dy = ty + 0.5 - sourceY
-            val d2 = dx * dx + dy * dy
-            if (d2 < best) {
-                best = d2
-                bestSample = sample
-            }
-        }
-        if (bestSample.isFinite()) {
-            nearNum.put(p, (nearNum.get(p) + r * bestSample).toFloat())
-            nearDen.put(p, (nearDen.get(p) + r).toFloat())
-        }
-    }
-
-    /** Source-coordinate 3x3 peak, independent of target CFA phase. */
-    private fun referenceHighlightPeak(
-        frame: RawSrBayerMerge.MergeFrame,
-        qx: Int, qy: Int,
-        width: Int, height: Int
-    ): Double {
-        val sourceX = (qx + 0.5) / LINEAR_SCALE
-        val sourceY = (qy + 0.5) / LINEAR_SCALE
-        if (!sourceX.isFinite() || !sourceY.isFinite() ||
-            sourceX < 0.0 || sourceY < 0.0 || sourceX >= width || sourceY >= height
-        ) return Double.NaN
-        val sx = floor(sourceX).toInt()
-        val sy = floor(sourceY).toInt()
-        return RawSrHighlights.peak(frame.samples, width, height, sx, sy)
-    }
-
-    /**
-     * Narrow-axis floor for merge-bound precision fields: no kernel axis
-     * narrower than [MIN_MINOR_SIGMA] quad px. Sub-lattice across-axes
-     * collapse each colour channel onto its own sparse taps and register
-     * each colour's edge separately — zipper and colour leaks. The floor
-     * value is a measured tradeoff (mosaic oracle, period-4 grating):
-     * σ0.25 keeps 87% texture contrast, σ0.3 keeps 73%, σ0.4 keeps 51%,
-     * σ0.5 keeps 39%; step rise is 0/1/2 target px respectively. 0.3 keeps
-     * neighbour-tap pooling (w ≈ 0.004 at 1 quad — still
-     * nearest-dominated, no lottery) while restoring most micro-contrast.
-     * Lower it toward the analytic texture width only with a zipper A/B
-     * ([minorAxisSigmaFloor]).
+     * Narrow-axis floor for precision-space kernel fields (KernelNet A/B
+     * path only; the reference-parity base path applies no clamp): no
+     * kernel axis narrower than [MIN_MINOR_SIGMA] quad px. The floor value
+     * is a measured tradeoff (mosaic oracle, period-4 grating): σ0.25 keeps
+     * 87% texture contrast, σ0.3 keeps 73%, σ0.4 keeps 51%, σ0.5 keeps 39%;
+     * step rise is 0/1/2 target px respectively ([minorAxisSigmaFloor]).
      */
     const val MIN_MINOR_SIGMA = 0.3
     /**
@@ -812,28 +596,45 @@ object MosaicSrReconstructor {
         }
     }
 
-    private fun interpolatePrecision(
-        precision: FloatArray, guideW: Int, guideH: Int, gx: Double, gy: Double,
+    /**
+     * Reference covariance interpolation + inversion (`merge.py::accumulate`),
+     * mirroring the linear merge twin: sign-preserving `modf` fractions,
+     * `int()` floors clipped at 0, ceilings at the far edge, row-then-column
+     * lerp, then the analytic 2x2 inverse into [out]. Null skips the site.
+     */
+    private fun interpolateCovariance(
+        covariance: FloatArray, guideW: Int, guideH: Int, gx: Double, gy: Double,
         out: DoubleArray
     ): DoubleArray? {
         if (!gx.isFinite() || !gy.isFinite()) return null
-        val cx = gx.coerceIn(0.0, (guideW - 1).toDouble())
-        val cy = gy.coerceIn(0.0, (guideH - 1).toDouble())
-        val x0 = floor(cx).toInt().coerceIn(0, guideW - 1)
-        val y0 = floor(cy).toInt().coerceIn(0, guideH - 1)
+        // Sign-preserving remainder, exactly like C modf / Python math.modf.
+        val fx = gx % 1.0
+        val fy = gy % 1.0
+        val x0 = (gx - fx).toInt().coerceAtLeast(0)
+        val y0 = (gy - fy).toInt().coerceAtLeast(0)
+        if (x0 >= guideW || y0 >= guideH) return null
         val x1 = minOf(x0 + 1, guideW - 1)
         val y1 = minOf(y0 + 1, guideH - 1)
-        val fx = cx - x0
-        val fy = cy - y0
+        var cxx = 0.0
+        var cxy = 0.0
+        var cyy = 0.0
         for (c in 0..3) {
-            val v00 = precision[(y0 * guideW + x0) * 4 + c].toDouble()
-            val v10 = precision[(y0 * guideW + x1) * 4 + c].toDouble()
-            val v01 = precision[(y1 * guideW + x0) * 4 + c].toDouble()
-            val v11 = precision[(y1 * guideW + x1) * 4 + c].toDouble()
+            val v00 = covariance[(y0 * guideW + x0) * 4 + c].toDouble()
+            val v10 = covariance[(y0 * guideW + x1) * 4 + c].toDouble()
+            val v01 = covariance[(y1 * guideW + x0) * 4 + c].toDouble()
+            val v11 = covariance[(y1 * guideW + x1) * 4 + c].toDouble()
             if (!v00.isFinite() || !v10.isFinite() || !v01.isFinite() || !v11.isFinite()) return null
-            out[c] = v00 * (1.0 - fx) * (1.0 - fy) + v10 * fx * (1.0 - fy) +
-                v01 * (1.0 - fx) * fy + v11 * fx * fy
+            val top = v00 + fx * (v10 - v00)
+            val bot = v01 + fx * (v11 - v01)
+            val v = top + fy * (bot - top)
+            if (c == 0) cxx = v else if (c == 3) cyy = v else if (c == 1) cxy = v
         }
+        val det = cxx * cyy - cxy * cxy
+        if (!det.isFinite() || det <= 0.0) return null
+        out[0] = cyy / det
+        out[1] = -cxy / det
+        out[2] = -cxy / det
+        out[3] = cxx / det
         return out
     }
 }

@@ -54,11 +54,19 @@ class RawSrMergedNoiseTest {
 
     @Test fun scaleProfileDividesEightCoefPerPlane() {
         // RGGB raster phases: R(0.02,1) G(0.03,2) G(0.04,3) B(0.05,4); green
-        // keeps the larger-slope pair, exactly DngNoiseProfile.toRgb.
+        // keeps the larger-slope pair, exactly DngNoiseProfile.toRgb, then
+        // normalizes (black 64, white 1023) and divides by N=2.
+        val black = floatArrayOf(64f, 64f, 64f, 64f)
         val scaled = RawSrMergedNoise.scaleProfile(
             doubleArrayOf(0.02, 1.0, 0.03, 2.0, 0.04, 3.0, 0.05, 4.0),
-            BayerPattern.RGGB, 2.0)
-        assertArrayEquals(doubleArrayOf(0.01, 0.5, 0.02, 1.5, 0.025, 2.0), scaled!!, 0.0)
+            BayerPattern.RGGB, 2.0, black, 1023f)
+        val range = 1023.0 - 64.0
+        fun norm(slope: Double, offset: Double) =
+            doubleArrayOf(slope / range / 2.0, (slope * 64.0 + offset) / (range * range) / 2.0)
+        val r = norm(0.02, 1.0)
+        val g = norm(0.04, 3.0)
+        val b = norm(0.05, 4.0)
+        assertArrayEquals(doubleArrayOf(r[0], r[1], g[0], g[1], b[0], b[1]), scaled!!, 0.0)
     }
 
     @Test fun scaleProfilePassesSixCoefThrough() {
@@ -70,9 +78,10 @@ class RawSrMergedNoiseTest {
 
     @Test fun unityScaleIsIdentity() {
         val values = doubleArrayOf(0.02, 1.0, 0.03, 2.0, 0.04, 3.0, 0.05, 4.0)
+        val black = floatArrayOf(64f, 64f, 64f, 64f)
         assertArrayEquals(
-            DngNoiseProfile.toRgb(values, BayerPattern.RGGB)!!,
-            RawSrMergedNoise.scaleProfile(values, BayerPattern.RGGB, 1.0)!!, 0.0)
+            DngNoiseProfile.toRgb(values, BayerPattern.RGGB, black, 1023f)!!,
+            RawSrMergedNoise.scaleProfile(values, BayerPattern.RGGB, 1.0, black, 1023f)!!, 0.0)
     }
 
     @Test fun scaleProfileOmitsInsteadOfFabricating() {
@@ -83,6 +92,7 @@ class RawSrMergedNoiseTest {
             doubleArrayOf(0.0, 1.0, 0.03, 2.0, 0.04, 3.0, 0.05, 4.0), BayerPattern.RGGB, 2.0))
         assertNull(RawSrMergedNoise.scaleProfile(good, BayerPattern.RGGB, 0.5))
         assertNull(RawSrMergedNoise.scaleProfile(good, BayerPattern.RGGB, Double.NaN))
+        assertNull(RawSrMergedNoise.scaleProfile(good, BayerPattern.RGGB, 2.0))
     }
 
     @Test fun formatEffectiveFramesIsLocaleFree() {

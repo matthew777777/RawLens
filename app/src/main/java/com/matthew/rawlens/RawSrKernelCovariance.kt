@@ -22,13 +22,9 @@ import kotlin.math.sqrt
  *   Such pixels fall back to the isotropic denoise kernel instead of propagating NaN.
  * - Non-finite stabilization: a non-finite tensor (e.g. NaN input) also falls back to
  *   the isotropic denoise kernel, keeping every packed coefficient finite.
- * - The hard-threshold selection law is the default (Jamy-L offers both laws and
- *   defaults to linear). The linear law smears noise/quantization gradients on busy
- *   texture into locally flat, segmented blends — the "oil painting" artifact this
- *   analytic path is known for. The hard law keeps every pixel at or below A = 1.95
- *   isotropic and only fully stretches past it, so the KernelNet fallback degrades
- *   to a safe isotropic kernel instead of a smeared one. Linear stays available for
- *   A/B comparison.
+ * - The linear selection law is the default, exactly like the reference
+ *   (`selection_law='linear'`). The hard-threshold law (`A > 1.95`, strict)
+ *   stays available for A/B comparison.
  * - ISO kernel type mirrors Jamy-L exactly, including its quirk: covariance equals
  *   kDetail (linear, not squared) and kDenoise is ignored.
  *
@@ -75,7 +71,7 @@ object RawSrKernelCovariance {
         gray: RawSrGrayImage,
         tuning: RawSrTuning,
         kernelType: KernelType = KernelType.STEERABLE,
-        selectionLaw: SelectionLaw = SelectionLaw.HARD
+        selectionLaw: SelectionLaw = SelectionLaw.LINEAR
     ): MatrixField =
         solve(gray, tuning, kernelType, selectionLaw, withCovariance = true).first!!
 
@@ -94,7 +90,7 @@ object RawSrKernelCovariance {
         gray: RawSrGrayImage,
         tuning: RawSrTuning,
         kernelType: KernelType = KernelType.STEERABLE,
-        selectionLaw: SelectionLaw = SelectionLaw.HARD
+        selectionLaw: SelectionLaw = SelectionLaw.LINEAR
     ): MatrixField =
         solve(gray, tuning, kernelType, selectionLaw, withCovariance = false).second
 
@@ -272,14 +268,79 @@ object RawSrKernelCovariance {
     }
 
     /**
-     * Analytic symmetric-2x2 eigendecomposition mirroring Jamy-L `linalg.py`:
-     * [e1x, e1y, e2x, e2y, l1, l2] with eigenvalues sorted by descending magnitude
-     * and unit, mutually orthogonal eigenvectors. The allocating overload exists
-     * for oracle checks; the solver uses the scratch variant and allocates nothing
-     * per pixel.
+     * Analytic symmetric-2x2 eigendecomposition, Jamy-L `linalg.py`
+     * (`get_eigen_val_2x2` + `get_eigen_vect_2x2`) verbatim: [e1x, e1y, e2x,
+     * e2y, l1, l2] with eigenvalues sorted by descending magnitude, the major
+     * axis as the (T - l2*I)*(1,1) residual, and unit, mutually orthogonal
+     * eigenvectors. The allocating overload exists for oracle checks; the
+     * solver uses the scratch variant and allocates nothing per pixel.
      */
     internal fun eigenDecomposition(t00: Float, t01: Float, t11: Float): FloatArray =
         FloatArray(6).also { eigenInto(t00, t01, t11, it) }
+
+    /**
+     * Per-texel symmetric-2x2 inverse of a packed [MatrixField]. The merge
+     * stores covariance and inverts after interpolation (Jamy-L Alg. 4); this
+     * bridges precision-space producers (the KernelNet A/B path) into the
+     * covariance-space merge. Degenerate texels (non-positive or non-finite
+     * determinant) fall back to identity rather than poisoning neighbours.
+     */
+    fun invertField(field: MatrixField): MatrixField {
+        val values = FloatArray(field.values.size)
+        RawSrWorkers.forEachShard(field.width * field.height) { i0, i1 ->
+            for (i in i0 until i1) {
+                val o = i * 4
+                val a = field.values[o].toDouble()
+                val b = field.values[o + 1].toDouble()
+                val d = field.values[o + 3].toDouble()
+                val det = a * d - b * b
+                if (det.isFinite() && det > 0.0 && a.isFinite() && b.isFinite() && d.isFinite()) {
+                    values[o] = (d / det).toFloat()
+                    values[o + 1] = (-b / det).toFloat()
+                    values[o + 2] = (-b / det).toFloat()
+                    values[o + 3] = (a / det).toFloat()
+                } else {
+                    values[o] = 1f
+                    values[o + 1] = 0f
+                    values[o + 2] = 0f
+                    values[o + 3] = 1f
+                }
+            }
+        }
+        return MatrixField(field.width, field.height, values)
+    }
+
+    /**
+     * In-place core of [invertField]: inverts the packed texels of [values]
+     * (4 floats per kernel) without allocating, so the KernelNet
+     * scratch-reuse contract survives the precision→covariance bridge.
+     * Per-texel reads complete before writes and texels are disjoint, hence
+     * bitwise-identical to [invertField].
+     */
+    fun invertFieldInPlace(values: FloatArray) {
+        require(values.size % 4 == 0) { "Packed field must hold 4 coefficients per texel" }
+        val n = values.size / 4
+        RawSrWorkers.forEachShard(n) { i0, i1 ->
+            for (i in i0 until i1) {
+                val o = i * 4
+                val a = values[o].toDouble()
+                val b = values[o + 1].toDouble()
+                val d = values[o + 3].toDouble()
+                val det = a * d - b * b
+                if (det.isFinite() && det > 0.0 && a.isFinite() && b.isFinite() && d.isFinite()) {
+                    values[o] = (d / det).toFloat()
+                    values[o + 1] = (-b / det).toFloat()
+                    values[o + 2] = (-b / det).toFloat()
+                    values[o + 3] = (a / det).toFloat()
+                } else {
+                    values[o] = 1f
+                    values[o + 1] = 0f
+                    values[o + 2] = 0f
+                    values[o + 3] = 1f
+                }
+            }
+        }
+    }
 
     internal fun eigenInto(t00: Float, t01: Float, t11: Float, out: FloatArray) {
         val b = -(t00 + t11)
@@ -300,34 +361,14 @@ object RawSrKernelCovariance {
             out[0] = 1f; out[1] = 0f; out[2] = 0f; out[3] = 1f; out[4] = l1; out[5] = l2
             return
         }
-        // Stable major-axis solve: v carries O(|T|) components, while the legacy
-        // (T - l2I)(1,1) residual cancels giants into rounding noise at
-        // near-collinear tensors and lets 1-ulp differences rotate kernels by
-        // degrees. Both forms are the same eigenvector in exact arithmetic, and
-        // precision outer products are sign-invariant, so well-conditioned
-        // results agree with the legacy form to float rounding.
-        // Cancellation-free row selection (4E precision fix): l1 - t00 cancels
-        // catastrophically in near-isotropic quads ((t11-t00)/2 + root/2 with
-        // opposite signs), rotating the kernel ~1 degree under float32 rounding
-        // while k1 != k2. The (l1-t11, t01) row is the same eigenvector in exact
-        // arithmetic; using the larger row keeps O(|T|) components on both the
-        // CPU and GPU paths. Near-ties imply a repeated eigenvalue, where
-        // k1 == k2 makes the axis irrelevant, so the >= tie-break is safe.
-        var e1x: Float
-        var e1y: Float
-        if (kotlin.math.abs(l1 - t11) >= kotlin.math.abs(l1 - t00)) {
-            e1x = l1 - t11
-            e1y = t01
-        } else {
-            e1x = t01
-            e1y = l1 - t00
-        }
+        // Reference `get_eigen_vect_2x2` verbatim: the major axis is the
+        // (T - l2*I)*(1,1) residual off the SMALLER-magnitude eigenvalue,
+        // normalized, with the minor axis rotated off its sign.
+        var e1x = t00 + t01 - l2
+        var e1y = t01 + t11 - l2
         val e2x: Float
         val e2y: Float
-        if (e1x == 0f && e1y == 0f) {
-            // t01 == 0 with l1 == t00 (t00 >= t11): legacy axis fallback.
-            e1x = 1f; e1y = 0f; e2x = 0f; e2y = 1f
-        } else if (e1x == 0f) {
+        if (e1x == 0f) {
             e1x = 0f; e1y = 1f; e2x = 1f; e2y = 0f
         } else if (e1y == 0f) {
             e1x = 1f; e1y = 0f; e2x = 0f; e2y = 1f
@@ -335,7 +376,8 @@ object RawSrKernelCovariance {
             val norm = sqrt(e1x * e1x + e1y * e1y)
             e1x /= norm
             e1y /= norm
-            val sign = if (e1x >= 0f) 1f else -1f
+            // Reference copysign(1, e1x), including the signed-zero edge.
+            val sign = Math.copySign(1f, e1x)
             e2y = kotlin.math.abs(e1x)
             e2x = -e1y * sign
         }

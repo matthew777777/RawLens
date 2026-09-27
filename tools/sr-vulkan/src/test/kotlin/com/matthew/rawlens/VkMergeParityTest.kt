@@ -42,6 +42,10 @@ class VkMergeParityTest {
         val inputs = packed.mapIndexed { i, p -> RawSrMergeJob.MosaicInput(p, loaded[i].metadata) }
         val chain = RawSrMergeJob.mosaicChain(inputs, 0, noiseLut = null)
         val oracle = RawSrBayerMerge.merge(chain.reference, chain.moving)
+        // The GPU merged texture is post-inpaint; heal the oracle likewise.
+        RawSrDeadLaneInpaint.inpaint(oracle.rgb, oracle.denominator, oracle.width, oracle.height)
+        // ...and post chroma-from-luma; steady the oracle likewise.
+        RawSrChromaFromLuma.stabilize(oracle.rgb, oracle.width, oracle.height)
         assertEquals(256, oracle.width)
 
         var sumAbs = 0.0

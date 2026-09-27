@@ -21,12 +21,15 @@ class MosaicSharpnessTest {
     ): RawSrBayerMerge.MergeFrame {
         val qw = w / 2
         val qh = h / 2
-        // Route through the production narrow-axis clamp (default floor),
-        // exactly like RawSrMergeJob.mergeFrame does: P=16I (σ0.25) leaves
-        // as σ0.3, so these tests pin shipped behaviour, not raw kernels.
-        val precision = MosaicSrReconstructor.clampMinorAxis(
-            RawSrKernelCovariance.MatrixField(
-                qw, qh, FloatArray(qw * qh * 4) { i -> if (i % 4 == 0 || i % 4 == 3) precisionValue else 0f }))
+        // Route through the production narrow-axis clamp (default floor):
+        // P=16I (σ0.25) leaves as σ0.3. The clamp works in precision space
+        // while the merge consumes covariances (reference Alg. 4 inverts per
+        // pixel), so the clamped field is inverted at the boundary — the
+        // effective kernel is the clamped precision over raw-unit distances.
+        val precision = RawSrKernelCovariance.invertField(
+            MosaicSrReconstructor.clampMinorAxis(
+                RawSrKernelCovariance.MatrixField(
+                    qw, qh, FloatArray(qw * qh * 4) { i -> if (i % 4 == 0 || i % 4 == 3) precisionValue else 0f })))
         val tiles = List(qw * qh) { RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true) }
         val flow = RawSrAlignmentField(qw, qh, 1, qw, qh, tiles)
         val robustness = RawSrRobustness.FrameRobustness(

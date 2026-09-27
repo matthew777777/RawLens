@@ -54,7 +54,9 @@ object MosaicMain {
         val ref = if (opts.ref < 0) loaded.size / 2 else opts.ref.coerceIn(loaded.indices)
         val refMetadata = loaded[ref].metadata
         val cameraId = refMetadata.cameraId
-        if (!opts.noKernelnet) {
+        // KernelNet is disconnected by default (RawSrKernelNetAniso.enabled);
+        // skip the model extract/load unless an A/B run opts back in.
+        if (!opts.noKernelnet && RawSrKernelNetAniso.enabled) {
             extractModels(opts.cacheDir)
             NcnnLoader.tryLoad()
             RawSrKernelNetAniso.preload(Context(opts.cacheDir))
@@ -86,7 +88,8 @@ object MosaicMain {
         val accepted = 1 + result.acceptedFrames
         val noiseOverride = refMetadata.cfaPattern?.let { pattern ->
             com.matthew.rawlens.RawSrMergedNoise.scaleProfile(
-                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames
+                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames,
+                refMetadata.blackLevels?.toFloatArray(), refMetadata.whiteLevel
             )
         }
         val provenance = MosaicSrProvenance(

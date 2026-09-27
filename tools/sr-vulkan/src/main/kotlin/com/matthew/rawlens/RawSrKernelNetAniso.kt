@@ -63,8 +63,9 @@ import kotlin.math.sqrt
  *
  * Every failure mode (model absent, not ready, inference error, OOM,
  * non-finite output) falls back per-pixel — or wholesale — to the analytic
- * field the caller already computed. The merge contract is unchanged: same
- * [RawSrKernelCovariance.MatrixField] packing `(m00, m01, m10, m11)`.
+ * field the caller already computed. The merge stores covariance, so the
+ * precision-space conversion is inverted at the boundary; the packing is the
+ * same [RawSrKernelCovariance.MatrixField] `(m00, m01, m10, m11)` either way.
  */
 object RawSrKernelNetAniso {
     private const val TAG = "RawLensKernelNet"
@@ -108,8 +109,13 @@ object RawSrKernelNetAniso {
      */
     const val KERNEL_SIGMA_MAX = 0.71
 
-    /** Master switch (tests / A/B). When false the analytic field passes through. */
-    @Volatile var enabled = true
+    /**
+     * Master switch (tests / A/B). OFF by default: the base merge path is the
+     * analytic reference-parity port (Jamy-L Alg. 5) with no learned stage.
+     * When false every entry point returns the analytic field (or null for
+     * the kernel-only bridge) without touching the model.
+     */
+    @Volatile var enabled = false
 
     /** Idempotent background preload; call from the activity/controller startup path. */
     fun preload(context: Context) {
@@ -472,6 +478,9 @@ object RawSrKernelNetAniso {
         require(analytic.width == outW && analytic.height == outH) {
             "Analytic fallback grid must match the quad grid"
         }
+        // The merge stores covariance; this path converts in precision space,
+        // so the fallback is inverted at entry and the result back at exit.
+        val analyticPrecision = RawSrKernelCovariance.invertField(analytic)
         val result = processor.runInference(
             lumaPlane(cfa, grayScratch), outW, outH, sigma, outScratch)
             ?: return analytic
@@ -499,10 +508,10 @@ object RawSrKernelNetAniso {
                 val rho = samplePlane(planes, 2, planeW, planeH, qx, qy, outW, outH)
                 stats.add(s1, s2, classifyTriple(s1, s2, rho))
                 if (!precisionOf(s1, s2, rho, values, i * 4)) {
-                    values[i * 4] = analytic.values[i * 4]
-                    values[i * 4 + 1] = analytic.values[i * 4 + 1]
-                    values[i * 4 + 2] = analytic.values[i * 4 + 2]
-                    values[i * 4 + 3] = analytic.values[i * 4 + 3]
+                    values[i * 4] = analyticPrecision.values[i * 4]
+                    values[i * 4 + 1] = analyticPrecision.values[i * 4 + 1]
+                    values[i * 4 + 2] = analyticPrecision.values[i * 4 + 2]
+                    values[i * 4 + 3] = analyticPrecision.values[i * 4 + 3]
                 }
             }
             statsQueue.add(stats)
@@ -510,13 +519,12 @@ object RawSrKernelNetAniso {
         val stats = KernelStats()
         statsQueue.forEach(stats::merge)
         Log.i(TAG, stats.logLine("${outW}x${outH}"))
-        // Lattice floor: cap and area floor preserve anisotropy, so strong
-        // edges keep sub-lattice across-axes that zipper the 1x RGB merge
-        // (per-channel sparse taps, ~1px inter-channel straddle) exactly as
-        // they did the mosaic target before its clamp. Same floor, in place:
-        // the mosaic chain's downstream clamp is then an idempotent no-op.
+        // Lattice floor in precision space, then back to the covariance-space
+        // merge field the base path consumes. In place: no extra field-sized
+        // allocation on top of the caller's scratch.
         MosaicSrReconstructor.clampMinorAxisInPlace(
             values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        RawSrKernelCovariance.invertFieldInPlace(values)
         return RawSrKernelCovariance.MatrixField(outW, outH, values)
     }
 
@@ -583,15 +591,17 @@ object RawSrKernelNetAniso {
     /**
      * Resample channel-major model planes onto the quad grid and convert
      * each triple to a packed precision texel ([precisionOf], isotropic
-     * fallback for rejected triples), then floor every kernel's narrow
-     * axis at [MosaicSrReconstructor.MIN_MINOR_SIGMA]. The per-triple cap
-     * and area floor preserve anisotropy, so without this floor strong
-     * edges keep sub-lattice across-axes that zipper the 1x RGB merge
-     * (per-channel sparse taps, ~1px inter-channel straddle) — the same
-     * failure the mosaic target's downstream clamp already cures. The
-     * clamp runs in place over [values], preserving the GPU burst's
-     * scratch-reuse contract. Internal seam: the NCNN `Result` holder is
-     * not constructible on the JVM, so tests drive this directly.
+     * fallback for rejected triples), floor every kernel's narrow axis at
+     * [MosaicSrReconstructor.MIN_MINOR_SIGMA], then invert into the
+     * covariance field the merge consumes (reference Alg. 4 inverts per
+     * pixel). The per-triple cap and area floor preserve anisotropy, so
+     * without the floor strong edges keep sub-lattice across-axes that
+     * zipper the 1x RGB merge (per-channel sparse taps, ~1px
+     * inter-channel straddle) — the same failure the mosaic target's
+     * downstream clamp already cures. The clamp runs in place over
+     * [values], preserving the GPU burst's scratch-reuse contract.
+     * Internal seam: the NCNN `Result` holder is not constructible on the
+     * JVM, so tests drive this directly.
      */
     internal fun convertPlanesToField(
         planes: FloatArray,
@@ -603,7 +613,7 @@ object RawSrKernelNetAniso {
     ): RawSrKernelCovariance.MatrixField {
         require(planeW > 0 && planeH > 0 && outW > 0 && outH > 0)
         require(planes.size == planeW * planeH * 3) { "Model planes must hold 3 channels" }
-        require(values.size == outW * outH * 4) { "Precision field must hold 4 coefficients per quad" }
+        require(values.size == outW * outH * 4) { "Covariance field must hold 4 coefficients per quad" }
         val statsQueue = java.util.concurrent.ConcurrentLinkedQueue<KernelStats>()
         RawSrWorkers.forEachShard(outH) { y0, y1 ->
             val stats = KernelStats()
@@ -624,6 +634,9 @@ object RawSrKernelNetAniso {
         Log.i(TAG, stats.logLine("${outW}x${outH} kernel-only"))
         MosaicSrReconstructor.clampMinorAxisInPlace(
             values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        // In place: the returned field reuses the caller's scratch (the GPU
+        // burst's zero-extra-heap contract), bitwise-identical to invertField.
+        RawSrKernelCovariance.invertFieldInPlace(values)
         return RawSrKernelCovariance.MatrixField(outW, outH, values)
     }
 

@@ -13,9 +13,9 @@ import kotlin.math.sqrt
 
 /**
  * Measured noise-correction LUT for motion robustness (Jamy-L `noise_lut.py` /
- * `monte_carlo.py` methodology, reimplemented for RawLens's linear guide domain).
+ * `monte_carlo.py`, [TRANSFORM] `clip_raw_then_sqrt_bayer_quad_rgb_v1`).
  *
- * The reference simulates clipped noisy 3x3 patch statistics over a stratified
+ * The simulation draws clipped noisy 3x3 patch statistics over a stratified
  * latent-brightness prior and bins the expected reference variance (`sigma_sq`)
  * and reference-moving distance (`d_sq`) by measured brightness. The robustness
  * stage then floors sigma² at the LUT value and shrinks d² by
@@ -23,14 +23,11 @@ import kotlin.math.sqrt
  * texture. No upstream code is copied; the Monte Carlo loop, Welford patch
  * statistics, file validation, and profile-match rules are reimplemented here.
  *
- * Deliberate domain difference: the reference LUT is generated for the
- * sqrt-domain guide (`clip_raw_then_sqrt_bayer_quad_rgb_v1`), which RawLens
- * does not use — our robustness statistics live in the linear normalized
- * domain (docs/raw-sr-robustness.md §1). This LUT is therefore generated for
- * [TRANSFORM] (`clip_raw_then_linear_bayer_quad_rgb_v1`): identical procedure,
- * no square root. Reference `.npz` files are NOT loadable here, and ours are
- * not loadable there; the transform name is part of the cache key so the two
- * can never be confused.
+ * The patch statistics live in the sqrt guide domain, exactly like the
+ * reference: single-sample patches use `sqrt(clipped noisy value)` and green
+ * patches use `sqrt(mean of the two noisy greens)`, matching the robustness
+ * guide pixel-for-pixel. The transform name is part of the cache key so LUTs
+ * from other domains can never be confused.
  *
  * Coefficients are normalized-domain `(alpha, beta)` in EXIF RGBG plane order
  * (R, G1, B, G2), i.e. `var(v) = alpha*v + beta` for `v` in [0, 1]. Sensor
@@ -45,8 +42,10 @@ import kotlin.math.sqrt
  */
 object RawSrNoiseLut {
     /** Simulated transform; part of the on-disk identity, never reused across domains. */
-    const val TRANSFORM = "clip_raw_then_linear_bayer_quad_rgb_v1"
-    const val FORMAT_VERSION = 1
+    const val TRANSFORM = "clip_raw_then_sqrt_bayer_quad_rgb_v1"
+    // Bumped for the six-coefficient normalized-domain fix: v1 LUTs baked the
+    // double-divided model and must regenerate, never load.
+    const val FORMAT_VERSION = 2
     const val DEFAULT_BINS = 1001
     const val DEFAULT_TRIALS = 500_000
     const val DEFAULT_SEED = 0L
@@ -160,9 +159,19 @@ object RawSrNoiseLut {
             }
             val black = blackLevels[raster].toDouble()
             val white = whiteLevel.toDouble()
-            // Exact per-phase normalization, mirroring RawSrCovarianceGuide.
-            val a = slope / (white - black)
-            val b = (slope * black + offset) / ((white - black) * (white - black))
+            // Exact per-phase normalization, mirroring RawSrCovarianceGuide:
+            // eight-coefficient Camera2 profiles are code-domain and convert,
+            // six-coefficient DNG profiles are already normalized and pass
+            // through (dividing them again understates noise ~white-level-fold).
+            val a: Double
+            val b: Double
+            if (profile.size == 8) {
+                a = slope / (white - black)
+                b = (slope * black + offset) / ((white - black) * (white - black))
+            } else {
+                a = slope
+                b = offset
+            }
             when (sensorPattern.colorAt(raster and 1, (raster shr 1) and 1)) {
                 CfaColor.RED -> { alpha[0] = a; beta[0] = b }
                 CfaColor.BLUE -> { alpha[2] = a; beta[2] = b }
@@ -180,7 +189,7 @@ object RawSrNoiseLut {
 
     /**
      * Monte Carlo simulation of clipped-noise 3x3 patch statistics in the
-     * linear guide domain. The latent prior is exactly uniform by midpoint
+     * sqrt guide domain. The latent prior is exactly uniform by midpoint
      * stratification (`(trial+0.5)/trials`, mirroring the reference); R/B
      * channels simulate single-sample patches, G simulates mean-of-two-greens
      * patches, and the reference means/variances plus moving means bin into
@@ -252,14 +261,14 @@ object RawSrNoiseLut {
         return value.coerceIn(0.0, 1.0)
     }
 
-    /** Welford mean/variance of a single-sample 3x3 patch into [out] (mean, variance). */
+    /** Welford mean/variance of a sqrt-domain single-sample 3x3 patch into [out]. */
     private fun patchStats(
         random: Random, brightness: Double, slope: Double, offset: Double, out: DoubleArray
     ) {
         var mean = 0.0
         var moment2 = 0.0
         for (sample in 0..8) {
-            val value = noisy(random, brightness, slope, offset)
+            val value = sqrt(noisy(random, brightness, slope, offset))
             val delta = value - mean
             mean += delta / (sample + 1)
             moment2 += delta * (value - mean)
@@ -268,7 +277,7 @@ object RawSrNoiseLut {
         out[1] = maxOf(moment2 / 9.0, 0.0)
     }
 
-    /** Welford mean/variance of a mean-of-two-greens 3x3 patch (the guide's G). */
+    /** Welford mean/variance of a sqrt-domain mean-of-two-greens 3x3 patch (the guide's G). */
     private fun patchStatsGreen(
         random: Random, brightness: Double,
         slopeA: Double, offsetA: Double, slopeB: Double, offsetB: Double,
@@ -277,8 +286,8 @@ object RawSrNoiseLut {
         var mean = 0.0
         var moment2 = 0.0
         for (sample in 0..8) {
-            val value = 0.5 * (noisy(random, brightness, slopeA, offsetA) +
-                noisy(random, brightness, slopeB, offsetB))
+            val value = sqrt(0.5 * (noisy(random, brightness, slopeA, offsetA) +
+                noisy(random, brightness, slopeB, offsetB)))
             val delta = value - mean
             mean += delta / (sample + 1)
             moment2 += delta * (value - mean)
@@ -290,7 +299,7 @@ object RawSrNoiseLut {
     private fun patchMean(random: Random, brightness: Double, slope: Double, offset: Double): Double {
         var mean = 0.0
         for (sample in 0..8) {
-            mean += (noisy(random, brightness, slope, offset) - mean) / (sample + 1)
+            mean += (sqrt(noisy(random, brightness, slope, offset)) - mean) / (sample + 1)
         }
         return mean
     }
@@ -301,8 +310,8 @@ object RawSrNoiseLut {
     ): Double {
         var mean = 0.0
         for (sample in 0..8) {
-            val value = 0.5 * (noisy(random, brightness, slopeA, offsetA) +
-                noisy(random, brightness, slopeB, offsetB))
+            val value = sqrt(0.5 * (noisy(random, brightness, slopeA, offsetA) +
+                noisy(random, brightness, slopeB, offsetB)))
             mean += (value - mean) / (sample + 1)
         }
         return mean

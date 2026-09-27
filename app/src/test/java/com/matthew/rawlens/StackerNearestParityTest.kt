@@ -21,14 +21,13 @@ import org.junit.Test
  * centered 3x3 window, channel/phase match, finite-only, texel-center
  * distance squared, strictly-less update, oy-outer/ox-inner loop order as
  * the deterministic tie-break) and the burst-loop weight rules (reference
- * frame at unit weight, moving frames at clamped robustness, zero-weight
- * and out-of-bounds sources skipped). Deliberate adaptations NOT covered
- * here, documented in docs/raw-sr-merge.md and the runlog: quad-level
- * (not per-pixel) robustness lookup, fallback-gated (not full-frame)
- * emission, the saturation guard, Double (not float) arithmetic,
- * censored-tap skipping in nearest picks, reference-kernel-first fallback
- * priority (nearest-first would straddle edges into chroma speckles), and
- * crop-origin-aware CFA routing.
+ * frame at unit weight, moving frames at robustness weight, zero-weight
+ * and out-of-bounds sources skipped). The merge path itself follows
+ * reference Alg. 4 (`num += w*r*c`, `den += w*r`, plain divide, no
+ * fallback cascade). Deliberate adaptations of the dormant nearest helper
+ * NOT covered here: the saturation guard, censored-tap skipping in
+ * nearest picks, Double (not float) arithmetic, and crop-origin-aware CFA
+ * routing.
  */
 class StackerNearestParityTest {
     private companion object {
@@ -193,15 +192,13 @@ class StackerNearestParityTest {
         assertEquals(1.0, prodDen[1], 0.0)
     }
 
-    @Test fun zeroWeightMovingFrameFallsBackToReferenceOnly() {
+    @Test fun zeroWeightMovingFrameEqualsReferenceOnly() {
         // Stacker burst loop: local_weight == 0 -> continue before flow and
         // sampling, so a fully-zero-robustness moving frame adds nothing to
-        // the burst accumulators. rc stays 0 -> the overwrite forces fallback
-        // everywhere, and with no moving support the fallback resolves
-        // through the reference kernel quotient — bit-identical to the
-        // reference-only run. (Per-call pick parity lives in
-        // nearestPickMatchesStackerTranscription; the live-weight burst
-        // quotient in fallbackBlendMatchesStackerBurstQuotient.)
+        // the burst accumulators — bit-identical to the reference-only run,
+        // with a clean mask (no fallback branch exists). (Per-call pick
+        // parity lives in nearestPickMatchesStackerTranscription; the
+        // live-weight burst quotient in burstQuotientMatchesStackerWeightRules.)
         val w = 8
         val h = 8
         val ref = frame(w, h, BayerPattern.RGGB, 0, 0,
@@ -211,7 +208,7 @@ class StackerNearestParityTest {
             zeroField(w / 2, h / 2), constRobust(w / 2, h / 2, 0f))
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
         val refOnly = RawSrBayerMerge.merge(ref, emptyList())
-        assertTrue(out.fallback.all { it })
+        assertTrue(out.fallback.none { it })
         assertArrayEquals(refOnly.rgb, out.rgb, 0f)
         assertArrayEquals(refOnly.oobCount, out.oobCount)
     }
@@ -236,17 +233,15 @@ class StackerNearestParityTest {
         assertTrue(out.oobCount.sum() == w * h)
     }
 
-    @Test fun fallbackBlendMatchesStackerBurstQuotient() {
-        // Stacker burst-loop weight rules end to end: reference at unit weight
-        // plus a moving frame at r = 0.1, rc forcing fallback everywhere.
-        // The pick rule stays Stacker-faithful (nearestPickMatches above),
-        // but the fallback PRIORITY is deliberately ours: the smooth
-        // reference kernel mean precedes the burst-nearest blend, whose
-        // per-channel picks straddle high-contrast edges into chroma
-        // speckles. Zero flow keeps both sources exactly at texel centers +
-        // 0.5, so no float-blend ulp can perturb the pick geometry (shifted-
-        // pick coverage lives in nearestPickMatchesStackerTranscription;
-        // oob-skip coverage in outOfBoundsMovingFrameContributesNothing).
+    @Test fun burstQuotientMatchesStackerWeightRules() {
+        // Stacker burst-loop weight rules end to end: reference at unit
+        // weight plus a moving frame at r = 0.1. Zero flow and identical
+        // kernel fields give both frames the same tap geometry and weights,
+        // so the burst accumulators must equal the reference-only
+        // accumulators plus 0.1x the moving frame's own reference-only
+        // accumulators, lane by lane (reference Alg. 4: `num += w*r*c`,
+        // `den += w*r` with r_ref = 1). Summation order differs between the
+        // runs, hence the float-dust tolerance.
         val w = 8
         val h = 8
         val rng = Random(SEED + 1)
@@ -257,10 +252,14 @@ class StackerNearestParityTest {
         val mov = frame(w, h, BayerPattern.RGGB, 0, 0, movSamples,
             zeroField(w / 2, h / 2), constRobust(w / 2, h / 2, movWeight))
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
-        assertTrue(out.fallback.all { it })
-        // Reference kernel mean everywhere (sub-guard random scenes stay
-        // clear of the censor rule): equals the reference-only run exactly.
+        assertTrue(out.fallback.none { it })
         val refOnly = RawSrBayerMerge.merge(ref, emptyList())
-        assertArrayEquals(refOnly.rgb, out.rgb, 0f)
+        val movOnly = RawSrBayerMerge.merge(mov.copy(flow = null, robustness = null), emptyList())
+        for (o in out.numerator.indices) {
+            val expectedNum = refOnly.numerator[o] + movWeight * movOnly.numerator[o]
+            val expectedDen = refOnly.denominator[o] + movWeight * movOnly.denominator[o]
+            assertEquals("num[$o]", expectedNum, out.numerator[o], 1e-5f)
+            assertEquals("den[$o]", expectedDen, out.denominator[o], 1e-5f)
+        }
     }
 }

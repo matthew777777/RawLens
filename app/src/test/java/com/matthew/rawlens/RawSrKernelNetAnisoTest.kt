@@ -388,19 +388,22 @@ class RawSrKernelNetAnisoTest {
         assertEquals(2, field.height)
         for (i in 0 until 4) {
             val o = i * 4
-            val p00 = field.values[o].toDouble()
-            val p01 = field.values[o + 1].toDouble()
-            val p11 = field.values[o + 3].toDouble()
+            // The produced field holds covariances (the merge inverts per
+            // pixel), so the floor reads as a minor-variance bound.
+            val c00 = field.values[o].toDouble()
+            val c01 = field.values[o + 1].toDouble()
+            val c11 = field.values[o + 3].toDouble()
             // Axis-aligned triple stays axis-aligned.
-            assertEquals(0.0, p01, 1e-6)
-            // Minor sigma of Sigma = P^-1 is >= 0.3: lambda_max(P) <= 1/0.09.
-            val trace = p00 + p11
-            val det = p00 * p11 - p01 * p01
-            val lambdaMax = (trace + kotlin.math.sqrt(maxOf(trace * trace - 4 * det, 0.0))) / 2
-            assertTrue("quad $i minor sigma ${1 / kotlin.math.sqrt(lambdaMax)} below floor",
-                lambdaMax <= (1.0 / 0.09) * (1 + 1e-5))
-            // Wide (x) axis untouched by the floor.
-            assertEquals(raw[0].toDouble(), p00, 1e-4)
+            assertEquals(0.0, c01, 1e-6)
+            // Minor sigma >= 0.3: lambda_min(Sigma) >= 0.09.
+            val trace = c00 + c11
+            val det = c00 * c11 - c01 * c01
+            val lambdaMin = (trace - kotlin.math.sqrt(maxOf(trace * trace - 4 * det, 0.0))) / 2
+            assertTrue("quad $i minor sigma ${kotlin.math.sqrt(lambdaMin)} below floor",
+                lambdaMin >= 0.09 * (1 - 1e-5))
+            // Wide (x) axis untouched by the floor: Sigma_xx is the exact
+            // reciprocal of the unclamped precision lane.
+            assertEquals(1.0 / raw[0].toDouble(), c00, 1e-4)
         }
     }
 
@@ -413,29 +416,33 @@ class RawSrKernelNetAnisoTest {
         val field = RawSrKernelNetAniso.convertPlanesToField(planes, 1, 1, 2, 2, values)
         for (i in 0 until 4) {
             val o = i * 4
-            val p00 = field.values[o].toDouble()
-            val p11 = field.values[o + 3].toDouble()
-            // Area floor engaged (well below the unfloored 2/0.0625 = 32)
-            // but lattice floor idle (well below 1/0.09 ≈ 11.1).
-            assertTrue("quad $i p00=$p00", p00 > 4.0 && p00 < 11.0)
-            assertTrue("quad $i p11=$p11", p11 > 4.0 && p11 < 11.0)
+            // Covariance output: area floor engaged (well above the
+            // unfloored 1/32 ≈ 0.031) but lattice floor idle (well above
+            // the 0.09 clamp level) — the reciprocals of the old (4, 11)
+            // precision bounds.
+            val c00 = field.values[o].toDouble()
+            val c11 = field.values[o + 3].toDouble()
+            assertTrue("quad $i c00=$c00", c00 > 0.15 && c00 < 0.25)
+            assertTrue("quad $i c11=$c11", c11 > 0.15 && c11 < 0.25)
             assertEquals(0.0, field.values[o + 1].toDouble(), 1e-6)
         }
     }
 
     @Test fun kernelNetFieldLeavesWideTripleAlone() {
         // Capped isotropic triple (1,1,0) -> (0.71,0.71): true sigma is
-        // s/sqrt(2) = 0.502, comfortably above the 0.3 floor, so the field
-        // passes through to float tolerance (P -> Sigma -> P roundtrip only).
+        // s/sqrt(2) = 0.502, comfortably above the 0.3 floor, so both guards
+        // are idle and the covariance field reads exactly 1/P with
+        // P = 2/0.71^2 ≈ 3.9675 (no roundtrip: the conversion lands in
+        // covariance space directly).
         val planes = floatArrayOf(1f, 1f, 0f)
         val values = FloatArray(2 * 2 * 4)
         val field = RawSrKernelNetAniso.convertPlanesToField(planes, 1, 1, 2, 2, values)
-        val raw = FloatArray(4)
-        assertTrue(RawSrKernelNetAniso.precisionOf(1f, 1f, 0f, raw, 0))
+        val expected = (0.71 * 0.71 / 2.0).toFloat()
         for (i in 0 until 4) {
             val o = i * 4
-            assertEquals(raw[0], field.values[o], 1e-4f)
-            assertEquals(raw[3], field.values[o + 3], 1e-4f)
+            assertEquals(expected, field.values[o], 1e-4f)
+            assertEquals(0f, field.values[o + 1], 1e-6f)
+            assertEquals(expected, field.values[o + 3], 1e-4f)
         }
     }
 

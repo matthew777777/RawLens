@@ -172,9 +172,10 @@ class MainActivity : Activity() {
         }
         preloadFlowNetForMergedHdr()
         preloadRawNindIfEnabled()
-        // KernelNet is tiny (19KB model); preload alongside the other ML nets so
-        // SR saves never wait for init. Unavailable model => silent analytic fallback.
-        RawSrKernelNetAniso.preload(applicationContext)
+        // KernelNet is opt-in A/B only (RawSrKernelNetAniso.enabled, default off):
+        // the base merge path is the analytic reference-parity port with no
+        // learned stage, so no model is preloaded unless the switch is on.
+        if (RawSrKernelNetAniso.enabled) RawSrKernelNetAniso.preload(applicationContext)
         rawSuperResolutionSettings = RawSuperResolutionSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
             lensPreferences().getInt(KEY_CAPTURE_EXPOSURE_MODE, CaptureExposureMode.AUTO.ordinal)

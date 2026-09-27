@@ -104,17 +104,15 @@ data class RawSrAlignmentField(
     }
 
     /**
-     * Bilinear flow for merge/robustness consumption (reference-faithful: no
-     * tile borders visible to the merge). Tile centers sit at integer lattice
-     * points of u = (p + 0.5) / tileSize - 0.5; the four surrounding tiles
-     * blend dx/dy, and confidence blends the reliable bits with a 0.5 gate
-     * (an isoline, not a grid line). Residual stays nearest (containing
-     * tile): the residual gate is a threshold, and thresholding a blended
-     * approximately-agreeing value would shift gate boundaries between CPU
-     * and GPU — the gate keeps its exact old boundary. Any non-finite corner
-     * flow falls back to the containing tile, preserving invalid-flow
-     * propagation. Bitwise-agreeing twins live in robustness.glsl and
-     * merge_accumulate.glsl; [flowAt] stays nearest for alignment internals.
+     * Bilinear flow for coarse-field upsampling inside alignment (pyramid
+     * levels blend by construction). NOT for merge/robustness consumption:
+     * the reference looks flow up at the nearest tile, and the ported merge
+     * and robustness stages use [flowAt] (nearest) to match — tile borders
+     * resolve as quilt steps there by design. Tile centers sit at integer
+     * lattice points of u = (p + 0.5) / tileSize - 0.5; the four surrounding
+     * tiles blend dx/dy, and confidence blends the reliable bits with a 0.5
+     * gate (an isoline, not a grid line). Any non-finite corner flow falls
+     * back to the containing tile, preserving invalid-flow propagation.
      */
     fun flowAtSmooth(x: Float, y: Float): RawSrTileFlow {
         val ux = (x + 0.5f) / tileSize - 0.5f

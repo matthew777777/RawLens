@@ -15,6 +15,10 @@ data class Options(
     val files: List<File>?,
     val backend: String,
     val noKernelnet: Boolean,
+    val noInpaint: Boolean,
+    val noCfl: Boolean,
+    val dumpFields: File?,
+    val cpuGatCov: Boolean,
     val captureId: Long
 ) {
     companion object {
@@ -40,6 +44,10 @@ data class Options(
                 files = value("--files")?.split(",")?.map(::File),
                 backend = value("--backend") ?: "cpu",
                 noKernelnet = args.contains("--no-kernelnet"),
+                noInpaint = args.contains("--no-inpaint"),
+                noCfl = args.contains("--no-cfl"),
+                dumpFields = value("--dump-fields")?.let(::File),
+                cpuGatCov = args.contains("--cpu-gat-cov"),
                 captureId = value("--capture-id")?.toLong() ?: System.currentTimeMillis()
             )
         }
@@ -49,7 +57,7 @@ data class Options(
             System.err.println(
                 "usage: $tool --in <dng-dir> --out <dir> [--ref N] [--cache DIR]" +
                     " [--crop x,y,w,h] [--limit N] [--files a.dng,b.dng]" +
-                    " [--no-kernelnet] [--capture-id ID]"
+                    " [--no-kernelnet] [--no-inpaint] [--no-cfl] [--capture-id ID]"
             )
             System.err.println("       $tool vkcheck  (prove the Vulkan driver + SR shader modules)")
             throw IllegalArgumentException(message)

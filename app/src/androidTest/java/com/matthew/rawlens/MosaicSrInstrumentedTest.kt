@@ -32,7 +32,7 @@ class MosaicSrInstrumentedTest {
             return RawSrBayerMerge.MergeFrame(
                 width = w, height = h, samples = values,
                 sensorPattern = BayerPattern.RGGB, sensorLeft = 0, sensorTop = 0,
-                precision = precision,
+                covariance = precision,
                 flow = RawSrAlignmentField(quadsW, quadsH, 1, quadsW, quadsH, tiles),
                 robustness = RawSrRobustness.FrameRobustness(
                     quadsW, quadsH, FloatArray(quadsW * quadsH) { 1f }, IntArray(quadsW * quadsH)

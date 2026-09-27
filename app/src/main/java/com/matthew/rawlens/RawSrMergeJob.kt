@@ -84,13 +84,12 @@ object RawSrMergeJob {
     private const val READBACK_STRIP_ROWS = 256
 
     /**
-     * Memory-compact backing for a quad-grid flow field. A full-res burst
-     * holds ~3.1M quads; one boxed [RawSrTileFlow] per quad costs ~125MB per
-     * moving frame and OOMs the mosaic save on a 512MB heap. Flat arrays cost
-     * ~40MB for the same grid. Same [List] contract: tileSize is 1, so the
-     * center derives from the index ([RawSrAlignmentField.flowAt] and direct
-     * indexing behave exactly as with a materialized list; each access still
-     * returns a fresh [RawSrTileFlow] value).
+     * Memory-compact backing for a quad-grid flow field, serving
+     * [upsampleFlowToQuads] (dormant A/B; see above). Flat arrays instead of
+     * one boxed [RawSrTileFlow] per quad. Same [List] contract: tileSize is
+     * 1, so the center derives from the index ([RawSrAlignmentField.flowAt]
+     * and direct indexing behave exactly as with a materialized list; each
+     * access still returns a fresh [RawSrTileFlow] value).
      */
     internal class QuadFlowTiles(
         private val quadsW: Int,
@@ -118,10 +117,9 @@ object RawSrMergeJob {
     }
 
     /**
-     * Nearest-tile resampling of a coarse alignment field onto the quad grid.
-     * The oracle consumes flow "looked up at the nearest tile", so sampling
-     * the coarse field per quad preserves its contract on the grid the merge
-     * inputs require (exactly quadsW × quadsH, tileSize 1).
+     * Bilinear resampling of a coarse alignment field onto the quad grid
+     * (dormant A/B helper; the reference-parity base path consumes the
+     * coarse field with nearest-tile lookup and never upsamples).
      */
     fun upsampleFlowToQuads(
         coarse: RawSrAlignmentField, quadsW: Int, quadsH: Int
@@ -408,9 +406,8 @@ object RawSrMergeJob {
         }
         RawSrHotPixel.inpaintNormalized(
             cfa.values, mask, cfa.width, cfa.height, cfa.pattern)
-        val sigma = RawSrKernelNetAniso.sigmaFor(input.packed.noiseProfile)
         if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) logNoiseCheck(input)
-        return mergeFrame(cfa, tuning, flow = null, robustness = null, kernelNetSigma = sigma).copy(highlightNeutral = RawSrHighlights.neutral(input.metadata))
+        return mergeFrame(cfa, tuning, flow = null, robustness = null).copy(highlightNeutral = RawSrHighlights.neutral(input.metadata))
     }
 
     /**
@@ -478,7 +475,10 @@ object RawSrMergeJob {
             return null
         }
         val tAlign = android.os.SystemClock.elapsedRealtime()
-        val flow = upsampleFlowToQuads(coarse, cfa.width / 2, cfa.height / 2)
+        // Reference-parity base: the coarse tile field feeds robustness and
+        // the merge directly; both consume it with nearest-tile lookup
+        // (Jamy-L Algs. 4/6), never a smoothed upsampling.
+        val flow = coarse
         val robustness = try {
             RawSrRobustness.evaluate(
                 refGuide, RawSrRobustness.linearGuide(input.packed, hot), flow, tuning, config, noiseLut
@@ -490,19 +490,10 @@ object RawSrMergeJob {
             return null
         }
         val tRobust = android.os.SystemClock.elapsedRealtime()
-        // Unblocker (Sabre analogue): attenuate the frame's robustness where
-        // 2x2 boxing destroyed signal variance, before the merge consumes it.
-        // The green normalized coefficients come from the same reduction the
-        // GPU path uploads; without a usable model every weight is 1 and the
-        // bake is a no-op. One site serves the Linear oracle and the Mosaic
-        // chain alike; the reference never attenuates (it defines detail).
-        val greenParams = RawSrRobustness.gpuParams(input.packed)
-        val unblocked = RawSrUnblocker.applyToFrame(
-            robustness,
-            RawSrUnblocker.computeFrame(
-                gray, greenParams.alpha[1].toDouble(), greenParams.beta[1].toDouble()))
-        val sigma = RawSrKernelNetAniso.sigmaFor(input.packed.noiseProfile)
-        val frame = mergeFrame(cfa, tuning, flow, unblocked, gray, sigma)
+        // Reference-parity base: the robustness field feeds the merge
+        // unchanged (Jamy-L Alg. 6 has no unblocker fold and no learned
+        // kernel stage). RawSrUnblocker stays available for A/B only.
+        val frame = mergeFrame(cfa, tuning, flow, robustness, gray)
         if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) {
             android.util.Log.d(TAG, "mosaic frame ${cfa.width}x${cfa.height}" +
                 " unpack=${tUnpack - t0}ms align=${tAlign - tUnpack}ms" +
@@ -544,22 +535,13 @@ object RawSrMergeJob {
         tuning: RawSrTuning,
         flow: RawSrAlignmentField?,
         robustness: RawSrRobustness.FrameRobustness?,
-        gray: RawSrGrayImage = RawSrAlignment.bayerQuadGray(cfa),
-        kernelNetSigma: Float? = null
+        gray: RawSrGrayImage = RawSrAlignment.bayerQuadGray(cfa)
     ): RawSrBayerMerge.MergeFrame {
-        val analytic = RawSrKernelCovariance.precision(gray, tuning)
-        // KernelNet drives the anisotropic weights directly when its model is
-        // ready; per-pixel (or wholesale) fallback keeps the analytic field.
-        // Narrow-axis clamp: this builder serves the mosaic chain (1.4x CFA
-        // target) exclusively — the 1x RGB production merge runs on the GPU
-        // path — and sub-lattice across-axes ring and straddle per-channel
-        // edges in ways third-party demosaics read as zipper.
-        val precision = MosaicSrReconstructor.clampMinorAxis(
-            if (kernelNetSigma != null)
-                RawSrKernelNetAniso.precisionFor(cfa, analytic, kernelNetSigma)
-            else analytic,
-            MosaicSrReconstructor.minorAxisSigmaFloor
-        )
+        // Reference-parity base: the analytic kernel covariance, interpolated
+        // and inverted by the merge itself (Jamy-L Algs. 4-5). No learned
+        // stage and no narrow-axis clamp in the base path; KernelNet stays
+        // available behind its own switch for A/B only.
+        val covariance = RawSrKernelCovariance.covariance(gray, tuning)
         return RawSrBayerMerge.MergeFrame(
             width = cfa.width,
             height = cfa.height,
@@ -567,7 +549,7 @@ object RawSrMergeJob {
             sensorPattern = cfa.pattern,
             sensorLeft = cfa.sensorCropLeft,
             sensorTop = cfa.sensorCropTop,
-            precision = precision,
+            covariance = covariance,
             flow = flow,
             robustness = robustness
         )

@@ -198,29 +198,40 @@ class RawSrKernelCovarianceTest {
         assertEquals(0.3f, general[4] * e1x * e1y + general[5] * e2x * e2y, 1e-5f)
     }
 
-    @Test fun eigenDecompositionIsStableAtNearCollinearTensors() {
-        // Sea fixture tensor: gradients collinear to 0.2%, so the legacy
-        // (T - l2I)(1,1) residual is rounding noise and 1-ulp input changes
-        // rotate the kernel by degrees. The stable solve must hold the ~135-degree
-        // major axis steady under +-10-ulp perturbations of every component.
-        // Compared modulo PI: kernels consume the axis LINE (outer products),
-        // so opposite directions of the same line are the same kernel. The 4E
-        // row-selection form reports this line as -PI/4 rather than 3*PI/4.
+    @Test fun eigenDecompositionMatchesReferenceResidualForm() {
+        // Sea fixture tensor: gradients collinear to 0.2%. The solver is the
+        // reference `get_eigen_vect_2x2` verbatim — the (T - l2I)(1,1)
+        // residual off the smaller eigenvalue — INCLUDING its conditioning:
+        // the giants cancel into rounding noise here, so the reported ~135°
+        // line sits 0.6° off the stable solve's 3π/4. That offset is pinned
+        // exactly (it is the reference answer, not a bug), and ±10-ulp
+        // perturbations must stay within the reference form's own jitter
+        // envelope (0.05 rad bound below), never NaN and never a quadrant flip.
+        // Compared modulo PI: kernels consume the axis LINE (outer
+        // products), so opposite directions are the same kernel.
         val base = floatArrayOf(277.4251f, -276.1415f, 277.428f)
         fun lineAngle(t00: Float, t01: Float, t11: Float): Double {
             val e = RawSrKernelCovariance.eigenDecomposition(t00, t01, t11)
             val a = kotlin.math.atan2(e[1].toDouble(), e[0].toDouble())
             return ((a % kotlin.math.PI) + kotlin.math.PI) % kotlin.math.PI
         }
-        val expected = kotlin.math.PI * 3.0 / 4.0
-        assertEquals(expected, lineAngle(base[0], base[1], base[2]), 2e-3)
+        val expected = 2.345668584454689
+        assertEquals(expected, lineAngle(base[0], base[1], base[2]), 1e-9)
+        var worst = 0.0
         for (i in 0..2) for (dir in listOf(-10, 10)) {
             val p = base.copyOf()
             var v = p[i]
             repeat(kotlin.math.abs(dir)) { v = if (dir > 0) Math.nextUp(v) else Math.nextDown(v) }
             p[i] = v
-            assertEquals("component $i dir $dir", expected, lineAngle(p[0], p[1], p[2]), 2e-3)
+            val angle = lineAngle(p[0], p[1], p[2])
+            assertTrue("component $i dir $dir angle=$angle", angle.isFinite())
+            worst = maxOf(worst, kotlin.math.abs(angle - expected))
         }
+        // Measured 0.0223 rad on this fixture: the reference form jitters
+        // ~1° under ±10-ulp inputs (vs 2e-3 for the retired stable solve).
+        // The bound keeps 2x margin while still catching NaN/degenerate and
+        // quadrant-flip regressions.
+        assertTrue("jitter envelope $worst", worst < 0.05)
     }
 
     @Test fun rejectsMismatchedPacking() {

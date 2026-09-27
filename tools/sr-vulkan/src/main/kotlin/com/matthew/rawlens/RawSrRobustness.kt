@@ -3,20 +3,24 @@ package com.matthew.rawlens
 
 import java.nio.ByteOrder
 import kotlin.math.exp
-import kotlin.math.floor
 import kotlin.math.sqrt
 
 /**
- * Prompt 4C CPU oracle: noise-aware motion robustness (Wronski/IPOL Alg. 6–9).
- * Implements [docs/raw-sr-robustness.md]; the document is normative.
+ * CPU oracle: noise-aware motion robustness, Jamy-L Algs. 6–9 verbatim
+ * (`robustness.py`: `compute_robustness`, `compute_guide_image`,
+ * `compute_local_stats`, `warp_stats`, `compute_d_sigma`, `compute_s`,
+ * `robustness_threshold`, `local_min`).
  *
- * Pipeline per moving frame: linear 3-channel guide → 3x3 local stats → warp
- * moving means into reference coordinates (nearest tile flow, bilinear samples)
- * → expected disagreement from measured reference variance plus model moving
- * variance → flow-irregularity scaling → threshold → 5x5 local minimum.
- * Unreliable tiles test the zero-shift hypothesis explicitly (flagged, never
- * silent). Hard gates (bounds, validity, residual, saturation, conflict) force
- * exact zero weights with explicit per-quad flags.
+ * Pipeline per moving frame: sqrt 3-channel guide (Alg. 7) → 3x3 local stats
+ * (Alg. 8) → Dogson-biquadratic warp of the moving means into reference
+ * coordinates at the nearest-tile flow → color distance over measured
+ * reference variance, with the measured-LUT noise correction → s1/s2
+ * flow-irregularity scaling → `clamp(S*exp(-d²/σ²)-t)` threshold → 5x5 local
+ * minimum (Alg. 9). Out-of-bounds warps and non-finite flow weigh exactly
+ * zero; the reference defines no other gate (no rail, residual, reliability,
+ * or model-validity bypass), so the base path has none either. The flag
+ * constants below stay for diagnostics and A/B; the base path reports OOB
+ * and invalid-flow rejections only.
  *
  * Scalar Float/Double arithmetic over flat arrays; no object is allocated per
  * pixel.
@@ -50,9 +54,12 @@ object RawSrRobustness {
     internal fun motionThresholdQuad(tuning: RawSrTuning) = (tuning.mTh / 2.0).toFloat()
 
     /**
-     * Linear 3-channel guide on the quad grid: R/B single samples, G mean of two.
-     * Values are unshaded normalized observations; alpha/beta are the channel
-     * normalized noise coefficients; rail marks quads with any near-rail sample.
+     * Sqrt 3-channel guide on the quad grid (Alg. 7): `sqrt(R)`,
+     * `sqrt(mean of the two greens)`, `sqrt(B)` over unshaded normalized
+     * observations. Alpha/beta are the channel normalized noise coefficients;
+     * rail marks quads with any near-rail sample. The base robustness path
+     * consumes the three color planes only; the remaining fields feed
+     * diagnostics and A/B stages.
      */
     /** Model provenance; only VALID and ZERO_SHOT close the photo gate. */
     enum class Model { VALID, ZERO_SHOT, MISSING, INVALID, ZERO_NOISE }
@@ -226,9 +233,11 @@ object RawSrRobustness {
                 }
                 require(greens == 2) { "Bayer quads must hold exactly two green samples" }
                 val o = qy * outWidth + qx
-                red[o] = r
-                green[o] = (g * 0.5f)
-                blue[o] = b
+                // Alg. 7: sqrt of the clipped quad value; green takes the
+                // square root of the two-tap mean, not the mean of roots.
+                red[o] = sqrt(maxOf(r, 0f))
+                green[o] = sqrt(maxOf(g * 0.5f, 0f))
+                blue[o] = sqrt(maxOf(b, 0f))
                 // A hot quad always rails: its mean carries a stuck tap even
                 // where no sample happens to sit near the code rail.
                 rail[o] = quadRail || quadHot[o]
@@ -279,10 +288,17 @@ object RawSrRobustness {
     }
 
     /**
-     * @param noiseLut measured noise correction (Jamy-L `compute_d_sigma`
-     * noise-correction mirror): sigma² floors at the LUT value and d² shrinks
-     * by `(d²/(d²+d²_LUT))²` at the measured reference brightness. Null keeps
-     * the analytic expected variance. Only applies when both models are valid.
+     * Reference `compute_robustness` (Alg. 6) over the sqrt guides: Dogson
+     * warp of the moving means at the nearest-tile flow, color distance over
+     * measured reference variance with the optional measured-LUT correction,
+     * s1/s2 flow-irregularity scaling, threshold, 5x5 local minimum (Alg. 9).
+     *
+     * @param config accepted for call-site stability and ignored: the
+     * reference defines no residual or reliability gate.
+     * @param noiseLut measured noise correction (reference `noise_correction`):
+     * sigma² floors at the LUT value and d² shrinks by
+     * `(d²/(d²+d²_LUT))²` at the measured reference brightness. Null disables
+     * the correction, exactly like the reference.
      */
     fun evaluate(
         reference: LinearGuide,
@@ -296,10 +312,11 @@ object RawSrRobustness {
         require(flow.imageWidth == reference.width && flow.imageHeight == reference.height)
         val width = reference.width
         val height = reference.height
-        // Reference local statistics (Alg. 8): 3x3 clamp-to-edge mean and variance.
+        // Local statistics (Alg. 8): 3x3 clamp-to-edge means everywhere, plus
+        // the reference variances. The moving variance never enters: sigma²
+        // is measured reference variance only (plus the LUT floor).
         val refMean = Array(3) { FloatArray(width * height) }
         val refVar = Array(3) { FloatArray(width * height) }
-        // Moving local means only; moving variance comes from the noise model.
         val movMean = Array(3) { FloatArray(width * height) }
         for (c in 0..2) {
             val ref = reference.channel(c)
@@ -320,6 +337,9 @@ object RawSrRobustness {
                     val o = y * width + x
                     val mean = sum / 9f
                     refMean[c][o] = mean
+                    // Reference stores the raw (possibly slightly negative)
+                    // variance; the max() below only guards float rounding,
+                    // and sigma² <= 0 still rejects through the threshold.
                     refVar[c][o] = maxOf(squares / 9f - mean * mean, 0f)
                     movMean[c][o] = movSum / 9f
                 }
@@ -327,127 +347,62 @@ object RawSrRobustness {
         }
         val threshold = tuning.t.toFloat()
         val motionThreshold = motionThresholdQuad(tuning)
+        val s1 = tuning.s1.toFloat()
+        val s2 = tuning.s2.toFloat()
         val raw = FloatArray(width * height)
         val flags = IntArray(width * height)
         RawSrWorkers.forEachShard(height) { y0, y1 ->
-            val flowScratch = FloatArray(4)
+            val warped = DoubleArray(3)
             for (y in y0 until y1) for (x in 0 until width) {
                 val o = y * width + x
-                // Smooth (bilinear) sampling: tile borders must not reach the merge.
-                // Into form is bitwise-identical with no per-quad boxing.
-                flow.flowAtSmoothInto(x.toFloat(), y.toFloat(), flowScratch)
-                val tileDx = flowScratch[0]
-                val tileDy = flowScratch[1]
-                val tileResidual = flowScratch[2]
-                val tileReliable = flowScratch[3] >= 0.5f
-                var flag = 0
-                if (!tileDx.isFinite() || !tileDy.isFinite()) {
+                // Nearest-tile flow, exactly like the reference tile lookup.
+                val tile = flow.flowAt(x.toFloat(), y.toFloat())
+                val dx = tile.dx
+                val dy = tile.dy
+                if (!dx.isFinite() || !dy.isFinite()) {
                     raw[o] = 0f
                     flags[o] = FLAG_INVALID_FLOW
                     continue
                 }
-                // Warp target and saturation use the tested displacement: flow when the
-                // tile is reliable, the explicit zero-shift hypothesis otherwise.
-                val dx = if (tileReliable) tileDx else 0f
-                val dy = if (tileReliable) tileDy else 0f
-            val centerX = x + dx
-            val centerY = y + dy
-            if (centerX < 0f || centerY < 0f || centerX >= width || centerY >= height) {
-                raw[o] = 0f
-                flags[o] = FLAG_OUT_OF_BOUNDS
-                continue
-            }
-            val warpQuadX = floor(centerX + 0.5f).toInt().coerceIn(0, width - 1)
-            val warpQuadY = floor(centerY + 0.5f).toInt().coerceIn(0, height - 1)
-            if (reference.rail[o] || moving.rail[warpQuadY * width + warpQuadX]) {
-                raw[o] = 0f
-                // Hot quads rail through the same zero-weight gate, but keep
-                // their own flag: a stuck tap is a sensor defect, not a
-                // saturated highlight, and the merge-debug payload tells them
-                // apart. Mirrored in robustness.glsl.
-                flags[o] = if (reference.hot[o] || moving.hot[warpQuadY * width + warpQuadX])
-                    FLAG_HOTPIXEL else FLAG_SATURATED
-                continue
-            }
-            if (tileReliable && tileResidual > config.maxMeanAbsoluteResidual) {
-                raw[o] = 0f
-                flags[o] = FLAG_RESIDUAL
-                continue
-            }
-            // Bilinear moving means with interpolation weight correction.
-            var distance = 0.0
-            var variance = 0.0
-            val x0 = floor(centerX).toInt()
-            val y0 = floor(centerY).toInt()
-            val fx = centerX - x0
-            val fy = centerY - y0
-            var weightSquares = 0.0
-            for (c in 0..2) {
-                var warped = 0.0
-                for (i in 0..1) for (j in 0..1) {
-                    val xx = (x0 + j).coerceIn(0, width - 1)
-                    val yy = (y0 + i).coerceIn(0, height - 1)
-                    val weight = (if (j == 0) 1.0 - fx.toDouble() else fx.toDouble()) *
-                        (if (i == 0) 1.0 - fy.toDouble() else fy.toDouble())
-                    warped += movMean[c][yy * width + xx] * weight
-                    if (c == 0) weightSquares += weight * weight
+                val centerX = x + dx.toDouble()
+                val centerY = y + dy.toDouble()
+                if (centerX < 0.0 || centerY < 0.0 || centerX >= width || centerY >= height) {
+                    // Reference OOB: warped means are +inf, so R = 0.
+                    raw[o] = 0f
+                    flags[o] = FLAG_OUT_OF_BOUNDS
+                    continue
                 }
-                val error = refMean[c][o] - warped
-                distance += error * error
-                if (moving.modelValid) {
-                    val expected = moving.alpha[c] * warped + moving.beta[c]
-                    variance += refVar[c][o] + weightSquares * maxOf(expected, 0.0) / 9.0
+                warpDogson(movMean, width, height, centerX, centerY, warped)
+                var distance = 0.0
+                var variance = 0.0
+                for (c in 0..2) {
+                    val error = refMean[c][o] - warped[c]
+                    distance += error * error
+                    variance += refVar[c][o]
                 }
-            }
-            // Measured noise correction (null LUT is a no-op): brightness is the
-            // mean reference channel mean, exactly the LUT's binning key.
-            var correctedDistance = distance
-            var correctedVariance = variance
-            if (noiseLut != null && reference.modelValid && moving.modelValid) {
-                val brightness = ((refMean[0][o] + refMean[1][o] + refMean[2][o]) / 3f).coerceIn(0f, 1f)
-                val sample = noiseLut.sample(brightness)
-                correctedVariance = maxOf(variance, sample.sigmaSq.toDouble())
-                if (distance > 0.0) {
-                    val shrink = distance / (distance + sample.dSq.toDouble())
-                    correctedDistance = distance * shrink * shrink
+                // Measured noise correction (null LUT is a no-op): brightness
+                // is the mean reference channel mean, the LUT's binning key.
+                var correctedDistance = distance
+                var correctedVariance = variance
+                if (noiseLut != null) {
+                    val brightness = ((refMean[0][o] + refMean[1][o] + refMean[2][o]) / 3f).coerceIn(0f, 1f)
+                    val sample = noiseLut.sample(brightness)
+                    correctedVariance = maxOf(variance, sample.sigmaSq.toDouble())
+                    if (distance > 0.0) {
+                        val shrink = distance / (distance + sample.dSq.toDouble())
+                        correctedDistance = distance * shrink * shrink
+                    }
                 }
-            }
-            var value: Float
-            if (!reference.modelValid || !moving.modelValid) {
-                // No usable model on at least one side: the photo gate stands
-                // open; alignment, validity, and saturation gates still bind.
-                value = 1f
-                flag = if (reference.model == Model.ZERO_NOISE && moving.model == Model.ZERO_NOISE)
-                    FLAG_MODEL_ZERO else FLAG_MODEL_MISSING
-            } else if (correctedVariance <= 0.0) {
-                // Exact silence on both sides agrees; any difference rejects.
-                value = if (correctedDistance == 0.0) 1f else 0f
-                if (correctedDistance != 0.0) flag = FLAG_PHOTO_CONFLICT
-            } else {
-                val irregular = flowIrregular(flow, x, y, motionThreshold)
-                val scale = if (!tileReliable || irregular) tuning.s1.toFloat() else tuning.s2.toFloat()
-                value = (scale * exp(-(correctedDistance / correctedVariance).toFloat()) - threshold).coerceIn(0f, 1f)
-                if (value == 0f) flag = FLAG_PHOTO_CONFLICT
-                // Reliable-but-irregular tiles merge under the motion scale:
-                // mark them so device builds can attribute lost support to
-                // flow spread rather than photo conflict. Unreliable tiles
-                // keep their own flags below; this bit never fires for them.
-                if (tileReliable && irregular) flag = flag or FLAG_MOTION_IRREGULAR
-            }
-            if (!tileReliable) {
-                if (value > 0f) {
-                    flag = flag or FLAG_STATIC_HYPOTHESIS
-                } else {
-                    flag = (flag and FLAG_PHOTO_CONFLICT.inv()) or FLAG_FLOW_UNRELIABLE
+                val scale = if (flowIrregular(flow, x, y, motionThreshold)) s1 else s2
+                var value = (scale * exp(-(correctedDistance / correctedVariance).toFloat()) - threshold)
+                    .coerceIn(0f, 1f)
+                if (!value.isFinite()) {
+                    // Matches the reference clamp outcome: sigma² = 0 rejects
+                    // (0/0 disagrees through fmax, d² > 0 underflows to zero).
                     value = 0f
                 }
-            }
-            if (!value.isFinite()) {
-                value = 0f
-                flag = flag or FLAG_PHOTO_CONFLICT
-            }
                 raw[o] = value
-                flags[o] = flag
+                flags[o] = 0
             }
         }
         // Local minimum over a 5x5 clamp window (Alg. 9); flags stay own-quad.
@@ -463,7 +418,56 @@ object RawSrRobustness {
         return FrameRobustness(width, height, r, flags)
     }
 
-    /** 3x3 tile flow spread (in-bounds tiles only); true when motion is irregular. */
+    /** Reference `dogson_quadratic_kernel` (utils_image.py). */
+    internal fun dogsonQuadratic(x: Double): Double {
+        val a = kotlin.math.abs(x)
+        return if (a <= 0.5) -2.0 * a * a + 1.0
+        else if (a <= 1.5) a * a - 2.5 * a + 1.5
+        else 0.0
+    }
+
+    /**
+     * Reference `cuda_warp_dogson`: the moving 3x3 means resampled at
+     * ([centerX], [centerY]) with the separable Dogson biquadratic kernel
+     * over the rounded, edge-clamped 3x3 window, normalized by the summed
+     * weights. The caller guarantees the center is in bounds.
+     */
+    internal fun warpDogson(
+        movMean: Array<FloatArray>,
+        width: Int,
+        height: Int,
+        centerX: Double,
+        centerY: Double,
+        out: DoubleArray
+    ) {
+        // Reference round(): half-to-even, like Math.rint.
+        val centerQuadX = Math.rint(centerX).toInt()
+        val centerQuadY = Math.rint(centerY).toInt()
+        var wAcc = 0.0
+        out[0] = 0.0
+        out[1] = 0.0
+        out[2] = 0.0
+        for (i in -1..1) {
+            val yy = (centerQuadY + i).coerceIn(0, height - 1)
+            val wy = dogsonQuadratic(yy - centerY)
+            for (j in -1..1) {
+                val xx = (centerQuadX + j).coerceIn(0, width - 1)
+                val w = wy * dogsonQuadratic(xx - centerX)
+                for (c in 0..2) out[c] += movMean[c][yy * width + xx] * w
+                wAcc += w
+            }
+        }
+        out[0] /= wAcc
+        out[1] /= wAcc
+        out[2] /= wAcc
+    }
+
+    /**
+     * Reference `cuda_compute_s`: 3x3 tile flow spread (in-bounds tiles,
+     * reliability-blind); true when motion is irregular. Non-finite tiles
+     * are reference-undefined and skipped as missing data; with no finite
+     * tile the verdict is conservatively irregular.
+     */
     internal fun flowIrregular(flow: RawSrAlignmentField, x: Int, y: Int, motionThreshold: Float): Boolean {
         val tileX = (x / flow.tileSize).coerceIn(0, flow.columns - 1)
         val tileY = (y / flow.tileSize).coerceIn(0, flow.rows - 1)
@@ -479,24 +483,16 @@ object RawSrRobustness {
             if (tx < 0 || ty < 0 || tx >= flow.columns || ty >= flow.rows) continue
             val dx: Float
             val dy: Float
-            val reliable: Boolean
             if (direct != null) {
                 val index = ty * flow.columns + tx
                 dx = direct.directDx(index)
                 dy = direct.directDy(index)
-                reliable = direct.directReliable(index)
             } else {
                 val tile = flow.tiles[ty * flow.columns + tx]
                 dx = tile.dx
                 dy = tile.dy
-                reliable = tile.reliable
             }
-            if (!dx.isFinite() || !dy.isFinite()) return true
-            // Unreliable tiles carry garbage flow (night/low-texture
-            // estimates); counting them poisons the spread and paints s1
-            // halos around every unreliable tile. They are judged by their
-            // own per-quad reliability gate instead.
-            if (!reliable) continue
+            if (!dx.isFinite() || !dy.isFinite()) continue
             finite = true
             minX = minOf(minX, dx)
             minY = minOf(minY, dy)

@@ -14,11 +14,13 @@ import kotlin.math.sqrt
  * (`handheld_super_resolution/utils_image.py::gat`: `VST = max(0, a*x + 3/8*a^2 + b)`,
  * output `(2/a)*sqrt(VST)`, asserted `a > 0`) followed by `decimating` 2x2 averaging.
  * No upstream code is copied. Deliberate deviations, each with explicit behavior:
- * - The transform runs on black/white-normalized, lens-shading-free observations
- *   (the domain where the captured `S*code + O` model holds), not on raw sensor codes.
- *   Per-phase normalized coefficients are exact, not fitted: with `v = (code-b)/(W-b)`
- *   and code variance `S*code + O`, `var(v) = a'*v + b'` for `a' = S/(W-b)` and
- *   `b' = (S*b + O)/(W-b)^2`.
+ * - The transform runs on black/white-normalized, lens-shading-free observations,
+ *   not on raw sensor codes. Eight-coefficient Camera2 profiles are code-domain
+ *   (`S*code + O`) and convert exactly: with `v = (code-b)/(W-b)`,
+ *   `var(v) = a'*v + b'` for `a' = S/(W-b)` and `b' = (S*b + O)/(W-b)^2`.
+ *   Six-coefficient DNG profiles are already normalized-domain (`S*v + O`) and
+ *   pass through untouched; dividing them again would understate noise by
+ *   ~the white level and collapse every kernel to a razor.
  * - Zero shot noise (`S == 0`, `O > 0`) uses the continuous affine limit `v/sqrt(b')`.
  *   Jamy-L asserts `alpha > 0` and refuses these profiles; RawLens stabilizes them.
  * - Missing, invalid, inconsistent, or exactly-zero-noise profiles fall back to the
@@ -45,14 +47,19 @@ import kotlin.math.sqrt
  * - Gradients ([RawSrKernelCovariance] input): gradient `(gx, gy)` spans quads
  *   `(gx..gx+1, gy..gy+1)`; valid for `0 <= gx <= W-2`. The structure tensor at quad
  *   `(qx, qy)` sums the 2x2 gradient window `{(qx-1..qx, qy-1..qy)}`.
- * - Storage vs units: covariance/precision matrices are STORED per quad pixel, but
- *   their entries are expressed in quad-pixel spatial units (quad-pixel^2 and
- *   quad-pixel^-2). A matrix stored at quad `(qx, qy)` describes offsets measured in
- *   quad pixels from that quad's center.
- * - Cross-grid conversion: raw offsets are twice quad offsets (`d_raw = 2*d_quad`),
- *   so a raw-domain precision is `P_raw = P_quad/4` and the kernel exponent `d^T P d`
- *   is invariant. Future fusion code sampling raw pixels MUST scale packed precision
- *   by 1/4; the exponent-invariance test pins this factor.
+ * - Storage vs units: covariance/precision matrices are STORED per quad pixel
+ *   (one matrix per Bayer quad), and their entries are the reference
+ *   `estimate_kernels` NUMBERS verbatim: the merge interpolates the
+ *   covariances and inverts per pixel, then evaluates the exponent over
+ *   RAW-pixel distances with NO /4 conversion — exactly like the reference
+ *   `merge.py::accumulate`, whose covariance numbers are likewise consumed
+ *   raw. (The retired quad-unit reading divided distances by 2, widening
+ *   every kernel 2x against the reference; the exponent-invariance identity
+ *   itself — `d^T P d` under joint distance/precision scaling — remains
+ *   true math, but the merge no longer applies the conversion.)
+ * - Grids: raw offsets are twice quad offsets (`d_raw = 2*d_quad`); only the
+ *   LOOKUPS (covariance interpolation, flow) convert between grids, never the
+ *   matrix entries.
  *
  * Scalar Double arithmetic over flat arrays; no object is allocated per pixel.
  */
@@ -157,9 +164,14 @@ object RawSrCovarianceGuide {
 
     /**
      * Per-phase noise tables in crop-local phase order (matches preprocess
-     * black-level order). Alpha/beta are normalized-domain; slope/offset are the
-     * code-domain captured pairs. Sensor coordinates select profile entries, so
-     * odd origins stay exact.
+     * black-level order). Alpha/beta are normalized-domain (`variance = a*v +
+     * b` at normalized v); slope/offset are the code-domain equivalents
+     * (`variance = slope*code + offset`) for the sigma-in-codes consumers.
+     * Eight-coefficient Camera2 profiles are code-domain and converted;
+     * six-coefficient DNG profiles are already normalized-domain (DNG
+     * NoiseProfile convention) and pass through to alpha/beta, with
+     * slope/offset derived as the exact code-domain image. Sensor
+     * coordinates select profile entries, so odd origins stay exact.
      */
     internal data class NoiseTables(
         val alpha: DoubleArray,
@@ -181,6 +193,9 @@ object RawSrCovarianceGuide {
         val beta = DoubleArray(4)
         val slope = DoubleArray(4)
         val offset = DoubleArray(4)
+        // DNG six-coefficient profiles already live in the normalized domain;
+        // only Camera2 eight-coefficient profiles need code-domain conversion.
+        val dngNormalized = coefficients.size == 6
         for (phase in 0..3) {
             val sx = input.sensorCropLeft + (phase and 1)
             val sy = input.sensorCropTop + ((phase shr 1) and 1)
@@ -201,10 +216,22 @@ object RawSrCovarianceGuide {
             }
             val black = input.normalization.blackAt(sx, sy).toDouble()
             val white = input.normalization.whiteLevel.toDouble()
-            slope[phase] = parsedSlope
-            offset[phase] = parsedOffset
-            alpha[phase] = parsedSlope / (white - black)
-            beta[phase] = (parsedSlope * black + parsedOffset) / ((white - black) * (white - black))
+            if (dngNormalized) {
+                alpha[phase] = parsedSlope
+                beta[phase] = parsedOffset
+                // Exact code-domain image of S*v + O with v = (code-b)/(W-b):
+                // slope*code + offset for the sigma-in-codes consumers. The
+                // offset legitimately goes negative (affine extrapolation
+                // below black); variance stays positive at/above black.
+                slope[phase] = parsedSlope * (white - black)
+                offset[phase] = parsedOffset * (white - black) * (white - black) -
+                    parsedSlope * (white - black) * black
+            } else {
+                slope[phase] = parsedSlope
+                offset[phase] = parsedOffset
+                alpha[phase] = parsedSlope / (white - black)
+                beta[phase] = (parsedSlope * black + parsedOffset) / ((white - black) * (white - black))
+            }
         }
         val degenerate = BooleanArray(4) { alpha[it] == 0.0 && beta[it] == 0.0 }
         if (degenerate.all { it }) return NoiseTables(alpha, beta, slope, offset, ModelClass.ZERO_NOISE)

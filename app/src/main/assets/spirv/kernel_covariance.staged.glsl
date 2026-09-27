@@ -1,14 +1,16 @@
 #version 450
 uniform highp uvec3 u_dispatch_offset;
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Prompt 4B: Wronski/IPOL anisotropic kernel precision per Bayer-quad pixel.
-// Mirrors RawSrKernelCovariance (Jamy-L Alg. 5): separable 2x2 gradients, 2x2
+// Jamy-L Alg. 5 kernel covariance per Bayer-quad pixel
+// (`kernels.py::estimate_kernels`, `linalg.py`): separable 2x2 gradients, 2x2
 // structure-tensor window, analytic eigendecomposition, kernel radii from the
-// resolved tuning, packed 2x2 precision output. One invocation per quad pixel;
-// no per-pixel host objects. Packing matches the SkyKing alterCov consumer:
-// RGBA texel (p00, p01, p10, p11) read back as mat2(v.x, v.y, v.z, v.w).
+// resolved tuning, packed 2x2 COVARIANCE output. One invocation per quad
+// pixel; no per-pixel host objects. Packing: RGBA texel
+// (c00, c01, c10, c11), read back as mat2(v.x, v.y, v.z, v.w). The merge
+// interpolates this field and inverts per pixel (Alg. 4); this pass never
+// pre-inverts. Mirrors RawSrKernelCovariance exactly.
 // u_kernel_type: 0 steerable, 1 iso (covariance = kDetail, Jamy-L quirk).
-// u_selection_law: 0 linear, 1 hard threshold (A > 1.95, strict).
+// u_selection_law: 0 linear (reference default), 1 hard threshold (A > 1.95, strict).
 precision highp float;
 precision highp sampler2D;
 precision highp image2D;
@@ -72,16 +74,10 @@ void main() {
             l2 = r1;
         }
         if (t01 != 0.0 || t00 != t11) {
-            // Stable major-axis solve mirroring the oracle: v carries O(|T|)
-            // components, never a small residual of cancelled giants.
-            // Cancellation-free row selection (4E precision fix, mirror of the
-            // oracle): the (l1-t11, t01) row is the same eigenvector in exact
-            // arithmetic; the larger row keeps O(|T|) components on both paths.
-            vec2 v = abs(l1 - t11) >= abs(l1 - t00) ? vec2(l1 - t11, t01) : vec2(t01, l1 - t00);
-            if (v.x == 0.0 && v.y == 0.0) {
-                e1 = vec2(1.0, 0.0);
-                e2 = vec2(0.0, 1.0);
-            } else if (v.x == 0.0) {
+            // Reference get_eigen_vect_2x2 verbatim: the major axis is the
+            // (T - l2*I)*(1,1) residual off the smaller-magnitude eigenvalue.
+            vec2 v = vec2(t00 + t01 - l2, t01 + t11 - l2);
+            if (v.x == 0.0) {
                 e1 = vec2(0.0, 1.0);
                 e2 = vec2(1.0, 0.0);
             } else if (v.y == 0.0) {
@@ -121,12 +117,10 @@ void main() {
             e2 = vec2(0.0, 1.0);
         }
     }
-    float i1 = 1.0 / k1Sq;
-    float i2 = 1.0 / k2Sq;
     vec4 packed = vec4(
-        i1 * e1.x * e1.x + i2 * e2.x * e2.x,
-        i1 * e1.x * e1.y + i2 * e2.x * e2.y,
-        i1 * e1.x * e1.y + i2 * e2.x * e2.y,
-        i1 * e1.y * e1.y + i2 * e2.y * e2.y);
+        k1Sq * e1.x * e1.x + k2Sq * e2.x * e2.x,
+        k1Sq * e1.x * e1.y + k2Sq * e2.x * e2.y,
+        k1Sq * e1.x * e1.y + k2Sq * e2.x * e2.y,
+        k1Sq * e1.y * e1.y + k2Sq * e2.y * e2.y);
     imageStore(img_cov, p, packed);
 }

@@ -47,6 +47,8 @@ class TinyDngMetadataTest {
         `when`(metadata.exifOrientation).thenReturn(6)
         `when`(metadata.noiseProfile).thenReturn(ImmutableDoubleValues(
             doubleArrayOf(4.0, 0.4, 2.0, 0.9, 3.0, 0.2, 1.0, 0.1)))
+        `when`(metadata.blackLevels).thenReturn(ImmutableFloatValues(floatArrayOf(64f, 64f, 64f, 64f)))
+        `when`(metadata.whiteLevel).thenReturn(1023f)
         `when`(metadata.lensShadingMap).thenReturn(LensShadingSnapshot(1, 1,
             ImmutableFloatValues(floatArrayOf(1f, 2f, 3f, 4f))))
         `when`(metadata.lensShadingAlreadyApplied).thenReturn(true)
@@ -61,7 +63,15 @@ class TinyDngMetadataTest {
             return ByteBuffer.wrap(tags.payloads[index]).order(ByteOrder.LITTLE_ENDIAN)
         }
         val noise = payload(51041)
-        assertArrayEquals(doubleArrayOf(1.0, 0.1, 3.0, 0.2, 4.0, 0.4), DoubleArray(6) { noise.double }, 0.0)
+        // BGGR winners R(1.0,0.1) G(3.0,0.2) B(4.0,0.4), normalized (black 64, white 1023).
+        val range = 1023.0 - 64.0
+        fun norm(slope: Double, offset: Double) =
+            doubleArrayOf(slope / range, (slope * 64.0 + offset) / (range * range))
+        val r = norm(1.0, 0.1)
+        val g = norm(3.0, 0.2)
+        val b = norm(4.0, 0.4)
+        assertArrayEquals(doubleArrayOf(r[0], r[1], g[0], g[1], b[0], b[1]),
+            DoubleArray(6) { noise.double }, 0.0)
         val black = payload(50714)
         assertEquals(64.5, black.int.toDouble() / black.int, 0.0)
         val colors = payload(50721)

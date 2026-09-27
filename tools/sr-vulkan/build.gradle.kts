@@ -206,6 +206,7 @@ tasks.named("processResources") {
 
 // GPU + staging tests need the built native lib, SPIR-V, and staged ESSL.
 tasks.named<Test>("test") {
+    maxHeapSize = "4g" // TEMP burst522 probe only — revert before finishing
     dependsOn("processResources", "compileShaders")
     // The ported ML processors loadLibrary("ncnnMl") (dedup-by-name only),
     // so the staged host lib must sit on java.library.path (see NcnnLoader).

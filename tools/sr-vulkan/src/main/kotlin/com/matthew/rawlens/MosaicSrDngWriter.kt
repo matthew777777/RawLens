@@ -174,7 +174,8 @@ object MosaicSrDngWriter {
         if (mergedProfile != null) {
             entries += Entry(51041, DOUBLE, doubles(mergedProfile))
         } else metadata.cfaPattern?.let { pattern ->
-            DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern)
+            DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern,
+                metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
                 ?.let { entries += Entry(51041, DOUBLE, doubles(it)) }
         }
         if (gps != null) {
