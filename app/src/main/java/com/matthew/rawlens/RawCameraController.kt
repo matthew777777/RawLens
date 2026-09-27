@@ -469,6 +469,9 @@ class RawCameraController(
     @Volatile private var denoiseSettings = DenoiseSettings()
 
     private var activeDenoiseSettings = DenoiseSettings()
+    @Volatile private var galoshSettings = GaloshSettings()
+
+    private var activeGaloshSettings = GaloshSettings()
     private val previewLayoutListener = View.OnLayoutChangeListener { _, left, top, right, bottom,
                                                                        oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -1351,6 +1354,17 @@ class RawCameraController(
         return true
     }
 
+    /** GALOSH controls freeze exactly like the AI denoise controls. */
+    fun setGaloshSettings(settings: GaloshSettings): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setGaloshSettings(settings) }
+            return true
+        }
+        galoshSettings = settings
+        return true
+    }
+
     fun rawSuperResolutionSettings(): RawSuperResolutionSettings = rawSuperResolutionSettings
 
     fun setRawSuperResolutionSettings(settings: RawSuperResolutionSettings): Boolean {
@@ -1578,6 +1592,7 @@ class RawCameraController(
         activeAdaptiveExposure = SharedAdaptiveExposure()
         activeJpegOutputSettings = jpegOutputSettings
         activeDenoiseSettings = denoiseSettings
+        activeGaloshSettings = galoshSettings
         activeRawSuperResolutionSettings = rawSuperResolutionSettings
         activeRawSrReferenceFallback = false
         return true
@@ -3592,6 +3607,12 @@ class RawCameraController(
 
     fun activeCameraId(): String? = selectedCameraId
 
+    /** Enable-time GALOSH Vulkan preload, off the capture path. */
+    fun prewarmGalosh() {
+        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        developer.prewarmGalosh()
+    }
+
     /** Camera-provided values shown in the guided DNG override editor. */
     fun dngMetadataDefaults(): DngMetadataDefaults {
         val camera = characteristics
@@ -5133,6 +5154,7 @@ class RawCameraController(
         val outputFormat = activeCaptureFormat
         val outputSettings = activeJpegOutputSettings
         val captureDenoiseSettings = activeDenoiseSettings
+        val captureGaloshSettings = activeGaloshSettings
         val adaptiveExposureStrength = adaptivePreviewStrength(activeCaptureExposureMode, outputSettings)
         val sharedAdaptiveExposure = activeAdaptiveExposure
         // Burst callers pass one timestamp for every output of the capture
@@ -5162,14 +5184,26 @@ class RawCameraController(
                     }
                     val devSettings = RawDevelopmentSettings(
                         denoise = captureDenoiseSettings,
+                        galosh = captureGaloshSettings,
                         adaptiveExposureStrength = adaptiveExposureStrength,
                         sharedAdaptiveExposure = sharedAdaptiveExposure,
                         adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(outputSettings)
                     )
-                    // AI denoise-once: one inference whose CFA is shared by the
-                    // denoised-DNG write and the JPEG. Null when AI is off or
-                    // unavailable -> legacy paths below run unchanged.
-                    val aiCfa: UnpackedRawCfa? = if (captureDenoiseSettings.aiEnabled &&
+                    // Denoise-once: at most one stage runs per capture. Galosh
+                    // wins when enabled and AI is skipped for that capture;
+                    // otherwise AI runs as before. The winning CFA is shared
+                    // by the denoised-DNG write and the JPEG; null means the
+                    // legacy paths below run unchanged.
+                    val galoshCfa: UnpackedRawCfa? = if (captureGaloshSettings.enabled &&
+                        (outputFormat.includesDng || outputFormat.includesJpeg)
+                    ) {
+                        val galoshPlane = image.planes.singleOrNull()?.buffer
+                        if (galoshPlane != null) {
+                            developer.galoshCaptureCfa(galoshPlane, frameMetadata, devSettings)
+                        } else null
+                    } else null
+                    val aiCfa: UnpackedRawCfa? = if (!captureGaloshSettings.enabled &&
+                        captureDenoiseSettings.aiEnabled &&
                         (outputFormat.includesDng || outputFormat.includesJpeg)
                     ) {
                         val aiPlane = image.planes.singleOrNull()?.buffer
@@ -5177,6 +5211,7 @@ class RawCameraController(
                             developer.denoiseCaptureCfa(aiPlane, frameMetadata, devSettings)
                         } else null
                     } else null
+                    val denCfa: UnpackedRawCfa? = galoshCfa ?: aiCfa
                     fun saveOriginalDng(): String? = try {
                         DngSaver(context).save(
                             image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
@@ -5194,7 +5229,28 @@ class RawCameraController(
                         Log.e(LOG_TAG, "DNG save failed", failure)
                         null
                     }
-                    if (aiCfa != null) {
+                    if (galoshCfa != null) {
+                        if (outputFormat.includesDng) {
+                            try {
+                                dngName = DngSaver(context).saveGaloshDenoised(
+                                    galoshCfa, frameMetadata, captureId = captureTimeMillis,
+                                    fileNameSuffix = fileNameSuffix, gps = captureGps,
+                                    subfolder = subfolder
+                                )
+                                Log.i(
+                                    LOG_TAG,
+                                    "GALOSH DNG saved name=$dngName pendingSaves=${pendingSaveCount.get()}"
+                                )
+                            } catch (failure: Exception) {
+                                dngFailure = failure
+                                Log.e(LOG_TAG, "GALOSH DNG save failed", failure)
+                            }
+                            if (captureGaloshSettings.saveOriginalDng) {
+                                val ogName = saveOriginalDng()
+                                if (dngName == null) dngName = ogName
+                            }
+                        }
+                    } else if (aiCfa != null) {
                         if (outputFormat.includesDng) {
                             try {
                                 dngName = DngSaver(context).saveAiDenoised(
@@ -5225,11 +5281,12 @@ class RawCameraController(
                                 "RAW development input timestamp=${frameMetadata.timestampNanos} " +
                                     "frame=${frameMetadata.frameNumber} cfa=${frameMetadata.cfaPattern} " +
                                     "geometry=${frameMetadata.bufferGeometry}" +
-                                    if (aiCfa != null) " aiDenoised" else ""
+                                    if (galoshCfa != null) " galoshDenoised"
+                                    else if (aiCfa != null) " aiDenoised" else ""
                             )
-                            val developed = if (aiCfa != null) {
+                            val developed = if (denCfa != null) {
                                 developer.developCfaJpeg(
-                                    aiCfa, frameMetadata,
+                                    denCfa, frameMetadata,
                                     settings = devSettings,
                                     outputSettings = outputSettings
                                 )

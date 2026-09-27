@@ -1,0 +1,213 @@
+#version 450
+/* o32_pass2_only.comp — Phase-2 Mali split: Pass2 Wiener stage of
+ * o32_pass12 as a standalone kernel.  The fused pass12 mis-executes its
+ * Pass2 region on Mali-G615 (27.9 dB vs oracle with bit-identical inputs;
+ * fused Pass1 verified bit-identical to o32_pass1_dump), so Phase 5 runs
+ * split: o32_pass1_dump -> pilot buffer -> o32_pass2_only.
+ *
+ * Bit-model: load tile_in from L_cs (f16), load shared pilot from the
+ * global pilot buffer (Pass1 output, f16-rounded values), zero
+ * accumulators, Wiener shrinkage per block (identical to fused Steps 5-7),
+ * finalize to L_cs_den (f16).  Always full 16 phases (phase_stride=1).
+ * Matches the CPU oracle's GALOSH_F16_STAGE(L_cs_pilot) model. */
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : enable
+#include "galosh_f16_rne.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define GALOSH_BS      8
+#define GALOSH_BP     64
+#define GALOSH_STRIDE  2
+#define PHASE_MOD  (GALOSH_BS / GALOSH_STRIDE)
+#define N_PHASES   (PHASE_MOD * PHASE_MOD)
+#define HALO       (GALOSH_BS - GALOSH_STRIDE)
+#define WIENER_FLOOR  0.125f
+
+#define O32_TILE_SIZE 28
+#define O32_TILE_W      (O32_TILE_SIZE + 2 * HALO)
+#define O32_TILE_PIXELS (O32_TILE_W * O32_TILE_W)
+
+const float kaiser_1d[8] = float[8](
+  0.34012f, 0.59885f, 0.84123f, 0.97659f,
+  0.97659f, 0.84123f, 0.59885f, 0.34012f
+);
+
+layout(std430, binding = 0) readonly  buffer Buf0 { float16_t input_buf[]; };
+layout(std430, binding = 1) readonly  buffer Buf1 { float pilot_global[]; };
+layout(std430, binding = 2) writeonly buffer Buf2 { float16_t output_buf[]; };
+layout(push_constant) uniform PC {
+  int   width;
+  int   height;
+  float sigma_strength;
+  int   phase_stride;
+} pc;
+
+shared float tile_in[O32_TILE_PIXELS];
+shared float numer  [O32_TILE_PIXELS];
+shared float denom  [O32_TILE_PIXELS];
+shared float pilot  [O32_TILE_PIXELS];
+
+void wht8_f(inout float x[8])
+{
+  float a0 = x[0]+x[1], a1 = x[0]-x[1];
+  float a2 = x[2]+x[3], a3 = x[2]-x[3];
+  float a4 = x[4]+x[5], a5 = x[4]-x[5];
+  float a6 = x[6]+x[7], a7 = x[6]-x[7];
+  float b0 = a0+a2, b1 = a1+a3;
+  float b2 = a0-a2, b3 = a1-a3;
+  float b4 = a4+a6, b5 = a5+a7;
+  float b6 = a4-a6, b7 = a5-a7;
+  x[0] = b0+b4; x[1] = b1+b5; x[2] = b2+b6; x[3] = b3+b7;
+  x[4] = b0-b4; x[5] = b1-b5; x[6] = b2-b6; x[7] = b3-b7;
+}
+
+void wht2d_8x8_f(inout float block[GALOSH_BP], const int normalize)
+{
+  for(int r = 0; r < 8; r++)
+  {
+    float row[8];
+    for(int c = 0; c < 8; c++) row[c] = block[r * 8 + c];
+    wht8_f(row);
+    for(int c = 0; c < 8; c++) block[r * 8 + c] = row[c];
+  }
+  for(int c = 0; c < 8; c++)
+  {
+    float col[8];
+    for(int r = 0; r < 8; r++) col[r] = block[r * 8 + c];
+    wht8_f(col);
+    for(int r = 0; r < 8; r++) block[r * 8 + c] = col[r];
+  }
+  if(normalize != 0)
+  {
+    const float inv = (1.0f / 64.0f);
+    for(int i = 0; i < 64; i++) block[i] *= inv;
+  }
+}
+
+void main()
+{
+  const int tile_x = int(gl_WorkGroupID.x) * O32_TILE_SIZE;
+  const int tile_y = int(gl_WorkGroupID.y) * O32_TILE_SIZE;
+  const int lid = int(gl_LocalInvocationID.y) * 8 + int(gl_LocalInvocationID.x);
+  const int wg_size = 8 * 8;
+
+  const int img_rmax = pc.height - GALOSH_BS;
+  const int img_cmax = pc.width  - GALOSH_BS;
+
+  /* ---- Step 1: Load input tile (with halo) + pilot tile ---- */
+  for(int i = lid; i < O32_TILE_PIXELS; i += wg_size)
+  {
+    const int lx = i % O32_TILE_W;
+    const int ly = i / O32_TILE_W;
+    const int gx = tile_x - HALO + lx;
+    const int gy = tile_y - HALO + ly;
+    const bool inside = (gx >= 0 && gx < pc.width && gy >= 0 && gy < pc.height);
+    tile_in[i] = inside ? float(input_buf[gy * pc.width + gx]) : 0.0f;
+    pilot[i]   = inside ? pilot_global[gy * pc.width + gx] : 0.0f;
+  }
+  memoryBarrierShared(); barrier();
+
+  /* ---- Step 5: Zero accumulators ---- */
+  for(int i = lid; i < O32_TILE_PIXELS; i += wg_size)
+  {
+    numer[i] = 0.0f;
+    denom[i] = 0.0f;
+  }
+  memoryBarrierShared(); barrier();
+
+  /* ---- Step 6: Pass2 Wiener shrinkage (== fused Step 6, stride=1) ---- */
+  {
+    const int n_blocks_dim = (O32_TILE_W - GALOSH_BS) / GALOSH_STRIDE + 1;
+    const float sigma_sq_unorm = pc.sigma_strength * pc.sigma_strength * float(GALOSH_BP);
+
+    for(int phase = 0; phase < N_PHASES; phase++)
+    {
+      const int px = phase % PHASE_MOD;
+      const int py = phase / PHASE_MOD;
+      if(pc.phase_stride > 1 &&
+         ((px % pc.phase_stride) != 0 || (py % pc.phase_stride) != 0))
+        continue;
+      const int bpd   = (n_blocks_dim - px + PHASE_MOD - 1) / PHASE_MOD;
+      const int bpd_y = (n_blocks_dim - py + PHASE_MOD - 1) / PHASE_MOD;
+      const int n_blocks = bpd * bpd_y;
+
+      for(int bi = lid; bi < n_blocks; bi += wg_size)
+      {
+        const int pbx = bi % bpd;
+        const int pby = bi / bpd;
+        const int bx = pbx * PHASE_MOD + px;
+        const int by = pby * PHASE_MOD + py;
+        if(bx >= n_blocks_dim || by >= n_blocks_dim) continue;
+
+        const int ref_c = bx * GALOSH_STRIDE;
+        const int ref_r = by * GALOSH_STRIDE;
+
+        const int img_ref_r = tile_y - HALO + ref_r;
+        const int img_ref_c = tile_x - HALO + ref_c;
+        if(img_ref_r < 0 || img_ref_r > img_rmax) continue;
+        if(img_ref_c < 0 || img_ref_c > img_cmax) continue;
+
+        float blk_noisy[GALOSH_BP];
+        float blk_pilot[GALOSH_BP];
+        for(int dy = 0; dy < GALOSH_BS; dy++)
+          for(int dx = 0; dx < GALOSH_BS; dx++)
+          {
+            const int pos = (ref_r + dy) * O32_TILE_W + (ref_c + dx);
+            blk_noisy[dy * GALOSH_BS + dx] = tile_in[pos];
+            blk_pilot[dy * GALOSH_BS + dx] = pilot[pos];
+          }
+
+        wht2d_8x8_f(blk_noisy, 0);
+        wht2d_8x8_f(blk_pilot, 0);
+
+        float wiener_energy = 0.0f;
+        for(int i = 0; i < GALOSH_BP; i++)
+        {
+          float w;
+          if(i == 0)
+            w = 1.0f;
+          else
+          {
+            const float p = blk_pilot[i];
+            const float s2 = p * p;
+            w = s2 / (s2 + sigma_sq_unorm);
+            if(w < WIENER_FLOOR) w = WIENER_FLOOR;
+          }
+          blk_noisy[i] *= w;
+          wiener_energy += w * w;
+        }
+
+        wht2d_8x8_f(blk_noisy, 1);
+
+        const float weight = 1.0f / max(wiener_energy, 1e-6f);
+        for(int dy = 0; dy < GALOSH_BS; dy++)
+          for(int dx = 0; dx < GALOSH_BS; dx++)
+          {
+            const float kw = kaiser_1d[dy] * kaiser_1d[dx];
+            const float wkw = weight * kw;
+            const int pos = (ref_r + dy) * O32_TILE_W + (ref_c + dx);
+            numer[pos] += wkw * blk_noisy[dy * GALOSH_BS + dx];
+            denom[pos] += wkw;
+          }
+      }
+      memoryBarrierShared(); barrier();
+    }
+  }
+
+  /* ---- Step 7: Finalize -> global output (interior only) ---- */
+  for(int i = lid; i < O32_TILE_SIZE * O32_TILE_SIZE; i += wg_size)
+  {
+    const int lx = i % O32_TILE_SIZE + HALO;
+    const int ly = i / O32_TILE_SIZE + HALO;
+    const int idx = ly * O32_TILE_W + lx;
+    const int gx = tile_x + (i % O32_TILE_SIZE);
+    const int gy = tile_y + (i / O32_TILE_SIZE);
+    if(gx < pc.width && gy < pc.height)
+    {
+      const float d = denom[idx];
+      output_buf[gy * pc.width + gx] =
+          float16_t(galosh_f16_rne((d > 1e-10f) ? (numer[idx] / d) : tile_in[idx]));
+    }
+  }
+}

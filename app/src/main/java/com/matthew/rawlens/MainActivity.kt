@@ -444,6 +444,7 @@ class MainActivity : Activity() {
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
         controller.setDenoiseSettings(denoiseSettings())
+        controller.setGaloshSettings(galoshSettings())
         controller.setVfPreviewMode(vfPreviewMode)
         controller.setVfTargetLongEdge(vfResolution)
         controller.setVfEngineMode(
@@ -2969,6 +2970,36 @@ class MainActivity : Activity() {
         return true
     }
 
+    private fun galoshSettings(): GaloshSettings {
+        val prefs = lensPreferences()
+        return GaloshSettings(
+            enabled = prefs.getBoolean(KEY_GALOSH_ENABLED, false),
+            saveOriginalDng = prefs.getBoolean(KEY_GALOSH_SAVE_ORIGINAL_DNG, true),
+            strength = prefs.getInt(KEY_GALOSH_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
+            luma = prefs.getInt(KEY_GALOSH_LUMA_PCT, 100).coerceIn(0, 200) / 100f,
+            chroma = prefs.getInt(KEY_GALOSH_CHROMA_PCT, 100).coerceIn(0, 200) / 100f,
+            fastUpsample = prefs.getBoolean(KEY_GALOSH_FAST_UPSAMPLE, false),
+            fastMode = prefs.getBoolean(KEY_GALOSH_FAST_MODE, false)
+        )
+    }
+
+    private fun persistGaloshSettings(settings: GaloshSettings): Boolean {
+        if (!controller.setGaloshSettings(settings)) {
+            setStatus("DENOISE AFTER SAVES")
+            return false
+        }
+        lensPreferences().edit()
+            .putBoolean(KEY_GALOSH_ENABLED, settings.enabled)
+            .putBoolean(KEY_GALOSH_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
+            .putInt(KEY_GALOSH_STRENGTH_PCT, (settings.strength * 100 + 0.5f).toInt().coerceIn(0, 100))
+            .putInt(KEY_GALOSH_LUMA_PCT, (settings.luma * 100 + 0.5f).toInt().coerceIn(0, 200))
+            .putInt(KEY_GALOSH_CHROMA_PCT, (settings.chroma * 100 + 0.5f).toInt().coerceIn(0, 200))
+            .putBoolean(KEY_GALOSH_FAST_UPSAMPLE, settings.fastUpsample)
+            .putBoolean(KEY_GALOSH_FAST_MODE, settings.fastMode)
+            .apply()
+        return true
+    }
+
     /**
      * Warm-starts the available RawNIND models when AI denoise is enabled
      * (process-wide singleton, background init): model load plus Vulkan
@@ -4005,6 +4036,127 @@ class MainActivity : Activity() {
             aiSubordinate += aiStrengthBar
             aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
 
+            content.addView(sectionTitle("Classical denoise (GALOSH Vulkan)"))
+            var galosh = galoshSettings()
+            val galoshSubordinate = ArrayList<View>()
+            val galoshMaster = CheckBox(this).apply {
+                text = "GALOSH RAW denoise (Vulkan)\nOn writes a denoised _GALOSH DNG and develops the JPEG from it. Wins over AI denoise when both are on."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = galosh.enabled
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = galosh.copy(enabled = value)
+                    if (persistGaloshSettings(proposed)) {
+                        galosh = proposed
+                        galoshSubordinate.forEach { it.isEnabled = galosh.enabled }
+                        // Enable-time preload: create the Vulkan device off
+                        // the capture path so the first shot stays fast.
+                        if (galosh.enabled) controllerIfReady?.prewarmGalosh()
+                    } else if (button.isChecked != galosh.enabled) {
+                        button.isChecked = galosh.enabled
+                    }
+                }
+            }
+            val galoshKeepOriginal = CheckBox(this).apply {
+                text = "Save original DNG alongside\nOff halves storage; the untouched sensor DNG is skipped."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = galosh.saveOriginalDng
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = galosh.copy(saveOriginalDng = value)
+                    if (persistGaloshSettings(proposed)) {
+                        galosh = proposed
+                    } else if (button.isChecked != galosh.saveOriginalDng) {
+                        button.isChecked = galosh.saveOriginalDng
+                    }
+                }
+            }
+            content.addView(galoshMaster); content.addView(galoshKeepOriginal)
+            galoshSubordinate += galoshKeepOriginal
+            fun addGaloshSlider(
+                title: String,
+                maximum: Int,
+                initial: Int,
+                update: (GaloshSettings, Int) -> GaloshSettings
+            ) {
+                var selected = initial.coerceIn(0, maximum)
+                val label = TextView(this).apply {
+                    text = "$title: $selected%"
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 14f
+                    setPadding(dp(12), dp(8), dp(12), 0)
+                }
+                content.addView(label)
+                val bar = SeekBar(this).apply {
+                    max = maximum
+                    progress = selected
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                            selected = progress
+                            label.text = "$title: $selected%"
+                        }
+                        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                        override fun onStopTrackingTouch(seekBar: SeekBar) {
+                            val proposed = update(galosh, selected)
+                            if (persistGaloshSettings(proposed)) {
+                                galosh = proposed
+                                setStatus("GALOSH ${title.uppercase(Locale.US)} • $selected%")
+                            } else {
+                                selected = initial.coerceIn(0, maximum)
+                                seekBar.progress = selected
+                            }
+                        }
+                    })
+                }
+                content.addView(bar)
+                galoshSubordinate += label
+                galoshSubordinate += bar
+            }
+            addGaloshSlider("Strength", 100, (galosh.strength * 100 + 0.5f).toInt()) { s, v ->
+                s.copy(strength = v / 100f)
+            }
+            addGaloshSlider("Luma", 200, (galosh.luma * 100 + 0.5f).toInt()) { s, v ->
+                s.copy(luma = v / 100f)
+            }
+            addGaloshSlider("Chroma", 200, (galosh.chroma * 100 + 0.5f).toInt()) { s, v ->
+                s.copy(chroma = v / 100f)
+            }
+            content.addView(TextView(this).apply {
+                text = "Strength 0% keeps the source CFA. Luma/chroma 100% is neutral; noise model is always blind-fit."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+            })
+            val galoshFast = CheckBox(this).apply {
+                text = "Fast chroma upsample (guided bilinear)\nFaster, slightly softer chroma than the K16 path."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = galosh.fastUpsample
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = galosh.copy(fastUpsample = value)
+                    if (persistGaloshSettings(proposed)) {
+                        galosh = proposed
+                    } else if (button.isChecked != galosh.fastUpsample) {
+                        button.isChecked = galosh.fastUpsample
+                    }
+                }
+            }
+            content.addView(galoshFast)
+            galoshSubordinate += galoshFast
+            val galoshFastMode = CheckBox(this).apply {
+                text = "Fast mode (4-phase WHT)\nAbout 4x faster denoise, slightly less smooth. Recommended on this device."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = galosh.fastMode
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = galosh.copy(fastMode = value)
+                    if (persistGaloshSettings(proposed)) {
+                        galosh = proposed
+                    } else if (button.isChecked != galosh.fastMode) {
+                        button.isChecked = galosh.fastMode
+                    }
+                }
+            }
+            content.addView(galoshFastMode)
+            galoshSubordinate += galoshFastMode
+            galoshSubordinate.forEach { it.isEnabled = galosh.enabled }
+
             markActive(denoiseTab)
             polish()
         }
@@ -4982,6 +5134,13 @@ class MainActivity : Activity() {
         const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
         const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
+        const val KEY_GALOSH_ENABLED = "galosh_enabled"
+        const val KEY_GALOSH_SAVE_ORIGINAL_DNG = "galosh_save_original_dng"
+        const val KEY_GALOSH_STRENGTH_PCT = "galosh_strength_pct"
+        const val KEY_GALOSH_LUMA_PCT = "galosh_luma_pct"
+        const val KEY_GALOSH_CHROMA_PCT = "galosh_chroma_pct"
+        const val KEY_GALOSH_FAST_UPSAMPLE = "galosh_fast_upsample"
+        const val KEY_GALOSH_FAST_MODE = "galosh_fast_mode"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L
