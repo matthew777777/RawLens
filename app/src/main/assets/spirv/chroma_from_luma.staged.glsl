@@ -1,0 +1,57 @@
+#version 450
+uniform highp uvec3 u_dispatch_offset;
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Chroma-from-luma stabilization (RawSrChromaFromLuma twin): rebuilds R/B as
+// G * smooth(R/G) / G * smooth(B/G) with a separable sigma-1.0 Gaussian
+// (radius 3) over per-tap guarded ratios. G passes through untouched.
+// Clamped borders, center guide floor, and Float accumulation order match the
+// CPU twin op for op (up to GPU FMA contraction, ~1ulp).
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp image2D;
+layout(local_size_x = 8, local_size_y = 8) in;
+uniform sampler2D u_merged;
+uniform ivec2 u_size;
+layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
+const float GUIDE_EPS = 1e-4;
+const float K0 = 0.399050279652;
+const float K1 = 0.242036229376;
+const float K2 = 0.0540055826224;
+const float K3 = 0.00443304817524;
+float kw(int o) {
+    return o == 0 ? K0 : (o == 1 ? K1 : (o == 2 ? K2 : K3));
+}
+vec2 tapRatio(ivec2 t) {
+    t = clamp(t, ivec2(0), u_size - ivec2(1));
+    vec4 v = texelFetch(u_merged, t, 0);
+    float gn = v.y > GUIDE_EPS ? v.y : GUIDE_EPS;
+    return vec2(v.x / gn, v.z / gn);
+}
+void main() {
+    ivec2 p = ivec2((gl_GlobalInvocationID + u_dispatch_offset).xy);
+    if (any(greaterThanEqual(p, u_size))) return;
+    vec4 m = texelFetch(u_merged, p, 0);
+    if (!(m.y > GUIDE_EPS)) {
+        imageStore(img_out, p, vec4(m.x, m.y, m.z, 1.0));
+        return;
+    }
+    // Separable combination in CPU order: horizontal sums per row offset,
+    // then the vertical combination (49 fetches, no intermediate texture).
+    float sumR = 0.0;
+    float sumB = 0.0;
+    for (int oy = -3; oy <= 3; oy++) {
+        float hR = 0.0;
+        float hB = 0.0;
+        for (int ox = -3; ox <= 3; ox++) {
+            vec2 r = tapRatio(p + ivec2(ox, oy));
+            float w = kw(ox < 0 ? -ox : ox);
+            hR += w * r.x;
+            hB += w * r.y;
+        }
+        float w = kw(oy < 0 ? -oy : oy);
+        sumR += w * hR;
+        sumB += w * hB;
+    }
+    imageStore(img_out, p, vec4(m.y * sumR, m.y, m.y * sumB, 1.0));
+}
