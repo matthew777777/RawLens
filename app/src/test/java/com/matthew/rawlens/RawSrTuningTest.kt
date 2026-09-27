@@ -51,12 +51,18 @@ class RawSrTuningTest {
             assertTrue(message.contains(name))
     }
 
-    @Test fun usesLinearSnrNotDbAndNotQuadAveragingGain() {
+    @Test fun analyticAdapterConvertsLinearRatioToDb() {
+        // Normalized-domain profile (reference alpha/beta convention):
+        // variance 0.0025 at mean brightness 0.5 gives linear ratio 10.0,
+        // converted to the dB domain `forSnr` tunes on: 20*log10(10) = 20
+        // dB -> 32px tiles. (A linear-domain misread would keep 64px tiles;
+        // quad-averaged noise would inflate the ratio.)
         val profile = ImmutableDoubleValues(DoubleArray(8) { if (it % 2 == 0) 0.0 else 0.0025 })
         val estimate = RawSrTuning.estimate(0.5, profile)
         assertEquals(0.0025, estimate.variance!!, 1e-12)
         assertEquals(10.0, estimate.linearSnr!!, 1e-12)
-        assertEquals(64, estimate.tuning.rawTileSize) // dB or quad-noise incorrectly gives 20
+        assertEquals(20.0, estimate.tuning.snr, 1e-9)
+        assertEquals(32, estimate.tuning.rawTileSize)
         assertEquals(RawSrTuning.Status.ESTIMATED, estimate.status)
     }
 
@@ -104,13 +110,20 @@ class RawSrTuningTest {
                 val black = normalization.blackAt(x + 1, y).toInt()
                 bytes.putShort(4 + y * 16 + x * 2, (black + (1020 - black) / 2).toShort())
             }
+            // Code-domain Camera2-style S/O (O = 0.0025 codes): normalized
+            // beta ~= 2.5e-9, so the per-sample ratio is huge (~80 dB) and
+            // clips to MAX_SNR -> 16px tiles. The pinned behaviors are the
+            // exact mean brightness, the clip, determinism, and the frozen
+            // plane/position/lens-independence below.
             val profile = ImmutableDoubleValues(DoubleArray(8) { if (it % 2 == 0) 0.0 else 0.0025 })
             val lens = LensShadingModel(1, 1, FloatArray(4) { 2f }, IntRectSnapshot(0, 0, 8, 8))
             val frame = RawSrPackedFrame(bytes, layout, RawCrop(1, 1, 4, 4), normalization, lens, profile)
             val before = ByteArray(bytes.remaining()).also { bytes.duplicate().get(it) }
             val first = RawSrTuning.fromReference(frame)
             assertEquals(0.5, first.brightness!!, 0.0)
-            assertEquals(10.0, first.linearSnr!!, 1e-12)
+            assertTrue("linearSnr=${first.linearSnr}", first.linearSnr!! > 9000.0)
+            assertEquals(30.0, first.tuning.snr, 0.0)
+            assertEquals(16, first.tuning.rawTileSize)
             assertEquals(first, RawSrTuning.fromReference(frame))
             assertEquals(4, bytes.position())
             assertArrayEquals(before, ByteArray(bytes.remaining()).also { bytes.duplicate().get(it) })

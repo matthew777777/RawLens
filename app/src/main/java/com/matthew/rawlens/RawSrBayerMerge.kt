@@ -7,49 +7,42 @@ import kotlin.math.floor
 import kotlin.math.sqrt
 
 /**
- * Prompt 4D CPU oracle: Bayer-direct merge (Wronski/IPOL Alg. 4 accumulation
- * geometry: 3x3 support, kernel splats, reference-anchored flow).
- * Implements [docs/raw-sr-merge.md]; the document is normative.
+ * CPU oracle: Bayer-direct linear merge, Jamy-L Alg. 4 (`merge.py`:
+ * `accumulate`) verbatim, plus the plain `num/den` normalization
+ * (`utils.divide`, NaN-at-zero-support blacked by the caller).
  *
- * Attribution: the accumulation geometry is Jamy-L Alg. 4; the fallback
- * cascade below (reference-only quotient, saturation guard, reference-kernel
- * before burst-nearest, MIN_SUPPORT overwrite) is Stacker/SkyKing-derived,
- * not Jamy-L — Jamy-L leaves zero-support pixels undefined (NaN, later
- * blacked). Do not cite Algs. 4/11 for fallback behavior.
- *
- * Deliberate structure, each pinned by tests:
- * - Ordinary linear camera-RGB numerators with independent per-channel
- *   denominators (no opponent transform or baked white balance). Final
- *   highlight rolloff resolves censored chroma toward the camera neutral.
+ * Reference structure, in reference order per output pixel:
  * - Native 1x grid; reference-anchored flow in quad pixels converted with x2
  *   and looked up at the nearest tile ([RawSrAlignmentField.flowAt]).
- * - Source-anchored bilinear precision interpolation; quad-unit exponent
- *   `z = d_quad^T P d_quad`, `w = exp(-0.5 z)` with no additive floor.
+ * - Robustness from the quad one up-left of the output pixel (`r_ref = 1`);
+ *   `r == 0` skips accumulation. The one-quad shift is the reference
+ *   `min(int(lr//2-0.5))` lookup replicated verbatim, not nearest-quad.
+ * - Source-anchored bilinear COVARIANCE interpolation at
+ *   `g = source*(guide/raw) - 0.5`, inverted per pixel to the precision the
+ *   exponent consumes (`z = d_raw^T P d_raw`, raw-unit distances,
+ *   `w = exp(-0.5 max(z, 0))`, no additive floor).
  * - 3x3 RAW support with per-tap sensor-coordinate CFA routing via
- *   [BayerPattern.colorAt] (all four phases; never an `rggb` hardcode).
- * - Opt-in Sabre-style green-guided chroma deweight ([ChromaParams]): R/B taps
- *   scale by `exp(-0.5 d^2)` with `d = (localGreen - targetGreen) / sigma`,
- *   `sigma = max(2.5 sqrt(max(S*signal + O, 0)), 1/160)`. Null (the default)
- *   preserves legacy behavior bitwise. Green taps, the reference frame, and
- *   burst-nearest accumulation never deweight.
- * - Reference-last order with `r_ref = 1`; reference-only A/B mode runs the
- *   same path with moving frames skipped. Fallback at `den <= eps` takes the
- *   reference-only value; additionally, any quad whose accumulated robustness
- *   is below [MIN_SUPPORT] (less than one frame-equivalent of support) is
- *   overwritten with the reference-only value, mirroring Stacker's
- *   accumulated-robustness overwrite. `Rc` folds through
- *   [RawSrRobustness.accumulate] unchanged over the effective
- *   (finite-sanitized) weights.
- * - Bounded support (Sabre `maximumSupport` analogue): Rc sums [0, 1]
- *   robustness weights, so no quad can exceed one frame-equivalent per
- *   moving frame — the excess is clamped, and per-channel moving-frame
- *   support is exposed as [MergeResult.channelEvidence] for denoising
- *   control (Sabre `support.g/b` analogue). Unbounded Double accumulators
- *   need no cap for normalization itself (quotients, not sums); the cap
- *   guards only the reported support and the downstream noise model.
- * - The merge takes precomputed kernel precision fields and consumes no
+ *   [BayerPattern.colorAt] (pattern-aware; identical to the reference `rggb`
+ *   hardcode on RGGB): `num_c += w*r*c`, `den_c += w*r`, with independent
+ *   R/G/B denominators. Ordinary linear camera-RGB numerators (no opponent
+ *   transform or baked white balance); unclamped signal policy (negatives
+ *   preserved, never clipped); every finite sample merges (no censor skip).
+ * - Plain per-channel divide with `den <= eps` reading 0, matching the
+ *   reference NaN-at-zero-support blacked downstream (an empty denominator
+ *   implies an empty numerator — the same weights feed both — so the only
+ *   undefined quotient is 0/0).
+ * - `Rc` folds through [RawSrRobustness.accumulate] over the effective
+ *   (finite-sanitized) weights, like the reference accumulated-robustness
+ *   debug map; per-channel moving-frame support is exposed as
+ *   [MergeResult.channelEvidence] for denoising control.
+ * - The merge takes precomputed kernel covariance fields and consumes no
  *   tuning: there is no per-scene covariance parameter to tune.
- * - Unclamped signal policy: negative samples are preserved, never clipped.
+ * - Opt-in green-guided chroma deweight ([ChromaParams]) stays available for
+ *   A/B; null (the default) runs the reference path. Likewise
+ *   [accumulateNearest] (Stacker delta-kernel rule) stays as a tested helper
+ *   but no longer backs any fallback: the base path has no fallback cascade,
+ *   no highlight rolloff, and no support overwrite — the reference defines
+ *   none of them.
  * - Scalar Double accumulation over flat arrays; no object is allocated per
  *   pixel and peak working memory is independent of the frame count.
  */
@@ -58,41 +51,14 @@ object RawSrBayerMerge {
     const val EPS = 1e-8
 
     /**
-     * Motion-edge stop (water / occlusion boundaries) in quad pixels:
-     * neighbouring tiles disagreeing by more than this mean the bilinear
-     * flow blends two motions, so every kernel splat misregisters. Pixels
-     * past the stop are skipped like r == 0 (accumulators keep the
-     * reference-only value downstream) with no OOB bump — the source
-     * exists, the motion does not agree. Frozen: a sensor-geometry rail
-     * like SATURATED_REF_GUARD, not tuning; the robustness mTh gate (0.4)
-     * already handles sub-pixel irregularity, this catches true
-     * discontinuities only.
+     * Dormant A/B constants, not consumed by the reference-parity base path:
+     * [MOTION_EDGE_QUAD] (merge motion-edge stop), [MIN_SUPPORT]
+     * (accumulated-robustness overwrite), [SATURATED_REF_GUARD] (tap censor
+     * boundary). The reference defines none of these gates; every finite
+     * sample merges and zero support divides to 0.
      */
     const val MOTION_EDGE_QUAD = 1.0f
-
-    /**
-     * Minimum accumulated robustness (per quad) for merged output to stand.
-     * Quads below half a frame-equivalent of moving-frame support are
-     * overwritten with the reference-only value (merge contract §9). Below
-     * half a frame the reference already dominates the blend 2:1, so keeps
-     * near the threshold stay near the reference and a straddling decision
-     * cannot hurt; at the same time the threshold sits clear of the Rc = 1
-     * saturation fixed point, where accepted GPU/CPU arithmetic differences
-     * would straddle it routinely. This is deliberately NOT matched to
-     * Stacker's 1.0: Stacker's pinned overwrite compares a per-pixel
-     * accumulated-robustness scalar against a caller max_frame_count whose
-     * only 1.0 is a self-test-harness literal with no production caller
-     * (Stacker v0.1.5-beta, commit 715d949e) — an incommensurate quantity in
-     * an incommensurate context. 0.5 stands on our own threshold A/B
-     * (runlog 2026-09-12, supportThresholdABDiscriminatingBandIsGhosty).
-     * The rule is inert with no moving frames: reference-only output already
-     * equals the reference, and the fallback mask stays clean.
-     */
     const val MIN_SUPPORT = 0.5f
-
-    /** Sensor-normalized censor boundary. Censored taps stay out of kernel
-     * means; the finalizer uses a shared neighbourhood mask and camera-neutral
-     * rolloff to resolve the missing chroma (see [RawSrHighlights]). */
     const val SATURATED_REF_GUARD = 0.99
 
     data class MergeFrame(
@@ -112,8 +78,12 @@ object RawSrBayerMerge {
         /** Full-sensor coordinates of samples[0]; informational only, never folded into routing. */
         val sensorLeft: Int,
         val sensorTop: Int,
-        /** Owning frame's precision field on its quad grid (quad-pixel^-2). */
-        val precision: RawSrKernelCovariance.MatrixField,
+        /**
+         * Owning frame's kernel covariance field on its quad grid
+         * (quad-pixel²). The merge interpolates covariances and inverts per
+         * pixel (reference Alg. 4); it never consumes a pre-inverted field.
+         */
+        val covariance: RawSrKernelCovariance.MatrixField,
         /** Reference-anchored flow on the quad grid; ignored for the reference frame. */
         val flow: RawSrAlignmentField?,
         /** Reference-anchored robustness on the quad grid; ignored for the reference frame. */
@@ -158,11 +128,9 @@ object RawSrBayerMerge {
         /** True where any channel fell back to the reference-only value. */
         val fallback: BooleanArray,
         /**
-         * Reference-only quotient per pixel and channel (pixels * 3). Valid
-         * at fallback pixels, where the finalizer evaluates it for the
-         * [SATURATED_REF_GUARD]; zero elsewhere. Lets the 4E Q1 gate excuse
-         * the float64/float32 guard-boundary race without re-deriving the
-         * quotient from inputs.
+         * Reserved reference-quotient lane (pixels * 3), zeros in the base
+         * path: the reference-parity finalizer is a plain divide with no
+         * reference-only fallback branch. Kept for result-shape stability.
          */
         val refQuotient: FloatArray = FloatArray(0),
         /**
@@ -204,8 +172,8 @@ object RawSrBayerMerge {
                 "$label dimensions ${frame.width}x${frame.height} do not match $width x $height"
             }
             require(frame.samples.size == width * height) { "$label samples truncated" }
-            require(frame.precision.width == quadsW && frame.precision.height == quadsH) {
-                "$label precision grid must match the quad grid"
+            require(frame.covariance.width == quadsW && frame.covariance.height == quadsH) {
+                "$label covariance grid must match the quad grid"
             }
         }
         checkFrame(reference, "Reference")
@@ -220,41 +188,29 @@ object RawSrBayerMerge {
             }
         }
         val pixels = width * height
-        // Accumulator doubles, quad Rc floats, int OOB/fallback lanes, plus
-        // the per-pixel channel-evidence byte plane.
-        val bytes = pixels * 3L * 8 * 8 + quadsW.toLong() * quadsH * 4 +
+        // One numerator/denominator double pair, quad Rc floats, int OOB
+        // lanes, the fallback mask, and the channel-evidence byte plane.
+        val bytes = pixels * 3L * 8 * 2 + quadsW.toLong() * quadsH * 4 +
             pixels * 4L + pixels + pixels.toLong()
         memory?.allocate(bytes)
         try {
             val num = DoubleArray(pixels * 3)
             val den = DoubleArray(pixels * 3)
-            val refNum = DoubleArray(pixels * 3)
-            val refDen = DoubleArray(pixels * 3)
-            // Burst-nearest accumulators (Stacker-style delta-kernel merge):
-            // per-channel robustness-weighted mean of each frame's nearest
-            // matching-phase sample. Backs the fallback path below; the
-            // kernel accumulators above are untouched.
-            val nearNum = DoubleArray(pixels * 3)
-            val nearDen = DoubleArray(pixels * 3)
-            val nearRefNum = DoubleArray(pixels * 3)
-            val nearRefDen = DoubleArray(pixels * 3)
             val oob = IntArray(pixels)
             val rowsDone = java.util.concurrent.atomic.AtomicInteger(0)
             for (frame in frames) {
                 val tile = frame.flow!!
                 val robust = frame.robustness!!
-                accumulateFrame(frame, tile, robust, num, den, nearNum, nearDen,
+                accumulateFrame(frame, tile, robust, num, den,
                     oob, width, height, quadsW, false) {
                     isCancelled?.invoke(rowsDone.incrementAndGet()) == true
                 }
                 if (isCancelled?.invoke(rowsDone.get()) == true) throw CancellationException("RAW-SR merge cancelled")
             }
-            accumulateFrame(reference, null, null, refNum, refDen, nearRefNum, nearRefDen,
-                oob, width, height, quadsW, true)
-            // Per-channel moving-frame evidence (Sabre support.g/b analogue):
-            // read off the moving-only denominators before the reference
-            // contribution joins them below. Bit c of pixel p is set when
-            // channel c saw moving-frame support above EPS.
+            // Per-channel moving-frame evidence: read off the moving-only
+            // denominators before the reference contribution joins them below.
+            // Bit c of pixel p is set when channel c saw moving-frame support
+            // above EPS.
             val channelEvidence = ByteArray(pixels)
             RawSrWorkers.forEachShard(num.size) { i0, i1 ->
                 for (i in i0 until i1) {
@@ -263,15 +219,13 @@ object RawSrBayerMerge {
                         channelEvidence[p] =
                             (channelEvidence[p].toInt() or (1 shl (i % 3))).toByte()
                     }
-                    num[i] += refNum[i]
-                    den[i] += refDen[i]
-                    nearNum[i] += nearRefNum[i]
-                    nearDen[i] += nearRefDen[i]
                 }
             }
-            // Fused sanitize+accumulate: one alloc and one pass per frame
-            // (was: sanitized copy plus accumulate's own copy). Same order,
-            // same addition — bitwise-identical.
+            accumulateFrame(reference, null, null, num, den,
+                oob, width, height, quadsW, true)
+            // Rc over the effective (finite-sanitized) weights, like the
+            // reference accumulated-robustness map; identically zero when the
+            // moving frames are skipped.
             var rcValues = FloatArray(quadsW * quadsH)
             for (frame in frames) {
                 val robust = frame.robustness!!
@@ -284,84 +238,31 @@ object RawSrBayerMerge {
                 rcValues = next
             }
             if (referenceOnly) rcValues = FloatArray(quadsW * quadsH)
-            // Bounded support (Sabre maximumSupport analogue): Rc sums
-            // [0, 1] robustness weights, so no quad exceeds one
-            // frame-equivalent per moving frame. Clamp the excess — reachable
-            // only through out-of-contract inputs (production weights never
-            // exceed 1), so the MIN_SUPPORT overwrite below (0.5) and the
-            // reference-only path (identically zero) are untouched. The
-            // support estimate and the noise model downstream never exceed
-            // the true burst size, instead of understating noise.
-            if (frames.isNotEmpty()) {
-                val cap = frames.size.toFloat()
-                for (i in rcValues.indices) {
-                    if (rcValues[i] > cap) rcValues[i] = cap
-                }
-            }
             val rc = RawSrRobustness.RcField(quadsW, quadsH, rcValues)
             val rgb = FloatArray(pixels * 3)
             val numerator = FloatArray(pixels * 3)
             val denominator = FloatArray(pixels * 3)
             val fallback = BooleanArray(pixels)
             val refQuotient = FloatArray(pixels * 3)
-            // Accumulated-robustness overwrite (§9): a quad with less than one
-            // frame-equivalent of moving-frame support cannot carry merged
-            // detail, so every pixel it covers takes the reference-only value
-            // and joins the fallback set. Skipped with no moving frames, where
-            // the output already equals the reference.
-            val overwrite = frames.isNotEmpty()
-            // Row-sharded finalizer: shards cover disjoint output rows with the
-            // serial per-pixel code untouched (bitwise-identical at any worker
-            // count). Hoists the per-row quad base out of the pixel loop.
+            // Reference divide (`utils.divide`): plain per-channel quotient,
+            // 0 at zero support (the reference NaN blacked downstream).
+            // Row-sharded: disjoint rows, bitwise-identical at any count.
             RawSrWorkers.forEachShard(height) { y0, y1 ->
                 for (y in y0 until y1) {
-                    val quadRow = (y / 2) * quadsW
                     for (x in 0 until width) {
                         val p = y * width + x
-                        val quad = quadRow + (x / 2)
-                        val unsupported = overwrite && rc.values[quad] < MIN_SUPPORT
-                        var fellBack = unsupported
-                        val highlightPeak = RawSrHighlights.peak(reference.samples, width, height, x, y)
-                        if (RawSrHighlights.amount(highlightPeak) > 0.0) fellBack = true
-                        // No moving-frame support at all at this quad (every moving
-                        // frame rejected or skipped): the burst contributes nothing,
-                        // so the reference kernel quotient stands — the shared-weight
-                        // mean stays achromatic where per-channel nearest picks would
-                        // straddle edges and invent chroma.
-                        val movSupported = rc.values[quad].toDouble() > EPS
+                        var fellBack = false
                         for (c in 0..2) {
                             val o = p * 3 + c
-                            val value = if (!unsupported && den[o] > EPS) {
+                            val value = if (den[o] > EPS) {
                                 num[o] / maxOf(den[o], EPS)
                             } else {
-                                if (den[o] <= EPS) fellBack = true
-                                val refValue = refNum[o] / maxOf(refDen[o], EPS)
-                                refQuotient[o] = refValue.toFloat()
-                                // Fallback cascade: clipped reference channels stay
-                                // honest (saturation guard); with no moving
-                                // support at all the shared-weight reference
-                                // quotient stands; otherwise the reference
-                                // kernel mean precedes burst-nearest (see
-                                // above); nearest is last resort before the
-                                // reference value.
-                                if (refValue >= SATURATED_REF_GUARD) refValue
-                                else if (!movSupported) refValue
-                                // Reference-kernel fallback before burst-nearest:
-                                // the reference-only quotient is a full 3x3
-                                // kernel mean (smooth, honest single-frame
-                                // value), while per-channel nearest picks can
-                                // straddle high-contrast edges and invent
-                                // chroma speckles there (lamp-clip contours).
-                                // Nearest survives solely where the reference
-                                // kernel itself has no support. Deliberate
-                                // deviation from Stacker's nearest-first order,
-                                // pinned by partialSupportResolvesReferenceKernel.
-                                else if (refDen[o] > EPS) refValue
-                                else if (nearDen[o] > EPS) nearNum[o] / maxOf(nearDen[o], EPS)
-                                else refValue
+                                fellBack = true
+                                0.0
                             }
                             val finite = if (value.isFinite()) value else 0.0
-                            rgb[o] = RawSrHighlights.resolve(finite, highlightPeak, reference.highlightNeutral[c]).toFloat()
+                            if (!value.isFinite()) fellBack = true
+                            rgb[o] = finite.toFloat()
                             numerator[o] = num[o].toFloat().let { if (it.isFinite()) it else 0f }
                             denominator[o] = den[o].toFloat().let { if (it.isFinite()) it else 0f }
                         }
@@ -387,8 +288,6 @@ object RawSrBayerMerge {
         robust: RawSrRobustness.FrameRobustness?,
         num: DoubleArray,
         den: DoubleArray,
-        nearNum: DoubleArray,
-        nearDen: DoubleArray,
         oob: IntArray,
         width: Int,
         height: Int,
@@ -397,19 +296,17 @@ object RawSrBayerMerge {
         onRow: (() -> Boolean)? = null
     ) {
         val samples = frame.samples
-        val precision = frame.precision.values
-        val guideW = frame.precision.width
-        val guideH = frame.precision.height
+        val covariance = frame.covariance.values
+        val guideW = frame.covariance.width
+        val guideH = frame.covariance.height
         val scaleX = guideW.toDouble() / width
         val scaleY = guideH.toDouble() / height
         // Row-sharded across the shared worker pool: shards cover disjoint
         // output rows with the serial per-pixel code untouched, so the
         // accumulation is bitwise-identical at any worker count. Per-pixel
-        // scratch (precision + flow) is shard-local (was: one DoubleArray and
-        // ~6 boxed flows per pixel, a GC hotspot at full res).
+        // scratch is shard-local (no per-pixel allocation).
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             val scratch = DoubleArray(4)
-            val flowScratch = FloatArray(4)
             for (y in y0 until y1) {
                 if (onRow?.invoke() == true) throw CancellationException("RAW-SR merge cancelled")
                 val quadY = y / 2
@@ -417,7 +314,13 @@ object RawSrBayerMerge {
                     val quadX = x / 2
                     val p = y * width + x
                     val r = if (isReference) 1.0 else {
-                        val raw = robust!!.r[quadY * quadsW + quadX]
+                        // Reference bayer lookup verbatim: min(int(lr//2-0.5))
+                        // reads the quad one up-left of the output pixel
+                        // (max(q-1, 0)), edge-clamped — a genuine off-by-one
+                        // in the reference indexing, replicated exactly.
+                        val rqX = maxOf(quadX - 1, 0)
+                        val rqY = maxOf(quadY - 1, 0)
+                        val raw = robust!!.r[rqY * quadsW + rqX]
                         if (raw.isFinite()) raw.toDouble() else 0.0
                     }
                     if (r == 0.0) continue
@@ -427,21 +330,14 @@ object RawSrBayerMerge {
                         dxQuad = 0.0
                         dyQuad = 0.0
                     } else {
-                        // Smooth (bilinear) sampling: tile borders must not reach the merge.
-                        flow!!.flowAtSmoothInto(quadX.toFloat(), quadY.toFloat(), flowScratch)
-                        if (!flowScratch[0].isFinite() || !flowScratch[1].isFinite()) {
+                        // Nearest-tile lookup, exactly like the reference.
+                        val tile = flow!!.flowAt(quadX.toFloat(), quadY.toFloat())
+                        if (!tile.dx.isFinite() || !tile.dy.isFinite()) {
                             oob[p]++
                             continue
                         }
-                        // Motion-edge stop: same 3x3 tile-spread test as the
-                        // robustness irregularity gate, at discontinuity
-                        // scale — mirrored in merge_accumulate.glsl. Only
-                        // demonstrated disagreement vetoes (see
-                        // flowDisagrees): unknown tiles merge, with the
-                        // robustness gates as backstop.
-                        if (RawSrRobustness.flowDisagrees(flow, quadX, quadY, MOTION_EDGE_QUAD)) continue
-                        dxQuad = flowScratch[0].toDouble()
-                        dyQuad = flowScratch[1].toDouble()
+                        dxQuad = tile.dx.toDouble()
+                        dyQuad = tile.dy.toDouble()
                     }
                     val sourceX = x + 0.5 + 2.0 * dxQuad
                     val sourceY = y + 0.5 + 2.0 * dyQuad
@@ -451,25 +347,15 @@ object RawSrBayerMerge {
                         oob[p]++
                         continue
                     }
-                    // Burst-nearest accumulation (Stacker delta-kernel rule): per
-                    // channel, the nearest finite sample of the channel's colour
-                    // in the floor-centered 3x3 window, weighted by robustness.
-                    // Nearest by texel-center distance; strictly-less update, so
-                    // the oy-outer/ox-inner loop order is the deterministic
-                    // tie-break (mirrored in merge_accumulate.glsl).
-                    accumulateNearest(frame, sourceX, sourceY, r, p, width, height, nearNum, nearDen)
-                    val interpolated = interpolatePrecision(
-                        precision, guideW, guideH, sourceX * scaleX - 0.5, sourceY * scaleY - 0.5, scratch)
+                    val interpolated = interpolateCovariance(
+                        covariance, guideW, guideH, sourceX * scaleX - 0.5, sourceY * scaleY - 0.5, scratch)
                     if (interpolated == null) continue
                     val centerX = floor(sourceX).toInt()
                     val centerY = floor(sourceY).toInt()
-                    // Chroma target-green pass (Sabre two-loop structure):
-                    // the kernel-weighted green mean at the source, using the
-                    // same spatial weights x r as the main loop. Null chroma
-                    // (or no green support) leaves targetGreen non-finite and
-                    // the main loop below runs ungated, bitwise-identical to
-                    // legacy. The reference frame never deweights (chroma is
-                    // moving-frame only, like Sabre's frameWeight path).
+                    // Dormant A/B chroma target-green pass (null in the base
+                    // path): the kernel-weighted green mean at the source,
+                    // using the same spatial weights x r as the main loop.
+                    // The reference frame never deweights.
                     val chroma = if (!isReference) frame.chroma else null
                     var targetGreen = Double.NaN
                     if (chroma != null) {
@@ -481,9 +367,9 @@ object RawSrBayerMerge {
                             if (tx < 0 || ty < 0 || tx >= width || ty >= height) continue
                             if (frame.sensorPattern.colorAt(tx, ty) != CfaColor.GREEN) continue
                             val sample = samples[ty * width + tx].toDouble()
-                            if (!sample.isFinite() || sample >= SATURATED_REF_GUARD) continue
-                            val distX = (tx + 0.5 - sourceX) / 2.0
-                            val distY = (ty + 0.5 - sourceY) / 2.0
+                            if (!sample.isFinite()) continue
+                            val distX = tx + 0.5 - sourceX
+                            val distY = ty + 0.5 - sourceY
                             val z = interpolated[0] * distX * distX +
                                 (interpolated[1] + interpolated[2]) * distX * distY +
                                 interpolated[3] * distY * distY
@@ -500,14 +386,12 @@ object RawSrBayerMerge {
                         val ty = centerY + oy
                         if (tx < 0 || ty < 0 || tx >= width || ty >= height) continue
                         val sample = samples[ty * width + tx].toDouble()
-                        // Censored taps (>= SATURATED_REF_GUARD) carry no
-                        // trustworthy signal (SkyKing CENSORED_UNKNOWN_CHROMA):
-                        // clipped values must not bleed through kernel means —
-                        // not even from the reference at r = 1. The nearest path
-                        // below keeps finite-only sampling (Stacker parity).
-                        if (!sample.isFinite() || sample >= SATURATED_REF_GUARD) continue
-                        val distX = (tx + 0.5 - sourceX) / 2.0
-                        val distY = (ty + 0.5 - sourceY) / 2.0
+                        // Every finite sample merges (no censor skip): the
+                        // reference defines none. Non-finite taps are
+                        // reference-undefined and skipped.
+                        if (!sample.isFinite()) continue
+                        val distX = tx + 0.5 - sourceX
+                        val distY = ty + 0.5 - sourceY
                         val z = interpolated[0] * distX * distX +
                             (interpolated[1] + interpolated[2]) * distX * distY +
                             interpolated[3] * distY * distY
@@ -521,11 +405,8 @@ object RawSrBayerMerge {
                         }
                         val o = p * 3 + channel
                         var weighted = weight * r
-                        // Green-guided R/B gate (Sabre chromaWeight): taps
-                        // whose local green disagrees with the target green
-                        // straddle a luma edge, so their chroma would smear —
-                        // scale them down. Green taps never gate (channel 1
-                        // skips); without targetGreen the factor is exactly 1.
+                        // Dormant A/B green-guided R/B gate. Green taps never
+                        // gate; without targetGreen the factor is exactly 1.
                         if (chroma != null && channel != 1 && targetGreen.isFinite()) {
                             weighted *= chromaFactor(
                                 frame, samples, width, height, tx, ty, targetGreen, chroma)
@@ -539,19 +420,17 @@ object RawSrBayerMerge {
     }
 
     /**
-     * Burst-nearest sample accumulation for one frame at one output pixel:
-     * for each of the three channels, the nearest finite UNCENSORED sample
-     * whose sensor colour matches the channel, in the floor-centered 3x3
-     * window around (sourceX, sourceY), weighted by [r]. Nearest by
-     * texel-center distance squared with a strictly-less update, so the
-     * oy-outer/ox-inner loop order deterministically breaks ties (Stacker
-     * nearest_cfa_sample rule, mirrored in merge_accumulate.glsl, plus the
-     * censor skip: Stacker samples finite-only, but a clipped white tap must
-     * not become a fallback value — see SATURATED_REF_GUARD).
-     * squared with a strictly-less update, so the oy-outer/ox-inner loop
-     * order deterministically breaks ties (Stacker nearest_cfa_sample rule,
-     * mirrored in merge_accumulate.glsl). Pinned to Stacker v0.1.5-beta
-     * (commit 715d949e), app/src/main/cpp/wronski_cpu_merge.cpp:
+     * Burst-nearest sample accumulation for one frame at one output pixel
+     * (dormant A/B helper; the reference-parity base path has no
+     * burst-nearest fallback): for each of the three channels, the nearest
+     * finite UNCENSORED sample whose sensor colour matches the channel, in
+     * the floor-centered 3x3 window around (sourceX, sourceY), weighted by
+     * [r]. Nearest by texel-center distance squared with a strictly-less
+     * update, so the oy-outer/ox-inner loop order deterministically breaks
+     * ties (Stacker nearest_cfa_sample rule, plus the censor skip: Stacker
+     * samples finite-only, but a clipped white tap must not become a
+     * fallback value — see SATURATED_REF_GUARD). Pinned to Stacker
+     * v0.1.5-beta (commit 715d949e), app/src/main/cpp/wronski_cpu_merge.cpp:
      * nearest_cfa_sample lines 48-87, merge_cpu_bayer_nearest_burst lines
      * 539-617; parity pinned by StackerNearestParityTest. Internal for that
      * test; not a call-site API.
@@ -603,14 +482,14 @@ object RawSrBayerMerge {
     }
 
     /**
-     * Sabre `chromaWeight` analogue for one R/B tap: `exp(-0.5 d^2)` with
-     * `d = (localGreen - targetGreen) / sigma` and
+     * Dormant A/B `chromaWeight` analogue for one R/B tap: `exp(-0.5 d^2)`
+     * with `d = (localGreen - targetGreen) / sigma` and
      * `sigma = max(2.5 sqrt(max(S*signal + O, 0)), 1/160)`.
-     * `localGreen` is the mean of the finite uncensored green samples in the
-     * 3x3 window around the tap (our frames carry no dense Sabre-style
-     * chromaGuide, so the guide is estimated from the frame's own green
-     * taps); with no green neighbour the factor is exactly 1. Non-finite
-     * factors fall back to 1 rather than killing the tap.
+     * `localGreen` is the mean of the finite green samples in the 3x3 window
+     * around the tap (no dense chromaGuide exists on this path, so the guide
+     * is estimated from the frame's own green taps); with no green neighbour
+     * the factor is exactly 1. Non-finite factors fall back to 1 rather than
+     * killing the tap.
      */
     private fun chromaFactor(
         frame: MergeFrame,
@@ -630,7 +509,7 @@ object RawSrBayerMerge {
             if (gx < 0 || gy < 0 || gx >= width || gy >= height) continue
             if (frame.sensorPattern.colorAt(gx, gy) != CfaColor.GREEN) continue
             val s = samples[gy * width + gx].toDouble()
-            if (!s.isFinite() || s >= SATURATED_REF_GUARD) continue
+            if (!s.isFinite()) continue
             sum += s
             n++
         }
@@ -644,28 +523,50 @@ object RawSrBayerMerge {
         return if (f.isFinite()) f else 1.0
     }
 
-    private fun interpolatePrecision(
-        precision: FloatArray, guideW: Int, guideH: Int, gx: Double, gy: Double,
+    /**
+     * Reference covariance interpolation + inversion (`merge.py::accumulate`):
+     * sign-preserving `modf` fractions, `int()` (truncation) floors clipped
+     * at 0, ceilings clipped at the far edge, row-then-column lerp order,
+     * then the analytic 2x2 inverse into [out]. Null skips the pixel:
+     * non-finite corners and degenerate determinants are reference-undefined
+     * (in-domain corners are finite and the interpolation of PD matrices is
+     * PD, so the guard never fires on reference-defined inputs).
+     */
+    private fun interpolateCovariance(
+        covariance: FloatArray, guideW: Int, guideH: Int, gx: Double, gy: Double,
         out: DoubleArray
     ): DoubleArray? {
         if (!gx.isFinite() || !gy.isFinite()) return null
-        val cx = gx.coerceIn(0.0, (guideW - 1).toDouble())
-        val cy = gy.coerceIn(0.0, (guideH - 1).toDouble())
-        val x0 = floor(cx).toInt().coerceIn(0, guideW - 1)
-        val y0 = floor(cy).toInt().coerceIn(0, guideH - 1)
+        // Reference modf/int semantics: the fraction keeps the sign (so the
+        // sub-center edge extrapolates) and truncation clips at 0.
+        // Sign-preserving remainder, exactly like C modf / Python math.modf.
+        val fx = gx % 1.0
+        val fy = gy % 1.0
+        val x0 = (gx - fx).toInt().coerceAtLeast(0)
+        val y0 = (gy - fy).toInt().coerceAtLeast(0)
+        if (x0 >= guideW || y0 >= guideH) return null
         val x1 = minOf(x0 + 1, guideW - 1)
         val y1 = minOf(y0 + 1, guideH - 1)
-        val fx = cx - x0
-        val fy = cy - y0
+        var cxx = 0.0
+        var cxy = 0.0
+        var cyy = 0.0
         for (c in 0..3) {
-            val v00 = precision[(y0 * guideW + x0) * 4 + c].toDouble()
-            val v10 = precision[(y0 * guideW + x1) * 4 + c].toDouble()
-            val v01 = precision[(y1 * guideW + x0) * 4 + c].toDouble()
-            val v11 = precision[(y1 * guideW + x1) * 4 + c].toDouble()
+            val v00 = covariance[(y0 * guideW + x0) * 4 + c].toDouble()
+            val v10 = covariance[(y0 * guideW + x1) * 4 + c].toDouble()
+            val v01 = covariance[(y1 * guideW + x0) * 4 + c].toDouble()
+            val v11 = covariance[(y1 * guideW + x1) * 4 + c].toDouble()
             if (!v00.isFinite() || !v10.isFinite() || !v01.isFinite() || !v11.isFinite()) return null
-            out[c] = v00 * (1.0 - fx) * (1.0 - fy) + v10 * fx * (1.0 - fy) +
-                v01 * (1.0 - fx) * fy + v11 * fx * fy
+            val top = v00 + fx * (v10 - v00)
+            val bot = v01 + fx * (v11 - v01)
+            val v = top + fy * (bot - top)
+            if (c == 0) cxx = v else if (c == 3) cyy = v else if (c == 1) cxy = v
         }
+        val det = cxx * cyy - cxy * cxy
+        if (!det.isFinite() || det <= 0.0) return null
+        out[0] = cyy / det
+        out[1] = -cxy / det
+        out[2] = -cxy / det
+        out[3] = cxx / det
         return out
     }
 }

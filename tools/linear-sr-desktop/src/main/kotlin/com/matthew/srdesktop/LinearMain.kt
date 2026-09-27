@@ -10,6 +10,10 @@ import com.matthew.rawlens.MergeProvenance
 import com.matthew.rawlens.MergedLinearRgb
 import com.matthew.rawlens.NcnnLoader
 import com.matthew.rawlens.RawSrBayerMerge
+import com.matthew.rawlens.RawSrChromaFromLuma
+import com.matthew.rawlens.RawSrCovarianceGuide
+import com.matthew.rawlens.RawSrDeadLaneInpaint
+import com.matthew.rawlens.RawSrKernelCovariance
 import com.matthew.rawlens.RawSrKernelNetAniso
 import com.matthew.rawlens.RawSrMergeDecisions
 import com.matthew.rawlens.RawSrMergeJob
@@ -31,7 +35,8 @@ import java.io.File
  * change.
  *
  * Usage: linear-sr-desktop --in <dng-dir> --out <dir> [--ref N] [--cache DIR]
- *   [--crop x,y,w,h] [--limit N] [--no-kernelnet] [--capture-id ID]
+ *   [--crop x,y,w,h] [--limit N] [--no-kernelnet] [--no-inpaint] [--no-cfl]
+ *   [--capture-id ID]
  */
 object LinearMain {
     @JvmStatic
@@ -59,7 +64,9 @@ object LinearMain {
         android.os.Build.MODEL = loaded.first().admitted.model
         val ref = if (opts.ref < 0) loaded.size / 2 else opts.ref.coerceIn(loaded.indices)
         val refMetadata = loaded[ref].metadata
-        if (!opts.noKernelnet) {
+        // KernelNet is disconnected by default (RawSrKernelNetAniso.enabled);
+        // skip the model extract/load unless an A/B run opts back in.
+        if (!opts.noKernelnet && RawSrKernelNetAniso.enabled) {
             extractModels(opts.cacheDir)
             NcnnLoader.tryLoad()
             RawSrKernelNetAniso.preload(Context(opts.cacheDir))
@@ -77,8 +84,31 @@ object LinearMain {
         val meanSupport: Double
         val accepted: Int
         if (opts.backend == "vulkan") {
+            val dumpDir = opts.dumpFields?.also { it.mkdirs() }
+            if (dumpDir != null) {
+                File(dumpDir, "vk_map.txt").writeText(
+                    "mergeIndices=${decision.mergeIndices}\n")
+            }
             val out = VkRawSrProcessor(Context(opts.cacheDir)).use { proc ->
-                proc.processPacked(inputs.map { it.packed }, noiseLut = noiseLut) { output ->
+                proc.processPacked(inputs.map { it.packed }, noiseLut = noiseLut,
+                    onFlow = { index, id, cols, rows ->
+                        if (dumpDir != null) {
+                            val v = vkDownloadRgba32f(id)
+                            writeF32(dumpDir, "vk_flow_$index", cols, rows, 4, v)
+                        }
+                    },
+                    onCovariance = { index, id, w, h ->
+                        if (dumpDir != null) {
+                            val v = vkDownloadRgba32f(id)
+                            writeF32(dumpDir, "vk_cov_$index", w, h, 4, v)
+                        }
+                    },
+                    onRobustness = { index, rId, _, w, h ->
+                        if (dumpDir != null) {
+                            val v = vkDownloadR32f(rId)
+                            writeF32(dumpDir, "vk_r_$index", w, h, 1, v)
+                        }
+                    }) { output ->
                     val rgba = vkDownloadRgba32f(output.mergedTextureId)
                     val rc = vkDownloadR32f(output.rcTextureId)
                     VulkanMerge(output.width, output.height, output.acceptedFrames, rgba, rc)
@@ -96,7 +126,68 @@ object LinearMain {
                 "linear-sr: chain kept ${chain.moving.size} moving frame(s) " +
                     "tileQuads=${chain.alignmentTileQuads} snr=${chain.tuning.snr}"
             )
-            val result = RawSrBayerMerge.merge(chain.reference, chain.moving)
+            // Causation experiment: swap the CPU merge onto GAT-guide
+            // covariances (exactly what the Vulkan path consumes) to test
+            // whether the guide input explains the VK spikes.
+            val refFrame: RawSrBayerMerge.MergeFrame
+            val movFrames: List<RawSrBayerMerge.MergeFrame>
+            if (opts.cpuGatCov) {
+                val gatRef = RawSrKernelCovariance.covariance(
+                    RawSrCovarianceGuide.guide(inputs[0].packed).gray, chain.tuning)
+                refFrame = chain.reference.copy(covariance = gatRef)
+                movFrames = chain.moving.mapIndexed { j, frame ->
+                    val g = RawSrCovarianceGuide.guide(
+                        inputs[chain.survivorIndices[j]].packed).gray
+                    frame.copy(covariance = RawSrKernelCovariance.covariance(g, chain.tuning))
+                }
+                println("linear-sr: cpu merge uses GAT-guide covariances (--cpu-gat-cov)")
+            } else {
+                refFrame = chain.reference
+                movFrames = chain.moving
+            }
+            opts.dumpFields?.also { dumpDir ->
+                dumpDir.mkdirs()
+                val cov = refFrame.covariance
+                writeF32(dumpDir, "cpu_cov_ref", cov.width, cov.height, 4, cov.values)
+                val map = StringBuilder("mergeIndices=${decision.mergeIndices}\n")
+                map.append("survivors=${chain.survivorIndices}\n")
+                map.append("tileQuads=${chain.alignmentTileQuads} snr=${chain.tuning.snr}\n")
+                map.append("gatCov=${opts.cpuGatCov}\n")
+                movFrames.forEachIndexed { j, frame ->
+                    val surv = chain.survivorIndices[j]
+                    val c = frame.covariance
+                    writeF32(dumpDir, "cpu_cov_mov${j}_surv$surv", c.width, c.height, 4, c.values)
+                    val flow = frame.flow!!
+                    val fv = FloatArray(flow.columns * flow.rows * 2)
+                    flow.tiles.forEachIndexed { t, tile ->
+                        fv[t * 2] = tile.dx
+                        fv[t * 2 + 1] = tile.dy
+                    }
+                    writeF32(dumpDir, "cpu_flow_mov${j}_surv$surv",
+                        flow.columns, flow.rows, 2, fv)
+                    val r = frame.robustness!!
+                    writeF32(dumpDir, "cpu_r_mov${j}_surv$surv", r.width, r.height, 1, r.r)
+                }
+                File(dumpDir, "cpu_map.txt").writeText(map.toString())
+                println("linear-sr: dumped CPU fields to $dumpDir")
+            }
+            val result = RawSrBayerMerge.merge(refFrame, movFrames)
+            // Diagnostic A/B flags (default: both finishing passes on).
+            // --no-inpaint exposes raw dead lanes (denominator <= eps reads 0);
+            // --no-cfl exposes raw merged R/B latch.
+            if (opts.noInpaint) {
+                println("linear-sr: cpu dead-lane inpaint SKIPPED (--no-inpaint)")
+            } else {
+                val healed = RawSrDeadLaneInpaint.inpaint(
+                    result.rgb, result.denominator, result.width, result.height)
+                println("linear-sr: cpu dead-lane inpaint healed $healed lane(s)")
+            }
+            if (opts.noCfl) {
+                println("linear-sr: cpu chroma-from-luma SKIPPED (--no-cfl)")
+            } else {
+                val steadied = RawSrChromaFromLuma.stabilize(result.rgb, result.width, result.height)
+                println("linear-sr: cpu chroma-from-luma steadied $steadied pixel(s)")
+            }
             merged = MergedLinearRgb(result.width, result.height, result.rgb)
             meanSupport = result.support.average()
             accepted = 1 + chain.moving.size
@@ -104,7 +195,8 @@ object LinearMain {
         val effectiveFrames = RawSrMergedNoise.effectiveFrames(meanSupport, accepted.toDouble())
         val noiseOverride = refMetadata.cfaPattern?.let { pattern ->
             RawSrMergedNoise.scaleProfile(
-                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames
+                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames,
+                refMetadata.blackLevels?.toFloatArray(), refMetadata.whiteLevel
             )
         }
         val provenance = MergeProvenance(
@@ -126,6 +218,22 @@ object LinearMain {
             "linear-sr: wrote ${File(opts.outDir, name)} " +
                 "backend=${opts.backend} in ${(System.nanoTime() - t0) / 1_000_000}ms"
         )
+    }
+
+    /** Diagnostic field dump: raw LE float32 + dims sidecar. */
+    private fun writeF32(dir: File, name: String, w: Int, h: Int, channels: Int, values: FloatArray) {
+        require(values.size == w * h * channels) {
+            "$name: expected ${w * h * channels} floats, got ${values.size}"
+        }
+        File(dir, "$name.txt").writeText("$w $h $channels\n")
+        java.io.DataOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(File(dir, "$name.f32")))).use { out ->
+            val buf = java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            for (v in values) {
+                buf.clear()
+                buf.putFloat(v)
+                out.write(buf.array())
+            }
+        }
     }
 
     private data class VulkanMerge(

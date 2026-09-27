@@ -212,6 +212,67 @@ class RawSrCovarianceGuideTest {
         }
     }
 
+    @Test fun sixCoefficientTablesPassNormalizedModelThrough() {
+        // DNG R/G/B profile is already normalized-domain: alpha/beta pass
+        // through untouched; slope/offset are the exact code-domain image.
+        val profile = ImmutableDoubleValues(doubleArrayOf(3e-4, 4e-7, 2e-4, 5e-7, 3e-4, 4e-7))
+        val frame = packed(sensorPattern = BayerPattern.RGGB,
+            black = listOf(64f, 64f, 64f, 64f), white = 1023f, profile = profile)
+        val tables = RawSrCovarianceGuide.noiseTables(frame.uploadInput(), profile)
+        assertEquals(RawSrCovarianceGuide.ModelClass.VALID, tables.modelClass)
+        // RGGB crop-local phases: 0=R 1=G 2=G 3=B.
+        val s = doubleArrayOf(3e-4, 2e-4, 2e-4, 3e-4)
+        val o = doubleArrayOf(4e-7, 5e-7, 5e-7, 4e-7)
+        val range = 1023.0 - 64.0
+        for (phase in 0..3) {
+            assertEquals("alpha[$phase]", s[phase], tables.alpha[phase], 0.0)
+            assertEquals("beta[$phase]", o[phase], tables.beta[phase], 0.0)
+            assertEquals("slope[$phase]", s[phase] * range, tables.slope[phase], 0.0)
+            assertEquals("offset[$phase]",
+                o[phase] * range * range - s[phase] * range * 64.0, tables.offset[phase], 0.0)
+            // Variance stays positive at black and above for every phase.
+            assertTrue("var[$phase]", tables.slope[phase] * 64.0 + tables.offset[phase] > 0.0)
+        }
+    }
+
+    @Test fun sixCoefficientGuideStabilizesModelMatchedNoiseToUnitVariance() {
+        // Regression: dividing an already-normalized DNG profile again
+        // understates noise ~1000x, inflates guide gradients ~30x, and
+        // collapses every kernel to a razor (green line-dots on Vulkan).
+        val slope = 2e-4
+        val offset = 4e-7
+        val profile = ImmutableDoubleValues(DoubleArray(6) { if (it % 2 == 0) slope else offset })
+        val base = 160
+        val v = (base - 64.0) / (1023.0 - 64.0)
+        val sigmaCode = 959.0 * sqrt(slope * v + offset)
+        val frame = packed(layoutW = 40, layoutH = 32, crop = RawCrop(0, 0, 40, 32),
+            black = listOf(64f, 64f, 64f, 64f), white = 1023f, profile = profile,
+            codes = { sx, sy ->
+                val hash = (((sx * 73856093) xor (sy * 19349663)) and 0x7fffffff) % 1001 / 1000.0 * 2.0 - 1.0
+                base + (hash * 1.73 * sigmaCode).toInt()
+            })
+        val guide = RawSrCovarianceGuide.guide(frame)
+        assertEquals(RawSrCovarianceGuide.Status.STABILIZED, guide.status)
+        val gray = guide.gray
+        var sum = 0.0
+        var sumSq = 0.0
+        var n = 0
+        for (qy in 0 until gray.height - 1) for (qx in 0 until gray.width - 1) {
+            val a = gray.values[qy * gray.width + qx].toDouble()
+            val b = gray.values[qy * gray.width + qx + 1].toDouble()
+            val c = gray.values[(qy + 1) * gray.width + qx].toDouble()
+            val d = gray.values[(qy + 1) * gray.width + qx + 1].toDouble()
+            val gx = 0.25 * (-a + b - c + d)
+            val gy = 0.25 * (-a - b + c + d)
+            sum += gx + gy
+            sumSq += gx * gx + gy * gy
+            n += 2
+        }
+        val mean = sum / n
+        val sd = sqrt(sumSq / n - mean * mean)
+        assertTrue("stabilized gradient sd=$sd", sd < 4.0)
+    }
+
     @Test fun kernelExponentIsInvariantAcrossRawQuadConversion() {
         // Contract: P_raw = P_quad/4 converts storage grids; d^T P d is invariant.
         val frame = packed(codes = { sx, sy -> 1200 + (sx * 79 + sy * 43) % 500 })

@@ -37,7 +37,6 @@ class VkRawSrProcessor(context: Context) : Closeable {
         onRobustness: (frameIndex: Int, rTextureId: Int, flagsTextureId: Int, width: Int, height: Int)
             -> Unit = { _, _, _, _, _ -> },
         noiseLut: RawSrNoiseLut.Lut? = null,
-        onUnblocker: (frameIndex: Int, uTextureId: Int, width: Int, height: Int) -> Unit = { _, _, _, _ -> },
         enableChroma: Boolean = false,
         consume: (RawSrGpuOutput) -> T
     ): T {
@@ -50,20 +49,22 @@ class VkRawSrProcessor(context: Context) : Closeable {
         if (appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
             android.util.Log.d("RawLensRawSrTuning",
             estimate.debugSummary() + " explicitAlignmentOverride=${config != null} activeTileQuads=${resolvedConfig.tileSize}")
-        // Prompt 4E precision fix: the kernel guide is computed once on the CPU
-        // (double precision, exactly the oracle input) and uploaded, instead of
-        // re-deriving it in float32 on the GPU. Oracle parity by construction.
-        // Computed lazily per frame: each guide is a full quad-res float field
-        // (~12.5MB at 12MP), so retaining the whole burst upfront (~100MB for
-        // 8 frames) pins the Dalvik heap at 0% free and stalls the viewfinder
-        // in GC while merging. Values are pure in the frame bytes, so lazy
-        // evaluation is pixel-identical; a frame whose guide throws still fails
-        // the merge, only after (harmless, arena-released) partial GPU work.
-        val guideProvider = { index: Int -> RawSrCovarianceGuide.guide(inputs[index]).gray }
-        // KernelNet drives the anisotropic weights directly when its model is
-        // ready: per-frame precision fields computed lazily on first use and
-        // uploaded verbatim (same packing the merge consumes), bypassing the
-        // analytic kernel_covariance pass. Null keeps the validated path
+        // Analytic kernel covariance consumes the plain quad-gray pyramid
+        // level (levels[0]/refs[0] fallback in execute()), exactly the oracle
+        // input: the CPU merge feeds bayerQuadGray of the same corrected CFA
+        // (RawSrMergeJob.mergeFrame default) per the documented no-GAT
+        // contract on RawSrKernelCovariance. A prior revision uploaded the
+        // CPU-computed GAT guide here for estimator parity, but the oracle
+        // merge never consumes GAT input: VST-domain gradients read strong
+        // edges as full-detail (D=0, k1~0.13 razor) where the oracle reads
+        // denoise-wide kernels, so the GPU latched onto single taps and wrote
+        // 1px full-range spikes at high-contrast slanted edges (burst522
+        // truck roof) that the CPU never showed. Null keeps the plain-gray
+        // path; VkMergeParityTest pins strong-edge agreement.
+        // KernelNet A/B (RawSrKernelNetAniso.enabled, default off): per-frame
+        // covariance fields computed lazily on first use and uploaded
+        // verbatim (same packing the merge consumes), bypassing the analytic
+        // kernel_covariance pass. Null keeps the reference-parity path
         // unchanged. Fields are never retained: each upload drops its heap
         // array immediately, so burst length cannot grow Dalvik peak.
         val kernelNet = kernelNetProvider(inputs, ref.width, ref.height)
@@ -78,10 +79,10 @@ class VkRawSrProcessor(context: Context) : Closeable {
             chromaParamsFor(input, it.noiseProfile)
         } else List(inputs.size) { null }
         return execute(inputs.size, ref.width, ref.height, ref.pattern, resolvedConfig, estimate.tuning,
-            guideProvider,
+            null,
             robustParams,
-            referenceOnly, onFlow, onCovariance, onRobustness, onUnblocker,
-            kernelNet, ref.highlightNeutral, chromaFrames = chromaFrames,
+            referenceOnly, onFlow, onCovariance, onRobustness,
+            kernelNet, chromaFrames = chromaFrames,
             { index, active, arena ->
                 val raw = inputs[index].uploadInput()
                 val codes = uploadCodes(raw, active, arena)
@@ -90,11 +91,12 @@ class VkRawSrProcessor(context: Context) : Closeable {
     }
 
     /**
-     * Lazy per-frame KernelNet fields, or null when the model is not ready
-     * (non-blocking probe — never stalls the caller on model init).
+     * Lazy per-frame KernelNet covariance fields (A/B only), or null when the
+     * switch is off or the model is not ready (non-blocking probe — never
+     * stalls the caller on model init).
      *
      * Memory contract (512MB-heap save path): one reusable direct scratch pair
-     * (~22MB at 12MP), heap model planes (~9MB), and precision grid (~50MB)
+     * (~22MB at 12MP), heap model planes (~9MB), and covariance grid (~50MB)
      * are allocated once per burst. No full-resolution unpacked CFA is built;
      * if that fails the provider is null and
      * the save runs fully analytic. Each field is computed on first use for
@@ -221,7 +223,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
         return cfa
     }
 
-    /** Prompt 4C linear guide: unshaded normalized R/G/B per quad plus rail mask. */
+    /** Jamy-L Alg. 7 sqrt guide: unshaded normalized sqrt(R/G/B) per quad. */
     private fun linearFromCodes(codes: VkImage, params: RawSrRobustness.GpuParams,
                                 pattern: BayerPattern, active: VkSession, arena: VkArena): VkImage {
         val linear = arena.texture(codes.width / 2, codes.height / 2, GLES30.GL_RGBA32F)
@@ -229,8 +231,6 @@ class VkRawSrProcessor(context: Context) : Closeable {
             sampler("u_raw", codes); ivec2("u_size", linear.width, linear.height)
             ivec4("u_fc", AmazePipelineContract.cfaUniform(pattern))
             vec4("u_black", params.black); float("u_white", params.white)
-            vec4("u_slope", params.slope); vec4("u_offset", params.offset)
-            integer("u_model_valid", if (params.modelValid) 1 else 0)
             image(0, linear, GLES30.GL_RGBA32F); dispatch(linear.width, linear.height, 8, 8)
         }
         return linear
@@ -261,31 +261,24 @@ class VkRawSrProcessor(context: Context) : Closeable {
                                movLinear: VkImage,
                                flow: VkImage,
                                tuning: RawSrTuning, config: RawSrAlignmentConfig,
-                               refParams: RawSrRobustness.GpuParams, movParams: RawSrRobustness.GpuParams,
+                               lut: RawSrNoiseLut.Lut?,
                                lutTexture: VkImage,
-                               refHot: VkImage,
-                               movHot: VkImage,
                                active: VkSession, arena: VkArena): Pair<VkImage, VkImage> {
         val rawR = arena.texture(refLinear.width, refLinear.height, GLES30.GL_R32F)
         val flags = arena.texture(refLinear.width, refLinear.height, GLES30.GL_R32UI)
         active.pass("rawsr/robustness.glsl") {
             sampler("u_ref_lin", refLinear); sampler("u_mov_lin", movLinear); sampler("u_flow", flow)
-            sampler("u_hot_ref", refHot); sampler("u_hot_mov", movHot)
             ivec2("u_size", rawR.width, rawR.height)
             ivec2("u_tile_grid", flow.width, flow.height)
             integer("u_tile_size", config.tileSize)
             float("u_t", tuning.t.toFloat())
             float("u_s1", tuning.s1.toFloat()); float("u_s2", tuning.s2.toFloat())
             float("u_mth_quad", (tuning.mTh / 2.0).toFloat())
-            float("u_max_residual", config.maxMeanAbsoluteResidual)
-            vec3("u_mov_alpha", movParams.alpha); vec3("u_mov_beta", movParams.beta)
-            integer("u_ref_valid", if (refParams.modelValid) 1 else 0)
-            integer("u_mov_valid", if (movParams.modelValid) 1 else 0)
             // Reference-derived LUT: the correction is keyed by reference
             // brightness and both frames share the sensor profile.
             sampler("u_lut", lutTexture)
-            integer("u_lut_bins", refParams.noiseLut?.bins ?: 1)
-            integer("u_lut_enabled", if (refParams.noiseLut != null) 1 else 0)
+            integer("u_lut_bins", lut?.bins ?: 1)
+            integer("u_lut_enabled", if (lut != null) 1 else 0)
             image(0, rawR, GLES30.GL_R32F); image(1, flags, GLES30.GL_R32UI)
             dispatch(rawR.width, rawR.height, 8, 8)
         }
@@ -302,9 +295,10 @@ class VkRawSrProcessor(context: Context) : Closeable {
 
     /**
      * Hot-pixel mask from raw codes (hot_mask.glsl): R32UI, 1 where the tap
-     * is a stuck-bright outlier. Consumed by the robustness gate (quad
-     * projection) and the CFA inpaint below. Null codes (adapter path) skip
-     * both: with no codes there is no detection domain.
+     * is a stuck-bright outlier. Consumed by the CFA inpaint below (defect
+     * domain; the reference defines no hot-pixel gate, so robustness takes
+     * no mask). Null codes (adapter path) skip both: with no codes there is
+     * no detection domain.
      */
     private fun hotMask(codes: VkImage, params: RawSrRobustness.GpuParams,
                         active: VkSession, arena: VkArena): VkImage {
@@ -324,8 +318,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
      * Inpainted copy of a normalized CFA plane (hot_inpaint.glsl): masked
      * taps take their unmasked same-colour ring mean. The caller releases
      * the input; the output replaces it everywhere downstream (pyramid,
-     * guide, merge), while the robustness gate still zeroes hot quads via
-     * the mask.
+     * guide, merge).
      */
     private fun hotInpaint(cfa: VkImage, mask: VkImage,
                            pattern: BayerPattern, active: VkSession, arena: VkArena): VkImage {
@@ -339,51 +332,6 @@ class VkRawSrProcessor(context: Context) : Closeable {
         return out
     }
 
-    /**
-     * Unblocker fold (Sabre analogue): per-frame variance-loss weight from
-     * the frame's quad gray, multiplied into the eroded robustness before
-     * Rc accumulation. Returns (weight, attenuated r, attenuated flags);
-     * the caller releases all three. The weight texture is exposed for
-     * diagnostics before release, mirroring onFlow/onCovariance discipline.
-     */
-    private fun unblockerPass(
-        gray: VkImage,
-        r: VkImage,
-        flags: VkImage,
-        params: RawSrRobustness.GpuParams,
-        active: VkSession,
-        arena: VkArena
-    ): Triple<VkImage, VkImage, VkImage> {
-        val halfW = (gray.width + 1) / 2
-        val halfH = (gray.height + 1) / 2
-        val half = arena.texture(halfW, halfH, GLES30.GL_R32F)
-        active.pass("rawsr/unblocker_downsample.glsl") {
-            sampler("u_gray", gray)
-            ivec2("u_size", halfW, halfH)
-            ivec2("u_full_size", gray.width, gray.height)
-            image(0, half, GLES30.GL_R32F); dispatch(halfW, halfH, 8, 8)
-        }
-        val weight = arena.texture(gray.width, gray.height, GLES30.GL_R32F)
-        active.pass("rawsr/unblocker_weight.glsl") {
-            sampler("u_gray", gray); sampler("u_half", half)
-            ivec2("u_size", gray.width, gray.height)
-            ivec2("u_half_size", halfW, halfH)
-            vec2("u_ab", params.alpha[1], params.beta[1])
-            integer("u_model_valid", if (params.modelValid) 1 else 0)
-            image(0, weight, GLES30.GL_R32F); dispatch(gray.width, gray.height, 8, 8)
-        }
-        arena.release(half)
-        val rOut = arena.texture(gray.width, gray.height, GLES30.GL_R32F)
-        val flagsOut = arena.texture(gray.width, gray.height, GLES30.GL_R32UI)
-        active.pass("rawsr/unblocker_modulate.glsl") {
-            sampler("u_r", r); sampler("u_u", weight); sampler("u_flags_in", flags)
-            ivec2("u_size", gray.width, gray.height)
-            image(0, rOut, GLES30.GL_R32F); image(1, flagsOut, GLES30.GL_R32UI)
-            dispatch(gray.width, gray.height, 8, 8)
-        }
-        return Triple(weight, rOut, flagsOut)
-    }
-
     private fun accumulateRc(rc: VkImage, r: VkImage,
                              out: VkImage, active: VkSession) {        active.pass("rawsr/robustness_accumulate.glsl") {
             sampler("u_rc", rc); sampler("u_r", r)
@@ -392,22 +340,17 @@ class VkRawSrProcessor(context: Context) : Closeable {
         }
     }
 
-    /** Prompt 4D Bayer-direct accumulation into one accumulator pair, plus the
-     * burst-nearest pair. Moving frames feed [num]/[den] and
-     * [nearNum]/[nearDen]; the reference-last pass feeds the reference-only
-     * A/B pair through the identical shader with zero shift and unit
-     * robustness, adding its nearest contribution into the same near pair
-     * (no separate reference-nearest textures).
+    /** Jamy-L Alg. 4 Bayer-direct accumulation into one accumulator pair.
+     * Moving frames feed [num]/[den]; the reference-last pass feeds the
+     * reference-only A/B pair through the identical shader with zero shift
+     * and unit robustness.
      */
     /**
-     * L1 chroma-gate noise for one packed frame: normalized-domain
+     * A/B chroma-gate noise for one packed frame: normalized-domain
      * single-sample green slope/offset (mean of the two green phases from
-     * [RawSrCovarianceGuide.noiseTables]). Deliberately NOT the x0.25
-     * green-mean pair in `GpuParams` — that quarter scaling describes the
-     * variance of the 2-sample green mean used by the robustness photo term,
-     * while the gate keys single-sample green levels. Null (missing,
-     * invalid, or zero-noise model, or a non-Bayer quad) disables the gate
-     * for the frame and keeps the legacy merge path.
+     * [RawSrCovarianceGuide.noiseTables]). Null (missing, invalid, or
+     * zero-noise model, or a non-Bayer quad) disables the gate for the frame
+     * and keeps the reference merge path.
      */
     private fun chromaParamsFor(
         input: GpuRawAmazeInput,
@@ -435,14 +378,12 @@ class VkRawSrProcessor(context: Context) : Closeable {
     private fun mergeAccumulate(
         cfa: VkImage,
         flow: VkImage,
-        precision: VkImage,
+        covariance: VkImage,
         r: VkImage,
         useR: Boolean,
         isReference: Boolean,
         num: VkImage,
         den: VkImage,
-        nearNum: VkImage,
-        nearDen: VkImage,
         oob: VkImage,
         pattern: BayerPattern,
         config: RawSrAlignmentConfig,
@@ -451,26 +392,22 @@ class VkRawSrProcessor(context: Context) : Closeable {
     ) {
         active.pass("rawsr/merge_accumulate.glsl") {
             sampler("u_cfa", cfa); sampler("u_flow", flow)
-            sampler("u_precision", precision); sampler("u_r", r)
+            sampler("u_covariance", covariance); sampler("u_r", r)
             sampler("u_num", num); sampler("u_den", den); sampler("u_oob", oob)
-            sampler("u_near_num", nearNum); sampler("u_near_den", nearDen)
             ivec2("u_size", cfa.width, cfa.height)
             ivec2("u_tile_grid", flow.width, flow.height)
             integer("u_tile_size", config.tileSize)
-            float("u_motion_edge", RawSrBayerMerge.MOTION_EDGE_QUAD)
-            ivec2("u_guide_size", precision.width, precision.height)
+            ivec2("u_guide_size", covariance.width, covariance.height)
             ivec4("u_fc", AmazePipelineContract.cfaUniform(pattern))
             integer("u_is_reference", if (isReference) 1 else 0)
             integer("u_use_r", if (useR) 1 else 0)
-            // Opt-in green-guided chroma deweight (oracle ChromaParams twin):
-            // null (the default, including every current call site) binds 0
-            // and runs the legacy path bitwise-identically.
+            // A/B green-guided chroma deweight (oracle ChromaParams twin):
+            // null (the default) binds 0 and runs the reference path.
             integer("u_use_chroma", if (chroma != null && !isReference) 1 else 0)
             float("u_green_noise_s", chroma?.greenNoiseS?.toFloat() ?: 0f)
             float("u_green_noise_o", chroma?.greenNoiseO?.toFloat() ?: 0f)
             image(0, num, GLES30.GL_RGBA32F); image(1, den, GLES30.GL_RGBA32F)
             image(2, oob, GLES30.GL_R32F)
-            image(3, nearNum, GLES30.GL_RGBA32F); image(4, nearDen, GLES30.GL_RGBA32F)
             dispatch(cfa.width, cfa.height, 8, 8)
         }
     }
@@ -580,16 +517,17 @@ class VkRawSrProcessor(context: Context) : Closeable {
             float("u_k_detail", tuning.kDetail.toFloat()); float("u_k_denoise", tuning.kDenoise.toFloat())
             float("u_d_th", tuning.dTh.toFloat()); float("u_d_tr", tuning.dTr.toFloat())
             float("u_k_stretch", tuning.kStretch.toFloat()); float("u_k_shrink", tuning.kShrink.toFloat())
-            // Analytic fallback law: steerable + hard threshold, matching the
-            // RawSrKernelCovariance defaults (KernelNet bypasses this pass when ready).
-            integer("u_kernel_type", 0); integer("u_selection_law", 1)
+            // Reference law: steerable + linear, matching the
+            // RawSrKernelCovariance defaults (the KernelNet A/B bypasses this
+            // pass when enabled).
+            integer("u_kernel_type", 0); integer("u_selection_law", 0)
             image(0, packed, GLES30.GL_RGBA32F); dispatch(gray.width, gray.height, 8, 8)
         }
         return packed
     }
 
-    private fun uploadPrecision(field: RawSrKernelCovariance.MatrixField,
-                                active: VkSession, arena: VkArena): VkImage {
+    private fun uploadCovariance(field: RawSrKernelCovariance.MatrixField,
+                                 active: VkSession, arena: VkArena): VkImage {
         require(field.values.size == field.width * field.height * 4)
         return arena.texture(field.width, field.height, GLES30.GL_RGBA32F).also {
             it.uploadRgba32f(field.values, active.uploads)
@@ -597,11 +535,12 @@ class VkRawSrProcessor(context: Context) : Closeable {
     }
 
     /**
-     * Lazily computed KernelNet precision as a live GL texture, or null when
-     * unavailable — then the caller runs the analytic pass. Never throws:
-     * compute and upload are both guarded so a pressured heap degrades to
-     * analytic instead of killing the save. The returned texture follows the
-     * usual arena discipline; the heap field is droppable on return.
+     * Lazily computed KernelNet covariance (A/B) as a live GL texture, or
+     * null when unavailable — then the caller runs the analytic pass. Never
+     * throws: compute and upload are both guarded so a pressured heap
+     * degrades to analytic instead of killing the save. The returned texture
+     * follows the usual arena discipline; the heap field is droppable on
+     * return.
      */
     private fun kernelNetTexture(
         kernelNet: ((index: Int) -> RawSrKernelCovariance.MatrixField?)?,
@@ -611,7 +550,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
     ): VkImage? {
         if (kernelNet == null) return null
         return try {
-            kernelNet.invoke(index)?.let { uploadPrecision(it, active, arena) }
+            kernelNet.invoke(index)?.let { uploadCovariance(it, active, arena) }
         } catch (_: Throwable) {
             null
         }
@@ -624,9 +563,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
         onFlow: (Int, Int, Int, Int) -> Unit,
         onCovariance: (Int, Int, Int, Int) -> Unit,
         onRobustness: (Int, Int, Int, Int, Int) -> Unit,
-        onUnblocker: (Int, Int, Int, Int) -> Unit = { _, _, _, _ -> },
         kernelNet: ((index: Int) -> RawSrKernelCovariance.MatrixField?)? = null,
-        highlightNeutral: FloatArray = floatArrayOf(1f, 1f, 1f),
         chromaFrames: List<RawSrBayerMerge.ChromaParams?>? = null,
         load: (Int, VkSession, VkArena) -> LoadedFrame,
         consume: (RawSrGpuOutput) -> T
@@ -646,18 +583,15 @@ class VkRawSrProcessor(context: Context) : Closeable {
           VkArena(active.vk).use { arena ->
             val quadsW = width / 2
             val quadsH = height / 2
-            // Only moving/nearest accumulators and OOB diagnostics live for the
+            // Only the moving accumulators and OOB diagnostics live for the
             // whole burst. Reference accumulators and final outputs are allocated later.
             val numerator = arena.texture(width, height, GLES30.GL_RGBA32F)
             val denominator = arena.texture(width, height, GLES30.GL_RGBA32F)
-            val nearNumerator = arena.texture(width, height, GLES30.GL_RGBA32F)
-            val nearDenominator = arena.texture(width, height, GLES30.GL_RGBA32F)
             val oob = arena.texture(width, height, GLES30.GL_R32F)
             active.pass("rawsr/clear_accumulators.glsl") {
                 ivec2("u_size", width, height)
                 image(0, numerator, GLES30.GL_RGBA32F); image(1, denominator, GLES30.GL_RGBA32F)
                 image(5, oob, GLES30.GL_R32F)
-                image(6, nearNumerator, GLES30.GL_RGBA32F); image(7, nearDenominator, GLES30.GL_RGBA32F)
                 dispatch(width, height, 8, 8)
             }
             // Placeholder binding for shader inputs the reference/unused paths skip.
@@ -670,9 +604,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
             // The reference uploads and normalizes exactly once and stays resident
             // with the persistent accumulators for the whole burst. Hot taps
             // are inpainted into the resident CFA (the pyramid, guide, and
-            // merge read the clean plane); the reference mask stays alive
-            // with the linear guide because every moving robustness pass
-            // gates against it.
+            // merge read the clean plane).
             val refLoaded = load(0, active, arena)
             val refHotMask = refLoaded.codes?.let { hotMask(it, robust[0], active, arena) }
             val refCfaRaw = refLoaded.cfa
@@ -680,19 +612,20 @@ class VkRawSrProcessor(context: Context) : Closeable {
                 hotInpaint(refCfaRaw, refHotMask, pattern, active, arena).also { arena.release(refCfaRaw) }
             else refCfaRaw
             val refs = pyramid(refCfa, active, arena, config)
-            // Kernel precision consumes the CPU-computed guide (4E precision
-            // fix); the adapter path has no codes and reuses plain quad gray.
-            // The alignment pyramid above is untouched.
+            // Kernel covariance consumes the plain quad-gray pyramid level
+            // (no-GAT oracle contract); a null guide provider selects refs[0]
+            // here and levels[0] for moving frames. The alignment pyramid
+            // above is untouched.
             // KernelNet does not consume the analytic guide. Build it only on fallback,
             // avoiding an otherwise unused full quad plane and CPU pass per frame.
-            val refPrecision = kernelNetTexture(kernelNet, 0, active, arena) ?: run {
+            val refCovariance = kernelNetTexture(kernelNet, 0, active, arena) ?: run {
                 val guide = if (refLoaded.codes != null)
                     guideProvider?.invoke(0)?.let { uploadGuide(it, active, arena) } else null
                 kernelCovariance(guide ?: refs[0], tuning, active, arena).also {
                     guide?.let(arena::release)
                 }
             }
-            onCovariance(0, refPrecision.id, refPrecision.width, refPrecision.height)
+            onCovariance(0, refCovariance.id, refCovariance.width, refCovariance.height)
             val fuseMoving = !referenceOnly && count > 1
             // The reference holds its linear guide for the whole burst like the pyramid.
             val refLinear = if (fuseMoving && refLoaded.codes != null)
@@ -741,32 +674,15 @@ class VkRawSrProcessor(context: Context) : Closeable {
                     val useR = codes != null && refLinear != null
                     if (useR) {
                         val linear = linearFromCodes(codes!!, robust[index], pattern, active, arena)
-                        val refHotForGate = checkNotNull(refHotMask) {
-                            "Packed path always masks the reference alongside moving frames"
-                        }
-                        val movHotForGate = checkNotNull(movHotMask) {
-                            "Packed path always masks moving frames with codes present"
-                        }
                         val (rawR, flags) = robustnessPass(refLinear!!, linear, flow, tuning, config,
-                            robust[0], robust[index], lutTexture!!, refHotForGate, movHotForGate,
-                            active, arena)
+                            robust[0].noiseLut, lutTexture!!, active, arena)
                         val r = robustnessMin(rawR, active, arena)
                         arena.release(rawR)
-                        // Unblocker (Sabre analogue): attenuate the eroded
-                        // robustness where boxing destroyed signal variance,
-                        // before Rc accumulation consumes it. levels[0] is the
-                        // frame's own inpainted quad gray, resident and
-                        // correctly sized; the reference never attenuates.
-                        val (uWeight, ru, flagsU) = unblockerPass(
-                            levels[0], r, flags, robust[index], active, arena)
-                        arena.release(r); arena.release(flags)
-                        onUnblocker(index, uWeight.id, uWeight.width, uWeight.height)
-                        arena.release(uWeight)
-                        onRobustness(index, ru.id, flagsU.id, ru.width, ru.height)
-                        accumulateRc(rc, ru, rcNext, active)
+                        onRobustness(index, r.id, flags.id, r.width, r.height)
+                        accumulateRc(rc, r, rcNext, active)
                         val old = rc; rc = rcNext; rcNext = old
-                        arena.release(flagsU); arena.release(linear)
-                        rTexture = ru
+                        arena.release(flags); arena.release(linear)
+                        rTexture = r
                     }
                     val tRobust = android.os.SystemClock.elapsedRealtime()
                     // Validated alignment/covariance/robustness feed the merge unchanged:
@@ -775,7 +691,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
                     // and the reused robustness output.
                     mergeAccumulate(cfa, flow, covariance, rTexture ?: dummy, useR,
                         isReference = false, numerator, denominator,
-                        nearNumerator, nearDenominator, oob, pattern, config, active,
+                        oob, pattern, config, active,
                         chroma = chromaFrames?.getOrNull(index))
                     val tMerge = android.os.SystemClock.elapsedRealtime()
                     if (android.util.Log.isLoggable("RawLensRawSr", android.util.Log.DEBUG)) {
@@ -804,48 +720,62 @@ class VkRawSrProcessor(context: Context) : Closeable {
                 dispatch(width, height, 8, 8)
             }
             // The captured reference accumulates last with r_ref = 1 through the same
-            // pass, filling the reference-only A/B buffers that back the fallback.
-            mergeAccumulate(refCfa, dummy, refPrecision, dummy, useR = false,
+            // pass, filling the reference-only A/B buffers.
+            mergeAccumulate(refCfa, dummy, refCovariance, dummy, useR = false,
                 isReference = true, refNumerator, refDenominator,
-                nearNumerator, nearDenominator, oob, pattern, config, active)
+                oob, pattern, config, active)
             arena.release(refCfa)
             refs.forEach(arena::release)
             refLinear?.let(arena::release)
             refHotMask?.let(arena::release)
             lutTexture?.let(arena::release)
-            arena.release(refPrecision)
+            arena.release(refCovariance)
             arena.release(dummy)
             arena.release(rcNext)
-            // Reference-last add, per-channel normalization, and local reset plus
-            // reference-only fallback where confidence is insufficient. Quads
-            // with less than one frame-equivalent of accumulated robustness
-            // are overwritten with the reference-only value (§9 support
-            // overwrite); the rule is inert unless Rc was tracked, i.e. the
-            // packed path with moving frames (reference-only and adapter
-            // outputs already equal the reference where it matters).
-            val trackSupport = fuseMoving && refLinear != null
-            // Finalize writes every pixel, so outputs need no initial clear.
+            // Reference-last add and per-channel normalization; zero support
+            // divides to 0. Finalize writes every pixel, so outputs need no
+            // initial clear.
             val merged = arena.texture(width, height, GLES30.GL_RGBA32F)
             val fallback = arena.texture(width, height, GLES30.GL_R32F)
             active.pass("rawsr/merge_finalize.glsl") {
                 sampler("u_num", numerator); sampler("u_den", denominator)
                 sampler("u_ref_num", refNumerator); sampler("u_ref_den", refDenominator)
-                sampler("u_near_num", nearNumerator); sampler("u_near_den", nearDenominator)
-                sampler("u_rc", rc)
-                vec4("u_highlight_neutral", floatArrayOf(highlightNeutral[0], highlightNeutral[1], highlightNeutral[2], 0f))
                 ivec2("u_size", width, height)
-                float("u_min_support", if (trackSupport) RawSrBayerMerge.MIN_SUPPORT else 0f)
                 image(0, merged, GLES30.GL_RGBA32F); image(1, fallback, GLES30.GL_R32F)
                 dispatch(width, height, 8, 8)
             }
-            // Finalization has completed; these are not exposed to the consumer.
-            // Free another two RGBA32F planes before JPEG development/readback.
-            arena.release(nearNumerator)
-            arena.release(nearDenominator)
+            // Dead-lane inpaint for the Linear-RGB product (RawSrDeadLaneInpaint
+            // twin): the reference re-mosaics to Bayer and lets the downstream
+            // demosaic absorb isolated dead lanes; linear RGB has no demosaic,
+            // so unsupported lanes heal from live same-lane neighbours here.
+            // The fallback mask still flags the pre-inpaint dead cells.
+            val inpainted = arena.texture(width, height, GLES30.GL_RGBA32F)
+            active.pass("rawsr/inpaint_dead_lanes.glsl") {
+                sampler("u_merged", merged); sampler("u_den", denominator)
+                sampler("u_ref_den", refDenominator)
+                ivec2("u_size", width, height)
+                image(0, inpainted, GLES30.GL_RGBA32F)
+                dispatch(width, height, 8, 8)
+            }
+            arena.release(merged)
+            // Chroma-from-luma stabilization (RawSrChromaFromLuma twin):
+            // razor kernels latch R/B onto single taps out of phase along
+            // slanted edges (rainbow staircases); rebuilding chroma from
+            // smoothed ratios under the untouched guide transfers the clean
+            // luma edge profile onto R/B, the demosaic analogue the
+            // reference relies on downstream of its re-mosaiced output.
+            val stabilized = arena.texture(width, height, GLES30.GL_RGBA32F)
+            active.pass("rawsr/chroma_from_luma.glsl") {
+                sampler("u_merged", inpainted)
+                ivec2("u_size", width, height)
+                image(0, stabilized, GLES30.GL_RGBA32F)
+                dispatch(width, height, 8, 8)
+            }
+            arena.release(inpainted)
             val processed = if (referenceOnly) 1 else count
             return consume(RawSrGpuOutput(numerator.id, denominator.id, width, height, processed,
                 listOfNotNull(lastFlow?.id), rc.id, refNumerator.id, refDenominator.id,
-                merged.id, fallback.id, oob.id, arena.memory.peakBytes))
+                stabilized.id, fallback.id, oob.id, arena.memory.peakBytes))
           }
         } finally {
             processing = false

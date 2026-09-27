@@ -271,22 +271,21 @@ class RawSrForestQuality4EInstrumentedTest {
     /**
      * Fast iteration twin of the full sweep: reference + 3 moving frames
      * (order.take(4)), agreement gates only, no exports. Runs in ~2 min on
-     * device instead of ~13. Same oracle (KernelNet precision, unblocked
-     * masked robustness), same provisions — a green 4-frame run is necessary
-     * but not sufficient for the full gate.
+     * device instead of ~13. Analytic base path (KernelNet disconnected):
+     * the oracle builds the same analytic covariance fields the GPU
+     * kernel_covariance shader computes (steerable/linear), with unblocked
+     * masked robustness. A green 4-frame run is necessary but not
+     * sufficient for the full gate.
      */
     @Test fun realForestFourFrameAgreement() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val fixture = RawSrFixture.load(instrumentation.context.assets, "rawsr/forest")
         assertEquals(30, fixture.frames.size)
-        RawSrKernelNetAniso.preload(instrumentation.targetContext)
-        val kernelProc = KernelNetNcnnProcessor.getInstance()
-        assertTrue("KernelNet model load timed out",
-            kernelProc != null && kernelProc.waitReady(120_000))
-        assertTrue("KernelNet model must be ready", RawSrKernelNetAniso.isReady())
-        val kernelScratch = KernelScratch(
-            fixture.frames[fixture.referenceIndex].width,
-            fixture.frames[fixture.referenceIndex].height)
+        // Base-path pin: KernelNet stays disconnected; the device runs the
+        // analytic estimator the oracle mirrors below. If this trips, an
+        // A/B run re-enabled the model and this agreement is meaningless.
+        assertTrue("KernelNet must stay disconnected for the base-path gate",
+            !RawSrKernelNetAniso.enabled)
         val config = RawSrAlignmentConfig(levels = 4, tileSize = 16, searchRadius = 4)
         val frames = fixture.referenceFirst.take(4).map { fixture.frames[it] }
         val tuning = RawSrTuning.fromReference(frames.first()).tuning
@@ -319,20 +318,17 @@ class RawSrForestQuality4EInstrumentedTest {
                 fallback = readTexture(output.fallbackTextureId, width, height, GLES30.GL_RED)
                 oob = readTexture(output.oobTextureId, width, height, GLES30.GL_RED)
             }
-            val expected = packedOracle(frames, config, tuning, kernelScratch)
+            val expected = packedOracle(frames, config, tuning, kernelScratch = null)
             val entry = JSONObject().put("count", 4)
-            entry.put("determinismProbe",
-                kernelScratch.determinismProbe(frames[2],
-                    requireNotNull(lastOracleFrames.getOrNull(1)).precision))
             val gpuOnly = GpuArrays(merged, num, den, rc, fallback, oob, width, height)
             val (agreeErr, agreeFailures) = agreementArrays(entry, gpuOnly, expected,
                 "4E-forest count=4", lastOracleFrames).let { (e, f) -> e to f.toMutableList() }
             if (agreeErr > RGB_TOL) agreeFailures.add("4E-forest count=4 agreement maxError=$agreeErr")
             // Forensics for surviving rgb violations (capped): per-frame
-            // oracle inputs at the pixel — flow, robustness, motion-edge
-            // spread vs threshold, source OOB. A borderline spread implicates
-            // a float32/64 veto flip on the GPU side; healthy inputs implicate
-            // GPU flow divergence instead.
+            // oracle inputs at the pixel — nearest-tile flow, robustness,
+            // source OOB. No motion-edge veto or tap censor exists in the
+            // base path; healthy inputs implicate GPU flow divergence (see
+            // the flow probe below) or kernel-field divergence instead.
             var forensic = 0
             for (yy in 4 until height - 4) for (xx in 4 until width - 4) {
                 if (forensic >= 8) break
@@ -350,72 +346,23 @@ class RawSrForestQuality4EInstrumentedTest {
                             continue
                         }
                         val qx = xx / 2; val qy = yy / 2
-                        val t = flow.flowAtSmooth(qx.toFloat(), qy.toFloat())
+                        val t = flow.flowAt(qx.toFloat(), qy.toFloat())
                         val r = frame.robustness?.r?.getOrNull(
                             qy.coerceIn(0, frame.robustness.height - 1) * (frame.width / 2) +
                                 qx.coerceIn(0, frame.width / 2 - 1))
-                        val veto = RawSrRobustness.flowDisagrees(
-                            flow, qx, qy, RawSrBayerMerge.MOTION_EDGE_QUAD)
-                        sb.append(" f$fi dx=${t.dx} dy=${t.dy} rel=${t.reliable} r=$r veto=$veto")
-                    }
-                    Log.i(TAG, "4E-forest count=4 $sb")
-                    // Spread razor check: replicate the 3x3 tile min/max around
-                    // the containing tile; a spread^2 within float-noise of
-                    // MOTION_EDGE_QUAD^2 means the GPU veto can flip while the
-                    // oracle keeps the pixel (no counter distinguishes it).
-                    for ((fi, frame) in lastOracleFrames.withIndex()) {
-                        val flow = frame.flow ?: continue
-                        val qx = xx / 2; val qy = yy / 2
-                        val tileX = (qx / flow.tileSize).coerceIn(0, flow.columns - 1)
-                        val tileY = (qy / flow.tileSize).coerceIn(0, flow.rows - 1)
-                        var minX = Float.POSITIVE_INFINITY
-                        var minY = Float.POSITIVE_INFINITY
-                        var maxX = Float.NEGATIVE_INFINITY
-                        var maxY = Float.NEGATIVE_INFINITY
-                        for (i in -1..1) for (j in -1..1) {
-                            val tx = tileX + j; val ty = tileY + i
-                            if (tx < 0 || ty < 0 || tx >= flow.columns || ty >= flow.rows) continue
-                            val t = flow.tiles[ty * flow.columns + tx]
-                            if (!t.dx.isFinite() || !t.dy.isFinite()) continue
-                            minX = minOf(minX, t.dx); minY = minOf(minY, t.dy)
-                            maxX = maxOf(maxX, t.dx); maxY = maxOf(maxY, t.dy)
-                        }
-                        val sp2 = (maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY)
-                        val th2 = RawSrBayerMerge.MOTION_EDGE_QUAD *
-                            RawSrBayerMerge.MOTION_EDGE_QUAD
-                        Log.i(TAG, "4E-forest count=4 spread ($xx,$yy) f$fi " +
-                            "spread2=$sp2 thresh2=$th2 margin=${sp2 - th2}")
-                    }
-                    // Censor-boundary forensics: dump the 3x3 source-window
-                    // samples for the single contributing frame. A tap within
-                    // float-noise of SATURATED_REF_GUARD flips the censor on
-                    // one side only (float32 GPU vs float64 oracle sample),
-                    // moving den by a whole tap weight.
-                    for ((fi, frame) in lastOracleFrames.withIndex()) {
-                        if (frame.flow == null) continue
-                        val qx = xx / 2; val qy = yy / 2
-                        val t = frame.flow.flowAtSmooth(qx.toFloat(), qy.toFloat())
-                        if (!t.dx.isFinite() || !t.dy.isFinite()) continue
                         val sx = xx + 0.5 + 2.0 * t.dx
                         val sy = yy + 0.5 + 2.0 * t.dy
-                        val cx = floor(sx).toInt(); val cy = floor(sy).toInt()
-                        val sw = StringBuilder("censorwin ($xx,$yy) f$fi")
-                        for (oy in -1..1) for (ox in -1..1) {
-                            val tx = cx + ox; val ty = cy + oy
-                            if (tx < 0 || ty < 0 || tx >= frame.width || ty >= frame.height) continue
-                            val s = frame.samples[ty * frame.width + tx]
-                            val d = 0.99 - s
-                            if (d < 1e-4f) sw.append(" ($tx,$ty)=$s")
-                        }
-                        Log.i(TAG, "4E-forest count=4 $sw")
+                        val oob = sx < 0.0 || sy < 0.0 || sx >= frame.width || sy >= frame.height
+                        sb.append(" f$fi dx=${t.dx} dy=${t.dy} r=$r oob=$oob")
                     }
+                    Log.i(TAG, "4E-forest count=4 $sb")
                 }
             }
             // Flow-input probe: GPU tile flow vs oracle CPU tile flow per
-            // moving frame. Sharp KernelNet kernels amplify source
-            // differences into weight differences, so a local flow
-            // divergence (not a merge bug) explains isolated rgb residuals
-            // with agreeing precision and robustness.
+            // moving frame. Sharp kernels amplify source differences into
+            // weight differences, so a local flow divergence (not a merge
+            // bug) explains isolated rgb residuals with agreeing covariance
+            // and robustness.
             for ((index, flowEntry) in gpuFlows) {
                 val (dims, gpu) = flowEntry
                 val (columns, rows) = dims
@@ -436,19 +383,21 @@ class RawSrForestQuality4EInstrumentedTest {
                     "tile=$mi gpuDx=$mg cpuDx=$mc")
             }
             val cov = requireNotNull(gpuCov) { "no covariance texture" }
-            val cpuPrec = requireNotNull(lastOracleReference).precision.values
-            if (cov.size == cpuPrec.size) {
+            val cpuCov = requireNotNull(lastOracleReference).covariance.values
+            if (cov.size == cpuCov.size) {
                 var covMax = 0f; var covViol = 0
                 for (i in cov.indices) {
-                    val d = abs(cov[i] - cpuPrec[i])
+                    val d = abs(cov[i] - cpuCov[i])
                     covMax = max(covMax, d)
-                    if (d > 1e-6f) covViol++
+                    if (d > MERGE_TOL_ABS + MERGE_TOL_REL * abs(cpuCov[i])) covViol++
                 }
-                entry.put("precisionProbe", JSONObject().put("maxError", covMax.toDouble())
+                entry.put("covarianceProbe", JSONObject().put("maxError", covMax.toDouble())
                     .put("violations", covViol))
-                Log.i(TAG, "4E-forest count=4 precisionProbe maxError=$covMax violations=$covViol")
+                Log.i(TAG, "4E-forest count=4 covarianceProbe maxError=$covMax violations=$covViol")
+                if (covViol > 0) agreeFailures.add("4E-forest count=4 covariance violations=$covViol maxError=$covMax")
             } else {
-                entry.put("precisionProbe", JSONObject().put("dimsMismatch", true))
+                entry.put("covarianceProbe", JSONObject().put("dimsMismatch", true))
+                agreeFailures.add("4E-forest count=4 covariance dims gpu=${cov.size} cpu=${cpuCov.size}")
             }
             Log.i(TAG, "4E-forest count=4 $entry")
             assertTrue("4-frame failures=$agreeFailures", agreeFailures.isEmpty())
@@ -456,14 +405,21 @@ class RawSrForestQuality4EInstrumentedTest {
     }
 
     /** Packed-path CPU oracle (same construction as the 4D parity tests).
-     * Precision mirrors the production GPU input exactly: the KernelNet-only
-     * field (clamped) the device uploads via kernelNetTexture — never the
-     * analytic estimator. [kernelScratch] must cover every frame; frames are
+     * Kernel fields mirror the production GPU input exactly: with
+     * [kernelScratch] the KernelNet-only field (clamped) the device uploads
+     * via kernelNetTexture; with null the analytic estimator
+     * ([RawSrKernelCovariance.covariance], steerable/linear) the GPU
+     * kernel_covariance shader computes on the disconnected base path.
+     * [kernelScratch] must cover every frame when given; frames are
      * fixture-uniform so one set serves the burst. */
     private fun packedOracle(frames: List<RawSrPackedFrame>, config: RawSrAlignmentConfig,
                              tuning: RawSrTuning,
-                             kernelScratch: KernelScratch,
+                             kernelScratch: KernelScratch?,
                              referenceOnly: Boolean = false): RawSrBayerMerge.MergeResult {
+        fun fieldOf(frame: RawSrPackedFrame): RawSrKernelCovariance.MatrixField =
+            kernelScratch?.productionPrecision(frame)
+                ?: RawSrKernelCovariance.covariance(
+                    RawSrCovarianceGuide.guide(frame).gray, tuning)
         fun shaded(frame: RawSrPackedFrame): Pair<UnpackedRawCfa, BayerPattern> {
             val input = frame.uploadInput()
             val cpu = RawSensorUnpacker.unpackNormalized(input.buffer, input.layout, input.normalization, input.crop)
@@ -487,31 +443,27 @@ class RawSrForestQuality4EInstrumentedTest {
         val moving = if (referenceOnly) emptyList() else frames.drop(1).mapIndexed { i, frame ->
             val flow = RawSrAlignment.align(grays[0], grays[i + 1], config)
             // Production gates robustness against the shared hot mask
-            // (buildMovingFrame); the rail gate zeroes hot quads there, so
-            // the oracle must see the identical mask — never unmasked.
+            // (buildMovingFrame); the oracle must see the identical mask —
+            // never unmasked. (The mask feeds diagnostics only; the base
+            // path has no hot-pixel gate.)
             val hot = RawSrHotPixel.detectPacked(frame)
             val robust = RawSrRobustness.evaluate(
                 RawSrRobustness.linearGuide(frames[0], RawSrHotPixel.detectPacked(frames[0])),
                 RawSrRobustness.linearGuide(frame, hot), flow, tuning, config)
-            // Production attenuates robustness through the unblocker
-            // (buildMovingFrame) before the merge consumes it; the oracle
-            // applies the identical step over the same inpainted gray with
-            // the same green coefficients — never unit weight.
-            val greenParams = RawSrRobustness.gpuParams(frame)
-            val unblocked = RawSrUnblocker.applyToFrame(robust,
-                RawSrUnblocker.computeFrame(grays[i + 1],
-                    greenParams.alpha[1].toDouble(), greenParams.beta[1].toDouble()))
+            // Reference-parity base: robustness feeds the merge unchanged
+            // (Jamy-L Alg. 6 has no unblocker fold; RawSrUnblocker stays
+            // available for A/B only).
             val (cpu, sensorPattern) = shadedFrames[i + 1]
             RawSrBayerMerge.MergeFrame(cpu.width, cpu.height, cpu.values, sensorPattern,
                 cpu.sensorCropLeft, cpu.sensorCropTop,
-                kernelScratch.productionPrecision(frame),
-                flow, unblocked)
+                fieldOf(frame),
+                flow, robust)
         }
         lastOracleFrames = moving
         val (refCpu, refPattern) = shadedFrames[0]
         lastOracleReference = RawSrBayerMerge.MergeFrame(refCpu.width, refCpu.height, refCpu.values, refPattern,
             refCpu.sensorCropLeft, refCpu.sensorCropTop,
-            kernelScratch.productionPrecision(frames[0]),
+            fieldOf(frames[0]),
             null, null)
         return RawSrBayerMerge.merge(requireNotNull(lastOracleReference),
             moving, referenceOnly)
@@ -597,15 +549,16 @@ class RawSrForestQuality4EInstrumentedTest {
      * sits within [STRADDLE_BAND] of an integer in x or y, i.e. the float64 CPU
      * source and the float32 GPU source may floor the 3x3 tap-window center to
      * adjacent pixels. Mirrors the source projection in
-     * [RawSrBayerMerge.accumulateFrame] exactly (reference frames project to
-     * x + 0.5 and never straddle). Ported from the sea 4E gate. */
+     * [RawSrBayerMerge.accumulateFrame] exactly, including its nearest-tile
+     * flow lookup (reference frames project to x + 0.5 and never straddle).
+     * Ported from the sea 4E gate. */
     private fun isTapWindowStraddle(x: Int, y: Int, frames: List<RawSrBayerMerge.MergeFrame>): Boolean {
         if (frames.isEmpty()) return false
         val qx = x / 2
         val qy = y / 2
         for (frame in frames) {
             val flow = frame.flow ?: continue
-            val tile = flow.flowAtSmooth(qx.toFloat(), qy.toFloat())
+            val tile = flow.flowAt(qx.toFloat(), qy.toFloat())
             if (!tile.dx.isFinite() || !tile.dy.isFinite()) continue
             val sx = x + 0.5 + 2.0 * tile.dx
             val sy = y + 0.5 + 2.0 * tile.dy
@@ -617,14 +570,11 @@ class RawSrForestQuality4EInstrumentedTest {
 
     /** True when any frame's burst-nearest pick for channel [c] at raw
      * pixel (x, y) is unstable: the best and second-best same-colour tap
-     * distances differ by less than [TIE_BAND]. Mirrors the oracle's
-     * nearest membership exactly, unlike the sea port it replaces:
-     * crop-relative routing (the shifted pattern reads local taps — folding
-     * the sensor origin again swaps R/B on odd origins like this fixture),
-     * censored taps skipped, OOB sources skipped, r == 0 and motion-edge
-     * quads skipped, and the reference frame participates with zero shift
-     * (its pick joins the totals). Only meaningful where rgb derives from
-     * the nearest totals, i.e. at fallback pixels. */
+     * distances differ by less than [TIE_BAND]. Dormant-provision legacy
+     * from the retired nearest-fallback cascade (the base path divides to 0
+     * at zero support and has no nearest branch): kept only so the retired
+     * fallback-pixel excuse path still compiles for the full sweep. Uses the
+     * nearest-tile lookup the ported merge uses. */
     private fun isNearTie(x: Int, y: Int, c: Int, frames: List<RawSrBayerMerge.MergeFrame>): Boolean {
         for (frame in frames + listOfNotNull(lastOracleReference)) {
             val isRef = frame.flow == null
@@ -637,14 +587,13 @@ class RawSrForestQuality4EInstrumentedTest {
                 val flow = frame.flow!!
                 val qx = x / 2
                 val qy = y / 2
-                val tile = flow.flowAtSmooth(qx.toFloat(), qy.toFloat())
+                val tile = flow.flowAt(qx.toFloat(), qy.toFloat())
                 if (!tile.dx.isFinite() || !tile.dy.isFinite()) continue
                 val robust = frame.robustness
                 val rRaw = robust?.r?.getOrNull(
                     qy.coerceIn(0, robust.height - 1) * (frame.width / 2) +
                         qx.coerceIn(0, frame.width / 2 - 1))
                 if (rRaw == null || !rRaw.isFinite() || rRaw == 0f) continue
-                if (RawSrRobustness.flowDisagrees(flow, qx, qy, RawSrBayerMerge.MOTION_EDGE_QUAD)) continue
                 dx = tile.dx.toDouble()
                 dy = tile.dy.toDouble()
             }

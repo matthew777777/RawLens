@@ -2003,7 +2003,8 @@ class RawCameraController(
                             rcMean, output.acceptedFrames.toDouble()) else 1.0
                     val noiseOverride = if (rcMean != null) refMetadata.cfaPattern?.let { pattern ->
                         RawSrMergedNoise.scaleProfile(
-                            refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames)
+                            refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames,
+                            refMetadata.blackLevels?.toFloatArray(), refMetadata.whiteLevel)
                     } else null
                     val provenance = MergeProvenance(
                         algorithmVersion = LinearRgbDngWriter.ALGORITHM_VERSION,
@@ -2080,7 +2081,8 @@ class RawCameraController(
         // scale the Linear path derives from its Rc texture readback.
         val noiseOverride = refMetadata.cfaPattern?.let { pattern ->
             RawSrMergedNoise.scaleProfile(
-                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames)
+                refMetadata.noiseProfile?.toDoubleArray(), pattern, effectiveFrames,
+                refMetadata.blackLevels?.toFloatArray(), refMetadata.whiteLevel)
         }
         val provenance = MosaicSrProvenance(
             selectedFrames = decision.mergeIndices.size,

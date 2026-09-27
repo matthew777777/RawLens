@@ -216,22 +216,39 @@ class RawSrHotPixelTest {
         assertFalse(guide.hot[q + 1])
     }
 
-    @Test fun evaluateZeroesHotQuadWithHotFlag() {
+    @Test fun hotPixelsHaveNoRobustnessGate() {
+        // The reference defines no hot-pixel gate: robustness runs over 3x3
+        // local means, so a single stuck tap — diluted 9x — cannot move the
+        // photo term and its quad still accepts at full weight with a clean
+        // mask. Detection still fires (the guide's hot diagnostic marks the
+        // quad) and sample-layer inpainting owns single taps (MergeJob
+        // inpaints before the merge). Only mean-level hot regions — a stuck
+        // 4x4 block covering whole quads — reject, through the photo term.
         val tuning = RawSrTuning.forSnr(18.0)
         val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
-        val ref = RawSrRobustness.linearGuide(packed(flat()))
-        val mov = RawSrRobustness.linearGuide(packed({ sx, sy ->
-            if (sx == 10 && sy == 10) 1900 else 1500
-        }))
+        val texture = { sx: Int, sy: Int -> 1500 + ((sx * 79 + sy * 43) % 101) }
         val flow = RawSrAlignmentField(16, 12, 16, 1, 1, listOf(
             RawSrTileFlow(8f, 6f, 0f, 0f, 0f, true)))
-        val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         val q = 5 * 16 + 5
-        assertEquals(0f, result.r[q], 0f)
-        assertTrue("flags=${result.flags[q]}",
-            result.flags[q] and RawSrRobustness.FLAG_HOTPIXEL != 0)
+        // Single stuck tap: detected, but robustness accepts (no gate).
+        val ref = RawSrRobustness.linearGuide(packed(texture))
+        val singleHot = RawSrRobustness.linearGuide(packed({ sx, sy ->
+            if (sx == 10 && sy == 10) 1900 else texture(sx, sy)
+        }))
+        assertTrue(singleHot.hot[q])
+        val single = RawSrRobustness.evaluate(ref, singleHot, flow, tuning, config)
+        assertEquals(1f, single.r[q], 0f)
+        assertTrue(single.flags.all { it == 0 })
+        // Stuck 4x4 block (quads (4..5, 4..5) fully hot): the interior quad
+        // rejects through the photo term, still with no hot bit.
+        val blockHot = RawSrRobustness.linearGuide(packed({ sx, sy ->
+            if (sx in 8..11 && sy in 8..11) 1900 else texture(sx, sy)
+        }))
+        val block = RawSrRobustness.evaluate(ref, blockHot, flow, tuning, config)
+        assertEquals(0f, block.r[q], 0f)
+        assertEquals(0, block.flags[q] and RawSrRobustness.FLAG_HOTPIXEL)
         // Untouched quads still accept the static pair.
-        assertEquals(1f, result.r[0], 0f)
-        assertEquals(0, result.flags[0])
+        assertEquals(1f, block.r[0], 0f)
+        assertEquals(0, block.flags[0])
     }
 }

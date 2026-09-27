@@ -52,20 +52,25 @@ object RawSrMergedNoise {
 
     /**
      * Scale a sensor noise profile by the merged frame count (S/N and O/N
-     * per plane). Accepts the same 8/6-coefficient camera2 forms as
-     * [DngNoiseProfile] and always returns the 6-value RGB-plane form the
-     * DNG tag carries. Returns null — the tag is omitted, never fabricated —
-     * when the input profile is null, invalid, or zero-noise, or when the
-     * frame count is not measurable.
+     * per plane). Accepts the same 8/6-coefficient forms as [DngNoiseProfile]
+     * and always returns the normalized 6-value RGB-plane form the DNG tag
+     * carries. Eight-coefficient code-domain inputs normalize through
+     * [blackLevels]/[whiteLevel]; six-coefficient inputs are already
+     * normalized and ignore them. Returns null — the tag is omitted, never
+     * fabricated — when the input profile is null, invalid, or zero-noise,
+     * when the frame count is not measurable, or when an eight-coefficient
+     * input lacks usable levels.
      */
     fun scaleProfile(
         values: DoubleArray?,
         pattern: BayerPattern,
-        effectiveFrames: Double
+        effectiveFrames: Double,
+        blackLevels: FloatArray? = null,
+        whiteLevel: Float? = null
     ): DoubleArray? {
         val n = effectiveFrames
         if (!n.isFinite() || n < 1.0) return null
-        val rgb = DngNoiseProfile.toRgb(values, pattern) ?: return null
+        val rgb = DngNoiseProfile.toRgb(values, pattern, blackLevels, whiteLevel) ?: return null
         return DoubleArray(6) { rgb[it] / n }
     }
 }

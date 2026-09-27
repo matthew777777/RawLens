@@ -17,10 +17,13 @@ class RawSrNoiseLutTest {
         val white = 1000f
         val (alpha, beta) = RawSrNoiseLut.rgbgNormalized(rgb, black, white, BayerPattern.RGGB)
         // R <- raster 0, G1 <- raster 1, B <- raster 3, G2 <- raster 2.
-        assertEquals(0.001 / 990.0, alpha[0], 1e-15)
-        assertEquals((0.002 * 20 + 0.0002) / (980.0 * 980.0), beta[1], 1e-15)
-        assertEquals(0.004 / 960.0, alpha[2], 1e-15)
-        assertEquals((0.002 * 30 + 0.0002) / (970.0 * 970.0), beta[3], 1e-15)
+        // Six-coefficient DNG planes are already normalized: passthrough.
+        assertEquals(0.001, alpha[0], 0.0)
+        assertEquals(0.0002, beta[1], 0.0)
+        assertEquals(0.004, alpha[2], 0.0)
+        assertEquals(0.0002, beta[3], 0.0)
+        assertEquals(0.002, alpha[1], 0.0)
+        assertEquals(0.002, alpha[3], 0.0)
         // Eight-coefficient raster profile on BGGR: (0,0)=B (1,0)=G (0,1)=G (1,1)=R.
         val raster = doubleArrayOf(0.01, 0.001, 0.02, 0.002, 0.03, 0.003, 0.04, 0.004)
         val (alpha8, beta8) = RawSrNoiseLut.rgbgNormalized(raster, black, white, BayerPattern.BGGR)
@@ -82,12 +85,15 @@ class RawSrNoiseLutTest {
     }
 
     @Test fun curvesMatchAnalyticNoiseExpectation() {
-        // Single-sample variance at latent 0.5 is 1e-4*0.5+1e-6 = 5.1e-5.
-        // Patch-mean variances: R/B 5.1e-5/9, G half that (mean of two
-        // greens); d² sums two independent means per channel (~2.8e-5).
-        // Patch variances carry the (n-1)/n Welford factor: (5.1e-5*8/9)*2.5
-        // ~= 1.13e-4. Ranges are +-40%, tight enough to catch a missing
-        // green-averaging factor (which would read ~3.4e-5 / ~1.36e-4).
+        // Sqrt guide domain (reference `clip_raw_then_sqrt_bayer_quad_rgb_v1`).
+        // Single-sample variance at latent 0.5 is 1e-4*0.5+1e-6 = 5.1e-5;
+        // the delta method gives sqrt-domain var ~= 5.1e-5/(4*0.5) = 2.55e-5.
+        // Patch-mean variances: R/B 2.55e-5/9, G half that (root of the
+        // two-green mean); d² sums two independent means per channel:
+        // 2*(2.83+1.42+2.83)e-6 ~= 1.42e-5. Patch variances carry the
+        // (n-1)/n Welford factor: (2.55+1.275+2.55)e-5*8/9 ~= 5.67e-5.
+        // Ranges catch a missing green-averaging factor (which would read
+        // ~1.7e-5 / ~6.8e-5) with wide margin over Monte Carlo noise (~3%).
         val alpha = doubleArrayOf(1e-4, 1e-4, 1e-4, 1e-4)
         val beta = doubleArrayOf(1e-6, 1e-6, 1e-6, 1e-6)
         val lut = RawSrNoiseLut.generate(alpha, beta, bins = 65, trials = 200_000, seed = 1)
@@ -95,8 +101,8 @@ class RawSrNoiseLutTest {
         assertTrue(lut.dSq.all { it.isFinite() && it >= 0f })
         assertEquals(200_000L, lut.counts.sum())
         val mid = lut.bins / 2
-        assertTrue("dSq[mid]=${lut.dSq[mid]}", lut.dSq[mid] in 2.0e-5f..3.2e-5f)
-        assertTrue("sigmaSq[mid]=${lut.sigmaSq[mid]}", lut.sigmaSq[mid] in 8e-5f..1.3e-4f)
+        assertTrue("dSq[mid]=${lut.dSq[mid]}", lut.dSq[mid] in 1.15e-5f..1.65e-5f)
+        assertTrue("sigmaSq[mid]=${lut.sigmaSq[mid]}", lut.sigmaSq[mid] in 4.8e-5f..6.4e-5f)
     }
 
     @Test fun storageRoundtripsAndRejectsCorruption() {

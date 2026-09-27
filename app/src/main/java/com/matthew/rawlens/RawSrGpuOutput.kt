@@ -22,7 +22,7 @@ data class RawSrGpuOutput(
     val refNumeratorTextureId: Int,
     /** Reference-only A/B denominators (rgb): backs the local fallback. */
     val refDenominatorTextureId: Int,
-    /** Final merged linear RGB after the reference-last add, normalization, and fallback. */
+    /** Final merged linear RGB: reference-last add, normalization, fallback, dead-lane inpaint, chroma-from-luma. */
     val mergedTextureId: Int,
     /** Per-pixel local-fallback mask (1 where any channel fell back to reference-only). */
     val fallbackTextureId: Int,

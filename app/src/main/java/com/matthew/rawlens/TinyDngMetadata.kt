@@ -82,7 +82,8 @@ internal class TinyDngMetadata {
                 shorts(50779, metadata.referenceIlluminant2)
             }
             DngNoiseProfile.toRgb(overrides.noiseProfile?.toDoubleArray()
-                ?: metadata.noiseProfile?.toDoubleArray(), requireNotNull(metadata.cfaPattern))
+                ?: metadata.noiseProfile?.toDoubleArray(), requireNotNull(metadata.cfaPattern),
+                metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
                 ?.let { reals(51041, it, 12) }
             metadata.sensitivityIso?.let { shorts(34855, it.coerceIn(0, 65535)) }
             metadata.exposureTimeNanos?.let { reals(33434, doubleArrayOf(it / 1e9), 5) }

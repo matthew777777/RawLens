@@ -105,18 +105,28 @@ class RawSrRobustnessTest {
         assertEquals(guide.beta[1], params.beta[1], 1e-12f)
     }
 
-    @Test fun shadowQuadsNeverRail() {        // Codes one sigma above black (66 vs black 64 + 3σ≈4.7) are normal
-        // read-noise-limited data: they must fuse at full weight, not rail
-        // to zero and lift the shadow noise floor to single-frame.
+    @Test fun shadowQuadsNeverRail() {
+        // The rail diagnostic is highlight-side only: codes near black never
+        // rail. A perfectly flat dark field reads r = 0 everywhere (the
+        // reference-undefined 0/0 edge — zero distance over zero measured
+        // variance — rejects on doubt), while dark texture with genuine
+        // signal variance fuses at full weight with a clean mask.
         val dark = { _: Int, _: Int -> 66 }
         val ref = RawSrRobustness.linearGuide(packed(codes = dark))
         val mov = RawSrRobustness.linearGuide(packed(codes = dark))
         assertFalse(ref.rail.any { it })
         assertFalse(mov.rail.any { it })
         val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
-        val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
-        assertTrue(result.r.all { it == 1f })
-        assertTrue(result.flags.all { it == 0 })
+        val flat = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
+        assertTrue(flat.r.all { it == 0f })
+        assertTrue(flat.flags.all { it == 0 })
+        val shadowTexture = { sx: Int, sy: Int -> 66 + ((sx * 79 + sy * 43) % 7) }
+        val texturedRef = RawSrRobustness.linearGuide(packed(codes = shadowTexture))
+        val texturedMov = RawSrRobustness.linearGuide(packed(codes = shadowTexture))
+        assertFalse(texturedRef.rail.any { it })
+        val fused = RawSrRobustness.evaluate(texturedRef, texturedMov, flow, tuning, config)
+        assertTrue(fused.r.all { it == 1f })
+        assertTrue(fused.flags.all { it == 0 })
     }
 
     @Test fun flowDisagreesNeedsDemonstratedDisagreement() {
@@ -155,8 +165,11 @@ class RawSrRobustnessTest {
         val solo = RawSrAlignmentField(16, 12, 16, 1, 1, listOf(
             RawSrTileFlow(0f, 0f, 3f, 0f, 0f, true)))
         assertFalse(RawSrRobustness.flowDisagrees(solo, 5, 5, 1f))
-        // flowIrregular keeps its legacy verdict (non-finite poisons).
-        assertTrue(RawSrRobustness.flowIrregular(holes, 5, 5, 1f))
+        // flowIrregular skips non-finite tiles as missing data (reference
+        // block matching yields finite flows by construction, so this edge
+        // is reference-undefined; the skip matches the merge shader): the
+        // agreeing finite pair reads regular.
+        assertFalse(RawSrRobustness.flowIrregular(holes, 5, 5, 1f))
         assertFalse(RawSrRobustness.flowIrregular(calm, 5, 5, 1f))
     }
 
@@ -204,25 +217,23 @@ class RawSrRobustnessTest {
         }
     }
 
-    @Test fun unreliableFlowAcceptsStaticPatchViaExplicitHypothesis() {
+    @Test fun reliabilityIgnoredAcceptanceIsPurelyPhotometric() {
+        // The reference defines no reliability gate: the flow's reliable bit
+        // is ignored and acceptance follows the photo term alone, with no
+        // static-hypothesis or unreliable-flow flags (the base path reports
+        // out-of-bounds and invalid flow only).
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(codes = textured(7)))
-        // Weak Hessian everywhere: flow carries no displacement, yet the static
-        // hypothesis validates against the data.
         val flow = manualFlow(16, 12, reliable = false, dx = 0f, dy = 0f)
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         assertTrue(acceptance(result, 3, 13, 3, 9) >= 0.95)
-        val flagged = (3 until 9).any { y -> (3 until 13).any { x ->
-            result.flags[y * 16 + x] and RawSrRobustness.FLAG_STATIC_HYPOTHESIS != 0 } }
-        assertTrue("static acceptance must be flagged, never silent", flagged)
-        // Same unreliable flow, falsified hypothesis: uniform +400-code mean
+        assertTrue(result.flags.all { it == 0 })
+        // Same unreliable flow, falsified content: uniform +400-code mean
         // shift rejects (re-shuffled stationary texture would still agree).
         val other = RawSrRobustness.linearGuide(packed(codes = { sx, sy -> textured(7)(sx, sy) + 400 }))
         val rejected = RawSrRobustness.evaluate(ref, other, flow, tuning, config)
         assertTrue(acceptance(rejected, 3, 13, 3, 9) <= 0.05)
-        val marked = (3 until 9).any { y -> (3 until 13).any { x ->
-            rejected.flags[y * 16 + x] and RawSrRobustness.FLAG_FLOW_UNRELIABLE != 0 } }
-        assertTrue(marked)
+        assertTrue(rejected.flags.all { it == 0 })
     }
 
     @Test fun translatedForegroundRejectedStaticKept() {
@@ -288,18 +299,26 @@ class RawSrRobustnessTest {
         assertArrayEquals(analytic.flags, withLut.flags)
     }
 
-    @Test fun noiseLutIgnoredWhenModelInvalid() {
-        // No usable model: the photo gate stands open with MODEL_MISSING and
-        // the LUT must not change anything (it is gated on model validity).
+    @Test fun missingModelLeavesVerdictUnchangedAndLutApplies() {
+        // The noise profile feeds diagnostics only: the photo term runs over
+        // measured guide variance either way, so a missing model changes
+        // neither the analytic verdict nor the LUT-corrected one (bitwise),
+        // and no model-missing bit is set (the base path reports
+        // out-of-bounds and invalid flow only).
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
-        val mov = RawSrRobustness.linearGuide(packed(codes = textured(9), profile = null))
+        val movValid = RawSrRobustness.linearGuide(packed(codes = textured(9)))
+        val movMissing = RawSrRobustness.linearGuide(packed(codes = textured(9), profile = null))
         val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
         val lut = constLut(1f, 1f)
-        val analytic = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
-        val withLut = RawSrRobustness.evaluate(ref, mov, flow, tuning, config, lut)
-        assertArrayEquals(analytic.r, withLut.r, 0f)
-        assertTrue(analytic.r.all { it == 1f })
-        assertTrue(analytic.flags.all { it == RawSrRobustness.FLAG_MODEL_MISSING })
+        val analyticValid = RawSrRobustness.evaluate(ref, movValid, flow, tuning, config)
+        val analyticMissing = RawSrRobustness.evaluate(ref, movMissing, flow, tuning, config)
+        assertArrayEquals(analyticValid.r, analyticMissing.r, 0f)
+        assertArrayEquals(analyticValid.flags, analyticMissing.flags)
+        val lutValid = RawSrRobustness.evaluate(ref, movValid, flow, tuning, config, lut)
+        val lutMissing = RawSrRobustness.evaluate(ref, movMissing, flow, tuning, config, lut)
+        assertArrayEquals(lutValid.r, lutMissing.r, 0f)
+        assertArrayEquals(lutValid.flags, lutMissing.flags)
+        assertTrue(analyticMissing.flags.all { it == 0 })
     }
 
     @Test fun exposureMismatchRejectedAsBackstop() {
@@ -312,8 +331,12 @@ class RawSrRobustnessTest {
         assertTrue("exposure rejection=$rejected", rejected >= 0.70)
     }
 
-    @Test fun saturatedBlockFlaggedAndZeroWeighted() {
-        // S=0.02 at white 4000: sigma ~= 9, rail gate at 3973.
+    @Test fun saturatedBlockRejectedByPhotoTermWithoutFlag() {
+        // S=0.02 at white 4000: sigma ~= 9, rail diagnostic at 3973. The
+        // reference defines no saturation gate: the clipped block rejects
+        // through the photo term alone (huge color distance over texture
+        // variance), with no saturated bit set. The below-rail block rejects
+        // identically — the photo term is rail-independent.
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(
             codes = { sx, sy -> if (sx in 8 until 24 && sy in 6 until 18) 3995 else textured(7)(sx, sy) }))
@@ -323,47 +346,52 @@ class RawSrRobustnessTest {
         // Saturated raw block maps to quads x in 4..11, y in 3..8; judge interior.
         for (y in 4..7) for (x in 5..10) {
             val o = y * 16 + x
-            assertTrue("($x,$y) flags=${result.flags[o]}",
-                result.flags[o] and RawSrRobustness.FLAG_SATURATED != 0)
             assertEquals(0f, result.r[o], 0f)
+            assertEquals(0, result.flags[o] and RawSrRobustness.FLAG_SATURATED)
         }
-        // Below the rail gate (3900 < 3973): no saturation flag, static agreement.
+        // Below the rail gate (3900 < 3973): still a photo conflict, still
+        // rejected, still no saturation flag.
         val below = RawSrRobustness.linearGuide(packed(
             codes = { sx, sy -> if (sx in 8 until 24 && sy in 6 until 18) 3900 else textured(7)(sx, sy) }))
         val belowResult = RawSrRobustness.evaluate(ref, below, flow, tuning, config)
-        for (y in 4..7) for (x in 5..10)
-            assertEquals(0, belowResult.flags[y * 16 + x] and RawSrRobustness.FLAG_SATURATED)
+        for (y in 4..7) for (x in 5..10) {
+            val o = y * 16 + x
+            assertEquals(0f, belowResult.r[o], 0f)
+            assertEquals(0, belowResult.flags[o] and RawSrRobustness.FLAG_SATURATED)
+        }
     }
 
     @Test fun flowScaleDiscriminatesIdenticalDisagreement() {
-        // Uniform +3-code offset: d2/s2 ~= 2.94 everywhere, inside the (2.8, 4.6)
-        // window where irregular flow (s1) rejects and smooth flow (s2) accepts.
-        // Hand-derived discriminator; both margins are deterministic float-exact.
-        val ref = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1600 }))
-        val mov = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1603 }))
+        // Quad-block texture (uniform local variance: 2x2 code blocks
+        // alternate 1600/1604, so every interior 3x3 guide window holds a
+        // 5/4 split) plus a uniform +4-code offset: d²/σ² ~= 4.0
+        // everywhere, inside the (2.8, 4.6) window where irregular flow
+        // (s1 = 2) rejects and smooth flow (s2 = 12) accepts. No
+        // motion-irregular bit exists (the base path reports out-of-bounds
+        // and invalid flow only): both masks stay clean.
+        val blocks = { sx: Int, sy: Int -> 1600 + ((sx / 2 + sy / 2) % 2) * 4 }
+        val ref = RawSrRobustness.linearGuide(packed(codes = blocks))
+        val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy -> blocks(sx, sy) + 4 }))
         val smooth = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
         val accepted = RawSrRobustness.evaluate(ref, mov, smooth, tuning, config)
         assertTrue(acceptance(accepted, 3, 13, 3, 9) >= 0.95)
+        assertTrue(accepted.flags.all { it == 0 })
         val columns = 2
         val rows = 2
         val tiles = List(columns * rows) { i ->
-            val checker = if ((i % columns + i / columns) % 2 == 0) 0f else 3f
-            RawSrTileFlow(4f, 4f, checker, 0f, 0f, true)
+            // Even shift (0/2): the warp preserves block phase, so the
+            // disagreement stays the calibrated offset (an odd shift would
+            // flip blocks against the offset and cancel it in places).
+            val raggedDx = if ((i % columns + i / columns) % 2 == 0) 0f else 2f
+            RawSrTileFlow(4f, 4f, raggedDx, 0f, 0f, true)
         }
         val ragged = RawSrAlignmentField(16, 12, 8, columns, rows, tiles)
         val rejected = RawSrRobustness.evaluate(ref, mov, ragged, tuning, config)
         assertTrue(acceptance(rejected, 3, 13, 3, 9) <= 0.05)
-        // The ragged tiles are reliable but irregular: the motion-irregular
-        // bit marks s1-scaled quads for support attribution (in addition to
-        // the photo-conflict zero here).
-        for (y in 3 until 9) for (x in 3 until 13) {
-            val f = rejected.flags[y * 16 + x]
-            assertTrue("flags=$f", f and RawSrRobustness.FLAG_MOTION_IRREGULAR != 0)
-        }
-        // …while smooth reliable flow never sets it.
-        for (f in accepted.flags) {
-            assertEquals(0, f and RawSrRobustness.FLAG_MOTION_IRREGULAR)
-        }
+        // Interior mask stays clean (no motion-irregular bit exists); the
+        // +2 shift legitimately pushes right-edge quads out of bounds.
+        for (y in 3 until 9) for (x in 3 until 13)
+            assertEquals(0, rejected.flags[y * 16 + x])
     }
 
     @Test fun outOfBoundsInvalidAndResidualGates() {
@@ -395,10 +423,14 @@ class RawSrRobustnessTest {
             assertTrue(invalid.r[o] > 0f)
             assertEquals(0, invalid.flags[o] and RawSrRobustness.FLAG_INVALID_FLOW)
         }
+        // The reference defines no residual gate: a huge residual changes
+        // nothing — the run equals the zero-residual run bitwise.
         val residual = RawSrRobustness.evaluate(ref, mov,
             manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f, residual = 10f), tuning, config)
-        assertTrue(residual.r.all { it == 0f })
-        assertTrue(residual.flags.all { it and RawSrRobustness.FLAG_RESIDUAL != 0 })
+        val clean = RawSrRobustness.evaluate(ref, mov,
+            manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f), tuning, config)
+        assertArrayEquals(clean.r, residual.r, 0f)
+        assertArrayEquals(clean.flags, residual.flags)
     }
 
     @Test fun lensPresenceLeavesDecisionsUnchanged() {
@@ -473,16 +505,19 @@ class RawSrRobustnessTest {
     }
 
     @Test fun linearGuideChannelsMapAnyPattern() {
-        // One quad: R/G/B values must come from the pattern's own samples.
+        // One quad: R/G/B values must come from the pattern's own samples,
+        // square-rooted per reference Alg. 7 (guide of normalized linear).
+        // Green takes the root of the two-tap mean, not the mean of roots.
         val frame = packed(layoutW = 2, layoutH = 2, crop = RawCrop(0, 0, 2, 2),
             codes = { sx, sy -> 1000 + ((sy and 1) shl 1 or (sx and 1)) * 100 },
             sensorPattern = BayerPattern.GRBG)
         val guide = RawSrRobustness.linearGuide(frame)
         // GRBG quad: (0,0)=G:1000, (1,0)=R:1100, (0,1)=B:1200, (1,1)=G:1300.
         val scale = 1f / (4000f - 64f)
-        assertEquals((1100f - 64f) * scale, guide.red[0], 1e-6f)
-        assertEquals(((1000f - 64f) + (1300f - 64f)) * 0.5f * scale, guide.green[0], 1e-6f)
-        assertEquals((1200f - 64f) * scale, guide.blue[0], 1e-6f)
+        assertEquals(sqrt(((1100f - 64f) * scale).toDouble()).toFloat(), guide.red[0], 1e-6f)
+        assertEquals(sqrt((((1000f - 64f) + (1300f - 64f)) * 0.5f * scale).toDouble()).toFloat(),
+            guide.green[0], 1e-6f)
+        assertEquals(sqrt(((1200f - 64f) * scale).toDouble()).toFloat(), guide.blue[0], 1e-6f)
         assertTrue(guide.modelValid)
     }
 }
