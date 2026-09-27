@@ -179,15 +179,18 @@ object RawFrameMetadataFactory {
         val rawBinning = if (Build.VERSION.SDK_INT >= 31) {
             result.get(CaptureResult.SENSOR_RAW_BINNING_FACTOR_USED)
         } else null
+        val pixelMode = if (Build.VERSION.SDK_INT >= 31) {
+            result.get(CaptureResult.SENSOR_PIXEL_MODE)
+        } else null
 
         val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-        val groupSize = if (Build.VERSION.SDK_INT >= 31 && rawBinning == true) {
+        val groupSize = if (Build.VERSION.SDK_INT >= 31) {
             characteristics.get(CameraCharacteristics.SENSOR_INFO_BINNING_FACTOR)
         } else null
         val groupedBayer = RawBayerLayout.requiresRemosaic(
             rawBinning,
             capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR) == true,
-            capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_REMOSAIC_REPROCESSING) == true,
+            pixelMode,
             groupSize?.width, groupSize?.height
         )
         val quadBayer = groupedBayer && groupSize?.width == 2 && groupSize.height == 2
@@ -259,9 +262,7 @@ object RawFrameMetadataFactory {
             referenceIlluminant2 = characteristics
                 .get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt(),
             noiseProfile = noise,
-            sensorPixelMode = if (Build.VERSION.SDK_INT >= 31) {
-                result.get(CaptureResult.SENSOR_PIXEL_MODE)
-            } else null,
+            sensorPixelMode = pixelMode,
             rawBinningFactorUsed = rawBinning,
             activePhysicalCameraId = result
                 .get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
