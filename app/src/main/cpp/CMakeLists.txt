@@ -166,6 +166,22 @@ else()
     message(FATAL_ERROR "shared srvulkan sources not found at ${SRVK_DIR} (repo layout changed?)")
 endif()
 
+# GALOSH raw denoise (Vulkan): caps probe + shader-host scaffold (Phase 1).
+# SPIR-V comes from app assets (spirv/galosh/); see assets README for provenance.
+add_library(galosh SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_caps.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_host.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_run.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_jni.cpp")
+target_include_directories(galosh PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/galosh")
+target_compile_options(galosh PRIVATE -Wall -Wextra -Werror=return-type)
+find_library(GALOSH_VULKAN_LIB vulkan REQUIRED)
+find_library(GALOSH_LOG_LIB log REQUIRED)
+find_library(GALOSH_ANDROID_LIB android REQUIRED)
+target_link_libraries(galosh PRIVATE ${GALOSH_VULKAN_LIB} ${GALOSH_LOG_LIB} ${GALOSH_ANDROID_LIB})
+set_target_properties(galosh PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_options(galosh PRIVATE "-Wl,-z,max-page-size=16384")
+
 # Pinned TinyDNG v3 writer. The app supplies Camera2 metadata as checked TIFF fields.
 set(TINYDNG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/tinydng")
 add_library(tinydng_v3 STATIC

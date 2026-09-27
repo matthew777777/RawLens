@@ -209,3 +209,19 @@ Upstream authors provide their work without endorsement of RawLens.
   https://github.com/mirsadm/motioncam-decoder (external, not vendored).
 - RawLens JNI bridge (`app/src/main/cpp/cinemaraw_spike_jni.cpp`,
   `CinemaRawSpike.kt`) is RawLens's own code under the repository license.
+
+## GALOSH (vendored shaders, raw-denoise port)
+
+- Project: GALOSH — blind, training-free denoising of raw Bayer images
+- Repository: https://github.com/luxgrain/GALOSH
+- Pinned commit: `11de0593cc8091933ad76d1d6d873f7dee537f15` (HEAD at vendoring, 2026-09-26)
+- License: Apache License, Version 2.0
+- Vendored files (unmodified): the 43 raw-path kernels
+  `standalone/vk/shaders/o32_*.comp` plus `galosh_f16_rne.glsl`, with
+  SPIR-V rebuilt via NDK r27 `glslc -O --target-env=vulkan1.2`, all under
+  `app/src/main/assets/spirv/galosh/` (see its README.md for the rebuild
+  command). The `yuv_*` engine is not vendored (raw-only port).
+- RawLens host (`app/src/main/cpp/galosh/`, `GaloshVulkan.kt`) is RawLens's
+  own code under the repository license; it loads the vendored SPIR-V and
+  follows the upstream device contract (Vulkan 1.2, float16 arithmetic,
+  16-bit storage) documented in `docs/galosh-phase0-spec.md`.

@@ -28,6 +28,7 @@ object CaptureFileNames {
     const val TYPE_LINEAR = "LINEAR"
     const val TYPE_MOSAIC = "MOSAIC"
     const val TYPE_AI = "AI"
+    const val TYPE_GALOSH = "GALOSH"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -82,6 +83,15 @@ object CaptureFileNames {
      */
     fun aiDng(captureTimeMillis: Long, frameSuffix: String? = null): String {
         val suffix = if (frameSuffix.isNullOrBlank()) TYPE_AI else "${frameSuffix.uppercase(Locale.US)}$TYPE_AI"
+        return fileName(captureTimeMillis, suffix, "dng")
+    }
+
+    /**
+     * GALOSH-denoised DNG sharing its capture's stem: `IMG_<ts>_GALOSH.dng`,
+     * or `IMG_<ts>_F00GALOSH.dng` with a burst/bracket frame tag.
+     */
+    fun galoshDng(captureTimeMillis: Long, frameSuffix: String? = null): String {
+        val suffix = if (frameSuffix.isNullOrBlank()) TYPE_GALOSH else "${frameSuffix.uppercase(Locale.US)}$TYPE_GALOSH"
         return fileName(captureTimeMillis, suffix, "dng")
     }
 

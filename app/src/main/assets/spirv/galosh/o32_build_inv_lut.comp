@@ -1,0 +1,137 @@
+#version 450
+/* Transcribed from galosh.cl §7.3 galosh_o32_build_inv_lut (line 6925).
+ * Phase 0 (3/3): build inverse GAT LUT via Poisson summation + 10-point
+ * Gauss-Hermite quadrature, one WI per LUT entry (4096 entries).
+ * Mirrors CPU gat_build_inverse_table.
+ *
+ * FP64-FREE MULTIPLICATIVE RECURRENCE (V2.0 Mali fix, 2026-09-26):
+ * the Kahan-compensated log-domain recurrence accumulated Mali libm
+ * log()/exp() error over ~6000 Poisson terms (table rms error 0.144,
+ * non-monotone).  Now: forward multiplicative recurrence
+ * P(k+1) = P(k)*lambda/(k+1) from k0 = lambda-12*sqrt(lambda) with an
+ * ARBITRARY starting scale (1e-20), masses + weighted GH sums Kahan-
+ * accumulated, normalized at the end.  ZERO log/exp calls in the loop,
+ * no giant -lambda/+lambda cancellation, peak mass ~1e11 (no overflow),
+ * range covers mass to ~1e-33 (superset of the CPU 1e-15-break range;
+ * extra terms are float-zero).  lambda=0 needs no special case
+ * (P(k>0) = P(0)*0/k = 0 exactly).  Gh quadrature unchanged. */
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly  buffer Buf0 { float params[]; };
+layout(std430, binding = 1) writeonly buffer Buf1 { float lut_d[]; };
+layout(std430, binding = 2) writeonly buffer Buf2 { float lut_x[]; };
+layout(std430, binding = 3) writeonly buffer Buf3 { float lut_params[]; };
+
+/* No scalar args in the OpenCL kernel → no push constants. */
+
+const int GAT_LUT_SIZE = 4096;   /* galosh.cl line 1125 */
+const int P_ALPHA      = 13;
+const int P_SIGMA_SQ   = 14;
+
+/* galosh.cl lines 6914-6923: 10-point Gauss-Hermite nodes/weights
+ * (float __constant arrays — used at native float precision). */
+const float gh_nodes_o32[10] = float[10](
+  -3.436159, -2.532732, -1.756684, -1.036611, -0.342901,
+   0.342901,  1.036611,  1.756684,  2.532732,  3.436159
+);
+const float gh_weights_o32[10] = float[10](
+  7.640432855232641e-06, 1.343645746781232e-03, 3.387439445548111e-02,
+  2.401386110823147e-01, 6.108626337353258e-01,
+  6.108626337353258e-01, 2.401386110823147e-01, 3.387439445548111e-02,
+  1.343645746781232e-03, 7.640432855232641e-06
+);
+
+/* Neumaier/Kahan accumulate: (s, c) += v with true value ≈ s + c.
+ * Knuth TwoSum (branch-free, magnitude-order-free); error into comp. */
+void kacc(inout float s, inout float c, float v)
+{
+  precise float t  = s + v;
+  precise float vp = t - s;
+  precise float sp = t - vp;
+  precise float e  = (v - vp) + (s - sp);
+  s = t;
+  c = c + e;
+}
+
+void main()
+{
+  const int i = int(gl_GlobalInvocationID.x);
+  if(i >= GAT_LUT_SIZE) return;
+
+  const float a   = params[P_ALPHA];
+  const float sq  = params[P_SIGMA_SQ];
+  const float sig = sqrt(max(sq, 1e-20));
+  const float y_break = -0.375 * a;
+  const float t_break = 2.0 * sig / a;
+
+  const float x_val  = float(i) / float(GAT_LUT_SIZE - 1);
+  const float lambda = x_val / a;
+
+  /* Poisson masses: forward multiplicative recurrence (see header).
+   * k0/k1 cover mass to ~1e-33; masses + eg-weighted sums normalized. */
+  const float sig_lam = sqrt(max(lambda, 0.0));
+  int k0 = int(lambda - 12.0 * sig_lam);
+  if(k0 < 0) k0 = 0;
+  const int k1 = int(lambda + 12.0 * sig_lam) + 20;
+  float mass_s = 0.0, mass_c = 0.0;
+  float exg_s = 0.0, exg_c = 0.0;
+  /* Arbitrary starting scale (normalized at the end); the 1e10 guard below
+   * keeps the ~e^72 growth in range.  Tails cannot underflow: k0/k1 are
+   * symmetric +-12-sigma cutoffs so scaled tails stay ~O(1) (lambda~=0
+   * tails flush only far below the CPU 1e-15 break). */
+  float pk = 1.0;
+  for(int k = k0; k <= k1; k++)
+  {
+    if(k > k0) pk = pk * (lambda / float(k));
+    /* Dynamic-range guard: from P(k0) the masses can grow ~e^lambda
+     * (small-lambda k0=0 starts); rescale all accumulators together
+     * (ratio-preserving) whenever anything exceeds 1e10.  Tails stay
+     * covered to ~1e-38 relative to peak (CPU breaks at 1e-15). */
+    if(pk > 1e10 || mass_s > 1e10 || exg_s > 1e10)
+    {
+      pk *= 1e-10; mass_s *= 1e-10; mass_c *= 1e-10;
+      exg_s *= 1e-10; exg_c *= 1e-10;
+    }
+    kacc(mass_s, mass_c, pk);
+
+    /* 10-point Gauss-Hermite quadrature over Gaussian noise. */
+    float eg_s = 0.0, eg_c = 0.0;
+    for(int g = 0; g < 10; g++)
+    {
+      const float z = 1.4142135623730951 * sig * gh_nodes_o32[g];
+      const float noisy_y = float(k) * a + z;
+      float T;
+      if(noisy_y >= y_break)
+      {
+        const float arg = a * noisy_y + 0.375 * a * a + sq;
+        T = (2.0 / a) * sqrt(max(arg, 0.0));
+      }
+      else
+      {
+        T = t_break + (noisy_y - y_break) / sig;
+      }
+      kacc(eg_s, eg_c, gh_weights_o32[g] * T);
+    }
+    const float eg = (eg_s + eg_c) * 0.5641895835477563;  /* 1 / sqrt(pi) */
+    kacc(exg_s, exg_c, pk * eg);
+  }
+
+  const float mass = mass_s + mass_c;
+  lut_d[i] = (exg_s + exg_c) / mass;
+  lut_x[i] = x_val;
+
+  /* WI 0: write lut_params (= matches §1 K_LUT_FINALIZE layout):
+   *   [0]=d_min (deferred to §7.3b), [1]=d_max (deferred to §7.3b),
+   *   [2]=y_break, [3]=t_break, [4]=sigma_raw, [5]=alpha, [6]=sigma_sq. */
+  if(i == 0)
+  {
+    lut_params[2] = y_break;
+    lut_params[3] = t_break;
+    lut_params[4] = sig;
+    lut_params[5] = a;
+    lut_params[6] = sq;
+  }
+  /* d_min (= lut_d[0]) and d_max (= lut_d[LUT_SIZE-1]) finalized in §7.3b
+   * after all entries computed. */
+}

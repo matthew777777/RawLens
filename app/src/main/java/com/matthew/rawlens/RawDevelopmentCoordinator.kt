@@ -16,6 +16,7 @@ data class RawDevelopmentSettings(
     val preDemosaic: PreDemosaicSettings = PreDemosaicSettings(),
     val exposureEv: Double = 0.0,
     val denoise: DenoiseSettings = DenoiseSettings(),
+    val galosh: GaloshSettings = GaloshSettings(),
     val adaptiveExposureStrength: Float = 0f,
     val sharedAdaptiveExposure: SharedAdaptiveExposure? = null,
     val adaptiveExposureTuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
@@ -68,8 +69,12 @@ class RawDevelopmentCoordinator(context: Context) {
     private var mergedEgl: Gles31AmazeProcessor.EglComputeContext? = null
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
     private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
+    private val galoshDenoiser by lazy { GaloshDenoiser(appContext) }
 
     fun probe(width: Int, height: Int): AmazeCapability = amaze.probe(width, height)
+
+    /** Enable-time Vulkan preload; first capture's denoise stays fast. */
+    fun prewarmGalosh() = galoshDenoiser.prewarm()
 
     fun <T> develop(
         rawPlane: ByteBuffer,
@@ -355,6 +360,47 @@ class RawDevelopmentCoordinator(context: Context) {
             null
         } catch (oom: OutOfMemoryError) {
             Log.w(LOG_TAG, "AI bayer capture denoise OOM, falling back", oom)
+            null
+        }
+    }
+
+    /**
+     * GALOSH classical denoise for one capture: unpacks + pre-demosaics,
+     * then runs the Vulkan o32 pipeline once; the denoised CFA is shared by
+     * the denoised-DNG write and the JPEG, so one capture pays for exactly
+     * one run. Returns null when Galosh is disabled/unavailable; any
+     * failure falls back silently and the caller runs the normal
+     * development path instead.
+     */
+    fun galoshCaptureCfa(
+        rawPlane: ByteBuffer,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings()
+    ): UnpackedRawCfa? {
+        if (!settings.galosh.enabled || settings.galosh.strength == 0f) return null
+        return try {
+            metadata.rawDevelopmentUnsupportedReason?.let { return null }
+            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+                ?: return null
+            val normalization = metadata.normalizationOrNull() ?: return null
+            val rowStride = metadata.rawPlaneRowStride ?: return null
+            val pixelStride = metadata.rawPlanePixelStride ?: return null
+            val layout = RawPlaneLayout(
+                metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride,
+                geometry.sensorOriginX, geometry.sensorOriginY
+            )
+            val unpacked = RawSensorUnpacker.unpackNormalized(
+                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            )
+            val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
+            val cfa = prepared.cfa ?: return null
+            galoshDenoiser.denoise(cfa, settings.galosh)
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "Galosh capture denoise failed, falling back", failure)
+            null
+        } catch (oom: OutOfMemoryError) {
+            Log.w(LOG_TAG, "Galosh capture denoise OOM, falling back", oom)
             null
         }
     }
