@@ -64,11 +64,13 @@ contract §"Pyramid, coordinates and matching"). For output pixel `p`
 
 `source_n(p) = p + 0.5 + 2 · flow_n(p)`,
 
-where `flow_n(p)` is the **nearest-tile** flow sample
-(`RawSrAlignmentField.flowAt`), exactly like the reference
-`px = int(lr_x//tile_size)`. There is no flow smoothing and no motion-edge
-stop in the base path: each pixel merges under its own tile's flow, and tile
-borders resolve as quilt steps (pinned by test). The `+0.5` terms are the
+where `flow_n(p)` is the **bilinear** flow sample
+(`RawSrAlignmentField.flowAtSmoothInto`): tile centers sit at integer lattice
+points of `u = (q + 0.5) / tileSize - 0.5` and the four surrounding tiles blend
+dx/dy, so tile borders stay inside alignment and never quilt the merge (a
+deliberate deviation from the reference `px = int(lr_x//tile_size)`, which
+imprints the 16px tile grid on real bursts). Non-finite corners fall back to
+the containing tile. There is no motion-edge stop in the base path. The `+0.5` terms are the
 pixel-center convention: output pixel `p` integrates `[p, p+1)`, and the source
 is addressed in the same continuous RAW-pixel coordinate system. Multiplying by
 2 is the Bayer-quad-to-RAW conversion (`d_raw = 2 · d_quad`).

@@ -34,6 +34,34 @@ layout(binding = 1, r32ui) writeonly uniform highp uimage2D img_flags;
 const uint FLAG_OUT_OF_BOUNDS = 8u;
 const uint FLAG_INVALID_FLOW = 16u;
 bool finite(float x) { return !isnan(x) && !isinf(x); }
+// Bilinear flow twin of RawSrAlignmentField.flowAtSmooth (same formula, same
+// order): tile centers at integer lattice of u = (q + 0.5)/tile - 0.5, dx/dy
+// blended. The warp target below uses this smooth sample so tile borders
+// never quilt the robustness field; the tile-spread irregularity gate keeps
+// its discrete tiles. Non-finite corners fall back to the containing tile.
+vec4 flowSmooth(vec2 q) {
+    float ts = float(u_tile_size);
+    vec2 u = (q + vec2(0.5)) / ts - vec2(0.5);
+    vec2 b = floor(u);
+    vec2 f = clamp(u - b, vec2(0.0), vec2(1.0));
+    ivec2 lo = ivec2(clamp(b, vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
+    ivec2 hi = ivec2(clamp(b + vec2(1.0), vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
+    vec4 g00 = texelFetch(u_flow, ivec2(lo.x, lo.y), 0);
+    vec4 g10 = texelFetch(u_flow, ivec2(hi.x, lo.y), 0);
+    vec4 g01 = texelFetch(u_flow, ivec2(lo.x, hi.y), 0);
+    vec4 g11 = texelFetch(u_flow, ivec2(hi.x, hi.y), 0);
+    ivec2 ntile = clamp(ivec2(q) / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
+    if (!finite(g00.x) || !finite(g00.y) || !finite(g10.x) || !finite(g10.y) ||
+        !finite(g01.x) || !finite(g01.y) || !finite(g11.x) || !finite(g11.y)) {
+        return texelFetch(u_flow, ntile, 0);
+    }
+    float w00 = (1.0 - f.x) * (1.0 - f.y);
+    float w10 = f.x * (1.0 - f.y);
+    float w01 = (1.0 - f.x) * f.y;
+    float w11 = f.x * f.y;
+    vec4 m = g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11;
+    return vec4(m.xy, m.z, m.w);
+}
 vec2 clampTap(vec2 p) { return clamp(p, vec2(0.0), vec2(u_size) - vec2(1.0)); }
 // Reference dogson_quadratic_kernel (utils_image.py).
 float dogsonQuadratic(float x) {
@@ -57,7 +85,7 @@ void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(q, u_size))) return;
     ivec2 tile = clamp(q / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
-    vec4 flow = texelFetch(u_flow, tile, 0);
+    vec4 flow = flowSmooth(vec2(q));
     if (!finite(flow.x) || !finite(flow.y)) {
         imageStore(img_r, q, vec4(0.0));
         imageStore(img_flags, q, uvec4(FLAG_INVALID_FLOW, 0u, 0u, 0u));

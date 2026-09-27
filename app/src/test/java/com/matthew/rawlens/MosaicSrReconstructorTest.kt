@@ -458,14 +458,12 @@ class MosaicSrReconstructorTest {
         assertTrue("expected kernel ghost mush, worst=$worst", worst > 0.03)
     }
 
-    @Test fun tileBorderFlowUsesNearestTileQuiltStep() {
-        // Mirror of the RGB quilt test (flowTransitionBlendsAcrossTileBorder)
+    @Test fun tileBorderFlowBlendsAcrossTileBorder() {
+        // Mirror of the RGB blend test (flowTransitionBlendsAcrossTileBorder)
         // for the mosaic path: alternating tile columns shift 0 vs 1 quad px
-        // (tileSize 4) on a monotonic ramp. Reference Alg. 4 looks the flow
-        // up at the nearest tile (`int(lr//tile_size)`), so sites on either
-        // side of a tile border resolve to the uniform-flow endpoint of
-        // their own tile bitwise — the quilt step. A smoothing lookup would
-        // land strictly between the endpoints at border sites instead.
+        // (tileSize 4) on a monotonic ramp. Bilinear flow sampling blends the
+        // border sites strictly between the uniform-flow endpoints instead of
+        // snapping each side to its own tile (quilt step).
         val w = 32; val h = 24
         fun ramp() = FloatArray(w * h) { i -> (i % w).toFloat() / 40f }
         fun movingWith(flow: RawSrAlignmentField): RawSrBayerMerge.MergeFrame {
@@ -517,15 +515,12 @@ class MosaicSrReconstructorTest {
             val a = outA.cfa[y * outA.width + x].toDouble()
             val b = outB.cfa[y * outB.width + x].toDouble()
             // Tile border between quadX 3 (tile 0, flow 0) and quadX 4
-            // (tile 1, flow 1): nearest-tile lookup resolves each side to
-            // its own tile's uniform outcome — the identical computation,
-            // bitwise. A smoothing lookup would land strictly between.
-            if (quadX == 3) {
-                assertEquals("left of step ($x,$y)", a, v, 0.0)
-                leftOfStep++
-            } else if (quadX == 4) {
-                assertEquals("right of step ($x,$y)", b, v, 0.0)
-                rightOfStep++
+            // (tile 1, flow 1): the bilinear sample blends both tiles, so
+            // border sites land strictly between the uniform endpoints.
+            if (quadX == 3 || quadX == 4) {
+                assertTrue("blend zone must sit strictly between uniforms ($x,$y) a=$a b=$b v=$v",
+                    (v - a) * (v - b) < 0.0)
+                if (quadX == 3) leftOfStep++ else rightOfStep++
             }
         }
         assertTrue("no left-of-step GREEN sites", leftOfStep > 0)

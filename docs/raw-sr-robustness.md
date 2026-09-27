@@ -65,8 +65,11 @@ Per channel, 3×3 window with clamp-to-edge taps (mirrors the reference):
 
 Moving means are sampled at `q + flow(q)` in **quad units** (our flow
 convention; the reference scales raw-unit flow by 0.5 — same geometry). Flow
-lookup is **nearest tile, never blended**, exactly like the reference
-`int(lr//tile_size)`. The moving sample uses Dogson biquadratic weights
+lookup is **bilinear** (`flowAtSmoothInto`, same lattice as the merge), a
+deliberate deviation from the reference `int(lr//tile_size)`: nearest-tile
+sampling imprints the tile grid on the robustness field and hence on the
+merge weights. Non-finite corners fall back to the containing tile. The
+moving sample uses Dogson biquadratic weights
 (`a = 1`, reference `dogson` verbatim):
 
 - `μ_m(q) = Σ w_i·m_i / Σ w`; taps clamp to edges; weights renormalize.

@@ -4,8 +4,9 @@
 // projected source position, nearest-tile flow, covariance interpolation +
 // per-pixel inversion, raw-unit exponent, 3x3 support, per-tap CFA routing,
 // and gate order mirror RawSrBayerMerge exactly:
-// - reference-anchored flow in quad pixels, NEAREST-tile lookup, x2
-//   conversion, source(p) = p + 0.5 + 2*flow (zero shift when u_is_reference).
+// - reference-anchored flow in quad pixels, BILINEAR lookup (flowSmooth),
+//   x2 conversion, source(p) = p + 0.5 + 2*flow (zero shift when
+//   u_is_reference). Tile borders stay inside alignment and never quilt.
 // - robustness r is the reused weight of the quad one up-left of the output
 //   pixel (never interpolated; the reference min(int(lr//2-0.5)) lookup
 //   replicated verbatim); r == 0 preserves the accumulators without
@@ -50,6 +51,34 @@ layout(binding = 0, rgba32f) writeonly uniform highp image2D img_num;
 layout(binding = 1, rgba32f) writeonly uniform highp image2D img_den;
 layout(binding = 2, r32f) writeonly uniform highp image2D img_oob;
 bool finite(float x) { return !isnan(x) && !isinf(x); }
+// Bilinear flow twin of RawSrAlignmentField.flowAtSmooth (same formula, same
+// order): tile centers at integer lattice of u = (q + 0.5)/tile - 0.5, dx/dy
+// blended. Tile borders stay inside alignment and never quilt the merge.
+// Any non-finite corner falls back to the containing (nearest) tile,
+// preserving invalid-flow propagation.
+vec4 flowSmooth(vec2 q) {
+    float ts = float(u_tile_size);
+    vec2 u = (q + vec2(0.5)) / ts - vec2(0.5);
+    vec2 b = floor(u);
+    vec2 f = clamp(u - b, vec2(0.0), vec2(1.0));
+    ivec2 lo = ivec2(clamp(b, vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
+    ivec2 hi = ivec2(clamp(b + vec2(1.0), vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
+    vec4 g00 = texelFetch(u_flow, ivec2(lo.x, lo.y), 0);
+    vec4 g10 = texelFetch(u_flow, ivec2(hi.x, lo.y), 0);
+    vec4 g01 = texelFetch(u_flow, ivec2(lo.x, hi.y), 0);
+    vec4 g11 = texelFetch(u_flow, ivec2(hi.x, hi.y), 0);
+    ivec2 ntile = clamp(ivec2(q) / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
+    if (!finite(g00.x) || !finite(g00.y) || !finite(g10.x) || !finite(g10.y) ||
+        !finite(g01.x) || !finite(g01.y) || !finite(g11.x) || !finite(g11.y)) {
+        return texelFetch(u_flow, ntile, 0);
+    }
+    float w00 = (1.0 - f.x) * (1.0 - f.y);
+    float w10 = f.x * (1.0 - f.y);
+    float w01 = (1.0 - f.x) * f.y;
+    float w11 = f.x * f.y;
+    vec4 m = g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11;
+    return vec4(m.xy, m.z, m.w);
+}
 int channelOf(ivec2 t) { return u_fc[((t.y & 1) << 1) | (t.x & 1)]; }
 // Dormant A/B chromaWeight analogue for one R/B tap: local green is the mean
 // of the finite green samples in the 3x3 window around the tap (no dense
@@ -99,8 +128,10 @@ void main() {
             if (!finite(r)) r = 0.0;
         }
         if (r == 0.0) return;
-        ivec2 tile = clamp(quad / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
-        vec4 flow = texelFetch(u_flow, tile, 0);
+        // Bilinear flow sampling: the four surrounding tiles blend dx/dy so
+        // tile borders never quilt the merge. Non-finite corners fall back
+        // to the containing (nearest) tile inside flowSmooth.
+        vec4 flow = flowSmooth(vec2(quad));
         if (!finite(flow.x) || !finite(flow.y)) {
             preserve(p, 1.0);
             return;
