@@ -13,7 +13,10 @@ import kotlin.math.sqrt
  *
  * Reference structure, in reference order per output pixel:
  * - Native 1x grid; reference-anchored flow in quad pixels converted with x2
- *   and looked up at the nearest tile ([RawSrAlignmentField.flowAt]).
+ *   and sampled bilinearly ([RawSrAlignmentField.flowAtSmoothInto]): tile
+ *   centers sit at integer lattice points of u = (q + 0.5) / tileSize - 0.5
+ *   and the four surrounding tiles blend dx/dy, so tile borders never imprint
+ *   the alignment grid on the merge as quilt steps.
  * - Robustness from the quad one up-left of the output pixel (`r_ref = 1`);
  *   `r == 0` skips accumulation. The one-quad shift is the reference
  *   `min(int(lr//2-0.5))` lookup replicated verbatim, not nearest-quad.
@@ -307,6 +310,7 @@ object RawSrBayerMerge {
         // scratch is shard-local (no per-pixel allocation).
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             val scratch = DoubleArray(4)
+            val flowScratch = FloatArray(4)
             for (y in y0 until y1) {
                 if (onRow?.invoke() == true) throw CancellationException("RAW-SR merge cancelled")
                 val quadY = y / 2
@@ -330,14 +334,20 @@ object RawSrBayerMerge {
                         dxQuad = 0.0
                         dyQuad = 0.0
                     } else {
-                        // Nearest-tile lookup, exactly like the reference.
-                        val tile = flow!!.flowAt(quadX.toFloat(), quadY.toFloat())
-                        if (!tile.dx.isFinite() || !tile.dy.isFinite()) {
+                        // Bilinear flow sampling: tile centers sit at integer
+                        // lattice points of u = (q + 0.5) / tileSize - 0.5 and
+                        // the four surrounding tiles blend dx/dy, so tile
+                        // borders stay inside alignment and never imprint the
+                        // 16px quilt on the merge. Non-finite corners fall
+                        // back to the containing (nearest) tile, preserving
+                        // invalid-flow propagation.
+                        flow!!.flowAtSmoothInto(quadX.toFloat(), quadY.toFloat(), flowScratch)
+                        if (!flowScratch[0].isFinite() || !flowScratch[1].isFinite()) {
                             oob[p]++
                             continue
                         }
-                        dxQuad = tile.dx.toDouble()
-                        dyQuad = tile.dy.toDouble()
+                        dxQuad = flowScratch[0].toDouble()
+                        dyQuad = flowScratch[1].toDouble()
                     }
                     val sourceX = x + 0.5 + 2.0 * dxQuad
                     val sourceY = y + 0.5 + 2.0 * dyQuad

@@ -491,12 +491,11 @@ class RawSrBayerMergeTest {
         }
     }
 
-    @Test fun flowTransitionQuiltsAtTileBorder() {
-        // Reference Alg. 4 looks the flow up at the nearest tile
-        // (`int(lr//tile_size)`): alternating tile-columns shifting 0 vs 1
-        // quad px (tileSize 4) resolve each side of a tile border to its own
-        // tile's uniform outcome bitwise — the quilt step. A smoothing lookup
-        // would land strictly between the endpoints at border pixels instead.
+    @Test fun flowTransitionBlendsAcrossTileBorder() {
+        // Bilinear flow sampling (flowAtSmoothInto): alternating tile-columns
+        // shifting 0 vs 1 quad px (tileSize 4) blend across the border, so a
+        // near-border pixel lands strictly between the two uniform outcomes
+        // on a monotonic ramp instead of snapping to its own tile (quilt).
         fun ramp(sx: Int, sy: Int, color: CfaColor): Float = 0.1f + 0.6f * sx.toFloat() / W + color.ordinal * 0.05f
         val ref = sceneFrame(scene = ::ramp)
         val mixed = field(QW, QH, 4, flowAt = { tx, _ -> if (tx % 2 == 0) 0f to 0f else 1f to 0f })
@@ -508,14 +507,25 @@ class RawSrBayerMergeTest {
         val outB = RawSrBayerMerge.merge(ref, listOf(movingWith(uniformB)))
         fun rOf(out: RawSrBayerMerge.MergeResult, x: Int, y: Int) = out.rgb[(y * W + x) * 3]
         val y = H / 2
-        // Quad 1 (tile 0): exact tile value, equals uniform A.
+        // Quad 1 (tile 0 interior): exact tile value, equals uniform A.
         assertEquals(rOf(outA, 2, y), rOf(outMixed, 2, y), 0f)
-        // Quad 2 (tile 0): nearest-tile lookup reproduces A bitwise here.
-        assertEquals(rOf(outA, 5, y), rOf(outMixed, 5, y), 0f)
-        // Quad 4 (tile 1): the quilt step — equals uniform B bitwise, while
-        // the two uniforms genuinely differ on the ramp.
-        assertEquals(rOf(outB, 9, y), rOf(outMixed, 9, y), 0f)
-        assertTrue("uniforms must differ", abs(rOf(outA, 9, y) - rOf(outB, 9, y)) > 1e-4)
+        // Quad 2 (tile 0, one quad from the border): the blend zone — the
+        // smooth sample mixes tile 1, so the value lies strictly between
+        // the two uniforms while they genuinely differ.
+        val a5 = rOf(outA, 5, y).toDouble()
+        val b5 = rOf(outB, 5, y).toDouble()
+        val m5 = rOf(outMixed, 5, y).toDouble()
+        assertTrue("uniforms must differ", abs(a5 - b5) > 1e-4)
+        assertTrue("blend zone must sit strictly between uniforms (a=$a5 b=$b5 m=$m5)",
+            (m5 - a5) * (m5 - b5) < 0.0)
+        // Quad 4 (tile 1, one quad from the border): same blend from the
+        // other side.
+        val a9 = rOf(outA, 9, y).toDouble()
+        val b9 = rOf(outB, 9, y).toDouble()
+        val m9 = rOf(outMixed, 9, y).toDouble()
+        assertTrue("uniforms must differ", abs(a9 - b9) > 1e-4)
+        assertTrue("blend zone must sit strictly between uniforms (a=$a9 b=$b9 m=$m9)",
+            (m9 - a9) * (m9 - b9) < 0.0)
     }
 
     @Test fun outOfBoundsFramePreservesAccumulatorsAndCountsSupport() {

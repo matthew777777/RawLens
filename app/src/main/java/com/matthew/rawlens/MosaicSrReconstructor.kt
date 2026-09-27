@@ -428,13 +428,16 @@ object MosaicSrReconstructor {
         // per-pixel scratch is shard-local (no per-pixel allocation).
         RawSrWorkers.forEachShard(outH) { y0, y1 ->
             val scratch = DoubleArray(4)
+            val flowScratch = FloatArray(4)
             for (qy in y0 until y1) {
                 if (onRow?.invoke() == true) throw CancellationException("Mosaic SR cancelled")
                 for (qx in 0 until outW) {
                 val p = qy * outW + qx
                 val siteColor = pattern.colorAt(qx, qy)
                 // Reference-source position of the site center, plus the
-                // nearest-tile flow displacement in quad pixels.
+                // bilinear flow displacement in quad pixels (tile borders
+                // stay inside alignment; nearest-tile lookup imprints the
+                // 16px quilt at tile borders).
                 val dxQuad: Double
                 val dyQuad: Double
                 val r: Double
@@ -445,15 +448,17 @@ object MosaicSrReconstructor {
                     val baseY = (qy + 0.5) / LINEAR_SCALE
                     val quadX = floor(baseX / 2.0).toInt()
                     val quadY = floor(baseY / 2.0).toInt()
-                    // Nearest-tile lookup, exactly like the reference (and
-                    // the linear merge twin).
-                    val tile = flow!!.flowAt(quadX.toFloat(), quadY.toFloat())
-                    if (!tile.dx.isFinite() || !tile.dy.isFinite()) {
+                    // Bilinear flow sampling (flowAtSmoothInto), mirroring
+                    // the linear merge twin: the four surrounding tiles
+                    // blend dx/dy so tile borders never quilt the mosaic.
+                    // Non-finite corners fall back to the containing tile.
+                    flow!!.flowAtSmoothInto(quadX.toFloat(), quadY.toFloat(), flowScratch)
+                    if (!flowScratch[0].isFinite() || !flowScratch[1].isFinite()) {
                         if (oob != null) oob[p]++
                         continue
                     }
-                    dxQuad = tile.dx.toDouble()
-                    dyQuad = tile.dy.toDouble()
+                    dxQuad = flowScratch[0].toDouble()
+                    dyQuad = flowScratch[1].toDouble()
                     // Reference bayer lookup verbatim: min(int(lr//2-0.5))
                     // reads the quad one up-left (max(q-1, 0)), edge-clamped.
                     val rqX = maxOf(quadX - 1, 0).coerceIn(0, quadsW - 1)

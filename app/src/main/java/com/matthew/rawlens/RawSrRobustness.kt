@@ -13,7 +13,7 @@ import kotlin.math.sqrt
  *
  * Pipeline per moving frame: sqrt 3-channel guide (Alg. 7) → 3x3 local stats
  * (Alg. 8) → Dogson-biquadratic warp of the moving means into reference
- * coordinates at the nearest-tile flow → color distance over measured
+ * coordinates at the bilinear flow sample → color distance over measured
  * reference variance, with the measured-LUT noise correction → s1/s2
  * flow-irregularity scaling → `clamp(S*exp(-d²/σ²)-t)` threshold → 5x5 local
  * minimum (Alg. 9). Out-of-bounds warps and non-finite flow weigh exactly
@@ -353,12 +353,17 @@ object RawSrRobustness {
         val flags = IntArray(width * height)
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             val warped = DoubleArray(3)
+            val flowScratch = FloatArray(4)
             for (y in y0 until y1) for (x in 0 until width) {
                 val o = y * width + x
-                // Nearest-tile flow, exactly like the reference tile lookup.
-                val tile = flow.flowAt(x.toFloat(), y.toFloat())
-                val dx = tile.dx
-                val dy = tile.dy
+                // Bilinear flow sampling: the warp target blends the four
+                // surrounding tiles so tile borders never quilt the
+                // robustness field (the tile-spread irregularity gate below
+                // still reads discrete tiles). Non-finite corners fall back
+                // to the containing tile.
+                flow.flowAtSmoothInto(x.toFloat(), y.toFloat(), flowScratch)
+                val dx = flowScratch[0]
+                val dy = flowScratch[1]
                 if (!dx.isFinite() || !dy.isFinite()) {
                     raw[o] = 0f
                     flags[o] = FLAG_INVALID_FLOW
