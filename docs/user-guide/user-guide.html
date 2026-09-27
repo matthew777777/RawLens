@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RawLens — User Guide (Dishwasher-Manual Style)</title>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#111418; --muted:#5b6470; --line:#e2e6ec;
+    --accent:#c81e1e; --lime:#c6f52e; --lime-ink:#111418;
+    --dark:#101318; --dark2:#1a2029; --card:#f6f7f9;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .page{max-width:960px;margin:0 auto;padding:32px 28px 80px}
+  header.cover{border:3px solid var(--ink);border-radius:18px;padding:28px;background:#0f1114;color:#fff;overflow:hidden}
+  header.cover h1{margin:0 0 6px;font-size:38px;letter-spacing:.5px}
+  header.cover h1 span{color:var(--lime)}
+  header.cover p{margin:6px 0;color:#cfd6df}
+  .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .badge{border:1px solid #333;background:#171b21;color:#fff;border-radius:999px;padding:4px 12px;font-size:12.5px}
+  .badge.lime{background:var(--lime);color:#111;border-color:var(--lime);font-weight:700}
+  h2{font-size:26px;margin:44px 0 10px;padding-top:18px;border-top:3px solid var(--ink)}
+  h3{font-size:19px;margin:28px 0 8px}
+  h4{font-size:15.5px;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+  p,li{color:var(--ink)}
+  .muted{color:var(--muted)}
+  code,kbd{font-family:var(--mono);font-size:13px;background:#eef1f5;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left}
+  th{background:#0f1114;color:#fff}
+  tr:nth-child(even) td{background:#f7f8fa}
+  .tip,.warn,.note{border-radius:12px;padding:12px 14px;margin:14px 0;border:2px solid}
+  .tip{background:#f4ffcf;border-color:#8ab300}
+  .warn{background:#fff1f1;border-color:var(--accent)}
+  .note{background:#eef4ff;border-color:#3158d3}
+  .tip b,.warn b,.note b{display:block;margin-bottom:4px}
+  figureshot{border:2px dashed #9aa3b2;border-radius:14px;background:var(--card);padding:14px;margin:16px 0;display:block}
+  figureshot figcaption{font-size:13px;color:var(--muted);margin-top:8px}
+  figureshot img{width:100%;max-width:340px;display:block;margin:0 auto;border-radius:18px;border:3px solid #111;background:#000}
+  .imgrow{display:flex;gap:14px;flex-wrap:wrap}
+  .imgrow figure{flex:1 1 280px}
+  /* Dishwasher-manual annotated phone */
+  .manual-fig{display:grid;grid-template-columns:360px 1fr;gap:18px;margin:16px 0;border:2px solid var(--ink);border-radius:16px;overflow:hidden}
+  @media(max-width:820px){.manual-fig{grid-template-columns:1fr}}
+  .phone{background:#000;color:#fff;position:relative;min-height:640px;padding:10px}
+  .phone .topbar{display:flex;justify-content:space-between;align-items:center;padding:6px 4px}
+  .circle-btn{width:52px;height:52px;border-radius:50%;border:2px solid #444;display:flex;align-items:center;justify-content:center;font-size:22px;background:#15181d}
+  .dngpill{border:2px solid #9dff3f;color:#c6ff4d;border-radius:14px;padding:2px 12px;font-weight:800;font-size:14px;text-align:center}
+  .dngsub{font-size:11px;color:#cfd6df;text-align:center;margin-top:2px;letter-spacing:.5px}
+  .vf{border:1px solid #333;border-radius:8px;height:300px;margin:8px 0;position:relative;background:radial-gradient(circle at 50% 40%,#1c212a 0%,#05070a 70%);}
+  .vf .grid{position:absolute;inset:0;background:
+    linear-gradient(#ffffff22 1px,transparent 1px),
+    linear-gradient(90deg,#ffffff22 1px,transparent 1px);
+    background-size:100% 33.3%,33.3% 100%;}
+  .pin{position:absolute;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font:800 15px/28px Arial;text-align:center;box-shadow:0 0 0 3px #fff,0 2px 8px #0009;z-index:3}
+  .pin.limepin{background:#7aab00;box-shadow:0 0 0 3px #eaff9a,0 2px 8px #0009}
+  .pin.darkpin{background:#111;box-shadow:0 0 0 3px #fff,0 2px 8px #0009}
+  .chips{display:flex;gap:6px;margin:8px 0}
+  .chip{flex:1;background:#151a21;border:1px solid #333;border-radius:12px;text-align:center;padding:8px 2px;font-size:12px}
+  .chip b{display:block;font-size:13px}
+  .shutterrow{display:flex;align-items:center;justify-content:space-between;margin-top:10px}
+  .bigshutter{width:110px;height:110px;border-radius:50%;background:#f2f2ee;border:6px solid #2a2f37;margin:0 auto}
+  .modebtn{background:var(--lime);color:#111;font-weight:800;border-radius:14px;padding:12px;text-align:center;font-size:13px}
+  .legend{padding:16px 16px 16px 4px}
+  .legend ol{margin:0;padding-left:22px}
+  .legend li{margin:9px 0}
+  .legend li b{color:var(--accent)}
+  .num{display:inline-block;min-width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;text-align:center;font:800 14px/24px Arial;margin-right:6px}
+  .num.lime{background:#5a7f00}
+  .arrow{color:var(--accent);font-weight:900}
+  .toc{background:var(--card);border:2px solid var(--ink);border-radius:14px;padding:16px 20px}
+  .toc ol{margin:8px 0;padding-left:22px}
+  .printbar{position:sticky;top:0;background:#0f1114;color:#fff;padding:10px 16px;z-index:50;display:flex;gap:10px;align-items:center;justify-content:space-between}
+  .printbar button{background:var(--lime);border:0;border-radius:10px;padding:10px 16px;font-weight:800;cursor:pointer}
+  footer{margin-top:40px;border-top:2px solid var(--line);padding-top:14px;color:var(--muted);font-size:13px}
+  @media print{
+    .printbar{display:none}
+    body{font-size:12px}
+    .page{max-width:none;padding:0}
+    h2{break-before:page;margin-top:0}
+    h2.nobreak{break-before:avoid}
+    .manual-fig,.tip,.warn,.note,table{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="printbar">
+  <div><b>RawLens User Guide</b> <span class="muted" style="color:#9aa3b2">— open this file in Chrome / Edge / Safari → Print → Save as PDF</span></div>
+  <button onclick="window.print()">🖨️ Print / Save as PDF</button>
+</div>
+<div class="page">
+
+<header class="cover">
+  <h1>RawLens <span>• User Guide</span></h1>
+  <p><b>Photography-first RAW camera for Android.</b> Full-resolution Camera2 <code>RAW_SENSOR</code> → DNG + calibrated AgX JPEG. No gallery, no cloud, no account, no network.</p>
+  <div class="badges">
+    <span class="badge lime">PORTRAIT VIEWFINDER</span>
+    <span class="badge">DNG 10-BIT</span>
+    <span class="badge">AUTO • PROGRAM • ZSL • MANUAL</span>
+    <span class="badge">HDR ±2 / ±4 EV</span>
+    <span class="badge">AgX JPEG</span>
+  </div>
+  <p style="margin-top:14px">How to read this manual — like a dishwasher manual: <b>1)</b> find the big picture with red numbered pins ①②③, <b>2)</b> follow the <span style="color:#ff7b7b">red arrows ➔</span> to the table, <b>3)</b> read “What it does / What to press / What you see”. Every control is explained twice: short label + long detail.</p>
+  <p class="muted" style="color:#9aa3b2">Version: matches app with Settings tabs General / JPEG / Exposure / Burst / Denoise / Lenses / Debug / About. Requires Android 10+, rear camera with <code>REQUEST_AVAILABLE_CAPABILITIES_RAW</code>.</p>
+</header>
+
+<div class="warn"><b>⚠️ BEFORE YOU SHOOT — 3 things that confuse everyone</b>
+1. <b>Black viewfinder at night is normal.</b> The preview in your screenshots is dark/noisy because the test scene was dark (ISO 12800–20000, 1/14–1/33s). Point at daylight and the same UI shows a bright image.<br>
+2. <b>ZSL and PROGRAM can never be on together.</b> Turning one on turns the other off.<br>
+3. <b>Checked lenses = viewfinder switcher.</b> If you see only <code>1×</code>, you unchecked <code>0.7×</code> in Lens discovery. Re-check + SAVE.
+</div>
+
+<div class="toc">
+<b>Contents — click / tap to jump</b>
+<ol>
+<li><a href="#map">Screenshot map: your 15 images → where they live in this guide</a></li>
+<li><a href="#vf">Chapter 1 — Viewfinder: the whole machine at a glance</a></li>
+<li><a href="#top">Chapter 2 — Top bar: Settings / Flash / Timer / DNG badge</a></li>
+<li><a href="#format">Chapter 2B — ★ Capture format: DNG ↔ JPEG ↔ JPEG+DNG (how to switch)</a></li>
+<li><a href="#chips">Chapter 3 — Bottom chips: ISO • S • WB • AF • EV</a></li>
+<li><a href="#shutter">Chapter 4 — Shutter, video, mode, RAW badge, lens pills, histogram</a></li>
+<li><a href="#slider">Chapter 5 — Manual ruler panel: LIMITS / AUTO + shutter ruler</a></li>
+<li><a href="#program">Chapter 6 — PROGRAM AE • custom panel (full editor)</a></li>
+<li><a href="#lens">Chapter 7 — Lens discovery: DIRECT vs LOGICAL vs VENDOR</a></li>
+<li><a href="#jpeg">Chapter 8 — Settings → JPEG: output + AgX look</a></li>
+<li><a href="#exposure">Chapter 9 — Settings → Exposure: HDR, PROGRAM limits, ETTR</a></li>
+<li><a href="#othertabs">Chapter 10 — General / Burst (ZSL) / Denoise / Debug / About</a></li>
+<li><a href="#workflows">Chapter 11 — Recipes: AUTO, PROGRAM, ZSL, MANUAL, HDR, burst</a></li>
+<li><a href="#files">Chapter 12 — Where photos go + troubleshooting</a></li>
+<li><a href="#appendix">Appendix — Defaults, glossary, button-cycling tables</a></li>
+</ol>
+</div>
+
+<h2 id="map">Screenshot map — your 15 images</h2>
+<p>Save the images you sent in chat as files next to this HTML, then they appear inside the guide automatically. Put them in <code>docs/user-guide/images/</code> with these names:</p>
+<table>
+<tr><th>#</th><th>Save as</th><th>What it shows (from your upload)</th><th>Explained in</th></tr>
+<tr><td>Image 1</td><td><code>images/screenshot-01-lens-discovery.png</code></td><td>Lens discovery: 5 RAW lenses • 2 groups, DIRECT CAMERAS • 3, LOGICAL 3 • 2 LENSES</td><td><a href="#lens">Ch.7</a></td></tr>
+<tr><td>Image 2</td><td><code>images/screenshot-02-jpeg-adaptive.png</code></td><td>Settings → JPEG (lower half): Preserve hue 0%, Highlight +6.5 EV, Shadow 10.0 EV, Gamut 0%, Adaptive exposure, PROGRAM 50%, headroom 1.00, sky 0.85, shoulder 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
+<tr><td>Image 3</td><td><code>images/screenshot-03-exposure.png</code></td><td>Settings → Exposure: Lock NONE, Metering CENTER, ISO min/max SENSOR, Shutter min SENSOR MIN / max AUTO HANDHELD, Brightness +0.0 EV, ETTR checkbox, Highlight -0.3 EV, ISO ceiling SENSOR MAX</td><td><a href="#exposure">Ch.9</a></td></tr>
+<tr><td>Image 4</td><td><code>images/screenshot-04-jpeg-output.png</code></td><td>Settings → JPEG (upper half): JPEG output, Ultra HDR, Display P3, chroma 4:2:2, quality 100%, AgX purity/contrast/saturation 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
+<tr><td>Image 5–9</td><td><code>images/screenshot-05 … 09.png</code></td><td><b>Arrived corrupted in chat (white with cyan/magenta/yellow streaks).</b> Please re-export and overwrite these 5 files. Placeholders are kept below.</td><td>—</td></tr>
+<tr><td>Image 10</td><td><code>images/screenshot-10-program-ae.png</code></td><td>PROGRAM AE • custom: Priority 0.50 balanced, LOCK NONE, LOCKED ISO/SHUTTER --, ISO/SHUTTER MIN/MAX, SHUTTER MAX AUTO HANDHELD, Brightness +0.0 EV, METERING CENTER</td><td><a href="#program">Ch.6</a></td></tr>
+<tr><td>Image 11</td><td><code>images/screenshot-11-manual-slider.png</code></td><td>Viewfinder with manual ruler open: S 1/14, LIMITS + AUTO, ISO 12800, WB 6769K, P PROGRAM, RAW•A</td><td><a href="#slider">Ch.5</a></td></tr>
+<tr><td>Image 12</td><td><code>images/screenshot-12-zsl.png</code></td><td>Viewfinder ZSL ACTIVE: 0.7× / 1× pills, ISO 20000, S 1/33, Z ZSL button, RAW•A</td><td><a href="#vf">Ch.1</a>, <a href="#othertabs">Ch.10</a></td></tr>
+<tr><td>Image 13</td><td><code>images/screenshot-13-auto.png</code></td><td>Viewfinder AUTO AE: same framing, A AUTO button, ISO 20000, S 1/33</td><td><a href="#vf">Ch.1</a></td></tr>
+<tr><td>Image 14–15</td><td><code>images/screenshot-14 … 15.png</code></td><td>Spare slots — use for General tab + Burst/ZSL tab if you capture them later.</td><td><a href="#othertabs">Ch.10</a></td></tr>
+</table>
+
+<figureshot>
+<b>📷 How to attach your screenshots (30 seconds)</b>
+<ol>
+<li>Create folder <code>docs/user-guide/images/</code> (already created for you).</li>
+<li>Long-press each image in chat → Save → rename exactly as in the table above.</li>
+<li>Re-open this HTML — images appear. Then <b>Print → Save as PDF</b> to freeze them into the manual.</li>
+</ol>
+<div class="imgrow">
+<figure><img alt="placeholder" src="images/screenshot-01-lens-discovery.png" onerror="this.style.opacity=.2"><figcaption>Fig. 1 — Lens discovery (Image 1). If broken, re-save the file.</figcaption></figure>
+<figure><img alt="placeholder" src="images/screenshot-10-program-ae.png" onerror="this.style.opacity=.2"><figcaption>Fig. 10 — PROGRAM AE panel (Image 10).</figcaption></figure>
+<figure><img alt="placeholder" src="images/screenshot-12-zsl.png" onerror="this.style.opacity=.2"><figcaption>Fig. 12 — ZSL viewfinder (Image 12).</figcaption></figure>
+</div>
+</figureshot>
+
+<h2 id="vf" class="nobreak">Chapter 1 — Viewfinder: the whole machine</h2>
+<p>This is the screen you shoot from (your Images 11–13). Think of it as a dishwasher door: top = program selectors, middle = window, bottom = detergent + start button.</p>
+
+<div class="manual-fig">
+<div class="phone">
+  <div class="topbar"><div style="display:flex;gap:8px"><div class="circle-btn">⚙</div><div class="circle-btn">⚡</div><div class="circle-btn">⏱</div></div><div><div class="dngpill">DNG●</div><div class="dngsub">ZSL ACTIVE</div></div></div>
+  <div class="pin" style="left:18px;top:18px">1</div>
+  <div class="pin" style="right:18px;top:18px">2</div>
+  <div class="vf"><div class="grid"></div>
+    <div class="pin" style="left:46%;top:44%">3</div>
+    <div class="pin limepin" style="left:8px;bottom:14px">4</div>
+    <div class="pin limepin" style="right:24px;bottom:110px">5</div>
+  </div>
+  <div class="chips"><div class="chip">ISO<br><b>20000</b></div><div class="chip">S<br><b>1/33</b></div><div class="chip">WB<br><b>6769K</b></div><div class="chip">AF<br><b>--</b></div><div class="chip">EV<br><b>+0.0</b></div></div>
+  <div class="pin" style="left:40px;bottom:210px">6</div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:#9aa3b2"><span>DNG 10-BIT</span><span>RAW 4080×3060</span></div>
+  <div class="shutterrow"><div class="circle-btn">☰</div><div class="bigshutter"></div><div class="modebtn">Z<br>ZSL</div></div>
+  <div class="pin" style="left:140px;bottom:40px">7</div>
+  <div class="pin" style="right:30px;bottom:40px">8</div>
+</div>
+<div class="legend">
+<b>Follow the red pins ① → ⑧</b>
+<ol>
+<li><b>Top-left cluster — <span class="arrow">➔</span> Settings / Flash / Timer.</b> Gear opens all Settings tabs. Lightning = torch/flash. Stopwatch = 2s / 5s self-timer. White icon = ON, grey = OFF.</li>
+<li><b>Top-right DNG badge — <span class="arrow">➔</span> what will be saved.</b> <code>DNG●</code> green dot = RAW will save. Sub-line tells AE/ZSL state: <code>AUTO AE</code> / <code>P NONE (both auto)</code> / <code>ZSL ACTIVE</code> / <code>HDR ±2 EV</code>. Tap nothing here — it is a status lamp, like “Rinse aid low”.</li>
+<li><b>Middle window — <span class="arrow">➔</span> framing + tap/drag focus &amp; metering.</b> Thin lines = rule-of-thirds grid. Tap = move AF point, drag = move AE metering target. If you see heavy grain in screenshots, that is a dark room at ISO 20000, not a defect.</li>
+<li><b>Histogram (bottom-left of preview) — <span class="arrow">➔</span> exposure graph.</b> Left = shadows, right = highlights. Spike glued to left = underexposed dark scene. Tap it to toggle RAW vs preview source. Green edge = RAW source live.</li>
+<li><b>Lens pills <code>0.7× / 1×</code> — <span class="arrow">➔</span> switch lens.</b> Lime text = active lens. Only checked lenses from Lens discovery appear. Disappear? Re-check in <a href="#lens">Ch.7</a>.</li>
+<li><b>Bottom chips ISO/S/WB/AF/EV — <span class="arrow">➔</span> tap = slider, hold = lock (PROGRAM) / manual (others).</b> Full detail in <a href="#chips">Ch.3</a>.</li>
+<li><b>Big white button — <span class="arrow">➔</span> shutter (photo).</b> Red-rimmed button below-left = video REC. Sliders icon = quick panel (grid, histogram, metering, HDR, timer, burst, SR, ETTR).</li>
+<li><b>Mode + format — <span class="arrow">➔</span> exposure program + file type.</b> <code>A AUTO / P PROGRAM / Z ZSL / M MANUAL</code>. <code>RAW•A</code> = RAW+Auto JPEG. Tap mode to cycle; long-press or quick panel for details.</li>
+</ol>
+</div>
+</div>
+
+<div class="tip"><b>✅ First-light checklist (do once)</b>
+1. Gear → Lenses → check only DIRECT lenses → SAVE.<br>
+2. Gear → General → confirm DNG backend + photo folder.<br>
+3. Take one daylight photo in AUTO. Check <code>DCIM/RawLens/&lt;stem&gt;</code> for .DNG + .JPG.<br>
+If that works, everything else is seasoning.</div>
+
+<h2 id="top">Chapter 2 — Top bar in detail</h2>
+<table>
+<tr><th>Control</th><th>What it does</th><th>What you see / hear</th><th>Dishwasher analogy</th></tr>
+<tr><td>⚙ <b>Settings</b></td><td>Opens sheet with tabs General / JPEG / Exposure / Burst / Denoise / Lenses / Debug / About. Swipe left/right on empty space flips tabs like book pages. CLOSE dismisses.</td><td>Sheet slides up; status toast like <code>JPEG QUALITY • 100%</code>.</td><td>Control panel cover — everything behind one door.</td></tr>
+<tr><td>⚡ <b>Torch / Flash</b></td><td>Toggles LED torch for preview / capture assist. Not a xenon flash — continuous light.</td><td>Icon turns white when on. No effect on RAW exposure math except more light.</td><td>Rinse-aid boost.</td></tr>
+<tr><td>⏱ <b>Timer</b></td><td>Cycles Off → 2s → 5s. Counts down on shutter, then fires (burst fires full set).</td><td>Badge + beep/haptic; shutter disabled during countdown.</td><td>Delayed start.</td></tr>
+<tr><td><b>DNG badge + sub-line</b></td><td><b>TAP = switch capture format (see Chapter 2B).</b> Main line: <code>DNG</code> / <code>JPEG</code> / <code>JPEG + DNG</code> (+ green dot = will save). Sub-line: <code>AUTO AE</code>, <code>P NONE (both auto) 0.50 …</code>, <code>ZSL ACTIVE / ZSL … (warming) / ZSL OFF / ZSL N/A (fallback)</code>, <code>HDR ±2 EV</code>.</td><td>If you expect ZSL but see <code>ZSL N/A</code>, device rejected full-res stream combo — app fell back to normal RAW automatically. Toast after tap: <code>DNG ONLY / JPG / JPG+DNG</code>.</td><td>Display: “Eco 50° – 2:10 remaining” — tap = change program.</td></tr>
+</table>
+
+<h2 id="format">Chapter 2B — ★ Capture format: DNG ↔ JPEG ↔ JPEG+DNG</h2>
+<p><b>Short answer: tap the top-right <code>DNG / JPEG / JPEG+DNG</code> pill.</b> Each tap cycles one step. This is the dishwasher “program” button — no Settings menu needed.</p>
+<div class="manual-fig">
+<div class="phone">
+  <div class="topbar"><div style="display:flex;gap:8px"><div class="circle-btn">⚙</div><div class="circle-btn">⚡</div><div class="circle-btn">⏱</div></div><div><div class="dngpill">DNG●</div><div class="dngsub">AUTO AE</div></div></div>
+  <div class="pin" style="right:18px;top:18px">A</div>
+  <div class="vf" style="height:140px"><div class="grid"></div></div>
+  <div class="chips"><div class="chip">ISO<br><b>20000</b></div><div class="chip">S<br><b>1/33</b></div><div class="chip">WB<br><b>6769K</b></div><div class="chip">AF<br><b>--</b></div><div class="chip">EV<br><b>+0.0</b></div></div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:#9aa3b2"><span>DNG 10-BIT</span><span>RAW 4080×3060</span></div>
+  <div class="shutterrow"><div class="circle-btn">☰</div><div class="bigshutter"></div><div class="modebtn" style="background:#1a2029;color:#fff;border:1px solid #444">A<br>AUTO</div></div>
+  <div style="margin-top:10px;background:#151a21;border:1px solid #333;border-radius:12px;padding:8px;text-align:center;font-size:13px">RAW•A<div class="pin limepin" style="margin-left:200px;margin-top:-34px">B</div></div>
+</div>
+<div class="legend">
+<b>Two different switches — do not mix them up:</b>
+<ol>
+<li><b><span class="num">A</span> Top-right pill = FILE format (what lands in DCIM/RawLens).</b> <span class="arrow">➔</span> <b>Tap <code>DNG●</code> group to cycle:</b> <code>DNG ONLY → JPEG → JPEG+DNG → DNG ONLY …</code> Toast confirms: <code>DNG ONLY / JPG / JPG+DNG</code>. Green dot = RAW will save. Persisted across restarts. Locked during saving (<code>LOCKED • SAVING</code> — wait 1 s and tap again).</li>
+<li><b><span class="num lime">B</span> Bottom-right <code>RAW•A / JPG•A / RAW / JPG</code> = PREVIEW only (what the screen shows).</b> <span class="arrow">➔</span> Tap to cycle <code>FOLLOW (RAW•A) → RAW → JPG → FOLLOW …</code>. <code>RAW•A</code> = auto-follow the file format (RAW render for DNG, AgX for JPEG). Does <b>not</b> change saved files — pure WYSIWYG switch.</li>
+</ol>
+<table>
+<tr><th>You want…</th><th>Tap A until you see…</th><th>Files per press</th><th>When to use</th></tr>
+<tr><td>Max edit latitude</td><td><code>DNG</code> (green ●)</td><td>1× .DNG only</td><td>Default. Lightroom / RawTherapee grading.</td></tr>
+<tr><td>Share instantly</td><td><code>JPEG</code></td><td>1× .JPG (developed from RAW via AgX)</td><td>Messaging, small storage. JPEG is <b>always developed from the paired RAW frame</b>, never a separate capture.</td></tr>
+<tr><td>Both (safety)</td><td><code>JPEG + DNG</code></td><td>1× .DNG + 1× .JPG</td><td>Keep RAW master + ready-to-share copy. Burst/ZSL-6 = 6 pairs.</td></tr>
+</table>
+<p class="muted">ZSL note: JPEG/JPEG+DNG selections are bounded to 6 frames for memory; DNG-only can save up to 30. HDR merged mode saves one DNG by default (or 3 if “save all brackets” is on).</p>
+</div>
+</div>
+<div class="tip"><b>✅ Try it in 10 seconds</b> 1) Tap top-right pill → see <code>JPG</code> toast. 2) Take photo → check <code>DCIM/RawLens/&lt;stem&gt;.jpg</code> (no .dng). 3) Tap twice more → <code>JPG+DNG</code> → photo → you get both. 4) Tap once more → back to <code>DNG ONLY</code>.</div>
+<div class="warn"><b>⚠️ If tap does nothing</b> You pressed <code>RAW•A</code> (preview) instead of the top-right pill, or a save is in flight (<code>LOCKED • SAVING</code>). Wait for the shutter to re-enable, then tap the <b>top-right</b> group.</div>
+
+<h2 id="chips">Chapter 3 — Bottom chips: ISO • S • WB • AF • EV</h2>
+<p>Five dark pills above the shutter. Behavior depends on mode — this is the #1 confusion. Memorize this table:</p>
+<table>
+<tr><th>Chip</th><th>In AUTO / ZSL</th><th>In PROGRAM (P)</th><th>In MANUAL (M)</th></tr>
+<tr><td><b>ISO</b> e.g. <code>12800 / 20000</code></td><td>Read-only readout of what sensor chose.</td><td><b>Tap</b> = open ISO ruler. <b>Hold</b> = lock ISO (other axis auto-adjusts). Hold second axis = enter MANUAL.</td><td>Tap = ruler, drag = set sensor ISO directly.</td></tr>
+<tr><td><b>S</b> e.g. <code>1/14 / 1/33</code></td><td>Readout. Shutter capped by handheld limit.</td><td>Tap = shutter ruler. Hold = lock shutter. <code>AUTO HANDHELD</code> = app picks 1/focal-length-safe floor.</td><td>Direct shutter control 1/10000 … 1/2 (sensor limits).</td></tr>
+<tr><td><b>WB</b> <code>6769K</code></td><td>Auto white balance Kelvin. Tap for slider / presets.</td><td>Same. WB never affects RAW pixels, only JPEG development + preview.</td><td>Same.</td></tr>
+<tr><td><b>AF</b> <code>--</code></td><td>Tap/drag in viewfinder to focus. <code>--</code> = continuous / inactive in dark test shots.</td><td>Same.</td><td>Same.</td></tr>
+<tr><td><b>EV</b> <code>+0.0</code></td><td>Exposure compensation / brightness bias. Tap for ± slider.</td><td>Neutral bias ± EV around PROGRAM target. Disabled in MANUAL.</td><td>Disabled (you own both axes).</td></tr>
+</table>
+<div class="note"><b>ℹ️ The line under chips: <code>DNG 10-BIT &nbsp;&nbsp;&nbsp; RAW 4080×3060</code></b><br>
+Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide lens). Changes when you switch 0.7× (8.0 MP, 3264×2448) vs 1×. If it says 0×0, lens failed to open — pick DIRECT lens.</div>
+
+<h2 id="shutter">Chapter 4 — Shutter row, lens pills, histogram, quick panel</h2>
+<div class="manual-fig">
+<div class="phone">
+<div class="vf" style="height:200px"><div class="grid"></div><div class="pin" style="left:10px;bottom:10px">4</div><div class="pin" style="right:20px;top:30px">5</div></div>
+<div class="chips"><div class="chip">ISO</div><div class="chip">S</div><div class="chip">WB</div><div class="chip">AF</div><div class="chip">EV</div></div>
+<div class="shutterrow"><div class="circle-btn">☰<div class="pin" style="margin-left:-44px;margin-top:-40px">9</div></div><div class="bigshutter"><div class="pin" style="margin-left:36px;margin-top:36px">7</div></div><div class="modebtn">P<br>PROGRAM<div class="pin limepin" style="margin-left:40px;margin-top:-60px">8</div></div></div>
+</div>
+<div class="legend">
+<ol>
+<li value="4"><b>Histogram — tap to toggle RAW ↔ preview source.</b> RAW source = ground truth for ETTR/PROGRAM. If flat-lined left in dark room, add light or raise ISO ceiling — graph is honest.</li>
+<li value="5"><b>Lens pills.</b> Example: <code>0.7×</code> = Ultra-wide ≈16 mm eq (8 MP), <code>1×</code> = Wide ≈24 mm eq (12.5 MP, lime = active). Names come from Lens discovery.</li>
+<li value="7"><b>White shutter = photo.</b> Single press = 1 DNG (+JPEG per RAW•A). In burst/ZSL-6 mode = 6 frames. Red button = video (takes camera exclusively during REC).</li>
+<li value="8"><b>Mode button shows program.</b> Tap to cycle <code>A→P→Z→M</code>. Color: lime = non-AUTO active (attention!), dark = AUTO. Long text under DNG badge mirrors it.</li>
+<li value="9"><b>Sliders button = quick panel.</b> Tiles: GRID, HISTOGRAM, AE METER, HDR, TIMER, RELEASE (single/burst), RAW SR, ETTR. Dual-function AE METER tile: in PROGRAM cycles center/average/spot RAW metering, otherwise hardware AE metering.</li>
+</ol>
+<p class="muted">Status toasts you will see: <code>ZSL ×6</code>, <code>HDR ±2 EV</code>, <code>AGX PURITY • 100%</code>, <code>PICK A RAW LENS</code>, <code>GPS ON/OFF</code>.</p>
+</div>
+</div>
+
+<h2 id="slider">Chapter 5 — Manual ruler panel (your Image 11)</h2>
+<p>When you tap ISO or S, a ruler slides above the chips. Your Image 11 shows the <b>S (shutter) ruler at 1/14</b> with <code>LIMITS</code> + <code>AUTO</code> buttons.</p>
+<table>
+<tr><th>Element in Image 11</th><th>Meaning</th><th>What to do</th></tr>
+<tr><td>Ruler <code>S 1/14 … 1/10000 … 1/2</code></td><td>Draggable shutter scale. Green tick = current value. Left = faster (freezes motion, darker), right = slower (brighter, blur risk).</td><td>Drag to set. Tap chip again or shutter to confirm. In PROGRAM this sets the locked value / limit.</td></tr>
+<tr><td><code>LIMITS</code> (dark)</td><td>Opens per-lens min/max editor (same as PROGRAM panel / Settings → Exposure). Bounds the AUTO range.</td><td>Use to forbid 1/2s handheld or ISO 20000 noise.</td></tr>
+<tr><td><code>AUTO</code> (lime)</td><td>Releases lock on this axis back to auto. Lime = this axis is currently AUTO.</td><td>Tap to release. “Auto releases both” in PROGRAM header.</td></tr>
+<tr><td>Top line <code>P NONE (both auto) 0.50 Br…</code></td><td>PROGRAM status: lock mode + priority + brightness bias, truncated.</td><td>Mirror of PROGRAM panel — open full editor via LIMITS.</td></tr>
+</table>
+<div class="tip"><b>💡 Hold vs tap (PROGRAM only)</b> Tap chip = temporary slider. <b>Hold</b> chip = lock that axis (ISO_LOCK / SHUTTER_LOCK). Hold the other chip while one is locked = MANUAL. AUTO button releases both. This is printed at the top of the PROGRAM panel — drill it once and it sticks.</div>
+
+<h2 id="program">Chapter 6 — PROGRAM AE • custom (your Image 10)</h2>
+<p>Full editor. Open via LIMITS, ISO/S chips (hold), or Settings → Exposure. Header in your shot: <code>PROGRAM • per-lens 0 • RAW-driven (sensor ISO + shutter)</code>.</p>
+<figureshot><b>Fig. 10 annotated — Image 10 with dishwasher pins</b>
+<table>
+<tr><th>Pin / Row</th><th>Control in screenshot</th><th>Detailed explanation</th></tr>
+<tr><td>①</td><td><code>Priority: 0.50 • balanced ← ISO priority | balanced | shutter priority →</code> + BAL ruler</td><td>Who moves first when light changes? <b>0.00 = ISO priority</b> (keep shutter fast, raise ISO → noisier but sharper). <b>1.00 = shutter priority</b> (keep ISO low, slow shutter → cleaner but blur risk). <b>0.50 balanced</b> = move both. Damped closed loop glides ~1 stop/s so preview doesn’t jump.</td></tr>
+<tr><td>②</td><td><code>LOCK: NONE (BOTH AUTO) • TAP TO CYCLE</code></td><td>Cycles <code>NONE → ISO_LOCK → SHUTTER_LOCK → NONE</code>. Hold-both = MANUAL. On cameras without manual sensor control this is disabled and shows <code>Android AE</code>.</td></tr>
+<tr><td>③</td><td><code>LOCKED ISO: -- (ISO LOCK OFF)</code> / <code>LOCKED SHUTTER: --</code></td><td>Shows frozen value when locked. <code>--</code> = off. Seed value = current metered pair when you lock.</td></tr>
+<tr><td>④</td><td><code>ISO MIN: SENSOR MIN</code> / <code>ISO MAX: SENSOR MAX</code></td><td>Tap to cycle allowed bounds (e.g. 100/200/400/800 … 6400). Caps AUTO range per lens. Tighten MAX to forbid ISO 20000 mush.</td></tr>
+<tr><td>⑤</td><td><code>SHUTTER MIN: SENSOR MIN</code> / <code>SHUTTER MAX: AUTO HANDHELD</code> (lime)</td><td>Lime highlight = currently selected for editing. <code>AUTO HANDHELD</code> = 1/focal-length-safe floor (e.g. ~1/30–1/60). Tap to cycle fixed speeds or return to AUTO.</td></tr>
+<tr><td>⑥</td><td><code>Brightness bias: +0.0 EV</code> ruler</td><td>Neutral trim around PROGRAM target. + = brighter JPEG + higher exposure, – = protect highlights. Disabled in MANUAL.</td></tr>
+<tr><td>⑦</td><td><code>METERING: CENTER • TAP TO SWITCH</code></td><td>RAW metering: <code>CENTER</code> (center-weighted) → <code>AVERAGE</code> (frame average) → <code>SPOT</code> (metering target). In PROGRAM this meters the RAW, not the preview.</td></tr>
+<tr><td>⑧</td><td><code>RESET PER-LENS DEFAULTS</code> + <code>DONE</code></td><td>Reset clears per-lens overrides for this lens only. DONE saves (persisted per Camera2 ID).</td></tr>
+</table>
+<figcaption>Keep this image as <code>images/screenshot-10-program-ae.png</code>. Priority 0.50 + NONE + CENTER is the sane default — start there.</figcaption>
+</figureshot>
+<div class="warn"><b>⚠️ ETTR overrides PROGRAM when converged</b> Small grey line at bottom of Image 10: if ETTR converges, it freezes PROGRAM and owns exposure from actual sensor values. Uncheck ETTR in Exposure tab if PROGRAM feels “stuck”.</div>
+
+<h2 id="lens">Chapter 7 — Lens discovery (your Image 1)</h2>
+<p>First-run + Settings → Lenses. Filters Camera2 IDs to rear-facing RAW-capable cameras. <b>Checked = appears as 0.7×/1× pill.</b> Widest first inside each group.</p>
+<table>
+<tr><th>Row in Image 1</th><th>Meaning</th></tr>
+<tr><td>Header <code>5 RAW lenses • 2 groups</code></td><td>Found 5 RAW-capable routes in 2 groups. Your phone exposes duplicates (direct + logical).</td></tr>
+<tr><td><code>Select all / Clear</code></td><td>Bulk check. Don’t Select-all blindly — you’ll get duplicate 24 mm entries.</td></tr>
+<tr><td><code>DIRECT CAMERAS • 3 — Open straight from camera service. Pick these first when in doubt.</code></td><td>Gold rule. DIRECT = standalone physical camera, most reliable for DNG. Example: <code>Ultra-wide ≈16 mm eq, 1.67 mm, 3264×2448, 8.0 MP, ID 2, DIRECT camera 2 ☑</code> and <code>Wide ≈24 mm eq, 6.06 mm, 4080×3060, 12.5 MP, ID 0 ☑</code>.</td></tr>
+<tr><td>Unchecked <code>Wide ≈24 mm eq, 6.18 mm, ID 3 ☐</code></td><td>Duplicate Wide (same 24 mm eq, slightly different physical focal length). Leave unchecked unless ID 0 fails.</td></tr>
+<tr><td><code>LOGICAL 3 • 2 LENSES — Opens logical camera 3 and binds output to one physical lens.</code></td><td>Vendor logical camera. Example <code>Ultra-wide ID 3/2 ☐</code> = open logical 3, bind physical 2. Use only for lenses missing under DIRECT.</td></tr>
+<tr><td>Tip <code>start with Direct cameras…</code></td><td>Follow it. Vendor routes are fallback.</td></tr>
+<tr><td><code>CANCEL / SAVE</code></td><td>SAVE persists set + reloads lenses. Empty set is rejected with <code>PICK A RAW LENS</code>.</td></tr>
+</table>
+<div class="tip"><b>✅ Recommended pick (your phone)</b> Check exactly 2: <code>ID 2 Ultra-wide 16 mm</code> + <code>ID 0 Wide 24 mm</code> → SAVE. You get clean <code>0.7× / 1×</code> pills, no duplicates. Add LOGICAL only if a telephoto is missing.</div>
+
+<h2 id="jpeg">Chapter 8 — Settings → JPEG (your Images 2 + 4)</h2>
+<p>Two halves of one long scroll. Top = file container, bottom = AgX look + adaptive exposure. All JPEGs are <b>developed from the paired RAW</b>, never separate captures.</p>
+<h3>8A — Top half (Image 4)</h3>
+<table>
+<tr><th>Control</th><th>Detail</th></tr>
+<tr><td><code>Ultra HDR JPEG (Android 14+ gainmap)</code> ☐</td><td>HDR JPEG with gainmap for HDR displays. Needs Android 14+. Off = SDR via native libjpeg-turbo. Quality slider still applies; chroma then controlled by platform encoder.</td></tr>
+<tr><td><code>Display P3 JPEG</code> ☐</td><td>Wider gamut than sRGB. Use if your editor/viewer supports P3; otherwise colors look flat elsewhere.</td></tr>
+<tr><td><code>JPEG chroma subsampling: 4:2:2</code></td><td>Tap to cycle (e.g. 4:4:4 sharper color / 4:2:0 smaller file). 4:2:2 = balanced default.</td></tr>
+<tr><td><code>JPEG quality: 100%</code></td><td>1–100. 100% = largest, least artifacts. 92–95% is visually identical and much smaller — use for bursts.</td></tr>
+<tr><td><code>AgX purity boost / contrast / saturation 100%</code></td><td>AgX Base look. Purity = color cleanliness at high chroma, Contrast = tone slope, Saturation = color strength. 100% = official base. Lower each if skin tones clip.</td></tr>
+</table>
+<h3>8B — Bottom half (Image 2)</h3>
+<table>
+<tr><th>Control</th><th>Detail</th></tr>
+<tr><td><code>Preserve hue: 0%</code></td><td>0% = allow hue shifts for filmic rolloff (default AgX). Raise toward 100% to lock hues (more digital, less pastel highlights).</td></tr>
+<tr><td><code>Highlight range: +6.5 EV</code> / <code>Shadow range: 10.0 EV</code></td><td>How much scene range AgX compresses into JPEG. Bigger = more recovery, flatter mids. Defaults shown are already wide.</td></tr>
+<tr><td><code>Gamut compression: 0%</code></td><td>Squeezes out-of-gamut colors. Raise if neon signs posterize.</td></tr>
+<tr><td><code>Adaptive development exposure (AUTO and ZSL)</code> ☑</td><td>Master switch: auto-trim JPEG brightness from RAW stats in AUTO/ZSL. Keep ON unless matching manual exposures frame-to-frame.</td></tr>
+<tr><td><code>PROGRAM adaptive exposure: 50%</code></td><td>Same trim but for PROGRAM, as strength %. 0% = fixed, 100% = full auto. 50% = half correction — good default.</td></tr>
+<tr><td>Helper <code>Highlights: headroom caps p99.5 spike…</code></td><td>Explains next three knobs: headroom = white-point cap for specular spikes, sky protection = broad p95 skies, shoulder = rolloff into AgX.</td></tr>
+<tr><td><code>Highlight headroom: 1.00</code> / <code>Sky protection: 0.85</code> / <code>Highlight shoulder: 100%</code></td><td>Lower headroom/sky = protect clouds/sky (darker whites). Lower shoulder = harder clip, higher = softer filmic shoulder. Your values are defaults — don’t touch until highlights blow.</td></tr>
+<tr><td><code>Reset official AgX Base</code></td><td>Restores purity/contrast/saturation/hue to official base (keeps UltraHDR/P3/adaptive + highlight knobs).</td></tr>
+</table>
+<div class="note"><b>ℹ️ Where knobs live (header reminder)</b> <code>PROGRAM • per-lens limits live under Exposure; RAW DNG calibration under General; overlays, logs, HDR debug under Debug.</code> If you can’t find a knob, you’re on the wrong tab.</div>
+
+<h2 id="exposure">Chapter 9 — Settings → Exposure (your Image 3)</h2>
+<p>Top badge in your shot says <code>HDR ±2 EV</code> — HDR bracket mode is on. This tab has three blocks: HDR, PROGRAM limits mirror, ETTR.</p>
+<table>
+<tr><th>Control in Image 3</th><th>Detail</th></tr>
+<tr><td><code>Lock: NONE (both auto)</code></td><td>Mirror of PROGRAM lock. Tap to cycle NONE → ISO_LOCK → SHUTTER_LOCK.</td></tr>
+<tr><td><code>Metering: CENTER</code></td><td>Mirror of PROGRAM metering. Tap: CENTER → AVERAGE → SPOT.</td></tr>
+<tr><td><code>ISO min: SENSOR MIN</code> / <code>ISO max: SENSOR MAX</code></td><td>Tap to cycle numeric bounds. SENSOR MIN/MAX = full sensor range (widest). Narrow to limit noise (MAX) or force Hi-ISO (MIN).</td></tr>
+<tr><td><code>Shutter min: SENSOR MIN</code> / <code>Shutter max: AUTO HANDHELD</code></td><td>Same for shutter. AUTO HANDHELD = shake-safe floor. Fix MAX to 1/125 in wind, or allow 1/15 on tripod.</td></tr>
+<tr><td><code>Brightness bias: +0.0 EV</code></td><td>Same as PROGRAM bias. ± slider, neutral default.</td></tr>
+<tr><td><code>ETTR single exposure (RAW-measured)</code> ☐</td><td><b>Expose-To-The-Right:</b> pushes exposure as bright as possible without clipping RAW, from actual sensor stats. When gain ceiling binds, it keeps hand-motion shutter cap and accepts darker frame instead of trading noise for blur. Unchecked in your shot = OFF. Turn on for tripod landscapes, off for people/action.</td></tr>
+<tr><td><code>Highlight headroom: -0.3 EV</code></td><td>ETTR safety margin. -0.3 = leave 1/3 stop below clip. Tap to cycle 0 / -0.3 / -0.5 / -1.0. More negative = safer highlights, darker image.</td></tr>
+<tr><td><code>ISO ceiling: SENSOR MAX</code></td><td>ETTR will never exceed this ISO. Lower to cap noise (e.g. 1600).</td></tr>
+</table>
+<div class="tip"><b>💡 HDR quick reference (top of this tab, not in screenshot but on same scroll)</b> <code>HDR: save all 3 brackets as separate DNGs</code> (off = merged single DNG), <code>HDR bracket range −4/0/+4 EV</code> (off = ±2 EV). Merged HDR saves one DNG by default. Debug frames live under Debug tab.</div>
+
+<h2 id="othertabs">Chapter 10 — General / Burst (ZSL) / Denoise / Lenses / Debug / About</h2>
+<h3>General (Images 14–15 slot)</h3>
+<ul>
+<li><b>RAW capture, DNG backend, location, viewfinder.</b> RAW DNG calibration overrides per Camera2 ID (black/white levels, noise profile, color/calibration/forward matrices). Reset = device defaults. Undeclared tags are hidden (no unsafe overrides).</li>
+<li><b>Viewfinder:</b> GPU superpixel resolution (480/640 full-rate, 960 balanced, 1080 detail), preview mode FOLLOW, overlays shortcut (full controls under Debug).</li>
+<li><b>Sidecars/photo folder:</b> DNG/JPEG bursts → <code>DCIM/RawLens/&lt;stem&gt;</code> via MediaStore; gyro sidecars (<code>burst.json + gyro/</code> CSVs) → <code>Download/RawLens/&lt;stem&gt;</code> unless photo folder granted under General → then next to DNGs.</li>
+</ul>
+<h3>Burst — Zero shutter lag (ZSL)</h3>
+<ul>
+<li><b>Master:</b> <code>RAW zero shutter lag</code> checkbox = same as Z mode button. Needs compatible reprocessing or preview+RAW stream; else <code>ZSL N/A → fallback to normal RAW</code> automatically.</li>
+<li><b>Frame count 1–30 (default 2):</b> ring buffer size. 30 fps × 30 = ~1 s pre-shutter history. JPEG/JPEG+DNG bounded to 6 frames for memory; DNG-only can save all 30.</li>
+<li><b>Badge language:</b> <code>RAW•ZSL</code> after first paired frame, <code>ZSL …</code> warming, <code>ZSL OFF</code> disabled, <code>ZSL N/A</code> fallback.</li>
+<li><b>Scoring:</b> on press, only fresh frames (readout finished by press instant) scored by recency, AF/AE state, lens movement, ISO, exposure, gyro motion. Request epochs block stale frames.</li>
+<li><b>Hybrid top-up, RAW SR merge (Linear RGB recommended / Mosaic for RawTherapee), sidecar folder grant.</b> SR forces ZSL on.</li>
+</ul>
+<h3>Denoise</h3>
+<ul>
+<li><b>AI RAW denoise (RawNIND Bayer):</b> writes denoised DNG + develops JPEG from it. Needs model in assets. Strength 0–100% (blend, no re-run). <code>Save original DNG alongside</code> off = halves storage.</li>
+<li><b>GALOSH Vulkan classical:</b> writes <code>_GALOSH</code> DNG + JPEG. Wins over AI when both on. Prewarms Vulkan on enable.</li>
+</ul>
+<h3>Lenses / Debug / About</h3>
+<ul>
+<li><b>Lenses:</b> same as <a href="#lens">Ch.7</a> + per-lens RAW DNG calibration link + ISO/shutter bounds link.</li>
+<li><b>Debug:</b> HDR debug frames, viewfinder overlays (grid/histogram/diagnostics), app logs, logcat file.</li>
+<li><b>About:</b> license (GPLv3+), privacy (camera permission only, no network), PhotonCamera/TinyDNG attribution.</li>
+</ul>
+
+<h2 id="workflows">Chapter 11 — Recipes (tear-out card)</h2>
+<table>
+<tr><th>Goal</th><th>Mode + settings</th><th>Press …</th></tr>
+<tr><td>Everyday sharp photo</td><td>AUTO, DIRECT 1×, Adaptive ON, quality 92%</td><td>Tap to focus → white shutter. Check DNG+JPEG pair.</td></tr>
+<tr><td>Balanced control (street)</td><td>P PROGRAM, Priority 0.50, CENTER, ISO MAX 3200, SHUTTER MAX AUTO HANDHELD, bias +0.0</td><td>Hold ISO to lock in sun, AUTO to release indoors.</td></tr>
+<tr><td>Kids / decisive moment</td><td>Z ZSL, frames 6, hybrid top-up ON</td><td>Half-wait for <code>ZSL ACTIVE</code>, then shutter. Pick sharpest of 6.</td></tr>
+<tr><td>Full manual night</td><td>M MANUAL, ISO 1600, S 1/30, WB lock, EV n/a</td><td>Use histogram: push right without clipping. Tripod → allow 1/4s.</td></tr>
+<tr><td>Sunset HDR</td><td>Exposure tab HDR ±2 EV (or ±4 for harsh), merged DNG</td><td>HDR quick tile ON → shutter → one merged DNG.</td></tr>
+<tr><td>Cleanest landscape</td><td>ETTR ON, headroom -0.3, ISO ceiling 1600, tripod</td><td>Let ETTR converge (freezes PROGRAM), then fire.</td></tr>
+</table>
+<div class="warn"><b>⚠️ Don’t do this</b> PROGRAM + ZSL together (mutually exclusive — last one wins). ETTR + fast action (adds lag). Ultra HDR + old editor (colors wash). Select-all lenses (duplicate pills).</div>
+
+<h2 id="files">Chapter 12 — Where photos go + troubleshooting</h2>
+<table>
+<tr><th>Symptom (like dishwasher fault code)</th><th>Cause</th><th>Fix</th></tr>
+<tr><td>Viewfinder black / noisy (your Images 12–13)</td><td>Dark room, ISO 20000, 1/33s. Honest preview.</td><td>Add light or test daylight. Raise exposure / check histogram moves right.</td></tr>
+<tr><td><code>ZSL N/A</code> or no ZSL badge</td><td>Device rejected full-res combo / memory budget.</td><td>App already fell back to normal RAW — shoot normally. Reduce frame count to 2.</td></tr>
+<tr><td>Only <code>1×</code>, no <code>0.7×</code></td><td>Lens unchecked.</td><td>Settings → Lenses → check ID 2 → SAVE.</td></tr>
+<tr><td>PROGRAM feels stuck</td><td>ETTR converged and owns exposure.</td><td>Exposure tab → uncheck ETTR, or wait for light change.</td></tr>
+<tr><td>Corrupted streaky images (your Images 5–9)</td><td>Upload / export corruption in chat, not camera.</td><td>Re-save originals over <code>images/screenshot-05 … 09.png</code> and re-print PDF.</td></tr>
+<tr><td>No DNG, only JPEG</td><td>Capture format = JPEG-only or non-RAW lens.</td><td>Set <code>RAW•A</code>, use DIRECT lens with RAW capability.</td></tr>
+<tr><td>Sidecars missing next to DNG</td><td>Android forbids text under DCIM via MediaStore.</td><td>General → grant photo folder, or copy <code>burst.json + gyro/</code> from Downloads next to DNGs before desktop import.</td></tr>
+</table>
+<p><b>Files:</b> stills <code>DCIM/RawLens/&lt;stem&gt;.{dng,jpg}</code>, bursts <code>&lt;stem&gt;_000…</code>, sidecars <code>Download/RawLens/&lt;stem&gt;/burst.json + gyro/*.csv</code> (or next to DNGs after folder grant). No gallery in app — open in Files / Lightroom / RawTherapee.</p>
+
+<h2 id="appendix">Appendix — Defaults &amp; glossary</h2>
+<h4>Factory defaults (your screenshots match these)</h4>
+<table>
+<tr><th>Setting</th><th>Default in shots</th></tr>
+<tr><td>JPEG quality / chroma / P3 / UltraHDR</td><td>100% / 4:2:2 / off / off</td></tr>
+<tr><td>AgX purity / contrast / saturation / hue</td><td>100% / 100% / 100% / 0%</td></tr>
+<tr><td>Highlight / Shadow / Gamut</td><td>+6.5 EV / 10.0 EV / 0%</td></tr>
+<tr><td>Adaptive (AUTO/ZSL) / PROGRAM strength</td><td>ON / 50%</td></tr>
+<tr><td>Headroom / Sky / Shoulder</td><td>1.00 / 0.85 / 100%</td></tr>
+<tr><td>PROGRAM priority / lock / metering / bias</td><td>0.50 balanced / NONE / CENTER / +0.0 EV</td></tr>
+<tr><td>ISO/Shutter min/max</td><td>SENSOR MIN / SENSOR MAX, Shutter MAX AUTO HANDHELD</td></tr>
+<tr><td>ETTR / headroom / ceiling</td><td>OFF / -0.3 EV / SENSOR MAX</td></tr>
+<tr><td>ZSL frames</td><td>2 (1–30)</td></tr>
+</table>
+<h4>Glossary (plain words)</h4>
+<p><b>RAW_SENSOR / DNG:</b> uncooked sensor data + metadata — edit latitude. <b>AgX:</b> filmic tone mapper for JPEG look. <b>ETTR:</b> shoot as bright as possible without clipping. <b>ZSL:</b> camera remembers pre-press frames. <b>DIRECT vs LOGICAL:</b> real camera vs vendor-combined virtual camera. <b>Gainmap (Ultra HDR):</b> extra brightness layer for HDR screens. <b>P3:</b> wider color box. <b>Chroma subsampling:</b> color resolution squeeze. <b>p99.5 / p95:</b> brightest 0.5% / 5% pixels — used for highlight guards.</p>
+
+<figureshot>
+<b>📎 Spare figure slots (Images 5–9, 14–15 — replace when you re-export)</b>
+<div class="imgrow">
+<figure><img src="images/screenshot-05.png" onerror="this.style.opacity=.15"><figcaption>Slot 05 — re-upload (arrived as static).</figcaption></figure>
+<figure><img src="images/screenshot-06.png" onerror="this.style.opacity=.15"><figcaption>Slot 06 — re-upload.</figcaption></figure>
+<figure><img src="images/screenshot-07.png" onerror="this.style.opacity=.15"><figcaption>Slot 07 — re-upload.</figcaption></figure>
+<figure><img src="images/screenshot-08.png" onerror="this.style.opacity=.15"><figcaption>Slot 08 — re-upload.</figcaption></figure>
+<figure><img src="images/screenshot-09.png" onerror="this.style.opacity=.15"><figcaption>Slot 09 — re-upload.</figcaption></figure>
+</div>
+<figcaption>Tip: screenshots must be PNG/JPG without HDR gainmap to survive chat compression. Open in Photos → Share → without HDR if offered.</figcaption>
+</figureshot>
+
+<footer>
+RawLens User Guide — generated from app source (MainActivity + README + your 15 screenshots). GPL-3.0-or-later. No network, camera permission only. Device reports: include Android version, model, Camera2 ID/lens, diagnostic overlay.<br>
+<b>To PDF:</b> Chrome/Edge → <code>Ctrl/Cmd+P</code> → Destination <code>Save as PDF</code> → Margins Default → Background graphics ON → Save. Or: <code>pandoc user-guide.md -o RawLens-Manual.pdf</code>.
+</footer>
+
+</div>
+</body>
+</html>
