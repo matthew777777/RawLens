@@ -126,10 +126,50 @@ internal object LogcatFileWriter {
     fun currentSessionPath(): String? = synchronized(lock) { currentFile?.absolutePath }
 
     /**
+     * Installs the global uncaught-exception handler without starting logcat
+     * streaming. Safe to call on every process start: idempotent and cheap.
+     * This must run from `Application.onCreate` so crashes in the launcher
+     * activity, services, or background executors (e.g. lens discovery) are
+     * still written to disk before the process dies.
+     */
+    fun installCrashHandler(context: Context) {
+        synchronized(lock) {
+            // Remember where to write the crash even when streaming is off.
+            runCatching {
+                appContext = context.applicationContext
+                packageName = context.packageName
+                if (logDir == null) logDir = resolveDir(context)
+            }
+            if (handlerInstalled) return
+            // Capture the pre-existing handler once; re-capturing later would
+            // chain our own handler and record every crash twice.
+            previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            val root = previousHandler
+            Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+                recordCrash(thread, error)
+                if (root != null) {
+                    root.uncaughtException(thread, error)
+                } else {
+                    // No platform handler (tests / exotic ROMs): kill loudly
+                    // instead of swallowing the crash silently.
+                    try {
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                    } finally {
+                        kotlin.system.exitProcess(10)
+                    }
+                }
+            }
+            handlerInstalled = true
+        }
+    }
+
+    /**
      * Starts streaming. Idempotent; safe to call on every launch. Failures are
      * logged to logcat and leave the writer stopped rather than crashing setup.
      */
     fun start(context: Context) {
+        // Crash logging must not depend on the streaming preference.
+        installCrashHandler(context)
         synchronized(lock) {
             if (running) return
             try {
@@ -141,16 +181,6 @@ internal object LogcatFileWriter {
                 appContext = context.applicationContext
                 packageName = context.packageName
                 openSessionLocked(dir)
-                if (!handlerInstalled) {
-                    // Once per process: re-capturing on a later start() would
-                    // chain our own handler and record every crash twice.
-                    previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-                    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-                        recordCrash(thread, error)
-                        previousHandler?.uncaughtException(thread, error)
-                    }
-                    handlerInstalled = true
-                }
                 pid = android.os.Process.myPid()
                 spawnLocked()
                 running = true
@@ -408,11 +438,19 @@ internal object LogcatFileWriter {
     private fun recordCrash(thread: Thread, error: Throwable) {
         synchronized(lock) {
             try {
-                if (writer == null && logDir != null && !running) {
-                    // Writer was toggled off or never started: still leave a
-                    // crash trace next to the sessions rather than losing it.
-                    running = true
-                    openSessionLocked(requireNotNull(logDir))
+                if (writer == null && !running) {
+                    // Writer was toggled off, never started, or dir was not
+                    // ready at install time: still leave a crash trace rather
+                    // than losing it.
+                    val ctx = appContext
+                    if (logDir == null && ctx != null) {
+                        logDir = runCatching { resolveDir(ctx) }.getOrNull()
+                    }
+                    val dir = logDir
+                    if (dir != null) {
+                        running = true
+                        openSessionLocked(dir)
+                    }
                 }
                 writer?.let {
                     it.write("----- FATAL EXCEPTION on ${thread.name} -----")

@@ -5,7 +5,6 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.graphics.ImageFormat
-import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.util.Log
@@ -91,6 +90,21 @@ class LensDiscovery(context: Context) {
 
     fun discover(onComplete: (List<DiscoveredLens>) -> Unit) {
         executor.execute {
+            try {
+                onComplete(discoverBlocking())
+            } catch (t: Throwable) {
+                // Never let a vendor characteristics bug kill discovery: report what we have.
+                Log.w(LOG_TAG, "Lens discovery failed; returning empty list", t)
+                try {
+                    onComplete(emptyList())
+                } catch (_: Throwable) {
+                    // Caller callback must never crash the discovery thread.
+                }
+            }
+        }
+    }
+
+    private fun discoverBlocking(): List<DiscoveredLens> {
             val official = cameraIds()
             Log.i(LOG_TAG, "Official camera IDs: $official")
 
@@ -103,7 +117,8 @@ class LensDiscovery(context: Context) {
             // cameraIdList. Include every ID advertised by a logical camera so OEM aliases such
             // as A-B and A/B can be discovered as well as numeric forms such as 0-1 and 3/2.
             official.forEach { id ->
-                characteristics(id)?.physicalCameraIds?.forEach { physicalId ->
+                val physicalIds = characteristics(id)?.let(::safePhysicalIds) ?: emptySet()
+                physicalIds.forEach { physicalId ->
                     if (characteristics(physicalId) != null) queryableIds += physicalId
                 }
             }
@@ -122,7 +137,11 @@ class LensDiscovery(context: Context) {
             // for rear RAW cameras omitted from cameraIdList.
             queryableIds.forEach { id ->
                 val c = characteristics(id) ?: return@forEach
-                if (isRearRaw(c)) found[id] = discovered(id, c, "standalone")
+                if (runCatching { isRearRaw(c) }.getOrDefault(false)) {
+                    runCatching { discovered(id, c, "standalone") }
+                        .onSuccess { found[id] = it }
+                        .onFailure { Log.w(LOG_TAG, "Skipping standalone $id", it) }
+                }
             }
 
             // B) Every logical -> physical relationship advertised by a queryable camera,
@@ -131,16 +150,19 @@ class LensDiscovery(context: Context) {
             // be accepted by getCameraCharacteristics().
             queryableIds.forEach { logicalId ->
                 val logical = characteristics(logicalId) ?: return@forEach
-                val physicalIds = logical.physicalCameraIds
+                val physicalIds = safePhysicalIds(logical)
                 if (physicalIds.isEmpty()) return@forEach
 
                 physicalIds.forEach physicalLoop@ { physicalId ->
                     // API 29+ (RawLens minSdk) explicitly permits querying characteristics
                     // for physical IDs that are hidden from cameraIdList.
                     val physical = characteristics(physicalId) ?: return@physicalLoop
-                    if (!isRearRaw(physical, logical)) return@physicalLoop
-                    val routeId = "$logicalId/$physicalId"
-                    found[routeId] = discovered(routeId, physical, "logical $logicalId → physical $physicalId")
+                    if (runCatching { isRearRaw(physical, logical) }.getOrDefault(false)) {
+                        runCatching {
+                            discovered(id = "$logicalId/$physicalId", c = physical, route = "logical $logicalId → physical $physicalId")
+                        }.onSuccess { found["$logicalId/$physicalId"] = it }
+                            .onFailure { Log.w(LOG_TAG, "Skipping route $logicalId/$physicalId", it) }
+                    }
                 }
             }
 
@@ -168,67 +190,100 @@ class LensDiscovery(context: Context) {
             }
             compositeCandidates.forEach { composite ->
                 if (composite in found) return@forEach
-                val compositeCharacteristics = characteristics(composite) ?: return@forEach
-                val physicalId = composite.substringAfterLast('/', composite.substringAfterLast('-'))
-                val logicalId = composite.substringBefore('/').substringBefore('-')
-                val logical = characteristics(logicalId)
-                val usable = when {
-                    isRearRaw(compositeCharacteristics, logical) -> compositeCharacteristics
-                    else -> characteristics(physicalId)?.takeIf { isRearRaw(it, logical) }
-                } ?: return@forEach
-                found[composite] = discovered(composite, usable, "vendor route")
+                runCatching {
+                    val compositeCharacteristics = characteristics(composite) ?: return@runCatching null
+                    val physicalId = composite.substringAfterLast('/', composite.substringAfterLast('-'))
+                    val logicalId = composite.substringBefore('/').substringBefore('-')
+                    val logical = characteristics(logicalId)
+                    val usable = when {
+                        isRearRaw(compositeCharacteristics, logical) -> compositeCharacteristics
+                        else -> characteristics(physicalId)?.takeIf { isRearRaw(it, logical) }
+                    } ?: return@runCatching null
+                    discovered(composite, usable, "vendor route")
+                }.onSuccess { lens ->
+                    if (lens != null) found[composite] = lens
+                }.onFailure {
+                    Log.w(LOG_TAG, "Skipping vendor route $composite", it)
+                }
             }
 
             Log.i(LOG_TAG, "Discovered RAW lenses: ${found.keys}")
-            onComplete(found.values.sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id }))
-        }
+            return found.values.sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
     }
 
     fun close() = executor.shutdownNow()
 
     private fun cameraIds(): List<String> = try {
         manager.cameraIdList.toList()
-    } catch (_: CameraAccessException) {
-        emptyList()
-    } catch (_: SecurityException) {
+    } catch (_: Throwable) {
+        // CameraAccessException, SecurityException, and vendor RuntimeExceptions/Errors.
         emptyList()
     }
 
     private fun characteristics(id: String): CameraCharacteristics? = try {
         manager.getCameraCharacteristics(id)
-    } catch (_: CameraAccessException) {
+    } catch (_: Throwable) {
+        // Vendor camera services occasionally throw non-standard runtime failures,
+        // IllegalArgumentException, or even Errors for hidden/probed IDs.
         null
-    } catch (_: IllegalArgumentException) {
-        null
-    } catch (_: SecurityException) {
-        null
-    } catch (_: RuntimeException) {
-        // Vendor camera services occasionally throw non-standard runtime failures for hidden IDs.
-        null
+    }
+
+    /**
+     * Every [CameraCharacteristics.get] call can throw on vendor ROMs. The reported crash
+     * is a NullPointerException inside
+     * `CameraMetadataNative.getStreamConfigurationMap` when reading
+     * `SCALER_STREAM_CONFIGURATION_MAP`, so all key reads go through here.
+     */
+    private fun <T> safeGet(c: CameraCharacteristics, key: CameraCharacteristics.Key<T>): T? =
+        try {
+            c.get(key)
+        } catch (_: Throwable) {
+            null
+        }
+
+    private fun safePhysicalIds(c: CameraCharacteristics): Set<String> = try {
+        c.physicalCameraIds ?: emptySet()
+    } catch (_: Throwable) {
+        emptySet()
+    }
+
+    private fun hasRawStreamConfig(c: CameraCharacteristics): Boolean = try {
+        safeGet(c, CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.outputFormats?.contains(ImageFormat.RAW_SENSOR) == true
+    } catch (_: Throwable) {
+        false
     }
 
     private fun isRearRaw(
         c: CameraCharacteristics,
         logicalFallback: CameraCharacteristics? = null
     ): Boolean {
-        val facing = c.get(CameraCharacteristics.LENS_FACING)
-            ?: logicalFallback?.get(CameraCharacteristics.LENS_FACING)
-        if (facing == CameraCharacteristics.LENS_FACING_FRONT) return false
-
-        val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
-        if (capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) return true
-
-        // Some physical-camera characteristic blocks omit the RAW capability bit even though the
-        // physical stream configuration explicitly exposes RAW_SENSOR. Accept that authoritative
-        // stream declaration as well.
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        return map?.outputFormats?.contains(ImageFormat.RAW_SENSOR) == true
+        return try {
+            val facing = safeGet(c, CameraCharacteristics.LENS_FACING)
+                ?: logicalFallback?.let { safeGet(it, CameraCharacteristics.LENS_FACING) }
+            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                false
+            } else {
+                val capabilities =
+                    safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+                if (capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
+                    true
+                } else {
+                    // Some physical-camera characteristic blocks omit the RAW capability bit even though the
+                    // physical stream configuration explicitly exposes RAW_SENSOR. Accept that authoritative
+                    // stream declaration as well.
+                    hasRawStreamConfig(c)
+                }
+            }
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     private fun discovered(id: String, c: CameraCharacteristics, route: String): DiscoveredLens {
-        val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
-        val sensor = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-        val pixels = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val focal = safeGet(c, CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+        val sensor = safeGet(c, CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val pixels = safeGet(c, CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val equivalent = if (focal != null && sensor != null && sensor.width > 0f) {
             36f * focal / sensor.width
         } else null
@@ -302,13 +357,16 @@ class LensDiscovery(context: Context) {
         return Triple(LensRouteKind.VENDOR_COMPOSITE, null, null)
     }
 
-    private fun summary(c: CameraCharacteristics): String {
-        val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+    private fun summary(c: CameraCharacteristics): String = try {
+        val capabilities = safeGet(c, CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         val rawCapability = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-        val rawStream = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.outputFormats?.contains(ImageFormat.RAW_SENSOR) == true
-        return "facing=${c.get(CameraCharacteristics.LENS_FACING)} rawCapability=$rawCapability " +
-            "rawStream=$rawStream physical=${c.physicalCameraIds}"
+        val rawStream = hasRawStreamConfig(c)
+        val facing = safeGet(c, CameraCharacteristics.LENS_FACING)
+        val physical = safePhysicalIds(c)
+        "facing=$facing rawCapability=$rawCapability rawStream=$rawStream physical=$physical"
+    } catch (t: Throwable) {
+        // Logging must never crash discovery on malformed vendor metadata.
+        "unavailable(${t.javaClass.simpleName})"
     }
 
     private companion object {
