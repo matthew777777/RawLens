@@ -1,0 +1,85 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D inputImage;
+layout(set = 0, binding = 1, rgba8) uniform image2D overlayImage;
+layout(std140, set = 0, binding = 2) uniform FocusParams {
+    vec4 color;
+    vec4 controls;  // sensitivity, absoluteNoiseFloor, normalizationFloor, unused
+    uvec4 meta;     // width, height, compose, enabled
+}
+pc;
+
+// Display-referred focus: 12x12 luma tile (8x8 output + 2px halo for Sobel of
+// the 10x10 alpha neighborhood) plus a 10x10 alpha tile for 3x3 max dilation.
+// Thickens 1px detections to ~3px so edges read at a glance.
+shared float lumaTile[144];   // 12x12
+shared float alphaTile[100];  // 10x10
+
+float lumaAt(ivec2 p) {
+    p = clamp(p, ivec2(0), ivec2(int(pc.meta.x) - 1, int(pc.meta.y) - 1));
+    vec3 rgb = clamp(imageLoad(inputImage, p).rgb, vec3(0.0), vec3(1.0));
+    return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+}
+
+float lload(int x, int y) { return lumaTile[y * 12 + x]; }
+
+vec4 over(vec4 top, vec4 bottom) { return top + bottom * (1.0 - top.a); }
+
+float scoreAt(int x, int y) {
+    // x,y index into lumaTile; center has a 1px border inside the tile.
+    float n00 = lload(x - 1, y - 1), n01 = lload(x, y - 1), n02 = lload(x + 1, y - 1);
+    float n10 = lload(x - 1, y), c = lload(x, y), n12 = lload(x + 1, y);
+    float n20 = lload(x - 1, y + 1), n21 = lload(x, y + 1), n22 = lload(x + 1, y + 1);
+    float gx = (n02 + 2.0 * n12 + n22) - (n00 + 2.0 * n10 + n20);
+    float gy = (n20 + 2.0 * n21 + n22) - (n00 + 2.0 * n01 + n02);
+    float sobel = abs(gx) + abs(gy);
+    float axial = abs(4.0 * c - n01 - n10 - n12 - n21);
+    float diag = abs(4.0 * c - n00 - n02 - n20 - n22);
+    float hf = sobel + 0.5 * (axial + 0.5 * diag);
+    float localMean = (abs(n00) + abs(n01) + abs(n02) + abs(n10) + abs(c) + abs(n12) + abs(n20) + abs(n21) + abs(n22));
+    localMean *= 1.0 / 9.0;
+    float floorv = max(pc.controls.y, 0.0) * (1.0 + 0.5 * sqrt(max(localMean, 0.0)));
+    return max(0.0, hf - floorv) / (localMean + max(pc.controls.z, 1e-6));
+}
+
+float alphaFromScore(float score) {
+    float s = clamp(pc.controls.x, 0.0, 1.0);
+    float threshold = mix(4.0, 0.6, s);
+    float width = max(0.08, threshold * 1.2);
+    float t = clamp((score - threshold) / width, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t) * clamp(pc.color.a, 0.0, 1.0);
+}
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 - ivec2(2);
+    for (uint i = lid; i < 144u; i += 64u) {
+        ivec2 q = ivec2(int(i % 12u), int(i / 12u));
+        lumaTile[i] = lumaAt(origin + q);
+    }
+    barrier();
+
+    // Cooperatively compute the 10x10 alpha neighborhood (100 values, 64 lanes).
+    for (uint i = lid; i < 100u; i += 64u) {
+        int ax = int(i % 10u);
+        int ay = int(i / 10u);
+        // Alpha (ax,ay) corresponds to lumaTile (ax+1, ay+1).
+        alphaTile[i] = alphaFromScore(scoreAt(ax + 1, ay + 1));
+    }
+    barrier();
+
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.meta.x) || p.y >= int(pc.meta.y)) return;
+    int x = int(gl_LocalInvocationID.x) + 1;
+    int y = int(gl_LocalInvocationID.y) + 1;
+    float core = alphaTile[y * 10 + x];
+    float m = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) m = max(m, alphaTile[(y + dy) * 10 + (x + dx)]);
+    // Bright 1px core, dim halo: thin edge instead of a solid 3x3 block.
+    float a = max(core, 0.4 * m);
+    vec4 outv = vec4(clamp(pc.color.rgb, vec3(0.0), vec3(1.0)) * a, a);
+    if (pc.meta.z != 0u) outv = over(outv, imageLoad(overlayImage, p));
+    imageStore(overlayImage, p, outv);
+}

@@ -1,0 +1,38 @@
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer Partial { uint density[]; }
+partial;
+layout(std430, binding = 1) buffer Vec { uint density[]; }
+outb;
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+    uint samplingMode;
+    uint sampledCountOffset;
+    uint maxOffset;
+    uint sampledPixelCount;
+    uint gridBins;
+    uint p2;
+}
+pc;
+
+const uint PARTITIONS = 16u;
+const uint PLANE_STRIDE = 65536u;
+shared uint mx[256];
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    uint idx = gl_WorkGroupID.x * 256u + li;
+    uint sum = 0u;
+    for (uint p = 0u; p < PARTITIONS; ++p) sum += partial.density[p * PLANE_STRIDE + idx];
+    outb.density[idx] = sum;
+
+    mx[li] = sum;
+    barrier();
+    for (uint step = 128u; step != 0u; step >>= 1u) {
+        if (li < step) mx[li] = max(mx[li], mx[li + step]);
+        barrier();
+    }
+    if (li == 0u) atomicMax(outb.density[pc.maxOffset], mx[0]);
+    if (gl_WorkGroupID.x == 0u && li == 0u) outb.density[pc.sampledCountOffset] = pc.sampledPixelCount;
+}

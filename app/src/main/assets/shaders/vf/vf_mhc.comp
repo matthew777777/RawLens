@@ -1,0 +1,378 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Malvar-He-Cutler linear demosaic (H. Malvar, L. He, R. Cutler,
+// "High-Quality Linear Interpolation for Demosaicing of Bayer-Patterned
+// Color Images", ICASSP 2004) for the Direct-Log RECORD path: full-res
+// float RGB out of the 16:9 crop at video rate (single dispatch, gate
+// 20ms at 4K). The grade-YUV stage consumes it in full-RGB mode.
+//
+// Three sparse 5x5 MHC kernels applied as blind convolutions of the
+// mosaic (exactly as the reference: kernel selected by site type, every
+// tap whatever color lands there) plus edge-directed GREEN at R/B
+// sites (the fixed MHC green kernel zippers ±0.075 along edges) and
+// edge-directed CHROMA everywhere (the fixed chroma kernels blur
+// across edges while green stays sharp: ±0.19 alternating row-to-row
+// chroma error, the cyan/red halos around every contrast edge):
+//   Rg_row/Rg_col: symmetric fallback at green sites (texture/flats).
+//   Rb_opp: symmetric fallback at R/B sites.
+//   G_dir: two second-order directional estimates steered by
+//     gradient + same-color curvature, corner-blended to the symmetric
+//     MHC mean (see the site branches; (gh + gv) / 2 IS the old kernel).
+//   C_dir: green-anchored difference-domain chroma (R/B = green +
+//     level-rescaled bilateral pick of the steered sides' (mosaic -
+//     green) differences), blended to the symmetric MHC kernel by the
+//     same gate bank. Bayer phase picks the AXIS (level-correct), the
+//     edge steers WITHIN the axis (sharp); see MhcReference.
+// Green sites keep mosaic green plus C_dir R/B; R/B sites keep mosaic
+// plus G_dir and C_dir. All paths reproduce flat fields exactly
+// (verified); negatives clamp like RawTherapee (a camera matrix turns
+// edge undershoot into complementary fringes), overshoot stays
+// unclipped like the MHC paper (the grade handles >1).
+//
+// Single pass from CFA only: no inter-mode dependency, no scratch, no
+// rgb reads (write-only output, race-free by construction). NO shared
+// memory staging: on Mali (no on-chip workgroup SRAM; `shared` is
+// emulated in global memory) the 12x12-tile version measured 40ms —
+// every "shared read" a global round-trip plus barrier. Direct buffer
+// reads ride the L2 instead (same convention as fast vf_superpixel):
+// each thread CSEs the stencil's 13 unique taps into registers once
+// (center, +-1/+-2 cross, +-1 diagonals cover all four kernels), then
+// evaluates its two kernels from registers. Adjacent taps share uint
+// words (2 pixels each), so the 13 taps cost 9 word loads: rows y+-2
+// one word each, rows y+-1 two words each (3 px always span 2), row y
+// three words; middle taps select the covering word by index parity.
+// 16x16 workgroups keep the Valhall cores occupied (256 invocations;
+// Vulkan Roadmap floor). Edges MIRROR (phase preserving; the CPU
+// parity reference mirrors too). Interior pixels (>= 2 from every
+// edge: all but a 2px frame) skip mirror math entirely via a
+// workgroup-uniform branch; the edge path mirrors per tap exactly
+// like the reference. Values normalized 0..1 (the grade consumes
+// 0..1).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_mhc.comp -o vf_mhc.spv
+#version 450
+// NOTE: mediump (fp16 dual-rate ALU) was tried and reverted: no
+// measurable win (the kernel is not ALU-bound) for 2x worse parity
+// deltas. Keep fp32 compute; only the store quantizes to f16.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Byte-exact sensor view (same convention as vf_superpixel): each uint
+// holds 2 LE pixels, stride is the Image plane pitch in pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+layout(binding = 1, rgba16f) uniform writeonly image2D img_rgb;
+
+// Mirrors RcdParams in vf_vulkan_vf.cpp (72 bytes; u_mode is 0, single
+// dispatch — kept for layout reuse with the RCD submit path). Words
+// 0..3 are the FMA normalize bias (-black * invRange), NOT black
+// levels: taps normalize as fma(code, inv, bias) in one instruction.
+// Green edge-gate band, mirrors MhcReference.GREEN_EDGE_T0/T1.
+const float GREEN_EDGE_T0 = 0.03;
+const float GREEN_EDGE_T1 = 0.08;
+// Chroma side floor + level-ratio regularizer, mirrors
+// MhcReference.BILATERAL_EPS/LEVEL_EPS.
+const float BILATERAL_EPS = 1e-3;
+const float LEVEL_EPS = 0.002;
+
+layout(push_constant) uniform Params {
+    ivec2 u_dims;      // crop W/H (output dims, full res)
+    ivec2 u_origin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 u_chans;     // quad-offset map, channels[] convention
+    vec4 u_normBias;   // per-quad-pos -black * invRange (FMA bias)
+    vec4 u_invRange;   // per-quad-pos 1/(white-black)
+    int u_pitch;       // sensor row stride in pixels
+    int u_mode;        // 0 (only mode)
+} p;
+
+// Phase-preserving edge mirror (single reflection covers our +-2
+// stencil on any dims >= 8).
+int mir(int i, int n) {
+    if (i < 0) i = -i;
+    if (i >= n) i = 2 * n - 2 - i;
+    return i;
+}
+
+// Quad offset (0..3) of crop pixel s in sensor phase.
+int quadOf(ivec2 s) {
+    return (((s.y + p.u_origin.y) & 1) << 1) | ((s.x + p.u_origin.x) & 1);
+}
+
+// CFA color 0=R 1=G 2=B by inverting channels[] (canonical 1 AND 2 are
+// both green: Gr and Gb share a quad diagonal).
+int colorAt(ivec2 s) {
+    int q = quadOf(s);
+    if (p.u_chans.x == q) return 0;
+    if (p.u_chans.y == q || p.u_chans.z == q) return 1;
+    return 2;
+}
+
+// Unpack + normalize one sensor pixel from a precomputed plane index
+// with precomputed quad phase (push-constant dynamic indexing, same as
+// the superpixel unpack). Single FMA, unclipped: kernel outputs are
+// unclipped anyway (the grade clamps downstream), and in-range codes
+// (the common case) are unaffected; out-of-range codes differ from the
+// clamping CPU reference by the overshoot only.
+float normIdx(int idx, int q) {
+    uint u = uint(idx);
+    uint word = codes[u >> 1u];
+    uint code = ((u & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+    return fma(float(code), p.u_invRange[q], p.u_normBias[q]);
+}
+
+// Unpack + normalize from an already-loaded word (the caller
+// guarantees word == codes[idx >> 1]) with a precomputed unpack shift
+// (0 or 16): the per-tap parity multiply folds into two per-thread
+// shifts (see main).
+float normShift(uint word, uint shift, int q) {
+    uint code = (word >> shift) & 0xFFFFu;
+    return fma(float(code), p.u_invRange[q], p.u_normBias[q]);
+}
+
+// Edge path: mirror into range first (phase preserving), then unpack —
+// exactly the reference fetchN (mirror, then quad of mirrored coords).
+float normEdge(ivec2 s) {
+    ivec2 m = ivec2(mir(s.x, p.u_dims.x), mir(s.y, p.u_dims.y));
+    int q = quadOf(m);
+    int idx = (m.y + p.u_origin.y) * p.u_pitch + (m.x + p.u_origin.x);
+    return normIdx(idx, q);
+}
+
+// Level ratio for chroma rescaling (see MhcReference.levelRatio):
+// (num + eps)/(den + eps) with both terms floored at eps. Taps here
+// are unclipped FMA (sub-black noise reaches -0.067), so the floors
+// bar division by ~zero (no INF/NaN speckle); the CPU computes the
+// identical expression (no-op there: its taps clip at 0).
+float levelRatio(float num, float den) {
+    return max(num + LEVEL_EPS, LEVEL_EPS) / max(den + LEVEL_EPS, LEVEL_EPS);
+}
+
+// Edge-directed green at R/B sites (reference op order): the two
+// second-order directional estimates steered by gradient + same-color
+// curvature, corner-blended to the symmetric MHC mean. (gh + gv) / 2
+// IS the old MHC kernel, so flat fields and ramps are bit-identical.
+float greenDir(float c, float n, float s, float w, float e,
+               float n2, float s2, float w2, float e2) {
+    float ch = 2.0 * c - w2 - e2;
+    float cv = 2.0 * c - n2 - s2;
+    float gh = 0.5 * (w + e) + 0.25 * ch;
+    float gv = 0.5 * (n + s) + 0.25 * cv;
+    float dh = abs(w - e) + 0.5 * abs(ch);
+    float dv = abs(n - s) + 0.5 * abs(cv);
+    float gd = (dh < dv) ? gh : gv;
+    float gm = 0.5 * (gh + gv);
+    float t = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
+    return mix(gd, gm, t);
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+
+    // The 13 unique taps of the 5x5 stencil (every MHC kernel draws
+    // from this set): center, +-1/+-2 cross, +-1 diagonals.
+    float c;
+    float n;
+    float s;
+    float w;
+    float e;
+    float n2;
+    float s2;
+    float w2;
+    float e2;
+    float nw;
+    float ne;
+    float sw;
+    float se;
+    if (all(greaterThanEqual(ij, ivec2(2))) && all(lessThan(ij, p.u_dims - ivec2(2)))) {
+        // Interior: raw taps are in range (no mirror). Tap quad phase
+        // derives from the center by XOR (LSB of a sum is XOR of LSBs):
+        // x-neighbors flip bit 0, y-neighbors bit 1, diagonals both.
+        // 9 word loads cover the 13 taps; middle taps select the
+        // covering word by index parity (even idx: the upper word).
+        int sx = ij.x + p.u_origin.x;
+        int sy = ij.y + p.u_origin.y;
+        int q0 = ((sy & 1) << 1) | (sx & 1);
+        int qE = q0 ^ 1;
+        int qS = q0 ^ 2;
+        int qD = q0 ^ 3;
+        int P = p.u_pitch;
+        int base = sy * P + sx;
+        uint wN2 = codes[uint(base - 2 * P) >> 1u];
+        uint wNm = codes[uint(base - P - 1) >> 1u];
+        uint wNp = codes[uint(base - P + 1) >> 1u];
+        uint wCm = codes[uint(base - 2) >> 1u];
+        uint wC0 = codes[uint(base) >> 1u];
+        uint wCp = codes[uint(base + 2) >> 1u];
+        uint wSm = codes[uint(base + P - 1) >> 1u];
+        uint wSp = codes[uint(base + P + 1) >> 1u];
+        uint wS2 = codes[uint(base + 2 * P) >> 1u];
+        uint wN = (((base - P) & 1) == 0) ? wNp : wNm;
+        uint wS = (((base + P) & 1) == 0) ? wSp : wSm;
+        uint wW = ((base & 1) == 0) ? wCm : wC0;
+        uint wE = ((base & 1) == 0) ? wC0 : wCp;
+        // Unpack shifts: tap parity is base parity XOR offset parity,
+        // so even-offset taps share one shift, odd-offset taps the
+        // other; the +-P / +-P+-1 taps follow P's parity (one select
+        // each, shared by 2 / 4 taps).
+        uint s0 = uint(base & 1) * 16u;
+        uint s1 = 16u - s0;
+        uint sP = ((P & 1) == 0) ? s0 : s1;
+        uint sD = ((P & 1) == 0) ? s1 : s0;
+        c = normShift(wC0, s0, q0);
+        n = normShift(wN, sP, qS);
+        s = normShift(wS, sP, qS);
+        w = normShift(wW, s1, qE);
+        e = normShift(wE, s1, qE);
+        n2 = normShift(wN2, s0, q0);
+        s2 = normShift(wS2, s0, q0);
+        w2 = normShift(wCm, s0, q0);
+        e2 = normShift(wCp, s0, q0);
+        nw = normShift(wNm, sD, qD);
+        ne = normShift(wNp, sD, qD);
+        sw = normShift(wSm, sD, qD);
+        se = normShift(wSp, sD, qD);
+    } else {
+        c = normEdge(ij);
+        n = normEdge(ij + ivec2(0, -1));
+        s = normEdge(ij + ivec2(0, 1));
+        w = normEdge(ij + ivec2(-1, 0));
+        e = normEdge(ij + ivec2(1, 0));
+        n2 = normEdge(ij + ivec2(0, -2));
+        s2 = normEdge(ij + ivec2(0, 2));
+        w2 = normEdge(ij + ivec2(-2, 0));
+        e2 = normEdge(ij + ivec2(2, 0));
+        nw = normEdge(ij + ivec2(-1, -1));
+        ne = normEdge(ij + ivec2(1, -1));
+        sw = normEdge(ij + ivec2(-1, 1));
+        se = normEdge(ij + ivec2(1, 1));
+    }
+
+    // Kernels in reference op order (sums listed tap-for-tap as the
+    // CPU port); only the site's two kernels evaluate.
+    //
+    // Edge-gate bank shared by green and chroma (gradient + same-color
+    // curvature; greenDir recomputes its own copy internally — the ~12
+    // ALU duplication keeps the validated green path untouched). gt is
+    // the texture gate (both directions active -> symmetric MHC), gf
+    // the flat gate (neither active -> symmetric MHC, exact on flats
+    // and blind to chroma-only edges), gg their max for chroma.
+    float ch = 2.0 * c - w2 - e2;
+    float cv = 2.0 * c - n2 - s2;
+    float dh = abs(w - e) + 0.5 * abs(ch);
+    float dv = abs(n - s) + 0.5 * abs(cv);
+    float gt = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
+    float gf = clamp((GREEN_EDGE_T0 - max(dh, dv)) / GREEN_EDGE_T0, 0.0, 1.0);
+    float gg = max(gt, gf);
+    bool hEdge = dh < dv;
+    int col = colorAt(ij);
+    float r;
+    float g;
+    float b;
+    if (col == 0) {
+        r = c;
+        g = greenDir(c, n, s, w, e, n2, s2, w2, e2);
+        // Opposite chroma, green-anchored difference-domain (see
+        // MhcReference.kernelOppDir): green here plus a level-rescaled
+        // bilateral pick of the steered sides' (diagonal-pair -
+        // cardinal-green) differences. A vertical edge varies along x,
+        // so it picks the W/E-side pair; horizontal picks N/S. Side
+        // weights are cross-distances (weight W by E's mismatch).
+        float dw = 0.5 * (nw + sw) - w;
+        float de = 0.5 * (ne + se) - e;
+        float dn = 0.5 * (nw + ne) - n;
+        float ds = 0.5 * (sw + se) - s;
+        float oppDir;
+        if (hEdge) {
+            float wN = BILATERAL_EPS + abs(c - s2);
+            float wS = BILATERAL_EPS + abs(c - n2);
+            float rN = levelRatio(g, n);
+            float rS = levelRatio(g, s);
+            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
+        } else {
+            float wW = BILATERAL_EPS + abs(c - e2);
+            float wE = BILATERAL_EPS + abs(c - w2);
+            float rW = levelRatio(g, w);
+            float rE = levelRatio(g, e);
+            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
+        }
+        float v = 6.0 * c;
+        v += 2.0 * (nw + ne + sw + se);
+        v -= 1.5 * (n2 + s2 + w2 + e2);
+        b = mix(oppDir, v * 0.125, gg);
+    } else if (col == 2) {
+        g = greenDir(c, n, s, w, e, n2, s2, w2, e2);
+        float dw = 0.5 * (nw + sw) - w;
+        float de = 0.5 * (ne + se) - e;
+        float dn = 0.5 * (nw + ne) - n;
+        float ds = 0.5 * (sw + se) - s;
+        float oppDir;
+        if (hEdge) {
+            float wN = BILATERAL_EPS + abs(c - s2);
+            float wS = BILATERAL_EPS + abs(c - n2);
+            float rN = levelRatio(g, n);
+            float rS = levelRatio(g, s);
+            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
+        } else {
+            float wW = BILATERAL_EPS + abs(c - e2);
+            float wE = BILATERAL_EPS + abs(c - w2);
+            float rW = levelRatio(g, w);
+            float rE = levelRatio(g, e);
+            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
+        }
+        float v = 6.0 * c;
+        v += 2.0 * (nw + ne + sw + se);
+        v -= 1.5 * (n2 + s2 + w2 + e2);
+        r = mix(oppDir, v * 0.125, gg);
+        b = c;
+    } else {
+        g = c;
+        // Axis chroma, green-anchored difference-domain (see
+        // MhcReference.kernelChromaEW/NS): mosaic green plus a
+        // level-rescaled bilateral pick of the axis sides' (mosaic -
+        // centered-green) differences. Bayer phase picks the AXIS
+        // (level-correct: the axis taps hold the estimated channel);
+        // the edge steers WITHIN the axis (sharp). Bayer cardinals of
+        // green always split 2+2 (mirrored edges included: mirror
+        // preserves phase).
+        float gwW = hEdge ? 0.5 * (c + w2) : 0.5 * (nw + sw);
+        float gwE = hEdge ? 0.5 * (c + e2) : 0.5 * (ne + se);
+        float wW = BILATERAL_EPS + abs(c - e2);
+        float wE = BILATERAL_EPS + abs(c - w2);
+        float rW = levelRatio(c, gwW);
+        float rE = levelRatio(c, gwE);
+        float ewOut = c + (wW * (w - gwW) * rW + wE * (e - gwE) * rE) / (wW + wE);
+        float gnN = hEdge ? 0.5 * (nw + ne) : 0.5 * (c + n2);
+        float gnS = hEdge ? 0.5 * (sw + se) : 0.5 * (c + s2);
+        float wN = BILATERAL_EPS + abs(c - s2);
+        float wS = BILATERAL_EPS + abs(c - n2);
+        float rN = levelRatio(c, gnN);
+        float rS = levelRatio(c, gnS);
+        float nsOut = c + (wN * (n - gnN) * rN + wS * (s - gnS) * rS) / (wN + wS);
+        float vr = 5.0 * c;
+        vr += 4.0 * (w + e);
+        vr -= w2 + e2;
+        vr -= nw + ne + sw + se;
+        vr += 0.5 * (n2 + s2);
+        vr *= 0.125;
+        float vc = 5.0 * c;
+        vc += 4.0 * (n + s);
+        vc -= n2 + s2;
+        vc -= nw + ne + sw + se;
+        vc += 0.5 * (w2 + e2);
+        vc *= 0.125;
+        if (colorAt(ij + ivec2(1, 0)) == 0) {
+            r = mix(ewOut, vr, gg);
+            b = mix(nsOut, vc, gg);
+        } else {
+            r = mix(nsOut, vc, gg);
+            b = mix(ewOut, vr, gg);
+        }
+    }
+    // Clamp negatives like RawTherapee (a camera matrix turns edge
+    // undershoot into complementary fringes); overshoot stays unclipped
+    // like the MHC paper (the grade handles >1).
+    r = max(r, 0.0);
+    g = max(g, 0.0);
+    b = max(b, 0.0);
+    imageStore(img_rgb, ij, vec4(r, g, b, 1.0));
+}

@@ -1,0 +1,179 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, binding = 0) readonly buffer Present { uint density[]; }
+p;
+layout(binding = 1, rgba8) uniform writeonly image2D dst;
+
+layout(push_constant) uniform PC {
+    float gain;
+    float opacity;
+    uint showGrid;
+    uint showTargets;
+    uint showBg;
+    uint sampledPixelCount;
+    uint reserved0;
+    uint reserved1;
+}
+pc;
+
+const float PI = 3.14159265358979323846;
+
+float rawBin(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(511));
+    return float(p.density[uint(q.y) * 512u + uint(q.x)]);
+}
+
+float bilinearDensity(vec2 q) {
+    q = clamp(q, vec2(0.0), vec2(511.0));
+    ivec2 i0 = ivec2(floor(q));
+    ivec2 i1 = min(i0 + ivec2(1), ivec2(511));
+    vec2 t = fract(q);
+    float a = mix(rawBin(i0), rawBin(ivec2(i1.x, i0.y)), t.x);
+    float b = mix(rawBin(ivec2(i0.x, i1.y)), rawBin(i1), t.x);
+    return mix(a, b, t.y);
+}
+
+// Compact population reconstruction only.  No ridge extraction, no support
+// extrapolation, no directional synthesis.  Radius remains below one 512-grid bin.
+float microPopulation(vec2 q) {
+    // Micro: preserve individual hairs. Compact isotropic 3x3 tent.
+    const float o = .68;
+    float c = bilinearDensity(q) * .36;
+    c += (bilinearDensity(q + vec2(o, 0.0)) + bilinearDensity(q + vec2(-o, 0.0)) + bilinearDensity(q + vec2(0.0, o)) +
+          bilinearDensity(q + vec2(0.0, -o))) *
+         .12;
+    c += (bilinearDensity(q + vec2(o, o)) + bilinearDensity(q + vec2(-o, o)) + bilinearDensity(q + vec2(o, -o)) +
+          bilinearDensity(q + vec2(-o, -o))) *
+         .04;
+    return c;
+}
+float mesoPopulation(vec2 q) {
+    // Meso: connect locally coherent fragments into feather/ribbon bodies.
+    const float o = 1.22;
+    return bilinearDensity(q) * .44 + (bilinearDensity(q + vec2(o, 0.0)) + bilinearDensity(q + vec2(-o, 0.0)) +
+                                       bilinearDensity(q + vec2(0.0, o)) + bilinearDensity(q + vec2(0.0, -o))) *
+                                          .14;
+}
+float macroPopulation(vec2 q) {
+    // Macro: restrained envelope only; deliberately no broad Gaussian fog.
+    const float o = 2.05;
+    return bilinearDensity(q) * .52 + (bilinearDensity(q + vec2(o, 0.0)) + bilinearDensity(q + vec2(-o, 0.0)) +
+                                       bilinearDensity(q + vec2(0.0, o)) + bilinearDensity(q + vec2(0.0, -o))) *
+                                          .12;
+}
+float exposure(float count, float scale) {
+    if (count <= 0.0) return 0.0;
+    return 1.0 - exp(-count / max(scale, 1e-4));
+}
+
+vec3 chromaTint(vec2 q) {
+    float cb = q.x / 511.0 * 255.0 - 128.0;
+    float cr = q.y / 511.0 * 255.0 - 128.0;
+    float Y = 128.0;
+    return clamp(vec3(Y + 1.5748 * cr, Y - 0.1873 * cb - 0.4681 * cr, Y + 1.8556 * cb) / 255.0, 0.0, 1.0);
+}
+
+float lineDistance(vec2 q, vec2 a, vec2 b) {
+    vec2 d = b - a;
+    float t = clamp(dot(q - a, d) / max(dot(d, d), 1e-6), 0.0, 1.0);
+    return length(q - (a + t * d));
+}
+
+vec3 graticule(vec2 fp, ivec2 sz) {
+    if (pc.showGrid == 0u && pc.showTargets == 0u) return vec3(0.0);
+
+    vec2 center = .5 * vec2(sz);
+    float scale = float(min(sz.x, sz.y));
+    float R = .461 * scale;
+    vec2 d = fp - center;
+    float r = length(d);
+    vec3 gold = vec3(.20, .17, .075);
+    float g = 0.0;
+
+    if (pc.showGrid != 0u) {
+        g = max(g, 1.0 - smoothstep(.35, 1.25, abs(r - R)));
+        g = max(g, (1.0 - smoothstep(.35, 1.10, abs(d.x))) * step(abs(d.y), R));
+        g = max(g, (1.0 - smoothstep(.35, 1.10, abs(d.y))) * step(abs(d.x), R));
+
+        float nr = .052 * scale;
+        g = max(g, .72 * (1.0 - smoothstep(.35, 1.20, abs(r - nr))));
+
+        float ang = atan(d.y, d.x);
+        float tc = abs(fract((ang + PI) / (PI / 18.0)) - .5) * 2.0;
+        float mc = abs(fract((ang + PI) / (PI / 6.0)) - .5) * 2.0;
+        float tl = mix(.012, .024, 1.0 - smoothstep(0.0, .14, mc)) * scale;
+        g = max(g, .90 * (1.0 - smoothstep(0.0, .055, tc)) * step(R - tl, r) * step(r, R + .5));
+
+        float a = radians(-123.0);
+        vec2 end = center + vec2(cos(a), sin(a)) * (R * .60);
+        g = max(g, .70 * (1.0 - smoothstep(.35, 1.15, lineDistance(fp, center, end))));
+    }
+
+    if (pc.showTargets != 0u) {
+        vec2 t256[6] = vec2[6](vec2(99, 255), vec2(30, 12), vec2(255, 116), vec2(157, 0), vec2(226, 244), vec2(0, 140));
+        for (int i = 0; i < 6; ++i) {
+            vec2 q = t256[i] / 255.0;
+            vec2 tp = vec2(q.x * float(sz.x - 1), (1.0 - q.y) * float(sz.y - 1));
+            float ss = .016 * scale;
+            vec2 ad = abs(fp - tp);
+            float corners =
+                min(max(abs(ad.x - ss), max(ad.y - ss * .48, 0.0)), max(abs(ad.y - ss), max(ad.x - ss * .48, 0.0)));
+            g = max(g, .90 * (1.0 - smoothstep(.4, 1.4, corners)));
+        }
+    }
+    return gold * g;
+}
+
+void main() {
+    ivec2 ip = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(dst);
+    if (any(greaterThanEqual(ip, sz))) return;
+
+    vec2 uv = (vec2(ip) + vec2(.5)) / vec2(sz);
+    vec2 q = vec2(uv.x * 511.0, (1.0 - uv.y) * 511.0);
+
+    float micro = microPopulation(q);
+    float meso = mesoPopulation(q);
+    float macro = macroPopulation(q);
+    float N = max(float(pc.sampledPixelCount), 1.0);
+
+    // Frozen reference-like photographic exposure family.
+    float sparseScale = max(.80, N * .00000050);
+    float mediumScale = max(4.8, N * .0000075);
+    float denseScale = max(42.0, N * .000120);
+
+    // Use medium-exposure micro density only to decide reconstruction strength.
+    // Morphology still comes exclusively from measured population.
+    float proxy = 1.0 - exp(-micro / max(mediumScale, 1e-5));
+    float denseW = clamp((proxy - .38) / .46, 0.0, 1.0);
+    float mediumW = clamp((proxy - .08) / .42, 0.0, 1.0) * (1.0 - denseW);
+    float sparseW = 1.0 - clamp(mediumW + denseW, 0.0, 1.0);
+
+    float count = sparseW * (.86 * micro + .14 * meso) + mediumW * (.50 * micro + .46 * meso + .04 * macro) +
+                  denseW * (.30 * micro + .55 * meso + .15 * macro);
+
+    float sparse = exposure(count, sparseScale);
+    float medium = exposure(count, mediumScale);
+    float dense = exposure(count, denseScale);
+
+    float confidence = clamp(count * .5, 0.0, 1.0);
+    sparse *= .30 + .70 * confidence;
+
+    vec3 tint = chromaTint(q);
+    vec3 sparseColor = .02 + .98 * tint;
+    vec3 mediumColor = .20 + .80 * tint;
+    vec3 denseColor = .64 + .36 * tint;
+
+    vec3 light = pow(max(sparse, 0.0), .92) * sparseColor * .24;
+    light += pow(max(medium, 0.0), .95) * mediumColor * .58;
+    light += pow(max(dense, 0.0), .98) * denseColor * .78;
+    light += vec3(pow(clamp(dense, 0.0, 1.0), 3.8) * .30);
+    light *= pc.gain * pc.opacity;
+
+    vec3 col = pc.showBg != 0u ? vec3(.0025) : vec3(0.0);
+    col += 1.0 - exp(-light * 1.15);
+    col = max(col, graticule(vec2(ip) + .5, sz));
+
+    imageStore(dst, ip, vec4(clamp(col, 0.0, 1.0), 1.0));
+}

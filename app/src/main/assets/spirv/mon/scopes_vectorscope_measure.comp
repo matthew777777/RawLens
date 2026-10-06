@@ -1,0 +1,100 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "shared/common.glsl"
+
+// First pass: 16 workgroups own disjoint source stripes and disjoint dense
+// partial vectorscope planes. Samples are aggregated in a shared-memory hash
+// table in 1024-pixel batches, then flushed with ordinary stores/adds to the
+// workgroup-private partial plane. No device-memory atomics are used here.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(binding = 0, rgba8) uniform readonly image2D src;
+layout(std430, binding = 1) buffer Partial { uint density[]; }
+partial;
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+    uint samplingMode;
+    uint sampledCountOffset;
+    uint maxOffset;
+    uint sampledPixelCount;
+    uint gridBins;
+    uint p2;
+}
+pc;
+
+const uint PARTITIONS = 16u;
+const uint PLANE_STRIDE = 65536u;
+const uint TABLE = 2048u;
+const uint EMPTY = 0xffffffffu;
+const uint PRESENT_GRID = 512u;
+const uint PRESENT_OFFSET = PARTITIONS * PLANE_STRIDE;
+const float PRESENT_SCALE = 511.0 / (255.0 * 65536.0);
+shared uint keys[TABLE];
+shared uint counts[TABLE];
+
+uint slotFor(uint key) { return (key * 2654435761u) & (TABLE - 1u); }
+
+void insertKey(uint key) {
+    uint slot = slotFor(key);
+    for (uint probe = 0u; probe < TABLE; ++probe) {
+        uint old = atomicCompSwap(keys[slot], EMPTY, key);
+        if (old == EMPTY || old == key) {
+            atomicAdd(counts[slot], 1u);
+            return;
+        }
+        slot = (slot + 1u) & (TABLE - 1u);
+    }
+}
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    uint part = gl_WorkGroupID.x;
+    uint gridElements = pc.gridBins * pc.gridBins;
+    uint base = part * PLANE_STRIDE;
+
+    // This workgroup is the sole writer of its dense partial plane.
+    for (uint i = li; i < gridElements; i += 256u) partial.density[base + i] = 0u;
+    memoryBarrierBuffer();
+    barrier();
+
+    uint y0 = (part * pc.height) / PARTITIONS;
+    uint y1 = ((part + 1u) * pc.height) / PARTITIONS;
+    uint stripePixels = (y1 - y0) * pc.width;
+
+    for (uint batch = 0u; batch < stripePixels; batch += 1024u) {
+        for (uint i = li; i < TABLE; i += 256u) {
+            keys[i] = EMPTY;
+            counts[i] = 0u;
+        }
+        barrier();
+
+        for (uint k = 0u; k < 4u; ++k) {
+            uint idx = batch + li + k * 256u;
+            if (idx >= stripePixels) continue;
+            uint sx = idx % pc.width;
+            uint sy = y0 + idx / pc.width;
+            uvec2 p = uvec2(sx, sy);
+            if (!sampleSelected(p, pc.samplingMode)) continue;
+            uvec3 c = uvec3(round(clamp(imageLoad(src, ivec2(p)).rgb, 0.0, 1.0) * 255.0));
+            ivec2 cc = cbcrQ16(c);
+            uint xb = min(pc.gridBins - 1u, uint(cc.x) * pc.gridBins / 256u);
+            uint yb = min(pc.gridBins - 1u, uint(cc.y) * pc.gridBins / 256u);
+            insertKey(yb * pc.gridBins + xb);
+            // Private presentation path: preserve fractional Cb/Cr before
+            // public 8-bit vectorscope quantization. Exactly one extra atomic
+            // increment per selected source sample; no second image read.
+            ivec2 fine = cbcrFineQ16(c);
+            uint pxb = min(PRESENT_GRID - 1u, uint(round(float(fine.x) * PRESENT_SCALE)));
+            uint pyb = min(PRESENT_GRID - 1u, uint(round(float(fine.y) * PRESENT_SCALE)));
+            atomicAdd(partial.density[PRESENT_OFFSET + pyb * PRESENT_GRID + pxb], 1u);
+        }
+        barrier();
+
+        for (uint i = li; i < TABLE; i += 256u) {
+            uint key = keys[i];
+            if (key != EMPTY) partial.density[base + key] += counts[i];
+        }
+        memoryBarrierBuffer();
+        barrier();
+    }
+}

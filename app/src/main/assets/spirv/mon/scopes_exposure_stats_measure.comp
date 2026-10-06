@@ -1,0 +1,67 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "shared/common.glsl"
+
+// Lightweight display exposure meter. One deterministic sample per NxN block.
+// Unlike generic scope sampling, unsampled pixels are never iterated or loaded.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(binding = 0, rgba8) uniform readonly image2D src;
+layout(std430, binding = 1) buffer Partial { uint data[]; }
+partial;
+
+const uint PARTITIONS = 16u;
+const uint BIN_COUNT = 256u;
+const uint COUNTERS = 4u;  // sample, >=90%, >=96%, any RGB channel clipped
+const uint STRIDE = BIN_COUNT + COUNTERS;
+shared uint bins[BIN_COUNT];
+shared uint counters[COUNTERS];
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+    uint sampleBlockSize;
+    uint p1;
+    uint p2;
+    uint p3;
+    uint p4;
+    uint p5;
+}
+pc;
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    bins[li] = 0u;
+    if (li < COUNTERS) counters[li] = 0u;
+    barrier();
+
+    uint block = pc.sampleBlockSize;
+    uint blocksX = (pc.width + block - 1u) / block;
+    uint blocksY = (pc.height + block - 1u) / block;
+    uint part = gl_WorkGroupID.x;
+    uint by0 = (part * blocksY) / PARTITIONS;
+    uint by1 = ((part + 1u) * blocksY) / PARTITIONS;
+
+    for (uint by = by0; by < by1; ++by) {
+        uint y0 = by * block;
+        uint validH = min(block, pc.height - y0);
+        for (uint bx = li; bx < blocksX; bx += 256u) {
+            uint x0 = bx * block;
+            uint validW = min(block, pc.width - x0);
+            uint validCount = validW * validH;
+            uint lane = hash2(uvec2(bx, by)) % validCount;
+            uint x = x0 + (lane % validW);
+            uint y = y0 + (lane / validW);
+
+            uvec3 c = uvec3(round(clamp(imageLoad(src, ivec2(x, y)).rgb, 0.0, 1.0) * 255.0));
+            uint y8 = lumaQ16(c);
+            atomicAdd(bins[y8], 1u);
+            atomicAdd(counters[0], 1u);
+            if (y8 >= 230u) atomicAdd(counters[1], 1u);
+            if (y8 >= 245u) atomicAdd(counters[2], 1u);
+            if (c.r == 255u || c.g == 255u || c.b == 255u) atomicAdd(counters[3], 1u);
+        }
+    }
+    barrier();
+    uint base = part * STRIDE;
+    partial.data[base + li] = bins[li];
+    if (li < COUNTERS) partial.data[base + BIN_COUNT + li] = counters[li];
+}

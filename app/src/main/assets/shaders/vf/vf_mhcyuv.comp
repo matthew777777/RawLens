@@ -1,0 +1,489 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log FUSED record stage: CFA mosaic -> Malvar-He-Cutler demosaic
+// (full-res RGB, same 13-tap kernels as vf_mhc.comp) -> WB/CCM/exposure
+// -> DIRECT profile encode (BT.709 OETF / Sony S-Log3 / BT.2020 + HLG,
+// see outMode) -> limited-range YUV -> semi-planar P010 bytes, in ONE
+// dispatch. No contrast curve, no saturation.
+//
+// Why fused: MHC and grade share one Vulkan queue (strictly serial), so
+// record throughput is the SUM (measured 20.9 + 17.6 = 38.6ms > the
+// 33.3ms frame). The split stages also round-trip 150MB of RGBA16F
+// through DRAM. Fusing removes the round trip, one dispatch, and the
+// queue-family transfers on the 75MB RGB image. UV is the output pair's
+// mean (zero extra taps; see vf_gradeyuv.comp for the rationale).
+//
+// Source-of-truth note: the MHC tap math below is a copy of vf_mhc.comp
+// (13 taps, 9 word loads, FMA normalize, edge-directed green +
+// edge-directed difference-domain chroma, all in reference op order)
+// and the grade a direct per-pixel profile encode (CPU goldens are
+// VfLogGrade.encodePixel*).
+// Keep fused/vf_gradeyuv in sync; the precision probes (reference-
+// computed expects) gate drift. Deliberate differences: no f16 RGB
+// round trip between stages (fused keeps fp32 into the encode),
+// no bypass flag (the recorder never bypasses), and sensor-white
+// desaturation pre-shade (vf_gradeyuv carries no WB gains, so the
+// test-only split path cannot white-protect; the fused record path
+// must, or clipped white renders magenta).
+//
+// Params arrive as a 192-byte SSBO (FusedParams in vf_vulkan_vf.cpp).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_mhcyuv.comp -o vf_mhcyuv.spv
+#version 450
+// 16x16 workgroups (MHC's shape, not grade's 8x8): the fused kernel
+// is tap-heavy like MHC, and wider groups give the scheduler more
+// threads to cover tap latency with.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Byte-exact sensor view (vf_superpixel convention): each uint holds 2
+// LE pixels, stride is the Image plane pitch in pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+layout(binding = 1) writeonly buffer P010 { uint words[]; } buf_out;
+
+// Mirrors FusedParams in vf_vulkan_vf.cpp exactly (192 bytes, std430).
+struct FusedParams {
+    ivec2 cDims;      // crop W/H (MHC domain, full res)
+    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 cChans;     // quad-offset map, channels[] convention
+    vec4 cNormBias;   // per-quad-pos -black * invRange (FMA bias)
+    vec4 cInvRange;   // per-quad-pos 1/(white-black)
+    int cPitch;       // sensor row stride in pixels
+    int _pad0;
+    ivec2 oDims;      // output W/H (encode res)
+    vec4 gGains;      // R, G, B white-balance gains (+1 spare, folded: unused)
+    vec4 gCcmR;
+    vec4 gCcmG;
+    vec4 gCcmB;
+    vec4 gMisc;       // exposureEV, yStrideW, uvStrideW, uvBaseOffB
+    ivec4 sDims;      // shade rows, cols, enable, outMode
+    vec4 sActive;     // shade active l, t, 1/w, 1/h (sensor pixels)
+};
+layout(binding = 2) readonly buffer Fused { FusedParams u; };
+// Reserved for upcoming LUT support: still bound every submit (the
+// native gate requires the upload), not fetched (direct encode).
+layout(binding = 3) uniform sampler3D gradeLut;
+// HAL lens-shading map as RGBA16F (Camera2 order), hardware-bilinear
+// sampled: 16 manual loads + weight ALU per texel cost ~7ms on this
+// kernel (measured); one texture fetch is ~0.5ms.
+layout(binding = 4) uniform sampler2D shadeMap;
+
+// ---- MHC (copied from vf_mhc.comp; see its header) ----
+
+// Green edge-gate band, mirrors MhcReference.GREEN_EDGE_T0/T1.
+const float GREEN_EDGE_T0 = 0.03;
+const float GREEN_EDGE_T1 = 0.08;
+// Chroma side floor + level-ratio regularizer, mirrors
+// MhcReference.BILATERAL_EPS/LEVEL_EPS.
+const float BILATERAL_EPS = 1e-3;
+const float LEVEL_EPS = 0.002;
+// Sensor-white desaturation band, mirrors MhcReference.DESAT_LO/HI
+// (same anchors as the AMaZE JPEG path).
+const float DESAT_LO = 0.70;
+const float DESAT_HI = 0.99;
+
+// Phase-preserving edge mirror (single reflection covers our +-2
+// stencil on any dims >= 8).
+int mir(int i, int n) {
+    if (i < 0) i = -i;
+    if (i >= n) i = 2 * n - 2 - i;
+    return i;
+}
+
+// Quad offset (0..3) of crop pixel s in sensor phase.
+int quadOf(ivec2 s) {
+    return (((s.y + u.cOrigin.y) & 1) << 1) | ((s.x + u.cOrigin.x) & 1);
+}
+
+// CFA color 0=R 1=G 2=B by inverting channels[] (canonical 1 AND 2 are
+// both green: Gr and Gb share a quad diagonal).
+int colorAt(ivec2 s) {
+    int q = quadOf(s);
+    if (u.cChans.x == q) return 0;
+    if (u.cChans.y == q || u.cChans.z == q) return 1;
+    return 2;
+}
+
+// Unpack + normalize one sensor pixel from a precomputed plane index
+// with precomputed quad phase. Single FMA, unclipped (kernel outputs
+// are unclipped anyway; the grade packs clamped codes downstream).
+float normIdx(int idx, int q) {
+    uint uu = uint(idx);
+    uint word = codes[uu >> 1u];
+    uint code = ((uu & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+    return fma(float(code), u.cInvRange[q], u.cNormBias[q]);
+}
+
+// Unpack + normalize from an already-loaded word (the caller
+// guarantees word == codes[idx >> 1]) with a precomputed shift.
+float normShift(uint word, uint shift, int q) {
+    uint code = (word >> shift) & 0xFFFFu;
+    return fma(float(code), u.cInvRange[q], u.cNormBias[q]);
+}
+
+// Edge path: mirror into range first (phase preserving), then unpack.
+float normEdge(ivec2 s) {
+    ivec2 m = ivec2(mir(s.x, u.cDims.x), mir(s.y, u.cDims.y));
+    int q = quadOf(m);
+    int idx = (m.y + u.cOrigin.y) * u.cPitch + (m.x + u.cOrigin.x);
+    return normIdx(idx, q);
+}
+
+// Level ratio for chroma rescaling (see MhcReference.levelRatio):
+// (num + eps)/(den + eps) with both terms floored at eps. Taps here
+// are unclipped FMA (sub-black noise reaches -0.067), so the floors
+// bar division by ~zero (no INF/NaN speckle); the CPU computes the
+// identical expression (no-op there: its taps clip at 0).
+float levelRatio(float num, float den) {
+    return max(num + LEVEL_EPS, LEVEL_EPS) / max(den + LEVEL_EPS, LEVEL_EPS);
+}
+
+// Edge-directed green at R/B sites (reference op order): the two
+// second-order directional estimates steered by gradient + same-color
+// curvature, corner-blended to the symmetric MHC mean. (gh + gv) / 2
+// IS the old MHC kernel, so flat fields and ramps are bit-identical.
+float greenDir(float c, float n, float so, float w, float e,
+               float n2, float s2, float w2, float e2) {
+    float ch = 2.0 * c - w2 - e2;
+    float cv = 2.0 * c - n2 - s2;
+    float gh = 0.5 * (w + e) + 0.25 * ch;
+    float gv = 0.5 * (n + so) + 0.25 * cv;
+    float dh = abs(w - e) + 0.5 * abs(ch);
+    float dv = abs(n - so) + 0.5 * abs(cv);
+    float gd = (dh < dv) ? gh : gv;
+    float gm = 0.5 * (gh + gv);
+    float t = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
+    return mix(gd, gm, t);
+}
+
+// Full MHC interpolate at crop pixel s (13 taps, reference op order).
+vec3 mhcRgb(ivec2 s) {
+    float c;
+    float n;
+    float so;
+    float w;
+    float e;
+    float n2;
+    float s2;
+    float w2;
+    float e2;
+    float nw;
+    float ne;
+    float sw;
+    float se;
+    if (all(greaterThanEqual(s, ivec2(2))) && all(lessThan(s, u.cDims - ivec2(2)))) {
+        int sx = s.x + u.cOrigin.x;
+        int sy = s.y + u.cOrigin.y;
+        int q0 = ((sy & 1) << 1) | (sx & 1);
+        int qE = q0 ^ 1;
+        int qS = q0 ^ 2;
+        int qD = q0 ^ 3;
+        int P = u.cPitch;
+        int base = sy * P + sx;
+        uint wN2 = codes[uint(base - 2 * P) >> 1u];
+        uint wNm = codes[uint(base - P - 1) >> 1u];
+        uint wNp = codes[uint(base - P + 1) >> 1u];
+        uint wCm = codes[uint(base - 2) >> 1u];
+        uint wC0 = codes[uint(base) >> 1u];
+        uint wCp = codes[uint(base + 2) >> 1u];
+        uint wSm = codes[uint(base + P - 1) >> 1u];
+        uint wSp = codes[uint(base + P + 1) >> 1u];
+        uint wS2 = codes[uint(base + 2 * P) >> 1u];
+        uint wN = (((base - P) & 1) == 0) ? wNp : wNm;
+        uint wS = (((base + P) & 1) == 0) ? wSp : wSm;
+        uint wW = ((base & 1) == 0) ? wCm : wC0;
+        uint wE = ((base & 1) == 0) ? wC0 : wCp;
+        uint s0 = uint(base & 1) * 16u;
+        uint s1 = 16u - s0;
+        uint sP = ((P & 1) == 0) ? s0 : s1;
+        uint sD = ((P & 1) == 0) ? s1 : s0;
+        c = normShift(wC0, s0, q0);
+        n = normShift(wN, sP, qS);
+        so = normShift(wS, sP, qS);
+        w = normShift(wW, s1, qE);
+        e = normShift(wE, s1, qE);
+        n2 = normShift(wN2, s0, q0);
+        s2 = normShift(wS2, s0, q0);
+        w2 = normShift(wCm, s0, q0);
+        e2 = normShift(wCp, s0, q0);
+        nw = normShift(wNm, sD, qD);
+        ne = normShift(wNp, sD, qD);
+        sw = normShift(wSm, sD, qD);
+        se = normShift(wSp, sD, qD);
+    } else {
+        c = normEdge(s);
+        n = normEdge(s + ivec2(0, -1));
+        so = normEdge(s + ivec2(0, 1));
+        w = normEdge(s + ivec2(-1, 0));
+        e = normEdge(s + ivec2(1, 0));
+        n2 = normEdge(s + ivec2(0, -2));
+        s2 = normEdge(s + ivec2(0, 2));
+        w2 = normEdge(s + ivec2(-2, 0));
+        e2 = normEdge(s + ivec2(2, 0));
+        nw = normEdge(s + ivec2(-1, -1));
+        ne = normEdge(s + ivec2(1, -1));
+        sw = normEdge(s + ivec2(-1, 1));
+        se = normEdge(s + ivec2(1, 1));
+    }
+    // Edge-gate bank shared by green and chroma (see vf_mhc.comp).
+    float ch = 2.0 * c - w2 - e2;
+    float cv = 2.0 * c - n2 - s2;
+    float dh = abs(w - e) + 0.5 * abs(ch);
+    float dv = abs(n - so) + 0.5 * abs(cv);
+    float gt = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
+    float gf = clamp((GREEN_EDGE_T0 - max(dh, dv)) / GREEN_EDGE_T0, 0.0, 1.0);
+    float gg = max(gt, gf);
+    bool hEdge = dh < dv;
+    int col = colorAt(s);
+    float r;
+    float g;
+    float b;
+    if (col == 0) {
+        r = c;
+        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
+        float dw = 0.5 * (nw + sw) - w;
+        float de = 0.5 * (ne + se) - e;
+        float dn = 0.5 * (nw + ne) - n;
+        float ds = 0.5 * (sw + se) - so;
+        float oppDir;
+        if (hEdge) {
+            float wN = BILATERAL_EPS + abs(c - s2);
+            float wS = BILATERAL_EPS + abs(c - n2);
+            float rN = levelRatio(g, n);
+            float rS = levelRatio(g, so);
+            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
+        } else {
+            float wW = BILATERAL_EPS + abs(c - e2);
+            float wE = BILATERAL_EPS + abs(c - w2);
+            float rW = levelRatio(g, w);
+            float rE = levelRatio(g, e);
+            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
+        }
+        float v = 6.0 * c;
+        v += 2.0 * (nw + ne + sw + se);
+        v -= 1.5 * (n2 + s2 + w2 + e2);
+        b = mix(oppDir, v * 0.125, gg);
+    } else if (col == 2) {
+        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
+        float dw = 0.5 * (nw + sw) - w;
+        float de = 0.5 * (ne + se) - e;
+        float dn = 0.5 * (nw + ne) - n;
+        float ds = 0.5 * (sw + se) - so;
+        float oppDir;
+        if (hEdge) {
+            float wN = BILATERAL_EPS + abs(c - s2);
+            float wS = BILATERAL_EPS + abs(c - n2);
+            float rN = levelRatio(g, n);
+            float rS = levelRatio(g, so);
+            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
+        } else {
+            float wW = BILATERAL_EPS + abs(c - e2);
+            float wE = BILATERAL_EPS + abs(c - w2);
+            float rW = levelRatio(g, w);
+            float rE = levelRatio(g, e);
+            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
+        }
+        float v = 6.0 * c;
+        v += 2.0 * (nw + ne + sw + se);
+        v -= 1.5 * (n2 + s2 + w2 + e2);
+        r = mix(oppDir, v * 0.125, gg);
+        b = c;
+    } else {
+        g = c;
+        float gwW = hEdge ? 0.5 * (c + w2) : 0.5 * (nw + sw);
+        float gwE = hEdge ? 0.5 * (c + e2) : 0.5 * (ne + se);
+        float wW = BILATERAL_EPS + abs(c - e2);
+        float wE = BILATERAL_EPS + abs(c - w2);
+        float rW = levelRatio(c, gwW);
+        float rE = levelRatio(c, gwE);
+        float ewOut = c + (wW * (w - gwW) * rW + wE * (e - gwE) * rE) / (wW + wE);
+        float gnN = hEdge ? 0.5 * (nw + ne) : 0.5 * (c + n2);
+        float gnS = hEdge ? 0.5 * (sw + se) : 0.5 * (c + s2);
+        float wN = BILATERAL_EPS + abs(c - s2);
+        float wS = BILATERAL_EPS + abs(c - n2);
+        float rN = levelRatio(c, gnN);
+        float rS = levelRatio(c, gnS);
+        float nsOut = c + (wN * (n - gnN) * rN + wS * (so - gnS) * rS) / (wN + wS);
+        float vr = 5.0 * c;
+        vr += 4.0 * (w + e);
+        vr -= w2 + e2;
+        vr -= nw + ne + sw + se;
+        vr += 0.5 * (n2 + s2);
+        vr *= 0.125;
+        float vc = 5.0 * c;
+        vc += 4.0 * (n + so);
+        vc -= n2 + s2;
+        vc -= nw + ne + sw + se;
+        vc += 0.5 * (w2 + e2);
+        vc *= 0.125;
+        if (colorAt(s + ivec2(1, 0)) == 0) {
+            r = mix(ewOut, vr, gg);
+            b = mix(nsOut, vc, gg);
+        } else {
+            r = mix(nsOut, vc, gg);
+            b = mix(ewOut, vr, gg);
+        }
+    }
+    // Clamp negatives like RawTherapee (a camera matrix turns edge
+    // undershoot into complementary fringes); overshoot stays unclipped
+    // like the MHC paper (the grade handles >1).
+    return vec3(max(r, 0.0), max(g, 0.0), max(b, 0.0));
+}
+
+// ---- direct-encode record grade: no warp, no saturation ----
+// Identical to the grade-YUV stage: the two record paths agree by
+// construction. CPU goldens are VfLogGrade.encodePixel*.
+vec3 bt709Encode(vec3 v) {
+    v = clamp(v, 0.0, 1.0);
+    vec3 lo = 4.5 * v;
+    vec3 hi = 1.099 * pow(v, vec3(0.45)) - 0.099;
+    return mix(hi, lo, vec3(lessThan(v, vec3(0.018))));
+}
+
+float hlgOetf(float e) {
+    e = clamp(e, 0.0, 1.0);
+    if (e <= 1.0 / 12.0) return sqrt(3.0 * e);
+    // Natural log (BT.2100 Table 5); rounded constants overshoot 1.0
+    // by ~8e-5 at E = 1, hence the clamp.
+    return clamp(0.17883277 * log(12.0 * e - 0.28466892) + 0.55991073, 0.0, 1.0);
+}
+
+vec3 hlgEncode(vec3 v2020) {
+    return vec3(hlgOetf(v2020.r), hlgOetf(v2020.g), hlgOetf(v2020.b));
+}
+
+// Linear sRGB (D65) -> linear BT.2020 (D65), dot form (avoids mat3
+// layout pitfalls); mirrors VfLogGrade.SRGB_TO_BT2020.
+vec3 srgbToBt2020(vec3 v) {
+    return vec3(
+        dot(v, vec3(0.6274040, 0.3292820, 0.0433136)),
+        dot(v, vec3(0.0690970, 0.9195400, 0.0113612)),
+        dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
+}
+
+// Sony S-Log3, normalized (same mapping as vf_loggrade.comp):
+// divisor 0.19, 95-code black pedestal.
+float slog3cutY() {
+    return (420.0 + log2((0.01125 + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+}
+
+float sonySlog3(float x) {
+    x = max(x, 0.0);
+    if (x >= 0.01125) {
+        // log10 via log2 (GLSL has no log10): 1/log2(10) = 0.30103.
+        return (420.0 + log2((x + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+    }
+    return (95.0 + x * (slog3cutY() * 1023.0 - 95.0) / 0.01125) / 1023.0;
+}
+
+vec3 slogEncode(vec3 v) {
+    return vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+}
+
+// Grade: direct profile encode of the developed linear value. CCM
+// arrives WB+exposure-folded on the CPU. outMode (u.sDims.w): 0 =
+// BT.709, 1 = Sony S-Log3 (flat), 2 = BT.2020 + HLG. The branch is
+// SSBO-uniform: no divergence.
+vec3 gradeRgb(vec3 rgb) {
+    vec3 developed = vec3(dot(u.gCcmR.rgb, rgb), dot(u.gCcmG.rgb, rgb), dot(u.gCcmB.rgb, rgb));
+    int mode = u.sDims.w;
+    if (mode == 1) return slogEncode(developed);
+    if (mode == 2) return hlgEncode(srgbToBt2020(developed));
+    return bt709Encode(developed);
+}
+
+// Lens-shading gains (R, Gr, Gb, B) at sensor pixel s, one hardware-
+// bilinear texture fetch. The (mx + 0.5) / size un-mapping cancels the
+// sampler's half-texel convention, so the weights equal
+// LensShadingModel.gainAt per channel (same clamp/edge behavior, incl.
+// 1-wide maps) up to fp16/fp32 rounding (gains are smooth, ~0.1%).
+vec4 shadeGains(ivec2 s) {
+    float nx = clamp((float(s.x) - u.sActive.x) * u.sActive.z, 0.0, 1.0);
+    float ny = clamp((float(s.y) - u.sActive.y) * u.sActive.w, 0.0, 1.0);
+    float mx = nx * float(u.sDims.y - 1);
+    float my = ny * float(u.sDims.x - 1);
+    vec2 uv = vec2((mx + 0.5) / float(u.sDims.y), (my + 0.5) / float(u.sDims.x));
+    return texture(shadeMap, uv);
+}
+
+// Sensor-domain white-point protection (CPU mirror:
+// MhcReference.desaturateHighlights; same formula as the AMaZE JPEG
+// final stage): approaching RAW clip, converge on the camera neutral
+// BEFORE white balance, so clipped white renders white instead of
+// magenta. Pre-shade: clip is sensor saturation, and shade would drag
+// amplified midtones into the band (the shading proof pins 2x gains).
+vec3 desatWhite(vec3 rgb) {
+    vec3 gains = max(u.gGains.rgb, vec3(1e-6));
+    float minG = min(gains.r, min(gains.g, gains.b));
+    vec3 neutral = vec3(minG) / gains;
+    vec3 wb = smoothstep(vec3(DESAT_LO), vec3(DESAT_HI), rgb);
+    float blend = max(wb.r, max(wb.g, wb.b));
+    return mix(rgb, neutral, blend);
+}
+
+// Display RGB for one output texel (nearest src cover + MHC + grade).
+vec3 pixelLog(ivec2 ij) {
+    vec2 suv = (vec2(ij) + 0.5) * vec2(u.cDims) / vec2(u.oDims);
+    ivec2 s = ivec2(suv);
+    vec3 rgb = desatWhite(mhcRgb(s));
+    if (u.sDims.z != 0) {
+        // Vignetting, pre-WB like the viewfinder: the map is ~17x17 over
+        // the sensor, so one gain per output texel (not per MHC tap) is
+        // exact to 0.01%. Demosaiced green mixes both parities: mean them.
+        vec4 sg = shadeGains(s + u.cOrigin);
+        rgb *= vec3(sg.x, 0.5 * (sg.y + sg.z), sg.w);
+    }
+    return gradeRgb(rgb);
+}
+
+vec3 rgbToYuv(vec3 rgb, int mode) {
+    if (mode == 2) {
+        // BT.2020 non-constant luminance (Kr = 0.2627, Kb = 0.0593).
+        float y = 0.2627 * rgb.r + 0.6780 * rgb.g + 0.0593 * rgb.b;
+        float cb = (rgb.b - y) / 1.8814 + 0.5;
+        float cc = (rgb.r - y) / 1.4746 + 0.5;
+        return vec3(y, cb, cc);
+    }
+    float y = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    float cb = (rgb.b - y) / (2.0 * (1.0 - 0.0722)) + 0.5;
+    float cc = (rgb.r - y) / (2.0 * (1.0 - 0.2126)) + 0.5;
+    return vec3(y, cb, cc);
+}
+
+uint pack10(float v, float low, float high) {
+    uint code = uint(round(clamp(v, 0.0, 1.0) * (high - low) + low));
+    return (code << 6) & 0xFFC0u;
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, u.oDims))) return;
+    // Storage is u32 words but P010 codes are u16: every store packs a
+    // pair. Y pairs go to even-x invocations (odd-x has no unique word);
+    // UV pairs are naturally (U, V).
+    if ((ij.x & 1) != 0) return;
+    int yStride = int(u.gMisc.y);  // u16 words per Y row
+    int outMode = u.sDims.w;
+    vec3 lg0 = pixelLog(ij);
+    vec3 lg1 = (ij.x + 1 < u.oDims.x) ? pixelLog(ij + ivec2(1, 0)) : lg0;
+    vec3 yuv0 = rgbToYuv(lg0, outMode);
+    vec3 yuv1 = rgbToYuv(lg1, outMode);
+    uint yCode0 = pack10(yuv0.x, 64.0, 940.0);
+    uint yCode1 = pack10(yuv1.x, 64.0, 940.0);
+    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);  // u16 units
+    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
+    if ((ij.y & 1) == 0) {
+        // Chroma is this pair's mean (zero extra taps; rgbToYuv is
+        // linear so the mean of converts equals the convert of the
+        // mean). See vf_gradeyuv.comp for the rationale.
+        vec3 muv = (yuv0 + yuv1) * 0.5;
+        uint uCode = pack10(muv.g, 64.0, 960.0);
+        uint vCode = pack10(muv.b, 64.0, 960.0);
+        // u16-unit pair address (always even: strides/height are even,
+        // so >>1 below is exact).
+        uint pairIdx = uint(u.gMisc.w) / 2u
+            + uint(ij.y / 2) * uint(u.gMisc.z)
+            + uint(ij.x / 2) * 2u;
+        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    }
+}

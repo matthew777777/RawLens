@@ -1,0 +1,69 @@
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer Partial { uint data[]; }
+partial;
+layout(std430, binding = 1) buffer Out {
+    float lumaP50;
+    float lumaP95;
+    float lumaP99;
+    float brightFraction90;
+    float brightFraction96;
+    float anyChannelClippedFraction;
+    uint sampleCount;
+    uint reserved;
+}
+outb;
+const uint PARTITIONS = 16u;
+const uint BIN_COUNT = 256u;
+const uint COUNTERS = 4u;
+const uint STRIDE = BIN_COUNT + COUNTERS;
+shared uint hist[BIN_COUNT];
+shared uint counters[COUNTERS];
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    uint sum = 0u;
+    for (uint p = 0u; p < PARTITIONS; ++p) sum += partial.data[p * STRIDE + i];
+    hist[i] = sum;
+    if (i < COUNTERS) {
+        uint c = 0u;
+        for (uint p = 0u; p < PARTITIONS; ++p) c += partial.data[p * STRIDE + BIN_COUNT + i];
+        counters[i] = c;
+    }
+    barrier();
+    if (i == 0u) {
+        uint n = counters[0];
+        outb.sampleCount = n;
+        outb.reserved = 0u;
+        if (n == 0u) {
+            outb.lumaP50 = outb.lumaP95 = outb.lumaP99 = 0.0;
+            outb.brightFraction90 = outb.brightFraction96 = outb.anyChannelClippedFraction = 0.0;
+            return;
+        }
+        uint t50 = (n + 1u) / 2u, t95 = (95u * n + 99u) / 100u, t99 = (99u * n + 99u) / 100u;
+        uint acc = 0u;
+        uint b50 = 255u, b95 = 255u, b99 = 255u;
+        bool f50 = false, f95 = false;
+        for (uint b = 0u; b < 256u; ++b) {
+            acc += hist[b];
+            if (!f50 && acc >= t50) {
+                b50 = b;
+                f50 = true;
+            }
+            if (!f95 && acc >= t95) {
+                b95 = b;
+                f95 = true;
+            }
+            if (acc >= t99) {
+                b99 = b;
+                break;
+            }
+        }
+        outb.lumaP50 = float(b50) / 255.0;
+        outb.lumaP95 = float(b95) / 255.0;
+        outb.lumaP99 = float(b99) / 255.0;
+        outb.brightFraction90 = float(counters[1]) / float(n);
+        outb.brightFraction96 = float(counters[2]) / float(n);
+        outb.anyChannelClippedFraction = float(counters[3]) / float(n);
+    }
+}

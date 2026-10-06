@@ -1,0 +1,196 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log TRUE 10-bit stage: FP16 source (superpixel export OR
+// full-res MHC demosaic, see fullRgb) -> WB/CCM/exposure -> DIRECT
+// profile encode (BT.709 OETF / Sony S-Log3 / BT.2020 + HLG, see
+// outMode) -> limited-range YUV -> semi-planar P010 bytes in OUR OWN
+// buffer (storage buffer, byte-exact addressing). No EGL surface
+// anywhere: the 8-bit recordable-surface choke point is gone, and every
+// code in the file is full precision until the final 10-bit round. A
+// dumb CPU copy then de-interleaves UV into the codec's planar input
+// (GPU did all the math; MotionCam burns CPU on swscale here instead).
+// No contrast curve, no saturation: the encode is the developed linear
+// value through the profile's transfer function only.
+//
+// Layout (OUR allocation, validated natively per submit, loud -20 abort):
+// Y: full res uint16, 10-bit in the upper bits (P010).
+// UV: half res INTERLEAVED pairs (U,V uint16 each, 4 bytes per pair).
+//
+// Push block mirrors GradeYuvParams in vf_vulkan_vf.cpp (must match).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_gradeyuv.comp -o vf_gradeyuv.spv
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform readonly image2D img_in;
+layout(binding = 1) writeonly buffer P010 { uint words[]; } buf_out;
+// Reserved for upcoming LUT support: still bound every submit (the
+// native gate requires the upload), not fetched (direct encode).
+layout(binding = 2) uniform sampler3D gradeLut;
+
+layout(push_constant) uniform Params {
+    ivec2 u_dims;       // full-res output W/H
+    ivec2 u_srcDims;    // FP16 source W/H (half res per axis in
+                        // superpixel mode, full crop in full-RGB mode)
+    vec4 u_ccmR;        // WB+exposure-folded on the CPU (no u_gains)
+    vec4 u_ccmG;
+    vec4 u_ccmB;
+    vec4 u_misc;        // bypass, yStrideW, uvStrideW, uvBaseOffB
+    vec4 u_misc2;       // fullRgb, outMode, reserved, 0
+} p;
+
+// Source texel to linear RGB. Superpixel mode (fullRgb == 0): the
+// texel is a quad (R/Gr/Gb/B), demosaiced by Gr/Gb mean. Full-RGB
+// mode (fullRgb != 0): the texel is MHC demosaiced output, already
+// RGB. The flag is push-constant-uniform: no divergence.
+vec3 rgbOf(vec4 q) {
+    if (p.u_misc2.x > 0.5) {
+        return q.rgb;
+    }
+    return vec3(q.r, 0.5 * (q.g + q.b), q.a);
+}
+
+// ---- direct-encode record grade: no warp, no saturation ----
+vec3 bt709Encode(vec3 v) {
+    v = clamp(v, 0.0, 1.0);
+    vec3 lo = 4.5 * v;
+    vec3 hi = 1.099 * pow(v, vec3(0.45)) - 0.099;
+    return mix(hi, lo, vec3(lessThan(v, vec3(0.018))));
+}
+
+float hlgOetf(float e) {
+    e = clamp(e, 0.0, 1.0);
+    if (e <= 1.0 / 12.0) return sqrt(3.0 * e);
+    // Natural log (BT.2100 Table 5); rounded constants overshoot 1.0
+    // by ~8e-5 at E = 1, hence the clamp.
+    return clamp(0.17883277 * log(12.0 * e - 0.28466892) + 0.55991073, 0.0, 1.0);
+}
+
+vec3 hlgEncode(vec3 v2020) {
+    return vec3(hlgOetf(v2020.r), hlgOetf(v2020.g), hlgOetf(v2020.b));
+}
+
+// Linear sRGB (D65) -> linear BT.2020 (D65), dot form (avoids mat3
+// layout pitfalls); mirrors VfLogGrade.SRGB_TO_BT2020.
+vec3 srgbToBt2020(vec3 v) {
+    return vec3(
+        dot(v, vec3(0.6274040, 0.3292820, 0.0433136)),
+        dot(v, vec3(0.0690970, 0.9195400, 0.0113612)),
+        dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
+}
+
+// Sony S-Log3, normalized (same mapping as vf_loggrade.comp):
+// divisor 0.19, 95-code black pedestal.
+float slog3cutY() {
+    return (420.0 + log2((0.01125 + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+}
+
+float sonySlog3(float x) {
+    x = max(x, 0.0);
+    if (x >= 0.01125) {
+        // log10 via log2 (GLSL has no log10): 1/log2(10) = 0.30103.
+        return (420.0 + log2((x + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+    }
+    return (95.0 + x * (slog3cutY() * 1023.0 - 95.0) / 0.01125) / 1023.0;
+}
+
+vec3 slogEncode(vec3 v) {
+    return vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+}
+
+// Grade one source texel (shared by Y and UV taps): direct profile
+// encode of the developed linear value. CCM arrives WB+exposure-folded
+// on the CPU. outMode (u_misc2.y): 0 = BT.709, 1 = Sony S-Log3
+// (flat), 2 = BT.2020 + HLG. The branch is push-constant-uniform: no
+// divergence. CPU goldens are VfLogGrade.encodePixel*.
+vec3 gradeTexel(vec2 uv) {
+    vec4 q = imageLoad(img_in, ivec2(uv));
+    vec3 rgb = rgbOf(q);
+    vec3 developed = vec3(dot(p.u_ccmR.rgb, rgb), dot(p.u_ccmG.rgb, rgb), dot(p.u_ccmB.rgb, rgb));
+    int mode = int(p.u_misc2.y + 0.5);
+    if (mode == 1) return slogEncode(developed);
+    if (mode == 2) return hlgEncode(srgbToBt2020(developed));
+    return bt709Encode(developed);
+}
+
+// Display RGB for one full-res output texel (source cover + grade).
+vec3 pixelLog(ivec2 ij) {
+    vec2 suv = (vec2(ij) + 0.5) * vec2(p.u_srcDims) / vec2(p.u_dims);
+    vec3 lg = gradeTexel(suv);
+    if (p.u_misc.x > 0.5) {
+        // Bypass: ungraded source RGB through the pack (validates layout).
+        vec4 q = imageLoad(img_in, ivec2(suv));
+        lg = rgbOf(q);
+    }
+    return lg;
+}
+
+vec3 rgbToYuv(vec3 rgb, int mode) {
+    if (mode == 2) {
+        // BT.2020 non-constant luminance (Kr = 0.2627, Kb = 0.0593).
+        float y = 0.2627 * rgb.r + 0.6780 * rgb.g + 0.0593 * rgb.b;
+        float cb = (rgb.b - y) / 1.8814 + 0.5;
+        float cc = (rgb.r - y) / 1.4746 + 0.5;
+        return vec3(y, cb, cc);
+    }
+    float y = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    float cb = (rgb.b - y) / (2.0 * (1.0 - 0.0722)) + 0.5;
+    float cc = (rgb.r - y) / (2.0 * (1.0 - 0.2126)) + 0.5;
+    return vec3(y, cb, cc);
+}
+
+uint pack10(float v, float low, float high) {
+    uint code = uint(round(clamp(v, 0.0, 1.0) * (high - low) + low));
+    return (code << 6) & 0xFFC0u;
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+    // Storage is u32 words but P010 codes are u16: every store packs a
+    // pair (storing one u16 per u32 word wrote at 2x byte offsets with a
+    // zero high half — half-scale aliasing plus zero words, caught by the
+    // precision probe). Y pairs go to even-x invocations (odd-x has no
+    // unique word, so it early-outs); UV pairs are naturally (U, V).
+    if ((ij.x & 1) != 0) return;
+    int yStride = int(p.u_misc.y);  // u16 words per Y row
+    int outMode = int(p.u_misc2.y + 0.5);
+    vec3 lg0 = pixelLog(ij);
+    vec3 lg1 = (ij.x + 1 < p.u_dims.x) ? pixelLog(ij + ivec2(1, 0)) : lg0;
+    vec3 yuv0 = rgbToYuv(lg0, outMode);
+    vec3 yuv1 = rgbToYuv(lg1, outMode);
+    uint yCode0 = pack10(yuv0.x, 64.0, 940.0);
+    uint yCode1 = pack10(yuv1.x, 64.0, 940.0);
+    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);  // u16 units
+    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
+    if ((ij.y & 1) == 0) {
+        vec3 muv;
+        if (p.u_misc2.x > 0.5) {
+            // Full-RGB: chroma is this pair's mean (zero extra taps).
+            // The 4-tap stride-2 lowpass below would triple the grade
+            // cost for single-queue 30fps (measured 17.6ms -> the MHC +
+            // grade sum missed the frame); the pair mean keeps full
+            // horizontal chroma with single-row vertical support, which
+            // 4:2:0 subsamples vertically anyway. rgbToYuv is linear,
+            // so the mean of converts equals the convert of the mean.
+            muv = (yuv0 + yuv1) * 0.5;
+        } else {
+            // UV pair: average this 2x2 quad (recompute neighbours' grade).
+            vec3 g1 = pixelLog(ij + ivec2(2, 0));
+            vec3 g2 = pixelLog(ij + ivec2(0, 2));
+            vec3 g3 = pixelLog(ij + ivec2(2, 2));
+            vec3 mean = (lg0 + g1 + g2 + g3) * 0.25;
+            muv = rgbToYuv(mean, outMode);
+        }
+        uint uCode = pack10(muv.g, 64.0, 960.0);
+        uint vCode = pack10(muv.b, 64.0, 960.0);
+        // u16-unit pair address (always even: strides/height are even, so
+        // >>1 below is exact). Multiplying the sum instead of the row
+        // wrote ~0.5MB past the allocation (silent zeros, caught by probe).
+        uint pairIdx = uint(p.u_misc.w) / 2u
+            + uint(ij.y / 2) * uint(p.u_misc.z)
+            + uint(ij.x / 2) * 2u;
+        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    }
+}

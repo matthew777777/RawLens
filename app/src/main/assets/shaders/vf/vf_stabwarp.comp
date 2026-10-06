@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Post-record stabilization warp: tight P010 source (one decoded frame,
+// uploaded by the host) -> warped P010 staging (the exact bytes queued to
+// the re-encode), in one dispatch. The per-frame output->source homography
+// (crop-and-scale-to-fill folded with the gyro correction) arrives via
+// push constants, planned once per take on CPU (see StabTrajectory).
+//
+// Layout mirrors StabWarpParams in vf_vulkan_vf.cpp (push block, 68
+// bytes). Write discipline mirrors vf_gradeyuv.comp (even-x invocations
+// own the Y pair word, even rows additionally own the UV pair word — no
+// two invocations share a u32 word, so no atomics and no races).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_stabwarp.comp -o vf_stabwarp.spv
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Tight P010 view: Y u16 codes then interleaved UV u16 pairs, 10-bit
+// codes in the upper bits (same packing as the grade stages).
+layout(binding = 0) readonly buffer SrcP010 { uint words[]; } src;
+layout(binding = 1) writeonly buffer DstP010 { uint words[]; } buf_out;
+
+layout(push_constant) uniform Params {
+    ivec2 u_dims;        // W/H (out == src)
+    ivec2 u_srcStrides;  // yStrideW, uvStrideW (u16 units, tight input)
+    ivec2 u_outStrides;  // yStrideW, uvStrideW (u16 units, staging)
+    ivec2 u_uvBase;      // srcUvBaseOffB, outUvBaseOffB
+    float u_m[9];        // row-major out->src homography (last row 0 0 1)
+} p;
+
+// Affine by construction (rotation + translation + uniform scale).
+vec2 warp(vec2 o) {
+    return vec2(
+        p.u_m[0] * o.x + p.u_m[1] * o.y + p.u_m[2],
+        p.u_m[3] * o.x + p.u_m[4] * o.y + p.u_m[5]);
+}
+
+uint yCodeAt(int ox, int oy) {
+    uint idx = uint(oy) * uint(p.u_srcStrides.x) + uint(ox);
+    uint w = src.words[idx >> 1u];
+    uint u16 = ((idx & 1u) == 0u) ? (w & 0xFFFFu) : (w >> 16u);
+    return u16 >> 6u;
+}
+
+uvec2 uvPairAt(int cx, int cy) {
+    uint pairIdx = uint(p.u_uvBase.x) / 2u
+        + uint(cy) * uint(p.u_srcStrides.y)
+        + uint(cx) * 2u;
+    uint w = src.words[pairIdx >> 1u];
+    return uvec2((w & 0xFFFFu) >> 6u, (w >> 16u) >> 6u);
+}
+
+float bilerpY(vec2 s) {
+    // The crop margin keeps samples inside; the clamp is belt-and-braces
+    // (a saturated correction must smear the edge, never read OOB).
+    s = clamp(s, vec2(0.0), vec2(p.u_dims) - 1.0);
+    ivec2 b = ivec2(floor(s));
+    vec2 f = s - vec2(b);
+    ivec2 b1 = min(b + 1, p.u_dims - 1);
+    float c00 = float(yCodeAt(b.x, b.y));
+    float c10 = float(yCodeAt(b1.x, b.y));
+    float c01 = float(yCodeAt(b.x, b1.y));
+    float c11 = float(yCodeAt(b1.x, b1.y));
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+vec2 bilerpUV(vec2 s) {
+    ivec2 cdims = ivec2((p.u_dims.x + 1) / 2, (p.u_dims.y + 1) / 2);
+    s = clamp(s, vec2(0.0), vec2(cdims) - 1.0);
+    ivec2 b = ivec2(floor(s));
+    vec2 f = s - vec2(b);
+    ivec2 b1 = min(b + 1, cdims - 1);
+    vec2 c00 = vec2(uvPairAt(b.x, b.y));
+    vec2 c10 = vec2(uvPairAt(b1.x, b.y));
+    vec2 c01 = vec2(uvPairAt(b.x, b1.y));
+    vec2 c11 = vec2(uvPairAt(b1.x, b1.y));
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
+uint packCode(float v) {
+    uint code = uint(round(clamp(v, 0.0, 1023.0)));
+    return (code << 6) & 0xFFC0u;
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+    // Even-x invocations own the Y pair word (odd-x has no unique word).
+    if ((ij.x & 1) != 0) return;
+    float c0 = bilerpY(warp(vec2(ij)));
+    float c1 = (ij.x + 1 < p.u_dims.x) ? bilerpY(warp(vec2(ij) + vec2(1.0, 0.0))) : c0;
+    uint yIdx = uint(ij.y) * uint(p.u_outStrides.x) + uint(ij.x);  // u16 units
+    buf_out.words[yIdx >> 1u] = packCode(c0) | (packCode(c1) << 16u);
+    if ((ij.y & 1) == 0) {
+        // Chroma pair for this 2x2 quad, sampled at the warped quad
+        // center in half-res coords (top-left cosited: at identity the
+        // quad center (2cx+0.5, 2cy+0.5) lands exactly on (cx, cy)).
+        vec2 cs = (warp(vec2(ij) + vec2(0.5)) - vec2(0.5)) * 0.5;
+        vec2 uv = bilerpUV(cs);
+        uint pairIdx = uint(p.u_uvBase.y) / 2u
+            + uint(ij.y / 2) * uint(p.u_outStrides.y)
+            + uint(ij.x / 2) * 2u;
+        buf_out.words[pairIdx >> 1u] = packCode(uv.x) | (packCode(uv.y) << 16u);
+    }
+}
