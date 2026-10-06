@@ -53,7 +53,9 @@ class GaloshDenoiser(context: Context) {
             if (!settings.enabled || settings.strength == 0f) return cfa
             // The o32 shaders hardcode RGGB; any other effective arrangement
             // is losslessly reshuffled there and restored after the run.
-            val perm = GaloshBayerRemap.toRgbbPerm(cfa.pattern, cfa.sensorCropLeft, cfa.sensorCropTop)
+            // permForCfa (not toRgbbPerm): cfa.pattern is local, and the
+            // sensor pattern must be recovered for odd crop origins.
+            val perm = GaloshBayerRemap.permForCfa(cfa.pattern, cfa.sensorCropLeft, cfa.sensorCropTop)
             val remapped = !GaloshBayerRemap.isIdentity(perm)
             val work = if (remapped) {
                 GaloshBayerRemap.toRgbb(cfa.values, cfa.width, cfa.height, perm)

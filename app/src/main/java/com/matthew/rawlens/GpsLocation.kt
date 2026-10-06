@@ -154,93 +154,35 @@ data class Dms(val degrees: Int, val minutes: Int, val secondsNum: Long) {
 }
 
 /**
- * Standalone little-endian GPS sub-IFD (tag 34853 target) shared by the
- * hand-rolled Kotlin DNG writers. [baseOffset] is the absolute file offset
- * where the returned block will be placed; embedded value offsets are
- * resolved against it so the block can be spliced verbatim.
+ * GPS sub-IFD contents (tag 34853 target) as TinyDNG field values. IFD
+ * layout (sorting, offsets, blobs) is owned by the writer; this builder
+ * only serializes the values, byte-identical to the retired hand-rolled
+ * blob builder.
  */
 object GpsTiffDirectory {
     const val TAG_GPS_IFD_POINTER = 34853
 
-    private const val BYTE = 1
-    private const val ASCII = 2
-    private const val SHORT = 3
-    private const val LONG = 4
-    private const val RATIONAL = 5
-
-    fun build(location: GpsLocation, baseOffset: Int): ByteArray {
-        require(baseOffset >= 8) { "GPS IFD base offset must sit past the TIFF header" }
-        val latBytes = location.latitudeDms().toRationalBytes()
-        val lonBytes = location.longitudeDms().toRationalBytes()
+    fun fields(location: GpsLocation): TiffFields = TiffFields().apply {
         val utc = GpsLocation.utcCalendar(location.timeMillis)
-        val stampBytes = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN).apply {
+        bytes(0, byteArrayOf(2, 3, 0, 0))
+        ascii(1, location.latitudeRef)
+        tag(2, TiffFields.RATIONAL, location.latitudeDms().toRationalBytes())
+        ascii(3, location.longitudeRef)
+        tag(4, TiffFields.RATIONAL, location.longitudeDms().toRationalBytes())
+        location.altitudeMeters?.let {
+            bytes(5, byteArrayOf(if (it < 0) 1 else 0))
+            val altNum = (abs(it) * GpsLocation.ALTITUDE_DENOMINATOR + 0.5).toLong()
+                .coerceAtMost(0xFFFFFFFFL)
+            tag(6, TiffFields.RATIONAL, ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
+                putInt(altNum.toInt()).putInt(GpsLocation.ALTITUDE_DENOMINATOR.toInt())
+            }.array())
+        }
+        tag(7, TiffFields.RATIONAL, ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(utc.get(Calendar.HOUR_OF_DAY)).putInt(1)
             putInt(utc.get(Calendar.MINUTE)).putInt(1)
             putInt(utc.get(Calendar.SECOND)).putInt(1)
-        }.array()
-        val entries = arrayListOf(
-            GpsEntry(0, BYTE, byteArrayOf(2, 3, 0, 0)),
-            GpsEntry(1, ASCII, ascii(location.latitudeRef)),
-            GpsEntry(2, RATIONAL, latBytes),
-            GpsEntry(3, ASCII, ascii(location.longitudeRef)),
-            GpsEntry(4, RATIONAL, lonBytes),
-            GpsEntry(7, RATIONAL, stampBytes),
-            GpsEntry(27, ASCII, ascii(location.processingMethod)),
-            GpsEntry(29, ASCII, ascii(GpsLocation.dateStamp(location.timeMillis)))
-        )
-        location.altitudeMeters?.let {
-            entries += GpsEntry(5, BYTE, byteArrayOf(if (it < 0) 1 else 0))
-            val altNum = (abs(it) * GpsLocation.ALTITUDE_DENOMINATOR + 0.5).toLong()
-                .coerceAtMost(0xFFFFFFFFL)
-            entries += GpsEntry(
-                6, RATIONAL,
-                ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
-                    putInt(altNum.toInt()).putInt(GpsLocation.ALTITUDE_DENOMINATOR.toInt())
-                }.array()
-            )
-        }
-        entries.sortBy { it.tag }
-
-        val headerBytes = 2 + entries.size * 12 + 4
-        var dataOffset = baseOffset + headerBytes
-        val external = HashMap<Int, Int>()
-        entries.forEachIndexed { index, entry ->
-            if (entry.payload.size > 4) {
-                external[index] = dataOffset
-                dataOffset += entry.payload.size + (entry.payload.size and 1)
-            }
-        }
-        return ByteBuffer.allocate(dataOffset - baseOffset).order(ByteOrder.LITTLE_ENDIAN).apply {
-            putShort(entries.size.toShort())
-            entries.forEachIndexed { index, entry ->
-                putShort(entry.tag.toShort()).putShort(entry.type.toShort())
-                putInt(entry.payload.size / unitSize(entry.type))
-                if (entry.payload.size <= 4) {
-                    put(entry.payload)
-                    repeat(4 - entry.payload.size) { put(0) }
-                } else {
-                    putInt(requireNotNull(external[index]))
-                }
-            }
-            putInt(0)
-            entries.forEachIndexed { index, entry ->
-                external[index]?.let { offset ->
-                    position(offset - baseOffset)
-                    put(entry.payload)
-                    if (entry.payload.size and 1 == 1) put(0)
-                }
-            }
-        }.array()
+        }.array())
+        ascii(27, location.processingMethod)
+        ascii(29, GpsLocation.dateStamp(location.timeMillis))
     }
-
-    private fun unitSize(type: Int): Int = when (type) {
-        SHORT -> 2
-        LONG -> 4
-        RATIONAL -> 8
-        else -> 1
-    }
-
-    private fun ascii(value: String) = (value + '\u0000').toByteArray(Charsets.US_ASCII)
-
-    private data class GpsEntry(val tag: Int, val type: Int, val payload: ByteArray)
 }

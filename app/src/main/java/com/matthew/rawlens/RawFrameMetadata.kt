@@ -93,7 +93,15 @@ data class RawFrameMetadata(
     val afState: Int? = null,
     val aeState: Int? = null,
     val lensState: Int? = null,
-    val quadBayer: Boolean = false
+    val quadBayer: Boolean = false,
+    /** f-number at capture (LENS_APERTURE); feeds EXIF FNumber/ApertureValue. Null when unreported. */
+    val aperture: Float? = null,
+    /** Focal length in mm (LENS_FOCAL_LENGTH); feeds EXIF FocalLength. Null when unreported. */
+    val focalLengthMm: Float? = null,
+    /** Focus distance in meters (1/LENS_FOCUS_DISTANCE); feeds EXIF SubjectDistance. Null at infinity/unknown. */
+    val focusDistanceM: Float? = null,
+    /** True when the flash fired for this frame (FLASH_STATE); feeds EXIF Flash. Null when unknown. */
+    val flashFired: Boolean? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -269,7 +277,16 @@ object RawFrameMetadataFactory {
             afState = result.get(CaptureResult.CONTROL_AF_STATE),
             aeState = result.get(CaptureResult.CONTROL_AE_STATE),
             lensState = result.get(CaptureResult.LENS_STATE),
-            quadBayer = quadBayer
+            quadBayer = quadBayer,
+            aperture = result.get(CaptureResult.LENS_APERTURE)
+                ?.takeIf { it.isFinite() && it > 0f },
+            focalLengthMm = result.get(CaptureResult.LENS_FOCAL_LENGTH)
+                ?.takeIf { it.isFinite() && it > 0f },
+            focusDistanceM = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                ?.takeIf { it.isFinite() && it > 0f }?.let { 1f / it },
+            flashFired = result.get(CaptureResult.FLASH_STATE)?.let {
+                it == CaptureResult.FLASH_STATE_FIRED || it == CaptureResult.FLASH_STATE_PARTIAL
+            }
         )
     }
 

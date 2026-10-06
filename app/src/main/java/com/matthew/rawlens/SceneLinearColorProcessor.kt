@@ -440,14 +440,17 @@ object SceneLinearColorProcessor {
     ))
 
     // CameraMetadata illuminant codes and kelvin values copied from PhotonCamera Converter.java.
-    private val ILLUMINANT_KELVIN = mapOf(
+    // Internal (not private): the Direct-Log video static CCM reuses the
+    // DNG illuminant table; no behavior change to the stills path.
+    internal val ILLUMINANT_KELVIN = mapOf(
         1 to 6504, 21 to 6504, 23 to 5003, 20 to 5503, 22 to 7504,
         17 to 2856, 18 to 4874, 19 to 6774, 12 to 6430, 14 to 4230, 15 to 3450
     )
     private const val MATRIX_EPSILON = 1e-10
 }
 
-private data class Vec3(val x: Double, val y: Double, val z: Double) {
+// Internal (not private): reused by the Direct-Log video static CCM; no behavior change.
+internal data class Vec3(val x: Double, val y: Double, val z: Double) {
     operator fun times(scale: Double) = Vec3(x * scale, y * scale, z * scale)
     fun values() = doubleArrayOf(x, y, z)
     fun isFinite() = x.isFinite() && y.isFinite() && z.isFinite()
@@ -459,7 +462,8 @@ private data class Vec3(val x: Double, val y: Double, val z: Double) {
     }
 }
 
-private class Matrix3(values: DoubleArray) {
+// Internal (not private): reused by the Direct-Log video static CCM; no behavior change.
+internal class Matrix3(values: DoubleArray) {
     private val m = values.copyOf()
 
     init {

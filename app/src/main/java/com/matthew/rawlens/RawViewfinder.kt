@@ -67,6 +67,12 @@ internal object RawPreviewGeometry {
     }
 }
 
+/**
+ * Input-signal reading for Vulkan tier probation: buffer peak plus the levels
+ * that judge it. A strong signal with a black tier output latches the tier.
+ */
+internal data class VfInputSignal(val dataMax: Int, val black: Int, val white: Int)
+
 /** Snapshot for the RAW viewfinder debug overlay. All sizes are in pixels. */
 data class RawVfStats(
     val fps: Float,
@@ -77,6 +83,8 @@ data class RawVfStats(
     val rawHeight: Int,
     val glActive: Boolean,
     val starved: Boolean,
+    /** Bounded-wait skips (record owns the queue): diagnosing, not failing. */
+    val busySkips: Long,
     /** True when the last rendered frame took the zero-copy GPU path (false = NEON CPU). */
     val gpu: Boolean = false,
     /** Tonemap actually rendered: true = JPEG/AgX-lite, false = RAW/Reinhard. */
@@ -236,10 +244,29 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuActiveLogged = false
     private var lastFallbackReason = ""
     private var stridesLogged = false
+    private var vfDiagLogged = false
+    private var vfSanitizeLogged = false
     /** Sticky Vulkan skip after repeated compute failures; reset per session. */
     @Volatile private var vulkanDisabledForSession = false
     /** GL-worker-only consecutive Vulkan failure count. */
     private var consecutiveVulkanFailures = 0
+    /**
+     * Vulkan sub-tier latches (zero-copy import / gpu-copy staging), set on the
+     * GL worker by explicit failures or the black-output probe. Both latched
+     * implies [vulkanDisabledForSession]. Volatile: reset on the camera thread
+     * by [invalidateSession]. Reset per session.
+     */
+    @Volatile private var vulkanZeroCopyDisabled = false
+    @Volatile private var vulkanCopyDisabled = false
+    /** Black-output probation verdicts; a verified tier skips probing. GL worker only. */
+    private var vulkanZeroCopyVerified = false
+    private var vulkanCopyVerified = false
+    /** Copy tier has dispatched at least once (gates its probation). GL worker only. */
+    private var vulkanCopyActive = false
+    /** Latest input-signal reading for tier probation. Camera writes, GL worker reads. */
+    @Volatile private var vfInputSignal: VfInputSignal? = null
+    /** Cleared once every Vulkan tier is verified or latched (or never used). */
+    @Volatile private var vfProbeInputSignal = true
     private var vulkanInitialized = false
     private var vulkanExport: android.hardware.HardwareBuffer? = null
     private var vulkanExportWidth = 0
@@ -266,8 +293,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         private set
     /**
      * Engine override switched by tapping the RAW VF debug overlay. AUTO runs
-     * zero-copy GPU with automatic fallback to the native NEON sampler; GPU/CPU
-     * force one engine. Volatile: written from the UI thread, read on camera.
+     * zero-copy GPU with automatic fallback down the chain (gpu-copy, EGL, then
+     * the native NEON sampler); GPU/CPU force one engine. Volatile: written from
+     * the UI thread, read on camera.
      */
     @Volatile var engineMode: VfEngineMode = VfEngineMode.AUTO
         private set
@@ -294,7 +322,28 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private val previewEvScratch = FloatArray(VfGpuImport.MAX_PREVIEW_SAMPLES)
     private var lastPreviewEvMs = 0L
     private var previewEvSeeded = false
-    private var sampleIntervalMs = 16L
+    @Volatile private var sampleIntervalMs = 16L
+    /**
+     * Floor for [sampleIntervalMs]: 16 ms normally, raised by record mode.
+     * Volatile: written from the UI thread, read on the camera thread.
+     */
+    @Volatile private var minSampleIntervalMs = 16L
+    /**
+     * True while a Direct-Log take owns the shared Vulkan queue: the VF
+     * drops to 480p @<=10 fps so record submits never wait on a VF
+     * dispatch (submit-side mutex + shared-queue GPU time are the
+     * contention; the VF fence wait itself runs unlocked). Saved edge
+     * restores on exit. Any thread.
+     */
+    @Volatile private var recordMode = false
+    private var savedLongEdge = VfResolution.MAX
+    /**
+     * True from the moment an offer posts a draw until that draw finishes
+     * (latest-only: at most one queued + one running). Lets a recorder
+     * skip offers while the worker is busy instead of churning superseded
+     * frames through gralloc leases. Any thread.
+     */
+    @Volatile private var vfWorkOutstanding = false
     private var lastSlowOfferLogMs = 0L
     private var lastSlowRenderLogMs = 0L
     var onStarvation: (() -> Unit)? = null
@@ -464,6 +513,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     fun dispose() { invalidateSession(); worker.post { worker.removeCallbacks(vulkanRecoverRunnable); releaseGl(); thread.quitSafely() } }
 
     fun invalidateSession() {
+        // A queued draw that never runs (dispose) must not pin the idle gate.
+        vfWorkOutstanding = false
         synchronized(lock) {
             epoch++
             pending?.let(free::addLast)
@@ -503,6 +554,15 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         gpuActiveLogged = false
         lastFallbackReason = ""
         stridesLogged = false
+        vfDiagLogged = false
+        vfSanitizeLogged = false
+        vulkanZeroCopyDisabled = false
+        vulkanCopyDisabled = false
+        vulkanZeroCopyVerified = false
+        vulkanCopyVerified = false
+        vulkanCopyActive = false
+        vfInputSignal = null
+        vfProbeInputSignal = true
         // Evict cached Vulkan imports (session buffers are gone); the export buffer
         // and device persist and are re-imported on demand.
         worker.post {
@@ -529,6 +589,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             rawHeight = statRawHeight,
             glActive = active,
             starved = statStarved || !active,
+            busySkips = vulkanBusySkips,
             gpu = statGpuPath,
             jpeg = renderJpeg,
             exposureEv = previewExposureEv,
@@ -544,6 +605,38 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     fun setTargetLongEdge(longEdge: Int) {
         targetLongEdge = longEdge.coerceIn(VfResolution.MIN, VfResolution.MAX)
     }
+
+    /**
+     * Direct-Log record throttle: 480p + 10 fps ceiling while a take owns
+     * the shared Vulkan queue, previous edge restored on exit. Record
+     * submits and VF dispatches serialize on one native mutex, so a
+     * full-rate VF steals record frames (PTS gaps = visible stutter when
+     * panning) and renders choppily itself behind 4K fused dispatches.
+     * Safe to call from any thread; idempotent.
+     */
+    fun setRecordMode(active: Boolean) {
+        if (recordMode == active) return
+        recordMode = active
+        if (active) {
+            savedLongEdge = targetLongEdge
+            targetLongEdge = VfResolution.MIN
+            minSampleIntervalMs = RECORD_SAMPLE_INTERVAL_MS
+            sampleIntervalMs = maxOf(sampleIntervalMs, RECORD_SAMPLE_INTERVAL_MS)
+            Log.i("RawViewfinder", "VF record mode on (480p @<=10fps)")
+        } else {
+            targetLongEdge = savedLongEdge.coerceIn(VfResolution.MIN, VfResolution.MAX)
+            minSampleIntervalMs = 16L
+            Log.i("RawViewfinder", "VF record mode off (edge=$targetLongEdge)")
+        }
+    }
+
+    /**
+     * True when the worker has no draw queued or running: recorders offer
+     * only then, so a slow render never stacks superseded frames behind
+     * it. Latest-only semantics make the skip free. Any thread.
+     */
+    fun isIdleForOffer(): Boolean =
+        !vfWorkOutstanding && synchronized(lock) { pending == null && gpuPending == null }
 
     /** Switch the tonemap without touching the stream. Safe to call from any thread. */
     fun setRenderJpeg(jpeg: Boolean) {
@@ -617,13 +710,35 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             statRawWidth = image.width
             statRawHeight = image.height
             statStarved = false
-            val channels = RawPreviewGeometry.channels(c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0)
+            val cfaInt = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+            val channels = RawPreviewGeometry.channels(cfaInt)
             val black = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             val white = (result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
                 ?: c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023).toFloat()
             val levels = FloatArray(4) { i -> dynamicBlack?.get(i) ?: black?.getOffsetForIndex(i % 2, i / 2)?.toFloat() ?: 0f }
             val lensSnap = snapshotLens(c, result, image.width, image.height)
+            // Tier black-output probation needs a fresh input-signal reading
+            // until every Vulkan tier is verified or latched; then sampling
+            // stops (zero steady-state cost). CPU override never probes, but
+            // the first-frame diagnostic always samples.
+            val probing = engineMode != VfEngineMode.CPU && vfProbeInputSignal && VfVulkan.available
+            val inputSample = if (probing || !vfDiagLogged) {
+                try {
+                    sampleRawCodes(plane.buffer, plane.rowStride, plane.pixelStride, image.width, image.height)
+                } catch (_: Exception) {
+                    null
+                }
+            } else null
+            if (probing) inputSample?.let {
+                var blackMax = 0f
+                for (b in levels) if (b > blackMax) blackMax = b
+                vfInputSignal = VfInputSignal(it.first, blackMax.toInt(), white.toInt())
+            }
+            if (!vfDiagLogged) {
+                vfDiagLogged = true
+                logFirstFrameDiag(plane, image.width, image.height, cfaInt, channels, levels, white, gpuGeo, inputSample)
+            }
             // Coarse 2 Hz statistic on the user geometry; the grid stride
             // adapts, so the CPU cap below does not skew it.
             updatePreviewExposure(plane, gpuGeo.left, gpuGeo.top, gpuGeo.width, gpuGeo.height, gpuGeo.step, levels, white, now, lensSnap)
@@ -662,6 +777,54 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             post { alpha = 0f }
             Log.w("RawViewfinder", "RAW sampling failed; hidden system preview stream continues", failure)
         }
+    }
+
+    /**
+     * First-frame field diagnostic: the render inputs (black/white levels, CFA
+     * mapping, geometry) plus a tiny CPU sample of the actual buffer codes, so
+     * a black viewfinder is attributable to data (all codes at black), levels
+     * (black above signal), or the GPU tier (sane values, black output).
+     * Camera thread only; failures log as unavailable and never hide the VF.
+     */
+    private fun logFirstFrameDiag(
+        plane: Image.Plane, width: Int, height: Int,
+        cfa: Int, channels: IntArray, levels: FloatArray, white: Float,
+        geo: VfQuadGeometry, sample: Triple<Int, Int, Long>?
+    ) {
+        val pitch = if (plane.pixelStride > 0) plane.rowStride / plane.pixelStride else -1
+        val data = sample?.let { "dataMin=${it.first} dataMax=${it.second} dataMean=${it.third}" }
+            ?: "dataSample=failed"
+        Log.i("RawViewfinder",
+            "VF first frame raw=${width}x$height cfa=$cfa chans=${channels.joinToString(",")} " +
+                "pitch=$pitch black=${levels.joinToString(",")} white=$white " +
+                "geom=(${geo.left},${geo.top} ${geo.width}x${geo.height} s${geo.step}) $data")
+    }
+
+    /** Coarse min/max/mean over ~3k buffer codes; absolute reads only. */
+    private fun sampleRawCodes(
+        buffer: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int
+    ): Triple<Int, Int, Long> {
+        var min = Int.MAX_VALUE
+        var max = Int.MIN_VALUE
+        var sum = 0L
+        var n = 0L
+        val stepX = maxOf(1, width / 64)
+        val stepY = maxOf(1, height / 48)
+        var y = 0
+        while (y < height) {
+            val rowBase = y * rowStride
+            var x = 0
+            while (x < width) {
+                val code = buffer.getShort(rowBase + x * pixelStride).toInt() and 0xffff
+                if (code < min) min = code
+                if (code > max) max = code
+                sum += code
+                n++
+                x += stepX
+            }
+            y += stepY
+        }
+        return Triple(min, max, if (n > 0) sum / n else -1L)
     }
 
     /**
@@ -829,6 +992,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
             worker.removeCallbacks(gpuDraw)
             worker.post(gpuDraw)
+            vfWorkOutstanding = true
             return true
         } catch (failure: Exception) {
             frame.close()
@@ -873,6 +1037,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
             worker.removeCallbacks(draw)
             worker.post(draw)
+            vfWorkOutstanding = true
         } catch (failure: Exception) {
             synchronized(lock) { free.addLast(frame) }
             throw failure
@@ -945,13 +1110,32 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         c: CameraCharacteristics, result: CaptureResult?, channels: IntArray, out: FrameState
     ) {
         val gains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
-        out.gains[0] = gains?.red ?: 1f
-        out.gains[1] = (if (channels[1] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f
-        out.gains[2] = (if (channels[2] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f
-        out.gains[3] = gains?.blue ?: 1f
+        val rawGains = floatArrayOf(
+            gains?.red ?: 1f,
+            (if (channels[1] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f,
+            (if (channels[2] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f,
+            gains?.blue ?: 1f
+        )
+        var sanitized = false
+        for (i in 0..3) {
+            val clean = sanitizeWbGain(rawGains[i])
+            if (clean != rawGains[i]) sanitized = true
+            out.gains[i] = clean
+        }
         val matrix = result?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
-        for (row in 0..2) for (col in 0..2) out.matrix[col * 3 + row] =
-            matrix?.getElement(col, row)?.toFloat() ?: if (row == col) 1f else 0f
+        for (row in 0..2) for (col in 0..2) {
+            val identity = if (row == col) 1f else 0f
+            val raw = matrix?.getElement(col, row)?.toFloat() ?: identity
+            val clean = sanitizeCcmElement(raw, identity)
+            if (clean != raw) sanitized = true
+            out.matrix[col * 3 + row] = clean
+        }
+        // A bogus HAL value here poisons every presented frame (NaN renders
+        // black on Adreno), so a trigger is worth one field-diagnostic line.
+        if (sanitized && !vfSanitizeLogged) {
+            vfSanitizeLogged = true
+            Log.w("RawViewfinder", "VF sanitized non-finite render gains/matrix (gains=${rawGains.joinToString(",")})")
+        }
         // Snapshot the WYSIWYG render state with the frame so AgX slider moves
         // and RAW/JPEG switches never tear a frame in flight.
         out.jpeg = renderJpeg
@@ -988,7 +1172,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         // 30 Hz budget: floor at one vsync (16 ms), back off only when the
         // copy itself exceeds it. Previously max(34, copy*2) capped at ~15-25 fps.
-        sampleIntervalMs = if (throttleCpuCopy) max(16L, (SystemClock.elapsedRealtime() - now) * 2) else 16L
+        // Record mode raises the floor (never lowered here).
+        sampleIntervalMs = if (throttleCpuCopy) max(minSampleIntervalMs, (SystemClock.elapsedRealtime() - now) * 2)
+        else minSampleIntervalMs
     }
 
     /**
@@ -1206,15 +1392,21 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             noteFrameRendered(frame.epoch, gpu = false)
         } catch (failure: Exception) {
             noteGlFailure("GL failed", failure)
-        } finally { synchronized(lock) { free.addLast(frame) } }
+        } finally {
+            vfWorkOutstanding = false
+            synchronized(lock) { free.addLast(frame) }
+        }
     }
 
     /**
-     * Zero-copy present, two tiers. Tier 1 (primary): Vulkan superpixel compute into
+     * GPU present, three tiers. Tier 1 (primary): Vulkan superpixel compute into
      * the export buffer, EGL-imported and rendered through the ESSL 1.00 tonemap
-     * program. Tier 2: direct EGL import of the HAL buffer through the Bayer program
-     * (HALs where that import works). Any failure falls back down the chain to the
-     * NEON sampler. The controller defers Image.close until our frame lease closes. Runs on the GL worker.
+     * program — first zero-copy (imported HAL buffer), then gpu-copy (staging
+     * memcpy) when zero-copy fails or probes black. Tier 2: direct EGL import of
+     * the HAL buffer through the Bayer program (HALs where that import works).
+     * Any failure falls back down the chain to the NEON sampler, same frame when
+     * possible, so a broken tier never shows a black viewfinder. The controller
+     * defers Image.close until our frame lease closes. Runs on the GL worker.
      */
     private val gpuDraw = Runnable {
         val drawStarted = SystemClock.elapsedRealtime()
@@ -1226,14 +1418,48 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             if (shouldDropForFence()) return@Runnable
             var importBuffer: android.hardware.HardwareBuffer? = null
             var bayer = false
-            if (!vulkanDisabledForSession) {
+            var vkCopy = false
+            if (!vulkanDisabledForSession && !vulkanZeroCopyDisabled) {
                 val computeStarted = SystemClock.elapsedRealtime()
-                val code = runVulkanSuperpixel(frame)
+                val code = runVulkanSuperpixel(frame, copy = false)
                 computeMs = SystemClock.elapsedRealtime() - computeStarted
+                if (code == VfVulkan.BUSY) {
+                    // Bounded-wait backpressure (record dispatches own the
+                    // queue): skip the frame, keep the tier. Must NOT fall
+                    // through (the copy tier shares the queue: BUSY too; EGL
+                    // is the wrong path for a healthy session) or count as a
+                    // failure (no quarantine).
+                    noteVulkanBusy()
+                    return@Runnable
+                }
                 if (code == VfVulkan.OK && vulkanExport != null) {
-                    importBuffer = vulkanExport
+                    if (probeVulkanTier(zeroCopy = true)) importBuffer = vulkanExport
                 } else {
-                    noteVulkanFailure(VfVulkan.describe(code))
+                    noteVulkanFailure(VfVulkan.describe(code), zeroCopy = true)
+                }
+            }
+            if (importBuffer == null && !vulkanDisabledForSession && !vulkanCopyDisabled) {
+                if (!vulkanCopyVerified) {
+                    // First copy dispatch needs a fresh input signal for its
+                    // probation (zero-copy may have cleared probing already).
+                    vulkanCopyActive = true
+                    vfProbeInputSignal = true
+                }
+                val computeStarted = SystemClock.elapsedRealtime()
+                val code = runVulkanSuperpixel(frame, copy = true)
+                computeMs = SystemClock.elapsedRealtime() - computeStarted
+                if (code == VfVulkan.BUSY) {
+                    // Same backpressure gate as the zero-copy tier above.
+                    noteVulkanBusy()
+                    return@Runnable
+                }
+                if (code == VfVulkan.OK && vulkanExport != null) {
+                    if (probeVulkanTier(zeroCopy = false)) {
+                        importBuffer = vulkanExport
+                        vkCopy = true
+                    }
+                } else {
+                    noteVulkanFailure(VfVulkan.describe(code), zeroCopy = false)
                 }
             }
             if (importBuffer == null && glEs3 && gpuProgram != 0 && !gpuDisabledForSession) {
@@ -1250,7 +1476,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 0L
             }
             if (eglImage == 0L) {
-                if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import")
+                if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import", zeroCopy = !vkCopy)
                 return@Runnable
             }
             try {
@@ -1260,7 +1486,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glActiveTexture(GL_TEXTURE0)
                     val bindError = VfEglImport.bindEGLImageToTexture2D(eglImage, vkTexture)
                     if (bindError != GL_NO_ERROR) {
-                        noteVulkanFailure("egl-bind=$bindError")
+                        noteVulkanFailure("egl-bind=$bindError", zeroCopy = !vkCopy)
                         return@Runnable
                     }
                     applyCpuTonemap(frame, frame.width, frame.height)
@@ -1313,7 +1539,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 }
                 if (!gpuActiveLogged) {
                     gpuActiveLogged = true
-                    Log.i("RawViewfinder", "VF GPU zero-copy active (" + (if (bayer) "egl" else "vulkan") + ")")
+                    val tier = if (bayer) "egl" else if (vkCopy) "vulkan-copy" else "vulkan-zero"
+                    Log.i("RawViewfinder", "VF GPU active ($tier)")
                 }
                 noteFrameRendered(frame.epoch, gpu = true)
                 val drawFinished = SystemClock.elapsedRealtime()
@@ -1332,6 +1559,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         } catch (failure: Exception) {
             noteGlFailure("GPU GL failed", failure)
         } finally {
+            vfWorkOutstanding = false
             try {
                 frame.close()
             } catch (_: Exception) {
@@ -1340,8 +1568,76 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
     }
 
+    /**
+     * Black-output probation for a Vulkan tier that just dispatched OK. Returns
+     * true to present the export, false when the tier latched broken (the caller
+     * falls through to the next tier in the same frame, so no black frame is
+     * ever shown). Verified tiers skip probing entirely. GL worker only.
+     */
+    private fun probeVulkanTier(zeroCopy: Boolean): Boolean {
+        if (zeroCopy && vulkanZeroCopyVerified) return true
+        if (!zeroCopy && vulkanCopyVerified) return true
+        val tier = if (zeroCopy) "zero-copy" else "gpu-copy"
+        val signal = vfInputSignal ?: return true // input sample not arrived yet: present, keep probing
+        // Compute fence already waited; drain queued GL so the export sample
+        // cannot race the previous frame's tonemap read. Probation only.
+        glFinish()
+        val outputMax = try {
+            VfVulkan.sampleOutputNative()
+        } catch (_: Exception) {
+            -1
+        }
+        if (outputMax < 0) {
+            // Export not CPU-lockable: probation can never conclude; assume
+            // healthy so this costs one warning instead of a glFinish per frame.
+            Log.w("RawViewfinder", "VF $tier output unsampleable; assuming healthy")
+            if (zeroCopy) vulkanZeroCopyVerified = true else vulkanCopyVerified = true
+            maybeClearInputProbe()
+            return true
+        }
+        return when (probeVfTierOutput(signal.dataMax, signal.black, signal.white, outputMax)) {
+            VfTierProbe.VERIFIED -> {
+                if (zeroCopy) vulkanZeroCopyVerified = true else vulkanCopyVerified = true
+                maybeClearInputProbe()
+                Log.i("RawViewfinder", "VF $tier verified (outputMax=$outputMax)")
+                true
+            }
+            // Dark scene or lens cap: present (correct output either way), keep probing.
+            VfTierProbe.INCONCLUSIVE -> true
+            VfTierProbe.BROKEN -> {
+                Log.w("RawViewfinder", "VF $tier black output (inputMax=${signal.dataMax} outputMax=$outputMax); advancing tier")
+                latchVulkanSubTier(zeroCopy, "black-output")
+                false
+            }
+        }
+    }
+
+    /** Latch one Vulkan sub-tier dead for the session. Never schedules recovery. */
+    private fun latchVulkanSubTier(zeroCopy: Boolean, reason: String) {
+        val tier = if (zeroCopy) "zero-copy" else "gpu-copy"
+        if (zeroCopy) vulkanZeroCopyDisabled = true else vulkanCopyDisabled = true
+        consecutiveVulkanFailures = 0
+        maybeClearInputProbe()
+        if (vulkanZeroCopyDisabled && vulkanCopyDisabled) {
+            if (!vulkanDisabledForSession) {
+                vulkanDisabledForSession = true
+                Log.w("RawViewfinder", "VF Vulkan failed ($reason); EGL/NEON cover for session")
+            }
+        } else {
+            Log.w("RawViewfinder", "VF Vulkan $tier failed ($reason); trying next tier")
+        }
+    }
+
+    private fun maybeClearInputProbe() {
+        // The copy tier only needs a signal once it actually dispatches; a
+        // healthy zero-copy session stops probing after one verified frame.
+        val zeroResolved = vulkanZeroCopyVerified || vulkanZeroCopyDisabled
+        val copyResolved = vulkanCopyVerified || vulkanCopyDisabled || !vulkanCopyActive
+        if (zeroResolved && copyResolved) vfProbeInputSignal = false
+    }
+
     /** Vulkan tier: lazy init + export buffer + superpixel dispatch. GL worker only. */
-    private fun runVulkanSuperpixel(frame: GpuFrame): Int {
+    private fun runVulkanSuperpixel(frame: GpuFrame, copy: Boolean): Int {
         if (!vulkanInitialized) {
             val spv = loadVulkanSpv() ?: return VfVulkan.PIPELINE_FAILED
             val code = try {
@@ -1365,7 +1661,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     android.hardware.HardwareBuffer.RGBA_8888, 1,
                     android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
                         android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
-                        android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+                        android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+                        // Tier black-output probe locks the export on probation frames only.
+                        android.hardware.HardwareBuffer.USAGE_CPU_READ_RARELY
                 )
             } catch (_: Exception) {
                 null
@@ -1394,22 +1692,33 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.pitch, frame.levels, frame.white
         )
         return try {
-            VfVulkan.computeNative(frame.buffer, iparams, fparams)
+            if (copy) VfVulkan.computeCopyNative(frame.buffer, iparams, fparams)
+            else VfVulkan.computeNative(frame.buffer, iparams, fparams)
         } catch (_: Exception) {
             VfVulkan.SUBMIT_FAILED
         }
     }
 
-    /** Vulkan tier failure: warn, and skip the tier after repeated failures. */
-    private fun noteVulkanFailure(reason: String) {
+    /** Bounded-wait backpressure: count + occasional line, never a failure. GL worker only. */
+    private var vulkanBusySkips = 0L
+
+    private fun noteVulkanBusy() {
+        vulkanBusySkips++
+        if (vulkanBusySkips % 60L == 1L) {
+            Log.i("RawViewfinder", "VF Vulkan busy-skipped $vulkanBusySkips frames (gpu slow)")
+        }
+    }
+
+    /** Vulkan sub-tier failure: warn, and skip the sub-tier after repeated failures. */
+    private fun noteVulkanFailure(reason: String, zeroCopy: Boolean) {
         consecutiveVulkanFailures++
-        if ((VfVulkan.shouldDisableImmediately(reason) ||
-                consecutiveVulkanFailures >= VfGpuImport.MAX_CONSECUTIVE_FAILURES) && !vulkanDisabledForSession) {
-            vulkanDisabledForSession = true
-            Log.w("RawViewfinder", "VF Vulkan failed ($reason); EGL/NEON cover for session")
+        if (VfVulkan.shouldDisableImmediately(reason) ||
+            consecutiveVulkanFailures >= VfGpuImport.MAX_CONSECUTIVE_FAILURES
+        ) {
+            latchVulkanSubTier(zeroCopy, reason)
             if (VfVulkan.shouldRecover(reason)) scheduleVulkanRecovery()
         } else {
-            Log.w("RawViewfinder", "VF Vulkan frame failed ($reason); EGL/NEON cover")
+            Log.w("RawViewfinder", "VF Vulkan frame failed ($reason); trying next tier")
         }
     }
 
@@ -1428,11 +1737,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         worker.postDelayed(vulkanRecoverRunnable, vulkanRecoverDelayMs)
     }
 
-    /** Rate-limited device recreation; success unlatches the tier. GL worker only. */
+    /** Rate-limited device recreation; success unlatches the tiers. GL worker only. */
     private fun recoverVulkan() {
         vulkanRecoverPosted = false
         val currentEpoch = synchronized(lock) { epoch }
-        if (vulkanRecoverEpoch != currentEpoch || !vulkanDisabledForSession) return
+        if (vulkanRecoverEpoch != currentEpoch ||
+            (!vulkanDisabledForSession && !vulkanZeroCopyDisabled && !vulkanCopyDisabled)
+        ) return
         // Imports are dropped by the reinit and re-created on demand; the
         // Kotlin export buffer stays valid and is simply re-imported.
         val spv = loadVulkanSpv() ?: return
@@ -1451,6 +1762,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         vulkanRecoverDelayMs = VfGpuImport.nextVulkanRecoverDelayMs(vulkanRecoverDelayMs)
         consecutiveVulkanFailures = 0
         vulkanDisabledForSession = false
+        vulkanZeroCopyDisabled = false
+        vulkanCopyDisabled = false
+        vulkanZeroCopyVerified = false
+        vulkanCopyVerified = false
+        vulkanCopyActive = false
+        vfProbeInputSignal = true
         Log.i("RawViewfinder", "VF Vulkan recovered; re-probing zero-copy")
     }
 
@@ -1773,6 +2090,36 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         private const val MAX_PREVIEW_EV = 1.5f
         /** NEON sampler average cadence: one line per 5 s of fallback frames. */
         private const val NEON_LOG_INTERVAL_MS = 5000L
+        /** Record-mode offer floor: 10 fps VF while a take owns the GPU. */
+        const val RECORD_SAMPLE_INTERVAL_MS = 100L
+
+        /**
+         * WB gains multiply the signal: a non-finite or negative HAL value
+         * would poison the frame (NaN renders black on Adreno). Unity fallback.
+         */
+        internal fun sanitizeWbGain(value: Float): Float =
+            if (value.isFinite() && value >= 0f) value else 1f
+
+        /** CCM elements may be negative (off-diagonals); only non-finite is rejected. */
+        internal fun sanitizeCcmElement(value: Float, identity: Float): Float =
+            if (value.isFinite()) value else identity
+
+        /** Black-output probe verdict for a Vulkan tier. */
+        internal enum class VfTierProbe { VERIFIED, INCONCLUSIVE, BROKEN }
+
+        /**
+         * Tri-state tier probe. Strong input + black output = BROKEN (latch the
+         * tier and advance in the same frame). Weak input = INCONCLUSIVE (dark
+         * scene or lens cap: present, keep probing — never latch, never verify).
+         * Strong input + lit output = VERIFIED (probe no more). The margins are
+         * wide on purpose: a working tier turns 12.5% input signal into far
+         * more than 2/255 linear output, and a broken import reads exact zeros.
+         */
+        internal fun probeVfTierOutput(inputMax: Int, black: Int, white: Int, outputMax: Int): VfTierProbe {
+            val range = white - black
+            if (range <= 0 || inputMax - black <= range / 8) return VfTierProbe.INCONCLUSIVE
+            return if (outputMax <= 2) VfTierProbe.BROKEN else VfTierProbe.VERIFIED
+        }
     }
     override fun surfaceCreated(holder: SurfaceHolder) {
         worker.post {

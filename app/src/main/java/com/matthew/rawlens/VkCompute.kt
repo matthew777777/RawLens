@@ -248,19 +248,17 @@ internal class VkImage(
 
     fun uploadR32f(values: FloatArray, uploads: UploadBuffers) {
         require(internalFormat == GLES30.GL_R32F && values.size == width * height)
-        val buffer = uploads.floats(values.size)
-        buffer.put(values).flip()
-        vk.writeImage(handle, floatsToDirect(buffer, values.size))
+        uploads.floats(values.size).put(values).flip()
+        vk.writeImage(handle, uploads.directBytes())
     }
 
     fun uploadRgba32f(values: FloatArray, uploads: UploadBuffers) {
         require(internalFormat == GLES30.GL_RGBA32F && values.size == width * height * 4)
-        val buffer = uploads.floats(values.size)
-        buffer.put(values).flip()
-        vk.writeImage(handle, floatsToDirect(buffer, values.size))
+        uploads.floats(values.size).put(values).flip()
+        vk.writeImage(handle, uploads.directBytes())
     }
 
-    fun uploadRaw16(source: ByteBuffer, layout: RawPlaneLayout, crop: RawCrop) {
+    fun uploadRaw16(source: ByteBuffer, layout: RawPlaneLayout, crop: RawCrop, uploads: UploadBuffers) {
         require(internalFormat == GLES30.GL_R16UI && width == crop.width && height == crop.height)
         val input = source.duplicate().order(ByteOrder.nativeOrder())
         val origin = input.position()
@@ -270,24 +268,34 @@ internal class VkImage(
             (crop.width - 1).toLong() * layout.pixelStride + Short.SIZE_BYTES
         require(lastByte <= input.limit().toLong()) { "RAW_SENSOR buffer is truncated" }
         // Vulkan has no UNPACK_ROW_LENGTH: gather the crop into tight rows.
-        val tight = ByteBuffer.allocateDirect(width * height * Short.SIZE_BYTES)
-            .order(ByteOrder.nativeOrder())
+        // Pooled session staging instead of one fresh ~24MB direct buffer
+        // per frame; the gathered shorts are identical either way.
+        val tight = uploads.shorts(width * height)
         if (layout.pixelStride == Short.SIZE_BYTES) {
-            for (y in 0 until height) {
-                input.position(offset + y * layout.rowStride)
-                val row = input.slice().order(ByteOrder.nativeOrder())
-                row.limit(width * Short.SIZE_BYTES)
-                tight.put(row)
+            if (layout.rowStride == width * Short.SIZE_BYTES) {
+                // Contiguous crop: a single bulk gather, no per-row slices.
+                input.position(offset)
+                val body = input.slice().order(ByteOrder.nativeOrder()).asShortBuffer()
+                body.limit(width * height)
+                tight.put(body)
+            } else {
+                for (y in 0 until height) {
+                    input.position(offset + y * layout.rowStride)
+                    val row = input.slice().order(ByteOrder.nativeOrder()).asShortBuffer()
+                    row.limit(width)
+                    tight.put(row)
+                }
             }
         } else {
             for (y in 0 until height) {
+                val rowBase = offset + y * layout.rowStride
                 for (x in 0 until width) {
-                    tight.putShort(input.getShort(offset + y * layout.rowStride + x * layout.pixelStride))
+                    tight.put(input.getShort(rowBase + x * layout.pixelStride))
                 }
             }
         }
         tight.flip()
-        vk.writeImage(handle, tight)
+        vk.writeImage(handle, uploads.directBytes())
     }
 
     fun downloadR32f(): FloatArray {
@@ -319,12 +327,6 @@ internal class VkImage(
         require(internalFormat == GLES30.GL_R32F)
         require(x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= width && y + h <= height)
         return directToFloatsRegion(x, y, w, h, 1)
-    }
-
-    private fun floatsToDirect(view: java.nio.FloatBuffer, count: Int): ByteBuffer {
-        val direct = ByteBuffer.allocateDirect(count * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
-        direct.asFloatBuffer().put(view.duplicate()).flip()
-        return direct
     }
 
     private fun directToFloats(count: Int): FloatArray {
@@ -518,21 +520,31 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
     fun dispatch(width: Int, height: Int, localX: Int, localY: Int) {
         // Watchdog slicing, the same schedule the retired GLES host used:
         // the budget bounds each submit (block_match/lk_refine are heavy
-        // enough for their own tiny budget), every submit fence-waits in
+        // enough for their own smaller budget), every submit fence-waits in
         // native code (10s, like the GL fence; a hang throws instead of
         // hanging), and the sleep yields to the viewfinder queue between
         // slices. Desktop sets srvk.sliceBudget huge for one full-grid
         // slice per pass (offset 0, identical math — the offset only
         // translates global IDs); unset means phone budgets.
+        //
+        // Full-res passes slice at 256K pixels (a 12MP pass runs ~48
+        // slices, a level-0 alignment grid ~3): small enough that one
+        // in-flight submit never holds the shared Mali GPU past a
+        // viewfinder frame, so the RAW VF keeps its 30 fps zero-copy
+        // cadence through a merge. The 1ms yield runs every fourth slice,
+        // keeping the total yield overhead — and save time — at the old
+        // schedule while the finer granularity quadruples the worst-case
+        // preemption rate. Slicing preserves coordinates and arithmetic
+        // at any budget.
         val budgetOverride = System.getProperty("srvk.sliceBudget")?.toIntOrNull()
         val budget = budgetOverride
-            ?: if (asset.endsWith("block_match.glsl") || asset.endsWith("lk_refine.glsl")) 64 else 131072
-        for (slice in RawSrGpuScheduling.slices(width, height, localX, localY, budget)) {
+            ?: if (asset.endsWith("block_match.glsl") || asset.endsWith("lk_refine.glsl")) 4096 else 262144
+        for ((index, slice) in RawSrGpuScheduling.slices(width, height, localX, localY, budget).withIndex()) {
             setDispatchOffset(slice.x, slice.y)
             vk.writeUniforms(program.pipeline, ubo.duplicate().order(ByteOrder.nativeOrder()))
             vk.dispatch(program.pipeline, slice.groupsX, slice.groupsY, 1)
             // Leave a submission opportunity for the independent viewfinder queue.
-            Thread.sleep(1)
+            if (index % 4 == 3) Thread.sleep(1)
         }
     }
 

@@ -5,8 +5,6 @@ package com.matthew.rawlens
 
 import android.os.Build
 import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.roundToInt
 
 /**
@@ -91,6 +89,13 @@ data class MergeProvenance(
  * source-Bayer writers: no CFA tags are emitted, and float camera RGB is
  * quantized only here, at the writer boundary.
  *
+ * TIFF serialization is owned by the pinned TinyDNG writer
+ * ([TinyDngImageWriter], header-first streaming): this object only assembles
+ * the tag field lists (IFD layout, sorting, offsets, strip tables, and the
+ * EXIF/GPS sub-IFDs are the native writer's job) and quantizes the pixels.
+ * Geometry, compression, photometric, strip, and sample-format tags come from
+ * TinyDNG itself and must never be passed as custom fields.
+ *
  * Quantization policy (documented, parser-tested): each sample is clamped to
  * [0, 1], multiplied by [QUANTIZATION_SCALE], and rounded half up to an
  * unsigned 16-bit code. merged values above 1.0 (unclipped highlight energy)
@@ -124,41 +129,46 @@ object LinearRgbDngWriter {
      */
     const val DEFAULT_STRIP_ROWS = 256
 
-    private const val BYTE = 1
-    private const val ASCII = 2
-    private const val SHORT = 3
-    private const val LONG = 4
-    private const val RATIONAL = 5
-    private const val SRATIONAL = 10
-    private const val DOUBLE = 12
-
+    /**
+     * Whole-frame prime-DNG serialization as ONE strip (RowsPerStrip ==
+     * height): pixel data quantizes straight into the single strip buffer.
+     * Full-resolution callers that cannot hold the frame plus its strip
+     * bytes must use [writeStriped] instead.
+     */
+    /**
+     * @param captureTimeMillis wall-clock save time for the EXIF date tags
+     *   (the savers' captureId); null omits all date tags.
+     */
     fun write(
         output: OutputStream,
         image: MergedLinearRgb,
         metadata: RawFrameMetadata,
         provenance: MergeProvenance,
         gps: GpsLocation? = null,
-        noiseProfileOverride: DoubleArray? = null
+        noiseProfileOverride: DoubleArray? = null,
+        captureTimeMillis: Long? = null
     ) {
-        output.write(headerBytes(image.width, image.height, metadata, provenance, gps, noiseProfileOverride))
-        val row = ByteBuffer.allocate(image.width * 3 * Short.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        for (y in 0 until image.height) {
-            row.clear()
-            val start = y * image.width * 3
-            for (x in 0 until image.width * 3) {
-                row.putShort(quantize(image.rgb[start + x]).toShort())
-            }
-            output.write(row.array())
+        val fields = headerFields(image.width, image.height, metadata, provenance,
+            noiseProfileOverride, captureTimeMillis)
+        val stripBytes = Math.multiplyExact(Math.multiplyExact(image.width * image.height, 3), 2)
+        TinyDngImageWriter.write(output, image.width, image.height,
+            samplesPerPixel = 3, bitsPerSample = 16, sampleFormat = 1,
+            photometric = 34892, rowsPerStrip = image.height,
+            fields = fields.fields, exif = fields.exif,
+            gps = gps?.let { GpsTiffDirectory.fields(it) }, stripCount = 1) {
+            quantizeStrip(image.rgb, 0, image.width * image.height, stripBytes)
         }
     }
 
     /**
      * Memory-bounded prime-DNG serialization for full-resolution merges.
-     * Pixel-identical to [write]: the same header plus the same per-row
-     * quantization loop, but samples arrive band by band instead of as one
-     * retained [MergedLinearRgb] (~143MB at 12MP on top of the ~380MB a
+     * Pixel-identical to [write]: the same tags and the same per-sample
+     * quantization, but samples arrive band by band (one TIFF strip per
+     * band of at most [stripRows] rows) instead of as one retained
+     * [MergedLinearRgb] (~143MB at 12MP on top of the ~380MB a
      * whole-frame RGBA readback already holds — the combination OOMs a
-     * 512MB-heap save).
+     * 512MB-heap save). The strip tables are the only bytes that differ
+     * from [write]; readers consume multi-strip DNGs identically.
      *
      * [fillRgbStrip] must synchronously fill `rgb[0, width*rows*3)` with the
      * finite RGB triplets for rows `[startY, startY+rows)` in [MergedLinearRgb]
@@ -174,41 +184,45 @@ object LinearRgbDngWriter {
         gps: GpsLocation? = null,
         stripRows: Int = DEFAULT_STRIP_ROWS,
         noiseProfileOverride: DoubleArray? = null,
+        captureTimeMillis: Long? = null,
         fillRgbStrip: (startY: Int, rows: Int, rgb: FloatArray) -> Unit
     ) {
         require(stripRows > 0) { "Strip height must be positive" }
-        output.write(headerBytes(width, height, metadata, provenance, gps, noiseProfileOverride))
+        val fields = headerFields(width, height, metadata, provenance,
+            noiseProfileOverride, captureTimeMillis)
+        val stripCount = (height + stripRows - 1) / stripRows
         val band = FloatArray(Math.multiplyExact(Math.multiplyExact(width, stripRows), 3))
-        val row = ByteBuffer.allocate(width * 3 * Short.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        var y = 0
-        while (y < height) {
-            val rows = minOf(stripRows, height - y)
-            fillRgbStrip(y, rows, band)
-            for (r in 0 until rows) {
-                row.clear()
-                val start = r * width * 3
-                for (x in 0 until width * 3) {
-                    row.putShort(quantize(band[start + x]).toShort())
-                }
-                output.write(row.array())
-            }
-            y += rows
+        TinyDngImageWriter.write(output, width, height,
+            samplesPerPixel = 3, bitsPerSample = 16, sampleFormat = 1,
+            photometric = 34892, rowsPerStrip = stripRows,
+            fields = fields.fields, exif = fields.exif,
+            gps = gps?.let { GpsTiffDirectory.fields(it) }, stripCount = stripCount) { strip ->
+            val startY = strip * stripRows
+            val rows = minOf(stripRows, height - startY)
+            fillRgbStrip(startY, rows, band)
+            quantizeStrip(band, 0, width * rows,
+                Math.multiplyExact(Math.multiplyExact(width * rows, 3), 2))
         }
     }
 
+    /** Tag field lists shared by [write] and [writeStriped]. */
+    private class HeaderFields(val fields: TiffFields, val exif: TiffFields?)
+
     /**
-     * Shared header for [write] and [writeStriped]: identical bytes for
+     * Shared tags for [write] and [writeStriped]: identical fields for
      * identical dimensions and metadata, so the striped path cannot drift
-     * from the parser-tested layout.
+     * from the parser-tested set. Structural tags (geometry, strips,
+     * photometric, compression, sample format) are TinyDNG's and are never
+     * listed here — passing one fails the native writer loudly.
      */
-    private fun headerBytes(
+    private fun headerFields(
         width: Int,
         height: Int,
         metadata: RawFrameMetadata,
         provenance: MergeProvenance,
-        gps: GpsLocation?,
-        noiseProfileOverride: DoubleArray?
-    ): ByteArray {
+        noiseProfileOverride: DoubleArray?,
+        captureTimeMillis: Long?
+    ): HeaderFields {
         require(width > 0 && height > 0) { "Linear RGB frame must have positive dimensions" }
         require(metadata.cameraId == provenance.sourceCameraId) {
             "Provenance source camera must be the reference metadata camera"
@@ -218,48 +232,38 @@ object LinearRgbDngWriter {
             ?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
         val matrix = metadata.colorMatrix1?.let(::dngMatrix)
             ?.takeIf { it.size == 9 } ?: IDENTITY
-        val cameraName = "${Build.MANUFACTURER} ${Build.MODEL} (${metadata.cameraId})"
-        val byteCount = Math.multiplyExact(
-            Math.multiplyExact(width * height, 3), Short.SIZE_BYTES
-        )
-        val entries = arrayListOf(
-            Entry(254, LONG, longs(0)),
-            Entry(256, LONG, longs(width)), Entry(257, LONG, longs(height)),
-            Entry(258, SHORT, shorts(16, 16, 16)), Entry(259, SHORT, shorts(1)),
-            Entry(262, SHORT, shorts(34892)),
-            Entry(270, ASCII, ascii(provenanceBlock(provenance))),
-            Entry(271, ASCII, ascii(Build.MANUFACTURER)),
-            Entry(272, ASCII, ascii(Build.MODEL)),
-            Entry(273, LONG, ByteArray(4), patchStripOffset = true),
-            Entry(274, SHORT, shorts(metadata.exifOrientation)),
-            Entry(277, SHORT, shorts(3)), Entry(278, LONG, longs(height)),
-            Entry(279, LONG, longs(byteCount)),
-            Entry(284, SHORT, shorts(1)), Entry(305, ASCII, ascii("RawLens")),
-            Entry(339, SHORT, shorts(1)),
-            Entry(50706, BYTE, byteArrayOf(1, 4, 0, 0)),
-            Entry(50707, BYTE, byteArrayOf(1, 4, 0, 0)),
-            Entry(50708, ASCII, ascii(cameraName)),
-            Entry(50713, SHORT, shorts(1, 1)),
-            Entry(50714, RATIONAL, rationals(doubleArrayOf(0.0, 0.0, 0.0), signed = false)),
-            Entry(50717, LONG, longs(65535)),
-            Entry(50721, SRATIONAL, rationals(matrix, signed = true)),
-            Entry(50728, RATIONAL, rationals(neutral, signed = false)),
-            Entry(50778, SHORT, shorts(metadata.referenceIlluminant1 ?: 21))
-        )
+        val cameraName = "${oem(Build.MANUFACTURER)} ${oem(Build.MODEL)} (${metadata.cameraId})"
+        val fields = TiffFields().apply {
+            ascii(270, provenanceBlock(provenance))
+            ascii(271, oem(Build.MANUFACTURER))
+            ascii(272, oem(Build.MODEL))
+            shorts(274, metadata.exifOrientation)
+            shorts(284, 1)
+            ascii(305, "RawLens")
+            bytes(50706, byteArrayOf(1, 4, 0, 0))
+            bytes(50707, byteArrayOf(1, 4, 0, 0))
+            ascii(50708, cameraName)
+            shorts(50713, 1, 1)
+            rationals(50714, doubleArrayOf(0.0, 0.0, 0.0))
+            longs(50717, 65535)
+            srationals(50721, matrix)
+            rationals(50728, neutral)
+            shorts(50778, metadata.referenceIlluminant1 ?: 21)
+        }
         // A non-positive exposure carries no information; omit rather than
         // write a zero-second tag. Same truthfulness rule as the ISO range.
         metadata.exposureTimeNanos?.takeIf { it > 0 }?.let {
-            entries += Entry(33434, RATIONAL, exposureRational(it))
+            fields.rationals(33434, doubleArrayOf(it / 1e9))
         }
         metadata.sensitivityIso?.takeIf { it in 1..65535 }?.let {
-            entries += Entry(34855, SHORT, shorts(it))
+            fields.shorts(34855, it)
         }
         // Preserve the full camera colour calibration. Omitting calibration/forward matrices
         // while retaining AsShotNeutral can change the rendering in external RAW developers.
         fun matrixTag(tag: Int, values: ImmutableDoubleValues?) {
             values?.let(::dngMatrix)?.let {
                 require(it.size == 9 && it.all(Double::isFinite))
-                entries += Entry(tag, SRATIONAL, rationals(it, signed = true))
+                fields.srationals(tag, it)
             }
         }
         matrixTag(50723, metadata.cameraCalibration1)
@@ -268,7 +272,7 @@ object LinearRgbDngWriter {
             matrixTag(50722, metadata.colorMatrix2)
             matrixTag(50724, metadata.cameraCalibration2)
             matrixTag(50965, metadata.forwardMatrix2)
-            entries += Entry(50779, SHORT, shorts(metadata.referenceIlluminant2))
+            fields.shorts(50779, metadata.referenceIlluminant2)
         }
         // Sensor noise model for profiled denoise downstream; same RGB S/O
         // pairs as the source-Bayer path. Omitted when the reference metadata
@@ -279,58 +283,41 @@ object LinearRgbDngWriter {
         val mergedProfile = noiseProfileOverride
             ?.takeIf { it.size == 6 && it.all(Double::isFinite) }
         if (mergedProfile != null) {
-            entries += Entry(51041, DOUBLE, doubles(mergedProfile))
+            fields.doubles(51041, mergedProfile)
         } else metadata.cfaPattern?.let { pattern ->
             DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern,
                 metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
-                ?.let { entries += Entry(51041, DOUBLE, doubles(it)) }
+                ?.let { fields.doubles(51041, it) }
         }
-        if (gps != null) {
-            // Placeholder value: the GPS sub-IFD offset is patched during
-            // serialization once the external-data layout is known.
-            entries += Entry(GpsTiffDirectory.TAG_GPS_IFD_POINTER, LONG, ByteArray(4))
-        }
-        entries.sortBy { it.tag }
+        // The provenance timestamp is sensor-nanos (monotonic), not wall
+        // clock: EXIF dates come only from the saver's wall-clock
+        // captureTimeMillis, never from the sensor timebase.
+        val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
+        return HeaderFields(fields, exif)
+    }
 
-        val ifdBytes = 2 + entries.size * 12 + 4
-        var dataOffset = 8 + ifdBytes
-        val externalOffsets = HashMap<Int, Int>()
-        entries.forEachIndexed { index, entry ->
-            if (entry.payload.size > 4) {
-                externalOffsets[index] = dataOffset
-                dataOffset += entry.payload.size + (entry.payload.size and 1)
+    /**
+     * Quantizes [pixels] triplets at [offset] into one little-endian strip
+     * buffer of exactly [stripBytes]: the shared pixel loop for [write] and
+     * [writeStriped], so both paths emit identical sample bytes.
+     */
+    private fun quantizeStrip(
+        triplets: FloatArray, offset: Int, pixels: Int, stripBytes: Int
+    ): ByteArray {
+        val bytes = ByteArray(stripBytes)
+        // Sharded over samples: each sample quantizes independently into
+        // disjoint byte pairs, so any worker count emits identical bytes.
+        val samples = pixels * 3
+        RawSrWorkers.forEachShard(samples) { p0, p1 ->
+            var o = p0 * 2
+            for (p in p0 until p1) {
+                val q = quantize(triplets[offset + p])
+                bytes[o] = q.toByte()
+                bytes[o + 1] = (q shr 8).toByte()
+                o += 2
             }
         }
-        val gpsOffset = dataOffset
-        val gpsBlob = gps?.let { GpsTiffDirectory.build(it, gpsOffset) }
-        val stripOffset = gpsOffset + (gpsBlob?.size ?: 0)
-        val header = ByteBuffer.allocate(stripOffset).order(ByteOrder.LITTLE_ENDIAN)
-        header.put('I'.code.toByte()).put('I'.code.toByte()).putShort(42).putInt(8)
-        header.putShort(entries.size.toShort())
-        entries.forEachIndexed { index, entry ->
-            header.putShort(entry.tag.toShort()).putShort(entry.type.toShort())
-            header.putInt(entry.count)
-            when {
-                entry.patchStripOffset -> header.putInt(stripOffset)
-                entry.tag == GpsTiffDirectory.TAG_GPS_IFD_POINTER -> header.putInt(gpsOffset)
-                entry.payload.size <= 4 -> {
-                    header.put(entry.payload)
-                    repeat(4 - entry.payload.size) { header.put(0) }
-                }
-                else -> header.putInt(requireNotNull(externalOffsets[index]))
-            }
-        }
-        header.putInt(0)
-        entries.forEachIndexed { index, entry -> if (externalOffsets.containsKey(index)) {
-            header.position(requireNotNull(externalOffsets[index]))
-            header.put(entry.payload)
-            if (entry.payload.size and 1 == 1) header.put(0)
-        } }
-        gpsBlob?.let {
-            header.position(gpsOffset)
-            header.put(it)
-        }
-        return header.array()
+        return bytes
     }
 
     /**
@@ -344,25 +331,29 @@ object LinearRgbDngWriter {
     }
 
     /**
-     * Deterministic `key=value;` provenance block for ImageDescription.
-     * Unknown reference timestamps serialize as `unknown`, never as a
-     * fabricated zero. Visible for parser tests.
+     * Human-readable multi-line provenance record for ImageDescription, in
+     * the sectioned style of RAWR's multiframe descriptions. Deterministic
+     * for a fixed input; unknown reference timestamps serialize as `?`,
+     * never as a fabricated zero. Visible for parser tests.
      */
     fun provenanceBlock(provenance: MergeProvenance): String {
-        val timestamp = if (provenance.referenceTimestampNs == Long.MIN_VALUE) "unknown"
+        val timestamp = if (provenance.referenceTimestampNs == Long.MIN_VALUE) "?"
             else provenance.referenceTimestampNs.toString()
-        return "RawLens LinearRGB prime DNG from RAW burst merge. " +
-            "algorithm=${provenance.algorithmVersion};" +
-            "selectedFrames=${provenance.selectedFrames};" +
-            "acceptedFrames=${provenance.acceptedFrames};" +
-            "rejectedFrames=${provenance.rejectedFrames};" +
-            "referenceTimestampNs=$timestamp;" +
-            "outputScale=${provenance.outputScale};" +
-            "sourceCameraId=${provenance.sourceCameraId};" +
-            "derivation=$DERIVATION;" +
-            "lensShadingApplied=${provenance.lensShadingApplied};" +
-            "effectiveFrames=${formatEffectiveFrames(provenance.effectiveFrames)};" +
-            "quantization=clamp[0,1]*65535 round-half-up"
+        return "Captured with RawLens\n" +
+            "Linear RGB prime DNG from RAW burst merge\n" +
+            "\nPARAMETERS\n" +
+            "- Algorithm: ${provenance.algorithmVersion}\n" +
+            "- Selected frames: ${provenance.selectedFrames}\n" +
+            "- Accepted frames: ${provenance.acceptedFrames}\n" +
+            "- Rejected frames: ${provenance.rejectedFrames}\n" +
+            "- Output scale: ${provenance.outputScale}x\n" +
+            "- Lens shading applied: ${provenance.lensShadingApplied}\n" +
+            "- Effective frames: ${formatEffectiveFrames(provenance.effectiveFrames)}\n" +
+            "\nSource:\n" +
+            "- Camera: ${provenance.sourceCameraId}\n" +
+            "- Reference timestamp: $timestamp ns\n" +
+            "- Derivation: $DERIVATION\n" +
+            "- Quantization: clamp[0,1]*65535 round-half-up\n"
     }
 
     /**
@@ -381,35 +372,9 @@ object LinearRgbDngWriter {
         return DoubleArray(9) { values[(it % 3) * 3 + it / 3] }
     }
 
-    private fun exposureRational(exposureNanos: Long): ByteArray =
-        ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
-            putInt(exposureNanos.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).putInt(1_000_000_000)
-        }.array()
-
-    private data class Entry(
-        val tag: Int, val type: Int, val payload: ByteArray, val patchStripOffset: Boolean = false
-    ) {
-        val count: Int = payload.size / when (type) {
-            SHORT -> 2; LONG -> 4; RATIONAL, SRATIONAL, DOUBLE -> 8; else -> 1
-        }
-    }
-
-    private fun shorts(vararg values: Int) = ByteBuffer.allocate(values.size * 2)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putShort(it.toShort()) } }.array()
-    private fun longs(vararg values: Int) = ByteBuffer.allocate(values.size * 4)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putInt(it) } }.array()
     // OEM strings are never null on device, but a JVM-stubbed Build field is:
     // record "unknown" rather than crashing the save or fabricating identity.
-    private fun ascii(value: String?) = ((value ?: "unknown") + '\u0000').toByteArray(Charsets.US_ASCII)
-    private fun rationals(values: DoubleArray, signed: Boolean): ByteArray =
-        ByteBuffer.allocate(values.size * 8).order(ByteOrder.LITTLE_ENDIAN).apply {
-            values.forEach { value ->
-                val denominator = 1_000_000
-                val numerator = (value * denominator).roundToInt()
-                putInt(if (signed) numerator else numerator.coerceAtLeast(0)).putInt(denominator)
-            }
-        }.array()
-    private fun doubles(values: DoubleArray) = ByteBuffer.allocate(values.size * 8)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach(::putDouble) }.array()
+    private fun oem(value: String?) = value ?: "unknown"
+
     private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 }

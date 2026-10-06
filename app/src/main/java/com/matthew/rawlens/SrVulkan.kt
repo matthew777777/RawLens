@@ -45,8 +45,38 @@ object SrVulkan {
         stream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
         tmp.setReadable(true, true)
         tmp.setExecutable(true, true)
+        // macOS: the staged lib links MoltenVK via @loader_path so any Mac
+        // runs without an SDK install; extract the bundled sibling beside it
+        // (missing resource = pre-bundle jar, falls back to the link-time
+        // absolute path on SDK machines).
+        if (dir.startsWith("macos")) {
+            extractSibling(tmp, "libMoltenVK.dylib", "/native/$dir/libMoltenVK.dylib")
+        }
         System.load(tmp.absolutePath)
         loaded = true
+    }
+
+    /**
+     * Extract a sidecar dylib next to an already-staged temp lib, exactly
+     * once per directory (atomic move-if-absent wins creation races; the
+     * loser's bytes are identical). Missing resources skip silently.
+     */
+    private fun extractSibling(anchor: File, name: String, resource: String) {
+        val target = File(anchor.parentFile, name)
+        if (target.isFile) return
+        val stream = SrVulkan::class.java.getResourceAsStream(resource) ?: return
+        val tmp = File.createTempFile("sibling-", "-$name", anchor.parentFile)
+        try {
+            stream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+            tmp.setReadable(true, true)
+            try {
+                java.nio.file.Files.move(tmp.toPath(), target.toPath())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Lost the race; the winner's copy is identical.
+            }
+        } finally {
+            tmp.delete()
+        }
     }
 
     /** Pair of (resource dir, file name) for this OS/arch, or null. */

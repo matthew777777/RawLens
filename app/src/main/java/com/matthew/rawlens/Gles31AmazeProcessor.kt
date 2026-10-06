@@ -106,6 +106,268 @@ class Gles31AmazeProcessor(
             cameraWhiteNormalized, null, consume)
     }
 
+    /**
+     * RCD still demosaic via the Vulkan bridge: CFA codes upload to a
+     * BLOB, 4 RCD modes (blocking fd waits; the JPEG worker is a
+     * background thread), EGL-import of the RGB back into this session,
+     * then the RCD tail (negative clip, sensor-white desaturation,
+     * camera-to-ACEScg) so downstream sees the same scene-linear
+     * contract as AMaZE. Any failure throws: the coordinator falls back
+     * to AMaZE. Same serial worker confinement as [process].
+     */
+    fun <T> processRcdRaw(
+        input: GpuRawAmazeInput,
+        cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
+        cameraWhiteNormalized: FloatArray = UNIT_WHITE,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
+            "RCD requires an even Bayer crop of at least 4x4 pixels"
+        }
+        // Full-plane upload (single blit, sensor pitch): RCD's own crop
+        // origin then addresses the crop, so channels/levels stay
+        // sensor-indexed exactly like the video path.
+        val planeBytes = input.layout.rowStride * input.layout.height
+        val plane = if (input.buffer.isDirect) {
+            input.buffer.duplicate().order(ByteOrder.nativeOrder())
+        } else {
+            val copy = ByteBuffer.allocateDirect(input.buffer.remaining()).order(ByteOrder.nativeOrder())
+            copy.put(input.buffer.duplicate())
+            copy.flip()
+            copy
+        }
+        require(plane.remaining() >= planeBytes) { "RAW plane truncated for its stride" }
+        // Slice to position 0: GetDirectBufferAddress ignores position.
+        val direct = plane.slice().order(ByteOrder.nativeOrder())
+        val norm = input.normalization
+        return processRcdCore(
+            width = input.width,
+            height = input.height,
+            codes = direct,
+            byteCount = planeBytes,
+            pitch = input.layout.rowStride / 2,
+            left = input.sensorCropLeft,
+            top = input.sensorCropTop,
+            channels = VfRcd.channelsFromPattern(norm.sensorPattern),
+            levels = FloatArray(4) { norm.blackLevels[it] },
+            white = norm.whiteLevel,
+            cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
+            cameraWhiteNormalized = cameraWhiteNormalized,
+            consume = consume
+        )
+    }
+
+    /**
+     * RCD over an unpacked normalized CFA (CPU-fallback path): floats
+     * quantize back to uint16 (levels 0, white 65535 — the unpack
+     * already baked black/white + lens shading + defects), tight crop
+     * buffer, crop-local pattern.
+     */
+    fun <T> processRcdCfa(
+        input: UnpackedRawCfa,
+        cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
+        cameraWhiteNormalized: FloatArray = UNIT_WHITE,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
+            "RCD requires an even Bayer crop of at least 4x4 pixels"
+        }
+        require(input.values.size == input.width * input.height) {
+            "CFA values size mismatch"
+        }
+        val bytes = input.width * input.height * 2
+        val staging = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
+        val shorts = staging.asShortBuffer()
+        for (v in input.values) {
+            val q = (v.coerceIn(0f, 1f) * 65535f + 0.5f).toInt().coerceIn(0, 65535)
+            shorts.put(q.toShort())
+        }
+        staging.position(0)
+        staging.limit(bytes)
+        return processRcdCore(
+            width = input.width,
+            height = input.height,
+            codes = staging,
+            byteCount = bytes,
+            pitch = input.width,
+            left = 0,
+            top = 0,
+            channels = VfRcd.channelsFromPattern(input.pattern),
+            levels = FloatArray(4),
+            white = 65535f,
+            cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
+            cameraWhiteNormalized = cameraWhiteNormalized,
+            consume = consume
+        )
+    }
+
+    private fun <T> processRcdCore(
+        width: Int,
+        height: Int,
+        codes: ByteBuffer,
+        byteCount: Int,
+        pitch: Int,
+        left: Int,
+        top: Int,
+        channels: IntArray,
+        levels: FloatArray,
+        white: Float,
+        cameraToAcescgColumnMajor: FloatArray,
+        cameraWhiteNormalized: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
+            "Camera-to-ACEScg matrix must contain nine finite values"
+        }
+        require(cameraWhiteNormalized.size == 3 &&
+            cameraWhiteNormalized.all { it.isFinite() && it >= 0f } &&
+            cameraWhiteNormalized.maxOrNull()!! > 0f
+        ) {
+            "Camera neutral white must contain three finite non-negative values with a positive peak"
+        }
+        ensureRcdVulkan()
+        require(byteCount % 2 == 0 && byteCount > 0) { "RCD CFA bytes must be positive uint16" }
+        // BLOB holds exactly the caller's bytes (full-plane at sensor
+        // pitch for raw, tight crop for unpacked CFA): 1D width in bytes.
+        val cfa = VfEglImport.createBlobBayerInput(byteCount / 2, 1)
+            ?: throw UnsupportedOperationException("RCD CFA buffer allocate failed")
+        try {
+            if (VfEglImport.blitBytesToBlob(cfa, codes, byteCount) != 0) {
+                throw UnsupportedOperationException("RCD CFA upload failed")
+            }
+            val usage = android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+                android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
+                android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+            val rgb = android.hardware.HardwareBuffer.create(
+                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
+            )
+            val scratch = android.hardware.HardwareBuffer.create(
+                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
+            )
+            try {
+                for (mode in 0..3) {
+                    val (ip, fp) = VfRcd.packRcd(
+                        width, height, left, top, channels, pitch, mode, levels, white
+                    )
+                    val fd = VfRcd.rcdSubmitNative(cfa, rgb, scratch, ip, fp, 0)
+                    if (fd < 0) throw UnsupportedOperationException("RCD mode $mode submit failed ($fd)")
+                    try {
+                        if (!waitSyncFd(fd, 30_000L)) {
+                            throw UnsupportedOperationException("RCD mode $mode GPU wedge")
+                        }
+                    } finally {
+                        try { VfEglImport.closeSyncFd(fd) } catch (_: Exception) {}
+                    }
+                }
+                return rcdTail(rgb, width, height, cameraToAcescgColumnMajor, cameraWhiteNormalized, consume)
+            } finally {
+                try { rgb.close() } catch (_: Exception) {}
+                try { scratch.close() } catch (_: Exception) {}
+            }
+        } finally {
+            try { cfa.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * RCD tail on this session: EGL-import the Vulkan RGB, run
+     * rcd_final (negative clip + sensor-white desaturation +
+     * camera-to-ACEScg), hand the RGBA16F scene-linear texture to
+     * [consume]. Mirrors the AMaZE output lifecycle (output released
+     * after consume returns).
+     */
+    private fun <T> rcdTail(
+        rgb: android.hardware.HardwareBuffer,
+        width: Int,
+        height: Int,
+        cameraToAcescgColumnMajor: FloatArray,
+        cameraWhiteNormalized: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        val session = processingSession()
+        return session.egl.run {
+            makeCurrent()
+            val eglImage = VfEglImport.createEGLImage(rgb)
+            require(eglImage != 0L) { "RCD RGB EGL import failed" }
+            try {
+                val importId = IntArray(1).also { GLES31.glGenTextures(1, it, 0) }[0]
+                check(importId != 0) { "RCD import texture alloc failed" }
+                try {
+                    GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, importId)
+                    GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MIN_FILTER, GLES31.GL_NEAREST)
+                    GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MAG_FILTER, GLES31.GL_NEAREST)
+                    val bindErr = VfEglImport.bindEGLImageToTexture2D(eglImage, importId)
+                    check(bindErr == 0) { "RCD EGL bind failed ($bindErr)" }
+                    val program = session.programs.get("rcd/rcd_final.glsl")
+                    val output = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
+                    try {
+                        GLES31.glUseProgram(program)
+                        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+                        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, importId)
+                        GLES31.glUniform1i(
+                            GLES31.glGetUniformLocation(program, "u_rgb").also {
+                                check(it >= 0) { "rcd_final uniform 'u_rgb' is missing" }
+                            }, 0
+                        )
+                        GLES31.glUniform2i(
+                            GLES31.glGetUniformLocation(program, "u_outsize").also {
+                                check(it >= 0) { "rcd_final uniform 'u_outsize' is missing" }
+                            }, width, height
+                        )
+                        val matrix = session.uploads.floats(9)
+                        matrix.put(cameraToAcescgColumnMajor).flip()
+                        GLES31.glUniformMatrix3fv(
+                            GLES31.glGetUniformLocation(program, "u_camera_to_acescg").also {
+                                check(it >= 0) { "rcd_final uniform 'u_camera_to_acescg' is missing" }
+                            }, 1, false, matrix
+                        )
+                        GLES31.glUniform3f(
+                            GLES31.glGetUniformLocation(program, "u_camera_white_normalized").also {
+                                check(it >= 0) { "rcd_final uniform 'u_camera_white_normalized' is missing" }
+                            }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
+                        )
+                        GLES31.glBindImageTexture(
+                            0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
+                        )
+                        val gx = AmazePipelineContract.LOCAL_SIZE_X
+                        val gy = AmazePipelineContract.LOCAL_SIZE_Y
+                        GLES31.glDispatchCompute((width + gx - 1) / gx, (height + gy - 1) / gy, 1)
+                        GLES31.glMemoryBarrier(
+                            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                        )
+                        checkGl("RCD tail dispatch")
+                        consume(AmazeGpuOutput(output.id, width, height, AmazeTextureFormat.RGBA16F))
+                    } finally {
+                        session.textures.release(output)
+                    }
+                } finally {
+                    GLES31.glDeleteTextures(1, intArrayOf(importId), 0)
+                }
+            } finally {
+                VfEglImport.destroyEGLImage(eglImage)
+            }
+        }
+    }
+
+    /** Idempotent Vulkan RCD bring-up (viewfinder usually already owns the device). */
+    private fun ensureRcdVulkan() {
+        val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        check(VfVulkan.initNative(spv) == VfVulkan.OK) { "RCD vulkan init failed" }
+        val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "RCD grade init failed" }
+        val rcdspv = appContext.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
+        check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "RCD pipeline init failed" }
+    }
+
+    private fun waitSyncFd(fd: Int, timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (VfEglImport.pollSyncFd(fd)) return true
+            Thread.sleep(2)
+        }
+        return VfEglImport.pollSyncFd(fd)
+    }
+
     private fun <T> processInput(
         input: AmazeInput,
         clipPoint: Float,
@@ -364,12 +626,19 @@ class Gles31AmazeProcessor(
                 runQuad(input.frame)
                 return
             }
+            prepareTileScratch()
             val source = inputTexture
             for (tileY in 0 until ceilDiv(input.height, AmazePipelineContract.TILE)) {
                 for (tileX in 0 until ceilDiv(input.width, AmazePipelineContract.TILE)) {
                     runTile(tileX * AmazePipelineContract.TILE, tileY * AmazePipelineContract.TILE, source)
                 }
             }
+            // The fused output is read back via FBO/glReadPixels. Make the tile image stores
+            // visible to the framebuffer path explicitly, mirroring the unfused AgX pass, rather
+            // than relying on the readback to imply the barrier.
+            GLES31.glMemoryBarrier(
+                GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_FRAMEBUFFER_BARRIER_BIT
+            )
         }
 
         private fun runQuad(frame: QuadBayerFrame) {
@@ -396,6 +665,21 @@ class Gles31AmazeProcessor(
 
         fun releaseIntermediates() {
             textures.filter { it !== output && it !== gainmapOutput }.asReversed().forEach(::releaseTexture)
+        }
+
+        /**
+         * Allocates the whole tile working set before the first dispatch (the pre-quad-bayer
+         * order): texture allocation binds the new texture to the active sampler unit, so it must
+         * never interleave with passes that have samplers bound. Deferred sampler binding in
+         * [BoundProgram] already makes mid-pass allocation harmless; this additionally keeps the
+         * ~230 MB commit out of the dispatch stream. Pool hits make it free on warm frames, and the
+         * Quad-Bayer graph never calls it, so it still allocates no AMaZE scratch.
+         */
+        private fun prepareTileScratch() {
+            arrayOf(
+                cfa, grad, cdA, cdB, cd2, hvwt, nyqTest, nyq2, hvwt2, hvwt3,
+                greenD, greenD2, rbpm, pmrbint, greenD3, dgrb01
+            )
         }
 
         private fun runTile(originX: Int, originY: Int, source: GlTexture) {
@@ -527,17 +811,18 @@ class Gles31AmazeProcessor(
         }
 
         private inner class BoundProgram(private val id: Int) {
-            private var textureUnit = 0
+            private val pendingSamplers = ArrayList<Pair<String, GlTexture>>(4)
 
             init {
                 GLES31.glUseProgram(id)
             }
 
             fun sampler(name: String, texture: GlTexture) {
-                val unit = textureUnit++
-                GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
-                GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture.id)
-                GLES31.glUniform1i(location(name), unit)
+                // Recorded, not bound: texture arguments evaluated later in this pass (notably
+                // image() targets) may lazily allocate, and allocation binds the new texture to
+                // the active unit — binding here would let such an allocation silently rebind this
+                // sampler to uninitialized memory. All samplers bind at dispatch(), in call order.
+                pendingSamplers += name to texture
             }
 
             fun unsignedSampler(name: String, texture: GlTexture) = sampler(name, texture)
@@ -567,6 +852,13 @@ class Gles31AmazeProcessor(
                 GLES31.glUniformMatrix3fv(location(name), 1, false, columnMajor, 0)
 
             fun dispatch(width: Int, height: Int) {
+                // Bind samplers last, after every texture argument (and its lazy allocation) has
+                // settled, so no allocation in this pass can disturb sampler bindings.
+                pendingSamplers.forEachIndexed { unit, (name, texture) ->
+                    GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
+                    GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture.id)
+                    GLES31.glUniform1i(location(name), unit)
+                }
                 GLES31.glDispatchCompute(
                     ceilDiv(width, AmazePipelineContract.LOCAL_SIZE_X),
                     ceilDiv(height, AmazePipelineContract.LOCAL_SIZE_Y),

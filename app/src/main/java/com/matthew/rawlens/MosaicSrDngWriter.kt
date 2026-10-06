@@ -5,9 +5,6 @@ package com.matthew.rawlens
 
 import android.os.Build
 import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.roundToInt
 
 /**
  * Mosaic SR reconstruction output: one float sample per target CFA site on the
@@ -71,6 +68,12 @@ data class MosaicSrProvenance(
  * WhiteLevel 65535, the reference colour metadata, the output scale, and the
  * derived-Bayer-reconstruction provenance record.
  *
+ * TIFF serialization is owned by the pinned TinyDNG writer
+ * ([TinyDngImageWriter], header-first streaming): this object only assembles
+ * the tag field lists and quantizes the pixels. Geometry, compression,
+ * photometric, strip, and sample-format tags come from TinyDNG itself and
+ * must never be passed as custom fields.
+ *
  * Quantization reuses the documented prime-DNG policy (clamp [0, 1], ×65535,
  * round half up) via [LinearRgbDngWriter.quantize]: reconstructed samples are
  * already black-subtracted and normalized, so the scale describes the file
@@ -84,21 +87,18 @@ data class MosaicSrProvenance(
 object MosaicSrDngWriter {
     const val DERIVATION = "MosaicSrDerivedBayer"
 
-    private const val BYTE = 1
-    private const val ASCII = 2
-    private const val SHORT = 3
-    private const val LONG = 4
-    private const val RATIONAL = 5
-    private const val SRATIONAL = 10
-    private const val DOUBLE = 12
-
+    /**
+     * @param captureTimeMillis wall-clock save time for the EXIF date tags
+     *   (the savers' captureId); null omits all date tags.
+     */
     fun write(
         output: OutputStream,
         image: MosaicSrCfa,
         metadata: RawFrameMetadata,
         provenance: MosaicSrProvenance,
         gps: GpsLocation? = null,
-        noiseProfileOverride: DoubleArray? = null
+        noiseProfileOverride: DoubleArray? = null,
+        captureTimeMillis: Long? = null
     ) {
         require(metadata.cameraId == provenance.sourceCameraId) {
             "Provenance source camera must be the reference metadata camera"
@@ -108,51 +108,43 @@ object MosaicSrDngWriter {
             ?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
         val matrix = metadata.colorMatrix1?.let(::dngMatrix)
             ?.takeIf { it.size == 9 } ?: IDENTITY
-        val cameraName = "${Build.MANUFACTURER} ${Build.MODEL} (${metadata.cameraId})"
-        val byteCount = Math.multiplyExact(image.width * image.height, Short.SIZE_BYTES)
-        val entries = arrayListOf(
-            Entry(254, LONG, longs(0)),
-            Entry(256, LONG, longs(image.width)), Entry(257, LONG, longs(image.height)),
-            Entry(258, SHORT, shorts(16)), Entry(259, SHORT, shorts(1)),
-            Entry(262, SHORT, shorts(32803)),
-            Entry(270, ASCII, ascii(provenanceBlock(provenance, image))),
-            Entry(271, ASCII, ascii(Build.MANUFACTURER)),
-            Entry(272, ASCII, ascii(Build.MODEL)),
-            Entry(273, LONG, ByteArray(4), patchStripOffset = true),
-            Entry(274, SHORT, shorts(metadata.exifOrientation)),
-            Entry(277, SHORT, shorts(1)), Entry(278, LONG, longs(image.height)),
-            Entry(279, LONG, longs(byteCount)),
-            Entry(284, SHORT, shorts(1)), Entry(305, ASCII, ascii("RawLens")),
-            Entry(339, SHORT, shorts(1)),
-            Entry(33421, SHORT, shorts(2, 2)),
-            Entry(33422, BYTE, cfaPattern(image.pattern)),
-            Entry(50706, BYTE, byteArrayOf(1, 4, 0, 0)),
-            Entry(50707, BYTE, byteArrayOf(1, 4, 0, 0)),
-            Entry(50708, ASCII, ascii(cameraName)),
-            Entry(50713, SHORT, shorts(2, 2)),
+        val cameraName = "${oem(Build.MANUFACTURER)} ${oem(Build.MODEL)} (${metadata.cameraId})"
+        val fields = TiffFields().apply {
+            ascii(270, provenanceBlock(provenance, image))
+            ascii(271, oem(Build.MANUFACTURER))
+            ascii(272, oem(Build.MODEL))
+            shorts(274, metadata.exifOrientation)
+            shorts(284, 1)
+            ascii(305, "RawLens")
+            shorts(33421, 2, 2)
+            bytes(33422, cfaPattern(image.pattern))
+            bytes(50706, byteArrayOf(1, 4, 0, 0))
+            bytes(50707, byteArrayOf(1, 4, 0, 0))
+            ascii(50708, cameraName)
+            shorts(50713, 2, 2)
             // BlackLevel count must cover the 2x2 repeat grid (one level per
             // Bayer phase): count 1 is rejected by rawspeed/Darktable
             // ("BLACKLEVEL entry is too small"). Same shape as
             // FloatCfaDngWriter (count 4); all phases are zero here.
-            Entry(50714, SHORT, shorts(0, 0, 0, 0)),
-            Entry(50717, LONG, longs(65535)),
-            Entry(50721, SRATIONAL, rationals(matrix, signed = true)),
-            Entry(50728, RATIONAL, rationals(neutral, signed = false)),
-            Entry(50778, SHORT, shorts(metadata.referenceIlluminant1 ?: 21)),
-            Entry(50829, SHORT, shorts(0, 0, image.height, image.width))
-        )
+            shorts(50714, 0, 0, 0, 0)
+            longs(50717, 65535)
+            srationals(50721, matrix)
+            rationals(50728, neutral)
+            shorts(50778, metadata.referenceIlluminant1 ?: 21)
+            shorts(50829, 0, 0, image.height, image.width)
+        }
         metadata.exposureTimeNanos?.takeIf { it > 0 }?.let {
-            entries += Entry(33434, RATIONAL, exposureRational(it))
+            fields.rationals(33434, doubleArrayOf(it / 1e9))
         }
         metadata.sensitivityIso?.takeIf { it in 1..65535 }?.let {
-            entries += Entry(34855, SHORT, shorts(it))
+            fields.shorts(34855, it)
         }
         // Preserve the full camera colour calibration. Omitting calibration/forward matrices
         // while retaining AsShotNeutral can change the rendering in external RAW developers.
         fun matrixTag(tag: Int, values: ImmutableDoubleValues?) {
             values?.let(::dngMatrix)?.let {
                 require(it.size == 9 && it.all(Double::isFinite))
-                entries += Entry(tag, SRATIONAL, rationals(it, signed = true))
+                fields.srationals(tag, it)
             }
         }
         matrixTag(50723, metadata.cameraCalibration1)
@@ -161,7 +153,7 @@ object MosaicSrDngWriter {
             matrixTag(50722, metadata.colorMatrix2)
             matrixTag(50724, metadata.cameraCalibration2)
             matrixTag(50965, metadata.forwardMatrix2)
-            entries += Entry(50779, SHORT, shorts(metadata.referenceIlluminant2))
+            fields.shorts(50779, metadata.referenceIlluminant2)
         }
         // Sensor noise model for profiled denoise downstream; same RGB S/O
         // pairs as the source-Bayer path and the Linear RGB prime writer.
@@ -172,101 +164,66 @@ object MosaicSrDngWriter {
         val mergedProfile = noiseProfileOverride
             ?.takeIf { it.size == 6 && it.all(Double::isFinite) }
         if (mergedProfile != null) {
-            entries += Entry(51041, DOUBLE, doubles(mergedProfile))
+            fields.doubles(51041, mergedProfile)
         } else metadata.cfaPattern?.let { pattern ->
             DngNoiseProfile.toRgb(metadata.noiseProfile?.toDoubleArray(), pattern,
                 metadata.blackLevels?.toFloatArray(), metadata.whiteLevel)
-                ?.let { entries += Entry(51041, DOUBLE, doubles(it)) }
+                ?.let { fields.doubles(51041, it) }
         }
-        if (gps != null) {
-            // Placeholder value: the GPS sub-IFD offset is patched during
-            // serialization once the external-data layout is known.
-            entries += Entry(GpsTiffDirectory.TAG_GPS_IFD_POINTER, LONG, ByteArray(4))
-        }
-        entries.sortBy { it.tag }
-
-        val ifdBytes = 2 + entries.size * 12 + 4
-        var dataOffset = 8 + ifdBytes
-        val externalOffsets = HashMap<Int, Int>()
-        entries.forEachIndexed { index, entry ->
-            if (entry.payload.size > 4) {
-                externalOffsets[index] = dataOffset
-                dataOffset += entry.payload.size + (entry.payload.size and 1)
-            }
-        }
-        val gpsOffset = dataOffset
-        val gpsBlob = gps?.let { GpsTiffDirectory.build(it, gpsOffset) }
-        val stripOffset = gpsOffset + (gpsBlob?.size ?: 0)
-        val header = ByteBuffer.allocate(stripOffset).order(ByteOrder.LITTLE_ENDIAN)
-        header.put('I'.code.toByte()).put('I'.code.toByte()).putShort(42).putInt(8)
-        header.putShort(entries.size.toShort())
-        entries.forEachIndexed { index, entry ->
-            header.putShort(entry.tag.toShort()).putShort(entry.type.toShort())
-            header.putInt(entry.count)
-            when {
-                entry.patchStripOffset -> header.putInt(stripOffset)
-                entry.tag == GpsTiffDirectory.TAG_GPS_IFD_POINTER -> header.putInt(gpsOffset)
-                entry.payload.size <= 4 -> {
-                    header.put(entry.payload)
-                    repeat(4 - entry.payload.size) { header.put(0) }
-                }
-                else -> header.putInt(requireNotNull(externalOffsets[index]))
-            }
-        }
-        header.putInt(0)
-        entries.forEachIndexed { index, entry -> if (externalOffsets.containsKey(index)) {
-            header.position(requireNotNull(externalOffsets[index]))
-            header.put(entry.payload)
-            if (entry.payload.size and 1 == 1) header.put(0)
-        } }
-        gpsBlob?.let {
-            header.position(gpsOffset)
-            header.put(it)
-        }
-        output.write(header.array())
-
-        // Banded strip writes: 256 rows per syscall (~2MB at full res)
-        // instead of one syscall per row (~5k syscalls at 24MP). Same bytes,
-        // same order — only the buffering changes.
-        val bandRows = 256
-        val band = ByteBuffer.allocate(image.width * bandRows * Short.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        var y = 0
-        while (y < image.height) {
-            val rows = minOf(bandRows, image.height - y)
-            band.clear()
-            for (r in 0 until rows) {
-                val start = (y + r) * image.width
-                for (x in 0 until image.width) {
-                    band.putShort(LinearRgbDngWriter.quantize(image.samples[start + x]).toShort())
+        // The provenance timestamp is sensor-nanos (monotonic), not wall
+        // clock: EXIF dates come only from the saver's wall-clock
+        // captureTimeMillis, never from the sensor timebase.
+        val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
+        TinyDngImageWriter.write(output, image.width, image.height,
+            samplesPerPixel = 1, bitsPerSample = 16, sampleFormat = 1,
+            photometric = 32803, rowsPerStrip = image.height,
+            fields = fields, exif = exif,
+            gps = gps?.let { GpsTiffDirectory.fields(it) }, stripCount = 1) {
+            val bytes = ByteArray(Math.multiplyExact(image.width * image.height, 2))
+            // Sharded over samples: each sample quantizes independently into
+            // disjoint byte pairs, so any worker count emits identical bytes.
+            val samples = image.samples
+            RawSrWorkers.forEachShard(samples.size) { p0, p1 ->
+                var o = p0 * 2
+                for (p in p0 until p1) {
+                    val q = LinearRgbDngWriter.quantize(samples[p])
+                    bytes[o] = q.toByte()
+                    bytes[o + 1] = (q shr 8).toByte()
+                    o += 2
                 }
             }
-            output.write(band.array(), 0, rows * image.width * Short.SIZE_BYTES)
-            y += rows
+            bytes
         }
     }
 
     /**
-     * Deterministic `key=value;` provenance record for ImageDescription.
-     * Unknown reference timestamps serialize as `unknown`, never fabricated.
+     * Human-readable multi-line provenance record for ImageDescription, in
+     * the sectioned style of RAWR's multiframe descriptions. Deterministic
+     * for a fixed input; unknown reference timestamps serialize as `?`,
+     * never fabricated.
      */
     fun provenanceBlock(provenance: MosaicSrProvenance, image: MosaicSrCfa): String {
-        val timestamp = if (provenance.referenceTimestampNs == Long.MIN_VALUE) "unknown"
+        val timestamp = if (provenance.referenceTimestampNs == Long.MIN_VALUE) "?"
             else provenance.referenceTimestampNs.toString()
-        return "RawLens Mosaic SR DNG - derived Bayer reconstruction. " +
-            "algorithm=${MosaicSrReconstructor.ALGORITHM_VERSION};" +
-            "selectedFrames=${provenance.selectedFrames};" +
-            "acceptedFrames=${provenance.acceptedFrames};" +
-            "rejectedFrames=${provenance.rejectedFrames};" +
-            "referenceTimestampNs=$timestamp;" +
-            "sourceDims=${provenance.sourceWidth}x${provenance.sourceHeight};" +
-            "targetDims=${image.width}x${image.height};" +
-            "targetPattern=${image.pattern};" +
-            "outputScale=${MosaicSrReconstructor.LINEAR_SCALE};" +
-            "sourceCameraId=${provenance.sourceCameraId};" +
-            "derivation=$DERIVATION;" +
-            "lensShadingApplied=${provenance.lensShadingApplied};" +
-            "effectiveFrames=${LinearRgbDngWriter.formatEffectiveFrames(provenance.effectiveFrames)};" +
-            "quantization=clamp[0,1]*65535 round-half-up"
+        return "Captured with RawLens\n" +
+            "Mosaic SR DNG - derived Bayer reconstruction\n" +
+            "\nPARAMETERS\n" +
+            "- Algorithm: ${MosaicSrReconstructor.ALGORITHM_VERSION}\n" +
+            "- Selected frames: ${provenance.selectedFrames}\n" +
+            "- Accepted frames: ${provenance.acceptedFrames}\n" +
+            "- Rejected frames: ${provenance.rejectedFrames}\n" +
+            "- Output scale: ${MosaicSrReconstructor.LINEAR_SCALE}x\n" +
+            "- Lens shading applied: ${provenance.lensShadingApplied}\n" +
+            "- Effective frames: " +
+            "${LinearRgbDngWriter.formatEffectiveFrames(provenance.effectiveFrames)}\n" +
+            "\nSource:\n" +
+            "- Camera: ${provenance.sourceCameraId}\n" +
+            "- Source dimensions: ${provenance.sourceWidth}x${provenance.sourceHeight}\n" +
+            "- Target dimensions: ${image.width}x${image.height}\n" +
+            "- Target pattern: ${image.pattern}\n" +
+            "- Reference timestamp: $timestamp ns\n" +
+            "- Derivation: $DERIVATION\n" +
+            "- Quantization: clamp[0,1]*65535 round-half-up\n"
     }
 
     // Match TinyDngMetadata's RAW_SENSOR serialization. Camera2 snapshots are column-major
@@ -276,10 +233,9 @@ object MosaicSrDngWriter {
         return DoubleArray(9) { values[(it % 3) * 3 + it / 3] }
     }
 
-    private fun exposureRational(exposureNanos: Long): ByteArray =
-        ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).apply {
-            putInt(exposureNanos.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).putInt(1_000_000_000)
-        }.array()
+    // OEM strings are never null on device, but a JVM-stubbed Build field is:
+    // record "unknown" rather than crashing the save or fabricating identity.
+    private fun oem(value: String?) = value ?: "unknown"
 
     private fun cfaPattern(pattern: BayerPattern) = ByteArray(4) { index ->
         when (pattern.colorAt(index and 1, index shr 1)) {
@@ -287,28 +243,5 @@ object MosaicSrDngWriter {
         }
     }
 
-    private data class Entry(
-        val tag: Int, val type: Int, val payload: ByteArray, val patchStripOffset: Boolean = false
-    ) {
-        val count: Int = payload.size / when (type) {
-            SHORT -> 2; LONG -> 4; RATIONAL, SRATIONAL, DOUBLE -> 8; else -> 1
-        }
-    }
-
-    private fun shorts(vararg values: Int) = ByteBuffer.allocate(values.size * 2)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putShort(it.toShort()) } }.array()
-    private fun longs(vararg values: Int) = ByteBuffer.allocate(values.size * 4)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach { putInt(it) } }.array()
-    private fun ascii(value: String?) = ((value ?: "unknown") + '\u0000').toByteArray(Charsets.US_ASCII)
-    private fun rationals(values: DoubleArray, signed: Boolean): ByteArray =
-        ByteBuffer.allocate(values.size * 8).order(ByteOrder.LITTLE_ENDIAN).apply {
-            values.forEach { value ->
-                val denominator = 1_000_000
-                val numerator = (value * denominator).roundToInt()
-                putInt(if (signed) numerator else numerator.coerceAtLeast(0)).putInt(denominator)
-            }
-        }.array()
-    private fun doubles(values: DoubleArray) = ByteBuffer.allocate(values.size * 8)
-        .order(ByteOrder.LITTLE_ENDIAN).apply { values.forEach(::putDouble) }.array()
     private val IDENTITY = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 }

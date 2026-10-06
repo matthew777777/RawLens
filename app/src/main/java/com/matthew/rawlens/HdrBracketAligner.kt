@@ -123,45 +123,92 @@ object HdrBracketAligner {
         return cfa.copy(values = out)
     }
 
+    /**
+     * Reference-side matcher inputs, packed once per burst and reused for
+     * every alternate. Packing the reference per alternate costs one ~50MB
+     * transient and ~1s of proxy work per frame on 12MP captures; hoisting
+     * it keeps the align phase under ~260MB even with the reference, one
+     * alternate, and the moving-side proxies live at once.
+     */
+    data class PackedReference(
+        val quads: FloatArray,
+        val quadWidth: Int,
+        val quadHeight: Int,
+        val coarse: FloatArray,
+        val coarseWidth: Int,
+        val coarseHeight: Int,
+        val step0: Int,
+        val noise: CfaNoiseModel?,
+        val exposure: Double,
+        val width: Int,
+        val height: Int,
+        val pattern: BayerPattern
+    )
+
+    /** Packs [reference] once; pair with [estimateShiftPacked] per alternate. */
+    fun packReference(reference: HdrMergeFrame): PackedReference {
+        val ref = reference.cfa
+        val qScaleW = ref.width / 2
+        val qScaleH = ref.height / 2
+        val rq = packQuads(ref)
+        prefilter(rq, qScaleW, qScaleH, FloatArray(rq.size))
+        val step0 = coarseStep(qScaleW, qScaleH)
+        val cw = (qScaleW + step0 - 1) / step0
+        val ch = (qScaleH + step0 - 1) / step0
+        val rc = downsample(rq, qScaleW, qScaleH, step0)
+        return PackedReference(rq, qScaleW, qScaleH, rc, cw, ch, step0,
+            reference.noiseModel, exposureScale(reference),
+            ref.width, ref.height, ref.pattern)
+    }
+
+    private fun coarseStep(qScaleW: Int, qScaleH: Int): Int = when {
+        min(qScaleW, qScaleH) >= 96 -> 4
+        min(qScaleW, qScaleH) >= 48 -> 2
+        else -> 1
+    }
+
     fun estimateShift(
         reference: HdrMergeFrame,
         moving: HdrMergeFrame,
         maxShiftPx: Int = 64
+    ): Shift = estimateShiftPacked(packReference(reference), moving, maxShiftPx)
+
+    /**
+     * Same matcher as [estimateShift], but the reference side is packed
+     * once by the caller ([packReference]) instead of per alternate. Only
+     * the moving frame is packed here, so the transient per call is one
+     * quad mosaic + one prefilter scratch (~100MB on 12MP) plus small
+     * coarse grids. [lastTimings] covers the moving-side proxy work.
+     */
+    fun estimateShiftPacked(
+        packed: PackedReference,
+        moving: HdrMergeFrame,
+        maxShiftPx: Int = 64
     ): Shift {
-        val ref = reference.cfa
         val mov = moving.cfa
-        require(ref.width == mov.width && ref.height == mov.height)
-        require(ref.pattern == mov.pattern) { "Bracket frames must share the CFA pattern" }
+        require(packed.width == mov.width && packed.height == mov.height)
+        require(packed.pattern == mov.pattern) { "Bracket frames must share the CFA pattern" }
         // Exposure-match moving onto reference so EV gaps don't read as motion.
-        val scale = exposureScale(reference) / exposureScale(moving)
-        val qScaleW = ref.width / 2
-        val qScaleH = ref.height / 2
-        // 4-channel quad mosaics at 1/2 res (R/G1/G2/B planes, never averaged:
+        val scale = packed.exposure / exposureScale(moving)
+        val qScaleW = packed.quadWidth
+        val qScaleH = packed.quadHeight
+        // 4-channel quad mosaic at 1/2 res (R/G1/G2/B planes, never averaged:
         // gray averaging destroys the texture the matcher runs on) under a
         // Gaussian prefilter (PhotonCamera normalize.glsl: sigma 1.5 quads).
         var t = System.nanoTime()
-        val rq = packQuads(ref)
         val mq = packQuads(mov)
-        // One reusable scratch for both passes (same size); halves the ~24MB
-        // transient on 12MP frames. Filtered values are identical.
-        val prefilterTmp = FloatArray(rq.size)
-        prefilter(rq, qScaleW, qScaleH, prefilterTmp)
-        prefilter(mq, qScaleW, qScaleH, prefilterTmp)
-        val noise = reference.noiseModel
+        prefilter(mq, qScaleW, qScaleH, FloatArray(mq.size))
+        val noise = packed.noise
         val proxyMs = (System.nanoTime() - t) / 1_000_000
         // Two-level search (logcat 2026-09-16: full-SAD cost 37s align on 12MP;
         // stride-2 SAD + float + threads target low single digits — a coarser
         // grid was tried and mislocks on periodic texture, so the grid stays).
         // Steps adapt to proxy size so small fixtures keep full resolution.
-        val step0 = when {
-            min(qScaleW, qScaleH) >= 96 -> 4
-            min(qScaleW, qScaleH) >= 48 -> 2
-            else -> 1
-        }
+        val step0 = packed.step0
         t = System.nanoTime()
-        val cw = (qScaleW + step0 - 1) / step0
-        val ch = (qScaleH + step0 - 1) / step0
-        val rc = downsample(rq, qScaleW, qScaleH, step0)
+        val cw = packed.coarseWidth
+        val ch = packed.coarseHeight
+        val rc = packed.coarse
         val mc = downsample(mq, qScaleW, qScaleH, step0)
         val coarseRange = maxShiftPx / 2 / step0 + 1
         val coarseOffsets = ArrayList<Pair<Int, Int>>((2 * coarseRange + 1) * (2 * coarseRange + 1))
@@ -172,6 +219,7 @@ object HdrBracketAligner {
         val coarseMs = (System.nanoTime() - t) / 1_000_000
         t = System.nanoTime()
         // Fine: single ±2 round at quad resolution, then parabola subpixel.
+        val rq = packed.quads
         var qdx = bestDx * step0
         var qdy = bestDy * step0
         run {

@@ -35,7 +35,7 @@ class LinearRgbDngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create Linear RGB DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride) }
+            resolver.openOutputStream(uri, "w")?.use { LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride, captureId) }
                 ?: throw IOException("Could not open Linear RGB DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish Linear RGB DNG")
@@ -79,7 +79,7 @@ class LinearRgbDngSaver(private val context: Context) {
             resolver.openOutputStream(uri, "w")?.use {
                 LinearRgbDngWriter.writeStriped(
                     it, width, height, metadata, provenance, gps, stripRows,
-                    noiseProfileOverride, fillRgbStrip
+                    noiseProfileOverride, captureId, fillRgbStrip
                 )
             } ?: throw IOException("Could not open Linear RGB DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)

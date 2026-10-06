@@ -94,13 +94,24 @@ class DngSaver(private val context: Context) {
         }
     }
 
+    /**
+     * @param sixteenBit selects the 16-bit normalized writer
+     *   ([HdrPlusDngWriter]) instead of the 32-bit float writer
+     *   ([FloatCfaDngWriter]). HDR+ merges use 16-bit; fusion/SR keep
+     *   32-bit float.
+     * @param hdrPlusProvenance merge facts for the 16-bit path's
+     *   ImageDescription block; ignored by the 32-bit path.
+     */
     fun saveMerged(cfa: UnpackedRawCfa, metadata: RawFrameMetadata,
                    captureId: Long = System.currentTimeMillis(),
-                   gps: GpsLocation? = null): String {
-        val displayName = CaptureFileNames.hdrDng(captureId)
+                   gps: GpsLocation? = null,
+                   displayName: String? = null,
+                   sixteenBit: Boolean = false,
+                   hdrPlusProvenance: HdrPlusProvenance? = null): String {
+        val resolvedName = displayName ?: CaptureFileNames.hdrDng(captureId)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Images.Media.DISPLAY_NAME, resolvedName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
             put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
             put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -108,11 +119,14 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create HDR DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata, gps) }
-                ?: throw IOException("Could not open HDR DNG output stream")
+            resolver.openOutputStream(uri, "w")?.use {
+                if (sixteenBit) HdrPlusDngWriter.write(it, cfa, metadata, gps,
+                    captureTimeMillis = captureId, provenance = hdrPlusProvenance)
+                else FloatCfaDngWriter.write(it, cfa, metadata, gps)
+            } ?: throw IOException("Could not open HDR DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish HDR DNG")
-            return displayName
+            return resolvedName
         } catch (failure: Exception) {
             resolver.delete(uri, null, null)
             throw failure
