@@ -4,6 +4,7 @@
 package com.matthew.rawlens
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Rect
@@ -33,6 +34,7 @@ import android.view.View
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
@@ -103,7 +105,9 @@ enum class RawZslState { OFF, WARMING_UP, ACTIVE, FALLBACK }
 data class RawZslStatus(val state: RawZslState, val detail: String,
                        val bufferedFrames: Int = 0,
                        val srAvailable: Boolean? = null,
-                       val srBusy: Boolean = false)
+                       val srBusy: Boolean = false,
+                       val fusionBusy: Boolean = false,
+                       val hdrPlusBusy: Boolean = false)
 
 data class DynamicExposureSettings(
     val enabled: Boolean = false,
@@ -112,6 +116,19 @@ data class DynamicExposureSettings(
     val shutterLimitNanos: Long = 0L,
     val useAutoSafeShutter: Boolean = true
 )
+
+/**
+ * Single-flight super-resolution executor: one merge at a time, zero queue.
+ * SR merges run for tens of seconds; sharing the serial save writer would
+ * stall every JPEG/HDR save behind them, and any queued SR job would pin a
+ * full burst of gralloc slots (retention runs at job start) and wedge the
+ * reader against the refilling ring. A second press while busy rejects with
+ * [RejectedExecutionException] instead — the shutter fails fast with SR BUSY
+ * and the preserved ring takes instantly on re-tap. Top-level and internal
+ * so the contract is unit-testable without the controller.
+ */
+internal fun createSrMergeExecutor(): ThreadPoolExecutor =
+    ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, SynchronousQueue())
 
 private data class PendingZslResult(
     val result: TotalCaptureResult,
@@ -137,9 +154,15 @@ internal class RawSuperResolutionCapture(
     val denoiseSettings: DenoiseSettings,
     val selectedCameraId: String,
     val outputOrientation: Int,
-    val referenceIndex: Int = frames.size / 2
+    val referenceIndex: Int = frames.size / 2,
+    /** Planner sampled sharpness in capture order (null entries = no preview); feeds DNG provenance. */
+    val planSharpness: List<Double?>? = null,
+    /** Reference policy label ("sharpest"/"stability"); feeds DNG provenance. */
+    val planReferenceMode: String? = null
 ) : AutoCloseable {
-    private val imageOwner = CloseOnceOwner(frames) { it.image.close() }
+    // Lease-aware release: a direct close() would bypass an in-flight viewfinder
+    // GPU borrow of the same image. Unadopted images still close directly.
+    private val imageOwner = CloseOnceOwner(frames) { RawImageOwnership.release(it.image) }
     /** Defensive snapshot: callers cannot mutate burst membership after ownership transfer. */
     val frames: List<RawSuperResolutionFrame> = imageOwner.items
 
@@ -148,7 +171,9 @@ internal class RawSuperResolutionCapture(
             RawSuperResolutionSettings.MAX_MERGE_FRAMES)
     }
 
-    /** The temporal middle is a stable diagnostic base until sharpness scoring lands in Phase B. */
+    /** Production overrides [referenceIndex] with the planner decision (stability- or
+     * sharpness-first per settings); the default temporal middle only serves direct
+     * construction (tests, diagnostics). */
     val reference: RawSuperResolutionFrame get() = frames[referenceIndex]
 
     override fun close() = imageOwner.close()
@@ -168,6 +193,7 @@ class RawCameraController(
     initialRawZslEnabled: Boolean,
     initialRawZslFrameCount: Int,
     initialRawSuperResolutionSettings: RawSuperResolutionSettings = RawSuperResolutionSettings(),
+    initialBurstFusionSettings: RawBurstFusionSettings = RawBurstFusionSettings(),
     initialDynamicExposureSettings: DynamicExposureSettings,
     initialEttrSettings: EttrSettings,
     initialAeMeteringMode: AeMeteringMode,
@@ -186,7 +212,8 @@ class RawCameraController(
     private val rawViewfinder: RawViewfinder? = null,
     private val onRawVfDebug: (String) -> Unit = { },
     initialRawStreamCompatMode: Boolean = false,
-    private val onRawStreamCompatMode: () -> Unit = { }
+    private val onRawStreamCompatMode: () -> Unit = { },
+    initialHdrPlusSettings: HdrPlusSettings = HdrPlusSettings()
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
@@ -216,6 +243,22 @@ class RawCameraController(
         DNG_WRITER_THREADS, DNG_WRITER_THREADS,
         0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(DNG_WRITER_QUEUE_SLOTS)
     )
+    // Dedicated SR merge worker (see createSrMergeExecutor): a tens-of-seconds
+    // merge never occupies the serial save writer, so JPEG/HDR saves and the
+    // drain-gated ZSL resume stay responsive through it.
+    private val srWriter = createSrMergeExecutor()
+    // Set on camera thread when an SR job is accepted, cleared in its finally
+    // (also camera thread): a second SR press fails fast with SR BUSY instead
+    // of pinning a second burst against the ring.
+    private val srMergeInFlight = AtomicBoolean(false)
+    // Same single-flight contract for burst fusion (translation-align +
+    // HdrRawMerge on the writer): a second press fails fast with FUSION
+    // BUSY instead of queueing a second full-burst merge.
+    private val fusionMergeInFlight = AtomicBoolean(false)
+    // Same single-flight contract for HDR+ (Vulkan merge on the writer): a
+    // second press fails fast with HDR+ BUSY instead of queueing a second
+    // full-burst merge.
+    private val hdrPlusMergeInFlight = AtomicBoolean(false)
     // Metering sampler worker: full-resolution Bayer sampling costs hundreds of ms on
     // some sensors and must never run on the camera handler (see dispatchMeteringSample).
     // Below-normal priority so it never contends with acquisition, pairing, or saves.
@@ -227,11 +270,20 @@ class RawCameraController(
     }
     private val meteringInFlight = AtomicBoolean(false)
     @Volatile private var rawDeveloper: RawDevelopmentCoordinator? = null
+    // SR-confined development coordinator: rawDeveloper is serial-writer
+    // confined (shared cached EGL state), so the SR thread gets its own
+    // instance instead of racing it. Same confinement contract.
+    @Volatile private var srDeveloper: RawDevelopmentCoordinator? = null
     private var srMergeProcessor: VkRawSrProcessor? = null
     @Volatile private var rawSuperResolutionSettings = initialRawSuperResolutionSettings
     private var rawSrCapability: Boolean? = null
     private var rawSrProbeStarted = false
     private var activeRawSuperResolutionSettings = initialRawSuperResolutionSettings
+    @Volatile private var burstFusionSettings = initialBurstFusionSettings
+    private var activeBurstFusionSettings = initialBurstFusionSettings
+    @Volatile private var hdrPlusSettings = initialHdrPlusSettings
+    private var activeHdrPlusSettings = initialHdrPlusSettings
+    @Volatile private var hdrPlusMerge: HdrPlusMerge? = null
     private var activeRawSrReferenceFallback = false
     private val pendingImages = ConcurrentHashMap<Long, Image>()
     private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
@@ -253,6 +305,8 @@ class RawCameraController(
     private var activeHdrSaveEachBracket = false
     private var activeHdrSaveDebugFrames = false
     private var activeHdrStops = 2
+    /** Flat per-shutter EV offsets for the in-flight bracket (see [HdrBracketConfig]). */
+    private var activeHdrFrameEvs: IntArray = intArrayOf(-2, 0, 2)
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
     /**
      * Hybrid top-up (GCam ZSL+PSL style): ring frames held aside while fresh
@@ -414,6 +468,11 @@ class RawCameraController(
     private var rawZslBuffer: RawZslBuffer? = null
     private var rawZslWatchdog: Runnable? = null
     private var rawZslHasFrame = false
+    /** Ring admissions in the current watchdog window; the session-death latch
+     * fires only on a window with zero of them. Camera thread only. */
+    private var rawZslEpochPairs = 0
+    /** Consecutive slow-but-productive watchdog windows on this epoch. */
+    private var rawZslSlowWindows = 0
     private var rawZslReportedSize = 0
     private val zslOverflowTracker = ZslOverflowTracker()
     private var lastRawZslStatus: RawZslStatus? = null
@@ -431,6 +490,9 @@ class RawCameraController(
     private var lastIso = 100
     private var lastExposureNanos = 10_000_000L
     private var lastWbKelvin: Int? = null
+    /** Published DNG bit depth + sensor label, so per-frame dynamic white can move the chip when it disagrees with the static key. */
+    private var lastWhiteLevelBits = 10
+    private var lastSensorInfo = ""
     private var hasPreviewMetadata = false
     private var lastPreviewMetadataPublishMs = 0L
     private var afRegion: MeteringRectangle? = null
@@ -483,6 +545,7 @@ class RawCameraController(
         if (destroyed || running) return
         running = true
         lifecycleGeneration++
+        openRetryCount = 0
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.addOnLayoutChangeListener(previewLayoutListener)
         viewfinder.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -528,19 +591,32 @@ class RawCameraController(
             ?: rawCameraIds.firstOrNull()
         if (id == null) {
             opening = false
+            if (candidates.isNotEmpty() &&
+                retryOpenForTransientRoute("No RAW camera route (candidates=$candidates)")
+            ) return
+            Log.w(LOG_TAG, "No RAW camera route (candidates=$candidates)")
             onState("NO RAW CAMERA")
             return
         }
         selectedCameraId = id
+        if (id != sessionLadderLensId) {
+            sessionLadderLensId = id
+            resetSessionLadder()
+        }
         val route = cachedCameraRoute(id)
         if (route == null) {
             opening = false
+            if (retryOpenForTransientRoute("RAW camera $id route unavailable")) return
+            Log.w(LOG_TAG, "RAW camera $id route unavailable")
             onState("RAW CAMERA $id UNAVAILABLE")
             return
         }
-        val openCameraId = route.openCameraId
-        activePhysicalCameraId = route.physicalCameraId
-        characteristics = route.characteristics
+        sessionPrimaryRoute = route
+        sessionAltRoute = resolveDirectPhysicalFallback(route)
+        val effectiveRoute = if (sessionRouteAltActive) sessionAltRoute ?: route else route
+        val openCameraId = effectiveRoute.openCameraId
+        activePhysicalCameraId = effectiveRoute.physicalCameraId
+        characteristics = effectiveRoute.characteristics
         hasPreviewMetadata = false
         lastPreviewMetadataPublishMs = 0L
         lastWbKelvin = null
@@ -567,15 +643,17 @@ class RawCameraController(
             if (pixelArraySize != null) "${pixelArraySize.width}x${pixelArraySize.height}" else "SENSOR")
         
         val maxDepth = characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
-        val dngInfo = String.format(java.util.Locale.US, "DNG\n%d-bit RAW", 
-            if (maxDepth != null) 32 - Integer.numberOfLeadingZeros(maxDepth) else 10)
-        
+        lastWhiteLevelBits = whiteLevelBitDepth(maxDepth)
+        lastSensorInfo = sensorInfo
+        val dngInfo = String.format(java.util.Locale.US, "DNG\n%d-bit RAW", lastWhiteLevelBits)
+
         onInfo(dngInfo, sensorInfo)
         publishControls()
         onActiveCameraChanged(id)
         
         onState("OPENING RAW")
-        Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id)")
+        val ladderRoute = if (sessionRouteAltActive) "direct-physical" else "primary"
+        Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo $sessionComboIndex]")
         cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
         } catch (failure: CameraAccessException) {
             opening = false
@@ -597,6 +675,7 @@ class RawCameraController(
                 }
                 opening = false
                 camera = device
+                openRetryCount = 0
             }
             Log.i(LOG_TAG, "Camera device opened: ${device.id}")
             createSession(device, generation)
@@ -618,6 +697,16 @@ class RawCameraController(
             }
             if (!isCurrent(generation)) return
             opening = false
+            // A device that fails before any session exists cannot be fixed by
+            // degrading combos, but a vendor composite may still open through
+            // its direct-physical route. Contention and policy errors are
+            // terminal: retrying those would only spin.
+            if (session == null &&
+                error != CameraDevice.StateCallback.ERROR_CAMERA_IN_USE &&
+                error != CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE &&
+                error != CameraDevice.StateCallback.ERROR_CAMERA_DISABLED &&
+                advancePastFailedOpen(device.id)
+            ) return
             Log.w(LOG_TAG, "Camera device error on ${device.id}: $error")
             onState(if (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE) "CAMERA IN USE" else "CAMERA ERROR")
         }
@@ -658,34 +747,63 @@ class RawCameraController(
             onState("NO SENSOR DATA")
             return
         }
-        val rawSize = largestRawSize(map) ?: run {
+        val rawSizes = map.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)?.toList()
+        if (rawSizes.isNullOrEmpty()) {
             Log.e(LOG_TAG, "Session aborted: no RAW_SENSOR size")
             onState("RAW UNAVAILABLE")
             return
         }
-        rawZslCapacity = calculateRawZslCapacity(rawSize)
+        // The activity is deliberately portrait-locked. Match Photon's preview geometry: camera
+        // stream sizes stay in their native landscape order while the view uses the swapped
+        // dimensions (3:4 for a 4:3 stream), irrespective of the phone's physical orientation.
+        val requiredBufferWidth = viewfinder.height
+        val requiredBufferHeight = viewfinder.width
+        // Empty preview sizes are not terminal: the ladder's RAW-only tail
+        // covers HALs that expose no preview stream at all.
+        val previewChoices = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        // Fallback ladder: attempt 0 is the legacy full combo (largest RAW, covering
+        // preview, ring-sized reader). A HAL rejection advances the index and rebuilds
+        // the session with a degraded combo instead of wedging on SESSION ERROR.
+        val combos = selectSessionStreamCombos(
+            rawSizes.map { SessionStreamSize(it.width, it.height) },
+            previewChoices.map { SessionStreamSize(it.width, it.height) },
+            requiredBufferWidth,
+            requiredBufferHeight,
+            fullReaderMaxImages(),
+            MIN_ACQUIRED_RAW_IMAGES
+        )
+        if (combos.isEmpty()) {
+            Log.e(LOG_TAG, "Session aborted: no RAW_SENSOR size")
+            onState("RAW UNAVAILABLE")
+            return
+        }
+        sessionComboIndex = sessionComboIndex.coerceIn(0, combos.lastIndex)
+        val combo = combos[sessionComboIndex]
+        val rawSize = Size(combo.raw.width, combo.raw.height)
+        rawZslCapacity = clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
+        if (rawZslRequested && rawZslCapacity == 0 && calculateRawZslCapacity(rawSize) > 0) {
+            // Degraded combo: the reduced reader cannot host a ZSL ring, so this
+            // session is viewfinder plus forward capture. Latched like any
+            // rejected stream combination; a lens change resets the ladder.
+            Log.w(LOG_TAG, "ZSL fallback: REDUCED BUFFERS")
+            rawZslDisabledForSession = true
+            rawZslFallbackDetail = "REDUCED BUFFERS"
+        }
         rawZslRealtimeTimestamps = c.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
         rawZslBuffer?.clear()
         rawZslBuffer = rawZslCapacity.takeIf { it > 0 }?.let(::RawZslBuffer)
         publishRawZslStatus()
 
-        // The activity is deliberately portrait-locked. Match Photon's preview geometry: camera
-        // stream sizes stay in their native landscape order while the view uses the swapped
-        // dimensions (3:4 for a 4:3 stream), irrespective of the phone's physical orientation.
-        val requiredBufferWidth = viewfinder.height
-        val requiredBufferHeight = viewfinder.width
-        val previewSize = choosePreviewSize(
-            map = map,
-            rawSize = rawSize,
-            requiredWidth = requiredBufferWidth,
-            requiredHeight = requiredBufferHeight
-        )
+        val previewSize = combo.preview?.let { Size(it.width, it.height) }
         this.previewSize = previewSize
         rawZslTargetFpsRange = chooseRawZslFpsRange(c, rawSize)
-        viewfinder.post {
-            viewfinder.setAspectRatio(previewSize.height, previewSize.width)
-            configurePreviewTransform(viewfinder.width, viewfinder.height)
+        // RAW-only sessions leave the (never-displayed) TextureView alone.
+        previewSize?.let { ps ->
+            viewfinder.post {
+                viewfinder.setAspectRatio(ps.height, ps.width)
+                configurePreviewTransform(viewfinder.width, viewfinder.height)
+            }
         }
 
         // maxImages must fit the whole ring plus frames still waiting for their
@@ -693,12 +811,9 @@ class RawCameraController(
         // slack, plus a small rearm overlap so the ring refills during the drain
         // tail of a burst (see resumeRawZslIfIdle). Without the pairing headroom
         // a full 30-frame ring plus normal result lag exceeds maxImages and wedges
-        // the gralloc queue into overflow + Mali unlock errors.
-        val readerMaxImages = maxOf(
-            MIN_ACQUIRED_RAW_IMAGES,
-            maxOf(rawZslCapacity, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
-                ZSL_REARM_OVERLAP_SLOTS
-        )
+        // the gralloc queue into overflow + Mali unlock errors. Degraded combos
+        // carry a burst-minimum reader instead and run without a ZSL ring.
+        val readerMaxImages = combo.readerMaxImages
         // NOTE (Step 2 finding): adding USAGE_GPU_SAMPLED_IMAGE here starves this
         // reader completely on the test HAL (Xiaomi 25080RABDG / MT6878) — session
         // configures but no RAW images are ever delivered, killing ZSL + VF + RAW
@@ -834,6 +949,9 @@ class RawCameraController(
                         // not inherit a full reader from this aborted burst.
                         drainQueuedRawImages(rawReader)
                         closeAllPendingPairs()
+                        // Wedge recovery: free ring slots too (closeAllPendingPairs
+                        // preserves them; holdout transfers are unaffected).
+                        clearRawZslBuffer()
                         // A top-up chain keeps its holdout plus arrivals as a
                         // partial burst; anything else was already closed above.
                         if (topupActive) finishTopupBurst()
@@ -850,21 +968,25 @@ class RawCameraController(
         lastRawImageReceivedMs = 0L
         rawStreamResults = 0
         rawStreamFailures = 0
-        logRawStreamCombo(map, rawSize, previewSize)
-        val texture = viewfinder.surfaceTexture ?: run {
-            reader.setOnImageAvailableListener(null, null)
-            reader.close()
-            rawReaderMaxImages = 0
-            return
+        logRawStreamCombo(map, rawSize, previewSize, combo.label, sessionComboIndex, combos.size)
+        // RAW-only combos skip the preview surface entirely: the session runs
+        // a single RAW stream and the RAW viewfinder is the only display.
+        val surface: Surface? = combo.preview?.let { pv ->
+            val texture = viewfinder.surfaceTexture ?: run {
+                reader.setOnImageAvailableListener(null, null)
+                reader.close()
+                rawReaderMaxImages = 0
+                return
+            }
+            texture.setDefaultBufferSize(pv.width, pv.height)
+            Surface(texture)
         }
-        texture.setDefaultBufferSize(previewSize.width, previewSize.height)
-        val surface = Surface(texture)
         synchronized(cameraStateLock) {
             if (!isCurrent(generation) || camera !== device) {
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
                 rawReaderMaxImages = 0
-                surface.release()
+                surface?.release()
                 return
             }
             rawReader = reader
@@ -877,8 +999,8 @@ class RawCameraController(
                 previewSurface = null
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
-                surface.release()
-                if (isCurrent(generation)) onState("SESSION ERROR")
+                surface?.release()
+                handleSessionSetupFailed(generation, "session creation failed: ${cameraAccessReason(failure)}")
             } catch (failure: IllegalArgumentException) {
                 Log.w(LOG_TAG, "Session surfaces rejected by HAL", failure)
                 rawReader = null
@@ -886,8 +1008,8 @@ class RawCameraController(
                 previewSurface = null
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
-                surface.release()
-                if (isCurrent(generation)) onState("SESSION ERROR")
+                surface?.release()
+                handleSessionSetupFailed(generation, "session surfaces rejected by HAL")
             } catch (failure: UnsupportedOperationException) {
                 Log.w(LOG_TAG, "Session creation unsupported by HAL", failure)
                 rawReader = null
@@ -895,15 +1017,15 @@ class RawCameraController(
                 previewSurface = null
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
-                surface.release()
-                if (isCurrent(generation)) onState("SESSION ERROR")
+                surface?.release()
+                handleSessionSetupFailed(generation, "session creation unsupported by HAL")
             } catch (_: IllegalStateException) {
                 rawReader = null
                 rawReaderMaxImages = 0
                 previewSurface = null
                 reader.setOnImageAvailableListener(null, null)
                 reader.close()
-                surface.release()
+                surface?.release()
                 if (camera === device) camera = null
                 if (isCurrent(generation)) onState("CAMERA CLOSED")
             }
@@ -921,25 +1043,33 @@ class RawCameraController(
      * that separates a stillborn stream (unsatisfiable combo) from a dead
      * viewfinder (delivery works, rendering fails).
      */
-    private fun logRawStreamCombo(map: StreamConfigurationMap, rawSize: Size, previewSize: Size) {
+    private fun logRawStreamCombo(
+        map: StreamConfigurationMap,
+        rawSize: Size,
+        previewSize: Size?,
+        comboLabel: String,
+        comboIndex: Int,
+        comboCount: Int
+    ) {
         val minFrameNs = runCatching {
             map.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, rawSize)
         }.getOrNull()
         val stallNs = runCatching {
             map.getOutputStallDuration(android.graphics.ImageFormat.RAW_SENSOR, rawSize)
         }.getOrNull()
+        val previewLabel = previewSize?.let { "${it.width}x${it.height}" } ?: "none"
         Log.i(
             LOG_TAG,
-            "RAW stream combo raw=${rawSize.width}x${rawSize.height} preview=${previewSize.width}x${previewSize.height} " +
+            "RAW stream combo raw=${rawSize.width}x${rawSize.height} preview=$previewLabel " +
                 "maxImages=$rawReaderMaxImages minFrameNs=${minFrameNs ?: "?"} stallNs=${stallNs ?: "?"} " +
-                "compat=$rawStreamCompatMode"
+                "compat=$rawStreamCompatMode combo=$comboLabel attempt=${comboIndex + 1}/$comboCount"
         )
     }
 
     @Suppress("DEPRECATION")
     private fun createPerformanceSession(
         device: CameraDevice,
-        preview: Surface,
+        preview: Surface?,
         raw: Surface,
         generation: Int
     ) {
@@ -955,12 +1085,12 @@ class RawCameraController(
             // entry point outright. The deprecated surface-list API is equivalent
             // when no stream-use-case / physical-routing hints are attached.
             Log.w(LOG_TAG, "Modern session API unsupported (${plan.label}); using legacy surfaces", failure)
-            device.createCaptureSession(listOf(preview, raw), callback, cameraHandler)
+            device.createCaptureSession(listOfNotNull(preview, raw), callback, cameraHandler)
             lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
             Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
         } catch (failure: IllegalArgumentException) {
             Log.w(LOG_TAG, "Modern session config rejected (${plan.label}); using legacy surfaces", failure)
-            device.createCaptureSession(listOf(preview, raw), callback, cameraHandler)
+            device.createCaptureSession(listOfNotNull(preview, raw), callback, cameraHandler)
             lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
             Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
         }
@@ -973,7 +1103,7 @@ class RawCameraController(
 
     private fun chooseSessionPerformancePlan(
         device: CameraDevice,
-        preview: Surface,
+        preview: Surface?,
         raw: Surface,
         callback: CameraCaptureSession.StateCallback
     ): SessionPerformancePlan {
@@ -988,25 +1118,37 @@ class RawCameraController(
         }
 
         fun configuration(previewUseCase: Long?, rawUseCase: Long?): SessionConfiguration {
-            val previewOutput = OutputConfiguration(preview)
-            val rawOutput = OutputConfiguration(raw)
-            // Standard Camera2 logical -> physical routing: keep the logical CameraDevice open,
-            // but bind both streams to the selected physical member. Standalone/vendor-direct
-            // routes leave this null and behave exactly as before.
-            activePhysicalCameraId?.let { physicalId ->
-                previewOutput.setPhysicalCameraId(physicalId)
-                rawOutput.setPhysicalCameraId(physicalId)
+            val outputs = mutableListOf<OutputConfiguration>()
+            preview?.let {
+                val previewOutput = OutputConfiguration(it)
+                // Standard Camera2 logical -> physical routing: keep the logical CameraDevice open,
+                // but bind both streams to the selected physical member. Standalone/vendor-direct
+                // routes leave this null and behave exactly as before.
+                activePhysicalCameraId?.let(previewOutput::setPhysicalCameraId)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    previewUseCase?.let(previewOutput::setStreamUseCase)
+                }
+                outputs += previewOutput
             }
+            val rawOutput = OutputConfiguration(raw)
+            activePhysicalCameraId?.let(rawOutput::setPhysicalCameraId)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                previewUseCase?.let(previewOutput::setStreamUseCase)
                 rawUseCase?.let(rawOutput::setStreamUseCase)
             }
+            outputs += rawOutput
             return SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(previewOutput, rawOutput),
+                outputs,
                 cameraExecutor,
                 callback
             )
+        }
+
+        if (preview == null) {
+            // RAW-only last resort: a single stream with no use-case hints at
+            // all. A lone RAW output tagged STILL_CAPTURE risks still-only
+            // scheduling (the Samsung lesson); DEFAULT is the baseline.
+            return SessionPerformancePlan(configuration(null, null), "RAW ONLY")
         }
 
         if (rawStreamCompatMode) {
@@ -1089,10 +1231,114 @@ class RawCameraController(
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
             if (!isCurrent(generation)) return
-            Log.e(LOG_TAG, "Camera session configuration rejected by HAL")
-            onState("SESSION ERROR")
+            handleSessionSetupFailed(generation, "Camera session configuration rejected by HAL")
         }
     }
+
+    /**
+     * Session setup recovery: a HAL that rejects the session (sync exception
+     * or async onConfigureFailed) advances the fallback ladder and rebuilds
+     * instead of wedging on SESSION ERROR. First the direct-physical route
+     * for vendor composites (a binding the HAL does not honor rejects every
+     * size), then degraded combos on the primary route. Terminal only when
+     * every attempt is exhausted.
+     */
+    private fun handleSessionSetupFailed(generation: Int, reason: String) {
+        // Sync rejections can surface on the SurfaceTexture (main) thread when
+        // createSession runs from the surface callback; the restart below is
+        // camera-thread confined.
+        if (!isOnCameraThread()) {
+            cameraHandler.post { handleSessionSetupFailed(generation, reason) }
+            return
+        }
+        if (!isCurrent(generation)) return
+        if (advanceSessionLadder("Session setup failed ($reason)")) return
+        Log.e(LOG_TAG, reason)
+        onState("SESSION ERROR")
+    }
+
+    /**
+     * Session fallback ladder: first the direct-physical route for vendor
+     * composites, then degraded combos on the primary route. Shared by
+     * explicit HAL rejections ([handleSessionSetupFailed]) and silent ones:
+     * a compat session that configures fine but delivers zero RAW buffers
+     * (vivo X300 Ultra) is the same unsatisfiable combo without the error
+     * callback. Returns true when a restart was issued. Camera-thread only.
+     */
+    private fun advanceSessionLadder(reason: String): Boolean {
+        check(isOnCameraThread())
+        val id = selectedCameraId
+        val alt = sessionAltRoute
+        if (!sessionRouteAltActive && alt != null && alt.openCameraId !in sessionFailedOpenIds) {
+            sessionRouteAltActive = true
+            sessionComboIndex = 0
+            Log.w(LOG_TAG, "$reason; retrying $id via direct physical ${alt.openCameraId}")
+            onState("RECOVERING PREVIEW")
+            restartCameraForConfigurationChange()
+            return true
+        }
+        val primary = sessionPrimaryRoute
+        val primaryFailed = primary?.openCameraId?.let(sessionFailedOpenIds::contains) == true
+        val comboCount = primary?.let { sessionComboCount(it.characteristics) } ?: 0
+        if (!primaryFailed && sessionComboIndex + 1 < comboCount) {
+            // A failed direct-physical full combo falls back to the primary
+            // route's degraded combos; the alternate never degrades sizes.
+            if (sessionRouteAltActive) sessionRouteAltActive = false
+            sessionComboIndex++
+            Log.w(LOG_TAG, "$reason; retrying $id with combo $sessionComboIndex/${comboCount - 1}")
+            onState("RECOVERING PREVIEW")
+            restartCameraForConfigurationChange()
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Open-failure recovery: degrading combos cannot fix a device that fails
+     * to open, but a vendor composite may still open through its
+     * direct-physical route. Returns true when a restart was issued. Runs on
+     * the camera handler (the openCamera callback thread).
+     */
+    private fun advancePastFailedOpen(failedOpenId: String): Boolean {
+        sessionFailedOpenIds += failedOpenId
+        val alt = sessionAltRoute
+        if (!sessionRouteAltActive && alt != null && alt.openCameraId !in sessionFailedOpenIds) {
+            sessionRouteAltActive = true
+            sessionComboIndex = 0
+            Log.w(LOG_TAG, "Camera open failed on $failedOpenId; retrying via direct physical ${alt.openCameraId}")
+            onState("RECOVERING PREVIEW")
+            restartCameraForConfigurationChange()
+            return true
+        }
+        return false
+    }
+
+    /** Combo count for the given route, rebuilt cheaply to bound the ladder. */
+    private fun sessionComboCount(characteristics: CameraCharacteristics): Int {
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return 1
+        val rawSizes = map.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)?.toList().orEmpty()
+        val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        if (rawSizes.isEmpty()) return 1
+        return selectSessionStreamCombos(
+            rawSizes.map { SessionStreamSize(it.width, it.height) },
+            previewSizes.map { SessionStreamSize(it.width, it.height) },
+            viewfinder.height,
+            viewfinder.width,
+            fullReaderMaxImages(),
+            MIN_ACQUIRED_RAW_IMAGES
+        ).size.coerceAtLeast(1)
+    }
+
+    /**
+     * Full-combo reader depth: the whole ZSL ring plus pairing headroom,
+     * transition slack, and rearm overlap (see createSession).
+     */
+    private fun fullReaderMaxImages(): Int = maxOf(
+        MIN_ACQUIRED_RAW_IMAGES,
+        maxOf(rawZslFrameCount, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
+            ZSL_REARM_OVERLAP_SLOTS
+    )
 
     private var rawPreviewRetryUntilMs = 0L
     private var rawPreviewFailures = 0
@@ -1114,6 +1360,48 @@ class RawCameraController(
      * the next cold start skips the stillborn attempt entirely.
      */
     private var rawStreamCompatMode = initialRawStreamCompatMode
+    /**
+     * Session fallback ladder: HALs that reject the full RAW+preview combo
+     * (Xiaomi 14 Ultra rejects it async on every route) retry with degraded
+     * combos and, for vendor composites, a direct-physical route instead of
+     * wedging on SESSION ERROR. Sticky per lens so a reopen goes straight to
+     * the winning combo; reset only when the user changes lens.
+     */
+    private var sessionComboIndex = 0
+    private var sessionRouteAltActive = false
+    private var sessionLadderLensId: String? = null
+    private val sessionFailedOpenIds = mutableSetOf<String>()
+    private var sessionPrimaryRoute: CameraRoute? = null
+    private var sessionAltRoute: CameraRoute? = null
+    /** Consumed reopen attempts for transient route resolution (see [retryOpenForTransientRoute]). */
+    private var openRetryCount = 0
+
+    private fun resetSessionLadder() {
+        sessionComboIndex = 0
+        sessionRouteAltActive = false
+        sessionFailedOpenIds.clear()
+        openRetryCount = 0
+    }
+
+    /**
+     * Bounded reopen for transient route resolution: Xiaomi answers early
+     * characteristics queries with bogus values (rear lenses reporting as
+     * front), so an unresolvable route right after launch is retried a few
+     * times instead of wedging on a black screen until the user taps a lens.
+     * Returns true when a retry was scheduled. Generation-guarded, so stop()
+     * or a lens change cancels the pending attempt.
+     */
+    private fun retryOpenForTransientRoute(reason: String): Boolean {
+        if (openRetryCount >= OPEN_RETRY_MAX) return false
+        openRetryCount++
+        Log.w(LOG_TAG, "$reason; retry $openRetryCount/$OPEN_RETRY_MAX")
+        onState("OPENING RAW")
+        val retryGeneration = lifecycleGeneration
+        cameraHandler.postDelayed({
+            if (isCurrent(retryGeneration) && camera == null && !opening) open()
+        }, OPEN_RETRY_DELAY_MS)
+        return true
+    }
 
     private fun recoverRawPreview(reason: String) {
         if (!running || captureInProgress.get()) return
@@ -1124,6 +1412,10 @@ class RawCameraController(
         // request-level recovery run its course there.
         if (shouldEscalateRawPreviewToCompatSession(rawPreviewFailures, rawStreamImages, rawStreamCompatMode)) {
             rawStreamCompatMode = true
+            // The plan axis changed (hinted -> DEFAULT): retry the full combo
+            // under it before degrading sizes again. Runs on the camera thread
+            // (all recoverRawPreview callers are camera-confined).
+            sessionComboIndex = 0
             Log.w(
                 LOG_TAG,
                 "RAW preview stillborn (images=0 results=$rawStreamResults failures=$rawStreamFailures " +
@@ -1134,6 +1426,26 @@ class RawCameraController(
             restartCameraForConfigurationChange()
             return
         }
+        // A compat session that still delivers zero RAW buffers is a silent
+        // combo rejection: the HAL configured the session fine, then starved
+        // it (vivo X300 Ultra accepts FULL but never produces a buffer).
+        // Request toggles cannot fix the session itself, so advance the
+        // combo ladder instead of wedging on a black viewfinder. Flowing
+        // buffers stay on request-level recovery: that is a viewfinder or
+        // rendering problem, not a session problem.
+        val alt = sessionAltRoute
+        val altAvailable = !sessionRouteAltActive && alt != null &&
+            alt.openCameraId !in sessionFailedOpenIds
+        val comboCount = sessionPrimaryRoute
+            ?.let { sessionComboCount(it.characteristics) } ?: 0
+        if (session != null && shouldAdvanceStillbornSessionLadder(
+                rawPreviewFailures, rawStreamImages, rawStreamCompatMode,
+                altAvailable, sessionComboIndex, comboCount
+            ) && advanceSessionLadder(
+                "RAW stream stillborn (images=0 results=$rawStreamResults " +
+                    "failures=$rawStreamFailures plan=$lastSessionPlanLabel)"
+            )
+        ) return
         val generation = lifecycleGeneration
         val shot = captureSequence.get()
         rawPreviewFailures++
@@ -1291,7 +1603,35 @@ class RawCameraController(
     /** Captures the default handheld bracket (-2, 0, +2 EV) around the latest metered pair. */
     fun captureHdrBracket(saveEachBracket: Boolean = false, bracketStops: Int = 2,
                           saveDebugFrames: Boolean = false) {
-        require(bracketStops == 2 || bracketStops == 4) { "HDR bracket must be ±2 or ±4 EV" }
+        captureBracket(HdrBracketConfig.classic(bracketStops), saveEachBracket, saveDebugFrames)
+    }
+
+    /**
+     * Captures an explicit-stop bracket (e.g. [-3,-2,-1,0,+1]) with one frame
+     * per stop around the latest metered pair. See [HdrBracketConfig].
+     */
+    fun captureBracketStops(stops: IntArray, saveEachBracket: Boolean = false,
+                            saveDebugFrames: Boolean = false) {
+        captureBracket(HdrBracketConfig.plan(stops.copyOf()), saveEachBracket, saveDebugFrames)
+    }
+
+    /**
+     * Captures a dense multi-frame-per-stop burst in the raymerge style (e.g.
+     * stops [-3,-2,-1,0,+1] with 5/3/8/2/6 frames per stop): extra shutters on
+     * the shadows where photon noise dominates. All frames merge through the
+     * HDR path with per-frame alignment + deghost; the JPEG requires every EV
+     * covered (see [HdrBracketConfig.coverageSummary]).
+     */
+    fun captureBracketedBurst(stops: IntArray, framesPerStop: IntArray,
+                              saveEachBracket: Boolean = false,
+                              saveDebugFrames: Boolean = false) {
+        captureBracket(HdrBracketConfig.plan(stops.copyOf(), framesPerStop.copyOf()),
+            saveEachBracket, saveDebugFrames)
+    }
+
+    /** Shared shutter for [captureHdrBracket], [captureBracketStops], and [captureBracketedBurst]. */
+    fun captureBracket(plan: HdrBracketConfig.Plan, saveEachBracket: Boolean = false,
+                       saveDebugFrames: Boolean = false) {
         val outputFormat = captureFormat
         val orientationSnapshot = deviceOrientationDegrees
         postShutter {
@@ -1306,12 +1646,15 @@ class RawCameraController(
             activeHdrBracket = true
             activeHdrSaveEachBracket = saveEachBracket && !saveDebugFrames
             activeHdrSaveDebugFrames = saveDebugFrames
-            activeHdrStops = bracketStops
+            activeHdrStops = plan.stops.maxOrNull()?.let { kotlin.math.max(it, -plan.stops.minOrNull()!!) } ?: 2
+            activeHdrFrameEvs = IntArray(plan.totalFrames) { plan.frames[it].evStops }
+            pendingHdrFrames.ensureCapacity(plan.totalFrames)
             // Warm-start FlowNet now (process-wide singleton, background init):
             // first-bracket merges were paying the ~10s model init inside the
             // align window while runInference blocked on waitReady.
             runCatching { FlowNetNcnnProcessor.start(context.applicationContext) }
-            captureFrames(3, outputFormat = outputFormat, orientationSnapshot = orientationSnapshot)
+            captureFrames(plan.totalFrames, outputFormat = outputFormat,
+                orientationSnapshot = orientationSnapshot)
         }
     }
 
@@ -1392,6 +1735,64 @@ class RawCameraController(
         publishRawZslStatus()
     }
 
+    fun burstFusionSettings(): RawBurstFusionSettings = burstFusionSettings
+
+    fun setBurstFusionSettings(settings: RawBurstFusionSettings): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) {
+            onState("FUSION LOCKED • SAVING")
+            return false
+        }
+        burstFusionSettings = settings
+        if (!isOnCameraThread()) {
+            cameraHandler.post { applyBurstFusionCameraState(settings) }
+            return true
+        }
+        applyBurstFusionCameraState(settings)
+        return true
+    }
+
+    private fun applyBurstFusionCameraState(settings: RawBurstFusionSettings) {
+        if (burstFusionSettings != settings) return
+        if (settings.enabled && !rawZslRequested) {
+            rawZslRequested = true
+            rawZslDisabledForSession = false
+            rawZslFallbackDetail = null
+            updateRepeatingRequest()
+        }
+        publishRawZslStatus()
+    }
+
+    fun hdrPlusSettings(): HdrPlusSettings = hdrPlusSettings
+
+    fun setHdrPlusSettings(settings: HdrPlusSettings): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) {
+            onState("HDR+ LOCKED • SAVING")
+            return false
+        }
+        hdrPlusSettings = settings
+        if (settings.enabled) hdrPlusProcessor().prewarm()
+        if (!isOnCameraThread()) {
+            cameraHandler.post { applyHdrPlusCameraState(settings) }
+            return true
+        }
+        applyHdrPlusCameraState(settings)
+        return true
+    }
+
+    private fun applyHdrPlusCameraState(settings: HdrPlusSettings) {
+        if (hdrPlusSettings != settings) return
+        if (settings.enabled && !rawZslRequested) {
+            rawZslRequested = true
+            rawZslDisabledForSession = false
+            rawZslFallbackDetail = null
+            updateRepeatingRequest()
+        }
+        publishRawZslStatus()
+    }
+
+    private fun hdrPlusProcessor(): HdrPlusMerge =
+        hdrPlusMerge ?: HdrPlusMerge(context).also { hdrPlusMerge = it }
+
     private fun beginSingleCapture(
         pressElapsedNanos: Long,
         sensorCutoffSnapshot: Long,
@@ -1405,8 +1806,30 @@ class RawCameraController(
         // a busy queue fails fast with QUEUE FULL and the shutter stays free.
         if (rawZslRequested) {
             val need = zslSelectedFrameCount(outputFormat)
-            // SR merges to one artifact: reserve one slot, not the full burst.
-            val needSlots = if (rawSuperResolutionSettings.enabled) 1 else need
+            // SR/fusion/HDR+ merge to one artifact: reserve one slot, not the burst.
+            // (SR wins if several are somehow on; the quick tiles are exclusive.)
+            val mergeMode = rawSuperResolutionSettings.enabled || burstFusionSettings.enabled ||
+                hdrPlusSettings.enabled
+            val needSlots = if (mergeMode) 1 else need
+            // Single-flight merge: a second press fails fast here, before
+            // any take drains the ring — the preserved ring then takes
+            // instantly on re-tap after the merge finishes.
+            if (rawSuperResolutionSettings.enabled && srMergeInFlight.get()) {
+                onState("SR BUSY")
+                refreshCaptureAvailability()
+                return
+            }
+            if (!rawSuperResolutionSettings.enabled && burstFusionSettings.enabled && fusionMergeInFlight.get()) {
+                onState("FUSION BUSY")
+                refreshCaptureAvailability()
+                return
+            }
+            if (!rawSuperResolutionSettings.enabled && !burstFusionSettings.enabled &&
+                hdrPlusSettings.enabled && hdrPlusMergeInFlight.get()) {
+                onState("HDR+ BUSY")
+                refreshCaptureAvailability()
+                return
+            }
             if (!beginCapture(outputFormat, requiredSaveSlots = needSlots, orientationSnapshot = orientationSnapshot)) return
             if (rawSuperResolutionSettings.enabled) {
                 // SR needs the full consistent ring; no top-up mixing.
@@ -1417,6 +1840,34 @@ class RawCameraController(
                     retryZslSelectionUntil(deadlineMs)
                 } else {
                     onState("SR QUEUED")
+                    val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                    retryZslSelectionUntil(deadlineMs)
+                }
+                return
+            }
+            if (burstFusionSettings.enabled) {
+                // Fusion needs the full consistent ring; no top-up mixing.
+                if (rawZslStreaming) {
+                    onState("SELECTING FUSION")
+                    if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
+                    val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                    retryZslSelectionUntil(deadlineMs)
+                } else {
+                    onState("FUSION QUEUED")
+                    val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                    retryZslSelectionUntil(deadlineMs)
+                }
+                return
+            }
+            if (hdrPlusSettings.enabled) {
+                // HDR+ needs the full consistent ring; no top-up mixing.
+                if (rawZslStreaming) {
+                    onState("SELECTING HDR+")
+                    if (selectAndSaveRawZsl(pressElapsedNanos, sensorCutoffSnapshot)) return
+                    val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
+                    retryZslSelectionUntil(deadlineMs)
+                } else {
+                    onState("HDR+ QUEUED")
                     val deadlineMs = SystemClock.elapsedRealtime() + ZSL_RECOVERY_WAIT_MS
                     retryZslSelectionUntil(deadlineMs)
                 }
@@ -1595,6 +2046,8 @@ class RawCameraController(
         activeGaloshSettings = galoshSettings
         activeRawSuperResolutionSettings = rawSuperResolutionSettings
         activeRawSrReferenceFallback = false
+        activeBurstFusionSettings = burstFusionSettings
+        activeHdrPlusSettings = hdrPlusSettings
         return true
     }
 
@@ -1629,6 +2082,52 @@ class RawCameraController(
             activeFramesRemaining.set(0)
             onState("RAW SR ×${srSelected.size} • PREPARING")
             saveRawSuperResolutionMerge(srSelected)
+            finishCapture()
+            publishRawZslStatus()
+            return true
+        }
+        // Fusion merges to one artifact: same full-ring discipline as SR.
+        if (activeBurstFusionSettings.enabled) {
+            if (!hasProcessingCapacity(1, activeCaptureFormat)) {
+                onState("ZSL QUEUED")
+                lastZslTakeSize = -1
+                return false
+            }
+            val fusionSelected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps,
+                selectedFrameCount).orEmpty()
+            lastZslTakeSize = fusionSelected.size
+            if (fusionSelected.isEmpty()) return false
+            if (fusionSelected.size < selectedFrameCount) return false
+            if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + fusionSelected.size,
+                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                updateRepeatingRequest(allowRawZsl = false)
+            }
+            activeFramesRemaining.set(0)
+            onState("FUSION ×${fusionSelected.size} • PREPARING")
+            saveBurstFusionMerge(fusionSelected)
+            finishCapture()
+            publishRawZslStatus()
+            return true
+        }
+        // HDR+ merges to one artifact: same full-ring discipline as SR/fusion.
+        if (activeHdrPlusSettings.enabled) {
+            if (!hasProcessingCapacity(1, activeCaptureFormat)) {
+                onState("ZSL QUEUED")
+                lastZslTakeSize = -1
+                return false
+            }
+            val hdrPlusSelected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps,
+                selectedFrameCount).orEmpty()
+            lastZslTakeSize = hdrPlusSelected.size
+            if (hdrPlusSelected.isEmpty()) return false
+            if (hdrPlusSelected.size < selectedFrameCount) return false
+            if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + hdrPlusSelected.size,
+                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                updateRepeatingRequest(allowRawZsl = false)
+            }
+            activeFramesRemaining.set(0)
+            onState("HDR+ ×${hdrPlusSelected.size} • PREPARING")
+            saveHdrPlusMerge(hdrPlusSelected)
             finishCapture()
             publishRawZslStatus()
             return true
@@ -1764,6 +2263,14 @@ class RawCameraController(
             onState("SR ERROR")
             return
         }
+        val settings = activeRawSuperResolutionSettings
+        // The ZSL slider owns the merge count: raise the HDR+ N-cap to the
+        // selected burst size (2..30) so a 16-frame selection merges 16,
+        // not 8-plus-OVERFLOW. Quality gates (UNSHARP, registration, merge-
+        // time support) still reject freely; only the count cap follows the
+        // user's selection. Retention already holds every selected frame and
+        // both merge paths stream through fixed-size workspaces, so a larger
+        // set costs time, not peak memory.
         val plan = runCatching {
             RawSrBurstPlanner.plan(frames.map {
                 RawSrBurstPlanner.Input(
@@ -1771,16 +2278,19 @@ class RawCameraController(
                     it.image.planes.singleOrNull()?.buffer ?: java.nio.ByteBuffer.allocate(0),
                     it.motionRadiansPerSecond
                 )
-            }, cameraId)
+            }, cameraId,
+                if (settings.sharpestReference) RawSrBurstPlanner.ReferenceMode.SHARPEST_FIRST
+                else RawSrBurstPlanner.ReferenceMode.STABILITY_FIRST,
+                policy = RawSrFrameRejection.Policy(maxMergeFrames = frames.size.coerceIn(2, 30)))
         }.getOrElse { failure ->
             frames.forEach { RawImageOwnership.release(it.image) }
             Log.e(LOG_TAG, "RAW SR planning failed", failure)
             onState("SR ERROR")
             return
         }
-        Log.i(LOG_TAG, "RAW SR plan reference=${plan.reference} accepted=${plan.accepted} rejected=${plan.rejected}")
+        Log.i(LOG_TAG, "RAW SR plan selected=${frames.size} reference=${plan.reference} accepted=${plan.accepted} rejected=${plan.rejected}" +
+            " sharpestRef=${settings.sharpestReference} kernelPreset=${settings.kernelPreset.label}")
         val decision = RawSrMergeDecisions.decide(plan.accepted, plan.rejected.size, plan.reference, frames.size)
-        val settings = activeRawSuperResolutionSettings
         val capture = RawSuperResolutionCapture(
             frames = frames,
             settings = settings,
@@ -1789,7 +2299,9 @@ class RawCameraController(
             denoiseSettings = activeDenoiseSettings,
             selectedCameraId = cameraId,
             outputOrientation = orientation,
-            referenceIndex = decision.referenceIndex
+            referenceIndex = decision.referenceIndex,
+            planSharpness = plan.sharpness,
+            planReferenceMode = if (settings.sharpestReference) "sharpest" else "stability"
         )
         val outputFormat = activeCaptureFormat
         val outputSettings = activeJpegOutputSettings
@@ -1815,6 +2327,104 @@ class RawCameraController(
                 if (outputFormat.includesJpeg) endJpegProcessing()
                 cameraHandler.post {
                     pendingSaveCount.decrementAndGet()
+                    srMergeInFlight.set(false)
+                    refreshCaptureAvailability()
+                    resumeRawZslIfIdle()
+                    publishRawZslStatus()
+                }
+            }
+        }
+        try {
+            srWriter.execute(job)
+            srMergeInFlight.set(true)
+        } catch (_: RejectedExecutionException) {
+            job.cancelBeforeRun()
+            if (outputFormat.includesJpeg) endJpegProcessing()
+            pendingSaveCount.decrementAndGet()
+            onState("QUEUE FULL")
+            finishCapture()
+            resumeRawZslIfIdle()
+        }
+    }
+
+    /**
+     * Per-frame fusion input: everything needed to unpack on demand, without
+     * the ~50MB unpacked pixels. The merge streams one alternate at a time
+     * (unpack → align → merge → release) instead of holding the whole burst
+     * unpacked, which OOMs a 512MB heap on 8+ full-res frames.
+     */
+    private data class FusionFrameInput(
+        val frame: BufferedRawFrame,
+        val metadata: RawFrameMetadata,
+        val result: TotalCaptureResult,
+        val layout: RawPlaneLayout,
+        val normalization: RawNormalization,
+        val crop: RawCrop,
+        val exposureTimeNanos: Long,
+        val sensitivityIso: Int,
+        val aperture: Float,
+        val focalLength: Float,
+        val noiseModel: CfaNoiseModel?
+    )
+
+    /**
+     * Unpacks one fusion input to normalized CFA. Reads are position-free
+     * ([RawSensorUnpacker.unpackNormalized] duplicates the buffer), so the
+     * same Image can be unpacked again later with bit-identical results.
+     */
+    private fun unpackFusionFrame(input: FusionFrameInput): UnpackedRawCfa {
+        val plane = input.frame.image.planes.single()
+        return RawSensorUnpacker.unpackNormalized(
+            plane.buffer, input.layout, input.normalization, input.crop,
+            ByteOrder.nativeOrder()
+        )
+    }
+
+    /**
+     * Native-resolution ZSL burst fusion: translation-align every alternate
+     * onto the middle reference ([HdrBracketAligner], no learned stage),
+     * then [HdrRawMerge] with the HDR+ Wiener deghost pre-pass driven by
+     * the DNG noise profile. Same exposures ⇒ photon weighting degenerates
+     * to robust temporal fusion; one merged CFA DNG out (plus JPEG when the
+     * capture format includes it). Mirrors the HDR save tail.
+     */
+    private fun saveHdrPlusMerge(selected: List<BufferedRawFrame>) {
+        val c = characteristics ?: run {
+            selected.forEach { RawImageOwnership.release(it.image) }
+            onState("HDR+ ERROR")
+            return
+        }
+        val orientation = activeOutputOrientation
+        val cameraId = selectedCameraId ?: "unknown"
+        val settings = activeHdrPlusSettings
+        val outputFormat = activeCaptureFormat
+        val outputSettings = activeJpegOutputSettings
+        val captureDenoiseSettings = activeDenoiseSettings
+        val captureTimeMillis = System.currentTimeMillis()
+        val captureGps = gpsLocation()
+        pendingSaveCount.incrementAndGet()
+        if (outputFormat.includesJpeg) beginJpegProcessing()
+        val releasedOwnership = AutoCloseable {
+            selected.forEach { RawImageOwnership.release(it.image) }
+        }
+        val job = OwnedCaptureJob(releasedOwnership) {
+            try {
+                runHdrPlusJob(
+                    selected, settings, c, orientation, cameraId,
+                    outputFormat, outputSettings, captureDenoiseSettings,
+                    captureTimeMillis, captureGps = captureGps
+                )
+            } catch (failure: Exception) {
+                Log.e(LOG_TAG, "HDR+ save failed", failure)
+                onState("HDR+ ERROR")
+            } catch (oom: OutOfMemoryError) {
+                Log.e(LOG_TAG, "HDR+ save out of memory", oom)
+                onState("HDR+ ERROR")
+            } finally {
+                if (outputFormat.includesJpeg) endJpegProcessing()
+                cameraHandler.post {
+                    pendingSaveCount.decrementAndGet()
+                    hdrPlusMergeInFlight.set(false)
                     refreshCaptureAvailability()
                     resumeRawZslIfIdle()
                     publishRawZslStatus()
@@ -1823,6 +2433,7 @@ class RawCameraController(
         }
         try {
             writer.execute(job)
+            hdrPlusMergeInFlight.set(true)
         } catch (_: RejectedExecutionException) {
             job.cancelBeforeRun()
             if (outputFormat.includesJpeg) endJpegProcessing()
@@ -1830,6 +2441,399 @@ class RawCameraController(
             onState("QUEUE FULL")
             finishCapture()
             resumeRawZslIfIdle()
+        }
+    }
+
+    private fun saveBurstFusionMerge(selected: List<BufferedRawFrame>) {
+        val c = characteristics ?: run {
+            selected.forEach { RawImageOwnership.release(it.image) }
+            onState("FUSION ERROR")
+            return
+        }
+        val orientation = activeOutputOrientation
+        val cameraId = selectedCameraId ?: "unknown"
+        val settings = activeBurstFusionSettings
+        val outputFormat = activeCaptureFormat
+        val outputSettings = activeJpegOutputSettings
+        val captureDenoiseSettings = activeDenoiseSettings
+        val captureTimeMillis = System.currentTimeMillis()
+        val captureGps = gpsLocation()
+        pendingSaveCount.incrementAndGet()
+        if (outputFormat.includesJpeg) beginJpegProcessing()
+        val releasedOwnership = AutoCloseable {
+            selected.forEach { RawImageOwnership.release(it.image) }
+        }
+        val job = OwnedCaptureJob(releasedOwnership) {
+            try {
+                runBurstFusionJob(
+                    selected, settings, c, orientation, cameraId,
+                    outputFormat, outputSettings, captureDenoiseSettings,
+                    captureTimeMillis, captureGps = captureGps
+                )
+            } catch (failure: Exception) {
+                Log.e(LOG_TAG, "Burst fusion save failed", failure)
+                onState("FUSION ERROR")
+            } catch (oom: OutOfMemoryError) {
+                Log.e(LOG_TAG, "Burst fusion save out of memory", oom)
+                onState("FUSION ERROR")
+            } finally {
+                if (outputFormat.includesJpeg) endJpegProcessing()
+                cameraHandler.post {
+                    pendingSaveCount.decrementAndGet()
+                    fusionMergeInFlight.set(false)
+                    refreshCaptureAvailability()
+                    resumeRawZslIfIdle()
+                    publishRawZslStatus()
+                }
+            }
+        }
+        try {
+            writer.execute(job)
+            fusionMergeInFlight.set(true)
+        } catch (_: RejectedExecutionException) {
+            job.cancelBeforeRun()
+            if (outputFormat.includesJpeg) endJpegProcessing()
+            pendingSaveCount.decrementAndGet()
+            onState("QUEUE FULL")
+            finishCapture()
+            resumeRawZslIfIdle()
+        }
+    }
+
+    private data class HdrPlusFrameInput(
+        val frame: BufferedRawFrame,
+        val metadata: RawFrameMetadata,
+        val result: TotalCaptureResult,
+        val layout: RawPlaneLayout,
+        val normalization: RawNormalization,
+        val crop: RawCrop
+    )
+
+    /**
+     * HDR+ ZSL burst merge on Vulkan (RAWR merge_hdrplus 1:1 port):
+     * coarse-to-fine tile alignment per alternate, then the robust
+     * spatial or frequency merge toward the middle reference. One merged
+     * CFA DNG out (plus JPEG when the capture format includes it).
+     * Mirrors the fusion save tail.
+     */
+    private fun runHdrPlusJob(
+        selected: List<BufferedRawFrame>,
+        settings: HdrPlusSettings,
+        c: android.hardware.camera2.CameraCharacteristics,
+        orientation: Int,
+        cameraId: String,
+        outputFormat: CaptureFormat,
+        outputSettings: JpegOutputSettings,
+        denoise: DenoiseSettings,
+        captureTimeMillis: Long,
+        captureGps: GpsLocation?
+    ) {
+        val saveGeneration = lifecycleGeneration
+        fun reportSaveState(message: String) {
+            cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
+        }
+        if (settings.keepSourceBurst) {
+            val saver = DngSaver(context)
+            val backend = dngWriterBackend()
+            val overrides = dngMetadataOverrides(cameraId)
+            selected.forEachIndexed { index, frame ->
+                val metadata = RawFrameMetadataFactory.capture(
+                    cameraId, frame.image, c, frame.result, orientation
+                )
+                val buffer = frame.image.planes.single().buffer
+                val position = buffer.position()
+                val limit = buffer.limit()
+                try {
+                    saver.save(
+                        frame.image, c, frame.result, orientation, overrides, metadata, backend,
+                        fileNameSuffix = "F%02d".format(index),
+                        captureId = captureTimeMillis,
+                        gps = captureGps
+                    )
+                } finally {
+                    buffer.limit(limit)
+                    buffer.position(position)
+                }
+            }
+        }
+        val inputs = selected.map { frame ->
+            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
+            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+                ?: throw UnsupportedOperationException("HDR+ RAW geometry is not supported")
+            val normalization = metadata.normalizationOrNull()
+                ?: throw UnsupportedOperationException("HDR+ normalization metadata is missing")
+            metadata.rawDevelopmentUnsupportedReason?.let { error(it) }
+            val plane = frame.image.planes.single()
+            HdrPlusFrameInput(
+                frame = frame, metadata = metadata, result = frame.result,
+                layout = RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
+                    plane.rowStride, plane.pixelStride,
+                    geometry.sensorOriginX, geometry.sensorOriginY),
+                normalization = normalization, crop = geometry.processingCrop
+            )
+        }
+        val referenceIndex = inputs.size / 2
+        reportSaveState("HDR+ MERGING")
+        val tMerge0 = SystemClock.elapsedRealtime()
+        val mergedRaw = try {
+            hdrPlusProcessor().merge(
+                inputs.map {
+                    HdrPlusMerge.FrameInput(it.frame.image, it.layout, it.crop, it.normalization)
+                },
+                referenceIndex, settings
+            )
+        } finally {
+            inputs.forEach { RawImageOwnership.release(it.frame.image) }
+        } ?: run {
+            Log.e(LOG_TAG, "HDR+ merge returned null")
+            reportSaveState("HDR+ ERROR")
+            return
+        }
+        val mergeMs = SystemClock.elapsedRealtime() - tMerge0
+        Log.i(LOG_TAG, "HDR+ timing merge=${mergeMs}ms " +
+            "frames=${inputs.size} ${mergedRaw.width}x${mergedRaw.height}")
+        val refMetadata = inputs[referenceIndex].metadata
+        val refResult = inputs[referenceIndex].result
+        val merged = requireNotNull(RawPreDemosaicPipeline.process(
+            mergedRaw, refMetadata, PreDemosaicSettings()).cfa)
+        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        val effectiveMerged = if (denoise.aiEnabled) {
+            developer.denoiseCfa(merged, refMetadata) ?: merged
+        } else merged
+        var referenceDng: String? = null
+        if (outputFormat.includesDng) {
+            val timings = hdrPlusProcessor().lastTimings
+            val provenance = HdrPlusProvenance(
+                mergedFrames = inputs.size, highQuality = settings.highQuality,
+                strength = settings.strength,
+                tileSize = HdrPlusSettings.TILE_SIZE,
+                searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
+                referenceIndex = referenceIndex,
+                referenceTimestampNs = refMetadata.timestampNanos,
+                referenceFrameNumber = refMetadata.frameNumber,
+                sourceWidth = refMetadata.imageWidth, sourceHeight = refMetadata.imageHeight,
+                sourceCameraId = refMetadata.cameraId,
+                mergeMs = mergeMs,
+                packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
+                frames = inputs.map {
+                    HdrPlusFrameInfo(it.metadata.exposureTimeNanos, it.metadata.sensitivityIso)
+                }
+            )
+            referenceDng = DngSaver(context).saveMerged(
+                effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
+                displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
+                sixteenBit = true, hdrPlusProvenance = provenance
+            )
+        }
+        if (outputFormat.includesJpeg) {
+            val developed = developer.developMergedJpeg(effectiveMerged, refMetadata,
+                RawDevelopmentSettings(denoise = denoise, exposureEv = 0.0), outputSettings)
+            try {
+                JpegSaver(context).save(developed, refMetadata,
+                    refResult, captureTimeMillis = captureTimeMillis,
+                    typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps)
+                reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG" else "HDR+ MERGED")
+            } finally {
+                if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    recycleUltraHdrGainmapContents(developed.bitmap)
+                }
+                developed.bitmap.recycle()
+            }
+        } else {
+            reportSaveState("HDR+ DNG SAVED")
+        }
+    }
+
+    private fun runBurstFusionJob(
+        selected: List<BufferedRawFrame>,
+        settings: RawBurstFusionSettings,
+        c: android.hardware.camera2.CameraCharacteristics,
+        orientation: Int,
+        cameraId: String,
+        outputFormat: CaptureFormat,
+        outputSettings: JpegOutputSettings,
+        denoise: DenoiseSettings,
+        captureTimeMillis: Long,
+        captureGps: GpsLocation?
+    ) {
+        val saveGeneration = lifecycleGeneration
+        fun reportSaveState(message: String) {
+            cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
+        }
+        if (settings.keepSourceBurst) {
+            val saver = DngSaver(context)
+            val backend = dngWriterBackend()
+            val overrides = dngMetadataOverrides(cameraId)
+            selected.forEachIndexed { index, frame ->
+                val metadata = RawFrameMetadataFactory.capture(
+                    cameraId, frame.image, c, frame.result, orientation
+                )
+                val buffer = frame.image.planes.single().buffer
+                val position = buffer.position()
+                val limit = buffer.limit()
+                try {
+                    saver.save(
+                        frame.image, c, frame.result, orientation, overrides, metadata, backend,
+                        fileNameSuffix = "F%02d".format(index),
+                        captureId = captureTimeMillis,
+                        gps = captureGps
+                    )
+                } finally {
+                    buffer.limit(limit)
+                    buffer.position(position)
+                }
+            }
+        }
+        // Phase 0: cheap per-frame inputs (metadata only — nothing unpacked).
+        // Unsupported geometry/normalization fails fast, before heavy work.
+        val inputs = selected.map { frame ->
+            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
+            val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
+                ?: throw UnsupportedOperationException("Fusion RAW geometry is not supported")
+            val normalization = metadata.normalizationOrNull()
+                ?: throw UnsupportedOperationException("Fusion normalization metadata is missing")
+            metadata.rawDevelopmentUnsupportedReason?.let { error(it) }
+            val plane = frame.image.planes.single()
+            val aperture = frame.result.get(CaptureResult.LENS_APERTURE)
+                ?.takeIf { it.isFinite() && it > 0f } ?: HdrRawMerge.FALLBACK_APERTURE
+            FusionFrameInput(
+                frame = frame, metadata = metadata, result = frame.result,
+                layout = RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
+                    plane.rowStride, plane.pixelStride,
+                    geometry.sensorOriginX, geometry.sensorOriginY),
+                normalization = normalization, crop = geometry.processingCrop,
+                exposureTimeNanos = metadata.exposureTimeNanos ?: error("Fusion exposure time missing"),
+                sensitivityIso = metadata.sensitivityIso ?: error("Fusion ISO missing"),
+                aperture = aperture,
+                focalLength = frame.result.get(CaptureResult.LENS_FOCAL_LENGTH)
+                    ?.takeIf { it.isFinite() && it > 0f } ?: HdrRawMerge.FALLBACK_FOCAL_LENGTH,
+                noiseModel = CfaNoiseModel.from(metadata.noiseProfile))
+        }
+        // Same-exposure ring: the middle frame is the geometric reference.
+        val referenceIndex = inputs.size / 2
+        fun mergeFrameOf(input: FusionFrameInput, cfa: UnpackedRawCfa, flow: HdrFlowField? = null) =
+            HdrMergeFrame(cfa, input.exposureTimeNanos, input.sensitivityIso, input.aperture,
+                flow, input.focalLength, input.noiseModel)
+        val reference = mergeFrameOf(inputs[referenceIndex], unpackFusionFrame(inputs[referenceIndex]))
+        // Phase A: align every alternate against the packed reference, one at
+        // a time. Only the reference, one alternate, and the matcher proxies
+        // are live (~260MB on 12MP). Packing the reference per alternate, or
+        // holding the whole burst unpacked, OOMs the heap instead (logcat
+        // 2026-10-02: every shift came back null from a swallowed OOM, then
+        // the merge died allocating its warp buffer).
+        reportSaveState("FUSION ALIGN")
+        val tAlign0 = SystemClock.elapsedRealtime()
+        var packedRef: HdrBracketAligner.PackedReference? =
+            HdrBracketAligner.packReference(reference)
+        val shifts = arrayOfNulls<HdrBracketAligner.Shift>(inputs.size)
+        for ((index, input) in inputs.withIndex()) {
+            if (index == referenceIndex) continue
+            val alt = mergeFrameOf(input, unpackFusionFrame(input))
+            try {
+                shifts[index] = HdrBracketAligner.estimateShiftPacked(
+                    requireNotNull(packedRef), alt)
+            } catch (failure: Exception) {
+                Log.e(LOG_TAG, "Fusion shift frame=$index failed, merging unaligned", failure)
+                shifts[index] = null
+            } catch (oom: OutOfMemoryError) {
+                Log.e(LOG_TAG, "Fusion shift frame=$index out of memory", oom)
+                throw oom
+            }
+            val shiftTimings = HdrBracketAligner.lastTimings
+            Log.i(LOG_TAG, "Fusion shift frame=$index " +
+                "proxy=${shiftTimings.proxyMs}ms " +
+                "coarse=${shiftTimings.coarseMs}ms " +
+                "fine=${shiftTimings.fineMs}ms shift=${shifts[index]}")
+            // `alt` is unreachable past this point, so its ~50MB is
+            // collectable before the next alternate unpacks.
+        }
+        packedRef = null
+        // Phase B: stream the merge in input order (darktable: the first
+        // frame wins clipped ties). Each alternate is re-unpacked from its
+        // still-open Image, pre-shifted, accumulated, and released; Images
+        // unpin progressively so the ZSL ring can refill during the merge.
+        // Translation-only (no FlowNet): deterministic, no native deps.
+        // Residual subpixel error is absorbed by the Wiener deghost
+        // pre-pass, which collapses mismatched bins.
+        reportSaveState("FUSION MERGING")
+        val tMerge0 = SystemClock.elapsedRealtime()
+        val dropped = ArrayList<Pair<Int, HdrTileDeghost.TileStats>>()
+        val session = HdrRawMerge.beginMerge(
+            reference,
+            inputs.map {
+                HdrRawMerge.calibration(it.exposureTimeNanos, it.sensitivityIso, it.aperture, it.focalLength)
+            },
+            inputs.map {
+                HdrRawMerge.photonCount(it.exposureTimeNanos, it.sensitivityIso, it.aperture, it.focalLength)
+            },
+            referenceIndex, inputs.size,
+            HdrRawMerge.Options(
+                wienerStrength = settings.tau,
+                alternateDropDcRejectFrac = 0.9
+            ),
+            onAlternateDropped = { index, stats -> dropped.add(index to stats) }
+        )
+        for ((index, input) in inputs.withIndex()) {
+            if (index == referenceIndex) {
+                session.accumulate(index, reference)
+            } else {
+                val raw = unpackFusionFrame(input)
+                val shift = shifts[index]
+                val even = shift?.let { HdrBracketAligner.snapEven(it) }
+                val base = if (even != null) HdrBracketAligner.warpShiftedEven(raw, even) else raw
+                // Residual-only flow: the even part is already in `base`
+                // (lossless reindex). A full-shift flow here would apply the
+                // even part twice — once losslessly, once bilinearly.
+                val flow = if (shift != null && even != null)
+                    TranslationFlow(shift.dx - even.dx, shift.dy - even.dy) else null
+                session.accumulate(index, mergeFrameOf(input, base, flow))
+                RawImageOwnership.release(input.frame.image)
+            }
+            reportSaveState("FUSION ${index + 1}/${inputs.size}")
+        }
+        RawImageOwnership.release(inputs[referenceIndex].frame.image)
+        val mergedRaw = session.finish()
+        for (i in inputs.indices) {
+            val verdict = if (i == referenceIndex) "Reference"
+            else dropped.find { it.first == i }?.let {
+                "DROPPED (ghost dcReject=${"%.0f".format(it.second.dcRejectFrac * 100)}%)"
+            } ?: "Accepted"
+            Log.i(LOG_TAG, "Fusion frame=$i $verdict")
+        }
+        Log.i(LOG_TAG, "Fusion timing align=${tMerge0 - tAlign0}ms " +
+            "merge=${SystemClock.elapsedRealtime() - tMerge0}ms " +
+            "frames=${inputs.size} dropped=${dropped.size} " +
+            "${reference.cfa.width}x${reference.cfa.height}")
+        val refMetadata = inputs[referenceIndex].metadata
+        val refResult = inputs[referenceIndex].result
+        val merged = requireNotNull(RawPreDemosaicPipeline.process(
+            mergedRaw, refMetadata, PreDemosaicSettings()).cfa)
+        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        val effectiveMerged = if (denoise.aiEnabled) {
+            developer.denoiseCfa(merged, refMetadata) ?: merged
+        } else merged
+        var referenceDng: String? = null
+        if (outputFormat.includesDng) {
+            referenceDng = DngSaver(context).saveMerged(
+                effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps
+            )
+        }
+        if (outputFormat.includesJpeg) {
+            val developed = developer.developMergedJpeg(effectiveMerged, refMetadata,
+                RawDevelopmentSettings(denoise = denoise, exposureEv = 0.0), outputSettings)
+            try {
+                JpegSaver(context).save(developed, refMetadata,
+                    refResult, captureTimeMillis = captureTimeMillis,
+                    typeSuffix = CaptureFileNames.TYPE_FUSION, gps = captureGps)
+                reportSaveState(if (referenceDng != null) "FUSION MERGED+DNG" else "FUSION MERGED")
+            } finally {
+                if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    recycleUltraHdrGainmapContents(developed.bitmap)
+                }
+                developed.bitmap.recycle()
+            }
+        } else {
+            reportSaveState("FUSION DNG SAVED")
         }
     }
 
@@ -1868,10 +2872,28 @@ class RawCameraController(
         var jpegName: String? = null
         var dngFailure: Exception? = null
         var jpegFailure: Exception? = null
-        if (needJpeg || (needDng && dngMode == RawSrDngMode.LINEAR_RGB)) {
+        // Retain exact pixel copies and release the camera Images NOW: the merge
+        // below runs for tens of seconds, and pinning the gralloc slots that long
+        // starves the ZSL refill (merge-held + ring + pairing >= maxImages), spins
+        // the relief valve, and trips the watchdog into a session-wide burst-mode
+        // latch after a few captures. Same bytes into the same merge, while the
+        // reader, viewfinder and ring stay fluid. The reference stays open so a
+        // merge failure below can still fall back to it (one slot cannot wedge
+        // the reader). Null keeps that fallback viable too (retention is
+        // all-or-nothing: every Image is still owned when it throws).
+        val retained = try {
+            retainSrBurstPlanes(capture.frames, decision.referenceIndex)
+        } catch (failure: Exception) {
+            Log.e(LOG_TAG, "Super-resolution input retention failed", failure)
+            null
+        } catch (oom: OutOfMemoryError) {
+            Log.e(LOG_TAG, "Super-resolution input retention out of memory", oom)
+            null
+        }
+        if (retained != null && (needJpeg || (needDng && dngMode == RawSrDngMode.LINEAR_RGB))) {
             try {
                 runSrRgbMerge(
-                    capture, decision, refFrame, refMetadata,
+                    capture, decision, retained, refFrame, refMetadata,
                     needJpeg, needDng && dngMode == RawSrDngMode.LINEAR_RGB,
                     outputSettings, captureDenoiseSettings, captureTimeMillis,
                     onJpeg = { jpegName = it },
@@ -1888,10 +2910,10 @@ class RawCameraController(
                 Log.e(LOG_TAG, "Super-resolution RGB merge out of memory", oom)
             }
         }
-        if (needDng && dngMode == RawSrDngMode.MOSAIC_SR) {
+        if (retained != null && needDng && dngMode == RawSrDngMode.MOSAIC_SR) {
             try {
                 dngName = runSrMosaicDng(
-                    capture, decision, refFrame, refMetadata, cameraId, captureTimeMillis,
+                    capture, decision, retained, refFrame, refMetadata, cameraId, captureTimeMillis,
                     captureGps = captureGps
                 )
             } catch (failure: Exception) {
@@ -1940,10 +2962,29 @@ class RawCameraController(
         }.getOrNull()
     }
 
+    /**
+     * True when free RAM covers an SR linear merge of [ref] with headroom.
+     * Never throws: an unreadable memory service fails closed to 1x (a 1x
+     * save beats a failed save).
+     */
+    private fun linearUpscaleFits(ref: RawSrPackedFrame): Boolean {
+        val avail = freeRamBytes() ?: return false
+        return VkRawSrProcessor.upscaleFits(ref.width, ref.height, RawSrLinearScale.SR, avail)
+    }
+
+    /** Free RAM in bytes, or null when the memory service is unreadable. Never throws. */
+    private fun freeRamBytes(): Long? = runCatching {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val info = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(info)
+        info.availMem
+    }.getOrNull()
+
     /** GPU Bayer-direct merge feeding the requested JPEG and/or Linear RGB DNG. */
     private fun runSrRgbMerge(
         capture: RawSuperResolutionCapture,
         decision: RawSrMergeDecisions.Decision,
+        retained: List<RetainedSrFrame>,
         refFrame: RawSuperResolutionFrame,
         refMetadata: RawFrameMetadata,
         needJpeg: Boolean,
@@ -1958,15 +2999,41 @@ class RawCameraController(
         captureGps: GpsLocation? = null
     ) {
         val packed = decision.mergeIndices.map { index ->
-            val frame = capture.frames[index]
-            val plane = frame.image.planes.singleOrNull()?.buffer
-                ?: throw MergeUnavailableException("RAW SR image must have one plane")
-            RawSrPackedFrame.fromMetadata(plane, frame.metadata)
+            val input = retained[index]
+            RawSrPackedFrame.fromMetadata(input.plane, input.metadata)
         }
         val processor = srMergeProcessor ?: VkRawSrProcessor(context).also { srMergeProcessor = it }
-        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        val developer = srDeveloper ?: RawDevelopmentCoordinator(context).also { srDeveloper = it }
         val noiseLut = resolveNoiseLut(refMetadata)
-        processor.processPacked(packed, noiseLut = noiseLut) { output ->
+        // Production reads only the merged + Rc textures below: drop the raw
+        // accumulators before the develop + save tail (~768MB at 12MP).
+        // C2 preset: RAWR detail end on the scene's scanned flat width (the
+        // reference preset resolves inside the merge; skip the extra scan).
+        val tuningOverride = capture.settings.kernelPreset
+            .takeUnless { it == RawSrKernelPreset.REFERENCE }
+            ?.resolve(RawSrTuning.fromReference(packed[0]).tuning)
+        // SR output needs ~2x merge memory: refuse before allocating when
+        // free RAM is short, falling back to 1x (the DNG provenance records
+        // the scale that actually ran).
+        val requestedScale = capture.settings.linearScale
+        val scale = if (requestedScale == RawSrLinearScale.X1 || linearUpscaleFits(packed[0])) {
+            requestedScale
+        } else {
+            val needGb = VkRawSrProcessor.estimateTransientBytes(
+                packed[0].width, packed[0].height, RawSrLinearScale.SR) / (1 shl 30)
+            val freeGb = freeRamBytes()?.let { "${it / (1 shl 30)}GB" } ?: "unknown"
+            Log.w(LOG_TAG, "Linear SR needs ${needGb}GB transient with $freeGb free — falling back to 1x")
+            RawSrLinearScale.X1
+        }
+        val linearT0 = android.os.SystemClock.elapsedRealtime()
+        processor.processPacked(packed, tuningOverride = tuningOverride,
+            noiseLut = noiseLut, releaseAccumulators = true, scale = scale) { output ->
+            val mergeMs = android.os.SystemClock.elapsedRealtime() - linearT0
+            Log.i(LOG_TAG, "Linear RGB merged ${packed[0].width}x${packed[0].height}" +
+                " -> ${output.width}x${output.height} scale=${scale.preferenceValue}" +
+                " accepted=${output.acceptedFrames}" +
+                " mergeMs=$mergeMs" +
+                " peak=${output.peakTextureBytes / (1 shl 20)}MB")
             if (output.acceptedFrames < 2) {
                 throw MergeUnavailableException(
                     "Merge kept ${output.acceptedFrames} of ${packed.size} frame(s)"
@@ -2010,8 +3077,13 @@ class RawCameraController(
                     // profile (today's behaviour); the tag is omitted — never
                     // fabricated — when no model exists.
                     val rcMean = runCatching {
+                        // Rc is source-anchored (quad grid), like every merge
+                        // input: read it at the source dims, never derived
+                        // from the output grid (which no longer divides
+                        // evenly at SR scale).
                         RawSrMergeJob.readRcMeanSupport(
-                            output.rcTextureId, output.width / 2, output.height / 2)
+                            output.rcTextureId,
+                            packed[0].width / 2, packed[0].height / 2)
                     }.getOrNull()
                     val effectiveFrames = if (rcMean != null)
                         RawSrMergedNoise.effectiveFrames(
@@ -2060,10 +3132,25 @@ class RawCameraController(
         }
     }
 
+    /**
+     * Planner sharpness in merge order (reference first, via [decision]
+     * indices into the capture-order planner list). Null unless every merged
+     * frame has a sample — a partial list would mislabel frames — in which
+     * case the DNG provenance omits the selection section.
+     */
+    private fun mergeOrderSharpness(
+        planSharpness: List<Double?>?,
+        mergeIndices: List<Int>
+    ): List<Double>? {
+        if (planSharpness == null) return null
+        return mergeIndices.map { planSharpness.getOrNull(it) ?: return null }
+    }
+
     /** CPU Mosaic SR reconstruction feeding the Mosaic SR DNG. */
     private fun runSrMosaicDng(
         capture: RawSuperResolutionCapture,
         decision: RawSrMergeDecisions.Decision,
+        retained: List<RetainedSrFrame>,
         refFrame: RawSuperResolutionFrame,
         refMetadata: RawFrameMetadata,
         cameraId: String,
@@ -2071,25 +3158,30 @@ class RawCameraController(
         captureGps: GpsLocation? = null
     ): String {
         val inputs = decision.mergeIndices.map { index ->
-            val frame = capture.frames[index]
-            val plane = frame.image.planes.singleOrNull()?.buffer
-                ?: throw MergeUnavailableException("RAW SR image must have one plane")
-            RawSrMergeJob.MosaicInput(RawSrPackedFrame.fromMetadata(plane, frame.metadata), frame.metadata)
+            val input = retained[index]
+            RawSrMergeJob.MosaicInput(RawSrPackedFrame.fromMetadata(input.plane, input.metadata), input.metadata)
         }
         val mosaicT0 = android.os.SystemClock.elapsedRealtime()
-        val stream = RawSrMergeJob.mosaicStream(inputs, 0, noiseLut = resolveNoiseLut(refMetadata))
+        val tuningOverride = capture.settings.kernelPreset
+            .takeUnless { it == RawSrKernelPreset.REFERENCE }
+            ?.resolve(RawSrTuning.fromReference(inputs[0].packed).tuning)
+        val stream = RawSrMergeJob.mosaicStream(inputs, 0, noiseLut = resolveNoiseLut(refMetadata),
+            tuningOverride = tuningOverride)
         val result = MosaicSrReconstructor.reconstructStreaming(
             stream.geometry,
             stream.frames,
-            buildReference = { RawSrMergeJob.buildReferenceFrame(inputs[0]) },
-            tempDir = context.cacheDir
+            buildReference = stream.referenceFrame,
+            tempDir = context.cacheDir,
+            scale = capture.settings.mosaicScale
         )
         val effectiveFrames = RawSrMergedNoise.effectiveFrames(
             result.meanSupport, 1.0 + result.acceptedFrames)
+        val mergeMs = android.os.SystemClock.elapsedRealtime() - mosaicT0
         Log.i(LOG_TAG, "Mosaic SR merged ${stream.geometry.width}x${stream.geometry.height}" +
+            " -> ${result.width}x${result.height} scale=${capture.settings.mosaicScale.preferenceValue}" +
             " selected=${stream.selected} accepted=${result.acceptedFrames}" +
             " effectiveFrames=${LinearRgbDngWriter.formatEffectiveFrames(effectiveFrames)}" +
-            " mergeMs=${android.os.SystemClock.elapsedRealtime() - mosaicT0}" +
+            " mergeMs=$mergeMs" +
             " workers=${RawSrWorkers.count}")
         val accepted = 1 + result.acceptedFrames
         // Merged noise model from the streaming support accumulator: same
@@ -2152,7 +3244,7 @@ class RawCameraController(
             try {
                 val rawPlane = refFrame.image.planes.singleOrNull()?.buffer
                     ?: throw UnsupportedOperationException("RAW image must have one plane")
-                val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+                val developer = srDeveloper ?: RawDevelopmentCoordinator(context).also { srDeveloper = it }
                 val developed = developer.developJpeg(
                     rawPlane, refMetadata,
                     settings = RawDevelopmentSettings(denoise = captureDenoiseSettings),
@@ -2546,7 +3638,9 @@ class RawCameraController(
     }
 
     private fun applyHdrExposure(builder: CaptureRequest.Builder, frameIndex: Int) {
-        val stops = intArrayOf(-activeHdrStops, 0, activeHdrStops)[frameIndex]
+        val stops = activeHdrFrameEvs.getOrElse(frameIndex) {
+            intArrayOf(-activeHdrStops, 0, activeHdrStops).getOrElse(frameIndex) { 0 }
+        }
         val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
         val timeRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
         val useProgram = captureExposureMode == CaptureExposureMode.PROGRAM && dynamicExposureSettings.enabled
@@ -2557,8 +3651,7 @@ class RawCameraController(
         }
         val base = selectedExposureNanos ?: (if (useEttr) ettrShutterNanos else null)
             ?: (if (useProgram) dynamicShutterNanos else null) ?: lastExposureNanos
-        val factor = if (stops < 0) 1.0 / (1 shl -stops) else (1 shl stops).toDouble()
-        val time = (base * factor).toLong().let { value ->
+        val time = HdrBracketConfig.shutterNanos(base, stops).let { value ->
             value.coerceIn(timeRange?.lower ?: value, timeRange?.upper ?: value)
         }
         builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
@@ -2579,7 +3672,7 @@ class RawCameraController(
         ) {
             builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
         }
-        Log.i(LOG_TAG, "HDR bracket frame=${frameIndex + 1}/3 ev=$stops iso=$iso shutterNs=$time")
+        Log.i(LOG_TAG, "HDR bracket frame=${frameIndex + 1}/${activeHdrFrameEvs.size} ev=$stops iso=$iso shutterNs=$time")
     }
 
     /**
@@ -2627,7 +3720,7 @@ class RawCameraController(
             cameraHandler.post { startTouchFocus(viewX, viewY, indefinite, updateAe) }
             return
         }
-        if (camera == null || session == null || previewSurface == null) return
+        if (camera == null || session == null || singleShotTarget() == null) return
         val hasAfRegions = (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
         if (!hasAfRegions) {
             // Matches Open Camera: AE metering may still have been installed even when the
@@ -2711,10 +3804,19 @@ class RawCameraController(
     }
 
     /** One-shot AF START built from the current repeating state (AUTO + regions). */
+    /**
+     * One-shot capture target (AF triggers, metering probes): the invisible
+     * preview surface normally, the RAW reader in RAW-only sessions. A stray
+     * RAW frame from these triggers flows through normal handling (a bonus
+     * viewfinder frame, then release or pair-timeout), so reusing the reader
+     * is harmless.
+     */
+    private fun singleShotTarget(): Surface? = previewSurface ?: rawReader?.surface
+
     private fun sendTouchFocusStart() {
         val device = camera ?: return
         val currentSession = session ?: return
-        val surface = previewSurface ?: return
+        val surface = singleShotTarget() ?: return
         try {
             val start = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
@@ -2744,7 +3846,7 @@ class RawCameraController(
     private fun sendAfCancelCapture() {
         val device = camera ?: return
         val currentSession = session ?: return
-        val surface = previewSurface ?: return
+        val surface = singleShotTarget() ?: return
         try {
             val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
@@ -3598,6 +4700,7 @@ class RawCameraController(
         val current = rawCameraIds.indexOf(selectedCameraId).coerceAtLeast(0)
         selectedCameraId = rawCameraIds[(current + 1) % rawCameraIds.size]
         afRegion = null; aeRegion = null
+        resetSessionLadder()
         restartCameraForConfigurationChange()
     }
 
@@ -3647,6 +4750,7 @@ class RawCameraController(
         if (cameraId == selectedCameraId || cameraId !in rawCameraIds || captureInProgress.get()) return
         selectedCameraId = cameraId
         afRegion = null; aeRegion = null
+        resetSessionLadder()
         restartCameraForConfigurationChange()
     }
 
@@ -3758,6 +4862,7 @@ class RawCameraController(
             return
         }
         selectedCameraId = null
+        resetSessionLadder()
         restartCameraForConfigurationChange()
     }
 
@@ -3777,7 +4882,9 @@ class RawCameraController(
         }
         val device = camera ?: return
         val currentSession = session ?: return
-        val surface = previewSurface ?: return
+        // Null in RAW-only sessions: the repeating request then carries the
+        // RAW target alone and the RAW viewfinder is the only display.
+        val surface = previewSurface
         val reader = rawReader
         val generation = lifecycleGeneration
         // Queued DNG/JPEG saves must not stop the live RAW streams: their buffers
@@ -3850,7 +4957,7 @@ class RawCameraController(
             // correct repeating template and both targets continue to receive every frame.
             fun previewRequest(includeRaw: Boolean): CaptureRequest =
                 device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
+                surface?.let { addTarget(it) }
                 if (includeRaw) addTarget(reader!!.surface)
                 setTag(includeRaw)
                 applyCameraControls(this)
@@ -3894,7 +5001,10 @@ class RawCameraController(
                 val requests = ArrayList<CaptureRequest>(RAW_ZSL_REQUEST_PERIOD).apply {
                     add(previewRequest(includeRaw = true))
                     repeat(RAW_ZSL_REQUEST_PERIOD - 1) {
-                        add(previewRequest(includeRaw = false))
+                        // RAW-only sessions have no preview target to interleave
+                        // with: every request carries RAW (a targetless request
+                        // is illegal).
+                        add(previewRequest(includeRaw = surface == null))
                     }
                 }
                 if (requests.size == 1) {
@@ -3903,9 +5013,15 @@ class RawCameraController(
                     currentSession.setRepeatingBurst(requests, callback, cameraHandler)
                 }
             } else {
-                currentSession.setRepeatingRequest(
-                    previewRequest(includeRaw = false), callback, cameraHandler
-                )
+                // A targetless request is illegal, so a RAW-only session with
+                // no RAW consumer (transient backoff) leaves the existing
+                // repeating untouched instead of stopping the stream the
+                // backoff will resume.
+                if (surface != null) {
+                    currentSession.setRepeatingRequest(
+                        previewRequest(includeRaw = false), callback, cameraHandler
+                    )
+                }
             }
             val wasZslStreaming = rawZslStreaming
             rawViewfinderStreaming = useRawViewfinder
@@ -3924,10 +5040,23 @@ class RawCameraController(
             if (useRawZsl) {
                 if (!preserveBuffer) rawZslHasFrame = false
                 if (!preserveBuffer) {
+                    rawZslEpochPairs = 0
+                    rawZslSlowWindows = 0
                     zslOverflowTracker.reset()
                     scheduleRawZslWatchdog(generation, requestEpoch)
                     publishRawZslStatus(RawZslState.WARMING_UP, "Buffering full-resolution RAW frames")
                 } else {
+                    // Kept ring, new epoch: the stale watchdog can never fire
+                    // (epoch guard), so re-arm for the resumed stream unless
+                    // this is a light control push on the live stream (there
+                    // the original watchdog is still ticking). Fresh window,
+                    // fresh counters; self-guards on rawZslHasFrame, so a
+                    // preserved full ring needs no window.
+                    if (!light) {
+                        rawZslEpochPairs = 0
+                        rawZslSlowWindows = 0
+                        scheduleRawZslWatchdog(generation, requestEpoch)
+                    }
                     publishRawZslStatus()
                 }
             } else {
@@ -3971,6 +5100,22 @@ class RawCameraController(
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { lastPreviewSensorTimestamp = it }
                 if (iso > 0) lastIso = iso
                 if (shutter > 0) lastExposureNanos = shutter
+                // The VF normalizes against dynamic white first: when it
+                // disagrees with the static key the chip was published from,
+                // move the chip so both report the same effective depth.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.let { dynamicWhite ->
+                        val bits = whiteLevelBitDepth(dynamicWhite)
+                        if (bits != lastWhiteLevelBits) {
+                            lastWhiteLevelBits = bits
+                            Log.i(LOG_TAG, "Dynamic white level $dynamicWhite; DNG chip now $bits-bit")
+                            onInfo(
+                                String.format(java.util.Locale.US, "DNG\n%d-bit RAW", bits),
+                                lastSensorInfo
+                            )
+                        }
+                    }
+                }
                 latestPreviewResult = result
                 val includesRaw = rawSurface != null && request.tag == true
                 if (includesRaw) rawStreamResults++
@@ -4250,7 +5395,7 @@ class RawCameraController(
         dynamicExposureProbe = Runnable {
             val device = camera ?: return@Runnable
             val currentSession = session ?: return@Runnable
-            val surface = previewSurface ?: return@Runnable
+            val surface = singleShotTarget() ?: return@Runnable
             if (captureInProgress.get() || selectedIso != null || selectedExposureNanos != null) return@Runnable
             try {
                 val probe = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -4432,7 +5577,7 @@ class RawCameraController(
         aeLockIndefinite = false
         val device = camera
         val currentSession = session
-        val surface = previewSurface
+        val surface = singleShotTarget()
         if (device != null && currentSession != null && surface != null) {
             try {
                 val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -4749,6 +5894,7 @@ class RawCameraController(
             return false
         }
         buffer.add(image, result, motionRadiansPerSecond, timestampNanos, approximate)
+        rawZslEpochPairs++
         zslOverflowTracker.onPaired()
         fruitlessCooldowns = 0
         publishRawZslBufferState()
@@ -4864,6 +6010,7 @@ class RawCameraController(
                 activeHdrSaveEachBracket = false
                 activeHdrSaveDebugFrames = false
                 activeHdrStops = 2
+                activeHdrFrameEvs = intArrayOf(-2, 0, 2)
                 saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket, saveDebugFrames)
                 pendingHdrFrames.clear()
             }
@@ -4995,9 +6142,12 @@ class RawCameraController(
                 }
                 // Use the bracket's neutral/middle exposure as the geometric reference. Sorting
                 // by actual exposure remains correct if the camera clamps one requested shutter.
-                val referenceIndex = snapshots.indices.sortedBy {
-                    snapshots[it].third.exposureTimeNanos.toDouble() * snapshots[it].third.sensitivityIso
-                }[snapshots.size / 2]
+                val exposures = snapshots.map {
+                    it.third.exposureTimeNanos.toDouble() * it.third.sensitivityIso
+                }
+                val referenceIndex = HdrBracketConfig.referenceIndex(exposures)
+                val evRelative = HdrBracketConfig.evRelativeToReference(
+                    exposures.map { it as Double? }, referenceIndex)
                 val aligner = HdrFlowNetAligner(context)
                 val reference = snapshots[referenceIndex].third
                 // Reference model input rendered once (raw); per-frame exposure
@@ -5044,10 +6194,29 @@ class RawCameraController(
                     }
                 }
                 val tMerge0 = SystemClock.elapsedRealtime()
-                val mergedRaw = HdrRawMerge.merge(aligned, referenceIndex)
+                val dropped = ArrayList<Pair<Int, HdrTileDeghost.TileStats>>()
+                val mergedRaw = HdrRawMerge.merge(
+                    aligned, referenceIndex,
+                    HdrRawMerge.Options(alternateDropDcRejectFrac = 0.9),
+                    onAlternateDropped = { index, stats -> dropped.add(index to stats) }
+                )
+                // Raymerge-style F-list: one line per frame with its EV,
+                // reference anchor, and merge verdict (dropped = fully ghosted
+                // alternate collapsed to the reference during deghost).
+                for (i in aligned.indices) {
+                    val ev = evRelative.getOrNull(i)
+                    val evTag = if (ev == null) "?" else "%+.1f".format(ev)
+                    val verdict = if (i == referenceIndex) "Reference"
+                    else dropped.find { it.first == i }?.let {
+                        "DROPPED (ghost dcReject=${"%.0f".format(it.second.dcRejectFrac * 100)}%)"
+                    } ?: "Accepted"
+                    Log.i(LOG_TAG, "HDR " + HdrBracketConfig.frameLogLine(
+                        i, ev?.let { kotlin.math.round(it).toInt() } ?: 0, verdict,
+                        "ev=$evTag", isReference = i == referenceIndex))
+                }
                 Log.i(LOG_TAG, "HDR timing align=${tMerge0 - tAlign0}ms " +
                     "merge=${SystemClock.elapsedRealtime() - tMerge0}ms " +
-                    "frames=${aligned.size} " +
+                    "frames=${aligned.size} dropped=${dropped.size} " +
                     "${reference.cfa.width}x${reference.cfa.height}")
                 // Bake reference lens correction once, after saturation weighting. Float DNG
                 // carries these corrected pixels and must not carry a second gain-map opcode.
@@ -5062,6 +6231,13 @@ class RawCameraController(
                     developer.denoiseCfa(merged, snapshots[referenceIndex].first) ?: merged
                 } else merged
                 if (outputFormat.includesDng || saveDebugFrames) {
+                    val evList = evRelative.joinToString(",") {
+                        if (it == null) "?" else "%+.1f".format(it)
+                    }
+                    val dropList = if (dropped.isEmpty()) "none"
+                    else dropped.joinToString(",") { (index, stats) ->
+                        "F$index(dcReject=${"%.0f".format(stats.dcRejectFrac * 100)}%)"
+                    }
                     referenceDng = DngSaver(context).saveMerged(
                         effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps
                     )
@@ -5487,6 +6663,7 @@ class RawCameraController(
             activeHdrSaveEachBracket = false
             activeHdrSaveDebugFrames = false
             activeHdrStops = 2
+            activeHdrFrameEvs = intArrayOf(-2, 0, 2)
             activeFramesRemaining.set(0)
             captureSequence.incrementAndGet()
             pendingHdrFrames.forEach { RawImageOwnership.release(it.image) }
@@ -5550,7 +6727,13 @@ class RawCameraController(
                 "Resuming RAW ZSL ring (preempt metering " +
                     "hist=$rawHistogramStreaming ettr=$ettrStreaming prog=$programStreaming)"
             )
-            updateRepeatingRequest(allowRawZsl = true)
+            // Preserve surviving pre-roll (partial takes, forward singles):
+            // the stream refills around it instead of from zero. Empty ring
+            // takes the normal clearing path with its watchdog window.
+            updateRepeatingRequest(
+                allowRawZsl = true,
+                preserveRawZslBuffer = (rawZslBuffer?.size ?: 0) > 0
+            )
             return
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
@@ -5612,15 +6795,39 @@ class RawCameraController(
         )
         rawZslWatchdog = Runnable {
             rawZslWatchdog = null
-            if (isCurrent(generation) && requestEpoch == rawZslRequestEpoch &&
-                rawZslStreaming && !rawZslHasFrame
-            ) {
+            if (!isCurrent(generation) || requestEpoch != rawZslRequestEpoch ||
+                !rawZslStreaming || rawZslHasFrame
+            ) return@Runnable
+            if (rawZslEpochPairs <= 0) {
                 // Zero pairs in the whole startup window: same never-productive
                 // signature as a stillborn storm — burst-mode, not blind retry.
                 rawZslStreamBroken = true
                 Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
                 cooldownRawZslForRetry("No paired RAW frame arrived within ${timeoutMs}ms")
+                return@Runnable
             }
+            if (rawZslSlowWindows < ZSL_SLOW_WINDOW_EXTENSIONS) {
+                // Productive but too slow to fill (reader pressure, save drain):
+                // keep the stream and its partial ring and re-arm for another
+                // window. The counter resets, so a wedged stream (zero NEW
+                // pairs) still latches on the next window.
+                rawZslSlowWindows++
+                Log.w(
+                    LOG_TAG,
+                    "ZSL refill slow (${rawZslEpochPairs} pairs in ${timeoutMs}ms); " +
+                        "extending window ${rawZslSlowWindows}/$ZSL_SLOW_WINDOW_EXTENSIONS"
+                )
+                rawZslEpochPairs = 0
+                scheduleRawZslWatchdog(generation, requestEpoch)
+                return@Runnable
+            }
+            // Repeatedly slow: transient cooldown (retryable, per-shot restart
+            // re-attempts), never the session-death latch.
+            rawZslSlowWindows = 0
+            rawZslEpochPairs = 0
+            cooldownRawZslForRetry(
+                "ZSL refill too slow (${timeoutMs}ms x ${ZSL_SLOW_WINDOW_EXTENSIONS + 1} windows)"
+            )
         }.also { cameraHandler.postDelayed(it, timeoutMs) }
     }
 
@@ -5836,7 +7043,10 @@ class RawCameraController(
         rawZslRequestEpoch++
         cancelRawZslWatchdog()
         motionTracker.stop()
-        clearRawZslBuffer()
+        // No ring clear: pre-forward history stays eligible (age-gated) so
+        // the next ZSL press reuses it. In-flight pairing self-cleans via
+        // the epoch bump (mismatched pairs release, stale timeouts no-op
+        // once rawZslStreaming is false).
         closeUnmatchedRawImages()
         try {
             currentSession.stopRepeating()
@@ -5857,9 +7067,13 @@ class RawCameraController(
         previewRawTimestamps.clear()
         pendingTimeouts.values.forEach(cameraHandler::removeCallbacks)
         pendingTimeouts.clear()
-        rawZslBuffer?.clear()
-        rawZslHasFrame = false
-        rawZslReportedSize = 0
+        // The ring survives capture end: remaining frames (partial takes,
+        // untouched pre-roll around forward singles) stay eligible for the
+        // next press instead of forcing a refill from zero. Only teardown,
+        // session rebuild, ZSL-off and outage paths clear it explicitly.
+        val buffered = rawZslBuffer?.size ?: 0
+        rawZslHasFrame = rawZslCapacity > 0 && buffered >= rawZslCapacity
+        rawZslReportedSize = buffered
     }
 
     private fun closeUnmatchedRawImages() {
@@ -5923,7 +7137,9 @@ class RawCameraController(
             srAvailable = if (status.state == RawZslState.FALLBACK ||
                 (rawSuperResolutionSettings.enabled && rawZslCapacity <
                     rawSuperResolutionSettings.activeFrameCount(rawZslFrameCount))) false else rawSrCapability,
-            srBusy = activeRawSuperResolutionSettings.enabled && pendingSaveCount.get() > 0)
+            srBusy = activeRawSuperResolutionSettings.enabled && pendingSaveCount.get() > 0,
+            fusionBusy = activeBurstFusionSettings.enabled && pendingSaveCount.get() > 0,
+            hdrPlusBusy = activeHdrPlusSettings.enabled && pendingSaveCount.get() > 0)
         if (enriched != lastRawZslStatus) {
             lastRawZslStatus = enriched
             onRawZslStatus(enriched)
@@ -5997,18 +7213,30 @@ class RawCameraController(
         try {
             writer.execute {
                 rawDeveloper?.close()
-                runCatching { srMergeProcessor?.close() }
-                srMergeProcessor = null
             }
         } catch (_: RejectedExecutionException) {
             // The process will reclaim this small program/context cache if a full queue prevents
             // graceful teardown during Activity destruction.
+        }
+        // SR-owned resources close on the SR thread for the same confinement
+        // reason; a running merge rejects this, and the process reclaims it.
+        try {
+            srWriter.execute {
+                srDeveloper?.close()
+                runCatching { srMergeProcessor?.close() }
+                srMergeProcessor = null
+            }
+        } catch (_: RejectedExecutionException) {
+            // Same reclamation note as above when a merge is mid-flight.
         }
         writer.shutdown()
         // Plain DNG jobs touch neither EGL nor the shared developer (AI/JPEG stay
         // on the serial writer), so no ordered teardown is needed here; queued
         // DNGs simply finish or are dropped with the process.
         dngWriter.shutdown()
+        // A running merge finishes or dies with the process; nothing queues
+        // behind it by construction (single-flight).
+        srWriter.shutdown()
         // Accepted samples own Images, including queued samples. Let them finish and
         // release those Images before retired readers close; stale results are ignored.
         meteringExecutor.shutdown()
@@ -6188,6 +7416,27 @@ class RawCameraController(
     private fun resolveOpenCameraId(cameraId: String): String? =
         cachedCameraRoute(cameraId)?.openCameraId
 
+    /**
+     * Direct-physical fallback for vendor composites (e.g. `9/2`): when the
+     * physical member is not advertised in the logical camera's
+     * `physicalCameraIds`, binding outputs to it may be rejected by the HAL
+     * even though the physical camera opens fine on its own (Xiaomi aux
+     * routing). Returns null for standalone routes and for advertised
+     * memberships, where a direct open would be refused as a subordinate.
+     */
+    private fun resolveDirectPhysicalFallback(route: CameraRoute): CameraRoute? {
+        val physicalId = route.physicalCameraId ?: return null
+        val advertised = try {
+            cachedCameraRoute(route.openCameraId)?.characteristics?.physicalCameraIds
+        } catch (_: Exception) {
+            null
+        }
+        if (advertised?.contains(physicalId) == true) return null
+        val direct = cachedCameraRoute(physicalId) ?: return null
+        if (direct.openCameraId != physicalId || direct.physicalCameraId != null) return null
+        return CameraRoute(route.identity, physicalId, null, direct.characteristics)
+    }
+
     private fun opticalMetric(cameraId: String): Float = try {
         val c = cachedCameraRoute(cameraId)?.characteristics ?: return Float.MAX_VALUE
         val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
@@ -6226,39 +7475,6 @@ class RawCameraController(
         CameraAccessException.CAMERA_IN_USE -> "camera is in use"
         CameraAccessException.MAX_CAMERAS_IN_USE -> "too many cameras are open"
         else -> failure.message ?: "camera unavailable"
-    }
-
-    private fun largestRawSize(map: StreamConfigurationMap): Size? =
-        map.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
-
-    private fun choosePreviewSize(
-        map: StreamConfigurationMap,
-        rawSize: Size,
-        requiredWidth: Int,
-        requiredHeight: Int
-    ): Size {
-        val choices = map.getOutputSizes(SurfaceTexture::class.java)
-        val targetWidth = requiredWidth.coerceIn(1, MAX_PREVIEW_WIDTH)
-        val targetHeight = requiredHeight.coerceIn(1, MAX_PREVIEW_HEIGHT)
-
-        // Preview and RAW should show the same framing. Allow a small tolerance because some
-        // devices expose slightly cropped preview sizes rather than an exact sensor ratio.
-        val matchingAspect = choices.filter { size ->
-            val ratioError = kotlin.math.abs(
-                size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
-            )
-            ratioError <= ASPECT_RATIO_TOLERANCE
-        }
-        val suitable = matchingAspect.filter {
-            it.width <= MAX_PREVIEW_WIDTH && it.height <= MAX_PREVIEW_HEIGHT
-        }
-        val pool = suitable.ifEmpty { matchingAspect }.ifEmpty { choices.asList() }
-
-        // Use the least expensive stream that still covers the TextureView. If none does,
-        // choose the largest bounded stream rather than requesting a full-sensor preview.
-        return pool.filter { it.width >= targetWidth && it.height >= targetHeight }
-            .minByOrNull { it.width.toLong() * it.height }
-            ?: pool.maxByOrNull { it.width.toLong() * it.height }!!
     }
 
     /** Keeps the camera preview in the portrait-locked 4:3 viewbox. */
@@ -6332,6 +7548,10 @@ class RawCameraController(
         private const val ZSL_RETRY_COOLDOWN_MS = 2_000L
         private const val ZSL_STARTUP_TIMEOUT_MS = 4_000L
         private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
+        /** Slow-but-productive watchdog windows tolerated per epoch before a
+         * transient (retryable, never latching) cooldown. Zero-pair windows
+         * still latch burst-mode immediately. */
+        private const val ZSL_SLOW_WINDOW_EXTENSIONS = 2
         private const val MAX_ZSL_FRAMES = 30
         private const val RAW_ZSL_TARGET_FPS = 30
         private fun hdrBracketSuffix(index: Int): String = "F%02d".format(index)
@@ -6390,8 +7610,184 @@ class RawCameraController(
         ): Boolean = !compatMode && deliveredImages == 0 &&
             failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
 
+        /**
+         * Stillborn-in-compat escalation: the compat rebuild already proved
+         * request toggles cannot revive this session, so a RAW stream that
+         * still delivers zero buffers advances the session fallback ladder
+         * (direct-physical route, then degraded combos) instead of parking
+         * on a black viewfinder. Fires only after the same cheap
+         * request-level retry the compat escalation allows, and never while
+         * buffers flow (a rendering problem) or past the last combo.
+         */
+        internal fun shouldAdvanceStillbornSessionLadder(
+            failures: Int,
+            deliveredImages: Int,
+            compatMode: Boolean,
+            altRouteAvailable: Boolean,
+            comboIndex: Int,
+            comboCount: Int
+        ): Boolean = compatMode && deliveredImages == 0 &&
+            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES &&
+            (altRouteAvailable || comboIndex + 1 < comboCount)
+
+        /**
+         * Bit depth implied by a white level (1023 -> 10, 4095 -> 12,
+         * 16383 -> 14, 65535 -> 16); 10 when the key is missing. Shared by
+         * the DNG chip's static publish and its dynamic-white updates so
+         * both report the same depth for the same level.
+         */
+        internal fun whiteLevelBitDepth(whiteLevel: Int?): Int =
+            whiteLevel?.let { 32 - Integer.numberOfLeadingZeros(it) } ?: 10
+
+        /**
+         * Plain width/height pair for session-combo selection. `android.util.Size`
+         * is a framework stub under JVM unit tests, so the ladder below runs on
+         * this type and the camera thread maps to/from `Size` at the boundary.
+         */
+        internal data class SessionStreamSize(val width: Int, val height: Int) {
+            val area: Long get() = width.toLong() * height
+        }
+
+        /**
+         * One session attempt: RAW size, preview size, and reader queue depth.
+         * A null preview is a RAW-only session (no preview stream at all) for
+         * HALs that do not support RAW+preview in any combination.
+         */
+        internal data class SessionStreamCombo(
+            val raw: SessionStreamSize,
+            val preview: SessionStreamSize?,
+            val readerMaxImages: Int,
+            val label: String
+        )
+
+        /**
+         * Session fallback ladder for HALs that reject the full RAW+preview
+         * combination (Xiaomi 14 Ultra rejects 4096x3072 RAW + 1440x1080
+         * preview outright, async, on every route). Each step degrades exactly
+         * one axis so a working session keeps the most capability possible:
+         * full combo, minimal preview, minimal buffers (viewfinder-only, the
+         * reader cannot host a ZSL ring), a half-area RAW size, then RAW-only
+         * sessions (largest RAW first for capture quality, smallest last for
+         * minimum bandwidth). Steps that would retry an identical session are
+         * deduped away. An empty preview list yields only the RAW-only steps.
+         */
+        internal fun selectSessionStreamCombos(
+            rawSizes: List<SessionStreamSize>,
+            previewSizes: List<SessionStreamSize>,
+            requiredWidth: Int,
+            requiredHeight: Int,
+            fullReaderMaxImages: Int,
+            reducedReaderMaxImages: Int
+        ): List<SessionStreamCombo> {
+            val fullRaw = rawSizes.maxByOrNull { it.area } ?: return emptyList()
+            val combos = mutableListOf<SessionStreamCombo>()
+            if (previewSizes.isNotEmpty()) {
+                val fullPreview = selectFullPreviewSize(previewSizes, fullRaw, requiredWidth, requiredHeight)
+                val fallbackPreview = selectFallbackPreviewSize(previewSizes, fullRaw)
+                combos += SessionStreamCombo(fullRaw, fullPreview, fullReaderMaxImages, "FULL")
+                combos += SessionStreamCombo(fullRaw, fallbackPreview, fullReaderMaxImages, "MIN PREVIEW")
+                combos += SessionStreamCombo(fullRaw, fallbackPreview, reducedReaderMaxImages, "MIN BUFFERS")
+                selectSmallerRawSize(rawSizes)?.let { smaller ->
+                    combos += SessionStreamCombo(smaller, fallbackPreview, reducedReaderMaxImages, "SMALL RAW")
+                }
+            }
+            combos += SessionStreamCombo(fullRaw, null, reducedReaderMaxImages, "RAW ONLY")
+            rawSizes.minByOrNull { it.area }?.let { smallest ->
+                combos += SessionStreamCombo(smallest, null, reducedReaderMaxImages, "RAW ONLY MIN")
+            }
+            val deduped = mutableListOf<SessionStreamCombo>()
+            for (combo in combos) {
+                val prev = deduped.lastOrNull()
+                if (prev == null || prev.raw != combo.raw || prev.preview != combo.preview ||
+                    prev.readerMaxImages != combo.readerMaxImages
+                ) {
+                    deduped += combo
+                }
+            }
+            return deduped
+        }
+
+        /**
+         * Legacy preview choice, unchanged: the least expensive stream that
+         * still covers the TextureView, else the largest bounded stream.
+         */
+        internal fun selectFullPreviewSize(
+            previewSizes: List<SessionStreamSize>,
+            rawSize: SessionStreamSize,
+            requiredWidth: Int,
+            requiredHeight: Int
+        ): SessionStreamSize {
+            val targetWidth = requiredWidth.coerceIn(1, MAX_PREVIEW_WIDTH)
+            val targetHeight = requiredHeight.coerceIn(1, MAX_PREVIEW_HEIGHT)
+
+            // Preview and RAW should show the same framing. Allow a small tolerance because some
+            // devices expose slightly cropped preview sizes rather than an exact sensor ratio.
+            val matchingAspect = previewSizes.filter { size ->
+                kotlin.math.abs(
+                    size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
+                ) <= ASPECT_RATIO_TOLERANCE
+            }
+            val suitable = matchingAspect.filter {
+                it.width <= MAX_PREVIEW_WIDTH && it.height <= MAX_PREVIEW_HEIGHT
+            }
+            val pool = suitable.ifEmpty { matchingAspect }.ifEmpty { previewSizes }
+
+            // Use the least expensive stream that still covers the TextureView. If none does,
+            // choose the largest bounded stream rather than requesting a full-sensor preview.
+            return pool.filter { it.width >= targetWidth && it.height >= targetHeight }
+                .minByOrNull { it.area }
+                ?: pool.maxByOrNull { it.area }!!
+        }
+
+        /**
+         * Fallback preview: the smallest matching-aspect stream that stays
+         * usable as a viewfinder, else the smallest matching-aspect stream,
+         * else the smallest stream overall.
+         */
+        internal fun selectFallbackPreviewSize(
+            previewSizes: List<SessionStreamSize>,
+            rawSize: SessionStreamSize
+        ): SessionStreamSize {
+            val matchingAspect = previewSizes.filter { size ->
+                kotlin.math.abs(
+                    size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
+                ) <= ASPECT_RATIO_TOLERANCE
+            }
+            return matchingAspect
+                .filter { it.width >= FALLBACK_PREVIEW_MIN_WIDTH && it.height >= FALLBACK_PREVIEW_MIN_HEIGHT }
+                .minByOrNull { it.area }
+                ?: matchingAspect.minByOrNull { it.area }
+                ?: previewSizes.minByOrNull { it.area }!!
+        }
+
+        /**
+         * Largest RAW size at most half the sensor area: one decisive bandwidth
+         * step instead of a slow walk through near-identical remosaic sizes.
+         * Null when no such step exists (single RAW size).
+         */
+        internal fun selectSmallerRawSize(rawSizes: List<SessionStreamSize>): SessionStreamSize? {
+            val largest = rawSizes.maxByOrNull { it.area } ?: return null
+            return rawSizes.filter { it.area * 2 <= largest.area }.maxByOrNull { it.area }
+        }
+
+        /**
+         * Inverse of the reader sizing in [createSession]: the forward formula
+         * keeps `max(capacity, MAX_IN_FLIGHT_JPEG_SAVES)` plus pairing,
+         * transition, and rearm headroom within the reader. A full-size reader
+         * clamps back to the requested count; a reader below that floor yields
+         * zero (viewfinder-only, no ZSL ring).
+         */
+        internal fun clampZslCapacityForReader(requestedFrameCount: Int, readerMaxImages: Int): Int {
+            val roomForRing = readerMaxImages - RAW_PREVIEW_RESERVED_SLOTS - ZSL_REARM_OVERLAP_SLOTS
+            if (roomForRing < MAX_IN_FLIGHT_JPEG_SAVES) return 0
+            return minOf(requestedFrameCount, roomForRing)
+        }
+
         /** Request-level recoveries before a stillborn stream rebuilds the session. */
         private const val RAW_PREVIEW_COMPAT_ESCALATION_FAILURES = 1
+        /** Fallback preview stays usable as a viewfinder at or above this size. */
+        private const val FALLBACK_PREVIEW_MIN_WIDTH = 640
+        private const val FALLBACK_PREVIEW_MIN_HEIGHT = 480
         private const val RAW_BYTES_PER_PIXEL = 2L
         // JPEG development retains large intermediate CPU/GPU buffers, so keep one serialized
         // development worker while allowing five additional retained RAW inputs. DNG-only writes
@@ -6412,6 +7808,9 @@ class RawCameraController(
         private const val RAW_READER_TRANSITION_SLOTS = 2
         private const val RAW_PREVIEW_RESERVED_SLOTS = ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS + 2
         private const val MIN_ACQUIRED_RAW_IMAGES = BURST_FRAME_COUNT + 2
+        /** Transient route-resolution reopen budget (Xiaomi characteristics settle late). */
+        private const val OPEN_RETRY_MAX = 3
+        private const val OPEN_RETRY_DELAY_MS = 1500L
         private const val LOG_TAG = "RawLensCamera"
         private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = 2_500L
         /** Timed tap-lock hold before auto-return to continuous AF. */

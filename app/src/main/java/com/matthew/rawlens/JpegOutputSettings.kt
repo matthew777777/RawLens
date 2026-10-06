@@ -39,7 +39,9 @@ data class JpegOutputSettings(
      * Scene-linear highlight shoulder strength: 0 = pinned Filament AgX only,
      * 1 = full exponential soft shoulder (knee 0.9, scale 0.8). Default 1.
      */
-    val highlightShoulder: Float = 1f
+    val highlightShoulder: Float = 1f,
+    /** Still-JPEG demosaic backend (AMaZE default; RCD via the Vulkan bridge). */
+    val demosaic: JpegDemosaic = JpegDemosaic.AMAZE
 ) {
     /** Ultra HDR is an Android 14 (API 34) platform JPEG feature. */
     fun resolvedForPlatform(): JpegOutputSettings {

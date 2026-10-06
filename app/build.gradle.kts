@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -73,6 +75,13 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Merged-DNG writer unit tests serialize through the host TinyDNG
+        // lib (same C sources as the Android rawLensDng target); on-device
+        // code loads the APK's .so via System.loadLibrary instead.
+        unitTests.all {
+            it.systemProperty("rawlens.dnglib",
+                System.getProperty("rawlens.dnglib") ?: dngTestLibFile.get().asFile.absolutePath)
+        }
     }
     // On-device tests always run against release (CMake -O3): debug native
     // code is ~40x slower and cannot hold record-mode cadence, so debug
@@ -100,4 +109,28 @@ configurations.all {
             because("pin for AGP 8.7.3 / compileSdk 35 (exifinterface 1.4.2 pulls core 1.18 which needs SDK36/AGP8.9)")
         }
     }
+}
+
+// Host librawLensDng for JVM unit tests (see also :tools:sr-vulkan,
+// which stages the same lib for the desktop CLI). The script compiles
+// the pinned TinyDNG sources plus the JNI bridge for the host.
+val dngTestLibName = if ("mac" in System.getProperty("os.name").lowercase()) {
+    "librawLensDng.dylib"
+} else {
+    "librawLensDng.so"
+}
+val dngTestLibDir = layout.buildDirectory.dir("dng-native")
+val dngTestLibFile = dngTestLibDir.map { it.file(dngTestLibName) }
+tasks.register<Exec>("buildDngNativeHost") {
+    onlyIf { System.getenv("PATH").split(":").any { File(it, "cc").canExecute() } }
+    val javaHome = System.getProperty("java.home")
+    val plat = if ("mac" in System.getProperty("os.name").lowercase()) "darwin" else "linux"
+    commandLine(
+        "bash", rootDir.resolve("tools/build_dng_native.sh").absolutePath,
+        dngTestLibFile.get().asFile.absolutePath,
+        "$javaHome/include", "$javaHome/include/$plat"
+    )
+}
+tasks.matching { it.name.startsWith("test") && it.name.contains("UnitTest") }.configureEach {
+    dependsOn("buildDngNativeHost")
 }

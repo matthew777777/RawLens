@@ -49,6 +49,22 @@ enum class JpegChromaSubsampling(val label: String, val nativeValue: Int) {
     }
 }
 
+/**
+ * Still-JPEG demosaic backend. AMaZE (GLES) is the default; RCD runs the
+ * Vulkan [VfRcd] modes and imports the RGB back into the GLES develop.
+ */
+enum class JpegDemosaic(val label: String) {
+    AMAZE("AMaZE"),
+    RCD("RCD");
+
+    fun next(): JpegDemosaic = if (this == AMAZE) RCD else AMAZE
+
+    companion object {
+        fun fromPreference(value: String?): JpegDemosaic =
+            entries.firstOrNull { it.name == value } ?: AMAZE
+    }
+}
+
 /** Extracts Android's own ICC payload from a tiny color-tagged JPEG, so native files keep the
  * same sRGB / Display-P3 interpretation as the previous Bitmap.compress path. */
 private object JpegIccProfileProvider {

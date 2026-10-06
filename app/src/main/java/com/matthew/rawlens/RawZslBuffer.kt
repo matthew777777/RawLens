@@ -26,7 +26,10 @@ internal data class BufferedRawFrame(
     val metadataApproximate: Boolean = false
 )
 
-/** Owns every Image added to it. Evicted, rejected, and unselected images are closed immediately. */
+/** Owns every Image added to it. Evicted and rejected images are closed
+ * immediately; unselected frames stay buffered as pre-roll for the next
+ * press (age-gated by MAX_FRAME_AGE_NANOS), so takes never force a refill
+ * from zero. */
 internal class RawZslBuffer(private val capacity: Int) {
     private val frames = ArrayDeque<BufferedRawFrame>(capacity)
 
@@ -134,8 +137,11 @@ internal class RawZslBuffer(private val capacity: Int) {
             .sortedByDescending { qualityScore(it, cutoffNanos, realtimeTimestamps) }
             .take(count)
             .sortedBy { it.timestampNanos }
+        // Non-destructive take: only selected frames transfer to the caller.
+        // Unselected frames (lower-scored eligible plus ineligible) stay in
+        // the ring as pre-roll — the next press reuses them instead of
+        // refilling from zero. Age and capacity eviction bound staleness.
         selected.forEach(frames::remove)
-        clear()
         return selected
     }
 

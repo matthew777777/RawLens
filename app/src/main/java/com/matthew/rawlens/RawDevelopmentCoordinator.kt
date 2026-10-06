@@ -157,24 +157,58 @@ class RawDevelopmentCoordinator(context: Context) {
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
             consume(SceneLinearGpuFrame(output, preDemosaic, transform))
         }
-        val result = if (directGpu) {
-            amaze.processRaw(
-                GpuRawAmazeInput(
-                    rawPlane, layout, geometry.processingCrop, normalization, lensModel
-                ),
-                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
-                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = fusedOutputSettings,
-                consume = consumeOutput
-            )
+        fun runAmaze(): T {
+            return if (directGpu) {
+                amaze.processRaw(
+                    GpuRawAmazeInput(
+                        rawPlane, layout, geometry.processingCrop, normalization, lensModel
+                    ),
+                    cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                    cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                    fusedOutputSettings = fusedOutputSettings,
+                    consume = consumeOutput
+                )
+            } else {
+                amaze.process(
+                    requireNotNull(cpuCfa),
+                    cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                    cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                    fusedOutputSettings = fusedOutputSettings,
+                    consume = consumeOutput
+                )
+            }
+        }
+        // Still-JPEG demosaic backend (Quad-Bayer always stays AMaZE).
+        // RCD failures fall back to AMaZE: the JPEG must never fail for
+        // a demosaic choice.
+        var demosaicUsed = "AMAZE"
+        val result = if (fusedOutputSettings?.demosaic == JpegDemosaic.RCD) {
+            try {
+                demosaicUsed = "RCD"
+                if (directGpu) {
+                    amaze.processRcdRaw(
+                        GpuRawAmazeInput(
+                            rawPlane, layout, geometry.processingCrop, normalization, lensModel
+                        ),
+                        cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                        cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                        consume = consumeOutput
+                    )
+                } else {
+                    amaze.processRcdCfa(
+                        requireNotNull(cpuCfa),
+                        cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                        cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                        consume = consumeOutput
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "RCD JPEG failed, falling back to AMaZE", e)
+                demosaicUsed = "AMAZE(fallback)"
+                runAmaze()
+            }
         } else {
-            amaze.process(
-                requireNotNull(cpuCfa),
-                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
-                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = fusedOutputSettings,
-                consume = consumeOutput
-            )
+            runAmaze()
         }
         val completedAt = SystemClock.elapsedRealtime()
         Log.i(
@@ -182,6 +216,7 @@ class RawDevelopmentCoordinator(context: Context) {
             "RAW development ${metadata.imageWidth}x${metadata.imageHeight}: " +
                 "preprocessCpu=${preparedAt - startedAt}ms " +
                 "path=${if (directGpu) "GPU_RAW" else "CPU_FALLBACK"} " +
+                "demosaic=$demosaicUsed " +
                 "adaptive=${adaptiveAt - preparedAt}ms " +
                 "color=${transformAt - adaptiveAt}ms " +
                 "adaptiveEV=${adaptive?.correctionEv ?: 0.0} appliedEV=$resolvedExposureEv " +
@@ -233,16 +268,20 @@ class RawDevelopmentCoordinator(context: Context) {
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
-    ): DevelopedJpeg = develop(
-        rawPlane,
-        metadata,
-        settings,
-        fusedOutputSettings = outputSettings
-    ) { frame ->
-        if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
-            jpegOutput.processEncoded(frame.texture, outputSettings)
-        } else {
-            jpegOutput.process(frame.texture, outputSettings)
+    ): DevelopedJpeg = developWithTileDropRetry(
+        "single-frame ${metadata.imageWidth}x${metadata.imageHeight}"
+    ) {
+        develop(
+            rawPlane,
+            metadata,
+            settings,
+            fusedOutputSettings = outputSettings
+        ) { frame ->
+            if (frame.texture.internalFormat == AmazeTextureFormat.RGBA8) {
+                jpegOutput.processEncoded(frame.texture, outputSettings)
+            } else {
+                jpegOutput.process(frame.texture, outputSettings)
+            }
         }
     }
 
@@ -428,13 +467,15 @@ class RawDevelopmentCoordinator(context: Context) {
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), resolvedExposureEv
         )
-        return amaze.process(
-            cfa,
-            clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
-            cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
-            cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-            fusedOutputSettings = outputSettings
-        ) { output -> finishJpeg(output, outputSettings) }
+        return developWithTileDropRetry("cfa-frame ${cfa.width}x${cfa.height}") {
+            amaze.process(
+                cfa,
+                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                fusedOutputSettings = outputSettings
+            ) { output -> finishJpeg(output, outputSettings) }
+        }
     }
 
     private fun finishJpeg(
@@ -463,19 +504,52 @@ class RawDevelopmentCoordinator(context: Context) {
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), settings.exposureEv
         )
-        return amaze.process(
-            cfa,
-            clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
-            cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
-            cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-            fusedOutputSettings = outputSettings
-        ) { output ->
-            if (output.internalFormat == AmazeTextureFormat.RGBA8) {
-                jpegOutput.processEncoded(output, outputSettings)
-            } else {
-                jpegOutput.process(output, outputSettings)
+        return developWithTileDropRetry("merged-frame ${cfa.width}x${cfa.height}") {
+            amaze.process(
+                cfa,
+                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                fusedOutputSettings = outputSettings
+            ) { output ->
+                if (output.internalFormat == AmazeTextureFormat.RGBA8) {
+                    jpegOutput.processEncoded(output, outputSettings)
+                } else {
+                    jpegOutput.process(output, outputSettings)
+                }
             }
         }
+    }
+
+    /**
+     * Develops once, then verifies no AMaZE tile was dropped before the bitmap may be saved.
+     * A dropped tile (an exact-zero tile next to lit content, which no real scene can produce)
+     * retries the develop a single time on the still-owned inputs; a persistent drop throws
+     * instead of saving a corrupt JPEG (the DNG is already written by then, so no capture data
+     * is lost). Uniformly black frames are a dark scene, never a drop, and pass through. The SR
+     * texture path is intentionally excluded: it develops with one full-frame dispatch rather
+     * than AMaZE tiling.
+     */
+    private fun developWithTileDropRetry(tag: String, once: () -> DevelopedJpeg): DevelopedJpeg {
+        val first = once()
+        val drops = DevelopTileDropDetector.findZeroTiles(
+            first.bitmap.width, first.bitmap.height
+        ) { x, y -> first.bitmap.getPixel(x, y) }
+        if (drops.isEmpty()) return first
+        first.bitmap.recycle()
+        Log.w(LOG_TAG, "Dropped GPU tile(s) $drops in $tag; retrying develop once")
+        val second = once()
+        val redrops = DevelopTileDropDetector.findZeroTiles(
+            second.bitmap.width, second.bitmap.height
+        ) { x, y -> second.bitmap.getPixel(x, y) }
+        if (redrops.isEmpty()) {
+            Log.i(LOG_TAG, "Tile-drop retry recovered $tag (first attempt dropped $drops)")
+            return second
+        }
+        second.bitmap.recycle()
+        throw IllegalStateException(
+            "GPU tile drop persisted after retry in $tag: first=$drops retry=$redrops"
+        )
     }
 
     /**

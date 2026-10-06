@@ -7,9 +7,11 @@
 package com.matthew.rawlens
 
 data class RawSrGpuOutput(
-    /** Ordinary linear camera-RGB numerators (rgb; Prompt 4D merge contract). */
+    /** Ordinary linear camera-RGB numerators (rgb; Prompt 4D merge contract).
+     * 0 when the caller requested the accumulator early release. */
     val numeratorTextureId: Int,
-    /** Independent per-channel R/G/B denominators (rgb; RGBA32F, contract §6). */
+    /** Independent per-channel R/G/B denominators (rgb; RGBA32F, contract §6).
+     * 0 when the caller requested the accumulator early release. */
     val denominatorTextureId: Int,
     val width: Int,
     val height: Int,
@@ -18,9 +20,11 @@ data class RawSrGpuOutput(
     val flowTextureIds: List<Int>,
     /** Accumulated per-quad robustness Rc; identically zero in reference-only mode. */
     val rcTextureId: Int,
-    /** Reference-only A/B numerators (rgb): the reference-last pass through the same path. */
+    /** Reference-only A/B numerators (rgb): the reference-last pass through the same path.
+     * 0 when the caller requested the accumulator early release. */
     val refNumeratorTextureId: Int,
-    /** Reference-only A/B denominators (rgb): backs the local fallback. */
+    /** Reference-only A/B denominators (rgb): backs the local fallback.
+     * 0 when the caller requested the accumulator early release. */
     val refDenominatorTextureId: Int,
     /** Final merged linear RGB: reference-last add, normalization, fallback, dead-lane inpaint, chroma-from-luma. */
     val mergedTextureId: Int,

@@ -8,14 +8,16 @@ import java.io.RandomAccessFile
 import java.nio.FloatBuffer
 import java.nio.channels.FileChannel
 import java.util.concurrent.CancellationException
-import kotlin.math.exp
 import kotlin.math.floor
 
 /**
- * Mosaic SR: direct CFA-target reconstruction at [LINEAR_SCALE], sharing the
+ * Mosaic SR: direct CFA-target reconstruction at [RawSrMosaicScale]
+ * ([RawSrMosaicScale.SR] upscales to the [LINEAR_SCALE] grid,
+ * [RawSrMosaicScale.NATIVE] keeps sensor resolution), sharing the
  * reference-parity accumulation math with [RawSrBayerMerge] (Jamy-L Alg. 4:
- * nearest-tile flow, covariance interpolation + per-pixel inversion, raw-unit
- * Gaussian weights, one-quad-shifted robustness with r_ref = 1).
+ * nearest-tile flow lookup, nearest-quad robustness fetch with the
+ * reference one-quad shift, covariance interpolation + per-pixel
+ * inversion, raw-unit Gaussian weights, robustness with r_ref = 1).
  *
  * This is NOT a re-mosaicing of merged RGB. Each target CFA site accumulates
  * only aligned same-colour source observations, routed by sensor colour
@@ -23,21 +25,37 @@ import kotlin.math.floor
  * support divide to 0 like the reference NaN blacked downstream; Rc folds
  * through [RawSrRobustness.accumulate] unchanged.
  *
- * Target grid: linear scale [LINEAR_SCALE] (≈√2, so a ~12 MP source becomes a
- * ~24 MP target by AREA, not 2× width and height), floored to the even grid
- * at or below dim×s to preserve the 2×2 Bayer phase and the source aspect
- * ratio. The target phase is the source phase at the shared origin
- * (crop-origin aware).
+ * Target grid: linear scale [RawSrMosaicScale.SR] (≈√2, so a ~12 MP source
+ * becomes a ~24 MP target by AREA, not 2× width and height), floored to the
+ * even grid at or below dim×s to preserve the 2×2 Bayer phase and the
+ * source aspect ratio; NATIVE reproduces the source grid exactly. The
+ * target phase is the source phase at the shared origin (crop-origin
+ * aware).
  *
  * Single-precision accumulation over flat arrays, mirroring the linear merge.
  * The RGB merge stays the JPEG path; this reconstruction feeds only the
  * Mosaic SR DNG.
+ *
+ * Chroma latch guard (deliberate deviation, shared with [RawSrBayerMerge]):
+ * R/B sites merge with a 2x-wider kernel than green sites
+ * ([RawSrBayerMerge.CHROMA_SIGMA_MPY]), Nyquist-matched to their 2px
+ * lattices; the reference reuses the razor kernel for every site and
+ * latches R/B sites onto single taps (chroma zipper: with across-edge
+ * radii ~0.13 raw px a site whose taps all fall far from the source
+ * divides to exactly 0, a saturated confetti dot). Green sites are bitwise
+ * reference-verbatim; `chromaSigmaMpy = 1.0` restores the full reference
+ * path.
  */
 object MosaicSrReconstructor {
     /** √2 linear scale: target area ≈ 2× source area. */
     const val LINEAR_SCALE = 1.4142135623730951
     const val ALGORITHM_VERSION = "RawLens-MosaicSr/5K-neutral-highlights"
-    const val EPS = 1e-8
+    /**
+     * Zero-support gate (reference `utils.divide` parity, shared with
+     * [RawSrBayerMerge.EPS]): sites divide to 0 only at exactly-zero weight;
+     * tiny but nonzero support divides to its finite mean.
+     */
+    const val EPS = 0.0
 
     data class TargetGrid(
         val width: Int,
@@ -64,7 +82,7 @@ object MosaicSrReconstructor {
     )
 
     /**
-     * Even target grid at [LINEAR_SCALE], preserving aspect ratio. Rounding is
+     * Even target grid at [scale], preserving aspect ratio. Rounding is
      * floor-to-even (largest even grid at or below dim×s), so every target
      * site maps strictly inside the source frame — no site is born
      * out-of-bounds. [phasePattern] is the source phase AT the shared (crop)
@@ -77,36 +95,41 @@ object MosaicSrReconstructor {
     fun planTarget(
         sourceWidth: Int,
         sourceHeight: Int,
-        phasePattern: BayerPattern = BayerPattern.RGGB
+        phasePattern: BayerPattern = BayerPattern.RGGB,
+        scale: RawSrMosaicScale = RawSrMosaicScale.SR
     ): TargetGrid {
         require(sourceWidth >= 2 && sourceHeight >= 2 && sourceWidth % 2 == 0 && sourceHeight % 2 == 0) {
             "Mosaic SR needs an even source crop of at least 2x2"
         }
-        // Floor to even: 2×floor(dim×s/2). A ~12 MP source lands at ~2× area.
-        val width = (floorToEven(sourceWidth * LINEAR_SCALE)).coerceAtLeast(2)
-        val height = (floorToEven(sourceHeight * LINEAR_SCALE)).coerceAtLeast(2)
-        return TargetGrid(width, height, phasePattern, LINEAR_SCALE)
-    }
-
-    private fun floorToEven(value: Double): Int {
-        val half = floor(value / 2.0).toInt()
-        return half * 2
+        // Shared planner: the mosaic SR grid is pixel-identical to the
+        // linear SR grid by construction, never by duplicated rounding.
+        val (width, height) = planSrOutputDims(sourceWidth, sourceHeight, scale.factor)
+        return TargetGrid(width, height, phasePattern, scale.factor)
     }
 
     /**
-     * Reconstruct [reference] + [moving] onto the target grid. [targetPattern]
-     * defaults to the source phase at the shared origin; pass an explicit
-     * phase only to test phase selection. Frames reuse
-     * [RawSrBayerMerge.MergeFrame] so the validated model inputs transfer
-     * unchanged.
+     * Reconstruct [reference] + [moving] onto the target grid at [scale]
+     * ([RawSrMosaicScale.SR] upscales to the √2 grid, NATIVE keeps sensor
+     * resolution). [targetPattern] defaults to the source phase at the
+     * shared origin; pass an explicit phase only to test phase selection.
+     * Frames reuse [RawSrBayerMerge.MergeFrame] so the validated model
+     * inputs transfer unchanged.
      */
     fun reconstruct(
         reference: RawSrBayerMerge.MergeFrame,
         moving: List<RawSrBayerMerge.MergeFrame>,
         targetPattern: BayerPattern? = null,
         referenceOnly: Boolean = false,
-        isCancelled: ((rowsCompleted: Int) -> Boolean)? = null
+        isCancelled: ((rowsCompleted: Int) -> Boolean)? = null,
+        scale: RawSrMosaicScale = RawSrMosaicScale.SR,
+        chromaSigmaMpy: Double = RawSrBayerMerge.CHROMA_SIGMA_MPY
     ): MosaicSrResult {
+        require(chromaSigmaMpy.isFinite() && chromaSigmaMpy > 0.0) {
+            "chromaSigmaMpy must be finite and positive"
+        }
+        // Precision-domain scale for R/B sites (sigma x s <=> z / s^2);
+        // green sites always use the unscaled z (bitwise reference path).
+        val chromaZScale = RawSrCoreKernel.chromaZScale(chromaSigmaMpy)
         val frames = if (referenceOnly) emptyList() else moving
         val width = reference.width
         val height = reference.height
@@ -128,8 +151,8 @@ object MosaicSrReconstructor {
         frames.forEachIndexed { index, frame ->
             checkFrame(frame, "Moving $index")
             require(frame.flow != null && frame.robustness != null) { "Moving $index needs flow and robustness" }
-            require(frame.flow.imageWidth == quadsW && frame.flow.imageHeight == quadsH) {
-                "Moving $index flow grid must match the quad grid"
+            require(frame.flow.coversRaw(width, height)) {
+                "Moving $index flow must cover the raw lattice"
             }
             require(frame.robustness.width == quadsW && frame.robustness.height == quadsH) {
                 "Moving $index robustness grid must match the quad grid"
@@ -137,7 +160,8 @@ object MosaicSrReconstructor {
         }
         // The target grid shares the source origin: its (0,0) site carries
         // the reference frame's origin-shifted phase verbatim.
-        val plan = planTarget(width, height, reference.sensorPattern)
+        val plan = planTarget(width, height, reference.sensorPattern, scale)
+        val linearScale = plan.scale
         val pattern = targetPattern ?: plan.pattern
         val outW = plan.width
         val outH = plan.height
@@ -155,7 +179,7 @@ object MosaicSrReconstructor {
         for (frame in frames) {
             accumulateFrame(frame, frame.flow!!, frame.robustness!!, pattern,
                 numBuf, denBuf, taps, oob,
-                width, height, quadsW, outW, outH, false)
+                width, height, quadsW, outW, outH, linearScale, false, chromaZScale)
             rowsDone += outH
             if (isCancelled?.invoke(rowsDone) == true) throw CancellationException("Mosaic SR cancelled")
         }
@@ -164,19 +188,12 @@ object MosaicSrReconstructor {
         // bitwise even though every store narrows to float).
         accumulateFrame(reference, null, null, pattern,
             numBuf, denBuf, taps, oob,
-            width, height, quadsW, outW, outH, true)
+            width, height, quadsW, outW, outH, linearScale, true, chromaZScale)
         // Rc over the effective (finite-sanitized) weights, like the linear
         // merge; empty (hence zero) under referenceOnly.
-        var rcValues = FloatArray(quadsW * quadsH)
+        val rcValues = FloatArray(quadsW * quadsH)
         for (frame in frames) {
-            val robust = frame.robustness!!
-            val next = rcValues.copyOf()
-            val r = robust.r
-            for (i in next.indices) {
-                val v = r[i]
-                next[i] += if (v.isFinite()) v else 0f
-            }
-            rcValues = next
+            RawSrCoreRobustness.accumulateRcInPlace(rcValues, frame.robustness!!.r)
         }
         val rc = RawSrRobustness.RcField(quadsW, quadsH, rcValues)
         val cfa = FloatArray(pixels)
@@ -191,16 +208,10 @@ object MosaicSrReconstructor {
                     // Accumulator reads widen to Double at the decision boundary (one
                     // narrowing on store, identically on both paths).
                     val denD = den[p].toDouble()
-                    val value = if (denD > EPS) {
-                        num[p] / maxOf(denD, EPS)
-                    } else {
-                        fallback[p] = true
-                        0.0
-                    }
-                    val finite = if (value.isFinite()) value else 0.0
-                    if (!value.isFinite()) fallback[p] = true
-                    cfa[p] = finite.toFloat()
-                    weight[p] = den[p].toFloat().let { if (it.isFinite()) it else 0f }
+                    val numD = num[p].toDouble()
+                    cfa[p] = RawSrCoreKernel.divide(numD, denD).toFloat()
+                    if (RawSrCoreKernel.divideFallback(numD, denD)) fallback[p] = true
+                    weight[p] = RawSrCoreKernel.sanitize(den[p])
                 }
             }
         }
@@ -244,8 +255,14 @@ object MosaicSrReconstructor {
         buildReference: () -> RawSrBayerMerge.MergeFrame,
         targetPattern: BayerPattern? = null,
         tempDir: File,
-        isCancelled: ((rowsCompleted: Int) -> Boolean)? = null
+        isCancelled: ((rowsCompleted: Int) -> Boolean)? = null,
+        scale: RawSrMosaicScale = RawSrMosaicScale.SR,
+        chromaSigmaMpy: Double = RawSrBayerMerge.CHROMA_SIGMA_MPY
     ): StreamingMosaic {
+        require(chromaSigmaMpy.isFinite() && chromaSigmaMpy > 0.0) {
+            "chromaSigmaMpy must be finite and positive"
+        }
+        val chromaZScale = RawSrCoreKernel.chromaZScale(chromaSigmaMpy)
         val width = geometry.width
         val height = geometry.height
         require(width >= 2 && height >= 2 && width % 2 == 0 && height % 2 == 0) {
@@ -262,7 +279,8 @@ object MosaicSrReconstructor {
                 "$label covariance grid must match the quad grid"
             }
         }
-        val plan = planTarget(width, height, geometry.pattern)
+        val plan = planTarget(width, height, geometry.pattern, scale)
+        val linearScale = plan.scale
         val pattern = targetPattern ?: plan.pattern
         val outW = plan.width
         val outH = plan.height
@@ -291,8 +309,8 @@ object MosaicSrReconstructor {
                     require(current.flow != null && current.robustness != null) {
                         "Moving $accepted needs flow and robustness"
                     }
-                    require(current.flow.imageWidth == quadsW && current.flow.imageHeight == quadsH) {
-                        "Moving $accepted flow grid must match the quad grid"
+                    require(current.flow.coversRaw(width, height)) {
+                        "Moving $accepted flow must cover the raw lattice"
                     }
                     require(current.robustness.width == quadsW && current.robustness.height == quadsH) {
                         "Moving $accepted robustness grid must match the quad grid"
@@ -300,13 +318,13 @@ object MosaicSrReconstructor {
                     val tAcc0 = android.os.SystemClock.elapsedRealtime()
                     accumulateFrame(current, current.flow, current.robustness, pattern,
                         num, den, null, null,
-                        width, height, quadsW, outW, outH, false)
+                        width, height, quadsW, outW, outH, linearScale, false, chromaZScale)
                     val tAcc1 = android.os.SystemClock.elapsedRealtime()
                     val support = current.robustness.r
                     RawSrWorkers.forEachShard(support.size) { q0, q1 ->
                         for (q in q0 until q1) {
                             val v = support[q]
-                            rcAcc.put(q, rcAcc.get(q) + (if (v.isFinite()) v else 0f))
+                            rcAcc.put(q, rcAcc.get(q) + RawSrCoreRobustness.sanitizeWeight(v))
                         }
                     }
                     if (android.util.Log.isLoggable("RawLensMosaic", android.util.Log.DEBUG)) {
@@ -329,11 +347,10 @@ object MosaicSrReconstructor {
             // reference MergeFrame (~100MB) must be unreachable after the
             // pass so its heap is reusable.
             run {
-                val ref = buildReference()
-                checkFrame(ref, "Reference")
+                val ref = buildReference().also { checkFrame(it, "Reference") }
                 accumulateFrame(ref, null, null, pattern,
                     num, den, null, null,
-                    width, height, quadsW, outW, outH, true)
+                    width, height, quadsW, outW, outH, linearScale, true, chromaZScale)
             }
             val cfa = FloatArray(pixels)
             // Mean support for the merged noise model: one scalar pass over
@@ -352,12 +369,7 @@ object MosaicSrReconstructor {
                     for (qx in 0 until outW) {
                         val p = qy * outW + qx
                         val d = den.get(p).toDouble()
-                        val value = if (d > EPS) {
-                            num.get(p) / maxOf(d, EPS)
-                        } else {
-                            0.0
-                        }
-                        cfa[p] = (if (value.isFinite()) value else 0.0).toFloat()
+                        cfa[p] = RawSrCoreKernel.divide(num.get(p).toDouble(), d).toFloat()
                     }
                 }
             }
@@ -413,15 +425,31 @@ object MosaicSrReconstructor {
         quadsW: Int,
         outW: Int,
         outH: Int,
+        linearScale: Double,
         isReference: Boolean,
+        chromaZScale: Double,
         onRow: (() -> Boolean)? = null
     ) {
         val samples = frame.samples
         val covariance = frame.covariance.values
         val guideW = frame.covariance.width
         val guideH = frame.covariance.height
-        val scaleX = guideW.toDouble() / width
-        val scaleY = guideH.toDouble() / height
+        val scaleX = RawSrCoreSampling.guideScale(guideW, width)
+        val scaleY = RawSrCoreSampling.guideScale(guideH, height)
+        // Hoisted CFA phase tables (RED=0, GREEN=1, BLUE=2): the site gate
+        // and the tap gate below index these directly instead of dispatching
+        // colorAt per tap — identical routing, no enum traffic.
+        val sitePhase = pattern.cellOrdinals
+        val tapPhase = frame.sensorPattern.cellOrdinals
+        // Per-axis coordinate LUTs: sourceCenter/robustnessSamplePos are pure
+        // functions of (out, scale), so precomputing once per frame replaces
+        // outW*outH divisions with outW+outH loads. Same functions, same
+        // args, same doubles — bitwise-identical. flowLookupPos aliases
+        // sourceCenter, so the flow lookup reuses the source LUT directly.
+        val srcX = DoubleArray(outW) { x -> RawSrCoreSampling.sourceCenter(x, linearScale) }
+        val srcY = DoubleArray(outH) { y -> RawSrCoreSampling.sourceCenter(y, linearScale) }
+        val robX = DoubleArray(outW) { x -> RawSrCoreSampling.robustnessSamplePos(x, linearScale) }
+        val robY = DoubleArray(outH) { y -> RawSrCoreSampling.robustnessSamplePos(y, linearScale) }
         // Row-sharded across the shared worker pool: shards cover disjoint
         // output rows with the serial per-pixel code untouched, so the
         // accumulation is bitwise-identical at any worker count. The
@@ -429,57 +457,77 @@ object MosaicSrReconstructor {
         RawSrWorkers.forEachShard(outH) { y0, y1 ->
             val scratch = DoubleArray(4)
             val flowScratch = FloatArray(4)
+            val tapScratch = DoubleArray(2)
             for (qy in y0 until y1) {
                 if (onRow?.invoke() == true) throw CancellationException("Mosaic SR cancelled")
+                val siteRow = (qy and 1) shl 1
+                val sourceBaseY = srcY[qy]
+                val robBaseY = robY[qy]
                 for (qx in 0 until outW) {
                 val p = qy * outW + qx
-                val siteColor = pattern.colorAt(qx, qy)
+                val siteColor = sitePhase[siteRow or (qx and 1)]
+                val sourceBaseX = srcX[qx]
                 // Reference-source position of the site center, plus the
-                // bilinear flow displacement in quad pixels (tile borders
-                // stay inside alignment; nearest-tile lookup imprints the
-                // 16px quilt at tile borders).
-                val dxQuad: Double
-                val dyQuad: Double
+                // bilinear-blended flow displacement in raw pixels (the
+                // smooth lookup below).
+                val dx: Double
+                val dy: Double
                 val r: Double
                 if (isReference) {
-                    dxQuad = 0.0; dyQuad = 0.0; r = 1.0
+                    dx = 0.0; dy = 0.0; r = 1.0
                 } else {
-                    val baseX = (qx + 0.5) / LINEAR_SCALE
-                    val baseY = (qy + 0.5) / LINEAR_SCALE
-                    val quadX = floor(baseX / 2.0).toInt()
-                    val quadY = floor(baseY / 2.0).toInt()
-                    // Bilinear flow sampling (flowAtSmoothInto), mirroring
-                    // the linear merge twin: the four surrounding tiles
-                    // blend dx/dy so tile borders never quilt the mosaic.
-                    // Non-finite corners fall back to the containing tile.
-                    flow!!.flowAtSmoothInto(quadX.toFloat(), quadY.toFloat(), flowScratch)
+                    // Bilinear flow lookup (Sabre-style dense gather,
+                    // mirroring the linear merge twin): the warp is
+                    // C0-continuous, so no tile tears can form;
+                    // mistakes are rejected per-pixel by r, not by
+                    // flow vetoes. Non-finite corners fall back to
+                    // the containing tile; a non-finite result skips
+                    // the site.
+                    flow!!.flowAtSmoothInto(
+                        sourceBaseX.toFloat(), sourceBaseY.toFloat(), flowScratch)
                     if (!flowScratch[0].isFinite() || !flowScratch[1].isFinite()) {
                         if (oob != null) oob[p]++
                         continue
                     }
-                    dxQuad = flowScratch[0].toDouble()
-                    dyQuad = flowScratch[1].toDouble()
-                    // Reference bayer lookup verbatim: min(int(lr//2-0.5))
-                    // reads the quad one up-left (max(q-1, 0)), edge-clamped.
-                    val rqX = maxOf(quadX - 1, 0).coerceIn(0, quadsW - 1)
-                    val rqY = maxOf(quadY - 1, 0).coerceIn(0, robust!!.height - 1)
-                    val raw = robust!!.r[rqY * quadsW + rqX]
-                    r = if (raw.isFinite()) raw.toDouble() else 0.0
+                    dx = flowScratch[0].toDouble()
+                    dy = flowScratch[1].toDouble()
+                    // Reference `cpu_accumulate` robustness fetch
+                    // verbatim: nearest quad with the one-quad shift
+                    // (min(int(lr//2-0.5))), sampled at s = b - 1.
+                    r = RawSrCoreSampling.sampleRobustness(
+                        robust!!.r, robust.width, robust.height,
+                        robX[qx], robBaseY)
                 }
                 if (r == 0.0) continue
-                val sourceX = (qx + 0.5) / LINEAR_SCALE + 2.0 * dxQuad
-                val sourceY = (qy + 0.5) / LINEAR_SCALE + 2.0 * dyQuad
+                // Reference lr_mov = lr + flow verbatim: raw-unit flow.
+                val sourceX = sourceBaseX + dx
+                val sourceY = sourceBaseY + dy
                 if (!sourceX.isFinite() || !sourceY.isFinite() ||
                     sourceX < 0.0 || sourceY < 0.0 || sourceX >= width || sourceY >= height
                 ) {
                     if (oob != null) oob[p]++
                     continue
                 }
-                val interpolated = interpolateCovariance(
-                    covariance, guideW, guideH, sourceX * scaleX - 0.5, sourceY * scaleY - 0.5, scratch)
+                val interpolated = RawSrCoreSampling.interpolateCovariance(
+                    covariance, guideW, guideH,
+                    RawSrCoreSampling.covarianceGuideCoord(sourceX, scaleX),
+                    RawSrCoreSampling.covarianceGuideCoord(sourceY, scaleY),
+                    scratch)
                 if (interpolated == null) continue
+                // One cross term per site, not per tap: same operands, same
+                // sum, bitwise-identical exponent in the tap loop.
+                val cross = interpolated[1] + interpolated[2]
                 val centerX = floor(sourceX).toInt()
                 val centerY = floor(sourceY).toInt()
+                // Accumulator traffic: the streaming path backs num/den with
+                // memory-mapped files, so every get/put crosses the buffer
+                // boundary. One site's taps touch only that site's pair, so
+                // a single load/add/store pass through float locals issues
+                // the identical float additions in the identical order —
+                // bitwise-identical output with one buffer round-trip per
+                // site instead of one per tap.
+                var numAcc = num.get(p)
+                var denAcc = den.get(p)
                 for (oy in -1..1) for (ox in -1..1) {
                     val tx = centerX + ox
                     val ty = centerY + oy
@@ -489,8 +537,8 @@ object MosaicSrReconstructor {
                     // origin-shifted; folding the origin again swaps R/B on
                     // odd crops). Cross-colour taps never contribute —
                     // this is what makes the output a CFA, not a demosaicing.
-                    val tapColor = frame.sensorPattern.colorAt(tx, ty)
-                    if (tapColor != siteColor) continue
+                    // Ordinal compare over the hoisted phase tables.
+                    if (tapPhase[((ty and 1) shl 1) or (tx and 1)] != siteColor) continue
                     val sample = samples[ty * width + tx].toDouble()
                     // Every finite sample merges (no censor skip): the
                     // reference defines none. Non-finite taps are
@@ -498,17 +546,22 @@ object MosaicSrReconstructor {
                     if (!sample.isFinite()) continue
                     val distX = tx + 0.5 - sourceX
                     val distY = ty + 0.5 - sourceY
-                    val z = interpolated[0] * distX * distX +
-                        (interpolated[1] + interpolated[2]) * distX * distY +
-                        interpolated[3] * distY * distY
-                    if (!z.isFinite()) continue
-                    val weight = exp(-0.5 * maxOf(z, 0.0))
-                    if (!weight.isFinite()) continue
-                    val weighted = weight * r
-                    num.put(p, (num.get(p) + weighted * sample).toFloat())
-                    den.put(p, (den.get(p) + weighted).toFloat())
+                    val z = RawSrCoreKernel.tapZ(
+                        interpolated[0], cross, interpolated[3], distX, distY)
+                    // Chroma latch guard: R/B sites (ordinal != 1) see the
+                    // widened kernel (z / s^2); green sites keep the
+                    // unscaled z, so the luma lane is bitwise-identical
+                    // with or without the guard. The same-colour gate
+                    // above already ensures every tap matches the site.
+                    if (!RawSrCoreKernel.accumulateTap(
+                            z, r, sample, chromaZScale, siteColor == 1, tapScratch)
+                    ) continue
+                    numAcc = (numAcc + tapScratch[0]).toFloat()
+                    denAcc = (denAcc + tapScratch[1]).toFloat()
                     if (taps != null) taps[p]++
                 }
+                num.put(p, numAcc)
+                den.put(p, denAcc)
             }
         }
         }
@@ -601,45 +654,7 @@ object MosaicSrReconstructor {
         }
     }
 
-    /**
-     * Reference covariance interpolation + inversion (`merge.py::accumulate`),
-     * mirroring the linear merge twin: sign-preserving `modf` fractions,
-     * `int()` floors clipped at 0, ceilings at the far edge, row-then-column
-     * lerp, then the analytic 2x2 inverse into [out]. Null skips the site.
-     */
-    private fun interpolateCovariance(
-        covariance: FloatArray, guideW: Int, guideH: Int, gx: Double, gy: Double,
-        out: DoubleArray
-    ): DoubleArray? {
-        if (!gx.isFinite() || !gy.isFinite()) return null
-        // Sign-preserving remainder, exactly like C modf / Python math.modf.
-        val fx = gx % 1.0
-        val fy = gy % 1.0
-        val x0 = (gx - fx).toInt().coerceAtLeast(0)
-        val y0 = (gy - fy).toInt().coerceAtLeast(0)
-        if (x0 >= guideW || y0 >= guideH) return null
-        val x1 = minOf(x0 + 1, guideW - 1)
-        val y1 = minOf(y0 + 1, guideH - 1)
-        var cxx = 0.0
-        var cxy = 0.0
-        var cyy = 0.0
-        for (c in 0..3) {
-            val v00 = covariance[(y0 * guideW + x0) * 4 + c].toDouble()
-            val v10 = covariance[(y0 * guideW + x1) * 4 + c].toDouble()
-            val v01 = covariance[(y1 * guideW + x0) * 4 + c].toDouble()
-            val v11 = covariance[(y1 * guideW + x1) * 4 + c].toDouble()
-            if (!v00.isFinite() || !v10.isFinite() || !v01.isFinite() || !v11.isFinite()) return null
-            val top = v00 + fx * (v10 - v00)
-            val bot = v01 + fx * (v11 - v01)
-            val v = top + fy * (bot - top)
-            if (c == 0) cxx = v else if (c == 3) cyy = v else if (c == 1) cxy = v
-        }
-        val det = cxx * cyy - cxy * cxy
-        if (!det.isFinite() || det <= 0.0) return null
-        out[0] = cyy / det
-        out[1] = -cxy / det
-        out[2] = -cxy / det
-        out[3] = cxx / det
-        return out
-    }
+    // Sampling (robustness fetch, covariance interpolation), tap weights,
+    // and the finalizer live in [RawSrCoreSampling]/[RawSrCoreKernel]; this
+    // file keeps orchestration, sharding, and the streaming accumulators.
 }

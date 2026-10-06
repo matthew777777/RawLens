@@ -100,60 +100,113 @@ object HdrRawMerge {
          * how much alternate frame survives on matched bins (reference
          * weight near `1 / (1 + strength)`): larger keeps more alternate
          * (cleaner, less ghost-robust), smaller more reference.
+         *
+         * This is the HDR+ tuning factor c (Hasinoff 2016 §5: the noise-term
+         * multiplier; hdr-plus-swift `robustness_norm`, upstream presets
+         * span 1/6/14/25 with 6 as the balanced middle). 8 is our balanced
+         * default; expose alongside [RawSrTuning] s1/s2/mTh as one tuning
+         * surface for A/B.
          */
         val wienerStrength: Float = 8f,
         /**
          * Per-channel deghost tile edge: [HdrTileDeghost.TILE] (8, default)
          * or [HdrTileDeghost.TILE_LARGE] (16, fallback for heavy blur).
          */
-        val deghostTileSize: Int = HdrTileDeghost.TILE
-    )
+        val deghostTileSize: Int = HdrTileDeghost.TILE,
+        /**
+         * Frame-level alternate rejection: when set, an alternate whose
+         * deghost census rejects DC on more than this fraction of tiles is
+         * dropped from photon weighting entirely (it contributes no alternate
+         * signal — every tile collapsed to the reference — so accumulating
+         * it only costs time). Null (default) keeps the legacy behavior of
+         * always accumulating every alternate. The reference is never
+         * dropped; highlight rescue still flows through the surviving
+         * frames' clipped-winner fallback.
+         */
+        val alternateDropDcRejectFrac: Double? = null
+    ) {
+        init {
+            require(alternateDropDcRejectFrac == null ||
+                (alternateDropDcRejectFrac.isFinite() &&
+                    alternateDropDcRejectFrac in 0.0..1.0)) {
+                "alternateDropDcRejectFrac must be null or in 0..1"
+            }
+        }
+    }
 
-    fun merge(
-        frames: List<HdrMergeFrame>,
-        referenceIndex: Int = frames.size / 2,
-        options: Options = Options()
-    ): UnpackedRawCfa {
-        checkFrames(frames, referenceIndex)
-        if (!options.smoothMask && !options.deghost) return mergeExact(frames, referenceIndex)
-        val reference = frames[referenceIndex].cfa
-        val width = reference.width
-        val height = reference.height
-        val count = width * height
-
-        val cals = frames.map { calibration(it) }
-        val photons = frames.map { photonCount(it) }
-        var whiteLevel = cals.maxOrNull() ?: 1f
-
-        val pixels = FloatArray(count)
-        val weights = FloatArray(count)
+    /**
+     * Incremental merge session: the exact math of [merge], but frames are
+     * accumulated one at a time so the caller can unpack → align → merge →
+     * release each alternate instead of holding every unpacked frame (~50MB
+     * each on 12MP) plus the ~175MB accumulators at once. All-at-once peaks
+     * over the 512MB large-heap limit on an 8-frame burst (logcat
+     * 2026-10-02: OOM in the warp-buffer allocation); streaming peaks at
+     * reference + one alternate + accumulators.
+     *
+     * Accumulate in input order (0 until [frameCount], each index exactly
+     * once): like darktable, the first frame wins clipped ties, so order is
+     * part of the output. Row strips run on the shared pool (disjoint
+     * writes, deterministic output).
+     */
+    class MergeSession internal constructor(
+        val reference: HdrMergeFrame,
+        val referenceIndex: Int,
+        val frameCount: Int,
+        cals: List<Float>,
+        photons: List<Float>,
+        private val options: Options,
+        private val onAlternateDropped: ((index: Int, stats: HdrTileDeghost.TileStats) -> Unit)?
+    ) {
+        val width: Int = reference.cfa.width
+        val height: Int = reference.cfa.height
+        private val count = width * height
+        private val cw = width / 2
+        private val ch = height / 2
+        private val calList = cals.toList()
+        private val photonList = photons.toList()
+        private val pixels = FloatArray(count)
+        private val weights = FloatArray(count)
         // Reused across frames (sequential loop): avoids re-allocating and
-        // zeroing ~48MB warp + ~2x12MB block buffers per frame. Values fed to
-        // the accumulate loop are identical; only allocation churn is removed.
-        val warpBuf = FloatArray(count)
-        val cw = width / 2
-        val ch = height / 2
-        val blockMax = FloatArray(cw * ch)
-        val blockMin = FloatArray(cw * ch)
+        // zeroing ~2x12MB block buffers per frame. Values fed to the
+        // accumulate loop are identical; only allocation churn is removed.
+        private val blockMax = FloatArray(cw * ch)
+        private val blockMin = FloatArray(cw * ch)
+        private val whiteLevel = calList.maxOrNull() ?: 1f
+        /**
+         * Warp scratch, shared across frames like the block buffers — but
+         * allocated lazily: merges where every frame is identity (null
+         * flow) never need the ~50MB, and on a tight heap that headroom
+         * decides between completing and OOMing.
+         */
+        private var warpBuf: FloatArray? = null
+        private var accumulated = 0
 
-        // Accumulate in input order like darktable: the first frame wins clipped
-        // ties. The geometric reference only defines flow coordinates, never order.
-        // Row strips run on the shared pool (disjoint writes, deterministic output).
-        for ((k, frame) in frames.withIndex()) {
+        /**
+         * Warp + deghost + photon-weight frame [index] into the
+         * accumulators. Call once per index, in input order.
+         */
+        fun accumulate(index: Int, frame: HdrMergeFrame) {
+            require(index in 0 until frameCount) {
+                "Frame index $index outside 0..${frameCount - 1}"
+            }
+            checkFrameMatches(frame, index)
+            accumulated++
+            val k = index
             // Identity frames read the source directly: no 48MB copy.
             var registered: FloatArray
             val flow = frame.flow
             if (flow == null) {
                 registered = frame.cfa.values
             } else {
-                registered = warpBuf
-                parallelRows(height) { y0, y1 ->
+                val buf = warpBuf ?: FloatArray(count).also { warpBuf = it }
+                registered = buf
+                HdrRawMerge.parallelRows(height) { y0, y1 ->
                     val tmp = FloatArray(2)
                     val scratch = FloatArray(2)
                     for (y in y0 until y1) {
                         var i = y * width
                         for (x in 0 until width) {
-                            registered[i] = sampleSmoothFast(frame.cfa, flow, x, y, tmp, scratch)
+                            registered[i] = HdrRawMerge.sampleSmoothFast(frame.cfa, flow, x, y, tmp, scratch)
                             i++
                         }
                     }
@@ -169,7 +222,7 @@ object HdrRawMerge {
             // defaults (0 / MAX_VALUE) so border cells match exactly.
             blockMax.fill(0f)
             blockMin.fill(Float.MAX_VALUE)
-            parallelRows(ch) { cy0, cy1 ->
+            HdrRawMerge.parallelRows(ch) { cy0, cy1 ->
                 for (cy in cy0 until cy1) for (cx in 0 until cw) {
                     val ox = cx * 2
                     val oy = cy * 2
@@ -192,16 +245,36 @@ object HdrRawMerge {
                 // HDR+ robust pre-pass: collapse blurred/ghosted/misregistered
                 // bins to the reference before photon weighting (which would
                 // otherwise trust a motion-blurred long exposure most).
-                registered = HdrTileDeghost.deghost(
-                    frames[referenceIndex], frame,
-                    frame.cfa.copy(values = registered),
-                    options.wienerStrength,
-                    options.deghostTileSize
-                ).values
+                val dropFrac = options.alternateDropDcRejectFrac
+                if (dropFrac != null) {
+                    val (deghosted, stats) = HdrTileDeghost.deghostWithStats(
+                        reference, frame,
+                        frame.cfa.copy(values = registered),
+                        options.wienerStrength,
+                        options.deghostTileSize
+                    )
+                    if (stats.dcRejectFrac > dropFrac) {
+                        // Fully-ghosted alternate: nearly every tile collapsed
+                        // to the reference, so it carries almost no alternate
+                        // signal — only re-weighting the average toward the
+                        // reference it duplicates. Dropping keeps the merge
+                        // sharp and skips the photon pass for this frame.
+                        onAlternateDropped?.invoke(k, stats)
+                        return
+                    }
+                    registered = deghosted.values
+                } else {
+                    registered = HdrTileDeghost.deghost(
+                        reference, frame,
+                        frame.cfa.copy(values = registered),
+                        options.wienerStrength,
+                        options.deghostTileSize
+                    ).values
+                }
             }
-            val cal = cals[k]
-            val photon = photons[k]
-            parallelRows(height) { y0, y1 ->
+            val cal = calList[k]
+            val photon = photonList[k]
+            HdrRawMerge.parallelRows(height) { y0, y1 ->
                 val mm = FloatArray(2)
                 for (y in y0 until y1) for (x in 0 until width) {
                     val i = y * width + x
@@ -213,14 +286,14 @@ object HdrRawMerge {
                     var weight = photon
                     if (interior) {
                         val envMax = if (options.smoothMask) {
-                            sampleBlockSmoothInto(blockMax, blockMin, cw, ch, x, y, mm)
+                            HdrRawMerge.sampleBlockSmoothInto(blockMax, blockMin, cw, ch, x, y, mm)
                             mm[0]
                         } else cellMax
-                        weight *= EPS_WEIGHT + envelope(envMax + QUANTIZATION_MARGIN)
+                        weight *= HdrRawMerge.EPS_WEIGHT + HdrRawMerge.envelope(envMax + HdrRawMerge.QUANTIZATION_MARGIN)
                     }
-                    if (cellMax + QUANTIZATION_MARGIN >= 1f) {
+                    if (cellMax + HdrRawMerge.QUANTIZATION_MARGIN >= 1f) {
                         if (weights[i] <= 0f && (weights[i] == 0f || cellMin < -weights[i])) {
-                            pixels[i] = if (cellMin + QUANTIZATION_MARGIN >= 1f) 1f
+                            pixels[i] = if (cellMin + HdrRawMerge.QUANTIZATION_MARGIN >= 1f) 1f
                             else sample * cal / whiteLevel
                             weights[i] = -cellMin
                         }
@@ -235,9 +308,85 @@ object HdrRawMerge {
                 }
             }
         }
-        for (i in pixels.indices) if (weights[i] > 0f)
-            pixels[i] = max(0f, pixels[i] / (weights[i] * whiteLevel))
-        return reference.copy(values = pixels)
+
+        /**
+         * Normalizes the accumulators into the merged CFA. Every index must
+         * have been accumulated exactly once (dropped alternates count: they
+         * were consumed, they just contributed no photons).
+         */
+        fun finish(): UnpackedRawCfa {
+            require(accumulated == frameCount) {
+                "Merge finished after $accumulated of $frameCount frames"
+            }
+            for (i in pixels.indices) if (weights[i] > 0f)
+                pixels[i] = max(0f, pixels[i] / (weights[i] * whiteLevel))
+            return reference.cfa.copy(values = pixels)
+        }
+
+        /** Per-frame slice of [checkFrames]: geometry plus normalized-domain guard. */
+        private fun checkFrameMatches(frame: HdrMergeFrame, k: Int) {
+            val ref = reference.cfa
+            require(frame.cfa.width == ref.width && frame.cfa.height == ref.height &&
+                frame.cfa.pattern == ref.pattern &&
+                frame.cfa.sensorCropLeft == ref.sensorCropLeft &&
+                frame.cfa.sensorCropTop == ref.sensorCropTop) {
+                "HDR frames must have identical dimensions, crop, and CFA phase"
+            }
+            // Normalized-domain guard: inputs must be sensor black/white
+            // normalized (roughly [0,1] with small negative noise overshoot),
+            // never raw digital numbers.
+            var min = Float.MAX_VALUE
+            var max = -Float.MAX_VALUE
+            for (v in frame.cfa.values) {
+                if (v < min) min = v
+                if (v > max) max = v
+            }
+            require(min >= -0.5f && max <= 1.5f) {
+                "HDR frame $k looks un-normalized (range $min..$max, expected ~0..1)"
+            }
+        }
+    }
+
+    /**
+     * Opens a streaming merge over [frameCount] frames with [reference] as
+     * the geometric anchor. [calibrations]/[photonWeights] are the per-frame
+     * exposure calibrations ([calibration]/[photonCount]); the caller
+     * supplies them so alternates never need to be materialized up front.
+     */
+    fun beginMerge(
+        reference: HdrMergeFrame,
+        calibrations: List<Float>,
+        photonWeights: List<Float>,
+        referenceIndex: Int,
+        frameCount: Int = calibrations.size,
+        options: Options = Options(),
+        onAlternateDropped: ((index: Int, stats: HdrTileDeghost.TileStats) -> Unit)? = null
+    ): MergeSession {
+        require(frameCount >= 2) { "HDR merge requires at least two exposures" }
+        require(referenceIndex in 0 until frameCount)
+        require(calibrations.size == frameCount && photonWeights.size == frameCount) {
+            "Calibration lists must cover all $frameCount frames"
+        }
+        reference.cfa.requireAmazeCompatible()
+        return MergeSession(reference, referenceIndex, frameCount,
+            calibrations, photonWeights, options, onAlternateDropped)
+    }
+
+    fun merge(
+        frames: List<HdrMergeFrame>,
+        referenceIndex: Int = frames.size / 2,
+        options: Options = Options(),
+        onAlternateDropped: ((index: Int, stats: HdrTileDeghost.TileStats) -> Unit)? = null
+    ): UnpackedRawCfa {
+        checkFrames(frames, referenceIndex)
+        if (!options.smoothMask && !options.deghost) return mergeExact(frames, referenceIndex)
+        // Accumulate in input order like darktable: the first frame wins clipped
+        // ties. The geometric reference only defines flow coordinates, never order.
+        val session = beginMerge(frames[referenceIndex], frames.map { calibration(it) },
+            frames.map { photonCount(it) }, referenceIndex, frames.size,
+            options, onAlternateDropped)
+        frames.forEachIndexed { k, frame -> session.accumulate(k, frame) }
+        return session.finish()
     }
 
     /**
@@ -300,16 +449,34 @@ object HdrRawMerge {
 
     // ---- darktable calibration (control_jobs.c) ----
 
-    internal fun calibration(frame: HdrMergeFrame): Float {
-        val apertureArea = Math.PI.toFloat() * sq(0.5f * frame.focalLength / frame.aperture)
-        val seconds = frame.exposureTimeNanos * 1e-9f
-        return 100f / (apertureArea * seconds * frame.sensitivityIso)
+    internal fun calibration(frame: HdrMergeFrame): Float =
+        calibration(frame.exposureTimeNanos, frame.sensitivityIso, frame.aperture, frame.focalLength)
+
+    /** Exposure calibration without a materialized frame (streaming merges). */
+    internal fun calibration(
+        exposureTimeNanos: Long,
+        sensitivityIso: Int,
+        aperture: Float,
+        focalLength: Float
+    ): Float {
+        val apertureArea = Math.PI.toFloat() * sq(0.5f * focalLength / aperture)
+        val seconds = exposureTimeNanos * 1e-9f
+        return 100f / (apertureArea * seconds * sensitivityIso)
     }
 
-    internal fun photonCount(frame: HdrMergeFrame): Float {
-        val apertureArea = Math.PI.toFloat() * sq(0.5f * frame.focalLength / frame.aperture)
-        val seconds = frame.exposureTimeNanos * 1e-9f
-        return 100f * apertureArea * seconds / frame.sensitivityIso
+    internal fun photonCount(frame: HdrMergeFrame): Float =
+        photonCount(frame.exposureTimeNanos, frame.sensitivityIso, frame.aperture, frame.focalLength)
+
+    /** Photon weight without a materialized frame (streaming merges). */
+    internal fun photonCount(
+        exposureTimeNanos: Long,
+        sensitivityIso: Int,
+        aperture: Float,
+        focalLength: Float
+    ): Float {
+        val apertureArea = Math.PI.toFloat() * sq(0.5f * focalLength / aperture)
+        val seconds = exposureTimeNanos * 1e-9f
+        return 100f * apertureArea * seconds / sensitivityIso
     }
 
     // ---- sampling ----
@@ -456,7 +623,7 @@ object HdrRawMerge {
      * Static row-strip fan-out over the shared pool (max 8 threads). Strips write
      * disjoint rows, so output is bit-deterministic regardless of thread count.
      */
-    private fun parallelRows(height: Int, block: (y0: Int, y1: Int) -> Unit) =
+    internal fun parallelRows(height: Int, block: (y0: Int, y1: Int) -> Unit) =
         HdrPools.runStriped(height, 8, block)
 
     private fun checkFrames(frames: List<HdrMergeFrame>, referenceIndex: Int) {        require(frames.size >= 2) { "HDR merge requires at least two exposures" }

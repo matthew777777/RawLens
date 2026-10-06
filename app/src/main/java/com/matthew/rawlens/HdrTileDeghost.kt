@@ -227,6 +227,42 @@ object HdrTileDeghost {
     private val PASS_LARGE = TilePass(TILE_LARGE)
 
     /**
+     * Thread-safe per-tile deghost census for frame-level alternate
+     * rejection (see [HdrRawMerge.Options.alternateDropDcRejectFrac]). Tiles
+     * are counted per phase visit (each image region is visited 4x, once per
+     * half-tile phase); the rejected FRACTION is phase-invariant, so it
+     * reads as the frame's ghost load regardless.
+     */
+    class TileStatsCollector {
+        private var tiles = 0L
+        private var dcRejected = 0L
+        private var mismatchSum = 0.0
+
+        @Synchronized
+        fun addTile(dcWeight: Float, mismatch: Float) {
+            tiles++
+            if (dcWeight.isFinite() && dcWeight > 0.5f) dcRejected++
+            if (mismatch.isFinite()) mismatchSum += mismatch
+        }
+
+        @Synchronized
+        fun snapshot(): TileStats = TileStats(
+            tiles = tiles,
+            dcRejected = dcRejected,
+            dcRejectFrac = if (tiles == 0L) 0.0 else dcRejected.toDouble() / tiles,
+            meanMismatch = if (tiles == 0L) 0.0 else mismatchSum / tiles
+        )
+    }
+
+    /** Frame-level deghost census: how much of the alternate collapsed to the reference. */
+    data class TileStats(
+        val tiles: Long,
+        val dcRejected: Long,
+        val dcRejectFrac: Double,
+        val meanMismatch: Double
+    )
+
+    /**
      * Deghosts [movingCfa] (already warped onto [reference]) against
      * [reference] and returns the result in the moving frame's own exposure
      * domain. Pure function of its inputs; deterministic.
@@ -245,7 +281,8 @@ object HdrTileDeghost {
         moving: HdrMergeFrame,
         movingCfa: UnpackedRawCfa,
         strength: Float = 8f,
-        tileSize: Int = TILE
+        tileSize: Int = TILE,
+        stats: TileStatsCollector? = null
     ): UnpackedRawCfa {
         require(strength.isFinite() && strength > 0f)
         require(tileSize == TILE || tileSize == TILE_LARGE) {
@@ -283,7 +320,7 @@ object HdrTileDeghost {
                         ref.values, movingCfa.values, width, height, ref.pattern,
                         startOx + tx * p.bt, startOy + ty * p.bt,
                         gain, exposureGain, reference.noiseModel, moving.noiseModel,
-                        strength, out, width, tile, p
+                        strength, out, width, tile, p, stats
                     )
                 }
             }
@@ -297,6 +334,25 @@ object HdrTileDeghost {
             }
         }
         return movingCfa.copy(values = out)
+    }
+
+    /**
+     * [deghost] plus the frame-level census: how many tiles collapsed to the
+     * reference (DC rejected). The merge uses [TileStats.dcRejectFrac] to
+     * drop fully-ghosted alternates (see
+     * [HdrRawMerge.Options.alternateDropDcRejectFrac]) instead of
+     * photon-weighting a frame that contributes no alternate signal.
+     */
+    fun deghostWithStats(
+        reference: HdrMergeFrame,
+        moving: HdrMergeFrame,
+        movingCfa: UnpackedRawCfa,
+        strength: Float = 8f,
+        tileSize: Int = TILE
+    ): Pair<UnpackedRawCfa, TileStats> {
+        val stats = TileStatsCollector()
+        val out = deghost(reference, moving, movingCfa, strength, tileSize, stats)
+        return out to stats.snapshot()
     }
 
     /** EXIF exposure ratio refined by a clamped data-driven median ratio. */
@@ -387,7 +443,8 @@ object HdrTileDeghost {
         ref: FloatArray, mov: FloatArray, width: Int, height: Int,
         pattern: BayerPattern, ox: Int, oy: Int, gain: Float, exposureGain: Float,
         refNoise: CfaNoiseModel?, movNoise: CfaNoiseModel?,
-        strength: Float, out: FloatArray, outStride: Int, s: TileScratch, p: TilePass
+        strength: Float, out: FloatArray, outStride: Int, s: TileScratch, p: TilePass,
+        stats: TileStatsCollector? = null
     ) {
         val t = p.t
         // Channel quad offsets for this pattern: slot 0=R,1=G-top,2=G-bottom,3=B.
@@ -573,6 +630,9 @@ object HdrTileDeghost {
             lfN++
         }
         s.weight[0] = (lfSum / lfN).coerceIn(0f, 1f)
+        // Frame-level census: the DC bin decides whether this tile keeps any
+        // alternate signal at all (final blend weight is max(bin, reject)).
+        stats?.addTile(max(s.weight[0], motionReject), mismatch)
         val invGain = 1f / tileGain
         // Undo only the matching transform on the alternate. The reference
         // enters the blend in the calibrated alternate exposure domain, not

@@ -4,12 +4,15 @@ package com.matthew.rawlens
 import android.hardware.HardwareBuffer
 
 /**
- * Vulkan zero-copy viewfinder compute (see `app/src/main/cpp/vf_vulkan_vf.cpp`).
- * Imports the camera HAL's RAW `AHardwareBuffer` (which EGL cannot import on this
- * gralloc) as `R16_UINT`, runs the superpixel compute shader, and writes the RGBA8
- * result into an app-allocated export buffer that GL re-imports for tonemap +
- * present. All calls run serialized on the viewfinder GL worker. Result codes are
- * best-effort diagnostics; any nonzero code means "fall back".
+ * Vulkan viewfinder compute (see `app/src/main/cpp/vf_vulkan_vf.cpp`), two input
+ * tiers sharing one superpixel pipeline and export buffer. Zero-copy imports the
+ * camera HAL's RAW `AHardwareBuffer` (which EGL cannot import on this gralloc) as
+ * `R16_UINT`; gpu-copy (motioncam pattern) lock+memcpys it into a host-visible
+ * staging buffer instead, for HALs whose import reads back zeros (Adreno 750).
+ * Both write RGBA8 into an app-allocated export buffer that GL re-imports for
+ * tonemap + present. All calls run serialized on the viewfinder GL worker. Result
+ * codes are best-effort diagnostics; any nonzero code means "fall back", except
+ * BUSY (backpressure: skip the frame, keep the tier).
  */
 internal object VfVulkan {
     const val OK = 0
@@ -22,6 +25,8 @@ internal object VfVulkan {
     const val SUBMIT_FAILED = 7
     const val BAD_ARGUMENT = 8
     const val DEVICE_LOST = 9
+    const val BUSY = 10
+    const val COPY_UPLOAD_FAILED = 11
 
     val available: Boolean
 
@@ -47,6 +52,8 @@ internal object VfVulkan {
         SUBMIT_FAILED -> "submit"
         BAD_ARGUMENT -> "bad-argument"
         DEVICE_LOST -> "device-lost"
+        BUSY -> "busy"
+        COPY_UPLOAD_FAILED -> "copy-upload"
         else -> "code-$code"
     }
 
@@ -86,6 +93,13 @@ internal object VfVulkan {
     external fun initNative(spv: ByteArray): Int
 
     /**
+     * Create the Direct-Log f16 superpixel variant (same bindings, rgba16f
+     * store) on the shared device. Idempotent. The viewfinder never calls
+     * this; wait-free twins bind it via scope swap.
+     */
+    external fun initF16Native(spv: ByteArray): Int
+
+    /**
      * Tear down and recreate the device + pipeline from SPIR-V bytes after
      * persistent submit failures (wedged queue or lost device). Imports are
      * dropped and re-created on demand, so the next frame re-probes a fresh
@@ -105,6 +119,46 @@ internal object VfVulkan {
         inputBuffer: HardwareBuffer,
         iparams: IntArray,
         fparams: FloatArray
+    ): Int
+
+    /**
+     * GPU-copy twin of [computeNative]: lock+memcpy [inputBuffer] into the
+     * host-visible staging buffer, then the same superpixel dispatch. Same
+     * fence/export/reap semantics; only the input mechanism differs.
+     */
+    external fun computeCopyNative(
+        inputBuffer: HardwareBuffer,
+        iparams: IntArray,
+        fparams: FloatArray
+    ): Int
+
+    /**
+     * Tier black-output probe: max byte over a coarse grid of the export
+     * buffer (0..255), or -1 when the export cannot be CPU-locked. Call after
+     * a compute fence, with GL drained, on probation frames only.
+     */
+    external fun sampleOutputNative(): Int
+
+    /**
+     * Wait-free twin of [computeNative]: submits without
+     * `vkQueueWaitIdle`. Correct only when the consumer submit follows on
+     * the same queue ([VfLogGrade.gradeSubmitNative]) or otherwise carries
+     * completion (fd handoff). [slot] selects the ping-pong command buffer
+     * (0/1); reuse must stay gated by the caller's EGL fence. [expBuffer]
+     * is imported into recorder-private state (never evicts the
+     * viewfinder's output). Falls back to [computeNative] on any error.
+     * [shadeDims] is null (unshaded) or [rows, cols, l, t, r, b] with
+     * [shadeGains] the Camera2-order HAL map (rows*cols*4 fp16 bits),
+     * hardware-bilinear sampled; per-quad-channel, pre-WB like the VF.
+     */
+    external fun computeSubmitNative(
+        inputBuffer: HardwareBuffer,
+        expBuffer: HardwareBuffer,
+        iparams: IntArray,
+        fparams: FloatArray,
+        slot: Int,
+        shadeDims: IntArray?,
+        shadeGains: ShortArray?,
     ): Int
 
     /** Evict all cached imports (session boundary). Keeps device + pipeline. */

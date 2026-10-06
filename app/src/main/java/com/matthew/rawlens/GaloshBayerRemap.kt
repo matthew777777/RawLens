@@ -18,8 +18,10 @@ package com.matthew.rawlens
 object GaloshBayerRemap {
     /**
      * Stored quad index (TL=0, TR=1, BL=2, BR=3) -> RGGB slot for quads at
-     * sensor origin ([originX], [originY]). Identity iff the crop already
-     * reads RGGB.
+     * sensor origin ([originX], [originY]). [pattern] must be the SENSOR
+     * pattern (unshifted); callers holding a local (crop-shifted) pattern
+     * must un-shift it first — see GaloshDenoiser. Identity iff the crop
+     * already reads RGGB.
      */
     fun toRgbbPerm(pattern: BayerPattern, originX: Int, originY: Int): IntArray {
         var rRow = 0
@@ -46,6 +48,17 @@ object GaloshBayerRemap {
         for (i in 0..3) if (perm[i] != i) return false
         return true
     }
+
+    /**
+     * [toRgbbPerm] for a [UnpackedRawCfa], whose [UnpackedRawCfa.pattern] is
+     * local (already shifted to the crop origin): un-shifts it back to the
+     * sensor pattern first. A 2x2 shift is self-inverse, so shifting the
+     * local pattern by the origin again recovers the sensor pattern.
+     * Callers must use this instead of [toRgbbPerm] directly — passing the
+     * local pattern scrambles colors whenever the crop origin is odd.
+     */
+    fun permForCfa(pattern: BayerPattern, originX: Int, originY: Int): IntArray =
+        toRgbbPerm(pattern.shifted(originX, originY), originX, originY)
 
     /** Stored mosaic layout -> RGGB-ordered mosaic (same dims). */
     fun toRgbb(values: FloatArray, width: Int, height: Int, perm: IntArray): FloatArray {

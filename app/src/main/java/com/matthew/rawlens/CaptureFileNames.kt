@@ -29,6 +29,8 @@ object CaptureFileNames {
     const val TYPE_MOSAIC = "MOSAIC"
     const val TYPE_AI = "AI"
     const val TYPE_GALOSH = "GALOSH"
+    const val TYPE_FUSION = "FUSION"
+    const val TYPE_HDRPLUS = "HDRPLUS"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -69,6 +71,16 @@ object CaptureFileNames {
 
     /** Super-resolution merged output: `IMG_<ts>_SR.dng`. */
     fun srDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_SR, "dng")
+
+    /** Native-resolution burst fusion outputs: `IMG_<ts>_FUSION.dng/jpg`. */
+    fun fusionDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_FUSION, "dng")
+
+    fun fusionJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_FUSION, "jpg")
+
+    /** HDR+ merged outputs: `IMG_<ts>_HDRPLUS.dng/jpg`. */
+    fun hdrPlusDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "dng")
+
+    fun hdrPlusJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "jpg")
 
     /** Linear RGB prime DNG from burst merge: `IMG_<ts>_LINEAR.dng`. */
     fun linearRgbDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_LINEAR, "dng")

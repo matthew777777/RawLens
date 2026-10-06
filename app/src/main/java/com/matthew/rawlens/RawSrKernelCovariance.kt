@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
-import kotlin.math.sqrt
-
 /**
  * Prompt 4B CPU oracle: Wronski/IPOL anisotropic reconstruction kernels (paper Alg. 1 /
  * IPOL Alg. 5 `ComputeKernelCovariance`).
@@ -27,10 +25,18 @@ import kotlin.math.sqrt
  *   stays available for A/B comparison.
  * - ISO kernel type mirrors Jamy-L exactly, including its quirk: covariance equals
  *   kDetail (linear, not squared) and kDenoise is ignored.
+ * - Decoupled flat radius (RawSrTuning.flatSigma, default off): when set, the
+ *   denoise end of the blend is the absolute flatSigma instead of the
+ *   kDetail * kDenoise product, so flats smooth at flatSigma while edges
+ *   stay kDetail-sharp. The ISO fast path ignores flatSigma like kDenoise.
+ * - Detail floor (RawSrTuning.detailFloor, default off): both radii clamp
+ *   to at least the floor, a guardrail against degenerate razor radii
+ *   (~0.01) that would let one tap win by hundreds of nats. The ISO fast
+ *   path ignores the floor (its quirk pins kDetail exactly).
  *
  * The tuning robustness constants (t, s1, s2, Mth) belong to per-pixel robustness
- * weighting, a later prompt; only kDetail, kDenoise, Dth, Dtr, kStretch and kShrink
- * are consumed here.
+ * weighting, a later prompt; only kDetail, kDenoise, Dth, Dtr, kStretch, kShrink
+ * and the optional flatSigma/detailFloor are consumed here.
  *
  * Since Prompt 4B.1 the input gray is the variance-stabilized covariance guide
  * ([RawSrCovarianceGuide]); the estimator itself is unchanged. See the coordinate
@@ -45,8 +51,8 @@ object RawSrKernelCovariance {
     /** Jamy-L `selection_law`: progressive linear blend or 1.95 hard threshold. */
     enum class SelectionLaw { LINEAR, HARD }
 
-    /** Hard-law anisotropy gate, exactly Jamy-L's `A > 1.95` (strict). */
-    const val HARD_ANISOTROPY_GATE = 1.95f
+    /** Hard-law anisotropy gate, exactly Jamy-L's `A > 1.95` (strict); see [RawSrCoreKernels]. */
+    const val HARD_ANISOTROPY_GATE = RawSrCoreKernels.HARD_ANISOTROPY_GATE
 
     /**
      * Packed row-major 2x2 matrices, RGBA channel order (m00, m01, m10, m11) per
@@ -66,6 +72,12 @@ object RawSrKernelCovariance {
     /**
      * Pre-inversion kernel covariance per quad pixel. Oracle checks only; the GLES
      * pipeline stores [precision].
+     *
+     * The precision half (~50MB at full res) is NOT allocated — the CPU merge
+     * consumes covariance only, and the joint allocation peaks past the
+     * 512MB heap during the mosaic save. The covariance arithmetic is
+     * untouched, so outputs agree bitwise; the inversion test pins
+     * covariance/precision agreement.
      */
     fun covariance(
         gray: RawSrGrayImage,
@@ -73,7 +85,7 @@ object RawSrKernelCovariance {
         kernelType: KernelType = KernelType.STEERABLE,
         selectionLaw: SelectionLaw = SelectionLaw.LINEAR
     ): MatrixField =
-        solve(gray, tuning, kernelType, selectionLaw, withCovariance = true).first!!
+        solve(gray, tuning, kernelType, selectionLaw, withCovariance = true, withPrecision = false).first!!
 
     /**
      * Inverse covariance (precision) per quad pixel, packed for GLES RGBA32F upload.
@@ -92,7 +104,7 @@ object RawSrKernelCovariance {
         kernelType: KernelType = KernelType.STEERABLE,
         selectionLaw: SelectionLaw = SelectionLaw.LINEAR
     ): MatrixField =
-        solve(gray, tuning, kernelType, selectionLaw, withCovariance = false).second
+        solve(gray, tuning, kernelType, selectionLaw, withCovariance = false, withPrecision = true).second!!
 
     /**
      * Detail-axis multipliers for one anisotropy value, exactly Jamy-L
@@ -105,23 +117,20 @@ object RawSrKernelCovariance {
         kShrink: Float,
         kStretch: Float,
         selectionLaw: SelectionLaw
-    ): Pair<Float, Float> = if (selectionLaw == SelectionLaw.HARD) {
-        if (anisotropy > HARD_ANISOTROPY_GATE) (1f / kShrink) to kStretch else 1f to 1f
-    } else {
-        ((2f - anisotropy) + (anisotropy - 1f) / kShrink) to
-            ((2f - anisotropy) + (anisotropy - 1f) * kStretch)
-    }
+    ): Pair<Float, Float> = RawSrCoreKernels.selectionAxes(anisotropy, kShrink, kStretch, selectionLaw)
 
     private fun solve(
         gray: RawSrGrayImage,
         tuning: RawSrTuning,
         kernelType: KernelType,
         selectionLaw: SelectionLaw,
-        withCovariance: Boolean
-    ): Pair<MatrixField?, MatrixField> {
+        withCovariance: Boolean,
+        withPrecision: Boolean
+    ): Pair<MatrixField?, MatrixField?> {
         val width = gray.width
         val height = gray.height
-        if (kernelType == KernelType.ISO) return solveIso(width, height, tuning.kDetail.toFloat(), withCovariance)
+        if (kernelType == KernelType.ISO) return solveIso(
+            width, height, tuning.kDetail.toFloat(), withCovariance, withPrecision)
         val gradWidth = width - 1
         val gradHeight = height - 1
         // Separable Wronski gradient filters, evaluated only where the 2x2 support
@@ -134,14 +143,16 @@ object RawSrKernelCovariance {
                 val c = gray.values[(y + 1) * width + x]
                 val d = gray.values[(y + 1) * width + x + 1]
                 val o = (y * gradWidth + x) * 2
-                grads[o] = 0.25f * (-a + b - c + d)
-                grads[o + 1] = 0.25f * (-a - b + c + d)
+                grads[o] = RawSrCoreKernels.gradientX(a, b, c, d)
+                grads[o + 1] = RawSrCoreKernels.gradientY(a, b, c, d)
             }
         }
         val covariances = if (withCovariance) FloatArray(width * height * 4) else null
-        val precisions = FloatArray(width * height * 4)
+        val precisions = if (withPrecision) FloatArray(width * height * 4) else null
         val kDetail = tuning.kDetail.toFloat()
         val kDenoise = tuning.kDenoise.toFloat()
+        val flatSigma = tuning.flatSigma?.toFloat()
+        val detailFloor = tuning.detailFloor?.toFloat() ?: 0f
         val dTh = tuning.dTh.toFloat()
         val dTr = tuning.dTr.toFloat()
         val kStretch = tuning.kStretch.toFloat()
@@ -151,29 +162,28 @@ object RawSrKernelCovariance {
             // shard — the pixel loop still allocates nothing per pixel).
             val eig = FloatArray(6)
             for (y in y0 until y1) for (x in 0 until width) {
-                var t00 = 0f
-                var t01 = 0f
-                var t11 = 0f
-                for (i in 0..1) for (j in 0..1) {
-                    val gx = x - 1 + j
-                    val gy = y - 1 + i
-                    if (gx < 0 || gy < 0 || gx >= gradWidth || gy >= gradHeight) continue
-                    val o = (gy * gradWidth + gx) * 2
-                    val xx = grads[o]
-                    val yy = grads[o + 1]
-                    t00 += xx * xx
-                    t01 += xx * yy
-                    t11 += yy * yy
-                }
-                // One scratch array per shard: the pixel loop allocates nothing.
+                // One scratch array per shard: the pixel loop allocates nothing
+                // (the tensor triplet lands in the eig scratch, then the
+                // eigendecomposition overwrites it).
+                RawSrCoreKernels.structureTensor(grads, gradWidth, gradHeight, x, y, eig)
+                val t00 = eig[0]
+                val t01 = eig[1]
+                val t11 = eig[2]
                 val eigen = if (t00.isFinite() && t01.isFinite() && t11.isFinite()) {
-                    eigenInto(t00, t01, t11, eig)
+                    RawSrCoreKernels.eigenInto(t00, t01, t11, eig)
                     eig
                 } else null
                 // Squared kernel radii along the dominant/minor axes; isotropic denoise
                 // fallback keeps flat and non-finite pixels wide, radial and finite.
-                var k1Sq = kDetail * kDetail * kDenoise * kDenoise
+                // Decoupled override sits outside the reference expression so the
+                // coupled path keeps its exact float operations.
+                val kIso = kDetail * kDenoise
+                var k1Sq = kIso * kIso
                 var k2Sq = k1Sq
+                if (flatSigma != null) {
+                    k1Sq = flatSigma * flatSigma
+                    k2Sq = k1Sq
+                }
                 var e1x = 1f
                 var e1y = 0f
                 var e2x = 0f
@@ -182,28 +192,22 @@ object RawSrKernelCovariance {
                     e1x = eigen[0]; e1y = eigen[1]; e2x = eigen[2]; e2y = eigen[3]
                     val l1 = eigen[4]
                     val l2 = eigen[5]
-                    val ratio = (l1 - l2) / (l1 + l2)
-                    val anisotropy = if (ratio >= 0f) 1f + sqrt(ratio) else 1f
-                    val detail = if (l1 > 0f) sqrt(l1) else 0f
-                    val denoise = (1f - detail / dTr + dTh).coerceIn(0f, 1f)
-                    // Same branch as [selectionAxes], inlined: the pixel loop
+                    val anisotropy = RawSrCoreKernels.anisotropy(l1, l2)
+                    val detail = RawSrCoreKernels.detail(l1)
+                    val denoise = RawSrCoreKernels.denoiseWeight(detail, dTh, dTr)
+                    // Scalar axis twins of [selectionAxes]: the pixel loop
                     // allocates nothing, and a Pair return would box per pixel.
-                    val axis1: Float
-                    val axis2: Float
-                    if (selectionLaw == SelectionLaw.HARD) {
-                        if (anisotropy > HARD_ANISOTROPY_GATE) {
-                            axis1 = 1f / kShrink
-                            axis2 = kStretch
-                        } else {
-                            axis1 = 1f
-                            axis2 = 1f
-                        }
-                    } else {
-                        axis1 = (2f - anisotropy) + (anisotropy - 1f) / kShrink
-                        axis2 = (2f - anisotropy) + (anisotropy - 1f) * kStretch
-                    }
-                    val k1 = (kDetail * ((1f - denoise) * axis1 + denoise * kDenoise)).toFloat()
-                    val k2 = (kDetail * ((1f - denoise) * axis2 + denoise * kDenoise)).toFloat()
+                    val axis1 = RawSrCoreKernels.selectionAxis1(anisotropy, kShrink, selectionLaw)
+                    val axis2 = RawSrCoreKernels.selectionAxis2(anisotropy, kStretch, selectionLaw)
+                    // Decoupled: the denoise end of the blend is the absolute
+                    // flatSigma, not the kDetail-scaled product — the coupled
+                    // branch below keeps the reference op order verbatim.
+                    // The detail floor clamps both radii afterwards (max with
+                    // 0 is a no-op, so the reference path is untouched).
+                    val k1 = RawSrCoreKernels.blendRadius(
+                        kDetail, kDenoise, flatSigma, detailFloor, denoise, axis1)
+                    val k2 = RawSrCoreKernels.blendRadius(
+                        kDetail, kDenoise, flatSigma, detailFloor, denoise, axis2)
                     if (k1.isFinite() && k2.isFinite() && k1 > 0f && k2 > 0f) {
                         k1Sq = k1 * k1
                         k2Sq = k2 * k2
@@ -216,23 +220,20 @@ object RawSrKernelCovariance {
                 // production path: the array itself is never allocated there.
                 // Precision arithmetic below is untouched, hence bitwise-identical.
                 if (covariances != null) {
-                    covariances[o] = k1Sq * e1x * e1x + k2Sq * e2x * e2x
-                    covariances[o + 1] = k1Sq * e1x * e1y + k2Sq * e2x * e2y
-                    covariances[o + 2] = covariances[o + 1]
-                    covariances[o + 3] = k1Sq * e1y * e1y + k2Sq * e2y * e2y
+                    RawSrCoreKernels.assembleCovariance(k1Sq, k2Sq, e1x, e1y, e2x, e2y, covariances, o)
                 }
                 // Precision from the same eigenbasis: exactly the matrix inverse and
                 // positive-definite whenever the radii are positive and finite.
-                val i1 = 1f / k1Sq
-                val i2 = 1f / k2Sq
-                precisions[o] = i1 * e1x * e1x + i2 * e2x * e2x
-                precisions[o + 1] = i1 * e1x * e1y + i2 * e2x * e2y
-                precisions[o + 2] = precisions[o + 1]
-                precisions[o + 3] = i1 * e1y * e1y + i2 * e2y * e2y
+                // Skipped (not merely unwritten) when only covariance is
+                // needed: the array itself is never allocated there.
+                if (precisions != null) {
+                    RawSrCoreKernels.assemblePrecision(k1Sq, k2Sq, e1x, e1y, e2x, e2y, precisions, o)
+                }
             }
         }
         val covarianceField = covariances?.let { MatrixField(width, height, it) }
-        return covarianceField to MatrixField(width, height, precisions)
+        val precisionField = precisions?.let { MatrixField(width, height, it) }
+        return covarianceField to precisionField
     }
 
     /**
@@ -244,10 +245,11 @@ object RawSrKernelCovariance {
         width: Int,
         height: Int,
         kDetail: Float,
-        withCovariance: Boolean
-    ): Pair<MatrixField?, MatrixField> {
+        withCovariance: Boolean,
+        withPrecision: Boolean
+    ): Pair<MatrixField?, MatrixField?> {
         val covariances = if (withCovariance) FloatArray(width * height * 4) else null
-        val precisions = FloatArray(width * height * 4)
+        val precisions = if (withPrecision) FloatArray(width * height * 4) else null
         val inv = 1f / kDetail
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             for (y in y0 until y1) for (x in 0 until width) {
@@ -258,13 +260,16 @@ object RawSrKernelCovariance {
                     covariances[o + 2] = 0f
                     covariances[o + 3] = kDetail
                 }
-                precisions[o] = inv
-                precisions[o + 1] = 0f
-                precisions[o + 2] = 0f
-                precisions[o + 3] = inv
+                if (precisions != null) {
+                    precisions[o] = inv
+                    precisions[o + 1] = 0f
+                    precisions[o + 2] = 0f
+                    precisions[o + 3] = inv
+                }
             }
         }
-        return (covariances?.let { MatrixField(width, height, it) }) to MatrixField(width, height, precisions)
+        return (covariances?.let { MatrixField(width, height, it) }) to
+            (precisions?.let { MatrixField(width, height, it) })
     }
 
     /**
@@ -276,7 +281,7 @@ object RawSrKernelCovariance {
      * solver uses the scratch variant and allocates nothing per pixel.
      */
     internal fun eigenDecomposition(t00: Float, t01: Float, t11: Float): FloatArray =
-        FloatArray(6).also { eigenInto(t00, t01, t11, it) }
+        RawSrCoreKernels.eigenDecomposition(t00, t01, t11)
 
     /**
      * Per-texel symmetric-2x2 inverse of a packed [MatrixField]. The merge
@@ -342,45 +347,6 @@ object RawSrKernelCovariance {
         }
     }
 
-    internal fun eigenInto(t00: Float, t01: Float, t11: Float, out: FloatArray) {
-        val b = -(t00 + t11)
-        val c = t00 * t11 - t01 * t01
-        val delta = maxOf(b * b - 4f * c, 0f)
-        val root = sqrt(delta)
-        val r1 = (-b + root) * 0.5f
-        val r2 = (-b - root) * 0.5f
-        // l1 carries the eigenvalue with the biggest module, exactly like the reference.
-        val l1: Float
-        val l2: Float
-        if (kotlin.math.abs(r1) >= kotlin.math.abs(r2)) {
-            l1 = r1; l2 = r2
-        } else {
-            l1 = r2; l2 = r1
-        }
-        if (t01 == 0f && t00 == t11) {
-            out[0] = 1f; out[1] = 0f; out[2] = 0f; out[3] = 1f; out[4] = l1; out[5] = l2
-            return
-        }
-        // Reference `get_eigen_vect_2x2` verbatim: the major axis is the
-        // (T - l2*I)*(1,1) residual off the SMALLER-magnitude eigenvalue,
-        // normalized, with the minor axis rotated off its sign.
-        var e1x = t00 + t01 - l2
-        var e1y = t01 + t11 - l2
-        val e2x: Float
-        val e2y: Float
-        if (e1x == 0f) {
-            e1x = 0f; e1y = 1f; e2x = 1f; e2y = 0f
-        } else if (e1y == 0f) {
-            e1x = 1f; e1y = 0f; e2x = 0f; e2y = 1f
-        } else {
-            val norm = sqrt(e1x * e1x + e1y * e1y)
-            e1x /= norm
-            e1y /= norm
-            // Reference copysign(1, e1x), including the signed-zero edge.
-            val sign = Math.copySign(1f, e1x)
-            e2y = kotlin.math.abs(e1x)
-            e2x = -e1y * sign
-        }
-        out[0] = e1x; out[1] = e1y; out[2] = e2x; out[3] = e2y; out[4] = l1; out[5] = l2
-    }
+    internal fun eigenInto(t00: Float, t01: Float, t11: Float, out: FloatArray) =
+        RawSrCoreKernels.eigenInto(t00, t01, t11, out)
 }

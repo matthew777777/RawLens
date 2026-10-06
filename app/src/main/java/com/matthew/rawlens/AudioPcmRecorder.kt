@@ -38,7 +38,7 @@ internal class AudioPcmRecorder {
         // direct PCM16LE, position 0, limit frames*channels*2 (interleaved)
         val data: ByteBuffer,
         val frames: Int, // per-channel frames; shorts = frames*channels
-        val channels: Int, // 1 or 2, always matches [AudioPcmRecorder.channels]
+        val channels: Int, // always 2 (mono capture upmixes to dual-mono)
         val timestampNs: Long, // first sample, boot-time ns
     )
 
@@ -50,7 +50,7 @@ internal class AudioPcmRecorder {
     private val chunkCount = AtomicLong(0)
     private val frameCount = AtomicLong(0)
 
-    /** Selected channel count (2 preferred, 1 fallback). Valid after [start]. */
+    /** Output channel count: always 2 (stereo native, dual-mono upmix). Valid after [start]. */
     var channels = 0
         private set
 
@@ -117,8 +117,8 @@ internal class AudioPcmRecorder {
             Log.w(TAG, "mic unavailable: no channel config records")
             return false
         }
-        channels = selected
-        Log.i(TAG, "recording $selected channels")
+        channels = 2
+        Log.i(TAG, "mic $selected ch -> recording 2 channels")
         val active = rec
         record = active
         anchorWarned = false
@@ -144,22 +144,25 @@ internal class AudioPcmRecorder {
                 // every later channel alignment in the container.
                 val frames = read / ch
                 if (frames == 0) continue
-                val kept = frames * ch
+                // Mono fallback upmixes to dual-mono stereo: every chunk
+                // leaves here as 2ch, so both containers are always stereo.
+                val pcm = if (ch == 1) upmixMonoToStereo(shorts, frames) else shorts
+                val kept = frames * 2
                 val tsNs = anchorFor(active, anchor, frames)
                 var peak = 0
                 for (i in 0 until kept) {
-                    val a = kotlin.math.abs(shorts[i].toInt())
+                    val a = kotlin.math.abs(pcm[i].toInt())
                     if (a > peak) peak = a
                 }
                 lastPeak = (peak / 32768f).coerceIn(0f, 1f)
                 val direct = ByteBuffer.allocateDirect(kept * 2)
                     .order(ByteOrder.nativeOrder())
-                for (i in 0 until kept) direct.putShort(shorts[i])
+                for (i in 0 until kept) direct.putShort(pcm[i])
                 direct.flip()
                 chunkCount.incrementAndGet()
                 frameCount.addAndGet(frames.toLong())
                 try {
-                    onChunk(Chunk(direct, frames, ch, tsNs))
+                    onChunk(Chunk(direct, frames, 2, tsNs))
                 } catch (e: Exception) {
                     Log.w(TAG, "audio chunk dropped: ${e.message}")
                 }
@@ -228,5 +231,16 @@ internal class AudioPcmRecorder {
         const val SAMPLE_RATE = 48000
         private const val CHUNK_FRAMES = 2048 // ~43ms, ~23 chunks/s
         private const val TAG = "AudioPcmRecorder"
+
+        /** Duplicate each mono sample to L/R (unit-tested). */
+        internal fun upmixMonoToStereo(mono: ShortArray, frames: Int): ShortArray {
+            require(frames >= 0 && frames <= mono.size)
+            val stereo = ShortArray(frames * 2)
+            for (f in 0 until frames) {
+                stereo[f * 2] = mono[f]
+                stereo[f * 2 + 1] = mono[f]
+            }
+            return stereo
+        }
     }
 }
