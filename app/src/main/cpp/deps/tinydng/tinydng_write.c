@@ -705,6 +705,15 @@ struct tinydng_writer {
   td_writer w;
   uint64_t data_pos;
   int finished;
+  /* RawLens header-first streaming + sub-IFDs (all context-owned). */
+  int header_first;
+  uint32_t next_seg;
+  tinydng_field *sub_exif;
+  size_t sub_exif_count;
+  tinydng_field *sub_gps;
+  size_t sub_gps_count;
+  td_wentry *sub_exif_entry;
+  td_wentry *sub_gps_entry;
   /* Cached LZW encoder hash table (reused across tiles). */
   td_lzw_table lzw_tbl;
   /* Scratch buffers reused across tiles (grown on demand):
@@ -1178,6 +1187,221 @@ static uint32_t td_wceil(uint32_t a, uint32_t b) {
   return (b == 0u) ? 0u : (a / b) + ((a % b) != 0u);
 }
 
+/* ------------------------------------------------------------------ */
+/* RawLens: sub-IFD assembly + header-first streaming                  */
+/* ------------------------------------------------------------------ */
+#define TD_RL_TAG_EXIF_IFD 34665u
+#define TD_RL_TAG_GPS_IFD 34853u
+#define TD_RL_SUB_MAX_FIELDS 128u
+
+/* Unit size for a TIFF field type, or 0 when the writer cannot carry it. */
+static size_t td_rl_field_unit(uint16_t type) {
+  switch (type) {
+    case 1: case 2: case 7: return 1;
+    case 3: return 2;
+    case 4: case 9: case 11: return 4;
+    case 5: case 10: case 12: return 8;
+    default: return 0;
+  }
+}
+
+/* One caller field is well-formed: known type, sane count, payload matches. */
+static int td_rl_field_ok(const tinydng_field *f) {
+  size_t unit;
+  if (!f || !f->data || !f->count) return 0;
+  unit = td_rl_field_unit(f->type);
+  if (!unit || f->count > SIZE_MAX / unit) return 0;
+  return f->size == (size_t)f->count * unit;
+}
+
+/* Deep-copy + tag-sort a sub-IFD field list into context-owned storage.
+   Rejects duplicate tags and nested sub-IFD pointers (regress for readers). */
+static tinydng_status td_rl_copy_sub(tinydng_context *ctx,
+                                     const tinydng_field *src, size_t count,
+                                     tinydng_field **out, tinydng_error *err) {
+  tinydng_field *dst;
+  size_t i, j;
+  if (count > TD_RL_SUB_MAX_FIELDS) {
+    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                 "sub-IFD field count %zu exceeds %u", count,
+                 TD_RL_SUB_MAX_FIELDS);
+    return TINYDNG_E_BOUNDS;
+  }
+  dst = (tinydng_field *)td_ctx_calloc(ctx, count * sizeof(*dst), err);
+  if (!dst) return TINYDNG_E_OOM;
+  for (i = 0; i < count; i++) {
+    if (!td_rl_field_ok(&src[i])) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0,
+                   src[i].tag, 0, "malformed sub-IFD field");
+      return TINYDNG_E_INVALID_ARG;
+    }
+    if (src[i].tag == TD_RL_TAG_EXIF_IFD || src[i].tag == TD_RL_TAG_GPS_IFD) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0,
+                   src[i].tag, 0, "nested sub-IFD pointer rejected");
+      return TINYDNG_E_INVALID_ARG;
+    }
+    dst[i].tag = src[i].tag;
+    dst[i].type = src[i].type;
+    dst[i].count = src[i].count;
+    dst[i].size = src[i].size;
+    dst[i].data = (uint8_t *)td_ctx_alloc(ctx, src[i].size, err);
+    if (!dst[i].data) return TINYDNG_E_OOM;
+    memcpy(dst[i].data, src[i].data, src[i].size);
+  }
+  /* Insertion sort by tag (TIFF requires ascending); tiny n. */
+  for (i = 1; i < count; i++) {
+    tinydng_field tmp = dst[i];
+    j = i;
+    while (j > 0 && dst[j - 1].tag > tmp.tag) {
+      dst[j] = dst[j - 1];
+      j--;
+    }
+    dst[j] = tmp;
+  }
+  for (i = 1; i < count; i++) {
+    if (dst[i].tag == dst[i - 1].tag) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0,
+                   dst[i].tag, 0, "duplicate sub-IFD tag");
+      return TINYDNG_E_INVALID_ARG;
+    }
+  }
+  *out = dst;
+  return TINYDNG_OK;
+}
+
+/* Checked serialized size of a sorted sub-IFD blob (classic entries). */
+static int td_rl_sub_blob_size(const tinydng_field *fields, size_t count,
+                               size_t *out) {
+  size_t total = 2 + 4; /* entry count + next-IFD */
+  size_t i;
+  if (!td_safe_mul_size(count, 12u, &i) ||
+      !td_safe_add_size(total, i, &total)) {
+    return 0;
+  }
+  for (i = 0; i < count; i++) {
+    size_t padded;
+    if (fields[i].size <= 4u) continue;
+    if (!td_safe_add_size(fields[i].size, 1u, &padded)) return 0;
+    padded &= ~(size_t)1u;
+    if (!td_safe_add_size(total, padded, &total)) return 0;
+  }
+  *out = total;
+  return 1;
+}
+
+/* Serialize one sorted sub-IFD into `blob` (exactly the size computed by
+   td_rl_sub_blob_size); value offsets are absolute from the TIFF header. */
+static void td_rl_serialize_sub(uint8_t *blob, const tinydng_field *fields,
+                                size_t count, uint64_t blob_off, int be) {
+  size_t head = 2 + count * 12u + 4u;
+  size_t running = head;
+  size_t i;
+  td_put16(blob, (uint16_t)count, be);
+  for (i = 0; i < count; i++) {
+    const tinydng_field *f = &fields[i];
+    uint8_t *ep = blob + 2 + i * 12u;
+    td_put16(ep, f->tag, be);
+    td_put16(ep + 2, f->type, be);
+    td_put32(ep + 4, f->count, be);
+    if (f->size <= 4u) {
+      memcpy(ep + 8, f->data, f->size);
+      memset(ep + 8 + f->size, 0, 4u - f->size);
+    } else {
+      size_t padded = (f->size + 1u) & ~(size_t)1u;
+      td_put32(ep + 8, (uint32_t)(blob_off + running), be);
+      memcpy(blob + running, f->data, f->size);
+      if (padded > f->size) blob[running + f->size] = 0;
+      running += padded;
+    }
+  }
+  td_put32(blob + 2 + count * 12u, 0u, be);
+}
+
+/* Serialize every reserved sub-IFD blob now that extras_base is known.
+   Must run after td_writer_relayout_extras (final region positions). */
+static tinydng_status td_rl_serialize_subs(tinydng_writer *w,
+                                           uint64_t extras_base,
+                                           tinydng_error *err) {
+  size_t k;
+  for (k = 0; k < 2u; k++) {
+    td_wentry *e = k == 0 ? w->sub_exif_entry : w->sub_gps_entry;
+    const tinydng_field *fields = k == 0 ? w->sub_exif : w->sub_gps;
+    size_t count = k == 0 ? w->sub_exif_count : w->sub_gps_count;
+    uint64_t blob_off;
+    if (!e) continue;
+    if (!td_safe_add_u64(extras_base,
+                         (uint64_t)(e->ext - w->w.extras), &blob_off) ||
+        blob_off > (uint64_t)UINT32_MAX) {
+      td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, e->tag,
+                   extras_base, "sub-IFD offset overflow");
+      return TINYDNG_E_BOUNDS;
+    }
+    td_rl_serialize_sub((uint8_t *)e->ext, fields, count, blob_off,
+                        w->big_endian);
+  }
+  return TINYDNG_OK;
+}
+
+/* Forward: defined below with the streaming writer. */
+static tinydng_status td_writer_relayout_extras(tinydng_writer *w,
+                                                tinydng_error *err);
+
+/* Header-first layout + emit (classic uncompressed strips only): fix the
+   extras layout now, precompute every strip offset, serialize sub-IFDs,
+   then emit header, IFD and extras in increasing-offset order so a
+   non-seekable sink stays sequential. Strips append after at data_pos. */
+static tinydng_status td_rl_emit_head(tinydng_writer *w, tinydng_error *err) {
+  uint64_t ifd_size, extras_base, pos;
+  uint32_t k;
+  tinydng_status st;
+  st = td_writer_relayout_extras(w, err);
+  if (st != TINYDNG_OK) return st;
+  ifd_size = 2u + (uint64_t)w->w.entry_count * 12u + 4u; /* n <= 64 */
+  extras_base = 8u + ifd_size;
+  st = td_rl_serialize_subs(w, extras_base, err);
+  if (st != TINYDNG_OK) return st;
+  /* Precompute strip offsets exactly as td_writer_put_segment advances. */
+  pos = extras_base + (uint64_t)w->w.extras_len;
+  for (k = 0; k < w->seg_count; k++) {
+    uint64_t y = (uint64_t)k * (uint64_t)w->rows_per_strip;
+    uint32_t rows = w->rows_per_strip;
+    size_t len;
+    if (y + (uint64_t)rows > (uint64_t)w->height) {
+      rows = w->height - (uint32_t)y;
+    }
+    if (!td_safe_mul_size((size_t)w->width, (size_t)rows, &len) ||
+        !td_safe_mul_size(len, (size_t)w->spp, &len) ||
+        !td_safe_mul_size(len, (size_t)w->bps / 8u, &len) ||
+        pos > (uint64_t)UINT32_MAX) {
+      td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, pos,
+                   "header-first strip layout overflow");
+      return TINYDNG_E_BOUNDS;
+    }
+    w->segs[k].offset = pos;
+    w->segs[k].byte_count = (uint64_t)len;
+    pos += (uint64_t)len;
+    if (pos & 1u) pos++; /* put_segment's alignment pad byte */
+  }
+  td_writer_patch_segs(w);
+  if (w->w.failed) {
+    td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                 "header-first segment patch overflow");
+    return TINYDNG_E_INTERNAL;
+  }
+  st = td_writer_put_header(&w->sink, w->big_endian, 0, 8u, err);
+  if (st != TINYDNG_OK) return st;
+  st = td_writer_emit_ifd(&w->w, &w->sink, 8u, extras_base, err);
+  if (st != TINYDNG_OK) return st;
+  if (w->w.extras_len > 0u) {
+    if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
+        w->w.extras_len) {
+      return td_wio_err(&w->sink, extras_base, err);
+    }
+  }
+  w->data_pos = w->segs[0].offset;
+  return TINYDNG_OK;
+}
+
 tinydng_status tinydng_writer_create(tinydng_context *ctx,
                                      tinydng_write_io sink,
                                      const tinydng_write_image *meta,
@@ -1267,6 +1491,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   w->sfmt = sfmt;
   w->photo = photo;
   w->compression = comp;
+  w->header_first = opts && opts->header_first;
   w->ljpeg_arithmetic = opts ? (opts->ljpeg_arithmetic != 0) : 0;
   w->ljpeg_predictor =
       (opts && opts->ljpeg_predictor) ? opts->ljpeg_predictor : 1u;
@@ -1440,7 +1665,10 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   if (opts && opts->as_dng) {
     const tinydng_raw_info *raw = meta->raw;
     const tinydng_cfa *cfa = meta->cfa;
-    td_add_short(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
+    /* TIFF 6.0 mandates LONG for NewSubfileType; SHORT makes Apple ImageIO
+     * (Finder Quick Look, sips) reject the file. Matches the pre-TinyDNG
+     * Kotlin writer, which emitted Entry(254, LONG, ...). */
+    td_add_long(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
     if (cfa && cfa->present) {
       uint16_t dim[2];
       dim[0] = cfa->pattern_dim[0] ? cfa->pattern_dim[0] : 2u;
@@ -1504,20 +1732,67 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   if (meta->field_count && !meta->fields) w->w.failed = 1;
   for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
     const tinydng_field *f = &meta->fields[i];
-    size_t unit = 0;
-    switch (f->type) {
-      case 1: case 2: case 7: unit = 1; break;
-      case 3: unit = 2; break;
-      case 4: case 9: case 11: unit = 4; break;
-      case 5: case 10: case 12: unit = 8; break;
-      default: w->w.failed = 1; break;
-    }
-    if (!f->data || !f->count || !unit || f->count > SIZE_MAX / unit ||
-        f->size != (size_t)f->count * unit) { w->w.failed = 1; break; }
+    if (!td_rl_field_ok(f)) { w->w.failed = 1; break; }
     for (size_t j = 0; j < w->w.entry_count; ++j) {
       if (w->w.entries[j].tag == f->tag) w->w.failed = 1;
     }
     if (!w->w.failed) td_add(&w->w, f->tag, f->type, f->count, f->data, f->size);
+  }
+
+  /* RawLens nested EXIF/GPS sub-IFDs: validate + copy now, reserve the blob
+     regions (sizes are layout-independent); contents serialize once absolute
+     offsets exist (header-first: at create; streaming: at finish). */
+  if (!w->w.failed &&
+      (meta->exif_field_count || meta->gps_field_count)) {
+    const tinydng_field *lists[2] = {meta->exif_fields, meta->gps_fields};
+    const size_t counts[2] = {meta->exif_field_count, meta->gps_field_count};
+    const uint16_t ptrs[2] = {TD_RL_TAG_EXIF_IFD, TD_RL_TAG_GPS_IFD};
+    size_t k;
+    if (w->bigtiff) {
+      td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                   "sub-IFDs require classic TIFF");
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return TINYDNG_E_UNSUPPORTED;
+    }
+    for (k = 0; k < 2u; ++k) {
+      tinydng_field *copy = NULL;
+      size_t blob_size = 0;
+      uint8_t *region;
+      size_t j;
+      if (!counts[k]) continue;
+      if (!lists[k]) { w->w.failed = 1; break; }
+      for (j = 0; j < w->w.entry_count; ++j) {
+        if (w->w.entries[j].tag == ptrs[k]) w->w.failed = 1;
+      }
+      if (w->w.failed) break;
+      st = td_rl_copy_sub(ctx, lists[k], counts[k], &copy, err);
+      if (st != TINYDNG_OK) {
+        td_ctx_free(ctx, w->w.extras);
+        td_ctx_free(ctx, w->segs);
+        td_ctx_free(ctx, w);
+        return st;
+      }
+      if (!td_rl_sub_blob_size(copy, counts[k], &blob_size)) {
+        td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, ptrs[k],
+                     0, "sub-IFD size overflow");
+        td_ctx_free(ctx, w->w.extras);
+        td_ctx_free(ctx, w->segs);
+        td_ctx_free(ctx, w);
+        return TINYDNG_E_BOUNDS;
+      }
+      region = td_reserve(&w->w, blob_size);
+      if (!region) break; /* w->failed set; handled below */
+      td_add_reserved(&w->w, ptrs[k], TD_TYPE_LONG, 1u, region, blob_size);
+      if (k == 0) {
+        w->sub_exif = copy;
+        w->sub_exif_count = counts[k];
+      } else {
+        w->sub_gps = copy;
+        w->sub_gps_count = counts[k];
+      }
+    }
   }
 
   if (w->w.failed) {
@@ -1531,6 +1806,51 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
 
   /* Sort entries by tag (TIFF requires ascending). */
   qsort(w->w.entries, w->w.entry_count, sizeof(td_wentry), td_entry_cmp);
+
+  /* RawLens: locate the sub-IFD pointer entries at their sorted slots. */
+  if (w->sub_exif_count || w->sub_gps_count) {
+    size_t i;
+    for (i = 0; i < w->w.entry_count; i++) {
+      if (w->w.entries[i].tag == TD_RL_TAG_EXIF_IFD) {
+        w->sub_exif_entry = &w->w.entries[i];
+      } else if (w->w.entries[i].tag == TD_RL_TAG_GPS_IFD) {
+        w->sub_gps_entry = &w->w.entries[i];
+      }
+    }
+    if (!!w->sub_exif_count != !!w->sub_exif_entry ||
+        !!w->sub_gps_count != !!w->sub_gps_entry) {
+      td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                   "sub-IFD pointer entry lost in sort");
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return TINYDNG_E_INTERNAL;
+    }
+  }
+
+  if (w->header_first) {
+    /* Uncompressed sizes are known upfront, so the whole header (IFD +
+       extras + sub-IFDs) goes out now and strips append after it — a
+       non-seekable sink never needs a backward patch. */
+    if (w->tiled || w->compression != TINYDNG_COMPRESSION_NONE ||
+        w->bigtiff) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                   "header-first needs uncompressed classic strips");
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return TINYDNG_E_INVALID_ARG;
+    }
+    st = td_rl_emit_head(w, err);
+    if (st != TINYDNG_OK) {
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return st;
+    }
+    *out = w;
+    return TINYDNG_OK;
+  }
 
   /* Header placeholder; the IFD offset is patched at finish. */
   st = td_writer_put_header(&w->sink, be, w->bigtiff, 0, err);
@@ -1584,7 +1904,21 @@ static tinydng_status td_writer_put_segment(tinydng_writer *w, uint32_t index,
                  w->seg_count);
     return TINYDNG_E_INVALID_ARG;
   }
-  if (w->segs[index].offset != 0u) {
+  if (w->header_first) {
+    /* Header-first offsets are precomputed: a non-seekable sink needs
+       strict index order, and the running position must hit the plan. */
+    if (index != w->next_seg) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                   "header-first strips must arrive in index order");
+      return TINYDNG_E_INVALID_ARG;
+    }
+    if (at != w->segs[index].offset) {
+      td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, at,
+                   "header-first strip position missed its plan");
+      return TINYDNG_E_INTERNAL;
+    }
+    w->next_seg++;
+  } else if (w->segs[index].offset != 0u) {
     td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
                  "segment %u written twice", index);
     return TINYDNG_E_INVALID_ARG;
@@ -1782,6 +2116,16 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
                  "writer already finished");
     return TINYDNG_E_INVALID_ARG;
   }
+  if (w->header_first) {
+    /* Header, IFD and extras went out at create; only completeness left. */
+    if (w->next_seg != w->seg_count) {
+      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                   "segment %u was never written", w->next_seg);
+      st = TINYDNG_E_INVALID_ARG;
+      goto cleanup;
+    }
+    goto cleanup;
+  }
   for (i = 0; i < w->seg_count; i++) {
     if (w->segs[i].offset == 0u) {
       td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
@@ -1803,6 +2147,10 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
   }
 
   extras_base = w->data_pos; /* already even-aligned */
+  st = td_rl_serialize_subs(w, extras_base, err);
+  if (st != TINYDNG_OK) {
+    goto cleanup;
+  }
   if (w->w.extras_len > 0u) {
     if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
         w->w.extras_len) {

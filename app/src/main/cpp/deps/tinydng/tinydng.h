@@ -688,6 +688,11 @@ typedef struct tinydng_write_options {
   uint8_t ljpeg_predictor;  /* 0 => 1; otherwise Annex H selector 1..7 */
   uint16_t ljpeg_restart_interval_mcus; /* 0 => none; whole MCU rows   */
   uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits */
+  /* RawLens: header-first streaming for uncompressed output to non-seekable
+     sinks. The header, IFD and extras are emitted at create (offsets
+     precomputed — valid only for uncompressed striped layouts), and strips
+     must arrive in index order. Classic TIFF only. */
+  uint8_t header_first;
 } tinydng_write_options;
 
 typedef struct tinydng_write_image {
@@ -704,6 +709,13 @@ typedef struct tinydng_write_image {
      Must not duplicate generated tags. Payloads are copied at writer_create. */
   const tinydng_field *fields;
   size_t field_count;
+  /* RawLens: nested EXIF (34665) / GPS (34853) sub-IFD contents. Each list is
+     assembled into its own sorted sub-IFD; empty count omits the sub-IFD.
+     Same payload rules as `fields`. Not supported with bigtiff. */
+  const tinydng_field *exif_fields;
+  size_t exif_field_count;
+  const tinydng_field *gps_fields;
+  size_t gps_field_count;
 } tinydng_write_image;
 
 /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;

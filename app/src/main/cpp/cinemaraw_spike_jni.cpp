@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // P0 spike bridge: RAW16 -> packed-RAW10 packer (planned P3 pack stage) plus
 // direct access to the vendored MediaCinemaRAW type-7 encoder (GPL-3.0-only,
-// app/src/main/cpp/cinemaraw, commit 14c3ddc). Timing is done in Kotlin with
+// app/src/main/cpp/cinemaraw, upstream 55cceb2). Timing is done in Kotlin with
 // nanoTime(); these entry points do a single pack/encode each so per-stage
 // medians isolate pack cost from encode cost (Path A vs Path B verdict).
+// The parallel entry is bench-only: the recorder parallelizes across frames
+// (N workers x serial encode), so per-frame threading would oversubscribe.
 #include <jni.h>
 
 #include <cstdint>
@@ -73,6 +75,35 @@ int packRaw10Impl(const uint8_t* src, int srcStride, int w, int h, uint8_t* dst)
     return 0;
 }
 
+int encodeImpl(JNIEnv* env, jobject src, jint srcOffset, jint size, jint w,
+               jint h, jint stride, bool raw10, jint cropTop, jint cropHeight,
+               bool bin, jobject dst, jint dstOffset, jint dstCapacity,
+               int threads) {
+    const uint8_t* s =
+        static_cast<const uint8_t*>(env->GetDirectBufferAddress(src));
+    uint8_t* d = static_cast<uint8_t*>(env->GetDirectBufferAddress(dst));
+    if (!s || !d || size < 0) return -2;
+    try {
+        thread_local std::vector<uint8_t> out;
+        if (threads < 0) {
+            mediacinemaraw::encode(s + srcOffset, static_cast<size_t>(size), w,
+                                   h, stride, raw10, cropTop, cropHeight, bin,
+                                   out);
+        } else {
+            mediacinemaraw::encode_parallel(
+                s + srcOffset, static_cast<size_t>(size), w, h, stride, raw10,
+                cropTop, cropHeight, bin, out, static_cast<unsigned>(threads));
+        }
+        if (static_cast<jint>(out.size()) > dstCapacity) return -3;
+        std::memcpy(d + dstOffset, out.data(), out.size());
+        return static_cast<jint>(out.size());
+    } catch (const std::invalid_argument&) {
+        return -4;
+    } catch (...) {
+        return -5;
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -94,22 +125,19 @@ Java_com_matthew_rawlens_CinemaRawSpike_encodeNative(
     jint w, jint h, jint stride, jboolean raw10, jint cropTop,
     jint cropHeight, jboolean bin, jobject dst, jint dstOffset,
     jint dstCapacity) {
-    const uint8_t* s =
-        static_cast<const uint8_t*>(env->GetDirectBufferAddress(src));
-    uint8_t* d = static_cast<uint8_t*>(env->GetDirectBufferAddress(dst));
-    if (!s || !d || size < 0) return -2;
-    try {
-        thread_local std::vector<uint8_t> out;
-        mediacinemaraw::encode(s + srcOffset, static_cast<size_t>(size), w, h,
-                               stride, raw10, cropTop, cropHeight, bin, out);
-        if (static_cast<jint>(out.size()) > dstCapacity) return -3;
-        std::memcpy(d + dstOffset, out.data(), out.size());
-        return static_cast<jint>(out.size());
-    } catch (const std::invalid_argument&) {
-        return -4;
-    } catch (...) {
-        return -5;
-    }
+    return encodeImpl(env, src, srcOffset, size, w, h, stride, raw10, cropTop,
+                      cropHeight, bin, dst, dstOffset, dstCapacity,
+                      /*threads=*/-1);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_CinemaRawSpike_encodeParallelNative(
+    JNIEnv* env, jobject /*thiz*/, jobject src, jint srcOffset, jint size,
+    jint w, jint h, jint stride, jboolean raw10, jint cropTop,
+    jint cropHeight, jboolean bin, jint threads, jobject dst, jint dstOffset,
+    jint dstCapacity) {
+    return encodeImpl(env, src, srcOffset, size, w, h, stride, raw10, cropTop,
+                      cropHeight, bin, dst, dstOffset, dstCapacity, threads);
 }
 
 }  // extern "C"

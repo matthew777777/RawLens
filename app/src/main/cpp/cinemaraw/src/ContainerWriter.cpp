@@ -3,7 +3,11 @@
 // written with one write() call each (the kernel/FUSE layer splits internally
 // and pipelines much better than userspace small-block loops), while small
 // items accumulate in a staging buffer that is flushed in large blocks.
+// Audio and motion payloads are emitted in bounded chunks (~16/96 KiB) so a
+// pathological single call cannot spike transient memory (upstream 55cceb2);
+// bytes on disk are identical to the unchunked layout.
 #include <MediaCinemaRAW/ContainerWriter.h>
+#include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
@@ -115,16 +119,24 @@ void ContainerWriter::writeFrame(const uint8_t* d, size_t n, int64_t ts, const s
 void ContainerWriter::writeAudio(const int16_t* s, size_t n, int64_t ts) {
   if (closed_) throw std::logic_error("closed");
   if (n > 0 && s == nullptr) throw std::invalid_argument("null audio samples");
+  const uint32_t payload = audioPayload(n); // validate before staging anything
   const int64_t offset = position();
-  item(5,audioPayload(n));
-  std::vector<uint8_t> pcm(n*2);
-  for (size_t i = 0; i < n; i++) {
-    const uint16_t v = uint16_t(s[i]);
-    pcm[i*2] = uint8_t(v);
-    pcm[i*2+1] = uint8_t(v >> 8);
+  item(5,payload);
+  flushStaging(); // header lands exactly at the recorded offset
+  // Chunked: n is bounded only by u32, so never buffer the whole payload.
+  std::vector<uint8_t> pcm;
+  pcm.reserve(8192*2);
+  for (size_t i = 0; i < n;) {
+    const size_t m = std::min(n - i, size_t(8192));
+    pcm.resize(m*2);
+    for (size_t j = 0; j < m; j++) {
+      const uint16_t v = uint16_t(s[i+j]);
+      pcm[j*2] = uint8_t(v);
+      pcm[j*2+1] = uint8_t(v >> 8);
+    }
+    writeAll(pcm.data(), pcm.size());
+    i += m;
   }
-  flushStaging();
-  writeAll(pcm.data(), pcm.size());
   item(6,8);
   const uint8_t tsBytes[8] = {
     uint8_t(ts), uint8_t(ts >> 8), uint8_t(ts >> 16), uint8_t(ts >> 24),
@@ -134,26 +146,17 @@ void ContainerWriter::writeAudio(const int16_t* s, size_t n, int64_t ts) {
   audio_.push_back({offset,ts});
 }
 namespace {
-// Packs one version-1 motion chunk (24-byte samples: i64 timestampNs,
-// 3x f32 axes, u32 reserved) into a flat payload buffer.
-template<class S>
-void packMotion(const S* s, size_t n, std::vector<uint8_t>& data) {
-  data.resize(8+n*24);
-  data[0] = 1; // version
-  const uint32_t count = ck(n);
-  data[4] = uint8_t(count); data[5] = uint8_t(count >> 8);
-  data[6] = uint8_t(count >> 16); data[7] = uint8_t(count >> 24);
-  for (size_t i = 0; i < n; i++) {
-    const size_t at = 8 + i*24;
-    const uint64_t t = uint64_t(s[i].timestampNs);
-    for (size_t b = 0; b < 8; ++b) data[at+b] = uint8_t(t >> (8*b));
-    const float axes[3] = {s[i].x, s[i].y, s[i].z};
-    for (size_t a = 0; a < 3; ++a) {
-      uint32_t bits; std::memcpy(&bits, &axes[a], 4);
-      for (size_t b = 0; b < 4; ++b) data[at+8+a*4+b] = uint8_t(bits >> (8*b));
-    }
-    std::memset(&data[at+20], 0, 4);
+// One version-1 motion sample: i64 timestampNs LE, 3x f32 axes LE, u32
+// reserved (always 0). Gyro and accelerometer samples share this layout.
+inline void packSample(uint8_t* d, int64_t timestampNs, float x, float y, float z) {
+  const uint64_t t = uint64_t(timestampNs);
+  for (size_t b = 0; b < 8; ++b) d[b] = uint8_t(t >> (8*b));
+  const float axes[3] = {x, y, z};
+  for (size_t a = 0; a < 3; ++a) {
+    uint32_t bits; std::memcpy(&bits, &axes[a], 4);
+    for (size_t b = 0; b < 4; ++b) d[8+a*4+b] = uint8_t(bits >> (8*b));
   }
+  d[20] = d[21] = d[22] = d[23] = 0;
 }
 }
 void ContainerWriter::writeGyro(const GyroSample* s, size_t n) {
@@ -174,23 +177,53 @@ void ContainerWriter::writeAccelerometer(const AccelerometerSample* s, size_t n)
 }
 void ContainerWriter::flushGyro() {
   if (pendingGyro_.empty()) return;
+  const uint32_t payload = motionPayload(pendingGyro_.size());
   const int64_t offset = position();
-  item(9,motionPayload(pendingGyro_.size()));
-  std::vector<uint8_t> data;
-  packMotion(pendingGyro_.data(), pendingGyro_.size(), data);
+  item(9,payload);
   flushStaging();
-  writeAll(data.data(), data.size());
+  const uint32_t count = ck(pendingGyro_.size());
+  const uint8_t head[8] = {1, 0, 0, 0,
+    uint8_t(count), uint8_t(count >> 8), uint8_t(count >> 16), uint8_t(count >> 24)};
+  writeAll(head, 8);
+  // Chunked to ~96 KiB so the backstop case (1M samples, no frames) cannot
+  // spike a 24 MB transient the way one flat buffer would.
+  std::vector<uint8_t> buf;
+  buf.reserve(4096*24);
+  for (size_t i = 0; i < pendingGyro_.size();) {
+    const size_t m = std::min(pendingGyro_.size() - i, size_t(4096));
+    buf.resize(m*24);
+    for (size_t j = 0; j < m; j++) {
+      const auto& sm = pendingGyro_[i+j];
+      packSample(buf.data() + j*24, sm.timestampNs, sm.x, sm.y, sm.z);
+    }
+    writeAll(buf.data(), buf.size());
+    i += m;
+  }
   gyro_.push_back({offset,pendingGyro_[0].timestampNs});
   pendingGyro_.clear();
 }
 void ContainerWriter::flushAccel() {
   if (pendingAccel_.empty()) return;
+  const uint32_t payload = motionPayload(pendingAccel_.size());
   const int64_t offset = position();
-  item(13,motionPayload(pendingAccel_.size()));
-  std::vector<uint8_t> data;
-  packMotion(pendingAccel_.data(), pendingAccel_.size(), data);
+  item(13,payload);
   flushStaging();
-  writeAll(data.data(), data.size());
+  const uint32_t count = ck(pendingAccel_.size());
+  const uint8_t head[8] = {1, 0, 0, 0,
+    uint8_t(count), uint8_t(count >> 8), uint8_t(count >> 16), uint8_t(count >> 24)};
+  writeAll(head, 8);
+  std::vector<uint8_t> buf;
+  buf.reserve(4096*24);
+  for (size_t i = 0; i < pendingAccel_.size();) {
+    const size_t m = std::min(pendingAccel_.size() - i, size_t(4096));
+    buf.resize(m*24);
+    for (size_t j = 0; j < m; j++) {
+      const auto& sm = pendingAccel_[i+j];
+      packSample(buf.data() + j*24, sm.timestampNs, sm.x, sm.y, sm.z);
+    }
+    writeAll(buf.data(), buf.size());
+    i += m;
+  }
   accel_.push_back({offset,pendingAccel_[0].timestampNs});
   pendingAccel_.clear();
 }
