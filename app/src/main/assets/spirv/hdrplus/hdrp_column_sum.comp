@@ -1,0 +1,27 @@
+#version 450
+// texture_mean stage 1 (sum_rect_columns_float): per-column sums, one per
+// row-parity (upstream sums each mosaic row-phase separately so the row
+// stage can group by 2x2 phase).
+// Upstream-parity patch (RawLens): two strided sums per column in upstream's
+// exact association instead of one packed sum.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(std430, set = 0, binding = 1) writeonly buffer Columns { float v[]; } columns;
+layout(push_constant) uniform P {
+    ivec2 size;
+} p;
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    if (x >= p.size.x) return;
+    float even = 0.0, odd = 0.0;
+    for (int y = 0; y < p.size.y; ++y) {
+        if ((y & 1) == 0) {
+            even += imageLoad(src, ivec2(x, y)).x;
+        } else {
+            odd += imageLoad(src, ivec2(x, y)).x;
+        }
+    }
+    columns.v[2 * x + 0] = even;
+    columns.v[2 * x + 1] = odd;
+}

@@ -1,0 +1,22 @@
+#version 450
+// Port of hdr-plus-swift calculate_rms_rgba: per-tile shot-noise estimate of
+// the reference (HDR+ "noise model and tiled approximation").
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refRgba;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D rms;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+} p;
+
+void main() {
+    ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, p.tiles))) return;
+    ivec2 t0 = g * 8;
+    vec4 acc = vec4(0.0);
+    for (int dy = 0; dy < 8; ++dy)
+        for (int dx = 0; dx < 8; ++dx) {
+            vec4 v = imageLoad(refRgba, t0 + ivec2(dx, dy));
+            acc += v * v;
+        }
+    imageStore(rms, g, 0.25 * sqrt(acc) / 8.0);
+}

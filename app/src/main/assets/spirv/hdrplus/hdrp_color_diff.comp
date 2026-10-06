@@ -1,0 +1,24 @@
+#version 450
+// Port of hdr-plus-swift color_difference: per 2x2 Bayer cell, the sum of
+// absolute differences of its four sites (half-resolution output).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D a;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D b;
+layout(set = 0, binding = 2, r32f) writeonly uniform image2D diff;
+layout(push_constant) uniform P {
+    ivec2 cells;
+    ivec2 aOffset;
+    ivec2 bOffset;
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.cells))) return;
+    float total = 0.0;
+    for (int dx = 0; dx < 2; ++dx)
+        for (int dy = 0; dy < 2; ++dy) {
+            ivec2 s = 2 * q + ivec2(dx, dy);
+            total += abs(imageLoad(a, p.aOffset + s).x - imageLoad(b, p.bOffset + s).x);
+        }
+    imageStore(diff, q, vec4(total));
+}

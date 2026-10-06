@@ -1,0 +1,63 @@
+#version 450
+// Port of hdr-plus-swift correct_upsampling_error (uniform-exposure path):
+// after nearest upsampling, each tile also tries the alignment of its
+// horizontal and vertical coarse neighbours and keeps the best of the three
+// (HDR+ paper, improves alignment at moving-object borders). One workgroup
+// per tile stages the reference tile and each candidate patch in shared
+// memory; lanes sum strided partials, reduced in fixed order by lane 0.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refLevel;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D compLevel;
+layout(std430, set = 0, binding = 2) readonly buffer Prev { ivec2 v[]; } prev;
+layout(std430, set = 0, binding = 3) writeonly buffer Corrected { ivec2 v[]; } corrected;
+layout(push_constant) uniform P {
+    ivec2 levelSize;
+    ivec2 tiles;
+    int downscale;  // 0 at the coarsest level
+    int tileSize;
+    int useSsd;
+} p;
+
+const int MAX_TILE = 32;
+shared float sRef[MAX_TILE * MAX_TILE];
+shared float sComp[MAX_TILE * MAX_TILE];
+shared float sPartial[3][64];
+
+void main() {
+    ivec2 g = ivec2(gl_WorkGroupID.xy);
+    if (g.x >= p.tiles.x || g.y >= p.tiles.y) return;
+    int lane = int(gl_LocalInvocationID.x);
+    int t = p.tileSize;
+    ivec2 t0 = g * (t / 2);
+    ivec3 xs = clamp(ivec3(g.x, g.x + ((g.x % 2 == 0) ? -1 : 1), g.x), 0, p.tiles.x - 1);
+    ivec3 ys = clamp(ivec3(g.y, g.y, g.y + ((g.y % 2 == 0) ? -1 : 1)), 0, p.tiles.y - 1);
+    ivec2 cand[3];
+    for (int c = 0; c < 3; ++c) cand[c] = prev.v[ys[c] * p.tiles.x + xs[c]];
+    for (int i = lane; i < t * t; i += 64) sRef[i] = imageLoad(refLevel, t0 + ivec2(i % t, i / t)).x;
+    for (int c = 0; c < 3; ++c) {
+        barrier();
+        for (int i = lane; i < t * t; i += 64) {
+            ivec2 s = t0 + ivec2(i % t, i / t) + p.downscale * cand[c];
+            // Upstream computes int * 2 * half(-65504) in half precision, which
+            // overflows: any out-of-frame sample makes the candidate cost +inf.
+            bool outside = any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.levelSize));
+            sComp[i] = outside ? uintBitsToFloat(0x7f800000u) : imageLoad(compLevel, s).x;
+        }
+        barrier();
+        float partial = 0.0;
+        for (int i = lane; i < t * t; i += 64) {
+            float d = abs(sRef[i] - sComp[i]);
+            partial += p.useSsd != 0 ? d * d : d;
+        }
+        sPartial[c][lane] = partial;
+    }
+    barrier();
+    if (lane != 0) return;
+    float sDiff[3];
+    for (int c = 0; c < 3; ++c) {
+        sDiff[c] = 0.0;
+        for (int i = 0; i < 64; ++i) sDiff[c] += sPartial[c][i];
+    }
+    ivec2 best = (sDiff[0] < sDiff[1] && sDiff[0] < sDiff[2]) ? cand[0] : (sDiff[1] < sDiff[2] ? cand[1] : cand[2]);
+    corrected.v[g.y * p.tiles.x + g.x] = best;
+}

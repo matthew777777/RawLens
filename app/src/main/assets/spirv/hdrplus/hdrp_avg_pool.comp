@@ -1,0 +1,20 @@
+#version 450
+// Port of hdr-plus-swift avg_pool (scale 2, no black/WB normalization: the
+// exposure-control-off path). Output rounded through fp16 like upstream's
+// r16Float pyramid so alignment decisions match.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D dst;
+layout(push_constant) uniform P {
+    ivec2 dstSize;
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.dstSize))) return;
+    ivec2 s = q * 2;
+    float v = imageLoad(src, s).x + imageLoad(src, s + ivec2(0, 1)).x + imageLoad(src, s + ivec2(1, 0)).x +
+              imageLoad(src, s + ivec2(1, 1)).x;
+    v = unpackHalf2x16(packHalf2x16(vec2(v * 0.25, 0.0))).x;
+    imageStore(dst, q, vec4(v));
+}

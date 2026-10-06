@@ -1,0 +1,23 @@
+#version 450
+// Port of hdr-plus-swift normalize_mismatch + add_texture: rescales so the
+// mean mismatch is 0.12 (just below the 0.17 threshold), clamps to [0,1] and
+// accumulates the pass-total mismatch (mean over frames) for deconvolution.
+// Upstream-parity patch (RawLens): the frame count divides (upstream
+// add_texture divides by N; multiplying by a reciprocal differs by a
+// rounding step for N not a power of two).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) uniform image2D mismatch;
+layout(set = 0, binding = 1, r32f) uniform image2D total;
+layout(std430, set = 0, binding = 2) readonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    int frames;
+} p;
+
+void main() {
+    ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, p.tiles))) return;
+    float m = clamp(imageLoad(mismatch, g).x * (0.12 / (mean.v[0] + 1e-12)), 0.0, 1.0);
+    imageStore(mismatch, g, vec4(m));
+    imageStore(total, g, vec4(imageLoad(total, g).x + m / float(p.frames)));
+}

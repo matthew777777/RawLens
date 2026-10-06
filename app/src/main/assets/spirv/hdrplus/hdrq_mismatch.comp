@@ -1,0 +1,54 @@
+#version 450
+// Port of hdr-plus-swift calculate_abs_diff_rgba + calculate_mismatch_rgba
+// (uniform exposure): raised-cosine-weighted mean |ref - aligned| over twice
+// the tile support, relative to the tile's shot noise (Liba 2019 "spatially
+// varying temporal merging"). One 16x16 workgroup per tile, one lane per
+// window pixel, tree reduction (upstream sums sequentially in one thread).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refRgba;
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedRgba;
+layout(set = 0, binding = 2, rgba32f) readonly uniform image2D rms;
+layout(set = 0, binding = 3, r32f) writeonly uniform image2D mismatch;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    ivec2 rgbaSize;
+} p;
+
+const float PI = 3.14159265358979323846;
+shared vec4 sDiff[256];
+shared float sWeight[256];
+
+void main() {
+    ivec2 g = ivec2(gl_WorkGroupID.xy);
+    if (any(greaterThanEqual(g, p.tiles))) return;
+    const int ts = 8;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    uint lane = gl_LocalInvocationIndex;
+    ivec2 t0 = g * ts;
+    // Upstream clamps the end to size-1 (exclusive), dropping the last row/column.
+    ivec2 start = max(ivec2(0), t0 - ts / 2);
+    ivec2 end = min(p.rgbaSize - 1, t0 + ts * 3 / 2);
+    ivec2 q = t0 - ts / 2 + l;  // window pixel; l is its offset (dx + shift)
+    float angle = -2.0 * PI / float(ts);
+    vec4 d = vec4(0.0);
+    float w = 0.0;
+    if (all(greaterThanEqual(q, start)) && all(lessThan(q, end))) {
+        w = (0.5 - 0.17 * cos(-angle * (float(l.x) + 0.5))) * (0.5 - 0.17 * cos(-angle * (float(l.y) + 0.5)));
+        d = w * abs(imageLoad(refRgba, q) - imageLoad(alignedRgba, q));
+    }
+    sDiff[lane] = d;
+    sWeight[lane] = w;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) {
+            sDiff[lane] += sDiff[lane + stride];
+            sWeight[lane] += sWeight[lane + stride];
+        }
+        barrier();
+    }
+    if (lane != 0u) return;
+    vec4 noise = imageLoad(rms, g);
+    vec4 diff = sDiff[0] / sWeight[0];
+    vec4 m4 = diff / sqrt(0.5 * noise + 0.5 * noise + 1.0);
+    imageStore(mismatch, g, vec4(0.25 * (m4.x + m4.y + m4.z + m4.w)));
+}
