@@ -8,7 +8,7 @@ import org.junit.Test
  * Unblocker tests. Criteria encode docs/raw-sr-unblocker.md: exact
  * degenerates (flat, Nyquist checker), noise-dominated keeps weight,
  * no-model keeps weight, step edges attenuate partially, and the bake
- * scales weights with an explicit flag.
+ * caps weights (min, never compounding) with an explicit flag.
  *
  * Fixture rule (see the doc): noise fixtures must be model-plausible —
  * white noise against a clean model is indistinguishable from stuck taps
@@ -85,7 +85,7 @@ class RawSrUnblockerTest {
         assertTrue(u.all { it == 1f })
     }
 
-    @Test fun bakeScalesWeightsAndFlagsAttenuation() {
+    @Test fun bakeCapsWeightsAndFlagsAttenuation() {
         val frame = RawSrRobustness.FrameRobustness(
             2, 1, floatArrayOf(1f, 1f), intArrayOf(0, RawSrRobustness.FLAG_HOTPIXEL))
         val out = RawSrUnblocker.applyToFrame(frame, floatArrayOf(1f, 0.5f))
@@ -94,6 +94,18 @@ class RawSrUnblockerTest {
         assertEquals(
             RawSrRobustness.FLAG_HOTPIXEL or RawSrRobustness.FLAG_UNBLOCKED,
             out.flags[1])
+    }
+
+    @Test fun bakeCapsRatherThanCompounding() {
+        // Sabre `min(1 - unblocker, frame_weight)`: partial agreement
+        // capped by a partial keep-weight keeps the weaker factor (0.5),
+        // not the product (0.25).
+        val frame = RawSrRobustness.FrameRobustness(
+            2, 1, floatArrayOf(0.5f, 0.3f), IntArray(2))
+        val out = RawSrUnblocker.applyToFrame(frame, floatArrayOf(0.5f, 0.8f))
+        assertArrayEquals(floatArrayOf(0.5f, 0.3f), out.r, 0f)
+        assertEquals(RawSrRobustness.FLAG_UNBLOCKED, out.flags[0])
+        assertEquals(RawSrRobustness.FLAG_UNBLOCKED, out.flags[1])
     }
 
     @Test fun bakeSanitizesNonFiniteProducts() {
@@ -105,6 +117,47 @@ class RawSrUnblockerTest {
         assertEquals(0, out.flags[0])
         assertEquals(RawSrRobustness.FLAG_UNBLOCKED, out.flags[1])
         assertEquals(0, out.flags[2])
+    }
+
+    @Test fun spreadDilatesAttenuationCores() {
+        // A lone attenuated core (u = 0.1 at the center of a 7x7 ones
+        // field) spreads to the full 5x5 window; quads 3+ away keep 1.
+        // Flags stay own-quad: only r spreads.
+        val frame = RawSrRobustness.FrameRobustness(7, 7, FloatArray(49) { 1f }, IntArray(49))
+        val u = FloatArray(49) { 1f }
+        u[3 * 7 + 3] = 0.1f
+        val out = RawSrUnblocker.applyToFrameAndSpread(frame, u)
+        assertEquals(0.1f, out.r[3 * 7 + 3], 0f)
+        assertEquals(0.1f, out.r[1 * 7 + 1], 0f)
+        assertEquals(0.1f, out.r[5 * 7 + 5], 0f)
+        assertEquals(1f, out.r[0], 0f)
+        assertEquals(1f, out.r[6 * 7 + 6], 0f)
+        assertEquals(RawSrRobustness.FLAG_UNBLOCKED, out.flags[3 * 7 + 3])
+        assertEquals(0, out.flags[1 * 7 + 1])
+    }
+
+    @Test fun vetoZeroesContestedGhostsOnly() {
+        // 4x2 tiles over a 16x8 quad grid (tileSize 8): columns 0-1 still,
+        // columns 2-3 shifted 5px. u = 0.4 everywhere (below veto). Quad
+        // (6,2) sits over tile 1 whose window touches the 5px step
+        // (spread 5 > mTh 0.8 -> irregular -> vetoed to exactly 0), while
+        // quad (1,2) is regular AND 3+ quads from any vetoed site, so it
+        // keeps the 0.4 cap through the spread. The veto needs BOTH
+        // signals: a smooth-flow twin keeps 0.4 everywhere.
+        val tiles = List(8) { i ->
+            val dx = if (i % 4 < 2) 0f else 5f
+            RawSrTileFlow(0f, 0f, dx, 0f, 0f, true)
+        }
+        val flow = RawSrAlignmentField(32, 16, 8, 4, 2, tiles)
+        val frame = RawSrRobustness.FrameRobustness(16, 8, FloatArray(128) { 1f }, IntArray(128))
+        val u = FloatArray(128) { 0.4f }
+        val out = RawSrUnblocker.applyToFrameAndSpread(frame, u, flow, 0.8f)
+        assertEquals(0f, out.r[2 * 16 + 6], 0f)
+        assertEquals(0.4f, out.r[2 * 16 + 1], 0f)
+        val calm = RawSrAlignmentField(32, 16, 8, 4, 2,
+            List(8) { RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true) })
+        val kept = RawSrUnblocker.applyToFrameAndSpread(frame, u, calm, 0.8f)
+        assertTrue(kept.r.all { it == 0.4f })
     }
 
     @Test fun bakeRejectsMismatchedGrid() {

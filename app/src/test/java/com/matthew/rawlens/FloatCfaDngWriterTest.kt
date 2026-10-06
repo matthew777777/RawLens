@@ -73,6 +73,9 @@ class FloatCfaDngWriterTest {
         assertEquals(1, tags.getValue(339).second)
         assertEquals(1, tags.getValue(50717).second)
         assertTrue(tags.containsKey(33422))
+        // Rawspeed wants Make/Model for camera identification.
+        assertTrue(tags.containsKey(271))
+        assertTrue(tags.containsKey(272))
         assertEquals(0f, buffer.getFloat(stripOffset), 0f)
         assertEquals(3.5f, buffer.getFloat(stripOffset + 15 * 4), 0f)
     }

@@ -154,6 +154,24 @@ class RawSrKernelCovarianceTest {
         assertTrue(covariance.values.all { it.isFinite() })
     }
 
+    @Test fun nonFiniteFallbackIsKDetailTimesKDenoiseSquared() {
+        // Non-finite tensors fall back to the isotropic denoise kernel with
+        // the reference op order (kDetail * kDenoise)² — the shader twin and
+        // the reference k² agree bitwise. SNR 7 separates this order from
+        // kDetail² * kDenoise² by one ulp.
+        val tuning = RawSrTuning.forSnr(7.0)
+        val gray = RawSrGrayImage(8, 6, FloatArray(8 * 6) { Float.NaN })
+        val kIso = tuning.kDetail.toFloat() * tuning.kDenoise.toFloat()
+        val expected = kIso * kIso
+        val covariance = RawSrKernelCovariance.covariance(gray, tuning)
+        for (y in 0 until gray.height) for (x in 0 until gray.width) {
+            assertEquals(expected, covariance.get(x, y, 0), 0f)
+            assertEquals(0f, covariance.get(x, y, 1), 0f)
+            assertEquals(0f, covariance.get(x, y, 2), 0f)
+            assertEquals(expected, covariance.get(x, y, 3), 0f)
+        }
+    }
+
     @Test fun degenerateSinglePixelIsIsotropic() {
         val tuning = RawSrTuning.forSnr(18.0)
         val precision = RawSrKernelCovariance.precision(RawSrGrayImage(1, 1, floatArrayOf(0.5f)), tuning)
@@ -238,6 +256,126 @@ class RawSrKernelCovarianceTest {
         assertThrows(IllegalArgumentException::class.java) {
             RawSrKernelCovariance.MatrixField(4, 4, FloatArray(4 * 4 * 3))
         }
+    }
+
+    @Test fun decoupledFlatFieldUsesAbsoluteFlatSigma() {
+        // Flat: detail gate saturates (detail = 0 -> denoise = 1), so the
+        // radius is exactly flatSigma — independent of kDetail * kDenoise
+        // (0.29 * 4.0 = 1.16 here, must NOT appear).
+        val tuning = RawSrTuning.forSnr(18.0).withFlatSigma(0.5)
+        val covariance = RawSrKernelCovariance.covariance(flat(), tuning)
+        val precision = RawSrKernelCovariance.precision(flat(), tuning)
+        assertEquals(0.25f, covariance.get(8, 6, 0), 1e-6f)
+        assertEquals(0f, covariance.get(8, 6, 1), 0f)
+        assertEquals(0.25f, covariance.get(8, 6, 3), 1e-6f)
+        assertEquals(4f, precision.get(8, 6, 0), 1e-5f)
+        assertEquals(0f, precision.get(8, 6, 1), 0f)
+        assertEquals(4f, precision.get(8, 6, 3), 1e-5f)
+    }
+
+    @Test fun decoupledDetailEdgesStillUseKDetail() {
+        // Same full-contrast vertical line as verticalLineElongatesAlongLine
+        // (l1 = 1, A = 2, D = 0.71 at SNR 30): decoupled radii blend the
+        // kDetail-scaled axes with the absolute flat sigma instead of the
+        // coupled kDetail * kDenoise product.
+        // k1 = 0.29 * 0.25 * 0.5 + 0.71 * 0.5 = 0.39125 (coupled: 0.56875).
+        // k2 = 0.29 * 0.25 * 4.0 + 0.71 * 0.5 = 0.645 (coupled: 0.8225).
+        val width = 32
+        val height = 24
+        val values = FloatArray(width * height)
+        for (y in 0 until height) for (x in 0 until width)
+            values[y * width + x] = if (x == 16) 1f else 0f
+        val tuning = RawSrTuning.forSnr(30.0).withFlatSigma(0.5)
+        val precision = RawSrKernelCovariance.precision(RawSrGrayImage(width, height, values), tuning)
+        assertEquals(1f / (0.39125f * 0.39125f), precision.get(16, 12, 0), 1e-4f)
+        assertEquals(0f, precision.get(16, 12, 1), 1e-5f)
+        assertEquals(1f / (0.645f * 0.645f), precision.get(16, 12, 3), 1e-4f)
+        // Across-edge stays sharper than the decoupled flat (1/0.5^2 = 4).
+        assertTrue(precision.get(16, 12, 0) > 4f)
+    }
+
+    @Test fun decoupledFlatIgnoresKDetailChanges() {
+        // The point of decoupling: retuning edge sharpness (kDetail) must
+        // not move flat-region smoothing (flatSigma).
+        val low = RawSrKernelCovariance.precision(flat(), RawSrTuning.forSnr(6.0).withFlatSigma(0.5))
+        val high = RawSrKernelCovariance.precision(flat(), RawSrTuning.forSnr(30.0).withFlatSigma(0.5))
+        assertArrayEquals(low.values, high.values, 0f)
+        // While the coupled path still widens flats at low SNR.
+        val coupledLow = RawSrKernelCovariance.precision(flat(), RawSrTuning.forSnr(6.0)).get(8, 6, 0)
+        val coupledHigh = RawSrKernelCovariance.precision(flat(), RawSrTuning.forSnr(30.0)).get(8, 6, 0)
+        assertTrue(coupledLow < coupledHigh)
+    }
+
+    @Test fun decoupledMatchingCoupledRadiusAgreesWithCoupled() {
+        // Decoupled with flatSigma = kDetail * kDenoise is the same geometry
+        // in a different op order: agree tightly, not bitwise.
+        val coupled = RawSrTuning.forSnr(18.0)
+        val decoupled = coupled.withFlatSigma(coupled.kDetail * coupled.kDenoise)
+        val width = 20
+        val height = 14
+        val values = FloatArray(width * height) { i ->
+            val x = i % width
+            val y = i / width
+            0.35f + 0.25f * ((x * 79 + y * 43) % 17) / 17f + 0.1f * ((x * x + 3 * y) % 13) / 13f
+        }
+        val gray = RawSrGrayImage(width, height, values)
+        val expected = RawSrKernelCovariance.covariance(gray, coupled).values
+        val actual = RawSrKernelCovariance.covariance(gray, decoupled).values
+        assertEquals(expected.size, actual.size)
+        for (i in expected.indices) {
+            assertEquals("[$i] expected=${expected[i]} actual=${actual[i]}",
+                expected[i], actual[i], 1e-5f)
+        }
+    }
+
+    @Test fun detailFloorClampsNarrowAxis() {
+        // Vertical line at SNR 30 (coupled k1 = 0.56875, k2 = 0.8225): a
+        // 0.7 floor binds the across-edge radius only.
+        val width = 32
+        val height = 24
+        val values = FloatArray(width * height)
+        for (y in 0 until height) for (x in 0 until width)
+            values[y * width + x] = if (x == 16) 1f else 0f
+        val tuning = RawSrTuning.forSnr(30.0).withDetailFloor(0.7)
+        val precision = RawSrKernelCovariance.precision(RawSrGrayImage(width, height, values), tuning)
+        assertEquals(1f / (0.7f * 0.7f), precision.get(16, 12, 0), 1e-4f)
+        assertEquals(0f, precision.get(16, 12, 1), 1e-5f)
+        assertEquals(1f / (0.8225f * 0.8225f), precision.get(16, 12, 3), 1e-4f)
+    }
+
+    @Test fun detailFloorBindsBothAxesWhenWide() {
+        // Flat field at SNR 30 (coupled radius 0.75): a 1.0 floor binds
+        // both axes to the isotropic floor kernel.
+        val tuning = RawSrTuning.forSnr(30.0).withDetailFloor(1.0)
+        val precision = RawSrKernelCovariance.precision(flat(), tuning)
+        assertEquals(1f, precision.get(8, 6, 0), 1e-6f)
+        assertEquals(0f, precision.get(8, 6, 1), 0f)
+        assertEquals(1f, precision.get(8, 6, 3), 1e-6f)
+    }
+
+    @Test fun detailFloorComposesWithDecoupling() {
+        // Decoupled vertical line (k1 = 0.39125, k2 = 0.645): a 0.4 floor
+        // binds the across-edge radius only, keeping edges sharp but
+        // above the single-tap latch.
+        val width = 32
+        val height = 24
+        val values = FloatArray(width * height)
+        for (y in 0 until height) for (x in 0 until width)
+            values[y * width + x] = if (x == 16) 1f else 0f
+        val tuning = RawSrTuning.forSnr(30.0).withFlatSigma(0.5).withDetailFloor(0.4)
+        val precision = RawSrKernelCovariance.precision(RawSrGrayImage(width, height, values), tuning)
+        assertEquals(1f / (0.4f * 0.4f), precision.get(16, 12, 0), 1e-4f)
+        assertEquals(1f / (0.645f * 0.645f), precision.get(16, 12, 3), 1e-4f)
+    }
+
+    @Test fun isoIgnoresFlatSigma() {
+        // ISO keeps the Jamy-L quirk (covariance = kDetail, kDenoise
+        // ignored); decoupling does not change that fast path.
+        val tuning = RawSrTuning.forSnr(30.0).withFlatSigma(0.5)
+        val covariance = RawSrKernelCovariance.covariance(
+            flat(20, 14), tuning, RawSrKernelCovariance.KernelType.ISO)
+        assertEquals(0.25f, covariance.get(10, 7, 0), 0f)
+        assertEquals(0.25f, covariance.get(10, 7, 3), 0f)
     }
 
     @Test fun defaultSelectionLawIsHard() {

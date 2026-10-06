@@ -75,6 +75,65 @@ class RawNindPackTest {
         assertTrue(threw)
     }
 
+    @Test fun bayerOriginIsTheRSiteOfEveryPattern() {
+        assertEquals(0 to 0, RawNindPack.bayerOrigin(BayerPattern.RGGB))
+        assertEquals(0 to 1, RawNindPack.bayerOrigin(BayerPattern.GRBG))
+        assertEquals(1 to 0, RawNindPack.bayerOrigin(BayerPattern.GBRG))
+        assertEquals(1 to 1, RawNindPack.bayerOrigin(BayerPattern.BGGR))
+        for (pattern in BayerPattern.entries) {
+            val (y0, x0) = RawNindPack.bayerOrigin(pattern)
+            assertEquals(CfaColor.RED, pattern.colorAt(x0, y0))
+        }
+    }
+
+    @Test fun bayerShiftedPackIsRgbbOrderedOnEveryPattern() {
+        // Distinct value per stored quad position; after the R-shift the
+        // packed channels must read [R, G1, G2, B] with G1 on working-even
+        // rows — no permutation. 6x6 keeps a full quad past every origin.
+        for (pattern in BayerPattern.entries) {
+            val w = 6
+            val h = 6
+            val bayer = FloatArray(w * h) { i ->
+                when (pattern.colorAt(i % w, i / w)) {
+                    CfaColor.RED -> 10f
+                    CfaColor.GREEN -> if ((i / w) % 2 == 0) 20f else 30f
+                    CfaColor.BLUE -> 40f
+                }
+            }
+            val pack = RawNindPack.bayerPackShifted(bayer, w, h, pattern)
+            val (y0, x0) = RawNindPack.bayerOrigin(pattern)
+            assertEquals(y0, pack.y0)
+            assertEquals(x0, pack.x0)
+            assertEquals((w - x0) / 2, pack.w2)
+            assertEquals((h - y0) / 2, pack.h2)
+            for (qi in 0 until pack.w2 * pack.h2) {
+                assertEquals("$pattern R", 10f, pack.packed[qi * 4], 0f)
+                assertEquals("$pattern B", 40f, pack.packed[qi * 4 + 3], 0f)
+                // G1/G2 follow the working (RGGB-phase) rows, not the
+                // sensor rows: first packed row sits on sensor row y0.
+                val qy = qi / pack.w2
+                val g1 = if ((y0 + qy * 2) % 2 == 0) 20f else 30f
+                val g2 = if ((y0 + qy * 2 + 1) % 2 == 0) 20f else 30f
+                assertEquals("$pattern G1", g1, pack.packed[qi * 4 + 1], 0f)
+                assertEquals("$pattern G2", g2, pack.packed[qi * 4 + 2], 0f)
+            }
+        }
+    }
+
+    @Test fun bayerShiftedPackMatchesCanonicalPackOnRgbb() {
+        val rng = Random(11)
+        val w = 8
+        val h = 6
+        val bayer = FloatArray(w * h) { rng.nextFloat() }
+        val shifted = RawNindPack.bayerPackShifted(bayer, w, h, BayerPattern.RGGB)
+        assertEquals(0, shifted.y0)
+        assertEquals(0, shifted.x0)
+        assertArrayEquals(
+            RawNindPack.packCanonical(bayer, w, h, BayerPattern.RGGB),
+            shifted.packed, 0f
+        )
+    }
+
     @Test fun sigmaMatchesPoissonGaussianProfile() {
         // sqrt(2.5e-4 * 0.18 + 2.5e-6) ~= 0.00689.
         val sigma = RawNindPack.sigmaFor(0.18f, 2.5e-4f, 2.5e-6f)

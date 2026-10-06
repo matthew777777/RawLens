@@ -103,11 +103,13 @@ class StackerNearestParityTest {
         return RawSrBayerMerge.MergeFrame(w, h, samples, pattern.shifted(ox, oy), ox, oy, precision, flow, robustness)
     }
 
-    private fun zeroField(qw: Int, qh: Int, dx: Float = 0f, dy: Float = 0f): RawSrAlignmentField {
-        val columns = (qw + 7) / 8
-        val rows = (qh + 7) / 8
+    private fun zeroField(w: Int, h: Int, dx: Float = 0f, dy: Float = 0f): RawSrAlignmentField {
+        // Raw-lattice field (Jamy-L convention): raw-pixel coverage with
+        // raw-unit vectors.
+        val columns = w / 8
+        val rows = h / 8
         val tiles = List(columns * rows) { RawSrTileFlow(0f, 0f, dx, dy, 0f, true) }
-        return RawSrAlignmentField(qw, qh, 8, columns, rows, tiles)
+        return RawSrAlignmentField(w, h, 8, columns, rows, tiles)
     }
 
     private fun constRobust(qw: Int, qh: Int, v: Float): RawSrRobustness.FrameRobustness =
@@ -205,7 +207,7 @@ class StackerNearestParityTest {
             FloatArray(w * h) { i -> 0.1f + (i % 7) * 0.05f })
         val mov = frame(w, h, BayerPattern.RGGB, 0, 0,
             FloatArray(w * h) { i -> 0.9f - (i % 5) * 0.05f },
-            zeroField(w / 2, h / 2), constRobust(w / 2, h / 2, 0f))
+            zeroField(w, h), constRobust(w / 2, h / 2, 0f))
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
         val refOnly = RawSrBayerMerge.merge(ref, emptyList())
         assertTrue(out.fallback.none { it })
@@ -224,7 +226,7 @@ class StackerNearestParityTest {
             FloatArray(w * h) { i -> 0.1f + (i % 7) * 0.05f })
         val mov = frame(w, h, BayerPattern.RGGB, 0, 0,
             FloatArray(w * h) { i -> 0.9f - (i % 5) * 0.05f },
-            zeroField(w / 2, h / 2, dx = 100f), constRobust(w / 2, h / 2, 1f))
+            zeroField(w, h, dx = 100f), constRobust(w / 2, h / 2, 1f))
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
         val refOnly = RawSrBayerMerge.merge(ref, emptyList())
         assertArrayEquals(refOnly.rgb, out.rgb, 0f)
@@ -250,7 +252,7 @@ class StackerNearestParityTest {
         val ref = frame(w, h, BayerPattern.RGGB, 0, 0, refSamples)
         val movWeight = 0.1f
         val mov = frame(w, h, BayerPattern.RGGB, 0, 0, movSamples,
-            zeroField(w / 2, h / 2), constRobust(w / 2, h / 2, movWeight))
+            zeroField(w, h), constRobust(w / 2, h / 2, movWeight))
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
         assertTrue(out.fallback.none { it })
         val refOnly = RawSrBayerMerge.merge(ref, emptyList())

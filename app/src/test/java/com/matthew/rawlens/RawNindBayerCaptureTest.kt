@@ -28,7 +28,10 @@ class RawNindBayerCaptureTest {
             values.put(p * 3 + 1, 500_000f)
             values.put(p * 3 + 2, 800_000f)
         }
-        `when`(processor.runInferenceBayer(any(FloatBuffer::class.java), eq(2), eq(2))).thenReturn(bytes)
+        // Shifted (w2, h2) vary by pattern — RGGB (2, 2), GRBG (1, 2),
+        // GBRG (2, 1), BGGR (1, 1); the oversized uniform buffer satisfies
+        // every limit check.
+        `when`(processor.runInferenceBayer(any(FloatBuffer::class.java), anyInt(), anyInt())).thenReturn(bytes)
         val denoiser = RawNindDenoiser(processor)
         for (pattern in BayerPattern.entries) {
             val input = source(pattern)
@@ -38,26 +41,35 @@ class RawNindBayerCaptureTest {
             assertEquals(input.sensorCropTop, result.sensorCropTop)
             assertArrayEquals(input.values, result.values, 1e-6f)
         }
-        verify(processor, times(4)).runInferenceBayer(any(FloatBuffer::class.java), eq(2), eq(2))
+        verify(processor, times(4)).runInferenceBayer(any(FloatBuffer::class.java), anyInt(), anyInt())
         verify(processor, never()).runInference(any(FloatBuffer::class.java), anyInt(), anyInt())
     }
 
-    @Test fun remosaicPreservesSpatialPhaseAndFallsBackForNonFinitePredictions() {
+    @Test fun remosaicSamplesAtSiteAndKeepsMarginsAtSource() {
+        // Distinct model value per (pixel, channel) so any off-site sampling
+        // fails; margins (outside the R-shifted working grid) keep source.
         val rgb = FloatBuffer.wrap(FloatArray(4 * 4 * 3) { it / 100f })
         for (pattern in BayerPattern.entries) {
             val input = source(pattern)
             val result = RawNindPack.bayerRgbToCfa(rgb, input, 1f)
-            val perm = RawNindPack.canonicalPerm(pattern)
+            val (y0, x0) = RawNindPack.bayerOrigin(pattern)
+            val mw = 2 * ((4 - x0) / 2)
+            val mh = 2 * ((4 - y0) / 2)
             for (y in 0..3) for (x in 0..3) {
-                val site = perm[(y % 2) * 2 + x % 2]
-                val modelY = y / 2 * 2 + site / 2
-                val modelX = x / 2 * 2 + site % 2
-                val c = when (pattern.colorAt(x, y)) {
-                    CfaColor.RED -> 0
-                    CfaColor.GREEN -> 1
-                    CfaColor.BLUE -> 2
+                val expected = if (y in y0 until y0 + mh && x in x0 until x0 + mw) {
+                    val wy = y - y0
+                    val wx = x - x0
+                    // Working grid is RGGB by construction.
+                    val c = when ((wy and 1) * 2 + (wx and 1)) {
+                        0 -> 0
+                        3 -> 2
+                        else -> 1
+                    }
+                    rgb.get((wy * mw + wx) * 3 + c)
+                } else {
+                    input.values[y * 4 + x]
                 }
-                assertEquals(rgb.get((modelY * 4 + modelX) * 3 + c), result.values[y * 4 + x], 1e-6f)
+                assertEquals("$pattern@$x,$y", expected, result.values[y * 4 + x], 1e-6f)
             }
             assertSame(input, RawNindPack.bayerRgbToCfa(rgb, input, 0f))
         }

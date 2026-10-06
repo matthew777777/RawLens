@@ -15,10 +15,10 @@ class RawSrTuningTest {
             val tuning = RawSrTuning.forSnr(snr)
             assertEquals(raw, tuning.rawTileSize)
             assertEquals(raw / 2, tuning.alignmentTileQuads)
-            assertEquals(raw / 2, tuning.alignmentConfig().tileSize)
+            assertEquals(raw, tuning.alignmentConfig().tileSize)
             assertEquals(3, tuning.alignmentConfig().lkIterations)
             assertEquals(4, tuning.alignmentConfig().searchRadius)
-            assertEquals(0.12f, tuning.alignmentConfig().maxMeanAbsoluteResidual, 0f)
+            assertEquals(0.12, tuning.alignmentConfig().maxMeanAbsoluteResidual, 0.0)
         }
         assertEquals(6.0, RawSrTuning.forSnr(Double.NEGATIVE_INFINITY).snr, 0.0)
         assertEquals(30.0, RawSrTuning.forSnr(Double.POSITIVE_INFINITY).snr, 0.0)
@@ -101,6 +101,109 @@ class RawSrTuningTest {
         assertTrue(highNoise.tuning.rawTileSize > lowNoise.tuning.rawTileSize)
     }
 
+    @Test fun forSnrStaysCoupledLegacy() {
+        for (snr in listOf(6.0, 18.0, 30.0)) {
+            assertNull(RawSrTuning.forSnr(snr).flatSigma)
+            assertNull(RawSrTuning.forSnr(snr).detailFloor)
+        }
+    }
+
+    @Test fun fixedFactoryPinsEveryConstant() {
+        val t = RawSrTuning.fixed(
+            rawTileSize = 32, kDetail = 0.08, kDenoise = 5.0, dTh = 0.25, dTr = 0.30,
+            kStretch = 1.0, kShrink = 8.0, t = 0.09, s1 = 1.5, s2 = 9.0, mTh = 0.65,
+            flatSigma = 0.5, detailFloor = 0.4)
+        assertEquals(32, t.rawTileSize)
+        assertEquals(16, t.alignmentTileQuads)
+        assertEquals(32, t.alignmentConfig().tileSize)
+        assertEquals(0.08, t.kDetail, 0.0)
+        assertEquals(5.0, t.kDenoise, 0.0)
+        assertEquals(0.25, t.dTh, 0.0)
+        assertEquals(0.30, t.dTr, 0.0)
+        assertEquals(1.0, t.kStretch, 0.0)
+        assertEquals(8.0, t.kShrink, 0.0)
+        assertEquals(0.09, t.t, 0.0)
+        assertEquals(1.5, t.s1, 0.0)
+        assertEquals(9.0, t.s2, 0.0)
+        assertEquals(0.65, t.mTh, 0.0)
+        assertEquals(0.5, t.flatSigma!!, 0.0)
+        assertEquals(0.4, t.detailFloor!!, 0.0)
+    }
+
+    @Test fun decoupledSharpPresetMatchesMeasuredExif() {
+        // RAWR MF12 multiframe EXIF (2026-09-25): kDetail 0.080, kDenoise 5.0,
+        // dThreshold 0.250, dTransition 0.300, kStretch 1.0, kShrink 8.0,
+        // robustness T/S1/S2 0.090/1.500/9.000, motion 0.650, flat sigma 0.5.
+        // Detail floor 0.4 is a RawLens latch-guardrail addition (RAWR: off).
+        val t = RawSrTuning.decoupledSharp()
+        assertEquals(0.08, t.kDetail, 0.0)
+        assertEquals(5.0, t.kDenoise, 0.0)
+        assertEquals(0.25, t.dTh, 0.0)
+        assertEquals(0.30, t.dTr, 0.0)
+        assertEquals(1.0, t.kStretch, 0.0)
+        assertEquals(8.0, t.kShrink, 0.0)
+        assertEquals(0.09, t.t, 0.0)
+        assertEquals(1.5, t.s1, 0.0)
+        assertEquals(9.0, t.s2, 0.0)
+        assertEquals(0.65, t.mTh, 0.0)
+        assertEquals(0.5, t.flatSigma!!, 0.0)
+        assertEquals(0.4, t.detailFloor!!, 0.0)
+    }
+
+    @Test fun decoupledSharpAcceptsScannedFlat() {
+        val t = RawSrTuning.decoupledSharp(flatSigma = 0.767, snrDb = 29.45)
+        assertEquals(0.767, t.flatSigma!!, 0.0)
+        assertEquals(29.45, t.snr, 0.0)
+        assertEquals(0.08, t.kDetail, 0.0)
+        assertEquals(5.0, t.kDenoise, 0.0)
+        assertEquals(0.4, t.detailFloor!!, 0.0)
+        // Bare call stays RAWR-exact (flat 0.5, label SNR 30).
+        assertEquals(0.5, RawSrTuning.decoupledSharp().flatSigma!!, 0.0)
+    }
+
+    @Test fun withDetailFloorCopiesAndValidates() {
+        val base = RawSrTuning.forSnr(18.0)
+        val floored = base.withDetailFloor(0.4)
+        assertEquals(0.4, floored.detailFloor!!, 0.0)
+        assertEquals(base.kDetail, floored.kDetail, 0.0)
+        assertNull(floored.flatSigma)
+        for (bad in listOf(0.0, -0.5, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) { base.withDetailFloor(bad) }
+        }
+    }
+
+    @Test fun withFlatSigmaCopiesAndValidates() {
+        val base = RawSrTuning.forSnr(18.0)
+        val decoupled = base.withFlatSigma(0.5)
+        assertEquals(0.5, decoupled.flatSigma!!, 0.0)
+        assertEquals(base.kDetail, decoupled.kDetail, 0.0)
+        assertEquals(base.kDenoise, decoupled.kDenoise, 0.0)
+        assertEquals(base.dTh, decoupled.dTh, 0.0)
+        assertEquals(base.rawTileSize, decoupled.rawTileSize)
+        for (bad in listOf(0.0, -0.5, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) { base.withFlatSigma(bad) }
+        }
+        val sharper = base.withKDetail(0.08)
+        assertEquals(0.08, sharper.kDetail, 0.0)
+        assertEquals(base.kDenoise, sharper.kDenoise, 0.0)
+        assertNull(sharper.flatSigma)
+        for (bad in listOf(0.0, -0.5, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) { base.withKDetail(bad) }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RawSrTuning.fixed(rawTileSize = 8, kDetail = 0.1, kDenoise = 5.0,
+                dTh = 0.25, dTr = 0.3, flatSigma = 0.5)
+        }
+    }
+
+    @Test fun debugSummaryNamesFlatSigma() {
+        assertTrue(RawSrTuning.estimate(0.5, null).debugSummary().contains("flatSigma"))
+        val summary = RawSrTuning.Estimate(
+            RawSrTuning.decoupledSharp(), 0.5, 10.0, 0.0025,
+            RawSrTuning.Status.ESTIMATED).debugSummary()
+        assertTrue(summary, summary.contains("flatSigma=0.5"))
+    }
+
     @Test fun packedReferenceUsesFrozenBlackWhiteCropAndPlanePositionBeforeLensGains() {
         for (pattern in BayerPattern.entries) {
             val layout = RawPlaneLayout(6, 6, 16, 2, 1, 0)
@@ -129,4 +232,32 @@ class RawSrTuningTest {
             assertArrayEquals(before, ByteArray(bytes.remaining()).also { bytes.duplicate().get(it) })
         }
     }
+
+    @Test fun describeRecordsEveryConstantForProvenance() {
+        val line = RawSrTuning.forSnr(30.0)
+            .withFlatSigma(0.5).withDetailFloor(0.4).describe()
+        val tuning = RawSrTuning.forSnr(30.0).withFlatSigma(0.5).withDetailFloor(0.4)
+        for (key in listOf(
+            "tileRaw=${tuning.rawTileSize}", "kDetail=${tuning.kDetail}",
+            "kDenoise=${tuning.kDenoise}", "Dth=${tuning.dTh}", "Dtr=${tuning.dTr}",
+            "kStretch=${tuning.kStretch}", "kShrink=${tuning.kShrink}",
+            "t=${tuning.t}", "s1=${tuning.s1}", "s2=${tuning.s2}",
+            "mTh=${tuning.mTh}", "flatSigma=0.5", "detailFloor=0.4",
+            "snr=${tuning.snr}"
+        )) assertTrue("missing $key", line.contains(key))
+    }
+
+    @Test fun flowRegularizeSigmaDefaultsOffAndValidates() {
+        assertEquals(null, RawSrTuning.forSnr(30.0).flowRegularizeSigma)
+        val tuned = RawSrTuning.forSnr(30.0).withFlowRegularizeSigma(1.5)
+        assertEquals(1.5, tuned.flowRegularizeSigma!!, 0.0)
+        assertTrue(tuned.describe().contains("flowReg=1.5"))
+        for (bad in listOf(0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY)) {
+            try {
+                RawSrTuning.forSnr(30.0).withFlowRegularizeSigma(bad)
+                org.junit.Assert.fail("withFlowRegularizeSigma($bad) must reject")
+            } catch (_: IllegalArgumentException) { }
+        }
+    }
+
 }

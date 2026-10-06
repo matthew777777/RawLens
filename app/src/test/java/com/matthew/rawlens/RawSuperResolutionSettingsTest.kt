@@ -4,6 +4,7 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class RawSuperResolutionSettingsTest {
@@ -23,6 +24,62 @@ class RawSuperResolutionSettingsTest {
         assertEquals(true,
             RawSuperResolutionSettings.fromPreferences(
                 mapOf("raw_super_resolution_save_merge_debug" to true)).saveMergeDebugFrames)
+    }
+
+    @Test fun kernelPresetResolveUsesScannedFlatForDecoupled() {
+        // C2 semantics: the RAWR detail end with the scene's own scanned
+        // flat width (SNR 18 scans to kDetail 0.29 x kDenoise 4.0).
+        val scan = RawSrTuning.forSnr(18.0)
+        assertNull(RawSrKernelPreset.REFERENCE.resolve(scan))
+        val decoupled = RawSrKernelPreset.DECOUPLED_SHARP.resolve(scan)!!
+        assertEquals(scan.kDetail * scan.kDenoise, decoupled.flatSigma!!, 0.0)
+        assertEquals(1.16, decoupled.flatSigma!!, 1e-9)
+        assertEquals(0.08, decoupled.kDetail, 0.0)
+        assertEquals(0.25, decoupled.dTh, 0.0)
+        assertEquals(0.30, decoupled.dTr, 0.0)
+        assertEquals(1.0, decoupled.kStretch, 0.0)
+        assertEquals(8.0, decoupled.kShrink, 0.0)
+        assertEquals(0.4, decoupled.detailFloor!!, 0.0)
+        assertEquals(18.0, decoupled.snr, 0.0)
+    }
+
+    @Test fun sharpestReferenceDefaultsOnAndSurvivesReload() {
+        assertEquals(true, RawSuperResolutionSettings().sharpestReference)
+        assertEquals(RawSrKernelPreset.REFERENCE, RawSuperResolutionSettings().kernelPreset)
+        val custom = RawSuperResolutionSettings(
+            sharpestReference = false, kernelPreset = RawSrKernelPreset.DECOUPLED_SHARP)
+        assertEquals(custom, RawSuperResolutionSettings.fromPreferences(custom.toPreferences().toMutableMap()))
+        assertEquals(true,
+            RawSuperResolutionSettings.fromPreferences(emptyMap<String, Any>()).sharpestReference)
+        assertEquals(RawSrKernelPreset.DECOUPLED_SHARP, RawSrKernelPreset.fromPreference("decoupled_sharp"))
+        assertEquals(RawSrKernelPreset.REFERENCE, RawSrKernelPreset.fromPreference("unknown"))
+        assertEquals(RawSrKernelPreset.REFERENCE, RawSrKernelPreset.fromPreference(null))
+    }
+
+    @Test fun mosaicScaleDefaultsSrAndSurvivesReload() {
+        assertEquals(RawSrMosaicScale.SR, RawSuperResolutionSettings().mosaicScale)
+        val native = RawSuperResolutionSettings(mosaicScale = RawSrMosaicScale.NATIVE)
+        assertEquals(native, RawSuperResolutionSettings.fromPreferences(native.toPreferences().toMutableMap()))
+        assertEquals(RawSrMosaicScale.NATIVE, RawSrMosaicScale.fromPreference("native"))
+        assertEquals(RawSrMosaicScale.SR, RawSrMosaicScale.fromPreference("sr"))
+        assertEquals(RawSrMosaicScale.SR, RawSrMosaicScale.fromPreference("unknown"))
+        assertEquals(RawSrMosaicScale.SR, RawSrMosaicScale.fromPreference(null))
+        assertEquals(1.0, RawSrMosaicScale.NATIVE.factor, 0.0)
+        assertEquals(MosaicSrReconstructor.LINEAR_SCALE, RawSrMosaicScale.SR.factor, 0.0)
+    }
+
+    @Test fun linearScaleDefaultsX1AndSurvivesReload() {
+        assertEquals(RawSrLinearScale.X1, RawSuperResolutionSettings().linearScale)
+        val sr = RawSuperResolutionSettings(linearScale = RawSrLinearScale.SR)
+        assertEquals(sr, RawSuperResolutionSettings.fromPreferences(sr.toPreferences().toMutableMap()))
+        assertEquals(RawSrLinearScale.X1, RawSrLinearScale.fromPreference("1x"))
+        assertEquals(RawSrLinearScale.SR, RawSrLinearScale.fromPreference("sr"))
+        assertEquals(RawSrLinearScale.X1, RawSrLinearScale.fromPreference("unknown"))
+        assertEquals(RawSrLinearScale.X1, RawSrLinearScale.fromPreference(null))
+        assertEquals(1.0, RawSrLinearScale.X1.factor, 0.0)
+        assertEquals(MosaicSrReconstructor.LINEAR_SCALE, RawSrLinearScale.SR.factor, 0.0)
+        // Unity pin: both paths resolve the same √2 factor.
+        assertEquals(RawSrMosaicScale.SR.factor, RawSrLinearScale.SR.factor, 0.0)
     }
 
     @Test fun queuedSnapshotSurvivesUiChangesAndPreferenceReload() {

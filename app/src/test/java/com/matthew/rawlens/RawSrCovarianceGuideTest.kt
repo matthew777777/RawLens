@@ -62,9 +62,20 @@ class RawSrCovarianceGuideTest {
         val unpacked = RawSensorUnpacker.unpackNormalized(
             missing.uploadInput().buffer, missing.uploadInput().layout,
             missing.uploadInput().normalization, missing.uploadInput().crop)
-        val plain = RawSrAlignment.bayerQuadGray(unpacked)
+        // Plain normalized quad average in Float (bayerQuadGray's formula,
+        // inlined after the checkout port removed the quad-grey front end).
+        val gw = missingGuide.gray.width
+        val gh = missingGuide.gray.height
+        val plain = FloatArray(gw * gh) { i ->
+            val qx = i % gw
+            val qy = i / gw
+            var sum = 0f
+            for (dy in 0..1) for (dx in 0..1)
+                sum += unpacked.values[(qy * 2 + dy) * unpacked.width + qx * 2 + dx]
+            sum * 0.25f
+        }
         // Same formula in Float vs Double: 1-ulp rounding differs, nothing else.
-        assertArrayEquals(plain.values, missingGuide.gray.values, 1e-4f)
+        assertArrayEquals(plain, missingGuide.gray.values, 1e-4f)
 
         // Invalid: wrong size, negative, and non-finite coefficients.
         for (bad in listOf(
@@ -73,13 +84,13 @@ class RawSrCovarianceGuideTest {
             ImmutableDoubleValues(doubleArrayOf(0.01, 0.001, Double.NaN, 0.001, 0.03, 0.001, 0.04, 0.001)))) {
             val guide = RawSrCovarianceGuide.guide(packed(profile = bad))
             assertEquals("profile=$bad", RawSrCovarianceGuide.Status.UNSTABILIZED_INVALID_PROFILE, guide.status)
-            assertArrayEquals(plain.values, guide.gray.values, 1e-4f)
+            assertArrayEquals(plain, guide.gray.values, 1e-4f)
         }
 
         // Zero noise everywhere: nothing to stabilize, plain average labeled honestly.
         val zero = RawSrCovarianceGuide.guide(packed(profile = ImmutableDoubleValues(DoubleArray(8))))
         assertEquals(RawSrCovarianceGuide.Status.UNSTABILIZED_ZERO_NOISE, zero.status)
-        assertArrayEquals(plain.values, zero.gray.values, 1e-4f)
+        assertArrayEquals(plain, zero.gray.values, 1e-4f)
 
         // Inconsistent: one zero-noise phase beside noisy ones is no physical sensor.
         val inconsistent = RawSrCovarianceGuide.guide(packed(profile = ImmutableDoubleValues(

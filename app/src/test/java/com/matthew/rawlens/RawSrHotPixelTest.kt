@@ -225,10 +225,10 @@ class RawSrHotPixelTest {
         // inpaints before the merge). Only mean-level hot regions — a stuck
         // 4x4 block covering whole quads — reject, through the photo term.
         val tuning = RawSrTuning.forSnr(18.0)
-        val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
+        val config = RawSrAlignmentConfig()
         val texture = { sx: Int, sy: Int -> 1500 + ((sx * 79 + sy * 43) % 101) }
-        val flow = RawSrAlignmentField(16, 12, 16, 1, 1, listOf(
-            RawSrTileFlow(8f, 6f, 0f, 0f, 0f, true)))
+        val flow = RawSrAlignmentField(32, 24, 16, 2, 2, List(4) {
+            RawSrTileFlow(8f, 6f, 0f, 0f, 0f, true) })
         val q = 5 * 16 + 5
         // Single stuck tap: detected, but robustness accepts (no gate).
         val ref = RawSrRobustness.linearGuide(packed(texture))

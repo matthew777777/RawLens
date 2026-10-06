@@ -12,11 +12,15 @@ class CameraIdCacheTest {
         assertEquals(1, resolutions)
     }
 
-    @Test fun `rejected ids stay cached so they never re-hit the HAL`() {
+    @Test fun `rejected ids resolve again so transient vendor responses never poison`() {
+        // Xiaomi returns bogus characteristics while the camera service is
+        // still initializing: a null cached at startup would wedge every
+        // later open of that lens. Nulls re-hit the resolver; only successes
+        // are memoized.
         var resolutions = 0
         val cache = CameraIdCache<String> { resolutions++.let { null } }
         repeat(3) { assertNull(cache.get("1")) }
-        assertEquals(1, resolutions)
+        assertEquals(3, resolutions)
     }
 
     @Test fun `distinct ids resolve independently`() {

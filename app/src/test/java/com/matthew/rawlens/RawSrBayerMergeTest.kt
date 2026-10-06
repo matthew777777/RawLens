@@ -5,6 +5,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CancellationException
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.random.Random
 import org.junit.Assert.*
 import org.junit.Test
@@ -40,17 +41,19 @@ class RawSrBayerMergeTest {
     }
 
     private fun field(
-        qw: Int = QW, qh: Int = QH, tileSize: Int = 8,
+        w: Int = W, h: Int = H, tileSize: Int = 8,
         flowAt: (tx: Int, ty: Int) -> Pair<Float, Float> = { _, _ -> 0f to 0f },
         reliable: Boolean = true
     ): RawSrAlignmentField {
-        val columns = (qw + tileSize - 1) / tileSize
-        val rows = (qh + tileSize - 1) / tileSize
+        // Raw-lattice field (Jamy-L convention): raw-pixel coverage with
+        // raw-unit vectors. Fixtures size the frame as a tile multiple.
+        val columns = w / tileSize
+        val rows = h / tileSize
         val tiles = List(columns * rows) { i ->
             val (dx, dy) = flowAt(i % columns, i / columns)
             RawSrTileFlow(0f, 0f, dx, dy, 0f, reliable)
         }
-        return RawSrAlignmentField(qw, qh, tileSize, columns, rows, tiles)
+        return RawSrAlignmentField(w, h, tileSize, columns, rows, tiles)
     }
 
     private fun robust(
@@ -78,7 +81,7 @@ class RawSrBayerMergeTest {
         return RawSrBayerMerge.MergeFrame(
             w, h, samples, pattern.shifted(ox, oy), ox, oy,
             isoCovariance(w / 2, h / 2, k),
-            flow ?: field(w / 2, h / 2),
+            flow ?: field(w, h),
             robustness ?: robust(w / 2, h / 2),
             chroma = chroma)
     }
@@ -399,6 +402,76 @@ class RawSrBayerMergeTest {
         }
     }
 
+    @Test fun chromaLatchGuardKillsEdgeTeethAndKeepsGreenBitwise() {
+        // Achromatic vertical step (0.2 | 0.8) under a razor across-edge /
+        // smooth along-edge kernel (sx = 0.13 raw px, the analytic A = 2
+        // across radius): the reference-verbatim spelling (chromaSigmaMpy =
+        // 1.0) latches each output pixel's R/B quotient onto a single tap,
+        // and the R/B latch phases disagree along the edge (chroma zipper
+        // teeth). The guarded default widens only the R/B kernel, so the
+        // worst R/G and B/G deviations must shrink while green stays
+        // bitwise-identical.
+        fun aniso(qw: Int, qh: Int, sx: Double, sy: Double): RawSrKernelCovariance.MatrixField {
+            val values = FloatArray(qw * qh * 4)
+            for (i in 0 until qw * qh) {
+                values[i * 4] = (sx * sx).toFloat()
+                values[i * 4 + 1] = 0f
+                values[i * 4 + 2] = 0f
+                values[i * 4 + 3] = (sy * sy).toFloat()
+            }
+            return RawSrKernelCovariance.MatrixField(qw, qh, values)
+        }
+        val edge = 16
+        fun edged(flowDx: Float): RawSrBayerMerge.MergeFrame {
+            val frame = sceneFrame(pattern = BayerPattern.RGGB,
+                flow = field(flowAt = { _, _ -> flowDx to 0f })) { sx, _, _ ->
+                if (sx < edge) 0.2f else 0.8f
+            }
+            return frame.copy(covariance = aniso(W / 2, H / 2, 0.13, 2.0))
+        }
+        // Sub-pixel-shifted movers (the real burst geometry): fractional
+        // shifts break the integer-grid R/B distance ties asymmetrically,
+        // so the verbatim spelling hard-latches onto nearer taps — sometimes
+        // the wrong side of the edge — while the guard blends.
+        val ref = edged(0f)
+        val moving = listOf(0.3f, -0.4f, 0.7f, -0.9f, 1.2f, -1.5f, 0.15f).map { edged(it) }
+        fun run(mpy: Double): RawSrBayerMerge.MergeResult =
+            RawSrBayerMerge.merge(ref, moving, chromaSigmaMpy = mpy)
+        val plain = run(1.0)
+        val guarded = run(RawSrBayerMerge.CHROMA_SIGMA_MPY)
+        fun worstChroma(result: RawSrBayerMerge.MergeResult): Double {
+            var worst = 0.0
+            for (y in 2 until H - 2) for (x in edge - 2..edge + 2) {
+                val o = (y * W + x) * 3
+                val g = result.rgb[o + 1].toDouble()
+                worst = maxOf(worst, abs(result.rgb[o].toDouble() - g), abs(result.rgb[o + 2].toDouble() - g))
+            }
+            return worst
+        }
+        val plainWorst = worstChroma(plain)
+        val guardedWorst = worstChroma(guarded)
+        for ((nm, res) in listOf("plain" to plain, "guarded" to guarded)) {
+            val sb = StringBuilder("$nm y=12:")
+            for (x in 13..19) {
+                val o = (12 * W + x) * 3
+                sb.append(" x$x=(%.3f,%.3f,%.3f)".format(res.rgb[o], res.rgb[o + 1], res.rgb[o + 2]))
+            }
+            println(sb.toString())
+        }
+        assertTrue("verbatim must latch teeth (worst=$plainWorst)", plainWorst > 0.1)
+        // Zero-support divide (EPS=0) removed the collapse-to-0 teeth the
+        // guard once erased wholesale; what remains is latch-phase
+        // disagreement (R/B picking different single taps), which the wider
+        // guard kernel softens but does not eliminate on this razor edge.
+        // The guard must still strictly improve the worst tooth.
+        assertTrue("guarded worst=$guardedWorst must beat verbatim worst=$plainWorst",
+            guardedWorst < plainWorst)
+        for (y in 0 until H) for (x in 0 until W) {
+            val o = (y * W + x) * 3 + 1
+            assertEquals("green ($x,$y) must stay bitwise", plain.rgb[o], guarded.rgb[o], 0f)
+        }
+    }
+
     private fun Random.nextGaussian(): Double {
         var u = 0.0
         var v = 0.0
@@ -446,12 +519,17 @@ class RawSrBayerMergeTest {
 
     @Test fun foregroundOcclusionStaysGhostFreeOnRejection() {
         // Occluded block (robustness 0): the moving frame is fully rejected
-        // and contributes nothing, so the block resolves through the
-        // reference kernel quotient alone — never the +0.5 ghost content.
-        // Every output must lie within the reference window's own value
-        // range: any ghost admixture would exceed its maximum, since every
-        // ghost sample sits exactly +0.5 above the reference texture. No
-        // fallback trips (the reference supports every pixel).
+        // and contributes nothing, so the block interior resolves through
+        // the reference kernel quotient alone — never the +0.5 ghost
+        // content. Every interior output must lie within the reference
+        // window's own value range: any ghost admixture would exceed its
+        // maximum, since every ghost sample sits exactly +0.5 above the
+        // reference texture. No fallback trips (the reference supports
+        // every pixel). Nearest r fetch snaps at quad borders (the snap
+        // itself is pinned by robustnessStepSnapsToShiftedQuad), so exact
+        // rejection is asserted on the guaranteed interior (every pixel
+        // reads r = 0: x in 15..19 → quads 6..8, y in 11..13 → quads
+        // 4..5).
         fun textured(sx: Int, sy: Int, color: CfaColor): Float = 0.15f + ((sx * 31 + sy * 17) % 23) / 23f * 0.5f
         val ref = sceneFrame(scene = ::textured)
         val inBlock = { x: Int, y: Int -> x in 12..21 && y in 8..15 }
@@ -460,7 +538,7 @@ class RawSrBayerMergeTest {
         ) { sx, sy, color -> if (inBlock(sx, sy)) textured(sx, sy, color) + 0.5f else textured(sx, sy, color) }
         val out = RawSrBayerMerge.merge(ref, listOf(moving))
         val refSamples = FloatArray(W * H) { i -> textured(i % W, i / W, BayerPattern.RGGB.colorAt(i % W, i / W)) }
-        for (y in 10..13) for (x in 14..19) {
+        for (y in 11..13) for (x in 15..19) {
             assertTrue("no fallback ($x,$y)", !out.fallback[y * W + x])
             for (c in 0..2) {
                 val v = out.rgb[(y * W + x) * 3 + c].toDouble()
@@ -482,50 +560,225 @@ class RawSrBayerMergeTest {
     }
 
     @Test fun saturatedMovingFrameMergesToReferenceExactly() {
+        // Saturated ghost content (5.0) behind an r = 0 block: the block
+        // interior resolves to the reference exactly. Nearest r fetch
+        // snaps at quad borders (pinned by
+        // robustnessStepSnapsToShiftedQuad), so exactness is asserted on
+        // the guaranteed interior (x in 11..21 → quads 4..9, y in 9..15
+        // → quads 3..6, all inside the r = 0 block).
         val ref = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
         val moving = sceneFrame(robustness = robust { x, y -> if (x in 4..11 && y in 3..8) 0f else 1f }) { _, _, _ -> 5.0f }
         val out = RawSrBayerMerge.merge(ref, listOf(moving))
         val base = refOnlyOf(ref)
-        for (y in 8..15) for (x in 10..21) for (c in 0..2) {
+        for (y in 9..15) for (x in 11..21) for (c in 0..2) {
             assertEquals("($x,$y,$c)", base.rgb[(y * W + x) * 3 + c], out.rgb[(y * W + x) * 3 + c], 0f)
         }
     }
 
-    @Test fun flowTransitionBlendsAcrossTileBorder() {
-        // Bilinear flow sampling (flowAtSmoothInto): alternating tile-columns
-        // shifting 0 vs 1 quad px (tileSize 4) blend across the border, so a
-        // near-border pixel lands strictly between the two uniform outcomes
-        // on a monotonic ramp instead of snapping to its own tile (quilt).
+    @Test fun flowTransitionBlendsAcrossBorderButMatchesUniformFarAway() {
+        // Bilinear-everywhere flow lookup (flowAtSmoothInto):
+        // alternating tile-columns shifting 0 vs 2 raw px (tileSize 4)
+        // blend across every border (the warp is C0-continuous, so no
+        // tile tears can form; mistakes are rejected per-pixel by r,
+        // not by flow vetoes). Near-border pixels 3 and 4 differ from
+        // BOTH uniform outcomes; pixels far from any border (1 and 30,
+        // where both blend corners clamp to one tile) equal the
+        // matching uniform render bitwise.
         fun ramp(sx: Int, sy: Int, color: CfaColor): Float = 0.1f + 0.6f * sx.toFloat() / W + color.ordinal * 0.05f
         val ref = sceneFrame(scene = ::ramp)
-        val mixed = field(QW, QH, 4, flowAt = { tx, _ -> if (tx % 2 == 0) 0f to 0f else 1f to 0f })
-        val uniformA = field(QW, QH, 4, flowAt = { _, _ -> 0f to 0f })
-        val uniformB = field(QW, QH, 4, flowAt = { _, _ -> 1f to 0f })
+        val mixed = field(W, H, 4, flowAt = { tx, _ -> if (tx % 2 == 0) 0f to 0f else 2f to 0f })
+        val uniformA = field(W, H, 4, flowAt = { _, _ -> 0f to 0f })
+        val uniformB = field(W, H, 4, flowAt = { _, _ -> 2f to 0f })
         fun movingWith(flow: RawSrAlignmentField) = sceneFrame(flow = flow, scene = ::ramp)
         val outMixed = RawSrBayerMerge.merge(ref, listOf(movingWith(mixed)))
         val outA = RawSrBayerMerge.merge(ref, listOf(movingWith(uniformA)))
         val outB = RawSrBayerMerge.merge(ref, listOf(movingWith(uniformB)))
         fun rOf(out: RawSrBayerMerge.MergeResult, x: Int, y: Int) = out.rgb[(y * W + x) * 3]
         val y = H / 2
-        // Quad 1 (tile 0 interior): exact tile value, equals uniform A.
-        assertEquals(rOf(outA, 2, y), rOf(outMixed, 2, y), 0f)
-        // Quad 2 (tile 0, one quad from the border): the blend zone — the
-        // smooth sample mixes tile 1, so the value lies strictly between
-        // the two uniforms while they genuinely differ.
-        val a5 = rOf(outA, 5, y).toDouble()
-        val b5 = rOf(outB, 5, y).toDouble()
-        val m5 = rOf(outMixed, 5, y).toDouble()
-        assertTrue("uniforms must differ", abs(a5 - b5) > 1e-4)
-        assertTrue("blend zone must sit strictly between uniforms (a=$a5 b=$b5 m=$m5)",
-            (m5 - a5) * (m5 - b5) < 0.0)
-        // Quad 4 (tile 1, one quad from the border): same blend from the
-        // other side.
-        val a9 = rOf(outA, 9, y).toDouble()
-        val b9 = rOf(outB, 9, y).toDouble()
-        val m9 = rOf(outMixed, 9, y).toDouble()
-        assertTrue("uniforms must differ", abs(a9 - b9) > 1e-4)
-        assertTrue("blend zone must sit strictly between uniforms (a=$a9 b=$b9 m=$m9)",
-            (m9 - a9) * (m9 - b9) < 0.0)
+        // Pixel 1 (corners clamp to tile 0) reads tile 0 exactly:
+        // identical to uniform A, bitwise.
+        assertEquals(rOf(outA, 1, y), rOf(outMixed, 1, y), 0f)
+        // Pixel 30 (corners clamp to tile 7, odd -> 2px) reads tile 7
+        // exactly: identical to uniform B, bitwise.
+        assertEquals(rOf(outB, 30, y), rOf(outMixed, 30, y), 0f)
+        // Pixels 3 and 4 straddle the 0/1 border: the blend lands
+        // strictly between the two uniform warps on this monotonic
+        // ramp, differing from both.
+        for (x in listOf(3, 4)) {
+            assertTrue("mixed must differ from A at $x",
+                abs(rOf(outMixed, x, y) - rOf(outA, x, y)) > 1e-4f)
+            assertTrue("mixed must differ from B at $x",
+                abs(rOf(outMixed, x, y) - rOf(outB, x, y)) > 1e-4f)
+            val lo = minOf(rOf(outA, x, y), rOf(outB, x, y))
+            val hi = maxOf(rOf(outA, x, y), rOf(outB, x, y))
+            assertTrue("mixed must sit between uniforms at $x",
+                rOf(outMixed, x, y) in lo..hi)
+        }
+        // The test is vacuous unless the uniforms genuinely differ there.
+        assertTrue(abs(rOf(outA, 3, y) - rOf(outB, 3, y)) > 1e-4f)
+        assertTrue(abs(rOf(outA, 4, y) - rOf(outB, 4, y)) > 1e-4f)
+    }
+
+    @Test fun robustnessStepSnapsToShiftedQuad() {
+        // Robustness twin of the flow snap test: a single r step (0 below
+        // quad column 8, 1 at/above) on a monotonic ramp with a uniform
+        // flow. Reference `cpu_accumulate` fetches the nearest quad with
+        // the one-quad shift (min(int(lr//2-0.5))): pixels over the r = 0
+        // side equal the all-rejected render exactly, pixels over the
+        // r = 1 side equal the all-accepted render exactly — the step
+        // snaps between columns 17 (quad 7) and 18 (quad 8).
+        fun ramp(sx: Int, sy: Int, color: CfaColor): Float = 0.1f + 0.6f * sx.toFloat() / W + color.ordinal * 0.05f
+        val ref = sceneFrame(scene = ::ramp)
+        val shift = field(flowAt = { _, _ -> 1f to 0f })
+        fun movingWith(rAt: (qx: Int) -> Float) = sceneFrame(flow = shift,
+            robustness = robust(value = { qx, _ -> rAt(qx) }), scene = ::ramp)
+        val outMixed = RawSrBayerMerge.merge(ref, listOf(movingWith { qx -> if (qx < 8) 0f else 1f }))
+        val outA = RawSrBayerMerge.merge(ref, listOf(movingWith { 0f }))
+        val outB = RawSrBayerMerge.merge(ref, listOf(movingWith { 1f }))
+        assertTrue(outMixed.fallback.none { it })
+        var snapped = 0
+        for (y in 4 until H - 4) for (c in 0..2) {
+            // Column 17 reads quad 7 (r = 0): all-rejected, exactly.
+            assertEquals("reject side (17,$y,$c)",
+                outA.rgb[(y * W + 17) * 3 + c], outMixed.rgb[(y * W + 17) * 3 + c], 0f)
+            // Column 18 reads quad 8 (r = 1): all-accepted, exactly.
+            assertEquals("accept side (18,$y,$c)",
+                outB.rgb[(y * W + 18) * 3 + c], outMixed.rgb[(y * W + 18) * 3 + c], 0f)
+            // Vacuous unless the endpoints genuinely differ.
+            assertTrue("uniforms must differ ($y,$c)",
+                abs(outA.rgb[(y * W + 17) * 3 + c] - outB.rgb[(y * W + 17) * 3 + c]) > 1e-9f)
+            snapped++
+        }
+        assertTrue("no snap-zone pixels", snapped > 0)
+    }
+
+    @Test fun horizonRobustnessDipSnapsToShiftedQuads() {
+        // Nearest-r snap on a realistic setup: a 64x64 horizontal step
+        // (0.25/0.75) with production analytic kernels, one moving frame
+        // shifted a full quad down, r = 0 on two-quad patches along the
+        // edge rows. Reference `cpu_accumulate` fetches the nearest quad
+        // with the one-quad shift, so every pixel over an r = 0 patch
+        // equals the reference-only render exactly, and every pixel over
+        // an r = 1 patch equals the all-accepted render exactly.
+        val w = 64
+        val h = 64
+        val qw = w / 2
+        val qh = h / 2
+        val samples = FloatArray(w * h) { i -> if (i / w < h / 2) 0.25f else 0.75f }
+        val gray = RawSrGrayImage(qw, qh,
+            FloatArray(qw * qh) { i -> if (i / qw < qh / 2) 0.25f else 0.75f })
+        val covariance = RawSrKernelCovariance.covariance(gray, RawSrTuning.forSnr(30.0))
+        fun frame(dy: Float, rAt: (qx: Int, qy: Int) -> Float): RawSrBayerMerge.MergeFrame {
+            val flow = RawSrAlignmentField(w, h, 1, w, h,
+                List(w * h) { RawSrTileFlow(0f, 0f, 0f, dy, 0f, true) })
+            val robust = RawSrRobustness.FrameRobustness(
+                qw, qh, FloatArray(qw * qh) { i -> rAt(i % qw, i / qw) }, IntArray(qw * qh))
+            return RawSrBayerMerge.MergeFrame(
+                w, h, samples, BayerPattern.RGGB, 0, 0, covariance, flow, robust)
+        }
+        val patches = { qx: Int, qy: Int -> if (qy in 14..15 && (qx / 2) % 2 == 0) 0f else 1f }
+        val ref = frame(0f) { _, _ -> 1f }
+        val outMixed = RawSrBayerMerge.merge(ref, listOf(frame(2.0f, patches)))
+        val outReject = RawSrBayerMerge.merge(ref, emptyList(), referenceOnly = true)
+        val outAccept = RawSrBayerMerge.merge(ref, listOf(frame(2.0f) { _, _ -> 1f }))
+        var rejected = 0
+        var accepted = 0
+        for (y in 30..33) for (x in 8..23) for (c in 0..2) {
+            val qx = floor((x + 0.5) / 2.0 - 1.0).toInt()
+            val qy = floor((y + 0.5) / 2.0 - 1.0).toInt()
+            val m = outMixed.rgb[(y * w + x) * 3 + c]
+            if (patches(qx, qy) == 0f) {
+                assertEquals("reject patch ($x,$y,$c)", outReject.rgb[(y * w + x) * 3 + c], m, 0f)
+                rejected++
+            } else {
+                assertEquals("accept patch ($x,$y,$c)", outAccept.rgb[(y * w + x) * 3 + c], m, 0f)
+                accepted++
+            }
+        }
+        assertTrue("no reject-patch pixels", rejected > 0)
+        assertTrue("no accept-patch pixels", accepted > 0)
+        // Vacuous unless the moving frame genuinely changes the blend
+        // where accepted: the full-quad downward shift crosses the step.
+        var differs = false
+        for (y in 30..33) for (x in 8..23) for (c in 0..2) {
+            if (abs(outAccept.rgb[(y * w + x) * 3 + c] - outReject.rgb[(y * w + x) * 3 + c]) > 1e-4f) differs = true
+        }
+        assertTrue("moving frame must change the blend", differs)
+    }
+
+    @Test fun srGridMatchesMosaicPlannerAndReproducesUniform() {
+        // SR output (shared √2 grid): the linear grid is pixel-identical
+        // to the mosaic SR grid while kernels/flow/robustness stay
+        // source-anchored (Rc/support keep quad shape); uniform scenes
+        // reproduce exactly per channel.
+        val ref = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
+        val moving = sceneFrame(
+            robustness = robust { _, _ -> 1f }, scene = constScene(0.3f, 0.5f, 0.4f))
+        val out = RawSrBayerMerge.merge(ref, listOf(moving), scale = RawSrLinearScale.SR)
+        val mosaic = MosaicSrReconstructor.planTarget(W, H)
+        assertEquals(mosaic.width, out.width)
+        assertEquals(mosaic.height, out.height)
+        // Pinned: floor-to-even √2 of 32x24.
+        assertEquals(44, out.width)
+        assertEquals(32, out.height)
+        assertEquals(QW, out.rc.width)
+        assertEquals(QH, out.rc.height)
+        assertEquals(QW * QH, out.support.size)
+        assertEquals(44 * 32 * 3, out.rgb.size)
+        assertTrue(out.fallback.none { it })
+        for (p in 0 until 44 * 32) {
+            assertEquals(0.3, out.rgb[p * 3].toDouble(), 1e-6)
+            assertEquals(0.5, out.rgb[p * 3 + 1].toDouble(), 1e-6)
+            assertEquals(0.4, out.rgb[p * 3 + 2].toDouble(), 1e-6)
+        }
+    }
+
+    @Test fun srStepEdgeTransitionsMonotonically() {
+        // Static burst on a horizontal step: the SR green channel must
+        // climb monotonically through the transition (no stride/mapping
+        // scramble between the output lattice and source taps).
+        val w = 32
+        val h = 24
+        val samples = FloatArray(w * h) { i -> if (i / w < h / 2) 0.25f else 0.75f }
+        fun frame(): RawSrBayerMerge.MergeFrame {
+            val flow = RawSrAlignmentField(w, h, 1, w, h,
+                List(w * h) { RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true) })
+            val robust = RawSrRobustness.FrameRobustness(
+                w / 2, h / 2, FloatArray(w / 2 * h / 2) { 1f }, IntArray(w / 2 * h / 2))
+            return RawSrBayerMerge.MergeFrame(w, h, samples, BayerPattern.RGGB, 0, 0,
+                isoCovariance(w / 2, h / 2), flow, robust)
+        }
+        val out = RawSrBayerMerge.merge(
+            frame().copy(flow = null, robustness = null), listOf(frame()), scale = RawSrLinearScale.SR)
+        val planned = RawSrBayerMerge.planTarget(w, h, RawSrLinearScale.SR)
+        assertEquals(planned.first, out.width)
+        assertEquals(planned.second, out.height)
+        for (x in 0 until out.width) {
+            var prev = -1.0
+            for (y in 0 until out.height) {
+                val g = out.rgb[(y * out.width + x) * 3 + 1].toDouble()
+                assertTrue("column $x dips at row $y ($prev -> $g)", g + 1e-9 >= prev)
+                prev = g
+            }
+        }
+    }
+
+    @Test fun srPlannerUnifiesBothPaths() {
+        // The shared planner resolves identical dims for both paths: a
+        // 12MP source lands at 5768x4326 (~25MP) on either, and X1/NATIVE
+        // reproduce the source grid exactly.
+        val linear = RawSrBayerMerge.planTarget(4080, 3060, RawSrLinearScale.SR)
+        assertEquals(5768, linear.first)
+        assertEquals(4326, linear.second)
+        val mosaic = MosaicSrReconstructor.planTarget(4080, 3060)
+        assertEquals(linear.first, mosaic.width)
+        assertEquals(linear.second, mosaic.height)
+        assertEquals(4080 to 3060, RawSrBayerMerge.planTarget(4080, 3060, RawSrLinearScale.X1))
+        try {
+            RawSrBayerMerge.planTarget(33, 24, RawSrLinearScale.SR)
+            fail("odd source width must throw")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test fun outOfBoundsFramePreservesAccumulatorsAndCountsSupport() {
@@ -546,93 +799,104 @@ class RawSrBayerMergeTest {
     @Test fun motionDiscontinuityMergesWithoutSkip() {
         // Two tile columns disagreeing by 5 quads (0 vs +10 raw px).
         // Reference Alg. 4 defines no motion-edge stop: each pixel merges
-        // under its own nearest tile's flow. The step scene (dark left of
-        // x = 24, bright right) makes the two tiles disagree in content:
-        // tile-0 pixels resolve like the reference-only image while tile-1
-        // interior pixels pull bright shifted taps and differ — proving the
-        // moving frame merged on both sides of the discontinuity.
-        val w = 32
+        // under its own containing tile's flow (px = int(lr_x//tile_size),
+        // no blending — tile 0 reads pure 0, tile 1 pure +10).
+        // The step scene (dark left of x = 32, bright right) makes the two
+        // tiles disagree in content: tile-0 pixels resolve like the
+        // reference-only image while tile-1 interior pixels pull bright
+        // shifted taps and differ — proving the moving frame merged on both
+        // sides of the discontinuity. Reliability is not a merge input (no
+        // zero-shift fallback), so the unreliable twin must merge identically.
+        val w = 64
         val h = 32
-        fun step(sx: Int, sy: Int, color: CfaColor): Float = if (sx < 24) 0.2f else 0.8f
+        fun step(sx: Int, sy: Int, color: CfaColor): Float = if (sx < 32) 0.2f else 0.8f
         val ref = sceneFrame(w, h, scene = ::step)
-        val mov = sceneFrame(w, h, scene = ::step,
-            flow = field(16, 16, 8, flowAt = { tx, _ -> if (tx == 0) 0f to 0f else 5f to 0f }))
-        val out = RawSrBayerMerge.merge(ref, listOf(mov))
         val alone = RawSrBayerMerge.merge(ref, emptyList(), referenceOnly = true)
-        var same = 0
-        var moved = 0
-        for (y in 0 until h) for (x in 0 until w) for (c in 0..2) {
-            val v = out.rgb[(y * w + x) * 3 + c]
-            val a = alone.rgb[(y * w + x) * 3 + c]
-            val baseX = x + 0.5
-            if (baseX in 4.0..12.0) {
-                // Tile 0 interior (flow 0): identical computation to
-                // reference-only up to float summation order.
-                assertEquals("tile-0 pixel ($x,$y,$c)", a, v, 1e-6f)
-                same++
-            } else if (baseX in 16.5..20.5) {
-                // Tile 1 interior (flow +10 px, in bounds): shifted taps
-                // read the bright side while tile 0 would read dark.
-                assertTrue("tile-1 pixel ($x,$y,$c) v=$v a=$a did not move",
-                    abs(v - a) > 1e-3f)
-                moved++
+        for (reliable in listOf(true, false)) {
+            val mov = sceneFrame(w, h, scene = ::step,
+                flow = field(64, 32, 16,
+                    flowAt = { tx, _ -> if (tx == 0) 0f to 0f else 10f to 0f },
+                    reliable = reliable))
+            val out = RawSrBayerMerge.merge(ref, listOf(mov))
+            var same = 0
+            var moved = 0
+            for (y in 0 until h) for (x in 0 until w) for (c in 0..2) {
+                val v = out.rgb[(y * w + x) * 3 + c]
+                val a = alone.rgb[(y * w + x) * 3 + c]
+                val baseX = x + 0.5
+                if (baseX in 4.0..7.0) {
+                    // Tile 0 interior (flow pure 0): identical computation
+                    // to reference-only up to float summation order.
+                    assertEquals("tile-0 pixel ($x,$y,$c) reliable=$reliable", a, v, 1e-6f)
+                    same++
+                } else if (baseX in 24.5..28.5) {
+                    // Tile 1 interior (pure +10px flow, in bounds): shifted
+                    // taps read the bright side while tile 0 would read dark.
+                    assertTrue("tile-1 pixel ($x,$y,$c) v=$v a=$a reliable=$reliable did not move",
+                        abs(v - a) > 1e-3f)
+                    moved++
+                }
             }
+            assertTrue("no tile-0 pixels reliable=$reliable", same > 0)
+            assertTrue("no tile-1 pixels reliable=$reliable", moved > 0)
         }
-        assertTrue("no tile-0 pixels", same > 0)
-        assertTrue("no tile-1 pixels", moved > 0)
-        // Control: a uniform 5-quad shift (no disagreement) still merges
+        // Control: a uniform 10px shift (no disagreement) still merges
         // where in bounds — no magnitude gate exists either.
         val uni = sceneFrame(w, h, scene = constScene(0.5f, 0.5f, 0.5f),
-            flow = field(16, 16, 8, flowAt = { _, _ -> 5f to 0f }))
+            flow = field(64, 32, flowAt = { _, _ -> 10f to 0f }))
         val merged = RawSrBayerMerge.merge(ref, listOf(uni))
         assertTrue(merged.denominator.any { it > 1e-8f })
     }
 
     @Test fun mergePassesNonfiniteNeighbourTiles() {
-        // One NaN tile beside agreeing tiles: nearest-tile lookup reads only
-        // the containing tile, so finite tiles still merge (denominator
-        // carries moving weight, no OOB bump) — a NaN neighbour poisons
-        // nothing, with the robustness map as the misalignment backstop.
+        // One NaN tile beside agreeing tiles: the nearest lookup reads the
+        // containing tile (0,0) directly — neighbours never enter — so
+        // pixel (4,4) still merges (denominator carries moving weight, no
+        // OOB bump): a NaN neighbour poisons nothing, with the robustness
+        // map as the misalignment backstop.
         val w = 32
         val h = 32
         val ref = sceneFrame(w, h, scene = constScene(0.5f, 0.5f, 0.5f))
-        val columns = 2
-        val rows = 2
+        val columns = 4
+        val rows = 4
         val tiles = List(columns * rows) { i ->
             val tx = i % columns
             val ty = i / columns
             if (tx == 1 && ty == 1) RawSrTileFlow(0f, 0f, Float.NaN, 0f, 0f, false)
             else RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true)
         }
-        val flow = RawSrAlignmentField(16, 16, 8, columns, rows, tiles)
+        val flow = RawSrAlignmentField(32, 32, 8, columns, rows, tiles)
         val mov = sceneFrame(w, h, scene = constScene(0.5f, 0.5f, 0.5f), flow = flow)
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
-        // Quad (2,2) sits in tile (0,0) next to the NaN tile: it must merge.
+        // Pixel (4,4) sits in tile (0,0) next to the NaN tile: it must merge.
         val p = 4 * w + 4
         assertTrue(out.denominator[p * 3] > 1e-8f)
         assertEquals(0, out.oobCount[p])
     }
 
     @Test fun mergeIgnoresUnreliableTiles() {
-        // A wild flow vector on an UNRELIABLE tile affects only its own
-        // tile's pixels under nearest-tile lookup: every other tile still
-        // fuses. Reference is uniform 0.4, moving uniform 0.6: any moving
-        // contribution pulls the mean clearly above reference-only.
+        // A wild flow vector on an UNRELIABLE tile never leaks into
+        // neighbours under the nearest lookup: pixel (4,4) reads its own
+        // tile (0,0), so every tile still fuses. Reference is uniform 0.4,
+        // moving uniform 0.6: any moving contribution pulls the mean
+        // clearly above reference-only. Reliability is not a merge input
+        // (no zero-shift fallback), so the wild tile merges where its own
+        // taps land.
         val w = 32
         val h = 32
         val ref = sceneFrame(w, h, scene = constScene(0.4f, 0.4f, 0.4f))
-        val columns = 2
-        val rows = 2
+        val columns = 4
+        val rows = 4
         val tiles = List(columns * rows) { i ->
             val tx = i % columns
             val ty = i / columns
             if (tx == 1 && ty == 1) RawSrTileFlow(0f, 0f, 9f, -7f, 0f, false)
             else RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true)
         }
-        val flow = RawSrAlignmentField(16, 16, 8, columns, rows, tiles)
+        val flow = RawSrAlignmentField(32, 32, 8, columns, rows, tiles)
         val mov = sceneFrame(w, h, scene = constScene(0.6f, 0.6f, 0.6f), flow = flow)
         val out = RawSrBayerMerge.merge(ref, listOf(mov))
-        // Quad (2,2) in tile (0,0): merges under its own finite flow.
+        // Pixel (4,4) in tile (0,0): merges under its own zero flow.
         val p = 4 * w + 4
         assertTrue(out.denominator[p * 3] > 1e-8f)
         assertEquals(0, out.oobCount[p])
@@ -735,7 +999,7 @@ class RawSrBayerMergeTest {
         val qh = h / 2
         fun frame(samples: FloatArray, r: (x: Int, y: Int) -> Float): RawSrBayerMerge.MergeFrame {
             return RawSrBayerMerge.MergeFrame(w, h, samples, BayerPattern.RGGB, 0, 0,
-                isoCovariance(qw, qh), field(qw, qh), robust(qw, qh, r))
+                isoCovariance(qw, qh), field(w, h), robust(qw, qh, r))
         }
         val ref = frame(refSamples) { _, _ -> 1f }
         val moving = frame(FloatArray(w * h) { 0.5f }) { x, y -> if (x in 1..4 && y in 1..4) 0f else 1f }
@@ -758,16 +1022,20 @@ class RawSrBayerMergeTest {
     @Test fun partialSupportBlendsGhostContent() {
         // Single moving frame with fractional robustness (0.3) over a block
         // and ghost content. The reference defines no support overwrite, so
-        // the block takes the plain kernel blend of reference and ghost
-        // ((0.3 + 0.9*0.3)/1.3, (0.5 + 0.1*0.3)/1.3, (0.4 + 0.8*0.3)/1.3)
-        // with a clean mask — never a reference-only overwrite.
+        // the block interior takes the plain kernel blend of reference and
+        // ghost ((0.3 + 0.9*0.3)/1.3, (0.5 + 0.1*0.3)/1.3, (0.4 + 0.8*0.3)/1.3)
+        // with a clean mask — never a reference-only overwrite. Nearest r
+        // fetch snaps at quad borders (pinned by
+        // robustnessStepSnapsToShiftedQuad), so the exact blend is
+        // asserted on the guaranteed interior (every pixel reads
+        // r = 0.3: x in 15..19 → quads 6..8, y in 11..13 → quads 4..5).
         val ref = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
         val moving = sceneFrame(
             robustness = robust { x, y -> if (x in 6..10 && y in 4..7) 0.3f else 1f },
             scene = constScene(0.9f, 0.1f, 0.8f))
         val out = RawSrBayerMerge.merge(ref, listOf(moving))
         val expected = doubleArrayOf(0.57 / 1.3, 0.53 / 1.3, 0.64 / 1.3)
-        for (y in 10..13) for (x in 14..19) for (c in 0..2) {
+        for (y in 11..13) for (x in 15..19) for (c in 0..2) {
             assertEquals("($x,$y,$c)", expected[c], out.rgb[(y * W + x) * 3 + c].toDouble(), 1e-6)
         }
         assertTrue("block must not fall back", (10..13).all { y -> (14..19).all { x -> !out.fallback[y * W + x] } })
@@ -782,7 +1050,7 @@ class RawSrBayerMergeTest {
             val w = qw * 2
             val h = qh * 2
             return RawSrBayerMerge.MergeFrame(w, h, FloatArray(w * h) { 0.4f }, BayerPattern.RGGB, 0, 0,
-                isoCovariance(qw, qh), field(qw, qh), RawSrRobustness.FrameRobustness(qw, qh, r, IntArray(r.size)))
+                isoCovariance(qw, qh), field(w, h, 2), RawSrRobustness.FrameRobustness(qw, qh, r, IntArray(r.size)))
         }
         val ref = frame(FloatArray(qw * qh) { 1f })
         val out = RawSrBayerMerge.merge(ref, listOf(frame(r1), frame(r2)))
@@ -810,7 +1078,7 @@ class RawSrBayerMergeTest {
         val h = qh * 2
         fun frame(r: Float): RawSrBayerMerge.MergeFrame =
             RawSrBayerMerge.MergeFrame(w, h, FloatArray(w * h) { 0.4f }, BayerPattern.RGGB, 0, 0,
-                isoCovariance(qw, qh), field(qw, qh),
+                isoCovariance(qw, qh), field(w, h, 2),
                 RawSrRobustness.FrameRobustness(qw, qh, FloatArray(qw * qh) { r }, IntArray(qw * qh)))
         val ref = frame(1f)
         val out = RawSrBayerMerge.merge(ref, listOf(frame(1f), frame(1f)))
@@ -938,7 +1206,7 @@ class RawSrBayerMergeTest {
         val crop = RawCrop(0, 0, W, H)
         val profile = ImmutableDoubleValues(doubleArrayOf(0.02, 1.0, 0.02, 1.0, 0.02, 1.0, 0.02, 1.0))
         val tuning = RawSrTuning.forSnr(18.0)
-        val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
+        val config = RawSrAlignmentConfig()
         fun packedFrame(seed: Int): RawSrPackedFrame {
             val random = Random(seed)
             val noise = FloatArray((layoutW + 1) * (layoutH + 1)) { random.nextGaussian().toFloat() * 5f }
@@ -962,11 +1230,11 @@ class RawSrBayerMergeTest {
             return RawSrBayerMerge.MergeFrame(
                 unpacked.width, unpacked.height, unpacked.values,
                 unpacked.pattern, unpacked.sensorCropLeft, unpacked.sensorCropTop,
-                covariance, field(QW, QH), r)
+                covariance, field(W, H), r)
         }
         val refPacked = packedFrame(7)
         val refGuide = RawSrRobustness.linearGuide(refPacked)
-        val zeroFlow = field(QW, QH)
+        val zeroFlow = field(W, H)
         val frames = listOf(refPacked, packedFrame(99), packedFrame(1234))
         val guides = frames.map { RawSrRobustness.linearGuide(it) }
         val robustness = guides.drop(1).map { RawSrRobustness.evaluate(refGuide, it, zeroFlow, tuning, config) }
@@ -986,5 +1254,58 @@ class RawSrBayerMergeTest {
             n++
         }
         assertTrue("meanAbsDiff=${sum / n}", sum / n <= 0.01)
+    }
+
+    @Test fun channelEvidenceBitsMatchDenominatorSupport() {
+        // Pure-function contract: bit c of pixel p is set iff den[3p+c]
+        // strictly exceeds EPS (exactly-EPS reads 0). Exact at serial and
+        // sharded worker counts, straddling spans included.
+        val den = doubleArrayOf(
+            1.0, 1.0, 1.0, // 0b111
+            0.0, 2.0, 0.0, // 0b010
+            0.0, 0.0, 0.0, // 0b000
+            3.0, 0.0, 4.0, // 0b101
+            RawSrBayerMerge.EPS, RawSrBayerMerge.EPS, RawSrBayerMerge.EPS // 0b000
+        )
+        val expected = byteArrayOf(
+            0b111.toByte(), 0b010.toByte(), 0b000.toByte(), 0b101.toByte(), 0b000.toByte())
+        for (workers in intArrayOf(1, 2, 3, 4, 5)) {
+            RawSrWorkers.overrideCount = workers
+            try {
+                assertArrayEquals("workers=$workers", expected,
+                    RawSrBayerMerge.computeChannelEvidence(den, 5))
+            } finally {
+                RawSrWorkers.overrideCount = null
+            }
+        }
+        try {
+            RawSrBayerMerge.computeChannelEvidence(DoubleArray(4), 2)
+            fail("mismatched denominator size must fail")
+        } catch (expected: IllegalArgumentException) {
+        }
+    }
+
+    @Test fun channelEvidenceIsRaceFreeAtAnyWorkerCount() {
+        // Regression: the evidence loop once sharded over channels, so a
+        // pixel's three read-modify-write updates could split across two
+        // shards (any span not a multiple of 3: counts 5/9/13 below) and
+        // lose a bit to a lost update. Pixel sharding gives one writer per
+        // pixel, so full support reads 0b111 on every run at every count.
+        val ref = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
+        val moving = sceneFrame(scene = constScene(0.3f, 0.5f, 0.4f))
+        for (workers in intArrayOf(1, 5, 9, 13)) {
+            RawSrWorkers.overrideCount = workers
+            try {
+                repeat(20) { iter ->
+                    val out = RawSrBayerMerge.merge(ref, listOf(moving))
+                    for (y in 2 until H - 2) for (x in 2 until W - 2) {
+                        assertEquals("workers=$workers iter=$iter ($x,$y)",
+                            0b111.toByte(), out.channelEvidence[y * W + x])
+                    }
+                }
+            } finally {
+                RawSrWorkers.overrideCount = null
+            }
+        }
     }
 }

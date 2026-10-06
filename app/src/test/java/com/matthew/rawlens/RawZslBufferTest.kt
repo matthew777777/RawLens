@@ -64,7 +64,7 @@ class RawZslBufferTest {
         assertTrue(buffer.takeForCapture(4000L, false, 3, true).isEmpty())
     }
 
-    @Test fun `selection transfers requested frames and closes unselected frames`() {
+    @Test fun `selection transfers requested frames and keeps unselected pre-roll`() {
         val first = frame(1_000L)
         val second = frame(2_000L)
         val third = frame(3_000L)
@@ -76,10 +76,33 @@ class RawZslBufferTest {
         val selected = buffer.takeBest(4_000L, realtimeTimestamps = false, count = 2)
 
         assertEquals(listOf(2_000L, 3_000L), selected.map { it.timestampNanos })
-        Mockito.verify(first.image).close()
+        Mockito.verify(first.image, Mockito.never()).close()
         Mockito.verify(second.image, Mockito.never()).close()
         Mockito.verify(third.image, Mockito.never()).close()
+        assertEquals(1, buffer.size)
+        buffer.clear()
+        Mockito.verify(first.image).close()
+    }
+
+    @Test fun `second take reuses unselected pre-roll from first take`() {
+        val frames = (1L..5L).map { frame(it * 1_000L) }
+        val buffer = RawZslBuffer(8)
+        frames.forEachIndexed { index, f -> buffer.addTestFrame(f, (index + 1) * 1_000L) }
+
+        val firstTake = buffer.takeUpTo(9_000L, realtimeTimestamps = false, maxCount = 3)
+        assertEquals(3, firstTake.size)
+        assertEquals(2, buffer.size)
+
+        // Nothing new arrived: the second press reuses the kept pre-roll.
+        val secondTake = buffer.takeUpTo(9_500L, realtimeTimestamps = false, maxCount = 3)
+        assertEquals(listOf(1_000L, 2_000L), secondTake.map { it.timestampNanos })
         assertEquals(0, buffer.size)
+        imagesNeverClosed(frames)
+        buffer.clear()
+    }
+
+    private fun imagesNeverClosed(frames: List<TestFrame>) {
+        frames.forEach { Mockito.verify(it.image, Mockito.never()).close() }
     }
 
     @Test fun `insufficient selection keeps ownership in ring`() {
@@ -129,15 +152,17 @@ class RawZslBufferTest {
         assertEquals(0, buffer.size)
     }
 
-    @Test fun `takeUpTo caps at maxCount and closes the rest`() {
+    @Test fun `takeUpTo caps at maxCount and keeps the rest`() {
         val frames = (1L..5L).map { frame(it * 1_000L) }
         val buffer = RawZslBuffer(8)
         frames.forEachIndexed { index, f -> buffer.addTestFrame(f, (index + 1) * 1_000L) }
 
         val selected = buffer.takeUpTo(9_000L, realtimeTimestamps = false, maxCount = 3)
 
-        assertEquals(3, selected.size)
-        assertEquals(0, buffer.size)
+        assertEquals(listOf(3_000L, 4_000L, 5_000L), selected.map { it.timestampNanos })
+        assertEquals(2, buffer.size)
+        imagesNeverClosed(frames)
+        buffer.clear()
     }
 
     @Test fun `takeUpTo on empty ring returns empty`() {
@@ -158,7 +183,9 @@ class RawZslBufferTest {
 
         assertEquals(listOf(2_000L), selected.map { it.timestampNanos })
         assertEquals(false, selected.single().metadataApproximate)
-        assertEquals(0, buffer.size)
+        assertEquals(1, buffer.size)
+        Mockito.verify(approx.image, Mockito.never()).close()
+        buffer.clear()
     }
 
     @Test fun `takeUpTo carries approximate flags through`() {

@@ -238,6 +238,55 @@ class HdrRawMergeTest {
         }
     }
 
+    @Test fun fullyGhostedAlternateDropsFromPhotonWeighting() {
+        val ref = textured(32, 5)
+        val ghost = textured(32, 9)
+        val dropped = ArrayList<Pair<Int, HdrTileDeghost.TileStats>>()
+        val merged = HdrRawMerge.merge(
+            listOf(HdrMergeFrame(ref, 10_000_000L, 100), HdrMergeFrame(ghost, 10_000_000L, 100)),
+            referenceIndex = 0,
+            options = HdrRawMerge.Options(alternateDropDcRejectFrac = 0.5),
+            onAlternateDropped = { index, stats -> dropped.add(index to stats) })
+        assertEquals(listOf(1), dropped.map { it.first })
+        assertTrue(dropped.single().second.dcRejectFrac > 0.5)
+        // Reference-only output stays finite and near the reference level.
+        assertTrue(merged.values.all { it.isFinite() })
+        assertEquals(ref.values.average(), merged.values.average(), 0.05)
+    }
+
+    @Test fun matchedAlternateSurvivesDropGate() {
+        val ref = textured(32, 5)
+        var drops = 0
+        HdrRawMerge.merge(
+            listOf(HdrMergeFrame(ref, 10_000_000L, 100), HdrMergeFrame(ref.copy(), 10_000_000L, 100)),
+            referenceIndex = 0,
+            options = HdrRawMerge.Options(alternateDropDcRejectFrac = 0.5),
+            onAlternateDropped = { _, _ -> drops++ })
+        assertEquals(0, drops)
+    }
+
+    @Test fun nullThresholdNeverDrops() {
+        // Legacy behavior: ghosted alternates always accumulate.
+        val ref = textured(32, 5)
+        val ghost = textured(32, 9)
+        var drops = 0
+        val merged = HdrRawMerge.merge(
+            listOf(HdrMergeFrame(ref, 10_000_000L, 100), HdrMergeFrame(ghost, 10_000_000L, 100)),
+            referenceIndex = 0,
+            onAlternateDropped = { _, _ -> drops++ })
+        assertEquals(0, drops)
+        assertTrue(merged.values.all { it.isFinite() })
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun dropThresholdMustBeUnitOrNull() {
+        HdrRawMerge.Options(alternateDropDcRejectFrac = 2.0)
+    }
+
+    private fun textured(size: Int, seed: Int) = UnpackedRawCfa(size, size, BayerPattern.RGGB,
+        FloatArray(size * size) { i -> (((i * 7 + seed) % 19) / 19f).coerceIn(0.05f, 0.9f) },
+        RawCrop(0, 0, size, size))
+
     private fun cfa(value: Float, size: Int = 6) = UnpackedRawCfa(
         size, size, BayerPattern.RGGB, FloatArray(size * size) { value },
         RawCrop(0, 0, size, size)

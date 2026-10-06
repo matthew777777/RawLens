@@ -49,15 +49,12 @@ class RawSrPackedKernelInputTest {
                 if(!RawSrKernelNetAniso.precisionOf(triple[0],triple[1],triple[2],expected,0)) {
                     expected[0]=.5f;expected[3]=.5f
                 }
-                // The produced field floors every kernel's narrow axis at
-                // 0.3 quads (zipper regression) and lands in covariance
-                // space (the merge inverts per pixel): mirror clamp +
-                // inversion on the single-texel expectation. Per-texel
-                // independence keeps the comparison bitwise-exact.
-                val clamped=MosaicSrReconstructor.clampMinorAxis(
-                    RawSrKernelCovariance.MatrixField(1,1,expected)).values
+                // The produced field lands in covariance space (the merge
+                // inverts per pixel): mirror the inversion on the
+                // single-texel expectation. Per-texel independence keeps
+                // the comparison bitwise-exact.
                 val expectedCov=RawSrKernelCovariance.invertField(
-                    RawSrKernelCovariance.MatrixField(1,1,clamped.copyOf())).values
+                    RawSrKernelCovariance.MatrixField(1,1,expected.copyOf())).values
                 for(c in 0..3) assertEquals(expectedCov[c],field.values[(y*w+x)*4+c],0f)
             }
             assertEquals(0,buf.position())
