@@ -1,0 +1,91 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "shared/common.glsl"
+
+// One workgroup exclusively owns one of the 512 waveform x columns. Density
+// bins are therefore direct stores, not device-memory atomics.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(binding = 0, rgba8) uniform readonly image2D src;
+layout(std430, binding = 1) buffer Wave { uint density[]; }
+outb;
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+    uint mode;
+    uint samplingMode;
+    uint sampledCountOffset;
+    uint maxOffset;
+    uint sampledPixelCount;
+    uint sourceQuarterTurns;
+}
+pc;
+
+shared uint sh[768];
+shared uint red[256];
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    uint xb = gl_WorkGroupID.x;
+    uint planes = pc.mode == 0u ? 1u : 3u;
+    uint elems = planes * 256u;
+    for (uint i = li; i < elems; i += 256u) sh[i] = 0u;
+    barrier();
+
+    // Measure in displayed-image coordinates. The app still owns final presentation,
+    // but waveform X must correspond to the X axis the photographer sees.
+    uint q = pc.sourceQuarterTurns & 3u;
+    uint displayWidth = (q & 1u) != 0u ? pc.height : pc.width;
+    uint displayHeight = (q & 1u) != 0u ? pc.width : pc.height;
+    // Exact inverse of floor(displayX * 512 / displayWidth) == xb.
+    uint x0 = (xb * displayWidth + 511u) / 512u;
+    uint x1 = ((xb + 1u) * displayWidth + 511u) / 512u;
+    x0 = min(x0, displayWidth);
+    x1 = min(x1, displayWidth);
+    uint span = x1 - x0;
+    uint total = span * displayHeight;
+
+    for (uint idx = li; idx < total; idx += 256u) {
+        uint dx = x0 + (idx % span);
+        uint dy = idx / span;
+        uvec2 p;
+        if (q == 1u)
+            p = uvec2(dy, pc.height - 1u - dx);
+        else if (q == 2u)
+            p = uvec2(pc.width - 1u - dx, pc.height - 1u - dy);
+        else if (q == 3u)
+            p = uvec2(pc.width - 1u - dy, dx);
+        else
+            p = uvec2(dx, dy);
+        if (!sampleSelected(p, pc.samplingMode)) continue;
+        uvec3 c = uvec3(round(clamp(imageLoad(src, ivec2(p)).rgb, 0.0, 1.0) * 255.0));
+        if (pc.mode == 0u) {
+            atomicAdd(sh[lumaQ16(c)], 1u);
+        } else {
+            atomicAdd(sh[c.r], 1u);
+            atomicAdd(sh[256u + c.g], 1u);
+            atomicAdd(sh[512u + c.b], 1u);
+        }
+    }
+    barrier();
+
+    if (pc.mode == 0u) {
+        outb.density[li * 512u + xb] = sh[li];
+    } else {
+        outb.density[li * 512u + xb] = sh[li];
+        outb.density[131072u + li * 512u + xb] = sh[256u + li];
+        outb.density[262144u + li * 512u + xb] = sh[512u + li];
+    }
+
+    // Only 512 global atomicMax operations per active plane remain.
+    for (uint ch = 0u; ch < planes; ++ch) {
+        red[li] = sh[ch * 256u + li];
+        barrier();
+        for (uint step = 128u; step != 0u; step >>= 1u) {
+            if (li < step) red[li] = max(red[li], red[li + step]);
+            barrier();
+        }
+        if (li == 0u) atomicMax(outb.density[pc.maxOffset + ch], red[0]);
+        barrier();
+    }
+    if (xb == 0u && li == 0u) outb.density[pc.sampledCountOffset] = pc.sampledPixelCount;
+}

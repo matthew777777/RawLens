@@ -1,0 +1,135 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, binding = 0) readonly buffer Wave { uint density[]; }
+w;
+layout(binding = 1, rgba8) uniform writeonly image2D dst;
+
+layout(push_constant) uniform PC {
+    uint mode;  // 0 luma, 1 RGB overlay
+    float gain;
+    float opacity;
+    uint showGrid;
+    uint showBg;
+    uint sampledPixels;
+    uint reserved0;
+    uint reserved1;
+}
+pc;
+
+const uint PLANE_STRIDE = 131072u;  // 512*256
+
+float rawBilinear(uint plane, vec2 q) {
+    q = clamp(q, vec2(0.0), vec2(511.0, 255.0));
+    ivec2 i0 = ivec2(floor(q));
+    ivec2 i1 = min(i0 + ivec2(1), ivec2(511, 255));
+    vec2 t = fract(q);
+    float a = mix(float(w.density[plane * PLANE_STRIDE + uint(i0.y) * 512u + uint(i0.x)]),
+                  float(w.density[plane * PLANE_STRIDE + uint(i0.y) * 512u + uint(i1.x)]), t.x);
+    float b = mix(float(w.density[plane * PLANE_STRIDE + uint(i1.y) * 512u + uint(i0.x)]),
+                  float(w.density[plane * PLANE_STRIDE + uint(i1.y) * 512u + uint(i1.x)]), t.x);
+    return mix(a, b, t.y);
+}
+
+float microPop(uint plane, vec2 q) {
+    // Waveform X is source-image X. Keep horizontal reconstruction much
+    // tighter than vertical reconstruction to preserve spatial topology.
+    const float vy = .52;
+    const float hx = .20;
+    float c = rawBilinear(plane, q) * .44;
+    c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .18;
+    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .10;
+    return c;
+}
+float mesoPop(uint plane, vec2 q) {
+    const float vy = 1.10;
+    const float hx = .28;
+    float c = rawBilinear(plane, q) * .48;
+    c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .18;
+    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .08;
+    return c;
+}
+float macroPop(uint plane, vec2 q) {
+    const float vy = 1.85;
+    const float hx = .38;
+    float c = rawBilinear(plane, q) * .56;
+    c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .16;
+    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .06;
+    return c;
+}
+
+float expResponse(float count, float scale) {
+    if (count <= 0.0) return 0.0;
+    return 1.0 - exp(-count / max(scale, 1e-5));
+}
+
+float renderPlane(uint plane, vec2 q) {
+    float micro = microPop(plane, q);
+    float meso = mesoPop(plane, q);
+    float macro = macroPop(plane, q);
+
+    // Normalize density by expected selected samples per source-X column rather
+    // than by a scene-global peak. This lets sparse/medium/dense populations
+    // coexist without making every occupied bin equally bright.
+    float perColumn = max(float(pc.sampledPixels) / 512.0, 1.0);
+    // Waveform E was visually tuned at FullReference where a 256x256
+    // source yields 128 selected samples per presentation-X column.
+    // Preserve those exact FullReference response scales, but scale them
+    // linearly with the actual selected population. Fixed absolute floors
+    // made Production50/25 progressively darker even when the measured
+    // waveform geometry was identical.
+    float sparseScale = perColumn * (.20 / 128.0);
+    float mediumScale = perColumn * (1.50 / 128.0);
+    float denseScale = perColumn * (8.0 / 128.0);
+
+    float proxy = expResponse(micro, mediumScale);
+    float wd = clamp((proxy - .42) / .42, 0.0, 1.0);
+    float wm = clamp((proxy - .08) / .42, 0.0, 1.0) * (1.0 - wd);
+    float ws = 1.0 - clamp(wm + wd, 0.0, 1.0);
+
+    float c = ws * (.90 * micro + .10 * meso) + wm * (.58 * micro + .40 * meso + .02 * macro) +
+              wd * (.38 * micro + .52 * meso + .10 * macro);
+
+    float sparse = expResponse(c, sparseScale);
+    float medium = expResponse(c, mediumScale);
+    float dense = expResponse(c, denseScale);
+
+    // Sparse confidence was the remaining sampling-dependent term. `c` scales
+    // with selected population, so using it directly made Production25 darker
+    // even after the exposure scales were normalized. Convert reconstructed
+    // population back to the FullReference tuning population (128 samples/X
+    // column for the qualification fixture) before evaluating confidence.
+    //
+    // At FullReference perColumn==128, this is exactly the original
+    // clamp(c*.5) behavior, preserving the accepted Waveform E appearance.
+    float fullReferenceEquivalentCount = c * (128.0 / perColumn);
+    sparse *= .25 + .75 * clamp(fullReferenceEquivalentCount * .5, 0.0, 1.0);
+
+    float light = .18 * sparse + .48 * medium + .82 * dense + .20 * pow(dense, 3.5);
+    return clamp(pc.gain * (1.0 - exp(-light * 1.05)), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(dst);
+    if (any(greaterThanEqual(p, sz))) return;
+
+    vec2 q = vec2((float(p.x) + .5) * 512.0 / float(sz.x), (1.0 - (float(p.y) + .5) / float(sz.y)) * 256.0);
+    q = clamp(q, vec2(0), vec2(511, 255));
+
+    vec3 signal;
+    if (pc.mode == 0u) {
+        float d = renderPlane(0u, q);
+        signal = vec3(d);
+    } else {
+        signal = vec3(renderPlane(0u, q), renderPlane(1u, q), renderPlane(2u, q));
+    }
+    signal *= pc.opacity;
+
+    vec3 col = pc.showBg != 0u ? vec3(.015) : vec3(0.0);
+    col = max(col, signal);
+    if (pc.showGrid != 0u) {
+        int gx = max(sz.x / 4, 1), gy = max(sz.y / 4, 1);
+        if ((p.x % gx) == 0 || (p.y % gy) == 0) col = max(col, vec3(.055));
+    }
+    imageStore(dst, p, vec4(clamp(col, 0.0, 1.0), 1.0));
+}

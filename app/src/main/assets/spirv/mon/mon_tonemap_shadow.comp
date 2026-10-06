@@ -1,0 +1,38 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D displayImage;
+layout(set = 0, binding = 1, rgba8) uniform image2D overlayImage;
+
+layout(std140, set = 0, binding = 2) uniform ShadowParams {
+    uvec4 meta;      // enabled, width, height, compose
+    vec4 controls;   // shadowsUI, blacksUI, thresholdIre, stripePeriod
+    vec4 colorA;     // zebra stripe 0 (black)
+    vec4 colorB;     // zebra stripe 1 (white)
+}
+pc;
+
+vec4 premul(vec4 c) {
+    float a = clamp(c.a, 0.0, 1.0);
+    return vec4(clamp(c.rgb, vec3(0.0), vec3(1.0)) * a, a);
+}
+vec4 over(vec4 top, vec4 bottom) { return top + bottom * (1.0 - top.a); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.meta.y) || p.y >= int(pc.meta.z)) return;
+    vec3 rgb = clamp(imageLoad(displayImage, p).rgb, vec3(0.0), vec3(1.0));
+    float ire = 100.0 * dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    // WYSIWYG crushed-black zebra: the display image already carries the
+    // Shadows/Blacks slider positions, so darkening grows the zebra and
+    // lifting shrinks it with no slider-dependent term.
+    bool isShadow = ire < clamp(pc.controls.z, 0.0, 100.0);
+    vec4 outv = vec4(0.0);
+    if (isShadow) {
+        float period = max(2.0, pc.controls.w);
+        float stripe = mod(floor(float(p.x + p.y) / period), 2.0);
+        outv = premul(stripe < 0.5 ? pc.colorA : pc.colorB);
+    }
+    if (pc.meta.w != 0u) outv = over(outv, imageLoad(overlayImage, p));
+    imageStore(overlayImage, p, outv);
+}

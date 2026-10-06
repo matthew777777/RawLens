@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log record preview: staged P010 (the exact bytes queued to the
+// encoder) -> small RGBA8 display image, in one tiny dispatch. This is what
+// the take monitor shows INSTEAD of a separately-demosaiced viewfinder: no
+// second WB/CCM/grade, no contended full-res dispatch — the preview IS the
+// encode pixels (pre-compression), so LOG EV and grade-slider moves show
+// live and WYSIWYG.
+//
+// The kernel box-downsamples luma 1:1 with the chroma grid (box x box Y taps
+// + (box/2) x (box/2) UV pairs, box = 4 at 4K -> 540p), then applies the
+// exact inverse of vf_gradeyuv's rgbToYuv + pack10 (BT.709 limited range).
+// Layout mirrors PreviewParams in vf_vulkan_vf.cpp (push block, 32 bytes).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_p010preview.comp -o vf_p010preview.spv
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Byte-exact P010 view (vf_gradeyuv convention): Y u16 codes then
+// interleaved UV u16 pairs, 10-bit codes in the upper bits.
+layout(binding = 0) readonly buffer P010 { uint words[]; };
+layout(binding = 1, rgba8) uniform writeonly image2D img_out;
+
+layout(push_constant) uniform Params {
+    ivec2 u_dims;      // preview W/H
+    ivec2 u_srcDims;   // encode W/H (P010 domain)
+    ivec4 u_strides;   // yStrideW, uvStrideW (u16 units), uvBaseOffB, box
+} p;
+
+uint yCodeAt(int ox, int oy) {
+    uint idx = uint(oy) * uint(p.u_strides.x) + uint(ox);
+    uint w = words[idx >> 1u];
+    uint u16 = ((idx & 1u) == 0u) ? (w & 0xFFFFu) : (w >> 16u);
+    return u16 >> 6u;
+}
+
+// Chroma pair at half-res coords (mirrors the fused/grade-YUV write path:
+// pairIdx is always even, so low half = U, high half = V).
+uvec2 uvPairAt(int cx, int cy) {
+    uint pairIdx = uint(p.u_strides.z) / 2u
+        + uint(cy) * uint(p.u_strides.y)
+        + uint(cx) * 2u;
+    uint w = words[pairIdx >> 1u];
+    return uvec2((w & 0xFFFFu) >> 6u, (w >> 16u) >> 6u);
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+    int box = p.u_strides.w;
+    float ySum = 0.0;
+    for (int dy = 0; dy < box; ++dy) {
+        int oy = min(ij.y * box + dy, p.u_srcDims.y - 1);
+        for (int dx = 0; dx < box; ++dx) {
+            int ox = min(ij.x * box + dx, p.u_srcDims.x - 1);
+            ySum += float(yCodeAt(ox, oy));
+        }
+    }
+    int hbox = box / 2;
+    int cw = (p.u_srcDims.x + 1) / 2;
+    int ch = (p.u_srcDims.y + 1) / 2;
+    float uSum = 0.0;
+    float vSum = 0.0;
+    for (int dy = 0; dy < hbox; ++dy) {
+        int cy = min(ij.y * hbox + dy, ch - 1);
+        for (int dx = 0; dx < hbox; ++dx) {
+            int cx = min(ij.x * hbox + dx, cw - 1);
+            uvec2 uv = uvPairAt(cx, cy);
+            uSum += float(uv.x);
+            vSum += float(uv.y);
+        }
+    }
+    float y = ySum / float(box * box);
+    float u = uSum / float(hbox * hbox);
+    float v = vSum / float(hbox * hbox);
+    // Limited-range -> unorm, then the inverse of vf_gradeyuv's rgbToYuv
+    // (BT.709, Kr = 0.2126, Kb = 0.0722). The P010 already holds
+    // sRGB-encoded components, so this lands directly in display RGB.
+    float yn = (y - 64.0) / (940.0 - 64.0);
+    float cb = (u - 64.0) / (960.0 - 64.0) - 0.5;
+    float cr = (v - 64.0) / (960.0 - 64.0) - 0.5;
+    float r = yn + 2.0 * (1.0 - 0.2126) * cr;
+    float b = yn + 2.0 * (1.0 - 0.0722) * cb;
+    float g = (yn - 0.2126 * r - 0.0722 * b) / 0.7152;
+    imageStore(img_out, ij, vec4(clamp(vec3(r, g, b), 0.0, 1.0), 1.0));
+}

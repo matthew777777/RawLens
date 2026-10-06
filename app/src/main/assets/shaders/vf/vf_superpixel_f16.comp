@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log variant of the superpixel: identical math, but the output is
+// RGBA16F so the log grade downstream keeps >8-bit precision (no banding
+// in the 10-bit encode). The viewfinder keeps its own RGBA8 variant
+// (vf_superpixel); the push-constant layout is shared, so both pipelines
+// use the same descriptor set layout and packing.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_superpixel_f16.comp -o vf_superpixel_f16.spv
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Byte-exact buffer view of the sensor plane: the driver reports a padded
+// rowPitch (4096) for image imports of a packed 4080-pixel buffer, so images
+// sample skewed. Buffers have no pitch ambiguity; stride comes from the Image
+// plane (the same value the correct CPU path uses). Each uint holds 2 LE pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+layout(binding = 1, rgba16f) uniform writeonly image2D img_out;
+// HAL lens-shading map as RGBA16F (Camera2 order), hardware-bilinear
+// sampled. Only the record path binds a live map (the viewfinder
+// shades in GL); enable stays 0 otherwise.
+layout(binding = 2) uniform sampler2D shadeMap;
+
+// Packing order avoids std430 padding surprises: 16-byte members first.
+// Total 112 bytes (8 pad after u_pitch for the vec4 alignment); the C
+// side mirrors this layout exactly.
+layout(push_constant) uniform Params {
+    ivec4 u_chans;
+    vec4 u_black;
+    vec4 u_invRange;
+    ivec2 u_quadBase;
+    ivec2 u_frameSize;
+    int u_step;
+    int u_pitch;
+    ivec4 u_shadeDims;    // shade rows, cols, enable, 0
+    vec4 u_shadeActive;   // shade active l, t, 1/w, 1/h (sensor px)
+} p;
+
+uint fetchCode(ivec2 s) {
+    uint idx = uint(s.y) * uint(p.u_pitch) + uint(s.x);
+    uint word = codes[idx >> 1u];
+    return ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+}
+
+// Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
+// into u_black/u_invRange on the CPU, so this is a straight-line fetch + MAD
+// with dynamic uniform indexing and no per-channel branches.
+float fetchN(ivec2 q, int ch) {
+    ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
+    float code = float(fetchCode(s));
+    float blk = p.u_black[ch];
+    float inv = p.u_invRange[ch];
+    return clamp((code - blk) * inv, 0.0, 1.0);
+}
+
+// Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-
+// bilinear texture fetch at the quad origin (intra-quad variation is
+// negligible — the map is ~17x17 over the sensor; the GL viewfinder
+// samples the same way, so the record twin agrees with it texel for
+// texel). Output slots are canonical R/Gr/Gb/B; the green slots take
+// the map channel of their own sensor row parity (Gr sits on even or
+// odd rows depending on CFA phase).
+vec4 shadeQuad(ivec2 q, ivec4 ch) {
+    float nx = clamp((float(q.x) - p.u_shadeActive.x) * p.u_shadeActive.z, 0.0, 1.0);
+    float ny = clamp((float(q.y) - p.u_shadeActive.y) * p.u_shadeActive.w, 0.0, 1.0);
+    float mx = nx * float(p.u_shadeDims.y - 1);
+    float my = ny * float(p.u_shadeDims.x - 1);
+    vec2 uv = vec2((mx + 0.5) / float(p.u_shadeDims.y), (my + 0.5) / float(p.u_shadeDims.x));
+    vec4 g = texture(shadeMap, uv);
+    int p1 = (q.y + ((ch.y >> 1) & 1)) & 1;
+    int p2 = (q.y + ((ch.z >> 1) & 1)) & 1;
+    float gr = (p1 == 0) ? g.y : g.z;
+    float gb = (p2 == 0) ? g.y : g.z;
+    return vec4(g.x, gr, gb, g.w);
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_frameSize))) return;
+    ivec2 q = p.u_quadBase + ij * p.u_step;
+    vec4 b = vec4(fetchN(q, p.u_chans.x), fetchN(q, p.u_chans.y),
+                  fetchN(q, p.u_chans.z), fetchN(q, p.u_chans.w));
+    if (p.u_shadeDims.z != 0) {
+        b *= shadeQuad(q, p.u_chans);
+    }
+    imageStore(img_out, ij, b);
+}
