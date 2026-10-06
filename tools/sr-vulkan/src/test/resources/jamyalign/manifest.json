@@ -1,0 +1,533 @@
+{
+ "files": {
+  "mosaic_ref.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "mosaic_mov.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "grey_ref.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "grey_mov.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "grey_ref_padded.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "pyr_ref_l0.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "pyr_ref_l1.f32": {
+   "shape": [
+    252,
+    252
+   ],
+   "dtype": "f32"
+  },
+  "pyr_ref_l2.f32": {
+   "shape": [
+    59,
+    59
+   ],
+   "dtype": "f32"
+  },
+  "pyr_ref_l3.f32": {
+   "shape": [
+    10,
+    10
+   ],
+   "dtype": "f32"
+  },
+  "pyr_mov_l0.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "pyr_mov_l1.f32": {
+   "shape": [
+    252,
+    252
+   ],
+   "dtype": "f32"
+  },
+  "pyr_mov_l2.f32": {
+   "shape": [
+    59,
+    59
+   ],
+   "dtype": "f32"
+  },
+  "pyr_mov_l3.f32": {
+   "shape": [
+    10,
+    10
+   ],
+   "dtype": "f32"
+  },
+  "gradx_l0.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "grady_l0.f32": {
+   "shape": [
+    512,
+    512
+   ],
+   "dtype": "f32"
+  },
+  "hessian_l0.f32": {
+   "shape": [
+    1024,
+    4
+   ],
+   "dtype": "f32"
+  },
+  "gradx_l1.f32": {
+   "shape": [
+    252,
+    252
+   ],
+   "dtype": "f32"
+  },
+  "grady_l1.f32": {
+   "shape": [
+    252,
+    252
+   ],
+   "dtype": "f32"
+  },
+  "hessian_l1.f32": {
+   "shape": [
+    225,
+    4
+   ],
+   "dtype": "f32"
+  },
+  "gradx_l2.f32": {
+   "shape": [
+    59,
+    59
+   ],
+   "dtype": "f32"
+  },
+  "grady_l2.f32": {
+   "shape": [
+    59,
+    59
+   ],
+   "dtype": "f32"
+  },
+  "hessian_l2.f32": {
+   "shape": [
+    9,
+    4
+   ],
+   "dtype": "f32"
+  },
+  "gradx_l3.f32": {
+   "shape": [
+    10,
+    10
+   ],
+   "dtype": "f32"
+  },
+  "grady_l3.f32": {
+   "shape": [
+    10,
+    10
+   ],
+   "dtype": "f32"
+  },
+  "hessian_l3.f32": {
+   "shape": [
+    1,
+    4
+   ],
+   "dtype": "f32"
+  },
+  "l2_seed_zero.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l2_flow_zero.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l2_seed_frac.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l2_flow_frac.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l2_ts8_flow.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_a_in.f32": {
+   "shape": [
+    1,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_a_nearest.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_a_bilinear.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_a_bicubic.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_b_in.f32": {
+   "shape": [
+    9,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_b_nearest.f32": {
+   "shape": [
+    225,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_b_bilinear.f32": {
+   "shape": [
+    225,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_b_bicubic.f32": {
+   "shape": [
+    225,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_c_in.f32": {
+   "shape": [
+    225,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_c_nearest.f32": {
+   "shape": [
+    1024,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_c_bilinear.f32": {
+   "shape": [
+    1024,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "up_c_bicubic.f32": {
+   "shape": [
+    1024,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "e2e_flow.f32": {
+   "shape": [
+    32,
+    32,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l1_in_ref.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "l1_in_mov.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "l1_ts16_zero.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l1_ts16_frac.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l1_ts32_zero.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "l1_ts32_frac.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts16_ref.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts16_mov.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts16_s0.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts16_s1.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts32_ref.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts32_mov.f32": {
+   "shape": [
+    64,
+    64
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts32_s0.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts32_s1.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts8_ref.f32": {
+   "shape": [
+    32,
+    32
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts8_mov.f32": {
+   "shape": [
+    32,
+    32
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts8_s0.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts8_s1.f32": {
+   "shape": [
+    16,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts64_ref.f32": {
+   "shape": [
+    128,
+    128
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts64_mov.f32": {
+   "shape": [
+    128,
+    128
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts64_s0.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  },
+  "ica_ts64_s1.f32": {
+   "shape": [
+    4,
+    2
+   ],
+   "dtype": "f32"
+  }
+ },
+ "big_shift": [
+  5.7,
+  -3.2
+ ],
+ "pyr_shapes": [
+  [
+   512,
+   512
+  ],
+  [
+   252,
+   252
+  ],
+  [
+   59,
+   59
+  ],
+  [
+   10,
+   10
+  ]
+ ],
+ "l2_grid": [
+  3,
+  3
+ ],
+ "l2_ts8_grid": [
+  4,
+  4
+ ],
+ "up_a": {
+  "src": [
+   1,
+   1
+  ],
+  "dst": [
+   3,
+   3
+  ],
+  "factor": 4,
+  "new_ts": 16,
+  "prev_ts": 8
+ },
+ "up_b": {
+  "src": [
+   3,
+   3
+  ],
+  "dst": [
+   15,
+   15
+  ],
+  "factor": 4,
+  "new_ts": 16,
+  "prev_ts": 16
+ },
+ "up_c": {
+  "src": [
+   15,
+   15
+  ],
+  "dst": [
+   32,
+   32
+  ],
+  "factor": 2,
+  "new_ts": 16,
+  "prev_ts": 16
+ },
+ "e2e_grid": [
+  32,
+  32
+ ]
+}
