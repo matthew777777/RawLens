@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.CancellationException
 import kotlin.math.abs
+import kotlin.math.floor
 
 class MosaicSrReconstructorTest {
     // ---- target grid ----
@@ -24,6 +25,84 @@ class MosaicSrReconstructorTest {
         val grid = MosaicSrReconstructor.planTarget(8, 6)
         assertEquals(10, grid.width)
         assertEquals(8, grid.height)
+    }
+
+    @Test fun targetGridNativeMatchesSource() {
+        // NATIVE keeps sensor resolution: the target grid equals the source
+        // grid (already even), carrying the origin-shifted phase verbatim.
+        val grid = MosaicSrReconstructor.planTarget(4000, 3000, BayerPattern.RGGB, RawSrMosaicScale.NATIVE)
+        assertEquals(4000, grid.width)
+        assertEquals(3000, grid.height)
+        assertEquals(1.0, grid.scale, 0.0)
+        assertEquals(BayerPattern.RGGB, grid.pattern)
+        val small = MosaicSrReconstructor.planTarget(8, 6, BayerPattern.GRBG, RawSrMosaicScale.NATIVE)
+        assertEquals(8, small.width)
+        assertEquals(6, small.height)
+        assertEquals(
+            BayerPattern.GRBG.shifted(1, 1),
+            MosaicSrReconstructor.planTarget(8, 6, BayerPattern.GRBG.shifted(1, 1), RawSrMosaicScale.NATIVE).pattern
+        )
+        // SR stays the default: omitted scale upscales to the √2 grid.
+        assertEquals(
+            MosaicSrReconstructor.planTarget(4000, 3000).width,
+            MosaicSrReconstructor.planTarget(4000, 3000, BayerPattern.RGGB, RawSrMosaicScale.SR).width
+        )
+    }
+
+    @Test fun nativeReconstructReproducesUniformAndRoutesColours() {
+        // NATIVE reconstructs onto the source grid: uniform values reproduce
+        // exactly and same-colour routing holds for every Bayer phase.
+        val uniform = MosaicSrReconstructor.reconstruct(
+            frame(8, 6, BayerPattern.RGGB, FloatArray(48) { 0.37f }), emptyList(),
+            scale = RawSrMosaicScale.NATIVE
+        )
+        assertEquals(8, uniform.width)
+        assertEquals(6, uniform.height)
+        for (v in uniform.cfa) assertEquals(0.37f, v, 1e-6f)
+        assertTrue(uniform.fallback.none { it })
+        for (pattern in BayerPattern.entries) {
+            val samples = FloatArray(48) { i ->
+                when (pattern.colorAt(i % 8, i / 8)) {
+                    CfaColor.RED -> 0.8f
+                    CfaColor.GREEN -> 0.5f
+                    CfaColor.BLUE -> 0.25f
+                }
+            }
+            val result = MosaicSrReconstructor.reconstruct(
+                frame(8, 6, pattern, samples), emptyList(), scale = RawSrMosaicScale.NATIVE)
+            assertEquals(pattern, result.pattern)
+            for (y in 0 until result.height) for (x in 0 until result.width) {
+                val expected = when (result.pattern.colorAt(x, y)) {
+                    CfaColor.RED -> 0.8f
+                    CfaColor.GREEN -> 0.5f
+                    CfaColor.BLUE -> 0.25f
+                }
+                assertEquals("$pattern ($x,$y)", expected, result.cfa[y * result.width + x], 1e-6f)
+            }
+        }
+    }
+
+    @Test fun nativeStreamingMatchesEagerExactly() {
+        // Eager/streaming bitwise agreement holds at NATIVE scale too.
+        val ref = frame(8, 6, BayerPattern.RGGB, FloatArray(48) { 0.4f })
+        val mov = frame(8, 6, BayerPattern.RGGB, FloatArray(48) { 0.6f }, dx = 1f)
+        val expected = MosaicSrReconstructor.reconstruct(ref, listOf(mov), scale = RawSrMosaicScale.NATIVE)
+        assertEquals(8, expected.width)
+        assertEquals(6, expected.height)
+        val dir = java.nio.file.Files.createTempDirectory("mosaic-stream-native").toFile()
+        try {
+            val actual = MosaicSrReconstructor.reconstructStreaming(
+                geometryOf(ref), listOf(mov).asSequence(), { ref },
+                tempDir = dir, scale = RawSrMosaicScale.NATIVE
+            )
+            assertEquals(expected.width, actual.width)
+            assertEquals(expected.height, actual.height)
+            assertEquals(expected.pattern, actual.pattern)
+            assertArrayEquals(expected.cfa, actual.cfa, 0f)
+            assertTrue(dir.listFiles()?.isEmpty() == true)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test fun targetGridRejectsBadSource() {
@@ -173,22 +252,28 @@ class MosaicSrReconstructorTest {
     @Test fun motionDiscontinuityMergesWithoutSkip() {
         // Tile columns disagreeing by 5 quads (0 vs +10 raw px). Reference
         // Alg. 4 defines no motion-edge stop: each site merges under its own
-        // nearest tile's flow. The step scene (dark left of x = 24, bright
-        // right) makes the two tiles disagree in content: tile-0 sites
-        // resolve like the reference-only image while tile-1 interior sites
-        // pull bright shifted taps and differ — proving the moving frame
-        // merged on both sides of the discontinuity instead of skipping.
-        val w = 32
+        // containing tile's flow (px = int(lr_x//tile_size), no blending).
+        // The step scene (dark
+        // left of x = 40, bright right) makes the two tiles disagree in
+        // content: tile-0 sites resolve like the reference-only image while
+        // tile-1 interior sites pull bright shifted taps and differ — proving
+        // the moving frame merged on both sides of the discontinuity instead
+        // of skipping. Reliability is not a merge input (no zero-shift
+        // fallback), so the unreliable twin must merge identically.
+        val w = 64
         val h = 32
         val qw = w / 2
         val qh = h / 2
-        val samples = FloatArray(w * h) { i -> if (i % w < 24) 0.2f else 0.8f }
-        fun flowOf(flowAt: (tx: Int, ty: Int) -> Pair<Float, Float>): RawSrAlignmentField {
-            val tiles = List(4) { i ->
-                val (dx, dy) = flowAt(i % 2, i / 2)
-                RawSrTileFlow(0f, 0f, dx, dy, 0f, true)
+        val samples = FloatArray(w * h) { i -> if (i % w < 40) 0.2f else 0.8f }
+        fun flowOf(flowAt: (tx: Int, ty: Int) -> Pair<Float, Float>,
+                   reliable: Boolean = true): RawSrAlignmentField {
+            val columns = w / 16
+            val rows = h / 16
+            val tiles = List(columns * rows) { i ->
+                val (dx, dy) = flowAt(i % columns, i / columns)
+                RawSrTileFlow(0f, 0f, dx, dy, 0f, reliable)
             }
-            return RawSrAlignmentField(qw, qh, 8, 2, 2, tiles)
+            return RawSrAlignmentField(w, h, 16, columns, rows, tiles)
         }
         fun mframe(flow: RawSrAlignmentField?, r: Float): RawSrBayerMerge.MergeFrame {
             val covariance = RawSrKernelCovariance.MatrixField(
@@ -201,30 +286,34 @@ class MosaicSrReconstructorTest {
                 w, h, samples, BayerPattern.RGGB, 0, 0, covariance, flow, robustness)
         }
         val ref = mframe(null, 1f)
-        val mov = mframe(flowOf { tx, _ -> if (tx == 0) 0f to 0f else 5f to 0f }, 1f)
-        val result = MosaicSrReconstructor.reconstruct(ref, listOf(mov))
         val alone = MosaicSrReconstructor.reconstruct(ref, emptyList())
-        var same = 0
-        var moved = 0
-        for (y in 0 until result.height) for (x in 0 until result.width) {
-            val v = result.cfa[y * result.width + x]
-            assertTrue("cfa=$v", v.isFinite())
-            val baseX = (x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
-            val a = alone.cfa[y * alone.width + x]
-            // Tile 0 interior (flow 0): identical computation to
-            // reference-only up to float summation order.
-            if (baseX in 4.0..12.0) {
-                assertEquals("tile-0 site ($x,$y)", a, v, 1e-6f)
-                same++
-            } else if (baseX in 16.5..20.5) {
-                // Tile 1 interior (flow +10 px, in bounds): shifted taps
-                // read the bright side while tile 0 would read dark.
-                assertTrue("tile-1 site ($x,$y) v=$v a=$a did not move", abs(v - a) > 1e-3f)
-                moved++
+        for (reliable in listOf(true, false)) {
+            val mov = mframe(flowOf({ tx, _ -> if (tx == 0) 0f to 0f else 10f to 0f }, reliable), 1f)
+            val result = MosaicSrReconstructor.reconstruct(ref, listOf(mov))
+            var same = 0
+            var moved = 0
+            for (y in 0 until result.height) for (x in 0 until result.width) {
+                val v = result.cfa[y * result.width + x]
+                assertTrue("cfa=$v", v.isFinite())
+                val baseX = (x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
+                val a = alone.cfa[y * alone.width + x]
+                // Tile 0 interior (flow pure 0): identical computation to
+                // reference-only up to float summation order.
+                if (baseX in 4.0..7.0) {
+                    assertEquals("tile-0 site ($x,$y) reliable=$reliable", a, v, 1e-6f)
+                    same++
+                } else if (baseX in 31.5..35.5) {
+                    // Tile 1 interior (saturated +10px flow, in bounds):
+                    // shifted taps read the bright side while tile 0 would
+                    // read dark.
+                    assertTrue("tile-1 site ($x,$y) v=$v a=$a reliable=$reliable did not move",
+                        abs(v - a) > 1e-3f)
+                    moved++
+                }
             }
+            assertTrue("no tile-0 sites reliable=$reliable", same > 0)
+            assertTrue("no tile-1 sites reliable=$reliable", moved > 0)
         }
-        assertTrue("no tile-0 sites", same > 0)
-        assertTrue("no tile-1 sites", moved > 0)
     }
 
     @Test fun blindReferenceMergesMovingUncensored() {
@@ -297,7 +386,7 @@ class MosaicSrReconstructorTest {
         fun ramp() = FloatArray(48) { i -> (i % 8).toFloat() * 0.1f }
         val ref = frame(8, 6, BayerPattern.RGGB, FloatArray(48))
         val still = frame(8, 6, BayerPattern.RGGB, ramp())
-        val shifted = frame(8, 6, BayerPattern.RGGB, ramp(), dx = 1.0f)
+        val shifted = frame(8, 6, BayerPattern.RGGB, ramp(), dx = 2.0f)
         val plain = MosaicSrReconstructor.reconstruct(ref, listOf(still))
         val moved = MosaicSrReconstructor.reconstruct(ref, listOf(shifted))
         var sum = 0.0; var n = 0
@@ -458,17 +547,19 @@ class MosaicSrReconstructorTest {
         assertTrue("expected kernel ghost mush, worst=$worst", worst > 0.03)
     }
 
-    @Test fun tileBorderFlowBlendsAcrossTileBorder() {
-        // Mirror of the RGB blend test (flowTransitionBlendsAcrossTileBorder)
-        // for the mosaic path: alternating tile columns shift 0 vs 1 quad px
-        // (tileSize 4) on a monotonic ramp. Bilinear flow sampling blends the
-        // border sites strictly between the uniform-flow endpoints instead of
-        // snapping each side to its own tile (quilt step).
+    @Test fun tileBorderFlowBlendsAcrossBorder() {
+        // Mirror of the RGB blend test
+        // (flowTransitionBlendsAcrossBorderButMatchesUniformFarAway) for
+        // the mosaic path: alternating tile columns shift 0 vs 2 raw px
+        // (tileSize 4) on a monotonic ramp. Bilinear-everywhere blends
+        // across every border (the warp is C0-continuous), so every
+        // interior site differs from its containing tile's uniform
+        // render and sits strictly between the two uniform renders.
         val w = 32; val h = 24
         fun ramp() = FloatArray(w * h) { i -> (i % w).toFloat() / 40f }
         fun movingWith(flow: RawSrAlignmentField): RawSrBayerMerge.MergeFrame {
             val quadsW = w / 2; val quadsH = h / 2
-            // Unit isotropic covariance (like the RGB quilt test's K = 1.0):
+            // Unit isotropic covariance (like the RGB snap test's K = 1.0):
             // kernel weights must respond to subpixel shifts, otherwise
             // flat weights round every outcome to float32-identical values.
             return RawSrBayerMerge.MergeFrame(w, h, ramp(), BayerPattern.RGGB, 0, 0,
@@ -481,12 +572,12 @@ class MosaicSrReconstructorTest {
         }
         fun tiledFlow(dxAt: (tx: Int, ty: Int) -> Float): RawSrAlignmentField {
             val tileSize = 4
-            val columns = (w / 2 + tileSize - 1) / tileSize
-            val rows = (h / 2 + tileSize - 1) / tileSize
+            val columns = w / tileSize
+            val rows = h / tileSize
             val tiles = List(columns * rows) { i ->
                 RawSrTileFlow(0f, 0f, dxAt(i % columns, i / columns), 0f, 0f, true)
             }
-            return RawSrAlignmentField(w / 2, h / 2, tileSize, columns, rows, tiles)
+            return RawSrAlignmentField(w, h, tileSize, columns, rows, tiles)
         }
         val ref = RawSrBayerMerge.MergeFrame(w, h, ramp(), BayerPattern.RGGB, 0, 0,
             RawSrKernelCovariance.MatrixField(
@@ -494,37 +585,144 @@ class MosaicSrReconstructorTest {
                     if (i % 4 == 0 || i % 4 == 3) 1.0f else 0f
                 }), null, null)
         val mixed = MosaicSrReconstructor.reconstruct(
-            ref, listOf(movingWith(tiledFlow { tx, _ -> if (tx % 2 == 0) 0f else 1f })))
+            ref, listOf(movingWith(tiledFlow { tx, _ -> if (tx % 2 == 0) 0f else 2f })))
         val outA = MosaicSrReconstructor.reconstruct(
             ref, listOf(movingWith(tiledFlow { _, _ -> 0f })))
         val outB = MosaicSrReconstructor.reconstruct(
-            ref, listOf(movingWith(tiledFlow { _, _ -> 1f })))
+            ref, listOf(movingWith(tiledFlow { _, _ -> 2f })))
         assertTrue(mixed.fallback.none { it })
-        // Only GREEN sites gate the quilt: their 3x3 windows hold several
-        // same-colour taps, so the endpoint values genuinely differ between
-        // the two shifts (RED/BLUE windows often hold a single tap, where
-        // any method returns an endpoint by sampling physics).
-        var leftOfStep = 0
-        var rightOfStep = 0
+        var evenSites = 0
+        var oddSites = 0
+        var blendedSites = 0
+        var greenDiffers = false
         for (y in 4 until mixed.height - 4) for (x in 4 until mixed.width - 4) {
-            if (mixed.pattern.colorAt(x, y) != CfaColor.GREEN) continue
-            val quadX = (((x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE) / 2.0).toInt()
-            val quadY = (((y + 0.5) / MosaicSrReconstructor.LINEAR_SCALE) / 2.0).toInt()
-            if (quadY < 2 || quadX > w / 2 - 3 || quadY > h / 2 - 3) continue
-            val v = mixed.cfa[y * mixed.width + x].toDouble()
-            val a = outA.cfa[y * outA.width + x].toDouble()
-            val b = outB.cfa[y * outB.width + x].toDouble()
-            // Tile border between quadX 3 (tile 0, flow 0) and quadX 4
-            // (tile 1, flow 1): the bilinear sample blends both tiles, so
-            // border sites land strictly between the uniform endpoints.
-            if (quadX == 3 || quadX == 4) {
-                assertTrue("blend zone must sit strictly between uniforms ($x,$y) a=$a b=$b v=$v",
-                    (v - a) * (v - b) < 0.0)
-                if (quadX == 3) leftOfStep++ else rightOfStep++
+            val baseX = (x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
+            val o = y * mixed.width + x
+            if ((baseX / 4).toInt() % 2 == 0) evenSites++ else oddSites++
+            val a = outA.cfa[o]
+            val b = outB.cfa[o]
+            val m = mixed.cfa[o]
+            // A snap would equal one uniform at every site; the blend
+            // differs from both wherever the shift moves the taps.
+            // (No between-ness: the quotient's denominator also moves
+            // with the shift, so render space is not shift-monotonic.
+            // Sites whose same-channel taps share one x-coordinate are
+            // shift-blind and coincide with a uniform.)
+            if (abs(m - a) > 1e-4f && abs(m - b) > 1e-4f) blendedSites++
+            if (mixed.pattern.colorAt(x, y) == CfaColor.GREEN && abs(a - b) > 1e-6f) greenDiffers = true
+        }
+        assertTrue("no even-tile sites", evenSites > 0)
+        assertTrue("no odd-tile sites", oddSites > 0)
+        assertTrue("no blended sites", blendedSites > 0)
+        assertTrue("uniforms never differ on GREEN sites", greenDiffers)
+    }
+
+    @Test fun robustnessStepSnapsToShiftedQuad() {
+        // Robustness twin of the flow snap test: a single r step (0 below
+        // quad column 8, 1 at/above) on a monotonic ramp with a uniform
+        // shift. Reference `cpu_accumulate` fetches the nearest quad with
+        // the one-quad shift (min(int(lr//2-0.5))): sites over the r = 0
+        // side equal the all-rejected render exactly, sites over the r = 1
+        // side equal the all-accepted render exactly.
+        val w = 32; val h = 24
+        fun ramp() = FloatArray(w * h) { i -> (i % w).toFloat() / 40f }
+        fun unitCovariance() = RawSrKernelCovariance.MatrixField(
+            w / 2, h / 2, FloatArray(w / 2 * h / 2 * 4) { i ->
+                if (i % 4 == 0 || i % 4 == 3) 1.0f else 0f
+            })
+        fun movingWith(rAt: (qx: Int) -> Float): RawSrBayerMerge.MergeFrame {
+            val quadsW = w / 2; val quadsH = h / 2
+            return RawSrBayerMerge.MergeFrame(w, h, ramp(), BayerPattern.RGGB, 0, 0,
+                unitCovariance(),
+                RawSrAlignmentField(w, h, 1, w, h,
+                    List(w * h) { RawSrTileFlow(0f, 0f, 2f, 0f, 0f, true) }),
+                RawSrRobustness.FrameRobustness(
+                    quadsW, quadsH,
+                    FloatArray(quadsW * quadsH) { i -> rAt(i % quadsW) },
+                    IntArray(quadsW * quadsH)))
+        }
+        val ref = RawSrBayerMerge.MergeFrame(
+            w, h, ramp(), BayerPattern.RGGB, 0, 0, unitCovariance(), null, null)
+        val mixed = MosaicSrReconstructor.reconstruct(
+            ref, listOf(movingWith { qx -> if (qx < 8) 0f else 1f }))
+        val outA = MosaicSrReconstructor.reconstruct(
+            ref, listOf(movingWith { 0f }))
+        val outB = MosaicSrReconstructor.reconstruct(
+            ref, listOf(movingWith { 1f }))
+        assertTrue(mixed.fallback.none { it })
+        var rejected = 0
+        var accepted = 0
+        var greenDiffers = false
+        for (y in 4 until mixed.height - 4) for (x in 4 until mixed.width - 4) {
+            val baseX = (x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
+            val qx = floor(baseX / 2.0 - 1.0).toInt()
+            val expected = if (qx < 8) {
+                rejected++
+                outA.cfa[y * outA.width + x]
+            } else {
+                accepted++
+                outB.cfa[y * outB.width + x]
+            }
+            assertEquals("snap site ($x,$y)", expected, mixed.cfa[y * mixed.width + x], 0f)
+            if (mixed.pattern.colorAt(x, y) == CfaColor.GREEN &&
+                abs(outA.cfa[y * outA.width + x] - outB.cfa[y * outB.width + x]) > 1e-6f
+            ) greenDiffers = true
+        }
+        assertTrue("no reject-side sites", rejected > 0)
+        assertTrue("no accept-side sites", accepted > 0)
+        assertTrue("uniforms never differ on GREEN sites", greenDiffers)
+    }
+
+    @Test fun horizonRobustnessDipSnapsToShiftedQuads() {
+        // Nearest-r snap on a realistic mosaic setup: a 64x64 horizontal
+        // step (0.25/0.75) with production analytic kernels, one moving
+        // frame shifted a full quad down, r = 0 on two-quad patches along
+        // the edge rows. Reference `cpu_accumulate` fetches the nearest
+        // quad with the one-quad shift, so every site over an r = 0 patch
+        // equals the reference-only reconstruction exactly, and every site
+        // over an r = 1 patch equals the all-accepted one exactly.
+        val w = 64; val h = 64
+        val qw = w / 2; val qh = h / 2
+        val samples = FloatArray(w * h) { i -> if (i / w < h / 2) 0.25f else 0.75f }
+        val gray = RawSrGrayImage(qw, qh,
+            FloatArray(qw * qh) { i -> if (i / qw < qh / 2) 0.25f else 0.75f })
+        val covariance = RawSrKernelCovariance.covariance(gray, RawSrTuning.forSnr(30.0))
+        fun frame(dy: Float, rAt: (qx: Int, qy: Int) -> Float): RawSrBayerMerge.MergeFrame {
+            val flow = RawSrAlignmentField(w, h, 1, w, h,
+                List(w * h) { RawSrTileFlow(0f, 0f, 0f, dy, 0f, true) })
+            val robust = RawSrRobustness.FrameRobustness(
+                qw, qh, FloatArray(qw * qh) { i -> rAt(i % qw, i / qw) }, IntArray(qw * qh))
+            return RawSrBayerMerge.MergeFrame(
+                w, h, samples, BayerPattern.RGGB, 0, 0, covariance, flow, robust)
+        }
+        val patches = { qx: Int, qy: Int -> if (qy in 15..16 && (qx / 2) % 2 == 0) 0f else 1f }
+        val ref = frame(0f) { _, _ -> 1f }
+        val mixed = MosaicSrReconstructor.reconstruct(ref, listOf(frame(2.0f, patches)))
+        val outReject = MosaicSrReconstructor.reconstruct(ref, emptyList())
+        val outAccept = MosaicSrReconstructor.reconstruct(ref, listOf(frame(2.0f) { _, _ -> 1f }))
+        var rejected = 0
+        var accepted = 0
+        var differs = false
+        for (y in 4 until mixed.height - 4) for (x in 4 until mixed.width - 4) {
+            val baseX = (x + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
+            val baseY = (y + 0.5) / MosaicSrReconstructor.LINEAR_SCALE
+            val qx = floor(baseX / 2.0 - 1.0).toInt()
+            val qy = floor(baseY / 2.0 - 1.0).toInt()
+            val v = mixed.cfa[y * mixed.width + x]
+            if (patches(qx, qy) == 0f) {
+                assertEquals("reject patch ($x,$y)", outReject.cfa[y * outReject.width + x], v, 0f)
+                rejected++
+            } else {
+                assertEquals("accept patch ($x,$y)", outAccept.cfa[y * outAccept.width + x], v, 0f)
+                accepted++
+            }
+            if (abs(outAccept.cfa[y * outAccept.width + x] - outReject.cfa[y * outReject.width + x]) > 1e-4f) {
+                differs = true
             }
         }
-        assertTrue("no left-of-step GREEN sites", leftOfStep > 0)
-        assertTrue("no right-of-step GREEN sites", rightOfStep > 0)
+        assertTrue("no reject-patch sites", rejected > 0)
+        assertTrue("no accept-patch sites", accepted > 0)
+        assertTrue("moving frame must change the blend", differs)
     }
 
     @Test fun streamingFallsBackToReferenceWhenNothingSupported() {
@@ -608,8 +806,9 @@ class MosaicSrReconstructorTest {
                 if (covariance.isNaN()) Float.NaN else if (i % 4 == 0 || i % 4 == 3) covariance else 0f
             }
         )
-        val tiles = List(quadsW * quadsH) { RawSrTileFlow(0f, 0f, dx, dy, 0f, true) }
-        val flow = RawSrAlignmentField(quadsW, quadsH, 1, quadsW, quadsH, tiles)
+        // Raw-lattice dense flow (Jamy-L convention): raw-unit vectors.
+        val tiles = List(w * h) { RawSrTileFlow(0f, 0f, dx, dy, 0f, true) }
+        val flow = RawSrAlignmentField(w, h, 1, w, h, tiles)
         val robustness = RawSrRobustness.FrameRobustness(
             quadsW, quadsH, FloatArray(quadsW * quadsH) { r }, IntArray(quadsW * quadsH)
         )
@@ -719,6 +918,54 @@ class MosaicSrReconstructorTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             MosaicSrReconstructor.clampMinorAxisInPlace(FloatArray(6))
+        }
+    }
+
+    // ---- chroma latch guard ----
+
+    @Test fun chromaGuardRescuesCollapsedRbSitesAndKeepsGreenBitwise() {
+        // Razor isotropic kernels (site-A class: sigma ~0.13 raw px) at SR
+        // scale, reference-only: R/B sites whose same-colour taps all fall
+        // far from the source accumulate tiny support on the
+        // reference-verbatim path (chromaSigmaMpy = 1.0). Zero-support
+        // divide (EPS=0) keeps those quotients finite (no collapse to 0),
+        // so the guard (2.0) is pinned by support instead: every R/B site
+        // must gain weight under the wider kernel while green sites stay
+        // bitwise identical.
+        val samples = FloatArray(8 * 6) { 0.5f }
+        val ref = frame(8, 6, BayerPattern.RGGB, samples, covariance = 0.016f)
+        val plain = MosaicSrReconstructor.reconstruct(
+            ref, emptyList(), scale = RawSrMosaicScale.SR, chromaSigmaMpy = 1.0)
+        val guarded = MosaicSrReconstructor.reconstruct(
+            ref, emptyList(), scale = RawSrMosaicScale.SR, chromaSigmaMpy = 2.0)
+        assertEquals(plain.width, guarded.width)
+        assertEquals(plain.height, guarded.height)
+        var rbSites = 0
+        for (p in plain.cfa.indices) {
+            val x = p % plain.width
+            val y = p / plain.width
+            if (plain.pattern.colorAt(x, y) == CfaColor.GREEN) {
+                assertEquals("green site ($x,$y)", plain.cfa[p], guarded.cfa[p], 0f)
+            } else {
+                rbSites++
+                assertTrue("R/B site ($x,$y) plain weight ${plain.weight[p]}",
+                    plain.weight[p] > 0f)
+                assertTrue("R/B site ($x,$y) guarded weight ${guarded.weight[p]} " +
+                    "must exceed plain ${plain.weight[p]}",
+                    guarded.weight[p] > plain.weight[p])
+                assertFalse("R/B site ($x,$y) plain fallback", plain.fallback[p])
+                assertFalse("R/B site ($x,$y) guarded fallback", guarded.fallback[p])
+            }
+        }
+        assertTrue("expected R/B sites, got $rbSites", rbSites > 0)
+    }
+
+    @Test fun chromaGuardRejectsBadMultiplier() {
+        val ref = frame(8, 6, BayerPattern.RGGB, FloatArray(48) { 0.5f })
+        for (bad in listOf(0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                MosaicSrReconstructor.reconstruct(ref, emptyList(), chromaSigmaMpy = bad)
+            }
         }
     }
 }

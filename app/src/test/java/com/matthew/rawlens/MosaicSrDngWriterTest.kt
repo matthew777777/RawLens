@@ -67,7 +67,7 @@ class MosaicSrDngWriterTest {
 
     @Test fun provenanceRecordCarriesEffectiveFrames() {
         assertTrue(MosaicSrDngWriter.provenanceBlock(provenance(), MosaicSrCfa(12, 8, BayerPattern.GRBG,
-            FloatArray(12 * 8) { 0.1f })).contains("effectiveFrames=1.0"))
+            FloatArray(12 * 8) { 0.1f })).contains("- Effective frames: 1.0\n"))
     }
 
     @Test fun noiseProfileOverrideWritesMergedTag() {
@@ -85,13 +85,17 @@ class MosaicSrDngWriterTest {
     @Test fun provenanceRecordCarriesEveryRequiredKey() {
         val parsed = parse(writeDefault())
         val block = parsed.ascii(270)
-        assertTrue(block.startsWith("RawLens Mosaic SR DNG - derived Bayer reconstruction."))
+        assertTrue(block.startsWith("Captured with RawLens\nMosaic SR DNG - derived Bayer reconstruction\n"))
         for (key in listOf(
-            "algorithm=${MosaicSrReconstructor.ALGORITHM_VERSION}", "selectedFrames=4", "acceptedFrames=3",
-            "rejectedFrames=1", "referenceTimestampNs=555", "sourceDims=8x6",
-            "targetDims=12x8", "targetPattern=GRBG", "outputScale=1.4142135623730951",
-            "sourceCameraId=0", "derivation=MosaicSrDerivedBayer", "lensShadingApplied=false",
-            "quantization=clamp[0,1]*65535 round-half-up"
+            "\nPARAMETERS\n", "- Algorithm: ${MosaicSrReconstructor.ALGORITHM_VERSION}\n",
+            "- Selected frames: 4\n", "- Accepted frames: 3\n",
+            "- Rejected frames: 1\n", "- Reference timestamp: 555 ns\n",
+            "- Source dimensions: 8x6\n",
+            "- Target dimensions: 12x8\n", "- Target pattern: GRBG\n",
+            "- Output scale: 1.4142135623730951x\n",
+            "\nSource:\n", "- Camera: 0\n", "- Derivation: MosaicSrDerivedBayer\n",
+            "- Lens shading applied: false\n",
+            "- Quantization: clamp[0,1]*65535 round-half-up\n"
         )) assertTrue("missing $key", block.contains(key))
     }
 
@@ -113,8 +117,8 @@ class MosaicSrDngWriterTest {
         assertEquals(21, parsed.entry(50778).value)
         assertEquals(17, parsed.entry(50779).value)
         val (num, den) = parsed.rational(33434)
-        assertEquals(10_000_000, num)
-        assertEquals(1_000_000_000, den)
+        // Reduced rationals pin the value (10ms), not the numerator bytes.
+        assertEquals(0.01, num.toDouble() / den, 1e-12)
         assertEquals(100, parsed.entry(34855).value)
         assertTrue(parsed.ascii(50708).contains("(0)"))
     }

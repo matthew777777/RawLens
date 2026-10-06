@@ -64,46 +64,52 @@ class RawSrMergeJobTest {
     // ---- flow resampling ----
 
     @Test fun upsampledFlowMatchesQuadGridExactly() {
+        // Coarse field on the raw lattice (tileSize 2); each quad samples
+        // its center in raw coordinates (2q+1).
         val coarse = RawSrAlignmentField(
-            imageWidth = 4, imageHeight = 3, tileSize = 2, columns = 2, rows = 2,
-            tiles = List(4) { i -> RawSrTileFlow(0f, 0f, i.toFloat(), -i.toFloat(), 0f, true) }
+            imageWidth = 8, imageHeight = 6, tileSize = 2, columns = 4, rows = 3,
+            tiles = List(12) { i -> RawSrTileFlow(0f, 0f, i.toFloat(), -i.toFloat(), 0f, true) }
         )
         val quad = RawSrMergeJob.upsampleFlowToQuads(coarse, 4, 3)
         assertEquals(4, quad.imageWidth)
         assertEquals(3, quad.imageHeight)
         assertEquals(1, quad.tileSize)
-        // Bilinear: quad (3, 2) blends tile (1, 0)=1 and (1, 1)=3 at fy=0.75.
+        // Quad (3, 2) samples raw (7, 5): ux=3.25, uy=2.25 clamp to tile 11.
         val tile = quad.flowAt(3f, 2f)
-        assertEquals(2.5f, tile.dx, 0f)
-        assertEquals(-2.5f, tile.dy, 0f)
-        assertEquals(2.25f, quad.flowAt(2f, 2f).dx, 0f)
+        assertEquals(11f, tile.dx, 0f)
+        assertEquals(-11f, tile.dy, 0f)
+        // Quad (2, 2): ux=2.25 blends tiles 10,11 at 0.75/0.25, uy clamps
+        // to row 2: 10*0.75 + 11*0.25 = 10.25.
+        assertEquals(10.25f, quad.flowAt(2f, 2f).dx, 0f)
     }
 
     @Test fun upsampledFlowListContractHoldsOnCompactBacking() {
         // The quad grid is array-backed (no boxed tile per quad); the List
         // contract must still hold exactly: size, centers, values, iteration.
         val coarse = RawSrAlignmentField(
-            imageWidth = 4, imageHeight = 3, tileSize = 2, columns = 2, rows = 2,
-            tiles = List(4) { i -> RawSrTileFlow(0f, 0f, i.toFloat(), -i.toFloat(), 0.5f, i % 2 == 0) }
+            imageWidth = 8, imageHeight = 6, tileSize = 2, columns = 4, rows = 3,
+            tiles = List(12) { i -> RawSrTileFlow(0f, 0f, i.toFloat(), -i.toFloat(), 0.5f, i % 2 == 0) }
         )
         val quad = RawSrMergeJob.upsampleFlowToQuads(coarse, 4, 3)
         assertEquals(12, quad.tiles.size)
         val first = quad.tiles[0]
         assertEquals(0f, first.centerX, 0f)
         assertEquals(0f, first.centerY, 0f)
-        assertEquals(0f, first.dx, 0f)
+        // Quad (0,0): ux=uy=0.25 blends tiles 0,1,4,5 at
+        // 0.5625/0.1875/0.1875/0.0625 = 1.25. Residual/reliability come
+        // from the containing tile (0): 0.5 / true.
+        assertEquals(1.25f, first.dx, 0f)
         assertEquals(0.5f, first.residual, 0f)
         assertTrue(first.reliable)
         val last = quad.tiles[11]
         assertEquals(3f, last.centerX, 0f)
         assertEquals(2f, last.centerY, 0f)
-        // Bilinear (not nearest): quad (3, 2) blends tiles 1 and 3 at fy=0.75.
-        assertEquals(2.5f, last.dx, 0f)
-        assertEquals(-2.5f, last.dy, 0f)
+        assertEquals(11f, last.dx, 0f)
+        assertEquals(-11f, last.dy, 0f)
         assertFalse(last.reliable)
-        // Interior blend: quad (2, 1) mixes all four coarse tiles -> 1.25,
-        // where nearest lookup returned tile (1, 0) = 1 exactly.
-        assertEquals(1.25f, quad.tiles[6].dx, 0f)
+        // Interior blend: quad (2, 1) at ux=2.25/uy=1.25 mixes tiles
+        // 6,7,10,11 -> 7.25, where nearest lookup returned tile (2, 1) = 6.
+        assertEquals(7.25f, quad.tiles[6].dx, 0f)
         assertEquals(12, quad.tiles.count())
         assertEquals(
             quad.tiles.filter { it.reliable }.size,
@@ -113,15 +119,15 @@ class RawSrMergeJobTest {
 
     // ---- mosaic chain ----
 
-    private val chainConfig = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 3)
+    private val chainConfig = RawSrAlignmentConfig()
 
     @Test fun mosaicChainKeepsAlignedFramesAndRejectsBadOnes() {
-        val ref = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
         // Flat field: no reliable tile anywhere, rejected by the chain.
-        val flat = input(128, 96, textured = false)
+        val flat = input(512, 512, textured = false)
         // Wrong-size frame: align() rejects the dimension mismatch.
         val bad = input(32, 24, textured = true)
-        val good = input(128, 96, textured = true)
+        val good = input(512, 512, textured = true)
         val chain = RawSrMergeJob.mosaicChain(listOf(ref, flat, bad, good), 0, chainConfig)
         assertEquals(listOf(3), chain.survivorIndices)
         assertEquals(1, chain.moving.size)
@@ -132,28 +138,136 @@ class RawSrMergeJobTest {
     }
 
     @Test fun mosaicChainAndStreamDefaultToTuningTileSize() {
-        val ref = input(128, 96, textured = true)
-        val good = input(128, 96, textured = true)
-        // Fixture profile and brightness put SNR at the 30 clip: 16 raw px,
-        // i.e. 8 quads — the same tile size the GPU path resolves.
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
+        // Fixture profile and brightness put SNR at the 30 clip: 16 raw px.
         val chain = RawSrMergeJob.mosaicChain(listOf(ref, good), 0)
         assertEquals(16, chain.tuning.rawTileSize)
-        assertEquals(8, chain.alignmentTileQuads)
+        assertEquals(16, chain.alignmentTileSize)
         assertEquals(listOf(1), chain.survivorIndices)
         val stream = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
-        assertEquals(8, stream.alignmentTileQuads)
+        assertEquals(16, stream.alignmentTileSize)
         assertEquals(chain.tuning, stream.tuning)
-        // Explicit configs still win over tuning.
+        // Explicit configs still win over tuning (low-SNR tuning would
+        // resolve tile 64; the explicit 16 runs the chain instead).
         val explicit = RawSrMergeJob.mosaicChain(
-            listOf(ref, good), 0, RawSrAlignmentConfig(levels = 2, tileSize = 4))
-        assertEquals(4, explicit.alignmentTileQuads)
+            listOf(ref, good), 0, RawSrAlignmentConfig(tileSize = 16),
+            tuningOverride = RawSrTuning.forSnr(6.0))
+        assertEquals(16, explicit.alignmentTileSize)
+    }
+
+    @Test fun mosaicChainAndStreamHonorTuningOverride() {
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
+        val override = RawSrTuning.decoupledSharp()
+        val chain = RawSrMergeJob.mosaicChain(
+            listOf(ref, good), 0, null, tuningOverride = override)
+        assertEquals(override, chain.tuning)
+        // Null config derives the tile size from the override, not the scan.
+        assertEquals(override.rawTileSize, chain.alignmentTileSize)
+        assertEquals(16, chain.alignmentTileSize)
+        assertEquals(listOf(1), chain.survivorIndices)
+        val stream = RawSrMergeJob.mosaicStream(
+            listOf(ref, good), 0, null, tuningOverride = override)
+        assertEquals(override, stream.tuning)
+        assertEquals(16, stream.alignmentTileSize)
+    }
+
+    @Test fun chainAndStreamCarryAutoSigmaRatioWhenEnabled() {
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
+        val saved = RawSrKernelNetAniso.enabled
+        RawSrKernelNetAniso.enabled = true
+        try {
+            val chain = RawSrMergeJob.mosaicChain(listOf(ref, good), 0)
+            assertNotNull(chain.noiseSigmaRatio)
+            val stream = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
+            assertNotNull(stream.noiseSigmaRatio)
+            assertEquals(chain.noiseSigmaRatio!!, stream.noiseSigmaRatio!!, 0f)
+        } finally {
+            RawSrKernelNetAniso.enabled = saved
+        }
+    }
+
+    @Test fun chainAndStreamOmitAutoSigmaRatioWhenDisabled() {
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
+        val saved = RawSrKernelNetAniso.enabled
+        RawSrKernelNetAniso.enabled = false
+        try {
+            // Analytic opt-out (--no-kernelnet): no measurement, no ratio.
+            val chain = RawSrMergeJob.mosaicChain(listOf(ref, good), 0)
+            assertNull(chain.noiseSigmaRatio)
+            val stream = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
+            assertNull(stream.noiseSigmaRatio)
+        } finally {
+            RawSrKernelNetAniso.enabled = saved
+        }
+    }
+
+    @Test fun streamFallsBackToAnalyticWithoutModel() {
+        // No ncnn model in unit tests: enabled-but-not-ready must stay
+        // exactly analytic (silent fallback), never crash, never half-swap.
+        val saved = RawSrKernelNetAniso.enabled
+        RawSrKernelNetAniso.enabled = true
+        try {
+            val ref = input(512, 512, textured = true)
+            val good = input(512, 512, textured = true)
+            val on = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
+            val onFrames = on.frames.toList()
+            val onRef = on.referenceFrame()
+            RawSrKernelNetAniso.enabled = false
+            val off = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
+            val offFrames = off.frames.toList()
+            val offRef = off.referenceFrame()
+            assertEquals(offFrames.size, onFrames.size)
+            onFrames.zip(offFrames).forEachIndexed { i, (a, b) ->
+                assertArrayEquals("moving $i covariance",
+                    b.covariance.values, a.covariance.values, 0f)
+            }
+            assertArrayEquals("reference covariance",
+                offRef.covariance.values, onRef.covariance.values, 0f)
+        } finally {
+            RawSrKernelNetAniso.enabled = saved
+        }
+    }
+
+    @Test fun streamSwapsEveryFrameThroughTestSeam() {
+        // The seam stands in for model inference (unavailable in unit
+        // tests): every yielded moving frame plus the reference must pass
+        // through the swap with the stream's measured auto-sigma ratio.
+        val saved = RawSrKernelNetAniso.enabled
+        val savedSeam = RawSrMergeJob.kernelNetSwapForTest
+        RawSrKernelNetAniso.enabled = true
+        val ratios = mutableListOf<Float?>()
+        try {
+            RawSrMergeJob.kernelNetSwapForTest = { frame, _, ratio ->
+                ratios.add(ratio)
+                val cov = frame.covariance
+                frame.copy(covariance = RawSrKernelCovariance.MatrixField(
+                    cov.width, cov.height, FloatArray(cov.values.size) { -1f }))
+            }
+            val ref = input(512, 512, textured = true)
+            val good = input(512, 512, textured = true)
+            val stream = RawSrMergeJob.mosaicStream(listOf(ref, good), 0)
+            val frames = stream.frames.toList()
+            val refFrame = stream.referenceFrame()
+            assertEquals(frames.size + 1, ratios.size)
+            ratios.forEach { assertEquals(stream.noiseSigmaRatio, it) }
+            (frames + refFrame).forEach {
+                assertTrue(it.covariance.values.all { v -> v == -1f })
+            }
+        } finally {
+            RawSrMergeJob.kernelNetSwapForTest = savedSeam
+            RawSrKernelNetAniso.enabled = saved
+        }
     }
 
     @Test fun mosaicChainWithZeroLutMatchesAnalytic() {
         // A zero LUT is an exact no-op: the chain must produce bit-identical
         // robustness fields with and without it.
-        val ref = input(128, 96, textured = true)
-        val good = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
         val zero = RawSrNoiseLut.Lut(
             bins = 4, trials = 8, seed = 0,
             alpha = DoubleArray(4), beta = DoubleArray(4),
@@ -171,16 +285,59 @@ class RawSrMergeJobTest {
     }
 
     @Test fun mosaicChainThrowsWhenNothingSurvives() {
-        val ref = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
         val bad = input(32, 24, textured = true)
         assertThrows(MergeUnavailableException::class.java) {
             RawSrMergeJob.mosaicChain(listOf(ref, bad), 0, chainConfig)
         }
     }
 
+    @Test fun mosaicChainReportsRejectionsWithReasons() {
+        val ref = input(512, 512, textured = true)
+        val flat = input(512, 512, textured = false)
+        val good = input(512, 512, textured = true)
+        val seen = ArrayList<RawSrMergeJob.RejectedFrame>()
+        val chain = RawSrMergeJob.mosaicChain(listOf(ref, flat, good), 0, chainConfig,
+            onRejected = { seen.add(it) })
+        assertEquals(listOf(2), chain.survivorIndices)
+        assertEquals(1, chain.rejections.size)
+        assertEquals(1, chain.rejections.single().index)
+        assertTrue(chain.rejections.single().reason.isNotEmpty())
+        assertEquals(chain.rejections, seen)
+    }
+
+    @Test fun strictSupportPolicyRejectsAndNamesDetail() {
+        // Mean-R floor of 1.0 is unreachable (R clamps below 1 - t), so every
+        // moving frame rejects and the exception names the gate per frame.
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
+        val strict = RawSrFrameRejection.Policy(minMeanRobustness = 1.0)
+        try {
+            RawSrMergeJob.mosaicChain(listOf(ref, good), 0, chainConfig, rejectionPolicy = strict)
+            fail("expected MergeUnavailableException")
+        } catch (failure: MergeUnavailableException) {
+            assertTrue(failure.message ?: "", (failure.message ?: "").contains("low-mean-r"))
+        }
+        // Default policy keeps the same pair (proves the gate, not the fixture).
+        val chain = RawSrMergeJob.mosaicChain(listOf(ref, good), 0, chainConfig)
+        assertEquals(listOf(1), chain.survivorIndices)
+    }
+
+    @Test fun mosaicStreamForwardsRejectionsToCallback() {
+        val ref = input(512, 512, textured = true)
+        val flat = input(512, 512, textured = false)
+        val good = input(512, 512, textured = true)
+        val seen = ArrayList<RawSrMergeJob.RejectedFrame>()
+        val stream = RawSrMergeJob.mosaicStream(listOf(ref, flat, good), 0, chainConfig,
+            onRejected = { seen.add(it) })
+        assertEquals(1, stream.frames.toList().size)
+        assertEquals(1, seen.size)
+        assertEquals(1, seen.single().index)
+    }
+
     @Test fun mosaicChainPropagatesCancellation() {
-        val ref = input(128, 96, textured = true)
-        val good = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
         assertThrows(CancellationException::class.java) {
             RawSrMergeJob.mosaicChain(listOf(ref, good), 0, chainConfig, isCancelled = { true })
         }
@@ -190,10 +347,10 @@ class RawSrMergeJobTest {
         // Heap pressure must surface as OOM (the caller falls back with an
         // OOM message), never as a silent frame rejection that ends in the
         // misleading "kept no moving frame after alignment".
-        val ref = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
         val packed = mock(RawSrPackedFrame::class.java)
         `when`(packed.uploadInput()).thenThrow(OutOfMemoryError("test OOM"))
-        val oom = RawSrMergeJob.MosaicInput(packed, metadataFor(128, 96))
+        val oom = RawSrMergeJob.MosaicInput(packed, metadataFor(512, 512))
         assertThrows(OutOfMemoryError::class.java) {
             RawSrMergeJob.mosaicChain(listOf(ref, oom), 0, chainConfig)
         }
@@ -203,8 +360,8 @@ class RawSrMergeJobTest {
         // The streaming path must expose the same mean support the eager
         // path accumulates: both fold identical per-quad robustness in the
         // same order, so the merged noise model agrees bitwise.
-        val ref = input(128, 96, textured = true)
-        val good = input(128, 96, textured = true)
+        val ref = input(512, 512, textured = true)
+        val good = input(512, 512, textured = true)
         val inputs = listOf(ref, good)
         val chain = RawSrMergeJob.mosaicChain(inputs, 0, chainConfig)
         val eager = MosaicSrReconstructor.reconstruct(chain.reference, chain.moving)
@@ -229,10 +386,10 @@ class RawSrMergeJobTest {
         // reconstructStreaming, as RawCameraController wires them) must keep
         // the same moving frames as the eager chain and reconstruct the
         // bitwise-identical CFA.
-        val ref = input(128, 96, textured = true)
-        val flat = input(128, 96, textured = false)
+        val ref = input(512, 512, textured = true)
+        val flat = input(512, 512, textured = false)
         val bad = input(32, 24, textured = true)
-        val good = input(128, 96, textured = true)
+        val good = input(512, 512, textured = true)
         val inputs = listOf(ref, flat, bad, good)
         val chain = RawSrMergeJob.mosaicChain(inputs, 0, chainConfig)
         val stream = RawSrMergeJob.mosaicStream(inputs, 0, chainConfig)

@@ -22,13 +22,14 @@ class RawSrRobustnessTest {
         for (threshold in listOf(0f, 1f, 4f)) {
             val cached = RawSrRobustness.flowDisagreementTiles(flow, threshold)
             for (y in -2..24) for (x in -2..32) {
-                val index = (y / 8).coerceIn(0, 2) * 4 + (x / 8).coerceIn(0, 3)
+                // Guide coordinates address the raw tile lattice doubled.
+                val index = ((2 * y) / 8).coerceIn(0, 2) * 4 + ((2 * x) / 8).coerceIn(0, 3)
                 assertEquals("($x,$y), threshold=$threshold",
                     RawSrRobustness.flowDisagrees(flow, x, y, threshold), cached[index])
             }
         }
     }
-    private val config = RawSrAlignmentConfig(levels = 3, tileSize = 8, searchRadius = 2)
+    private val config = RawSrAlignmentConfig()
     private val tuning = RawSrTuning.forSnr(18.0)
     private val baseProfile = ImmutableDoubleValues(
         doubleArrayOf(0.02, 1.0, 0.02, 1.0, 0.02, 1.0, 0.02, 1.0))
@@ -56,9 +57,11 @@ class RawSrRobustnessTest {
 
     private fun manualFlow(width: Int, height: Int, reliable: Boolean, dx: Float, dy: Float,
                            residual: Float = 0f): RawSrAlignmentField {
+        // Raw-lattice field (Jamy-L convention): raw-pixel coverage with
+        // raw-unit vectors. Fixtures size the frame as a tile multiple.
         val tileSize = 8
-        val columns = (width + tileSize - 1) / tileSize
-        val rows = (height + tileSize - 1) / tileSize
+        val columns = width / tileSize
+        val rows = height / tileSize
         val tiles = List(columns * rows) { i ->
             val tx = i % columns
             val ty = i / columns
@@ -107,18 +110,19 @@ class RawSrRobustnessTest {
 
     @Test fun shadowQuadsNeverRail() {
         // The rail diagnostic is highlight-side only: codes near black never
-        // rail. A perfectly flat dark field reads r = 0 everywhere (the
-        // reference-undefined 0/0 edge — zero distance over zero measured
-        // variance — rejects on doubt), while dark texture with genuine
-        // signal variance fuses at full weight with a clean mask.
+        // rail. A perfectly flat dark field fuses at full weight (reference
+        // exp/clamp parity: zero distance over the tiny measured variance —
+        // Float rounding leaves slivers, not exact 0/0 — reads R = 1 for
+        // denoising; only exactly-zero 0/0 reads 0), like dark texture with
+        // genuine signal variance, both with a clean mask.
         val dark = { _: Int, _: Int -> 66 }
         val ref = RawSrRobustness.linearGuide(packed(codes = dark))
         val mov = RawSrRobustness.linearGuide(packed(codes = dark))
         assertFalse(ref.rail.any { it })
         assertFalse(mov.rail.any { it })
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val flat = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
-        assertTrue(flat.r.all { it == 0f })
+        assertTrue(flat.r.all { it == 1f })
         assertTrue(flat.flags.all { it == 0 })
         val shadowTexture = { sx: Int, sy: Int -> 66 + ((sx * 79 + sy * 43) % 7) }
         val texturedRef = RawSrRobustness.linearGuide(packed(codes = shadowTexture))
@@ -129,8 +133,29 @@ class RawSrRobustnessTest {
         assertTrue(fused.flags.all { it == 0 })
     }
 
+    @Test fun negativeVarianceSliverAccepts() {
+        // Alg. 8 stores variance unfloored (reference-verbatim): flat code
+        // 72 cancels to a slightly negative variance, and the reference
+        // exp/clamp path accepts the sliver (exp(-d/s) >= 1 with s < 0, so
+        // static flats fuse at R = 1 for denoising). Only exactly-zero 0/0
+        // reads 0.
+        val flat = { _: Int, _: Int -> 72 }
+        val ref = RawSrRobustness.linearGuide(packed(codes = flat))
+        val mov = RawSrRobustness.linearGuide(packed(codes = flat))
+        val stats = RawSrRobustness.referenceStats(ref)
+        assertTrue(stats.variance.all { channel -> channel.all { it < 0f } })
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
+        val out = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
+        assertTrue(out.r.all { it == 1f })
+        assertTrue(out.flags.all { it == 0 })
+        // The fused path stores the identical raw variance.
+        val fused = RawSrRobustness.referenceStatsFromPacked(packed(codes = flat))
+        for (c in 0..2) assertArrayEquals(stats.variance[c], fused.variance[c], 0f)
+    }
+
     @Test fun flowDisagreesNeedsDemonstratedDisagreement() {
-        // 2x2 tiles of size 8 over a 16x12 quad grid; threshold 1.0.
+        // 2x2 tiles of size 8 over a 16x12 raw grid; threshold 1.0.
+        // Guide coords (5,5) address tile (1,1), whose window is all 4 tiles.
         fun field(dx: (tx: Int, ty: Int) -> Float): RawSrAlignmentField {
             val tiles = List(4) { i ->
                 RawSrTileFlow(0f, 0f, dx(i % 2, i / 2), 0f, 0f, true)
@@ -140,7 +165,7 @@ class RawSrRobustnessTest {
         // Uniform flow agrees everywhere.
         val calm = field { _, _ -> 0f }
         assertFalse(RawSrRobustness.flowDisagrees(calm, 5, 5, 1f))
-        // A 5-quad split across columns disagrees (mirrors the merge gate).
+        // A 5px split across columns disagrees (mirrors the merge gate).
         val split = field { tx, _ -> if (tx == 0) 0f else 5f }
         assertTrue(RawSrRobustness.flowDisagrees(split, 5, 5, 1f))
         // Sub-threshold jitter agrees.
@@ -180,17 +205,18 @@ class RawSrRobustnessTest {
         // unreliable tile and static regions never average.
         val ref = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1600 }))
         val mov = RawSrRobustness.linearGuide(packed(codes = { _, _ -> 1600 }))
-        val tiles = List(4) { i ->
-            val tx = i % 2
-            val ty = i / 2
-            if (tx == 1 && ty == 1) RawSrTileFlow(0f, 0f, 9f, -7f, 0f, false)
+        val tiles = List(12) { i ->
+            val tx = i % 4
+            val ty = i / 4
+            if (tx == 2 && ty == 2) RawSrTileFlow(0f, 0f, 9f, -7f, 0f, false)
             else RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true)
         }
-        val flow = RawSrAlignmentField(16, 12, 8, 2, 2, tiles)
+        val flow = RawSrAlignmentField(32, 24, 8, 4, 3, tiles)
         assertFalse(RawSrRobustness.flowDisagrees(flow, 5, 5, 1f))
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
-        // Quad (5,5) sits in tile (0,0), reliable, agreeing: full weight,
-        // no motion-irregular bit (its window's wild tile is excluded).
+        // Quad (5,5) sits in tile (1,1): its window's wild tile (2,2) is
+        // excluded by flowDisagrees, and flat content fuses at full weight
+        // (the reliability-blind s1/s2 gate cannot move R off 1.0 here).
         val o = 5 * 16 + 5
         assertEquals(1f, result.r[o], 0f)
         assertEquals(0, result.flags[o] and RawSrRobustness.FLAG_MOTION_IRREGULAR)
@@ -208,7 +234,7 @@ class RawSrRobustnessTest {
             }
             val ref = RawSrRobustness.linearGuide(packed(codes = noisy(7)))
             val mov = RawSrRobustness.linearGuide(packed(codes = noisy(99)))
-            val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+            val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
             val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
             assertTrue(result.r.all { it.isFinite() })
             // 16x12 guide; 5x5 minimum spreads border effects, so judge interior.
@@ -224,7 +250,7 @@ class RawSrRobustnessTest {
         // out-of-bounds and invalid flow only).
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(codes = textured(7)))
-        val flow = manualFlow(16, 12, reliable = false, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = false, dx = 0f, dy = 0f)
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         assertTrue(acceptance(result, 3, 13, 3, 9) >= 0.95)
         assertTrue(result.flags.all { it == 0 })
@@ -236,6 +262,22 @@ class RawSrRobustnessTest {
         assertTrue(rejected.flags.all { it == 0 })
     }
 
+    @Test fun unreliableFlowMatchesReliableFlowBitwise() {
+        // The reference defines no reliability gate: robustness consumes the
+        // flow vectors alone, so flipping every tile's reliable bit must not
+        // change a single output (no zero-shift hypothesis, no forced s1).
+        // Nonzero uniform flow keeps the warp in bounds while still proving
+        // the bit is unread (a zero flow would make any fallback a no-op).
+        val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
+        val mov = RawSrRobustness.linearGuide(packed(codes = textured(7)))
+        val reliable = RawSrRobustness.evaluate(
+            ref, mov, manualFlow(32, 24, reliable = true, dx = 2f, dy = 1f), tuning, config)
+        val unreliable = RawSrRobustness.evaluate(
+            ref, mov, manualFlow(32, 24, reliable = false, dx = 2f, dy = 1f), tuning, config)
+        assertTrue(reliable.r.contentEquals(unreliable.r))
+        assertTrue(reliable.flags.contentEquals(unreliable.flags))
+    }
+
     @Test fun translatedForegroundRejectedStaticKept() {
         // Left half covered by a uniform bright foreground block (mean-level
         // conflict), right half identical; zero flow everywhere. A re-shuffled
@@ -245,7 +287,7 @@ class RawSrRobustnessTest {
         val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy ->
             if (sx < 16) 2500 else textured(7)(sx, sy)
         }))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         // The 3x3 statistics window touches the foreground one quad out and the
         // 5x5 minimum spreads two more: judge clear of x=8 by four quads.
@@ -269,7 +311,7 @@ class RawSrRobustnessTest {
         val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy ->
             if (sx < 16) 1800 else textured(7)(sx, sy)
         }))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val analytic = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         assertTrue(1.0 - acceptance(analytic, 1, 6, 3, 9) >= 0.90)
         val corrected = RawSrRobustness.evaluate(ref, mov, flow, tuning, config, constLut(0f, 1f))
@@ -284,7 +326,7 @@ class RawSrRobustnessTest {
         val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy ->
             if (sx < 16) 1800 else textured(7)(sx, sy)
         }))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val corrected = RawSrRobustness.evaluate(ref, mov, flow, tuning, config, constLut(0.01f, 0f))
         assertTrue(acceptance(corrected, 1, 6, 3, 9) >= 0.95)
     }
@@ -292,11 +334,70 @@ class RawSrRobustnessTest {
     @Test fun zeroLutIsBitExactNoOp() {
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(codes = textured(9)))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val analytic = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         val withLut = RawSrRobustness.evaluate(ref, mov, flow, tuning, config, constLut(0f, 0f))
         assertArrayEquals(analytic.r, withLut.r, 0f)
         assertArrayEquals(analytic.flags, withLut.flags)
+    }
+
+    @Test fun hoistedStatsMatchEvaluateBitwise() {
+        // The memory-bound production stream precomputes reference stats
+        // once and reduces each moving guide to its means before the
+        // verdict: the split must reproduce evaluate() exactly (same
+        // operations per element, only regrouped).
+        val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
+        val mov = RawSrRobustness.linearGuide(packed(codes = textured(9)))
+        // Mixed field: subpixel warp, an invalid tile, an out-of-bounds
+        // tile, and a negative shift (covers every verdict branch).
+        val shifts = arrayOf(
+            floatArrayOf(0.5f, -0.25f), floatArrayOf(Float.NaN, 0f),
+            floatArrayOf(40f, 0f), floatArrayOf(-1.5f, 2.25f))
+        val tiles = List(12) { i ->
+            RawSrTileFlow(4f, 4f, shifts[i % 4][0], shifts[i % 4][1], 0f, true)
+        }
+        val flow = RawSrAlignmentField(32, 24, 8, 4, 3, tiles)
+        for (lut in listOf(null, constLut(1f, 1f))) {
+            val eager = RawSrRobustness.evaluate(ref, mov, flow, tuning, config, lut)
+            val hoisted = RawSrRobustness.evaluateWithStats(
+                RawSrRobustness.referenceStats(ref), RawSrRobustness.movingStats(mov),
+                flow, tuning, config, lut)
+            assertArrayEquals(eager.r, hoisted.r, 0f)
+            assertArrayEquals(eager.flags, hoisted.flags)
+        }
+    }
+
+    @Test fun warpFlowBlendsAcrossTiles() {
+        // Bilinear-everywhere warp flow lookup: the warp target blends the
+        // four surrounding tiles at the raw quad center. Tile (0,0) holds
+        // still while every other tile warps far out of bounds: quad
+        // (3,1) (raw center (7,3)) blends 44% of tile (1,0)'s +100 shift
+        // and warps out of bounds (3 + 44/2 > 16), while quad (1,1)
+        // (raw center (3,3), both corners clamped to tile (0,0)) stays
+        // in-bounds. A quad deep inside a far-warp tile flags OOB
+        // (guards vacuity).
+        val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
+        val mov = RawSrRobustness.linearGuide(packed(codes = textured(7)))
+        val columns = 4
+        val rows = 3
+        val tiles = List(columns * rows) { i ->
+            val tx = i % columns
+            val ty = i / columns
+            val far = tx != 0 || ty != 0
+            RawSrTileFlow(4f, 4f, if (far) 100f else 0f, 0f, 0f, true)
+        }
+        val flow = RawSrAlignmentField(32, 24, 8, columns, rows, tiles)
+        val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
+        // Quad (1,1): pure tile (0,0) — in bounds, no flag.
+        assertEquals(0, result.flags[1 * 16 + 1])
+        // Quad (3,1): the blend drags the warp out of bounds.
+        val blended = 1 * 16 + 3
+        assertEquals(RawSrRobustness.FLAG_OUT_OF_BOUNDS, result.flags[blended])
+        assertEquals(0f, result.r[blended], 0f)
+        // Quad (7,1): raw center (15,3), containing tile (1,0) — OOB.
+        val oob = 1 * 16 + 7
+        assertEquals(RawSrRobustness.FLAG_OUT_OF_BOUNDS, result.flags[oob])
+        assertEquals(0f, result.r[oob], 0f)
     }
 
     @Test fun missingModelLeavesVerdictUnchangedAndLutApplies() {
@@ -308,7 +409,7 @@ class RawSrRobustnessTest {
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val movValid = RawSrRobustness.linearGuide(packed(codes = textured(9)))
         val movMissing = RawSrRobustness.linearGuide(packed(codes = textured(9), profile = null))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val lut = constLut(1f, 1f)
         val analyticValid = RawSrRobustness.evaluate(ref, movValid, flow, tuning, config)
         val analyticMissing = RawSrRobustness.evaluate(ref, movMissing, flow, tuning, config)
@@ -325,7 +426,7 @@ class RawSrRobustnessTest {
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         // 1.5x exposure stays below white: pure photometric conflict, no rails.
         val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy -> (textured(7)(sx, sy) * 1.5).toInt() }))
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         val rejected = 1.0 - acceptance(result, 3, 13, 3, 9)
         assertTrue("exposure rejection=$rejected", rejected >= 0.70)
@@ -341,7 +442,7 @@ class RawSrRobustnessTest {
         val mov = RawSrRobustness.linearGuide(packed(
             codes = { sx, sy -> if (sx in 8 until 24 && sy in 6 until 18) 3995 else textured(7)(sx, sy) }))
         assertTrue(mov.rail.any { it })
-        val flow = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val result = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         // Saturated raw block maps to quads x in 4..11, y in 3..8; judge interior.
         for (y in 4..7) for (x in 5..10) {
@@ -372,20 +473,21 @@ class RawSrRobustnessTest {
         val blocks = { sx: Int, sy: Int -> 1600 + ((sx / 2 + sy / 2) % 2) * 4 }
         val ref = RawSrRobustness.linearGuide(packed(codes = blocks))
         val mov = RawSrRobustness.linearGuide(packed(codes = { sx, sy -> blocks(sx, sy) + 4 }))
-        val smooth = manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f)
+        val smooth = manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f)
         val accepted = RawSrRobustness.evaluate(ref, mov, smooth, tuning, config)
         assertTrue(acceptance(accepted, 3, 13, 3, 9) >= 0.95)
         assertTrue(accepted.flags.all { it == 0 })
-        val columns = 2
-        val rows = 2
+        val columns = 4
+        val rows = 3
         val tiles = List(columns * rows) { i ->
-            // Even shift (0/2): the warp preserves block phase, so the
-            // disagreement stays the calibrated offset (an odd shift would
-            // flip blocks against the offset and cancel it in places).
+            // Even shift (0/2 raw px = 0/1 quads): the warp preserves block
+            // phase, so the disagreement stays the calibrated offset (an
+            // odd-quad shift would flip blocks against the offset and
+            // cancel it in places).
             val raggedDx = if ((i % columns + i / columns) % 2 == 0) 0f else 2f
             RawSrTileFlow(4f, 4f, raggedDx, 0f, 0f, true)
         }
-        val ragged = RawSrAlignmentField(16, 12, 8, columns, rows, tiles)
+        val ragged = RawSrAlignmentField(32, 24, 8, columns, rows, tiles)
         val rejected = RawSrRobustness.evaluate(ref, mov, ragged, tuning, config)
         assertTrue(acceptance(rejected, 3, 13, 3, 9) <= 0.05)
         // Interior mask stays clean (no motion-irregular bit exists); the
@@ -398,21 +500,24 @@ class RawSrRobustnessTest {
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val oob = RawSrRobustness.evaluate(ref, mov,
-            manualFlow(16, 12, reliable = true, dx = 100f, dy = 0f), tuning, config)
+            manualFlow(32, 24, reliable = true, dx = 100f, dy = 0f), tuning, config)
         for (y in 0 until 12) for (x in 0 until 16) {
             val o = y * 16 + x
             assertEquals(0f, oob.r[o], 0f)
             assertTrue(oob.flags[o] and RawSrRobustness.FLAG_OUT_OF_BOUNDS != 0)
         }
-        val poisoned = RawSrAlignmentField(16, 12, 8, 2, 2, List(4) { i ->
+        // Tile rows 0-1 (stats rows 0-7) carry NaN/Inf flow; row 2 (stats
+        // rows 8-11) is valid zero flow on identical frames. The 5x5 minimum
+        // spreads rejection two rows down, so judge away from the boundary.
+        val poisoned = RawSrAlignmentField(32, 24, 8, 4, 3, List(12) { i ->
+            val ty = i / 4
+            val tx = i % 4
             RawSrTileFlow(4f, 4f,
-                if (i == 0) Float.NaN else 0f, if (i == 1) Float.POSITIVE_INFINITY else 0f, 0f, i >= 2)
+                if (ty < 2 && tx % 2 == 0) Float.NaN else 0f,
+                if (ty < 2 && tx % 2 == 1) Float.POSITIVE_INFINITY else 0f, 0f, ty == 2)
         })
         val invalid = RawSrRobustness.evaluate(ref, mov, poisoned, tuning, config)
         assertTrue(invalid.r.all { it.isFinite() })
-        // Tiles 0,1 (top half) carry NaN/Inf flow; tiles 2,3 (bottom half) are
-        // valid zero flow on identical frames. The 5x5 minimum spreads rejection
-        // two rows down, so judge away from the boundary.
         for (y in 0 until 4) for (x in 0 until 16) {
             val o = y * 16 + x
             assertEquals(0f, invalid.r[o], 0f)
@@ -426,9 +531,9 @@ class RawSrRobustnessTest {
         // The reference defines no residual gate: a huge residual changes
         // nothing — the run equals the zero-residual run bitwise.
         val residual = RawSrRobustness.evaluate(ref, mov,
-            manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f, residual = 10f), tuning, config)
+            manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f, residual = 10f), tuning, config)
         val clean = RawSrRobustness.evaluate(ref, mov,
-            manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f), tuning, config)
+            manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f), tuning, config)
         assertArrayEquals(clean.r, residual.r, 0f)
         assertArrayEquals(clean.flags, residual.flags)
     }
@@ -439,11 +544,11 @@ class RawSrRobustnessTest {
         val plain = RawSrRobustness.evaluate(
             RawSrRobustness.linearGuide(packed(codes = textured(7))),
             RawSrRobustness.linearGuide(packed(codes = textured(99))),
-            manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f), tuning, config)
+            manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f), tuning, config)
         val shaded = RawSrRobustness.evaluate(
             RawSrRobustness.linearGuide(packed(codes = textured(7), lens = lens)),
             RawSrRobustness.linearGuide(packed(codes = textured(99), lens = lens)),
-            manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f), tuning, config)
+            manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f), tuning, config)
         assertArrayEquals(plain.r, shaded.r, 0f)
         assertArrayEquals(plain.flags, shaded.flags)
     }
@@ -458,7 +563,7 @@ class RawSrRobustnessTest {
                 val mov = RawSrRobustness.linearGuide(packed(originX = ox, originY = oy,
                     codes = textured(99), sensorPattern = pattern, profile = six))
                 val result = RawSrRobustness.evaluate(ref, mov,
-                    manualFlow(16, 12, reliable = true, dx = 0f, dy = 0f), tuning, config)
+                    manualFlow(32, 24, reliable = true, dx = 0f, dy = 0f), tuning, config)
                 assertTrue(result.r.all { it.isFinite() })
                 val rate = acceptance(result, 3, 13, 3, 9)
                 assertTrue("$pattern ($ox,$oy) retention=$rate", rate >= 0.95)
@@ -478,30 +583,82 @@ class RawSrRobustnessTest {
         // Determinism of the full evaluation.
         val ref = RawSrRobustness.linearGuide(packed(codes = textured(7)))
         val mov = RawSrRobustness.linearGuide(packed(codes = textured(99)))
-        val flow = manualFlow(16, 12, reliable = true, dx = 1f, dy = -1f)
+        val flow = manualFlow(32, 24, reliable = true, dx = 1f, dy = -1f)
         val first = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         val second = RawSrRobustness.evaluate(ref, mov, flow, tuning, config)
         assertArrayEquals(first.r, second.r, 0f)
         assertArrayEquals(first.flags, second.flags)
     }
 
-    @Test fun motionThresholdUsesQuadUnits() {
-        assertEquals(0.4f, RawSrRobustness.motionThresholdQuad(RawSrTuning.forSnr(18.0)), 0f)
+    @Test fun motionThresholdUsesRawPixels() {
+        assertEquals(0.8f, RawSrRobustness.motionThresholdPx(RawSrTuning.forSnr(18.0)), 0f)
     }
 
     @Test fun flowIrregularityMatchesDocumentedGate() {
-        val smooth = manualFlow(16, 12, reliable = true, dx = 1f, dy = 0f)
+        val smooth = manualFlow(32, 24, reliable = true, dx = 1f, dy = 0f)
         assertEquals(false, RawSrRobustness.flowIrregular(smooth, 8, 6, 0.4f))
-        val columns = 2
-        val rows = 2
-        val ragged = RawSrAlignmentField(16, 12, 8, columns, rows, List(columns * rows) { i ->
-            RawSrTileFlow(4f, 4f, if (i == 0) 3f else 0f, 0f, 0f, true)
+        // Guide coords (8,6) address tile (2,1); the spike sits there so
+        // the 3x3 window spreads 3px over the 0.4 threshold.
+        val columns = 4
+        val rows = 3
+        val ragged = RawSrAlignmentField(32, 24, 8, columns, rows, List(columns * rows) { i ->
+            RawSrTileFlow(4f, 4f, if (i == 6) 3f else 0f, 0f, 0f, true)
         })
         assertEquals(true, RawSrRobustness.flowIrregular(ragged, 8, 6, 0.4f))
         // Single-tile fields cannot spread: smooth by construction.
         val single = RawSrAlignmentField(16, 12, 16, 1, 1,
             listOf(RawSrTileFlow(8f, 6f, 5f, -2f, 0f, true)))
         assertEquals(false, RawSrRobustness.flowIrregular(single, 8, 6, 0.4f))
+    }
+
+    @Test fun fusedPackedStatsMatchEagerBitwise() {
+        // The fused low-memory path must reproduce the eager guide+stats
+        // exactly: same guide math per quad, same 3x3 accumulation order.
+        val six = ImmutableDoubleValues(doubleArrayOf(0.02, 0.002, 0.01, 0.001, 0.03, 0.003))
+        val profiles = listOf(baseProfile, six, null)
+        for (pattern in BayerPattern.entries) {
+            for ((ox, oy) in listOf(0 to 0, 1 to 1)) {
+                for (profile in profiles) {
+                    val frame = packed(originX = ox, originY = oy,
+                        codes = textured(7), sensorPattern = pattern, profile = profile)
+                    val guide = RawSrRobustness.linearGuide(frame)
+                    val refEager = RawSrRobustness.referenceStats(guide)
+                    val refFused = RawSrRobustness.referenceStatsFromPacked(frame)
+                    assertEquals(refEager.width, refFused.width)
+                    assertEquals(refEager.height, refFused.height)
+                    for (c in 0..2) {
+                        assertArrayEquals("$pattern ($ox,$oy) profile=$profile refMean[$c]",
+                            refEager.mean[c], refFused.mean[c], 0f)
+                        assertArrayEquals("$pattern ($ox,$oy) profile=$profile refVar[$c]",
+                            refEager.variance[c], refFused.variance[c], 0f)
+                    }
+                    val movEager = RawSrRobustness.movingStats(guide)
+                    val movFused = RawSrRobustness.movingStatsFromPacked(frame)
+                    for (c in 0..2) {
+                        assertArrayEquals("$pattern ($ox,$oy) profile=$profile movMean[$c]",
+                            movEager.mean[c], movFused.mean[c], 0f)
+                    }
+                }
+            }
+        }
+        // Odd crop origin plus an explicit hot mask: guide color planes (and
+        // hence stats) never read the mask, so all-true, all-false and fused
+        // agree bitwise.
+        val odd = packed(layoutW = 36, layoutH = 28, crop = RawCrop(1, 1, 32, 24),
+            codes = textured(11))
+        val allTrue = BooleanArray(32 * 24) { true }
+        val allFalse = BooleanArray(32 * 24)
+        val statsTrue = RawSrRobustness.referenceStats(RawSrRobustness.linearGuide(odd, allTrue))
+        val statsFalse = RawSrRobustness.referenceStats(RawSrRobustness.linearGuide(odd, allFalse))
+        val statsFused = RawSrRobustness.referenceStatsFromPacked(odd)
+        for (c in 0..2) {
+            assertArrayEquals(statsTrue.mean[c], statsFalse.mean[c], 0f)
+            assertArrayEquals(statsTrue.mean[c], statsFused.mean[c], 0f)
+            assertArrayEquals(statsTrue.variance[c], statsFused.variance[c], 0f)
+        }
+        val movTrue = RawSrRobustness.movingStats(RawSrRobustness.linearGuide(odd, allTrue))
+        val movFused = RawSrRobustness.movingStatsFromPacked(odd)
+        for (c in 0..2) assertArrayEquals(movTrue.mean[c], movFused.mean[c], 0f)
     }
 
     @Test fun linearGuideChannelsMapAnyPattern() {

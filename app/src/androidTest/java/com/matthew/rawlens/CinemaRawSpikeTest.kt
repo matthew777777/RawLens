@@ -30,7 +30,8 @@ import org.junit.runner.RunWith
  *  4. sequential storage bandwidth (cache file + MediaStore.Video probe).
  *
  * Spike, not a gate: these tests log tables and never assert on performance.
- * Correctness spot-checks (pack round-trip, encode determinism) do assert.
+ * Correctness spot-checks (pack round-trip, encode determinism,
+ * serial/parallel parity) do assert.
  * Pull logcat with `adb logcat -s CinemaRawSpike` or read the test output.
  */
 @RunWith(AndroidJUnit4::class)
@@ -263,6 +264,42 @@ class CinemaRawSpikeTest {
                         "out=${"%.2f".format(bytesBin / 1e6)}MB"
                 )
             }
+        }
+    }
+
+    @Test fun encodeParallelParity() {
+        assumeTrue("cinemaraw native library unavailable", CinemaRawSpike.available)
+        // Partial edge tiles (68 % 64 != 0) plus stride slack: band splits
+        // must not disturb tile order or the padding clamp.
+        val w = 68
+        val h = 12
+        val stride = w * 2 + 16
+        val planeBytes = ((h - 1).toLong() * stride + w * 2).toInt()
+        val src = direct(planeBytes.toLong())
+        fillRaw16(src, w, h, stride)
+        val ew = (w + 63) / 64 * 64
+        val cap = (ew * h * 2 + ew * h / 8 + 4096).toLong()
+        val serial = direct(cap)
+        src.rewind()
+        serial.rewind()
+        val serialBytes =
+            CinemaRawSpike.encode(src, planeBytes, w, h, stride, false, 0, h, false, serial)
+        assertTrue("empty payload", serialBytes > 0)
+        for (threads in listOf(0, 1, 2, 7)) {
+            val par = direct(cap)
+            src.rewind()
+            par.rewind()
+            val parBytes = CinemaRawSpike.encodeParallel(
+                src, planeBytes, w, h, stride, false, 0, h, false, threads, par
+            )
+            assertEquals("thread count $threads changed size", serialBytes, parBytes)
+            serial.rewind()
+            par.rewind()
+            val a = ByteArray(serialBytes)
+            val b = ByteArray(parBytes)
+            serial.get(a)
+            par.get(b)
+            assertTrue("thread count $threads changed bytes", a.contentEquals(b))
         }
     }
 

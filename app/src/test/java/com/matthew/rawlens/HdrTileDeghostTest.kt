@@ -167,6 +167,57 @@ class HdrTileDeghostTest {
         assertTrue("sharpness lost: ratio=$ratio", ratio > 0.7f)
     }
 
+    @Test fun blurredLongExposureKeepsReferenceSharpness() {
+        // IMG_20261006_090946_373 failure: the 1/25s F02 frame is handshake-blurred
+        // and the merge smeared fine weave instead of collapsing to sharp F01.
+        // Realistic where blurredAlternateKeepsReferenceSharpness is not:
+        // low-contrast texture (weave-like 4px grating, amplitude 0.03), a x4
+        // cross-exposure gain, and high-ISO noise on both frames.
+        val size = 64
+        val noiseHi = CfaNoiseModel(FloatArray(4) { 0.0017f }, FloatArray(4) { 4e-7f })
+        val rng = kotlin.random.Random(7)
+        fun sigma(level: Float) = kotlin.math.sqrt(0.0017f * level + 4e-7f)
+        fun gauss(): Float {
+            // Box-Muller from a seeded RNG: deterministic across runs.
+            var u = 0.0
+            while (u == 0.0) u = rng.nextDouble()
+            val v = rng.nextDouble()
+            return (kotlin.math.sqrt(-2.0 * kotlin.math.ln(u)) *
+                kotlin.math.cos(2.0 * kotlin.math.PI * v)).toFloat()
+        }
+        val grating = FloatArray(size * size) { i ->
+            val x = i % size
+            0.2f + 0.03f * kotlin.math.sin(2.0 * kotlin.math.PI * x / 4.0).toFloat()
+        }
+        val refValues = FloatArray(size * size) { i -> grating[i] + sigma(grating[i]) * gauss() }
+        // Directional handshake blur (~3px box along x) at 4x exposure.
+        val movValues = FloatArray(size * size) { i ->
+            val x = i % size
+            val y = i / size
+            var sum = 0f
+            for (dx in -1..1) {
+                val xx = (x + dx).coerceIn(0, size - 1)
+                sum += grating[y * size + xx]
+            }
+            val level = sum / 3f * 4f
+            level + sigma(level) * gauss()
+        }
+        val ref = UnpackedRawCfa(size, size, BayerPattern.RGGB, refValues, RawCrop(0, 0, size, size))
+        val mov = UnpackedRawCfa(size, size, BayerPattern.RGGB, movValues, RawCrop(0, 0, size, size))
+        assertTrue("fixture must blur",
+            edgeEnergy(FloatArray(movValues.size) { movValues[it] / 4f }, size) <
+                0.7f * edgeEnergy(refValues, size))
+        val out = HdrTileDeghost.deghost(
+            HdrMergeFrame(ref, 10_000_000L, 100, noiseModel = noiseHi),
+            HdrMergeFrame(mov, 40_000_000L, 100, noiseModel = noiseHi),
+            mov, strength = 8f
+        )
+        // Output lives in the moving exposure domain; scale back for comparison.
+        val ratio = edgeEnergy(FloatArray(size * size) { out.values[it] / 4f }, size) /
+            edgeEnergy(refValues, size)
+        assertTrue("blurred long exposure smeared the merge: ratio=$ratio", ratio > 0.7f)
+    }
+
     @Test fun matchedContentIsKeptForDownstreamAveraging() {
         // Sub-noise offset must survive (darktable averages it later),
         // not snap to the reference.
@@ -567,6 +618,27 @@ class HdrTileDeghostTest {
             HdrMergeFrame(ref, 10_000_000L, 100), HdrMergeFrame(mov, 5_000_000L, 100), mov
         ).values
         assertTrue(a.zip(b.toList()).all { (x, y) -> x == y })
+    }
+
+    @Test fun statsCensusSeparatesMatchedFromGhosted() {
+        // Identical pair: every tile keeps the alternate (DC accepted).
+        val same = textured(32, 7)
+        val (_, keep) = HdrTileDeghost.deghostWithStats(
+            HdrMergeFrame(same, 10_000_000L, 100, noiseModel = noise),
+            HdrMergeFrame(same.copy(), 10_000_000L, 100, noiseModel = noise),
+            same.copy()
+        )
+        assertTrue("tiles=${keep.tiles}", keep.tiles > 0)
+        assertTrue("dcRejectFrac=${keep.dcRejectFrac}", keep.dcRejectFrac < 0.05)
+        // Unrelated textures: structure mismatches everywhere, DC collapses.
+        val (_, drop) = HdrTileDeghost.deghostWithStats(
+            HdrMergeFrame(textured(32, 5), 10_000_000L, 100, noiseModel = noise),
+            HdrMergeFrame(textured(32, 9), 10_000_000L, 100, noiseModel = noise),
+            textured(32, 9)
+        )
+        assertTrue("dcRejectFrac=${drop.dcRejectFrac}", drop.dcRejectFrac > 0.5)
+        assertTrue("meanMismatch keep=${keep.meanMismatch} drop=${drop.meanMismatch}",
+            drop.meanMismatch > keep.meanMismatch)
     }
 
     private fun edgeEnergy(v: FloatArray, size: Int): Float {

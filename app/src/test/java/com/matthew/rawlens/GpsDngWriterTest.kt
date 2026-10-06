@@ -9,7 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * GPS sub-IFD coverage for the hand-rolled Kotlin DNG writers. The platform
+ * GPS sub-IFD coverage for the TinyDNG-backed DNG writers. The platform
  * DngCreator path is owned by Android's writer (setLocation) and the JPEG
  * path by ExifInterface; both are pinned in [GpsLocationTest].
  */

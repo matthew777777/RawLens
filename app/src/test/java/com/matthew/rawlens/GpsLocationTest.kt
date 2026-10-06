@@ -65,12 +65,11 @@ class GpsLocationTest {
         assertEquals("2026:06:01", GpsLocation.dateStamp(1780276800000L))
     }
 
-    // ---- TIFF GPS sub-IFD ----
+    // ---- TIFF GPS sub-IFD fields (layout owned by the TinyDNG writer) ----
 
     @Test fun gpsDirectoryCarriesEveryRequiredTag() {
         val location = GpsLocation(48.858222, 2.2945, 35.5, timeMillis = 1780276800000L)
-        val blob = GpsTiffDirectory.build(location, 1024)
-        val parsed = GpsIfd(blob, 1024)
+        val parsed = GpsFields(GpsTiffDirectory.fields(location))
         assertEquals(listOf(0, 1, 2, 3, 4, 5, 6, 7, 27, 29), parsed.tags)
         assertArrayEquals(byteArrayOf(2, 3, 0, 0), parsed.bytes(0))
         assertEquals("N", parsed.ascii(1))
@@ -85,7 +84,7 @@ class GpsLocationTest {
 
     @Test fun gpsDirectoryOmitsAltitudeWithoutAFix() {
         val location = GpsLocation(-33.86, 151.2, altitudeMeters = null)
-        val parsed = GpsIfd(GpsTiffDirectory.build(location, 64), 64)
+        val parsed = GpsFields(GpsTiffDirectory.fields(location))
         assertFalse(parsed.tags.contains(5))
         assertFalse(parsed.tags.contains(6))
         assertEquals("S", parsed.ascii(1))
@@ -94,21 +93,28 @@ class GpsLocationTest {
 
     @Test fun gpsDirectoryMarksBelowSeaLevel() {
         val location = GpsLocation(31.5, 35.5, altitudeMeters = -430.0)
-        val parsed = GpsIfd(GpsTiffDirectory.build(location, 64), 64)
+        val parsed = GpsFields(GpsTiffDirectory.fields(location))
         assertArrayEquals(byteArrayOf(1), parsed.bytes(5))
         assertEquals(430L, parsed.rationals(6).single().let { it.first / it.second })
     }
 
-    @Test fun gpsDirectoryOffsetsSurviveRelocation() {
+    @Test fun gpsFieldsCarryValuesWithoutLayout() {
+        // The retired blob builder embedded absolute file offsets; fields
+        // carry (tag, type, count, payload) only, so the same field list
+        // serializes identically wherever the writer places the sub-IFD.
+        // Offset correctness now lives in the writer (GpsDngWriterTest
+        // parses full TinyDNG output) instead of per-base blob tests.
         val location = GpsLocation(48.85, 2.35, 100.0, timeMillis = 1780276800000L)
-        for (base in listOf(8, 100, 4096)) {
-            val blob = GpsTiffDirectory.build(location, base)
-            val parsed = GpsIfd(blob, base)
-            assertEquals("N", parsed.ascii(1))
-            assertEquals("E", parsed.ascii(3))
-            assertEquals("2026:06:01", parsed.ascii(29))
-            assertEquals(100L, parsed.rationals(6).single().let { it.first / it.second })
-        }
+        val a = GpsTiffDirectory.fields(location)
+        val b = GpsTiffDirectory.fields(location)
+        assertEquals(a.descriptors, b.descriptors)
+        assertEquals(a.payloads.size, b.payloads.size)
+        a.payloads.forEachIndexed { i, payload -> assertArrayEquals(payload, b.payloads[i]) }
+        val parsed = GpsFields(a)
+        assertEquals("N", parsed.ascii(1))
+        assertEquals("E", parsed.ascii(3))
+        assertEquals("2026:06:01", parsed.ascii(29))
+        assertEquals(100L, parsed.rationals(6).single().let { it.first / it.second })
     }
 
     // ---- ExifInterface contract (JPEG) ----
@@ -155,46 +161,25 @@ class GpsLocationTest {
         verify(exif).setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, "N")
     }
 
-    /** Minimal little-endian GPS IFD parser mirroring the existing DNG parser tests. */
-    private class GpsIfd(val bytes: ByteArray, val base: Int) {
-        private val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+    /** Minimal field-list reader mirroring the retired blob parser. */
+    private class GpsFields(fields: TiffFields) {
+        private val payloads: Map<Int, ByteArray>
         val tags: List<Int>
-        private val entries: Map<Int, Triple<Int, Long, Long>>
         init {
-            val count = u16(0)
-            val map = HashMap<Int, Triple<Int, Long, Long>>()
-            repeat(count) { i ->
-                val off = 2 + i * 12
-                map[u16(off)] = Triple(u16(off + 2), u32(off + 4), u32(off + 8))
-            }
-            entries = map
+            val map = HashMap<Int, ByteArray>()
+            val d = fields.descriptors
+            require(d.size == fields.payloads.size * 3)
+            fields.payloads.forEachIndexed { i, payload -> map[d[i * 3]] = payload }
+            payloads = map
             tags = map.keys.sorted()
         }
-        private fun entry(tag: Int) = requireNotNull(entries[tag]) { "missing GPS tag $tag" }
-        private fun u16(off: Int) = buf.getShort(off).toInt() and 0xFFFF
-        private fun u32(off: Int) = buf.getInt(off).toLong() and 0xFFFFFFFFL
-        private fun valueBytes(tag: Int): ByteArray {
-            val (type, count, valueOrOffset) = entry(tag)
-            val size = count.toInt() * when (type) {
-                3 -> 2; 4 -> 4; 5 -> 8; else -> 1
-            }
-            return if (size <= 4) {
-                ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
-                    putInt(valueOrOffset.toInt())
-                }.array().copyOf(size)
-            } else {
-                // Embedded offsets are absolute file offsets; the blob starts at [base].
-                val start = (valueOrOffset - base).toInt()
-                bytes.copyOfRange(start, start + size)
-            }
-        }
-        fun bytes(tag: Int): ByteArray = valueBytes(tag)
+        fun bytes(tag: Int): ByteArray = requireNotNull(payloads[tag]) { "missing GPS tag $tag" }
         fun ascii(tag: Int): String {
-            val raw = valueBytes(tag)
+            val raw = bytes(tag)
             return String(raw, 0, raw.indexOf(0).takeIf { it >= 0 } ?: raw.size, Charsets.US_ASCII)
         }
         fun rationals(tag: Int): List<Pair<Long, Long>> {
-            val raw = valueBytes(tag)
+            val raw = bytes(tag)
             val b = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
             return (0 until raw.size / 8).map {
                 val num = b.getInt(it * 8).toLong() and 0xFFFFFFFFL

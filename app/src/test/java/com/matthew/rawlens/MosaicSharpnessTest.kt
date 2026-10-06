@@ -30,8 +30,8 @@ class MosaicSharpnessTest {
             MosaicSrReconstructor.clampMinorAxis(
                 RawSrKernelCovariance.MatrixField(
                     qw, qh, FloatArray(qw * qh * 4) { i -> if (i % 4 == 0 || i % 4 == 3) precisionValue else 0f })))
-        val tiles = List(qw * qh) { RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true) }
-        val flow = RawSrAlignmentField(qw, qh, 1, qw, qh, tiles)
+        val tiles = List(w * h) { RawSrTileFlow(0f, 0f, 0f, 0f, 0f, true) }
+        val flow = RawSrAlignmentField(w, h, 1, w, h, tiles)
         val robustness = RawSrRobustness.FrameRobustness(
             qw, qh, FloatArray(qw * qh) { 1f }, IntArray(qw * qh))
         return RawSrBayerMerge.MergeFrame(

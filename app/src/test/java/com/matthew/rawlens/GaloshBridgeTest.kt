@@ -62,6 +62,47 @@ class GaloshBridgeTest {
         error("no red in $pattern")
     }
 
+    @Test fun callerRecoversSensorPatternBeforeRemap() {
+        // GaloshDenoiser holds a LOCAL (crop-shifted) pattern; toRgbbPerm
+        // needs the SENSOR pattern. permForCfa must recover it for every
+        // sensor pattern and origin parity, and the recovered perm must
+        // still reshuffle to [R, Gr, Gb, B] — passing the local pattern
+        // directly (the old caller) scrambles colors on odd origins.
+        for (sensor in BayerPattern.values()) for (ox in 0..1) for (oy in 0..1) {
+            val local = sensor.shifted(ox, oy)
+            val values = FloatArray(64) { i ->
+                val sx = ox + i % 8
+                val sy = oy + i / 8
+                when (sensor.colorAt(sx, sy)) {
+                    CfaColor.RED -> 10f
+                    CfaColor.BLUE -> 40f
+                    CfaColor.GREEN -> if (isRRow(sensor, sy)) 20f else 30f
+                }
+            }
+            // The exact helper the denoiser calls.
+            val perm = GaloshBayerRemap.permForCfa(local, ox, oy)
+            assertArrayEquals("$sensor@$ox,$oy",
+                GaloshBayerRemap.toRgbbPerm(sensor, ox, oy), perm)
+            val remapped = GaloshBayerRemap.toRgbb(values, 8, 8, perm)
+            for (qy in 0 until 4) for (qx in 0 until 4) {
+                val base = qy * 2 * 8 + qx * 2
+                assertEquals("$sensor@$ox,$oy R", 10f, remapped[base], 0f)
+                assertEquals("$sensor@$ox,$oy Gr", 20f, remapped[base + 1], 0f)
+                assertEquals("$sensor@$ox,$oy Gb", 30f, remapped[base + 8], 0f)
+                assertEquals("$sensor@$ox,$oy B", 40f, remapped[base + 9], 0f)
+            }
+            // The old caller (local pattern straight into toRgbbPerm)
+            // disagrees exactly on odd origins — the regression guard.
+            val buggy = GaloshBayerRemap.toRgbbPerm(local, ox, oy)
+            if (ox % 2 == 0 && oy % 2 == 0) {
+                assertArrayEquals("$sensor@$ox,$oy even-origin parity", perm, buggy)
+            } else {
+                assertFalse("$sensor@$ox,$oy must differ on odd origins",
+                    perm.contentEquals(buggy))
+            }
+        }
+    }
+
     @Test fun galoshDngNameGroupsWithCaptureStem() {
         val ts = 1_786_269_212_527L
         val stem = CaptureFileNames.stem(ts)

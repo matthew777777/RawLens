@@ -81,9 +81,9 @@ class LinearRgbDngWriterTest {
 
     @Test fun provenanceBlockCarriesEffectiveFrames() {
         val block = LinearRgbDngWriter.provenanceBlock(provenance())
-        assertTrue(block.contains("effectiveFrames=1.0"))
+        assertTrue(block.contains("- Effective frames: 1.0\n"))
         val merged = LinearRgbDngWriter.provenanceBlock(provenance().copy(effectiveFrames = 3.25))
-        assertTrue(merged.contains("effectiveFrames=3.25"))
+        assertTrue(merged.contains("- Effective frames: 3.25\n"))
     }
 
     @Test fun provenanceRejectsSubUnityEffectiveFrames() {
@@ -119,11 +119,14 @@ class LinearRgbDngWriterTest {
 
     @Test fun provenanceBlockCarriesEveryRequiredKey() {
         val block = LinearRgbDngWriter.provenanceBlock(provenance())
+        assertTrue(block, block.startsWith("Captured with RawLens\nLinear RGB prime DNG from RAW burst merge\n"))
         for (key in listOf(
-            "algorithm=${LinearRgbDngWriter.ALGORITHM_VERSION}", "selectedFrames=4", "acceptedFrames=3",
-            "rejectedFrames=1", "referenceTimestampNs=123456789", "outputScale=1",
-            "sourceCameraId=0", "derivation=DerivedFromRawBurst", "lensShadingApplied=true",
-            "effectiveFrames=1.0", "quantization=clamp[0,1]*65535 round-half-up"
+            "\nPARAMETERS\n", "- Algorithm: ${LinearRgbDngWriter.ALGORITHM_VERSION}\n",
+            "- Selected frames: 4\n", "- Accepted frames: 3\n",
+            "- Rejected frames: 1\n", "- Reference timestamp: 123456789 ns\n",
+            "- Output scale: 1x\n", "\nSource:\n", "- Camera: 0\n",
+            "- Derivation: DerivedFromRawBurst\n", "- Lens shading applied: true\n",
+            "- Effective frames: 1.0\n", "- Quantization: clamp[0,1]*65535 round-half-up\n"
         )) assertTrue("missing $key", block.contains(key))
     }
 
@@ -131,8 +134,8 @@ class LinearRgbDngWriterTest {
         val block = LinearRgbDngWriter.provenanceBlock(
             provenance().copy(referenceTimestampNs = Long.MIN_VALUE)
         )
-        assertTrue(block.contains("referenceTimestampNs=unknown"))
-        assertFalse(block.contains("referenceTimestampNs=0;"))
+        assertTrue(block.contains("- Reference timestamp: ? ns"))
+        assertFalse(block.contains("- Reference timestamp: 0 ns"))
     }
 
     // ---- file structure (parser-level) ----
@@ -159,6 +162,16 @@ class LinearRgbDngWriterTest {
         assertEquals(listOf(1, 1), parsed.shorts(50713)) // 1x1 RGB tile: three black levels
         assertEquals(listOf(0.0, 0.0, 0.0), parsed.rationals(50714)) // BlackLevel
         for (cfaTag in listOf(33421, 33422)) assertFalse("CFA tag $cfaTag", parsed.has(cfaTag))
+    }
+
+    @Test fun newSubfileTypeIsLong() {
+        // TIFF 6.0 mandates LONG for tag 254; the native writer once emitted
+        // SHORT, which Apple ImageIO (Finder Quick Look, sips) rejects while
+        // darktable/exiftool stay lenient.
+        val field = parse(writeDefault()).entry(254)
+        assertEquals(4, field.type)
+        assertEquals(1, field.count)
+        assertEquals(0, field.value)
     }
 
     @Test fun pixelValuesRoundTripInRgbOrder() {
@@ -189,15 +202,15 @@ class LinearRgbDngWriterTest {
     @Test fun exposureIsoAndIdentityAreCopied() {
         val parsed = parse(writeDefault())
         val (num, den) = parsed.rational(33434)
-        assertEquals(10_000_000, num)
-        assertEquals(1_000_000_000, den)
+        // Reduced rationals pin the value (10ms), not the numerator bytes.
+        assertEquals(0.01, num.toDouble() / den, 1e-12)
         assertEquals(100, parsed.entry(34855).value)
         // OEM strings are environment-dependent ("unknown" under a JVM stub);
         // pin structure and the camera-ID suffix instead of exact values.
         assertTrue(parsed.ascii(271).isNotEmpty())
         assertTrue(parsed.ascii(272).isNotEmpty())
         assertTrue(parsed.ascii(50708).contains("(0)"))
-        assertTrue(parsed.ascii(270).contains("derivation=DerivedFromRawBurst"))
+        assertTrue(parsed.ascii(270).contains("- Derivation: DerivedFromRawBurst\n"))
     }
 
     @Test fun noiseProfileIsEmbeddedAsDoubles() {
@@ -236,17 +249,40 @@ class LinearRgbDngWriterTest {
         }
     }
 
+    @Test fun captureTimeMillisLandsInExifDates() {
+        val bytes = ByteArrayOutputStream().also {
+            LinearRgbDngWriter.write(it, MergedLinearRgb(2, 2, FloatArray(12) { 0.25f }),
+                metadata(), provenance(), captureTimeMillis = 1_700_000_000_123L)
+        }.toByteArray()
+        val exif = parse(bytes).subIfd(34665)
+        val stamp = exif.ascii(36867)
+        assertTrue(stamp, stamp.matches(Regex("\\d{4}:\\d\\d:\\d\\d \\d\\d:\\d\\d:\\d\\d")))
+        assertEquals("123", exif.ascii(37520))
+    }
+
+    @Test fun nullCaptureTimeOmitsExifDatesButKeepsOpticalFacts() {
+        val exif = parse(writeDefault()).subIfd(34665)
+        assertFalse(exif.has(36867))
+        assertTrue(exif.has(36864)) // ExifVersion still present
+        assertTrue(exif.has(37377)) // shutter speed from the 10ms exposure
+    }
+
     // ---- striped (memory-bounded) write ----
 
-    @Test fun stripedWriteIsByteIdenticalToWholeWrite() {
+    @Test fun stripedWriteMatchesWholeWritePixelsAndTags() {
         // Gradient plus clippable samples; strip heights cover single-row,
-        // exact-division, ragged-tail, and taller-than-frame bands.
+        // exact-division, ragged-tail, and taller-than-frame bands. The
+        // striped path bands the pixels into one TIFF strip per band (that
+        // is what keeps a 12MP save off the heap), so the strip tables
+        // (273/278/279) legitimately differ from the single-strip whole
+        // write — every other tag and every sample byte must match.
         val w = 5; val h = 7
         val rgb = FloatArray(w * h * 3) { i -> (i - 9) / 31f }
         rgb[0] = 1.5f; rgb[1] = -0.25f
         val expected = ByteArrayOutputStream().also {
             LinearRgbDngWriter.write(it, MergedLinearRgb(w, h, rgb), metadata(), provenance())
         }.toByteArray()
+        assertEquals(h, parse(expected).entry(278).value)
         for (stripRows in listOf(1, 2, 3, 7, 64)) {
             val actual = ByteArrayOutputStream().also {
                 LinearRgbDngWriter.writeStriped(it, w, h, metadata(), provenance(),
@@ -254,7 +290,9 @@ class LinearRgbDngWriterTest {
                     rgb.copyInto(band, 0, startY * w * 3, (startY + rows) * w * 3)
                 }
             }.toByteArray()
-            assertArrayEquals("stripRows=$stripRows", expected, actual)
+            assertSameImage("stripRows=$stripRows", expected, actual)
+            // Taller-than-frame bands collapse to one strip of the frame.
+            assertEquals(minOf(stripRows, h), parse(actual).entry(278).value)
         }
     }
 
@@ -350,18 +388,21 @@ class LinearRgbDngWriterTest {
 
     private fun writeDefault(): ByteArray = write()
 
-    private class Parsed(val bytes: ByteArray) {
+    private class Parsed(val bytes: ByteArray, val base: Int = 8) {
         private val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         data class Field(val type: Int, val count: Int, val value: Int)
 
         val entries: Map<Int, Field> = buildMap {
-            val count = buffer.getShort(8).toInt() and 0xffff
+            val count = buffer.getShort(base).toInt() and 0xffff
             for (i in 0 until count) {
-                val p = 10 + i * 12
+                val p = base + 2 + i * 12
                 val tag = buffer.getShort(p).toInt() and 0xffff
                 put(tag, Field(buffer.getShort(p + 2).toInt() and 0xffff, buffer.getInt(p + 4), buffer.getInt(p + 8)))
             }
         }
+
+        /** Follows a sub-IFD pointer (EXIF 34665 / GPS 34853) to its directory. */
+        fun subIfd(pointerTag: Int) = Parsed(bytes, entry(pointerTag).value)
 
         fun has(tag: Int) = entries.containsKey(tag)
         fun entry(tag: Int) = entries.getValue(tag)
@@ -387,7 +428,12 @@ class LinearRgbDngWriterTest {
         fun ascii(tag: Int): String {
             val field = entry(tag)
             assertEquals(2, field.type)
-            val bytes = ByteArray(field.count) { buffer.get(payload(tag) + it) }
+            // Short strings (SubSecTime "123\0") live inline in the value field.
+            val bytes = if (field.count <= 4) {
+                ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
+                    putInt(field.value)
+                }.array().copyOf(field.count)
+            } else ByteArray(field.count) { buffer.get(field.value + it) }
             return bytes.toString(Charsets.US_ASCII).trimEnd('\u0000')
         }
 
@@ -423,7 +469,66 @@ class LinearRgbDngWriterTest {
             assertEquals(1, field.count)
             return buffer.getInt(payload(tag)) to buffer.getInt(payload(tag) + 4)
         }
+
+        fun longs(tag: Int): List<Int> {
+            val field = entry(tag)
+            assertEquals(4, field.type)
+            return if (field.count * 4 <= 4) {
+                List(field.count) { field.value }
+            } else List(field.count) { buffer.getInt(field.value + it * 4) }
+        }
+
+        /** Raw value bytes of a tag (inline field or external payload). */
+        fun rawBytes(tag: Int): ByteArray {
+            val field = entry(tag)
+            val unit = when (field.type) {
+                3 -> 2; 4 -> 4; 5, 10, 12 -> 8; else -> 1
+            }
+            val size = field.count * unit
+            return if (size <= 4) {
+                ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).apply {
+                    putInt(field.value)
+                }.array().copyOf(size)
+            } else bytes.copyOfRange(field.value, field.value + size)
+        }
+
+        /** Pixel bytes in strip order (all strips concatenated). */
+        fun stripBytes(): ByteArray {
+            val offsets = longs(273)
+            val counts = longs(279)
+            assertEquals(offsets.size, counts.size)
+            val out = ByteArray(counts.sum())
+            var o = 0
+            for (i in offsets.indices) {
+                bytes.copyInto(out, o, offsets[i], offsets[i] + counts[i])
+                o += counts[i]
+            }
+            return out
+        }
     }
 
     private fun parse(bytes: ByteArray) = Parsed(bytes)
+
+    /**
+     * Whole-write vs striped-write equivalence: identical tag sets, types,
+     * counts, and payloads outside the strip tables, plus identical pixel
+     * bytes in strip order.
+     */
+    private fun assertSameImage(message: String, a: ByteArray, b: ByteArray) {
+        val pa = parse(a)
+        val pb = parse(b)
+        assertEquals("$message tags", pa.entries.keys, pb.entries.keys)
+        for ((tag, fa) in pa.entries) {
+            val fb = pb.entry(tag)
+            assertEquals("$message tag $tag type", fa.type, fb.type)
+            if (tag == 273 || tag == 279) continue // strip tables differ by construction
+            assertEquals("$message tag $tag count", fa.count, fb.count)
+            // RowsPerStrip and the sub-IFD pointers embed layout offsets
+            // that legitimately move when the strip tables change size; the
+            // sub-IFD contents are pinned separately (GpsDngWriterTest).
+            if (tag == 278 || tag == 34665 || tag == 34853) continue
+            assertArrayEquals("$message tag $tag payload", pa.rawBytes(tag), pb.rawBytes(tag))
+        }
+        assertArrayEquals("$message pixels", pa.stripBytes(), pb.stripBytes())
+    }
 }
