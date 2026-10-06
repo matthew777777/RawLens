@@ -182,6 +182,22 @@ target_link_libraries(galosh PRIVATE ${GALOSH_VULKAN_LIB} ${GALOSH_LOG_LIB} ${GA
 set_target_properties(galosh PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_link_options(galosh PRIVATE "-Wl,-z,max-page-size=16384")
 
+# HDR+ burst merge (Vulkan): 1:1 port of RAWR's merge_hdrplus recorder
+# (itself a port of Burst Photo / hdr-plus-swift). SPIR-V comes from app
+# assets (spirv/hdrplus/); see assets UPSTREAM.md + README for provenance.
+add_library(hdrplus SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_host.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_run.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_jni.cpp")
+target_include_directories(hdrplus PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus")
+target_compile_options(hdrplus PRIVATE -Wall -Wextra -Werror=return-type)
+find_library(HDRPLUS_VULKAN_LIB vulkan REQUIRED)
+find_library(HDRPLUS_LOG_LIB log REQUIRED)
+find_library(HDRPLUS_ANDROID_LIB android REQUIRED)
+target_link_libraries(hdrplus PRIVATE ${HDRPLUS_VULKAN_LIB} ${HDRPLUS_LOG_LIB} ${HDRPLUS_ANDROID_LIB})
+set_target_properties(hdrplus PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_options(hdrplus PRIVATE "-Wl,-z,max-page-size=16384")
+
 # Pinned TinyDNG v3 writer. The app supplies Camera2 metadata as checked TIFF fields.
 set(TINYDNG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/tinydng")
 add_library(tinydng_v3 STATIC
