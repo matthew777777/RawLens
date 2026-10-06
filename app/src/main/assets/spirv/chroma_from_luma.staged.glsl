@@ -3,7 +3,7 @@ uniform highp uvec3 u_dispatch_offset;
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Chroma-from-luma stabilization (RawSrChromaFromLuma twin): rebuilds R/B as
 // G * smooth(R/G) / G * smooth(B/G) with a separable sigma-1.0 Gaussian
-// (radius 3) over per-tap guarded ratios. G passes through untouched.
+// (radius 3) over color ratios. G passes through untouched.
 // Clamped borders, center guide floor, and Float accumulation order match the
 // CPU twin op for op (up to GPU FMA contraction, ~1ulp).
 precision highp float;
@@ -25,8 +25,7 @@ float kw(int o) {
 vec2 tapRatio(ivec2 t) {
     t = clamp(t, ivec2(0), u_size - ivec2(1));
     vec4 v = texelFetch(u_merged, t, 0);
-    float gn = v.y > GUIDE_EPS ? v.y : GUIDE_EPS;
-    return vec2(v.x / gn, v.z / gn);
+    return vec2(v.x / v.y, v.z / v.y);
 }
 void main() {
     ivec2 p = ivec2((gl_GlobalInvocationID + u_dispatch_offset).xy);

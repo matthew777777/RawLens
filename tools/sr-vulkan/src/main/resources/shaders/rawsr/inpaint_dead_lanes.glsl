@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Dead-lane inpaint for the Linear-RGB product (RawSrDeadLaneInpaint twin):
-// output lanes with no kernel support (total denominator at or below EPS)
-// take the mean of live same-lane neighbours over rings 1..3; lanes with
-// support pass through untouched, and cells with no live neighbour in range
-// keep the finalize value (0). Ring enumeration and float accumulation
-// order match the CPU twin exactly for bitwise agreement.
+// Dead-lane inpaint for the Linear-RGB product (RawSrCoreFinish.inpaint
+// twin): output lanes with no kernel support (total denominator at or below
+// the exact-zero gate, EPS = 0.0 like RawSrBayerMerge.EPS) take the mean of
+// live same-lane neighbours over rings 1..3; lanes with support pass
+// through untouched, and cells with no live neighbour in range keep the
+// finalize value (0). Ring enumeration and float accumulation order match
+// the CPU twin exactly for bitwise agreement.
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -15,7 +16,7 @@ uniform sampler2D u_den;
 uniform sampler2D u_ref_den;
 uniform ivec2 u_size;
 layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
-const float EPS = 1e-8;
+const float EPS = 0.0;
 const int MAX_RING = 3;
 float totalDen(ivec2 p, int c) {
     vec4 d = texelFetch(u_den, p, 0) + texelFetch(u_ref_den, p, 0);

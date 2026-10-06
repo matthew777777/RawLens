@@ -1,69 +1,121 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// JAMY-L inverse-compositional refinement 1:1 (ICA.py cpu_ica via
+// RawSrCoreAlign.steepestSums/treeClippedSums/icaStep/meanAbsidual):
+// unhalved zero-padded central-difference gradients, full-tile Hessian,
+// |det| < 1e-10 keeps the seed flow (residual still computed). Per-size
+// quirks transcribed verbatim: 8 clamps its sampler (frac from the
+// unclamped floor) and tree-clips reduction partials to +-radius with an
+// unclipped step; 16/32/64 zero-fill and clip the step to +-radius (64
+// with the clip disabled at 32767, reference ica.clip=False for ts 64).
+// (Retired: the old CUDA 64-kernel sliding window with its off-by-one
+// bottom row; the current reference cpu_ica has no 64 path.) Output w
+// is the det verdict (diagnostic; downstream consumes xy only).
 precision highp float;
 precision highp int;
 precision highp sampler2D;
 layout(local_size_x=1,local_size_y=1) in;
 uniform sampler2D u_reference,u_moving,u_flow;
-uniform ivec2 u_size,u_tile_grid;
-uniform int u_tile_size;
-uniform float u_min_determinant,u_max_residual,u_min_condition,u_min_fraction;
+uniform ivec2 u_ref_size,u_mov_size,u_tile_grid;
+uniform int u_tile_size,u_search_radius,u_iterations;
 layout(binding=0,rgba32f) writeonly uniform highp image2D img_refined;
-bool finite(float x){return !isnan(x)&&!isinf(x);}
-bool inside(vec2 q){return all(greaterThanEqual(q,vec2(0)))&&all(lessThan(q,vec2(u_size-1)));}
-bool templateInside(ivec2 p){return all(greaterThan(p,ivec2(0)))&&all(lessThan(p,u_size-1));}
-vec2 gradient(ivec2 p){return 0.5*vec2(
- texelFetch(u_reference,p+ivec2(1,0),0).r-texelFetch(u_reference,p-ivec2(1,0),0).r,
- texelFetch(u_reference,p+ivec2(0,1),0).r-texelFetch(u_reference,p-ivec2(0,1),0).r);}
-float sampleMoving(vec2 p){
- ivec2 q=ivec2(floor(p));vec2 f=p-vec2(q);
- float a=texelFetch(u_moving,q,0).r*(1.0-f.x)+texelFetch(u_moving,q+ivec2(1,0),0).r*f.x;
- float b=texelFetch(u_moving,q+ivec2(0,1),0).r*(1.0-f.x)+texelFetch(u_moving,q+ivec2(1,1),0).r*f.x;
- return a*(1.0-f.y)+b*f.y;
+float refTap(ivec2 p){return texelFetch(u_reference,p,0).r;}
+float movTapZero(ivec2 p){
+ if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,u_mov_size)))return 0.0;
+ return texelFetch(u_moving,p,0).r;
+}
+float sampleZero(vec2 q){
+ ivec2 f=ivec2(floor(q));vec2 frac=q-vec2(f);
+ float m00=movTapZero(f),m01=movTapZero(f+ivec2(1,0));
+ float m10=movTapZero(f+ivec2(0,1)),m11=movTapZero(f+ivec2(1,1));
+ float top=m00+(m01-m00)*frac.x;
+ float bot=m10+(m11-m10)*frac.x;
+ return top+(bot-top)*frac.y;
+}
+float sampleClamped(vec2 q){
+ ivec2 f=ivec2(floor(q));vec2 frac=q-vec2(f);
+ ivec2 f0=clamp(f,ivec2(0),u_mov_size-ivec2(1));
+ ivec2 f1=min(f0+ivec2(1),u_mov_size-ivec2(1));
+ float m00=texelFetch(u_moving,f0,0).r;
+ float m01=texelFetch(u_moving,ivec2(f1.x,f0.y),0).r;
+ float m10=texelFetch(u_moving,ivec2(f0.x,f1.y),0).r;
+ float m11=texelFetch(u_moving,f1,0).r;
+ float top=m00+(m01-m00)*frac.x;
+ float bot=m10+(m11-m10)*frac.x;
+ return top+(bot-top)*frac.y;
+}
+vec2 refGrad(ivec2 p){
+ float left=p.x>0?refTap(p-ivec2(1,0)):0.0;
+ float right=p.x<u_ref_size.x-1?refTap(p+ivec2(1,0)):0.0;
+ float up=p.y>0?refTap(p-ivec2(0,1)):0.0;
+ float down=p.y<u_ref_size.y-1?refTap(p+ivec2(0,1)):0.0;
+ return vec2(right-left,down-up);
 }
 void main(){
  ivec2 tile=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(tile,u_tile_grid)))return;
- ivec2 origin=tile*u_tile_size,end=min(origin+ivec2(u_tile_size),u_size);
- vec4 initial=texelFetch(u_flow,tile,0);vec2 flow=initial.xy;
- float hxx=0.0,hxy=0.0,hyy=0.0;int samples=0;
- for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
-  for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
-   ivec2 p=origin+ivec2(x,y);if(!templateInside(p))continue;
-   vec2 g=gradient(p);hxx+=g.x*g.x;hxy+=g.x*g.y;hyy+=g.y*g.y;samples++;
+ ivec2 origin=tile*u_tile_size;
+ vec2 flow=texelFetch(u_flow,tile,0).xy;
+ float h00=0.0,h01=0.0,h11=0.0;
+ for(int y=0;y<64;y++){
+  if(y>=u_tile_size)break;
+  for(int x=0;x<64;x++){
+   if(x>=u_tile_size)break;
+   vec2 g=refGrad(origin+ivec2(x,y));
+   h00+=g.x*g.x;h01+=g.x*g.y;h11+=g.y*g.y;
   }
  }
- float determinant=hxx*hyy-hxy*hxy,trace=hxx+hyy;
- bool valid=initial.w>0.0&&samples>=4&&finite(determinant)&&determinant>u_min_determinant&&determinant>u_min_condition*trace*trace;
- // Exactly three finest-level IC updates; failed tiles stay rejected.
- for(int iteration=0;iteration<3;iteration++){
-  float bx=0.0,by=0.0;int count=0;
-  if(valid){
-   for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
-    for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
-     ivec2 p=origin+ivec2(x,y);vec2 q=vec2(p)+flow;
-     if(!templateInside(p)||!inside(q))continue;
-     vec2 g=gradient(p);float e=sampleMoving(q)-texelFetch(u_reference,p,0).r;
-     bx+=g.x*e;by+=g.y*e;count++;
+ float det=h00*h11-h01*h01;
+ bool solvable=abs(det)>=1e-10;
+ float clip=u_tile_size==64?32767.0:float(u_search_radius);
+ if(solvable){
+  float detInv=1.0/det;
+  for(int iter=0;iter<5;iter++){
+   if(iter>=u_iterations)break;
+   if(u_tile_size==8){
+    float c0[64];float c1[64];
+    for(int y=0;y<8;y++){
+     for(int x=0;x<8;x++){
+      ivec2 p=origin+ivec2(x,y);
+      float e=sampleClamped(vec2(p)+flow)-refTap(p);
+      vec2 g=refGrad(p);
+      c0[y*8+x]=-g.x*e;c1[y*8+x]=-g.y*e;
+     }
     }
-   }
-   valid=count==samples&&finite(bx)&&finite(by);
-   if(valid){
-    vec2 step=vec2(hyy*bx-hxy*by,hxx*by-hxy*bx)/determinant;
-    valid=finite(step.x)&&finite(step.y);
-    if(valid)flow-=clamp(step,vec2(-1),vec2(1));
+    int n=32;
+    while(n>0){
+     for(int tid=0;tid<32;tid++){
+      if(tid>=n)break;
+      c0[tid]+=clamp(c0[tid+n],-clip,clip);
+      c1[tid]+=clamp(c1[tid+n],-clip,clip);
+     }
+     n/=2;
+    }
+    flow+=detInv*vec2(h11*c0[0]-h01*c1[0],-h01*c0[0]+h00*c1[0]);
+   }else{
+    float b0=0.0,b1=0.0;
+    for(int y=0;y<64;y++){
+     if(y>=u_tile_size)break;
+     for(int x=0;x<64;x++){
+      if(x>=u_tile_size)break;
+      ivec2 p=origin+ivec2(x,y);
+      float e=sampleZero(vec2(p)+flow)-refTap(p);
+      vec2 g=refGrad(p);
+      b0+=-g.x*e;b1+=-g.y*e;
+     }
+    }
+    flow+=clamp(detInv*vec2(h11*b0-h01*b1,-h01*b0+h00*b1),vec2(-clip),vec2(clip));
    }
   }
  }
- float residual=0.0;int count=0;
- for(int y=0;y<32;y++){if(origin.y+y>=end.y)break;
-  for(int x=0;x<32;x++){if(origin.x+x>=end.x)break;
-   ivec2 p=origin+ivec2(x,y);vec2 q=vec2(p)+flow;
-   if(!inside(q))continue;
-   residual+=abs(sampleMoving(q)-texelFetch(u_reference,p,0).r);count++;
+ float residual=0.0;
+ for(int y=0;y<64;y++){
+  if(y>=u_tile_size)break;
+  for(int x=0;x<64;x++){
+   if(x>=u_tile_size)break;
+   ivec2 p=origin+ivec2(x,y);
+   float s=u_tile_size==8?sampleClamped(vec2(p)+flow):sampleZero(vec2(p)+flow);
+   residual+=abs(s-refTap(p));
   }
  }
- int area=(end.x-origin.x)*(end.y-origin.y);
- bool enough=count>=max(4,int(ceil(float(area)*u_min_fraction)));
- residual=enough&&finite(residual)?min(residual/float(count),1e6):1e6;
- valid=valid&&enough&&residual<=u_max_residual;
- imageStore(img_refined,tile,vec4(flow,residual,valid?1.0:0.0));
+ residual/=float(u_tile_size*u_tile_size);
+ imageStore(img_refined,tile,vec4(flow,residual,solvable?1.0:0.0));
 }

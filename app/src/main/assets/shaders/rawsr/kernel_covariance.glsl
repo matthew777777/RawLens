@@ -9,6 +9,10 @@
 // pre-inverts. Mirrors RawSrKernelCovariance exactly.
 // u_kernel_type: 0 steerable, 1 iso (covariance = kDetail, Jamy-L quirk).
 // u_selection_law: 0 linear (reference default), 1 hard threshold (A > 1.95, strict).
+// u_use_flat: 0 coupled (flat radius = kDetail * kDenoise, reference), 1 decoupled
+// (flat radius = u_k_flat; edges stay kDetail-sharp). Mirrors RawSrKernelCovariance.
+// u_detail_floor: minimum radius along either axis (0 = off, reference). Keeps
+// razor across-edge settings from latching onto single taps (zipper).
 precision highp float;
 precision highp sampler2D;
 precision highp image2D;
@@ -17,6 +21,9 @@ uniform sampler2D u_gray;
 uniform ivec2 u_size;
 uniform float u_k_detail;
 uniform float u_k_denoise;
+uniform float u_k_flat;
+uniform int u_use_flat;
+uniform float u_detail_floor;
 uniform float u_d_th;
 uniform float u_d_tr;
 uniform float u_k_stretch;
@@ -50,6 +57,9 @@ void main() {
         }
     }
     float kIso = u_k_detail * u_k_denoise;
+    if (u_use_flat == 1) {
+        kIso = u_k_flat;
+    }
     float k1Sq = kIso * kIso;
     float k2Sq = k1Sq;
     vec2 e1 = vec2(1.0, 0.0);
@@ -107,6 +117,12 @@ void main() {
         }
         float k1 = u_k_detail * ((1.0 - denoise) * axis1 + denoise * u_k_denoise);
         float k2 = u_k_detail * ((1.0 - denoise) * axis2 + denoise * u_k_denoise);
+        if (u_use_flat == 1) {
+            k1 = (1.0 - denoise) * u_k_detail * axis1 + denoise * u_k_flat;
+            k2 = (1.0 - denoise) * u_k_detail * axis2 + denoise * u_k_flat;
+        }
+        k1 = max(k1, u_detail_floor);
+        k2 = max(k2, u_detail_floor);
         if (finite(k1) && finite(k2) && k1 > 0.0 && k2 > 0.0) {
             k1Sq = k1 * k1;
             k2Sq = k2 * k2;
