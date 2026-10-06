@@ -18,6 +18,17 @@ enum class BayerPattern(private val cells: List<CfaColor>) {
     fun colorAt(sensorX: Int, sensorY: Int): CfaColor =
         cells[((sensorY and 1) shl 1) or (sensorX and 1)]
 
+    /**
+     * Cell ordinals in [cells] order (RED=0, GREEN=1, BLUE=2), read-only.
+     * The hot merge loops hoist this array and index it directly instead of
+     * dispatching [colorAt] per tap: identical routing, no enum traffic.
+     */
+    internal val cellOrdinals = IntArray(4) { cells[it].ordinal }
+
+    /** Ordinal twin of [colorAt]: identical routing as an Int, no enum dispatch. */
+    fun colorOrdinalAt(sensorX: Int, sensorY: Int): Int =
+        cellOrdinals[((sensorY and 1) shl 1) or (sensorX and 1)]
+
     fun shifted(sensorX: Int, sensorY: Int): BayerPattern {
         val shiftedCells = List(4) { index ->
             colorAt(sensorX + (index and 1), sensorY + (index shr 1))
@@ -138,11 +149,18 @@ object RawSensorUnpacker {
         // ByteBuffer reads are position-free and thread-safe for reads).
         // Hoists the per-row sensor/black terms out of the pixel loop.
         val whiteLevel = normalization.whiteLevel
+        val pixelStride = layout.pixelStride
+        // Tight pixels (the universal phone layout) gather each row with one
+        // bulk short transfer instead of one getShort call per pixel; the
+        // shorts — and the per-pixel normalization below — are identical.
+        val bulkRows = pixelStride == 2
         RawSrWorkers.forEachShard(crop.height) { y0, y1 ->
+            val shardInput = if (bulkRows) input.duplicate().order(byteOrder) else input
+            val rowCodes = if (bulkRows) ShortArray(crop.width) else null
             for (y in y0 until y1) {
                 val planeY = crop.top + y
                 val sensorY = layout.sensorOriginY + planeY
-                val rowStart = dataOrigin + planeY * layout.rowStride + crop.left * layout.pixelStride
+                val rowStart = dataOrigin + planeY * layout.rowStride + crop.left * pixelStride
                 // Two black levels per row (even/odd sensor columns); the
                 // white denominator likewise. Same values blackAt returns.
                 val blackEven = normalization.blackLevels[((sensorY and 1) shl 1) or ((layout.sensorOriginX + crop.left) and 1)]
@@ -150,12 +168,37 @@ object RawSensorUnpacker {
                 val denomEven = whiteLevel - blackEven
                 val denomOdd = whiteLevel - blackOdd
                 var outputIndex = y * crop.width
-                for (x in 0 until crop.width) {
-                    val code = input.getShort(rowStart + x * layout.pixelStride).toInt() and 0xffff
-                    if ((x and 1) == 0) {
+                if (rowCodes != null) {
+                    shardInput.position(rowStart)
+                    val view = shardInput.slice().order(byteOrder).asShortBuffer()
+                    view.get(rowCodes, 0, crop.width)
+                    // Pair-stepped: even/odd pixels take their row's level
+                    // without the alternating branch, same value per pixel.
+                    var x = 0
+                    while (x + 1 < crop.width) {
+                        val code0 = rowCodes[x].toInt() and 0xffff
+                        val code1 = rowCodes[x + 1].toInt() and 0xffff
+                        output[outputIndex++] = (code0 - blackEven) / denomEven
+                        output[outputIndex++] = (code1 - blackOdd) / denomOdd
+                        x += 2
+                    }
+                    if (x < crop.width) {
+                        val code = rowCodes[x].toInt() and 0xffff
                         output[outputIndex++] = (code - blackEven) / denomEven
-                    } else {
-                        output[outputIndex++] = (code - blackOdd) / denomOdd
+                    }
+                } else {
+                    var x = 0
+                    while (x + 1 < crop.width) {
+                        val base = rowStart + x * pixelStride
+                        val code0 = input.getShort(base).toInt() and 0xffff
+                        val code1 = input.getShort(base + pixelStride).toInt() and 0xffff
+                        output[outputIndex++] = (code0 - blackEven) / denomEven
+                        output[outputIndex++] = (code1 - blackOdd) / denomOdd
+                        x += 2
+                    }
+                    if (x < crop.width) {
+                        val code = input.getShort(rowStart + x * pixelStride).toInt() and 0xffff
+                        output[outputIndex++] = (code - blackEven) / denomEven
                     }
                 }
             }

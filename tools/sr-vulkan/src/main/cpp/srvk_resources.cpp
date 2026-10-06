@@ -165,6 +165,36 @@ uint64_t srvk_create_image(SrvkContext* ctx, int width, int height, int format,
     return (uint64_t)(uintptr_t)img;
 }
 
+static int submit_rebuild(SrvkContext* ctx) {
+    // Best-effort recovery after a failed submit: drop the persistent
+    // objects (a timed-out fence may still be in flight, so it is left to
+    // the context teardown like before) and allocate fresh ones, so a
+    // caller that continues after an error gets clean objects.
+    if (ctx->submit_cmd != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &ctx->submit_cmd);
+        ctx->submit_cmd = VK_NULL_HANDLE;
+    }
+    ctx->submit_fence = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo ai = {};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = ctx->cmd_pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    if (vkAllocateCommandBuffers(ctx->device, &ai, &ctx->submit_cmd) != VK_SUCCESS) {
+        ctx->submit_cmd = VK_NULL_HANDLE;
+        return -1;
+    }
+    VkFenceCreateInfo fi = {};
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    if (vkCreateFence(ctx->device, &fi, NULL, &ctx->submit_fence) != VK_SUCCESS) {
+        vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &ctx->submit_cmd);
+        ctx->submit_cmd = VK_NULL_HANDLE;
+        ctx->submit_fence = VK_NULL_HANDLE;
+        return -1;
+    }
+    return 0;
+}
+
 static int submit_oneshot(SrvkContext* ctx, VkCommandBuffer cmd, char* errmsg, size_t errmsg_len,
                           const char* what) {
     VkResult res = vkEndCommandBuffer(cmd);
@@ -172,58 +202,69 @@ static int submit_oneshot(SrvkContext* ctx, VkCommandBuffer cmd, char* errmsg, s
         srvk_set_err(errmsg, errmsg_len, what, res);
         return -1;
     }
-    VkFence fence = VK_NULL_HANDLE;
-    VkFenceCreateInfo fi = {};
-    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    res = vkCreateFence(ctx->device, &fi, NULL, &fence);
+    // Persistent fence: reset instead of create/destroy per submit. The
+    // fence is unsignaled here (every prior submit waited on it).
+    res = vkResetFences(ctx->device, 1, &ctx->submit_fence);
     if (res != VK_SUCCESS) {
-        srvk_set_err(errmsg, errmsg_len, "fence alloc failed", res);
+        srvk_set_err(errmsg, errmsg_len, "fence reset failed", res);
+        submit_rebuild(ctx);
         return -1;
     }
     VkSubmitInfo si = {};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    res = vkQueueSubmit(ctx->queue, 1, &si, fence);
+    res = vkQueueSubmit(ctx->queue, 1, &si, ctx->submit_fence);
     if (res != VK_SUCCESS) {
         srvk_set_err(errmsg, errmsg_len, "vkQueueSubmit failed", res);
-        vkDestroyFence(ctx->device, fence, NULL);
+        submit_rebuild(ctx);
         return -1;
     }
-    res = vkWaitForFences(ctx->device, 1, &fence, VK_TRUE, SRVK_FENCE_TIMEOUT_NS);
-    // A timed-out fence may still be in flight: destroying it would be
-    // undefined, so only destroy on a definitive outcome (same fail-the-merge
-    // contract as the GL fence timeout; the context tears down after).
+    res = vkWaitForFences(ctx->device, 1, &ctx->submit_fence, VK_TRUE, SRVK_FENCE_TIMEOUT_NS);
     if (res == VK_SUCCESS) {
-        vkDestroyFence(ctx->device, fence, NULL);
         return 0;
     }
+    // Same fail-the-merge contract as before: a timed-out fence may still
+    // be in flight, so the persistent objects are rebuilt (the old fence
+    // is abandoned to the context teardown) and the error propagates.
     if (errmsg != NULL && errmsg_len > 0)
         snprintf(errmsg, errmsg_len, "%s: GPU did not complete (VkResult %d)", what, (int)res);
+    submit_rebuild(ctx);
     return -1;
 }
 
 static int alloc_cmd(SrvkContext* ctx, VkCommandBuffer* cmd, char* errmsg, size_t errmsg_len) {
-    VkCommandBufferAllocateInfo ai = {};
-    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    ai.commandPool = ctx->cmd_pool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
-    VkResult res = vkAllocateCommandBuffers(ctx->device, &ai, cmd);
+    // Persistent command buffer: reset instead of allocate/free per submit.
+    // The pool was created with RESET_COMMAND_BUFFER_BIT for this.
+    if (ctx->submit_cmd == VK_NULL_HANDLE) {
+        if (submit_rebuild(ctx) != 0) {
+            srvk_set_err(errmsg, errmsg_len, "command buffer alloc failed", VK_ERROR_OUT_OF_HOST_MEMORY);
+            return -1;
+        }
+    }
+    VkResult res = vkResetCommandBuffer(ctx->submit_cmd, 0);
     if (res != VK_SUCCESS) {
-        srvk_set_err(errmsg, errmsg_len, "command buffer alloc failed", res);
+        srvk_set_err(errmsg, errmsg_len, "command buffer reset failed", res);
         return -1;
     }
+    *cmd = ctx->submit_cmd;
     VkCommandBufferBeginInfo bi = {};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     res = vkBeginCommandBuffer(*cmd, &bi);
     if (res != VK_SUCCESS) {
         srvk_set_err(errmsg, errmsg_len, "vkBeginCommandBuffer failed", res);
-        vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, cmd);
         return -1;
     }
     return 0;
+}
+
+static void free_cmd(SrvkContext* ctx, VkCommandBuffer* cmd) {
+    // No-op by design: the persistent command buffer is reset by the next
+    // alloc_cmd, never freed per submit. Kept as a call-site marker so the
+    // record/submit/release discipline stays visible.
+    (void)ctx;
+    (void)cmd;
 }
 
 static void transition(VkCommandBuffer cmd, VkImage image, VkImageLayout old_layout,
@@ -367,7 +408,7 @@ int srvk_write_image(SrvkContext* ctx, uint64_t handle, const void* bytes, size_
                            1, &copy);
     transition(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
     int rc = submit_oneshot(ctx, cmd, errmsg, errmsg_len, "write_image");
-    vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &cmd);
+    free_cmd(ctx, &cmd);
     if (rc == 0) img->layout = VK_IMAGE_LAYOUT_GENERAL;
     return rc;
 }
@@ -420,7 +461,7 @@ int srvk_read_image_region(SrvkContext* ctx, uint64_t handle, int x, int y, int 
                            1, &copy);
     transition(cmd, img->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
     int rc = submit_oneshot(ctx, cmd, errmsg, errmsg_len, "read_image_region");
-    vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &cmd);
+    free_cmd(ctx, &cmd);
     if (rc == 0) {
         img->layout = VK_IMAGE_LAYOUT_GENERAL;
         memcpy(out, ctx->staging_mapped, len);
@@ -668,7 +709,7 @@ int srvk_dispatch(SrvkContext* ctx, uint64_t pipe_handle, int gx, int gy, int gz
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0, 1, &barrier, 0, NULL, 0, NULL);
     int rc = submit_oneshot(ctx, cmd, errmsg, errmsg_len, "dispatch");
-    vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &cmd);
+    free_cmd(ctx, &cmd);
     return rc;
 }
 
@@ -742,11 +783,21 @@ int srvk_resources_init(SrvkContext* ctx, char* errmsg, size_t errmsg_len) {
         srvk_set_err(errmsg, errmsg_len, "descriptor pool failed", res);
         return -1;
     }
+    // Persistent submit objects (lazily rebuilt by alloc_cmd/submit_oneshot
+    // if this eager creation fails or a later submit fails).
+    if (submit_rebuild(ctx) != 0) {
+        srvk_set_err(errmsg, errmsg_len, "submit objects failed",
+                      VK_ERROR_OUT_OF_HOST_MEMORY);
+        return -1;
+    }
     return 0;
 }
 
 void srvk_resources_teardown(SrvkContext* ctx) {
     if (ctx == NULL) return;
+    if (ctx->submit_fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, ctx->submit_fence, NULL);
+    if (ctx->submit_cmd != VK_NULL_HANDLE)
+        vkFreeCommandBuffers(ctx->device, ctx->cmd_pool, 1, &ctx->submit_cmd);
     if (ctx->staging_mapped != NULL) vkUnmapMemory(ctx->device, ctx->staging_memory);
     if (ctx->staging != VK_NULL_HANDLE) vkDestroyBuffer(ctx->device, ctx->staging, NULL);
     if (ctx->staging_memory != VK_NULL_HANDLE) vkFreeMemory(ctx->device, ctx->staging_memory, NULL);

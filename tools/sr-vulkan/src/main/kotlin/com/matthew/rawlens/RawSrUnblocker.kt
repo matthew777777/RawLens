@@ -37,6 +37,17 @@ object RawSrUnblocker {
     const val UNBLOCKED_THRESHOLD = 0.999
 
     /**
+     * Contested-warp veto: a quad whose 3x3 tile flow spread exceeds the
+     * motion threshold (period-ghost territory: the blend bends across
+     * disagreeing tiles) AND whose keep-weight is below half (majority of
+     * the signal variance lost to blocking) contributes nothing — partial
+     * weight would render the bend. Measured surgical (4-6.5% of quads on
+     * the validation burst; pit/bush keep full weight). The veto rides the
+     * same spread as the fold, so pinholes fill from vetoed neighbors.
+     */
+    const val VETO_UNBLOCKER_THRESHOLD = 0.5f
+
+    /**
      * Per-quad unblocker weight for one frame.
      *
      * @param gray quad gray values (row-major).
@@ -133,10 +144,13 @@ object RawSrUnblocker {
     }
 
     /**
-     * Fold an unblocker field into a robustness field: `r *= clamp(u, 0, 1)`
-     * with non-finite products sanitized to zero, and [RawSrRobustness.FLAG_UNBLOCKED]
-     * ORed where the weight actually attenuates. Returns a new field; the
-     * input is never mutated.
+     * Fold an unblocker field into a robustness field:
+     * `r' = min(r, clamp(u, 0, 1))` (Sabre
+     * `weight = min(1 - unblocker, frame_weight)`: the keep-weight caps
+     * agreement instead of compounding it), with non-finite inputs
+     * sanitized to zero, and [RawSrRobustness.FLAG_UNBLOCKED] ORed where
+     * the weight actually attenuates. Returns a new field; the input is
+     * never mutated.
      */
     fun applyToFrame(
         frame: RawSrRobustness.FrameRobustness,
@@ -147,8 +161,9 @@ object RawSrUnblocker {
         val flags = IntArray(u.size)
         for (i in u.indices) {
             val weight = u[i].coerceIn(0f, 1f)
-            val scaled = frame.r[i] * weight
-            r[i] = if (scaled.isFinite()) scaled else 0f
+            val agreement = frame.r[i]
+            r[i] = if (!agreement.isFinite() || !weight.isFinite()) 0f
+            else minOf(agreement, weight)
             var flag = frame.flags[i]
             if (weight.isFinite() && weight < UNBLOCKED_THRESHOLD) {
                 flag = flag or RawSrRobustness.FLAG_UNBLOCKED
@@ -156,5 +171,49 @@ object RawSrUnblocker {
             flags[i] = flag
         }
         return RawSrRobustness.FrameRobustness(frame.width, frame.height, r, flags)
+    }
+
+    /**
+     * [applyToFrame] plus the contested-warp veto, followed by the Alg. 9
+     * 5x5 local minimum over the folded field (Sabre folds
+     * `min(1 - unblocker, frame_weight)` then dilates the rejection mask):
+     * attenuation cores spread ±2 quads so narrowly-aliased bands reject
+     * coherently instead of leaking through their higher-weight neighbors.
+     * The veto ([flow] non-null) zeroes quads whose tile flow is irregular
+     * ([motionThresholdPx]) while the keep-weight is below
+     * [VETO_UNBLOCKER_THRESHOLD] — the bend would render at any partial
+     * weight, so contested ghosts contribute nothing. Flags stay own-quad
+     * (only r spreads; vetoed quads already carry FLAG_UNBLOCKED). This is
+     * the production fold; [applyToFrame] alone serves unit fixtures that
+     * pin the cap without the spread.
+     */
+    fun applyToFrameAndSpread(
+        frame: RawSrRobustness.FrameRobustness,
+        u: FloatArray,
+        flow: RawSrAlignmentField? = null,
+        motionThresholdPx: Float = 0.8f,
+        vetoThreshold: Float = VETO_UNBLOCKER_THRESHOLD
+    ): RawSrRobustness.FrameRobustness {
+        val folded = applyToFrame(frame, u)
+        val width = folded.width
+        val height = folded.height
+        if (flow != null) {
+            for (y in 0 until height) for (x in 0 until width) {
+                val o = y * width + x
+                val weight = u[o].coerceIn(0f, 1f)
+                if (weight.isFinite() && weight < vetoThreshold &&
+                    RawSrCoreRobustness.flowIrregular(flow, x, y, motionThresholdPx)
+                ) {
+                    folded.r[o] = 0f
+                }
+            }
+        }
+        val r = FloatArray(width * height)
+        RawSrWorkers.forEachShard(height) { y0, y1 ->
+            for (y in y0 until y1) for (x in 0 until width) {
+                r[y * width + x] = RawSrCoreRobustness.localMin(folded.r, width, height, x, y)
+            }
+        }
+        return RawSrRobustness.FrameRobustness(width, height, r, folded.flags)
     }
 }

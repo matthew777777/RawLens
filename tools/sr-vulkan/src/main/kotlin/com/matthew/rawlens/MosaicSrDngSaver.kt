@@ -32,7 +32,7 @@ class MosaicSrDngSaver(private val outputDir: File) {
         val dest = File(outputDir, displayName)
         try {
             tmp.outputStream().buffered().use {
-                MosaicSrDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride)
+                MosaicSrDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride, captureId)
             }
             try {
                 Files.move(tmp.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE)

@@ -20,6 +20,11 @@ checkout's git history (the MotionCam Tools v1.0 era, pre-gyro) and asserts
 its tail scan — which stops at the first motion item — still finds the
 audio: the audio index must precede any trailing motion data. `verify.sh`
 also runs it against a sample file when one is given.
+`parallel_parity.cpp` is self-contained (no decoder checkouts): it pins the
+upstream `55cceb2` update — `encode_parallel()` byte-identical to `encode()`
+across RAW16/RAW10, bin, crops and partial edge tiles, the shorthand
+overload, the edge-clamp goldens, and a byte-exact chunked-container
+round-trip (multi-chunk audio/motion payloads, indexes, tail order).
 
 `repair_motion.py` salvages pre-fix takes: it rewrites the file with
 identical frames, audio and motion *samples* but one coalesced gyro/accel

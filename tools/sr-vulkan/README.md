@@ -48,7 +48,22 @@ $MOSAIC --in <dng-dir> --out /tmp/mos --files <dng-dir>/a.dng,<dng-dir>/b.dng --
 Flags: `--in DIR` `--out DIR` `--ref N` (default middle) `--cache DIR`
 (default `<out>/cache`) `--crop x,y,w,h` (even) `--limit N` `--files …`
 `--backend cpu|vulkan` (linear only; mosaic is CPU on the phone too)
-`--no-kernelnet` `--capture-id ID`.
+`--capture-id ID` `--max-frames N` (default 8) `--bracket-stops …`
+(EV coverage log only) `--min-reliable-frac/--min-mean-r/--min-support-frac X`
+(merge-gate overrides, default shared policy) `--chroma-mpy X` (R/B kernel
+widening, default 2.0, 1.0 = reference-verbatim).
+KernelNet learned covariances with auto-sigma are the default merge path on
+both CLIs (swapped per frame inside the stream/chain); `--no-kernelnet`
+opts out to analytic. `--kernelnet` forces a hard failure when the model is
+not ready (otherwise a missing model falls back to analytic with a warning);
+`--kernelnet-sigma-mpy X` (default 1.0) stacks on auto-sigma like upstream
+`ESD4D.noiseMpy`; `--kernelnet-kernel-mpy X` (default 0.5),
+`--kernelnet-major-mpy X` (default 1.0), `--kernelnet-min-sigma X` (default
+0.45) shape the learned kernels. `--kernel-preset reference|decoupled_sharp`
+plus `--k-detail/--flat-sigma/--detail-floor X` override tuning; linear-only
+A/B: `--reference-only` (single-frame bisection), `--cpu-gat-cov`,
+`--no-inpaint`, `--no-cfl`, `--dump-fields DIR`, `--linear-scale 1x|sr`.
+Mosaic-only: `--mosaic-scale native|sr` (default sr).
 
 Desktop Vulkan dispatch defaults to full-grid (`-Dsrvk.sliceBudget=MAX`
 in every launch path); run with `-Dsrvk.sliceBudget=` (empty) to

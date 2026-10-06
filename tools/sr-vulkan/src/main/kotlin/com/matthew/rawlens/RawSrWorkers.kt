@@ -21,7 +21,13 @@ internal object RawSrWorkers {
     val count: Int get() = overrideCount ?: defaultCount
 
     private val defaultCount: Int by lazy {
-        Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+        // Shards are disjoint and order-free, so any worker count is
+        // bitwise-identical. Up-to-8-core devices resolve exactly as
+        // before; many-core desktops scale to 16 instead of idling half
+        // the die. Override with -Dsr.workers.max=N when embedding.
+        val cap = System.getProperty("sr.workers.max")?.toIntOrNull()
+            ?.takeIf { it >= 1 } ?: 16
+        Runtime.getRuntime().availableProcessors().coerceIn(2, cap)
     }
 
     private val pool by lazy {

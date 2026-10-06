@@ -2,7 +2,6 @@
 package com.matthew.rawlens
 
 import java.nio.ByteOrder
-import kotlin.math.sqrt
 
 /**
  * Prompt 4B.1 covariance guide: variance-stabilized Bayer-quad grayscale that feeds
@@ -127,16 +126,14 @@ object RawSrCovarianceGuide {
                     val phase = ((y and 1) shl 1) or (x and 1)
                     val black = input.normalization.blackAt(sx, sy).toDouble()
                     val white = input.normalization.whiteLevel.toDouble()
-                    val observed = (code - black) / (white - black)
+                    val observed = RawSrCoreGuide.normalize(code, black, white)
                     sum += if (!resolved.stabilize) {
                         observed
                     } else {
-                        val a = resolved.alpha[phase]
-                        val b = resolved.beta[phase]
-                        if (a == 0.0) observed / sqrt(b) else (2.0 / a) * sqrt(maxOf(0.0, a * observed + 0.375 * a * a + b))
+                        RawSrCoreGuide.stabilize(observed, resolved.alpha[phase], resolved.beta[phase])
                     }
                 }
-                values[qy * outWidth + qx] = (sum * 0.25).toFloat()
+                values[qy * outWidth + qx] = RawSrCoreGuide.quadMean(sum).toFloat()
             }
         }
         return Guide(RawSrGrayImage(outWidth, outHeight, values), resolved.status)
@@ -181,65 +178,8 @@ object RawSrCovarianceGuide {
         val modelClass: ModelClass
     )
 
-    internal fun noiseTables(input: GpuRawAmazeInput, profile: ImmutableDoubleValues?): NoiseTables {
-        val empty = DoubleArray(4)
-        if (profile == null) return NoiseTables(empty, empty, empty, empty, ModelClass.MISSING)
-        val coefficients = profile.toDoubleArray()
-        if (coefficients.size != 6 && coefficients.size != 8)
-            return NoiseTables(empty, empty, empty, empty, ModelClass.INVALID)
-        if (coefficients.any { !it.isFinite() || it < 0.0 })
-            return NoiseTables(empty, empty, empty, empty, ModelClass.INVALID)
-        val alpha = DoubleArray(4)
-        val beta = DoubleArray(4)
-        val slope = DoubleArray(4)
-        val offset = DoubleArray(4)
-        // DNG six-coefficient profiles already live in the normalized domain;
-        // only Camera2 eight-coefficient profiles need code-domain conversion.
-        val dngNormalized = coefficients.size == 6
-        for (phase in 0..3) {
-            val sx = input.sensorCropLeft + (phase and 1)
-            val sy = input.sensorCropTop + ((phase shr 1) and 1)
-            val parsedSlope: Double
-            val parsedOffset: Double
-            if (coefficients.size == 8) {
-                val raster = ((sy and 1) shl 1) or (sx and 1)
-                parsedSlope = coefficients[raster * 2]
-                parsedOffset = coefficients[raster * 2 + 1]
-            } else {
-                val channel = when (input.normalization.sensorPattern.colorAt(sx, sy)) {
-                    CfaColor.RED -> 0
-                    CfaColor.GREEN -> 1
-                    CfaColor.BLUE -> 2
-                }
-                parsedSlope = coefficients[channel * 2]
-                parsedOffset = coefficients[channel * 2 + 1]
-            }
-            val black = input.normalization.blackAt(sx, sy).toDouble()
-            val white = input.normalization.whiteLevel.toDouble()
-            if (dngNormalized) {
-                alpha[phase] = parsedSlope
-                beta[phase] = parsedOffset
-                // Exact code-domain image of S*v + O with v = (code-b)/(W-b):
-                // slope*code + offset for the sigma-in-codes consumers. The
-                // offset legitimately goes negative (affine extrapolation
-                // below black); variance stays positive at/above black.
-                slope[phase] = parsedSlope * (white - black)
-                offset[phase] = parsedOffset * (white - black) * (white - black) -
-                    parsedSlope * (white - black) * black
-            } else {
-                slope[phase] = parsedSlope
-                offset[phase] = parsedOffset
-                alpha[phase] = parsedSlope / (white - black)
-                beta[phase] = (parsedSlope * black + parsedOffset) / ((white - black) * (white - black))
-            }
-        }
-        val degenerate = BooleanArray(4) { alpha[it] == 0.0 && beta[it] == 0.0 }
-        if (degenerate.all { it }) return NoiseTables(alpha, beta, slope, offset, ModelClass.ZERO_NOISE)
-        // A zero-noise phase beside a noisy one describes no physical sensor.
-        if (degenerate.any { it }) return NoiseTables(empty, empty, empty, empty, ModelClass.INVALID)
-        val modelClass = if (alpha.all { it == 0.0 }) ModelClass.ZERO_SHOT else ModelClass.VALID
-        return NoiseTables(alpha, beta, slope, offset, modelClass)
-    }
+    internal fun noiseTables(input: GpuRawAmazeInput, profile: ImmutableDoubleValues?): NoiseTables =
+        RawSrCoreGuide.noiseTables(input, profile)
 
     private data class Resolved(val stabilize: Boolean, val status: Status, val alpha: DoubleArray, val beta: DoubleArray)
 

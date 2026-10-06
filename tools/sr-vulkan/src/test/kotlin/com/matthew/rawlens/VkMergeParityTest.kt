@@ -41,6 +41,8 @@ class VkMergeParityTest {
 
         val inputs = packed.mapIndexed { i, p -> RawSrMergeJob.MosaicInput(p, loaded[i].metadata) }
         val chain = RawSrMergeJob.mosaicChain(inputs, 0, noiseLut = null)
+        // Default latch guard on both sides (the GPU binds u_chroma_z_scale
+        // from the same merge default in VkRawSrProcessor.mergeAccumulate).
         val oracle = RawSrBayerMerge.merge(chain.reference, chain.moving)
         // The GPU merged texture is post-inpaint; heal the oracle likewise.
         RawSrDeadLaneInpaint.inpaint(oracle.rgb, oracle.denominator, oracle.width, oracle.height)

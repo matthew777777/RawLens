@@ -59,16 +59,27 @@ and clipped blocks reject through the photo term alone (pinned by test).
 
 Per channel, 3×3 window with clamp-to-edge taps (mirrors the reference):
 
-- `μ(q) = Σx/9`, `V(q) = max(Σx²/9 − μ², 0)` (variance floored at 0).
+- `μ(q) = Σx/9`, `V(q) = Σx²/9 − μ²` stored unfloored, reference-verbatim
+  (catastrophic cancellation can leave a slightly negative sliver; the
+  §5 edge rule takes slivers through the exp/clamp path deterministically
+  and reads only exactly-zero variance as 0).
 
 ## 4. Warp (IPOL `warp_stats`, Dogson biquadratic)
 
-Moving means are sampled at `q + flow(q)` in **quad units** (our flow
-convention; the reference scales raw-unit flow by 0.5 — same geometry). Flow
-lookup is **bilinear** (`flowAtSmoothInto`, same lattice as the merge), a
-deliberate deviation from the reference `int(lr//tile_size)`: nearest-tile
-sampling imprints the tile grid on the robustness field and hence on the
-merge weights. Non-finite corners fall back to the containing tile. The
+Moving means are sampled at `q + flow(q)·0.5`: our flows are **raw-unit**
+vectors (`RawSrTileFlow.dx/dy`, same convention as the reference's default
+FFT-grey mode), and the stats grid is half-resolution, so the raw-unit flow
+scales by 0.5 onto the quad lattice (reference `cuda_warp_dogson` verbatim).
+Flow lookup bilinearly blends the four surrounding tiles at the quad
+center in raw coordinates (`2q+1`), Sabre-style dense warp — the SAME
+continuous warp the merge gather uses (`flowAtSmoothInto`, deliberate
+deviation from the reference tile snap: a snapped r over-accepts where
+the blended gather lands wrong, so r scores the warp that renders).
+Non-finite corners fall back to the containing tile; a non-finite
+result rejects the quad. (GPU twin: the flow texture stores RAW-unit
+vectors on the raw lattice, the shader blends identically, then scales
+the shift onto the quad lattice, `center = q + flow·0.5` — same
+geometry.) The
 moving sample uses Dogson biquadratic weights
 (`a = 1`, reference `dogson` verbatim):
 
@@ -81,9 +92,16 @@ moving sample uses Dogson biquadratic weights
 - `d²(q) = Σ_c (μ_r,c − μ_m,c)²`.
 - `σ²(q) = Σ_c V_r,c`, the measured reference local variance (scene + noise),
   with the measured-LUT noise correction below when a LUT is attached.
-- Edge rule: `d²/σ²` non-finite (the `0/0` exactly-flat edge, reference-undefined)
-  rejects (`r = 0`, reject on doubt). `σ² == 0` with `d² > 0` likewise rejects
-  (infinite standardized distance).
+- Edge rule: exactly-zero variance reads `r = 0` (the reference Numba
+  kernel would raise ZeroDivisionError on `0/0` under Python float
+  semantics; exact zero never occurs on noisy or LUT-floored data, so this
+  is a determinism guard, not a verdict). Negative cancellation slivers
+  from the unfloored Alg. 8 stats take the exp/clamp path like every other
+  variance (`exp(−d²/σ²) ≥ 1` with `σ² < 0`, exactly as Numba computes),
+  so static flat fields fuse at `R = 1` for denoising
+  (`RawSrCoreRobustness.threshold`; pinned by
+  `negativeVarianceSliverAccepts` and `shadowQuadsNeverRail`). NaN (`0/0`
+  only) clamps to 0 and +Inf overflow clamps to 1, matching Numba min/max.
 - The noise profile feeds diagnostics only: a missing, invalid, or exactly-zero
   model changes no verdict (bitwise) and sets no flag. No noise floor is
   invented; the analytic path needs none.
@@ -97,7 +115,11 @@ corrected exactly like the reference, before the edge rule:
   (the LUT's binning key).
 - `(σ²_LUT, d²_LUT)` = nearest-bin lookup
   (`floor(b·(bins−1) + 0.5)`, identical on CPU, in the generator, and in GLSL).
-- `σ² = max(σ², σ²_LUT)`; when `d² > 0`, `d² *= (d²/(d²+d²_LUT))²`.
+- `σ² = max(σ², σ²_LUT)` when the `σ²` bin is positive; a zero bin
+  skips the floor (a no-op like a null LUT — flooring a negative sliver
+  at 0 would flip it from the reference accept to a reject, breaking
+  zero-LUT/analytic identity). When `d² > 0`, `d² *= (d²/(d²+d²_LUT))²`
+  with a positive `d²` bin.
 
 The LUT is generated for the sqrt transform
 (`clip_raw_then_sqrt_bayer_quad_rgb_v1`): the reference Monte Carlo procedure
@@ -115,7 +137,17 @@ pinned by test).
 Over 3×3 tiles (in-bounds tiles only, mirroring the reference):
 
 - `spread² = (max dx − min dx)² + (max dy − min dy)²`; `spread > Mth → s1 else s2`.
-- `Mth = 0.4` quad pixels: the published `Mt = 0.8` is in raw pixels.
+- `Mth = 0.8` raw pixels (`RawSrTuning.M_TH`; published in raw pixels
+  and our flows are raw-unit, like the reference's default FFT-grey mode
+  whose flows are raw pixels). The CPU compares the 3×3 tile flow spread
+  against 0.8 directly (`motionThresholdPx`); the GPU compares its
+  raw-unit texture spread against `u_mth = mTh = 0.8` — the same gate on
+  the same lattice (retired: the pre-rewrite quad lattice compared
+  against `u_mth_quad = mTh/2 = 0.4`). The reference code applies no
+  0.5 factor inside `compute_s` itself (the 0.5 lives only in the warp's
+  raw→guide conversion). (In the reference's non-default decimating grey
+  mode the same 0.8 would compare against quad-unit flows — a 2× looser
+  physical gate; RawLens matches the default mode's physics.)
   Non-finite tiles are SKIPPED as missing data (reference block matching
   yields finite flows by construction, so this edge is reference-undefined;
   the skip matches the merge shader); with no finite tile the verdict is
@@ -158,9 +190,12 @@ sample count.
 
 ## 9. Deliberate deviations (summary)
 
-1. `d²/σ²` non-finite edge (exactly-flat fields) rejects; the reference edge
-   is implementation-defined (CUDA NaN semantics). Real captures always carry
-   noise, so the edge only bites synthetic constant fields.
+1. Exactly-zero variance reads `r = 0` (determinism guard; the reference
+   Numba kernel would raise ZeroDivisionError on `0/0`). Negative Alg. 8
+   slivers take the exp/clamp path like every other variance, exactly as
+   Numba computes — not a deviation, just the transcribed edge both sides
+   share. Real captures always carry noise, so exact zero only bites
+   synthetic constant fields, and then only where rounding lands on 0.
 2. Non-finite flow tiles skipped as missing data in the spread (§6);
    reference-undefined (its flows are finite by construction).
 3. Pattern-aware CFA routing instead of the hardcoded RGGB map (identical on
@@ -176,7 +211,9 @@ sample count.
   family); flags bit-exact; `|Rc_gpu − Rc_cpu| ≤ 2e−3 + 2e−3·|Rc_cpu|`.
 - Static noisy retention: ≥ 95% of interior quads accepted (`r > 0`) across
   dark/mid/bright scenes with matched profiles. (Perfectly flat synthetic
-  fields read `r = 0` per the §5 edge rule; retention needs signal variance.)
+  fields fuse at full weight per the §5 edge rule — rounding leaves
+  slivers, not exact `0/0` — so retention holds with or without signal
+  variance on static content.)
 - Conflict rejection: ≥ 90% of independently-translated foreground quads
   rejected (`r == 0`); saturated blocks reject through the photo term with NO
   saturation flag.

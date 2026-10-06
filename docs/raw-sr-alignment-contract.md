@@ -1,7 +1,25 @@
 # Deterministic RAW-SR alignment contract
 
 Implemented and validated on 2026-09-10. CPU `RawSrAlignment` is the oracle for
-`Gles31RawSrProcessor`; this does not enable merged DNG/JPEG saving.
+the GPU path (Vulkan since the GLES orchestrator was retired); this does not
+enable merged DNG/JPEG saving.
+
+**Revision 2026-10-03 (reference-parity port):** flows are **RAW pixels**
+throughout — the Jamy-L convention (its default FFT grey keeps full
+resolution) — not Bayer-quad pixels. The CPU front end is now FFT grey →
+circular pad (reference only) → valid-convolution Gaussian pyramid `[1,2,4,4]`
+→ directional `alignPair` (L1 finest / L2 coarse, ICA refine on every level,
+per-level tiles `[ts,ts,ts,ts/2]`, SNR-driven raw-px tile size {64,32,16},
+`flowUpscale` default BILINEAR — the unified CPU/GPU default, matching the
+reference `AlignmentConfig.flow_upscale_mode`; NEAREST/BICUBIC are explicit
+opt-ins). The interim NEAREST unified default (kept while the legacy GPU
+path was nearest-only) is retired with the GPU 1:1 port, which implements
+the same FFT-grey → pad → pyramid → block-match → ICA → bilinear-upscale
+chain in float32, on the same RAW-pixel lattice with RAW-pixel flows —
+the ×2 quad-unit twin conversion is retired on every consumer (merge,
+robustness warp, `flowFieldFromReadback`). The 2026-09-10 verification
+record below is kept for provenance; its quad-pixel tables describe that
+date's build.
 
 ## Reference decisions
 
@@ -50,8 +68,11 @@ bit-identical port of the CUDA/PyTorch implementation.
   Y-major/X-minor enumeration order. Invalid parent candidates are ignored;
   absence of a valid seed resets the local seed to zero.
 - Each intermediate displacement is in that pyramid level's pixels, with explicit
-  scale conversion. Final flow is in base **Bayer-quad pixels**. Only the existing
-  full-resolution RGB sampling boundary multiplies by two.
+  scale conversion. Final flow is in base **RAW pixels** (2026-10-03 revision:
+  the reference-parity port moved off Bayer-quad pixels; the 1:1 GPU port
+  lands the same raw lattice in float32 — see the header note). Consumers
+  add the flow directly (`source = p + flow`); no ×2 lives in the stored
+  flow.
 
 ## IC refinement and rejection
 
@@ -72,10 +93,15 @@ Default checks:
    update. Otherwise reject instead of silently changing Hessian support.
 6. Final residual needs at least four samples and 75% of clipped tile area;
    mean absolute residual must be at most `0.12`.
-7. Compute reverse alignment independently. At the forward-warped tile center,
-   select the containing reverse tile without interpolation. Reject out-of-image
-   centers, invalid reverse tiles, or forward-plus-reverse max-axis error above
-   `1.5` quad pixels. This is a validity test, never flow smoothing.
+7. (Retired 2026-10-03: the reference has no reverse pass, so neither does
+   the flow path — `alignPair` is directional and the GPU reverse pass was
+   retired with it (`flow_consistency.glsl` stays staged until the shader
+   stage removes it). A per-tile auxiliary
+   reliability feeds frame rejection only and never alters a flow.)
+   The 2026-09-10 rule was: compute reverse alignment independently; at the
+   forward-warped tile center, select the containing reverse tile without
+   interpolation; reject out-of-image centers, invalid reverse tiles, or
+   forward-plus-reverse max-axis error above `1.5` quad pixels.
 
 Flow layout is `(dx, dy, meanAbsoluteResidual, confidence)`. Confidence is exactly
 zero or one. Invalid flow/residual values remain finite; unavailable/nonfinite
@@ -87,20 +113,58 @@ Coarse block-matching texture scores are L2 or L1 costs, not final residuals.
 - `icaLevels`: null keeps the finest-only IC schedule above; an explicit level
   set refines those levels instead (Jamy-L refines every level). Mirrored on
   GLES (`refineAt` gates `lk_refine.glsl` per level).
-- `flowUpscale`: NEAREST keeps the three-candidate propagation above;
-  BILINEAR/BICUBIC densely upsample the prior tile field instead
-  (align_corners=False equivalent sampling, Catmull-Rom for bicubic, scaled
-  by the level factor, rounded to the integer block-matching seed).
-  CPU-oracle-only: the GLES path rejects non-nearest configs explicitly
-  rather than diverging silently. Dense seeds trust the coarse lock without
+- `flowUpscale`: selects the inter-level propagation mode; every mode
+  densely upsamples the prior tile field (align_corners=False equivalent
+  sampling, Catmull-Rom for bicubic, scaled by the level factor, rounded
+  to the integer block-matching seed).
+  2026-10-03 revision: every mode is dense `torch.nn.functional.interpolate`
+  semantics (align_corners=False) — the old three-candidate propagation
+  schedule was retired with the port — and BILINEAR is the unified
+  CPU/GPU default, matching the Jamy-L checkout
+  (`AlignmentConfig.flow_upscale_mode = "bilinear"`, pinned by
+  `flowUpscaleDefaultsToBilinearLikeReference`). The interim NEAREST
+  unified default (kept while the legacy GPU path implemented
+  nearest-only propagation and `VkRawSrProcessor` rejected non-nearest
+  configs) is retired with the GPU 1:1 port, which transcribes the same
+  dense bilinear upscale. Dense seeds trust the coarse lock without
   per-candidate score revalidation, so periodic textures can trap them in a
-  wrong-period lock (observed: sinusoidal fixture, MAE ~20 quad px); the
-  default stays NEAREST.
+  wrong-period lock (observed: sinusoidal fixture, MAE ~20 quad px).
 - The CPU mosaic chain (`mosaicChain`/`mosaicStream`) resolves a null config
-  from tuning (`tuning.alignmentConfig()`, SNR-based 32/16/8-quad tiles),
-  matching the GPU path; previously a fixed 12-quad default. Explicit configs
-  are unaffected. The resolved tile size is reported on the chain/stream as
-  `alignmentTileQuads`.
+  from tuning (`tuning.alignmentConfig()`, SNR-based 64/32/16 raw-px tiles
+  at the reference 14/22 dB steps), matching the GPU path; previously a
+  fixed 12-quad default. Explicit configs are unaffected. The resolved tile
+  size rides on the tuning as `rawTileSize` (`alignmentTileQuads` is the
+  legacy quad-unit view).
+
+## RGGB processing space (2026-10-04)
+
+The reference aligns in RGGB space (`cfa_to_rggb` inside `load_dng_burst`),
+so the alignment grey is mapped there before `fftGrey`
+(`RawSrCfaOrientation.toProcessingSpace`) and the resulting flow field maps
+back to sensor space at the alignment boundary (`remapFieldToSensor`;
+merge, robustness, and rejection stay sensor-space). This matters because
+the Gaussian pyramid (valid convolution + stride-from-0) and the circular
+pad are NOT flip-invariant: sensor-space alignment on a non-RGGB sensor
+samples the complementary stride phase and pads the wrong scene end,
+flipping coarse near-tie winners the fine level cannot recover (±1.5px
+tile chatter that imprints the 16px quilt). Pattern map: RGGB identity,
+BGGR rot180, GRBG hflip, GBRG vflip. GPU twin: `flow_deflip.glsl`.
+
+## Majority-tile remap (2026-10-05)
+
+`remapFieldToSensor` maps each sensor tile to the processing tile holding
+the majority of its flipped rows (located via the flipped tile center),
+NOT the mirror index `rows - 1 - ty`. The mirror index is off by one tile
+row whenever the image height is not a multiple of the tile size (the
+3060-row burst at ts 16: sensor ty <- proc 190 - ty, not 191 - ty) because
+bottom-up sensor tiling and top-down processing tiling start from opposite
+ends. The mapping uses the UNPADDED sensor dims (the field carries padded
+tile-multiple dims; deriving the flip from them reproduces the off-by-one).
+Before this fix every sampled flow sat 3/4 tile off, and at flow
+discontinuities the warp/merge sampled the wrong tile: the white-blinds
+pit (green 6704 vs reference 9761; fixed: 9759) and tile-quilt seeding.
+Pinned by `fieldRemapNonMultipleHeightUsesMajorityTile` /
+`fieldRemapBurstGeometry` (+ GPU `flowDeflipMatchesCpu` non-multiple case).
 
 ## Verification and diagnostics
 

@@ -32,6 +32,13 @@ struct SrvkContext {
     VkDeviceMemory staging_memory;
     void* staging_mapped;
     size_t staging_size;
+    // Persistent submit objects: every dispatch/upload/download round-trips
+    // through submit_oneshot (thousands per burst), so the command buffer
+    // and fence are allocated once and reset per submit instead of
+    // created/destroyed each time. Single-threaded use only (the merge
+    // writer thread); a failed submit rebuilds both before returning.
+    VkCommandBuffer submit_cmd;
+    VkFence submit_fence;
 };
 
 static inline void srvk_set_err(char* errmsg, size_t len, const char* what, VkResult res) {

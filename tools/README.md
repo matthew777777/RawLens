@@ -14,6 +14,7 @@ and one-off verification scripts. Everything here runs on Linux/macOS
 | `mosaic-desktop/` | Mosaic SR → derived-Bayer DNG CLI on the library. |
 | `linear-sr-desktop/` | Linear RGB SR → LinearRaw DNG CLI on the library (`--backend vulkan`). |
 | `parity_sr_vulkan.py` | Mechanical 1:1 enforcement (runs in `:tools:sr-vulkan:check`). |
+| `jamy_parity_oracle.py` | Independent NumPy transcription of the Jamy-L SR core; generates the `JamyCoreParityTest` goldens (`python3 tools/jamy_parity_oracle.py --out <dir>`). |
 | `srvk_shader_transform.py` | Stages GLSL → `*.vk.glsl` + `*.spv` + `manifest.json`. |
 | `srvk_spirv_check.py` | Pins checked-in SPIR-V to the shader tree. |
 

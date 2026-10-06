@@ -1,4 +1,13 @@
-# Hot-pixel pre-mask (normative)
+# Hot-pixel pre-mask (BYPASSED for Jamy-L parity)
+
+> Status: dormant. Jamy-L defines no hot-pixel stage, and exact-float
+> forensics on IMG_20260927_134544_522 proved the stuck-low gate misfires
+> on thin scene lines (~2600 flags/frame, zero sensor-locked, inpaint
+> brightening dark line pixels ~1.5-2.4x), which the merge renders as
+> isolated green dots. The chain (CPU `RawSrMergeJob`, GPU
+> `VkRawSrProcessor`) consumes plain unpacked samples instead; the code
+> below is specified but undispatched. `HotPixelChainParityTest` pins the
+> bypass. True stuck taps leak through exactly as they do in Jamy-L.
 
 Sabre analogue: `suppress_hot_pixels_bayer`. A stuck sensor tap carries
 no scene signal, yet one tap corrupts every downstream stage: kernel means

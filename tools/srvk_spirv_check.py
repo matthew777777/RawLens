@@ -32,8 +32,12 @@ def main():
         if r.returncode != 0:
             print(f"spirvCheck: transform failed:\n{r.stdout}\n{r.stderr}")
             return 1
+        # galosh/ is a separate pipeline (own .comp sources, loaded by the
+        # GALOSH native host, not by this transform), so it is out of scope
+        # for the transform-freshness diff.
         d = subprocess.run(
-            ["diff", "-r", "-x", ".DS_Store", tmp, "app/src/main/assets/spirv"],
+            ["diff", "-r", "-x", ".DS_Store", "-x", "galosh",
+             tmp, "app/src/main/assets/spirv"],
             cwd=ROOT, capture_output=True, text=True)
         if d.stdout.strip():
             print("spirvCheck: checked-in SPIR-V is stale; regenerate:\n"

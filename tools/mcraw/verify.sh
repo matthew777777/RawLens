@@ -27,6 +27,13 @@ c++ -std=c++17 -O2 -Iapp/src/main/cpp/cinemaraw/include \
     "$motion/lib/Decoder.cpp" "$motion/lib/RawData.cpp" \
     "$motion/lib/RawData_Legacy.cpp" -o "$out/motion_coalesce"
 "$out/motion_coalesce"
+# Self-contained (no decoder checkouts): serial/parallel parity, shorthand
+# overload, edge-clamp goldens, chunked container round-trip.
+c++ -std=c++17 -O2 -Iapp/src/main/cpp/cinemaraw/include \
+    tools/mcraw/parallel_parity.cpp app/src/main/cpp/cinemaraw/src/Encoder.cpp \
+    app/src/main/cpp/cinemaraw/src/ContainerWriter.cpp \
+    -o "$out/parallel_parity"
+"$out/parallel_parity"
 # Jan-2026 decoder (MotionCam Tools v1.0 era): its tail scan stops at the
 # first motion item, so the audio index must precede trailing motion data.
 # Sources come from the checkout's own git history (no downloads); a

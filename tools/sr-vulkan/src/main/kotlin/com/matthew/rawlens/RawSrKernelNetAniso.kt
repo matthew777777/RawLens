@@ -36,30 +36,34 @@ import kotlin.math.sqrt
  * resamples it onto the quad grid with the same bilinear rule upstream's
  * linear-filtered `texture(kernelsMap)` sampling applies.
  *
- * s1/s2/rho -> precision conversion follows PhotonCamera's merge weights
+ * s1/s2/rho -> precision conversion is PhotonCamera's merge weights
  * (`merge/mergeCombineWeight*.glsl`, same convention in
- * `upscalecrop/anisoupscale.glsl`): s1 is the y-sigma and s2 the x-sigma
- * (`a = 1/(s1^2*det)` is the dy^2 coefficient, `c = 1/(s2^2*det)` the dx^2
- * one). Swapping them rotates every anisotropic kernel 90 degrees — narrow
- * along the edge instead of across it — which starves the along-edge taps
- * and zippers. Sigmas arrive in model-input-texel units (quads), and the SR
- * merge evaluates `w = exp(-0.5 d^T P d)` with `d` in quad pixels while
- * upstream consumers evaluate `exp(-q)`, so `P_quad = 2 * M(s)` makes `z/2`
- * exactly upstream's `q`. Two consumer-driven guards on top: the
- * kernel-area floor ([MIN_KERNEL_AREA], overridable via [kernelAreaFloor]
- * for A/B) widens support-starved kernels
- * uniformly, because the unpacked Bayer merge — unlike upstream's packed
- * domain — collapses sub-lattice kernels to a nearest-tap lottery; and the
- * width cap ([KERNEL_SIGMA_MAX]) trims the model's saturated wide end
- * (s → 2 in darks/flats) to σ ≤ 0.71, since the multi-frame average already
- * denoises and wider per-frame smoothing only mushes detail and mottles
- * shadows. Finally every produced field floors each kernel's narrow axis
- * at [MosaicSrReconstructor.MIN_MINOR_SIGMA] (0.5 quads): cap and area
- * floor preserve anisotropy, so strong edges would otherwise keep
- * sub-lattice across-axes that collapse each colour channel onto its own
- * sparse taps (~1px inter-channel straddle plus ringing) — zipper and
- * colour leaks on the 1x RGB merge, not just the mosaic target.
- * Orientation and the wide axis are untouched.
+ * `upscalecrop/anisoupscale.glsl`) verbatim: s1 is the y-sigma and s2 the
+ * x-sigma (`a = 1/(s1^2*det)` is the dy^2 coefficient, `c = 1/(s2^2*det)`
+ * the dx^2 one). Swapping them rotates every anisotropic kernel 90 degrees
+ * — narrow along the edge instead of across it — which starves the
+ * along-edge taps and zippers. Sigmas arrive in model-input-texel units
+ * (quads), and the SR merge evaluates `w = exp(-0.5 d^T P d)` with `d` in
+ * quad pixels while upstream consumers evaluate `exp(-q)`, so
+ * `P_quad = 2 * M(s)` makes `z/2` exactly upstream's `q`. The model is a
+ * denoising-kernel predictor and its output converts verbatim, exactly
+ * like upstream; unusable triples (non-finite or sub-[SIGMA_MIN] axes)
+ * are the only rejections (caller substitutes fallback).
+ *
+ * Two consumer-driven guards ([zipperGates], desktop `--zipper-gates`)
+ * adapt the denoising predictions to the CFA-merge consumer, which
+ * starves below the same-colour tap lattice: the width cap
+ * ([KERNEL_SIGMA_MAX]) trims the saturated wide end, and the kernel-area
+ * floor ([MIN_KERNEL_AREA]) guarantees total support. Each binds a
+ * different regime — saturated darks/flats for the cap, razor texture
+ * and weak diagonals for the floor — and mid sigmas pass through
+ * untouched. A narrow-axis clamp
+ * ([MosaicSrReconstructor.clampMinorAxisInPlace]) over the converted
+ * field (plus the analytic-field clamp in [RawSrMergeJob.mergeFrame])
+ * floors each kernel's narrow axis at
+ * [MosaicSrReconstructor.MIN_MINOR_SIGMA], since the floor above cannot
+ * see orientation: a strong edge keeps its ratio and stays sub-pixel
+ * sharp while its across-axis never starves its own lattice.
  *
  * Every failure mode (model absent, not ready, inference error, OOM,
  * non-finite output) falls back per-pixel — or wholesale — to the analytic
@@ -108,14 +112,121 @@ object RawSrKernelNetAniso {
      * the cap pass through untouched.
      */
     const val KERNEL_SIGMA_MAX = 0.71
+    /**
+     * Zipper-gate master switch (desktop `--zipper-gates`). ON restores the
+     * consumer-driven guards: the width cap ([KERNEL_SIGMA_MAX]) on raw
+     * model sigmas, the kernel-area floor ([kernelAreaFloor]) on the
+     * scaled triple, and the narrow-axis clamp
+     * ([MosaicSrReconstructor.clampMinorAxisInPlace]) over every produced
+     * field — plus the analytic-field clamp in [RawSrMergeJob.mergeFrame].
+     * OFF (default) converts verbatim with the multiplier law only,
+     * preserving the reference-parity base path bitwise.
+     */
+    @Volatile var zipperGates = false
 
     /**
-     * Master switch (tests / A/B). OFF by default: the base merge path is the
-     * analytic reference-parity port (Jamy-L Alg. 5) with no learned stage.
-     * When false every entry point returns the analytic field (or null for
-     * the kernel-only bridge) without touching the model.
+     * Master switch. ON by default: KernelNet covariances with auto-sigma
+     * ([sigmaFor]) are the default merge path on every backend. Set false
+     * for the analytic opt-out (desktop `--no-kernelnet`): every entry
+     * point then returns the analytic field (or null for the kernel-only
+     * bridge) without touching the model, and [RawSrMergeJob] skips the
+     * noise-ratio measurement.
      */
-    @Volatile var enabled = false
+    @Volatile var enabled = true
+
+    /**
+     * Test-only multiplier on [sigmaFor] (desktop `--kernelnet-sigma-mpy`,
+     * default 1.0). Mirrors upstream PhotonCamera's `ESD4D.noiseMpy`
+     * ("Network merge noise multiplier", default 1.0): scales the scalar
+     * noise estimate fed to the model. Higher widens the predicted kernels
+     * (more denoise), lower sharpens them. No-op at the default; clamped to
+     * a positive floor so a bad CLI value cannot invert the model input.
+     */
+    @Volatile var sigmaMpy = 1.0f
+
+    /**
+     * Default predicted-kernel scaling: 0.5 halves s1/s2 (precision ×4) for
+     * sharper SR-merge kernels, per eszdman's recommendation for reusing
+     * single-frame denoising predictions in a merge context (wall-crop A/B:
+     * +27% Laplacian energy over verbatim with the support floor in place).
+     * Upstream precedent: `dynamicgaussian_kernelnet.glsl` scales the same
+     * predictions by `sqrt(postVar/preVar)` when denoising a merged image.
+     * 1.0 restores the verbatim upstream law. The narrow end is fenced by
+     * [minSigma]: unclamped ×0.5 starves kernels below the sample lattice
+     * (wall crop: worst-checker 0.12 vs 0.06 verbatim).
+     */
+    const val DEFAULT_KERNEL_SIGMA_MPY = 0.5f
+
+    /**
+     * Multiplier on the predicted kernel sigmas (desktop
+     * `--kernelnet-kernel-mpy`, default [DEFAULT_KERNEL_SIGMA_MPY]).
+     * Applied post-model in [precisionOf], after the usability gate, then
+     * fenced below by [minSigma]. Scales the shorter model axis always;
+     * the longer axis keeps [kernelSigmaMajorMpy] where the native
+     * anisotropy clears [MAJOR_ANISO_LO]. Clamped to a positive floor.
+     */
+    @Volatile var kernelSigmaMpy = DEFAULT_KERNEL_SIGMA_MPY
+
+    /**
+     * Default longer-axis multiplier: 1.0 keeps the model's verbatim
+     * along-edge support. Symmetric x0.5 halves the longer axis too, which
+     * collapses edge kernels to near-isotropic floor blobs (slat crop:
+     * median aniso 1.11 vs analytic 2.49) with too few along-edge taps:
+     * each output pixel's green quotient latches onto 1-2
+     * Bayer-phase-dependent taps and the latch phase disagrees along the
+     * edge (zipper teeth, worst on green since R/B already merge 2x
+     * wider). Keeping the longer axis restores analytic-like along-edge
+     * support (model peak / sqrt(2) ~= analytic major) while the shorter
+     * axis keeps the full x0.5 across-edge sharpening, so edges stay
+     * sharp across and average clean along. 0.5 restores the symmetric
+     * law bit-exactly.
+     */
+    const val DEFAULT_KERNEL_SIGMA_MAJOR_MPY = 1.0f
+
+    /**
+     * Multiplier on the longer predicted axis (desktop
+     * `--kernelnet-major-mpy`, default
+     * [DEFAULT_KERNEL_SIGMA_MAJOR_MPY]). Gated by native model
+     * anisotropy ([MAJOR_ANISO_LO]/[MAJOR_ANISO_HI]): near-isotropic
+     * predictions (flats, texture) stay symmetric so noise never invents
+     * an orientation. Clamped to a positive floor.
+     */
+    @Volatile var kernelSigmaMajorMpy = DEFAULT_KERNEL_SIGMA_MAJOR_MPY
+
+    /**
+     * Native-anisotropy window fading the asymmetric law in: at or below
+     * [MAJOR_ANISO_LO] both axes scale by [kernelSigmaMpy] (symmetric,
+     * current behavior); at or above [MAJOR_ANISO_HI] the longer axis
+     * scales by [kernelSigmaMajorMpy] fully. Inferred model stats put
+     * flats at aniso ~1.02-1.06 and edge kernels one-floored (native
+     * aniso > ~1.3), so the window separates confident edge direction
+     * from isotropic noise with a continuous ramp (no seam).
+     */
+    const val MAJOR_ANISO_LO = 1.2f
+
+    /** Upper end of the asymmetric-law fade window (see [MAJOR_ANISO_LO]). */
+    const val MAJOR_ANISO_HI = 1.5f
+
+    /**
+     * Minimum effective kernel axis in quad units, applied post-multiplier
+     * in [precisionOf] (desktop `--kernelnet-min-sigma`). Below ~0.3 quads a
+     * kernel covers fewer samples than the 8-frame Bayer lattice provides
+     * per output pixel (~0.5-quad effective same-channel spacing), so each
+     * pixel grabs 1-2 samples with alignment-dependent weights: the
+     * checkerboard/maze. Field dumps on the reference burst show maze quads
+     * at effective smax 0.27 (near-isotropic, model peak ~0.55 — the model's
+     * own width prediction does NOT separate maze from detail, so a
+     * peak-gated ramp was tried and dropped) vs clean texture at 0.48; the
+     * floor lifts the starved end onto supported widths while mid kernels
+     * keep the full ×0.5 sharpening (sweep: 0.45 kills the wall maze at
+     * 0.075 worst-checker vs 0.122 unclamped, keeping +27% Laplacian over
+     * verbatim). Tuned on the 8-frame reference burst; fewer frames widen
+     * the effective spacing and may want a higher floor. 0 disables.
+     */
+    const val DEFAULT_MIN_SIGMA = 0.45f
+
+    /** Test/CLI override for the support floor (default above). */
+    @Volatile var minSigma = DEFAULT_MIN_SIGMA
 
     /** Idempotent background preload; call from the activity/controller startup path. */
     fun preload(context: Context) {
@@ -130,6 +241,14 @@ object RawSrKernelNetAniso {
     }
 
     /**
+     * Auto-sigma ceiling: the [RawSrFrameNoiseMeter] ratio reads high on
+     * texture (3.9x on the reference burst, where 2x was the visual sweet
+     * spot), so the upward correction caps here instead of tracking the
+     * raw ratio into over-smoothing.
+     */
+    const val AUTO_SIGMA_MAX = 2.0f
+
+    /**
      * Per-frame noise sigma in the normalized domain, matching upstream
      * (`ESD4D.kernelSigma`, pre-merge-inflation): Poisson-Gaussian sigma at
      * mid-brightness, `sqrt(S*0.5+O)`, over the averaged sensor model — not
@@ -137,10 +256,21 @@ object RawSrKernelNetAniso {
      * a dark frame's mean sigma lands on its sharp cliff and starves every
      * kernel, while the mid-brightness sigma sits on the wide plateau the
      * model was calibrated for.
+     *
+     * [measuredRatio] is the [RawSrFrameNoiseMeter] measured/profile ratio
+     * for the burst reference: an understated OEM profile feeds the model
+     * too little noise and it invents maze in flats, so the ratio corrects
+     * upward (clamped to [1, [AUTO_SIGMA_MAX]]), stacking with [sigmaMpy].
+     * The correction never goes below 1: underestimating noise is the worse
+     * failure mode, and the meter reads ~5% low by construction.
      */
-    fun sigmaFor(noiseProfile: ImmutableDoubleValues?): Float {
+    fun sigmaFor(noiseProfile: ImmutableDoubleValues?, measuredRatio: Float? = null): Float {
         val model = CfaNoiseModel.from(noiseProfile)
-        return RawNindPack.sigmaFor(0.5f, model.averageScale, model.averageOffset)
+        val auto = measuredRatio
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?.coerceIn(1.0f, AUTO_SIGMA_MAX) ?: 1.0f
+        return RawNindPack.sigmaFor(0.5f, model.averageScale, model.averageOffset) *
+            auto * sigmaMpy.coerceAtLeast(1e-3f)
     }
 
     /**
@@ -272,6 +402,7 @@ object RawSrKernelNetAniso {
      * Per-triple guard report for [precisionOf]: single decision source for
      * the width cap and the area floor, so the merge conversion and the
      * per-burst stats log cannot disagree about which regime a triple took.
+     * With [zipperGates] off only REJECTED reports (the verbatim law).
      */
     internal object KernelTripleFlags {
         const val CAPPED = 1
@@ -283,11 +414,14 @@ object RawSrKernelNetAniso {
      * Classify one KernelNet output triple without converting it. Mirrors
      * the [precisionOf] gates exactly (same thresholds, same order):
      * unusable triples report REJECTED, otherwise the cap and floor bits
-     * report which guards engaged.
+     * report which guards engaged. The floor bit sees the scaled triple
+     * (cap, then the multiplier law, then the floor check), exactly like
+     * the converter. With [zipperGates] off usable triples report 0.
      */
     internal fun classifyTriple(s1: Float, s2: Float, rho: Float): Int {
         if (!s1.isFinite() || !s2.isFinite() || !rho.isFinite()) return KernelTripleFlags.REJECTED
         if (s1 < SIGMA_MIN || s2 < SIGMA_MIN) return KernelTripleFlags.REJECTED
+        if (!zipperGates) return 0
         var flags = 0
         var c1 = s1.toDouble()
         var c2 = s2.toDouble()
@@ -298,9 +432,21 @@ object RawSrKernelNetAniso {
             c1 *= kc
             c2 *= kc
         }
+        // Multiplier law (mirrors [precisionOf] op for op): the floor bit
+        // reports the scaled triple the converter floors.
+        val m = kernelSigmaMpy.coerceAtLeast(1e-3f).toDouble()
+        val floor = minSigma.toDouble().coerceAtLeast(0.0)
+        val mMaj = kernelSigmaMajorMpy.coerceAtLeast(1e-3f).toDouble()
+        val aniso = maxOf(c1, c2) / minOf(c1, c2)
+        val t = ((aniso - MAJOR_ANISO_LO) / (MAJOR_ANISO_HI - MAJOR_ANISO_LO)).coerceIn(0.0, 1.0)
+        val mLong = m + (mMaj - m) * t
+        val m1 = if (c1 >= c2) mLong else m
+        val m2 = if (c2 > c1) mLong else m
+        val f1 = maxOf(c1 * m1, floor)
+        val f2 = maxOf(c2 * m2, floor)
         val r = rho.coerceIn(-RHO_MAX, RHO_MAX)
         val det = maxOf(1.0 - r * r, DET_FLOOR)
-        if (c1 * c2 * sqrt(det) / 2.0 < kernelAreaFloor) {
+        if (f1 * f2 * sqrt(det) / 2.0 < kernelAreaFloor) {
             flags = flags or KernelTripleFlags.FLOORED
         }
         return flags
@@ -357,20 +503,55 @@ object RawSrKernelNetAniso {
     /**
      * Convert one KernelNet output triple to a packed precision texel.
      * s1 is the y-sigma and s2 the x-sigma (upstream `mergeCombineWeight`
-     * convention: `a = 1/(s1^2*det)` weights dy^2). Returns false when the
-     * triple is unusable (caller substitutes fallback).
+     * convention: `a = 1/(s1^2*det)` weights dy^2). Gate order: the
+     * usability gate sees the raw triple (a sharpening scale never rejects
+     * a usable kernel into the analytic fallback); with [zipperGates] the
+     * width cap ([KERNEL_SIGMA_MAX], joint scale, shape-preserving) trims
+     * the saturated wide end first; then the multiplier law scales the
+     * shorter axis by [kernelSigmaMpy] (1.0 = verbatim; the default is
+     * [DEFAULT_KERNEL_SIGMA_MPY]) and the longer axis by
+     * [kernelSigmaMajorMpy] where the native model anisotropy clears
+     * [MAJOR_ANISO_LO] (ramps in over [MAJOR_ANISO_LO]..[MAJOR_ANISO_HI]),
+     * clamping each axis to [minSigma] (0 disables); finally the
+     * kernel-area floor ([kernelAreaFloor]) widens support-starved scaled
+     * triples uniformly. The aniso gate sees capped-model anisotropy, so
+     * near-isotropic predictions stay symmetric; when
+     * [kernelSigmaMajorMpy] equals [kernelSigmaMpy] the blend collapses
+     * to the symmetric law bit-exactly. With [zipperGates] off the cap is
+     * ×1.0 (exact no-op) and the floor never engages, reproducing the
+     * verbatim multiplier law bit-exactly. Returns false when the triple
+     * is unusable (caller substitutes fallback).
      */
     fun precisionOf(s1: Float, s2: Float, rho: Float, out: FloatArray, offset: Int): Boolean {
-        val flags = classifyTriple(s1, s2, rho)
-        if (flags and KernelTripleFlags.REJECTED != 0) return false
-        // Width cap first (joint scale, shape-preserving), then the area
-        // floor on the capped triple; each binds a different regime. The
-        // kc form below keeps the historical numerics bitwise: capped
-        // triples stay in Float, uncapped ones widen to Double via ×1.0.
+        if (classifyTriple(s1, s2, rho) and KernelTripleFlags.REJECTED != 0) return false
+        // Width cap first (joint scale, shape-preserving), on the raw model
+        // sigmas; each binds a different regime. ×1.0 when the gates are
+        // off (or below the cap) is an exact no-op, so the verbatim law is
+        // untouched bit-for-bit.
         val peak = maxOf(s1, s2)
-        val kc = if (flags and KernelTripleFlags.CAPPED != 0) KERNEL_SIGMA_MAX / peak else 1.0
-        val c1 = s1 * kc
-        val c2 = s2 * kc
+        val kc = if (zipperGates && peak > KERNEL_SIGMA_MAX) KERNEL_SIGMA_MAX / peak else 1.0
+        val q1 = s1 * kc
+        val q2 = s2 * kc
+        val m = kernelSigmaMpy.coerceAtLeast(1e-3f).toDouble()
+        val floor = minSigma.toDouble().coerceAtLeast(0.0)
+        // Aniso-gated asymmetric law: the longer model axis (along-edge
+        // where the model predicts direction) keeps mMaj, the shorter
+        // (across-edge) always takes the sharpening m. Model rho is ~0
+        // (median |rho| 0.04), so s1/s2 are effectively the eigen-axes and
+        // no eigendecomposition is needed. The blend factor is exact 0/1
+        // at the window ends, and mMaj == m collapses mLong to m exactly,
+        // so the symmetric law reproduces bit-exactly.
+        val mMaj = kernelSigmaMajorMpy.coerceAtLeast(1e-3f).toDouble()
+        val aniso = maxOf(q1, q2) / minOf(q1, q2)
+        val t = ((aniso - MAJOR_ANISO_LO) / (MAJOR_ANISO_HI - MAJOR_ANISO_LO)).coerceIn(0.0, 1.0)
+        val mLong = m + (mMaj - m) * t
+        val m1 = if (q1 >= q2) mLong else m
+        val m2 = if (q2 > q1) mLong else m
+        // Per-axis support floor (orientation-preserving): axes are clamped
+        // independently so an edge kernel keeps its direction, just never
+        // narrower than the sample lattice can feed.
+        val c1 = maxOf(q1 * m1, floor)
+        val c2 = maxOf(q2 * m2, floor)
         val r = rho.coerceIn(-RHO_MAX, RHO_MAX)
         val det = maxOf(1.0 - r * r, DET_FLOOR)
         var p00 = QUAD_PRECISION_SCALE / (c2 * c2 * det)
@@ -381,12 +562,14 @@ object RawSrKernelNetAniso {
         // Σ = P^-1, σ1σ2 = s1·s2·√det/2; scaling P by area/floor
         // when below widens uniformly. Extreme-rho ridges fatten the same
         // way, since their area → 0 as |rho| → 1.
-        val area = c1 * c2 * sqrt(det) / 2.0
-        if (area < kernelAreaFloor) {
-            val k = area / kernelAreaFloor
-            p00 *= k
-            p01 *= k
-            p11 *= k
+        if (zipperGates) {
+            val area = c1 * c2 * sqrt(det) / 2.0
+            if (area < kernelAreaFloor) {
+                val k = area / kernelAreaFloor
+                p00 *= k
+                p01 *= k
+                p11 *= k
+            }
         }
         if (!p00.isFinite() || !p01.isFinite() || !p11.isFinite()) return false
         out[offset] = p00.toFloat()
@@ -519,11 +702,15 @@ object RawSrKernelNetAniso {
         val stats = KernelStats()
         statsQueue.forEach(stats::merge)
         Log.i(TAG, stats.logLine("${outW}x${outH}"))
-        // Lattice floor in precision space, then back to the covariance-space
-        // merge field the base path consumes. In place: no extra field-sized
-        // allocation on top of the caller's scratch.
-        MosaicSrReconstructor.clampMinorAxisInPlace(
-            values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        // Narrow-axis floor over the converted field: razor across-axes
+        // starve their own lattice and ring into zipper along edges, the
+        // same failure the mosaic target's downstream clamp already cures.
+        if (zipperGates) {
+            MosaicSrReconstructor.clampMinorAxisInPlace(values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        }
+        // Back to the covariance-space merge field the base path consumes.
+        // In place: no extra field-sized allocation on top of the caller's
+        // scratch.
         RawSrKernelCovariance.invertFieldInPlace(values)
         return RawSrKernelCovariance.MatrixField(outW, outH, values)
     }
@@ -591,15 +778,8 @@ object RawSrKernelNetAniso {
     /**
      * Resample channel-major model planes onto the quad grid and convert
      * each triple to a packed precision texel ([precisionOf], isotropic
-     * fallback for rejected triples), floor every kernel's narrow axis at
-     * [MosaicSrReconstructor.MIN_MINOR_SIGMA], then invert into the
-     * covariance field the merge consumes (reference Alg. 4 inverts per
-     * pixel). The per-triple cap and area floor preserve anisotropy, so
-     * without the floor strong edges keep sub-lattice across-axes that
-     * zipper the 1x RGB merge (per-channel sparse taps, ~1px
-     * inter-channel straddle) — the same failure the mosaic target's
-     * downstream clamp already cures. The clamp runs in place over
-     * [values], preserving the GPU burst's scratch-reuse contract.
+     * fallback for rejected triples), then invert into the covariance field
+     * the merge consumes (reference Alg. 4 inverts per pixel).
      * Internal seam: the NCNN `Result` holder is not constructible on the
      * JVM, so tests drive this directly.
      */
@@ -632,8 +812,11 @@ object RawSrKernelNetAniso {
         val stats = KernelStats()
         statsQueue.forEach(stats::merge)
         Log.i(TAG, stats.logLine("${outW}x${outH} kernel-only"))
-        MosaicSrReconstructor.clampMinorAxisInPlace(
-            values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        // Narrow-axis floor over the converted field (same zipper guard as
+        // the fallback path above).
+        if (zipperGates) {
+            MosaicSrReconstructor.clampMinorAxisInPlace(values, MosaicSrReconstructor.minorAxisSigmaFloor)
+        }
         // In place: the returned field reuses the caller's scratch (the GPU
         // burst's zero-extra-heap contract), bitwise-identical to invertField.
         RawSrKernelCovariance.invertFieldInPlace(values)

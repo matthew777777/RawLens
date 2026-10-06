@@ -52,12 +52,9 @@ divergences from upstream: the native side emits channel-major float32
 `[s1][s2][rho]` planes instead of upstream's RGBA-interleaved fp16 halves, and
 the Kotlin bridge (`RawSrKernelNetAniso`) converts the raw model output straight
 to the SR precision field as `P = 2*M(s)` per quad (the `mergeCombineWeight`
-convention, `s1`=y / `s2`=x, no transpose, no extra rescale). RawLens additionally
-guards the bridge: unusable triples (non-positive or non-finite axes) fall back
-to the analytic kernel, axes are capped at `KERNEL_SIGMA_MAX`, and narrow kernels
-are widened to a minimum area (`MIN_KERNEL_AREA`, overridable via the
-`kernelAreaFloor` developer knob) so packed-domain assumptions cannot collapse
-on the unpacked merge.
+convention, `s1`=y / `s2`=x, no transpose, no extra rescale, no width cap, no
+area floor, no narrow-axis clamp — the direct upstream law). Unusable triples
+(non-positive or non-finite axes) fall back to the analytic kernel.
 
 ## Google Filament AgX
 
@@ -196,19 +193,57 @@ Upstream authors provide their work without endorsement of RawLens.
 
 - Project: MediaCinemaRAW-Encoder
 - Repository: https://github.com/matthew777777/MediaCinemaRAW-Encoder
-- Pinned commit: `14c3ddccef861be2d2a14dc5549915370f721257` (HEAD at vendoring, 2026)
+- Pinned commit: `55cceb2ef74c23f761be72af5bce04c16267e0bc` (2026-10-04:
+  multithreaded encode, SSE2, edge-clamp, container I/O buffering)
 - License: GNU General Public License version 3 only
-- Vendored files (unmodified, SPDX headers intact):
-  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/Encoder.h`,
-  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/ContainerWriter.h`,
-  `app/src/main/cpp/cinemaraw/src/Encoder.cpp`,
-  `app/src/main/cpp/cinemaraw/src/ContainerWriter.cpp`
+- Vendored files (SPDX headers intact):
+  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/Encoder.h` and
+  `app/src/main/cpp/cinemaraw/src/Encoder.cpp` are verbatim upstream,
+  including `encode_parallel()` and the x86 SSE2 paths.
+  `app/src/main/cpp/cinemaraw/include/MediaCinemaRAW/ContainerWriter.h` and
+  `app/src/main/cpp/cinemaraw/src/ContainerWriter.cpp` are a RawLens fork of
+  the upstream writer: raw-fd I/O with a staging buffer (large-block writes
+  for Android FUSE), an `int fd` constructor, a zero-copy `writeFrame`
+  pointer overload, `fsync` on close, and the audio-index origin stored as
+  the full-nanosecond first-chunk timestamp (verified against a genuine
+  recording; upstream stores milliseconds). Upstream's motion coalescing,
+  audio-before-motion tail order, and chunked payload writes are merged in.
 - Purpose: lossless type-7 RAW-frame encoding (RAW16 / packed RAW10 input)
   plus version-3 `.mcraw` container writing (PCM16 audio, gyro/accel motion)
   for the planned RAW Video mode. Interop oracle during development:
   https://github.com/mirsadm/motioncam-decoder (external, not vendored).
-- RawLens JNI bridge (`app/src/main/cpp/cinemaraw_spike_jni.cpp`,
-  `CinemaRawSpike.kt`) is RawLens's own code under the repository license.
+- RawLens JNI bridges (`app/src/main/cpp/cinemaraw_spike_jni.cpp`,
+  `app/src/main/cpp/cinemaraw_writer_jni.cpp`, `CinemaRawSpike.kt`,
+  `CinemaRawWriter.kt`) are RawLens's own code under the repository license.
+  The recorder encodes serially on N frame workers; `encode_parallel()` is
+  exposed only through the spike bench (per-frame threading would
+  oversubscribe the frame workers).
+
+## RAWR merge_hdrplus (vendored shaders + header, HDR+ port)
+
+- Project: Rawr (Android RAW camera)
+- Repository: https://github.com/adityawarmanfw/rawr
+- Pinned commit: `f41e6c2c493cb2ebfe37ca7dcb98a6e38a5d40a5` (2026-10-06)
+- License: GNU General Public License version 3 only (compatible with
+  RawLens GPL-3.0-or-later)
+- Upstream-of-upstream: Burst Photo (https://github.com/martin-marek/hdr-plus-swift,
+  GPL-3.0) at `69cb0572bb6712e160c448260125cb6099bdfd87` (2024-08-24), which
+  RAWR ported to GLSL/Vulkan (see RAWR's `merge_hdrplus/UPSTREAM.md`).
+- Vendored files (unmodified): the 28 merge kernels `hdrp_*.comp` (spatial
+  "Fast" merge) and `hdrq_*.comp` (frequency "Higher quality" merge) under
+  `app/src/main/assets/spirv/hdrplus/` plus the geometry/robustness header
+  `RawMergeHdrPlusGpu.h` at `app/src/main/cpp/hdrplus/`, with SPIR-V rebuilt
+  via `glslangValidator -V --target-env=vulkan1.2` + `spirv-opt -O` +
+  `spirv-val` (see the assets README.md for the exact command and
+  UPSTREAM.md for the full provenance chain).
+- RawLens host (`app/src/main/cpp/hdrplus/`, `HdrPlusVulkan.kt`,
+  `HdrPlusMerge.kt`) is RawLens's own code under the repository license;
+  its dispatch sequence, bindings, push constants, barriers, and pass
+  order are a 1:1 translation of RAWR's `HdrPlusRecorder.cpp` and the
+  `runHdrPlus`/`runHdrPlusFrequency` drive loops, so shader-visible
+  behavior (and output bits) match RAWR. Host-only differences: run-scoped
+  allocation instead of RAWR's aliasing arena, one submission instead of
+  interleaved chunks, and whole-run GPU timestamps.
 
 ## GALOSH (vendored shaders, raw-denoise port)
 
