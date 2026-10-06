@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// FFT index passes 1:1 (RawSrAlignment.fftShift / fftGrey mask /
+// RawSrFftPlan.flattenIndex, float32): one thread per output element, no
+// workgroup communication. u_mode 0 is forward fftshift + the fftGrey
+// outer-quarter zeroing (shifted coords); 1 is inverse fftshift; 2
+// gathers natural order from the flattened stage order along u_axis (0
+// rows, 1 columns) over the u_factors stage chain (float array,
+// u_levels entries) with a final u_scale multiply (1.0 forward; 1/n
+// inverse, the CPU fft1d scale). Modes 0/1/2 read the complex (u_re_in,
+// u_im_in) planes.
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+layout(local_size_x=8,local_size_y=8) in;
+uniform sampler2D u_re_in;
+uniform sampler2D u_im_in;
+uniform ivec2 u_size;
+uniform int u_mode;
+uniform int u_axis;
+uniform int u_levels;
+uniform float u_factors[16];
+uniform float u_scale;
+layout(binding=0,r32f) writeonly uniform highp image2D img_re_out;
+layout(binding=1,r32f) writeonly uniform highp image2D img_im_out;
+void main(){
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,u_size)))return;
+ if(u_mode==2){
+  int pos=(u_axis==0)?p.x:p.y;
+  int line=(u_axis==0)?p.y:p.x;
+  int gather=0;
+  int tmp=pos;
+  for(int s=0;s<16;s++){
+   if(s>=u_levels)break;
+   int f=int(u_factors[s]+0.5);
+   int d=tmp%f;
+   tmp=(tmp-d)/f;
+   gather=gather*f+d;
+  }
+  ivec2 q=(u_axis==0)?ivec2(gather,line):ivec2(line,gather);
+  float re=texelFetch(u_re_in,q,0).r*u_scale;
+  float im=texelFetch(u_im_in,q,0).r*u_scale;
+  imageStore(img_re_out,p,vec4(re));
+  imageStore(img_im_out,p,vec4(im));
+  return;
+ }
+ int shiftX=(u_mode==0)?u_size.x/2:u_size.x-u_size.x/2;
+ int shiftY=(u_mode==0)?u_size.y/2:u_size.y-u_size.y/2;
+ ivec2 q=ivec2((p.x-shiftX+u_size.x)%u_size.x,(p.y-shiftY+u_size.y)%u_size.y);
+ float re=texelFetch(u_re_in,q,0).r;
+ float im=texelFetch(u_im_in,q,0).r;
+ if(u_mode==0){
+  int qx=u_size.x/4;
+  int qy=u_size.y/4;
+  if(p.x<qx||p.x>=u_size.x-qx||p.y<qy||p.y>=u_size.y-qy){
+   re=0.0;
+   im=0.0;
+  }
+ }
+ imageStore(img_re_out,p,vec4(re));
+ imageStore(img_im_out,p,vec4(im));
+}
