@@ -6,6 +6,8 @@ import java.nio.ByteOrder
 /**
  * Hot-pixel pre-mask (Sabre `suppress_hot_pixels_bayer` analogue).
  * Implements [docs/raw-sr-hotpixels.md]; the document is normative.
+ * Dormant: Jamy-L parity bypasses the stage (the stuck-low gate misfires
+ * on thin scene lines); nothing in the merge chain calls this object.
  *
  * A stuck sensor tap carries no scene signal, yet a single tap is
  * enough to corrupt everything downstream: the kernel means that smear it
@@ -83,8 +85,10 @@ object RawSrHotPixel {
         val absFloor = HOT_ABS_FLOOR * white
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             for (y in y0 until y1) for (x in 0 until width) {
-                val code = codeAt(x, y).toDouble()
-                val sigma = sigmaAt(x, y, codeAt(x, y))
+                // One code lookup per tap: the sigma gate reads the same tap.
+                val codeInt = codeAt(x, y)
+                val code = codeInt.toDouble()
+                val sigma = sigmaAt(x, y, codeInt)
                 if (!code.isFinite() || !sigma.isFinite() || sigma <= 0.0) continue
                 var sum = 0.0
                 var max = Double.NEGATIVE_INFINITY
@@ -129,9 +133,12 @@ object RawSrHotPixel {
         val source = input.buffer.duplicate().order(ByteOrder.nativeOrder())
         val base = source.position()
         val crop = input.crop
+        // Row base offsets, hoisted out of the per-tap lookup: the same
+        // offset the expression below computed, without the multiplies.
+        val rowBase = IntArray(height) { y -> base + (crop.top + y) * input.layout.rowStride }
+        val leftBytes = crop.left * 2
         fun codeAt(x: Int, y: Int): Int {
-            val offset = base + (crop.top + y) * input.layout.rowStride + (crop.left + x) * 2
-            return source.getShort(offset).toInt() and 65535
+            return source.getShort(rowBase[y] + leftBytes + x * 2).toInt() and 65535
         }
         return detect(
             width, height,
@@ -169,20 +176,35 @@ object RawSrHotPixel {
     ): Int {
         require(samples.size == width * height) { "Samples truncated" }
         require(mask.size == width * height) { "Mask must cover the frame" }
+        // Sparse: hot taps are rare, so only masked sites pay for the ring
+        // walk, and only replaced sites are retained — no full-frame scratch
+        // pair. Replacements still compute from the untouched original plane
+        // and apply afterwards in ascending index order, exactly as before.
         var count = 0
-        val replacement = FloatArray(width * height)
-        val pending = BooleanArray(width * height)
+        var pendingIndices = IntArray(64)
+        var pendingValues = FloatArray(64)
+        var pendingCount = 0
+        fun stage(index: Int, value: Float) {
+            if (pendingCount == pendingIndices.size) {
+                pendingIndices = pendingIndices.copyOf(pendingIndices.size * 2)
+                pendingValues = pendingValues.copyOf(pendingValues.size * 2)
+            }
+            pendingIndices[pendingCount] = index
+            pendingValues[pendingCount] = value
+            pendingCount++
+        }
+        val phase = pattern.cellOrdinals
         for (y in 0 until height) for (x in 0 until width) {
             val p = y * width + x
             if (!mask[p]) continue
-            val want = pattern.colorAt(x, y)
+            val want = phase[((y and 1) shl 1) or (x and 1)]
             var sum = 0.0
             var taps = 0
             for (tap in RING) {
                 val nx = x + tap[0]
                 val ny = y + tap[1]
                 if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
-                if (pattern.colorAt(nx, ny) != want) continue
+                if (phase[((ny and 1) shl 1) or (nx and 1)] != want) continue
                 val q = ny * width + nx
                 if (mask[q]) continue
                 val v = samples[q].toDouble()
@@ -191,11 +213,10 @@ object RawSrHotPixel {
                 taps++
             }
             if (taps == 0) continue
-            replacement[p] = (sum / taps).toFloat()
-            pending[p] = true
+            stage(p, (sum / taps).toFloat())
             count++
         }
-        for (p in samples.indices) if (pending[p]) samples[p] = replacement[p]
+        for (i in 0 until pendingCount) samples[pendingIndices[i]] = pendingValues[i]
         return count
     }
 
@@ -210,11 +231,14 @@ object RawSrHotPixel {
         val outW = width / 2
         val outH = height / 2
         val hot = BooleanArray(outW * outH)
-        for (qy in 0 until outH) for (qx in 0 until outW) {
-            val x = qx * 2
-            val y = qy * 2
-            hot[qy * outW + qx] = mask[y * width + x] || mask[y * width + x + 1] ||
-                mask[(y + 1) * width + x] || mask[(y + 1) * width + x + 1]
+        // Row-sharded: disjoint output rows, shared read-only mask.
+        RawSrWorkers.forEachShard(outH) { y0, y1 ->
+            for (qy in y0 until y1) for (qx in 0 until outW) {
+                val x = qx * 2
+                val y = qy * 2
+                hot[qy * outW + qx] = mask[y * width + x] || mask[y * width + x + 1] ||
+                    mask[(y + 1) * width + x] || mask[(y + 1) * width + x + 1]
+            }
         }
         return hot
     }

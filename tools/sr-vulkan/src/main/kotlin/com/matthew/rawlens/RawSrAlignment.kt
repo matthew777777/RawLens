@@ -3,13 +3,50 @@
 
 package com.matthew.rawlens
 
+import java.nio.DoubleBuffer
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.round
 
-/** Deterministic CPU oracle for the GLES RAW-SR alignment pipeline. Coordinates are Bayer quads. */
+/**
+ * Checkout port of the Jamy-L alignment stage
+ * (`alignment.py`, `block_matching.py`, `ICA.py`, `utils_image.py` at the
+ * pinned commit): FFT full-resolution grey, circular padding, valid-convolution
+ * Gaussian pyramid, L1 (finest) / direct-SSD L2 (coarse) block matching,
+ * inverse-compositional refinement on every level, and dense inter-level
+ * flow upscaling. Flows are RAW pixels on a RAW lattice throughout (the
+ * reference's convention: its default FFT grey keeps full resolution).
+ *
+ * Reference defaults are the defaults here: 4 levels, factors [1,2,4,4],
+ * radii [1,4,4,4] (fine level always 1), per-level tile sizes
+ * [ts,ts,ts,ts/2], 3 ICA iterations, bilinear upscaling. Tile size is
+ * SNR-driven ({64,32,16} raw px) via [RawSrTuning.alignmentConfig].
+ *
+ * Deliberate, documented deviations from the checkout text:
+ * - L2 uses direct spatial SSD instead of the FFT-correlation formulation.
+ *   The scores agree to float rounding (neither side can match cuFFT/cuBLAS
+ *   bitwise anyway) and the argmin agrees except at chaos ties; direct sums
+ *   keep the CPU oracle and the GPU path bitwise-agreeable where the two FFT
+ *   implementations could never be.
+ * - The 8-px ICA tree-reduction clipping is transcribed structurally but the
+ *   sums run sequentially in double (CUDA warp/tree order is 1-ulp class).
+ * - CPU arithmetic runs in double precision (the reference runs float32
+ *   CUDA): more accurate, agreeing to ~1e-6; flows narrow to float on
+ *   output. Flat-area argmin ties can flip between sides (either minimum is
+ *   a valid argmin); flow-agreement tests use textured fixtures.
+ * - A per-tile auxiliary reliability (Hessian solvability + post-ICA
+ *   residual) feeds frame rejection only; it never alters a flow. The
+ *   reference has no reverse pass, no consistency check, and no reliability,
+ *   and neither does the flow path here.
+ * - Transcribed reference quirks (commented at each site): tile-8 ICA clamps
+ *   its sampler and tree-clips its reduction partials while larger sizes
+ *   zero-fill and clip the step; tile-64 ICA additionally disables the step
+ *   clip at 32767 (reference `align_lvl_ica`).
+ */
+/** Full-resolution single-channel image (FFT grey or one pyramid level). */
 data class RawSrGrayImage(val width: Int, val height: Int, val values: FloatArray) {
     init { require(width > 0 && height > 0 && values.size == width * height) }
     operator fun get(x: Int, y: Int): Float = values[y * width + x]
@@ -17,58 +54,59 @@ data class RawSrGrayImage(val width: Int, val height: Int, val values: FloatArra
 
 data class RawSrAlignmentConfig(
     val levels: Int = 4,
-    val tileSize: Int = 12,
+    /** Raw-pixel tile size; the reference SNR schedule uses {64, 32, 16}. */
+    val tileSize: Int = 16,
+    /** Coarse-level search radius (the fine level always uses 1). */
     val searchRadius: Int = 4,
     val lkIterations: Int = 3,
-    val minHessianDeterminant: Float = 1e-5f,
-    val maxMeanAbsoluteResidual: Float = 0.12f,
-    val minConditionRatio: Float = 1e-4f,
-    val minSampleFraction: Float = 0.75f,
-    val maxFlowConsistencyError: Float = 1.5f,
     /**
-     * Pyramid levels running inverse-compositional refinement; null keeps the
-     * documented finest-only schedule (IPOL). Jamy-L refines every level; pass
-     * the full range to mirror that.
+     * Post-ICA mean-absolute-residual gate for the auxiliary per-tile
+     * reliability consumed by frame rejection. Flows never consult it.
      */
-    val icaLevels: Set<Int>? = null,
+    val maxMeanAbsoluteResidual: Double = 0.12,
     /**
-     * Inter-level flow propagation (Jamy-L `flow_upscale_mode`). NEAREST keeps
-     * the documented IPOL three-candidate non-interpolating propagation;
-     * BILINEAR/BICUBIC densely upsample the prior tile field instead (CPU
-     * oracle only — the GLES path rejects non-nearest configs explicitly).
+     * Inter-level flow propagation (Jamy-L `flow_upscale_mode`):
+     * torch.nn.functional.interpolate semantics (align_corners=False,
+     * edge-clamped reads) with bicubic Keys a=-0.75. BILINEAR is the
+     * unified JAMY-L default (reference
+     * `AlignmentConfig.flow_upscale_mode` is bilinear); NEAREST/BICUBIC
+     * stay explicit opt-ins for A/B only. A silent default flip moves both
+     * CPU and GPU flows (pinned by `flowUpscaleDefaultsToBilinearLikeReference`).
      */
-    val flowUpscale: FlowUpscaleMode = FlowUpscaleMode.NEAREST
+    val flowUpscale: FlowUpscaleMode = FlowUpscaleMode.BILINEAR
 ) {
     init {
-        require(levels in 1..6)
-        require(tileSize in 4..32 && searchRadius in 1..6 && lkIterations == 3)
-        require(minHessianDeterminant.isFinite() && minHessianDeterminant > 0f)
-        require(maxMeanAbsoluteResidual.isFinite() && maxMeanAbsoluteResidual > 0f)
-        require(minConditionRatio.isFinite() && minConditionRatio > 0f && minConditionRatio < 0.25f)
-        require(minSampleFraction in 0.5f..1f)
-        require(maxFlowConsistencyError.isFinite() && maxFlowConsistencyError > 0f)
-        require(icaLevels == null || icaLevels.all { it in 0 until levels }) {
-            "ICA levels $icaLevels must lie in 0 until $levels"
-        }
+        require(levels == 4) { "The checkout pyramid has exactly 4 levels" }
+        require(tileSize in setOf(16, 32, 64)) { "Reference tile sizes are {64, 32, 16}" }
+        require(searchRadius in 1..6)
+        require(lkIterations in 1..5)
+        require(maxMeanAbsoluteResidual.isFinite() && maxMeanAbsoluteResidual > 0.0)
     }
-    /** Finest-first schedule: [1, searchRadius, searchRadius, ...]. */
+    /** Finest-first schedule: [1, searchRadius, searchRadius, searchRadius]. */
     fun radiusAt(level: Int) = if (level == 0) 1 else searchRadius
-    /** Jamy-L [1,2,4,4] reduction schedule, extended with 4 for optional levels. */
-    fun factorAt(level: Int) = if (level == 0) 1 else if (level == 1) 2 else 4
-    /** True when [level] runs inverse-compositional refinement. */
-    fun refineAt(level: Int) = icaLevels?.contains(level) ?: (level == 0)
+    /** Jamy-L [1,2,4,4] reduction schedule (downsample factor into [level]). */
+    fun factorAt(level: Int) = FACTORS[level]
+    /** Per-level tile sizes [ts,ts,ts,ts/2] (raw px). */
+    fun tileSizeAt(level: Int) = if (level == LEVELS - 1) tileSize / 2 else tileSize
 
     /** Inter-level flow propagation mode; see [flowUpscale]. */
     enum class FlowUpscaleMode { NEAREST, BILINEAR, BICUBIC }
+
+    companion object {
+        const val LEVELS = 4
+        val FACTORS = intArrayOf(1, 2, 4, 4)
+    }
 }
 
 data class RawSrTileFlow(
     val centerX: Float,
     val centerY: Float,
-    /** Displacement sampled in the moving image so moving(x + dx, y + dy) matches reference(x,y). */
+    /** Displacement in raw pixels: moving(x + dx, y + dy) matches reference(x,y). */
     val dx: Float,
     val dy: Float,
+    /** Post-ICA mean absolute residual over the tile (auxiliary diagnostic). */
     val residual: Float,
+    /** Auxiliary reliability for frame rejection (never alters flows). */
     val reliable: Boolean
 )
 
@@ -88,8 +126,11 @@ interface RawSrDirectFlowTiles {
 }
 
 data class RawSrAlignmentField(
+    /** Raw-pixel image width covered by the field. */
     val imageWidth: Int,
+    /** Raw-pixel image height covered by the field. */
     val imageHeight: Int,
+    /** Raw-pixel tile size. */
     val tileSize: Int,
     val columns: Int,
     val rows: Int,
@@ -98,21 +139,61 @@ data class RawSrAlignmentField(
     init { require(tiles.size == columns * rows) }
 
     fun flowAt(x: Float, y: Float): RawSrTileFlow {
-        val tx = (x / tileSize).toInt().coerceIn(0, columns - 1)
-        val ty = (y / tileSize).toInt().coerceIn(0, rows - 1)
+        val tx = RawSrCoreSampling.flowTileIndex(x, tileSize).coerceIn(0, columns - 1)
+        val ty = RawSrCoreSampling.flowTileIndex(y, tileSize).coerceIn(0, rows - 1)
         return tiles[ty * columns + tx]
     }
 
     /**
-     * Bilinear flow for coarse-field upsampling inside alignment (pyramid
-     * levels blend by construction). NOT for merge/robustness consumption:
-     * the reference looks flow up at the nearest tile, and the ported merge
-     * and robustness stages use [flowAt] (nearest) to match — tile borders
-     * resolve as quilt steps there by design. Tile centers sit at integer
-     * lattice points of u = (p + 0.5) / tileSize - 0.5; the four surrounding
-     * tiles blend dx/dy, and confidence blends the reliable bits with a 0.5
-     * gate (an isoline, not a grid line). Any non-finite corner flow falls
-     * back to the containing tile, preserving invalid-flow propagation.
+     * Reference flow lookup (`merge.py::cpu_accumulate`,
+     * `robustness.py::cpu_warp_dogson`): the containing tile's raw-unit
+     * vector, no blending (`px = int(lr_x//tile_size)` — plain
+     * truncation, one tile per pixel). The merge and the robustness warp
+     * consume this verbatim: blending neighbor tiles at a flow
+     * discontinuity invents a warp no tile estimated, and on periodic
+     * texture the blend lands on a lookalike slat that over-accepts
+     * (white-blinds pits). Allocation-free twin of [flowAt]: writes dx,
+     * dy, residual, reliability (1f/0f) into [out] (size >= 4). Flat-
+     * backed fields ([RawSrDirectFlowTiles]) read without boxing.
+     */
+    fun flowAtNearestInto(x: Float, y: Float, out: FloatArray) {
+        val tx = RawSrCoreSampling.flowTileIndex(x, tileSize).coerceIn(0, columns - 1)
+        val ty = RawSrCoreSampling.flowTileIndex(y, tileSize).coerceIn(0, rows - 1)
+        val index = ty * columns + tx
+        val direct = tiles as? RawSrDirectFlowTiles
+        if (direct != null) {
+            out[0] = direct.directDx(index)
+            out[1] = direct.directDy(index)
+            out[2] = direct.directResidual(index)
+            out[3] = if (direct.directReliable(index)) 1f else 0f
+        } else {
+            val t = tiles[index]
+            out[0] = t.dx
+            out[1] = t.dy
+            out[2] = t.residual
+            out[3] = if (t.reliable) 1f else 0f
+        }
+    }
+
+    /**
+     * Raw-lattice coverage: the field spans ([rawW], [rawH]) plus less than
+     * one tile of circular-pad slack per axis ([circularPad] rounds up to a
+     * tile multiple). Consumers require this instead of exact equality so
+     * padded crops keep working.
+     */
+    fun coversRaw(rawW: Int, rawH: Int): Boolean =
+        imageWidth >= rawW && imageWidth - rawW < tileSize &&
+            imageHeight >= rawH && imageHeight - rawH < tileSize
+
+    /**
+     * Bilinear flow blend over the tile lattice (dormant A/B helper now:
+     * the merge and the robustness warp consume the reference nearest
+     * lookup, [flowAtNearestInto]; only [RawSrMergeJob.upsampleFlowToQuads]
+     * still blends). Coordinates are raw pixels. Tile centers sit at
+     * integer lattice points of u = (p + 0.5) / tileSize - 0.5; the four
+     * surrounding tiles blend dx/dy, and confidence blends the reliable
+     * bits with a 0.5 gate. Any non-finite corner flow falls back to the
+     * containing tile.
      */
     fun flowAtSmooth(x: Float, y: Float): RawSrTileFlow {
         val ux = (x + 0.5f) / tileSize - 0.5f
@@ -198,8 +279,8 @@ data class RawSrAlignmentField(
             c01 = if (t01.reliable) 1f else 0f
             c11 = if (t11.reliable) 1f else 0f
         }
-        val tx = (x / tileSize).toInt().coerceIn(0, columns - 1)
-        val ty = (y / tileSize).toInt().coerceIn(0, rows - 1)
+        val tx = RawSrCoreSampling.flowTileIndex(x, tileSize).coerceIn(0, columns - 1)
+        val ty = RawSrCoreSampling.flowTileIndex(y, tileSize).coerceIn(0, rows - 1)
         val nearest = ty * columns + tx
         val nearestResidual = direct?.directResidual(nearest) ?: tiles[nearest].residual
         if (!dx00.isFinite() || !dy00.isFinite() ||
@@ -230,439 +311,606 @@ data class RawSrAlignmentField(
         out[2] = nearestResidual
         out[3] = if (c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11 >= 0.5f) 1f else 0f
     }
+
+    /**
+     * Bilateral flow-field regularization (RawLens improvement, not
+     * reference): each tile's vector is replaced by the 3x3 bilateral
+     * average with the joint range kernel
+     * `w = exp(-(|dx|^2 + |dy|^2) / (2*sigma^2))` over the vector
+     * difference to the center tile. Coherent sub-sigma steps (the tile
+     * quilt: per-tile flow differences that extend scene edges along
+     * tile lines while robustness stays high) collapse toward the
+     * neighborhood consensus, while supra-sigma motion discontinuities
+     * keep their estimated vectors (blinds-safe: a 5px step weighs
+     * exp(-12.5) at sigma 1). Isolated single-tile spikes are NOT
+     * collapsed (the center always weighs 1) — that is robustness's job
+     * (a wrong vector mismatches and rejects), not the bilateral's.
+     * Non-finite neighbors are skipped (weight 0); a non-finite center
+     * rides through unchanged. Residuals, reliability, centers, and dims
+     * ride with their tile. [sigmaPx] <= 0 (or non-finite) returns this
+     * field unchanged. Window positions are edge-clamped (duplicated
+     * neighbors weigh per position, standard clamped bilateral).
+     * Float32 accumulation matches the GPU `flow_regularize.glsl` twin.
+     */
+    fun bilateralFiltered(sigmaPx: Float): RawSrAlignmentField {
+        if (!sigmaPx.isFinite() || sigmaPx <= 0f) return this
+        val denom = 2f * sigmaPx * sigmaPx
+        val direct = tiles as? RawSrDirectFlowTiles
+        val out = ArrayList<RawSrTileFlow>(columns * rows)
+        for (ty in 0 until rows) {
+            for (tx in 0 until columns) {
+                val i = ty * columns + tx
+                val center = tiles[i]
+                val cdx = direct?.directDx(i) ?: center.dx
+                val cdy = direct?.directDy(i) ?: center.dy
+                if (!cdx.isFinite() || !cdy.isFinite()) {
+                    out.add(center)
+                    continue
+                }
+                var wx = 0f
+                var wy = 0f
+                var wsum = 0f
+                for (oy in -1..1) {
+                    val ny = (ty + oy).coerceIn(0, rows - 1)
+                    for (ox in -1..1) {
+                        val nx = (tx + ox).coerceIn(0, columns - 1)
+                        val ni = ny * columns + nx
+                        val ndx = direct?.directDx(ni) ?: tiles[ni].dx
+                        val ndy = direct?.directDy(ni) ?: tiles[ni].dy
+                        if (!ndx.isFinite() || !ndy.isFinite()) continue
+                        val ddx = ndx - cdx
+                        val ddy = ndy - cdy
+                        val w = exp(-(ddx * ddx + ddy * ddy) / denom).toFloat()
+                        wx += ndx * w
+                        wy += ndy * w
+                        wsum += w
+                    }
+                }
+                // wsum > 0 always: the center contributes weight 1.
+                out.add(RawSrTileFlow(center.centerX, center.centerY,
+                    wx / wsum, wy / wsum, center.residual, center.reliable))
+            }
+        }
+        return RawSrAlignmentField(imageWidth, imageHeight, tileSize, columns, rows, out)
+    }
 }
 
+/** Checkout alignment front end + coarse-to-fine driver (see the file header). */
 object RawSrAlignment {
-    /** Removes CFA colour modulation by averaging each complete 2x2 Bayer cell. */
-    fun bayerQuadGray(raw: UnpackedRawCfa): RawSrGrayImage {
-        require(raw.width % 2 == 0 && raw.height % 2 == 0)
-        val width = raw.width / 2
-        val height = raw.height / 2
+    /** ICA Hessian solvability gate (reference `abs(det) < 1e-10`). */
+    const val ICA_DET_EPS = 1e-10
+
+    /**
+     * FFT grey (`compute_grey_images`, method FFT): forward DFT, fftshift,
+     * zero the outer quarters of the shifted spectrum, ifftshift, inverse
+     * DFT, real part. Full resolution; input is the normalized mosaic.
+     *
+     * The complex planes live in ashmem (see [RawSrFft.FftPlanePair]):
+     * on-heap they cost two ~100MB arrays at 12MP and OOM a 512MB-heap
+     * save before the linear merge writes anything. Same doubles, same
+     * order: bitwise-identical to the array implementation.
+     */
+    fun fftGrey(mosaic: FloatArray, width: Int, height: Int): RawSrGrayImage {
+        require(mosaic.size == width * height)
+        val n = width * height
+        RawSrFft.FftPlanePair.allocate(n).use { planes ->
+            val re = planes.re
+            val im = planes.im
+            for (i in 0 until n) re.put(i, mosaic[i].toDouble())
+            RawSrFft.fft2d(re, im, width, height, false)
+            fftShift(re, im, width, height, forward = true)
+            val qy = height / 4
+            val qx = width / 4
+            for (y in 0 until qy) for (x in 0 until width) {
+                val i = y * width + x
+                re.put(i, 0.0)
+                im.put(i, 0.0)
+            }
+            for (y in height - qy until height) for (x in 0 until width) {
+                val i = y * width + x
+                re.put(i, 0.0)
+                im.put(i, 0.0)
+            }
+            for (y in 0 until height) for (x in 0 until qx) {
+                val i = y * width + x
+                re.put(i, 0.0)
+                im.put(i, 0.0)
+            }
+            for (y in 0 until height) for (x in width - qx until width) {
+                val i = y * width + x
+                re.put(i, 0.0)
+                im.put(i, 0.0)
+            }
+            fftShift(re, im, width, height, forward = false)
+            RawSrFft.fft2d(re, im, width, height, true)
+            return RawSrGrayImage(width, height, FloatArray(n) { re.get(it).toFloat() })
+        }
+    }
+
+    /**
+     * torch.fft.fftshift (forward) / ifftshift (backward): circular shift by
+     * floor(n/2) / (n - floor(n/2)) per axis, in place.
+     *
+     * The array overload wraps and delegates here, so both spellings run
+     * one implementation and agree bitwise.
+     */
+    fun fftShift(re: DoubleBuffer, im: DoubleBuffer, width: Int, height: Int, forward: Boolean) {
+        shiftAxis(re, im, width, height, rowWise = true, forward)
+        shiftAxis(re, im, width, height, rowWise = false, forward)
+    }
+
+    /**
+     * Array spelling of the buffer fftshift above; wraps and delegates, so
+     * results are bitwise-identical to the off-heap path.
+     */
+    fun fftShift(re: DoubleArray, im: DoubleArray, width: Int, height: Int, forward: Boolean) {
+        fftShift(DoubleBuffer.wrap(re), DoubleBuffer.wrap(im), width, height, forward)
+    }
+
+    private fun shiftAxis(
+        re: DoubleBuffer, im: DoubleBuffer, width: Int, height: Int,
+        rowWise: Boolean, forward: Boolean
+    ) {
+        val n = if (rowWise) width else height
+        val shift = if (forward) n / 2 else n - n / 2
+        if (shift == 0) return
+        if (rowWise) {
+            RawSrWorkers.forEachShard(height) { y0, y1 ->
+                val tmpRe = DoubleArray(width)
+                val tmpIm = DoubleArray(width)
+                for (y in y0 until y1) {
+                    val base = y * width
+                    for (x in 0 until width) {
+                        tmpRe[(x + shift) % width] = re.get(base + x)
+                        tmpIm[(x + shift) % width] = im.get(base + x)
+                    }
+                    for (x in 0 until width) {
+                        re.put(base + x, tmpRe[x])
+                        im.put(base + x, tmpIm[x])
+                    }
+                }
+            }
+        } else {
+            RawSrWorkers.forEachShard(width) { x0, x1 ->
+                val tmpRe = DoubleArray(height)
+                val tmpIm = DoubleArray(height)
+                for (x in x0 until x1) {
+                    for (y in 0 until height) {
+                        tmpRe[(y + shift) % height] = re.get(y * width + x)
+                        tmpIm[(y + shift) % height] = im.get(y * width + x)
+                    }
+                    for (y in 0 until height) {
+                        re.put(y * width + x, tmpRe[y])
+                        im.put(y * width + x, tmpIm[y])
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Circular pad (torch F.pad circular) to a tile multiple: right/bottom
+     * strips wrap from the left/top. The reference pads the reference grey
+     * only; the moving grey stays unpadded.
+     */
+    fun circularPad(grey: RawSrGrayImage, tileSize: Int): RawSrGrayImage {
+        val padW = (tileSize - grey.width % tileSize) % tileSize
+        val padH = (tileSize - grey.height % tileSize) % tileSize
+        if (padW == 0 && padH == 0) return grey
+        val width = grey.width + padW
+        val height = grey.height + padH
         val out = FloatArray(width * height)
         RawSrWorkers.forEachShard(height) { y0, y1 ->
-            for (y in y0 until y1) for (x in 0 until width) {
-                val p = (y * 2) * raw.width + x * 2
-                out[y * width + x] = (raw.values[p] + raw.values[p + 1] +
-                    raw.values[p + raw.width] + raw.values[p + raw.width + 1]) * 0.25f
+            for (y in y0 until y1) {
+                val sy = y % grey.height
+                for (x in 0 until width) {
+                    out[y * width + x] = grey.values[sy * grey.width + (x % grey.width)]
+                }
             }
         }
         return RawSrGrayImage(width, height, out)
     }
 
-    /** Half-sample reflect borders, sigma=factor/2, truncate=4 sigma, origin at factor*p. */
-    internal fun gaussianWeights(factor: Int): FloatArray {
+    /**
+     * Separable Gaussian kernel matching scipy's `_gaussian_kernel1d`
+     * (radius int(2f+0.5), sigma f/2, sum-normalized), the reference
+     * `downsample` (gaussian) kernel.
+     */
+    fun gaussianKernel1d(factor: Int): DoubleArray {
+        require(factor >= 1)
+        val radius = (2 * factor + 0.5).toInt()
         val sigma = factor * 0.5
-        val radius = factor * 2
-        val weights = DoubleArray(radius * 2 + 1) { i ->
+        val kernel = DoubleArray(radius * 2 + 1) { i ->
             val x = (i - radius).toDouble()
-            kotlin.math.exp(-x * x / (2.0 * sigma * sigma))
+            kotlin.math.exp(-0.5 * x * x / (sigma * sigma))
         }
-        val total = weights.sum()
-        return FloatArray(weights.size) { (weights[it] / total).toFloat() }
-    }
-
-    private fun reflect(p: Int, size: Int): Int = when {
-        p < 0 -> -p - 1
-        p >= size -> 2 * size - p - 1
-        else -> p
-    }
-
-    fun pyramid(base: RawSrGrayImage, requestedLevels: Int): List<RawSrGrayImage> {
-        require(requestedLevels in 1..6)
-        val result = arrayListOf(base)
-        while (result.size < requestedLevels) {
-            val source = result.last()
-            val factor = if (result.size == 1) 2 else 4
-            if (source.width / factor < 4 || source.height / factor < 4) break
-            val width = source.width / factor; val height = source.height / factor
-            val weights = gaussianWeights(factor); val radius = factor * 2
-            val horizontal = FloatArray(width * source.height)
-            RawSrWorkers.forEachShard(source.height) { y0, y1 ->
-                for (y in y0 until y1) for (x in 0 until width) {
-                    var sum = 0f
-                    for (k in weights.indices) sum += source[reflect(x * factor + k - radius, source.width), y] * weights[k]
-                    horizontal[y * width + x] = sum
-                }
-            }
-            val values = FloatArray(width * height)
-            RawSrWorkers.forEachShard(height) { y0, y1 ->
-                for (y in y0 until y1) for (x in 0 until width) {
-                    var sum = 0f
-                    for (k in weights.indices) sum += horizontal[reflect(y * factor + k - radius, source.height) * width + x] * weights[k]
-                    values[y * width + x] = sum
-                }
-            }
-            result += RawSrGrayImage(width, height, values)
-        }
-        return result
-    }
-
-    fun align(reference: RawSrGrayImage, moving: RawSrGrayImage,
-              config: RawSrAlignmentConfig = RawSrAlignmentConfig()): RawSrAlignmentField {
-        require(reference.width == moving.width && reference.height == moving.height)
-        val refs = pyramid(reference, config.levels); val movs = pyramid(moving, refs.size)
-        val forward = alignDirectional(refs, movs, config)
-        val reverse = alignDirectional(movs, refs, config)
-        return checkConsistency(forward, reverse, config)
-    }
-
-    internal fun checkConsistency(forward: RawSrAlignmentField, reverse: RawSrAlignmentField,
-                                  config: RawSrAlignmentConfig): RawSrAlignmentField {
-        return forward.copy(tiles = forward.tiles.map { tile ->
-            val x = tile.centerX + tile.dx; val y = tile.centerY + tile.dy
-            val inBounds = x >= 0f && y >= 0f && x < reverse.imageWidth && y < reverse.imageHeight
-            val back = reverse.flowAt(x, y)
-            val consistent = max(abs(tile.dx + back.dx), abs(tile.dy + back.dy)) <= config.maxFlowConsistencyError
-            tile.copy(reliable = tile.reliable && inBounds && back.reliable && consistent)
-        })
+        val sum = kernel.sum()
+        for (i in kernel.indices) kernel[i] /= sum
+        return kernel
     }
 
     /**
-     * Dense inter-level flow upsampling (Jamy-L `upscale_lvl` mirror, without
-     * the zero-padding branch): tile (tx, ty) of the [columns]x[rows] current
-     * grid samples the prior tile field at half-pixel-centered coordinates
-     * (equivalent to align_corners=False) and scales by [factor] into
-     * current-level pixels. Every prior tile blends whether reliable or not —
-     * these are block-matching seeds only, and the search still validates.
-     * Non-finite prior flow contributes a zero seed (never NaN seeds).
+     * Reference `downsample` (gaussian): factor 1 returns the input;
+     * otherwise separable valid convolution then strided take every
+     * [factor]-th pixel starting at 0 (floor((size - 2r) / factor) kept).
      */
-    internal fun upsampleFlow(
-        prior: RawSrAlignmentField,
-        columns: Int,
-        rows: Int,
-        factor: Int,
-        mode: RawSrAlignmentConfig.FlowUpscaleMode
-    ): FloatArray {
-        require(columns > 0 && rows > 0 && factor >= 1)
-        require(mode != RawSrAlignmentConfig.FlowUpscaleMode.NEAREST) {
-            "Nearest propagation uses the three-candidate path, not dense upsampling"
+    fun downsample(image: RawSrGrayImage, factor: Int): RawSrGrayImage {
+        if (factor == 1) return image
+        val kernel = gaussianKernel1d(factor)
+        val radius = kernel.size / 2
+        val convW = image.width - 2 * radius
+        val convH = image.height - 2 * radius
+        require(convW > 0 && convH > 0) {
+            "Level ${image.width}x${image.height} too small for factor-$factor valid convolution"
         }
-        val out = FloatArray(columns * rows * 2)
-        val pw = prior.columns
-        val ph = prior.rows
-        // Flat prior reads (dx, dy per tile) so the blend below boxes nothing.
-        val pdx = FloatArray(pw * ph)
-        val pdy = FloatArray(pw * ph)
-        val direct = prior.tiles as? RawSrDirectFlowTiles
-        for (i in pdx.indices) {
-            val dx = direct?.directDx(i) ?: prior.tiles[i].dx
-            val dy = direct?.directDy(i) ?: prior.tiles[i].dy
-            pdx[i] = if (dx.isFinite()) dx else 0f
-            pdy[i] = if (dy.isFinite()) dy else 0f
+        val rowPass = DoubleArray(convW * image.height)
+        RawSrWorkers.forEachShard(image.height) { y0, y1 ->
+            for (y in y0 until y1) {
+                for (x in 0 until convW) {
+                    var acc = 0.0
+                    for (k in kernel.indices) acc += image.values[y * image.width + x + k] * kernel[k]
+                    rowPass[y * convW + x] = acc
+                }
+            }
         }
-        val bicubic = mode == RawSrAlignmentConfig.FlowUpscaleMode.BICUBIC
-        for (ty in 0 until rows) for (tx in 0 until columns) {
-            val px = (tx + 0.5f) * pw / columns - 0.5f
-            val py = (ty + 0.5f) * ph / rows - 0.5f
-            val o = (ty * columns + tx) * 2
-            if (bicubic) {
-                out[o] = bicubicAt(pdx, pw, ph, px, py) * factor
-                out[o + 1] = bicubicAt(pdy, pw, ph, px, py) * factor
-            } else {
-                out[o] = bilinearAt(pdx, pw, ph, px, py) * factor
-                out[o + 1] = bilinearAt(pdy, pw, ph, px, py) * factor
+        val full = DoubleArray(convW * convH)
+        RawSrWorkers.forEachShard(convH) { y0, y1 ->
+            for (y in y0 until y1) {
+                for (x in 0 until convW) {
+                    var acc = 0.0
+                    for (k in kernel.indices) acc += rowPass[(y + k) * convW + x] * kernel[k]
+                    full[y * convW + x] = acc
+                }
+            }
+        }
+        val width = convW / factor
+        val height = convH / factor
+        require(width > 0 && height > 0) { "Downsampled level is empty" }
+        val out = FloatArray(width * height)
+        RawSrWorkers.forEachShard(height) { y0, y1 ->
+            for (y in y0 until y1) {
+                for (x in 0 until width) {
+                    out[y * width + x] = full[(y * factor) * convW + x * factor].toFloat()
+                }
+            }
+        }
+        return RawSrGrayImage(width, height, out)
+    }
+
+    /** Fine-to-coarse pyramid: base, down(2), down(4), down(4). */
+    fun pyramid(base: RawSrGrayImage): List<RawSrGrayImage> {
+        val levels = ArrayList<RawSrGrayImage>(RawSrAlignmentConfig.LEVELS)
+        levels.add(base)
+        for (level in 1 until RawSrAlignmentConfig.LEVELS) {
+            levels.add(downsample(levels[level - 1], RawSrAlignmentConfig.FACTORS[level]))
+        }
+        return levels
+    }
+
+    /** Floor tile grid for [level]: partial right/bottom strips are dropped. */
+    fun levelGrid(level: RawSrGrayImage, tileSize: Int): Pair<Int, Int> {
+        val columns = level.width / tileSize
+        val rows = level.height / tileSize
+        require(columns > 0 && rows > 0) {
+            "Level ${level.width}x${level.height} smaller than one $tileSize-px tile"
+        }
+        return columns to rows
+    }
+
+    /** Per-level working flow: interleaved dx/dy doubles, row-major tiles. */
+    class LevelFlow(val columns: Int, val rows: Int, val values: DoubleArray) {
+        init { require(values.size == columns * rows * 2) }
+        fun dx(i: Int) = values[i * 2]
+        fun dy(i: Int) = values[i * 2 + 1]
+    }
+
+    /**
+     * L1 block matching (reference finest level): seed rounded half-away
+     * ([roundHalfAway], like `cpu_l1_local_search`), SAD with zero-filled
+     * out-of-image moving taps, first-minimum scan (sy outer, sx inner,
+     * strictly-less update), result integers (the incoming subpixel is
+     * dropped). Returns flows + mean SAD residuals.
+     *
+     * L2 seeds keep half-even ([Math.rint]): the reference rounds those with
+     * torch.round, which is half-even like rint.
+     */
+
+    /**
+     * Reference `utils.round_half_away` (CUDA round() semantics): halves round
+     * away from zero, unlike [Math.rint] (halves to even). Shared by L1 seeds
+     * and [RawSrRobustness] Dogson warp centers.
+     */
+    internal fun roundHalfAway(x: Double): Int = RawSrCoreAlign.roundHalfAway(x)
+    fun blockMatchL1(
+        ref: RawSrGrayImage, mov: RawSrGrayImage, seed: LevelFlow,
+        tileSize: Int, radius: Int
+    ): Pair<LevelFlow, DoubleArray> {
+        val (columns, rows) = levelGrid(ref, tileSize)
+        require(seed.columns == columns && seed.rows == rows)
+        val out = DoubleArray(columns * rows * 2)
+        val residual = DoubleArray(columns * rows)
+        val area = tileSize * tileSize.toDouble()
+        RawSrWorkers.forEachShard(rows) { ty0, ty1 ->
+            for (ty in ty0 until ty1) {
+                for (tx in 0 until columns) {
+                    val i = ty * columns + tx
+                    val seedX = roundHalfAway(seed.dx(i))
+                    val seedY = roundHalfAway(seed.dy(i))
+                    var best = Double.POSITIVE_INFINITY
+                    var bestX = 0
+                    var bestY = 0
+                    for (sy in -radius..radius) {
+                        for (sx in -radius..radius) {
+                            val sad = RawSrCoreAlign.blockCostL1(
+                                ref, mov, tx, ty, tileSize, seedX + sx, seedY + sy)
+                            if (sad < best) {
+                                best = sad
+                                bestX = sx
+                                bestY = sy
+                            }
+                        }
+                    }
+                    out[i * 2] = (seedX + bestX).toDouble()
+                    out[i * 2 + 1] = (seedY + bestY).toDouble()
+                    residual[i] = best / area
+                }
+            }
+        }
+        return LevelFlow(columns, rows, out) to residual
+    }
+
+    /**
+     * L2 block matching (reference coarse levels): same scan, but SSD with
+     * edge-clamped moving taps, and the integer winner adds onto the
+     * incoming (fractional) seed instead of replacing it.
+     */
+    fun blockMatchL2(
+        ref: RawSrGrayImage, mov: RawSrGrayImage, seed: LevelFlow,
+        tileSize: Int, radius: Int
+    ): Pair<LevelFlow, DoubleArray> {
+        val (columns, rows) = levelGrid(ref, tileSize)
+        require(seed.columns == columns && seed.rows == rows)
+        val out = DoubleArray(columns * rows * 2)
+        val residual = DoubleArray(columns * rows)
+        val area = tileSize * tileSize.toDouble()
+        RawSrWorkers.forEachShard(rows) { ty0, ty1 ->
+            for (ty in ty0 until ty1) {
+                for (tx in 0 until columns) {
+                    val i = ty * columns + tx
+                    val seedX = Math.rint(seed.dx(i)).toInt()
+                    val seedY = Math.rint(seed.dy(i)).toInt()
+                    var best = Double.POSITIVE_INFINITY
+                    var bestX = 0
+                    var bestY = 0
+                    for (sy in -radius..radius) {
+                        for (sx in -radius..radius) {
+                            val ssd = RawSrCoreAlign.blockCostL2(
+                                ref, mov, tx, ty, tileSize, seedX + sx, seedY + sy)
+                            if (ssd < best) {
+                                best = ssd
+                                bestX = sx
+                                bestY = sy
+                            }
+                        }
+                    }
+                    out[i * 2] = seed.dx(i) + bestX
+                    out[i * 2 + 1] = seed.dy(i) + bestY
+                    residual[i] = best / area
+                }
+            }
+        }
+        return LevelFlow(columns, rows, out) to residual
+    }
+
+    /** Unhalved central-difference gradients ([-1,0,1], zero-padded borders). */
+    fun imageGradients(level: RawSrGrayImage): Pair<DoubleArray, DoubleArray> {
+        val gx = DoubleArray(level.width * level.height)
+        val gy = DoubleArray(level.width * level.height)
+        RawSrWorkers.forEachShard(level.height) { y0, y1 ->
+            for (y in y0 until y1) {
+                for (x in 0 until level.width) {
+                    val left = if (x > 0) level.values[y * level.width + x - 1].toDouble() else 0.0
+                    val right = if (x < level.width - 1) level.values[y * level.width + x + 1].toDouble() else 0.0
+                    val up = if (y > 0) level.values[(y - 1) * level.width + x].toDouble() else 0.0
+                    val down = if (y < level.height - 1) level.values[(y + 1) * level.width + x].toDouble() else 0.0
+                    gx[y * level.width + x] = right - left
+                    gy[y * level.width + x] = down - up
+                }
+            }
+        }
+        return gx to gy
+    }
+
+    /** Per-tile structure tensor over full floor-grid tiles (h00,h01,h11). */
+    fun tileHessians(
+        grads: Pair<DoubleArray, DoubleArray>, width: Int, height: Int, tileSize: Int
+    ): DoubleArray {
+        val (gx, gy) = grads
+        val columns = width / tileSize
+        val rows = height / tileSize
+        val out = DoubleArray(columns * rows * 3)
+        RawSrWorkers.forEachShard(rows) { ty0, ty1 ->
+            for (ty in ty0 until ty1) {
+                for (tx in 0 until columns) {
+                    var h00 = 0.0
+                    var h01 = 0.0
+                    var h11 = 0.0
+                    for (y in 0 until tileSize) {
+                        for (x in 0 until tileSize) {
+                            val o = (ty * tileSize + y) * width + tx * tileSize + x
+                            h00 += gx[o] * gx[o]
+                            h01 += gx[o] * gy[o]
+                            h11 += gy[o] * gy[o]
+                        }
+                    }
+                    val i = ty * columns + tx
+                    out[i * 3] = h00
+                    out[i * 3 + 1] = h01
+                    out[i * 3 + 2] = h11
+                }
             }
         }
         return out
     }
 
-    private fun bilinearAt(grid: FloatArray, w: Int, h: Int, px: Float, py: Float): Float {
-        val cx = px.coerceIn(0f, (w - 1).toFloat())
-        val cy = py.coerceIn(0f, (h - 1).toFloat())
-        val x0 = floor(cx).toInt().coerceIn(0, w - 1)
-        val y0 = floor(cy).toInt().coerceIn(0, h - 1)
-        val x1 = min(x0 + 1, w - 1)
-        val y1 = min(y0 + 1, h - 1)
-        val fx = cx - x0
-        val fy = cy - y0
-        return grid[y0 * w + x0] * (1f - fx) * (1f - fy) +
-            grid[y0 * w + x1] * fx * (1f - fy) +
-            grid[y1 * w + x0] * (1f - fx) * fy +
-            grid[y1 * w + x1] * fx * fy
-    }
-
-    private fun bicubicAt(grid: FloatArray, w: Int, h: Int, px: Float, py: Float): Float {
-        val cx = px.coerceIn(0f, (w - 1).toFloat())
-        val cy = py.coerceIn(0f, (h - 1).toFloat())
-        val x0 = floor(cx).toInt().coerceIn(0, w - 1)
-        val y0 = floor(cy).toInt().coerceIn(0, h - 1)
-        val fx = cx - x0
-        val fy = cy - y0
-        // Catmull-Rom rows through the 4x4 clamp-to-edge neighborhood.
-        val row = FloatArray(4)
-        for (i in 0..3) {
-            val yy = (y0 - 1 + i).coerceIn(0, h - 1)
-            row[i] = catmullRom(
-                grid[yy * w + (x0 - 1).coerceIn(0, w - 1)],
-                grid[yy * w + x0],
-                grid[yy * w + (x0 + 1).coerceIn(0, w - 1)],
-                grid[yy * w + (x0 + 2).coerceIn(0, w - 1)],
-                fx)
-        }
-        return catmullRom(row[0], row[1], row[2], row[3], fy)
-    }
-
-    private fun catmullRom(p0: Float, p1: Float, p2: Float, p3: Float, t: Float): Float {
-        val t2 = t * t
-        val t3 = t2 * t
-        return 0.5f * (2f * p1 + (-p0 + p2) * t +
-            (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
-            (-p0 + 3f * p1 - 3f * p2 + p3) * t3)
-    }
-
-    private fun alignDirectional(refs: List<RawSrGrayImage>, movs: List<RawSrGrayImage>,
-                                 config: RawSrAlignmentConfig): RawSrAlignmentField {
-        var previous: RawSrAlignmentField? = null
-        for (level in refs.indices.reversed()) {
-            val ref = refs[level]; val mov = movs[level]
-            val columns = (ref.width + config.tileSize - 1) / config.tileSize
-            val rows = (ref.height + config.tileSize - 1) / config.tileSize
-            // Tile-sharded: tiles are independent given the read-only prior
-            // level, so shards fill disjoint index ranges (bitwise-identical).
-            // The 3-candidate seed probe is unrolled (was: listOf + 3 Pairs
-            // per tile) with the identical visit order and strict-less update.
-            val flows = arrayOfNulls<RawSrTileFlow>(columns * rows)
-            val prior = previous
-            // Dense inter-level seeds, computed once per level (not per tile):
-            // null keeps the three-candidate propagation below.
-            val denseSeeds = if (prior != null && config.flowUpscale != RawSrAlignmentConfig.FlowUpscaleMode.NEAREST)
-                upsampleFlow(prior, columns, rows, config.factorAt(level + 1), config.flowUpscale)
-            else null
-            RawSrWorkers.forEachShard(rows) { ty0, ty1 ->
-                for (ty in ty0 until ty1) for (tx in 0 until columns) {
-                    val left = tx * config.tileSize; val top = ty * config.tileSize
-                    val right = min(left + config.tileSize, ref.width); val bottom = min(top + config.tileSize, ref.height)
-                    val bounds = intArrayOf(left, top, right, bottom)
-                    var seedX = 0; var seedY = 0
-                    if (prior != null) {
-                        val factor = config.factorAt(level + 1)
-                        if (denseSeeds != null) {
-                            // Densely upsampled prior flow, rounded to the integer
-                            // block-matching seed (Jamy-L propagation mirror).
-                            val o = (ty * columns + tx) * 2
-                            seedX = round(denseSeeds[o]).toInt()
-                            seedY = round(denseSeeds[o + 1]).toInt()
-                        } else {
-                            // Integer subdivision, never normalized grid ratios or interpolated flow.
-                            val px = tx / factor; val py = ty / factor
-                            val nx = if (tx % factor < factor / 2) -1 else 1
-                            val ny = if (ty % factor < factor / 2) -1 else 1
-                            var best = INVALID_RESIDUAL
-                            for (k in 0..2) {
-                                val cx = px + (if (k == 1) nx else 0)
-                                val cy = py + (if (k == 2) ny else 0)
-                                if (cx !in 0 until prior.columns || cy !in 0 until prior.rows) continue
-                                val candidate = prior.tiles[cy * prior.columns + cx]
-                                if (!candidate.reliable) continue
-                                val dx = (candidate.dx * factor).toInt(); val dy = (candidate.dy * factor).toInt()
-                                val score = score(ref, mov, bounds, dx, dy, true, config)
-                                if (score < best) { best = score; seedX = dx; seedY = dy }
+    /**
+     * Inverse-compositional refinement (reference `ICA.py`, every level):
+     * fixed template gradients, 3 iterations of H^-1 B with per-size
+     * sampling semantics. Tiles with |det| < 1e-10 keep the block-match
+     * flow. Returns refined flows, mean-abs residuals, and det verdicts.
+     *
+     * Per-size quirks transcribed verbatim: 8 clamps its sampler and clips
+     * tree-reduction partials (no step clip); 16/32/64 zero-fill per pixel
+     * and clip the step to +-radius, except 64 disables the step clip
+     * (radius 32767, reference `align_lvl_ica`).
+     */
+    fun refineIca(
+        ref: RawSrGrayImage, mov: RawSrGrayImage,
+        grads: Pair<DoubleArray, DoubleArray>, hessians: DoubleArray,
+        seed: LevelFlow, tileSize: Int, radius: Int, iterations: Int
+    ): Triple<LevelFlow, DoubleArray, BooleanArray> {
+        val (gx, gy) = grads
+        val columns = seed.columns
+        val rows = seed.rows
+        val out = seed.values.copyOf()
+        val residual = DoubleArray(columns * rows)
+        val detOk = BooleanArray(columns * rows)
+        RawSrWorkers.forEachShard(rows) { ty0, ty1 ->
+            for (ty in ty0 until ty1) {
+                for (tx in 0 until columns) {
+                    val i = ty * columns + tx
+                    val h00 = hessians[i * 3]
+                    val h01 = hessians[i * 3 + 1]
+                    val h11 = hessians[i * 3 + 2]
+                    val det = h00 * h11 - h01 * h01
+                    var flowX = seed.dx(i)
+                    var flowY = seed.dy(i)
+                    var meanAbs = 0.0
+                    if (abs(det) >= ICA_DET_EPS) {
+                        detOk[i] = true
+                        val detInv = 1.0 / det
+                        val clip = if (tileSize == 64) 32767.0 else radius.toDouble()
+                        repeat(iterations) {
+                            val b = RawSrCoreAlign.steepestSums(ref, mov, gx, gy, tx, ty, tileSize, flowX, flowY)
+                            var stepX: Double
+                            var stepY: Double
+                            if (tileSize == 8) {
+                                // Tree-clipped B sums, unclipped step (reference).
+                                val (cb0, cb1) = RawSrCoreAlign.treeClippedSums(b.third!!, radius)
+                                val (sx, sy) = RawSrCoreAlign.icaStep(detInv, h00, h01, h11, cb0, cb1)
+                                stepX = sx
+                                stepY = sy
+                            } else {
+                                val (sx, sy) = RawSrCoreAlign.icaStep(detInv, h00, h01, h11, b.first, b.second)
+                                stepX = sx.coerceIn(-clip, clip)
+                                stepY = sy.coerceIn(-clip, clip)
                             }
+                            flowX += stepX
+                            flowY += stepY
                         }
+                        meanAbs = RawSrCoreAlign.meanAbsidual(ref, mov, tx, ty, tileSize, flowX, flowY)
+                    } else {
+                        meanAbs = RawSrCoreAlign.meanAbsidual(ref, mov, tx, ty, tileSize, flowX, flowY)
                     }
-                    val best = blockMatch(ref, mov, bounds, seedX, seedY, config.radiusAt(level), level == 0, config)
-                    val refined = if (config.refineAt(level)) refineLk(ref, mov, bounds, best, config) else best
-                    flows[ty * columns + tx] = RawSrTileFlow((left + right - 1) * 0.5f, (top + bottom - 1) * 0.5f,
-                        refined[0], refined[1], refined[2], refined[3] > 0f)
-                }
-            }
-            @Suppress("UNCHECKED_CAST")
-            previous = RawSrAlignmentField(ref.width, ref.height, config.tileSize, columns, rows,
-                (flows as Array<RawSrTileFlow>).asList())
-        }
-        return requireNotNull(previous)
-    }
-
-    internal const val INVALID_RESIDUAL = 1e6f
-
-    private fun score(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                      dx: Int, dy: Int, l1: Boolean, config: RawSrAlignmentConfig): Float {
-        var error = 0f; var count = 0
-        for (y in bounds[1] until bounds[3]) for (x in bounds[0] until bounds[2]) {
-            val mx = x + dx; val my = y + dy
-            if (mx !in 0 until mov.width || my !in 0 until mov.height) continue
-            val d = mov[mx, my] - ref[x, y]
-            if (!d.isFinite()) return INVALID_RESIDUAL
-            error += if (l1) abs(d) else d * d
-            count++
-        }
-        val area = (bounds[2] - bounds[0]) * (bounds[3] - bounds[1])
-        return if (count >= max(4, kotlin.math.ceil(area * config.minSampleFraction).toInt()) && error.isFinite())
-            (error / count).coerceAtMost(INVALID_RESIDUAL) else INVALID_RESIDUAL
-    }
-
-    private fun blockMatch(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                           baseX: Int, baseY: Int, radius: Int, l1: Boolean,
-                           config: RawSrAlignmentConfig): FloatArray {
-        var bestX = baseX; var bestY = baseY
-        var best = INVALID_RESIDUAL; var distance = Int.MAX_VALUE
-        for (oy in -radius..radius) for (ox in -radius..radius) {
-            val score = score(ref, mov, bounds, baseX + ox, baseY + oy, l1, config)
-            val d = ox * ox + oy * oy
-            if (score < best || (score == best && score < INVALID_RESIDUAL && d < distance)) {
-                best = score; bestX = baseX + ox; bestY = baseY + oy; distance = d
-            }
-        }
-        return floatArrayOf(bestX.toFloat(), bestY.toFloat(), best, if (best < INVALID_RESIDUAL) 1f else 0f)
-    }
-
-    private fun refineLk(ref: RawSrGrayImage, mov: RawSrGrayImage, bounds: IntArray,
-                         start: FloatArray, config: RawSrAlignmentConfig): FloatArray {
-        val left = bounds[0]; val top = bounds[1]; val right = bounds[2]; val bottom = bounds[3]
-        var dx = start[0]; var dy = start[1]
-        // Fixed template gradients/Hessian: inverse-compositional translation, not forward-additive LK.
-        var hxx = 0f; var hxy = 0f; var hyy = 0f; var samples = 0
-        for (y in max(1, top) until min(bottom, ref.height - 1))
-            for (x in max(1, left) until min(right, ref.width - 1)) {
-                val gx = (ref[x + 1, y] - ref[x - 1, y]) * 0.5f
-                val gy = (ref[x, y + 1] - ref[x, y - 1]) * 0.5f
-                hxx += gx * gx; hxy += gx * gy; hyy += gy * gy; samples++
-            }
-        val determinant = hxx * hyy - hxy * hxy
-        val trace = hxx + hyy
-        var valid = start[3] > 0f && samples >= 4 && determinant.isFinite() &&
-            determinant > config.minHessianDeterminant &&
-            determinant > config.minConditionRatio * trace * trace
-        repeat(3) {
-            var bx = 0f; var by = 0f; var count = 0
-            if (valid) {
-                for (y in max(1, top) until min(bottom, ref.height - 1))
-                    for (x in max(1, left) until min(right, ref.width - 1)) {
-                        val sample = bilinearOrNull(mov, x + dx, y + dy) ?: continue
-                        val gx = (ref[x + 1, y] - ref[x - 1, y]) * 0.5f
-                        val gy = (ref[x, y + 1] - ref[x, y - 1]) * 0.5f
-                        val error = sample - ref[x, y]
-                        bx += gx * error; by += gy * error; count++
-                    }
-                // Never silently change the template support/Hessian when a warp leaves bounds.
-                valid = count == samples && bx.isFinite() && by.isFinite()
-                if (valid) {
-                    val stepX = (hyy * bx - hxy * by) / determinant
-                    val stepY = (hxx * by - hxy * bx) / determinant
-                    valid = stepX.isFinite() && stepY.isFinite()
-                    if (valid) { dx -= stepX.coerceIn(-1f, 1f); dy -= stepY.coerceIn(-1f, 1f) }
+                    out[i * 2] = flowX
+                    out[i * 2 + 1] = flowY
+                    residual[i] = meanAbs
                 }
             }
         }
-        var residual = 0f; var count = 0
-        for (y in top until bottom) for (x in left until right) {
-            bilinearOrNull(mov, x + dx, y + dy)?.let {
-                residual += abs(it - ref[x, y]); count++
-            }
-        }
-        val area = (right - left) * (bottom - top)
-        val enough = count >= max(4, kotlin.math.ceil(area * config.minSampleFraction).toInt())
-        val mean = if (enough && residual.isFinite()) (residual / count).coerceAtMost(INVALID_RESIDUAL) else INVALID_RESIDUAL
-        valid = valid && enough && mean <= config.maxMeanAbsoluteResidual
-        return floatArrayOf(dx, dy, mean, if (valid) 1f else 0f)
+        return Triple(LevelFlow(columns, rows, out), residual, detOk)
     }
 
-    internal fun bilinearOrNull(image: RawSrGrayImage, x: Float, y: Float): Float? {
-        val x0 = floor(x).toInt(); val y0 = floor(y).toInt()
-        if (x0 < 0 || y0 < 0 || x0 + 1 >= image.width || y0 + 1 >= image.height) return null
-        val fx = x - x0; val fy = y - y0
-        return (image[x0, y0] * (1f - fx) + image[x0 + 1, y0] * fx) * (1f - fy) +
-            (image[x0, y0 + 1] * (1f - fx) + image[x0 + 1, y0 + 1] * fx) * fy
-    }
-}
+    // ICA sampling/steps, inter-level upscaling, and reliability live in
+    // [RawSrCoreAlign]; this object keeps the front end (FFT grey, padding,
+    // pyramid, gradients, Hessians) and the alignPair orchestration.
 
-data class RawSrRgbImage(val width: Int, val height: Int, val values: FloatArray) {
-    init { require(values.size == width * height * 3) }
-    operator fun get(x: Int, y: Int, channel: Int): Float = values[(y * width + x) * 3 + channel]
-}
+    /**
+     * Inter-level flow propagation (reference `upscale_lvl`; see
+     * [RawSrCoreAlign.upsampleFlow]).
+     */
+    fun upsampleFlow(
+        prior: LevelFlow?, columns: Int, rows: Int, factor: Int,
+        newTileSize: Int, prevTileSize: Int,
+        mode: RawSrAlignmentConfig.FlowUpscaleMode
+    ): LevelFlow = RawSrCoreAlign.upsampleFlow(prior, columns, rows, factor, newTileSize, prevTileSize, mode)
 
-data class RawSrMergeResult(
-    val image: RawSrRgbImage,
-    val denominator: FloatArray,
-    val alignments: List<RawSrAlignmentField>,
-    val acceptedFrames: Int
-)
+    /**
+     * Auxiliary per-tile reliability for frame rejection only (see
+     * [RawSrCoreAlign.auxiliaryReliable]). Flows never consult this.
+     */
+    fun auxiliaryReliable(residual: Double, detOk: Boolean, dx: Double, dy: Double, config: RawSrAlignmentConfig): Boolean =
+        RawSrCoreAlign.auxiliaryReliable(residual, detOk, dx, dy, config)
 
-/** Phase-B 1x RGB accumulator. It is deliberately simple and serves as an A/B oracle for GLES. */
-object RawSrMergePrototype {
-    fun merge(
-        frames: List<UnpackedRawCfa>,
-        config: RawSrAlignmentConfig = RawSrAlignmentConfig(),
-        referenceOnly: Boolean = false
-    ): RawSrMergeResult {
-        require(frames.isNotEmpty())
-        val reference = frames.first()
-        require(frames.all {
-            it.width == reference.width && it.height == reference.height && it.pattern == reference.pattern
-        }) { "RAW-SR frames must have identical dimensions and CFA phase" }
-        val referenceGray = RawSrAlignment.bayerQuadGray(reference)
-        val alignments = if (referenceOnly) emptyList() else frames.drop(1).map {
-            RawSrAlignment.align(referenceGray, RawSrAlignment.bayerQuadGray(it), config)
-        }
-        val rgbFrames = (if (referenceOnly) frames.take(1) else frames).map(::demosaic)
-        val numerator = FloatArray(reference.width * reference.height * 3)
-        val denominator = FloatArray(reference.width * reference.height)
-        for (frameIndex in rgbFrames.indices) {
-            val rgb = rgbFrames[frameIndex]
-            val field = alignments.getOrNull(frameIndex - 1)
-            for (y in 0 until reference.height) for (x in 0 until reference.width) {
-                val flow = field?.flowAt(x * 0.5f, y * 0.5f)
-                if (flow != null && !flow.reliable) continue
-                val sx = x + (flow?.dx ?: 0f) * 2f
-                val sy = y + (flow?.dy ?: 0f) * 2f
-                val sample = sampleRgb(rgb, sx, sy) ?: continue
-                val p = y * reference.width + x
-                denominator[p] += 1f
-                for (channel in 0..2) numerator[p * 3 + channel] += sample[channel]
+    /**
+     * Coarse-to-fine alignment of one moving grey against the reference
+     * grey (reference `align`): zero init at the coarsest level, then per
+     * level upscale -> block match (L1 finest, L2 coarse) -> ICA refine.
+     * [refPyramid] must come from [pyramid] of circularly padded reference
+     * grey ([circularPad]); [movPyramid] from [pyramid] of unpadded grey.
+     */
+    fun alignPair(
+        refPyramid: List<RawSrGrayImage>, movPyramid: List<RawSrGrayImage>,
+        config: RawSrAlignmentConfig
+    ): RawSrAlignmentField {
+        require(refPyramid.size == RawSrAlignmentConfig.LEVELS)
+        require(movPyramid.size == RawSrAlignmentConfig.LEVELS)
+        var flow: LevelFlow? = null
+        var residual = DoubleArray(0)
+        var detOk = BooleanArray(0)
+        for (level in RawSrAlignmentConfig.LEVELS - 1 downTo 0) {
+            val tileSize = config.tileSizeAt(level)
+            val (columns, rows) = levelGrid(refPyramid[level], tileSize)
+            val seeded = if (flow == null) {
+                LevelFlow(columns, rows, DoubleArray(columns * rows * 2))
+            } else {
+                upsampleFlow(
+                    flow, columns, rows, config.factorAt(level + 1),
+                    tileSize, config.tileSizeAt(level + 1), config.flowUpscale
+                )
             }
+            val ref = refPyramid[level]
+            val mov = movPyramid[level]
+            val radius = config.radiusAt(level)
+            val (matched, _) = if (level == 0) blockMatchL1(ref, mov, seeded, tileSize, radius)
+            else blockMatchL2(ref, mov, seeded, tileSize, radius)
+            val grads = imageGradients(ref)
+            val hessians = tileHessians(grads, ref.width, ref.height, tileSize)
+            val (refined, res, det) = refineIca(
+                ref, mov, grads, hessians, matched, tileSize, radius, config.lkIterations
+            )
+            flow = refined
+            residual = res
+            detOk = det
         }
-        for (p in denominator.indices) {
-            val weight = denominator[p]
-            if (weight > 0f) for (channel in 0..2) numerator[p * 3 + channel] /= weight
+        val fine = flow!!
+        val base = refPyramid[0]
+        val tileSize = config.tileSizeAt(0)
+        val tiles = List(fine.columns * fine.rows) { i ->
+            val tx = i % fine.columns
+            val ty = i / fine.columns
+            RawSrTileFlow(
+                centerX = tx * tileSize + tileSize / 2f,
+                centerY = ty * tileSize + tileSize / 2f,
+                dx = fine.dx(i).toFloat(),
+                dy = fine.dy(i).toFloat(),
+                residual = residual[i].toFloat(),
+                reliable = auxiliaryReliable(residual[i], detOk[i], fine.dx(i), fine.dy(i), config)
+            )
         }
-        return RawSrMergeResult(
-            RawSrRgbImage(reference.width, reference.height, numerator), denominator,
-            alignments, if (referenceOnly) 1 else 1 + alignments.count { field ->
-                field.tiles.count(RawSrTileFlow::reliable) >= field.tiles.size / 2
-            }
-        )
-    }
-
-    /** Phase-safe bilinear-like interpolation that never mixes unlike CFA samples directly. */
-    fun demosaic(raw: UnpackedRawCfa): RawSrRgbImage {
-        val out = FloatArray(raw.width * raw.height * 3)
-        for (y in 0 until raw.height) for (x in 0 until raw.width) {
-            val p = (y * raw.width + x) * 3
-            for (channel in 0..2) {
-                val wanted = when (channel) { 0 -> CfaColor.RED; 1 -> CfaColor.GREEN; else -> CfaColor.BLUE }
-                var sum = 0f
-                var weight = 0f
-                for (oy in -1..1) for (ox in -1..1) {
-                    val sx = x + ox; val sy = y + oy
-                    if (sx !in 0 until raw.width || sy !in 0 until raw.height) continue
-                    if (raw.pattern.colorAt(sx, sy) != wanted) continue
-                    val w = if (ox == 0 && oy == 0) 4f else if (ox == 0 || oy == 0) 2f else 1f
-                    sum += raw.values[sy * raw.width + sx] * w
-                    weight += w
-                }
-                if (weight == 0f) {
-                    // Only possible at tiny borders; expand by one Bayer period.
-                    for (oy in -2..2) for (ox in -2..2) {
-                        val sx = x + ox; val sy = y + oy
-                        if (sx in 0 until raw.width && sy in 0 until raw.height &&
-                            raw.pattern.colorAt(sx, sy) == wanted) {
-                            sum += raw.values[sy * raw.width + sx]; weight += 1f
-                        }
-                    }
-                }
-                out[p + channel] = if (weight > 0f) sum / weight else 0f
-            }
-        }
-        return RawSrRgbImage(raw.width, raw.height, out)
+        return RawSrAlignmentField(base.width, base.height, tileSize, fine.columns, fine.rows, tiles)
     }
 
-    private fun sampleRgb(image: RawSrRgbImage, x: Float, y: Float): FloatArray? {
-        val x0 = floor(x).toInt(); val y0 = floor(y).toInt()
-        if (x0 < 0 || y0 < 0 || x0 + 1 >= image.width || y0 + 1 >= image.height) return null
-        val fx = x - x0; val fy = y - y0
-        return FloatArray(3) { channel ->
-            (image[x0, y0, channel] * (1f - fx) + image[x0 + 1, y0, channel] * fx) * (1f - fy) +
-                (image[x0, y0 + 1, channel] * (1f - fx) + image[x0 + 1, y0 + 1, channel] * fx) * fy
-        }
+    /**
+     * Burst alignment sharing one reference pyramid (values identical to
+     * per-pair pyramids; deterministic). [refGrey] is padded inside;
+     * [movGreys] stay unpadded.
+     */
+    fun alignBurst(
+        refGrey: RawSrGrayImage, movGreys: List<RawSrGrayImage>,
+        config: RawSrAlignmentConfig
+    ): List<RawSrAlignmentField> {
+        val refPyramid = pyramid(circularPad(refGrey, config.tileSize))
+        return movGreys.map { movGrey -> alignPair(refPyramid, pyramid(movGrey), config) }
     }
 }

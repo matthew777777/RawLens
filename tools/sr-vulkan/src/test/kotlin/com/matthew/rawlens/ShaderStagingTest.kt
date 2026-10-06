@@ -29,7 +29,11 @@ class ShaderStagingTest {
                 checked++
             }
         }
-        assertTrue("no shaders checked", checked == 22)
+        // 26 rawsr + 1 raw: the 1:1 alignment port added circular_pad,
+        // flow_upscale, and flow_deflip, deleted flow_consistency, the
+        // quilt fix added flow_regularize, and the GPU FFT grey pass
+        // added fft_stage and fft_remap.
+        assertTrue("no shaders checked", checked == 27)
     }
 
     @Test

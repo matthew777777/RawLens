@@ -7,7 +7,7 @@ core plus the Vulkan compute backend shared by Android (NDK) and desktop
     python3 tools/parity_sr_vulkan.py        # standalone
     ./gradlew :tools:sr-vulkan:check        # runs parityCheck + tests
 
-## What is byte-identical (39 files)
+## What is byte-identical (53 files)
 
 Every file below diffs EMPTY against its original (`diff` must print
 nothing). The host-shim layer makes this possible: tiny desktop-only sources
@@ -17,11 +17,18 @@ in the `android.*`/`androidx.*` packages (`Log`, `SystemClock`, `Build`,
 ported line — not even imports — changes. Shims live only in this module and
 never ship on Android.
 
-- `com.matthew.rawlens`: all 17 pure `RawSr*` files + `RawSrMergeJob`,
+- `com.matthew.rawlens`: all 19 pure `RawSr*` files (incl. `RawSrFftPlan`,
+  `RawSrFftF32` for the GPU FFT grey pass) + `RawSrMergeJob`,
   `RawSrKernelNetAniso`, `MosaicSrReconstructor`, both DNG writers,
   `RawPreDemosaicPipeline`, `GpsLocation`, `RawSensorUnpacker`,
   `DngNoiseProfile`, `DenoiseSettings`, `RawSuperResolutionSettings`,
   `QuadBayerPreparation`, `CaptureFileNames`, `RawBayerLayout`
+- `com.matthew.rawlens` shared SR core (the exact scalar formulas the CPU
+  donors delegate to; the Vulkan shaders transcribe them — see
+  `docs/sr-vulkan-rewrite-plan.md` §1): `RawSrCoreSampling.kt`,
+  `RawSrCoreKernel.kt`, `RawSrCoreRobustness.kt`, `RawSrCoreKernels.kt`,
+  `RawSrCoreGuide.kt`, `RawSrCoreAlign.kt`, `RawSrCoreFinish.kt`, plus the
+  finishing passes `RawSrDeadLaneInpaint.kt`, `RawSrChromaFromLuma.kt`
 - `com.matthew.rawlens` unified Vulkan backend (shared phone/desktop
   bytes; the app compiles the same files): `VkRawSrProcessor.kt`,
   `VkCompute.kt`, `SrVulkan.kt`, `RawSrGpuOutput.kt`, `UploadBuffers.kt`,
@@ -55,12 +62,12 @@ as format tokens). Two platform seams exist, both explicit in shared
 lines (no per-platform code):
 
 - Dispatch slicing: `VkBound.dispatch` runs the retired GLES schedule
-  (`RawSrGpuScheduling.slices`, per-slice fence, 1ms yield) with the
-  phone's budgets by default (64 for block_match/lk_refine, else
-  131072). Desktop launch paths set `-Dsrvk.sliceBudget=<huge>` for one
-  full-grid slice per pass; omitting the flag exercises the phone's
-  exact schedule on desktop (proven bitwise-identical on a 1024px
-  burst crop).
+  (`RawSrGpuScheduling.slices`, per-slice fence, 1ms yield every fourth
+  slice) with the phone's budgets by default (4096 for
+  block_match/lk_refine, else 262144). Desktop launch paths set
+  `-Dsrvk.sliceBudget=<huge>` for one full-grid slice per pass; omitting
+  the flag exercises the phone's exact schedule on desktop (proven
+  bitwise-identical on a 1024px burst crop).
 - Shader loading: `VkProgramCache` reads `spirv/*.spv` + `manifest.json`
   through the platform `AssetManager` (APK assets on Android; staged
   directory with classpath fallback on desktop).
@@ -75,7 +82,7 @@ without the canonical toolchain).
 1. `RawFrameMetadata.kt`: imports + `RawFrameMetadataFactory.capture`
    (Camera2) replaced by `fromDng` (DNG tags → identical value, including
    the CFA-phase derivation and the row/column-major matrix transpose).
-   Lines 16-104 of the original are range-checked verbatim.
+   Lines 16-112 of the original are range-checked verbatim.
 2. `MosaicSrDngSaver.kt`, `LinearRgbDngSaver.kt`: desktop counterparts
    (same API shape, temp-file + atomic rename instead of MediaStore).
 3. Shaders: sources stay ESSL and byte-identical; the checked-in

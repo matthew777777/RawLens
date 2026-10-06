@@ -32,7 +32,7 @@ class LinearRgbDngSaver(private val outputDir: File) {
         val dest = File(outputDir, displayName)
         try {
             tmp.outputStream().buffered().use {
-                LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride)
+                LinearRgbDngWriter.write(it, image, metadata, provenance, gps, noiseProfileOverride, captureId)
             }
             publish(tmp, dest)
             Log.i(LOG_TAG, "Linear RGB prime DNG saved=$displayName")
@@ -68,7 +68,7 @@ class LinearRgbDngSaver(private val outputDir: File) {
             tmp.outputStream().buffered().use {
                 LinearRgbDngWriter.writeStriped(
                     it, width, height, metadata, provenance, gps, stripRows,
-                    noiseProfileOverride, fillRgbStrip
+                    noiseProfileOverride, captureId, fillRgbStrip
                 )
             }
             publish(tmp, dest)

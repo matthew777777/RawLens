@@ -54,18 +54,40 @@ detail to protect; only lost *signal* variance attenuates.
 ## 3. Consumption
 
 - CPU: `RawSrMergeJob.buildMovingFrame` bakes the field into the frame's
-  robustness (`applyToFrame`: `r *= clamp(u, 0, 1)`, non-finite products to
-  zero, `FLAG_UNBLOCKED = 1024` where `u < 0.999`). One site serves the
-  Linear oracle and the Mosaic chain alike. `Rc` folds the effective
-  weights, so the support overwrite and the future merged-noise scale
-  account for unblocking automatically.
-- GPU: `unblocker_downsample` → `unblocker_weight` → `unblocker_modulate`
-  run per moving frame inside the one-workspace discipline (transients
-  ~15 MB at 12 MP, released per frame — burst-length-independent peak is
-  preserved), between `robustness_min` and `robustness_accumulate`.
-  `merge_accumulate` and `robustness.glsl` are untouched. The weight
-  texture is exposed via `onUnblocker` under the usual live-inside-callback
-  discipline.
+  robustness after the support gate (`applyToFrameAndSpread`:
+  `r' = min(r, clamp(u, 0, 1))` — the keep-weight caps agreement
+  instead of compounding it, Sabre
+  `weight = min(1 - unblocker, frame_weight)` — then the
+  contested-warp veto, then a second 5x5 local minimum over the folded
+  field; non-finite inputs to zero, `FLAG_UNBLOCKED = 1024` where
+  `u < 0.999`). One site serves the Linear oracle and the Mosaic chain
+  alike. `Rc` folds the effective weights, so the support overwrite and
+  the future merged-noise scale account for unblocking automatically.
+  The keep verdict judges the pre-fold field (frame selection is
+  independent of blocking); without a usable noise model the field
+  rides through (no model, no gate).
+- Contested-warp veto (RawLens, not Sabre — Sabre's dense flow never
+  ghosts): quads whose 3x3 tile flow spread exceeds the motion
+  threshold while u < 0.5 (`VETO_UNBLOCKER_THRESHOLD`: majority of
+  the signal variance lost) contribute exactly 0 — the blend bends
+  across disagreeing tiles there, and the bend would render at any
+  partial weight. Photometric agreement is blind to it (boxed means
+  match at whole-period shifts) and the s1 path cannot reject an
+  exact match, so the conjunction (contested warp AND lost variance)
+  is the only signal that sees period ghosts. Measured surgical
+  (4-6.5% of quads on the validation burst; pit/bush keep full
+  weight); the veto rides the same spread, so pinholes fill from
+  vetoed neighbors.
+- GPU: the host uploads the CPU guide gray verbatim per moving frame
+  (4E precedent — the pyramid's linear grey lives in a different
+  domain and would gate differently), then
+  `unblocker_downsample` → `unblocker_weight` → `unblocker_modulate`
+  (min-cap + veto) run per moving frame inside the one-workspace
+  discipline (transients released per frame —
+  burst-length-independent peak is preserved), between
+  `robustness_min` and a SECOND `robustness_min`, ahead of
+  `robustness_accumulate` — the exact CPU order (min → fold → min).
+  `merge_accumulate` and `robustness.glsl` are untouched.
 
 ## 4. Fixture rule
 
@@ -80,6 +102,10 @@ fixtures use exact degenerates plus margin-covered noise.
 - One computation per moving frame; green coefficients shared with the
   robustness upload (no new metadata plumbing).
 - Pixel-affecting change: Linear `RawLens-RawSr/4F-scale1`, Mosaic
-  `RawLens-MosaicSr/5E`.
+  `RawLens-MosaicSr/5E`; fold + veto enabled 2026-10-06 (always on):
+  Linear `RawLens-RawSr/4F-veto1`, Mosaic `RawLens-MosaicSr/5E-veto1`.
+  Blinds kinks eliminated, (1298,1149) ghost resolved to the reference
+  value, quilt zmax 1.39 (REF 2.27), sharpness best-ever; VK twins CPU
+  (mean|d| 0.3).
 - Coverage/merge-factor telemetry rides with the merged-noise item, which
   reads the same `Rc`/denominator accumulators.

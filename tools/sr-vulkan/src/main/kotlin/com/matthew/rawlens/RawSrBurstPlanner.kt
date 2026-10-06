@@ -11,17 +11,32 @@ internal object RawSrBurstPlanner {
     const val MAX_EXPOSURE_RATIO = 1.10
     const val MAX_SATURATION_FRACTION = 0.10f
     enum class Reason { CAMERA, PHYSICAL_CAMERA, CROP, GEOMETRY, DIMENSIONS, PIXEL_STRIDE,
-        CFA, NORMALIZATION, EXPOSURE, COLOR, LENS_SHADING, PLANE, SATURATION, DISPLACEMENT, REGISTRATION }
+        CFA, NORMALIZATION, EXPOSURE, COLOR, LENS_SHADING, PLANE, SATURATION, DISPLACEMENT, REGISTRATION,
+        UNSHARP, OVERFLOW }
     data class Input(val metadata: RawFrameMetadata, val plane: ByteBuffer, val motion: Float)
     data class Rejected(val index: Int, val reasons: Set<Reason>)
     data class Plan(val selected: List<Int>, val accepted: List<Int>, val rejected: List<Rejected>,
-                    val reference: Int?) {
+                    val reference: Int?,
+                    /** Sampled sharpness per input (null when the preview failed); reference-anchored UNSHARP gate. */
+                    val sharpness: List<Double?> = emptyList(),
+                    /** EV of each input relative to the reference (null when uncomputable); 0.0 at the reference. */
+                    val evRelative: List<Double?> = emptyList()) {
         val canMerge get() = accepted.size >= 2
     }
+    /**
+     * Reference priority. STABILITY_FIRST (default) ranks stable AF/AE/lens
+     * state, then angular travel, then sampled sharpness; SHARPEST_FIRST
+     * ranks sampled sharpness first with the same tiebreaks, so the merge
+     * anchors on the sharpest eligible frame instead of the most central
+     * stable one. Eligibility and rejection reasons are identical in both.
+     */
+    enum class ReferenceMode { STABILITY_FIRST, SHARPEST_FIRST }
     private data class Preview(val pixels: FloatArray, val width: Int, val height: Int,
                                val step: Int, val sharpness: Double, val saturation: Float)
 
-    fun plan(inputs: List<Input>, cameraId: String): Plan {
+    fun plan(inputs: List<Input>, cameraId: String,
+             referenceMode: ReferenceMode = ReferenceMode.STABILITY_FIRST,
+             policy: RawSrFrameRejection.Policy = RawSrFrameRejection.Policy()): Plan {
         require(inputs.size in 2..30)
         val reasons = inputs.map { linkedSetOf<Reason>() }
         val previews = arrayOfNulls<Preview>(inputs.size)
@@ -36,18 +51,78 @@ internal object RawSrBurstPlanner {
         }
         val eligible = inputs.indices.filter { reasons[it].isEmpty() }
         val median = eligible.map { inputs[it].metadata.timestampNanos }.sorted().let { it.getOrNull(it.size / 2) ?: 0L }
-        val reference = eligible.sortedWith(compareBy<Int> { stability(inputs[it].metadata) }
-            .thenBy { val m = inputs[it].metadata
-                inputs[it].motion.toDouble() * ((m.exposureTimeNanos ?: 0).toDouble() + (m.rollingShutterSkewNanos ?: 0)) }
-            .thenByDescending { previews[it]!!.sharpness }
-            .thenBy { abs(inputs[it].metadata.timestampNanos.toDouble() - median) }
-            .thenBy { inputs[it].metadata.timestampNanos }.thenBy { it }).firstOrNull()
+        fun travel(it: Int): Double {
+            val m = inputs[it].metadata
+            return inputs[it].motion.toDouble() *
+                ((m.exposureTimeNanos ?: 0).toDouble() + (m.rollingShutterSkewNanos ?: 0))
+        }
+        val ordering = if (referenceMode == ReferenceMode.SHARPEST_FIRST) {
+            compareByDescending<Int> { previews[it]!!.sharpness }
+                .thenBy { stability(inputs[it].metadata) }
+                .thenBy { travel(it) }
+                .thenBy { abs(inputs[it].metadata.timestampNanos.toDouble() - median) }
+                .thenBy { inputs[it].metadata.timestampNanos }.thenBy { it }
+        } else {
+            compareBy<Int> { stability(inputs[it].metadata) }
+                .thenBy { travel(it) }
+                .thenByDescending { previews[it]!!.sharpness }
+                .thenBy { abs(inputs[it].metadata.timestampNanos.toDouble() - median) }
+                .thenBy { inputs[it].metadata.timestampNanos }.thenBy { it }
+        }
+        val reference = eligible.sortedWith(ordering).firstOrNull()
         if (reference != null) eligible.filter { it != reference }.forEach { i ->
             reasons[i].addAll(incompatible(inputs[reference].metadata, inputs[i].metadata))
             if (reasons[i].isEmpty()) registration(previews[reference]!!, previews[i]!!)?.let { reasons[i] += it }
         }
+        // Relative sharpness gate (reference-anchored UNSHARP): absolute
+        // sharpness varies by scene, so compare against the burst's own
+        // reference instead of a fixed floor. Skipped when the reference
+        // itself is near-flat (sharpness ~0) to avoid rejecting the whole
+        // burst on a textureless scene.
+        if (reference != null) {
+            val refSharp = previews[reference]?.sharpness ?: 0.0
+            if (refSharp > 1e-9) {
+                val floor = refSharp * policy.minSharpnessRatio
+                for (i in inputs.indices) {
+                    if (i == reference || reasons[i].isNotEmpty()) continue
+                    val s = previews[i]?.sharpness ?: continue
+                    if (s < floor) reasons[i] += Reason.UNSHARP
+                }
+            }
+        }
+        // HDR+ N-cap (Hasinoff §5: N=2..8 preferred): keep the reference plus
+        // the lowest-travel survivors; reject the overflow as OVERFLOW so the
+        // merge set stays bounded even for 30-frame input bursts.
+        if (reference != null) {
+            var accepted = inputs.indices.filter { reasons[it].isEmpty() }
+            if (accepted.size > policy.maxMergeFrames) {
+                val keep = setOf(reference) +
+                    accepted.filter { it != reference }.sortedWith(
+                        compareBy({ travel(it) },
+                            { abs(inputs[it].metadata.timestampNanos.toDouble() - median) },
+                            { inputs[it].metadata.timestampNanos }, { it })
+                    ).take(policy.maxMergeFrames - 1)
+                for (i in accepted) if (i !in keep) reasons[i] += Reason.OVERFLOW
+                accepted = inputs.indices.filter { reasons[it].isEmpty() }
+            }
+        }
+        val sharpness = inputs.indices.map { previews[it]?.sharpness }
+        val evRelative = inputs.indices.map { evRelativeTo(inputs, reference, it) }
         return Plan(inputs.indices.toList(), inputs.indices.filter { reasons[it].isEmpty() },
-            inputs.indices.filter { reasons[it].isNotEmpty() }.map { Rejected(it, reasons[it].toSet()) }, reference)
+            inputs.indices.filter { reasons[it].isNotEmpty() }.map { Rejected(it, reasons[it].toSet()) }, reference,
+            sharpness, evRelative)
+    }
+
+    /** EV of frame [index] relative to [reference] from exposure*ISO ratio; null when uncomputable. */
+    private fun evRelativeTo(inputs: List<Input>, reference: Int?, index: Int): Double? {
+        if (reference == null) return null
+        if (index == reference) return 0.0
+        val ref = inputs[reference].metadata
+        val other = inputs[index].metadata
+        val refEv = (ref.exposureTimeNanos ?: 0).toDouble() * (ref.sensitivityIso ?: 0).toDouble()
+        val othEv = (other.exposureTimeNanos ?: 0).toDouble() * (other.sensitivityIso ?: 0).toDouble()
+        if (refEv <= 0.0 || othEv <= 0.0) return null
+        return kotlin.math.log2(othEv / refEv)
     }
 
     fun invalid(m: RawFrameMetadata): Set<Reason> = buildSet {

@@ -2,7 +2,6 @@
 package com.matthew.rawlens
 
 import java.nio.ByteOrder
-import kotlin.math.exp
 import kotlin.math.sqrt
 
 /**
@@ -13,7 +12,9 @@ import kotlin.math.sqrt
  *
  * Pipeline per moving frame: sqrt 3-channel guide (Alg. 7) → 3x3 local stats
  * (Alg. 8) → Dogson-biquadratic warp of the moving means into reference
- * coordinates at the bilinear flow sample → color distance over measured
+ * coordinates at the bilinear-blended flow vector (Sabre-style dense
+ * warp: the same continuous warp the merge gather uses, so r scores
+ * the warp that actually renders) → color distance over measured
  * reference variance, with the measured-LUT noise correction → s1/s2
  * flow-irregularity scaling → `clamp(S*exp(-d²/σ²)-t)` threshold → 5x5 local
  * minimum (Alg. 9). Out-of-bounds warps and non-finite flow weigh exactly
@@ -50,8 +51,8 @@ object RawSrRobustness {
     /** The single 4C-chosen constant: rail proximity in noise sigmas (§2). */
     const val RAIL_SIGMA = 3.0
 
-    /** Mth is published in raw pixels; our flow lives in quad units. */
-    internal fun motionThresholdQuad(tuning: RawSrTuning) = (tuning.mTh / 2.0).toFloat()
+    /** Mth is published in raw pixels and our flows are raw-unit (Jamy-L convention). */
+    internal fun motionThresholdPx(tuning: RawSrTuning) = tuning.mTh.toFloat()
 
     /**
      * Sqrt 3-channel guide on the quad grid (Alg. 7): `sqrt(R)`,
@@ -107,6 +108,28 @@ object RawSrRobustness {
     data class RcField(val width: Int, val height: Int, val values: FloatArray) {
         init {
             require(width > 0 && height > 0 && values.size == width * height)
+        }
+    }
+
+    /** Reference 3x3 local means and variances over the sqrt guide (Alg. 8). */
+    data class ReferenceStats(
+        val width: Int,
+        val height: Int,
+        val mean: Array<FloatArray>,
+        val variance: Array<FloatArray>
+    ) {
+        init {
+            require(width > 0 && height > 0)
+            require(mean.size == 3 && variance.size == 3)
+            require(mean.all { it.size == width * height } && variance.all { it.size == width * height })
+        }
+    }
+
+    /** Moving 3x3 local means over the sqrt guide (Alg. 8, means only). */
+    data class MovingStats(val width: Int, val height: Int, val mean: Array<FloatArray>) {
+        init {
+            require(width > 0 && height > 0)
+            require(mean.size == 3 && mean.all { it.size == width * height })
         }
     }
 
@@ -191,6 +214,26 @@ object RawSrRobustness {
             alpha[0] = aR.toFloat(); alpha[1] = (aG * 0.25).toFloat(); alpha[2] = aB.toFloat()
             beta[0] = bR.toFloat(); beta[1] = (bG * 0.25).toFloat(); beta[2] = bB.toFloat()
         }
+        // Per-phase calibration LUTs: black levels and CFA colours repeat
+        // every 2x2, so the pixel loop indexes four-entry tables instead of
+        // recomputing sensor lookups per tap. Entries are exactly what
+        // blackAt/colorAt return for the tap's phase (parity-matched against
+        // the sensor origin, odd crops included).
+        val normalization = input.normalization
+        val sensorLeft = input.sensorCropLeft
+        val sensorTop = input.sensorCropTop
+        val whiteLevel = normalization.whiteLevel.toDouble()
+        val blackPhase = DoubleArray(4) { p ->
+            normalization.blackAt(sensorLeft + (p and 1), sensorTop + (p shr 1)).toDouble()
+        }
+        val colorPhase = Array(4) { p ->
+            normalization.sensorPattern.colorAt(sensorLeft + (p and 1), sensorTop + (p shr 1))
+        }
+        val rowStride = input.layout.rowStride
+        val cropLeft = crop.left
+        val cropTop = crop.top
+        val slope = tables.slope
+        val tableOffset = tables.offset
         RawSrWorkers.forEachShard(outHeight) { y0, y1 ->
             for (qy in y0 until y1) for (qx in 0 until outWidth) {
                 var r = 0f
@@ -201,25 +244,22 @@ object RawSrRobustness {
                 for (i in 0..1) for (j in 0..1) {
                     val x = qx * 2 + j
                     val y = qy * 2 + i
-                    val sx = input.sensorCropLeft + x
-                    val sy = input.sensorCropTop + y
                     val phase = ((y and 1) shl 1) or (x and 1)
-                    val offset = base + (crop.top + y) * input.layout.rowStride + (crop.left + x) * 2
+                    val offset = base + (cropTop + y) * rowStride + (cropLeft + x) * 2
                     val code = source.getShort(offset).toInt() and 65535
-                    val black = input.normalization.blackAt(sx, sy).toDouble()
-                    val white = input.normalization.whiteLevel.toDouble()
-                    val value = ((code - black) / (white - black)).toFloat()
+                    val black = blackPhase[phase]
+                    val value = RawSrCoreGuide.normalize(code, black, whiteLevel).toFloat()
                     if (modelValid) {
-                        val sigma = sqrt(tables.slope[phase] * code + tables.offset[phase])
+                        val sigma = sqrt(slope[phase] * code + tableOffset[phase])
                         // Highlight-side rail only: a tap within 3σ of white
                         // is clipped and carries no signal. There is NO shadow
                         // rail — signal within 3σ of black is normal
                         // read-noise-limited data, and zeroing it would deny
                         // shadows every moving frame (lifted noise floor);
                         // below-black evidence is judged by the photo term.
-                        if (code > white - RAIL_SIGMA * sigma) quadRail = true
+                        if (code > whiteLevel - RAIL_SIGMA * sigma) quadRail = true
                     }
-                    when (input.normalization.sensorPattern.colorAt(sx, sy)) {
+                    when (colorPhase[phase]) {
                         CfaColor.RED -> {
                             r = value
                         }
@@ -309,44 +349,337 @@ object RawSrRobustness {
         noiseLut: RawSrNoiseLut.Lut? = null
     ): FrameRobustness {
         require(reference.width == moving.width && reference.height == moving.height)
-        require(flow.imageWidth == reference.width && flow.imageHeight == reference.height)
+        require(flow.coversRaw(reference.width * 2, reference.height * 2)) {
+            "Flow covers the raw lattice (2x the guide grid)"
+        }
+        return evaluateWithStats(
+            referenceStats(reference), movingStats(moving), flow, tuning, config, noiseLut)
+    }
+
+    /**
+     * Reference 3x3 clamp-to-edge means and variances (Alg. 8). Hoisted out
+     * of [evaluate]: identical for every moving frame, so the production
+     * stream computes it once and drops the guide instead of recomputing
+     * ~75MB of stats per frame on a 512MB heap.
+     */
+    fun referenceStats(reference: LinearGuide): ReferenceStats {
         val width = reference.width
         val height = reference.height
-        // Local statistics (Alg. 8): 3x3 clamp-to-edge means everywhere, plus
-        // the reference variances. The moving variance never enters: sigma²
-        // is measured reference variance only (plus the LUT floor).
-        val refMean = Array(3) { FloatArray(width * height) }
-        val refVar = Array(3) { FloatArray(width * height) }
-        val movMean = Array(3) { FloatArray(width * height) }
+        val mean = Array(3) { FloatArray(width * height) }
+        val variance = Array(3) { FloatArray(width * height) }
         for (c in 0..2) {
             val ref = reference.channel(c)
-            val mov = moving.channel(c)
             RawSrWorkers.forEachShard(height) { y0, y1 ->
                 for (y in y0 until y1) for (x in 0 until width) {
                     var sum = 0f
                     var squares = 0f
-                    var movSum = 0f
                     for (i in -1..1) for (j in -1..1) {
                         val xx = (x + j).coerceIn(0, width - 1)
                         val yy = (y + i).coerceIn(0, height - 1)
                         val v = ref[yy * width + xx]
                         sum += v
                         squares += v * v
-                        movSum += mov[yy * width + xx]
                     }
                     val o = y * width + x
-                    val mean = sum / 9f
-                    refMean[c][o] = mean
-                    // Reference stores the raw (possibly slightly negative)
-                    // variance; the max() below only guards float rounding,
-                    // and sigma² <= 0 still rejects through the threshold.
-                    refVar[c][o] = maxOf(squares / 9f - mean * mean, 0f)
-                    movMean[c][o] = movSum / 9f
+                    val average = sum / 9f
+                    mean[c][o] = average
+                    // Reference Alg. 8 verbatim: the raw variance is stored
+                    // unfloored (catastrophic cancellation can leave it
+                    // slightly negative). Non-positive variance rejects
+                    // through the §5 edge rule, deterministically.
+                    variance[c][o] = squares / 9f - average * average
                 }
             }
         }
+        return ReferenceStats(width, height, mean, variance)
+    }
+
+    /**
+     * Moving 3x3 clamp-to-edge means (Alg. 8). The moving variance never
+     * enters: sigma² is measured reference variance only (plus the LUT
+     * floor). Computed per frame, then the guide is dropped before the
+     * verdict allocates its own planes.
+     */
+    fun movingStats(moving: LinearGuide): MovingStats {
+        val width = moving.width
+        val height = moving.height
+        val mean = Array(3) { FloatArray(width * height) }
+        for (c in 0..2) {
+            val mov = moving.channel(c)
+            RawSrWorkers.forEachShard(height) { y0, y1 ->
+                for (y in y0 until y1) for (x in 0 until width) {
+                    var movSum = 0f
+                    for (i in -1..1) for (j in -1..1) {
+                        val xx = (x + j).coerceIn(0, width - 1)
+                        val yy = (y + i).coerceIn(0, height - 1)
+                        movSum += mov[yy * width + xx]
+                    }
+                    mean[c][y * width + x] = movSum / 9f
+                }
+            }
+        }
+        return MovingStats(width, height, mean)
+    }
+
+    /**
+     * Guide-row source for the fused stats below: the same sqrt-of-quad
+     * values [linearGuide] stores in its color planes, computed one row at
+     * a time. Rail, hot, alpha/beta and the noise tables never enter the
+     * color planes, so this consults none of them.
+     */
+    private class PackedGuideRows(frame: RawSrPackedFrame) {
+        val outWidth: Int
+        val outHeight: Int
+        private val buffer: java.nio.ByteBuffer
+        private val base: Int
+        private val rowStride: Int
+        private val cropLeft: Int
+        private val cropTop: Int
+        private val blackPhase: DoubleArray
+        private val colorPhase: Array<CfaColor>
+        private val whiteLevel: Double
+
+        init {
+            require(frame.width % 2 == 0 && frame.height % 2 == 0) {
+                "Robustness guide requires complete Bayer quads"
+            }
+            val input = frame.uploadInput()
+            outWidth = input.crop.width / 2
+            outHeight = input.crop.height / 2
+            val view = input.buffer.duplicate().order(ByteOrder.nativeOrder())
+            buffer = view
+            base = view.position()
+            rowStride = input.layout.rowStride
+            cropLeft = input.crop.left
+            cropTop = input.crop.top
+            val normalization = input.normalization
+            val sensorLeft = input.sensorCropLeft
+            val sensorTop = input.sensorCropTop
+            blackPhase = DoubleArray(4) { p ->
+                normalization.blackAt(sensorLeft + (p and 1), sensorTop + (p shr 1)).toDouble()
+            }
+            colorPhase = Array(4) { p ->
+                normalization.sensorPattern.colorAt(sensorLeft + (p and 1), sensorTop + (p shr 1))
+            }
+            whiteLevel = normalization.whiteLevel.toDouble()
+        }
+
+        /** One guide row into the three channel rows; bitwise-identical to [linearGuide]. */
+        fun row(qy: Int, redRow: FloatArray, greenRow: FloatArray, blueRow: FloatArray) {
+            for (qx in 0 until outWidth) {
+                var r = 0f
+                var g = 0f
+                var b = 0f
+                var greens = 0
+                for (i in 0..1) for (j in 0..1) {
+                    val x = qx * 2 + j
+                    val y = qy * 2 + i
+                    val phase = ((y and 1) shl 1) or (x and 1)
+                    val offset = base + (cropTop + y) * rowStride + (cropLeft + x) * 2
+                    val code = buffer.getShort(offset).toInt() and 65535
+                    val black = blackPhase[phase]
+                    val value = RawSrCoreGuide.normalize(code, black, whiteLevel).toFloat()
+                    when (colorPhase[phase]) {
+                        CfaColor.RED -> {
+                            r = value
+                        }
+                        CfaColor.GREEN -> {
+                            g += value; greens++
+                        }
+                        CfaColor.BLUE -> {
+                            b = value
+                        }
+                    }
+                }
+                require(greens == 2) { "Bayer quads must hold exactly two green samples" }
+                redRow[qx] = sqrt(maxOf(r, 0f))
+                greenRow[qx] = sqrt(maxOf(g * 0.5f, 0f))
+                blueRow[qx] = sqrt(maxOf(b, 0f))
+            }
+        }
+    }
+
+    /**
+     * Reference stats directly from packed codes, bitwise-identical to
+     * `referenceStats(linearGuide(frame))`. Each shard keeps a 3-row guide
+     * ring (~73KB at full res) instead of the whole 37MB guide, so the 75MB
+     * stats allocate without the guide beside them on a 512MB heap.
+     */
+    fun referenceStatsFromPacked(frame: RawSrPackedFrame): ReferenceStats {
+        val rows = PackedGuideRows(frame)
+        val width = rows.outWidth
+        val height = rows.outHeight
+        val mean = Array(3) { FloatArray(width * height) }
+        val variance = Array(3) { FloatArray(width * height) }
+        RawSrWorkers.forEachShard(height) { y0, y1 ->
+            val cacheR = Array(3) { FloatArray(width) }
+            val cacheG = Array(3) { FloatArray(width) }
+            val cacheB = Array(3) { FloatArray(width) }
+            val cacheGy = IntArray(3) { -1 }
+            fun ensure(gy: Int) {
+                val slot = gy % 3
+                if (cacheGy[slot] != gy) {
+                    rows.row(gy, cacheR[slot], cacheG[slot], cacheB[slot])
+                    cacheGy[slot] = gy
+                }
+            }
+            for (y in y0 until y1) {
+                val gy0 = (y - 1).coerceIn(0, height - 1)
+                val gy1 = y
+                val gy2 = (y + 1).coerceIn(0, height - 1)
+                ensure(gy0)
+                ensure(gy1)
+                ensure(gy2)
+                val r0 = cacheR[gy0 % 3]
+                val r1 = cacheR[gy1 % 3]
+                val r2 = cacheR[gy2 % 3]
+                val g0 = cacheG[gy0 % 3]
+                val g1 = cacheG[gy1 % 3]
+                val g2 = cacheG[gy2 % 3]
+                val b0 = cacheB[gy0 % 3]
+                val b1 = cacheB[gy1 % 3]
+                val b2 = cacheB[gy2 % 3]
+                for (x in 0 until width) {
+                    val xx0 = (x - 1).coerceIn(0, width - 1)
+                    val xx2 = (x + 1).coerceIn(0, width - 1)
+                    // Channel sums replicate referenceStats order exactly:
+                    // i outer (-1,0,+1), j inner (-1,0,+1).
+                    var sumR = 0f
+                    var sqR = 0f
+                    var v = r0[xx0]; sumR += v; sqR += v * v
+                    v = r0[x]; sumR += v; sqR += v * v
+                    v = r0[xx2]; sumR += v; sqR += v * v
+                    v = r1[xx0]; sumR += v; sqR += v * v
+                    v = r1[x]; sumR += v; sqR += v * v
+                    v = r1[xx2]; sumR += v; sqR += v * v
+                    v = r2[xx0]; sumR += v; sqR += v * v
+                    v = r2[x]; sumR += v; sqR += v * v
+                    v = r2[xx2]; sumR += v; sqR += v * v
+                    var sumG = 0f
+                    var sqG = 0f
+                    v = g0[xx0]; sumG += v; sqG += v * v
+                    v = g0[x]; sumG += v; sqG += v * v
+                    v = g0[xx2]; sumG += v; sqG += v * v
+                    v = g1[xx0]; sumG += v; sqG += v * v
+                    v = g1[x]; sumG += v; sqG += v * v
+                    v = g1[xx2]; sumG += v; sqG += v * v
+                    v = g2[xx0]; sumG += v; sqG += v * v
+                    v = g2[x]; sumG += v; sqG += v * v
+                    v = g2[xx2]; sumG += v; sqG += v * v
+                    var sumB = 0f
+                    var sqB = 0f
+                    v = b0[xx0]; sumB += v; sqB += v * v
+                    v = b0[x]; sumB += v; sqB += v * v
+                    v = b0[xx2]; sumB += v; sqB += v * v
+                    v = b1[xx0]; sumB += v; sqB += v * v
+                    v = b1[x]; sumB += v; sqB += v * v
+                    v = b1[xx2]; sumB += v; sqB += v * v
+                    v = b2[xx0]; sumB += v; sqB += v * v
+                    v = b2[x]; sumB += v; sqB += v * v
+                    v = b2[xx2]; sumB += v; sqB += v * v
+                    val o = y * width + x
+                    val avgR = sumR / 9f
+                    val avgG = sumG / 9f
+                    val avgB = sumB / 9f
+                    mean[0][o] = avgR
+                    mean[1][o] = avgG
+                    mean[2][o] = avgB
+                    variance[0][o] = sqR / 9f - avgR * avgR
+                    variance[1][o] = sqG / 9f - avgG * avgG
+                    variance[2][o] = sqB / 9f - avgB * avgB
+                }
+            }
+        }
+        return ReferenceStats(width, height, mean, variance)
+    }
+
+    /**
+     * Moving means directly from packed codes, bitwise-identical to
+     * `movingStats(linearGuide(frame))`. Same 3-row ring as
+     * [referenceStatsFromPacked]: no 37MB guide beside the 37MB means.
+     */
+    fun movingStatsFromPacked(frame: RawSrPackedFrame): MovingStats {
+        val rows = PackedGuideRows(frame)
+        val width = rows.outWidth
+        val height = rows.outHeight
+        val mean = Array(3) { FloatArray(width * height) }
+        RawSrWorkers.forEachShard(height) { y0, y1 ->
+            val cacheR = Array(3) { FloatArray(width) }
+            val cacheG = Array(3) { FloatArray(width) }
+            val cacheB = Array(3) { FloatArray(width) }
+            val cacheGy = IntArray(3) { -1 }
+            fun ensure(gy: Int) {
+                val slot = gy % 3
+                if (cacheGy[slot] != gy) {
+                    rows.row(gy, cacheR[slot], cacheG[slot], cacheB[slot])
+                    cacheGy[slot] = gy
+                }
+            }
+            for (y in y0 until y1) {
+                val gy0 = (y - 1).coerceIn(0, height - 1)
+                val gy1 = y
+                val gy2 = (y + 1).coerceIn(0, height - 1)
+                ensure(gy0)
+                ensure(gy1)
+                ensure(gy2)
+                val r0 = cacheR[gy0 % 3]
+                val r1 = cacheR[gy1 % 3]
+                val r2 = cacheR[gy2 % 3]
+                val g0 = cacheG[gy0 % 3]
+                val g1 = cacheG[gy1 % 3]
+                val g2 = cacheG[gy2 % 3]
+                val b0 = cacheB[gy0 % 3]
+                val b1 = cacheB[gy1 % 3]
+                val b2 = cacheB[gy2 % 3]
+                for (x in 0 until width) {
+                    val xx0 = (x - 1).coerceIn(0, width - 1)
+                    val xx2 = (x + 1).coerceIn(0, width - 1)
+                    var sumR = 0f
+                    sumR += r0[xx0]; sumR += r0[x]; sumR += r0[xx2]
+                    sumR += r1[xx0]; sumR += r1[x]; sumR += r1[xx2]
+                    sumR += r2[xx0]; sumR += r2[x]; sumR += r2[xx2]
+                    var sumG = 0f
+                    sumG += g0[xx0]; sumG += g0[x]; sumG += g0[xx2]
+                    sumG += g1[xx0]; sumG += g1[x]; sumG += g1[xx2]
+                    sumG += g2[xx0]; sumG += g2[x]; sumG += g2[xx2]
+                    var sumB = 0f
+                    sumB += b0[xx0]; sumB += b0[x]; sumB += b0[xx2]
+                    sumB += b1[xx0]; sumB += b1[x]; sumB += b1[xx2]
+                    sumB += b2[xx0]; sumB += b2[x]; sumB += b2[xx2]
+                    val o = y * width + x
+                    mean[0][o] = sumR / 9f
+                    mean[1][o] = sumG / 9f
+                    mean[2][o] = sumB / 9f
+                }
+            }
+        }
+        return MovingStats(width, height, mean)
+    }
+
+    /**
+     * [evaluate] over precomputed local statistics: same Dogson warp, color
+     * distance, s1/s2 scaling, threshold and 5x5 local minimum, bitwise
+     * identical to [evaluate] for the same guides.
+     */
+    fun evaluateWithStats(
+        reference: ReferenceStats,
+        moving: MovingStats,
+        flow: RawSrAlignmentField,
+        tuning: RawSrTuning,
+        config: RawSrAlignmentConfig,
+        noiseLut: RawSrNoiseLut.Lut? = null
+    ): FrameRobustness {
+        require(reference.width == moving.width && reference.height == moving.height)
+        require(flow.coversRaw(reference.width * 2, reference.height * 2)) {
+            "Flow covers the raw lattice (2x the stats grid)"
+        }
+        val width = reference.width
+        val height = reference.height
+        val refMean = reference.mean
+        val refVar = reference.variance
+        val movMean = moving.mean
         val threshold = tuning.t.toFloat()
-        val motionThreshold = motionThresholdQuad(tuning)
+        val motionThreshold = motionThresholdPx(tuning)
         val s1 = tuning.s1.toFloat()
         val s2 = tuning.s2.toFloat()
         val raw = FloatArray(width * height)
@@ -354,14 +687,18 @@ object RawSrRobustness {
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             val warped = DoubleArray(3)
             val flowScratch = FloatArray(4)
+            val distVar = DoubleArray(2)
+            val corrected = DoubleArray(2)
             for (y in y0 until y1) for (x in 0 until width) {
                 val o = y * width + x
-                // Bilinear flow sampling: the warp target blends the four
-                // surrounding tiles so tile borders never quilt the
-                // robustness field (the tile-spread irregularity gate below
-                // still reads discrete tiles). Non-finite corners fall back
-                // to the containing tile.
-                flow.flowAtSmoothInto(x.toFloat(), y.toFloat(), flowScratch)
+                // Bilinear flow lookup (Sabre-style dense warp,
+                // beyond the reference `cpu_warp_dogson` tile snap):
+                // the SAME continuous warp the merge gather uses, so r
+                // scores the warp that actually renders (a snapped r
+                // over-accepts where the blended gather lands wrong).
+                // The tile-spread irregularity gate below still reads
+                // the discrete tiles (motion prior, unchanged).
+                flow.flowAtSmoothInto((2 * x + 1).toFloat(), (2 * y + 1).toFloat(), flowScratch)
                 val dx = flowScratch[0]
                 val dy = flowScratch[1]
                 if (!dx.isFinite() || !dy.isFinite()) {
@@ -369,44 +706,23 @@ object RawSrRobustness {
                     flags[o] = FLAG_INVALID_FLOW
                     continue
                 }
-                val centerX = x + dx.toDouble()
-                val centerY = y + dy.toDouble()
+                // Reference cuda_warp_dogson verbatim: the stats grid is
+                // half-resolution, so the raw-unit flow scales by 0.5.
+                val centerX = x + dx.toDouble() * 0.5
+                val centerY = y + dy.toDouble() * 0.5
                 if (centerX < 0.0 || centerY < 0.0 || centerX >= width || centerY >= height) {
                     // Reference OOB: warped means are +inf, so R = 0.
                     raw[o] = 0f
                     flags[o] = FLAG_OUT_OF_BOUNDS
                     continue
                 }
-                warpDogson(movMean, width, height, centerX, centerY, warped)
-                var distance = 0.0
-                var variance = 0.0
-                for (c in 0..2) {
-                    val error = refMean[c][o] - warped[c]
-                    distance += error * error
-                    variance += refVar[c][o]
-                }
-                // Measured noise correction (null LUT is a no-op): brightness
-                // is the mean reference channel mean, the LUT's binning key.
-                var correctedDistance = distance
-                var correctedVariance = variance
-                if (noiseLut != null) {
-                    val brightness = ((refMean[0][o] + refMean[1][o] + refMean[2][o]) / 3f).coerceIn(0f, 1f)
-                    val sample = noiseLut.sample(brightness)
-                    correctedVariance = maxOf(variance, sample.sigmaSq.toDouble())
-                    if (distance > 0.0) {
-                        val shrink = distance / (distance + sample.dSq.toDouble())
-                        correctedDistance = distance * shrink * shrink
-                    }
-                }
-                val scale = if (flowIrregular(flow, x, y, motionThreshold)) s1 else s2
-                var value = (scale * exp(-(correctedDistance / correctedVariance).toFloat()) - threshold)
-                    .coerceIn(0f, 1f)
-                if (!value.isFinite()) {
-                    // Matches the reference clamp outcome: sigma² = 0 rejects
-                    // (0/0 disagrees through fmax, d² > 0 underflows to zero).
-                    value = 0f
-                }
-                raw[o] = value
+                RawSrCoreRobustness.warpDogson(movMean, width, height, centerX, centerY, warped)
+                RawSrCoreRobustness.distanceAndVariance(refMean, refVar, warped, o, distVar)
+                RawSrCoreRobustness.correctNoise(
+                    distVar[0], distVar[1], refMean[0][o], refMean[1][o], refMean[2][o],
+                    noiseLut, corrected)
+                val scale = if (RawSrCoreRobustness.flowIrregular(flow, x, y, motionThreshold)) s1 else s2
+                raw[o] = RawSrCoreRobustness.threshold(corrected[0], corrected[1], scale, threshold)
                 flags[o] = 0
             }
         }
@@ -414,28 +730,18 @@ object RawSrRobustness {
         val r = FloatArray(width * height)
         RawSrWorkers.forEachShard(height) { y0, y1 ->
             for (y in y0 until y1) for (x in 0 until width) {
-                var minimum = Float.POSITIVE_INFINITY
-                for (i in -2..2) for (j in -2..2)
-                    minimum = minOf(minimum, raw[((y + i).coerceIn(0, height - 1)) * width + (x + j).coerceIn(0, width - 1)])
-                r[y * width + x] = minimum
+                r[y * width + x] = RawSrCoreRobustness.localMin(raw, width, height, x, y)
             }
         }
         return FrameRobustness(width, height, r, flags)
     }
 
-    /** Reference `dogson_quadratic_kernel` (utils_image.py). */
-    internal fun dogsonQuadratic(x: Double): Double {
-        val a = kotlin.math.abs(x)
-        return if (a <= 0.5) -2.0 * a * a + 1.0
-        else if (a <= 1.5) a * a - 2.5 * a + 1.5
-        else 0.0
-    }
+    /** Reference `dogson_quadratic_kernel` (utils_image.py); see [RawSrCoreRobustness]. */
+    internal fun dogsonQuadratic(x: Double): Double = RawSrCoreRobustness.dogsonQuadratic(x)
 
     /**
-     * Reference `cuda_warp_dogson`: the moving 3x3 means resampled at
-     * ([centerX], [centerY]) with the separable Dogson biquadratic kernel
-     * over the rounded, edge-clamped 3x3 window, normalized by the summed
-     * weights. The caller guarantees the center is in bounds.
+     * Reference `cuda_warp_dogson` (see [RawSrCoreRobustness.warpDogson]).
+     * The caller guarantees the center is in bounds.
      */
     internal fun warpDogson(
         movMean: Array<FloatArray>,
@@ -444,71 +750,13 @@ object RawSrRobustness {
         centerX: Double,
         centerY: Double,
         out: DoubleArray
-    ) {
-        // Reference round(): half-to-even, like Math.rint.
-        val centerQuadX = Math.rint(centerX).toInt()
-        val centerQuadY = Math.rint(centerY).toInt()
-        var wAcc = 0.0
-        out[0] = 0.0
-        out[1] = 0.0
-        out[2] = 0.0
-        for (i in -1..1) {
-            val yy = (centerQuadY + i).coerceIn(0, height - 1)
-            val wy = dogsonQuadratic(yy - centerY)
-            for (j in -1..1) {
-                val xx = (centerQuadX + j).coerceIn(0, width - 1)
-                val w = wy * dogsonQuadratic(xx - centerX)
-                for (c in 0..2) out[c] += movMean[c][yy * width + xx] * w
-                wAcc += w
-            }
-        }
-        out[0] /= wAcc
-        out[1] /= wAcc
-        out[2] /= wAcc
-    }
+    ) = RawSrCoreRobustness.warpDogson(movMean, width, height, centerX, centerY, out)
 
     /**
-     * Reference `cuda_compute_s`: 3x3 tile flow spread (in-bounds tiles,
-     * reliability-blind); true when motion is irregular. Non-finite tiles
-     * are reference-undefined and skipped as missing data; with no finite
-     * tile the verdict is conservatively irregular.
+     * Reference `cuda_compute_s` (see [RawSrCoreRobustness.flowIrregular]).
      */
-    internal fun flowIrregular(flow: RawSrAlignmentField, x: Int, y: Int, motionThreshold: Float): Boolean {
-        val tileX = (x / flow.tileSize).coerceIn(0, flow.columns - 1)
-        val tileY = (y / flow.tileSize).coerceIn(0, flow.rows - 1)
-        var minX = Float.POSITIVE_INFINITY
-        var minY = Float.POSITIVE_INFINITY
-        var maxX = Float.NEGATIVE_INFINITY
-        var maxY = Float.NEGATIVE_INFINITY
-        var finite = false
-        val direct = flow.tiles as? RawSrDirectFlowTiles
-        for (i in -1..1) for (j in -1..1) {
-            val tx = tileX + j
-            val ty = tileY + i
-            if (tx < 0 || ty < 0 || tx >= flow.columns || ty >= flow.rows) continue
-            val dx: Float
-            val dy: Float
-            if (direct != null) {
-                val index = ty * flow.columns + tx
-                dx = direct.directDx(index)
-                dy = direct.directDy(index)
-            } else {
-                val tile = flow.tiles[ty * flow.columns + tx]
-                dx = tile.dx
-                dy = tile.dy
-            }
-            if (!dx.isFinite() || !dy.isFinite()) continue
-            finite = true
-            minX = minOf(minX, dx)
-            minY = minOf(minY, dy)
-            maxX = maxOf(maxX, dx)
-            maxY = maxOf(maxY, dy)
-        }
-        if (!finite) return true
-        val spreadX = maxX - minX
-        val spreadY = maxY - minY
-        return spreadX * spreadX + spreadY * spreadY > motionThreshold * motionThreshold
-    }
+    internal fun flowIrregular(flow: RawSrAlignmentField, x: Int, y: Int, motionThreshold: Float): Boolean =
+        RawSrCoreRobustness.flowIrregular(flow, x, y, motionThreshold)
 
     /**
      * Merge motion-edge stop verdict: true only on demonstrated tile
@@ -517,11 +765,12 @@ object RawSrRobustness {
      * (which conservatively scales robustness weights on any doubt), a veto
      * here forfeits fusion, so unknown tiles merge with the robustness
      * gates as backstop. Mirrors the merge shader's finite-count gate
-     * exactly: fewer than two finite tiles cannot disagree.
+     * exactly: fewer than two finite tiles cannot disagree. ([x], [y] are
+     * guide (quad) coordinates like [flowIrregular].)
      */
     internal fun flowDisagrees(flow: RawSrAlignmentField, x: Int, y: Int, motionThreshold: Float): Boolean {
-        val tileX = (x / flow.tileSize).coerceIn(0, flow.columns - 1)
-        val tileY = (y / flow.tileSize).coerceIn(0, flow.rows - 1)
+        val tileX = ((2 * x) / flow.tileSize).coerceIn(0, flow.columns - 1)
+        val tileY = ((2 * y) / flow.tileSize).coerceIn(0, flow.rows - 1)
         var minX = Float.POSITIVE_INFINITY
         var minY = Float.POSITIVE_INFINITY
         var maxX = Float.NEGATIVE_INFINITY
@@ -560,19 +809,21 @@ object RawSrRobustness {
         return spreadX * spreadX + spreadY * spreadY > motionThreshold * motionThreshold
     }
 
-    /** The motion-edge decision is constant within an alignment tile. */
+    /**
+     * The motion-edge decision is constant within an alignment tile. Guide
+     * coordinates of the tile origin (tile lattice is raw pixels at an even
+     * [RawSrAlignmentField.tileSize], like every checkout level size).
+     */
     internal fun flowDisagreementTiles(flow: RawSrAlignmentField, motionThreshold: Float): BooleanArray =
         BooleanArray(flow.columns * flow.rows) { index ->
-            flowDisagrees(flow, (index % flow.columns) * flow.tileSize,
-                (index / flow.columns) * flow.tileSize, motionThreshold)
+            flowDisagrees(flow, (index % flow.columns) * flow.tileSize / 2,
+                (index / flow.columns) * flow.tileSize / 2, motionThreshold)
         }
 
     /** Exact once-per-quad accumulation; rc null starts from zero. */
     fun accumulate(rc: RcField?, frame: FrameRobustness): RcField {
         val base = rc ?: RcField(frame.width, frame.height, FloatArray(frame.width * frame.height))
         require(base.width == frame.width && base.height == frame.height)
-        val values = base.values.copyOf()
-        for (i in values.indices) values[i] += frame.r[i]
-        return RcField(frame.width, frame.height, values)
+        return RcField(frame.width, frame.height, RawSrCoreRobustness.accumulateRcPlain(base.values, frame.r))
     }
 }

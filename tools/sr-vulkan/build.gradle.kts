@@ -1,3 +1,4 @@
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 plugins {
@@ -148,11 +149,80 @@ tasks.register<Copy>("stageNative") {
     into(layout.buildDirectory.dir("resources/main/native/$nativePlatDir"))
 }
 
+// macOS any-Mac portability: the CMake link records an absolute MoltenVK
+// path (Homebrew/SDK), which breaks every Mac without that exact install.
+// Bundle the dylib beside the staged lib and retarget the reference to
+// @loader_path; SrVulkan.load() extracts the sibling next to the temp lib.
+// Linux is untouched (system libvulkan.so.1 resolves drivers at runtime).
+val moltenVkCandidates = listOfNotNull(
+    System.getenv("VULKAN_SDK")?.let { File("$it/lib/libMoltenVK.dylib") },
+    File("/opt/homebrew/lib/libMoltenVK.dylib"),
+    File("/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"),
+    File("/usr/local/lib/libMoltenVK.dylib")
+)
+tasks.register("stageMoltenVK") {
+    group = "build"
+    description = "Bundle MoltenVK beside the staged native lib (macOS)."
+    dependsOn("stageNative")
+    onlyIf { isMac && nativeLibFile.get().asFile.isFile }
+    doLast {
+        val dir = layout.buildDirectory.dir("resources/main/native/$nativePlatDir").get().asFile
+        val staged = File(dir, nativeLibName)
+        val molten = moltenVkCandidates.firstOrNull { it.isFile }
+        if (molten == null) {
+            logger.warn("sr-vulkan: libMoltenVK.dylib not found; desktop Vulkan needs an SDK install")
+            return@doLast
+        }
+        molten.copyTo(File(dir, "libMoltenVK.dylib"), overwrite = true)
+        val out = ByteArrayOutputStream()
+        project.exec {
+            commandLine("otool", "-L", staged.absolutePath)
+            standardOutput = out
+        }
+        val old = out.toString().lines()
+            .map { it.trim().split(" ").firstOrNull().orEmpty() }
+            .firstOrNull { it.endsWith("libMoltenVK.dylib") }
+            ?: throw GradleException("sr-vulkan: no MoltenVK link in ${staged.name}")
+        if (old != "@loader_path/libMoltenVK.dylib") {
+            project.exec {
+                commandLine("install_name_tool", "-change", old,
+                    "@loader_path/libMoltenVK.dylib", staged.absolutePath)
+            }
+            logger.lifecycle("sr-vulkan: staged MoltenVK + @loader_path link")
+        }
+    }
+}
+
 tasks.register<Copy>("stageSpirv") {
     dependsOn("compileShaders")
     onlyIf { spirvOut.get().asFile.isDirectory }
     from(spirvOut)
     into(layout.buildDirectory.dir("resources/main/spirv"))
+}
+
+// ---- Host librawLensDng (TinyDNG writer for merged DNGs) -------------------
+// Same C sources as the Android rawLensDng target (see CMakeLists.txt),
+// compiled for the host so the CLI and unit tests serialize DNGs through
+// the pinned TinyDNG writer instead of a JVM reimplementation.
+val dngLibName = if (isMac) "librawLensDng.dylib" else "librawLensDng.so"
+val dngBuildDir = layout.buildDirectory.dir("dng-native")
+val dngLibFile = dngBuildDir.map { it.file(dngLibName) }
+val hostJniPlat = if (isMac) "darwin" else "linux"
+tasks.register<Exec>("buildDngNative") {
+    onlyIf { commandExists("cc") }
+    val javaHome = System.getProperty("java.home")
+    commandLine(
+        "bash", rootDir.resolve("tools/build_dng_native.sh").absolutePath,
+        dngLibFile.get().asFile.absolutePath,
+        "$javaHome/include", "$javaHome/include/$hostJniPlat"
+    )
+}
+
+tasks.register<Copy>("stageDngNative") {
+    dependsOn("buildDngNative")
+    onlyIf { dngLibFile.get().asFile.isFile }
+    from(dngLibFile)
+    into(layout.buildDirectory.dir("resources/main/native/$nativePlatDir"))
 }
 
 // ---- Host ncnnMl (ML inference: KernelNet/FlowNet/RawNIND) -----------------
@@ -201,13 +271,17 @@ tasks.register<Copy>("stageNcnn") {
 }
 
 tasks.named("processResources") {
-    dependsOn("stageNative", "stageSpirv", "stageNcnn")
+    dependsOn("stageNative", "stageMoltenVK", "stageSpirv", "stageNcnn", "stageDngNative")
 }
 
 // GPU + staging tests need the built native lib, SPIR-V, and staged ESSL.
 tasks.named<Test>("test") {
     maxHeapSize = "4g" // TEMP burst522 probe only — revert before finishing
-    dependsOn("processResources", "compileShaders")
+    dependsOn("processResources", "compileShaders", "buildDngNative")
+    // Merged-DNG writer tests serialize through the host TinyDNG lib;
+    // -Drawlens.dnglib=... on the Gradle command overrides the built path.
+    systemProperty("rawlens.dnglib",
+        System.getProperty("rawlens.dnglib") ?: dngLibFile.get().asFile.absolutePath)
     // The ported ML processors loadLibrary("ncnnMl") (dedup-by-name only),
     // so the staged host lib must sit on java.library.path (see NcnnLoader).
     systemProperty("java.library.path", ncnnNativeDir.get().asFile.absolutePath)

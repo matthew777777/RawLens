@@ -12,6 +12,8 @@ Rules:
                allowlisted modified lines (additive deviations).
   DIRS       - directory trees must be identical (minus .DS_Store).
   FILES      - single files must be byte-identical (models).
+  STRUCTURE  - the alignment shader set must match the intended post-port
+               pass list (rewrite plan section 2), not the legacy set.
 """
 import subprocess
 import sys
@@ -25,16 +27,26 @@ CORE = ROOT / "tools/sr-vulkan/src/main/kotlin/com/matthew/rawlens"
 RAWLENS_IDENTICAL = [
     # Pure core (no host APIs at all).
     "RawSrAlignment.kt", "RawSrBayerMerge.kt", "RawSrBurstPlanner.kt",
+    "RawSrFrameRejection.kt", "HdrBracketConfig.kt", "DngExifDirectory.kt",
     "RawSrCovarianceGuide.kt", "RawSrFrameNoiseMeter.kt", "RawSrGpuScheduling.kt",
     "RawSrHighlights.kt", "RawSrHotPixel.kt", "RawSrKernelCovariance.kt",
     "RawSrMergedNoise.kt", "RawSrNoiseLut.kt", "RawSrPackedFrame.kt",
     "RawSrPackedKernelInput.kt", "RawSrRobustness.kt", "RawSrTuning.kt",
-    "RawSrUnblocker.kt", "RawSrWorkers.kt", "RawSensorUnpacker.kt",
+    "RawSrUnblocker.kt", "RawSrWorkers.kt", "RawSensorUnpacker.kt", "RawSrFft.kt",
+    "RawSrFftPlan.kt", "RawSrFftF32.kt",
     "DngNoiseProfile.kt", "DenoiseSettings.kt", "RawSuperResolutionSettings.kt",
     "QuadBayerPreparation.kt", "CaptureFileNames.kt", "RawBayerLayout.kt",
+    # Shared SR core: the exact scalar formulas the CPU donors delegate to
+    # (and the Vulkan shaders transcribe); see docs/sr-vulkan-rewrite-plan.md §1.
+    "RawSrCoreSampling.kt", "RawSrCoreKernel.kt", "RawSrCoreRobustness.kt",
+    "RawSrCoreKernels.kt", "RawSrCoreGuide.kt", "RawSrCoreAlign.kt",
+    "RawSrCoreFinish.kt",
+    # Finishing passes (pure; delegate to RawSrCoreFinish).
+    "RawSrDeadLaneInpaint.kt", "RawSrChromaFromLuma.kt",
     # Host-coupled only through the sr-vulkan host shims (android.util.Log,
-    # android.os.SystemClock/Build, android.opengl.GLES30, android.content,
-    # android.location, androidx.exifinterface) — every line identical.
+    # android.os.SystemClock/Build/SharedMemory, android.opengl.GLES30,
+    # android.content, android.location, androidx.exifinterface) — every
+    # line identical.
     "RawSrMergeJob.kt", "RawSrKernelNetAniso.kt", "MosaicSrReconstructor.kt",
     "MosaicSrDngWriter.kt", "LinearRgbDngWriter.kt", "RawPreDemosaicPipeline.kt",
     "GpsLocation.kt", "AmazePipelineContract.kt",
@@ -46,7 +58,7 @@ RAWLENS_IDENTICAL = [
 
 LIFTS = [
     # (original, lo, hi, lift file); 1-based inclusive.
-    (APP / "RawNindDenoiser.kt", 13, 137, CORE / "RawNindPack.kt"),
+    (APP / "RawNindDenoiser.kt", 13, 212, CORE / "RawNindPack.kt"),
 ]
 
 # Unified-backend files (both trees) that must stay free of GL host tokens
@@ -59,6 +71,20 @@ VK_BACKEND_FILES = [
 RETIRED_GL_TOKENS = ("Gles31", "EglCompute", "GlTexture", "GLES31.",
                      "glReadPixels", "glGenFramebuffers", "glTexImage",
                      "glDispatchCompute", "glMemoryBarrier", "glFenceSync")
+
+# Intended post-port alignment pass set (rewrite plan section 2). Required
+# stems must exist under shaders/rawsr in BOTH trees (any extension: the
+# plan names .comp for the new passes, the tree may stage .glsl); retired
+# stems must be gone from both. This audits structure, not byte-identity
+# with legacy bodies (check_dir covers tree equality separately).
+# Deliberately absent: fft_grey (superseded by the fft_stage/fft_remap
+# pair below), and bayer_quad_gray (Open Q6: covariance keeps plain gray;
+# quadGray is its remaining consumer). Dormant-but-staged
+# hot_mask/hot_inpaint are allowed: Jamy-L parity bypasses them, but no
+# decision retires them (the host keeps the dispatch functions for A/B).
+ALIGN_REQUIRED_STEMS = ("circular_pad", "flow_upscale", "flow_deflip", "block_match",
+                        "lk_refine", "pyramid_downsample", "fft_stage", "fft_remap")
+ALIGN_RETIRED_STEMS = ("flow_consistency",)
 
 failures = []
 
@@ -90,9 +116,9 @@ def check_lift(src: Path, lo: int, hi: int, lift: Path):
 
 
 def check_metadata_range():
-    """RawFrameMetadata: lines 16-104 (all pure declarations) verbatim."""
+    """RawFrameMetadata: lines 16-112 (all pure declarations) verbatim."""
     orig = (APP / "RawFrameMetadata.kt").read_text().splitlines()
-    want = [l for l in orig[15:104]]
+    want = [l for l in orig[15:112]]
     copy = (CORE / "RawFrameMetadata.kt").read_text().splitlines()
     start = next(i for i, l in enumerate(copy) if l.startswith("/** A defensive immutable wrapper"))
     stop = next(i for i, l in enumerate(copy) if l.startswith("// DESKTOP COUNTERPART"))
@@ -100,7 +126,7 @@ def check_metadata_range():
     while got and not got[-1].strip():
         got.pop()
     if got != want:
-        fail("RawFrameMetadata.kt pure region (orig 16-104) drifted")
+        fail("RawFrameMetadata.kt pure region (orig 16-112) drifted")
 
 
 def check_dir(src: Path, dst: Path):
@@ -137,6 +163,24 @@ def check_retirement():
                     fail(f"{path.relative_to(ROOT)} leaks retired GL token: {token}")
 
 
+def check_alignment_shader_structure():
+    """The alignment pass set must be the intended post-port list: the new
+    1:1 passes present, the retired legacy passes gone, in both trees."""
+    for root in (ROOT / "app/src/main/assets/shaders/rawsr",
+                 ROOT / "tools/sr-vulkan/src/main/resources/shaders/rawsr"):
+        try:
+            stems = {p.stem for p in root.iterdir() if p.is_file()}
+        except OSError:
+            fail(f"{root.relative_to(ROOT)} unreadable")
+            continue
+        for stem in ALIGN_REQUIRED_STEMS:
+            if stem not in stems:
+                fail(f"{root.relative_to(ROOT)} lacks intended alignment pass: {stem}")
+        for stem in ALIGN_RETIRED_STEMS:
+            if stem in stems:
+                fail(f"{root.relative_to(ROOT)} still stages retired pass: {stem}")
+
+
 def main():
     for name in RAWLENS_IDENTICAL:
         check_identical(APP / name, CORE / name)
@@ -148,6 +192,7 @@ def main():
         check_lift(src, lo, hi, lift)
     check_metadata_range()
     check_retirement()
+    check_alignment_shader_structure()
     check_dir(ROOT / "app/src/main/assets/shaders", ROOT / "tools/sr-vulkan/src/main/resources/shaders")
     for model in ("kernelnet_aniso_v2_2_params.ncnn.param", "kernelnet_aniso_v2_2_params.ncnn.bin"):
         check_identical(ROOT / f"app/src/main/assets/models/{model}",

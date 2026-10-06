@@ -6,7 +6,10 @@ rejection reasons, and a captured reference index. It never closes or transfers 
 
 Reference priority is valid input, stable captured AF/AE/lens state, angular travel over exposure
 plus rolling-shutter readout, sampled sharpness, distance from median timestamp, then timestamp
-and input index. Missing AF/AE/lens values rank below known stable values.
+and input index. Missing AF/AE/lens values rank below known stable values. `SHARPEST_FIRST`
+(`RawSrBurstPlanner.ReferenceMode`, via the `sharpestReference` save setting) moves sampled
+sharpness to the front with the same tiebreaks, anchoring the merge on the sharpest eligible
+frame; eligibility and rejection reasons are identical in both modes.
 
 V1 permits a maximum 1.10 ratio independently for exposure time and ISO. Dynamic black levels may
 differ provided each frame has valid normalization; white-level encoding must match. Uncorrected

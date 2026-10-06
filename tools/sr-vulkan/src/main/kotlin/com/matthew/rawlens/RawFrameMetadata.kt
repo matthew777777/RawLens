@@ -85,7 +85,15 @@ data class RawFrameMetadata(
     val afState: Int? = null,
     val aeState: Int? = null,
     val lensState: Int? = null,
-    val quadBayer: Boolean = false
+    val quadBayer: Boolean = false,
+    /** f-number at capture (LENS_APERTURE); feeds EXIF FNumber/ApertureValue. Null when unreported. */
+    val aperture: Float? = null,
+    /** Focal length in mm (LENS_FOCAL_LENGTH); feeds EXIF FocalLength. Null when unreported. */
+    val focalLengthMm: Float? = null,
+    /** Focus distance in meters (1/LENS_FOCUS_DISTANCE); feeds EXIF SubjectDistance. Null at infinity/unknown. */
+    val focusDistanceM: Float? = null,
+    /** True when the flash fired for this frame (FLASH_STATE); feeds EXIF Flash. Null when unknown. */
+    val flashFired: Boolean? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null

@@ -22,8 +22,12 @@ RawLens `docs/raw-sr-alignment-contract.md` (flow units/lookup),
 `RawSrKernelCovariance` (covariance packing), `RawSrPackedFrame.pattern`
 (phase-shifted CFA), `docs/wronski-raw-zsl-super-resolution-plan.md` §7.6.
 
-Attribution scope: accumulation geometry, kernel handling, robustness lookup,
-normalization, and the no-fallback divide are Jamy-L verbatim (§§3–6, 8).
+Attribution scope: accumulation geometry, kernel handling, normalization,
+flow/robustness sampling, and the no-fallback divide are Jamy-L verbatim
+(§§3–6, 8). The output lattice is a
+deliberate grid deviation (shared √2 SR lattice, §2 — not Jamy-L's 2x): the
+reconstruction is information-limited by the source kernels, so the denser
+2x sampling added no detail at 4x memory (evaluated, then retired).
 The dormant helpers (`accumulateNearest`, `ChromaParams`, `MIN_SUPPORT`,
 `MOTION_EDGE_QUAD`, `SATURATED_REF_GUARD`) are Stacker/SkyKing-derived and
 judged on their own tests, never on Alg. 4/11 fidelity.
@@ -56,24 +60,39 @@ dimensions (even-sized; shared by all frames per the packed-executor contract).
 The Mosaic SR target grid (√2 area scale, CFA-target reconstruction) is a
 separate path (`MosaicSrReconstructor`) sharing this accumulation math.
 
+The SR output grid (`RawSrLinearScale.SR`) is the shared √2 lattice both
+paths plan via `planSrOutputDims` (floor-to-even each side — a 12MP source
+lands at 5768×4326 ≈ 25MP, pixel-identical to the mosaic SR grid): output
+pixel `(i, j)` centers on source `((j + 0.5) / √2, (i + 0.5) / √2)` in RAW
+pixels. Kernels, flow, and robustness stay source-anchored (quad grid,
+raw-unit distances, §§3–5 sample the source position); only the output
+lattice changes, so every formula below reads with `p = (pixel + 0.5) /
+factor`. Rc/support stay quad-shaped; the fallback/oob/support planes and
+the DNG follow the output grid. The `outputScale` provenance tag records the
+grid factor (1.0 or √2 ≈ 1.4142135623730951).
+
 ## 3. Flow direction and units
 
-Flow is reference-anchored and stored in **Bayer-quad pixels** (alignment
-contract §"Pyramid, coordinates and matching"). For output pixel `p`
-(reference RAW coordinates), the projected source position in moving frame `n` is
+Flow is reference-anchored and stored in **RAW pixels** on a RAW-pixel tile
+lattice (`RawSrTileFlow.dx/dy`, `RawSrAlignmentField.tileSize` in raw px —
+the Jamy-L convention: its default FFT grey keeps full resolution, so its
+flows are raw pixels). For output pixel `p`, the projected source position
+in moving frame `n` is
 
-`source_n(p) = p + 0.5 + 2 · flow_n(p)`,
+`source_n(p) = (p + 0.5) / factor + flow_n(p)`,
 
-where `flow_n(p)` is the **bilinear** flow sample
-(`RawSrAlignmentField.flowAtSmoothInto`): tile centers sit at integer lattice
-points of `u = (q + 0.5) / tileSize - 0.5` and the four surrounding tiles blend
-dx/dy, so tile borders stay inside alignment and never quilt the merge (a
-deliberate deviation from the reference `px = int(lr_x//tile_size)`, which
-imprints the 16px tile grid on real bursts). Non-finite corners fall back to
-the containing tile. There is no motion-edge stop in the base path. The `+0.5` terms are the
+where `flow_n(p)` is the containing tile's raw-unit vector with no blending
+(`RawSrAlignmentField.flowAtNearestInto` via `RawSrCoreSampling.flowTileIndex`):
+`px = int(lr_x//tile_size)`, reference-verbatim. Non-finite tiles skip the
+pixel. There is no motion-edge stop in the base path. The `+0.5` terms are the
 pixel-center convention: output pixel `p` integrates `[p, p+1)`, and the source
-is addressed in the same continuous RAW-pixel coordinate system. Multiplying by
-2 is the Bayer-quad-to-RAW conversion (`d_raw = 2 · d_quad`).
+is addressed in the same continuous RAW-pixel coordinate system.
+
+GPU twin: the flow texture stores **RAW-unit** vectors on the RAW lattice
+(the 1:1 aligner tiles the raw grid, like the CPU chain), so the shader
+applies `source = (p + 0.5) / u_upscale + shift` verbatim — the same
+geometry with no unit conversion (retired: the pre-rewrite quad lattice
+applied `+ 2·shift`). The CPU/GPU agreement gate (§12) covers the twin.
 
 ## 4. Covariance lookup coordinates, units, kernel exponent
 
@@ -119,11 +138,12 @@ Per-tap accumulated contribution (channel `c` = tap color):
 `num_c(p) += w · r_n · sample_c(tap)`,
 `den_c(p) += w · r_n`,
 
-where `r_n` is the frame's robustness at the quad one up-left of the output
-pixel (`max(q−1, 0)`, the reference `min(int(lr//2−0.5))` lookup replicated
-verbatim, not nearest-quad), and `sample_c` is the normalized shaded merge
-sample (§1). Every finite sample merges (no censor skip): the reference
-defines none. The reference frame merges with `r_ref = 1`.
+where `r_n` is the frame's robustness from the nearest quad with the
+reference one-quad shift (`min(int(lr//2−0.5))`, sampled at the pixel
+center `s = (p + 0.5) / 2 − 1`), and `sample_c` is the normalized shaded
+merge sample (§1) — reference-verbatim. Every finite sample merges (no
+censor skip): the reference defines none. The reference frame merges with
+`r_ref = 1`.
 
 Opt-in green-guided chroma deweight (dormant A/B; Sabre `direct_rgb_accumulate`
 `chromaWeight` analogue, adapted to plain linear RGB): when the moving frame
@@ -258,7 +278,61 @@ robustness stage.
   output on any test including poisoned flow/noise inputs; repeated GPU runs
   bit-identical; CPU oracle run-to-run equal.
 
-## 13. Sign-off (2026-09-10, Mali-G615 MC2, Redmi 25080RABDG)
+## 13. Bilinear-everywhere + unblocker + contested veto (2026-10-05/06, RawLens improvement)
+
+Sabre-style dense warp, always on, no gates: merge gather AND
+robustness warp both bilinear-sample the flow (`flowAtSmoothInto`,
+C0-continuous, tears impossible by construction), and per-pixel
+rejection (not flow vetoes) handles mistakes. The robustness warp
+uses the SAME bilinear lookup as the gather, so r scores the warp
+that actually renders. Non-finite corners fall back to the containing
+tile; non-finite results skip with oob++ (invalid-flow propagation
+preserved). The pre-Sabre gated smoother (`flowAtGatedSmoothInto`,
+`FlowPhotoGate`, gradK) and all its tuning/CLI/shader surface are
+DELETED, not default-off — the gates were scaffolding around the
+self-inflicted tile snap. CPU and GPU transcribe the same formulas
+in float32 (`merge_accumulate.glsl`, `robustness.glsl`).
+
+The unblocker fold (`RawSrUnblocker`, always on) caps robustness by
+the variance-loss keep-weight (`r' = min(r, u)`, Sabre
+`weight = min(1 - unblocker, frame_weight)`), then the contested-warp
+veto zeroes quads where the 3x3 tile flow spread exceeds the motion
+threshold while u < 0.5 (period-ghost bends would render at any
+partial weight), and a second 5x5 local minimum spreads the fold
+(Sabre dilate). The keep verdict judges the PRE-fold field, so frame
+selection is unchanged; without a usable noise model the field rides
+through (no model, no gate). GPU mirrors the order exactly
+(robustness → min → modulate → min → accumulate) with the CPU guide
+gray uploaded verbatim (4E precedent: the pyramid's linear grey
+lives in a different domain and would gate differently).
+
+Validated on the Xiaomi burst (Xiaomi REDMI Note 15 Pro 5G,
+4080x3060 x8): quilt zmax 1.39 (REF Jamy-L 2.27, gated 2.23,
+bilinear-no-fold 1.96; single-frame floor 1.18); blinds slats
+straight (user spots track single-frame at mean|d| 47/16 DN vs
+989/655 gated); the (1298,1149) "pit" reads 3713 ≈ single-frame
+3690 — the 9836 value that gated/REF render there is a ghost smear
+(seven period-shifted moving samples averaging against the
+reference), so matching REF was a trap; sharpness best-ever
+(hp-std 786.6 vs 770.0 gated — rejecting ghosts sharpens); VK twins
+CPU at mean|d| 0.3, pit-exact, spots-exact. Veto measured surgical
+(4-6.5% of quads; pit/bush keep full weight).
+
+History compressed: gated smoothing (spread 2.0 + photo floor 0.035)
+was user-confirmed blinds-good with pit 9836, but left foliage
+tears (gates can't engage where tiles disagree by design) and the
+blinds ghost above. Spread INF is the blinds killer (user-confirmed
+bad). GradK failed the pit gate (k=1: 9836 → 6163 — the pit's own
+±2 gradient exceeds tear gradients, no k separates). Blend
+verification was tried and reverted (useless at INF). Pinned by
+`RawSrFlowIntoParityTest` smooth/nearest cases,
+`flowTransitionBlendsAcrossBorderButMatchesUniformFarAway`,
+`robustnessStepFlowMatchesOracleOffBand` (off-band REF parity +
+band divergence), unblocker cap/spread/veto tests, and GPU
+`gpuBilinearSmoothMatchesCpuOracle`. GPU carries no bitwise
+guarantee across source edits (twin-tolerance parity only).
+
+## 14. Sign-off (2026-09-10, Mali-G615 MC2, Redmi 25080RABDG)
 
 Prompt 4D declared DONE. JVM unit suite 211/211 green. Headless GPU
 `connectedDebugAndroidTest`: 50/50 ran, 49 pass; every merge, flow-oracle,

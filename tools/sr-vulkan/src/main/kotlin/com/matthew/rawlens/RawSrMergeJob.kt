@@ -119,7 +119,10 @@ object RawSrMergeJob {
     /**
      * Bilinear resampling of a coarse alignment field onto the quad grid
      * (dormant A/B helper; the reference-parity base path consumes the
-     * coarse field with nearest-tile lookup and never upsamples).
+     * coarse field with bilinear sampling directly and never upsamples).
+     * The coarse field speaks raw pixels (Jamy-L convention), so each quad
+     * samples its center in raw coordinates (2q+1); the stored vectors stay
+     * raw-unit displacements on the quad lattice (tileSize 1).
      */
     fun upsampleFlowToQuads(
         coarse: RawSrAlignmentField, quadsW: Int, quadsH: Int
@@ -136,7 +139,7 @@ object RawSrMergeJob {
                 // Bilinear source: the upsampled quad field carries the same
                 // smooth values a direct smooth sample would return.
                 // Into form is bitwise-identical with no per-quad boxing.
-                coarse.flowAtSmoothInto(qx.toFloat(), qy.toFloat(), flowScratch)
+                coarse.flowAtSmoothInto((2 * qx + 1).toFloat(), (2 * qy + 1).toFloat(), flowScratch)
                 val i = qy * quadsW + qx
                 dx[i] = flowScratch[0]
                 dy[i] = flowScratch[1]
@@ -227,6 +230,23 @@ object RawSrMergeJob {
     internal fun copyRgbaRowsToRgb(
         rgba: java.nio.FloatBuffer, width: Int, rows: Int, rgb: FloatArray, offset: Int
     ) {
+        // Array-backed sources (every production band) copy straight from
+        // the backing array: no per-band row temp, no per-row bulk get, same
+        // floats in the same order. The position still advances past the
+        // consumed quads, exactly as the row loop did.
+        if (rgba.hasArray()) {
+            val backing = rgba.array()
+            var r = rgba.arrayOffset() + rgba.position()
+            var o = offset
+            repeat(Math.multiplyExact(width, rows)) {
+                rgb[o++] = backing[r]
+                rgb[o++] = backing[r + 1]
+                rgb[o++] = backing[r + 2]
+                r += 4
+            }
+            rgba.position(rgba.position() + Math.multiplyExact(Math.multiplyExact(width, rows), 4))
+            return
+        }
         val row = FloatArray(Math.multiplyExact(width, 4))
         var o = offset
         repeat(rows) {
@@ -241,14 +261,34 @@ object RawSrMergeJob {
         }
     }
 
+    /** One merge-time rejection with the measured support numbers for provenance logging. */
+    data class RejectedFrame(
+        val index: Int,
+        val reason: String,
+        val evRelative: Double?,
+        val reliableFraction: Double?,
+        val meanRobustness: Double?,
+        val supportFraction: Double?,
+        val medianFlowSpanPx: Float?
+    )
+
     data class MosaicChain(
         val reference: RawSrBayerMerge.MergeFrame,
         val moving: List<RawSrBayerMerge.MergeFrame>,
         /** Indices into the caller's frame list that survived alignment. */
         val survivorIndices: List<Int>,
         val tuning: RawSrTuning,
-        /** Quad tile size of the alignment config this chain actually aligned with. */
-        val alignmentTileQuads: Int
+        /** Raw-pixel tile size of the alignment config this chain actually aligned with. */
+        val alignmentTileSize: Int,
+        /** Every moving frame rejected during the chain, in input order. */
+        val rejections: List<RejectedFrame> = emptyList(),
+        /**
+         * Measured/profile noise-sigma ratio for the reference frame (null
+         * when unmeasurable or KernelNet is off): feeds
+         * [RawSrKernelNetAniso.sigmaFor]'s auto-sigma correction so an
+         * understated OEM profile cannot maze the learned kernels.
+         */
+        val noiseSigmaRatio: Float? = null
     )
 
     /** One mosaic input: packed plane plus its reference metadata. */
@@ -262,49 +302,114 @@ object RawSrMergeJob {
      * surviving moving frame the chain throws [MergeUnavailableException] and
      * the caller falls back. Local motion stays inside the merge via
      * robustness and the reference-only fallback — never as a frame rejection.
+     * A null [tuningOverride] resolves tuning from the reference SNR scan; a
+     * fixed tuning replaces it for A/B presets.
+     *
+     * Frames keep analytic covariances: eager consumers orchestrate their own
+     * [kernelNetSwap] (the linear CLI does, after its GAT stage so learned
+     * kernels win — swapping here too would run inference twice). Only the
+     * streaming path swaps internally, where consumers have no swap point.
      */
     fun mosaicChain(
         inputs: List<MosaicInput>,
         referenceIndex: Int,
         config: RawSrAlignmentConfig? = null,
         isCancelled: ((rowsCompleted: Int) -> Boolean)? = null,
-        noiseLut: RawSrNoiseLut.Lut? = null
+        noiseLut: RawSrNoiseLut.Lut? = null,
+        tuningOverride: RawSrTuning? = null,
+        rejectionPolicy: RawSrFrameRejection.Policy = RawSrFrameRejection.Policy(),
+        onRejected: ((RejectedFrame) -> Unit)? = null
     ): MosaicChain {
         require(inputs.size >= 2) { "Mosaic chain needs at least two frames" }
         require(referenceIndex in inputs.indices)
         val refInput = inputs[referenceIndex]
-        val tuning = RawSrTuning.fromReference(refInput.packed).tuning
-        // Null keeps the GPU path's contract: SNR-derived tile size (64/32/16
-        // raw px -> 32/16/8 quads) instead of a fixed default.
+        val tuning = tuningOverride ?: RawSrTuning.fromReference(refInput.packed).tuning
+        // Null keeps the SNR-derived tile size (reference update_snr_config
+        // 64/32/16 raw px) instead of a fixed default.
         val activeConfig = config ?: tuning.alignmentConfig()
+        val refEv = exposureValue(refInput.metadata)
+        // The corrected reference CFA is built once and shared: the gray,
+        // the burst-shared alignment pyramid, and the reference merge frame
+        // all read it, instead of re-unpacking and re-correcting the
+        // reference inside buildReferenceFrame. Jamy-L parity: no hot-pixel
+        // stage — the reference defines none, and the stuck-low gate
+        // misfires on thin scene lines (green-dot root cause).
         val refCfa = correctedCfa(refInput)
             ?: throw MergeUnavailableException("Reference frame cannot be unpacked")
-        val refHot = RawSrHotPixel.detectPacked(refInput.packed)
-        // Inpaint before the gray: alignment and the guide both read these
-        // samples, and a stuck tap must not steer either one.
-        RawSrHotPixel.inpaintNormalized(
-            refCfa.values, refHot, refCfa.width, refCfa.height, refCfa.pattern)
-        val refGray = RawSrAlignment.bayerQuadGray(refCfa)
-        val refGuide = RawSrRobustness.linearGuide(refInput.packed, refHot)
-        val reference = buildReferenceFrame(refInput, refHot)
+        // Alignment grey is unshaded normalized (the reference has no lens
+        // shading); the merge keeps the shaded CFA. The grey runs in RGGB
+        // processing space (reference cfa_to_rggb): sensor space would
+        // sample the complementary stride phase and pad the wrong end.
+        val refPlain = unpack(refInput.packed)
+        val refProcessing = RawSrCfaOrientation.toProcessingSpace(
+            refPlain.values, refPlain.width, refPlain.height,
+            RawSrCfaOrientation.forPattern(refPlain.pattern))
+        val refGray = RawSrAlignment.fftGrey(refProcessing, refPlain.width, refPlain.height)
+        // Burst-shared alignment levels: identical for every moving frame
+        // (see alignBurst), built once instead of per frame. The reference
+        // pyramid pads circularly to a tile multiple (Jamy-L init).
+        val refPyramid = RawSrAlignment.pyramid(
+            RawSrAlignment.circularPad(refGray, activeConfig.tileSize))
+        // Reference stats are identical for every moving frame: compute once,
+        // fused from packed codes (no 37MB guide beside the 75MB stats).
+        val refStats = RawSrRobustness.referenceStatsFromPacked(refInput.packed)
+        // Auto-sigma input for KernelNet consumers: measured once on the
+        // pre-shading reference unpack (only when the model is enabled —
+        // the analytic path never reads it). Like all diagnostics, it must
+        // never break the merge.
+        val noiseSigmaRatio = if (RawSrKernelNetAniso.enabled) {
+            try {
+                RawSrFrameNoiseMeter.compare(refPlain, refInput.packed.noiseProfile)?.ratio
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val reference = buildReferenceFrameFromCfa(refInput, refCfa, tuning)
         val moving = ArrayList<RawSrBayerMerge.MergeFrame>()
         val survivors = ArrayList<Int>()
+        val rejections = ArrayList<RejectedFrame>()
         var completed = 0
         for ((index, input) in inputs.withIndex()) {
             if (index == referenceIndex) continue
             if (isCancelled?.invoke(completed) == true) {
                 throw java.util.concurrent.CancellationException("Mosaic chain cancelled")
             }
-            val frame = buildMovingFrame(refGray, refGuide, tuning, activeConfig, input, "index $index", noiseLut)
-                ?: continue
+            val outcome = buildMovingFrame(
+                refPyramid, refStats, tuning, activeConfig, input, "index $index", noiseLut,
+                rejectionPolicy, refEv)
+            val frame = outcome.frame
+            if (frame == null) {
+                val rejected = RejectedFrame(index, outcome.reason ?: "unknown",
+                    outcome.evRelative, outcome.reliableFraction, outcome.meanRobustness,
+                    outcome.supportFraction, outcome.medianFlowSpanPx)
+                rejections.add(rejected)
+                onRejected?.invoke(rejected)
+                continue
+            }
             moving.add(frame)
             survivors.add(index)
             completed++
         }
         if (moving.isEmpty()) {
-            throw MergeUnavailableException("Mosaic chain kept no moving frame after alignment")
+            val detail = rejections.joinToString { "index ${it.index}=${it.reason}" }
+            throw MergeUnavailableException(
+                "Mosaic chain kept no moving frame after alignment ($detail)")
         }
-        return MosaicChain(reference, moving, survivors, tuning, activeConfig.tileSize)
+        return MosaicChain(reference, moving, survivors, tuning, activeConfig.tileSize, rejections,
+            noiseSigmaRatio)
+    }
+
+    /** Exposure value proxy (exposure*ISO) for EV-relative logging; null-safe. */
+    private fun exposureValue(m: RawFrameMetadata): Double =
+        (m.exposureTimeNanos ?: 0).toDouble() * (m.sensitivityIso ?: 0).toDouble()
+
+    private fun evRelative(refEv: Double, m: RawFrameMetadata): Double? {
+        if (refEv <= 0.0) return null
+        val ev = exposureValue(m)
+        if (ev <= 0.0) return null
+        return kotlin.math.log2(ev / refEv)
     }
 
     /** Reference geometry for the streaming path (bytes, not buffers). */
@@ -318,50 +423,162 @@ object RawSrMergeJob {
 
     /**
      * Lazy counterpart of [mosaicChain] for the memory-bound production save.
-     * Reference preparation (unpack, gray, tuning, linear guide) runs eagerly;
+     * Reference preparation (unpack, gray, tuning, local stats) runs eagerly;
      * moving frames build on consumption so the caller can accumulate-then-drop
      * each frame instead of retaining the whole burst (~150MB per full-res
-     * frame). The reference guide (~40MB) is retained, not recomputed per
-     * frame. Only [ReferenceGeometry], the 12.5MB reference gray and the guide
-     * survive assembly.
+     * frame). The reference local stats are computed once and retained, not
+     * recomputed per frame. [ReferenceGeometry], the corrected reference
+     * CFA (~50MB) with its gray and alignment pyramid, and the stats
+     * survive assembly. [tuningOverride] behaves like [mosaicChain]'s.
      */
     data class MosaicStream(
         val geometry: ReferenceGeometry,
         val tuning: RawSrTuning,
         val selected: Int,
         val frames: Sequence<RawSrBayerMerge.MergeFrame>,
-        /** Quad tile size of the alignment config this stream actually aligns with. */
-        val alignmentTileQuads: Int
+        /** Raw-pixel tile size of the alignment config this stream actually aligns with. */
+        val alignmentTileSize: Int,
+        /**
+         * Reference merge frame over the cached corrected CFA: identical to
+         * `buildReferenceFrame(inputs[ref], tuning)` without re-unpacking,
+         * re-correcting, re-detecting, or re-graying the reference. Invoke
+         * once, at reference-accumulation time.
+         */
+        val referenceFrame: () -> RawSrBayerMerge.MergeFrame,
+        /**
+         * Measured/profile noise-sigma ratio for the reference frame (null
+         * when unmeasurable or KernelNet is off): same auto-sigma input as
+         * [MosaicChain.noiseSigmaRatio], for streaming consumers.
+         */
+        val noiseSigmaRatio: Float? = null
     )
+
+    /**
+     * Test-only stand-in for model inference in the streaming swap: when
+     * non-null, [mosaicStream] routes every moving frame plus the reference
+     * through it instead of the readiness-gated [kernelNetSwap], so wiring
+     * tests pin the per-frame call sites without an ncnn model. Production
+     * code must leave this null. Args are the frame, its sensor noise
+     * profile, and the stream's measured auto-sigma ratio.
+     */
+    internal var kernelNetSwapForTest: ((
+        frame: RawSrBayerMerge.MergeFrame,
+        noiseProfile: ImmutableDoubleValues?,
+        measuredRatio: Float?
+    ) -> RawSrBayerMerge.MergeFrame)? = null
+
+    /**
+     * One frame's analytic→learned covariance swap: rebuilds the frame's own
+     * corrected samples as CFA input (no re-unpack) and runs KernelNet at
+     * [RawSrKernelNetAniso.sigmaFor] with the burst's auto-sigma ratio.
+     * Returns the frame untouched when the model is off, not ready, or
+     * falls back (logged at debug). Shared by the linear CLI's eager swap
+     * and the streaming mosaic swap, so both paths consume one conversion.
+     */
+    fun kernelNetSwap(
+        frame: RawSrBayerMerge.MergeFrame,
+        noiseProfile: ImmutableDoubleValues?,
+        label: String,
+        measuredRatio: Float?
+    ): RawSrBayerMerge.MergeFrame {
+        val cfa = UnpackedRawCfa(
+            frame.width, frame.height, frame.sensorPattern, frame.samples,
+            RawCrop(0, 0, frame.width, frame.height), frame.sensorLeft, frame.sensorTop
+        )
+        val sigma = RawSrKernelNetAniso.sigmaFor(noiseProfile, measuredRatio)
+        val field = RawSrKernelNetAniso.precisionFor(cfa, frame.covariance, sigma)
+        if (field === frame.covariance) {
+            if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) {
+                android.util.Log.d(TAG, "kernelnet $label fell back to analytic")
+            }
+            return frame
+        }
+        return frame.copy(covariance = field)
+    }
 
     fun mosaicStream(
         inputs: List<MosaicInput>,
         referenceIndex: Int,
         config: RawSrAlignmentConfig? = null,
         isCancelled: ((rowsCompleted: Int) -> Boolean)? = null,
-        noiseLut: RawSrNoiseLut.Lut? = null
+        noiseLut: RawSrNoiseLut.Lut? = null,
+        tuningOverride: RawSrTuning? = null,
+        rejectionPolicy: RawSrFrameRejection.Policy = RawSrFrameRejection.Policy(),
+        onRejected: ((RejectedFrame) -> Unit)? = null
     ): MosaicStream {
         require(inputs.size >= 2) { "Mosaic chain needs at least two frames" }
         require(referenceIndex in inputs.indices)
         val refInput = inputs[referenceIndex]
-        val tuning = RawSrTuning.fromReference(refInput.packed).tuning
-        // Null keeps the GPU path's contract: SNR-derived tile size (64/32/16
-        // raw px -> 32/16/8 quads) instead of a fixed default.
+        val tuning = tuningOverride ?: RawSrTuning.fromReference(refInput.packed).tuning
+        // Null keeps the SNR-derived tile size (reference update_snr_config
+        // 64/32/16 raw px) instead of a fixed default.
         val activeConfig = config ?: tuning.alignmentConfig()
+        val refEv = exposureValue(refInput.metadata)
+        // The corrected reference CFA is built once and retained for the
+        // reference accumulation (~50MB CFA plus the 12MB gray beside the
+        // 75MB stats — inside the streaming budget), instead of
+        // re-unpacking and re-correcting the reference when it accumulates
+        // last. Jamy-L parity: no hot-pixel stage (see mosaicChain).
         val refCfa = correctedCfa(refInput)
             ?: throw MergeUnavailableException("Reference frame cannot be unpacked")
-        val refHot = RawSrHotPixel.detectPacked(refInput.packed)
-        RawSrHotPixel.inpaintNormalized(
-            refCfa.values, refHot, refCfa.width, refCfa.height, refCfa.pattern)
-        val refGray = RawSrAlignment.bayerQuadGray(refCfa)
-        // Built once: the guide depends only on the reference packed frame,
-        // so recomputing it per moving frame below would repeat a full-res
-        // pass for identical values.
-        val refGuide = RawSrRobustness.linearGuide(refInput.packed, refHot)
+        // Alignment grey is unshaded normalized (the reference has no lens
+        // shading); the merge keeps the shaded CFA. The grey runs in RGGB
+        // processing space (reference cfa_to_rggb): sensor space would
+        // sample the complementary stride phase and pad the wrong end.
+        val refPlain = unpack(refInput.packed)
+        val refProcessing = RawSrCfaOrientation.toProcessingSpace(
+            refPlain.values, refPlain.width, refPlain.height,
+            RawSrCfaOrientation.forPattern(refPlain.pattern))
+        val refGray = RawSrAlignment.fftGrey(refProcessing, refPlain.width, refPlain.height)
+        // Burst-shared alignment levels: identical for every moving frame
+        // (see alignBurst), built once instead of per frame. The reference
+        // pyramid pads circularly to a tile multiple (Jamy-L init).
+        val refPyramid = RawSrAlignment.pyramid(
+            RawSrAlignment.circularPad(refGray, activeConfig.tileSize))
         val geometry = ReferenceGeometry(
             refCfa.width, refCfa.height, refCfa.pattern,
             refCfa.sensorCropLeft, refCfa.sensorCropTop
         )
+        // Built once: the stats depend only on the reference packed frame,
+        // so recomputing them per moving frame below would repeat full-res
+        // passes for identical values. Fused from packed codes (no 37MB
+        // guide beside the 75MB stats); only the stats are captured below.
+        val refStats = RawSrRobustness.referenceStatsFromPacked(refInput.packed)
+        // Auto-sigma input, mirroring mosaicChain: measured once on the
+        // pre-shading reference unpack (only when the model is enabled).
+        // Like all diagnostics, it must never break the merge.
+        val noiseSigmaRatio = if (RawSrKernelNetAniso.enabled) {
+            try {
+                RawSrFrameNoiseMeter.compare(refPlain, refInput.packed.noiseProfile)?.ratio
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        // Frozen KernelNet decision for every frame of this stream:
+        // readiness is captured once at assembly so a model that finishes
+        // loading mid-burst cannot mix learned and analytic covariances
+        // across frames. The test seam bypasses the gate (it stands in for
+        // inference itself).
+        val testSwap = kernelNetSwapForTest
+        val swapKernels = testSwap != null ||
+            (RawSrKernelNetAniso.enabled && RawSrKernelNetAniso.isReady())
+        if (swapKernels) {
+            android.util.Log.i(TAG, "mosaic stream uses KernelNet covariances" +
+                " (auto-sigma ratio=${noiseSigmaRatio ?: "n/a"})")
+        } else if (RawSrKernelNetAniso.enabled) {
+            android.util.Log.i(TAG, "mosaic stream analytic: KernelNet model not ready")
+        }
+        fun maybeSwap(
+            frame: RawSrBayerMerge.MergeFrame,
+            noiseProfile: ImmutableDoubleValues?,
+            label: String
+        ): RawSrBayerMerge.MergeFrame {
+            if (!swapKernels) return frame
+            return testSwap?.invoke(frame, noiseProfile, noiseSigmaRatio)
+                ?: kernelNetSwap(frame, noiseProfile, label, noiseSigmaRatio)
+        }
         val frames = sequence {
             var completed = 0
             for ((index, input) in inputs.withIndex()) {
@@ -376,38 +593,70 @@ object RawSrMergeJob {
                 // the 512MB heap. Nulling before the next build keeps the
                 // accumulate-then-drop contract (mirrors the consumer side in
                 // MosaicSrReconstructor.reconstructStreaming).
-                var frame = buildMovingFrame(refGray, refGuide, tuning, activeConfig, input, "index $index", noiseLut)
+                var outcome = buildMovingFrame(refPyramid, refStats, tuning, activeConfig, input,
+                    "index $index", noiseLut, rejectionPolicy, refEv)
+                var frame = outcome.frame
                 if (frame != null) {
+                    // Learned kernels before the yield: the swap only replaces
+                    // the covariance field (same quad grid), so the
+                    // accumulate-then-drop memory contract below is unchanged.
+                    frame = maybeSwap(frame, input.packed.noiseProfile, "index $index")
                     yield(frame)
                     frame = null
+                    outcome = MovingOutcome(null, null, null, null, null, null, null)
                     completed++
+                } else {
+                    onRejected?.invoke(RejectedFrame(index, outcome.reason ?: "unknown",
+                        outcome.evRelative, outcome.reliableFraction, outcome.meanRobustness,
+                        outcome.supportFraction, outcome.medianFlowSpanPx))
                 }
             }
         }
-        return MosaicStream(geometry, tuning, inputs.size, frames, activeConfig.tileSize)
+        val referenceFrame: () -> RawSrBayerMerge.MergeFrame = {
+            maybeSwap(buildReferenceFrameFromCfa(refInput, refCfa, tuning),
+                refInput.packed.noiseProfile, "ref")
+        }
+        return MosaicStream(geometry, tuning, inputs.size, frames, activeConfig.tileSize, referenceFrame,
+            noiseSigmaRatio)
     }
 
     /**
-     * Reference merge frame: unpack, lens-shading correction, hot-pixel
-     * inpaint, precision. No flow or robustness (the reference anchors
+     * Reference merge frame: unpack, lens-shading correction, GAT-guide
+     * kernels, precision. No flow or robustness (the reference anchors
      * both). Shared by the eager chain and by the streaming path's one-shot
-     * reference accumulation. A null [hotMask] is detected internally; pass
-     * the chain's mask to share one detection.
+     * reference accumulation. Jamy-L parity: no hot-pixel stage.
      */
-    fun buildReferenceFrame(input: MosaicInput, hotMask: BooleanArray? = null): RawSrBayerMerge.MergeFrame {
-        val tuning = RawSrTuning.fromReference(input.packed).tuning
+    fun buildReferenceFrame(
+        input: MosaicInput,
+        tuning: RawSrTuning? = null
+    ): RawSrBayerMerge.MergeFrame {
+        // Null re-estimates from the frame (a full-frame SNR scan); callers
+        // that already hold the chain tuning pass it to skip the rescan.
+        val activeTuning = tuning ?: RawSrTuning.fromReference(input.packed).tuning
         val cfa = correctedCfa(input)
             ?: throw MergeUnavailableException("Reference frame cannot be unpacked")
-        val mask = if (hotMask != null) {
-            require(hotMask.size == cfa.width * cfa.height) { "Hot mask must cover the frame" }
-            hotMask
-        } else {
-            RawSrHotPixel.detectPacked(input.packed)
-        }
-        RawSrHotPixel.inpaintNormalized(
-            cfa.values, mask, cfa.width, cfa.height, cfa.pattern)
         if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) logNoiseCheck(input)
-        return mergeFrame(cfa, tuning, flow = null, robustness = null).copy(highlightNeutral = RawSrHighlights.neutral(input.metadata))
+        val guide = RawSrCovarianceGuide.guide(input.packed).gray
+        return mergeFrame(cfa, activeTuning, flow = null, robustness = null, guide)
+            .copy(highlightNeutral = RawSrHighlights.neutral(input.metadata))
+    }
+
+    /**
+     * Reference merge frame over an already corrected CFA: identical to
+     * [buildReferenceFrame] for the same tuning, minus the redundant
+     * unpack and lens-shading correction. The chain/stream setups already
+     * hold the CFA; rebuilding it costs a full unpack + correction per
+     * save for identical bytes.
+     */
+    internal fun buildReferenceFrameFromCfa(
+        input: MosaicInput,
+        cfa: UnpackedRawCfa,
+        tuning: RawSrTuning
+    ): RawSrBayerMerge.MergeFrame {
+        if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) logNoiseCheck(input)
+        val guide = RawSrCovarianceGuide.guide(input.packed).gray
+        return mergeFrame(cfa, tuning, flow = null, robustness = null, guide)
+            .copy(highlightNeutral = RawSrHighlights.neutral(input.metadata))
     }
 
     /**
@@ -428,78 +677,157 @@ object RawSrMergeJob {
     }
 
     /**
+     * Per-frame outcome: a kept frame, or the rejection reason plus the
+     * measured support numbers (null frame). Internal so both chain paths
+     * share one gate implementation.
+     */
+    internal data class MovingOutcome(
+        val frame: RawSrBayerMerge.MergeFrame?,
+        val reason: String?,
+        val evRelative: Double?,
+        val reliableFraction: Double?,
+        val meanRobustness: Double?,
+        val supportFraction: Double?,
+        val medianFlowSpanPx: Float?
+    )
+
+    /**
      * Per-frame chain step shared by the eager and streaming paths: unpack,
-     * align-or-reject, robustness, precision. Null means the frame is rejected
-     * (same gates as [mosaicChain]); every rejection logs its stage at WARN so
-     * a production "kept no moving frame" failure names its cause in logcat.
-     * Only [Exception] rejects a frame: [OutOfMemoryError] and cancellation
-     * propagate so the caller reports heap pressure truthfully instead of
-     * misreporting it as an alignment failure.
+     * align-or-reject, robustness-or-reject, support-gate, precision. Null
+     * frame means the frame is rejected (same gates as [mosaicChain]); every
+     * rejection logs its stage at WARN so a production "kept no moving
+     * frame" failure names its cause in logcat. Only [Exception] rejects a
+     * frame: [OutOfMemoryError] and cancellation propagate so the caller
+     * reports heap pressure truthfully instead of misreporting it as an
+     * alignment failure.
+     *
+     * Gates (see [RawSrFrameRejection]): unpack, align exception, zero
+     * reliable tiles, low reliable-tile fraction, robustness exception, then
+     * the shared support verdict (mean R, support fraction, global-motion
+     * veto). Local motion stays inside the merge via robustness and the
+     * reference-only fallback — never as a frame rejection.
      */
     private fun buildMovingFrame(
-        refGray: RawSrGrayImage,
-        refGuide: RawSrRobustness.LinearGuide,
+        refPyramid: List<RawSrGrayImage>,
+        refStats: RawSrRobustness.ReferenceStats,
         tuning: RawSrTuning,
         config: RawSrAlignmentConfig,
         input: MosaicInput,
         label: String,
-        noiseLut: RawSrNoiseLut.Lut?
-    ): RawSrBayerMerge.MergeFrame? {
+        noiseLut: RawSrNoiseLut.Lut?,
+        rejectionPolicy: RawSrFrameRejection.Policy = RawSrFrameRejection.Policy(),
+        refEv: Double = 0.0
+    ): MovingOutcome {
+        fun rejected(reason: String, rel: Double? = null, mean: Double? = null,
+                     support: Double? = null, span: Float? = null): MovingOutcome {
+            val ev = evRelative(refEv, input.metadata)
+            val evTag = if (ev == null) "" else " ev=${"%.2f".format(ev)}"
+            val detail = buildString {
+                if (rel != null) append(" rel=${"%.3f".format(rel)}")
+                if (mean != null) append(" meanR=${"%.3f".format(mean)}")
+                if (support != null) append(" support=${"%.3f".format(support)}")
+                if (span != null && span.isFinite()) append(" span=${"%.2f".format(span)}q")
+            }
+            android.util.Log.w(TAG, "mosaic frame $label rejected: $reason$evTag$detail")
+            return MovingOutcome(null, reason, ev, rel, mean, support, span)
+        }
         // Per-stage wall clock for production-save diagnosis (one line per
         // frame; Debug-gated so release logcat stays quiet).
         val t0 = android.os.SystemClock.elapsedRealtime()
         val cfa = correctedCfa(input)
         if (cfa == null) {
-            android.util.Log.w(TAG, "mosaic frame $label rejected: unpack")
-            return null
+            return rejected("unpack")
         }
-        // One hot-pixel detection per frame, shared by the guide rail and
-        // the sample inpaint below. Inpaint runs before the gray so
-        // alignment, robustness, and the kernel means all read clean taps;
-        // the rail gate still zeroes the quad's robustness weight.
-        val hot = RawSrHotPixel.detectPacked(input.packed)
-        RawSrHotPixel.inpaintNormalized(
-            cfa.values, hot, cfa.width, cfa.height, cfa.pattern)
+        // Jamy-L parity: no hot-pixel stage (see mosaicChain). The fused
+        // moving stats below read packed codes directly.
         val tUnpack = android.os.SystemClock.elapsedRealtime()
-        val gray = RawSrAlignment.bayerQuadGray(cfa)
+        // Alignment grey is unshaded normalized (the reference has no lens
+        // shading); the merge keeps the shaded CFA. Alignment runs in RGGB
+        // processing space (reference cfa_to_rggb) and the field maps back
+        // to sensor space at the boundary: robustness, rejection, and the
+        // merge below all see sensor space, exactly as before.
+        val plain = unpack(input.packed)
+        val flip = RawSrCfaOrientation.forPattern(plain.pattern)
+        val processing = RawSrCfaOrientation.toProcessingSpace(
+            plain.values, plain.width, plain.height, flip)
+        val gray = RawSrAlignment.fftGrey(processing, plain.width, plain.height)
         val coarse = try {
-            RawSrAlignment.align(refGray, gray, config)
+            RawSrCfaOrientation.remapFieldToSensor(
+                RawSrAlignment.alignPair(refPyramid, RawSrAlignment.pyramid(gray), config), flip,
+                plain.width, plain.height)
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            android.util.Log.w(TAG, "mosaic frame $label rejected: align (${failure.message})")
-            return null
+            return rejected("align (${failure.message})")
         }
         if (coarse.tiles.none { it.reliable }) {
-            android.util.Log.w(TAG, "mosaic frame $label rejected: no reliable tile")
-            return null
+            return rejected("no-reliable-tile", rel = 0.0)
+        }
+        val reliableFraction = RawSrFrameRejection.reliableFraction(coarse)
+        if (reliableFraction < rejectionPolicy.minReliableFraction) {
+            return rejected("low-reliable-frac", rel = reliableFraction)
         }
         val tAlign = android.os.SystemClock.elapsedRealtime()
-        // Reference-parity base: the coarse tile field feeds robustness and
-        // the merge directly; both consume it with nearest-tile lookup
-        // (Jamy-L Algs. 4/6), never a smoothed upsampling.
-        val flow = coarse
+        // Reference-parity base: the fine raw-lattice field feeds robustness
+        // and the merge directly (raw-pixel flows, Jamy-L convention). A
+        // regularization sigma upgrades to the bilateral-filtered field
+        // (both consumers stay consistent by construction).
+        val flowSmoothSigma = tuning.flowRegularizeSigma ?: 0.0
+        val flow = if (flowSmoothSigma > 0.0) coarse.bilateralFiltered(flowSmoothSigma.toFloat()) else coarse
         val robustness = try {
-            RawSrRobustness.evaluate(
-                refGuide, RawSrRobustness.linearGuide(input.packed, hot), flow, tuning, config, noiseLut
+            // Fused from packed codes (no 37MB guide beside the 37MB means).
+            // Inside the gate so a bad frame still rejects like before.
+            val movStats = RawSrRobustness.movingStatsFromPacked(input.packed)
+            RawSrRobustness.evaluateWithStats(
+                refStats, movStats, flow, tuning, config, noiseLut
             )
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            android.util.Log.w(TAG, "mosaic frame $label rejected: robustness (${failure.message})")
-            return null
+            return rejected("robustness (${failure.message})", rel = reliableFraction)
+        }
+        val verdict = RawSrFrameRejection.judge(flow, robustness, rejectionPolicy)
+        if (!verdict.keep) {
+            return rejected(verdict.rejectReason ?: "support",
+                rel = verdict.reliableFraction, mean = verdict.meanRobustness,
+                support = verdict.supportFraction, span = verdict.medianFlowSpanPx)
         }
         val tRobust = android.os.SystemClock.elapsedRealtime()
-        // Reference-parity base: the robustness field feeds the merge
-        // unchanged (Jamy-L Alg. 6 has no unblocker fold and no learned
-        // kernel stage). RawSrUnblocker stays available for A/B only.
-        val frame = mergeFrame(cfa, tuning, flow, robustness, gray)
+        val guide = RawSrCovarianceGuide.guide(input.packed).gray
+        // Sabre-style unblocker fold (always on): photometric agreement
+        // is blind to period-ambiguous ghosts (boxed means match at any
+        // whole-period shift), so the variance-loss keep-weight caps the
+        // robustness (min, never compounding) before the merge. The keep
+        // verdict above judged the unfolded field, so frame selection is
+        // unchanged; without a usable noise model the field rides through
+        // (no model, no gate).
+        val effective = try {
+            val params = RawSrRobustness.gpuParams(input.packed)
+            if (!params.modelValid) robustness
+            else RawSrUnblocker.applyToFrameAndSpread(robustness, RawSrUnblocker.computeFrame(
+                guide, params.alpha[1].toDouble(), params.beta[1].toDouble()),
+                flow, RawSrRobustness.motionThresholdPx(tuning))
+        } catch (cancelled: java.util.concurrent.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Exotic CFA (non-Bayer): the coefficient reduction requires
+            // two green phases, so the field rides through unfolded rather
+            // than failing a frame the fused stats path would accept.
+            robustness
+        }
+        val frame = mergeFrame(cfa, tuning, flow, effective, guide)
         if (android.util.Log.isLoggable(TAG, android.util.Log.DEBUG)) {
+            val ev = evRelative(refEv, input.metadata)
             android.util.Log.d(TAG, "mosaic frame ${cfa.width}x${cfa.height}" +
+                (if (ev == null) "" else " ev=${"%.2f".format(ev)}") +
+                " rel=${"%.3f".format(verdict.reliableFraction)}" +
+                " meanR=${"%.3f".format(verdict.meanRobustness)}" +
                 " unpack=${tUnpack - t0}ms align=${tAlign - tUnpack}ms" +
                 " robust=${tRobust - tAlign}ms precision=${android.os.SystemClock.elapsedRealtime() - tRobust}ms")
         }
-        return frame
+        return MovingOutcome(frame, null, evRelative(refEv, input.metadata),
+            verdict.reliableFraction, verdict.meanRobustness,
+            verdict.supportFraction, verdict.medianFlowSpanPx)
     }
 
     /**
@@ -535,13 +863,27 @@ object RawSrMergeJob {
         tuning: RawSrTuning,
         flow: RawSrAlignmentField?,
         robustness: RawSrRobustness.FrameRobustness?,
-        gray: RawSrGrayImage = RawSrAlignment.bayerQuadGray(cfa)
+        guide: RawSrGrayImage
     ): RawSrBayerMerge.MergeFrame {
-        // Reference-parity base: the analytic kernel covariance, interpolated
-        // and inverted by the merge itself (Jamy-L Algs. 4-5). No learned
-        // stage and no narrow-axis clamp in the base path; KernelNet stays
-        // available behind its own switch for A/B only.
-        val covariance = RawSrKernelCovariance.covariance(gray, tuning)
+        // Reference-parity base: the analytic kernel covariance over the
+        // GAT variance-stabilized guide (Jamy-L Algs. 4-5), interpolated
+        // and inverted by the merge itself. No learned stage in the base
+        // path; KernelNet stays available behind its own switch for A/B
+        // only.
+        val covariance = RawSrKernelCovariance.covariance(guide, tuning)
+        if (RawSrKernelNetAniso.zipperGates) {
+            // Narrow-axis clamp (default-kernel zipper gate): sub-lattice
+            // across-axes ring and straddle per-channel edges in ways
+            // third-party demosaics read as zipper, so every texel's minor
+            // axis floors at minorAxisSigmaFloor. Precision-space clamp
+            // over a covariance field: invert, clamp, invert back, all in
+            // place (the field is freshly allocated and the merge inverts
+            // per-pixel anyway). KernelNet-swapped fields arrive
+            // pre-clamped from the producers.
+            RawSrKernelCovariance.invertFieldInPlace(covariance.values)
+            MosaicSrReconstructor.clampMinorAxisInPlace(covariance.values, MosaicSrReconstructor.minorAxisSigmaFloor)
+            RawSrKernelCovariance.invertFieldInPlace(covariance.values)
+        }
         return RawSrBayerMerge.MergeFrame(
             width = cfa.width,
             height = cfa.height,
