@@ -1,0 +1,52 @@
+#version 450
+// Fused port of hdr-plus-swift upsample(.Bilinear) + add_texture_weighted +
+// add_texture: accum += lerp(ref, aligned, w) / N, with w bilinearly
+// upsampled from the half-resolution weight. mode 0 adds the reference's
+// own ref / N (the accumulator starts zeroed, like upstream).
+// Upstream-parity patches (RawLens): samples past the weight edge read zero
+// (upstream's Metal reads outside the texture return zero; clamping would
+// smear the edge cell into the last row/column), and the frame count divides
+// (upstream add_texture divides by N; multiplying by a reciprocal differs by
+// a rounding step for N not a power of two).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refPadded;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D aligned;
+layout(set = 0, binding = 2, r32f) readonly uniform image2D weight;
+layout(set = 0, binding = 3, r32f) uniform image2D accum;
+layout(push_constant) uniform P {
+    ivec2 size;
+    ivec2 pad;
+    ivec2 cells;
+    int count;
+    int mode;  // 0 = reference init, 1 = companion add
+} p;
+
+float w(ivec2 c) {
+    return (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, p.cells))) ? 0.0 : imageLoad(weight, c).x;
+}
+
+// upsample_bilinear_float at scale 2: even pixels hit a cell exactly.
+float upsampledWeight(ivec2 q) {
+    vec2 x = vec2(q) * 0.5;
+    ivec2 f = ivec2(floor(x)), c = ivec2(ceil(x));
+    vec2 t = x - floor(x);
+    float i1 = t.x == 0.0 ? w(ivec2(f.x, f.y)) : (1.0 - t.x) * w(ivec2(f.x, f.y)) + t.x * w(ivec2(c.x, f.y));
+    float i2 = t.x == 0.0 ? w(ivec2(f.x, c.y)) : (1.0 - t.x) * w(ivec2(f.x, c.y)) + t.x * w(ivec2(c.x, c.y));
+    return t.y == 0.0 ? i1 : (1.0 - t.y) * i1 + t.y * i2;
+}
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    float r = imageLoad(refPadded, p.pad + q).x;
+    float n = float(p.count);
+    if (p.mode == 0) {
+        // Upstream add_texture always adds (the final texture starts zeroed);
+        // the reference lands mid-loop, so it adds like every other frame.
+        imageStore(accum, q, vec4(imageLoad(accum, q).x + r / n));
+        return;
+    }
+    float k = upsampledWeight(q);
+    float merged = k * imageLoad(aligned, q).x + (1.0 - k) * r;
+    imageStore(accum, q, vec4(imageLoad(accum, q).x + merged / n));
+}

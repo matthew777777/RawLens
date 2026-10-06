@@ -1,0 +1,21 @@
+#version 450
+// Fourier sub-pixel shift coefficients for hdrq_merge: for each of the 7x7
+// candidate shifts and each 8x8 frequency bin, (cos, sin) of
+// angle * (m * sx + n * sy). They do not depend on the image, so they are
+// computed once per merge with the same expression the merge used per tile.
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) writeonly buffer Table { vec2 v[]; } table;
+
+const float PI = 3.14159265358979323846;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;  // shift * 64 + n * 8 + m
+    if (i >= 49u * 64u) return;
+    int shift = int(i / 64u), bin = int(i % 64u);
+    int m = bin % 8, n = bin / 8;
+    float angle = -2.0 * PI / 8.0;
+    const float step = 1.0 / 6.0;
+    float sx = -0.5 + float(shift % 7) * step, sy = -0.5 + float(shift / 7) * step;
+    float a = angle * (float(m) * sx + float(n) * sy);
+    table.v[i] = vec2(cos(a), sin(a));
+}

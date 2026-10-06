@@ -1,0 +1,25 @@
+#version 450
+// Port of hdr-plus-swift upsample_nearest_int for the per-tile alignment
+// vectors (stored as ivec2 in SSBOs instead of rg16Sint textures).
+// Upstream-parity patch (RawLens): Metal texture reads outside the texture
+// return zero, and upstream relies on that at the last row/column whenever
+// the source grid is less than half the destination grid (pyramid levels
+// below the tile-size-8 floor). Clamping would read the edge tile instead,
+// so out-of-range indices yield a zero vector like upstream.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer Src { ivec2 v[]; } src;
+layout(std430, set = 0, binding = 1) writeonly buffer Dst { ivec2 v[]; } dst;
+layout(push_constant) uniform P {
+    ivec2 srcTiles;
+    ivec2 dstTiles;
+    vec2 scale;  // dst / src, as float like upstream
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.dstTiles))) return;
+    ivec2 s = ivec2(round(vec2(q) / p.scale));
+    ivec2 v = ivec2(0);
+    if (all(greaterThanEqual(s, ivec2(0))) && all(lessThan(s, p.srcTiles))) v = src.v[s.y * p.srcTiles.x + s.x];
+    dst.v[q.y * p.dstTiles.x + q.x] = v;
+}

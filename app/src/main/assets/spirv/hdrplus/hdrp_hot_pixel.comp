@@ -1,0 +1,36 @@
+#version 450
+// Sensor hot-pixel concealment on the padded raw frame (same median-of-4
+// same-colour neighbours as pipeline/shaders/hot_pixel_conceal.comp).
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r32f) uniform image2D padded;
+layout(std430, set = 0, binding = 1) readonly buffer HotPixels { ivec2 xy[]; } hot;
+layout(push_constant) uniform P {
+    int count;
+    ivec2 pad;
+    ivec2 size;
+} p;
+
+void main() {
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= p.count) return;
+    ivec2 q = hot.xy[i];
+    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, p.size))) return;
+    float v[4];
+    int n = 0;
+    if (q.x - 2 >= 0) v[n++] = imageLoad(padded, p.pad + q + ivec2(-2, 0)).x;
+    if (q.x + 2 < p.size.x) v[n++] = imageLoad(padded, p.pad + q + ivec2(2, 0)).x;
+    if (q.y - 2 >= 0) v[n++] = imageLoad(padded, p.pad + q + ivec2(0, -2)).x;
+    if (q.y + 2 < p.size.y) v[n++] = imageLoad(padded, p.pad + q + ivec2(0, 2)).x;
+    if (n == 0) return;
+    for (int a = 1; a < n; ++a) {
+        float key = v[a];
+        int b = a - 1;
+        while (b >= 0 && v[b] > key) {
+            v[b + 1] = v[b];
+            --b;
+        }
+        v[b + 1] = key;
+    }
+    float median = (n % 2 == 1) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    imageStore(padded, p.pad + q, vec4(median));
+}

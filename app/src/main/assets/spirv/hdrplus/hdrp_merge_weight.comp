@@ -1,0 +1,22 @@
+#version 450
+// Port of hdr-plus-swift compute_merge_weight: the companion's weight falls
+// linearly from 1 (no difference) to 0 at noise_sd / robustness.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D diff;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D weight;
+layout(std430, set = 0, binding = 2) readonly buffer Noise { float v[]; } noise;
+layout(push_constant) uniform P {
+    ivec2 cells;
+    float robustness;
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.cells))) return;
+    float w = 1.0;
+    if (p.robustness != 0.0) {
+        float maxDiff = noise.v[0] / p.robustness;
+        w = clamp(1.0 - imageLoad(diff, q).x / maxDiff, 0.0, 1.0);
+    }
+    imageStore(weight, q, vec4(w));
+}

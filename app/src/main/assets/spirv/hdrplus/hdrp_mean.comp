@@ -1,0 +1,22 @@
+#version 450
+// texture_mean stages 2-3 (sum_row + sum_divide_buffer): one invocation sums
+// the column sums per 2x2 phase in x order, adds the four phases in order
+// and divides by the pixel count. Stays on the GPU (upstream also keeps it
+// in a buffer).
+// Upstream-parity patch (RawLens): phase-grouped association exactly like
+// upstream instead of one packed sum.
+layout(local_size_x = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer Columns { float v[]; } columns;
+layout(std430, set = 0, binding = 1) writeonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    int count;
+    float pixels;
+} p;
+
+void main() {
+    float phase[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    for (int q = 0; q < 4; ++q) {
+        for (int x = q & 1; x < p.count; x += 2) phase[q] += columns.v[2 * x + (q >> 1)];
+    }
+    mean.v[0] = (phase[0] + phase[1] + phase[2] + phase[3]) / p.pixels;
+}

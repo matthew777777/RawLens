@@ -1,0 +1,44 @@
+#version 450
+// Port of hdr-plus-swift backward_dft (8x8 tiles): inverse transform of the
+// merged spectrum, normalized by frame count * 64 (the sum of N pairwise
+// merges becomes their mean). One 8x8 workgroup per tile.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D ft;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D dst;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    float frames;
+} p;
+
+const float PI = 3.14159265358979323846;
+shared vec4 tmpRe[8][8];  // [dn][dm]
+shared vec4 tmpIm[8][8];
+
+void main() {
+    ivec2 t = ivec2(gl_WorkGroupID.xy);
+    if (any(greaterThanEqual(t, p.tiles))) return;
+    int dm = int(gl_LocalInvocationID.x), dn = int(gl_LocalInvocationID.y);
+    ivec2 t0 = t * 8;
+    float angle = 2.0 * PI / 8.0;
+    // Row-wise (x) transform.
+    vec4 re = vec4(0.0), im = vec4(0.0);
+    for (int dx = 0; dx < 8; ++dx) {
+        // Upstream-parity patch (RawLens): twiddle argument associated
+        // left-to-right like upstream's angle*dm*dx, not angle*(dm*dx).
+        float c = cos(angle * float(dm) * float(dx)), s = sin(angle * float(dm) * float(dx));
+        ivec2 x = ivec2(2 * (t0.x + dx), t0.y + dn);
+        vec4 dRe = imageLoad(ft, x), dIm = imageLoad(ft, x + ivec2(1, 0));
+        re += c * dRe - s * dIm;
+        im += s * dRe + c * dIm;
+    }
+    tmpRe[dn][dm] = re;
+    tmpIm[dn][dm] = im;
+    barrier();
+    // Column-wise (y) transform, real part only.
+    re = vec4(0.0);
+    for (int dy = 0; dy < 8; ++dy) {
+        float c = cos(angle * float(dn) * float(dy)), s = sin(angle * float(dn) * float(dy));
+        re += c * tmpRe[dy][dm] - s * tmpIm[dy][dm];
+    }
+    imageStore(dst, t0 + ivec2(dm, dn), re / (p.frames * 64.0));
+}

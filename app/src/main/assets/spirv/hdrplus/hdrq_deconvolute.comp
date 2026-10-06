@@ -1,0 +1,34 @@
+#version 450
+// Port of hdr-plus-swift deconvolute_frequency_domain (tile size 8): mild
+// per-frequency gain against blur from residual misalignment, faded out for
+// high-mismatch tiles and strong frequencies. One lane per bin; bin (0,0)
+// is never modified, so every lane may read it.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba32f) uniform image2D ft;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D totalMismatch;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+} p;
+
+const float CW[8] = float[8](0.00, 0.02, 0.04, 0.08, 0.04, 0.08, 0.04, 0.02);
+
+void main() {
+    ivec2 t = ivec2(gl_WorkGroupID.xy);
+    if (any(greaterThanEqual(t, p.tiles))) return;
+    int dm = int(gl_LocalInvocationID.x), dn = int(gl_LocalInvocationID.y);
+    float mm = imageLoad(totalMismatch, t).x;
+    if (dm + dn == 0 || !(mm < 0.3)) return;
+    ivec2 t0 = t * 8;
+    float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
+    vec4 zRe = imageLoad(ft, ivec2(2 * t0.x, t0.y)), zIm = imageLoad(ft, ivec2(2 * t0.x + 1, t0.y));
+    vec4 zMag = sqrt(zRe * zRe + zIm * zIm);
+    float magnitudeZero = zMag.x + zMag.y + zMag.z + zMag.w;
+    ivec2 o = ivec2(2 * (t0.x + dm), t0.y + dn);
+    vec4 re = imageLoad(ft, o), im = imageLoad(ft, o + ivec2(1, 0));
+    vec4 mag = sqrt(re * re + im * im);
+    float magnitude = mag.x + mag.y + mag.z + mag.w;
+    float weight = mismatchWeight * clamp(1.25 - 25.0 * magnitude / magnitudeZero, 0.0, 1.0);
+    float gain = (1.0 + weight * CW[dm]) * (1.0 + weight * CW[dn]);
+    imageStore(ft, o, gain * re);
+    imageStore(ft, o + ivec2(1, 0), gain * im);
+}

@@ -1,0 +1,77 @@
+#version 450
+// Port of hdr-plus-swift compute_tile_differences25: cost of each of the 5x5
+// integer displacements around the (upscaled) previous alignment. One
+// workgroup per tile stages the reference tile and the (T+4)^2 comparison
+// window in shared memory (upstream slides a 5-row cache for the same
+// reason). Each lane owns one (row, vertical displacement) pair and slides
+// along the row accumulating all five horizontal displacements from a small
+// register window (in upstream's pairwise order), so every staged value is
+// read about once per lane instead of five times. Row sums are then added in
+// row order. L2 on coarse levels, L1 on the finest. Tiles up to 32 px.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refLevel;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D compLevel;
+layout(std430, set = 0, binding = 2) readonly buffer Prev { ivec2 v[]; } prev;
+layout(std430, set = 0, binding = 3) writeonly buffer Diff { float v[]; } diffs;
+layout(push_constant) uniform P {
+    ivec2 levelSize;
+    ivec2 tiles;
+    int downscale;
+    int tileSize;
+    int useSsd;
+} p;
+
+const float FLOAT16_MIN_VAL = -65504.0;
+const int MAX_TILE = 32;
+const int MAX_WINDOW = MAX_TILE + 4;
+shared float sRef[MAX_TILE * MAX_TILE];
+shared float sComp[MAX_WINDOW * MAX_WINDOW];
+shared float sRow[25 * MAX_TILE];  // [displacement][row]
+
+float cost(float d) { return p.useSsd != 0 ? d * d : d; }
+
+void main() {
+    ivec2 g = ivec2(gl_WorkGroupID.xy);
+    if (g.x >= p.tiles.x || g.y >= p.tiles.y) return;
+    int lane = int(gl_LocalInvocationID.x);
+    int t = p.tileSize;
+    int win = t + 4;
+    ivec2 t0 = g * (t / 2);
+    ivec2 c0 = t0 + p.downscale * prev.v[g.y * p.tiles.x + g.x] - 2;
+    for (int i = lane; i < t * t; i += 256) sRef[i] = imageLoad(refLevel, t0 + ivec2(i % t, i / t)).x;
+    for (int i = lane; i < win * win; i += 256) {
+        ivec2 s = c0 + ivec2(i % win, i / win);
+        // Out-of-frame samples carry a finite high loss (upstream caches
+        // FLOAT16_MIN_VAL and compares against twice that in float).
+        bool outside = any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.levelSize));
+        sComp[i] = outside ? 2.0 * FLOAT16_MIN_VAL : imageLoad(compLevel, s).x;
+    }
+    barrier();
+    if (lane < 5 * t) {
+        int dy = lane % t, oy = lane / t;
+        int rr = dy * t, cr = (dy + oy) * win;
+        float acc[5] = float[5](0.0, 0.0, 0.0, 0.0, 0.0);
+        // Register window over comparison columns dx .. dx+5.
+        float w0 = sComp[cr + 0], w1 = sComp[cr + 1], w2 = sComp[cr + 2], w3 = sComp[cr + 3];
+        for (int dx = 0; dx < t; dx += 2) {
+            float w4 = sComp[cr + dx + 4], w5 = sComp[cr + dx + 5];
+            float r0 = sRef[rr + dx], r1 = sRef[rr + dx + 1];
+            acc[0] += cost(abs(r0 - w0)) + cost(abs(r1 - w1));
+            acc[1] += cost(abs(r0 - w1)) + cost(abs(r1 - w2));
+            acc[2] += cost(abs(r0 - w2)) + cost(abs(r1 - w3));
+            acc[3] += cost(abs(r0 - w3)) + cost(abs(r1 - w4));
+            acc[4] += cost(abs(r0 - w4)) + cost(abs(r1 - w5));
+            w0 = w2;
+            w1 = w3;
+            w2 = w4;
+            w3 = w5;
+        }
+        for (int ox = 0; ox < 5; ++ox) sRow[(oy * 5 + ox) * MAX_TILE + dy] = acc[ox];
+    }
+    barrier();
+    if (lane < 25) {
+        float total = 0.0;
+        for (int dy = 0; dy < t; ++dy) total += sRow[lane * MAX_TILE + dy];
+        diffs.v[(g.y * p.tiles.x + g.x) * 25 + lane] = total;
+    }
+}

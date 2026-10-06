@@ -1,0 +1,44 @@
+#version 450
+// Port of hdr-plus-swift blur_mosaic_texture: one separable pass of a
+// truncated binomial filter over same-colour samples (stride = mosaic width),
+// renormalized at the borders of the region. Region-relative offsets let the
+// merge blur the unpadded window of a padded frame without a crop copy.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D dst;
+layout(push_constant) uniform P {
+    ivec2 size;       // region extent
+    ivec2 srcOffset;
+    ivec2 dstOffset;
+    int kernelSize;   // 2 (pyramid) or 16 (merge); nothing else is used
+    int stride;       // mosaic pattern width: 1 or 2
+    int direction;    // 0 = x, 1 = y
+    int quantizeHalf; // emulate upstream r16Float storage
+} p;
+
+// Truncated binomial weights (upstream truncates kernel 16 to 8 taps).
+const float BW16[9] = float[9](601080390., 565722720., 471435600., 347373600., 225792840., 129024480., 64512240.,
+                               28048800., 10518300.);
+const float BW2[3] = float[3](6., 4., 1.);
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    bool wide = p.kernelSize == 16;
+    int trunc = wide ? 8 : 2;
+    int n = p.size[p.direction];
+    int i0 = q[p.direction];
+    float total = 0.0, weight = 0.0;
+    for (int di = -trunc; di <= trunc; ++di) {
+        int i = i0 + p.stride * di;
+        if (i < 0 || i >= n) continue;
+        ivec2 xy = q;
+        xy[p.direction] = i;
+        float w = wide ? BW16[abs(di)] : BW2[abs(di)];
+        total += w * imageLoad(src, p.srcOffset + xy).x;
+        weight += w;
+    }
+    float v = total / weight;
+    if (p.quantizeHalf != 0) v = unpackHalf2x16(packHalf2x16(vec2(v, 0.0))).x;
+    imageStore(dst, p.dstOffset + q, vec4(v));
+}

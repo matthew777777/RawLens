@@ -1,0 +1,49 @@
+#version 450
+// hdr-plus-swift warp_texture_bayer followed by convert_to_rgba, fused: each
+// RGBA texel warps the four raw samples of its 2x2 cell (same blending of the
+// up to four overlapping tile displacements as hdrp_warp.comp). offset maps
+// the pass's padded coordinates into the frame and tile grid the alignment
+// was computed on (align-once mode: pass 0).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D compPadded;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D rgba;
+layout(std430, set = 0, binding = 2) readonly buffer Align { ivec2 v[]; } align;
+layout(push_constant) uniform P {
+    ivec2 size;        // RGBA extent
+    ivec2 crop;        // raw-pixel offset into the padded frame
+    ivec2 paddedSize;
+    ivec2 tiles;       // level-0 tile grid
+    int halfTileSize;  // level-0 tile size == full-res half tile
+    ivec2 offset;
+    // 0: upstream weights ((x % h) + 0.5) / (2h), which jump at every half-tile
+    // boundary (hidden by upstream's four differently gridded passes).
+    // 1: continuous bilinear weights fract(grid), for align-once mode where all
+    // passes share one tile grid.
+    int continuous;
+} p;
+
+float sampleComp(ivec2 s) {
+    return (any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.paddedSize))) ? 0.0 : imageLoad(compPadded, s).x;
+}
+
+float warped(ivec2 q) {
+    float h = float(p.halfTileSize);
+    vec2 grid = (vec2(q) + 0.5) / h - 1.0;
+    ivec2 lo = ivec2(max(vec2(0.0), floor(grid)) + 0.1);
+    ivec2 hi = ivec2(min(ceil(grid), vec2(p.tiles - 1)) + 0.1);
+    vec2 w = p.continuous != 0 ? clamp(grid - floor(grid), 0.0, 1.0) : (vec2(q % p.halfTileSize) + 0.5) / (2.0 * h);
+    ivec2 a0 = 2 * align.v[lo.y * p.tiles.x + lo.x];
+    ivec2 a1 = 2 * align.v[lo.y * p.tiles.x + hi.x];
+    ivec2 a2 = 2 * align.v[hi.y * p.tiles.x + lo.x];
+    ivec2 a3 = 2 * align.v[hi.y * p.tiles.x + hi.x];
+    float w0 = (1.0 - w.x) * (1.0 - w.y), w1 = w.x * (1.0 - w.y), w2 = (1.0 - w.x) * w.y, w3 = w.x * w.y;
+    float v = w0 * sampleComp(q + a0) + w1 * sampleComp(q + a1) + w2 * sampleComp(q + a2) + w3 * sampleComp(q + a3);
+    return v / (w0 + w1 + w2 + w3);
+}
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    ivec2 s = 2 * q + p.crop + p.offset;
+    imageStore(rgba, q, vec4(warped(s), warped(s + ivec2(1, 0)), warped(s + ivec2(0, 1)), warped(s + ivec2(1, 1))));
+}

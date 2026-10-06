@@ -1,0 +1,26 @@
+#version 450
+// texture_mean over a rectangle of a single-channel tile image (stays on the
+// GPU). Upstream sums column-strided by row parity, then row-strided into
+// four 2x2-phase sums, then adds the phases in order; a single x-major pass
+// with four accumulators has exactly that association (each phase sees its
+// pixels in the same column-then-row order).
+// Upstream-parity patch (RawLens): upstream's exact association instead of a
+// strided tree reduction.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(std430, set = 0, binding = 1) writeonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    ivec2 origin;
+    ivec2 size;
+} p;
+
+void main() {
+    if (gl_LocalInvocationID.x != 0u) return;
+    float phase[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    for (int x = 0; x < p.size.x; ++x) {
+        for (int y = 0; y < p.size.y; ++y) {
+            phase[(x & 1) + ((y & 1) << 1)] += imageLoad(src, p.origin + ivec2(x, y)).x;
+        }
+    }
+    mean.v[0] = (phase[0] + phase[1] + phase[2] + phase[3]) / float(p.size.x * p.size.y);
+}

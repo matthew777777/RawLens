@@ -1,0 +1,24 @@
+#version 450
+// Port of hdr-plus-swift reduce_artifacts_tile_border (exposure-control off,
+// black levels -1): clamp below the windowed minimum and blend tile-border
+// pixels with the windowed reference.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) uniform image2D img;
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D refRgba;
+layout(push_constant) uniform P {
+    ivec2 size;
+    float minValue;  // black level - 1
+} p;
+
+const float PI = 3.14159265358979323846;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    ivec2 d = q % 8;
+    float angle = -2.0 * PI / 8.0;
+    float w = (0.5 - 0.5 * cos(-angle * (float(d.x) + 0.5))) * (0.5 - 0.5 * cos(-angle * (float(d.y) + 0.5)));
+    vec4 v = clamp(imageLoad(img, q), vec4(w * p.minValue), vec4(65535.0));
+    if (d.x == 0 || d.x == 7 || d.y == 0 || d.y == 7) v = 0.5 * (w * imageLoad(refRgba, q) + v);
+    imageStore(img, q, v);
+}

@@ -1,0 +1,25 @@
+#version 450
+// HDR+ spatial merge (port of hdr-plus-swift prepare_texture_bayer): copies a
+// RAW16 frame into the zero-padded raw-domain float frame. Values stay in raw
+// units (upstream merges with black included); the frame's per-phase black is
+// re-based onto the reference black so bursts with drifting black still match.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D padded;
+layout(push_constant) uniform P {
+    vec4 blackDelta;  // reference black - frame black, per (y&1)*2+(x&1) phase
+    ivec2 pad;
+    ivec2 size;       // RAW extent
+    ivec2 paddedSize;
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.paddedSize))) return;
+    ivec2 r = q - p.pad;
+    float v = 0.0;
+    if (all(greaterThanEqual(r, ivec2(0))) && all(lessThan(r, p.size))) {
+        v = max(float(imageLoad(rawU16, r).x) + p.blackDelta[(r.y & 1) * 2 + (r.x & 1)], 0.0);
+    }
+    imageStore(padded, q, vec4(v));
+}

@@ -1,0 +1,27 @@
+#version 450
+// Port of hdr-plus-swift find_best_tile_alignment: lowest-cost displacement
+// (first minimum in scan order) added to the upscaled previous alignment.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer Diff { float v[]; } diffs;
+layout(std430, set = 0, binding = 1) readonly buffer Prev { ivec2 v[]; } prev;
+layout(std430, set = 0, binding = 2) writeonly buffer Cur { ivec2 v[]; } cur;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    int downscale;
+} p;
+
+void main() {
+    ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, p.tiles))) return;
+    int t = g.y * p.tiles.x + g.x;
+    float best = 1e20;
+    int bestIndex = 0;
+    for (int i = 0; i < 25; ++i) {
+        float d = diffs.v[t * 25 + i];
+        if (d < best) {
+            best = d;
+            bestIndex = i;
+        }
+    }
+    cur.v[t] = p.downscale * prev.v[t] + ivec2(bestIndex % 5 - 2, bestIndex / 5 - 2);
+}

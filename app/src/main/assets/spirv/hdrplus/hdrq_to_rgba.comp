@@ -1,0 +1,26 @@
+#version 450
+// Port of hdr-plus-swift convert_to_rgba: packs each 2x2 Bayer cell of the
+// padded raw frame (after the merge crop) into one RGBA texel. offset maps a
+// pass's padded coordinates into the frame actually prepared (align-once
+// mode keeps the pass-0 padding); samples outside it are the zero padding.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D padded;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D rgba;
+layout(push_constant) uniform P {
+    ivec2 size;  // RGBA extent
+    ivec2 crop;  // raw-pixel offset into the padded frame
+    ivec2 offset;
+    ivec2 paddedSize;
+} p;
+
+float sampleRaw(ivec2 s) {
+    return (any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.paddedSize))) ? 0.0 : imageLoad(padded, s).x;
+}
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    ivec2 s = 2 * q + p.crop + p.offset;
+    imageStore(rgba, q, vec4(sampleRaw(s), sampleRaw(s + ivec2(1, 0)), sampleRaw(s + ivec2(0, 1)),
+                             sampleRaw(s + ivec2(1, 1))));
+}
