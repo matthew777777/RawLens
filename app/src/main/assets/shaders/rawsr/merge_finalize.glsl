@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Jamy-L merge finalization (`utils.divide`): per output pixel, adds the
 // reference-last contribution into the moving-frame accumulators and
-// normalizes each channel independently with eps = 1e-8. Zero support
-// divides to 0 (the reference NaN blacked downstream). The fallback mask
-// records every pixel where at least one channel had no support or the
-// quotient was non-finite. Non-finite outputs reset to zero, mirroring the
-// RawSrBayerMerge oracle.
+// normalizes each channel independently with the exact-zero gate
+// (RawSrCoreKernel.divide/divideFallback, EPS = 0.0): only exactly-zero
+// support divides to 0 (the reference NaN blacked downstream); tiny but
+// nonzero support divides to its finite weighted mean like the reference.
+// The fallback mask records every pixel where at least one channel had no
+// support or the quotient was non-finite. Non-finite outputs reset to zero,
+// mirroring the RawSrBayerMerge oracle.
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -18,12 +20,17 @@ uniform sampler2D u_ref_den;
 uniform ivec2 u_size;
 layout(binding = 0, rgba32f) writeonly uniform highp image2D img_out;
 layout(binding = 1, r32f) writeonly uniform highp image2D img_fallback;
-const float EPS = 1e-8;
+const float EPS = 0.0;
 bool finite(float x) { return !isnan(x) && !isinf(x); }
 float pick(float totalNum, float totalDen) {
     if (!(totalDen > EPS)) return 0.0;
     float v = totalNum / max(totalDen, EPS);
     return finite(v) ? v : 0.0;
+}
+bool fellBack(float totalNum, float totalDen) {
+    if (!(totalDen > EPS)) return true;
+    float v = totalNum / max(totalDen, EPS);
+    return !finite(v);
 }
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -33,9 +40,7 @@ void main() {
     float r = pick(num.x, den.x);
     float g = pick(num.y, den.y);
     float b = pick(num.z, den.z);
-    float fellBack = (den.x <= EPS || den.y <= EPS || den.z <= EPS
-        || !finite(num.x / max(den.x, EPS)) || !finite(num.y / max(den.y, EPS))
-        || !finite(num.z / max(den.z, EPS))) ? 1.0 : 0.0;
+    float fb = (fellBack(num.x, den.x) || fellBack(num.y, den.y) || fellBack(num.z, den.z)) ? 1.0 : 0.0;
     imageStore(img_out, p, vec4(r, g, b, 1.0));
-    imageStore(img_fallback, p, vec4(fellBack));
+    imageStore(img_fallback, p, vec4(fb));
 }

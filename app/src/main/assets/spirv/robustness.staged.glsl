@@ -2,13 +2,15 @@
 uniform highp uvec3 u_dispatch_offset;
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Jamy-L Alg. 6 robustness (`robustness.py::compute_robustness`): per-quad
-// photometric agreement between the reference sqrt guide and the Dogson-warped
-// moving 3x3 means, over measured reference variance with the optional
-// measured-LUT noise correction, scaled by the s1/s2 flow-irregularity Gate
-// and thresholded. Mirrors RawSrRobustness.evaluate gate order exactly:
-// invalid flow, bounds, photo term, threshold, finite guard. Outputs raw R
-// (before the 5x5 local minimum) and own-quad flags (OOB / invalid-flow only;
-// the reference defines no other gate).
+// photometric agreement between the reference guide means and the
+// Dogson-warped moving 3x3 means, over measured reference variance with
+// the optional measured-LUT noise correction, scaled by the s1/s2
+// flow-irregularity gate and thresholded. Mirrors
+// RawSrRobustness.evaluateWithStats gate order exactly (via
+// RawSrCoreRobustness, same formulas, same order, float32): invalid flow,
+// bounds, photo term, threshold, finite guard. Outputs raw R (before the 5x5
+// local minimum) and own-quad flags (OOB / invalid-flow only; the reference
+// defines no other gate).
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -23,7 +25,9 @@ uniform int u_tile_size;
 uniform float u_t;
 uniform float u_s1;
 uniform float u_s2;
-uniform float u_mth_quad;
+// Motion-irregularity threshold in RAW pixels (RawSrTuning.mTh, the
+// reference Mt): the flow lattice carries raw-unit vectors.
+uniform float u_mth;
 // Measured noise LUT: bins x 1 RGBA32F texel (R = sigma_sq, G = d_sq).
 // Disabled by u_lut_enabled = 0 (a 1x1 zero dummy stays bound); bin selection
 // is floor(b * (bins - 1) + 0.5), exactly the oracle's RawSrNoiseLut.sample.
@@ -36,33 +40,11 @@ layout(binding = 1, r32ui) writeonly uniform highp uimage2D img_flags;
 const uint FLAG_OUT_OF_BOUNDS = 8u;
 const uint FLAG_INVALID_FLOW = 16u;
 bool finite(float x) { return !isnan(x) && !isinf(x); }
-// Bilinear flow twin of RawSrAlignmentField.flowAtSmooth (same formula, same
-// order): tile centers at integer lattice of u = (q + 0.5)/tile - 0.5, dx/dy
-// blended. The warp target below uses this smooth sample so tile borders
-// never quilt the robustness field; the tile-spread irregularity gate keeps
-// its discrete tiles. Non-finite corners fall back to the containing tile.
-vec4 flowSmooth(vec2 q) {
-    float ts = float(u_tile_size);
-    vec2 u = (q + vec2(0.5)) / ts - vec2(0.5);
-    vec2 b = floor(u);
-    vec2 f = clamp(u - b, vec2(0.0), vec2(1.0));
-    ivec2 lo = ivec2(clamp(b, vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
-    ivec2 hi = ivec2(clamp(b + vec2(1.0), vec2(0.0), vec2(u_tile_grid) - vec2(1.0)));
-    vec4 g00 = texelFetch(u_flow, ivec2(lo.x, lo.y), 0);
-    vec4 g10 = texelFetch(u_flow, ivec2(hi.x, lo.y), 0);
-    vec4 g01 = texelFetch(u_flow, ivec2(lo.x, hi.y), 0);
-    vec4 g11 = texelFetch(u_flow, ivec2(hi.x, hi.y), 0);
-    ivec2 ntile = clamp(ivec2(q) / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
-    if (!finite(g00.x) || !finite(g00.y) || !finite(g10.x) || !finite(g10.y) ||
-        !finite(g01.x) || !finite(g01.y) || !finite(g11.x) || !finite(g11.y)) {
-        return texelFetch(u_flow, ntile, 0);
-    }
-    float w00 = (1.0 - f.x) * (1.0 - f.y);
-    float w10 = f.x * (1.0 - f.y);
-    float w01 = (1.0 - f.x) * f.y;
-    float w11 = f.x * f.y;
-    vec4 m = g00 * w00 + g10 * w10 + g01 * w01 + g11 * w11;
-    return vec4(m.xy, m.z, m.w);
+// Reference `utils.round_half_away` (CUDA round() semantics, halves away
+// from zero); GLSL round() is half-to-even and would pick the wrong warp
+// window on exact halves. See RawSrCoreAlign.roundHalfAway.
+int roundHalfAway(float x) {
+    return x >= 0.0 ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
 }
 vec2 clampTap(vec2 p) { return clamp(p, vec2(0.0), vec2(u_size) - vec2(1.0)); }
 // Reference dogson_quadratic_kernel (utils_image.py).
@@ -86,14 +68,44 @@ vec3 movMeanAt(ivec2 p) {
 void main() {
     ivec2 q = ivec2((gl_GlobalInvocationID + u_dispatch_offset).xy);
     if (any(greaterThanEqual(q, u_size))) return;
-    ivec2 tile = clamp(q / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
-    vec4 flow = flowSmooth(vec2(q));
+    // Bilinear smooth flow (CPU flowAtSmoothInto twin at the quad
+    // center in raw coordinates (2q+1), Sabre-style dense warp): the
+    // SAME continuous warp the merge gather uses, so r scores the
+    // warp that actually renders (a snapped r over-accepts where the
+    // blended gather lands wrong). Non-finite corners fall back to
+    // the containing tile; a non-finite result flags invalid flow.
+    vec2 qc = vec2(2 * q + ivec2(1));
+    ivec2 tile = clamp(ivec2(qc) / u_tile_size, ivec2(0), u_tile_grid - ivec2(1));
+    vec4 flow = texelFetch(u_flow, tile, 0);
+    vec2 uu = (qc + vec2(0.5)) / float(u_tile_size) - vec2(0.5);
+    vec2 ff = clamp(uu - floor(uu), vec2(0.0), vec2(1.0));
+    ivec2 gg = u_tile_grid - ivec2(1);
+    ivec2 i0 = ivec2(floor(uu));
+    ivec2 ta = clamp(i0, ivec2(0), gg);
+    ivec2 tb = clamp(i0 + ivec2(1), ivec2(0), gg);
+    vec4 f00 = texelFetch(u_flow, ivec2(ta.x, ta.y), 0);
+    vec4 f10 = texelFetch(u_flow, ivec2(tb.x, ta.y), 0);
+    vec4 f01 = texelFetch(u_flow, ivec2(ta.x, tb.y), 0);
+    vec4 f11 = texelFetch(u_flow, ivec2(tb.x, tb.y), 0);
+    if (finite(f00.x) && finite(f00.y) && finite(f10.x) && finite(f10.y) &&
+        finite(f01.x) && finite(f01.y) && finite(f11.x) && finite(f11.y)) {
+        float w00 = (1.0 - ff.x) * (1.0 - ff.y);
+        float w10 = ff.x * (1.0 - ff.y);
+        float w01 = (1.0 - ff.x) * ff.y;
+        float w11 = ff.x * ff.y;
+        flow.x = f00.x * w00 + f10.x * w10 + f01.x * w01 + f11.x * w11;
+        flow.y = f00.y * w00 + f10.y * w10 + f01.y * w01 + f11.y * w11;
+    }
     if (!finite(flow.x) || !finite(flow.y)) {
         imageStore(img_r, q, vec4(0.0));
         imageStore(img_flags, q, uvec4(FLAG_INVALID_FLOW, 0u, 0u, 0u));
         return;
     }
-    vec2 center = vec2(q) + flow.xy;
+    // The flow texture stores RAW-unit vectors on the raw lattice (the
+    // alignment 1:1 lattice); the warp runs on the quad lattice, so the
+    // shift scales by 0.5, exactly like the CPU center
+    // x + dx_raw * 0.5 (RawSrRobustness.evaluateWithStats).
+    vec2 center = vec2(q) + flow.xy * 0.5;
     if (any(lessThan(center, vec2(0.0))) || any(greaterThanEqual(center, vec2(u_size)))) {
         imageStore(img_r, q, vec4(0.0));
         imageStore(img_flags, q, uvec4(FLAG_OUT_OF_BOUNDS, 0u, 0u, 0u));
@@ -114,12 +126,16 @@ void main() {
     }
     for (int c = 0; c < 3; c++) {
         refMean[c] /= 9.0;
-        refVar[c] = max(refVar[c] / 9.0 - refMean[c] * refMean[c], 0.0);
+        // Reference Alg. 8 verbatim: unfloored (a cancellation sliver can go
+        // slightly negative; the threshold below takes it through the
+        // exp/clamp path like every other variance, exactly as the Numba
+        // kernel computes it).
+        refVar[c] = refVar[c] / 9.0 - refMean[c] * refMean[c];
     }
     // Dogson-biquadratic warp of the moving 3x3 means (reference
-    // cuda_warp_dogson): rounded, edge-clamped 3x3 window, normalized by the
-    // summed weights. GLSL round() is half-to-even, like the reference.
-    ivec2 rc = ivec2(round(center));
+    // cuda_warp_dogson): rounded half-away, edge-clamped 3x3 window,
+    // normalized by the summed weights.
+    ivec2 rc = ivec2(roundHalfAway(center.x), roundHalfAway(center.y));
     float wAcc = 0.0;
     float warped[3];
     warped[0] = 0.0; warped[1] = 0.0; warped[2] = 0.0;
@@ -140,15 +156,19 @@ void main() {
     float e2 = refMean[2] - warped[2];
     float d2 = e0 * e0 + e1 * e1 + e2 * e2;
     float sigma2 = refVar[0] + refVar[1] + refVar[2];
-    // Measured noise correction (oracle twin): sigma2 floors at the LUT
-    // value and d2 shrinks by (d2/(d2+dLut))^2 at the measured reference
-    // brightness.
+    // Measured noise correction (RawSrCoreRobustness.correctNoise twin): a
+    // zero sigma bin skips the floor (a no-op like a null LUT — flooring a
+    // negative sliver at 0 would flip it from the reference accept to a
+    // reject, breaking zero-LUT/analytic identity), and the shrink applies
+    // only at positive d2 with a positive d bin.
     if (u_lut_enabled != 0) {
         float brightness = clamp((refMean[0] + refMean[1] + refMean[2]) / 3.0, 0.0, 1.0);
         int lutIdx = int(clamp(floor(brightness * float(u_lut_bins - 1) + 0.5), 0.0, float(u_lut_bins - 1)));
         vec2 lut = texelFetch(u_lut, ivec2(lutIdx, 0), 0).rg;
-        sigma2 = max(sigma2, lut.x);
-        if (d2 > 0.0) {
+        if (lut.x > 0.0) {
+            sigma2 = max(sigma2, lut.x);
+        }
+        if (d2 > 0.0 && lut.y > 0.0) {
             float shrink = d2 / (d2 + lut.y);
             d2 *= shrink * shrink;
         }
@@ -175,12 +195,18 @@ void main() {
         if (ok) {
             float sx = maxX - minX;
             float sy = maxY - minY;
-            irregular = sx * sx + sy * sy > u_mth_quad * u_mth_quad;
+            irregular = sx * sx + sy * sy > u_mth * u_mth;
         }
     }
     float scale = irregular ? u_s1 : u_s2;
-    float value = clamp(scale * exp(-d2 / sigma2) - u_t, 0.0, 1.0);
-    if (!finite(value)) value = 0.0;
+    // Reference `cpu_robustness_threshold` verbatim
+    // (RawSrCoreRobustness.threshold): negative-variance cancellation
+    // slivers from the unfloored Alg. 8 stats take the exp/clamp path like
+    // every other variance (flats accept at R = 1 for denoising), exactly
+    // as the Numba kernel computes them. Exactly-zero variance reads 0.
+    // NaN reads 0 and +Inf clamps to 1, matching Numba min/max.
+    float raw = scale * exp(-d2 / sigma2) - u_t;
+    float value = sigma2 == 0.0 ? 0.0 : (isnan(raw) ? 0.0 : clamp(raw, 0.0, 1.0));
     imageStore(img_r, q, vec4(value));
     imageStore(img_flags, q, uvec4(0u, 0u, 0u, 0u));
 }

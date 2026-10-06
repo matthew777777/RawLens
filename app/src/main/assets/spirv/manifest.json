@@ -35,14 +35,14 @@
     },
     "rawsr/block_match.glsl": {
       "blockBinding": 4,
-      "blockBytes": 64,
+      "blockBytes": 48,
       "uniforms": {
         "u_dispatch_offset": {
           "offset": 0,
           "bytes": 12,
           "type": "uvec3"
         },
-        "u_size": {
+        "u_mov_size": {
           "offset": 16,
           "bytes": 8,
           "type": "ivec2"
@@ -52,40 +52,20 @@
           "bytes": 8,
           "type": "ivec2"
         },
-        "u_previous_grid": {
-          "offset": 32,
-          "bytes": 8,
-          "type": "ivec2"
-        },
         "u_tile_size": {
-          "offset": 40,
+          "offset": 32,
           "bytes": 4,
           "type": "int"
         },
         "u_search_radius": {
-          "offset": 44,
-          "bytes": 4,
-          "type": "int"
-        },
-        "u_has_initial_flow": {
-          "offset": 48,
-          "bytes": 4,
-          "type": "int"
-        },
-        "u_scale": {
-          "offset": 52,
+          "offset": 36,
           "bytes": 4,
           "type": "int"
         },
         "u_l1": {
-          "offset": 56,
+          "offset": 40,
           "bytes": 4,
           "type": "int"
-        },
-        "u_min_fraction": {
-          "offset": 60,
-          "bytes": 4,
-          "type": "float"
         }
       },
       "opaque": {
@@ -103,7 +83,7 @@
           "format": null,
           "esslBinding": null
         },
-        "u_initial_flow": {
+        "u_seed_flow": {
           "binding": 2,
           "kind": "sampled",
           "otype": "sampler2D",
@@ -147,6 +127,38 @@
           "kind": "storage",
           "otype": "image2D",
           "format": "rgba32f",
+          "esslBinding": 0
+        }
+      }
+    },
+    "rawsr/circular_pad.glsl": {
+      "blockBinding": 2,
+      "blockBytes": 32,
+      "uniforms": {
+        "u_dispatch_offset": {
+          "offset": 0,
+          "bytes": 12,
+          "type": "uvec3"
+        },
+        "u_size": {
+          "offset": 16,
+          "bytes": 8,
+          "type": "ivec2"
+        }
+      },
+      "opaque": {
+        "u_source": {
+          "binding": 0,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_out": {
+          "binding": 1,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "r32f",
           "esslBinding": 0
         }
       }
@@ -222,8 +234,79 @@
         }
       }
     },
-    "rawsr/flow_consistency.glsl": {
-      "blockBinding": 3,
+    "rawsr/fft_remap.glsl": {
+      "blockBinding": 4,
+      "blockBytes": 320,
+      "uniforms": {
+        "u_dispatch_offset": {
+          "offset": 0,
+          "bytes": 12,
+          "type": "uvec3"
+        },
+        "u_size": {
+          "offset": 16,
+          "bytes": 8,
+          "type": "ivec2"
+        },
+        "u_mode": {
+          "offset": 24,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_axis": {
+          "offset": 28,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_levels": {
+          "offset": 32,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_factors": {
+          "offset": 48,
+          "bytes": 256,
+          "type": "float[16]"
+        },
+        "u_scale": {
+          "offset": 304,
+          "bytes": 4,
+          "type": "float"
+        }
+      },
+      "opaque": {
+        "u_re_in": {
+          "binding": 0,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "u_im_in": {
+          "binding": 1,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_re_out": {
+          "binding": 2,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "r32f",
+          "esslBinding": 0
+        },
+        "img_im_out": {
+          "binding": 3,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "r32f",
+          "esslBinding": 1
+        }
+      }
+    },
+    "rawsr/fft_stage.glsl": {
+      "blockBinding": 6,
       "blockBytes": 48,
       "uniforms": {
         "u_dispatch_offset": {
@@ -236,39 +319,201 @@
           "bytes": 8,
           "type": "ivec2"
         },
-        "u_tile_grid": {
+        "u_axis": {
           "offset": 24,
-          "bytes": 8,
-          "type": "ivec2"
+          "bytes": 4,
+          "type": "int"
         },
-        "u_tile_size": {
+        "u_m": {
+          "offset": 28,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_radix": {
           "offset": 32,
           "bytes": 4,
           "type": "int"
         },
-        "u_max_consistency": {
+        "u_first": {
           "offset": 36,
           "bytes": 4,
-          "type": "float"
+          "type": "int"
+        },
+        "u_flip": {
+          "offset": 40,
+          "bytes": 4,
+          "type": "int"
         }
       },
       "opaque": {
-        "u_forward": {
+        "u_re_in": {
           "binding": 0,
           "kind": "sampled",
           "otype": "sampler2D",
           "format": null,
           "esslBinding": null
         },
-        "u_reverse": {
+        "u_im_in": {
           "binding": 1,
           "kind": "sampled",
           "otype": "sampler2D",
           "format": null,
           "esslBinding": null
         },
-        "img_flow": {
+        "u_tw_m": {
           "binding": 2,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "u_tw_p": {
+          "binding": 3,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_re_out": {
+          "binding": 4,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "r32f",
+          "esslBinding": 0
+        },
+        "img_im_out": {
+          "binding": 5,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "r32f",
+          "esslBinding": 1
+        }
+      }
+    },
+    "rawsr/flow_deflip.glsl": {
+      "blockBinding": 2,
+      "blockBytes": 32,
+      "uniforms": {
+        "u_dispatch_offset": {
+          "offset": 0,
+          "bytes": 12,
+          "type": "uvec3"
+        },
+        "u_mode": {
+          "offset": 12,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_img_w": {
+          "offset": 16,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_img_h": {
+          "offset": 20,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_tile": {
+          "offset": 24,
+          "bytes": 4,
+          "type": "int"
+        }
+      },
+      "opaque": {
+        "u_flow": {
+          "binding": 0,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_out": {
+          "binding": 1,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "rgba32f",
+          "esslBinding": 0
+        }
+      }
+    },
+    "rawsr/flow_regularize.glsl": {
+      "blockBinding": 2,
+      "blockBytes": 16,
+      "uniforms": {
+        "u_dispatch_offset": {
+          "offset": 0,
+          "bytes": 12,
+          "type": "uvec3"
+        },
+        "u_sigma": {
+          "offset": 12,
+          "bytes": 4,
+          "type": "float"
+        }
+      },
+      "opaque": {
+        "u_flow": {
+          "binding": 0,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_out": {
+          "binding": 1,
+          "kind": "storage",
+          "otype": "image2D",
+          "format": "rgba32f",
+          "esslBinding": 0
+        }
+      }
+    },
+    "rawsr/flow_upscale.glsl": {
+      "blockBinding": 2,
+      "blockBytes": 48,
+      "uniforms": {
+        "u_dispatch_offset": {
+          "offset": 0,
+          "bytes": 12,
+          "type": "uvec3"
+        },
+        "u_src_grid": {
+          "offset": 16,
+          "bytes": 8,
+          "type": "ivec2"
+        },
+        "u_dst_grid": {
+          "offset": 24,
+          "bytes": 8,
+          "type": "ivec2"
+        },
+        "u_repeat": {
+          "offset": 32,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_factor": {
+          "offset": 36,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_mode": {
+          "offset": 40,
+          "bytes": 4,
+          "type": "int"
+        }
+      },
+      "opaque": {
+        "u_prior": {
+          "binding": 0,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_flow": {
+          "binding": 1,
           "kind": "storage",
           "otype": "image2D",
           "format": "rgba32f",
@@ -420,7 +665,7 @@
     },
     "rawsr/kernel_covariance.glsl": {
       "blockBinding": 2,
-      "blockBytes": 64,
+      "blockBytes": 80,
       "uniforms": {
         "u_dispatch_offset": {
           "offset": 0,
@@ -442,33 +687,48 @@
           "bytes": 4,
           "type": "float"
         },
-        "u_d_th": {
+        "u_k_flat": {
           "offset": 32,
           "bytes": 4,
           "type": "float"
         },
-        "u_d_tr": {
+        "u_use_flat": {
           "offset": 36,
           "bytes": 4,
-          "type": "float"
+          "type": "int"
         },
-        "u_k_stretch": {
+        "u_detail_floor": {
           "offset": 40,
           "bytes": 4,
           "type": "float"
         },
-        "u_k_shrink": {
+        "u_d_th": {
           "offset": 44,
           "bytes": 4,
           "type": "float"
         },
-        "u_kernel_type": {
+        "u_d_tr": {
           "offset": 48,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_k_stretch": {
+          "offset": 52,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_k_shrink": {
+          "offset": 56,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_kernel_type": {
+          "offset": 60,
           "bytes": 4,
           "type": "int"
         },
         "u_selection_law": {
-          "offset": 52,
+          "offset": 64,
           "bytes": 4,
           "type": "int"
         }
@@ -546,40 +806,35 @@
           "bytes": 12,
           "type": "uvec3"
         },
-        "u_size": {
+        "u_ref_size": {
           "offset": 16,
           "bytes": 8,
           "type": "ivec2"
         },
-        "u_tile_grid": {
+        "u_mov_size": {
           "offset": 24,
           "bytes": 8,
           "type": "ivec2"
         },
-        "u_tile_size": {
+        "u_tile_grid": {
           "offset": 32,
+          "bytes": 8,
+          "type": "ivec2"
+        },
+        "u_tile_size": {
+          "offset": 40,
           "bytes": 4,
           "type": "int"
         },
-        "u_min_determinant": {
-          "offset": 36,
-          "bytes": 4,
-          "type": "float"
-        },
-        "u_max_residual": {
-          "offset": 40,
-          "bytes": 4,
-          "type": "float"
-        },
-        "u_min_condition": {
+        "u_search_radius": {
           "offset": 44,
           "bytes": 4,
-          "type": "float"
+          "type": "int"
         },
-        "u_min_fraction": {
+        "u_iterations": {
           "offset": 48,
           "bytes": 4,
-          "type": "float"
+          "type": "int"
         }
       },
       "opaque": {
@@ -637,6 +892,11 @@
           "bytes": 4,
           "type": "int"
         },
+        "u_upscale": {
+          "offset": 36,
+          "bytes": 4,
+          "type": "float"
+        },
         "u_guide_size": {
           "offset": 40,
           "bytes": 8,
@@ -669,6 +929,11 @@
         },
         "u_green_noise_o": {
           "offset": 80,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_chroma_z_scale": {
+          "offset": 84,
           "bytes": 4,
           "type": "float"
         }
@@ -892,7 +1157,7 @@
           "bytes": 4,
           "type": "float"
         },
-        "u_mth_quad": {
+        "u_mth": {
           "offset": 48,
           "bytes": 4,
           "type": "float"
@@ -1062,8 +1327,8 @@
       }
     },
     "rawsr/unblocker_modulate.glsl": {
-      "blockBinding": 5,
-      "blockBytes": 32,
+      "blockBinding": 6,
+      "blockBytes": 48,
       "uniforms": {
         "u_dispatch_offset": {
           "offset": 0,
@@ -1074,6 +1339,31 @@
           "offset": 16,
           "bytes": 8,
           "type": "ivec2"
+        },
+        "u_tile_grid": {
+          "offset": 24,
+          "bytes": 8,
+          "type": "ivec2"
+        },
+        "u_tile_size": {
+          "offset": 32,
+          "bytes": 4,
+          "type": "int"
+        },
+        "u_mth": {
+          "offset": 36,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_veto_u": {
+          "offset": 40,
+          "bytes": 4,
+          "type": "float"
+        },
+        "u_unblocked": {
+          "offset": 44,
+          "bytes": 4,
+          "type": "int"
         }
       },
       "opaque": {
@@ -1098,15 +1388,22 @@
           "format": null,
           "esslBinding": null
         },
-        "img_r": {
+        "u_flow": {
           "binding": 3,
+          "kind": "sampled",
+          "otype": "sampler2D",
+          "format": null,
+          "esslBinding": null
+        },
+        "img_r": {
+          "binding": 4,
           "kind": "storage",
           "otype": "image2D",
           "format": "r32f",
           "esslBinding": 0
         },
         "img_flags": {
-          "binding": 4,
+          "binding": 5,
           "kind": "storage",
           "otype": "uimage2D",
           "format": "r32ui",
