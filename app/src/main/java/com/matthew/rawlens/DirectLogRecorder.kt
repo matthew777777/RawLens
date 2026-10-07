@@ -393,6 +393,13 @@ class DirectLogRecorder(
     @Volatile private var true10Bit = false
     private val outBufs = AtomicInteger(0)
     private val outBytes = AtomicLong(0)
+    /**
+     * First muxed video sample time (elapsedRealtimeNanos): the output-fps
+     * window starts here, not at take start — camera/encoder bring-up (~1.5s
+     * of dead time before the first output) would otherwise read as a
+     * permanent ~20% fps deficit on the overlay.
+     */
+    @Volatile private var firstOutNs = 0L
     private var outputFile: File? = null
     private var startRealtimeMs: Long = 0L
 
@@ -430,7 +437,7 @@ class DirectLogRecorder(
             s.previewDone = CountDownLatch(0)
         }
         startCopyWorker()
-        outBufs.set(0); outBytes.set(0)
+        outBufs.set(0); outBytes.set(0); firstOutNs = 0L
         audioChunks.set(0); audioFrames.set(0); audioDropped.set(0); audioOutBufs.set(0)
         audioRequired = false; hasAudioStream = false; aacBytesOut = 0L
         audioTrack = -1
@@ -778,7 +785,7 @@ class DirectLogRecorder(
         val profile: String,
         /** Session demosaic path label (MHC/RCD/SUPER). */
         val demosaic: String,
-        /** Encoded output rate (drained muxer samples / wall clock). */
+        /** Encoded output rate (muxed samples since the first muxed sample; 0 until 2+). */
         val outputFps: Float,
         /** IO busy %: P010 copy + muxer write vs the frame budget. */
         val ioBusyPct: Int,
@@ -819,7 +826,9 @@ class DirectLogRecorder(
                 useFused -> "MHC"
                 else -> "SUPER"
             },
-            outputFps = if (elapsed > 0) outBufs.get() * 1000f / elapsed else 0f,
+            outputFps = muxedFps(
+                outBufs.get(), firstOutNs, android.os.SystemClock.elapsedRealtimeNanos()
+            ),
             ioBusyPct = busyPct(copyMsAvg + muxWriteMsAvg),
             encBusyPct = busyPct(encLatencyMsAvg),
             memPct = memPct.coerceIn(0, 100),
@@ -1918,7 +1927,9 @@ class DirectLogRecorder(
                         if (info.size > 0 && muxerStarted && videoTrack >= 0) {
                             val w0 = android.os.SystemClock.elapsedRealtimeNanos()
                             muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
-                            val writeMs = (android.os.SystemClock.elapsedRealtimeNanos() - w0) / 1e6f
+                            val w1 = android.os.SystemClock.elapsedRealtimeNanos()
+                            if (firstOutNs == 0L) firstOutNs = w1
+                            val writeMs = (w1 - w0) / 1e6f
                             muxWriteMsAvg = if (muxWriteMsAvg == 0f) writeMs
                             else muxWriteMsAvg * 0.9f + writeMs * 0.1f
                             outBufs.incrementAndGet()
@@ -1967,6 +1978,7 @@ class DirectLogRecorder(
                         try {
                             if (info.size > 0 && muxerStarted && videoTrack >= 0) {
                                 muxer?.writeSampleData(videoTrack, mc.getOutputBuffer(idx)!!, info)
+                                if (firstOutNs == 0L) firstOutNs = android.os.SystemClock.elapsedRealtimeNanos()
                                 outBufs.incrementAndGet()
                                 outBytes.addAndGet(info.size.toLong())
                             }
@@ -2154,6 +2166,18 @@ class DirectLogRecorder(
 
         /** Recording-relative presentation time in microseconds. */
         fun relativeUs(sensorTsNs: Long, originNs: Long): Long = (sensorTsNs - originNs) / 1000L
+
+        /**
+         * Muxed output rate in fps: [samples] video samples muxed between
+         * [firstOutNs] and [nowNs] (both elapsedRealtimeNanos). Anchored at
+         * the first muxed sample so camera/encoder bring-up (~1.5s of dead
+         * time before the first output) never reads as a deficit; needs 2+
+         * samples (a single sample spans no interval yet).
+         */
+        fun muxedFps(samples: Int, firstOutNs: Long, nowNs: Long): Float =
+            if (samples > 1 && firstOutNs > 0L && nowNs > firstOutNs)
+                samples * 1e9f / (nowNs - firstOutNs)
+            else 0f
 
         /**
          * Constant-frame-rate PTS in microseconds: frame [frameIndex]
