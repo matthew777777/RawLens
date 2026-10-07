@@ -78,6 +78,19 @@ struct MeanPc {
 struct WeightPc {
     std::int32_t cellsX, cellsY;
     float robustness;
+    std::int32_t mapOffset;  // <0 keeps the upstream path (map ignored)
+    std::int32_t pad;
+};
+// Uploaded strength maps: all N maps concatenated in one device buffer,
+// sliceFloats floats each (Fast: one robustness per block; HQ: one
+// robustnessNorm/readNoise/maxMotionNorm triple per block). use=false
+// binds the buffer but records mapOffset -1 (upstream path). mapW/mapH
+// are the unpadded map dims (HQ clamps padded tiles into them).
+struct MapBinding {
+    const GpuBuffer* buffer = nullptr;
+    std::uint32_t sliceFloats = 0;
+    bool use = false;
+    std::int32_t mapW = 0, mapH = 0;
 };
 struct AccumulatePc {
     std::int32_t width, height, padX, padY, cellsX, cellsY;
@@ -114,6 +127,9 @@ struct MismatchNormPc {
 struct FreqMergePc {
     std::int32_t tilesX, tilesY;
     float robustnessNorm, readNoise, maxMotionNorm;
+    std::int32_t mapOffset;  // <0 keeps the upstream path (map ignored)
+    std::int32_t mapOriginX, mapOriginY;  // unpadded origin in padded-raw px
+    std::int32_t mapW, mapH;  // unpadded map dims
 };
 struct BackwardPc {
     std::int32_t tilesX, tilesY;
@@ -133,7 +149,7 @@ static_assert(sizeof(WarpPc) == 36, "WarpPc layout");
 static_assert(sizeof(AccumulatePc) == 32, "AccumulatePc layout");
 static_assert(sizeof(FinalizePc) == 32, "FinalizePc layout");
 static_assert(sizeof(WarpRgbaPc) == 52, "WarpRgbaPc layout");
-static_assert(sizeof(FreqMergePc) == 20, "FreqMergePc layout");
+static_assert(sizeof(FreqMergePc) == 40, "FreqMergePc layout");
 
 VkDeviceSize alignUp256(VkDeviceSize v) { return (v + 255u) / 256u * 256u; }
 
@@ -270,13 +286,16 @@ BufferBinding bb(std::uint32_t b, const GpuBuffer& buf) {
 class Recorder {
    public:
     Recorder(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
-             hp::Config config, hp::Geometry geometry, std::string& err)
+             hp::Config config, hp::Geometry geometry, const float* frameStrengths, MapBinding maps,
+             std::string& err)
         : ctx_(ctx),
           desc_(desc),
           cmd_(cmd),
           scratch_(scratch),
           config_(config),
           geometry_(std::move(geometry)),
+          frameStrengths_(frameStrengths),
+          maps_(maps),
           err_(err) {}
 
     void setHotPixels(VkBuffer buffer, std::uint32_t count) noexcept {
@@ -295,7 +314,7 @@ class Recorder {
     bool recordCompanionPadded(VkImageView rawU16, const RawNormalization& frame);
     bool recordCompanionPrepare(VkImageView rawU16, const RawNormalization& frame);
     bool recordCompanionAlignLevel(std::uint32_t n);
-    bool recordCompanionMerge(std::uint32_t frameCount);
+    bool recordCompanionMerge(std::uint32_t frameCount, std::uint32_t frameIndex);
     bool recordFinalize();
 
    private:
@@ -318,6 +337,11 @@ class Recorder {
     Scratch& scratch_;
     hp::Config config_{};
     hp::Geometry geometry_{};
+    // Optional per-frame strengths (caller-owned, frame_count entries);
+    // nullptr merges every companion at config_.strength.
+    const float* frameStrengths_ = nullptr;
+    // Strength maps (always bound; use=false records mapOffset -1).
+    MapBinding maps_;
     RawNormalization reference_{};
     VkBuffer hotPixelBuffer_ = VK_NULL_HANDLE;
     std::uint32_t hotPixelCount_ = 0;
@@ -449,14 +473,17 @@ bool Recorder::recordReferenceAccumulate(std::uint32_t frameCount) {
 class FrequencyRecorder {
    public:
     FrequencyRecorder(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
-                      hp::Config config, hp::FrequencyGeometry geometry, std::string& err)
+                      hp::Config config, hp::FrequencyGeometry geometry, const float* frameStrengths,
+                      MapBinding fastMaps, MapBinding hqMaps, std::string& err)
         : ctx_(ctx),
           desc_(desc),
           cmd_(cmd),
           scratch_(scratch),
           config_(config),
           geometry_(std::move(geometry)),
-          align_(ctx, desc, cmd, scratch, config, geometry_.align, err),
+          frameStrengths_(frameStrengths),
+          hqMaps_(hqMaps),
+          align_(ctx, desc, cmd, scratch, config, geometry_.align, frameStrengths, fastMaps, err),
           err_(err) {}
 
     Recorder& alignment() noexcept { return align_; }
@@ -497,6 +524,11 @@ class FrequencyRecorder {
     Scratch& scratch_;
     hp::Config config_{};
     hp::FrequencyGeometry geometry_{};
+    // Optional per-frame strengths (caller-owned, frame_count entries);
+    // nullptr merges every companion at config_.strength.
+    const float* frameStrengths_ = nullptr;
+    // HQ norm triples (always bound; use=false records mapOffset -1).
+    MapBinding hqMaps_;
     Recorder align_;
     std::uint32_t pass_ = 0;
     std::string& err_;
@@ -636,13 +668,27 @@ bool FrequencyRecorder::recordCompanionMerge(std::uint32_t frameCount, std::uint
              {bb(2, scratch_.buffer("hdrq_mean"))}, &np, sizeof(np), divUp(tx, 16), divUp(ty, 16)))
         return false;
     compute_write_barrier(cmd_);
-    const auto norms = hp::frequencyNorms(config_.strength);
-    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise,
-                   norms.maxMotionNorm};
+    // slot is the companion's frame index (RAWR passes i as the slot).
+    const float companionStrength =
+        frameStrengths_ != nullptr ? frameStrengths_[slot] : config_.strength;
+    const auto norms = hp::frequencyNorms(companionStrength);
+    const std::int32_t mapOffset =
+        hqMaps_.use ? std::int32_t(slot) * std::int32_t(hqMaps_.sliceFloats) : -1;
+    FreqMergePc fm{std::int32_t(tx),
+                   std::int32_t(ty),
+                   norms.robustnessNorm,
+                   norms.readNoise,
+                   norms.maxMotionNorm,
+                   mapOffset,
+                   std::int32_t(geometry_.padLeft(pass_)) - std::int32_t(geometry_.cropX),
+                   std::int32_t(geometry_.padTop(pass_)) - std::int32_t(geometry_.cropY),
+                   hqMaps_.mapW,
+                   hqMaps_.mapH};
     if (!run(Shader::HdrqMerge,
              {ib(0, scratch_.image("hdrq_ref_ft")), ib(1, scratch_.image("hdrq_aligned_ft")),
               ib(2, scratch_.image("hdrq_final_ft")), ib(3, scratch_.image("hdrq_rms")), ib(4, mismatch)},
-             {bb(5, scratch_.buffer("hdrq_shift_table"))}, &fm, sizeof(fm), tx, ty))
+             {bb(5, scratch_.buffer("hdrq_shift_table")), bb(6, *hqMaps_.buffer)}, &fm, sizeof(fm),
+             tx, ty))
         return false;
     compute_write_barrier(cmd_);
     return true;
@@ -731,7 +777,7 @@ bool Recorder::recordCompanionAlignLevel(std::uint32_t n) {
     return true;
 }
 
-bool Recorder::recordCompanionMerge(std::uint32_t frameCount) {
+bool Recorder::recordCompanionMerge(std::uint32_t frameCount, std::uint32_t frameIndex) {
     const auto& level0 = geometry_.levels.front();
     const auto& aligned = scratch_.image("hdrp_aligned");
     WarpPc wp{std::int32_t(geometry_.width), std::int32_t(geometry_.height), std::int32_t(geometry_.padLeft),
@@ -756,10 +802,15 @@ bool Recorder::recordCompanionMerge(std::uint32_t frameCount) {
              {}, &cd, sizeof(cd), divUp(cellsX, 16), divUp(cellsY, 16)))
         return false;
     compute_write_barrier(cmd_);
-    WeightPc wt{std::int32_t(cellsX), std::int32_t(cellsY), hp::robustness(config_.strength)};
+    const float companionStrength =
+        frameStrengths_ != nullptr ? frameStrengths_[frameIndex] : config_.strength;
+    const std::int32_t mapOffset =
+        maps_.use ? std::int32_t(frameIndex) * std::int32_t(maps_.sliceFloats) : -1;
+    WeightPc wt{std::int32_t(cellsX), std::int32_t(cellsY), hp::robustness(companionStrength),
+                mapOffset, 0};
     if (!run(Shader::HdrpMergeWeight, {ib(0, diff), ib(1, weight)},
-             {bb(2, scratch_.buffer("hdrp_noise"))}, &wt, sizeof(wt), divUp(cellsX, 16),
-             divUp(cellsY, 16)))
+             {bb(2, scratch_.buffer("hdrp_noise")), bb(3, *maps_.buffer)}, &wt, sizeof(wt),
+             divUp(cellsX, 16), divUp(cellsY, 16)))
         return false;
     compute_write_barrier(cmd_);
     AccumulatePc ap{std::int32_t(geometry_.width), std::int32_t(geometry_.height),
@@ -796,8 +847,9 @@ bool Recorder::recordFinalize() {
 bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
                  const hp::Config& config, const hp::Geometry& geometry,
                  const std::vector<VkImageView>& views, const std::vector<RawNormalization>& norms,
-                 std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs, std::string& err) {
-    Recorder recorder(ctx, desc, cmd, scratch, config, geometry, err);
+                 std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs,
+                 const float* frameStrengths, MapBinding maps, std::string& err) {
+    Recorder recorder(ctx, desc, cmd, scratch, config, geometry, frameStrengths, maps, err);
     if (hotPixels != VK_NULL_HANDLE && hotPixelPairs > 0) recorder.setHotPixels(hotPixels, hotPixelPairs);
     const auto frameCount = std::uint32_t(views.size());
     if (!recorder.recordReference(views[ref], norms[ref], frameCount)) return false;
@@ -826,7 +878,7 @@ bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd,
         for (std::uint32_t level = recorder.levelCount(); level-- > 0;) {
             if (!recorder.recordCompanionAlignLevel(level)) return false;
         }
-        if (!recorder.recordCompanionMerge(frameCount)) return false;
+        if (!recorder.recordCompanionMerge(frameCount, i)) return false;
     }
     return recorder.recordFinalize();
 }
@@ -834,8 +886,11 @@ bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd,
 bool run_frequency(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
                    const hp::Config& config, const hp::FrequencyGeometry& geometry,
                    const std::vector<VkImageView>& views, const std::vector<RawNormalization>& norms,
-                   std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs, std::string& err) {
-    FrequencyRecorder recorder(ctx, desc, cmd, scratch, config, geometry, err);
+                   std::uint32_t ref, VkBuffer hotPixels, std::uint32_t hotPixelPairs,
+                   const float* frameStrengths, MapBinding fastMaps, MapBinding hqMaps,
+                   std::string& err) {
+    FrequencyRecorder recorder(ctx, desc, cmd, scratch, config, geometry, frameStrengths, fastMaps,
+                               hqMaps, err);
     if (hotPixels != VK_NULL_HANDLE && hotPixelPairs > 0)
         recorder.alignment().setHotPixels(hotPixels, hotPixelPairs);
     const auto frameCount = std::uint32_t(views.size());
@@ -874,6 +929,8 @@ void hdrplus_default_params(HdrPlusParams* p) {
     p->search_distance = 64;
     p->high_quality = 1;  // matches HdrPlusSettings default (HQ frequency)
     p->frequency_align_once = 1;
+    p->frame_strengths = nullptr;  // uniform strength for every companion
+    p->strength_maps = nullptr;  // exact upstream merge-weight path
 }
 
 int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const float* black_by_phase,
@@ -905,10 +962,27 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
     config.searchDistance = params->search_distance;
     config.frequencyAlignOnce = params->frequency_align_once != 0;
     if (!hp::valid(config)) return fail("hdrplus: invalid config (strength 1..22, tile 16/32, search 32/64/128)");
+    if (params->frame_strengths != nullptr) {
+        for (int i = 0; i < frame_count; ++i) {
+            const float s = params->frame_strengths[i];
+            if (!(s >= 1.0f && s <= 22.0f))
+                return fail("hdrplus: frame_strengths must hold frame_count finite 1..22 values");
+        }
+    }
 
     const std::uint32_t W = static_cast<std::uint32_t>(width), H = static_cast<std::uint32_t>(height);
     const std::uint32_t N = static_cast<std::uint32_t>(frame_count);
     const bool frequency = params->high_quality != 0;
+    int mapW = 0, mapH = 0;
+    hdrplus_strength_map_cells(width, height, &mapW, &mapH);
+    const size_t mapFloats = static_cast<size_t>(mapW) * static_cast<size_t>(mapH);
+    if (params->strength_maps != nullptr) {
+        for (size_t k = 0; k < static_cast<size_t>(N) * mapFloats; ++k) {
+            const float s = params->strength_maps[k];
+            if (!(s >= 1.0f && s <= 22.0f))
+                return fail("hdrplus: strength_maps must hold N*mw*mh finite 1..22 values");
+        }
+    }
 
     hp::Geometry spatial;
     hp::FrequencyGeometry freq;
@@ -958,6 +1032,40 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         std::memcpy(hotStage->mapped, hot_pixels, static_cast<size_t>(hotPairs) * 2u * sizeof(std::int32_t));
         hotBuf = arena.buffer(VkDeviceSize(hotPairs) * 2u * sizeof(std::int32_t), err);
         if (hotBuf == nullptr) return fail(err);
+    }
+    // Strength maps: N concatenated mw*mh robustness maps in one
+    // device-local buffer (always allocated + bound; zeroed when absent
+    // — the shader only reads with mapOffset >= 0). Strengths convert
+    // once here through the same robustness() the push path uses.
+    const VkDeviceSize mapsBytes = VkDeviceSize(N) * mapFloats * sizeof(float);
+    GpuBuffer* mapsStage = arena.staging(mapsBytes, err);
+    if (mapsStage == nullptr) return fail(err);
+    GpuBuffer* mapsBuf = arena.buffer(mapsBytes, err);
+    if (mapsBuf == nullptr) return fail(err);
+    float* mapsDst = static_cast<float*>(mapsStage->mapped);
+    if (params->strength_maps != nullptr) {
+        for (size_t k = 0; k < static_cast<size_t>(N) * mapFloats; ++k)
+            mapsDst[k] = hp::robustness(params->strength_maps[k]);
+    } else {
+        std::memset(mapsDst, 0, static_cast<size_t>(mapsBytes));
+    }
+    // HQ twin: interleaved robustnessNorm/readNoise/maxMotionNorm triples
+    // converted once through the same frequencyNorms() the push path uses.
+    const VkDeviceSize hqMapsBytes = VkDeviceSize(N) * mapFloats * 3u * sizeof(float);
+    GpuBuffer* hqMapsStage = arena.staging(hqMapsBytes, err);
+    if (hqMapsStage == nullptr) return fail(err);
+    GpuBuffer* hqMapsBuf = arena.buffer(hqMapsBytes, err);
+    if (hqMapsBuf == nullptr) return fail(err);
+    float* hqDst = static_cast<float*>(hqMapsStage->mapped);
+    if (params->strength_maps != nullptr) {
+        for (size_t k = 0; k < static_cast<size_t>(N) * mapFloats; ++k) {
+            const auto triple = hp::frequencyNorms(params->strength_maps[k]);
+            hqDst[3u * k] = triple.robustnessNorm;
+            hqDst[3u * k + 1u] = triple.readNoise;
+            hqDst[3u * k + 2u] = triple.maxMotionNorm;
+        }
+    } else {
+        std::memset(hqDst, 0, static_cast<size_t>(hqMapsBytes));
     }
     GpuBuffer* download = arena.staging(VkDeviceSize(W) * H * sizeof(float), err);
     if (download == nullptr) return fail(err);
@@ -1015,6 +1123,10 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
             VkBufferCopy hotCopy{0, 0, VkDeviceSize(hotPairs) * 2u * sizeof(std::int32_t)};
             vkCmdCopyBuffer(cmd, hotStage->buffer, hotBuf->buffer, 1, &hotCopy);
         }
+        VkBufferCopy mapsCopy{0, 0, mapsBytes};
+        vkCmdCopyBuffer(cmd, mapsStage->buffer, mapsBuf->buffer, 1, &mapsCopy);
+        VkBufferCopy hqMapsCopy{0, 0, hqMapsBytes};
+        vkCmdCopyBuffer(cmd, hqMapsStage->buffer, hqMapsBuf->buffer, 1, &hqMapsCopy);
         // Barrier: transfer writes visible to compute.
         VkMemoryBarrier upBar{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
                               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
@@ -1034,13 +1146,20 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         }
         const std::uint32_t ref = static_cast<std::uint32_t>(ref_index);
         VkBuffer hotHandle = hotBuf != nullptr ? hotBuf->buffer : VK_NULL_HANDLE;
+        // Buffers stay bound everywhere so descriptors never dangle;
+        // use=false records mapOffset -1 (upstream path per dispatch).
+        const bool haveMaps = params->strength_maps != nullptr;
+        const MapBinding fastMaps{mapsBuf, static_cast<std::uint32_t>(mapFloats), haveMaps,
+                                  mapW, mapH};
+        const MapBinding hqMaps{hqMapsBuf, static_cast<std::uint32_t>(mapFloats) * 3u, haveMaps,
+                                mapW, mapH};
         if (frequency) {
             ok = run_frequency(ctx, desc, cmd, scratch, config, freq, views, norms, ref, hotHandle,
-                               hotPairs, err);
+                               hotPairs, params->frame_strengths, fastMaps, hqMaps, err);
         } else {
             // Spatial geometry lives in `spatial`; run_spatial takes it by value.
             ok = run_spatial(ctx, desc, cmd, scratch, config, spatial, views, norms, ref, hotHandle,
-                             hotPairs, err);
+                             hotPairs, params->frame_strengths, fastMaps, err);
         }
         if (ok && std::getenv("HDRPLUS_DUMP_DIR") != nullptr) {
             // Diagnostic readback (dev only): alignment vectors, warped

@@ -48,6 +48,19 @@ vendoring time; pristine copies re-fetchable from that commit:
 - hdrq_forward_dft.comp: 2f3e308c416a7de3da64ba08be353997 (twiddle association)
 - hdrq_backward_dft.comp: 45b6fd8d2e154ee571514159cc9dba4f (twiddle association)
 
+RawLens extension (step-4 strength maps, 2026-10-07 — intentional behavior
+beyond upstream, not a parity fix; see `PARITY.md` "RawLens host extensions"):
+2 shaders carry marked extension patches. Pre-patch md5s — byte-identical to
+RAWR `f41e6c2` at vendoring time; pristine copies re-fetchable from that commit:
+
+- hdrp_merge_weight.comp: a1dabc5564734437c8bbc697958e091e (per-block
+  robustness-map binding + mapOffset push; negative offset keeps the
+  upstream computation, verified <=1 DN @16-bit rescheduling dust vs the
+  pre-patch shader on a 30-frame burst crop)
+- hdrq_merge.comp: 5e69b7cfa0f9d704a87ef5a621e1f10e (per-block Wiener-norm
+  triple map binding + mapOffset/origin/dims push; negative offset keeps
+  the upstream computation)
+
 Host deviations from RAWR toward Burst Photo (same proof doc): the HQ
 tile-border pass is skipped (upstream-off returns early for unknown black),
 and the spatial reference accumulates in frame order over a cleared

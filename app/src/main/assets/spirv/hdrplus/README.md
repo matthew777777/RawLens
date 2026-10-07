@@ -13,8 +13,9 @@ RAWR's merge is itself a port of Burst Photo
 alignment, warp, robust weight, accumulate, finalize) and 13 `hdrq_*`
 (frequency "Higher quality" merge: RGBA pack, DFT, RMS/mismatch
 statistics, Wiener merge, deconvolution, inverse DFT, border repair,
-4-pass accumulation, shift table). 20 are byte-identical to RAWR; 8 carry
-small marked upstream-parity patches toward Burst Photo (see UPSTREAM.md).
+4-pass accumulation, shift table). 18 are byte-identical to RAWR; 8 carry
+small marked upstream-parity patches toward Burst Photo and 2 carry marked
+RawLens extension patches (step-4 strength maps, see UPSTREAM.md).
 
 Rebuild (matches the documented glslang recipe; no glslc in the NDK):
 

@@ -18,11 +18,20 @@ layout(set = 0, binding = 3, rgba32f) readonly uniform image2D rms;
 layout(set = 0, binding = 4, r32f) readonly uniform image2D mismatch;
 // (cos, sin) per shift and bin, index shift * 64 + n * 8 + m (hdrq_shift_table).
 layout(std430, set = 0, binding = 5) readonly buffer ShiftTable { vec2 v[]; } shiftTable;
+// RawLens extension (step-4 strength maps, marked patch): optional per-block
+// Wiener-norm triples (binding 6, one robustnessNorm/readNoise/maxMotionNorm
+// triple per 32px block, N companions concatenated). mapOffset >= 0 selects
+// this companion's slice and the tile's block triple wins; negative keeps the
+// upstream computation (map ignored).
+layout(std430, set = 0, binding = 6) readonly buffer StrengthMap { float r[]; } smap;
 layout(push_constant) uniform P {
     ivec2 tiles;
     float robustnessNorm;
     float readNoise;
     float maxMotionNorm;
+    int mapOffset;
+    ivec2 mapOrigin;  // unpadded frame origin in padded-raw px (padLeft - cropX, ...)
+    ivec2 mapCells;   // unpadded map dims (mw, mh)
 } p;
 
 shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
@@ -69,10 +78,25 @@ void main() {
         sBest = bi;
     }
     barrier();
-    vec4 noiseNorm = (imageLoad(rms, t) + p.readNoise) * float(ts * ts) * p.robustnessNorm;
+    float robustnessNorm = p.robustnessNorm;
+    float readNoise = p.readNoise;
+    float maxMotionNorm = p.maxMotionNorm;
+    if (p.mapOffset >= 0) {
+        // Tile t covers padded-raw [t*16, t*16+16); the map covers the
+        // unpadded frame in 32px blocks (clamped: border tiles reuse edge
+        // blocks; the map is blur-smooth so this stays invisible).
+        int mw = p.mapCells.x, mh = p.mapCells.y;
+        int bx = clamp((t.x * 16 - p.mapOrigin.x) / 32, 0, mw - 1);
+        int by = clamp((t.y * 16 - p.mapOrigin.y) / 32, 0, mh - 1);
+        int triple = p.mapOffset + 3 * (by * mw + bx);
+        robustnessNorm = smap.r[triple];
+        readNoise = smap.r[triple + 1];
+        maxMotionNorm = smap.r[triple + 2];
+    }
+    vec4 noiseNorm = (imageLoad(rms, t) + readNoise) * float(ts * ts) * robustnessNorm;
     float mm = imageLoad(mismatch, t).x;
     float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
-    float motionNorm = clamp(p.maxMotionNorm - (mm - 0.02) * (p.maxMotionNorm - 1.0) / 0.15, 1.0, p.maxMotionNorm);
+    float motionNorm = clamp(maxMotionNorm - (mm - 0.02) * (maxMotionNorm - 1.0) / 0.15, 1.0, maxMotionNorm);
     vec2 cs = shiftTable.v[sBest * 64 + lane];
     float c = cs.x, s = cs.y;
     vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];

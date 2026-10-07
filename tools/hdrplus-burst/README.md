@@ -13,7 +13,7 @@ cmake -S tools/hdrplus-burst -B build/hdrplus-burst -DCMAKE_BUILD_TYPE=Release
 cmake --build build/hdrplus-burst
 ./build/hdrplus-burst/hdrplus_burst app/src/main/assets out.dng [--hq] \
     [--ref i] [--strength f] [--tile-size 16|32] [--search-distance 32|64|128] \
-    [--crop x,y,w,h] frame0.dng [frame1.dng ...]
+    [--frame-strengths f,f,...] [--crop x,y,w,h] frame0.dng [frame1.dng ...]
 ```
 
 macOS needs `vulkan-headers` + `molten-vk` (Homebrew layout by
@@ -23,7 +23,13 @@ default; override with `-DHDRPLUS_VULKAN_INCLUDE=` /
 Frames must be 16-bit mono Bayer DNGs (uncompressed or lossless
 JPEG) with identical geometry and CFA pattern; 2..64 frames.
 `--ref` defaults to the middle frame; `--crop` x/y must be even
-(CFA phase preserved).
+(CFA phase preserved). `--frame-strengths` takes one 1..22 strength
+per input frame (step-4 per-frame weights; default: uniform
+`--strength`); the reference entry is validated but unused.
+`--strength-maps` takes a raw little-endian float32 file with N
+concatenated row-major mw*mh strength maps (step-4 maps, both paths;
+mw/mh cover W/H in 32px blocks); a present map supersedes
+frame/global strength per block.
 
 ## Output
 

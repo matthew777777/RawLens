@@ -2376,9 +2376,20 @@ class MainActivity : Activity() {
      * for the next capture.
      */
     private fun cycleHdrPlusQuality() {
-        val settings = hdrPlusSettings.copy(highQuality = !hdrPlusSettings.highQuality)
+        val settings = when {
+            hdrPlusSettings.autoQuality ->
+                hdrPlusSettings.copy(autoQuality = false, highQuality = true)
+            hdrPlusSettings.highQuality -> hdrPlusSettings.copy(highQuality = false)
+            else -> hdrPlusSettings.copy(autoQuality = true)
+        }
         if (applyHdrPlusSettings(settings)) {
-            setStatus(if (settings.highQuality) "HDR+ QUALITY • HQ" else "HDR+ QUALITY • FAST")
+            setStatus(
+                when {
+                    settings.autoQuality -> "HDR+ QUALITY • AUTO"
+                    settings.highQuality -> "HDR+ QUALITY • HQ"
+                    else -> "HDR+ QUALITY • FAST"
+                }
+            )
         }
     }
 
@@ -4845,6 +4856,65 @@ class MainActivity : Activity() {
                     refresh()
                     if (applied) setStatus("LINEAR SCALE • ${scale.label}")
                 }
+            })
+            content.addView(sectionTitle("HDR+ merge"))
+            content.addView(sectionDesc("Noise-reduction strength. Higher merges harder: cleaner stills, more ghosting on motion."))
+            fun strengthRowText(value: Float): String =
+                HdrPlusSettings.strengthSliderText(value) +
+                    if (hdrPlusSettings.autoStrength) " • AUTO" else ""
+            var selectedStrength = hdrPlusSettings.strength
+            val strengthLabel = TextView(this).apply {
+                text = strengthRowText(selectedStrength)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            content.addView(settingsCheck("Auto strength", hdrPlusSettings.autoStrength).apply {
+                setOnCheckedChangeListener { _, checked ->
+                    val applied = applyHdrPlusSettings(
+                        hdrPlusSettings.copy(autoStrength = checked)
+                    )
+                    if (applied) {
+                        strengthLabel.text = strengthRowText(selectedStrength)
+                        setStatus(if (checked) "HDR+ STRENGTH • AUTO" else "HDR+ STRENGTH • MANUAL")
+                    } else {
+                        isChecked = hdrPlusSettings.autoStrength
+                    }
+                }
+            })
+            content.addView(strengthLabel)
+            content.addView(SeekBar(this).apply {
+                max = HdrPlusSettings.STRENGTH_SLIDER_STEPS
+                progress = HdrPlusSettings.strengthToProgress(selectedStrength)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(
+                        seekBar: SeekBar,
+                        progress: Int,
+                        fromUser: Boolean
+                    ) {
+                        selectedStrength = HdrPlusSettings.progressToStrength(progress)
+                        strengthLabel.text = strengthRowText(selectedStrength)
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        val applied = applyHdrPlusSettings(
+                            hdrPlusSettings.copy(autoStrength = false, strength = selectedStrength)
+                        )
+                        if (applied) {
+                            strengthLabel.text = strengthRowText(selectedStrength)
+                            setStatus(
+                                String.format(Locale.US, "HDR+ STRENGTH • %.1f", selectedStrength)
+                            )
+                        } else {
+                            selectedStrength = hdrPlusSettings.strength
+                            seekBar.progress =
+                                HdrPlusSettings.strengthToProgress(selectedStrength)
+                            strengthLabel.text = strengthRowText(selectedStrength)
+                        }
+                    }
+                })
             })
             rawZslSettingsStatus = TextView(this).apply {
                 text = rawZslSettingsText(rawZslStatus)

@@ -71,7 +71,8 @@ class HdrPlusDngWriterTest {
         `when`(metadata.focusDistanceM).thenReturn(4.55f)
         `when`(metadata.flashFired).thenReturn(false)
         val provenance = HdrPlusProvenance(
-            mergedFrames = 8, highQuality = true, strength = 13f,
+            mergedFrames = 8, selectedFrames = 8, rejectedFrames = 0,
+            highQuality = true, strength = 13f,
             tileSize = 32, searchDistance = 64, referenceIndex = 4,
             referenceTimestampNs = 123456789L, referenceFrameNumber = 42,
             sourceWidth = 4032, sourceHeight = 3024, sourceCameraId = "0",
@@ -111,12 +112,13 @@ class HdrPlusDngWriterTest {
         assertTrue(desc, desc.startsWith("Captured with RawLens\nHDR+ GPU merge\n"))
         assertTrue(desc, desc.contains("\nPARAMETERS\n"))
         assertTrue(desc, desc.contains("- Frames: 8\n"))
+        assertTrue(desc, desc.contains("- Rejected frames: 0\n"))
         assertTrue(desc, desc.contains("- Output: 4032x3024 (1.00x, ~12.2 MP)\n"))
         assertTrue(desc, desc.contains("- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"))
         assertTrue(desc, desc.contains("- HDR+ strength: 13.000\n"))
         assertTrue(desc, desc.contains("- HDR+ tile size: 32\n"))
         assertTrue(desc, desc.contains("\nBase Frame Selection:\n"))
-        assertTrue(desc, desc.contains("- Reference: chronological middle (frame 5 of 8)\n"))
+        assertTrue(desc, desc.contains("- Reference: auto-picked (frame 5 of 8)\n"))
         assertTrue(desc, desc.contains("\nFrames:\n"))
         assertTrue(desc, desc.contains("- F1: 10.0 ms, ISO 100\n"))
         assertTrue(desc, desc.contains("- F5: 10.0 ms, ISO 100 (reference)\n"))
@@ -142,5 +144,46 @@ class HdrPlusDngWriterTest {
         val stamp = String(ByteArray(dateCount) { buffer.get(dateOff + it) }, Charsets.US_ASCII)
             .trimEnd('\u0000')
         assertTrue(stamp, stamp.matches(Regex("\\d{4}:\\d\\d:\\d\\d \\d\\d:\\d\\d:\\d\\d")))
+    }
+
+    @Test fun provenanceBlockRendersPerFrameStrengths() {
+        val provenance = HdrPlusProvenance(
+            mergedFrames = 4, selectedFrames = 4, rejectedFrames = 0,
+            highQuality = false, strength = 3f,
+            tileSize = 32, searchDistance = 64, referenceIndex = 1,
+            referenceTimestampNs = 1L, referenceFrameNumber = 7,
+            sourceWidth = 4032, sourceHeight = 3024, sourceCameraId = "0",
+            mergeMs = 10, packMs = 1, gpuMs = 5.0, unpackMs = 1,
+            frames = listOf(
+                HdrPlusFrameInfo(10_000_000L, 100, mergeStrength = 3.0f),
+                HdrPlusFrameInfo(10_000_000L, 100, mergeStrength = 13.0f),
+                HdrPlusFrameInfo(10_000_000L, 100, mergeStrength = 11.8f),
+                HdrPlusFrameInfo(10_000_000L, 100, mergeStrength = 3.0f)
+            )
+        )
+        val desc = HdrPlusDngWriter.provenanceBlock(provenance)
+        assertTrue(desc, desc.contains("- HDR+ strength: 3.000 (per-frame)\n"))
+        assertTrue(desc, desc.contains("- F1: 10.0 ms, ISO 100, s=3.0\n"))
+        assertTrue(desc, desc.contains("- F2: 10.0 ms, ISO 100, s=13.0 (reference)\n"))
+        assertTrue(desc, desc.contains("- F3: 10.0 ms, ISO 100, s=11.8\n"))
+    }
+
+    @Test fun provenanceBlockMarksActiveStrengthMaps() {
+        val provenance = HdrPlusProvenance(
+            mergedFrames = 2, selectedFrames = 2, rejectedFrames = 0,
+            highQuality = false, strength = 3f,
+            tileSize = 32, searchDistance = 64, referenceIndex = 0,
+            referenceTimestampNs = 1L, referenceFrameNumber = 7,
+            sourceWidth = 64, sourceHeight = 64, sourceCameraId = "0",
+            mergeMs = 10, packMs = 1, gpuMs = 5.0, unpackMs = 1,
+            mapsActive = true,
+            frames = listOf(
+                HdrPlusFrameInfo(10_000_000L, 100),
+                HdrPlusFrameInfo(10_000_000L, 100)
+            )
+        )
+        val desc = HdrPlusDngWriter.provenanceBlock(provenance)
+        assertTrue(desc, desc.contains("- HDR+ strength: 3.000 (strength maps)\n"))
+        assertTrue(desc, !desc.contains(", s="))
     }
 }

@@ -32,13 +32,25 @@ class HdrPlusMerge(context: Context) {
     data class Timings(val packMs: Long, val gpuMs: Double, val unpackMs: Long)
     @Volatile var lastTimings = Timings(0, 0.0, 0)
         private set
+    /** Motion metering of the last [merge] call (any thread). */
+    @Volatile var lastMotion: HdrPlusMotionMeter.MotionSummary? = null
+        private set
+    /** Auto decision of the last [merge] call (any thread). */
+    @Volatile var lastDecision: HdrPlusAutoDecision? = null
+        private set
 
     /** One owned input frame with its frozen unpack geometry. */
     data class FrameInput(
         val image: Image,
         val layout: RawPlaneLayout,
         val crop: RawCrop,
-        val normalization: RawNormalization
+        val normalization: RawNormalization,
+        /** Sensor capture timestamp (ns, boot clock); 0 = unknown. */
+        val timestampNanos: Long = 0L,
+        /** Gyro ego-motion (rad/s) during this frame; NaN = unreported. */
+        val gyroRadiansPerSecond: Float = Float.NaN,
+        /** Sensor sensitivity for the darkness term; 0 = unknown. */
+        val sensitivityIso: Int = 0
     )
 
     /**
@@ -97,13 +109,47 @@ class HdrPlusMerge(context: Context) {
                 rotatedBlacks(frame, blacks, index * 4)
                 whites[index] = frame.normalization.whiteLevel
             }
+            // Meter first: the auto brain picks strength/path/frames/ref
+            // from read-only views of the packed buffers. Scores travel in
+            // locals, so the decision can never observe a stale volatile.
+            val metering = meterMotion(frames, packed, blacks, whites, width, height)
+            val decision = HdrPlusAutoSelect.select(
+                metering = metering,
+                frameCount = frames.size,
+                sensitivityIso = frames[refIndex].sensitivityIso,
+                manualStrength = settings.strength.takeIf { !settings.autoStrength },
+                manualQuality = settings.highQuality.takeIf { !settings.autoQuality },
+                preferredRef = refIndex
+            )
+            val keptPacked = decision.keepIndices.map { packed[it] }.toTypedArray()
+            val keptBlacks = FloatArray(decision.keepIndices.size * 4)
+            val keptWhites = FloatArray(decision.keepIndices.size)
+            decision.keepIndices.forEachIndexed { keptPos, srcPos ->
+                blacks.copyInto(keptBlacks, keptPos * 4, srcPos * 4, srcPos * 4 + 4)
+                keptWhites[keptPos] = whites[srcPos]
+            }
             val output = ByteBuffer.allocateDirect(width * height * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder())
             val packedAt = System.nanoTime()
+            val frameStrengths = decision.frameStrengths?.toFloatArray()
+            require(frameStrengths == null || frameStrengths.size == keptPacked.size) {
+                "HDR+ frame strengths ${frameStrengths?.size} != kept ${keptPacked.size}"
+            }
+            val maps = decision.strengthMaps
+            val flatMaps = maps?.let { list ->
+                require(list.size == keptPacked.size) {
+                    "HDR+ strength maps ${list.size} != kept ${keptPacked.size}"
+                }
+                val cells = metering.mapCellsX * metering.mapCellsY
+                require(cells > 0 && list.all { it.size == cells }) {
+                    "HDR+ strength maps must each hold ${metering.mapCellsX}x${metering.mapCellsY}"
+                }
+                FloatArray(list.size * cells) { i -> list[i / cells][i % cells] }
+            }
             val gpuMs = HdrPlusVulkan.merge(
-                handle, packed.toTypedArray(), blacks, whites, refIndex,
-                IntArray(0), settings.strength, tileSize, searchDistance,
-                settings.highQuality, alignOnce, width, height, output
+                handle, keptPacked, keptBlacks, keptWhites, decision.refIndex,
+                IntArray(0), decision.strength, frameStrengths, flatMaps, tileSize, searchDistance,
+                decision.highQuality, alignOnce, width, height, output
             )
             val inferredAt = System.nanoTime()
             val values = FloatArray(width * height)
@@ -113,9 +159,14 @@ class HdrPlusMerge(context: Context) {
             lastTimings = Timings(
                 (packedAt - t) / 1_000_000, gpuMs, (System.nanoTime() - inferredAt) / 1_000_000
             )
-            Log.i(LOG_TAG, "HDR+ merge ${width}x$height N=${frames.size} ref=$refIndex " +
-                "gpu=${"%.1f".format(gpuMs)}ms strength=${settings.strength}" +
-                (if (settings.highQuality) " HQ" else " fast"))
+            lastMotion = metering
+            lastDecision = decision
+            Log.i(LOG_TAG, "HDR+ merge ${width}x$height N=${keptPacked.size}/${frames.size} " +
+                "ref=${decision.refIndex} " +
+                "gpu=${"%.1f".format(gpuMs)}ms strength=${decision.strength}" +
+                (if (decision.highQuality) " HQ" else " fast"))
+            Log.i(LOG_TAG, metering.logLine(frames.size))
+            Log.i(LOG_TAG, decision.logLine(frames.size))
             return UnpackedRawCfa(
                 width, height,
                 first.normalization.sensorPattern.shifted(sensorCropX, sensorCropY),
@@ -128,6 +179,68 @@ class HdrPlusMerge(context: Context) {
             Log.w(LOG_TAG, "HDR+ merge OOM", oom)
             return null
         }
+    }
+
+    /**
+     * Read-only metering over the packed buffers: per-pair difference +
+     * local-motion scores plus per-frame brightness/texture, all bounded
+     * (~48k samples per pair at 12 MP). Runs before the native call so
+     * the auto brain can decide strength/path/frames/ref.
+     */
+    private fun meterMotion(
+        frames: List<FrameInput>,
+        packed: List<ByteBuffer>,
+        blacks: FloatArray,
+        whites: FloatArray,
+        width: Int,
+        height: Int
+    ): HdrPlusMotionMeter.MotionSummary {
+        val ranges = DoubleArray(frames.size) { i ->
+            val blackMean = (blacks[i * 4] + blacks[i * 4 + 1] +
+                blacks[i * 4 + 2] + blacks[i * 4 + 3]) / 4.0
+            whites[i].toDouble() - blackMean
+        }
+        val stats = frames.indices.map { i ->
+            HdrPlusMotionMeter.frameStats(
+                packed[i], width, height, normalizationRange = ranges[i]
+            )
+        }
+        val deltas = ArrayList<Double>(frames.size - 1)
+        val hots = ArrayList<Double>(frames.size - 1)
+        val prevTs = ArrayList<Long>(frames.size - 1)
+        val currTs = ArrayList<Long>(frames.size - 1)
+        val gyros = ArrayList<Double>(frames.size - 1)
+        val ratios = ArrayList<DoubleArray>(frames.size - 1)
+        for (i in 1 until frames.size) {
+            deltas += HdrPlusMotionMeter.meanAbsDiffNormalized(
+                packed[i - 1], packed[i], width * height,
+                normalizationRange = ranges[i]
+            )
+            hots += HdrPlusMotionMeter.blockHotFraction(
+                packed[i - 1], packed[i], width, height,
+                normalizationRange = ranges[i],
+                hotRatio = HdrPlusAutoTuning.HOT_RATIO
+            )
+            HdrPlusMotionMeter.blockMismatchRatios(
+                packed[i - 1], packed[i], width, height,
+                normalizationRange = ranges[i]
+            )?.let { ratios += it }
+            prevTs += frames[i - 1].timestampNanos
+            currTs += frames[i].timestampNanos
+            val gyro = frames[i].gyroRadiansPerSecond
+            gyros += if (gyro.isFinite()) gyro.toDouble() else Double.NaN
+        }
+        // Ratio grids ride along only when every pair measured one (else
+        // the map builder would mix resolutions); the brain treats a
+        // partial set as missing and falls back to frame strengths.
+        val fullRatios = ratios.takeIf { it.size == frames.size - 1 } ?: emptyList()
+        val (mapX, mapY) = if (fullRatios.isEmpty()) (0 to 0)
+        else HdrPlusMotionMeter.mapCells(width, height)
+        return HdrPlusMotionMeter.summarize(
+            deltas, prevTs, currTs, gyros, hots,
+            stats.map { it.meanLevel }, stats.map { it.sharpness },
+            fullRatios, mapX, mapY
+        )
     }
 
     /**
