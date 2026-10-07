@@ -247,7 +247,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Cozy 3-step strip -->
+        <!-- Cozy 4-step strip -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -260,7 +260,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:letterSpacing="0.12"
-                android:text="THREE TINY STEPS"
+                android:text="FOUR TINY STEPS"
                 android:textColor="@color/accent"
                 android:textSize="10sp"
                 android:textStyle="bold" />
@@ -269,7 +269,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:text="1 · Allow the camera   2 · Pick your RAW lenses   3 · Go shoot"
+                android:text="1 · Allow the camera   2 · Grant the photo folder   3 · Pick your RAW lenses   4 · Go shoot"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp"
                 android:lineSpacingExtra="4dp" />
@@ -302,7 +302,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:gravity="center"
-            android:text="First we ask for camera access, then you choose lenses. Your photos stay in DCIM/RawLens — no accounts, no cloud."
+            android:text="First camera access, then the photo-folder grant so burst gyro files save next to your DNGs, then lenses. Your photos stay in DCIM/RawLens — no accounts, no cloud."
             android:textColor="@color/text_muted"
             android:textSize="12sp"
             android:lineSpacingExtra="2dp" />

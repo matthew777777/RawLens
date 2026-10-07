@@ -175,9 +175,9 @@ Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 ## 10. Files + troubleshooting
 
-- Stills `DCIM/RawLens/<stem>.{dng,jpg}`, sidecars
-  `Download/RawLens/<stem>/burst.json + gyro/*.csv` (or next to DNGs
-  after folder grant).
+- Stills `DCIM/RawLens/<stem>.{dng,jpg}`, sidecars next to the DNGs
+  (`burst.json + gyro/*.csv`, photo folder granted on first install;
+  `Download/RawLens/<stem>/` fallback until granted).
 - Black preview = dark room ISO 20000 — add light.
 - Only 1× = re-check ID 2 → SAVE.
 - PROGRAM stuck = ETTR converged → uncheck.

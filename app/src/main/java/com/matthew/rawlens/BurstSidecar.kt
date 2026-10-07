@@ -25,8 +25,9 @@ import java.util.Locale
  *   gyro/IMG_<ts>_F00.csv …                (Downloads collection)
  * ```
  *
- * When the user grants the photo folder (Settings → General → sidecars),
- * [SidecarTreeAccess.writeViaTree] instead writes `burst.json` + `gyro/`
+ * The photo folder is granted automatically on first install (re-grant
+ * from burst settings after a reinstall or a revoked grant), so
+ * [SidecarTreeAccess.writeViaTree] writes `burst.json` + `gyro/`
  * directly into `DCIM/RawLens/IMG_<ts>/` next to the DNGs — no extra
  * manifest permission needed. Either way, desktop `import` wants one
  * folder holding DNGs + `burst.json` + `gyro/`, so copy the Downloads

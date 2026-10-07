@@ -26,6 +26,7 @@ import java.io.IOException
  */
 object SidecarTreeAccess {
     const val KEY_TREE_URI = "sidecar_tree_uri"
+    const val KEY_FIRST_INSTALL_PROMPTED = "sidecar_first_install_prompted"
     private const val PREFS_NAME = "rawlens_settings"
     private const val LOG_TAG = "RawLensSidecar"
 
@@ -45,6 +46,31 @@ object SidecarTreeAccess {
             it.uri == treeUri && it.isWritePermission
         }
     }
+
+    /**
+     * Pure first-install decision, host-testable: prompt exactly once, and
+     * never when a usable grant already exists.
+     */
+    fun shouldAutoPrompt(hasGrant: Boolean, alreadyPrompted: Boolean): Boolean =
+        !hasGrant && !alreadyPrompted
+
+    /**
+     * True when the automatic first-install photo-folder prompt still needs
+     * to run: no usable grant and the prompt has not fired yet.
+     */
+    fun needsFirstInstallPrompt(context: Context): Boolean =
+        shouldAutoPrompt(
+            hasGrant = hasWriteAccess(context),
+            alreadyPrompted = prefs(context).getBoolean(KEY_FIRST_INSTALL_PROMPTED, false)
+        )
+
+    /** Records that the automatic first-install prompt has fired. */
+    fun markFirstInstallPrompted(context: Context) {
+        prefs(context).edit().putBoolean(KEY_FIRST_INSTALL_PROMPTED, true).apply()
+    }
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /** Short human-readable label for settings (`DCIM/RawLens`, …). */
     fun displayPath(treeUri: Uri?): String? {

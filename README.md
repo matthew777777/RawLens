@@ -46,7 +46,7 @@ The DNG sensor calibration editor is guided by the active camera's declared meta
 - Android SDK 35 for compilation
 - CMake 3.22.1 for the native DNG writer
 
-The application requests only camera permission. DNG/JPEG bursts are written through `MediaStore` to `DCIM/RawLens/<stem>`, gyro sidecars (`burst.json` + `gyro/` CSVs) to `Download/RawLens/<stem>` — unless the photo folder is granted under Settings → General → sidecars, in which case they land next to the DNGs. Otherwise copy them next to the DNGs before desktop `import`.
+The application requests only camera permission plus one photo-folder grant (asked automatically on first install, re-grantable from burst settings). DNG/JPEG bursts are written through `MediaStore` to `DCIM/RawLens/<stem>`, and gyro sidecars (`burst.json` + `gyro/` CSVs) land next to the DNGs — falling back to `Download/RawLens/<stem>` only until the folder is granted. Copy any split sidecars next to the DNGs before desktop `import`.
 See [PRIVACY.md](PRIVACY.md) for the project's privacy statement.
 
 ## Build from source
