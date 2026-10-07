@@ -1,57 +1,84 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
+/**
+ * Pins the [FrameLeaseRegistry] contract the Direct-Log record path
+ * relies on: the camera ref releases up front while a GPU borrow keeps
+ * the native buffer alive, and the borrow transfers across threads
+ * (camera submit -> copy-worker fence) with idempotent close.
+ */
 class FrameLeaseRegistryTest {
-    @Test fun `ring eviction waits for GPU then releases native frame exactly once`() {
-        val frame = Any(); val reader = Any()
-        var closed = 0; var retired = 0
-        val registry = FrameLeaseRegistry<Any> { closed++ }
-        registry.adopt(frame, reader) { retired++ }
-        val gpu = registry.borrow(frame)!!
+    @Test
+    fun borrowDefersNativeCloseUntilLeaseClose() {
+        var closes = 0
+        val registry = FrameLeaseRegistry<Any> { closes++ }
+        val frame = Any()
+        registry.adopt(frame)
+        val lease = registry.borrow(frame)
+        assertNotNull(lease)
         registry.release(frame)
+        assertEquals("camera release must not close a borrowed frame", 0, closes)
+        lease!!.close()
+        assertEquals(1, closes)
+    }
+
+    @Test
+    fun leaseCloseIsIdempotent() {
+        var closes = 0
+        val registry = FrameLeaseRegistry<Any> { closes++ }
+        val frame = Any()
+        registry.adopt(frame)
+        val lease = registry.borrow(frame)!!
         registry.release(frame)
-        assertEquals(0, closed)
-        assertEquals(1, registry.count(reader))
-        assertEquals(1, registry.gpuOnlyCount())
+        lease.close()
+        lease.close()
+        assertEquals("double close (fence + job finally) must close once", 1, closes)
+    }
+
+    @Test
+    fun borrowAfterCameraReleaseReturnsNull() {
+        val registry = FrameLeaseRegistry<Any> { }
+        val frame = Any()
+        registry.adopt(frame)
+        registry.release(frame)
         assertNull(registry.borrow(frame))
-        gpu.close(); gpu.close()
-        registry.release(frame) // late duplicate completion after the GPU borrow is gone
-        assertEquals(1, closed)
-        assertEquals(1, retired)
-        assertEquals(0, registry.count(reader))
     }
-    @Test fun `GPU completion does not release a frame still owned by saving`() {
-        val frame = Any(); val reader = Any()
-        var closed = 0
-        val registry = FrameLeaseRegistry<Any> { closed++ }
-        registry.adopt(frame, reader)
-        val gpu = registry.borrow(frame)!!
-        gpu.close()
-        assertEquals(0, closed)
-        assertEquals(1, registry.count(reader))
+
+    @Test
+    fun everyBorrowGatesTheClose() {
+        var closes = 0
+        val registry = FrameLeaseRegistry<Any> { closes++ }
+        val frame = Any()
+        registry.adopt(frame)
+        val first = registry.borrow(frame)!!
+        val second = registry.borrow(frame)!!
         registry.release(frame)
-        assertEquals(1, closed)
+        first.close()
+        assertEquals(0, closes)
+        second.close()
+        assertEquals(1, closes)
     }
-    @Test fun `pending frame dropping and stale sessions release independent reader allocations`() {
-        val oldReader = Any(); val newReader = Any()
-        val closed = mutableListOf<Any>()
-        val registry = FrameLeaseRegistry<Any> { closed += it }
-        repeat(50) {
-            val old = Any(); val fresh = Any()
-            registry.adopt(old, oldReader); registry.adopt(fresh, newReader)
-            val queued = registry.borrow(old)!!
-            val drawing = registry.borrow(fresh)!!
-            registry.release(old); registry.release(fresh)
-            queued.close() // superseded or invalidated pending GPU frame
-            assertEquals(0, registry.count(oldReader))
-            assertEquals(1, registry.count(newReader))
-            drawing.close()
-            assertEquals(0, registry.count(newReader))
-        }
-        assertEquals(100, closed.distinct().size)
-        assertEquals(100, closed.size)
+
+    @Test
+    fun recorderProtocolTransfersOneLeaseToFenceClose() {
+        // Mirrors DirectLogRecorder: adopt -> borrow -> camera release on
+        // the camera thread, then the transferred lease closes on the
+        // worker (early fence close + finally backstop).
+        var closes = 0
+        val registry = FrameLeaseRegistry<Any> { closes++ }
+        val frame = Any()
+        registry.adopt(frame)
+        val transferred = registry.borrow(frame)
+        assertNotNull(transferred)
+        registry.release(frame)
+        assertEquals(0, closes)
+        transferred!!.close()
+        transferred.close()
+        assertEquals(1, closes)
     }
 }

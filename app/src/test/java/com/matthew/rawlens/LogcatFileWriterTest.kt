@@ -49,6 +49,17 @@ class LogcatFileWriterTest {
         assertTrue(!LogcatFileWriter.mirrorDue(1000L, 1000L + LogcatFileWriter.MIRROR_INTERVAL_MS - 1))
     }
 
+    @Test fun `capture stop marker names the reason and the truncation`() {
+        // A truncated session must be self-describing: without this marker
+        // a dead logcat child (file ends mid-session, app alive) reads
+        // exactly like a dead process.
+        assertEquals(
+            "----- logcat capture stopped (respawn budget spent); " +
+                "session truncated, app continues -----",
+            LogcatFileWriter.captureStoppedMarker("respawn budget spent")
+        )
+    }
+
     @Test fun `rotation budget constants stay bounded`() {
         assertEquals(8L * 1024L * 1024L, LogcatFileWriter.MAX_BYTES)
         assertEquals(5, LogcatFileWriter.KEEP_SESSIONS)

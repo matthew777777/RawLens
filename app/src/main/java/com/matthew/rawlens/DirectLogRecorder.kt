@@ -1177,16 +1177,21 @@ class DirectLogRecorder(
             dropped.incrementAndGet()
             return
         }
-        // Camera ref released up front; native close waits out the GPU lease.
+        // Camera ref released up front; native close waits out the GPU
+        // lease, which processFrame transfers to the copy job on success
+        // (GPU-completion-gated) or leaves here to close on drop paths.
         RawImageOwnership.release(image)
+        var leaseTransferred = false
         try {
-            processFrame(image, hb)
+            leaseTransferred = processFrame(image, hb, lease)
         } catch (e: Exception) {
             Log.w(TAG, "frame failed", e)
             frameErrors.incrementAndGet()
             dropped.incrementAndGet()
         } finally {
-            try { lease.close() } catch (_: Exception) {}
+            if (!leaseTransferred) {
+                try { lease.close() } catch (_: Exception) {}
+            }
             try { hb.close() } catch (_: Exception) {}
         }
         val cycleMs = (android.os.SystemClock.elapsedRealtimeNanos() - cycleStartNs) / 1e6f
@@ -1194,12 +1199,22 @@ class DirectLogRecorder(
         if (cycleMs > 1000f / 30f) cycleOverBudget.incrementAndGet()
     }
 
-    private fun processFrame(image: Image, hb: android.hardware.HardwareBuffer) {
-        val c = chars ?: return
+    /**
+     * Grade + submit one frame. Returns true when a [CopyJob] was queued
+     * (the [lease] transfers to the job then: the worker closes it once
+     * the submit fence proves the GPU finished reading the RAW import);
+     * false on any drop path (the caller closes the lease).
+     */
+    private fun processFrame(
+        image: Image,
+        hb: android.hardware.HardwareBuffer,
+        lease: AutoCloseable,
+    ): Boolean {
+        val c = chars ?: return false
         val plane = image.planes[0]
         if (plane.pixelStride != 2) {
             dropped.incrementAndGet()
-            return
+            return false
         }
         val ts = image.timestamp
         val result = awaitResult(ts)
@@ -1212,7 +1227,7 @@ class DirectLogRecorder(
             // recorded frame. Counted apart from mid-take drops: warm-up
             // is expected (and timing-dependent), not a health signal.
             headDropped.incrementAndGet()
-            return
+            return false
         }
         if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
         // Constant frame rate: PTS comes from the submit-order frame index
@@ -1226,8 +1241,8 @@ class DirectLogRecorder(
         // Same result feeds WB/CCM and shading, so the three never disagree.
         val (shadeD, shadeG) = snapshotShading(result)
         val pitch = plane.rowStride / plane.pixelStride
-        val exp = exportSize ?: return
-        val crop = cropRect ?: return
+        val exp = exportSize ?: return false
+        val crop = cropRect ?: return false
         val expW = exp.width
         val expH = exp.height
         // Slot rotation advances ONLY on submit-success (see bottom): a
@@ -1251,7 +1266,7 @@ class DirectLogRecorder(
             Log.w(TAG, "slot $slotIndex copy stuck; dropping frame")
             frameErrors.incrementAndGet()
             dropped.incrementAndGet()
-            return
+            return false
         }
 
         // 1. Wait-free submit(s) straight into OUR P010 staging. The
@@ -1259,7 +1274,7 @@ class DirectLogRecorder(
         // Fused (one dispatch: CFA -> demosaic -> grade -> P010) is the
         // record path; superpixel + grade-YUV (two dispatches, same-queue
         // ordered) is the session fallback.
-        val mc = codec ?: return
+        val mc = codec ?: return false
         val strides = intArrayOf(ourYStrideB, ourUvStrideB, width, height)
         val p010Buf = s.p010!!.buffer
         val fd: Int
@@ -1279,7 +1294,7 @@ class DirectLogRecorder(
                 if (fd == -20) error("P010 staging layout mismatch (see logcat); aborting take")
                 Log.w(TAG, "fused submit failed ($fd); dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
             fusedCount.incrementAndGet()
         } else if (useRcd) {
@@ -1293,7 +1308,7 @@ class DirectLogRecorder(
             if (rgbBuf == null || scratchBuf == null) {
                 Log.w(TAG, "rcd buffers missing; dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
             var rcdOk = true
             for (mode in 0..3) {
@@ -1310,7 +1325,7 @@ class DirectLogRecorder(
                 }
                 try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {}
             }
-            if (!rcdOk) return
+            if (!rcdOk) return false
             val (gidims, gfparams) = VfLogGrade.packGrade(
                 intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
                 profile = sessionProfile
@@ -1324,7 +1339,7 @@ class DirectLogRecorder(
             if (fd < 0) {
                 Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
             rcdCount.incrementAndGet()
         } else {
@@ -1332,7 +1347,7 @@ class DirectLogRecorder(
             if (expBuf == null) {
                 Log.w(TAG, "export slot missing; dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
             val (iparams, fparams) = VfVulkan.packParams(
                 channels, crop.left, crop.top, expW, expH, sessionStep, pitch, levels, white
@@ -1341,7 +1356,7 @@ class DirectLogRecorder(
             if (computeRc != VfVulkan.OK) {
                 Log.w(TAG, "compute submit failed (rc=$computeRc); dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
             val (gidims, gfparams) = VfLogGrade.packGrade(
                 intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
@@ -1356,7 +1371,7 @@ class DirectLogRecorder(
             if (fd < 0) {
                 Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
                 dropped.incrementAndGet()
-                return
+                return false
             }
         }
         if (fd == -20) {
@@ -1365,7 +1380,7 @@ class DirectLogRecorder(
         if (fd < 0) {
             Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
             dropped.incrementAndGet()
-            return
+            return false
         }
         s.fd = fd
         s.ptsUs = cfrUs
@@ -1377,11 +1392,14 @@ class DirectLogRecorder(
         submitPreview(s, slotIndex)
         // Hand the P010 to the copy worker (fd travels by value; the
         // worker closes it). The camera thread never touches pixels.
+        // The RAW lease travels with it: the worker releases the camera
+        // buffer once the submit fence proves the GPU is done reading
+        // it (closing here would recycle a live RAW mid-dispatch).
         val latch = CountDownLatch(1)
         s.jobDone = latch
         // frameCounter already incremented above: jobs are 0-based contiguous.
         val seq = frameCounter - 1
-        copyQueue.put(CopyJob(s.p010!!, fd, cfrUs, latch, seq, ts))
+        copyQueue.put(CopyJob(s.p010!!, fd, cfrUs, latch, seq, ts, lease))
         // Submit-only pair + fd handoff: zero CPU stall by construction
         // (no blocking twin exists on the P010 path, so fallbackWaits
         // stays 0 — any reclaim-valve stall would be a GPU wedge).
@@ -1390,6 +1408,7 @@ class DirectLogRecorder(
         cpuChainMsAvg = if (cpuChainMsAvg == 0f) chainMs else cpuChainMsAvg * 0.9f + chainMs * 0.1f
         if (chainMs > cpuChainMsMax) cpuChainMsMax = chainMs
         if (chainMs > 1000f / 30f) overBudget.incrementAndGet()
+        return true
     }
 
     /**
@@ -1494,7 +1513,11 @@ class DirectLogRecorder(
      * to 41ms) and fence waits absorb into slot slack instead of blowing
      * the 33ms frame. Jobs are FIFO: pts stay monotonic by construction.
      * Ownership: the fd travels BY VALUE in the job and closes exactly
-     * once in the job finally; slot fields stay camera-owned.
+     * once in the job finally; slot fields stay camera-owned. The RAW
+     * camera lease travels the same way: the GPU reads the zero-copy
+     * RAW import asynchronously, so the Image must stay open until the
+     * submit fence signals — closing at submit time lets the HAL recycle
+     * the buffer mid-dispatch (mid-frame tear under pool pressure).
      */
     private data class CopyJob(
         val p010: HardwareBufferRef,
@@ -1505,6 +1528,8 @@ class DirectLogRecorder(
         val seq: Long,
         /** Sensor timestamp (boot-time ns) for the stab frame table. */
         val sensorTsNs: Long,
+        /** RAW Image lease: close on GPU completion (idempotent). */
+        val rawLease: AutoCloseable,
     )
 
     /** A filled codec input awaiting its ordered turn at queueInputBuffer. */
@@ -1597,6 +1622,9 @@ class DirectLogRecorder(
                 null
             } finally {
                 try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
+                // Backstop: normally already released right after the
+                // fence wait in processCopyJob (idempotent).
+                try { job.rawLease.close() } catch (_: Exception) {}
                 job.done.countDown()
             }
             synchronized(queueGate) {
@@ -1651,6 +1679,11 @@ class DirectLogRecorder(
         val fenceWaitMs = (android.os.SystemClock.elapsedRealtimeNanos() - fenceStartNs) / 1e6f
         fenceWaitMsAvg = if (fenceWaitMsAvg == 0f) fenceWaitMs else fenceWaitMsAvg * 0.9f + fenceWaitMs * 0.1f
         if (fenceWaitMs > fenceWaitMsMax) fenceWaitMsMax = fenceWaitMs
+        // RAW input lifetime: the signaled fence proves the dispatch
+        // finished READING the sensor buffer, so return it to the HAL
+        // pool NOW — before the 50ms dequeue grace and the ~25ms copy
+        // widen pool pressure. Idempotent with the job-finally backstop.
+        try { job.rawLease.close() } catch (_: Exception) {}
         // Cold-start priming: C2 answers TRY_AGAIN while its input pool
         // comes up (~ms at take start), so the first jobs may wait; once
         // primed, dequeue is instant again. A 50ms grace past priming

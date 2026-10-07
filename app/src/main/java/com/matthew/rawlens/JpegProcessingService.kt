@@ -33,7 +33,10 @@ class JpegProcessingService : Service() {
         if (!acknowledgeForeground()) return
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:jpeg-processing")
-            .apply { acquire() }
+            // Bounded so a missed stop (background-start rejection races) can
+            // never hold the device awake indefinitely; development of one
+            // burst finishes far inside this.
+            .apply { acquire(WAKELOCK_TIMEOUT_MS) }
         sampleDiagnosticsAsync("jpeg-service-created")
     }
 
@@ -124,6 +127,8 @@ class JpegProcessingService : Service() {
         private const val CHANNEL_ID = "jpeg_processing"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP = "com.matthew.rawlens.STOP_JPEG_PROCESSING"
+        /** Worst-case partial-wakelock hold: 10 minutes, then the OS releases it. */
+        private const val WAKELOCK_TIMEOUT_MS = 10L * 60L * 1000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, JpegProcessingService::class.java))

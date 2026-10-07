@@ -38,7 +38,9 @@ import java.util.TimeZone
  * Downloads even when the app can never launch again. Files rotate at
  * [MAX_BYTES] and old sessions are pruned to [KEEP_SESSIONS], so a stuck loop
  * can never fill storage. If the logcat child dies on its own it is
- * respawned (bounded), so capture resumes by itself.
+ * respawned (bounded), so capture resumes by itself; when respawns give
+ * out a truncation marker is written to the file and mirrored, so a short
+ * session can never be mistaken for a dead process.
  */
 internal object LogcatFileWriter {
     private const val TAG = "LogcatFileWriter"
@@ -53,7 +55,7 @@ internal object LogcatFileWriter {
     private const val EXPORT_DIR = "Download/RawLens/logs/"
     /** Continuous Downloads mirror cadence; rotation/stop/crash always force one. */
     const val MIRROR_INTERVAL_MS = 30_000L
-    private const val MAX_RESPAWNS = 3
+    private const val MAX_RESPAWNS = 10
 
     private val lock = Any()
     private var process: Process? = null
@@ -96,6 +98,16 @@ internal object LogcatFileWriter {
     /** Interval gate for the Downloads mirror; rotation/stop/crash bypass it. */
     fun mirrorDue(lastMirrorMs: Long, nowMs: Long): Boolean =
         nowMs - lastMirrorMs >= MIRROR_INTERVAL_MS
+
+    /**
+     * File-side marker written when logcat capture dies while the app runs
+     * on. Without it a truncated session (logcat child killed, respawns
+     * spent) is indistinguishable from a dead process. Crash sessions keep
+     * their fatal footer instead; this marker means the app outlived its
+     * capture, never that the app died.
+     */
+    fun captureStoppedMarker(reason: String): String =
+        "----- logcat capture stopped ($reason); session truncated, app continues -----"
 
     /**
      * Reads and clears the crash flag left by [recordCrash]. Resolves the log
@@ -396,6 +408,7 @@ internal object LogcatFileWriter {
             if (!wantRespawn) break
             if (++restarts > MAX_RESPAWNS) {
                 Log.w(TAG, "Logcat respawn budget spent; capture stopped")
+                noteCaptureStopped("respawn budget spent")
                 break
             }
             try {
@@ -413,8 +426,37 @@ internal object LogcatFileWriter {
                     false
                 }
             }
-            if (!respawned) break
+            if (!respawned) {
+                noteCaptureStopped("logcat respawn failed")
+                break
+            }
         }
+    }
+
+    /**
+     * File-side truncation marker for capture death (see
+     * [captureStoppedMarker]), mirrored promptly so Downloads carries it
+     * even when the app never reaches another mirror cadence. Skips clean
+     * shutdowns: [stop] clears [running] under the same lock, so a marker
+     * here always means capture died unexpectedly.
+     */
+    private fun noteCaptureStopped(reason: String) {
+        val marked = synchronized(lock) {
+            if (!running) return
+            try {
+                writer?.let {
+                    it.write(captureStoppedMarker(reason))
+                    it.newLine()
+                    it.flush()
+                }
+                stream?.fd?.sync()
+                true
+            } catch (failure: Throwable) {
+                Log.w(TAG, "Recording capture stop to log file failed", failure)
+                false
+            }
+        }
+        if (marked) maybeMirror(force = true)
     }
 
     private fun appendLine(line: String) {
