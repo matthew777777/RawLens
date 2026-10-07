@@ -79,9 +79,9 @@ Java_com_matthew_rawlens_HdrPlusVulkan_nativeLastGpuMs(JNIEnv* env, jobject /*th
 
 JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_HdrPlusVulkan_nativeMerge(
     JNIEnv* env, jobject /*thiz*/, jlong handle, jobjectArray frames, jfloatArray blacks,
-    jfloatArray whites, jint refIndex, jintArray hotPixels, jfloat strength, jint tileSize,
-    jint searchDistance, jboolean highQuality, jboolean alignOnce, jint width, jint height,
-    jobject output) {
+    jfloatArray whites, jint refIndex, jintArray hotPixels, jfloat strength, jfloatArray frameStrengths,
+    jfloatArray strengthMaps, jint tileSize, jint searchDistance, jboolean highQuality,
+    jboolean alignOnce, jint width, jint height, jobject output) {
     HdrPlusContext* ctx = (HdrPlusContext*)(uintptr_t)handle;
     if (ctx == nullptr) {
         throw_runtime(env, "null hdrplus context");
@@ -131,6 +131,27 @@ JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_HdrPlusVulkan_nativeMerge(
     std::vector<float> whiteVec(static_cast<size_t>(n));
     env->GetFloatArrayRegion(blacks, 0, n * 4, blackVec.data());
     env->GetFloatArrayRegion(whites, 0, n, whiteVec.data());
+    std::vector<float> strengthVec;
+    if (frameStrengths != nullptr) {
+        if (env->GetArrayLength(frameStrengths) != n) {
+            throw_runtime(env, "hdrplus merge: frameStrengths must hold N floats or be null");
+            return -1.0;
+        }
+        strengthVec.resize(static_cast<size_t>(n));
+        env->GetFloatArrayRegion(frameStrengths, 0, n, strengthVec.data());
+    }
+    std::vector<float> mapsVec;
+    if (strengthMaps != nullptr) {
+        int mw = 0, mh = 0;
+        hdrplus_strength_map_cells(width, height, &mw, &mh);
+        const jsize want = n * mw * mh;
+        if (env->GetArrayLength(strengthMaps) != want) {
+            throw_runtime(env, "hdrplus merge: strengthMaps must hold N*mw*mh floats or be null");
+            return -1.0;
+        }
+        mapsVec.resize(static_cast<size_t>(want));
+        env->GetFloatArrayRegion(strengthMaps, 0, want, mapsVec.data());
+    }
     std::vector<int32_t> hotVec;
     if (hotPixels != nullptr) {
         const jsize hotLen = env->GetArrayLength(hotPixels);
@@ -144,6 +165,8 @@ JNIEXPORT jdouble JNICALL Java_com_matthew_rawlens_HdrPlusVulkan_nativeMerge(
     HdrPlusParams params{};
     hdrplus_default_params(&params);
     params.strength = strength;
+    params.frame_strengths = strengthVec.empty() ? nullptr : strengthVec.data();
+    params.strength_maps = mapsVec.empty() ? nullptr : mapsVec.data();
     params.tile_size = static_cast<uint32_t>(tileSize);
     params.search_distance = static_cast<uint32_t>(searchDistance);
     params.high_quality = highQuality ? 1 : 0;

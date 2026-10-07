@@ -17,6 +17,11 @@
 //   --search-distance 32|64|128 (default 64)
 //   --ref <i>         reference frame index (default: middle)
 //   --strength <f>    noise-reduction strength 1..22 (default 13)
+//   --frame-strengths <f,f,...>
+//                     per-frame strengths, one per input frame (default: uniform --strength)
+//   --strength-maps <file>
+//                     raw little-endian float32 strength maps, N*mw*mh values
+//                     (mw/mh cover W/H in 32px blocks; both paths)
 //   --crop x,y,w,h    merge a crop only (x/y must be even: CFA phase)
 //
 // Frames must be single-image uncompressed/LJPEG Bayer DNGs with identical
@@ -24,6 +29,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -33,10 +39,27 @@
 
 namespace {
 
+std::vector<float> parseFloatList(const char* text) {
+    std::vector<float> out;
+    if (text == nullptr || *text == '\0') return out;
+    const char* p = text;
+    for (;;) {
+        char* end = nullptr;
+        const float v = std::strtof(p, &end);
+        if (end == p) return std::vector<float>();
+        out.push_back(v);
+        if (*end == '\0') return out;
+        if (*end != ',') return std::vector<float>();
+        p = end + 1;
+        if (*p == '\0') return std::vector<float>();  // trailing comma
+    }
+}
+
 void usage(const char* argv0) {
     std::fprintf(stderr,
                  "usage: %s <assets-dir> <out.dng> [--hq] [--ref i] [--strength f]\n"
                  "             [--tile-size 16|32] [--search-distance 32|64|128]\n"
+                 "             [--frame-strengths f,f,...] [--strength-maps file]\n"
                  "             [--crop x,y,w,h] <frame0.dng> [frame1.dng ...]\n",
                  argv0);
 }
@@ -67,6 +90,8 @@ int main(int argc, char** argv) {
     bool highQuality = false;
     int refIndex = -1;
     float strength = 13.0f;
+    std::vector<float> frameStrengths;
+    const char* strengthMapsPath = nullptr;
     int tileSize = 32;
     int searchDistance = 64;
     bool doCrop = false;
@@ -79,6 +104,14 @@ int main(int argc, char** argv) {
             refIndex = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--strength") == 0 && i + 1 < argc) {
             strength = static_cast<float>(std::atof(argv[++i]));
+        } else if (std::strcmp(argv[i], "--frame-strengths") == 0 && i + 1 < argc) {
+            frameStrengths = parseFloatList(argv[++i]);
+            if (frameStrengths.empty()) {
+                std::fprintf(stderr, "bad --frame-strengths (want comma-separated floats)\n");
+                return 2;
+            }
+        } else if (std::strcmp(argv[i], "--strength-maps") == 0 && i + 1 < argc) {
+            strengthMapsPath = argv[++i];
         } else if (std::strcmp(argv[i], "--tile-size") == 0 && i + 1 < argc) {
             tileSize = std::atoi(argv[++i]);
             if (tileSize != 16 && tileSize != 32) {
@@ -208,9 +241,35 @@ int main(int argc, char** argv) {
         blacks.insert(blacks.end(), fr.black, fr.black + 4);
         whites.push_back(fr.white);
     }
+    if (!frameStrengths.empty() && frameStrengths.size() != frames.size()) {
+        std::fprintf(stderr, "need one --frame-strengths entry per frame, got %zu for %zu\n",
+                     frameStrengths.size(), frames.size());
+        return 2;
+    }
+    std::vector<float> strengthMaps;
+    if (strengthMapsPath != nullptr) {
+        int mw = 0, mh = 0;
+        hdrplus_strength_map_cells(width, height, &mw, &mh);
+        const size_t want = frames.size() * static_cast<size_t>(mw) * static_cast<size_t>(mh);
+        FILE* f = std::fopen(strengthMapsPath, "rb");
+        if (f == nullptr) {
+            std::fprintf(stderr, "cannot open --strength-maps %s\n", strengthMapsPath);
+            return 2;
+        }
+        strengthMaps.resize(want);
+        const size_t got = std::fread(strengthMaps.data(), sizeof(float), want, f);
+        std::fclose(f);
+        if (got != want) {
+            std::fprintf(stderr, "need %zu --strength-maps floats (N*mw*mh), got %zu\n", want,
+                         got);
+            return 2;
+        }
+    }
     HdrPlusParams params{};
     hdrplus_default_params(&params);
     params.strength = strength;
+    params.frame_strengths = frameStrengths.empty() ? nullptr : frameStrengths.data();
+    params.strength_maps = strengthMaps.empty() ? nullptr : strengthMaps.data();
     params.tile_size = static_cast<uint32_t>(tileSize);
     params.search_distance = static_cast<uint32_t>(searchDistance);
     params.high_quality = highQuality ? 1 : 0;

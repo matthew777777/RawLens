@@ -44,7 +44,30 @@ typedef struct HdrPlusParams {
     uint32_t search_distance;  // 32, 64 or 128 (default 64)
     int high_quality;     // 0 = spatial ("Fast"), nonzero = frequency ("Higher quality")
     int frequency_align_once;  // nonzero = align once (RAWR default); 0 = upstream-exact per-pass
+    // Optional per-frame strengths (RawLens extension, step 4): one float per
+    // input frame, each 1..22 like strength; the reference entry is validated
+    // but unused (the reference adds unweighted). NULL (default) merges every
+    // companion at strength. The merge-weight push constants are already
+    // dispatched per companion, so a uniform array records bit-identical
+    // command buffers to NULL (no shader change, parity intact).
+    const float* frame_strengths;  // NULL or frame_count floats, 1..22 each
+    // Optional per-frame strength maps (RawLens extension, step-4 maps,
+    // both paths): N concatenated row-major mw*mh 1..22 strength maps
+    // (mw/mh from hdrplus_strength_map_cells), the reference slice
+    // validated but unused. NULL (default) keeps the upstream merge
+    // path. A present map supersedes frame/global strength per block
+    // (Fast: robustness map; HQ: Wiener-norm triples).
+    const float* strength_maps;  // NULL or N*mw*mh floats, 1..22 each
 } HdrPlusParams;
+
+// Strength-map grid (step-4 maps): one strength per HDRPLUS_MAP_BLOCK_PX
+// block covering the unpadded frame. Must match
+// HdrPlusAutoTuning.MAP_BLOCK_PX and the shader's q>>4 lookup.
+#define HDRPLUS_MAP_BLOCK_PX 32
+static inline void hdrplus_strength_map_cells(int width, int height, int* mw, int* mh) {
+    if (mw != 0) *mw = (width + HDRPLUS_MAP_BLOCK_PX - 1) / HDRPLUS_MAP_BLOCK_PX;
+    if (mh != 0) *mh = (height + HDRPLUS_MAP_BLOCK_PX - 1) / HDRPLUS_MAP_BLOCK_PX;
+}
 
 void hdrplus_default_params(HdrPlusParams* p);
 

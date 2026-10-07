@@ -44,9 +44,15 @@ object HdrPlusVulkan {
      * [blacks] holds 4 floats per frame in (y&1)*2+(x&1) phase order with
      * phase 0 at the frame's (0,0); [whites] one float per frame;
      * [hotPixels] is an optional flat xy int list (empty skips
-     * concealment, like RAWR with no sensor list). [output] must be
-     * direct with at least W*H floats; it receives the merged normalized
-     * CFA. Returns the GPU time in ms.
+     * concealment, like RAWR with no sensor list). [frameStrengths] is
+     * an optional per-frame strength array (one float per frame, null
+     * merges every companion at [strength]; the reference entry is
+     * ignored). [strengthMaps] is an optional flat array of N row-major
+     * mw*mh strength maps (mw/mh cover W/H in 32px blocks, reference
+     * slice ignored); null keeps the frame/global path. Both paths
+     * consume maps (Fast: robustness; HQ: Wiener triples). [output]
+     * must be direct with at least W*H floats; it receives the merged
+     * normalized CFA. Returns the GPU time in ms.
      */
     fun merge(
         handle: Long,
@@ -56,6 +62,8 @@ object HdrPlusVulkan {
         refIndex: Int,
         hotPixels: IntArray,
         strength: Float,
+        frameStrengths: FloatArray?,
+        strengthMaps: FloatArray?,
         tileSize: Int,
         searchDistance: Int,
         highQuality: Boolean,
@@ -65,7 +73,8 @@ object HdrPlusVulkan {
         output: ByteBuffer
     ): Double = nativeMerge(
         handle, frames, blacks, whites, refIndex, hotPixels, strength,
-        tileSize, searchDistance, highQuality, alignOnce, width, height, output
+        frameStrengths, strengthMaps, tileSize, searchDistance, highQuality,
+        alignOnce, width, height, output
     )
 
     private external fun nativeInit(assetManager: AssetManager): Long
@@ -75,8 +84,9 @@ object HdrPlusVulkan {
     private external fun nativeLastGpuMs(handle: Long): Double
     private external fun nativeMerge(
         handle: Long, frames: Array<ByteBuffer>, blacks: FloatArray, whites: FloatArray,
-        refIndex: Int, hotPixels: IntArray, strength: Float, tileSize: Int,
-        searchDistance: Int, highQuality: Boolean, alignOnce: Boolean,
+        refIndex: Int, hotPixels: IntArray, strength: Float, frameStrengths: FloatArray?,
+        strengthMaps: FloatArray?, tileSize: Int, searchDistance: Int,
+        highQuality: Boolean, alignOnce: Boolean,
         width: Int, height: Int, output: ByteBuffer
     ): Double
 }

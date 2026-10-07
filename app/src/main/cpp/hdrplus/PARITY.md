@@ -172,3 +172,29 @@ to RAWR `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
   Last green before this audit: HdrPlusSettings 6/6, HdrPlusDngWriter 2/2,
   DngExif 8/8, full suite 1129/1130 (1 pre-existing HdrTileDeghost failure).
   No Kotlin file was touched by this audit, so those results still stand.
+
+## RawLens host extensions (not upstream deviations)
+
+- Per-frame strengths (`HdrPlusParams.frame_strengths`, step 4): the
+  merge-weight push constants were already dispatched per companion
+  (`WeightPc.robustness` / `FreqMergePc` norms), so the host can push a
+  different strength per frame with zero shader changes. NULL (default)
+  keeps the exact upstream dispatches; a uniform array records
+  bit-identical command buffers (verified: byte-identical DNGs vs NULL
+  on both paths). Non-uniform arrays are an intentional auto-mode
+  behavior (clean frames merge hard, shaky ones faintly), out of scope
+  for the 1:1 parity claim above by design.
+- Per-block strength maps (`HdrPlusParams.strength_maps`, step-4 maps,
+  both paths — the deliberate shader stages): `hdrp_merge_weight`
+  carries marked extension patch #9 (robustness-map binding + mapOffset
+  push) and `hdrq_merge` patch #10 (Wiener-triple binding + offset /
+  origin / dims push; see UPSTREAM.md). A negative offset keeps the
+  upstream computation — verified <=1 DN @16-bit rescheduling dust vs
+  the pre-patch Fast shader on a 30-frame burst crop (mean 0.0000;
+  optimizer reassociation around the added branch, not a semantic
+  change) and bit-identical on HQ. Uniform maps are byte-identical to
+  the no-map path on both paths. Non-uniform maps are the intended auto
+  behavior (still regions merge hard, moving ones faintly, inside one
+  frame); the earlier "no shader stage" note stands for the temporal
+  (per-frame) half, superseded here for the spatial half the host
+  provably cannot express.

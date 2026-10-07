@@ -10,7 +10,13 @@ import java.util.Locale
 /** Per-frame capture facts for the HDR+ frames listing (null = unreported). */
 data class HdrPlusFrameInfo(
     val exposureTimeNanos: Long?,
-    val sensitivityIso: Int?
+    val sensitivityIso: Int?,
+    /** Normalized frame-difference vs the previous merged frame (step-2 metering). */
+    val deltaVsPrev: Float? = null,
+    /** Gyro ego-motion during this frame in rad/s (step-2 metering). */
+    val gyroRadiansPerSecond: Float? = null,
+    /** This frame's merge strength (step-4 weights; null = uniform burst strength). */
+    val mergeStrength: Float? = null
 )
 
 /**
@@ -20,6 +26,8 @@ data class HdrPlusFrameInfo(
  */
 data class HdrPlusProvenance(
     val mergedFrames: Int,
+    val selectedFrames: Int,
+    val rejectedFrames: Int,
     val highQuality: Boolean,
     val strength: Float,
     val tileSize: Int,
@@ -34,10 +42,16 @@ data class HdrPlusProvenance(
     val packMs: Long,
     val gpuMs: Double,
     val unpackMs: Long,
-    val frames: List<HdrPlusFrameInfo>
+    val frames: List<HdrPlusFrameInfo>,
+    /** True when per-block strength maps drove the merge (Fast path). */
+    val mapsActive: Boolean = false
 ) {
     init {
         require(mergedFrames >= 2) { "Merged frame count must be at least 2" }
+        require(selectedFrames >= mergedFrames) { "Selected frames must cover merged frames" }
+        require(rejectedFrames == selectedFrames - mergedFrames) {
+            "Rejected frames must equal selected minus merged"
+        }
         require(strength.isFinite()) { "Strength must be finite" }
         require(tileSize in 16..64) { "Tile size must lie within 16..64" }
         require(searchDistance in 32..128) { "Search distance must lie within 32..128" }
@@ -172,17 +186,21 @@ object HdrPlusDngWriter {
             provenance.sourceWidth.toDouble() * provenance.sourceHeight / 1e5) / 10.0
         out.append("\nPARAMETERS\n")
             .append("- Frames: ${provenance.mergedFrames}\n")
+            .append("- Rejected frames: ${provenance.rejectedFrames}\n")
             .append("- Output: ${provenance.sourceWidth}x${provenance.sourceHeight} " +
                 "(1.00x, ~${"%.1f".format(Locale.US, mp)} MP)\n")
             .append(if (provenance.highQuality)
                 "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
             else "- Merge: HDR+ spatial (tile alignment + robust average)\n")
-            .append("- HDR+ strength: ${"%.3f".format(Locale.US, provenance.strength)}\n")
+            .append("- HDR+ strength: ${"%.3f".format(Locale.US, provenance.strength)}" +
+                (if (provenance.mapsActive) " (strength maps)"
+                else if (provenance.frames.any { it.mergeStrength != null }) " (per-frame)"
+                else "") + "\n")
             .append("- HDR+ tile size: ${provenance.tileSize}\n")
             .append("- HDR+ search distance: ${provenance.searchDistance}\n")
         out.append("\nBase Frame Selection:\n")
-            .append("- Mode: middle\n")
-            .append("- Reference: chronological middle " +
+            .append("- Mode: auto (sharpest low-motion)\n")
+            .append("- Reference: auto-picked " +
                 "(frame ${provenance.referenceIndex + 1} of ${provenance.mergedFrames})\n")
         out.append("\nFrames:\n")
         provenance.frames.forEachIndexed { index, frame ->
@@ -190,6 +208,7 @@ object HdrPlusDngWriter {
                 ?.let { "%.1f".format(Locale.US, it / 1e6) + " ms" } ?: "? ms"
             val iso = frame.sensitivityIso?.takeIf { it > 0 }?.toString() ?: "?"
             out.append("- F${index + 1}: $exp, ISO $iso")
+            frame.mergeStrength?.let { out.append(", s=${"%.1f".format(Locale.US, it)}") }
             if (index == provenance.referenceIndex) out.append(" (reference)")
             out.append('\n')
         }

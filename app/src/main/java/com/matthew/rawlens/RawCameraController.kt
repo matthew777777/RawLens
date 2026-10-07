@@ -2598,7 +2598,12 @@ class RawCameraController(
         val mergedRaw = try {
             hdrPlusProcessor().merge(
                 inputs.map {
-                    HdrPlusMerge.FrameInput(it.frame.image, it.layout, it.crop, it.normalization)
+                    HdrPlusMerge.FrameInput(
+                        it.frame.image, it.layout, it.crop, it.normalization,
+                        timestampNanos = it.frame.timestampNanos,
+                        gyroRadiansPerSecond = it.frame.motionRadiansPerSecond,
+                        sensitivityIso = it.metadata.sensitivityIso ?: 0
+                    )
                 },
                 referenceIndex, settings
             )
@@ -2610,10 +2615,26 @@ class RawCameraController(
             return
         }
         val mergeMs = SystemClock.elapsedRealtime() - tMerge0
+        // The decision was computed inside our own synchronized merge call;
+        // fall back to keep-all only if the volatile was never published.
+        val decision = hdrPlusProcessor().lastDecision
+            ?.takeIf {
+                it.keepIndices.size >= HdrPlusSettings.MIN_MERGE_FRAMES &&
+                    it.keepIndices.all { index -> index in inputs.indices } &&
+                    it.refIndex in it.keepIndices.indices
+            }
+            ?: HdrPlusAutoDecision(
+                strength = settings.strength, highQuality = settings.highQuality,
+                keepIndices = inputs.indices.toList(),
+                refIndex = referenceIndex.coerceIn(inputs.indices),
+                droppedIndices = emptyList(), strengthAuto = false, pathAuto = false
+            )
+        val keptInputs = decision.keepIndices.map { inputs[it] }
         Log.i(LOG_TAG, "HDR+ timing merge=${mergeMs}ms " +
-            "frames=${inputs.size} ${mergedRaw.width}x${mergedRaw.height}")
-        val refMetadata = inputs[referenceIndex].metadata
-        val refResult = inputs[referenceIndex].result
+            "frames=${keptInputs.size}/${inputs.size} ${mergedRaw.width}x${mergedRaw.height}")
+        val refInput = keptInputs[decision.refIndex]
+        val refMetadata = refInput.metadata
+        val refResult = refInput.result
         val merged = requireNotNull(RawPreDemosaicPipeline.process(
             mergedRaw, refMetadata, PreDemosaicSettings()).cfa)
         val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
@@ -2623,20 +2644,43 @@ class RawCameraController(
         var referenceDng: String? = null
         if (outputFormat.includesDng) {
             val timings = hdrPlusProcessor().lastTimings
+            val motion = hdrPlusProcessor().lastMotion
+            // Same snapshot discipline as lastTimings: merge is synchronized
+            // and this read follows our own merge call on the saver thread.
+            val gyroReported = motionTracker.isRunning()
+            // Per-frame strengths reach provenance only when they actually
+            // vary (uniform reads as the burst strength line) — and never
+            // when strength maps drove the merge (the maps supersede them).
+            val frameStrengths = if (decision.strengthMaps != null) null
+            else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
             val provenance = HdrPlusProvenance(
-                mergedFrames = inputs.size, highQuality = settings.highQuality,
-                strength = settings.strength,
+                mergedFrames = keptInputs.size, selectedFrames = inputs.size,
+                rejectedFrames = decision.droppedIndices.size,
+                highQuality = decision.highQuality,
+                strength = decision.strength,
                 tileSize = HdrPlusSettings.TILE_SIZE,
                 searchDistance = HdrPlusSettings.SEARCH_DISTANCE,
-                referenceIndex = referenceIndex,
+                referenceIndex = decision.refIndex,
                 referenceTimestampNs = refMetadata.timestampNanos,
                 referenceFrameNumber = refMetadata.frameNumber,
                 sourceWidth = refMetadata.imageWidth, sourceHeight = refMetadata.imageHeight,
                 sourceCameraId = refMetadata.cameraId,
                 mergeMs = mergeMs,
                 packMs = timings.packMs, gpuMs = timings.gpuMs, unpackMs = timings.unpackMs,
-                frames = inputs.map {
-                    HdrPlusFrameInfo(it.metadata.exposureTimeNanos, it.metadata.sensitivityIso)
+                mapsActive = decision.strengthMaps != null,
+                frames = keptInputs.mapIndexed { keptPos, input ->
+                    // Delta vs the immediate capture-order predecessor
+                    // (which may itself have been dropped).
+                    val origIndex = decision.keepIndices[keptPos]
+                    val delta = motion?.pairDeltas?.getOrNull(origIndex - 1)
+                        ?.takeIf { it.isFinite() }?.toFloat()
+                    HdrPlusFrameInfo(
+                        input.metadata.exposureTimeNanos, input.metadata.sensitivityIso,
+                        deltaVsPrev = delta,
+                        gyroRadiansPerSecond =
+                            input.frame.motionRadiansPerSecond.takeIf { gyroReported },
+                        mergeStrength = frameStrengths?.getOrNull(keptPos)
+                    )
                 }
             )
             referenceDng = DngSaver(context).saveMerged(
