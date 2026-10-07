@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
@@ -45,6 +47,14 @@ class WaveformView @JvmOverloads constructor(
         color = ScopeStyle.GRID
         pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f, 4f), 0f)
     }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = ScopeStyle.BORDER_WIDTH_DP * resources.displayMetrics.density
+        color = ScopeStyle.BORDER.toInt()
+    }
+    private val clipPath = Path()
+    private val bounds = RectF()
+    private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
     private var agxSelected = false
 
     /** Source selection follows the capture format; stale queued frames are rejected. */
@@ -89,14 +99,18 @@ class WaveformView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // Same padded plot box as the histogram so the two scopes swap seamlessly.
-        val left = paddingLeft.toFloat()
-        val top = paddingTop.toFloat()
-        val right = (width - paddingRight).toFloat().coerceAtLeast(left)
-        val bottom = (height - paddingBottom).toFloat().coerceAtLeast(top)
-        if (right <= left || bottom <= top) return
+        // One piece: same rounded full-bleed surface as the histogram so the two
+        // scopes swap seamlessly with no inner sharp box inside an outer shell.
+        if (width <= 0 || height <= 0) return
+        val left = 0f
+        val top = 0f
+        val right = width.toFloat()
+        val bottom = height.toFloat()
+        bounds.set(left, top, right, bottom)
+        clipPath.reset()
+        clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         canvas.save()
-        canvas.clipRect(left, top, right, bottom)
+        canvas.clipPath(clipPath)
         // The raster carries the darktable background, composited in software. The
         // opaque raster covers an under-grid, so the graticule draws over it (1px
         // dark lines read the same at this size).
@@ -111,6 +125,9 @@ class WaveformView @JvmOverloads constructor(
             canvas.drawLine(left, y, right, y, paint)
         }
         canvas.restore()
+        val halfStroke = borderPaint.strokeWidth / 2f
+        bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)
+        canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, borderPaint)
     }
 
     private fun copyResampled(

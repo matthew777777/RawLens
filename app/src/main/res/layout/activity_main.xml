@@ -257,7 +257,6 @@
         android:layout_gravity="start|bottom"
         android:layout_marginStart="16dp"
         android:layout_marginBottom="262dp"
-        android:background="@drawable/histogram_panel"
         android:clickable="true"
         android:focusable="true"
         android:contentDescription="Histogram" />
@@ -269,7 +268,6 @@
         android:layout_gravity="start|bottom"
         android:layout_marginStart="16dp"
         android:layout_marginBottom="262dp"
-        android:background="@drawable/histogram_panel"
         android:clickable="true"
         android:focusable="true"
         android:contentDescription="Waveform"

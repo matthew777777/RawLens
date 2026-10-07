@@ -28,6 +28,11 @@ object ScopeStyle {
     const val BACKGROUND = 0xFF262626.toInt()
     const val GRID = 0xFF111111.toInt()
 
+    /** Single-piece scope surface: one rounded box, no inner/outer split. */
+    const val CORNER_RADIUS_DP = 16f
+    const val BORDER = 0x30FFFFFF
+    const val BORDER_WIDTH_DP = 1f
+
     const val RED = 0xFFED1E14.toInt()
     const val GREEN = 0xFF1CEB1A.toInt()
     const val BLUE = 0xFF0E0EE9.toInt()

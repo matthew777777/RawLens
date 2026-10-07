@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
@@ -50,6 +51,14 @@ class HistogramView @JvmOverloads constructor(
         strokeWidth = 1f
         color = ScopeStyle.GRID
     }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = ScopeStyle.BORDER_WIDTH_DP * resources.displayMetrics.density
+        color = ScopeStyle.BORDER.toInt()
+    }
+    private val clipPath = Path()
+    private val bounds = RectF()
+    private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
     private var agxSelected = false
 
     /** Source selection follows the capture format; stale queued frames are rejected. */
@@ -71,18 +80,21 @@ class HistogramView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // Stay inside the rounded background box: the drawable carries padding
-        // (8dp sides, 6dp top/bottom) and the graph must not paint over it.
-        val left = paddingLeft.toFloat()
-        val top = paddingTop.toFloat()
-        val right = (width - paddingRight).toFloat().coerceAtLeast(left)
-        val bottom = (height - paddingBottom).toFloat().coerceAtLeast(top)
-        if (right <= left || bottom <= top) return
+        // One piece: the view draws its own rounded surface full-bleed and clips
+        // the graph to it, so there is no inner sharp box inside an outer shell.
+        if (width <= 0 || height <= 0) return
+        val left = 0f
+        val top = 0f
+        val right = width.toFloat()
+        val bottom = height.toFloat()
+        bounds.set(left, top, right, bottom)
+        clipPath.reset()
+        clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         val max = bins.maxOf { channel -> channel.maxOrNull() ?: 0 }.coerceAtLeast(1)
         val plotHeight = bottom - top
         val plotWidth = right - left
         canvas.save()
-        canvas.clipRect(left, top, right, bottom)
+        canvas.clipPath(clipPath)
         canvas.drawRect(left, top, right, bottom, bgPaint)
         for (quarter in 1..3) {
             val x = left + quarter * plotWidth / 4
@@ -102,6 +114,9 @@ class HistogramView @JvmOverloads constructor(
         // Luminance redraws as an outline only: the RGB fills already carry the mass.
         canvas.drawPath(paths[LUMINANCE], lumaPaint)
         canvas.restore()
+        val halfStroke = borderPaint.strokeWidth / 2f
+        bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)
+        canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, borderPaint)
     }
 
     private fun buildPath(

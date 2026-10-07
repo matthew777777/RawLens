@@ -28,6 +28,17 @@ class RawWaveformTest {
     }
 
     @Test
+    fun columnLutMatchesPerPixelMapping() {
+        for (width in intArrayOf(1, 2, 96, 4000, 4080)) {
+            val lut = RawWaveformSampler.columnLut(width)
+            assertEquals(width.coerceAtLeast(1), lut.size)
+            for (x in 0 until width.coerceAtLeast(1)) {
+                assertEquals(RawWaveformSampler.columnOf(x, width), lut[x])
+            }
+        }
+    }
+
+    @Test
     fun levelMappingSpansBlackToWhiteAndClamps() {
         assertEquals(0, RawWaveformSampler.levelOf(0.0))
         assertEquals(RawWaveformSampler.LEVELS - 1, RawWaveformSampler.levelOf(1.0))

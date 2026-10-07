@@ -44,55 +44,66 @@ class FocusPeakingTest {
     }
 
     @Test
-    fun greenOffsetsMatchCfaLayouts() {
-        // RGGB / BGGR carry green off the diagonal, GRBG / GBRG on it.
-        assertArrayEquals(intArrayOf(1, 0, 0, 1), RawFocusPeakingSampler.greenOffsets(0))
-        assertArrayEquals(intArrayOf(0, 0, 1, 1), RawFocusPeakingSampler.greenOffsets(1))
-        assertArrayEquals(intArrayOf(0, 0, 1, 1), RawFocusPeakingSampler.greenOffsets(2))
-        assertArrayEquals(intArrayOf(1, 0, 0, 1), RawFocusPeakingSampler.greenOffsets(3))
-    }
-
-    @Test
-    fun flatGridScoresZeroEverywhere() {
-        val scores = RawFocusPeakingSampler.scoresOf(FloatArray(25) { 0.5f }, 5, 5)
-        assertTrue(scores.all { it == 0f })
-    }
-
-    @Test
-    fun verticalEdgeScoresOnlyBesideTheStep() {
-        // Left half bright, right half black: central differences fire only at x=1..2.
-        val green = FloatArray(25) { i -> if (i % 5 < 2) 0.6f else 0f }
-        val scores = RawFocusPeakingSampler.scoresOf(green, 5, 5)
-        for (y in 1..3) for (x in 1..3) {
-            val expected = if (x == 1 || x == 2) 0.6f else 0f
-            assertEquals(expected, scores[y * 5 + x], 1e-6f)
-        }
-        // Border stays zero.
-        for (i in scores.indices) {
-            val x = i % 5
-            val y = i / 5
-            if (x == 0 || y == 0 || x == 4 || y == 4) assertEquals(0f, scores[i], 0f)
+    fun greenColStartMatchesCfaLayouts() {
+        // RGGB / BGGR carry green where x-parity != y-parity, GRBG / GBRG
+        // where it matches.
+        for (y in 0..7) {
+            assertEquals(1 - (y and 1), RawFocusPeakingSampler.greenColStart(0, y))
+            assertEquals(y and 1, RawFocusPeakingSampler.greenColStart(1, y))
+            assertEquals(y and 1, RawFocusPeakingSampler.greenColStart(2, y))
+            assertEquals(1 - (y and 1), RawFocusPeakingSampler.greenColStart(3, y))
         }
     }
 
     @Test
-    fun maskMarksBrightEdgeAndGatesBlackSide() {
-        val green = FloatArray(25) { i -> if (i % 5 < 3) 0.5f else 0f }
-        val mask = RawFocusPeakingSampler.maskOf(green, 5, 5)
-        // x=2 (bright, beside the step) passes; x=3 (black side) is gated by
-        // the black-mean floor even though its gradient is just as strong.
-        val expected = BooleanArray(25) { i -> i % 5 == 2 && i / 5 in 1..3 }
+    fun tenengradFlatIsZero() {
+        assertEquals(0f, RawFocusPeakingSampler.tenengrad(FloatArray(16) { 0.5f }), 0f)
+    }
+
+    @Test
+    fun tenengradStepEdgeEqualsStepSquared() {
+        // Vertical step of height a: every interior gx is ±a, gy is 0.
+        val step = FloatArray(16) { i -> if (i % 4 < 2) 0f else 0.5f }
+        assertEquals(0.25f, RawFocusPeakingSampler.tenengrad(step), 1e-6f)
+    }
+
+    @Test
+    fun despeckleDropsIsolatedKeepsPairs() {
+        val mask = BooleanArray(16)
+        mask[0] = true // isolated corner: noise spike, dropped
+        mask[6] = true // adjacent pair: edge fragment, kept
+        mask[7] = true
+        val expected = BooleanArray(16)
+        expected[6] = true
+        expected[7] = true
+        assertArrayEquals(expected, RawFocusPeakingSampler.despeckle(mask, 4, 4))
+    }
+
+    @Test
+    fun maskMarksSharpGatesBlackAndDropsIsolated() {
+        val energy = FloatArray(16)
+        val mean = FloatArray(16)
+        // Adjacent sharp pair: survives threshold + despeckle.
+        energy[5] = 0.02f; mean[5] = 0.5f
+        energy[6] = 0.02f; mean[6] = 0.5f
+        // Isolated sharp cell (no passing 8-neighbor): dropped by despeckle.
+        energy[12] = 0.02f; mean[12] = 0.5f
+        // Sharp but black: gated by the black-mean floor.
+        energy[15] = 0.02f; mean[15] = 0f
+        val mask = RawFocusPeakingSampler.maskOf(energy, mean, 4, 4)
+        val expected = BooleanArray(16)
+        expected[5] = true
+        expected[6] = true
         assertArrayEquals(expected, mask)
     }
 
     @Test
     fun washGuardRetiresholdsBusyFrames() {
-        // Smooth ramp: every interior gradient (0.2) clears the default 0.15,
-        // so the wash guard doubles once and nothing passes at 0.3.
-        val cols = 6
-        val rows = 6
-        val green = FloatArray(cols * rows) { i -> ((i % cols) + (i / cols)) * 0.05f + 0.1f }
-        val mask = RawFocusPeakingSampler.maskOf(green, cols, rows)
+        // Every cell clears the default 0.008, so the wash guard doubles once
+        // and nothing passes at 0.016.
+        val energy = FloatArray(16) { 0.01f }
+        val mean = FloatArray(16) { 0.5f }
+        val mask = RawFocusPeakingSampler.maskOf(energy, mean, 4, 4)
         assertTrue(mask.none { it })
     }
 
