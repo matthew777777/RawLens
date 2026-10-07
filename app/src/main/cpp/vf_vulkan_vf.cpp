@@ -551,6 +551,29 @@ void destroyImportedBuffer(Context* ctx, ImportedBuffer* buf) {
     *buf = ImportedBuffer{};
 }
 
+// FIFO eviction for the pointer-keyed input import cache, shared by all
+// get-or-import sites. The cap (24) covers the largest reader pool (22),
+// so steady-state viewfinder frames never evict: any eviction means the
+// live distinct-buffer set overflowed the cache and the next use of the
+// evicted buffer pays a full 25MB re-import. The counter + rate-limited
+// warning make that regime visible in logcat instead of silent churn.
+void evictOldestInput(Context* ctx) {
+    static uint64_t evictions = 0;
+    AHardwareBuffer* oldest = ctx->inputOrder.front();
+    ctx->inputOrder.erase(ctx->inputOrder.begin());
+    auto oit = ctx->inputs.find(oldest);
+    if (oit != ctx->inputs.end()) {
+        destroyImportedBuffer(ctx, &oit->second);
+        ctx->inputs.erase(oit);
+    }
+    AHardwareBuffer_release(oldest);
+    evictions++;
+    if (evictions == 1 || evictions % 64 == 0) {
+        LOGW("vf-vk: input import cache evicted %llu buffer(s) (cap %d); live pool exceeds cache",
+             (unsigned long long)evictions, INPUT_CACHE_CAP);
+    }
+}
+
 // Import an AHB as a Vulkan image per the reference flow: query format
 // properties, create with the reported VkFormat (or externalFormat), dedicated
 // import-allocate, bind, view. Does NOT acquire the caller's buffer.
@@ -2736,14 +2759,7 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
         int r = importInputBuffer(g, buf, &imported);
         if (r != VFVK_OK) return VFVK_INPUT_IMPORT_FAILED;
         if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
-            AHardwareBuffer* oldest = g->inputOrder.front();
-            g->inputOrder.erase(g->inputOrder.begin());
-            auto oit = g->inputs.find(oldest);
-            if (oit != g->inputs.end()) {
-                destroyImportedBuffer(g, &oit->second);
-                g->inputs.erase(oit);
-            }
-            AHardwareBuffer_release(oldest);
+            evictOldestInput(g);
         }
         AHardwareBuffer_acquire(buf);
         g->inputs[buf] = imported;
@@ -3259,14 +3275,7 @@ Java_com_matthew_rawlens_VfVulkan_computeSubmitNative(
         int r = importInputBuffer(g, buf, &imported);
         if (r != VFVK_OK) return VFVK_INPUT_IMPORT_FAILED;
         if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
-            AHardwareBuffer* oldest = g->inputOrder.front();
-            g->inputOrder.erase(g->inputOrder.begin());
-            auto oit = g->inputs.find(oldest);
-            if (oit != g->inputs.end()) {
-                destroyImportedBuffer(g, &oit->second);
-                g->inputs.erase(oit);
-            }
-            AHardwareBuffer_release(oldest);
+            evictOldestInput(g);
         }
         AHardwareBuffer_acquire(buf);
         g->inputs[buf] = imported;
@@ -4120,14 +4129,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
         int r = importInputBuffer(g, cfaBuf, &imported);
         if (r != VFVK_OK) return -VFVK_INPUT_IMPORT_FAILED;
         if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
-            AHardwareBuffer* oldest = g->inputOrder.front();
-            g->inputOrder.erase(g->inputOrder.begin());
-            auto oit = g->inputs.find(oldest);
-            if (oit != g->inputs.end()) {
-                destroyImportedBuffer(g, &oit->second);
-                g->inputs.erase(oit);
-            }
-            AHardwareBuffer_release(oldest);
+            evictOldestInput(g);
         }
         AHardwareBuffer_acquire(cfaBuf);
         g->inputs[cfaBuf] = imported;
@@ -4376,14 +4378,7 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
         int r = importInputBuffer(g, cfaBuf, &imported);
         if (r != VFVK_OK) return -VFVK_INPUT_IMPORT_FAILED;
         if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
-            AHardwareBuffer* oldest = g->inputOrder.front();
-            g->inputOrder.erase(g->inputOrder.begin());
-            auto oit = g->inputs.find(oldest);
-            if (oit != g->inputs.end()) {
-                destroyImportedBuffer(g, &oit->second);
-                g->inputs.erase(oit);
-            }
-            AHardwareBuffer_release(oldest);
+            evictOldestInput(g);
         }
         AHardwareBuffer_acquire(cfaBuf);
         g->inputs[cfaBuf] = imported;
@@ -4648,14 +4643,7 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
         int r = importInputBuffer(g, cfaBuf, &imported);
         if (r != VFVK_OK) return -VFVK_INPUT_IMPORT_FAILED;
         if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
-            AHardwareBuffer* oldest = g->inputOrder.front();
-            g->inputOrder.erase(g->inputOrder.begin());
-            auto oit = g->inputs.find(oldest);
-            if (oit != g->inputs.end()) {
-                destroyImportedBuffer(g, &oit->second);
-                g->inputs.erase(oit);
-            }
-            AHardwareBuffer_release(oldest);
+            evictOldestInput(g);
         }
         AHardwareBuffer_acquire(cfaBuf);
         g->inputs[cfaBuf] = imported;
