@@ -144,4 +144,28 @@ class DirectLogRecorderTest {
         assertEquals(null, DirectLogRecorder.packShading(1, 1, 0, 0, 64, 64, floatArrayOf(1f, Float.NaN, 1f, 1f)))
         assertEquals(null, DirectLogRecorder.packShading(1, 1, 0, 0, 64, 64, floatArrayOf(1f, 1f, 1f, Float.POSITIVE_INFINITY)))
     }
+
+    @Test
+    fun muxedFpsIsZeroUntilTwoSamples() {
+        assertEquals(0f, DirectLogRecorder.muxedFps(0, 0L, 8_000_000_000L), 0f)
+        assertEquals(0f, DirectLogRecorder.muxedFps(5, 0L, 8_000_000_000L), 0f)
+        // A single sample spans no interval yet (no divide-by-near-zero spike).
+        assertEquals(0f, DirectLogRecorder.muxedFps(1, 1_500_000_000L, 1_533_333_000L), 0f)
+        assertEquals(0f, DirectLogRecorder.muxedFps(2, 1_500_000_000L, 1_500_000_000L), 0f)
+    }
+
+    @Test
+    fun muxedFpsPinsThirtyFpsTake() {
+        // Device-observed open-gate take: 194 samples over 6.4667s of muxed output.
+        val fps = DirectLogRecorder.muxedFps(194, 1_500_000_000L, 1_500_000_000L + 6_466_700_000L)
+        assertEquals(30.0f, fps, 0.05f)
+    }
+
+    @Test
+    fun muxedFpsExcludesStartupDeadTime() {
+        // Same take on an 8s wall clock: naive samples/wall reads 194/8 = 24.3fps;
+        // anchored at the first muxed sample it reads the true muxed rate.
+        val fps = DirectLogRecorder.muxedFps(194, 1_533_300_000L, 8_000_000_000L)
+        assertEquals(30.0f, fps, 0.05f)
+    }
 }
