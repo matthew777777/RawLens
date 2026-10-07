@@ -271,6 +271,16 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var vulkanExport: android.hardware.HardwareBuffer? = null
     private var vulkanExportWidth = 0
     private var vulkanExportHeight = 0
+    /**
+     * Cached EGLImage for [vulkanExport]: the export buffer is stable
+     * across frames, so one image serves every Vulkan-tier draw instead
+     * of create/bind/destroy gralloc churn per frame (same pixels — the
+     * image wraps the buffer, whose contents refresh every dispatch).
+     * Identity-keyed: any export realloc/poison drop swaps the buffer and
+     * must drop this first. GL worker only.
+     */
+    private var exportEglImage = 0L
+    private var exportEglSource: android.hardware.HardwareBuffer? = null
     /** Recovery re-probe pending on the worker; at most one is ever scheduled. GL worker only. */
     private var vulkanRecoverPosted = false
     /** Session the pending recovery belongs to; stale recoveries stand down. GL worker only. */
@@ -1470,14 +1480,46 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 noteGpuFailure("no-gpu-tier")
                 return@Runnable
             }
-            val eglImage = try {
-                VfEglImport.createEGLImage(importBuffer)
-            } catch (_: Exception) {
-                0L
+            if (!bayer && importBuffer === vulkanExport) {
+                // The Vulkan compute fence-waited inside runVulkanSuperpixel,
+                // so the HAL input and its camera lease are fully consumed:
+                // GL samples only the export from here. Releasing now
+                // instead of after present shortens the gralloc hold by the
+                // GL+EGL+swap tail (~10-30ms) and relieves the BufferQueue
+                // pressure behind the Mali unlock-error storms. Bayer frames
+                // keep the buffer through the draw (GL samples it directly).
+                // Idempotent with the outer finally (lease + buffer closes).
+                try {
+                    frame.close()
+                } catch (_: Exception) {
+                    // Best effort: the outer finally closes again.
+                }
             }
-            if (eglImage == 0L) {
-                if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import", zeroCopy = !vkCopy)
-                return@Runnable
+            // The Vulkan export buffer is stable: reuse its cached EGLImage.
+            // The Bayer path imports a different HAL buffer per frame and
+            // keeps per-frame images (owned = destroyed below).
+            val cacheable = !bayer && importBuffer === vulkanExport
+            var eglImage = 0L
+            var ownsEglImage = true
+            if (cacheable && exportEglSource === importBuffer && exportEglImage != 0L) {
+                eglImage = exportEglImage
+                ownsEglImage = false
+            } else {
+                eglImage = try {
+                    VfEglImport.createEGLImage(importBuffer)
+                } catch (_: Exception) {
+                    0L
+                }
+                if (eglImage == 0L) {
+                    if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import", zeroCopy = !vkCopy)
+                    return@Runnable
+                }
+                if (cacheable) {
+                    dropExportEglImage()
+                    exportEglSource = importBuffer
+                    exportEglImage = eglImage
+                    ownsEglImage = false
+                }
             }
             try {
                 glViewport(0, 0, viewportWidth, viewportHeight)
@@ -1486,6 +1528,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glActiveTexture(GL_TEXTURE0)
                     val bindError = VfEglImport.bindEGLImageToTexture2D(eglImage, vkTexture)
                     if (bindError != GL_NO_ERROR) {
+                        // A stale cached image binds dirty once: drop it so the
+                        // next frame recreates, then fail down the tier chain.
+                        if (!ownsEglImage) dropExportEglImage()
                         noteVulkanFailure("egl-bind=$bindError", zeroCopy = !vkCopy)
                         return@Runnable
                     }
@@ -1550,10 +1595,15 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     Log.i("RawViewfinder", "Slow RAW draw: total=${drawMs}ms compute=${computeMs}ms age=${drawStarted - frame.timestamp}ms")
                 }
             } finally {
-                try {
-                    VfEglImport.destroyEGLImage(eglImage)
-                } catch (_: Exception) {
-                    // Best effort: the import is already fully consumed.
+                // Cached export images outlive the draw (destroyed on export
+                // realloc/poison, bind failure, or GL teardown); per-frame
+                // images destroy here, as before.
+                if (ownsEglImage) {
+                    try {
+                        VfEglImport.destroyEGLImage(eglImage)
+                    } catch (_: Exception) {
+                        // Best effort: the import is already fully consumed.
+                    }
                 }
             }
         } catch (failure: Exception) {
@@ -1564,6 +1614,23 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 frame.close()
             } catch (_: Exception) {
                 // Best effort: the gralloc reference is already accounted.
+            }
+        }
+    }
+
+    /**
+     * Drop the cached export EGLImage (stale buffer, bind failure, or GL
+     * teardown). Best effort; GL worker only.
+     */
+    private fun dropExportEglImage() {
+        val image = exportEglImage
+        exportEglImage = 0L
+        exportEglSource = null
+        if (image != 0L) {
+            try {
+                VfEglImport.destroyEGLImage(image)
+            } catch (_: Exception) {
+                // Best effort: the display may already be gone.
             }
         }
     }
@@ -1650,6 +1717,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             Log.i("RawViewfinder", "VF Vulkan ready")
         }
         if (vulkanExport == null || vulkanExportWidth != frame.width || vulkanExportHeight != frame.height) {
+            // The cached EGLImage wraps the old buffer: drop it before the
+            // buffer swaps, so the next draw imports the new one.
+            dropExportEglImage()
             try {
                 vulkanExport?.close()
             } catch (_: Exception) {
@@ -1680,6 +1750,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         if (ensure != VfVulkan.OK) {
             // A poisoned export buffer never recovers: drop it so next frame reallocates.
+            if (exportEglSource === export) dropExportEglImage()
             try {
                 export.close()
             } catch (_: Exception) {
@@ -2032,6 +2103,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         } catch (_: Exception) {
             // Best effort: the GL context is going away regardless.
         }
+        // Drop the cached EGLImage before its buffer and display go away.
+        dropExportEglImage()
         try {
             vulkanExport?.close()
         } catch (_: Exception) {

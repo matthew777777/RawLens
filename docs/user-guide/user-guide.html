@@ -189,10 +189,10 @@
 <li><b>Top-left cluster — <span class="arrow">➔</span> Settings / Flash / Timer.</b> Gear opens all Settings tabs. Lightning = torch/flash. Stopwatch = 2s / 5s self-timer. White icon = ON, grey = OFF.</li>
 <li><b>Top-right DNG badge — <span class="arrow">➔</span> what will be saved.</b> <code>DNG●</code> green dot = RAW will save. Sub-line tells AE/ZSL state: <code>AUTO AE</code> / <code>P NONE (both auto)</code> / <code>ZSL ACTIVE</code> / <code>HDR ±2 EV</code>. Tap nothing here — it is a status lamp, like “Rinse aid low”.</li>
 <li><b>Middle window — <span class="arrow">➔</span> framing + tap/drag focus &amp; metering.</b> Thin lines = rule-of-thirds grid. Tap = move AF point, drag = move AE metering target. If you see heavy grain in screenshots, that is a dark room at ISO 20000, not a defect.</li>
-<li><b>Histogram (bottom-left of preview) — <span class="arrow">➔</span> exposure graph.</b> Left = shadows, right = highlights. Spike glued to left = underexposed dark scene. Tap it to toggle RAW vs preview source. Green edge = RAW source live.</li>
+<li><b>Scope (bottom-left of preview) — <span class="arrow">➔</span> exposure graph.</b> Left = shadows, right = highlights. Spike glued to left = underexposed dark scene. Tap it to toggle histogram ↔ waveform. Data is linear RAW with DNG, AgX JPEG preview with a JPEG format (auto).</li>
 <li><b>Lens pills <code>0.7× / 1×</code> — <span class="arrow">➔</span> switch lens.</b> Lime text = active lens. Only checked lenses from Lens discovery appear. Disappear? Re-check in <a href="#lens">Ch.7</a>.</li>
 <li><b>Bottom chips ISO/S/WB/AF/EV — <span class="arrow">➔</span> tap = slider, hold = lock (PROGRAM) / manual (others).</b> Full detail in <a href="#chips">Ch.3</a>.</li>
-<li><b>Big white button — <span class="arrow">➔</span> shutter (photo).</b> Red-rimmed button below-left = video REC. Sliders icon = quick panel (grid, histogram, metering, HDR, timer, burst, SR, ETTR).</li>
+<li><b>Big white button — <span class="arrow">➔</span> shutter (photo).</b> Red-rimmed button below-left = video REC. Sliders icon = quick panel (grid, scope, metering, HDR, timer, burst, SR, ETTR).</li>
 <li><b>Mode + format — <span class="arrow">➔</span> exposure program + file type.</b> <code>A AUTO / P PROGRAM / Z ZSL / M MANUAL</code>. <code>RAW•A</code> = RAW+Auto JPEG. Tap mode to cycle; long-press or quick panel for details.</li>
 </ol>
 </div>
@@ -265,11 +265,11 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 </div>
 <div class="legend">
 <ol>
-<li value="4"><b>Histogram — tap to toggle RAW ↔ preview source.</b> RAW source = ground truth for ETTR/PROGRAM. If flat-lined left in dark room, add light or raise ISO ceiling — graph is honest.</li>
+<li value="4"><b>Scope — tap to toggle histogram ↔ waveform.</b> Linear-RAW data with DNG = ground truth for ETTR/PROGRAM; AgX JPEG preview with a JPEG format. If flat-lined left in dark room, add light or raise ISO ceiling — graph is honest.</li>
 <li value="5"><b>Lens pills.</b> Example: <code>0.7×</code> = Ultra-wide ≈16 mm eq (8 MP), <code>1×</code> = Wide ≈24 mm eq (12.5 MP, lime = active). Names come from Lens discovery.</li>
 <li value="7"><b>White shutter = photo.</b> Single press = 1 DNG (+JPEG per RAW•A). In burst/ZSL-6 mode = 6 frames. Red button = video (takes camera exclusively during REC).</li>
 <li value="8"><b>Mode button shows program.</b> Tap to cycle <code>A→P→Z→M</code>. Color: lime = non-AUTO active (attention!), dark = AUTO. Long text under DNG badge mirrors it.</li>
-<li value="9"><b>Sliders button = quick panel.</b> Tiles: GRID, HISTOGRAM, AE METER, HDR, TIMER, RELEASE (single/burst), RAW SR, ETTR. Dual-function AE METER tile: in PROGRAM cycles center/average/spot RAW metering, otherwise hardware AE metering.</li>
+<li value="9"><b>Sliders button = quick panel.</b> Tiles: GRID, SCOPE, AE METER, HDR, TIMER, RELEASE (single/burst), RAW SR, ETTR. Dual-function AE METER tile: in PROGRAM cycles center/average/spot RAW metering, otherwise hardware AE metering.</li>
 </ol>
 <p class="muted">Status toasts you will see: <code>ZSL ×6</code>, <code>HDR ±2 EV</code>, <code>AGX PURITY • 100%</code>, <code>PICK A RAW LENS</code>, <code>GPS ON/OFF</code>.</p>
 </div>
