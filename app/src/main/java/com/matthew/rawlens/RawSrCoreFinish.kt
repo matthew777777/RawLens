@@ -129,11 +129,16 @@ object RawSrCoreFinish {
 
     /**
      * Chroma-from-luma stabilization: rebuilds the R and B lanes as
-     * `G * smooth(R/G)` / `G * smooth(B/G)` with a separable sigma-1.0
-     * Gaussian (radius 3) over the color ratios, stabilizing [rgb]
+     * `G + smooth(R-G)` / `G + smooth(B-G)` with a separable sigma-1.0
+     * Gaussian (radius 3) over the color differences, stabilizing [rgb]
      * (`pixels * 3`, channel-minor) in place. G is never touched. Returns
      * the count of pixels whose lanes were rebuilt (guide above
      * [GUIDE_EPS]).
+     *
+     * Difference domain, not ratios: smoothing R-G then re-adding the
+     * guide cannot amplify (a convex blend of differences plus G), while
+     * smoothing R/G explodes where G pits to ~zero in shadows and sprays
+     * magenta donuts. No division anywhere, so black taps need no guard.
      *
      * Determinism: clamped borders, center pixels at/below [GUIDE_EPS]
      * keep their original lanes, and Float accumulation in fixed tap
@@ -144,7 +149,7 @@ object RawSrCoreFinish {
         require(width > 0 && height > 0)
         require(rgb.size == width * height * 3) { "rgb must hold 3 lanes per pixel" }
         val k = KERNEL
-        // Horizontal pass into ratio temps.
+        // Horizontal pass into difference temps.
         val tmpR = FloatArray(width * height)
         val tmpB = FloatArray(width * height)
         for (y in 0 until height) {
@@ -155,8 +160,8 @@ object RawSrCoreFinish {
                     val xx = (x + ox).coerceIn(0, width - 1)
                     val o = (y * width + xx) * 3
                     val w = k[kotlin.math.abs(ox)]
-                    sumR += w * (rgb[o] / rgb[o + 1])
-                    sumB += w * (rgb[o + 2] / rgb[o + 1])
+                    sumR += w * (rgb[o] - rgb[o + 1])
+                    sumB += w * (rgb[o + 2] - rgb[o + 1])
                 }
                 tmpR[y * width + x] = sumR
                 tmpB[y * width + x] = sumB
@@ -177,8 +182,8 @@ object RawSrCoreFinish {
                     sumR += w * tmpR[yy * width + x]
                     sumB += w * tmpB[yy * width + x]
                 }
-                rgb[o] = g * sumR
-                rgb[o + 2] = g * sumB
+                rgb[o] = g + sumR
+                rgb[o + 2] = g + sumB
                 count++
             }
         }
