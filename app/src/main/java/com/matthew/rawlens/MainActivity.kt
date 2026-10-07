@@ -74,7 +74,9 @@ class MainActivity : Activity() {
     private lateinit var rawVfDebugOverlay: TextView
     private lateinit var guideOverlay: CameraGuideOverlay
     private lateinit var histogramView: HistogramView
+    private lateinit var waveformView: WaveformView
     private lateinit var meteringOverlay: FocusMeteringOverlay
+    private lateinit var focusPeakingOverlay: FocusPeakingOverlayView
     private lateinit var quickPanel: LinearLayout
     private lateinit var gridQuick: TextView
     private lateinit var histogramQuick: TextView
@@ -101,12 +103,17 @@ class MainActivity : Activity() {
     private var rawZslSettingsStatus: TextView? = null
     private var gridEnabled = true
     private var histogramEnabled = true
-    // True once a RAW_SENSOR histogram arrived while the RAW source is selected.
-    // Freshness is reported separately; the selected source never changes on a timeout.
-    private var rawHistogramLive = false
-    private var lastRawHistogramMs = Long.MIN_VALUE
-    /** User-selected histogram source, persisted. Tapping the histogram toggles it. */
-    private var histogramSourceRaw = true
+    /** Focus-peaking master switch (default on); the overlay auto-shows on manual/tap focus. */
+    private var focusPeakingEnabled = true
+    private var focusPeakingColor = FocusPeakingColor.GREEN
+    /** Histogram vs waveform parade, persisted. Tapping the scope toggles it. */
+    private var scopeMode = ScopeMode.HISTOGRAM
+    // True once a RAW_SENSOR scope frame arrived. Freshness is reported separately.
+    private var rawScopeLive = false
+    private var lastRawScopeMs = Long.MIN_VALUE
+    /** Scope data source is automatic: AgX-curved JPEG preview with a JPEG format,
+     * linear RAW with DNG only. */
+    private fun scopeAgxApplied(): Boolean = captureFormat.includesJpeg
     private var aeMeteringMode = AeMeteringMode.AUTO
     private var timerSeconds = 0
     private var releaseMode = 0 // 0 single, 1 burst
@@ -118,8 +125,7 @@ class MainActivity : Activity() {
     private var programHintShown = false
     private var sidecarSettingsStatus: TextView? = null
     private var countdownRunnable: Runnable? = null
-    private var histogramRunnable: Runnable? = null
-    private var previewHistogramBitmap: android.graphics.Bitmap? = null
+    private var scopeRunnable: Runnable? = null
     private val quickTileStates = java.util.IdentityHashMap<TextView, Boolean>()
     private lateinit var orientationListener: OrientationEventListener
     private var activityResumed = false
@@ -280,8 +286,10 @@ class MainActivity : Activity() {
         rawVfDebugOverlay = findViewById(R.id.rawVfDebugOverlay)
         rawVfDebugOverlay.visibility = if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
+        focusPeakingOverlay = findViewById(R.id.focusPeakingOverlay)
         guideOverlay = findViewById(R.id.guideOverlay)
         histogramView = findViewById(R.id.histogramView)
+        waveformView = findViewById(R.id.waveformView)
         quickPanel = findViewById(R.id.quickSettingsPanel)
         gridQuick = findViewById(R.id.gridQuick)
         histogramQuick = findViewById(R.id.histogramQuick)
@@ -303,19 +311,30 @@ class MainActivity : Activity() {
         refreshCaptureFormatControl()
         gridEnabled = lensPreferences().getBoolean(KEY_GRID, true)
         histogramEnabled = lensPreferences().getBoolean(KEY_HISTOGRAM, true)
-        histogramSourceRaw = lensPreferences().getBoolean(KEY_HISTOGRAM_SOURCE_RAW, true)
-        histogramView.setSourceRaw(histogramSourceRaw)
+        focusPeakingEnabled = lensPreferences().getBoolean(KEY_FOCUS_PEAKING, true)
+        focusPeakingColor = FocusPeakingColor.fromPreference(
+            lensPreferences().getString(KEY_FOCUS_PEAKING_COLOR, null)
+        )
+        focusPeakingOverlay.peakingColor = focusPeakingColor
+        focusPeakingOverlay.visibility = View.GONE
+        scopeMode = ScopeMode.fromPreference(lensPreferences().getString(KEY_SCOPE_MODE, null))
+        histogramView.setAgxApplied(scopeAgxApplied())
+        waveformView.setAgxApplied(scopeAgxApplied())
         aeMeteringMode = AeMeteringMode.fromPreference(
             lensPreferences().getInt(KEY_AE_METERING_MODE, AeMeteringMode.AUTO.preferenceValue)
         )
         guideOverlay.gridEnabled = gridEnabled
-        histogramView.visibility = if (histogramEnabled) View.VISIBLE else View.GONE
-        // Tap the histogram to switch between the processed preview (YUV) and the live
-        // sensor (RAW) source. The choice is remembered across restarts.
+        syncScopeVisibility()
+        // Tap the scope to switch between histogram and waveform. The mode is
+        // remembered; the data source (linear RAW vs AgX JPEG preview) follows
+        // the capture format automatically.
         histogramView.isClickable = true
         histogramView.isFocusable = true
-        histogramView.setOnClickListener { toggleHistogramSource() }
-        refreshHistogramContentDescription()
+        histogramView.setOnClickListener { toggleScopeMode() }
+        waveformView.isClickable = true
+        waveformView.isFocusable = true
+        waveformView.setOnClickListener { toggleScopeMode() }
+        refreshScopeContentDescription()
 
         orientationListener = object : OrientationEventListener(this, SensorManager.SENSOR_DELAY_UI) {
             override fun onOrientationChanged(orientation: Int) {
@@ -403,22 +422,13 @@ class MainActivity : Activity() {
             ettrSettings(),
             aeMeteringMode,
             histogramEnabled,
-            histogramSourceRaw,
+            scopeAgxApplied(),
             programProfile(),
             { dngWriterBackend() },
             { cameraId -> dngMetadataOverrideStore.get(cameraId) },
             { zslStatus ->
                 rawZslStatus = zslStatus
                 runOnUiThread {
-                    // With the RAW source selected the controller keeps a histogram-only RAW
-                    // stream alive in every mode, so a ZSL OFF/FALLBACK transition must not
-                    // kick the graph back to YUV. Only the YUV source resets here.
-                    if ((zslStatus.state == RawZslState.OFF || zslStatus.state == RawZslState.FALLBACK) &&
-                        !histogramSourceRaw
-                    ) {
-                        rawHistogramLive = false
-                        updatePreviewHistogramOnce()
-                    }
                     refreshCaptureFormatControl()
                     updateQuickControls()
                     rawZslSettingsStatus?.text = rawZslSettingsText(zslStatus)
@@ -436,15 +446,15 @@ class MainActivity : Activity() {
                 runOnUiThread { meteringOverlay.setFocusLock(locked, indefinite, deadlineMs) }
             },
             { histogram ->
-                // The RAW histogram is live in every capture mode while the RAW source is
-                // selected (repeating histogram-only stream plus saved-frame snapshots).
-                // With the YUV source selected RAW frames never replace the preview graph.
+                // The RAW scope is live in every capture mode (repeating scope-only
+                // stream plus saved-frame snapshots). Mode/source gates drop frames
+                // queued before the user's last switch.
                 runOnUiThread {
-                    if (!histogramEnabled || !histogramSourceRaw) return@runOnUiThread
-                    rawHistogramLive = true
-                    lastRawHistogramMs = SystemClock.elapsedRealtime()
+                    if (!histogramEnabled || scopeMode != ScopeMode.HISTOGRAM) return@runOnUiThread
+                    rawScopeLive = true
+                    lastRawScopeMs = SystemClock.elapsedRealtime()
                     histogramView.update(histogram)
-                    refreshHistogramContentDescription()
+                    refreshScopeContentDescription()
                 }
             },
             { currentGpsLocation() },
@@ -474,6 +484,23 @@ class MainActivity : Activity() {
                 // (DEFAULT plan, HAL-default frame rate). Persist it so the
                 // next cold start skips the stillborn attempt entirely.
                 lensPreferences().edit().putBoolean(KEY_RAW_STREAM_COMPAT_MODE, true).apply()
+            },
+            initialScopeMode = scopeMode,
+            onRawWaveform = { waveform ->
+                runOnUiThread {
+                    if (!histogramEnabled || scopeMode != ScopeMode.WAVEFORM) return@runOnUiThread
+                    rawScopeLive = true
+                    lastRawScopeMs = SystemClock.elapsedRealtime()
+                    waveformView.update(waveform)
+                    refreshScopeContentDescription()
+                }
+            },
+            initialFocusPeakingEnabled = focusPeakingEnabled,
+            onFocusPeaking = { frame ->
+                runOnUiThread { focusPeakingOverlay.update(frame) }
+            },
+            onFocusPeakingActive = { active ->
+                runOnUiThread { setFocusPeakingVisible(active) }
             }
         )
         if (gpsEnabled()) gpsProvider?.start()
@@ -584,12 +611,32 @@ class MainActivity : Activity() {
             updateQuickControls()
         }
         histogramQuick.setOnClickListener {
-            histogramEnabled = !histogramEnabled
-            histogramView.visibility = if (histogramEnabled) View.VISIBLE else View.GONE
-            lensPreferences().edit().putBoolean(KEY_HISTOGRAM, histogramEnabled).apply()
+            // Tap toggles the selected graph on/off; the mode is untouched.
+            val next = ScopeUiState(histogramEnabled, scopeMode).onTap()
+            histogramEnabled = next.enabled
+            scopeMode = next.mode
+            persistScopeSelection()
             controller.setRawHistogramEnabled(histogramEnabled)
+            syncScopeVisibility()
             updateQuickControls()
-            scheduleHistogram()
+            scheduleScope()
+        }
+        histogramQuick.setOnLongClickListener { tile ->
+            // Long-press switches graphs, waking the scope when it was off.
+            tile.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            val next = ScopeUiState(histogramEnabled, scopeMode).onLongPress()
+            histogramEnabled = next.enabled
+            scopeMode = next.mode
+            persistScopeSelection()
+            controller.setScopeMode(scopeMode)
+            controller.setRawHistogramEnabled(histogramEnabled)
+            rawScopeLive = false
+            lastRawScopeMs = Long.MIN_VALUE
+            syncScopeVisibility()
+            updateQuickControls()
+            scheduleScope()
+            setStatus(scopeStatusLabel())
+            true
         }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         rawSrQuick.setOnClickListener { toggleRawSuperResolution() }
@@ -805,7 +852,7 @@ class MainActivity : Activity() {
         startCameraWhenReady()
         if (gpsEnabled()) gpsProvider?.start()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
-        scheduleHistogram()
+        scheduleScope()
     }
 
     /**
@@ -847,10 +894,8 @@ class MainActivity : Activity() {
         // A recording must be finalized before the stills session tears down;
         // no preview rearm while the activity is going away.
         if (videoRecording) stopVideoRecording(rearmPreview = false)
-        histogramRunnable?.let(histogramView::removeCallbacks)
-        histogramRunnable = null
-        previewHistogramBitmap?.recycle()
-        previewHistogramBitmap = null
+        scopeRunnable?.let(histogramView::removeCallbacks)
+        scopeRunnable = null
         controller.stop()
         super.onPause()
     }
@@ -919,7 +964,7 @@ class MainActivity : Activity() {
         syncMeteringOverlayToViewfinder(viewfinder)
         syncGuideOverlayToViewfinder(viewfinder)
         // Floating row sits on one 16dp rhythm above the bottom panel; the lens pill
-        // gets an extra 10dp so it clears the 124x64 histogram on narrow screens.
+        // gets an extra 10dp so it clears the 124x64 scope on narrow screens.
         lensSwitcher.layoutParams = FrameLayout.LayoutParams(wrapContent(), wrapContent(),
             Gravity.END or Gravity.BOTTOM).apply {
             marginEnd = dp(16)
@@ -947,11 +992,13 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Single stacking authority: histogram/lens row always sits above the rule-slider
+     * Single stacking authority: scope/lens row always sits above the rule-slider
      * row or quick panel, never behind them. Called after every visibility change.
+     * Both scope views share one slot; only the active mode is visible.
      */
     private fun updateOverlayStack() {
-        if (!::histogramView.isInitialized || !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
+            !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
         val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
         val floatingHeight = when {
             manualPanel.visibility == View.VISIBLE ->
@@ -961,11 +1008,13 @@ class MainActivity : Activity() {
             else -> 0
         }
         val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
-        (histogramView.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-            params.gravity = Gravity.START or Gravity.BOTTOM
-            params.marginStart = dp(16)
-            params.bottomMargin = panelHeight + dp(16) + lift
-            histogramView.layoutParams = params
+        scopeViews().forEach { scope ->
+            (scope.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.gravity = Gravity.START or Gravity.BOTTOM
+                params.marginStart = dp(16)
+                params.bottomMargin = panelHeight + dp(16) + lift
+                scope.layoutParams = params
+            }
         }
         // Lens switcher shares the floating row; keep it clear of the slider as well.
         if (::lensSwitcher.isInitialized) {
@@ -1015,7 +1064,7 @@ class MainActivity : Activity() {
         positionWholeRotatedPanels()
     }
 
-    /** Keep diagnostics and the histogram clear of the top controls and capture panel. */
+    /** Keep diagnostics and the scope clear of the top controls and capture panel. */
     private fun positionWholeRotatedPanels() {
         val quarterTurn = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
         val debugParams = (debugOverlay.layoutParams as? FrameLayout.LayoutParams)
@@ -1045,30 +1094,34 @@ class MainActivity : Activity() {
             rawVfDebugOverlay.translationX = 0f
             rawVfDebugOverlay.translationY = 0f
         }
-        val histogram = histogramView
-        if (histogram.width > 0 && histogram.height > 0) {
+        if (!::waveformView.isInitialized) return
+        val scope = activeScopeView()
+        if (scope.width > 0 && scope.height > 0) {
             updateOverlayStack()
-            (histogram.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+            // Both scope views share one slot and size: compute once, apply to both.
+            val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
+            val floatingHeight = when {
+                manualPanel.visibility == View.VISIBLE ->
+                    (manualPanel.height.takeIf { it > 0 } ?: dp(124))
+                quickPanel.visibility == View.VISIBLE ->
+                    (quickPanel.height.takeIf { it > 0 } ?: dp(200))
+                else -> 0
+            }
+            val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
+            val baseBottomMargin = panelHeight + dp(16) + lift
+            val rotationInset = if (quarterTurn && scope.width > scope.height) {
+                (scope.width - scope.height) / 2
+            } else 0
+            scopeViews().forEach { view ->
                 // Idempotent: recompute from the base stack position every time instead
                 // of adding to the previous margin, so repeated rotations never drift.
-                val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
-                val floatingHeight = when {
-                    manualPanel.visibility == View.VISIBLE ->
-                        (manualPanel.height.takeIf { it > 0 } ?: dp(124))
-                    quickPanel.visibility == View.VISIBLE ->
-                        (quickPanel.height.takeIf { it > 0 } ?: dp(200))
-                    else -> 0
+                (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                    params.bottomMargin = baseBottomMargin + rotationInset
+                    view.layoutParams = params
                 }
-                val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
-                val baseBottomMargin = panelHeight + dp(16) + lift
-                val rotationInset = if (quarterTurn && histogram.width > histogram.height) {
-                    (histogram.width - histogram.height) / 2
-                } else 0
-                params.bottomMargin = baseBottomMargin + rotationInset
-                histogram.layoutParams = params
+                view.translationX = 0f
+                view.translationY = 0f
             }
-            histogram.translationX = 0f
-            histogram.translationY = 0f
         }
     }
 
@@ -1098,13 +1151,14 @@ class MainActivity : Activity() {
         findViewById(R.id.videoHudRight)
     )
 
-    /** Debug overlays + histogram rotate with the device; top/bottom status labels
+    /** Debug overlays + scope rotate with the device; top/bottom status labels
      * stay fixed horizontal so wide thin text never clips off-screen. */
     private fun wholeRotatingOverlays(): List<View> = listOfNotNull(
         findViewById(R.id.debugOverlay),
         findViewById(R.id.rawVfDebugOverlay),
         findViewById(R.id.videoDebugOverlay),
-        findViewById(R.id.histogramView)
+        findViewById(R.id.histogramView),
+        findViewById(R.id.waveformView)
     )
 
     /** Wide thin status labels stay fixed horizontal in their bars (topBar,
@@ -1141,6 +1195,9 @@ class MainActivity : Activity() {
         params.topMargin = viewfinder.top
         guideOverlay.layoutParams = params
         findViewById<RawViewfinder>(R.id.rawViewfinder).layoutParams = FrameLayout.LayoutParams(params)
+        if (::focusPeakingOverlay.isInitialized) {
+            focusPeakingOverlay.layoutParams = FrameLayout.LayoutParams(params)
+        }
         guideOverlay.translationX = 0f
         guideOverlay.translationY = 0f
         guideOverlay.setContentInsets(0, 0, 0)
@@ -1235,7 +1292,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.topBar)?.visibility = View.GONE
         findViewById<View>(R.id.exposureControls)?.visibility = View.GONE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
-        repositionHistogramForVideo(inVideo = true)
+        repositionScopeForVideo(inVideo = true)
         repositionMeterForVideo(inVideo = true)
         reseatDirectLogEvSlider()
         videoHudTop.visibility = View.VISIBLE
@@ -1288,7 +1345,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.topBar)?.visibility = View.VISIBLE
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.VISIBLE
-        repositionHistogramForVideo(inVideo = false)
+        repositionScopeForVideo(inVideo = false)
         repositionMeterForVideo(inVideo = false)
         refreshVideoButton()
         applyCaptureExposureMode(lastPhotoExposureMode)
@@ -1296,16 +1353,18 @@ class MainActivity : Activity() {
         refreshVideoSensorInfo()
     }
 
-    /** Floating histogram drops above the capture panel in video, restored after. */
-    private fun repositionHistogramForVideo(inVideo: Boolean) {
-        val params = histogramView.layoutParams as? FrameLayout.LayoutParams ?: return
-        if (inVideo) {
-            if (histogramBottomMarginDefault < 0) histogramBottomMarginDefault = params.bottomMargin
-            params.bottomMargin = dp(150)
-        } else if (histogramBottomMarginDefault >= 0) {
-            params.bottomMargin = histogramBottomMarginDefault
+    /** Floating scope drops above the capture panel in video, restored after. */
+    private fun repositionScopeForVideo(inVideo: Boolean) {
+        scopeViews().forEach { scope ->
+            val params = scope.layoutParams as? FrameLayout.LayoutParams ?: return@forEach
+            if (inVideo) {
+                if (histogramBottomMarginDefault < 0) histogramBottomMarginDefault = params.bottomMargin
+                params.bottomMargin = dp(150)
+            } else if (histogramBottomMarginDefault >= 0) {
+                params.bottomMargin = histogramBottomMarginDefault
+            }
+            scope.layoutParams = params
         }
-        histogramView.layoutParams = params
     }
 
     /** Audio meter floats above the capture panel (same pattern as histogram). */
@@ -2386,6 +2445,7 @@ class MainActivity : Activity() {
         captureFormat = selected
         lensPreferences().edit().putString(KEY_CAPTURE_FORMAT, selected.name).apply()
         rawStatusGroup.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        applyScopeSource()
         refreshCaptureFormatControl()
         // FOLLOW tonemap follows the format inside the controller (setCaptureFormat pushes
         // the render state); just refresh the badge label here.
@@ -2474,11 +2534,10 @@ class MainActivity : Activity() {
     }
 
     private fun applyCaptureExposureMode(mode: CaptureExposureMode) {
-        // Keep the chosen source across capture-mode transitions. A RAW gap holds
-        // the last RAW bins until new sensor samples arrive.
+        // A RAW gap holds the last scope frame until new sensor samples arrive.
         if (::histogramView.isInitialized && histogramEnabled) {
-            rawHistogramLive = false
-            updatePreviewHistogramOnce()
+            rawScopeLive = false
+            refreshScopeContentDescription()
         }
         captureExposureMode = mode
         if (mode != CaptureExposureMode.ZSL && rawSuperResolutionSettings.enabled) {
@@ -3106,7 +3165,11 @@ class MainActivity : Activity() {
         release.isEnabled = !dualRawEnabled
         release.alpha = if (dualRawEnabled) .4f else 1f
         grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
-        histogram.text = "HISTOGRAM\n${if (histogramEnabled) "ON" else "OFF"}"
+        histogram.text = "SCOPE\n${scopeTileLabel()}"
+        val graph = if (scopeMode == ScopeMode.WAVEFORM) "waveform" else "histogram"
+        val power = if (histogramEnabled) "on" else "off"
+        histogram.contentDescription =
+            "Exposure scope, $graph, $power. Tap to turn ${if (histogramEnabled) "off" else "on"}, long-press to switch graphs."
         aeMeteringMode = controller.getAeMeteringMode()
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
             val rawMetering = runCatching { controller.getProgramAeProfile().metering }
@@ -3196,59 +3259,99 @@ class MainActivity : Activity() {
         timerBadge.visibility = if (timerSeconds > 0) View.VISIBLE else View.GONE
     }
 
-    private fun updatePreviewHistogramOnce() {
-        if (!activityResumed || !histogramEnabled || histogramSourceRaw || !::histogramView.isInitialized) return
-        val preview = findViewById<AutoFitTextureView>(R.id.viewfinder)
-        if (preview.isAvailable) {
-            val bitmap = previewHistogramBitmap ?: android.graphics.Bitmap.createBitmap(
-                96, 54, android.graphics.Bitmap.Config.ARGB_8888
-            ).also { previewHistogramBitmap = it }
-            histogramView.update(preview.getBitmap(bitmap), recycleBitmap = false)
-        }
+    /** Both scope views share one bottom slot; only the active mode is visible. */
+    private fun scopeViews(): List<View> = listOf(histogramView, waveformView)
+
+    private fun activeScopeView(): View =
+        if (scopeMode == ScopeMode.WAVEFORM) waveformView else histogramView
+
+    private fun syncScopeVisibility() {
+        histogramView.visibility =
+            if (histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
+        waveformView.visibility =
+            if (histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
     }
 
-    /** Tap the histogram to switch between processed-preview (YUV) and live-sensor (RAW).
-     * The choice is applied immediately and remembered across restarts. */
-    private fun toggleHistogramSource() {
-        if (!histogramEnabled || !::histogramView.isInitialized) return
-        histogramSourceRaw = !histogramSourceRaw
-        lensPreferences().edit().putBoolean(KEY_HISTOGRAM_SOURCE_RAW, histogramSourceRaw).apply()
-        controller.setHistogramSourceRaw(histogramSourceRaw)
-        histogramView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        // Source is explicit: capture stalls must never substitute YUV for RAW.
-        rawHistogramLive = false
-        lastRawHistogramMs = Long.MIN_VALUE
-        histogramView.setSourceRaw(histogramSourceRaw)
-        updatePreviewHistogramOnce()
-        refreshHistogramContentDescription()
-        setStatus(if (histogramSourceRaw) "HISTO RAW" else "HISTO YUV")
+    /** Edge-triggered by the controller's manual/tap-focus auto-show policy. */
+    private fun setFocusPeakingVisible(visible: Boolean) {
+        if (!::focusPeakingOverlay.isInitialized) return
+        focusPeakingOverlay.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) focusPeakingOverlay.clear()
     }
 
-    private fun refreshHistogramContentDescription() {
+    private fun scopeTileLabel(): String = when {
+        !histogramEnabled -> "OFF"
+        scopeMode == ScopeMode.WAVEFORM -> "WAVE"
+        else -> "HISTO"
+    }
+
+    private fun persistScopeSelection() {
+        lensPreferences().edit()
+            .putBoolean(KEY_HISTOGRAM, histogramEnabled)
+            .putString(KEY_SCOPE_MODE, scopeMode.name)
+            .apply()
+    }
+
+    /** Tap the scope to switch between histogram and waveform. The mode is applied
+     * immediately and remembered across restarts. */
+    private fun toggleScopeMode() {
+        if (!histogramEnabled || !::histogramView.isInitialized || !::waveformView.isInitialized) return
+        scopeMode = scopeMode.next()
+        persistScopeSelection()
+        controller.setScopeMode(scopeMode)
+        activeScopeView().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        rawScopeLive = false
+        lastRawScopeMs = Long.MIN_VALUE
+        syncScopeVisibility()
+        refreshScopeContentDescription()
+        updateQuickControls()
+        setStatus(scopeStatusLabel())
+    }
+
+    /** Scope source follows the capture format: AgX-curved JPEG preview with a JPEG
+     * format, linear RAW with DNG only. */
+    private fun applyScopeSource() {
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
+        val agx = scopeAgxApplied()
+        histogramView.setAgxApplied(agx)
+        waveformView.setAgxApplied(agx)
+        if (::controller.isInitialized) controller.setScopeAgxApplied(agx)
+        rawScopeLive = false
+        lastRawScopeMs = Long.MIN_VALUE
+        refreshScopeContentDescription()
+    }
+
+    private fun scopeStatusLabel(): String {
+        val mode = if (scopeMode == ScopeMode.WAVEFORM) "WAVE" else "HISTO"
+        val source = if (scopeAgxApplied()) "JPEG" else "RAW"
+        return "$mode $source"
+    }
+
+    private fun refreshScopeContentDescription() {
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
+        val source = if (scopeAgxApplied()) "AgX JPEG preview" else "linear RAW sensor"
+        val live = rawScopeLive && !rawScopeStalled()
+        val freshness = if (live) "live" else "waiting for a fresh RAW frame"
+        histogramView.contentDescription =
+            "Histogram, $source, $freshness. Tap to switch to waveform."
+        waveformView.contentDescription =
+            "Waveform, $source, $freshness. Tap to switch to histogram."
+    }
+
+    /** Freshness changes the accessibility status, never the selected mode or source. */
+    private fun rawScopeStalled(): Boolean =
+        RawHistogramThrottle.isStalled(SystemClock.elapsedRealtime(), lastRawScopeMs, HISTOGRAM_RAW_HOLD_MS)
+
+    /** RAW frames arrive push-driven; this only refreshes the stall status. */
+    private fun scheduleScope() {
         if (!::histogramView.isInitialized) return
-        histogramView.contentDescription = if (histogramSourceRaw) {
-            if (rawHistogramLive && !rawHistogramStalled())
-                "Histogram, live RAW sensor source. Tap to switch to preview source."
-            else "Histogram, RAW sensor source; waiting for a fresh RAW frame. Tap to switch to preview source."
-        } else {
-            "Histogram, processed preview source. Tap to switch to RAW sensor source."
-        }
-    }
-
-    /** Freshness changes the accessibility status, never the user's selected source. */
-    private fun rawHistogramStalled(): Boolean =
-        RawHistogramThrottle.isStalled(SystemClock.elapsedRealtime(), lastRawHistogramMs, HISTOGRAM_RAW_HOLD_MS)
-
-    private fun scheduleHistogram() {
-        if (!::histogramView.isInitialized) return
-        histogramRunnable?.let(histogramView::removeCallbacks)
-        histogramRunnable = null
+        scopeRunnable?.let(histogramView::removeCallbacks)
+        scopeRunnable = null
         if (!histogramEnabled) return
-        histogramRunnable = object : Runnable {
+        scopeRunnable = object : Runnable {
             override fun run() {
                 if (!isFinishing && !isDestroyed && histogramEnabled) {
-                    if (!histogramSourceRaw) updatePreviewHistogramOnce()
-                    else refreshHistogramContentDescription()
+                    refreshScopeContentDescription()
                     histogramView.postDelayed(this, HISTOGRAM_INTERVAL_MS)
                 }
             }
@@ -3921,6 +4024,32 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     cycleVfPreviewMode()
                     text = vfPreviewModeText()
+                }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "Focus peaking (manual + tap focus)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = focusPeakingEnabled
+                setOnCheckedChangeListener { _, enabled ->
+                    focusPeakingEnabled = enabled
+                    lensPreferences().edit().putBoolean(KEY_FOCUS_PEAKING, enabled).apply()
+                    controller.setFocusPeakingEnabled(enabled)
+                    setStatus(if (enabled) "PEAKING ON" else "PEAKING OFF")
+                }
+            })
+            content.addView(sectionDesc("Peaking auto-shows while a manual focus distance is set or a tap-to-focus scan/lock is in flight."))
+            content.addView(Button(this).apply {
+                fun refresh() {
+                    text = "Peaking color: ${focusPeakingColor.label}"
+                }
+                refresh()
+                setOnClickListener {
+                    focusPeakingColor = focusPeakingColor.next()
+                    lensPreferences().edit()
+                        .putString(KEY_FOCUS_PEAKING_COLOR, focusPeakingColor.preferenceValue).apply()
+                    focusPeakingOverlay.peakingColor = focusPeakingColor
+                    refresh()
+                    setStatus("PEAKING • ${focusPeakingColor.label}")
                 }
             })
             content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))
@@ -5900,7 +6029,9 @@ class MainActivity : Activity() {
         const val KEY_VF_ENGINE_MODE = "vf_engine_mode"
         const val KEY_GRID = "viewfinder_grid"
         const val KEY_HISTOGRAM = "viewfinder_histogram"
-        const val KEY_HISTOGRAM_SOURCE_RAW = "histogram_source_raw"
+        const val KEY_SCOPE_MODE = "scope_mode"
+        const val KEY_FOCUS_PEAKING = "focus_peaking"
+        const val KEY_FOCUS_PEAKING_COLOR = "focus_peaking_color"
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"
         const val KEY_RAW_ZSL_FRAME_COUNT = "raw_zsl_frame_count"

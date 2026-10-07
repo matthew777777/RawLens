@@ -36,7 +36,7 @@ Top = selectors, middle = window, bottom = chips + shutter.
    `ZSL ACTIVE / ZSL … / ZSL OFF / ZSL N/A`, `HDR ±2 EV`.
 3. **Middle window** — tap = AF, drag = AE target. Grid = thirds.
    Dark/grainy shots at ISO 20000 are a dark room, not a bug.
-4. **Histogram** — left shadows, right highlights. Tap toggles RAW ↔ preview.
+4. **Scope (histogram / waveform)** — left shadows, right highlights. Tap toggles the graph; the SCOPE tile toggles on/off on tap and switches graphs on long-press. Data is linear RAW with DNG, AgX JPEG preview with a JPEG format (auto).
 5. **Lens pills `0.7× / 1×`** — lime = active. Only checked lenses appear.
 6. **Chips ISO/S/WB/AF/EV** — tap = slider, hold = lock (PROGRAM).
 7. **White shutter** = photo. Red = video. Sliders icon = quick panel.

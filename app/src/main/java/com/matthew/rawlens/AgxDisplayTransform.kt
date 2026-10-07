@@ -119,6 +119,52 @@ object AgxDisplayTransform {
         return FloatArray(3) { anchor + scale * (value[it] - anchor) }
     }
 
+    /**
+     * Per-channel 1D AgX curve for exposure scopes (waveform/histogram with the
+     * view transform applied). This is the achromatic path of [acescgToOutputLinearSrgb]
+     * plus the sRGB OETF: for neutral inputs the inset/outset/gamut stages are
+     * identity, so `scopeCurve(n)` matches the display-encoded neutral ramp of the
+     * full transform. Cross-channel hue work is deliberately skipped: scope data is
+     * camera-native linear, not white-balanced ACEScg, so matrixing it would add hue
+     * shifts the saved JPEG never has. The curve tracks the user's AgX sliders
+     * (contrast, shadow/highlight range, shoulder) via [settings].
+     *
+     * Must stay in sync with the achromatic path above and agx_srgb8.glsl agx_base().
+     */
+    fun scopeCurve(linear: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
+        val resolved = settings.resolvedForPlatform()
+        if (!linear.isFinite()) return 0f
+        val positive = max(0f, linear)
+        val shoulder = resolved.highlightShoulder.coerceIn(0f, 1f)
+        val soft = when {
+            shoulder >= 1f -> compressHighlight(positive)
+            shoulder <= 0f -> positive
+            else -> { val c = compressHighlight(positive); positive + shoulder * (c - positive) }
+        }
+        val minimumEv = MIDDLE_GRAY_LOG2 - resolved.agxShadowEv
+        val evRange = resolved.agxShadowEv + resolved.agxHighlightEv
+        val normalized = ((log2(max(soft, 1e-10f)) - minimumEv) / evRange).coerceIn(0f, 1f)
+        val pivot = resolved.agxShadowEv / evRange
+        val contrasted = (pivot + (normalized - pivot) * resolved.agxContrast).coerceIn(0f, 1f)
+        val displayLinear = max(0f, contrast(contrasted)).pow(2.2f).coerceIn(0f, 1f)
+        return srgbOetf(displayLinear)
+    }
+
+    /** Sampled [scopeCurve] for scope hot loops; index `i` maps linear `i/(size-1)`. */
+    fun buildScopeLut(settings: JpegOutputSettings, size: Int = SCOPE_LUT_SIZE): FloatArray {
+        require(size >= 2)
+        val resolved = settings.resolvedForPlatform()
+        return FloatArray(size) { scopeCurve(it.toFloat() / (size - 1), resolved) }
+    }
+
+    /** LUT lookup for normalized linear 0..1; out-of-range inputs clamp to the ends. */
+    fun scopeLutLookup(lut: FloatArray, linear: Double): Float {
+        val index = (linear * (lut.size - 1)).toInt().coerceIn(0, lut.size - 1)
+        return lut[index]
+    }
+
+    const val SCOPE_LUT_SIZE = 1024
+
     /** Exactly one final display-gamut operation: hard clip in output-linear sRGB. */
     fun finalGamutClip(linearSrgb: FloatArray): FloatArray {
         require(linearSrgb.size == 3 && linearSrgb.all(Float::isFinite))

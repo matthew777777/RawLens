@@ -198,7 +198,7 @@ class RawCameraController(
     initialEttrSettings: EttrSettings,
     initialAeMeteringMode: AeMeteringMode,
     initialRawHistogramEnabled: Boolean,
-    initialHistogramSourceRaw: Boolean,
+    initialScopeAgxApplied: Boolean,
     initialProgramAeProfile: ProgramAeProfile = ProgramAeProfile(),
     private val dngWriterBackend: () -> DngWriterBackend,
     private val dngMetadataOverrides: (cameraId: String?) -> DngMetadataOverrides,
@@ -213,7 +213,12 @@ class RawCameraController(
     private val onRawVfDebug: (String) -> Unit = { },
     initialRawStreamCompatMode: Boolean = false,
     private val onRawStreamCompatMode: () -> Unit = { },
-    initialHdrPlusSettings: HdrPlusSettings = HdrPlusSettings()
+    initialHdrPlusSettings: HdrPlusSettings = HdrPlusSettings(),
+    initialScopeMode: ScopeMode = ScopeMode.HISTOGRAM,
+    private val onRawWaveform: (RgbWaveform) -> Unit = { },
+    initialFocusPeakingEnabled: Boolean = true,
+    private val onFocusPeaking: (FocusPeakingFrame) -> Unit = { },
+    private val onFocusPeakingActive: (Boolean) -> Unit = { }
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
@@ -477,13 +482,19 @@ class RawCameraController(
     private val zslOverflowTracker = ZslOverflowTracker()
     private var lastRawZslStatus: RawZslStatus? = null
     @Volatile private var rawHistogramEnabled = initialRawHistogramEnabled
-    @Volatile private var histogramSourceRaw = initialHistogramSourceRaw
-    /** Live RAW histogram-only repeating stream used when the user selects the RAW source
-     * outside ZSL (AUTO/PROGRAM/MANUAL). Frames are sampled for the histogram and closed;
-     * nothing is buffered and ZSL status is unaffected. */
+    /** AgX-curved (JPEG preview) vs linear-RAW scope data; follows the capture format. */
+    @Volatile private var scopeAgxApplied = initialScopeAgxApplied
+    @Volatile private var scopeMode = initialScopeMode
+    /** Live RAW scope-only repeating stream outside ZSL (AUTO/PROGRAM/MANUAL). Frames are
+     * sampled for the histogram/waveform and closed; nothing is buffered and ZSL status
+     * is unaffected. */
     private var rawHistogramStreaming = false
     private var rawHistogramDisabledForSession = false
     private var lastRawHistogramSampleMs = Long.MIN_VALUE
+    /** Focus-peaking master switch (default on); the auto-show policy gates delivery. */
+    @Volatile private var focusPeakingEnabled = initialFocusPeakingEnabled
+    private var lastFocusPeakingSampleMs = Long.MIN_VALUE
+    private var lastPeakingActivePublished = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
     private var latestPreviewResult: TotalCaptureResult? = null
     private val motionTracker = CameraMotionTracker(context)
@@ -852,7 +863,10 @@ class RawCameraController(
                         }
                         // Histogram delivery follows RAW arrival, independent of ZSL pairing
                         // and capture/save state. VF-only repeating frames are useful too.
-                        characteristics?.let { publishRawHistogramIfDue(image, it) }
+                        characteristics?.let { publishRawScopeIfDue(image, it) }
+                        // Focus peaking rides the same RAW VF stream at its own throttle,
+                        // gated by the manual/tap-focus auto-show policy.
+                        characteristics?.let { publishFocusPeakingIfDue(image, it) }
                         // The dual-RAW worker owns these allocations through Vulkan completion;
                         // don't concurrently hand the same AHB to the viewfinder GPU context.
                         if (!activeDualRaw) characteristics?.let { rawViewfinder?.offer(image, it, latestPreviewResult) }
@@ -887,7 +901,7 @@ class RawCameraController(
                             // runs on the metering executor: blocking the camera handler
                             // here stalls RAW acquisition and the HAL backpressures the
                             // whole preview pipeline down to ~1 fps.
-                            if (rawHistogramStreaming) publishRawHistogramIfDue(image, cameraCharacteristics)
+                            if (rawHistogramStreaming) publishRawScopeIfDue(image, cameraCharacteristics)
                             dispatchMeteringSample(image, cameraCharacteristics)
                             continue
                         }
@@ -2311,6 +2325,11 @@ class RawCameraController(
         pendingSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val job = OwnedCaptureJob(capture) {
+            // The SR merge owns the shared GPU for tens of seconds: run the
+            // viewfinder at its record profile (480p@<=10fps) for the whole
+            // job so the merge and the VF stop stuttering each other. The
+            // finally below always restores the previous edge.
+            rawViewfinder?.setRecordMode(true)
             try {
                 runSuperResolutionJob(
                     capture, decision, c, orientation, cameraId,
@@ -2324,6 +2343,7 @@ class RawCameraController(
                 Log.e(LOG_TAG, "Super-resolution save out of memory", oom)
                 onState("SR ERROR")
             } finally {
+                rawViewfinder?.setRecordMode(false)
                 if (outputFormat.includesJpeg) endJpegProcessing()
                 cameraHandler.post {
                     pendingSaveCount.decrementAndGet()
@@ -3746,7 +3766,10 @@ class RawCameraController(
         // rebuild on the critical path.
         if (wasTouchActive) sendAfCancelCapture()
         selectedFocusDistanceDiopters = null
-        val region = meteringRegion(viewX, viewY) ?: return
+        val region = meteringRegion(viewX, viewY) ?: run {
+            publishPeakingActiveIfChanged()
+            return
+        }
         afRegion = region
         if (updateAe && isAeMeteringSupported()) aeRegion = region
         openCameraTouchFocusActive = true
@@ -3765,6 +3788,7 @@ class RawCameraController(
             openCameraTouchFocusActive = false
             updateRepeatingRequest(preserveRawZslBuffer = true)
             onState("FOCUS AREA SET")
+            publishPeakingActiveIfChanged()
             return
         }
 
@@ -3778,6 +3802,7 @@ class RawCameraController(
                 pendingTouchFocusStart = null
                 if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
             }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_RETRY_MS) }
+            publishPeakingActiveIfChanged()
             return
         }
 
@@ -3791,6 +3816,7 @@ class RawCameraController(
                 pendingTouchFocusStart = null
                 if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
             }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_SETTLE_MS) }
+            publishPeakingActiveIfChanged()
         } catch (failure: CameraAccessException) {
             openCameraTouchFocusActive = false
             touchFocusLockedSharp = false
@@ -3800,6 +3826,7 @@ class RawCameraController(
             onFocusLock(false, false, 0L)
             updateRepeatingRequest(preserveRawZslBuffer = true)
             onState("FOCUS ERROR")
+            publishPeakingActiveIfChanged()
         }
     }
 
@@ -3839,6 +3866,7 @@ class RawCameraController(
             onFocusLock(false, false, 0L)
             updateRepeatingRequest(preserveRawZslBuffer = true)
             onState("FOCUS ERROR")
+            publishPeakingActiveIfChanged()
         }
     }
 
@@ -4073,19 +4101,66 @@ class RawCameraController(
         updateRepeatingRequest(preserveRawZslBuffer = true)
     }
 
-    /** YUV (false) shows the processed preview; RAW (true) streams live sensor histograms
-     * in every capture mode. Persisted by the Activity; toggled by tapping the histogram. */
-    fun setHistogramSourceRaw(raw: Boolean) {
+    /** AgX-curved (true, JPEG preview) vs linear-RAW (false, DNG) scope data. Follows the
+     * capture format; both variants sample the same RAW stream, so no session rebuild. */
+    fun setScopeAgxApplied(applied: Boolean) {
         if (!isOnCameraThread()) {
-            cameraHandler.post { setHistogramSourceRaw(raw) }
+            cameraHandler.post { setScopeAgxApplied(applied) }
             return
         }
-        histogramSourceRaw = raw
-        if (raw) {
-            rawHistogramDisabledForSession = false
-            lastRawHistogramSampleMs = Long.MIN_VALUE
+        scopeAgxApplied = applied
+        lastRawHistogramSampleMs = Long.MIN_VALUE
+    }
+
+    /** Histogram vs waveform parade. Both sample the same RAW stream; no session rebuild. */
+    fun setScopeMode(mode: ScopeMode) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setScopeMode(mode) }
+            return
         }
-        updateRepeatingRequest(preserveRawZslBuffer = true)
+        scopeMode = mode
+        lastRawHistogramSampleMs = Long.MIN_VALUE
+    }
+
+    /** Focus-peaking master switch. Peaking samples the running RAW VF stream, so no session rebuild. */
+    fun setFocusPeakingEnabled(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setFocusPeakingEnabled(enabled) }
+            return
+        }
+        focusPeakingEnabled = enabled
+        if (enabled) lastFocusPeakingSampleMs = Long.MIN_VALUE
+        publishPeakingActiveIfChanged()
+    }
+
+    /** True while the user is focusing: manual distance set or a tap scan/lock in flight. */
+    private fun focusPeakingActive(): Boolean =
+        FocusPeakingPolicy.shouldShow(
+            focusPeakingEnabled,
+            selectedFocusDistanceDiopters != null,
+            openCameraTouchFocusActive
+        )
+
+    /**
+     * Edge-triggered overlay visibility. Call on the camera thread after any
+     * mutation of the policy inputs (master switch, manual focus, touch-focus
+     * state) so the overlay never sticks on a stale verdict.
+     */
+    private fun publishPeakingActiveIfChanged() {
+        val active = focusPeakingActive()
+        if (active == lastPeakingActivePublished) return
+        lastPeakingActivePublished = active
+        if (active) lastFocusPeakingSampleMs = Long.MIN_VALUE
+        onFocusPeakingActive(active)
+    }
+
+    private fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics) {
+        if (!focusPeakingActive()) return
+        val now = SystemClock.elapsedRealtime()
+        // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
+        if (!RawHistogramThrottle.shouldSample(now, lastFocusPeakingSampleMs, FOCUS_PEAKING_INTERVAL_MS)) return
+        lastFocusPeakingSampleMs = now
+        RawFocusPeakingSampler.sample(image, cameraCharacteristics)?.let(onFocusPeaking)
     }
 
     fun setDynamicExposureSettings(settings: DynamicExposureSettings) {
@@ -4846,6 +4921,7 @@ class RawCameraController(
             }
             ManualControl.EXPOSURE_COMPENSATION -> exposureCompensation = value?.toInt() ?: 0
         }
+        if (control == ManualControl.FOCUS_DISTANCE) publishPeakingActiveIfChanged()
         clampControlsToCamera()
         controlsChanged()
     }
@@ -4889,7 +4965,7 @@ class RawCameraController(
         val generation = lifecycleGeneration
         // Queued DNG/JPEG saves must not stop the live RAW streams: their buffers
         // are pre-allocated and bounded, and a 6-frame JPEG burst would otherwise
-        // leave the viewfinder without RAW (stale histogram, YUV graph) for the
+        // leave the viewfinder without RAW (stale scope graph) for the
         // whole development queue. Only an active forward capture stops them.
         val captureActive = captureInProgress.get()
         // Split gate: a reserved capture slot (ZSL burst being assembled in the
@@ -4910,10 +4986,10 @@ class RawCameraController(
         val useRawZsl = allowRawZsl && zslRestartFitsReader() && shouldRunRawStream(
             rawZslRequested, zslBlocked, readerReady, captureActive && stillExecuting
         )
-        // Live RAW histogram for every capture mode while the user selects the RAW source.
-        // Never competes with the ZSL ring: histogram-only frames are sampled and closed.
+        // Live RAW scope for every capture mode. Never competes with the ZSL ring:
+        // scope-only frames are sampled and closed.
         val useRawHistogram = !useRawZsl && shouldRunRawStream(
-            rawHistogramEnabled && histogramSourceRaw, rawHistogramDisabledForSession,
+            rawHistogramEnabled, rawHistogramDisabledForSession,
             readerReady, captureActive
         )
         // RAW-based ETTR needs the same metering stream even when the histogram is off
@@ -5604,6 +5680,7 @@ class RawCameraController(
         // touch-focus release completes. This does not alter Camera2 AF behavior.
         onMeteringReleased()
         onState("CONTINUOUS AF")
+        publishPeakingActiveIfChanged()
     }
 
     private fun clipPercent(fraction: Float): String =
@@ -5888,7 +5965,7 @@ class RawCameraController(
             RawImageOwnership.release(image)
             return false
         }
-        publishRawHistogramIfDue(image, c)
+        publishRawScopeIfDue(image, c)
         val buffer = rawZslBuffer ?: run {
             RawImageOwnership.release(image)
             return false
@@ -5950,21 +6027,28 @@ class RawCameraController(
     }
 
     /**
-     * Sampling a full-resolution Bayer buffer is CPU work.  A live histogram only needs a few
+     * Sampling a full-resolution Bayer buffer is CPU work.  A live scope only needs a few
      * updates per second, so never perform it for hidden UI and never let it run at RAW-stream
      * frame rate on the camera callback thread.  A saved frame is sampled immediately.
+     * The AgX curve LUT tracks the live JPEG sliders; a 1024-entry rebuild per sample is
+     * negligible next to the full-resolution Bayer scan.
      */
-    private fun publishRawHistogramIfDue(
+    private fun publishRawScopeIfDue(
         image: Image,
         cameraCharacteristics: CameraCharacteristics,
         force: Boolean = false
     ) {
-        if (!rawHistogramEnabled || !histogramSourceRaw) return
+        if (!rawHistogramEnabled) return
         val now = SystemClock.elapsedRealtime()
         // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
         if (!RawHistogramThrottle.shouldSample(now, lastRawHistogramSampleMs, RAW_HISTOGRAM_INTERVAL_MS, force)) return
         lastRawHistogramSampleMs = now
-        RawHistogramSampler.sample(image, cameraCharacteristics)?.let(onRawHistogram)
+        val lut = if (scopeAgxApplied) AgxDisplayTransform.buildScopeLut(jpegOutputSettings) else null
+        if (scopeMode == ScopeMode.WAVEFORM) {
+            RawWaveformSampler.sample(image, cameraCharacteristics, lut)?.let(onRawWaveform)
+        } else {
+            RawHistogramSampler.sample(image, cameraCharacteristics, lut)?.let(onRawHistogram)
+        }
     }
 
     private fun pairAndSave(timestamp: Long) {
@@ -6309,7 +6393,7 @@ class RawCameraController(
             return
         }
         val orientation = activeOutputOrientation
-        publishRawHistogramIfDue(image, c, force = true)
+        publishRawScopeIfDue(image, c, force = true)
         // Freeze the exact paired result before crossing to the writer thread. Future JPEG
         // development consumes this snapshot, never a later preview result or mutable HAL array.
         val frameMetadata = try {
@@ -6738,7 +6822,7 @@ class RawCameraController(
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
         // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
-        val wantHistogram = rawHistogramEnabled && histogramSourceRaw &&
+        val wantHistogram = rawHistogramEnabled &&
             !rawHistogramDisabledForSession
         val wantEttr = ettrSettings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
@@ -6953,9 +7037,8 @@ class RawCameraController(
         onState("ZSL FALLBACK")
     }
 
-    /** A rejected histogram-only RAW stream must not wedge the viewfinder. Hold the last
-     * RAW histogram and keep the session alive. Re-enabled on camera reopen or
-     * when the user explicitly reselects the RAW source. */
+    /** A rejected scope-only RAW stream must not wedge the viewfinder. Hold the last
+     * scope frame and keep the session alive. Re-enabled on camera reopen. */
     private fun disableRawHistogramForSession(reason: String) {
         rawHistogramDisabledForSession = true
         rawHistogramStreaming = false
@@ -7161,6 +7244,7 @@ class RawCameraController(
             focusLockIndefinite = false
             aeLockIndefinite = false
             focusLockDeadlineMs = 0L
+            publishPeakingActiveIfChanged()
             removeOpenCameraTouchFocusTimeout()
             removeOpenCameraContinuousFocusReset()
             removePendingTouchFocusStart()
@@ -7825,6 +7909,8 @@ class RawCameraController(
         private const val RAW_VF_DEBUG_INTERVAL_MS = 500L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
+        /** Live peaking verdicts ride the same ~4 Hz cadence as the scope. */
+        private const val FOCUS_PEAKING_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */
         private const val ETTR_UPDATE_INTERVAL_MS = 500L
         /** Metering samples slower than this are logged so sick streams show in logcat. */

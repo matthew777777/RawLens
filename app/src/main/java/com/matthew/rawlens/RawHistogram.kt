@@ -11,9 +11,10 @@ data class RgbHistogram(
     val red: IntArray,
     val green: IntArray,
     val blue: IntArray,
-    /** Rec.709 luminance: Bayer-quad average for RAW, per-pixel for preview. */
+    /** Rec.709 luminance over the same (optionally AgX-curved) channel values. */
     val luminance: IntArray,
-    val fromRaw: Boolean
+    /** True when bins hold AgX display-encoded values (JPEG preview), false when linear RAW. */
+    val agxApplied: Boolean
 )
 
 /**
@@ -53,7 +54,16 @@ object RawHistogramSampler {
     internal fun luminanceOf(red: Double, green: Double, blue: Double): Double =
         0.2126 * red + 0.7152 * green + 0.0722 * blue
 
-    fun sample(image: Image, characteristics: CameraCharacteristics): RgbHistogram? {
+    /**
+     * @param scopeLut AgX display curve from [AgxDisplayTransform.buildScopeLut], or null
+     * for a linear-RAW histogram. A curved histogram predicts the developed JPEG; the
+     * linear one matches the DNG data.
+     */
+    fun sample(
+        image: Image,
+        characteristics: CameraCharacteristics,
+        scopeLut: FloatArray? = null
+    ): RgbHistogram? {
         val plane = image.planes.singleOrNull() ?: return null
         if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -124,13 +134,16 @@ object RawHistogramSampler {
                     }
                     val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
                         .coerceIn(0.0, 1.0)
-                    val bin = (normalized * (BIN_COUNT - 1)).toInt().coerceIn(0, BIN_COUNT - 1)
+                    val curved = if (scopeLut != null)
+                        AgxDisplayTransform.scopeLutLookup(scopeLut, normalized).toDouble()
+                    else normalized
+                    val bin = (curved * (BIN_COUNT - 1)).toInt().coerceIn(0, BIN_COUNT - 1)
                     when (colorLut[phase]) {
                         0 -> red[bin]++
                         1 -> green[bin]++
                         else -> blue[bin]++
                     }
-                    quad[quadSize] = normalized
+                    quad[quadSize] = curved
                     quadChannel[quadSize] = channelLut[phase]
                     quadSize++
                 }
@@ -151,7 +164,7 @@ object RawHistogramSampler {
             }
             blockY += blockStep
         }
-        return RgbHistogram(red, green, blue, luminance, fromRaw = true)
+        return RgbHistogram(red, green, blue, luminance, agxApplied = scopeLut != null)
     }
 
     private fun colorAt(cfa: Int, x: Int, y: Int): Int = when (cfa) {
