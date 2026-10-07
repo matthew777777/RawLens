@@ -41,7 +41,11 @@ import android.graphics.drawable.ColorDrawable
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 import android.view.WindowInsets
@@ -156,6 +160,8 @@ class MainActivity : Activity() {
     private var directLogEnabled = false
     /** True when the shared folder picker was opened to rescue staged video. */
     private var folderPickerForVideo = false
+    /** Settings JSON awaiting the export picker result; cleared once written or cancelled. */
+    private var pendingSettingsJson: String? = null
     private var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
@@ -804,6 +810,35 @@ class MainActivity : Activity() {
     @Deprecated("Use picker intent result for the sidecar folder grant")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SETTINGS_EXPORT_REQUEST) {
+            val json = pendingSettingsJson
+            pendingSettingsJson = null
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null && json != null) {
+                try {
+                    contentResolver.openOutputStream(uri)?.use {
+                        it.write(json.toByteArray(Charsets.UTF_8))
+                    } ?: throw IOException("cannot open export file")
+                    setStatus("SETTINGS EXPORTED")
+                } catch (_: Exception) {
+                    setStatus("SETTINGS EXPORT FAILED")
+                }
+            } else if (resultCode == RESULT_OK) {
+                setStatus("SETTINGS EXPORT FAILED")
+            }
+            return
+        } else if (requestCode == SETTINGS_IMPORT_REQUEST) {
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null) {
+                try {
+                    val count = applySettingsImport(SettingsBackup.fromJson(readSettingsImport(uri)))
+                    promptSettingsRestart(count)
+                } catch (_: Exception) {
+                    setStatus("SETTINGS IMPORT FAILED")
+                }
+            }
+            return
+        }
         if (requestCode == SIDECAR_TREE_REQUEST && resultCode == RESULT_OK) {
             val tree: Uri? = data?.data
             if (tree != null) {
@@ -847,6 +882,103 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             setStatus("FOLDER PICKER UNAVAILABLE")
         }
+    }
+
+    private fun exportSettings() {
+        val json = try {
+            SettingsBackup.toJson(SettingsBackup.KNOWN_STORES.associateWith { name ->
+                getSharedPreferences(name, Context.MODE_PRIVATE).all
+            })
+        } catch (_: IllegalArgumentException) {
+            setStatus("SETTINGS EXPORT FAILED")
+            return
+        }
+        pendingSettingsJson = json
+        try {
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "rawlens-settings-$stamp.json")
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, SETTINGS_EXPORT_REQUEST)
+        } catch (_: Exception) {
+            pendingSettingsJson = null
+            setStatus("FILE PICKER UNAVAILABLE")
+        }
+    }
+
+    private fun importSettings() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, SETTINGS_IMPORT_REQUEST)
+        } catch (_: Exception) {
+            setStatus("FILE PICKER UNAVAILABLE")
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun readSettingsImport(uri: Uri): String {
+        contentResolver.openInputStream(uri)?.use { stream ->
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            var total = 0
+            while (true) {
+                val read = stream.read(buf)
+                if (read < 0) break
+                total += read
+                if (total > MAX_SETTINGS_IMPORT_BYTES) throw IOException("settings file too large")
+                out.write(buf, 0, read)
+            }
+            return out.toString(Charsets.UTF_8.name())
+        } ?: throw IOException("cannot open settings file")
+    }
+
+    /**
+     * Replaces every known store with the backup contents. Synchronous commit:
+     * the restart prompt must never outrun the write. Returns the restored
+     * value count. Names come from [SettingsBackup], never the file, so no
+     * crafted backup can touch another preferences file.
+     */
+    private fun applySettingsImport(stores: Map<String, Map<String, Any>>): Int {
+        var count = 0
+        for ((name, entries) in stores) {
+            if (name !in SettingsBackup.KNOWN_STORES) continue
+            val editor = getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear()
+            for ((key, value) in entries) {
+                when (value) {
+                    is Boolean -> editor.putBoolean(key, value)
+                    is Int -> editor.putInt(key, value)
+                    is Long -> editor.putLong(key, value)
+                    is Float -> editor.putFloat(key, value)
+                    is String -> editor.putString(key, value)
+                    is Set<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        editor.putStringSet(key, value as Set<String>)
+                    }
+                    else -> throw IllegalArgumentException("cannot restore \"$key\"")
+                }
+                count++
+            }
+            if (!editor.commit()) throw IOException("cannot save settings")
+        }
+        return count
+    }
+
+    private fun promptSettingsRestart(count: Int) {
+        AlertDialog.Builder(this)
+            .setTitle("Settings imported")
+            .setMessage("$count values restored. Restart to apply them?")
+            .setPositiveButton("Restart") { _, _ -> recreate() }
+            .setNegativeButton("Later") { _, _ -> setStatus("SETTINGS IMPORTED • RESTART TO APPLY") }
+            .setCancelable(false)
+            .show()
     }
 
     override fun onResume() {
@@ -4082,6 +4214,23 @@ class MainActivity : Activity() {
                 }
             })
             content.addView(sectionDesc("Overlays, logs, and capture debug output live under the Debug tab."))
+            content.addView(sectionTitle("Settings backup"))
+            content.addView(sectionDesc("One JSON file with every setting: camera, JPEG, video, exposure, burst, denoise, lenses, DNG calibration, and PROGRAM profiles. Importing replaces all settings and asks for a restart."))
+            content.addView(Button(this).apply {
+                text = "Export settings to JSON"
+                setOnClickListener { exportSettings() }
+            })
+            content.addView(Button(this).apply {
+                text = "Import settings from JSON"
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Import settings?")
+                        .setMessage("This replaces ALL current settings with the file contents. Export first to keep a backup.")
+                        .setPositiveButton("Choose file") { _, _ -> importSettings() }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            })
             markActive(generalTab)
             polish()
         }
@@ -6109,6 +6258,10 @@ class MainActivity : Activity() {
         const val CAMERA_PERMISSION = 42
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
+        const val SETTINGS_EXPORT_REQUEST = 45
+        const val SETTINGS_IMPORT_REQUEST = 46
+        /** Rejects absurd import files before parsing (a real backup is tens of KB). */
+        const val MAX_SETTINGS_IMPORT_BYTES = 2 * 1024 * 1024
         const val AUDIO_PERMISSION = 45
         const val KEY_VIDEO_CROP = "video_crop"
         const val KEY_VIDEO_AUDIO = "video_audio"
@@ -6122,7 +6275,7 @@ class MainActivity : Activity() {
         const val KEY_DIRECT_LOG = "direct_log_video"
         const val KEY_DIRECT_LOG_PROFILE = "direct_log_profile"
         const val KEY_SAVE_LOCATION = "save_location_gps"
-        const val PREFS_NAME = "rawlens_settings"
+        const val PREFS_NAME = SettingsBackup.STORE_MAIN
         const val KEY_SELECTED_LENSES = "selected_lens_ids"
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"

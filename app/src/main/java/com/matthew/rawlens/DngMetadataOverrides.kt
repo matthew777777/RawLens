@@ -97,7 +97,7 @@ data class DngMetadataDefaults(
 )
 
 class DngMetadataOverrideStore(context: Context) {
-    private val preferences = context.getSharedPreferences("rawlens_dng_metadata", Context.MODE_PRIVATE)
+    private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun get(cameraId: String?): DngMetadataOverrides = DngMetadataOverrides.fromJson(
         cameraId?.let { preferences.getString("profile_$it", null) }
@@ -109,6 +109,10 @@ class DngMetadataOverrideStore(context: Context) {
     }
 
     fun clear(cameraId: String) = preferences.edit().remove("profile_$cameraId").apply()
+
+    companion object {
+        const val PREFS_NAME = "rawlens_dng_metadata"
+    }
 }
 
 /** Patches existing, device-declared DNG TIFF tags without touching the RAW image payload. */
