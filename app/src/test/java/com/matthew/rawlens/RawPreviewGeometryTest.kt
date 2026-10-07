@@ -21,9 +21,9 @@ class RawPreviewGeometryTest {
     }
 
     @Test fun `quad grid holds the long edge budget with an even step`() {
-        // 12 MP reference sensor: 1080 -> step 4 (1020x765), 640 -> step 8.
+        // 12 MP reference sensor: 1080 -> step 4 (1020x764, height rounded to even), 640 -> step 8.
         assertEquals(
-            VfQuadGeometry(0, 0, 1020, 765, 4),
+            VfQuadGeometry(0, 0, 1020, 764, 4),
             RawPreviewGeometry.quadGeometry(4080, 3060, null, 1080)
         )
         assertEquals(
@@ -57,5 +57,18 @@ class RawPreviewGeometryTest {
             RawPreviewGeometry.quadGeometry(4080, 3060, null, minOf(480, VfResolution.CPU_MAX))
         )
         assertEquals(1020, full.width)
+    }
+
+    @Test fun `output extents stay even for odd quotients`() {
+        // 4096x3072 at 480p: step 10 gives 409x307, rounded down to 408x306 so no
+        // half-texel edge column reaches the driver (right-border line artifact).
+        assertEquals(
+            VfQuadGeometry(0, 0, 408, 306, 10),
+            RawPreviewGeometry.quadGeometry(4096, 3072, null, 480)
+        )
+        // Odd height from integer truncation (3060/4=765) rounds to 764.
+        val geo = RawPreviewGeometry.quadGeometry(4080, 3060, null, 1080)
+        assertEquals(0, geo.width % 2)
+        assertEquals(0, geo.height % 2)
     }
 }

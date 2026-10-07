@@ -164,6 +164,44 @@ class VfCpuNeonInstrumentedTest {
         }
     }
 
+    @Test fun fiftyMpStrideStripMatchesScalarReference() {
+        assumeTrue("vf native library unavailable", VfCpuNeon.available)
+        // Synthetic 50 MP sensor row (8192 packed shorts) with the step-14
+        // CPU_MAX gather, over a 60-row strip so the test needs ~1 MiB instead
+        // of a 100 MiB full plane. Pins native stride math at sensor scale.
+        val width = 40
+        val height = 5
+        val step = 14
+        val channels = intArrayOf(0, 1, 2, 3)
+        val black = floatArrayOf(64f, 64f, 64f, 64f)
+        val white = 1023f
+        val shortsPerRow = 8192
+        val rows = 60
+        val rnd = java.util.Random(50)
+        val shorts = ShortArray(rows * shortsPerRow) { rnd.nextInt(1024).toShort() }
+        val source = direct(rows * shortsPerRow * 2)
+        shorts.forEach { source.putShort(it) }
+        source.flip()
+        val output = direct(width * height * 4)
+        VfCpuNeon.copy(
+            source, shortsPerRow * 2, 2, 0, 0, width, height, step,
+            channels, black, white, output
+        )
+        val inv = FloatArray(4) { i -> 1f / (white - black[i]).coerceAtLeast(1f) }
+        assertEquals(width * height * 4, output.remaining())
+        for (y in 0 until height) for (x in 0 until width) for (c in 0..3) {
+            val ch = channels[c]
+            val sx = x * step + ch % 2
+            val sy = y * step + ch / 2
+            val code = shorts[sy * shortsPerRow + sx].toInt() and 0xffff
+            val n = ((code - black[ch]) * inv[ch]).coerceIn(0f, 1f)
+            assertEquals(
+                "x=$x y=$y c=$c", (n * 255f + 0.5f).toInt(),
+                output.get().toInt() and 255
+            )
+        }
+    }
+
     @Test fun nativeRejectsBadArguments() {
         assumeTrue("vf native library unavailable", VfCpuNeon.available)
         val src = direct(64)

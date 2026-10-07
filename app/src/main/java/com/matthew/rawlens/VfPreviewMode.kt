@@ -4,8 +4,8 @@
 package com.matthew.rawlens
 
 /** WYSIWYG viewfinder contract: both modes render OUR scene-referred pipeline, never ISP YUV.
- * RAW shows the linear Reinhard preview; JPEG shows the cheap AgX preview approximating the
- * saved JPEG (superpixel demosaic + same WB/CCM + AgX-lite tonemap, no AMaZE detail/denoise). */
+ * RAW shows the linear Reinhard preview; JPEG shows the calibrated AgX preview matching the
+ * saved JPEG (superpixel demosaic + save-path color/exposure/tonemap, no AMaZE detail/denoise). */
 enum class VfPreviewMode {
     /** Follows [CaptureFormat]: DNG_ONLY -> RAW, JPEG/JPEG_DNG -> JPEG. */
     FOLLOW,
@@ -49,5 +49,35 @@ object VfResolution {
         value <= 800 -> MID
         value <= 1020 -> HIGH
         else -> MAX
+    }
+
+    /**
+     * Viewfinder offer-rate floors in milliseconds (pure power policy, unit-tested).
+     * The VF renders at most one frame per floor interval. FULL = 20 ms: low
+     * enough that a 30 fps camera locks every frame despite delivery jitter
+     * (a 28 ms floor still skipped sub-28 ms intervals and jumped 21-30 fps),
+     * high enough that a 60 fps stream (16.6 ms) still halves to 30.
+     * SAVER = 15 fps, RECORD = 10 fps (a take owns the shared queue).
+     */
+    const val RATE_FULL_MS = 20L
+    const val RATE_SAVER_MS = 66L
+    const val RATE_RECORD_MS = 100L
+
+    /** Power-save resolution cap: saver never renders above 640 long edge. */
+    const val SAVER_MAX = MID
+
+    fun rateFloorMs(recordMode: Boolean, powerSave: Boolean): Long = when {
+        recordMode -> RATE_RECORD_MS
+        powerSave -> RATE_SAVER_MS
+        else -> RATE_FULL_MS
+    }
+
+    fun effectiveEdge(userEdge: Int, recordMode: Boolean, powerSave: Boolean): Int {
+        val validatedEdge = validated(userEdge)
+        return when {
+            recordMode -> MIN
+            powerSave -> minOf(validatedEdge, SAVER_MAX)
+            else -> validatedEdge
+        }
     }
 }

@@ -58,6 +58,57 @@ class VfTierFallbackTest {
     }
 
     @Test
+    fun probationSignalCarriesMaxSampleNotMin() {
+        // Field regression (OnePlus 12 / Adreno 750): the signal fed the
+        // MINIMUM sample into dataMax, so every verdict wedged at
+        // INCONCLUSIVE, a black zero-copy tier presented forever with no
+        // log line, and the gpu-copy tier never engaged. Sample triple is
+        // (min, max, mean), as returned by the raw-code sampler.
+        val signal = RawViewfinder.inputSignalFromSample(
+            Triple(64, 458, 123),
+            floatArrayOf(64f, 64f, 64f, 64f), 1023f
+        )
+        assertEquals(458, signal?.dataMax)
+        assertEquals(64, signal?.black)
+        assertEquals(1023, signal?.white)
+    }
+
+    @Test
+    fun probationSignalUsesHighestBlackLevel() {
+        val signal = RawViewfinder.inputSignalFromSample(
+            Triple(100, 9000, 1200),
+            floatArrayOf(256f, 260f, 258f, 262f), 16383f
+        )
+        assertEquals(9000, signal?.dataMax)
+        assertEquals(262, signal?.black)
+    }
+
+    @Test
+    fun probationSignalNullSampleKeepsPrevious() {
+        assertEquals(
+            null,
+            RawViewfinder.inputSignalFromSample(null, floatArrayOf(64f, 64f, 64f, 64f), 1023f)
+        )
+    }
+
+    @Test
+    fun fieldSignalConvictsBlackTierAndVerifiesLitTier() {
+        // End to end on the logcat session values (black 64, white 1023,
+        // dataMax 458 then 612): a zero-reading tier must latch BROKEN so
+        // the chain advances to gpu-copy the same frame.
+        for (dataMax in intArrayOf(458, 612)) {
+            assertEquals(
+                VfTierProbe.BROKEN,
+                RawViewfinder.probeVfTierOutput(dataMax, 64, 1023, 0)
+            )
+            assertEquals(
+                VfTierProbe.VERIFIED,
+                RawViewfinder.probeVfTierOutput(dataMax, 64, 1023, 200)
+            )
+        }
+    }
+
+    @Test
     fun degenerateLevelsAreInconclusive() {
         assertEquals(
             VfTierProbe.INCONCLUSIVE,

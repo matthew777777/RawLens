@@ -64,6 +64,15 @@ class VfGpuImportTest {
         assertFalse(shader.contains("texture2D"))
     }
 
+    @Test fun `both shaders declare the lens green-row uniform they use`() {
+        // The ESSL3 lens-gain block reads u_lensGreenRow; the GPU shader once
+        // omitted its declaration, failing compile on every startup (Mali:
+        // "Undeclared variable 'u_lensGreenRow'") and silently killing the
+        // EGL-direct fallback tier.
+        assertTrue(VfGpuImport.cpuFragmentShader().contains("uniform int u_lensGreenRow"))
+        assertTrue(VfGpuImport.gpuFragmentShader().contains("uniform int u_lensGreenRow"))
+    }
+
     @Test fun `both shaders share the same WYSIWYG tonemap body`() {
         val cpu = VfGpuImport.cpuFragmentShader()
         val gpu = VfGpuImport.gpuFragmentShader()
@@ -86,11 +95,16 @@ class VfGpuImportTest {
         val logIndex = tail.indexOf("log2(max(v")
         assertTrue("tail must keep the AgX log domain", logIndex >= 0)
         assertTrue("exposure must apply before the log domain", evIndex < logIndex)
-        val outIndex = tail.indexOf("rec2020ToSrgb() * v")
-        assertTrue("tail must convert the working space to sRGB", outIndex >= 0)
+        val outIndex = tail.indexOf("outMat * v")
+        assertTrue("tail must convert the working space via the selected output matrix", outIndex >= 0)
+        assertTrue("tail must offer the sRGB output matrix", tail.contains("outMat = rec2020ToSrgb()"))
+        assertTrue(
+            "tail must follow the Display P3 target",
+            tail.contains("if (u_displayP3 != 0) { outMat = rec2020ToDisplayP3(); }")
+        )
         val gamutIndex = tail.indexOf("gamutScale(delta.r")
         assertTrue("tail must keep gamut compression", gamutIndex >= 0)
-        assertTrue("sRGB conversion must precede gamut compression", outIndex < gamutIndex)
+        assertTrue("output conversion must precede gamut compression", outIndex < gamutIndex)
     }
 
     @Test fun `AgX matrices are neutral-preserving in GLSL column-major order`() {
@@ -98,7 +112,7 @@ class VfGpuImportTest {
         // (a0,a3,a6), (a1,a4,a7), (a2,a5,a8). A row-ordered literal transposes
         // the matrix and tints neutrals (observed: B/R 1.5 from the outset).
         for (shader in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
-            for (name in listOf("agxInset", "agxOutset", "rec2020ToSrgb")) {
+            for (name in listOf("agxInset", "agxOutset", "acesCgToRec2020", "rec2020ToSrgb", "rec2020ToDisplayP3")) {
                 val literal = shader.substringAfter("$name() { return mat3(").substringBefore(");")
                 val elements = literal.split(",").map { it.trim().toFloat() }
                 assertEquals("$name must carry 9 elements", 9, elements.size)
@@ -153,5 +167,116 @@ class VfGpuImportTest {
         assertThrows(IllegalArgumentException::class.java) {
             VfGpuImport.nextVulkanRecoverDelayMs(-1000L)
         }
+    }
+
+    @Test fun `both shaders share the calibrated JPEG color path`() {
+        val cpu = VfGpuImport.cpuFragmentShader()
+        val gpu = VfGpuImport.gpuFragmentShader()
+        for (marker in listOf(
+            "u_camToAces",
+            "u_cameraWhite",
+            "u_displayP3",
+            "acesCgToRec2020",
+            "rec2020ToDisplayP3",
+            "smoothstep(vec3(0.70), vec3(0.99)"
+        )) {
+            assertTrue("CPU missing $marker", cpu.contains(marker))
+            assertTrue("GPU missing $marker", gpu.contains(marker))
+        }
+    }
+
+    @Test fun `VF JPEG tail matches save-path floors and dithered output`() {
+        val tail = VfGpuImport.cpuFragmentShader()
+        assertTrue("tail must use the save-path log floor", tail.contains("log2(max(v, vec3(1e-10)))"))
+        assertTrue("tail must keep the save-path luma guard", tail.contains("sceneLuma > 1e-9"))
+        assertTrue("tail must dither 8-bit output", tail.contains("gl_FragCoord"))
+        assertTrue("tail must quantize with one-LSB dither", tail.contains("/ 255.0"))
+    }
+
+    @Test fun `both shaders select lens green parity from the CFA pattern`() {
+        // Canonical Gr sits on the quad's even row only for RGGB/GRBG; GBRG/BGGR
+        // carry it on the odd row, so the G-even/G-odd swap must account for the
+        // pattern instead of assuming quad-relative row 0 (else greens get the
+        // wrong vignette gain and color flings toward the corners).
+        val cpu = VfGpuImport.cpuFragmentShader()
+        val gpu = VfGpuImport.gpuFragmentShader()
+        assertTrue("CPU missing u_lensGreenRow", cpu.contains("u_lensGreenRow"))
+        assertTrue("GPU missing u_lensGreenRow", gpu.contains("u_lensGreenRow"))
+        assertTrue(
+            "CPU must offset the green swap by the Gr row",
+            cpu.contains("mod(float(q.y + u_lensGreenRow), 2.0)")
+        )
+        assertTrue(
+            "GPU must offset the green swap by the Gr row",
+            gpu.contains("(q.y + u_lensGreenRow) & 1")
+        )
+    }
+
+    @Test fun `lens green row matches the Gr site for every CFA pattern`() {
+        // Pinned: RGGB/GRBG carry Gr on the quad's even row, GBRG/BGGR on odd.
+        val expected = intArrayOf(0, 0, 1, 1)
+        for (cfa in 0..3) {
+            val channels = RawPreviewGeometry.channels(cfa)
+            assertEquals("CFA $cfa", expected[cfa], VfGpuImport.lensGreenRow(channels))
+            // The single uniform relies on Gb taking the complementary row.
+            assertEquals("CFA $cfa Gb row", 1 - expected[cfa], channels[2] / 2)
+            // Mirror of the shader swap rule: Gr/Gb must land on G-even exactly
+            // on even absolute rows, like LensShadingModel.gainAt (save path).
+            for (quadRow in 0..1) {
+                val swap = (quadRow + expected[cfa]) % 2 == 1
+                val grRow = quadRow + expected[cfa]
+                val gbRow = quadRow + (1 - expected[cfa])
+                assertEquals("CFA $cfa Gr parity", grRow % 2 == 0, !swap)
+                assertEquals("CFA $cfa Gb parity", gbRow % 2 == 0, swap)
+            }
+        }
+    }
+
+    @Test fun `lens green row rejects non-quad channel maps`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            VfGpuImport.lensGreenRow(intArrayOf(0, 1, 2))
+        }
+    }
+
+    @Test fun `lens recheck always runs without cache or across lenses`() {
+        // No snapshot yet: every frame checks, so a late-appearing HAL map is
+        // picked up immediately, never after a throttle delay.
+        assertTrue(VfGpuImport.shouldRecheckLensMap(1000L, 999L, true, false))
+        // Lens switch (new characteristics): recheck even inside the window.
+        assertTrue(VfGpuImport.shouldRecheckLensMap(1000L, 999L, false, true))
+    }
+
+    @Test fun `lens recheck throttles to 1Hz once cached`() {
+        assertEquals(1000L, VfGpuImport.LENS_RECHECK_MS)
+        // 500 ms after verify: serve the cache, skip the gain-copy + hash.
+        assertFalse(VfGpuImport.shouldRecheckLensMap(1500L, 1000L, true, true))
+        // Window elapsed: re-verify the static map as a backstop.
+        assertTrue(VfGpuImport.shouldRecheckLensMap(2000L, 1000L, true, true))
+    }
+
+    @Test fun `smooth approach converges monotonically without overshoot`() {
+        var value = 0f
+        var previous = value
+        repeat(60) {
+            value = VfGpuImport.smoothToward(value, 1.5f, 33L)
+            assertTrue("monotonic up", value >= previous)
+            assertTrue("no overshoot", value <= 1.5f)
+            previous = value
+        }
+        assertEquals(1.5f, value, 1e-3f)
+        repeat(60) {
+            value = VfGpuImport.smoothToward(value, -1f, 33L)
+            assertTrue("monotonic down", value <= previous)
+            assertTrue("no undershoot", value >= -1f)
+            previous = value
+        }
+        assertEquals(-1f, value, 1e-3f)
+    }
+
+    @Test fun `smooth approach holds on zero time and snaps on huge gaps`() {
+        assertEquals(0.25f, VfGpuImport.smoothToward(0.25f, 1.5f, 0L), 0f)
+        assertEquals(0.25f, VfGpuImport.smoothToward(0.25f, 1.5f, -10L), 0f)
+        assertEquals(1.5f, VfGpuImport.smoothToward(0f, 1.5f, 2000L), 0f)
+        assertEquals(1.5f, VfGpuImport.smoothToward(1.5f, 1.5f, 33L), 0f)
     }
 }

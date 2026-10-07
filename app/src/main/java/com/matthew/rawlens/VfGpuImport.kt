@@ -3,6 +3,7 @@ package com.matthew.rawlens
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.exp
 
 /**
  * Pure logic for the zero-copy GPU viewfinder path. No Android dependencies so the
@@ -11,7 +12,7 @@ import java.nio.ByteOrder
  * GPU path: `Image.getHardwareBuffer()` → EGLImage import (see [VfEglImport]) →
  * `R16UI` texture sampled by an ESSL 3.00 fragment shader that performs the same
  * per-quad Bayer fetch + normalize as [VfCpuNeon.copy], then shares the exact
- * WB/CCM + Reinhard/AgX-lite tail with the CPU path (WYSIWYG parity by construction).
+ * Reinhard/AgX tail with the CPU path (WYSIWYG parity by construction).
  */
 internal object VfGpuImport {
     /** Consecutive GPU failures before the session sticks to the NEON fallback. */
@@ -70,6 +71,33 @@ internal object VfGpuImport {
             val channel = channels[i / 2]
             if (i % 2 == 0) channel % 2 else channel / 2
         }
+    }
+
+    /**
+     * Quad-relative row (0/1) of the canonical Gr site: the lens-shading G-even
+     * channel covers greens on even sensor rows, so the shader's G-even/G-odd
+     * swap must test (quadRow + this) parity. RGGB/GRBG carry Gr on row 0,
+     * GBRG/BGGR on row 1 (Gb always takes the other row).
+     */
+    fun lensGreenRow(channels: IntArray): Int {
+        require(channels.size == 4)
+        return channels[1] / 2
+    }
+
+    /** Per-frame preview smoothing time constant: 95% settled in ~540 ms. */
+    const val PREVIEW_SMOOTH_TAU_MS = 180f
+
+    /**
+     * One exponential-approach step of [current] toward [target] over [dtMs].
+     * Alpha derives from wall time so ramps hold constant speed across frame
+     * rates; snaps exactly once within 1/256 so values settle, never asymptote.
+     */
+    fun smoothToward(current: Float, target: Float, dtMs: Long, tauMs: Float = PREVIEW_SMOOTH_TAU_MS): Float {
+        if (current == target || tauMs <= 0f) return target
+        if (dtMs <= 0L) return current
+        val alpha = (1.0 - exp(-dtMs.toDouble() / tauMs.toDouble())).toFloat().coerceIn(0f, 1f)
+        val next = current + (target - current) * alpha
+        return if (kotlin.math.abs(target - next) < 1f / 256f) target else next
     }
 
     /**
@@ -167,16 +195,20 @@ internal object VfGpuImport {
         return AdaptiveDevelopmentExposure.analyzeSamples(samples, count, tuning).correctionEv
     }
 
-    // Shared AgX-lite helpers + tonemap tail. Both fragment shaders are composed from
+    // Shared AgX helpers + tonemap tail. Both fragment shaders are composed from
     // these pieces so the CPU and GPU paths can never drift apart. The tail takes the
-    // already-fetched normalized superpixel `b` and the framebuffer out-variable name.
-    // AgX matrices are pinned to assets/shaders/display/agx_srgb8.glsl. GLSL mat3()
-    // fills column-major, so each literal triple is one COLUMN (a row-ordered
-    // literal transposes the matrix: the outset then tints neutrals blue).
+    // already-fetched lens-corrected normalized superpixel `b` (UN-gained camera RGB;
+    // the RAW branch applies `gains`, the JPEG branch folds WB into `u_camToAces`)
+    // and the framebuffer out-variable name. AgX matrices are pinned to
+    // assets/shaders/display/agx_srgb8.glsl. GLSL mat3() fills column-major, so each
+    // literal triple is one COLUMN (a row-ordered literal transposes the matrix:
+    // the outset then tints neutrals blue).
     private const val TONEMAP_HELPERS =
         "mat3 agxInset() { return mat3(0.856627153315983, 0.137318972929847, 0.111898212999950, 0.095121240538159, 0.761241990602591, 0.076799418603190, 0.048251606145858, 0.101439036467562, 0.811302368396859); }" +
             "mat3 agxOutset() { return mat3(1.127100581814437, -0.141329763498438, -0.141329763498438, -0.110606643096603, 1.157823702216272, -0.110606643096603, -0.016493938717835, -0.016493938717834, 1.251936406595040); }" +
+            "mat3 acesCgToRec2020() { return mat3(1.025877552449, -0.002232441770, -0.005013950857, -0.020020686312, 1.004568990995, -0.025282661381, -0.005775003430, -0.002349522759, 1.030082295555); }" +
             "mat3 rec2020ToSrgb() { return mat3(1.6604910021, -0.1245504745, -0.0181507634, -0.5876411388, 1.1328998971, -0.1005788980, -0.0728498633, -0.0083494226, 1.1187296614); }" +
+            "mat3 rec2020ToDisplayP3() { return mat3(1.343578252570, -0.065297452837, 0.002821787226, -0.282179670449, 1.075787915784, -0.019598494598, -0.061398582051, -0.010490463088, 1.016776707234); }" +
             "vec3 agxSigmoid(vec3 x) { vec3 x2 = x * x; vec3 x4 = x2 * x2;" +
             " return -17.86 * x4 * x2 * x + 78.01 * x4 * x2 - 126.7 * x4 * x + 92.06 * x4" +
             " - 28.72 * x2 * x + 4.361 * x2 - 0.1718 * x + vec3(0.002857); }" +
@@ -184,13 +216,17 @@ internal object VfGpuImport {
             " return d > 0.0 ? (1.0 - a) / d : -a / d; }" +
             "vec3 srgbOetf(vec3 l) { vec3 lo = 12.92 * l;" +
             " vec3 hi = 1.055 * pow(l, vec3(1.0 / 2.4)) - vec3(0.055);" +
-            " return mix(hi, lo, vec3(lessThanEqual(l, vec3(0.0031308)))); }"
+            " return mix(hi, lo, vec3(lessThanEqual(l, vec3(0.0031308)))); }" +
+            // Interleaved-gradient-noise dither: float-only so both ESSL versions share
+            // it (ESSL 1.00 has no uint/bitwise ops for the save path's hash01).
+            "float ign(vec2 p, float ch) { return fract(52.9829189 * fract(dot(p + ch * 16.0 + 5.588238, vec2(0.06711056, 0.00583715)))); }"
 
     private const val AGX_UNIFORMS =
         "uniform int u_jpeg;" +
             "uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
             "uniform float u_agxHue; uniform float u_agxShadowEv; uniform float u_agxHighlightEv;" +
-            "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;"
+            "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;" +
+            "uniform mat3 u_camToAces; uniform vec3 u_cameraWhite; uniform int u_displayP3;"
 
     /** RAW VF brightness lift: the linear Reinhard preview meters ~1 EV dark, so the
      * shared tail applies +1 EV (×2.0) in RAW mode only. JPEG/AgX keeps its own
@@ -198,17 +234,27 @@ internal object VfGpuImport {
     const val RAW_VF_EV_GAIN = 2.0f
 
     private const val TONEMAP_TAIL_TEMPLATE =
-        " vec3 rgb = max(color * vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
-            " if (u_jpeg == 0) { rgb *= 2.0;" +
+        " if (u_jpeg == 0) { vec4 bg = b * gains;" +
+            "  vec3 rgb = max(color * vec3(bg.r, (bg.g + bg.b) * 0.5, bg.a), vec3(0.0));" +
+            "  rgb *= 2.0;" +
             "  rgb = rgb / (vec3(1.0) + rgb);" +
             "  @OUT@ = vec4(pow(rgb, vec3(1.0 / 2.2)), 1.0); return; }" +
-            " rgb *= exp2(u_exposureEv);" +
-            " for (int c = 0; c < 3; ++c) { if (rgb[c] > 0.9 && u_highlightShoulder > 0.0) {" +
-            "  float t = (rgb[c] - 0.9) / 0.8;" +
+            // JPEG: the save-path sequence on the superpixel (highlight
+            // neutralize -> preview EV -> calibrated camera-to-ACEScg -> AgX ->
+            // sRGB/P3 -> gamut -> clip -> OETF -> one-LSB dither). Only the
+            // superpixel demosaic stands in for AMaZE detail/denoise.
+            " vec3 cam = max(vec3(b.r, (b.g + b.b) * 0.5, b.a), vec3(0.0));" +
+            " vec3 whiteB = smoothstep(vec3(0.70), vec3(0.99), cam);" +
+            " float whiteBlend = max(whiteB.r, max(whiteB.g, whiteB.b));" +
+            " cam = mix(cam, u_cameraWhite, whiteBlend);" +
+            " cam *= exp2(u_exposureEv);" +
+            " vec3 scene = max(acesCgToRec2020() * (u_camToAces * cam), vec3(0.0));" +
+            " for (int c = 0; c < 3; ++c) { if (scene[c] > 0.9 && u_highlightShoulder > 0.0) {" +
+            "  float t = (scene[c] - 0.9) / 0.8;" +
             "  float comp = 0.9 + 0.8 * (1.0 - exp(-t));" +
-            "  rgb[c] = mix(rgb[c], comp, clamp(u_highlightShoulder, 0.0, 1.0)); } }" +
-            " vec3 v = agxInset() * rgb;" +
-            " v = log2(max(v, vec3(0.0001)));" +
+            "  scene[c] = mix(scene[c], comp, clamp(u_highlightShoulder, 0.0, 1.0)); } }" +
+            " vec3 v = agxInset() * scene;" +
+            " v = log2(max(v, vec3(1e-10)));" +
             " float evRange = u_agxShadowEv + u_agxHighlightEv;" +
             " float pivot = u_agxShadowEv / evRange;" +
             " v = clamp((v - vec3(-2.473931188 - u_agxShadowEv)) / vec3(evRange), vec3(0.0), vec3(1.0));" +
@@ -217,17 +263,20 @@ internal object VfGpuImport {
             " v = mix(v, agxOutset() * v, u_agxPurity);" +
             " v = pow(max(v, vec3(0.0)), vec3(2.2));" +
             " vec3 lumaW = vec3(0.2627, 0.6780, 0.0593);" +
-            " float mappedLuma = dot(v, lumaW); float sceneLuma = dot(rgb, lumaW);" +
-            " float ratio = (sceneLuma > 0.000001) ? mappedLuma / max(sceneLuma, 0.000001) : 1.0;" +
-            " v = mix(v, rgb * ratio, u_agxHue);" +
+            " float mappedLuma = dot(v, lumaW); float sceneLuma = dot(scene, lumaW);" +
+            " float ratio = (sceneLuma > 1e-9) ? mappedLuma / max(sceneLuma, 1e-9) : 1.0;" +
+            " v = mix(v, scene * ratio, u_agxHue);" +
             " float g = dot(v, lumaW); v = vec3(g) + u_agxSaturation * (v - vec3(g));" +
-            " v = rec2020ToSrgb() * v;" +
+            " mat3 outMat = rec2020ToSrgb(); if (u_displayP3 != 0) { outMat = rec2020ToDisplayP3(); }" +
+            " v = outMat * v;" +
             " float anchor = clamp(dot(v, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);" +
             " vec3 delta = v - vec3(anchor);" +
             " float sc = min(gamutScale(delta.r, anchor), min(gamutScale(delta.g, anchor), gamutScale(delta.b, anchor)));" +
             " sc = mix(1.0, clamp(sc, 0.0, 1.0), u_agxGamut);" +
             " v = vec3(anchor) + sc * delta;" +
-            " @OUT@ = vec4(srgbOetf(clamp(v, 0.0, 1.0)), 1.0); }"
+            " vec3 enc = srgbOetf(clamp(v, 0.0, 1.0));" +
+            " vec3 dith = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0)) - vec3(0.5);" +
+            " @OUT@ = vec4(enc + dith / 255.0, 1.0); }"
 
     // Zero-copy hardware-accelerated lens-shading (vignetting) correction.
     // The HAL's STATISTICS_LENS_SHADING_CORRECTION_MAP is packed once per map
@@ -244,7 +293,7 @@ internal object VfGpuImport {
     private const val LENS_UNIFORMS_COMMON =
         "uniform sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
             "uniform int u_applyLens; uniform ivec2 u_quadBase; uniform ivec2 u_frameSize;" +
-            "uniform int u_step;"
+            "uniform int u_step; uniform int u_lensGreenRow;"
 
     // ESSL 1.00 variant: single hardware-filtered texture2D fetch. No texelFetch
     // and no integer bitwise ops, so parity uses mod(). ESSL 1.00 also has no
@@ -261,7 +310,7 @@ internal object VfGpuImport {
             " vec2 sz = vec2(float(u_lensSize.x), float(u_lensSize.y));" +
             " vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
             " vec4 g = texture2D(u_lens, uv);" +
-            " if (mod(float(q.y), 2.0) != 0.0) g = vec4(g.r, g.b, g.g, g.a);" +
+            " if (mod(float(q.y + u_lensGreenRow), 2.0) != 0.0) g = vec4(g.r, g.b, g.g, g.a);" +
             " return g; }"
 
     // ESSL 3.00 variant: single hardware-filtered texture() fetch. Integer
@@ -278,7 +327,7 @@ internal object VfGpuImport {
             " highp vec2 sz = vec2(u_lensSize);" +
             " highp vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
             " highp vec4 g = texture(u_lens, uv);" +
-            " if ((q.y & 1) != 0) g = vec4(g.r, g.b, g.g, g.a);" +
+            " if (((q.y + u_lensGreenRow) & 1) != 0) g = vec4(g.r, g.b, g.g, g.a);" +
             " return g; }"
 
     // IEEE-754 float -> half-float bits for the RGBA16F lens pack. Branch-free
@@ -322,15 +371,36 @@ internal object VfGpuImport {
         (cols.toLong() shl 56) xor (rows.toLong() shl 48) xor
             (gains.contentHashCode().toLong() and 0xffff_ffffL)
 
+    /**
+     * Lens-map re-snapshot cadence. The HAL map is static per session, so once
+     * a snapshot is cached the camera thread skips the gain-copy + content
+     * hash (30 allocs/sec of GC churn) and re-verifies at 1 Hz. No cache or a
+     * characteristics change (lens switch) always rechecks immediately, so a
+     * late-appearing map is picked up on the next frame, never after a delay.
+     */
+    const val LENS_RECHECK_MS = 1000L
+
+    fun shouldRecheckLensMap(
+        nowMs: Long,
+        lastMs: Long,
+        sameCharacteristics: Boolean,
+        hasCached: Boolean,
+        intervalMs: Long = LENS_RECHECK_MS
+    ): Boolean {
+        if (!hasCached) return true
+        if (!sameCharacteristics) return true
+        return nowMs - lastMs >= intervalMs
+    }
+
     /** ESSL 1.00 fragment shader for the CPU-sampled RGBA path. */
     fun cpuFragmentShader(): String =
-        "precision mediump float;" +
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
             "varying vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
             TONEMAP_HELPERS +
             LENS_GAIN_ES1 +
-            "void main() { vec4 b = texture2D(raw, tex) * gains; b *= vfLensGain(tex);" +
+            "void main() { vec4 b = texture2D(raw, tex); b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "gl_FragColor")
 
     /** ESSL 3.00 vertex shader for the GPU path (highp varyings for exact quad math). */
@@ -343,17 +413,17 @@ internal object VfGpuImport {
      * ESSL 3.00 fragment shader for the zero-copy path. Each display texel fetches its
      * Bayer quad from the imported `R16UI` texture with the same channel mapping and
      * black/white normalization as [VfCpuNeon.copy] (in float, without the
-     * 8-bit quantization), then runs the shared tonemap tail. `highp` only for
-     * unpack/normalize and quad coordinates; CCM/gamma/AgX-lite stay `mediump`.
+     * 8-bit quantization), then runs the shared tonemap tail in `highp` so the
+     * JPEG branch matches the save-path AgX math.
      */
     fun gpuFragmentShader(): String =
         "#version 300 es\n" +
-            "precision mediump float; precision highp int; precision highp sampler2D;" +
+            "precision highp float; precision highp int; precision highp sampler2D;" +
             "uniform highp usampler2D u_bayer;" +
             "uniform ivec2 u_quadBase; uniform ivec2 u_frameSize; uniform int u_step;" +
             "uniform ivec4 u_chans; uniform highp vec4 u_black; uniform highp vec4 u_invRange;" +
             "uniform highp sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
-            "uniform int u_applyLens;" +
+            "uniform int u_applyLens; uniform int u_lensGreenRow;" +
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             "in highp vec2 tex; out vec4 fragColor;" +
@@ -371,7 +441,7 @@ internal object VfGpuImport {
             " highp float inv = u_invRange[ch];" +
             " return clamp((code - blk) * inv, 0.0, 1.0); }" +
             "void main() { highp ivec2 q = u_quadBase + ivec2(floor(tex * vec2(u_frameSize))) * u_step;" +
-            " highp vec4 b = vec4(vfFetch(q, u_chans.x), vfFetch(q, u_chans.y), vfFetch(q, u_chans.z), vfFetch(q, u_chans.w)) * gains;" +
+            " highp vec4 b = vec4(vfFetch(q, u_chans.x), vfFetch(q, u_chans.y), vfFetch(q, u_chans.z), vfFetch(q, u_chans.w));" +
             " b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "fragColor")
 }

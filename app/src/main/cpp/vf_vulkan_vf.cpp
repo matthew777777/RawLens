@@ -4770,8 +4770,10 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->fusedPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->fusedPipelineLayout, 0, 1, &g->fusedSets[slot], 0, nullptr);
-    const uint32_t gx = (uint32_t)(params.oDims[0] + 7) / 8;
-    const uint32_t gy = (uint32_t)(params.oDims[1] + 7) / 8;
+    // Fused uses 16x16 workgroups (vf_mhcyuv.comp; verified in the .spv):
+    // /8 over-dispatches 4x (harmless via the oDims guard, but wasted GPU).
+    const uint32_t gx = (uint32_t)(params.oDims[0] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.oDims[1] + 15) / 16;
     vkCmdDispatch(cmd, gx, gy, 1);
     inBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     inBarrier.dstAccessMask = 0;

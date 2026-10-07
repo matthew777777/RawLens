@@ -6,9 +6,12 @@ package com.matthew.rawlens
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.PowerManager
 import android.net.Uri
 import android.hardware.SensorManager
 import android.os.Bundle
@@ -853,6 +856,8 @@ class MainActivity : Activity() {
         if (gpsEnabled()) gpsProvider?.start()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
         scheduleScope()
+        applyPowerSave()
+        registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
     }
 
     /**
@@ -885,8 +890,21 @@ class MainActivity : Activity() {
         }
     }
 
+    /** System battery saver throttles the RAW viewfinder (15 fps, <=640p). */
+    private val powerSaveReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) applyPowerSave()
+        }
+    }
+
+    private fun applyPowerSave() {
+        val saver = getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
+        findViewById<RawViewfinder>(R.id.rawViewfinder)?.setPowerSave(saver)
+    }
+
     override fun onPause() {
         activityResumed = false
+        runCatching { unregisterReceiver(powerSaveReceiver) }
         gpsProvider?.stop()
         orientationListener.disable()
         countdownRunnable?.let(window.decorView::removeCallbacks)
@@ -4217,6 +4235,9 @@ class MainActivity : Activity() {
                         ) {
                             selected = progress
                             label.text = "$title: ${format(selected)}"
+                            // Smooth the drag: live-push the candidate look to the VF
+                            // (preview-only; the saved contract commits on release).
+                            if (fromUser) controller.previewAgxLive(update(currentJpegSettings, selected))
                         }
 
                         override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
@@ -4225,6 +4246,9 @@ class MainActivity : Activity() {
                             if (!applyJpegOutputSettings(update(currentJpegSettings, selected))) {
                                 selected = initial.coerceIn(0, maximum)
                                 seekBar.progress = selected
+                                // Commit refused (saves in flight): drop the live
+                                // candidate from the VF so it tracks the contract.
+                                controller.previewAgxLive(currentJpegSettings)
                             }
                         }
                     })
@@ -4249,6 +4273,9 @@ class MainActivity : Activity() {
                     ) {
                         purityPercent = progress
                         purityLabel.text = "AgX purity boost: $purityPercent%"
+                        if (fromUser) controller.previewAgxLive(
+                            currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
+                        )
                     }
 
                     override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
@@ -4258,6 +4285,12 @@ class MainActivity : Activity() {
                             currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
                         )) {
                             setStatus("AGX PURITY • $purityPercent%")
+                        } else {
+                            // Commit refused (saves in flight): revert the label
+                            // and drop the live candidate from the VF.
+                            purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt()
+                            seekBar.progress = purityPercent
+                            controller.previewAgxLive(currentJpegSettings)
                         }
                     }
                 })

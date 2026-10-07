@@ -767,19 +767,16 @@ class RawCameraController(
         // The activity is deliberately portrait-locked. Match Photon's preview geometry: camera
         // stream sizes stay in their native landscape order while the view uses the swapped
         // dimensions (3:4 for a 4:3 stream), irrespective of the phone's physical orientation.
-        val requiredBufferWidth = viewfinder.height
-        val requiredBufferHeight = viewfinder.width
         // Empty preview sizes are not terminal: the ladder's RAW-only tail
         // covers HALs that expose no preview stream at all.
         val previewChoices = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        // Fallback ladder: attempt 0 is the legacy full combo (largest RAW, covering
-        // preview, ring-sized reader). A HAL rejection advances the index and rebuilds
-        // the session with a degraded combo instead of wedging on SESSION ERROR.
+        // Fallback ladder: attempt 0 is the full combo (largest RAW, smallest
+        // preview, ring-sized reader). A HAL rejection advances the index and
+        // rebuilds the session with a degraded combo instead of wedging on
+        // SESSION ERROR.
         val combos = selectSessionStreamCombos(
             rawSizes.map { SessionStreamSize(it.width, it.height) },
             previewChoices.map { SessionStreamSize(it.width, it.height) },
-            requiredBufferWidth,
-            requiredBufferHeight,
             fullReaderMaxImages(),
             MIN_ACQUIRED_RAW_IMAGES
         )
@@ -1337,8 +1334,6 @@ class RawCameraController(
         return selectSessionStreamCombos(
             rawSizes.map { SessionStreamSize(it.width, it.height) },
             previewSizes.map { SessionStreamSize(it.width, it.height) },
-            viewfinder.height,
-            viewfinder.width,
             fullReaderMaxImages(),
             MIN_ACQUIRED_RAW_IMAGES
         ).size.coerceAtLeast(1)
@@ -1698,6 +1693,25 @@ class RawCameraController(
         // sampled frame carries them.
         pushVfRenderState()
         return true
+    }
+
+    /**
+     * Preview-only AgX live update while a settings slider drags: pushes the
+     * candidate look to the VF without touching the saved output contract (which
+     * still commits on release via [setJpegOutputSettings]). Deliberately NOT
+     * gated on capture/save activity: VF volatiles never affect an in-flight
+     * save, and the release path re-pushes the committed look when the commit
+     * itself is refused — so the VF can never strand on an uncommitted look.
+     */
+    fun previewAgxLive(settings: JpegOutputSettings) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { previewAgxLive(settings) }
+            return
+        }
+        val resolved = settings.resolvedForPlatform()
+        val vf = rawViewfinder ?: return
+        vf.setAgx(resolved)
+        vf.setPreviewExposureStrength(adaptivePreviewStrength(captureExposureMode, resolved))
     }
 
     /** Denoise controls are frozen at shutter press and cannot change during queued saves. */
@@ -7637,8 +7651,6 @@ class RawCameraController(
     )
 
     companion object {
-        private const val MAX_PREVIEW_WIDTH = 1920
-        private const val MAX_PREVIEW_HEIGHT = 1080
         private const val ASPECT_RATIO_TOLERANCE = 0.015
         private const val CAPTURE_TIMEOUT_MS = 8_000L
         private const val PAIR_TIMEOUT_MS = 5_000L
@@ -7790,11 +7802,14 @@ class RawCameraController(
 
         /**
          * Session fallback ladder for HALs that reject the full RAW+preview
-         * combination (Xiaomi 14 Ultra rejects 4096x3072 RAW + 1440x1080
-         * preview outright, async, on every route). Each step degrades exactly
-         * one axis so a working session keeps the most capability possible:
-         * full combo, minimal preview, minimal buffers (viewfinder-only, the
-         * reader cannot host a ZSL ring), a half-area RAW size, then RAW-only
+         * combination. The system preview is a stream target only (alpha-0:
+         * nothing reads its pixels, size, or aspect — focus, metering, and all
+         * overlays are wired to the RAW viewfinder and the fixed view rect),
+         * so FULL requests the smallest preview available and nothing more;
+         * some HALs (MediaTek) need a preview target present to sustain the
+         * 30 fps RAW stream. Each later step degrades exactly one axis:
+         * a larger preview retry, minimal buffers (viewfinder-only, the reader
+         * cannot host a ZSL ring), a half-area RAW size, then RAW-only
          * sessions (largest RAW first for capture quality, smallest last for
          * minimum bandwidth). Steps that would retry an identical session are
          * deduped away. An empty preview list yields only the RAW-only steps.
@@ -7802,15 +7817,13 @@ class RawCameraController(
         internal fun selectSessionStreamCombos(
             rawSizes: List<SessionStreamSize>,
             previewSizes: List<SessionStreamSize>,
-            requiredWidth: Int,
-            requiredHeight: Int,
             fullReaderMaxImages: Int,
             reducedReaderMaxImages: Int
         ): List<SessionStreamCombo> {
             val fullRaw = rawSizes.maxByOrNull { it.area } ?: return emptyList()
             val combos = mutableListOf<SessionStreamCombo>()
             if (previewSizes.isNotEmpty()) {
-                val fullPreview = selectFullPreviewSize(previewSizes, fullRaw, requiredWidth, requiredHeight)
+                val fullPreview = selectFullPreviewSize(previewSizes)
                 val fallbackPreview = selectFallbackPreviewSize(previewSizes, fullRaw)
                 combos += SessionStreamCombo(fullRaw, fullPreview, fullReaderMaxImages, "FULL")
                 combos += SessionStreamCombo(fullRaw, fallbackPreview, fullReaderMaxImages, "MIN PREVIEW")
@@ -7836,36 +7849,14 @@ class RawCameraController(
         }
 
         /**
-         * Legacy preview choice, unchanged: the least expensive stream that
-         * still covers the TextureView, else the largest bounded stream.
+         * Invisible-stream choice: the smallest preview available, requested
+         * only so HALs that need a preview target sustain the 30 fps RAW
+         * stream. No aspect, coverage, or viewfinder requirement applies —
+         * the TextureView is alpha-0 and `fillViewport` ignores aspect.
          */
         internal fun selectFullPreviewSize(
-            previewSizes: List<SessionStreamSize>,
-            rawSize: SessionStreamSize,
-            requiredWidth: Int,
-            requiredHeight: Int
-        ): SessionStreamSize {
-            val targetWidth = requiredWidth.coerceIn(1, MAX_PREVIEW_WIDTH)
-            val targetHeight = requiredHeight.coerceIn(1, MAX_PREVIEW_HEIGHT)
-
-            // Preview and RAW should show the same framing. Allow a small tolerance because some
-            // devices expose slightly cropped preview sizes rather than an exact sensor ratio.
-            val matchingAspect = previewSizes.filter { size ->
-                kotlin.math.abs(
-                    size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
-                ) <= ASPECT_RATIO_TOLERANCE
-            }
-            val suitable = matchingAspect.filter {
-                it.width <= MAX_PREVIEW_WIDTH && it.height <= MAX_PREVIEW_HEIGHT
-            }
-            val pool = suitable.ifEmpty { matchingAspect }.ifEmpty { previewSizes }
-
-            // Use the least expensive stream that still covers the TextureView. If none does,
-            // choose the largest bounded stream rather than requesting a full-sensor preview.
-            return pool.filter { it.width >= targetWidth && it.height >= targetHeight }
-                .minByOrNull { it.area }
-                ?: pool.maxByOrNull { it.area }!!
-        }
+            previewSizes: List<SessionStreamSize>
+        ): SessionStreamSize = previewSizes.minByOrNull { it.area }!!
 
         /**
          * Fallback preview: the smallest matching-aspect stream that stays
