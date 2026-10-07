@@ -6,7 +6,7 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 
 ### Added
 
-- Focus peaking on by default: green-sharp sparkle sampled from the RAW VF stream (same repeating Bayer source and ~4 Hz cadence as the live histogram), auto-showing while a manual focus distance is set or a tap-to-focus scan/lock is in flight; Settings → General → Viewfinder carries the on/off switch plus a peaking-color cycler (green/red/yellow/cyan/magenta/white)
+- Focus peaking on by default: small sharpness dots sampled from the RAW VF stream at native pixel resolution (per-cell Tenengrad energy over a 4×4 green lattice, same repeating Bayer source and ~4 Hz cadence as the live histogram, with black gate + wash guard + isolated-speck removal), auto-showing while a manual focus distance is set or a tap-to-focus scan/lock is in flight; Settings → General → Viewfinder carries the on/off switch plus a peaking-color cycler (green/red/yellow/cyan/magenta/white)
 - RGB waveform parade beside the histogram in the same bottom scope slot: tap the scope to switch graphs, SCOPE quick tile (replaces the old HISTOGRAM on/off tile) toggles on/off on tap and switches graphs on long-press
 - darktable-style scope rendering for both graphs: theme palette (#262626 plot, 237,30,20 / 28,235,26 / 14,14,233 primaries), ADD blending with neutral overlap, area-normalized waveform density with HLG perceptual lift and the ADD + hard-light two-pass composite, quarter grid (histogram) and emphasized middle/near-white graticule (waveform)
 - Scope source follows the capture format automatically: linear RAW with DNG only, AgX-curved JPEG preview with JPEG / JPEG+DNG (replaces the manual RAW ↔ YUV-preview toggle and its preview-bitmap sampling)

@@ -6,13 +6,12 @@ package com.matthew.rawlens
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
 /**
- * Focus-peaking sparkle over the RAW viewfinder: one inset block per sharp
- * sensor cell. The view is sized to the viewfinder rect like the guide overlay;
+ * Focus-peaking dots over the RAW viewfinder: one small dot per sharp sensor
+ * cell. The view is sized to the viewfinder rect like the guide overlay;
  * cells map through [FocusPeakingGeometry] so rotation/mirror match the
  * displayed frame. Never clickable: touches fall through to the metering
  * overlay above. Visibility is owned by the tap/manual-focus auto-show policy;
@@ -36,7 +35,6 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
         color = peakingColor.argb
         alpha = PEAKING_ALPHA
     }
-    private val rect = RectF()
 
     init {
         contentDescription = "Focus peaking ${peakingColor.label.lowercase()}"
@@ -66,22 +64,21 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
                 val cell = FocusPeakingGeometry.viewCell(
                     col, row, current.cols, current.rows, current.rotation, current.mirrored
                 )
-                // Inset so peaking reads as sparkle over the image, not solid blocks.
-                val insetX = (cell[2] - cell[0]) * CELL_INSET_FRACTION
-                val insetY = (cell[3] - cell[1]) * CELL_INSET_FRACTION
-                rect.set(
-                    (cell[0] + insetX) * viewWidth,
-                    (cell[1] + insetY) * viewHeight,
-                    (cell[2] - insetX) * viewWidth,
-                    (cell[3] - insetY) * viewHeight
-                )
-                if (rect.right > rect.left && rect.bottom > rect.top) canvas.drawRect(rect, paint)
+                // Small centered dot, never a filled block: peaking must read as
+                // points of sharpness over the image, not sand.
+                val cx = (cell[0] + cell[2]) / 2f * viewWidth
+                val cy = (cell[1] + cell[3]) / 2f * viewHeight
+                val radius = minOf(cell[2] - cell[0], cell[3] - cell[1]) *
+                    minOf(viewWidth, viewHeight) * DOT_RADIUS_FRACTION
+                if (radius > 0f) canvas.drawCircle(cx, cy, radius, paint)
             }
         }
     }
 
     private companion object {
         const val PEAKING_ALPHA = 220
-        const val CELL_INSET_FRACTION = 0.18f
+
+        /** Dot radius as a fraction of the smaller cell dimension. */
+        const val DOT_RADIUS_FRACTION = 0.22f
     }
 }

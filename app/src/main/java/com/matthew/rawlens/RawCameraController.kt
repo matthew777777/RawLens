@@ -491,6 +491,11 @@ class RawCameraController(
     private var rawHistogramStreaming = false
     private var rawHistogramDisabledForSession = false
     private var lastRawHistogramSampleMs = Long.MIN_VALUE
+    /** Scope cost telemetry accumulators (see noteScopeSample); camera thread only. */
+    private var scopeLutAccumNs = 0L
+    private var scopeScanAccumNs = 0L
+    private var scopeSamples = 0
+    private var lastScopeLogMs = 0L
     /** Focus-peaking master switch (default on); the auto-show policy gates delivery. */
     @Volatile private var focusPeakingEnabled = initialFocusPeakingEnabled
     private var lastFocusPeakingSampleMs = Long.MIN_VALUE
@@ -4209,6 +4214,12 @@ class RawCameraController(
         if (active == lastPeakingActivePublished) return
         lastPeakingActivePublished = active
         if (active) lastFocusPeakingSampleMs = Long.MIN_VALUE
+        Log.i(
+            LOG_TAG,
+            "Focus peaking ${if (active) "SHOWN" else "HIDDEN"} " +
+                "(manual=${selectedFocusDistanceDiopters != null} " +
+                "touch=$openCameraTouchFocusActive enabled=$focusPeakingEnabled)"
+        )
         onFocusPeakingActive(active)
     }
 
@@ -6101,12 +6112,37 @@ class RawCameraController(
         // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
         if (!RawHistogramThrottle.shouldSample(now, lastRawHistogramSampleMs, RAW_HISTOGRAM_INTERVAL_MS, force)) return
         lastRawHistogramSampleMs = now
+        val lutStartNs = System.nanoTime()
         val lut = if (scopeAgxApplied) AgxDisplayTransform.buildScopeLut(jpegOutputSettings) else null
+        val scanStartNs = System.nanoTime()
         if (scopeMode == ScopeMode.WAVEFORM) {
             RawWaveformSampler.sample(image, cameraCharacteristics, lut)?.let(onRawWaveform)
         } else {
             RawHistogramSampler.sample(image, cameraCharacteristics, lut)?.let(onRawHistogram)
         }
+        noteScopeSample(now, scanStartNs - lutStartNs, System.nanoTime() - scanStartNs)
+    }
+
+    /**
+     * Scope cost telemetry, same 5 s average discipline as the NEON sampler
+     * line: LUT build vs Bayer scan split per scope mode, so a slow scope
+     * (waveform vs histogram, AgX LUT on/off) is attributable in field logs.
+     * Camera thread only.
+     */
+    private fun noteScopeSample(nowMs: Long, lutNs: Long, scanNs: Long) {
+        scopeLutAccumNs += lutNs
+        scopeScanAccumNs += scanNs
+        scopeSamples++
+        if (nowMs - lastScopeLogMs < SCOPE_LOG_INTERVAL_MS || scopeSamples == 0) return
+        lastScopeLogMs = nowMs
+        val lutMs = scopeLutAccumNs / 1_000_000f / scopeSamples
+        val scanMs = scopeScanAccumNs / 1_000_000f / scopeSamples
+        Log.i(LOG_TAG, String.format(java.util.Locale.US,
+            "Scope sample: avg lut=%.1fms scan=%.1fms over %d frames (%s)",
+            lutMs, scanMs, scopeSamples, scopeMode.name.lowercase()))
+        scopeLutAccumNs = 0L
+        scopeScanAccumNs = 0L
+        scopeSamples = 0
     }
 
     private fun pairAndSave(timestamp: Long) {
@@ -7944,6 +7980,8 @@ class RawCameraController(
         private const val RAW_VF_DEBUG_INTERVAL_MS = 500L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
+        /** Scope cost telemetry cadence: one LUT/scan average line per 5 s. */
+        private const val SCOPE_LOG_INTERVAL_MS = 5000L
         /** Live peaking verdicts ride the same ~4 Hz cadence as the scope. */
         private const val FOCUS_PEAKING_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */

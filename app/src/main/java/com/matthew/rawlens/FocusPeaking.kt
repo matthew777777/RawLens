@@ -91,122 +91,198 @@ object FocusPeakingGeometry {
  * Samples sharpness from the sensor mosaic without demosaicing, on the same
  * repeating RAW stream (and ~4 Hz throttle) as the live histogram.
  *
- * Each grid cell averages the two green sites of its center Bayer quad, then a
- * central-difference gradient (|gx|+|gy|) over the green grid marks sharp cells.
- * Green-only keeps the read budget at ~14k pixels per sample and matches what
- * the eye focuses on; a black-mean floor suppresses pure-black noise and a
- * one-step wash guard doubles the threshold when over [WASH_FRACTION] of the
- * frame passes, so high-ISO grain never paints the whole screen.
+ * Each grid cell measures HIGH-frequency energy at native pixel resolution: a
+ * 4×4 green lattice (stride-2 inside one 8×8 Bayer patch at the cell center)
+ * scored with mean Tenengrad energy (gx²+gy² from central differences).
+ * Gradients between downsampled cells cannot work — at ~42 px spacing any
+ * texture passes whether in focus or not — so the metric never leaves native
+ * resolution. Green-only matches what the eye focuses on.
+ *
+ * Noise discipline: a black-mean floor gates pure-black cells, the threshold
+ * sits ~2× above bright-area shot-noise energy, a one-step wash guard doubles
+ * the threshold past [WASH_FRACTION], and [despeckle] drops isolated singles
+ * (sensor noise spikes; real edges are contiguous).
  */
 object RawFocusPeakingSampler {
     const val COLS = 96
     const val MIN_ROWS = 24
     const val MAX_ROWS = 96
 
-    /** Normalized green-gradient sum (|gx|+|gy|) above which a cell counts as sharp. */
-    const val EDGE_THRESHOLD = 0.15f
+    /** Bayer-pixels square sampled per cell; greens on a stride-2 lattice (4×4). */
+    const val PATCH = 8
+
+    /** Mean Tenengrad energy above which a cell counts as sharp. */
+    const val EDGE_THRESHOLD = 0.008f
 
     /** Cells darker than this green mean are never sharp (pure-black noise gate). */
     const val BLACK_MEAN_FLOOR = 0.03f
 
-    /** Interior pass fraction above which the threshold doubles once (wash guard). */
+    /** Pass fraction above which the threshold doubles once (wash guard). */
     const val WASH_FRACTION = 0.45f
 
     /** Grid rows holding cells ~square on any sensor aspect. */
     fun rowsFor(width: Int, height: Int, cols: Int = COLS): Int =
         (cols.toLong() * height / width.coerceAtLeast(1)).toInt().coerceIn(MIN_ROWS, MAX_ROWS)
 
-    /** Green-site offsets within one 2×2 Bayer quad for [cfa]: dx0,dy0,dx1,dy1. */
-    internal fun greenOffsets(cfa: Int): IntArray = when (cfa) {
-        // GRBG / GBRG carry green on the diagonal, RGGB / BGGR off it.
-        1, 2 -> intArrayOf(0, 0, 1, 1)
-        else -> intArrayOf(1, 0, 0, 1)
+    /**
+     * Green-column start within an even-aligned patch row [y] for [cfa]:
+     * GRBG/GBRG carry green where x-parity == y-parity, RGGB/BGGR where it
+     * differs. The 4 patch greens sit at start, +2, +4, +6.
+     */
+    internal fun greenColStart(cfa: Int, y: Int): Int {
+        val sameParity = cfa == 1 || cfa == 2
+        return (y and 1) xor (if (sameParity) 0 else 1)
     }
 
     /**
-     * Gradient scores over a row-major [cols]×[rows] green grid: |gx|+|gy|
-     * from central differences, 0 on the border. Pure so thresholds stay
-     * unit-tested.
+     * Mean Tenengrad energy over the interior 2×2 of a 4×4 normalized green
+     * grid (row-major): average gx²+gy² from central differences. Pure so the
+     * focus metric stays unit-tested.
      */
-    internal fun scoresOf(green: FloatArray, cols: Int, rows: Int): FloatArray {
-        val scores = FloatArray(cols * rows)
-        for (y in 1 until rows - 1) {
-            val row = y * cols
-            for (x in 1 until cols - 1) {
-                val gx = green[row + x + 1] - green[row + x - 1]
-                val gy = green[row + cols + x] - green[row - cols + x]
-                scores[row + x] = kotlin.math.abs(gx) + kotlin.math.abs(gy)
-            }
+    internal fun tenengrad(green4: FloatArray): Float {
+        require(green4.size == 16) { "Tenengrad needs a 4×4 grid, got ${green4.size}" }
+        var sum = 0f
+        for (y in 1..2) for (x in 1..2) {
+            val gx = green4[y * 4 + x + 1] - green4[y * 4 + x - 1]
+            val gy = green4[(y + 1) * 4 + x] - green4[(y - 1) * 4 + x]
+            sum += gx * gx + gy * gy
         }
-        return scores
+        return sum / 4f
+    }
+
+    /**
+     * Drops isolated single cells: a passing cell survives only with a passing
+     * 8-neighbor. Photon-noise spikes are isolated; focused edges span cells.
+     */
+    internal fun despeckle(mask: BooleanArray, cols: Int, rows: Int): BooleanArray {
+        val out = BooleanArray(mask.size)
+        for (y in 0 until rows) for (x in 0 until cols) {
+            if (!mask[y * cols + x]) continue
+            var keep = false
+            for (dy in -1..1) for (dx in -1..1) {
+                if (dx == 0 && dy == 0) continue
+                val nx = x + dx
+                val ny = y + dy
+                if (nx in 0 until cols && ny in 0 until rows && mask[ny * cols + nx]) {
+                    keep = true
+                    break
+                }
+            }
+            out[y * cols + x] = keep
+        }
+        return out
     }
 
     internal fun maskOf(
-        green: FloatArray,
+        energy: FloatArray,
+        mean: FloatArray,
         cols: Int,
         rows: Int,
         threshold: Float = EDGE_THRESHOLD
     ): BooleanArray {
-        require(green.size == cols * rows) { "green grid ${green.size} != $cols×$rows" }
-        val scores = scoresOf(green, cols, rows)
-        var mask = thresholdMask(scores, green, threshold)
-        val interior = (cols - 2).coerceAtLeast(0) * (rows - 2).coerceAtLeast(0)
-        if (interior > 0 && mask.count { it }.toFloat() / interior > WASH_FRACTION) {
-            mask = thresholdMask(scores, green, threshold * 2f)
+        require(energy.size == cols * rows) { "energy grid ${energy.size} != $cols×$rows" }
+        require(mean.size == cols * rows) { "mean grid ${mean.size} != $cols×$rows" }
+        var mask = thresholdMask(energy, mean, threshold)
+        val total = cols * rows
+        if (total > 0 && mask.count { it }.toFloat() / total > WASH_FRACTION) {
+            mask = thresholdMask(energy, mean, threshold * 2f)
         }
-        return mask
+        return despeckle(mask, cols, rows)
     }
 
-    private fun thresholdMask(scores: FloatArray, green: FloatArray, threshold: Float): BooleanArray =
-        BooleanArray(scores.size) { i -> green[i] >= BLACK_MEAN_FLOOR && scores[i] >= threshold }
+    private fun thresholdMask(energy: FloatArray, mean: FloatArray, threshold: Float): BooleanArray =
+        BooleanArray(energy.size) { i -> mean[i] >= BLACK_MEAN_FLOOR && energy[i] >= threshold }
+
+    @Volatile private var diagLogged = false
 
     fun sample(image: Image, characteristics: CameraCharacteristics): FocusPeakingFrame? {
         val plane = image.planes.singleOrNull() ?: return null
-        if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
+        if (plane.pixelStride < 2 || image.width < PATCH || image.height < PATCH) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
         val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.coerceAtLeast(1) ?: return null
-        // Cells are sparse across rows, so per-cell direct reads beat bulk row
-        // copies here (the histogram's dense scan is the opposite trade). Same
-        // LUT discipline otherwise: no per-pixel divisions or framework calls.
+        // One bulk copy per sampled row (same discipline as the histogram):
+        // each band needs 4 green rows, then every cell indexes the arrays.
+        // ~300 bulk copies + ~110k indexed reads per sample at 4 Hz.
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val limit = buffer.limit()
-        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
-        val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
-        val greens = greenOffsets(cfa)
-        val cols = COLS
-        val rows = rowsFor(image.width, image.height, cols)
-        val grid = FloatArray(cols * rows)
+        val shortView = buffer.asShortBuffer()
+        val shortCapacity = shortView.capacity()
+        val bulkRows = plane.pixelStride == 2 && plane.rowStride % 2 == 0
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
+        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
+        val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
+        val cols = COLS
+        val rows = rowsFor(image.width, image.height, cols)
+        val energy = FloatArray(cols * rows)
+        val mean = FloatArray(cols * rows)
+        val bandRows = if (bulkRows) Array(4) { ShortArray(image.width) } else null
+        val patch = FloatArray(16)
         for (row in 0 until rows) {
-            val cy = ((row + 0.5f) * image.height / rows).toInt().coerceIn(0, image.height - 2)
-            val qy = cy / 2 * 2
-            for (col in 0 until cols) {
-                val cx = ((col + 0.5f) * image.width / cols).toInt().coerceIn(0, image.width - 2)
-                val qx = cx / 2 * 2
-                var sum = 0.0
-                var count = 0
-                for (k in 0..1) {
-                    val x = qx + greens[k * 2]
-                    val y = qy + greens[k * 2 + 1]
-                    val offset = y * rowStride + x * pixelStride
-                    if (offset < 0 || offset + 1 >= limit) continue
-                    val phase = ((y and 1) shl 1) or (x and 1)
-                    val value = buffer.getShort(offset).toInt() and 0xffff
-                    sum += ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
-                        .coerceIn(0.0, 1.0)
-                    count++
+            val cy = ((row + 0.5f) * image.height / rows).toInt()
+            val qy = (cy / 2 * 2).coerceIn(0, image.height - PATCH)
+            var bandOk = bandRows != null
+            if (bandRows != null) {
+                for (k in 0..3) {
+                    val start = (qy + k * 2) * (rowStride / 2)
+                    if (start < 0 || start + image.width > shortCapacity) {
+                        bandOk = false
+                        break
+                    }
+                    shortView.get(start, bandRows[k], 0, image.width)
                 }
-                grid[row * cols + col] = if (count > 0) (sum / count).toFloat() else 0f
             }
+            for (col in 0 until cols) {
+                val cx = ((col + 0.5f) * image.width / cols).toInt()
+                val qx = (cx / 2 * 2).coerceIn(0, image.width - PATCH)
+                var patchMean = 0f
+                for (ky in 0..3) {
+                    val y = qy + ky * 2
+                    val x0 = qx + greenColStart(cfa, y)
+                    for (kx in 0..3) {
+                        val x = x0 + kx * 2
+                        val phase = ((y and 1) shl 1) or (x and 1)
+                        val value: Int? = if (bandOk && bandRows != null) {
+                            bandRows[ky][x].toInt() and 0xffff
+                        } else {
+                            val offset = y * rowStride + x * pixelStride
+                            if (offset < 0 || offset + 1 >= limit) null
+                            else buffer.getShort(offset).toInt() and 0xffff
+                        }
+                        val normalized = if (value == null) 0f
+                        else (((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
+                            .coerceIn(0.0, 1.0)).toFloat()
+                        patch[ky * 4 + kx] = normalized
+                        patchMean += normalized
+                    }
+                }
+                energy[row * cols + col] = tenengrad(patch)
+                mean[row * cols + col] = patchMean / 16f
+            }
+        }
+        val mask = maskOf(energy, mean, cols, rows)
+        if (!diagLogged) {
+            diagLogged = true
+            var peak = 0f
+            var sum = 0.0
+            for (e in energy) {
+                if (e > peak) peak = e
+                sum += e
+            }
+            android.util.Log.i(
+                "RawLensCamera",
+                "Focus peaking first sample: grid=${cols}x$rows passes=${mask.count { it }} " +
+                    "meanEnergy=${"%.5f".format(sum / energy.size)} peakEnergy=${"%.4f".format(peak)} " +
+                    "threshold=$EDGE_THRESHOLD cfa=$cfa"
+            )
         }
         val rotation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val mirrored = characteristics.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
-        return FocusPeakingFrame(cols, rows, maskOf(grid, cols, rows), rotation, mirrored)
+        return FocusPeakingFrame(cols, rows, mask, rotation, mirrored)
     }
 }

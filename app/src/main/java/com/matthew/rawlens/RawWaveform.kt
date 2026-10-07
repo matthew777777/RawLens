@@ -60,6 +60,14 @@ object RawWaveformSampler {
     internal fun columnOf(x: Int, width: Int, columns: Int = COLUMNS): Int =
         ((x.toLong() * columns / width.coerceAtLeast(1)).toInt()).coerceIn(0, columns - 1)
 
+    /**
+     * Precomputed [columnOf] per sensor x: one division per column instead of
+     * one per sampled pixel (the 64-bit division was the sampler's hottest
+     * per-pixel cost on the camera thread).
+     */
+    internal fun columnLut(width: Int, columns: Int = COLUMNS): IntArray =
+        IntArray(width.coerceAtLeast(1)) { x -> columnOf(x, width, columns) }
+
     /** Level bin for a display/linear value 0..1; out-of-range clamps to the ends. */
     internal fun levelOf(value: Double, levels: Int = LEVELS): Int =
         (value * (levels - 1)).toInt().coerceIn(0, levels - 1)
@@ -87,6 +95,7 @@ object RawWaveformSampler {
         val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
         val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
         val colorLut = IntArray(4) { i -> colorAt(cfa, i % 2, i / 2) }
+        val frameColumns = columnLut(image.width)
         val red = IntArray(COLUMNS * LEVELS)
         val green = IntArray(COLUMNS * LEVELS)
         val blue = IntArray(COLUMNS * LEVELS)
@@ -130,7 +139,7 @@ object RawWaveformSampler {
                     val curved = if (scopeLut != null)
                         AgxDisplayTransform.scopeLutLookup(scopeLut, normalized).toDouble()
                     else normalized
-                    val cell = columnOf(x, image.width) * LEVELS + levelOf(curved)
+                    val cell = frameColumns[x] * LEVELS + levelOf(curved)
                     when (colorLut[phase]) {
                         0 -> red[cell]++
                         1 -> green[cell]++
