@@ -200,6 +200,42 @@ object RawSrMergeJob {
         }
         val band = vkDownloadRgba32fRegion(imageId, 0, startY, width, rows)
         copyRgbaRowsToRgb(java.nio.FloatBuffer.wrap(band), width, rows, rgb, rgbOffset)
+        sanitizeStrip(rgb, rgbOffset, width, startY, rows)
+    }
+
+    /**
+     * Non-finite firewall for GPU readback strips: the merge shaders are
+     * finite-guarded end to end, so any NaN/Inf here is driver/readback
+     * corruption below the shader math (seen once in the field as a
+     * whole-DNG loss in [LinearRgbDngWriter.quantize]). A corrupt texel
+     * sanitizes to 0 (black, matching the merge's own zero-support value)
+     * instead of nuking the save; the first hit logs its coordinates and
+     * the band total so the corruption stays diagnosable. Finite strips
+     * pass through untouched — same floats, same bytes. Returns the
+     * sanitized sample count (0 when the strip was already finite).
+     */
+    internal fun sanitizeStrip(rgb: FloatArray, rgbOffset: Int, width: Int, startY: Int, rows: Int): Int {
+        val samples = Math.multiplyExact(Math.multiplyExact(width, rows), 3)
+        var bad = 0
+        var first = -1
+        val end = rgbOffset + samples
+        var i = rgbOffset
+        while (i < end) {
+            if (!rgb[i].isFinite()) {
+                if (first < 0) first = i - rgbOffset
+                bad++
+                rgb[i] = 0f
+            }
+            i++
+        }
+        if (bad > 0) {
+            val pixel = first / 3
+            val x = pixel % width
+            val y = startY + pixel / width
+            android.util.Log.w(TAG, "SR readback sanitized $bad non-finite sample(s)" +
+                " in rows [$startY, ${startY + rows}): first at ($x, $y) channel ${first % 3}")
+        }
+        return bad
     }
 
     /**

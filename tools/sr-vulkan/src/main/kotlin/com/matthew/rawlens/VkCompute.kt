@@ -471,6 +471,30 @@ internal class VkProgramCache(
 }
 
 internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkProgram, private val asset: String) {
+    companion object {
+        /**
+         * Per-pass slice budget in pixels (see [dispatch]): matched on the
+         * asset stem so unknown future passes default to the cheap tier.
+         * Pure (unit-testable, no GPU).
+         */
+        fun sliceBudgetFor(asset: String): Int {
+            val stem = asset.substringAfterLast("/").removeSuffix(".glsl")
+            return when (stem) {
+                // 1x1-workgroup alignment pair: hundreds of ops per tile in
+                // single-thread groups; stays fine-grained.
+                "block_match", "lk_refine" -> 16384
+                // Neighborhood passes: covariance-directed 3x3 accumulate,
+                // radix-loop FFT stages, 49-tap chroma rebuild, ring-search
+                // inpaint, per-quad covariance/robustness estimation.
+                "merge_accumulate", "fft_stage", "chroma_from_luma",
+                "inpaint_dead_lanes", "kernel_covariance", "robustness" -> 1048576
+                // Pointwise/small-kernel: clears, pads, remaps, normalizes,
+                // guides, pyramid steps, finalize, masks, flow resampling.
+                else -> 4194304
+            }
+        }
+    }
+
     private val entry = program.entry
     private val ubo = program.uboStaging
 
@@ -519,32 +543,31 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
 
     fun dispatch(width: Int, height: Int, localX: Int, localY: Int) {
         // Watchdog slicing, the same schedule the retired GLES host used:
-        // the budget bounds each submit (block_match/lk_refine are heavy
-        // enough for their own smaller budget), every submit fence-waits in
-        // native code (10s, like the GL fence; a hang throws instead of
-        // hanging), and the sleep yields to the viewfinder queue between
-        // slices. Desktop sets srvk.sliceBudget huge for one full-grid
-        // slice per pass (offset 0, identical math — the offset only
-        // translates global IDs); unset means phone budgets.
+        // the budget bounds each submit, every submit fence-waits in native
+        // code (10s, like the GL fence; a hang throws instead of hanging),
+        // and the sleep yields to the viewfinder queue between slices.
+        // Desktop sets srvk.sliceBudget huge for one full-grid slice per
+        // pass (offset 0, identical math — the offset only translates
+        // global IDs); unset means phone budgets.
         //
-        // Full-res passes slice at 256K pixels (a 12MP pass runs ~48
-        // slices, a level-0 alignment grid ~3): small enough that one
-        // in-flight submit never holds the shared Mali GPU past a
-        // viewfinder frame, so the RAW VF keeps its 30 fps zero-copy
-        // cadence through a merge. The 1ms yield runs every fourth slice,
-        // keeping the total yield overhead — and save time — at the old
-        // schedule while the finer granularity quadruples the worst-case
-        // preemption rate. Slicing preserves coordinates and arithmetic
-        // at any budget.
+        // Budgets are per-pass cost tiers: cheap pointwise/small-kernel
+        // passes run 4M pixels per submit (~3 slices at 12MP), medium
+        // neighborhood passes (accumulate, FFT stages, chroma/inpaint
+        // rebuilds) 1M (~12 slices), and the 1x1-workgroup alignment
+        // pair stays fine-grained at 16K. One in-flight submit still
+        // never holds the shared Mali GPU past a viewfinder frame, and
+        // the merge engages the VF record-mode throttle (480p@10fps) so
+        // the coexistence window is wider than the old 30fps math. The
+        // 1ms yield runs every eighth slice. Slicing preserves
+        // coordinates and arithmetic at any budget.
         val budgetOverride = System.getProperty("srvk.sliceBudget")?.toIntOrNull()
-        val budget = budgetOverride
-            ?: if (asset.endsWith("block_match.glsl") || asset.endsWith("lk_refine.glsl")) 4096 else 262144
+        val budget = budgetOverride ?: sliceBudgetFor(asset)
         for ((index, slice) in RawSrGpuScheduling.slices(width, height, localX, localY, budget).withIndex()) {
             setDispatchOffset(slice.x, slice.y)
             vk.writeUniforms(program.pipeline, ubo.duplicate().order(ByteOrder.nativeOrder()))
             vk.dispatch(program.pipeline, slice.groupsX, slice.groupsY, 1)
             // Leave a submission opportunity for the independent viewfinder queue.
-            if (index % 4 == 3) Thread.sleep(1)
+            if (index % 8 == 7) Thread.sleep(1)
         }
     }
 

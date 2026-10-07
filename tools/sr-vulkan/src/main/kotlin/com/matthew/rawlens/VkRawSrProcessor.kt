@@ -781,7 +781,8 @@ class VkRawSrProcessor(context: Context) : Closeable {
         padToTile: Int?,
         greyProvider: (Int) -> RawSrGrayImage,
         mosaicProvider: ((Int) -> FftMosaic)?,
-        active: VkSession, arena: VkArena
+        active: VkSession, arena: VkArena,
+        twiddleCache: MutableMap<TwiddleKey, VkImage>? = null
     ): VkImage {
         if (mosaicProvider != null) {
             var cached: FftMosaic? = null
@@ -789,7 +790,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
                 val m = mosaicProvider.invoke(index)
                 cached = m
                 return padGreyTexture(
-                    fftGreyGpu(m.values, m.width, m.height, m.flip, active, arena),
+                    fftGreyGpu(m.values, m.width, m.height, m.flip, active, arena, twiddleCache),
                     padToTile, active, arena)
             } catch (cancelled: java.util.concurrent.CancellationException) {
                 throw cancelled
@@ -851,15 +852,18 @@ class VkRawSrProcessor(context: Context) : Closeable {
      * same order, over ping-pong complex planes ([RawSrFftPlan] for the
      * stage math). The sensor→RGGB [flip] fuses into the first
      * stage's mosaic read. The returned resident R32F grey is adopted by
-     * the pyramid; every other texture (mosaic, complex pairs, twiddle
-     * rows) releases before return, including on failure, so the
-     * fallback starts clean. Throws on any GPU failure. Internal for
-     * the desktop GPU parity test (same-module callers only).
+     * the pyramid; every other texture (mosaic, complex pairs, and
+     * twiddle rows when [twiddleCache] is null) releases before return,
+     * including on failure, so the fallback starts clean. A supplied
+     * cache keeps the rows for the burst (released with its arena).
+     * Throws on any GPU failure. Internal for the desktop GPU parity
+     * test (same-module callers only).
      */
     internal fun fftGreyGpu(
         mosaic: FloatArray, width: Int, height: Int,
         flip: RawSrCfaOrientation.Flip,
-        active: VkSession, arena: VkArena
+        active: VkSession, arena: VkArena,
+        twiddleCache: MutableMap<TwiddleKey, VkImage>? = null
     ): VkImage {
         require(mosaic.size == width * height)
         // Every plane unwinds on failure (a half-allocated set cannot
@@ -886,10 +890,12 @@ class VkRawSrProcessor(context: Context) : Closeable {
             val b = ComplexLive(bRe, bIm)
             fun idleFor(live: ComplexLive): ComplexLive = if (live.re === aRe) b else a
             var cur = fftAxisInto(ComplexLive(src, src), a, width, height,
-                axis = 0, inverse = false, firstFlip = flipInt, active, arena, spare = b)
+                axis = 0, inverse = false, firstFlip = flipInt, active, arena, spare = b,
+                twiddleCache = twiddleCache)
             var dst = idleFor(cur)
             cur = fftAxisInto(cur, dst, width, height,
-                axis = 1, inverse = false, firstFlip = null, active, arena)
+                axis = 1, inverse = false, firstFlip = null, active, arena,
+                twiddleCache = twiddleCache)
             // fftshift + outer-quarter zeroing, then ifftshift back: the
             // CPU unshifts before the inverse FFT (mask in shifted
             // domain, transform in natural order), not after.
@@ -905,10 +911,12 @@ class VkRawSrProcessor(context: Context) : Closeable {
             // is the grey (the CPU reads it directly, no trailing shift).
             dst = idleFor(cur)
             cur = fftAxisInto(cur, dst, width, height,
-                axis = 1, inverse = true, firstFlip = null, active, arena)
+                axis = 1, inverse = true, firstFlip = null, active, arena,
+                twiddleCache = twiddleCache)
             dst = idleFor(cur)
             cur = fftAxisInto(cur, dst, width, height,
-                axis = 0, inverse = true, firstFlip = null, active, arena)
+                axis = 0, inverse = true, firstFlip = null, active, arena,
+                twiddleCache = twiddleCache)
             val grey = cur.re
             arena.release(src)
             arena.release(cur.im)
@@ -927,6 +935,16 @@ class VkRawSrProcessor(context: Context) : Closeable {
     private data class ComplexLive(val re: VkImage, val im: VkImage)
 
     /**
+     * Burst-scoped FFT twiddle cache key: twiddle rows depend only on the
+     * row length and the forward/inverse direction, so every burst frame
+     * reuses the same handful of rows (< 1MB total) instead of
+     * create/upload/destroy cycles per stage per frame (each upload is a
+     * fence-waited submit). Entries are arena textures released with the
+     * burst arena; the map itself must never outlive it.
+     */
+    internal data class TwiddleKey(val n: Int, val inverse: Boolean)
+
+    /**
      * 1D FFT along [axis] ([RawSrFftPlan.stages] chain + flatten-to-
      * natural permute, + 1/n scale when [inverse]): stage passes
      * ping-pong between [src] and [dst], then the permute writes the
@@ -942,7 +960,8 @@ class VkRawSrProcessor(context: Context) : Closeable {
     private fun fftAxisInto(
         src: ComplexLive, dst: ComplexLive, width: Int, height: Int,
         axis: Int, inverse: Boolean, firstFlip: Int?,
-        active: VkSession, arena: VkArena, spare: ComplexLive? = null
+        active: VkSession, arena: VkArena, spare: ComplexLive? = null,
+        twiddleCache: MutableMap<TwiddleKey, VkImage>? = null
     ): ComplexLive {
         val n = if (axis == 0) width else height
         val chain = RawSrFftPlan.stages(n)
@@ -950,12 +969,13 @@ class VkRawSrProcessor(context: Context) : Closeable {
             require(n > 1) { "Fused mosaic load needs a non-trivial axis" }
             val sparePair = requireNotNull(spare) { "Fused mosaic load needs a spare pair" }
             require(chain.isNotEmpty())
-            fftStage(src, dst, width, height, axis, chain[0], inverse, firstFlip, active, arena)
+            fftStage(src, dst, width, height, axis, chain[0], inverse, firstFlip, active, arena,
+                twiddleCache)
             var cur = dst
             var nxt = sparePair
             for (index in 1..chain.lastIndex) {
                 fftStage(cur, nxt, width, height, axis, chain[index], inverse,
-                    firstFlip = null, active, arena)
+                    firstFlip = null, active, arena, twiddleCache)
                 val tmp = cur; cur = nxt; nxt = tmp
             }
             // cur holds the last stage output, nxt is idle.
@@ -967,7 +987,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
         var nxt = dst
         for ((index, stage) in chain.withIndex()) {
             fftStage(cur, nxt, width, height, axis, stage, inverse,
-                firstFlip = null, active, arena)
+                firstFlip = null, active, arena, twiddleCache)
             val tmp = cur; cur = nxt; nxt = tmp
         }
         // nxt is idle (or dst when the chain is empty, n == 1).
@@ -980,18 +1000,18 @@ class VkRawSrProcessor(context: Context) : Closeable {
     /**
      * One [RawSrFftPlan.Stage] (`fft_stage.glsl`): [dst] =
      * stage([src]). Twiddle rows upload per stage and release with the
-     * pass (<= 128KB each; caching across frames would pin textures for
-     * no measurable win).
+     * pass (<= 128KB each) unless [twiddleCache] is supplied, in which
+     * case rows persist for the burst (same bytes, same binds — the
+     * cache only skips the redundant create/upload/destroy round-trips).
      */
     private fun fftStage(
         src: ComplexLive, dst: ComplexLive, width: Int, height: Int,
         axis: Int, stage: RawSrFftPlan.Stage, inverse: Boolean,
-        firstFlip: Int?, active: VkSession, arena: VkArena
+        firstFlip: Int?, active: VkSession, arena: VkArena,
+        twiddleCache: MutableMap<TwiddleKey, VkImage>? = null
     ) {
-        val twM = arena.texture(stage.m, 1, GLES30.GL_RGBA32F)
-        twM.uploadRgba32f(RawSrFftPlan.twiddleRow(stage.m, inverse), active.uploads)
-        val twP = arena.texture(stage.radix, 1, GLES30.GL_RGBA32F)
-        twP.uploadRgba32f(RawSrFftPlan.twiddleRow(stage.radix, inverse), active.uploads)
+        val twM = twiddleRow(stage.m, inverse, active, arena, twiddleCache)
+        val twP = twiddleRow(stage.radix, inverse, active, arena, twiddleCache)
         try {
             active.pass("rawsr/fft_stage.glsl") {
                 sampler("u_re_in", src.re)
@@ -1009,8 +1029,33 @@ class VkRawSrProcessor(context: Context) : Closeable {
                 dispatch(width, height, 8, 8)
             }
         } finally {
-            arena.release(twM)
-            arena.release(twP)
+            // Cached rows belong to the burst arena (released with it);
+            // uncached rows release with the pass, as before.
+            if (twiddleCache == null) {
+                arena.release(twM)
+                arena.release(twP)
+            }
+        }
+    }
+
+    /**
+     * One twiddle row texture, cached per [TwiddleKey] when [cache] is
+     * supplied. Upload bytes are deterministic per key, so a cached row
+     * binds bitwise-identical contents to a fresh upload.
+     */
+    private fun twiddleRow(
+        n: Int, inverse: Boolean, active: VkSession, arena: VkArena,
+        cache: MutableMap<TwiddleKey, VkImage>?
+    ): VkImage {
+        if (cache == null) {
+            return arena.texture(n, 1, GLES30.GL_RGBA32F).also {
+                it.uploadRgba32f(RawSrFftPlan.twiddleRow(n, inverse), active.uploads)
+            }
+        }
+        return cache.getOrPut(TwiddleKey(n, inverse)) {
+            arena.texture(n, 1, GLES30.GL_RGBA32F).also {
+                it.uploadRgba32f(RawSrFftPlan.twiddleRow(n, inverse), active.uploads)
+            }
         }
     }
 
@@ -1390,12 +1435,18 @@ class VkRawSrProcessor(context: Context) : Closeable {
             // plain unpacked plane.
             val refLoaded = load(0, active, arena)
             val refCfa = refLoaded.cfa
+            // Burst-scoped FFT twiddle rows (same dims every frame):
+            // created on first use, shared by all frames, released with
+            // the arena below. Upload bytes are deterministic per key, so
+            // cached binds are bitwise-identical to fresh uploads.
+            val twiddles = mutableMapOf<TwiddleKey, VkImage>()
             // GPU FFT grey (Open Q3 option (b)) with CPU fallback
             // ([greyTexture]): the reference pads to a tile multiple
             // (circular_pad on the GPU path, host pad on fallback); the
             // pyramid adopts the texture as L0.
             val refs = pyramid(
-                greyTexture(0, config.tileSize, greyProvider, mosaicProvider, active, arena),
+                greyTexture(0, config.tileSize, greyProvider, mosaicProvider, active, arena,
+                    twiddles),
                 active, arena, config)
             onGrey(0, refs[0].id, refs[0].width, refs[0].height)
             // Kernel covariance consumes plain quad gray (no-GAT oracle
@@ -1443,7 +1494,8 @@ class VkRawSrProcessor(context: Context) : Closeable {
                     // entirely skips with nothing allocated, like a
                     // CPU-chain rejection. Cancellation still propagates.
                     val greyTex = try {
-                        greyTexture(index, null, greyProvider, mosaicProvider, active, arena)
+                        greyTexture(index, null, greyProvider, mosaicProvider, active, arena,
+                            twiddles)
                     } catch (cancelled: java.util.concurrent.CancellationException) {
                         throw cancelled
                     } catch (failure: Exception) {

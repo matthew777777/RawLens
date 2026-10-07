@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Chroma-from-luma stabilization (RawSrChromaFromLuma twin): rebuilds R/B as
-// G * smooth(R/G) / G * smooth(B/G) with a separable sigma-1.0 Gaussian
-// (radius 3) over color ratios. G passes through untouched.
-// Clamped borders, center guide floor, and Float accumulation order match the
-// CPU twin op for op (up to GPU FMA contraction, ~1ulp).
+// G + smooth(R-G) / G + smooth(B-G) with a separable sigma-1.0 Gaussian
+// (radius 3) over color differences. G passes through untouched.
+// Difference domain, not ratios (ratio smoothing explodes where G pits to
+// ~zero and sprays magenta donuts). Clamped borders, center guide floor,
+// and Float accumulation order match the CPU twin op for op (up to GPU FMA
+// contraction, ~1ulp).
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -20,10 +22,10 @@ const float K3 = 0.00443304817524;
 float kw(int o) {
     return o == 0 ? K0 : (o == 1 ? K1 : (o == 2 ? K2 : K3));
 }
-vec2 tapRatio(ivec2 t) {
+vec2 tapDiff(ivec2 t) {
     t = clamp(t, ivec2(0), u_size - ivec2(1));
     vec4 v = texelFetch(u_merged, t, 0);
-    return vec2(v.x / v.y, v.z / v.y);
+    return vec2(v.x - v.y, v.z - v.y);
 }
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -41,7 +43,7 @@ void main() {
         float hR = 0.0;
         float hB = 0.0;
         for (int ox = -3; ox <= 3; ox++) {
-            vec2 r = tapRatio(p + ivec2(ox, oy));
+            vec2 r = tapDiff(p + ivec2(ox, oy));
             float w = kw(ox < 0 ? -ox : ox);
             hR += w * r.x;
             hB += w * r.y;
@@ -50,5 +52,5 @@ void main() {
         sumR += w * hR;
         sumB += w * hB;
     }
-    imageStore(img_out, p, vec4(m.y * sumR, m.y, m.y * sumB, 1.0));
+    imageStore(img_out, p, vec4(m.y + sumR, m.y, m.y + sumB, 1.0));
 }

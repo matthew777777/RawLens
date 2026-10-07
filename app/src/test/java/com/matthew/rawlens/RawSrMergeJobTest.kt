@@ -594,4 +594,31 @@ class RawSrMergeJobTest {
         sensorPixelMode = null,
         rawBinningFactorUsed = false, activePhysicalCameraId = "wide", afState = 2, aeState = 2, lensState = 0
     )
+
+    // ---- readback firewall ----
+
+    @Test fun sanitizeStripLeavesFiniteStripsBitwiseUntouched() {
+        val rgb = floatArrayOf(0f, 0.5f, 1f, 1.25f, -0f, 4.35f)
+        val before = rgb.copyOf()
+        assertEquals(0, RawSrMergeJob.sanitizeStrip(rgb, 0, 2, 7, 1))
+        assertArrayEquals(before, rgb, 0f)
+    }
+
+    @Test fun sanitizeStripZeroesNonFiniteAndCountsThem() {
+        val rgb = floatArrayOf(
+            0.5f, Float.NaN, 1f,
+            Float.POSITIVE_INFINITY, 0.25f, Float.NEGATIVE_INFINITY
+        )
+        assertEquals(3, RawSrMergeJob.sanitizeStrip(rgb, 0, 1, 0, 2))
+        assertArrayEquals(floatArrayOf(0.5f, 0f, 1f, 0f, 0.25f, 0f), rgb, 0f)
+    }
+
+    @Test fun sanitizeStripHonorsOffsetAndLeavesNeighborsAlone() {
+        // Width 2, one row at offset 3: only indices 3..8 scan.
+        val rgb = floatArrayOf(Float.NaN, Float.NaN, Float.NaN, 0.5f, Float.NaN, 1f, 0.25f, 0f, 2f, Float.NaN)
+        assertEquals(1, RawSrMergeJob.sanitizeStrip(rgb, 3, 2, 0, 1))
+        assertTrue(rgb[0].isNaN())
+        assertTrue(rgb[9].isNaN())
+        assertArrayEquals(floatArrayOf(0.5f, 0f, 1f, 0.25f, 0f, 2f), rgb.copyOfRange(3, 9), 0f)
+    }
 }
