@@ -296,13 +296,24 @@ object RawFrameMetadataFactory {
 
     private fun Point.snapshot() = IntPointSnapshot(x, y)
 
-    private fun ColorSpaceTransform?.toDoubleValues(): ImmutableDoubleValues? = this?.let {
-        ImmutableDoubleValues(DoubleArray(9) { index ->
-            it.getElement(index / 3, index % 3).toDouble()
-        })
-    }
+    private fun ColorSpaceTransform?.toDoubleValues(): ImmutableDoubleValues? =
+        this.toImmutableDoubles()
 
-    private fun Array<Rational>?.toDoubleValues(): ImmutableDoubleValues? = this?.let {
-        ImmutableDoubleValues(DoubleArray(size) { index -> get(index).toDouble() })
-    }
+    private fun Array<Rational>?.toDoubleValues(): ImmutableDoubleValues? =
+        this.toImmutableDoubles()
+}
+
+/**
+ * Camera2 storage order shared by saves and the WYSIWYG viewfinder: ColorSpaceTransform
+ * elements in API order (frozen[column * 3 + row] = getElement(column, row)), converted
+ * to mathematical row-major exactly once by [SceneLinearColorProcessor].
+ */
+internal fun ColorSpaceTransform?.toImmutableDoubles(): ImmutableDoubleValues? = this?.let {
+    ImmutableDoubleValues(DoubleArray(9) { index ->
+        it.getElement(index / 3, index % 3).toDouble()
+    })
+}
+
+internal fun Array<Rational>?.toImmutableDoubles(): ImmutableDoubleValues? = this?.let {
+    ImmutableDoubleValues(DoubleArray(size) { index -> get(index).toDouble() })
 }

@@ -63,7 +63,12 @@ internal object RawPreviewGeometry {
         val right = (crop?.right ?: imageWidth).coerceIn(left + 2, imageWidth)
         val bottom = (crop?.bottom ?: imageHeight).coerceIn(top + 2, imageHeight)
         val step = max(2, ((max(right - left, bottom - top) + longEdge - 1) / longEdge + 1) / 2 * 2)
-        return VfQuadGeometry(left, top, (right - left) / step, (bottom - top) / step, step)
+        // Even output extents: odd widths (e.g. 409x307 at 480p on 12 MP) leave a
+        // half-texel edge column that some Adreno drivers sample as a bright/colored
+        // line at the display border. Round down (never up past the crop).
+        val width = ((right - left) / step / 2 * 2).coerceAtLeast(2)
+        val height = ((bottom - top) / step / 2 * 2).coerceAtLeast(2)
+        return VfQuadGeometry(left, top, width, height, step)
     }
 }
 
@@ -87,7 +92,7 @@ data class RawVfStats(
     val busySkips: Long,
     /** True when the last rendered frame took the zero-copy GPU path (false = NEON CPU). */
     val gpu: Boolean = false,
-    /** Tonemap actually rendered: true = JPEG/AgX-lite, false = RAW/Reinhard. */
+    /** Tonemap actually rendered: true = calibrated JPEG/AgX, false = RAW/Reinhard. */
     val jpeg: Boolean = false,
     /** Adaptive preview EV applied by the JPEG tonemap (0 in RAW mode). */
     val exposureEv: Float = 0f,
@@ -108,12 +113,18 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     SurfaceView(context, attrs), SurfaceHolder.Callback {
     /**
      * Per-frame WYSIWYG snapshot shared by the NEON CPU and GPU paths: same WB gains,
-     * same CCM, same JPEG flag + 7 AgX params, copied from volatiles in offer() so a
-     * settings change never tears a frame in flight.
+     * same CCM, same calibrated camera-to-ACEScg JPEG color, same JPEG flag + 7 AgX
+     * params, copied from volatiles in offer() so a settings change never tears a
+     * frame in flight.
      */
     private interface FrameState {
         val gains: FloatArray
         val matrix: FloatArray
+        /** Calibrated JPEG color: GLSL column-major camera-to-ACEScg (no EV folded). */
+        val camToAces: FloatArray
+        /** Camera-space neutral white for JPEG highlight neutralization. */
+        val camWhite: FloatArray
+        var displayP3: Boolean
         var jpeg: Boolean
         var exposureEv: Float
         var agxContrast: Float
@@ -144,6 +155,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var quadLeft: Int
         var quadTop: Int
         var quadStep: Int
+        /** Quad-relative row of canonical Gr: the G-even/G-odd swap tests this parity. */
+        var lensGreenRow: Int
     }
 
     /**
@@ -165,6 +178,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var epoch = 0L
         override val gains = FloatArray(4) { 1f }
         override val matrix = FloatArray(9)
+        override val camToAces = FloatArray(9)
+        override val camWhite = FloatArray(3) { 1f }
+        override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
         override var agxContrast = 1f
@@ -189,6 +205,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var quadLeft = 0
         override var quadTop = 0
         override var quadStep = 2
+        override var lensGreenRow = 0
     }
 
     private class Frame : FrameState {
@@ -208,8 +225,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var mirrored = false
         override val gains = FloatArray(4) { 1f }
         override val matrix = FloatArray(9)
-        // Cheap scene-referred JPEG snapshot: same WB/CCM as RAW, AgX-lite tonemap.
-        // Copied from volatiles in offer() so a settings change never tears a frame.
+        override val camToAces = FloatArray(9)
+        override val camWhite = FloatArray(3) { 1f }
+        // Calibrated scene-referred JPEG snapshot: same color math as the saved
+        // JPEG on the superpixel. Copied from volatiles in offer() so a settings
+        // change never tears a frame.
+        override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
         override var agxContrast = 1f
@@ -231,6 +252,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var quadLeft = 0
         override var quadTop = 0
         override var quadStep = 2
+        override var lensGreenRow = 0
     }
     private val lock = Any()
     private val free = ArrayDeque<Frame>().apply { repeat(3) { add(Frame()) } }
@@ -296,8 +318,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         private set
     /**
      * WYSIWYG render mode. False = raw-clean Reinhard preview (DNG_ONLY).
-     * True = cheap scene-referred JPEG preview: same sampled superpixel + WB/CCM,
-     * AgX-lite tonemap tracking [JpegOutputSettings]. Never ISP YUV.
+     * True = calibrated scene-referred JPEG preview: the save-path color math
+     * (neutralize -> EV -> camera-to-ACEScg -> AgX -> sRGB/P3 -> OETF -> dither)
+     * on the sampled superpixel, tracking [JpegOutputSettings]. Never ISP YUV.
      */
     @Volatile var renderJpeg = false
         private set
@@ -320,24 +343,43 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Preview highlight guards (hard p99.5 / soft p95), mirroring the save path. */
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
+    /** Display P3 JPEG target, mirrored so the VF shows the saved output gamut. */
+    @Volatile private var previewP3 = false
+    /** Calibrated color cache; snapshotRenderState runs on the camera thread only. */
+    private val calibratedColorCache = VfCalibratedColorCache()
+    /** Static DNG calibration, re-read only when the characteristics identity changes. */
+    private var calibCharacteristics: CameraCharacteristics? = null
+    private var calibStaticMats: List<DoubleArray?> = listOf(null, null, null, null, null, null)
+    private var calibIlluminant1: Int? = null
+    private var calibIlluminant2: Int? = null
     /**
-     * Applied adaptive preview EV (correction × strength, EMA-smoothed): the JPEG
-     * tonemap multiplies scene-linear rgb by exp2 of this, exactly where the save
-     * path applies its development exposure. Always 0 in RAW mode.
+     * Applied adaptive preview EV (correction × strength, per-frame smoothed):
+     * the JPEG tonemap multiplies scene-linear rgb by exp2 of this, exactly
+     * where the save path applies its development exposure. Always 0 in RAW
+     * mode. Ramps toward [targetPreviewEv] every offered frame so pans glide
+     * instead of stepping at the 2 Hz estimator cadence.
      */
     @Volatile private var previewExposureEv = 0f
+    /** Latest 2 Hz estimator output; camera thread only. */
+    private var targetPreviewEv = 0f
+    /** Smoothed calibrated color the JPEG uniforms sample; camera thread only. */
+    private val smoothCamToAces = FloatArray(9)
+    private val smoothCamWhite = FloatArray(3) { 1f }
+    private var smoothColorSeeded = false
+    private var lastSmoothMs = 0L
     /** Save-path strength rule (AUTO/ZSL = auto?1:0, PROGRAM = slider, MANUAL = 0). */
     @Volatile private var previewExposureStrength = 0f
     /** Scratch for the 2 Hz preview-EV estimate; camera thread only. */
     private val previewEvScratch = FloatArray(VfGpuImport.MAX_PREVIEW_SAMPLES)
     private var lastPreviewEvMs = 0L
     private var previewEvSeeded = false
-    @Volatile private var sampleIntervalMs = 16L
+    @Volatile private var sampleIntervalMs = VfResolution.RATE_FULL_MS
     /**
-     * Floor for [sampleIntervalMs]: 16 ms normally, raised by record mode.
+     * Floor for [sampleIntervalMs]: 30 fps normally, raised by record mode
+     * (10 fps) or power-save mode (15 fps) via [updateRateFloor].
      * Volatile: written from the UI thread, read on the camera thread.
      */
-    @Volatile private var minSampleIntervalMs = 16L
+    @Volatile private var minSampleIntervalMs = VfResolution.RATE_FULL_MS
     /**
      * True while a Direct-Log take owns the shared Vulkan queue: the VF
      * drops to 480p @<=10 fps so record submits never wait on a VF
@@ -346,6 +388,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      * restores on exit. Any thread.
      */
     @Volatile private var recordMode = false
+    /**
+     * Power-save mode (system battery saver): the VF drops to 15 fps at most
+     * 640 long edge. Composes with [recordMode] (record wins); the user edge
+     * is never mutated, the cap applies in offer(). Any thread.
+     */
+    @Volatile private var powerSave = false
     private var savedLongEdge = VfResolution.MAX
     /**
      * True from the moment an offer posts a draw until that draw finishes
@@ -356,6 +404,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     @Volatile private var vfWorkOutstanding = false
     private var lastSlowOfferLogMs = 0L
     private var lastSlowRenderLogMs = 0L
+    /** Field-telemetry cadence gate for [noteFrameRendered]; GL worker only. */
+    private var lastVfStatsLogMs = 0L
     var onStarvation: (() -> Unit)? = null
     private var recoveryAttempts = 0
     private var recoverySinceMs = SystemClock.elapsedRealtime()
@@ -409,6 +459,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var vkTexture = 0
     private var gpuGainsLoc = -1
     private var gpuColorLoc = -1
+    private var gpuCamToAcesLoc = -1
+    private var gpuCameraWhiteLoc = -1
+    private var gpuDisplayP3Loc = -1
     private var gpuPositionLoc = -1
     private var gpuUvLoc = -1
     private var gpuJpegLoc = -1
@@ -432,9 +485,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuLensSizeLoc = -1
     private var gpuLensActiveLoc = -1
     private var gpuApplyLensLoc = -1
+    private var gpuLensGreenRowLoc = -1
     // Cached GL locations: string lookups once per link, not once per frame.
     private var gainsLoc = -1
     private var colorLoc = -1
+    private var camToAcesLoc = -1
+    private var cameraWhiteLoc = -1
+    private var displayP3Loc = -1
     private var positionLoc = -1
     private var uvLoc = -1
     private var jpegLoc = -1
@@ -451,6 +508,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var lensSizeLoc = -1
     private var lensActiveLoc = -1
     private var applyLensLoc = -1
+    private var lensGreenRowLoc = -1
     private var quadBaseLoc = -1
     private var frameSizeLoc = -1
     private var stepLoc = -1
@@ -470,6 +528,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Last camera-thread lens snapshot, reused while the HAL map is unchanged. */
     private var lensCacheHash = 0L
     private var lensCacheSnapshot: VfLensSnapshot? = null
+    /** 1 Hz re-verify gate for the cached snapshot (camera thread only). */
+    private var lensRecheckMs = 0L
+    private var lensRecheckChars: CameraCharacteristics? = null
     // Allocated RGBA storage: reuse via glTexSubImage2D when size is unchanged.
     private var texWidth = 0
     private var texHeight = 0
@@ -548,10 +609,15 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         statStarved = false
         statGpuPath = false
         previewExposureEv = 0f
+        targetPreviewEv = 0f
         previewEvSeeded = false
+        smoothColorSeeded = false
+        lastSmoothMs = 0L
         lastPreviewEvMs = 0L
         lensCacheHash = 0L
         lensCacheSnapshot = null
+        lensRecheckMs = 0L
+        lensRecheckChars = null
         // Session-scoped stickiness only: a new session re-probes the GPU path so a
         // transient gralloc storm never pins the viewfinder to the NEON copy forever.
         gpuDisabledForSession = false
@@ -630,14 +696,33 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         if (active) {
             savedLongEdge = targetLongEdge
             targetLongEdge = VfResolution.MIN
-            minSampleIntervalMs = RECORD_SAMPLE_INTERVAL_MS
-            sampleIntervalMs = maxOf(sampleIntervalMs, RECORD_SAMPLE_INTERVAL_MS)
+            updateRateFloor()
             Log.i("RawViewfinder", "VF record mode on (480p @<=10fps)")
         } else {
             targetLongEdge = savedLongEdge.coerceIn(VfResolution.MIN, VfResolution.MAX)
-            minSampleIntervalMs = 16L
+            updateRateFloor()
             Log.i("RawViewfinder", "VF record mode off (edge=$targetLongEdge)")
         }
+    }
+
+    /**
+     * Power-save throttle: 15 fps at most 640 long edge while the system
+     * battery saver is on. Record mode wins when both are active. The user
+     * edge is untouched; the cap applies per offer. Safe from any thread.
+     */
+    fun setPowerSave(active: Boolean) {
+        if (powerSave == active) return
+        powerSave = active
+        updateRateFloor()
+        Log.i("RawViewfinder", "VF power-save ${if (active) "on (<=640p @<=15fps)" else "off"}")
+    }
+
+    /** Recompute the offer-rate floor from record/power-save policy. Any thread. */
+    private fun updateRateFloor() {
+        val floor = VfResolution.rateFloorMs(recordMode, powerSave)
+        minSampleIntervalMs = floor
+        sampleIntervalMs = maxOf(sampleIntervalMs, floor)
+        if (!recordMode && !powerSave) sampleIntervalMs = floor
     }
 
     /**
@@ -690,6 +775,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         highlightShoulder = resolved.highlightShoulder
         previewHeadroom = resolved.highlightHeadroom
         previewSoftHeadroom = resolved.highlightSoftHeadroom
+        previewP3 = resolved.displayP3
     }
 
     fun setPreviewTuning(tuning: AdaptiveExposureTuning) {
@@ -715,7 +801,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
             val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             val crop = result?.get(CaptureResult.SCALER_CROP_REGION) ?: active
-            val longEdge = targetLongEdge.coerceIn(VfResolution.MIN, VfResolution.MAX)
+            val longEdge = VfResolution.effectiveEdge(targetLongEdge, recordMode, powerSave)
             val gpuGeo = RawPreviewGeometry.quadGeometry(image.width, image.height, crop, longEdge)
             statRawWidth = image.width
             statRawHeight = image.height
@@ -740,10 +826,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     null
                 }
             } else null
-            if (probing) inputSample?.let {
-                var blackMax = 0f
-                for (b in levels) if (b > blackMax) blackMax = b
-                vfInputSignal = VfInputSignal(it.first, blackMax.toInt(), white.toInt())
+            if (probing) {
+                inputSignalFromSample(inputSample, levels, white)?.let { vfInputSignal = it }
             }
             if (!vfDiagLogged) {
                 vfDiagLogged = true
@@ -877,6 +961,17 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 false, null, null
             )
         }
+        // 1 Hz re-verify: skip the per-frame gain-copy + content hash while a
+        // snapshot is cached. Active bounds are session-invariant for one
+        // characteristics instance, so the cached verdict stays exact.
+        val cachedSnap = lensCacheSnapshot
+        if (cachedSnap != null && !VfGpuImport.shouldRecheckLensMap(
+                SystemClock.elapsedRealtime(), lensRecheckMs,
+                lensRecheckChars === c, hasCached = true
+            )
+        ) {
+            return cachedSnap
+        }
         val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val left = active?.left ?: 0
         val top = active?.top ?: 0
@@ -900,6 +995,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             // array + model) while size, content and active bounds are unchanged
             // instead of reallocating on every camera-thread frame.
             val hash = VfGpuImport.lensContentKey(cols, rows, gains)
+            lensRecheckMs = SystemClock.elapsedRealtime()
+            lensRecheckChars = c
             val cached = lensCacheSnapshot
             if (hash == lensCacheHash && cached != null && cached.apply &&
                 cached.left == left && cached.top == top &&
@@ -986,7 +1083,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             channels.copyInto(frame.channels)
             levels.copyInto(frame.levels)
             frame.white = white
-            snapshotRenderState(c, result, channels, frame)
+            snapshotRenderState(c, result, channels, frame, now)
             frame.applyLens(lens, left, top, step)
             frame.timestamp = now
             // Leave camera-handler time for metadata, shutter and timeout callbacks on
@@ -1034,7 +1131,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             VfCpuNeon.copy(plane.buffer, plane.rowStride, plane.pixelStride, left, top,
                 width, height, step, channels, levels, white, frame.pixels)
             noteNeonSample(copyStartedNs, width, height)
-            snapshotRenderState(c, result, channels, frame)
+            snapshotRenderState(c, result, channels, frame, now)
             frame.applyLens(lens, left, top, step)
             frame.timestamp = now
             // Leave camera-handler time for metadata, shutter and timeout callbacks on
@@ -1081,8 +1178,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     /**
      * 2 Hz adaptive preview-EV refresh: the same percentile statistic the saved
-     * JPEG uses, on a coarse grid (≤4096 samples, sub-millisecond). EMA-smoothed
-     * so 2 Hz steps never flicker the preview. Camera thread only.
+     * JPEG uses, on a coarse grid (≤4096 samples, sub-millisecond). Writes the
+     * target only; snapshotRenderState ramps the applied value toward it every
+     * offered frame so pans glide instead of stepping. Camera thread only.
      */
     private fun updatePreviewExposure(
         plane: Image.Plane, left: Int, top: Int, width: Int, height: Int, step: Int,
@@ -1091,7 +1189,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         val strength = previewExposureStrength
         if (!renderJpeg || strength <= 0f) {
             if (previewExposureEv != 0f) previewExposureEv = 0f
+            targetPreviewEv = 0f
             previewEvSeeded = false
+            smoothColorSeeded = false
             return
         }
         if (now - lastPreviewEvMs < PREVIEW_EV_INTERVAL_MS) return
@@ -1107,17 +1207,17 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         )
         if (!correction.isFinite()) return
         val applied = (correction * strength).toFloat().coerceIn(-MAX_PREVIEW_EV, MAX_PREVIEW_EV)
-        previewExposureEv = if (!previewEvSeeded) {
+        targetPreviewEv = applied
+        if (!previewEvSeeded) {
+            // Snap on seed: no startup ramp from 0 on session/mode entry.
             previewEvSeeded = true
-            applied
-        } else {
-            previewExposureEv * 0.5f + applied * 0.5f
+            previewExposureEv = applied
         }
     }
 
     /** Shared WYSIWYG snapshot: identical gains/matrix/JPEG/AgX for both paths. */
     private fun snapshotRenderState(
-        c: CameraCharacteristics, result: CaptureResult?, channels: IntArray, out: FrameState
+        c: CameraCharacteristics, result: CaptureResult?, channels: IntArray, out: FrameState, now: Long
     ) {
         val gains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
         val rawGains = floatArrayOf(
@@ -1146,9 +1246,60 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             vfSanitizeLogged = true
             Log.w("RawViewfinder", "VF sanitized non-finite render gains/matrix (gains=${rawGains.joinToString(",")})")
         }
+        // Calibrated JPEG color from the same characteristics/result keys the save
+        // path freezes into RawFrameMetadata. Skipped entirely in RAW mode (the
+        // Reinhard branch never samples these uniforms); in JPEG mode the static
+        // DNG matrices re-read only when the characteristics identity changes and
+        // the cache re-resolves only when the neutral/gains actually move, so the
+        // steady-state cost is one result lookup plus small-array comparisons.
+        // out.gains/out.matrix above are the sanitized HAL values the fallback needs.
+        if (renderJpeg) {
+            if (c !== calibCharacteristics) {
+                calibCharacteristics = c
+                calibStaticMats = listOf(
+                    c.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)?.toImmutableDoubles()?.toDoubleArray(),
+                    c.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)?.toImmutableDoubles()?.toDoubleArray(),
+                    c.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.toImmutableDoubles()?.toDoubleArray(),
+                    c.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.toImmutableDoubles()?.toDoubleArray(),
+                    c.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.toImmutableDoubles()?.toDoubleArray(),
+                    c.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.toImmutableDoubles()?.toDoubleArray()
+                )
+                calibIlluminant1 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
+                calibIlluminant2 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
+            }
+            val neutralNow = result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { rationals ->
+                DoubleArray(rationals.size) { rationals[it].toDouble() }
+            }
+            val gainsSensor = gains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+            val calibrated = calibratedColorCache.resolve(
+                calibStaticMats, calibIlluminant1, calibIlluminant2,
+                neutralNow, gainsSensor, out.gains, out.matrix
+            )
+            // Per-frame approach toward the 2 Hz EV target and the AWB-gated
+            // color target: pans ramp continuously instead of stepping.
+            val dtMs = if (lastSmoothMs == 0L) 0L else (now - lastSmoothMs).coerceIn(0L, 1000L)
+            lastSmoothMs = now
+            if (previewEvSeeded) {
+                previewExposureEv = VfGpuImport.smoothToward(previewExposureEv, targetPreviewEv, dtMs)
+            }
+            if (!smoothColorSeeded) {
+                smoothColorSeeded = true
+                calibrated.cameraToAcescgColumnMajor.copyInto(smoothCamToAces)
+                calibrated.cameraWhiteNormalized.copyInto(smoothCamWhite)
+            } else {
+                for (i in 0..8) smoothCamToAces[i] = VfGpuImport.smoothToward(
+                    smoothCamToAces[i], calibrated.cameraToAcescgColumnMajor[i], dtMs)
+                for (i in 0..2) smoothCamWhite[i] = VfGpuImport.smoothToward(
+                    smoothCamWhite[i], calibrated.cameraWhiteNormalized[i], dtMs)
+            }
+            smoothCamToAces.copyInto(out.camToAces)
+            smoothCamWhite.copyInto(out.camWhite)
+        }
         // Snapshot the WYSIWYG render state with the frame so AgX slider moves
         // and RAW/JPEG switches never tear a frame in flight.
         out.jpeg = renderJpeg
+        out.displayP3 = previewP3
+        out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
         out.exposureEv = previewExposureEv
         out.agxContrast = agxContrast
         out.agxSaturation = agxSaturation
@@ -1180,9 +1331,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         } else if (statFrameMs == 0f) {
             statFrameMs = costMs
         }
-        // 30 Hz budget: floor at one vsync (16 ms), back off only when the
-        // copy itself exceeds it. Previously max(34, copy*2) capped at ~15-25 fps.
-        // Record mode raises the floor (never lowered here).
+        // 30 Hz budget: floor sits just under the 33.3 ms camera period so a
+        // 30 fps stream locks every frame; back off only when the copy itself
+        // exceeds it. Previously max(34, copy*2) capped at ~15-25 fps.
+        // Record/power-save modes raise the floor (never lowered here).
         sampleIntervalMs = if (throttleCpuCopy) max(minSampleIntervalMs, (SystemClock.elapsedRealtime() - now) * 2)
         else minSampleIntervalMs
     }
@@ -1218,6 +1370,16 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         statGlActive = true
         statStarved = false
         statGpuPath = gpu
+        // Field telemetry for fps-drop diagnosis: rendered cadence next to the
+        // camera's own interval separates app-side drops from a slow sensor
+        // (long night exposures deliver <30 fps no viewfinder can exceed).
+        if (renderNow - lastVfStatsLogMs >= VF_STATS_LOG_INTERVAL_MS) {
+            lastVfStatsLogMs = renderNow
+            Log.i("RawViewfinder", String.format(java.util.Locale.US,
+                "VF stats: fps=%.1f gpu=%b jpeg=%b engine=%s vf=%dx%d camInterval=%dms",
+                statFps, gpu, renderJpeg, engineMode.name,
+                statVfWidth, statVfHeight, expectedIntervalMs))
+        }
         stallCleared = false
         post { if (frameEpoch == synchronized(lock) { epoch } && SystemClock.elapsedRealtime() - lastDisplayed < max(2000L, expectedIntervalMs * 3)) alpha = 1f }
     }
@@ -1226,6 +1388,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun applyCpuTonemap(state: FrameState, width: Int, height: Int) {
         glUniform4fv(gainsLoc, 1, state.gains, 0)
         glUniformMatrix3fv(colorLoc, 1, false, state.matrix, 0)
+        glUniformMatrix3fv(camToAcesLoc, 1, false, state.camToAces, 0)
+        glUniform3fv(cameraWhiteLoc, 1, state.camWhite, 0)
+        glUniform1i(displayP3Loc, if (state.displayP3) 1 else 0)
         glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
         glUniform1f(agxContrastLoc, state.agxContrast)
@@ -1261,6 +1426,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             state.lensRight, state.lensBottom
         )
         glUniform1i(applyLensLoc, if (active) 1 else 0)
+        glUniform1i(lensGreenRowLoc, state.lensGreenRow)
         glUniform2i(quadBaseLoc, state.quadLeft, state.quadTop)
         glUniform2i(frameSizeLoc, width, height)
         glUniform1i(stepLoc, state.quadStep)
@@ -1330,6 +1496,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.lensRight, frame.lensBottom
         )
         glUniform1i(gpuApplyLensLoc, if (active) 1 else 0)
+        glUniform1i(gpuLensGreenRowLoc, frame.lensGreenRow)
     }
 
     /** Rotation/mirror UVs + fullscreen quad attribs. GL worker only. */
@@ -1346,6 +1513,11 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             coordinateRotation = rotation
             coordinateMirrored = mirrored
         }
+        // Rewind every draw: some drivers advance the NIO position on
+        // glVertexAttribPointer, which would shift the quad/UVs to the display
+        // border on the second frame onward.
+        vertices.position(0)
+        coordinates.position(0)
         glEnableVertexAttribArray(position); glEnableVertexAttribArray(uv)
         glVertexAttribPointer(position, 2, GL_FLOAT, false, 0, vertices)
         glVertexAttribPointer(uv, 2, GL_FLOAT, false, 0, coordinates)
@@ -1522,6 +1694,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 }
             }
             try {
+                val toneStarted = SystemClock.elapsedRealtime()
                 glViewport(0, 0, viewportWidth, viewportHeight)
                 if (!bayer) {
                     glUseProgram(program)
@@ -1554,6 +1727,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform4fv(gpuInvRangeLoc, 1, invRange, 0)
                     glUniform4fv(gpuGainsLoc, 1, frame.gains, 0)
                     glUniformMatrix3fv(gpuColorLoc, 1, false, frame.matrix, 0)
+                    glUniformMatrix3fv(gpuCamToAcesLoc, 1, false, frame.camToAces, 0)
+                    glUniform3fv(gpuCameraWhiteLoc, 1, frame.camWhite, 0)
+                    glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)
                     glUniform1f(gpuAgxSaturationLoc, frame.agxSaturation)
@@ -1573,7 +1749,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 // dispatch must not overwrite pixels still sampled by this GL draw.
                 // A post-swap frame fence/drop heuristic is not a cross-API handoff.
                 glFinish()
+                val toneMs = SystemClock.elapsedRealtime() - toneStarted
                 checkPresent()
+                val swapMs = SystemClock.elapsedRealtime() - toneStarted - toneMs
                 insertFrameFence()
                 synchronized(lock) { if (frame.epoch == epoch) lastDisplayed = frame.timestamp }
                 if (bayer) consecutiveGpuFailures = 0 else {
@@ -1592,7 +1770,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 val drawMs = drawFinished - drawStarted
                 if (drawMs >= 34L && drawFinished - lastSlowRenderLogMs >= 1000L) {
                     lastSlowRenderLogMs = drawFinished
-                    Log.i("RawViewfinder", "Slow RAW draw: total=${drawMs}ms compute=${computeMs}ms age=${drawStarted - frame.timestamp}ms")
+                    Log.i("RawViewfinder", "Slow RAW draw: total=${drawMs}ms compute=${computeMs}ms tone=${toneMs}ms swap=${swapMs}ms age=${drawStarted - frame.timestamp}ms")
                 }
             } finally {
                 // Cached export images outlive the draw (destroyed on export
@@ -1934,6 +2112,19 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         check(surface != EGL14.EGL_NO_SURFACE && eglContext != EGL14.EGL_NO_CONTEXT) { "VF EGL init failed (ES3+ES2)" }
         Log.i("RawViewfinder", "VF GL ES" + if (glEs3) "3 (fences on)" else "2 fallback (fences off)")
+        try {
+            val surfWidth = IntArray(1); val surfHeight = IntArray(1)
+            EGL14.eglQuerySurface(display, surface, EGL14.EGL_WIDTH, surfWidth, 0)
+            EGL14.eglQuerySurface(display, surface, EGL14.EGL_HEIGHT, surfHeight, 0)
+            if (surfWidth[0] != viewportWidth || surfHeight[0] != viewportHeight) {
+                Log.w("RawViewfinder", "VF EGL size ${surfWidth[0]}x${surfHeight[0]} != viewport ${viewportWidth}x$viewportHeight; syncing viewport")
+                viewportWidth = surfWidth[0].coerceAtLeast(1)
+                viewportHeight = surfHeight[0].coerceAtLeast(1)
+            } else {
+                Log.i("RawViewfinder", "VF EGL surface ${surfWidth[0]}x${surfHeight[0]} matches viewport")
+            }
+        } catch (_: Exception) {
+        }
         // Let SurfaceFlinger pace this window. swapInterval=0 flooded the Mali
         // BLAST queue during SR work, producing NO_BUFFER_AVAILABLE/fence storms.
         check(EGL14.eglSwapInterval(display, 1)) { "VF swap interval setup failed" }
@@ -1950,9 +2141,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         program = glCreateProgram(); glAttachShader(program, vertex); glAttachShader(program, fragment); glLinkProgram(program)
         glDeleteShader(vertex); glDeleteShader(fragment)
         val linked = IntArray(1); glGetProgramiv(program, GL_LINK_STATUS, linked, 0); check(linked[0] != 0)
-        // Cache once per link: superpixel display uses mediump CCM/gamma (Mali-friendly).
+        // Cache once per link: the tonemap runs highp where the fragment shader
+        // supports it so the JPEG branch matches save-path AgX bit-shape.
         gainsLoc = glGetUniformLocation(program, "gains")
         colorLoc = glGetUniformLocation(program, "color")
+        camToAcesLoc = glGetUniformLocation(program, "u_camToAces")
+        cameraWhiteLoc = glGetUniformLocation(program, "u_cameraWhite")
+        displayP3Loc = glGetUniformLocation(program, "u_displayP3")
         positionLoc = glGetAttribLocation(program, "position")
         uvLoc = glGetAttribLocation(program, "uv")
         jpegLoc = glGetUniformLocation(program, "u_jpeg")
@@ -1969,15 +2164,18 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         lensSizeLoc = glGetUniformLocation(program, "u_lensSize")
         lensActiveLoc = glGetUniformLocation(program, "u_lensActive")
         applyLensLoc = glGetUniformLocation(program, "u_applyLens")
+        lensGreenRowLoc = glGetUniformLocation(program, "u_lensGreenRow")
         quadBaseLoc = glGetUniformLocation(program, "u_quadBase")
         frameSizeLoc = glGetUniformLocation(program, "u_frameSize")
         stepLoc = glGetUniformLocation(program, "u_step")
-        check(gainsLoc >= 0 && colorLoc >= 0 && positionLoc >= 0 && uvLoc >= 0 &&
+        check(gainsLoc >= 0 && colorLoc >= 0 && camToAcesLoc >= 0 && cameraWhiteLoc >= 0 &&
+            displayP3Loc >= 0 && positionLoc >= 0 && uvLoc >= 0 &&
             jpegLoc >= 0 && agxContrastLoc >= 0 && agxSaturationLoc >= 0 && agxPurityLoc >= 0 &&
             agxHueLoc >= 0 && agxShadowEvLoc >= 0 && agxHighlightEvLoc >= 0 && agxGamutLoc >= 0 &&
             highlightShoulderLoc >= 0 &&
             exposureEvLoc >= 0 &&
             lensLoc >= 0 && lensSizeLoc >= 0 && lensActiveLoc >= 0 && applyLensLoc >= 0 &&
+            lensGreenRowLoc >= 0 &&
             quadBaseLoc >= 0 && frameSizeLoc >= 0 && stepLoc >= 0) { "VF uniforms missing" }
         texWidth = 0
         texHeight = 0
@@ -2050,6 +2248,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             val linked = IntArray(1); glGetProgramiv(id, GL_LINK_STATUS, linked, 0); check(linked[0] != 0)
             gpuGainsLoc = glGetUniformLocation(id, "gains")
             gpuColorLoc = glGetUniformLocation(id, "color")
+            gpuCamToAcesLoc = glGetUniformLocation(id, "u_camToAces")
+            gpuCameraWhiteLoc = glGetUniformLocation(id, "u_cameraWhite")
+            gpuDisplayP3Loc = glGetUniformLocation(id, "u_displayP3")
             gpuPositionLoc = glGetAttribLocation(id, "position")
             gpuUvLoc = glGetAttribLocation(id, "uv")
             gpuJpegLoc = glGetUniformLocation(id, "u_jpeg")
@@ -2073,14 +2274,17 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             gpuLensSizeLoc = glGetUniformLocation(id, "u_lensSize")
             gpuLensActiveLoc = glGetUniformLocation(id, "u_lensActive")
             gpuApplyLensLoc = glGetUniformLocation(id, "u_applyLens")
-            check(gpuGainsLoc >= 0 && gpuColorLoc >= 0 && gpuPositionLoc >= 0 && gpuUvLoc >= 0 &&
+            gpuLensGreenRowLoc = glGetUniformLocation(id, "u_lensGreenRow")
+            check(gpuGainsLoc >= 0 && gpuColorLoc >= 0 && gpuCamToAcesLoc >= 0 && gpuCameraWhiteLoc >= 0 &&
+                gpuDisplayP3Loc >= 0 && gpuPositionLoc >= 0 && gpuUvLoc >= 0 &&
                 gpuJpegLoc >= 0 && gpuAgxContrastLoc >= 0 && gpuAgxSaturationLoc >= 0 && gpuAgxPurityLoc >= 0 &&
                 gpuAgxHueLoc >= 0 && gpuAgxShadowEvLoc >= 0 && gpuAgxHighlightEvLoc >= 0 && gpuAgxGamutLoc >= 0 &&
                 gpuHighlightShoulderLoc >= 0 &&
                 gpuExposureEvLoc >= 0 &&
                 gpuBayerLoc >= 0 && gpuQuadBaseLoc >= 0 && gpuFrameSizeLoc >= 0 && gpuStepLoc >= 0 &&
                 gpuChansLoc >= 0 && gpuBlackLoc >= 0 && gpuInvRangeLoc >= 0 &&
-                gpuLensLoc >= 0 && gpuLensSizeLoc >= 0 && gpuLensActiveLoc >= 0 && gpuApplyLensLoc >= 0) { "VF GPU uniforms missing" }
+                gpuLensLoc >= 0 && gpuLensSizeLoc >= 0 && gpuLensActiveLoc >= 0 && gpuApplyLensLoc >= 0 &&
+                gpuLensGreenRowLoc >= 0) { "VF GPU uniforms missing" }
             gpuProgram = id
             val ids = IntArray(1); glGenTextures(1, ids, 0); gpuBayerTexture = ids[0]
             glBindTexture(GL_TEXTURE_2D, gpuBayerTexture)
@@ -2130,32 +2334,34 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             EGL14.eglReleaseThread()
         }
         surface = EGL14.EGL_NO_SURFACE; eglContext = EGL14.EGL_NO_CONTEXT; display = EGL14.EGL_NO_DISPLAY
-        gainsLoc = -1; colorLoc = -1; positionLoc = -1; uvLoc = -1
+        gainsLoc = -1; colorLoc = -1; camToAcesLoc = -1; cameraWhiteLoc = -1; displayP3Loc = -1
+        positionLoc = -1; uvLoc = -1
         jpegLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
         agxHueLoc = -1; agxShadowEvLoc = -1; agxHighlightEvLoc = -1; agxGamutLoc = -1
         highlightShoulderLoc = -1
         exposureEvLoc = -1
-        lensLoc = -1; lensSizeLoc = -1; lensActiveLoc = -1; applyLensLoc = -1
+        lensLoc = -1; lensSizeLoc = -1; lensActiveLoc = -1; applyLensLoc = -1; lensGreenRowLoc = -1
         quadBaseLoc = -1; frameSizeLoc = -1; stepLoc = -1
         lensTexture = 0; lensTexCols = 0; lensTexRows = 0
         lensUpTexture = 0; lensUpCols = 0; lensUpRows = 0; lensUpHash = 0L
         texWidth = 0; texHeight = 0
         gpuProgram = 0; gpuBayerTexture = 0; vkTexture = 0
-        gpuGainsLoc = -1; gpuColorLoc = -1; gpuPositionLoc = -1; gpuUvLoc = -1
+        gpuGainsLoc = -1; gpuColorLoc = -1; gpuCamToAcesLoc = -1; gpuCameraWhiteLoc = -1
+        gpuDisplayP3Loc = -1; gpuPositionLoc = -1; gpuUvLoc = -1
         gpuJpegLoc = -1; gpuAgxContrastLoc = -1; gpuAgxSaturationLoc = -1; gpuAgxPurityLoc = -1
         gpuAgxHueLoc = -1; gpuAgxShadowEvLoc = -1; gpuAgxHighlightEvLoc = -1; gpuAgxGamutLoc = -1
         gpuHighlightShoulderLoc = -1
         gpuExposureEvLoc = -1
         gpuBayerLoc = -1; gpuQuadBaseLoc = -1; gpuFrameSizeLoc = -1; gpuStepLoc = -1
         gpuChansLoc = -1; gpuBlackLoc = -1; gpuInvRangeLoc = -1
-        gpuLensLoc = -1; gpuLensSizeLoc = -1; gpuLensActiveLoc = -1; gpuApplyLensLoc = -1
+        gpuLensLoc = -1; gpuLensSizeLoc = -1; gpuLensActiveLoc = -1; gpuApplyLensLoc = -1; gpuLensGreenRowLoc = -1
     }
 
     companion object {
         // WYSIWYG fragment shaders (CPU ESSL 1.00 + GPU ESSL 3.00) are composed from
         // shared pieces in VfGpuImport so both paths run the identical tonemap tail:
         // u_jpeg == 0 is the raw-clean Reinhard preview (+1 EV) with hardware
-        // lens-shading, otherwise the cheap scene-referred AgX-lite preview tracking
+        // lens-shading, otherwise the calibrated save-path AgX preview tracking
         // JpegOutputSettings. No AMaZE detail, denoise or grain: those stay save-only.
         /** Preview-EV refresh cadence: the percentile statistic is stable at 2 Hz. */
         private const val PREVIEW_EV_INTERVAL_MS = 500L
@@ -2163,7 +2369,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         private const val MAX_PREVIEW_EV = 1.5f
         /** NEON sampler average cadence: one line per 5 s of fallback frames. */
         private const val NEON_LOG_INTERVAL_MS = 5000L
-        /** Record-mode offer floor: 10 fps VF while a take owns the GPU. */
+        /** VF stats telemetry cadence: one fps/mode line per 10 s of preview. */
+        private const val VF_STATS_LOG_INTERVAL_MS = 10000L
+        /** Record-mode offer floor lives in [VfResolution] power policy (10 fps). */
+        @Deprecated("Use VfResolution.RATE_RECORD_MS", ReplaceWith("VfResolution.RATE_RECORD_MS"))
         const val RECORD_SAMPLE_INTERVAL_MS = 100L
 
         /**
@@ -2179,6 +2388,25 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
         /** Black-output probe verdict for a Vulkan tier. */
         internal enum class VfTierProbe { VERIFIED, INCONCLUSIVE, BROKEN }
+
+        /**
+         * Input-signal reading for tier black-output probation from a raw-code
+         * sample triple (min, max, mean). The probe convicts on
+         * strong input + black output, so the signal carries the MAXIMUM
+         * sample: feeding the minimum (which sits at black level in every
+         * scene, dark or bright) wedges every verdict at INCONCLUSIVE, and
+         * a black tier then presents forever while the next tier in the
+         * chain never engages. Null sample (sampler threw) yields null and
+         * the caller keeps the previous signal.
+         */
+        internal fun inputSignalFromSample(
+            sample: Triple<Int, Int, Long>?, levels: FloatArray, white: Float
+        ): VfInputSignal? {
+            sample ?: return null
+            var blackMax = 0f
+            for (b in levels) if (b > blackMax) blackMax = b
+            return VfInputSignal(sample.second, blackMax.toInt(), white.toInt())
+        }
 
         /**
          * Tri-state tier probe. Strong input + black output = BROKEN (latch the
@@ -2207,8 +2435,20 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         worker.post {
-            viewportWidth = width.coerceAtLeast(1)
-            viewportHeight = height.coerceAtLeast(1)
+            val newWidth = width.coerceAtLeast(1)
+            val newHeight = height.coerceAtLeast(1)
+            if (newWidth != viewportWidth || newHeight != viewportHeight) {
+                Log.i("RawViewfinder", "VF surface changed ${viewportWidth}x$viewportHeight -> ${newWidth}x$newHeight")
+                viewportWidth = newWidth
+                viewportHeight = newHeight
+                // EGL window surfaces do not reliably track SurfaceView size changes on
+                // all drivers (stale 1080x2400 buffers after layout to 1080x1613 displace
+                // the image with a viewport mismatch). Recreate so the next draw binds
+                // the new size instead of rendering into a stale surface.
+                if (surface != EGL14.EGL_NO_SURFACE) {
+                    releaseGl()
+                }
+            }
             window = holder.surface
             hasSurface = holder.surface.isValid
         }
