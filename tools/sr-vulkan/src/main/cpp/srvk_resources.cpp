@@ -39,6 +39,11 @@ struct SrvkPipeline {
     // Per-binding image kind (SRVK_SAMPLED/STORAGE, -1 unset), indexed by
     // descriptor binding. Bindings are small (<= 32 in every SR shader).
     int kinds[40];
+    // Per-binding image handle from the last bind (0 = unbound). Lets the
+    // first dispatch transition fresh UNDEFINED images to GENERAL (see
+    // srvk_dispatch); images are idle across fence-waited submits, so the
+    // recorded handles stay valid until the next bind or image destroy.
+    uint64_t bound[40];
 };
 
 static int format_info(int format, VkFormat* vk_format, size_t* texel) {
@@ -276,6 +281,14 @@ static void transition(VkCommandBuffer cmd, VkImage image, VkImageLayout old_lay
     if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED && new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
         dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED && new_layout == VK_IMAGE_LAYOUT_GENERAL) {
+        // First-use transition for dispatch-only outputs (no upload ever
+        // touches them): no source access exists, the compute stage both
+        // acquires and writes. Without this arm the first storage write
+        // lands on an UNDEFINED image, which is spec-illegal and surfaces
+        // as garbage/NaN texels on strict drivers.
+        dst_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
                new_layout == VK_IMAGE_LAYOUT_GENERAL) {
         src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -671,6 +684,7 @@ int srvk_bind_image(SrvkContext* ctx, uint64_t pipe_handle, int binding, uint64_
                                : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo = &info;
     vkUpdateDescriptorSets(ctx->device, 1, &write, 0, NULL);
+    pipe->bound[binding] = img_handle;
     return 0;
 }
 
@@ -695,6 +709,19 @@ int srvk_dispatch(SrvkContext* ctx, uint64_t pipe_handle, int gx, int gy, int gz
     }
     VkCommandBuffer cmd;
     if (alloc_cmd(ctx, &cmd, errmsg, errmsg_len) != 0) return -1;
+    // First-use transitions for dispatch-only outputs: fresh images sit in
+    // UNDEFINED (descriptors already declare GENERAL), so promote each
+    // once, inside this submit — no extra round-trip. Repeats are free:
+    // the tracked layout flips to GENERAL on the first pass.
+    for (int b = 0; b < 40; b++) {
+        if (pipe->kinds[b] < 0 || pipe->bound[b] == 0) continue;
+        SrvkImage* bound = (SrvkImage*)(uintptr_t)pipe->bound[b];
+        if (bound->layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            transition(cmd, bound->image, VK_IMAGE_LAYOUT_UNDEFINED,
+                       VK_IMAGE_LAYOUT_GENERAL);
+            bound->layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipe_layout, 0, 1,
                             &pipe->set, 0, NULL);
