@@ -1,8 +1,36 @@
 import java.io.File
+import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Version source of truth is version.properties. Every real assemble/bundle
+// invocation bumps patch (1.0.0 -> 1.0.1) and versionCode by one, before the
+// android block below consumes the values, so the APK just built already
+// carries the new version in its manifest and file name.
+val versionPropsFile = file("version.properties")
+val versionProps = Properties().also {
+    if (versionPropsFile.exists()) versionPropsFile.inputStream().use(it::load)
+}
+var appVersionCode = (versionProps.getProperty("VERSION_CODE") ?: "1").toInt()
+var appVersionName = versionProps.getProperty("VERSION_NAME") ?: "1.0.0"
+val isPackagingBuild = gradle.startParameter.taskNames.any {
+    it.contains("assemble", ignoreCase = true) || it.contains("bundle", ignoreCase = true)
+} && !gradle.startParameter.isDryRun
+if (isPackagingBuild) {
+    appVersionName.split(".").toMutableList().let { parts ->
+        parts.last().toIntOrNull()?.let { patch ->
+            parts[parts.size - 1] = (patch + 1).toString()
+            appVersionName = parts.joinToString(".")
+        }
+    }
+    appVersionCode += 1
+    versionProps.setProperty("VERSION_CODE", appVersionCode.toString())
+    versionProps.setProperty("VERSION_NAME", appVersionName)
+    versionPropsFile.writer().use { versionProps.store(it, "Bumped automatically on assemble/bundle") }
+    println("RawLens version: $appVersionName ($appVersionCode)")
 }
 
 android {
@@ -13,8 +41,8 @@ android {
         applicationId = "com.matthew.rawlens"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -90,6 +118,16 @@ android {
 
     // Optional on-device DCG probe library, built by tools/build_dcg_vulkan_probe.sh.
     sourceSets.getByName("androidTest").jniLibs.srcDir("build/dcg-probe/jniLibs")
+
+    // Name APKs after the app instead of the generic module name, e.g.
+    // RawLens-1.0.0-release.apk instead of app-release.apk.
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "RawLens-${variant.versionName}-${variant.buildType.name}.apk"
+        }
+    }
 
 }
 

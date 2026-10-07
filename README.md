@@ -76,7 +76,7 @@ app compiles for NDK) plus mosaic/linear burst-DNG CLIs for Linux and macOS
 
 ## GitHub release checklist
 
-1. Update `versionCode` and `versionName` in `app/build.gradle.kts`.
+1. Note the auto-bumped version in `app/version.properties` (every `assemble`/`bundle` build advances the patch number and `versionCode` by one; edit the file by hand only for major/minor releases).
 2. Update `CHANGELOG.md` and verify that the release notes describe the actual build.
 3. Run `./gradlew clean test assembleDebug` and perform capture tests on at least one RAW-capable device in AUTO, PROGRAM, MANUAL, burst, and (when supported) ZSL modes.
 4. Build and sign the release artifact with your private signing configuration.
