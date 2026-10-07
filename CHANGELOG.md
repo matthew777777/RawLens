@@ -73,11 +73,13 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Direct Log record path is now direct-encode (no contrast curve, no saturation): BT.709 OETF, Sony S-Log3 with the 95-code pedestal (18% gray at code 420), or BT.2020 + HLG OETF straight from developed linear, with matching container signalling (HLG flagged BT.2020/HLG)
 - SR capture-to-save performance (identical pixels, phone + desktop): native submit path reuses one command buffer + fence instead of alloc/free per submit; RAW16 uploads reuse pooled staging with a contiguous fast path; CPU merges route CFA taps via hoisted ordinals with unrolled covariance lerp; reference CFA/pyramid built once per burst instead of per frame; >8-core desktops scale workers to 16; DNG writers pack shorts in bulk. Measured ~25% faster CPU merge with bitwise-identical output (943 unit tests green)
 - RAW video spike bench gains a multithreaded encode entry (`CinemaRawSpike.encodeParallel`, byte-identical to serial, 0 = core count) for measuring per-frame threading on-device; the recorder itself keeps frame-level parallelism (N workers × serial encode), where intra-frame threading would oversubscribe. Vendored encoder synced to upstream `55cceb2` (parallel entry, x86 SSE2). Pinned by `encodeParallelParity` on-device and `tools/mcraw/parallel_parity.cpp` on-host
+- First-install photo-folder grant: the welcome flow fires the same `ACTION_OPEN_DOCUMENT_TREE` picker burst settings offers right after camera permission, so gyro sidecars (`burst.json` + `gyro/` CSVs) save next to the DNGs in `DCIM/RawLens/<burst>` by default. The prompt fires exactly once and never blocks entry (cancel/deny/unavailable picker still opens the camera; sidecars fall back to Downloads until granted). `SidecarTreeAccessTest` pins the once-only decision
 
 ### Removed
 
 - Wavelet chroma denoise (darktable profiled à-trous path, strength slider, and `denoise_enabled` / `denoise_profiled_wavelet_strength` preferences): AMaZE output is now always the plain demosaic and the fused JPEG path is always eligible. AI RAW denoise (RawNIND-tiny) is untouched and remains the only denoise stage.
 - Slow Kotlin RAW viewfinder fallback sampler (`RawPreviewSampler`), replaced by the native NEON `VfCpuNeon` path
+- Burst-settings "Use Downloads folder for sidecars" switch: bursts always target `DCIM/RawLens/<burst>` now (Downloads remains only as the automatic fallback until the photo folder is granted), leaving a single re-grant button for reinstalls and revoked grants
 
 ### Fixed
 

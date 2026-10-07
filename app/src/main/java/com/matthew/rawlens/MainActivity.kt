@@ -5114,19 +5114,13 @@ class MainActivity : Activity() {
                 text = "Save sidecars next to DNGs (choose photo folder)"
                 setOnClickListener { pickSidecarFolder() }
             })
-            content.addView(Button(this).apply {
-                text = "Use Downloads folder for sidecars"
-                setOnClickListener {
-                    SidecarTreeAccess.clearTreeUri(this@MainActivity)
-                    sidecarSettingsStatus?.text = sidecarFolderText()
-                    setStatus("SIDECARS • DOWNLOADS")
-                }
-            })
             content.addView(TextView(this).apply {
                 text = "Android forbids text sidecars under DCIM via MediaStore. " +
-                    "Choose DCIM/RawLens when prompted; burst.json + gyro/ then land " +
-                    "in DCIM/RawLens/<burst> next to the DNGs. No extra permission " +
-                    "is needed beyond this one folder grant."
+                    "RawLens asks for the photo folder on first install; choose " +
+                    "DCIM/RawLens so burst.json + gyro/ land in " +
+                    "DCIM/RawLens/<burst> next to the DNGs. Use the button above " +
+                    "to re-grant after a reinstall or a revoked grant — no other " +
+                    "permission is needed."
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
                 setPadding(0, 0, 0, dp(16))
