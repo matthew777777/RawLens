@@ -299,6 +299,63 @@ Java_com_matthew_rawlens_VfEglImport_blitBytesToBlob(
     return 0;
 }
 
+// BGU guide-sample handoff: export the current GL stream position as a
+// dup'd native fence fd. The GPU signals it when all prior work (the
+// slice sample of this frame's export) completes; the offer thread waits
+// on it (via pollSyncFd) before the Vulkan dispatch reuses that slot.
+// Replaces the render-thread glFinish stall with overlapped execution.
+// Returns the fd, or -1 on failure; close with closeSyncFd.
+namespace {
+// eglDupNativeFenceFDANDROID is an extension entry point (not linkable
+// from libEGL on all platform levels): resolve once via proc address.
+typedef int (*DupFenceFn)(EGLDisplay, EGLSyncKHR);
+DupFenceFn dupFenceFn() {
+    static DupFenceFn fn = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        fn = reinterpret_cast<DupFenceFn>(eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+        if (!fn) LOGW("vf-egl: eglDupNativeFenceFDANDROID unavailable");
+    }
+    return fn;
+}
+}  // namespace
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfEglImport_exportFenceFd(JNIEnv*, jobject) {
+    EGLDisplay display = eglGetCurrentDisplay();
+    if (display == EGL_NO_DISPLAY) return -1;
+    DupFenceFn dup = dupFenceFn();
+    if (!dup) return -1;
+    // A plain EGL_SYNC_FENCE_KHR sync is the wrong type for dup (Mali
+    // answers EGL_BAD_PARAMETER): the fd comes from a native-fence sync
+    // (EGL_ANDROID_native_fence_sync) created with no initial fd.
+    const EGLint attribs[] = {
+        EGL_SYNC_NATIVE_FENCE_FD_ANDROID, EGL_NO_NATIVE_FENCE_FD_ANDROID,
+        EGL_NONE,
+    };
+    EGLSyncKHR sync = eglCreateSyncKHR(display, EGL_SYNC_NATIVE_FENCE_ANDROID, attribs);
+    if (sync == EGL_NO_SYNC_KHR) {
+        LOGW("vf-egl: exportFenceFd create failed: %#x", eglGetError());
+        return -1;
+    }
+    int fd = dup(display, sync);
+    EGLint err = eglGetError();
+    eglDestroySyncKHR(display, sync);
+    // -1 with EGL_SUCCESS is the fast path, not an error: the fence was
+    // already signaled (slice done before swap returned), so there is no
+    // in-flight work to guard. Warn only on real errors.
+    if (fd < 0 && err != EGL_SUCCESS) LOGW("vf-egl: exportFenceFd dup failed: %#x", err);
+    if (fd >= 0) {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            LOGI("vf-egl: guide fence handoff live (fd=%d)", fd);
+        }
+    }
+    return fd;
+}
+
 // Phase-A: GPU fence sync (EGL_KHR_fence_sync) for the encoder handoff.
 // The Java EGL bindings only expose ANDROID native fences, so KHR fences
 // live here. Insert after eglSwapBuffers; wait before reusing the sampled

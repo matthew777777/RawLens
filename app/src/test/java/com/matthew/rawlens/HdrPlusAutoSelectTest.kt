@@ -19,7 +19,8 @@ class HdrPlusAutoSelectTest {
         gyro: Double = 0.0,
         ratios: List<DoubleArray> = emptyList(),
         mapW: Int = 0,
-        mapH: Int = 0
+        mapH: Int = 0,
+        madDense: List<DoubleArray> = emptyList()
     ): MotionSummary {
         val pairs = deltas.size
         val base = 1_000_000_000L
@@ -33,7 +34,9 @@ class HdrPlusAutoSelectTest {
             frameSharpness = sharps,
             pairMismatchRatios = ratios,
             mapCellsX = mapW,
-            mapCellsY = mapH
+            mapCellsY = mapH,
+            pairMadDense = madDense,
+            pairTexDense = madDense.map { DoubleArray(it.size) }
         )
     }
 
@@ -366,6 +369,137 @@ class HdrPlusAutoSelectTest {
         assertFalse(decision.highQuality)
         assertEquals(listOf(3.0f, 3.0f, 13.0f), decision.frameStrengths)
         assertEquals(null, decision.strengthMaps)
+    }
+
+    @Test fun dangerTermOverridesCleanRatioOnJitter() {
+        // 4x1 grids, ratios clean everywhere (0.5 -> 13) but dense MAD
+        // hot on the right half of pair 0 (0.02 -> 3): the minimum
+        // carries the danger gradient onto frames adjacent to pair 0.
+        val decision = HdrPlusAutoSelect.select(
+            metering = metering(
+                deltas = List(2) { 0.01 },
+                hots = listOf(0.05, 0.0),
+                means = List(3) { 0.2 },
+                sharps = List(3) { 0.011 },
+                ratios = listOf(
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5),
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5)
+                ),
+                mapW = 4,
+                mapH = 1,
+                madDense = listOf(
+                    doubleArrayOf(0.001, 0.001, 0.02, 0.02),
+                    doubleArrayOf(0.001, 0.001, 0.001, 0.001)
+                )
+            ),
+            frameCount = 3,
+            sensitivityIso = 50,
+            manualStrength = null,
+            manualQuality = null,
+            preferredRef = 1
+        )
+        val maps = decision.strengthMaps!!
+        val gradient = floatArrayOf(13.0f, 9.6667f, 6.3333f, 3.0f)
+        assertMapEquals(gradient, maps[0], 1e-3f)
+        assertMapEquals(gradient, maps[1], 1e-3f)
+        assertMapEquals(floatArrayOf(13.0f, 13.0f, 13.0f, 13.0f), maps[2], 0f)
+    }
+
+    @Test fun dangerCleanLeavesRatioMapUntouched() {
+        // Danger below CLEAN everywhere is a minimum no-op: the ratio
+        // gradient (5.0 -> 3 on the right half) survives unchanged.
+        val decision = HdrPlusAutoSelect.select(
+            metering = metering(
+                deltas = List(2) { 0.01 },
+                hots = listOf(0.05, 0.0),
+                means = List(3) { 0.2 },
+                sharps = List(3) { 0.011 },
+                ratios = listOf(
+                    doubleArrayOf(0.5, 0.5, 5.0, 5.0),
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5)
+                ),
+                mapW = 4,
+                mapH = 1,
+                madDense = listOf(
+                    doubleArrayOf(0.001, 0.001, 0.001, 0.001),
+                    doubleArrayOf(0.001, 0.001, 0.001, 0.001)
+                )
+            ),
+            frameCount = 3,
+            sensitivityIso = 50,
+            manualStrength = null,
+            manualQuality = null,
+            preferredRef = 1
+        )
+        val maps = decision.strengthMaps!!
+        val gradient = floatArrayOf(13.0f, 9.6667f, 6.3333f, 3.0f)
+        assertMapEquals(gradient, maps[0], 1e-3f)
+        assertMapEquals(gradient, maps[1], 1e-3f)
+        assertMapEquals(floatArrayOf(13.0f, 13.0f, 13.0f, 13.0f), maps[2], 0f)
+    }
+
+    @Test fun nonFiniteDangerGoesStrict() {
+        // NaN danger is unmeasurable motion: strict (safe direction),
+        // same as a non-finite ratio.
+        val decision = HdrPlusAutoSelect.select(
+            metering = metering(
+                deltas = List(2) { 0.01 },
+                hots = listOf(0.05, 0.0),
+                means = List(3) { 0.2 },
+                sharps = List(3) { 0.011 },
+                ratios = listOf(
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5),
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5)
+                ),
+                mapW = 4,
+                mapH = 1,
+                madDense = listOf(
+                    doubleArrayOf(0.001, 0.001, Double.NaN, Double.NaN),
+                    doubleArrayOf(0.001, 0.001, 0.001, 0.001)
+                )
+            ),
+            frameCount = 3,
+            sensitivityIso = 50,
+            manualStrength = null,
+            manualQuality = null,
+            preferredRef = 1
+        )
+        val maps = decision.strengthMaps!!
+        val gradient = floatArrayOf(13.0f, 9.6667f, 6.3333f, 3.0f)
+        assertMapEquals(gradient, maps[0], 1e-3f)
+        assertMapEquals(gradient, maps[1], 1e-3f)
+        assertMapEquals(floatArrayOf(13.0f, 13.0f, 13.0f, 13.0f), maps[2], 0f)
+    }
+
+    @Test fun missizedDangerGridsIgnoreDanger() {
+        // Dense grids at the wrong resolution disable only the danger
+        // term (wrong counts never reach here: summarize() rejects
+        // partial lists): the ratio map still builds.
+        val decision = HdrPlusAutoSelect.select(
+            metering = metering(
+                deltas = List(2) { 0.01 },
+                hots = listOf(0.05, 0.0),
+                means = List(3) { 0.2 },
+                sharps = List(3) { 0.011 },
+                ratios = listOf(
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5),
+                    doubleArrayOf(0.5, 0.5, 0.5, 0.5)
+                ),
+                mapW = 4,
+                mapH = 1,
+                madDense = listOf(doubleArrayOf(0.02, 0.02), doubleArrayOf(0.02, 0.02))
+            ),
+            frameCount = 3,
+            sensitivityIso = 50,
+            manualStrength = null,
+            manualQuality = null,
+            preferredRef = 1
+        )
+        val maps = decision.strengthMaps!!
+        val flat = floatArrayOf(13.0f, 13.0f, 13.0f, 13.0f)
+        assertMapEquals(flat, maps[0], 0f)
+        assertMapEquals(flat, maps[1], 0f)
+        assertMapEquals(flat, maps[2], 0f)
     }
 
     private fun assertMapEquals(expected: FloatArray, actual: FloatArray, delta: Float) {

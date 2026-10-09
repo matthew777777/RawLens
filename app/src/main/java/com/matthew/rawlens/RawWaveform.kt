@@ -54,7 +54,6 @@ data class RgbWaveform(
 object RawWaveformSampler {
     const val COLUMNS = 96
     const val LEVELS = 48
-    private const val TARGET_BLOCKS = 8_000
 
     /** Frame-column bin for a sensor pixel; out-of-range x clamps to the edges. */
     internal fun columnOf(x: Int, width: Int, columns: Int = COLUMNS): Int =
@@ -101,9 +100,7 @@ object RawWaveformSampler {
         val blue = IntArray(COLUMNS * LEVELS)
         val blocksWide = image.width / 2
         val blocksHigh = image.height / 2
-        val blockStep = kotlin.math.sqrt(
-            (blocksWide.toLong() * blocksHigh / TARGET_BLOCKS.toDouble()).coerceAtLeast(1.0)
-        ).toInt().coerceAtLeast(1)
+        val blockStep = meterGridStep(blocksWide.toLong() * blocksHigh, SCOPE_TARGET_BLOCKS)
 
         var blockY = 0
         while (blockY < blocksHigh) {
@@ -114,8 +111,10 @@ object RawWaveformSampler {
                 val start0 = y0 * (plane.rowStride / 2)
                 val start1 = start0 + plane.rowStride / 2
                 if (start0 >= 0 && start1 + image.width <= shortCapacity) {
-                    shortView.get(start0, rowEven, 0, image.width)
-                    shortView.get(start1, rowOdd, 0, image.width)
+                    // Indexed bulk get needs ShortBufferCompat: the absolute
+                    // overload is missing below newer runtimes (API 30 crash).
+                    ShortBufferCompat.getBulk(shortView, start0, rowEven, 0, image.width)
+                    ShortBufferCompat.getBulk(shortView, start1, rowOdd, 0, image.width)
                     bulkEven = rowEven
                     bulkOdd = rowOdd
                 }

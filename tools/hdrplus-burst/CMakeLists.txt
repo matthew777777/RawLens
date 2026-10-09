@@ -20,6 +20,7 @@ add_executable(hdrplus_burst
     "${CMAKE_CURRENT_SOURCE_DIR}/burst.cpp"
     "${HDRPLUS_DIR}/hdrplus_host.cpp"
     "${HDRPLUS_DIR}/hdrplus_run.cpp"
+    "${HDRPLUS_DIR}/../vulkan_pipeline_cache.cpp"
     "${TINYDNG_DIR}/tinydng_api.c"
     "${TINYDNG_DIR}/tinydng_io.c"
     "${TINYDNG_DIR}/tinydng_tiff.c"
@@ -29,7 +30,7 @@ add_executable(hdrplus_burst
     "${TINYDNG_DIR}/tinydng_psd.c"
     "${TINYDNG_DIR}/tinydng_psd_write.c"
     "${TINYDNG_DIR}/tiny_dng_ljpeg92_v2.c")
-target_include_directories(hdrplus_burst PRIVATE "${HDRPLUS_DIR}" "${TINYDNG_DIR}")
+target_include_directories(hdrplus_burst PRIVATE "${HDRPLUS_DIR}" "${HDRPLUS_DIR}/.." "${TINYDNG_DIR}")
 set_target_properties(hdrplus_burst PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 # Same tinydng recipe as the app (app/src/main/cpp/CMakeLists.txt).
 target_compile_definitions(hdrplus_burst PRIVATE TINYDNG_NO_ZIP TINYDNG_NO_BASELINE_JPEG

@@ -43,6 +43,9 @@ object HdrPlusMotionMeter {
      * motion score per pair; [frameMeanLevel]/[frameSharpness] hold one
      * entry per frame. [pairMismatchRatios] holds one row-major
      * ceil-cover ratio grid per pair (empty when unmeasured).
+     * [pairMadDense]/[pairTexDense] hold the native meter's full-res
+     * per-cell MAD/texture grids (empty when the native meter is
+     * unavailable; the danger term then stays off).
      */
     data class MotionSummary(
         val pairDeltas: List<Double>,
@@ -59,7 +62,9 @@ object HdrPlusMotionMeter {
         val maxHotFraction: Double,
         val pairMismatchRatios: List<DoubleArray> = emptyList(),
         val mapCellsX: Int = 0,
-        val mapCellsY: Int = 0
+        val mapCellsY: Int = 0,
+        val pairMadDense: List<DoubleArray> = emptyList(),
+        val pairTexDense: List<DoubleArray> = emptyList()
     ) {
         /** GCam-style one-line report for the merge log. */
         fun logLine(frames: Int): String {
@@ -313,7 +318,9 @@ object HdrPlusMotionMeter {
         frameSharpness: List<Double> = emptyList(),
         pairMismatchRatios: List<DoubleArray> = emptyList(),
         mapCellsX: Int = 0,
-        mapCellsY: Int = 0
+        mapCellsY: Int = 0,
+        pairMadDense: List<DoubleArray> = emptyList(),
+        pairTexDense: List<DoubleArray> = emptyList()
     ): MotionSummary {
         require(pairDeltas.size == prevTimestampsNs.size &&
             pairDeltas.size == currTimestampsNs.size &&
@@ -329,6 +336,12 @@ object HdrPlusMotionMeter {
         }
         require(pairMismatchRatios.isEmpty() || pairMismatchRatios.size == pairDeltas.size) {
             "Mismatch ratio grids must cover every pair"
+        }
+        require(pairMadDense.isEmpty() || pairMadDense.size == pairDeltas.size) {
+            "Dense MAD grids must cover every pair"
+        }
+        require(pairTexDense.isEmpty() || pairTexDense.size == pairDeltas.size) {
+            "Dense texture grids must cover every pair"
         }
         val dts = pairDeltas.indices.map { i ->
             val prev = prevTimestampsNs[i]
@@ -358,7 +371,9 @@ object HdrPlusMotionMeter {
             maxHotFraction = pairHotFraction.finiteMax(),
             pairMismatchRatios = pairMismatchRatios.toList(),
             mapCellsX = mapCellsX,
-            mapCellsY = mapCellsY
+            mapCellsY = mapCellsY,
+            pairMadDense = pairMadDense.toList(),
+            pairTexDense = pairTexDense.toList()
         )
     }
 }

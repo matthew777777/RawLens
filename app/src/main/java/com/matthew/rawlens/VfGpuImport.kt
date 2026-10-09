@@ -219,7 +219,10 @@ internal object VfGpuImport {
             " return mix(hi, lo, vec3(lessThanEqual(l, vec3(0.0031308)))); }" +
             // Interleaved-gradient-noise dither: float-only so both ESSL versions share
             // it (ESSL 1.00 has no uint/bitwise ops for the save path's hash01).
-            "float ign(vec2 p, float ch) { return fract(52.9829189 * fract(dot(p + ch * 16.0 + 5.588238, vec2(0.06711056, 0.00583715)))); }"
+            // Pinned to VFHP (highp where available): the hash needs >16-bit
+            // intermediates at 1080p (mediump would coarsen it into banding).
+            "VFHP float ign(VFHP vec2 p, VFHP float ch) { return fract(52.9829189 *" +
+            " fract(dot(p + ch * 16.0 + 5.588238, vec2(0.06711056, 0.00583715)))); }"
 
     private const val AGX_UNIFORMS =
         "uniform int u_jpeg;" +
@@ -275,8 +278,11 @@ internal object VfGpuImport {
             " sc = mix(1.0, clamp(sc, 0.0, 1.0), u_agxGamut);" +
             " v = vec3(anchor) + sc * delta;" +
             " vec3 enc = srgbOetf(clamp(v, 0.0, 1.0));" +
-            " vec3 dith = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0)) - vec3(0.5);" +
-            " @OUT@ = vec4(enc + dith / 255.0, 1.0); }"
+            " VFHP float d0 = ign(gl_FragCoord.xy, 0.0);" +
+            " VFHP float d1 = ign(gl_FragCoord.xy, 1.0);" +
+            " VFHP float d2 = ign(gl_FragCoord.xy, 2.0);" +
+            " @OUT@ = vec4(enc.r + (d0 - 0.5) / 255.0, enc.g + (d1 - 0.5) / 255.0," +
+            " enc.b + (d2 - 0.5) / 255.0, 1.0); }"
 
     // Zero-copy hardware-accelerated lens-shading (vignetting) correction.
     // The HAL's STATISTICS_LENS_SHADING_CORRECTION_MAP is packed once per map
@@ -314,19 +320,21 @@ internal object VfGpuImport {
             " return g; }"
 
     // ESSL 3.00 variant: single hardware-filtered texture() fetch. Integer
-    // bitwise ops are available here (unavailable in ESSL 1.00).
+    // bitwise ops are available here (unavailable in ESSL 1.00). Float math
+    // runs at default (mediump) precision: the ~17-cell map needs none
+    // finer; quad coordinates stay highp int (mediump int is 16-bit).
     private const val LENS_GAIN_ES3 =
-        "highp vec4 vfLensGain(highp vec2 t) {" +
+        "vec4 vfLensGain(vec2 t) {" +
             " if (u_applyLens == 0) return vec4(1.0);" +
             " highp ivec2 ij = ivec2(floor(t * vec2(u_frameSize)));" +
             " highp ivec2 q = u_quadBase + ij * u_step;" +
-            " highp float aw = float(max(u_lensActive.z - u_lensActive.x - 1, 1));" +
-            " highp float ah = float(max(u_lensActive.w - u_lensActive.y - 1, 1));" +
-            " highp vec2 nuv = clamp(vec2(float(q.x - u_lensActive.x) / aw," +
+            " float aw = float(max(u_lensActive.z - u_lensActive.x - 1, 1));" +
+            " float ah = float(max(u_lensActive.w - u_lensActive.y - 1, 1));" +
+            " vec2 nuv = clamp(vec2(float(q.x - u_lensActive.x) / aw," +
             " float(q.y - u_lensActive.y) / ah), 0.0, 1.0);" +
-            " highp vec2 sz = vec2(u_lensSize);" +
-            " highp vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
-            " highp vec4 g = texture(u_lens, uv);" +
+            " vec2 sz = vec2(u_lensSize);" +
+            " vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
+            " vec4 g = texture(u_lens, uv);" +
             " if (((q.y + u_lensGreenRow) & 1) != 0) g = vec4(g.r, g.b, g.g, g.a);" +
             " return g; }"
 
@@ -392,9 +400,14 @@ internal object VfGpuImport {
         return nowMs - lastMs >= intervalMs
     }
 
-    /** ESSL 1.00 fragment shader for the CPU-sampled RGBA path. */
+    /**
+     * ESSL 1.00 fragment shader for the CPU-sampled RGBA path. Float math
+     * runs mediump (fp16 on mobile): the 8-bit dithered output needs no
+     * finer; only the dither hash keeps highp (VFHP) where available.
+     */
     fun cpuFragmentShader(): String =
-        "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+        "precision mediump float;\n" +
+            "#ifdef GL_FRAGMENT_PRECISION_HIGH\n#define VFHP highp\n#else\n#define VFHP mediump\n#endif\n" +
             "varying vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
@@ -412,17 +425,18 @@ internal object VfGpuImport {
     /**
      * ESSL 3.00 fragment shader for the zero-copy path. Each display texel fetches its
      * Bayer quad from the imported `R16UI` texture with the same channel mapping and
-     * black/white normalization as [VfCpuNeon.copy] (in float, without the
-     * 8-bit quantization), then runs the shared tonemap tail in `highp` so the
-     * JPEG branch matches the save-path AgX math.
+     * Q6 fixed-point normalization as [VfCpuNeon.copy] (pure integer, exact tier
+     * parity), then runs the shared tonemap tail in mediump (fp16 on mobile:
+     * the 8-bit dithered output needs no finer).
      */
     fun gpuFragmentShader(): String =
         "#version 300 es\n" +
-            "precision highp float; precision highp int; precision highp sampler2D;" +
+            "#define VFHP highp\n" +
+            "precision mediump float; precision highp int; precision highp sampler2D;" +
             "uniform highp usampler2D u_bayer;" +
             "uniform ivec2 u_quadBase; uniform ivec2 u_frameSize; uniform int u_step;" +
-            "uniform ivec4 u_chans; uniform highp vec4 u_black; uniform highp vec4 u_invRange;" +
-            "uniform highp sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
+            "uniform ivec4 u_chans; uniform highp ivec4 u_blackQ; uniform highp ivec4 u_denQ;" +
+            "uniform mediump sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
             "uniform int u_applyLens; uniform int u_lensGreenRow;" +
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
@@ -431,17 +445,23 @@ internal object VfGpuImport {
             LENS_GAIN_ES3 +
             // Runtime-specialized unpack: black/white for the exact RAW bit depth
             // (10/12/16-bit sensor modes all present as unpacked 16-bit codes) are
-            // baked into u_black/u_invRange on the CPU, so the shader is a single
-            // straight-line fetch + MAD with dynamic uniform indexing and no
-            // per-channel branches.
-            "highp float vfFetch(highp ivec2 q, int ch) {" +
+            // baked into Q6 ints on the CPU ([VfLevels]), so the shader is a single
+            // straight-line fetch + integer MAD with dynamic uniform indexing and
+            // no per-channel branches. All intermediates fit highp int (32-bit).
+            "highp int vfFetchByte(highp ivec2 q, int ch) {" +
             " highp ivec2 p = q + ivec2(ch & 1, (ch >> 1) & 1);" +
-            " highp float code = float(texelFetch(u_bayer, p, 0).r);" +
-            " highp float blk = u_black[ch];" +
-            " highp float inv = u_invRange[ch];" +
-            " return clamp((code - blk) * inv, 0.0, 1.0); }" +
+            " highp int code = int(texelFetch(u_bayer, p, 0).r);" +
+            " highp int bq = u_blackQ[ch];" +
+            " highp int dq = u_denQ[ch];" +
+            " highp int num = code * 64 - bq;" +
+            " if (num <= 0) return 0;" +
+            " if (num >= dq) return 255;" +
+            " return (num * 255 + dq / 2) / dq; }" +
             "void main() { highp ivec2 q = u_quadBase + ivec2(floor(tex * vec2(u_frameSize))) * u_step;" +
-            " highp vec4 b = vec4(vfFetch(q, u_chans.x), vfFetch(q, u_chans.y), vfFetch(q, u_chans.z), vfFetch(q, u_chans.w));" +
+            " highp ivec4 n = ivec4(vfFetchByte(q, u_chans.x), vfFetchByte(q, u_chans.y)," +
+            " vfFetchByte(q, u_chans.z), vfFetchByte(q, u_chans.w));" +
+            " highp vec4 bf = vec4(n) / 255.0;" +
+            " vec4 b = vec4(bf);" +
             " b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "fragColor")
 }

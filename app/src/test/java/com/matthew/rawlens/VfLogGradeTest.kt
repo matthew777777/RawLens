@@ -378,4 +378,10 @@ class VfLogGradeTest {
         assertEquals(0x3800, VfLogGrade.floatToHalfBits(0.5f))
         assertEquals(0xBC00, VfLogGrade.floatToHalfBits(-1f))
     }
+
+    @Test
+    fun fusedAssetSelectsFp16VariantOnCapability() {
+        assertEquals("shaders/vf/vf_mhcyuv_f16.spv", VfLogGrade.fusedAsset(true))
+        assertEquals("shaders/vf/vf_mhcyuv.spv", VfLogGrade.fusedAsset(false))
+    }
 }

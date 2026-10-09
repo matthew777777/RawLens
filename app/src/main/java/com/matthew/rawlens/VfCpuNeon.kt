@@ -5,14 +5,14 @@ import java.nio.ByteBuffer
 
 /**
  * Fast native CPU fallback for the RAW viewfinder: one aligned Bayer quad per
- * display texel into canonical R/Gr/Gb/B order, normalized by reciprocal
- * multiply exactly like the zero-copy GPU tiers.
+ * display texel into canonical R/Gr/Gb/B order, normalized in Q6 fixed-point
+ * integer exactly like the zero-copy GPU tiers ([VfLevels]).
  *
  * The old Kotlin sampler is gone: per-sample `ByteBuffer.getShort` bounds
  * checks cost ~100+ ms per frame. This path runs in
- * `app/src/main/cpp/vf_cpu_neon.cpp` (NEON float32x4 normalize on ARM, scalar
- * on x86 emulators) with no allocation and no per-sample checks — single-digit
- * milliseconds for a 1080px frame.
+ * `app/src/main/cpp/vf_cpu_neon.cpp` (scalar integer core, threaded row
+ * bands, no allocation and no per-sample checks) — single-digit milliseconds
+ * for a 1080px frame.
  *
  * Both buffers must be direct: the camera plane and the viewfinder's
  * `Frame.pixels` already are. Arguments are validated in Kotlin (same contract
@@ -97,12 +97,14 @@ internal object VfCpuNeon {
             }
         }
         if (!available) throw IllegalStateException("vf native library unavailable")
+        val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
+        val levels = IntArray(8) { i -> if (i < 4) blackQ[i] else denQ[i - 4] }
         val srcOffset = source.position()
         val dstOffset = destination.position()
         val code = try {
             copyNative(
                 source, srcOffset, rowStride, pixelStride, left, top,
-                width, height, step, channels, black, white,
+                width, height, step, channels, levels,
                 destination, dstOffset
             )
         } catch (e: UnsatisfiedLinkError) {
@@ -113,10 +115,14 @@ internal object VfCpuNeon {
         destination.flip()
     }
 
+    /**
+     * @param levels Q6 fixed-point [blackQ0..3, denQ0..3] from [VfLevels] (the
+     * native core is pure integer; blackQ >= 0, 1 <= denQ <= 65535*64).
+     */
     external fun copyNative(
         source: ByteBuffer, srcOffset: Int, rowStride: Int, pixelStride: Int,
         left: Int, top: Int, width: Int, height: Int, step: Int,
-        channels: IntArray, black: FloatArray, white: Float,
+        channels: IntArray, levels: IntArray,
         destination: ByteBuffer, dstOffset: Int
     ): Int
 }

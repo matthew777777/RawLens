@@ -40,7 +40,10 @@ import java.util.TimeZone
  * can never fill storage. If the logcat child dies on its own it is
  * respawned (bounded), so capture resumes by itself; when respawns give
  * out a truncation marker is written to the file and mirrored, so a short
- * session can never be mistaken for a dead process.
+ * session can never be mistaken for a dead process. The same holds for the
+ * two silent failures: a spawn that throws and a logcat that yields zero
+ * lines (OEM logd restrictions) are both written into the session as
+ * markers and mirrored, so a headers-only file always says why.
  */
 internal object LogcatFileWriter {
     private const val TAG = "LogcatFileWriter"
@@ -56,6 +59,14 @@ internal object LogcatFileWriter {
     /** Continuous Downloads mirror cadence; rotation/stop/crash always force one. */
     const val MIRROR_INTERVAL_MS = 30_000L
     private const val MAX_RESPAWNS = 10
+    /**
+     * Zero captured lines this long after start means the device yields no
+     * app logs at all: logcat normally dumps the pid's buffer within
+     * milliseconds, so silence this deep is definitive, not slow startup.
+     */
+    const val SILENCE_TIMEOUT_MS = 15_000L
+    /** Absolute binary first: PATH lookup is what OEM ROMs break. */
+    private const val SYSTEM_LOGCAT = "/system/bin/logcat"
 
     private val lock = Any()
     private var process: Process? = null
@@ -71,6 +82,10 @@ internal object LogcatFileWriter {
     @Volatile private var mirrorError: String? = null
     private var bytesWritten = 0L
     private var linesSinceFlush = 0
+    /** Monotonic captured-line count; the silence watchdog baselines it. */
+    private var linesCaptured = 0L
+    /** Short capture diagnosis (spawn failure / silence), for the status row. */
+    @Volatile private var captureNote: String? = null
     @Volatile private var running = false
     @Volatile private var previousHandler: Thread.UncaughtExceptionHandler? = null
     private var handlerInstalled = false
@@ -110,6 +125,25 @@ internal object LogcatFileWriter {
         "----- logcat capture stopped ($reason); session truncated, app continues -----"
 
     /**
+     * File-side marker for a logcat spawn that threw (PATH lookup or exec
+     * blocked on the ROM). Without it the orphaned headers-only session is
+     * still exportable and reads like an empty recording.
+     */
+    fun captureSpawnFailedMarker(detail: String): String =
+        "----- logcat capture failed to start ($detail); " +
+            "session has headers only, app continues -----"
+
+    /**
+     * File-side marker for a live-but-silent logcat: zero lines [waitedSecs]
+     * after start for [pid], i.e. the device logd yields no app logs at all.
+     * A headers-only session with this marker is a diagnosed device
+     * restriction, never an incomplete recording.
+     */
+    fun captureSilentMarker(pid: Int, waitedSecs: Long): String =
+        "----- logcat produced no lines for pid $pid after ${waitedSecs}s " +
+            "(device logd may restrict app logs); session has headers only, app continues -----"
+
+    /**
      * Reads and clears the crash flag left by [recordCrash]. Resolves the log
      * dir itself so the flag is honored even when capture is toggled off.
      * Returns the crashed session's file name, or null on a clean shutdown.
@@ -130,7 +164,8 @@ internal object LogcatFileWriter {
         val sizeKb = file?.takeIf { it.isFile }?.length()?.div(1024) ?: 0L
         val mirror = mirrorError?.let { "Downloads mirror failed ($it)" }
             ?: if (lastMirrorMs > 0L) "Downloads mirror: ok" else "Downloads mirror: pending"
-        "running=$running file=${file?.name ?: "none"} ${sizeKb}KB, $mirror"
+        val note = captureNote?.let { ", capture=$it" } ?: ""
+        "running=$running file=${file?.name ?: "none"} ${sizeKb}KB lines=$linesCaptured, $mirror$note"
     }
 
     fun isRunning(): Boolean = running
@@ -182,6 +217,7 @@ internal object LogcatFileWriter {
     fun start(context: Context) {
         // Crash logging must not depend on the streaming preference.
         installCrashHandler(context)
+        var spawnFailed = false
         synchronized(lock) {
             if (running) return
             try {
@@ -194,17 +230,27 @@ internal object LogcatFileWriter {
                 packageName = context.packageName
                 openSessionLocked(dir)
                 pid = android.os.Process.myPid()
+                captureNote = null
                 spawnLocked()
                 running = true
+                startSilenceWatchdogLocked(linesCaptured, pid)
                 readerThread = Thread(::pumpLoop, "logcat-file").apply {
                     isDaemon = true
                     start()
                 }
             } catch (failure: Throwable) {
                 Log.w(TAG, "Logcat file capture unavailable", failure)
+                // Logcat is the dead channel here, so the failure must also go
+                // into the session file itself; otherwise the orphaned
+                // headers-only session exports as a mysteriously empty log.
+                noteSpawnFailedLocked(failure)
                 closeLocked()
+                spawnFailed = true
             }
         }
+        // Mirror outside the lock (MediaStore I/O); the diagnosis must reach
+        // Downloads even though capture never ran.
+        if (spawnFailed) maybeMirror(force = true)
     }
 
     /**
@@ -217,12 +263,84 @@ internal object LogcatFileWriter {
         return File(context.filesDir, DIR_NAME)
     }
 
-    /** (Re)starts the logcat child; caller must hold [lock]. */
+    /**
+     * (Re)starts the logcat child; caller must hold [lock]. Absolute binary
+     * first with a PATH fallback: on some OEM ROMs the app process
+     * environment cannot resolve bare `logcat`, which used to fail every
+     * spawn silently.
+     */
     private fun spawnLocked() {
         runCatching { process?.destroy() }
-        process = ProcessBuilder("logcat", "-v", "threadtime", "--pid=$pid")
-            .redirectErrorStream(true)
-            .start()
+        var lastFailure: Throwable? = null
+        for (bin in arrayOf(SYSTEM_LOGCAT, "logcat")) {
+            try {
+                process = ProcessBuilder(bin, "-v", "threadtime", "--pid=$pid")
+                    .redirectErrorStream(true)
+                    .start()
+                return
+            } catch (failure: Throwable) {
+                lastFailure = failure
+            }
+        }
+        throw lastFailure ?: IOException("logcat spawn failed")
+    }
+
+    /**
+     * Records a spawn failure in the session file (when one is open) and in
+     * [captureNote] for the status row; caller must hold [lock]. The caller
+     * mirrors afterwards so Downloads carries the diagnosis.
+     */
+    private fun noteSpawnFailedLocked(failure: Throwable) {
+        val detail = "${failure.javaClass.simpleName}: ${failure.message}"
+        captureNote = "start failed ($detail)"
+        try {
+            writer?.let {
+                it.write(captureSpawnFailedMarker(detail))
+                it.newLine()
+                it.flush()
+            }
+            stream?.fd?.sync()
+        } catch (writeFailure: Throwable) {
+            Log.w(TAG, "Recording logcat spawn failure failed", writeFailure)
+        }
+    }
+
+    /**
+     * One-shot watchdog: if no lines arrive within [SILENCE_TIMEOUT_MS], the
+     * device logd is yielding nothing for this pid (restriction, not slow
+     * startup), so the session is marked and mirrored instead of staying a
+     * bare headers-only file. The baseline keeps a retry's watchdog honest
+     * when an earlier session already captured lines.
+     */
+    private fun startSilenceWatchdogLocked(baselineLines: Long, sessionPid: Int) {
+        Thread({
+            try {
+                Thread.sleep(SILENCE_TIMEOUT_MS)
+            } catch (failure: InterruptedException) {
+                return@Thread
+            }
+            val marked = synchronized(lock) {
+                if (!running || writer == null || linesCaptured != baselineLines) false
+                else try {
+                    val waitedSecs = SILENCE_TIMEOUT_MS / 1000
+                    captureNote = "silent ${waitedSecs}s (pid=$sessionPid)"
+                    writer?.let {
+                        it.write(captureSilentMarker(sessionPid, waitedSecs))
+                        it.newLine()
+                        it.flush()
+                    }
+                    stream?.fd?.sync()
+                    true
+                } catch (failure: Throwable) {
+                    Log.w(TAG, "Recording logcat silence failed", failure)
+                    false
+                }
+            }
+            if (marked) maybeMirror(force = true)
+        }, "logcat-silence-watch").apply {
+            isDaemon = true
+            start()
+        }
     }
 
     fun stop() {
@@ -468,6 +586,7 @@ internal object LogcatFileWriter {
                     it.write(line)
                     it.newLine()
                     bytesWritten += line.toByteArray(Charsets.UTF_8).size + 1
+                    linesCaptured++
                     if (++linesSinceFlush >= FLUSH_EVERY_LINES) flushLocked()
                 }
                 maybeMirror(force = false)

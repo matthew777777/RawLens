@@ -209,11 +209,11 @@ object RawEttrSampler {
     const val BIN_COUNT = 256
     /** Center-spot scale for PROGRAM spot metering; mirrors the hardware SPOT region. */
     const val SPOT_SCALE = 0.158
-    private const val TARGET_BLOCKS = 32_000
+    internal const val TARGET_BLOCKS = 32_000
     /** Sparse PROGRAM-only density; ETTR-grade tails keep full density. */
-    private const val TARGET_BLOCKS_PROGRAM = 4_000
+    internal const val TARGET_BLOCKS_PROGRAM = 4_000
     /** Full-frame guard density backing the highlight guard for cropped scans. */
-    private const val GUARD_PIXELS = 4_096
+    internal const val GUARD_PIXELS = 4_096
 
     fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
         sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
@@ -312,9 +312,7 @@ object RawEttrSampler {
         val regionBottom = region.getOrElse(3) { height }.coerceIn(regionTop + 1, height)
         val regionWidth = regionRight - regionLeft
         val regionHeight = regionBottom - regionTop
-        val step = kotlin.math.sqrt(
-            (regionWidth.toLong() * regionHeight / targetPixels.toDouble()).coerceAtLeast(1.0)
-        ).toInt().coerceAtLeast(1)
+        val step = meterGridStep(regionWidth.toLong() * regionHeight, targetPixels)
         val colCount = (regionWidth + step - 1) / step
         val colZone = DoubleArray(colCount) { i ->
             zoneCoord((regionLeft + i * step).coerceAtMost(width - 1), width)
@@ -330,7 +328,9 @@ object RawEttrSampler {
             if (bulkRows && rowSamples != null) {
                 val rowStart = y * (rowStride / 2)
                 if (rowStart >= 0 && rowStart + width <= shortCapacity) {
-                    shortView.get(rowStart, rowSamples, 0, width)
+                    // Indexed bulk get needs ShortBufferCompat: the absolute
+                    // overload is missing below newer runtimes (API 30 crash).
+                    ShortBufferCompat.getBulk(shortView, rowStart, rowSamples, 0, width)
                     bulkRow = rowSamples
                 }
             }

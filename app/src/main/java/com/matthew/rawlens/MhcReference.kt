@@ -59,6 +59,16 @@ object MhcReference {
     const val DESAT_HI = 0.99f
 
     /**
+     * Demosaiced output ceiling (shared with the shaders): legit kernel
+     * ringing never exceeds ~1.3; past that is level-ratio explosion on
+     * hue-violating pixels (side green ~0, side red ~1 -> R = 220). Both
+     * sides clamp identically (parity-safe), and the grade clips >= 1 to
+     * white, so the cap is downstream-invisible (BT.709/HLG
+     * bit-identical; S-Log superwhite either way, nearer truth).
+     */
+    const val OUTPUT_CLAMP_HI = 4f
+
+    /**
      * Demosaic the crop [(left, top), width x height] of the sensor plane.
      *
      * @param codes sensor codes row-major with [pitch] stride (full plane).
@@ -397,13 +407,13 @@ object MhcReference {
                         0 -> {
                             out[o] = fetchN(x, y)
                             val g = kernelGreen(x, y)
-                            out[o + 1] = max(g, 0f)
-                            out[o + 2] = max(kernelOppDir(x, y, g, gateOf(x, y)), 0f)
+                            out[o + 1] = g.coerceIn(0f, OUTPUT_CLAMP_HI)
+                            out[o + 2] = kernelOppDir(x, y, g, gateOf(x, y)).coerceIn(0f, OUTPUT_CLAMP_HI)
                         }
                         2 -> {
                             val g = kernelGreen(x, y)
-                            out[o] = max(kernelOppDir(x, y, g, gateOf(x, y)), 0f)
-                            out[o + 1] = max(g, 0f)
+                            out[o] = kernelOppDir(x, y, g, gateOf(x, y)).coerceIn(0f, OUTPUT_CLAMP_HI)
+                            out[o + 1] = g.coerceIn(0f, OUTPUT_CLAMP_HI)
                             out[o + 2] = fetchN(x, y)
                         }
                         else -> {
@@ -414,14 +424,14 @@ object MhcReference {
                             out[o + 1] = fetchN(x, y)
                             if (colorAt(x + 1, y) == 0) {
                                 val dir = kernelChromaEW(x, y, gate)
-                                out[o] = max(dir * (1f - gate.g) + kernelRow(x, y) * gate.g, 0f)
+                                out[o] = (dir * (1f - gate.g) + kernelRow(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
                                 val dirB = kernelChromaNS(x, y, gate)
-                                out[o + 2] = max(dirB * (1f - gate.g) + kernelCol(x, y) * gate.g, 0f)
+                                out[o + 2] = (dirB * (1f - gate.g) + kernelCol(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
                             } else {
                                 val dir = kernelChromaNS(x, y, gate)
-                                out[o] = max(dir * (1f - gate.g) + kernelCol(x, y) * gate.g, 0f)
+                                out[o] = (dir * (1f - gate.g) + kernelCol(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
                                 val dirB = kernelChromaEW(x, y, gate)
-                                out[o + 2] = max(dirB * (1f - gate.g) + kernelRow(x, y) * gate.g, 0f)
+                                out[o + 2] = (dirB * (1f - gate.g) + kernelRow(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
                             }
                         }
                     }

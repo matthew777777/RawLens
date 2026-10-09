@@ -198,19 +198,20 @@ class VkRawSrProcessor(context: Context) : Closeable {
             android.util.Log.d("RawLensRawSrTuning",
             estimate.debugSummary() + " explicitTuningOverride=${tuningOverride != null}" +
                 " explicitAlignmentOverride=${config != null} activeTilePx=${resolvedConfig.tileSize}")
-        // Analytic kernel covariance consumes plain quad gray of the
-        // normalized CFA (dedicated quadGray dispatch in execute(); the
-        // alignment pyramid base is FFT grey now), exactly the oracle
-        // input: the CPU merge feeds bayerQuadGray of the same corrected CFA
-        // (RawSrMergeJob.mergeFrame default) per the documented no-GAT
-        // contract on RawSrKernelCovariance. A prior revision uploaded the
-        // CPU-computed GAT guide here for estimator parity, but the oracle
-        // merge never consumes GAT input: VST-domain gradients read strong
-        // edges as full-detail (D=0, k1~0.13 razor) where the oracle reads
-        // denoise-wide kernels, so the GPU latched onto single taps and wrote
-        // 1px full-range spikes at high-contrast slanted edges (burst522
-        // truck roof) that the CPU never showed. Null keeps the plain-gray
-        // path; VkMergeParityTest pins strong-edge agreement.
+        // Analytic kernel covariance consumes the CPU-computed GAT guide
+        // (double precision, exactly the oracle input), uploaded verbatim —
+        // the same field RawSrMergeJob.mergeFrame feeds
+        // RawSrKernelCovariance on the CPU chain. Computed lazily per frame:
+        // values are pure in the frame bytes, so lazy evaluation is
+        // pixel-identical to upfront. (History: a Sep-27 revision nulled
+        // this provider to dodge 1px spikes the GPU wrote at high-contrast
+        // slanted edges on GAT input (burst522 truck roof) — but the Oct-6
+        // rework moved the CPU oracle to GAT while Vulkan stayed on plain
+        // gray, whose gradients never reach the GAT-scale Dth/Dtr
+        // thresholds: every Vulkan kernel silently collapsed to the
+        // isotropic flat default and rendered at ~half the CPU/Jamy-L
+        // detail energy. Restored 2026-10-08; if spikes recur, floor the
+        // razor via tuning detailFloor, never by switching domains.)
         // KernelNet (RawSrKernelNetAniso.enabled, default on): per-frame
         // covariance fields computed lazily on first use and uploaded
         // verbatim (same packing the merge consumes), bypassing the analytic
@@ -218,6 +219,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
         // the analytic path unchanged. Fields are never retained: each upload
         // drops its heap array immediately, so burst length cannot grow
         // Dalvik peak.
+        val guideProvider = { index: Int -> RawSrCovarianceGuide.guide(inputs[index]).gray }
         val kernelNet = kernelNetProvider(inputs, ref.width, ref.height)
         // GPU FFT grey (rewrite-plan Open Q3 option (b)) with CPU
         // fallback: the alignment input is the unshaded normalized unpack
@@ -250,7 +252,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
             chromaParamsFor(input, it.noiseProfile)
         } else List(inputs.size) { null }
         return execute(inputs.size, ref.width, ref.height, ref.pattern, resolvedConfig, tuning,
-            null, greyProvider, mosaicProvider,
+            guideProvider, greyProvider, mosaicProvider,
             robustParams,
             referenceOnly, onFlow, onCovariance, onRobustness,
             kernelNet, chromaFrames = chromaFrames,
@@ -263,12 +265,14 @@ class VkRawSrProcessor(context: Context) : Closeable {
                 val codes = uploadCodes(raw, active, arena)
                 LoadedFrame(normalize(raw, codes, active, arena), codes)
             }, consume, ubGuideProvider = { index ->
-                // 4E precedent: the CPU guide gray (double precision,
-                // exactly the oracle input) is uploaded verbatim — the
-                // pyramid's linear grey lives in a different domain and
-                // would gate differently.
+                // The unblocker noise gate is specified over the plain
+                // normalized quad mean (normative §1): the CPU oracle
+                // input, uploaded verbatim (double precision). Neither
+                // the GAT-stabilized guide the kernels consume nor the
+                // pyramid's linear grey gate the same — both live in
+                // different domains and would slash noisy flats.
                 try {
-                    RawSrCovarianceGuide.guide(inputs[index]).gray
+                    RawSrCovarianceGuide.plainMean(inputs[index])
                 } catch (_: Throwable) {
                     null
                 }
@@ -532,7 +536,7 @@ class VkRawSrProcessor(context: Context) : Closeable {
      * Sabre-style unblocker fold for one moving frame (always on): 2x2 box
      * the moving grey, score variance loss, cap + veto the min'd
      * robustness, and spread through a second 5x5 minimum — the GPU twin
-     * of the CPU `applyToFrameAndSpread` (the CPU guide gray uploaded
+     * of the CPU `applyToFrameAndSpread` (the CPU plain-mean gray uploaded
      * verbatim, same green coefficients, same thresholds). The verdict
      * judge ran on the pre-fold field, so frame selection is unchanged.
      * Returns null without a usable noise model (the caller keeps the
@@ -1449,12 +1453,13 @@ class VkRawSrProcessor(context: Context) : Closeable {
                     twiddles),
                 active, arena, config)
             onGrey(0, refs[0].id, refs[0].width, refs[0].height)
-            // Kernel covariance consumes plain quad gray (no-GAT oracle
-            // contract), NOT the FFT-grey pyramid above: a null guide
-            // provider selects a dedicated quadGray dispatch here and for
-            // moving frames. KernelNet does not consume the analytic
+            // Kernel covariance consumes the uploaded guide (the CPU GAT
+            // field, exactly the oracle input), NOT the FFT-grey pyramid
+            // above: a null guide provider (test-adapter path, which has no
+            // packed frames) selects a dedicated quadGray dispatch here and
+            // for moving frames. KernelNet does not consume the analytic
             // guide. Build it only on fallback, avoiding an otherwise
-            // unused full quad plane and CPU pass per frame.
+            // unused full quad plane and GPU pass per frame.
             val refCovariance = kernelNetTexture(kernelNet, 0, active, arena) ?: run {
                 val guide = if (refLoaded.codes != null)
                     guideProvider?.invoke(0)?.let { uploadGuide(it, active, arena) } else null

@@ -24,11 +24,11 @@ enum class DirectLogProfile(
     val wireId: Int,
     /** Short HUD label (right chip in LOG mode). */
     val hudLabel: String,
-    /** MP4 filename suffix (BT709 keeps the historical `_LOG`). */
+    /** MP4 filename suffix (`_LOG` + HUD label). */
     val fileSuffix: String,
 ) {
     /** Ready-to-watch SDR: linear -> BT.709 OETF -> BT.709 YUV. Default. */
-    BT709(0, "709", "_LOG"),
+    BT709(0, "709", "_LOG709"),
 
     /** Flat log for later grading: linear -> Sony S-Log3 -> BT.709 YUV. */
     SLOG3(1, "SLOG3", "_LOGSLOG3"),

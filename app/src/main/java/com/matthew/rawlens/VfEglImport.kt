@@ -37,6 +37,13 @@ internal object VfEglImport {
     external fun destroyEGLImage(eglImage: Long)
 
     /**
+     * BGU guide-sample handoff: export the current GL stream position as a
+     * dup'd native fence fd, signaled when prior GL work completes. -1 on
+     * failure; close with [closeSyncFd].
+     */
+    external fun exportFenceFd(): Int
+
+    /**
      * CPU-fill [buffer] (RGBA_8888, allocated with USAGE_CPU_WRITE_OFTEN)
      * with an animated gradient + moving white bar. Probe-only stand-in
      * for the Vulkan superpixel export: real AHB bytes -> EGL import ->

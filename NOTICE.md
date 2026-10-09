@@ -260,3 +260,32 @@ Upstream authors provide their work without endorsement of RawLens.
   own code under the repository license; it loads the vendored SPIR-V and
   follows the upstream device contract (Vulkan 1.2, float16 arithmetic,
   16-bit storage) documented in `docs/galosh-phase0-spec.md`.
+
+## Halide (AOT filters for the BGU viewfinder)
+
+- Project: Halide
+- Repository: https://github.com/halide/Halide
+- Host toolchain pinned: 21.0.0 (Homebrew 21.0.0_2) on arm64 macOS, C++17,
+  per `tools/halide/build_aot.sh`
+- License: MIT License
+- The AOT archives under `app/src/main/cpp/halide/filters/` (one per Android
+  ABI for `bgu_spike_downsample`, `bgu_look`, `bgu_fit`) embed the Halide
+  runtime and ship in the APK. The generator sources under
+  `tools/halide/generators/` are RawLens's own code under the repository
+  license (two adapt google/bgu generator structure, see below); the script
+  plus sources are the audit/regen path for the checked-in archives.
+
+## google/bgu (bilateral-grid research reference + adapted stages)
+
+- Project: google/bgu — Bilateral Guided Upsampling (J. Chen, A. Adams,
+  N. Wadhwa, S. Hasinoff, SIGGRAPH Asia 2016)
+- Repository: https://github.com/google/bgu
+- Pinned commit: `f2d6f2d` (depth-1 clone at research time, 2026-10-04)
+- License: Apache License, Version 2.0
+- Adapted (not vendored) into RawLens's own Halide generators and shaders:
+  `bgu_spike_downsample` adapts `src/halide/box_downsample_generator.cpp`,
+  `bgu_fit` adapts `src/halide/fit_and_slice_affine_grid_halide.cpp`
+  (f32 I/O, fit-only, BGU luma weights), and the GPU slice shader ports
+  `apply_local_curves.fs.glsl` to hand-written OpenGL ES 3.00. The paper's
+  fit/slice split (§4–§5) shapes the whole viewfinder engine; the engine,
+  JNI bridges, and schedules are RawLens's own work.

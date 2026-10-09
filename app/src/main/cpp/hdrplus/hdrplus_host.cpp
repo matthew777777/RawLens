@@ -5,6 +5,7 @@
 #include "hdrplus_internal.h"
 
 #include "hdrplus_platform.h"
+#include "vulkan_pipeline_cache.h"
 
 #include <algorithm>
 #include <cstring>
@@ -369,6 +370,32 @@ void set_err(char* errmsg, size_t n, const std::string& s) {
 }
 }  // namespace
 
+VkPipelineCache hdrplus_pipeline_cache(HdrPlusContext* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    if (ctx->pipeline_cache != VK_NULL_HANDLE) return ctx->pipeline_cache;
+    const char* path = ctx->pipeline_cache_path.empty() ? nullptr : ctx->pipeline_cache_path.c_str();
+    size_t warmed = 0;
+    ctx->pipeline_cache = rawlens::vpc::load(ctx->device, path, &warmed);
+    if (ctx->pipeline_cache == VK_NULL_HANDLE) {
+        HP_LOGE("hdrplus: pipeline cache unavailable; compiling without it");
+    } else if (path != nullptr) {
+        HP_LOGI("hdrplus: pipeline cache ready (%zu warmed bytes)", warmed);
+    }
+    return ctx->pipeline_cache;
+}
+
+void hdrplus_save_pipeline_cache(HdrPlusContext* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE || ctx->pipeline_cache == VK_NULL_HANDLE ||
+        ctx->pipeline_cache_path.empty()) {
+        return;
+    }
+    if (rawlens::vpc::save(ctx->device, ctx->pipeline_cache, ctx->pipeline_cache_path.c_str())) {
+        HP_LOGI("hdrplus: pipeline cache saved");
+    } else {
+        HP_LOGE("hdrplus: pipeline cache save failed");
+    }
+}
+
 extern "C" {
 
 int hdrplus_shader_count(void) { return 28; }
@@ -573,8 +600,8 @@ int hdrplus_load_shaders(HdrPlusContext* ctx, void* assetMgr, char* errmsg, size
             pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             pci.stage = st;
             pci.layout = program.layout;
-            ok = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pci, nullptr,
-                                          &program.pipeline) == VK_SUCCESS;
+            ok = vkCreateComputePipelines(ctx->device, hdrplus_pipeline_cache(ctx), 1, &pci,
+                                          nullptr, &program.pipeline) == VK_SUCCESS;
         }
         vkDestroyShaderModule(ctx->device, module, nullptr);
         if (!ok) {
@@ -587,6 +614,8 @@ int hdrplus_load_shaders(HdrPlusContext* ctx, void* assetMgr, char* errmsg, size
         ctx->loaded_shaders++;
     }
     HP_LOGI("hdrplus: %u shader modules loaded", ctx->loaded_shaders);
+    // Persist the warmed cache now: the process may die before destroy.
+    hdrplus_save_pipeline_cache(ctx);
     return static_cast<int>(ctx->loaded_shaders);
 }
 
@@ -594,10 +623,20 @@ int hdrplus_loaded_shader_count(const HdrPlusContext* ctx) {
     return ctx == nullptr ? 0 : static_cast<int>(ctx->loaded_shaders);
 }
 
+void hdrplus_set_pipeline_cache_path(HdrPlusContext* ctx, const char* path) {
+    if (ctx == nullptr) return;
+    ctx->pipeline_cache_path = (path != nullptr) ? path : "";
+}
+
 void hdrplus_destroy(HdrPlusContext* ctx) {
     if (ctx == nullptr) return;
     if (ctx->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(ctx->device);
+        hdrplus_save_pipeline_cache(ctx);
+        if (ctx->pipeline_cache != VK_NULL_HANDLE) {
+            vkDestroyPipelineCache(ctx->device, ctx->pipeline_cache, nullptr);
+            ctx->pipeline_cache = VK_NULL_HANDLE;
+        }
         for (auto& program : ctx->programs) {
             if (program.pipeline) vkDestroyPipeline(ctx->device, program.pipeline, nullptr);
             if (program.layout) vkDestroyPipelineLayout(ctx->device, program.layout, nullptr);

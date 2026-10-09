@@ -428,4 +428,49 @@ class MhcReferenceTest {
         }
         assertTrue("RGGB ref empty", ref.any { it != 0f })
     }
+
+    /**
+     * Ratio-explosion guard: mirrors the device parity pattern (R
+     * horizontal, Gr vertical, Gb/B diagonal ramps + saturated bar). At
+     * pixel (61,1) the side green is ~0 against a bright anchor, sending
+     * the level ratio to 243x and R to 220 pre-clamp; both sides clamp
+     * identically at [MhcReference.OUTPUT_CLAMP_HI], so the parity gate
+     * sees 0 diff instead of fp noise on garbage. Legit pixels (all
+     * others here) sit far below the cap: the clamp never fires on real
+     * content.
+     */
+    @Test fun hueViolatingPixelStaysBounded() {
+        val w = 64
+        val h = 64
+        val barX = 0
+        val barHalf = maxOf(w / 120, 2)
+        val codes = IntArray(w * h) { i ->
+            val x = i % w
+            val y = i / w
+            val v = when {
+                x % 2 == 0 && y % 2 == 0 -> (x * 1023) / w
+                x % 2 == 1 && y % 2 == 0 -> (y * 1023) / h
+                x % 2 == 0 -> ((x + y) * 1023) / (w + h)
+                else -> ((x + y) * 1023) / (w + h)
+            }
+            var dx = x - barX
+            if (dx < 0) dx = -dx
+            if (dx < barHalf) 1023 else v
+        }
+        val out = MhcReference.demosaic(
+            codes, w, h, w, 0, 0, w, h, channels, zeros, 1023f
+        )
+        var maxV = 0f
+        for (v in out) {
+            assertTrue("non-finite MHC output", v.isFinite())
+            maxV = maxOf(maxV, v)
+        }
+        assertTrue("MHC output $maxV exceeds clamp", maxV <= MhcReference.OUTPUT_CLAMP_HI)
+        // The explosion pixel clamps exactly (pre-clamp value: 219.68).
+        val r61_1 = out[(1 * w + 61) * 3]
+        assertTrue(
+            "pixel (61,1) R=$r61_1 (expect clamped at ${MhcReference.OUTPUT_CLAMP_HI})",
+            r61_1 == MhcReference.OUTPUT_CLAMP_HI
+        )
+    }
 }

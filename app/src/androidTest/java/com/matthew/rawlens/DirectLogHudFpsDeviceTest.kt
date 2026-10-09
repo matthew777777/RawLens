@@ -110,7 +110,7 @@ class DirectLogHudFpsDeviceTest {
                         MediaStore.Video.Media.DATE_ADDED
                     ),
                     "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",
-                    arrayOf("%_LOG.mp4"),
+                    arrayOf("%_LOG709.mp4"),
                     "${MediaStore.Video.Media.DATE_ADDED} DESC"
                 )?.use { cursor ->
                     if (cursor.moveToFirst()) {
@@ -125,7 +125,7 @@ class DirectLogHudFpsDeviceTest {
                 if (publishedUri != null) break
                 SystemClock.sleep(1000)
             }
-            assertTrue("No _LOG.mp4 published to MediaStore", publishedUri != null)
+            assertTrue("No _LOG709.mp4 published to MediaStore", publishedUri != null)
 
             val stats = activity.lastDirectLogStats
             assertTrue("No take stats recorded", stats != null)

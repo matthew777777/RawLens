@@ -7,6 +7,7 @@
 // degrading gracefully so the probe test can report instead of crash.
 #include "galosh_host.h"
 
+#include <android/log.h>
 #include <new>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,10 @@
 #include <vulkan/vulkan.h>
 
 #include "galosh_internal.h"
+#include "vulkan_pipeline_cache.h"
+
+#define GALOSH_CACHE_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "galosh", __VA_ARGS__)
+#define GALOSH_CACHE_LOGW(...) __android_log_print(ANDROID_LOG_WARN, "galosh", __VA_ARGS__)
 
 uint32_t galosh_find_mem_type(VkPhysicalDevice pd, uint32_t bits, VkMemoryPropertyFlags want,
                               bool* ok) {
@@ -277,4 +282,35 @@ int galosh_loaded_shader_count(const GaloshContext* ctx) {
         if (ctx->kerns[i].pipe != VK_NULL_HANDLE) n++;
     }
     return n;
+}
+
+void galosh_set_pipeline_cache_path(GaloshContext* ctx, const char* path) {
+    if (ctx == nullptr) return;
+    ctx->pipelineCachePath = (path != nullptr) ? path : "";
+}
+
+VkPipelineCache galosh_pipeline_cache(GaloshContext* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    if (ctx->pipelineCache != VK_NULL_HANDLE) return ctx->pipelineCache;
+    const char* path = ctx->pipelineCachePath.empty() ? nullptr : ctx->pipelineCachePath.c_str();
+    size_t warmed = 0;
+    ctx->pipelineCache = rawlens::vpc::load(ctx->device, path, &warmed);
+    if (ctx->pipelineCache == VK_NULL_HANDLE) {
+        GALOSH_CACHE_LOGW("pipeline cache unavailable; compiling without it");
+    } else if (path != nullptr) {
+        GALOSH_CACHE_LOGI("pipeline cache ready (%zu warmed bytes)", warmed);
+    }
+    return ctx->pipelineCache;
+}
+
+void galosh_save_pipeline_cache(GaloshContext* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE ||
+        ctx->pipelineCache == VK_NULL_HANDLE || ctx->pipelineCachePath.empty()) {
+        return;
+    }
+    if (rawlens::vpc::save(ctx->device, ctx->pipelineCache, ctx->pipelineCachePath.c_str())) {
+        GALOSH_CACHE_LOGI("pipeline cache saved");
+    } else {
+        GALOSH_CACHE_LOGW("pipeline cache save failed");
+    }
 }

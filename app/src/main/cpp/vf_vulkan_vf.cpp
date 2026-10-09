@@ -21,8 +21,11 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
+
+#include "vulkan_pipeline_cache.h"
 
 #define LOG_TAG "RawLensVfVk"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -92,6 +95,9 @@ static std::atomic<uint64_t> vkGeneration{0};
 // GL). The ivec4 pair needs 8 bytes of pad after pitch (72 -> 80).
 struct SuperpixelParams {
     int32_t chans[4];
+    // Q6 fixed-point blackQ/denQ bit-cast to float (VfLevels.kt): this
+    // struct only memcpys the words into the push block; the shader
+    // recovers the ints with floatBitsToInt. Never interpret as float.
     float black[4];
     float invRange[4];
     int32_t quadBase[2];
@@ -240,6 +246,11 @@ struct Context {
     // semaphore signal exported as a sync fd. Absent -> blocking fallback.
     PFN_vkGetSemaphoreFdKHR getSemFd = nullptr;
     bool hasSemaphoreFd = false;
+    // shaderFloat16 (VK_KHR_shader_float16_int8): the fused record kernel
+    // selects its fp16 SPIR-V when true, the fp32 twin otherwise.
+    bool hasF16Math = false;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    std::string pipelineCachePath;  // empty = in-memory cache only
     std::map<AHardwareBuffer*, ImportedBuffer> inputs;
     std::vector<AHardwareBuffer*> inputOrder;
     AHardwareBuffer* outputBuffer = nullptr;
@@ -445,6 +456,41 @@ struct Context {
 };
 
 Context* g = nullptr;
+
+// Pipeline-cache file set from Kotlin (VulkanPipelineCache). Static: the
+// Context is deleted + recreated across reinit, but the path persists.
+static std::string gPipelineCachePath;
+
+// Lazily creates ctx->pipelineCache, warming it from the file when one is
+// set. The result (possibly null; null means "no cache") is the cache
+// argument for pipeline creation. Called under vkMutex.
+static VkPipelineCache pipelineCacheFor(Context* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    if (ctx->pipelineCache != VK_NULL_HANDLE) return ctx->pipelineCache;
+    const char* path = ctx->pipelineCachePath.empty() ? nullptr : ctx->pipelineCachePath.c_str();
+    size_t warmed = 0;
+    ctx->pipelineCache = rawlens::vpc::load(ctx->device, path, &warmed);
+    if (ctx->pipelineCache == VK_NULL_HANDLE) {
+        LOGW("vf-vk: pipeline cache unavailable; compiling without it");
+    } else if (path != nullptr) {
+        LOGI("vf-vk: pipeline cache ready (%zu warmed bytes)", warmed);
+    }
+    return ctx->pipelineCache;
+}
+
+// Persists ctx->pipelineCache when a file is set. No-op otherwise; never
+// fatal. Called under vkMutex after pipeline creation (rare, idempotent).
+static void savePipelineCache(Context* ctx) {
+    if (ctx == nullptr || ctx->device == VK_NULL_HANDLE || ctx->pipelineCache == VK_NULL_HANDLE ||
+        ctx->pipelineCachePath.empty()) {
+        return;
+    }
+    if (rawlens::vpc::save(ctx->device, ctx->pipelineCache, ctx->pipelineCachePath.c_str())) {
+        LOGI("vf-vk: pipeline cache saved");
+    } else {
+        LOGW("vf-vk: pipeline cache save failed");
+    }
+}
 
 uint32_t pickMemoryType(uint32_t bits, uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
@@ -819,12 +865,13 @@ static bool createLinkedPipeline(Context* ctx, const uint32_t* code, size_t word
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->pipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, out);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, out);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: linked compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     return true;
 }
 
@@ -879,12 +926,13 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->pipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->pipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->pipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 1;
@@ -963,12 +1011,13 @@ bool createGradePipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->gradePipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->gradePipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->gradePipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: grade compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[0].descriptorCount = 1;
@@ -1049,12 +1098,13 @@ bool createYuvPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->yuvPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->yuvPipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->yuvPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: yuv compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[0].descriptorCount = 3;
@@ -1134,12 +1184,13 @@ bool createPreviewPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->previewPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->previewPipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->previewPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: preview compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 3;
@@ -1221,12 +1272,13 @@ bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->rcdPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->rcdPipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->rcdPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: rcd compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 3;
@@ -1304,12 +1356,13 @@ bool createMhcPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->mhcPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->mhcPipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->mhcPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: mhc compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 3;
@@ -1397,12 +1450,13 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->fusedPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &ctx->fusedPipeline);
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->fusedPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: fused compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[0].descriptorCount = 9;
@@ -2323,6 +2377,9 @@ static void teardownContext() {
         vkDestroyDescriptorSetLayout(ctx->device, ctx->setLayout, nullptr);
     if (ctx->descriptorPool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(ctx->device, ctx->descriptorPool, nullptr);
+    savePipelineCache(ctx);
+    if (ctx->pipelineCache != VK_NULL_HANDLE)
+        vkDestroyPipelineCache(ctx->device, ctx->pipelineCache, nullptr);
     VkDevice device = ctx->device;
     VkInstance instance = ctx->instance;
     delete ctx;
@@ -2336,6 +2393,20 @@ Java_com_matthew_rawlens_VfVulkan_initNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g != nullptr) return VFVK_OK;
     return initContext(env, spv);
+}
+
+// Persistence file for the process pipeline cache. Takes effect for the
+// live device (subsequently created pipelines) and every later (re)init.
+extern "C" JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VfVulkan_setPipelineCachePathNative(
+    JNIEnv* env, jobject, jstring path) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    const char* chars = (env != nullptr && path != nullptr)
+                            ? env->GetStringUTFChars(path, nullptr)
+                            : nullptr;
+    gPipelineCachePath = (chars != nullptr) ? chars : "";
+    if (chars != nullptr) env->ReleaseStringUTFChars(path, chars);
+    if (g != nullptr) g->pipelineCachePath = gPipelineCachePath;
 }
 
 // Full teardown + bring-up after persistent submit failures (wedged queue or
@@ -2366,6 +2437,7 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
     if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
 
     Context* ctx = new Context();
+    ctx->pipelineCachePath = gPipelineCachePath;
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "RawLensVf";
@@ -2408,7 +2480,7 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
     uint32_t extCount = 0;
     vkEnumerateDeviceExtensionProperties(ctx->gpu, nullptr, &extCount, nullptr);
     bool hasExternalMem = false, hasAhb = false, hasForeign = false;
-    bool hasSem = false, hasSemFd = false;
+    bool hasSem = false, hasSemFd = false, hasF16 = false;
     {
         uint32_t cap = extCount > 256 ? 256 : extCount;
         std::vector<VkExtensionProperties> exts(cap);
@@ -2425,6 +2497,8 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
                     hasSem = true;
                 if (!std::strcmp(exts[i].extensionName, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME))
                     hasSemFd = true;
+                if (!std::strcmp(exts[i].extensionName, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME))
+                    hasF16 = true;
             }
         }
     }
@@ -2439,20 +2513,41 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
     queueInfo.queueFamilyIndex = ctx->queueFamily;
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
-    const char* devExt[] = {VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-                            VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
-                            VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-                            VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
-                            VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME};
-    // Semaphore-fd export is optional (wait-free fast path); the required
-    // three come first so a missing pair only disables the fast path.
-    const uint32_t devExtCount = (hasSem && hasSemFd) ? 5 : 3;
+    // Optional pairs append independently: semaphore-fd (wait-free fast
+    // path) and float16 math (fused record kernel; fp32 fallback otherwise).
+    const bool wantSemFd = hasSem && hasSemFd;
+    std::vector<const char*> devExt;
+    devExt.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+    devExt.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+    devExt.push_back(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
+    if (wantSemFd) {
+        devExt.push_back(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
+        devExt.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+    }
+    VkPhysicalDeviceShaderFloat16Int8Features f16Features{};
+    bool wantF16 = hasF16;
+    if (wantF16) {
+        // Presence is not enough: shaderFloat16 is a queryable feature.
+        f16Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+        VkPhysicalDeviceFeatures2 f2{};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &f16Features;
+        vkGetPhysicalDeviceFeatures2(ctx->gpu, &f2);
+        wantF16 = f16Features.shaderFloat16 == VK_TRUE;
+    }
+    if (wantF16) devExt.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
     VkDeviceCreateInfo devInfo{};
     devInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &queueInfo;
-    devInfo.enabledExtensionCount = devExtCount;
-    devInfo.ppEnabledExtensionNames = devExt;
+    devInfo.enabledExtensionCount = static_cast<uint32_t>(devExt.size());
+    devInfo.ppEnabledExtensionNames = devExt.data();
+    if (wantF16) {
+        f16Features.shaderFloat16 = VK_TRUE;
+        f16Features.shaderInt8 = VK_FALSE;
+        f16Features.pNext = nullptr;
+        devInfo.pNext = &f16Features;
+    }
     if (vkCreateDevice(ctx->gpu, &devInfo, nullptr, &ctx->device) != VK_SUCCESS) {
         vkDestroyInstance(ctx->instance, nullptr);
         delete ctx;
@@ -2467,12 +2562,14 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
         delete ctx;
         return VFVK_NO_EXTENSION;
     }
-    if (devExtCount == 5) {
+    if (wantSemFd) {
         ctx->getSemFd = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
             vkGetDeviceProcAddr(ctx->device, "vkGetSemaphoreFdKHR"));
         ctx->hasSemaphoreFd = (ctx->getSemFd != nullptr);
         LOGI("vf-vk: semaphore-fd export %s", ctx->hasSemaphoreFd ? "ready" : "unavailable");
     }
+    ctx->hasF16Math = wantF16;
+    LOGI("vf-vk: float16 math %s", wantF16 ? "ready" : "unavailable (fp32 fallback)");
     if (!createPipeline(ctx, code.data(), code.size())) {
         vkDestroyDevice(ctx->device, nullptr);
         vkDestroyInstance(ctx->instance, nullptr);
@@ -2872,6 +2969,12 @@ Java_com_matthew_rawlens_VfVulkan_sampleOutputNative(JNIEnv*, jobject) {
     }
     AHardwareBuffer_unlock(g->outputBuffer, nullptr);
     return maxByte;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_matthew_rawlens_VfVulkan_supportsF16MathNative(JNIEnv*, jobject) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    return (g != nullptr && g->hasF16Math) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -4878,13 +4981,14 @@ bool createStabPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->stabPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr,
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr,
                                           &ctx->stabPipeline);
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: stab compute pipeline failed %d", r);
         return false;
     }
+    savePipelineCache(ctx);
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSize.descriptorCount = 2;

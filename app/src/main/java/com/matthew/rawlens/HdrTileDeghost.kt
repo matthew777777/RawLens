@@ -56,10 +56,10 @@ import kotlin.math.sqrt
  * via [deghost]'s `tileSize`. Residual subpixel registration (after
  * translation pre-align + FlowNet and the merge's same-colour bilinear
  * warp) is absorbed inside each tile by a Fourier phase-ramp search over
- * +-0.5 channel-px (hdr-plus-swift `merge/frequency.metal` idea, 3x3
- * candidate grid on the already-computed spectra — no extra FFTs): the
- * shift minimizing the noise-normalized spectral residual is applied to
- * the alternate spectrum before Wiener weighting, so subpixel residuals
+ * +-0.5 channel-px (hdr-plus-swift `merge_frequency_domain` 7x7 grid at
+ * 1/6 steps on the already-computed spectra — no extra FFTs): the shift
+ * maximizing the noise-weighted cross-correlation is applied to the
+ * alternate spectrum before Wiener weighting, so subpixel residuals
  * average instead of forcing HF rejection.
  */
 object HdrTileDeghost {
@@ -114,12 +114,18 @@ object HdrTileDeghost {
      */
     private const val WARP_VARIANCE_INFLATION = 1.25f
     /**
-     * Fourier subpixel search half-range in channel px (hdr-plus-swift uses
-     * +-0.5 at 1/6 steps over 49 candidates; we score the 3x3 grid at
-     * +-0.5/0 on the already-computed spectra — no extra FFTs — which
-     * captures the aligner residual at ~1/9th the upstream cost).
+     * Fourier subpixel search grid (hdr-plus-swift `merge_frequency_domain`
+     * / RAWR `hdrq_shift_table`): 7x7 candidates at 1/6 steps over +-0.5
+     * channel-px (49 shifts), scored on the already-computed spectra via
+     * the cross-correlation argmax — the same argmin as least squares in
+     * real arithmetic (rotation preserves magnitude), at one dot product
+     * per candidate instead of a full residual. No extra FFTs.
      */
-    private const val SUBPIX_STEP = 0.5f
+    private const val SUBPIX_GRID = 7
+    private const val SUBPIX_GRIDSQ = SUBPIX_GRID * SUBPIX_GRID
+    private const val SUBPIX_FINE = 1.0 / 6.0
+    /** Candidate index of the zero shift (first-maximum wins ties). */
+    private const val SUBPIX_ZERO = 3 * SUBPIX_GRID + 3
     /**
      * Tiles whose reference AC energy sits below this multiple of the
      * expected noise-bin energy skip refinement (flat tiles have no
@@ -147,29 +153,29 @@ object HdrTileDeghost {
         val winPower: Float
         val twRe = FloatArray(t / 2) { k -> cos(2.0 * PI * k / t).toFloat() }
         val twIm = FloatArray(t / 2) { k -> -sin(2.0 * PI * k / t).toFloat() }
-        val subCos: Array<FloatArray> = Array(3) { si ->
-            val shift = (si - 1) * SUBPIX_STEP
-            FloatArray(t) { f ->
-                val signed = if (f <= t / 2) f else f - t
-                cos(2.0 * PI * signed * shift / t).toFloat()
-            }
-        }
-        val subSin: Array<FloatArray> = Array(3) { si ->
-            val shift = (si - 1) * SUBPIX_STEP
-            FloatArray(t) { f ->
-                val signed = if (f <= t / 2) f else f - t
-                (-sin(2.0 * PI * signed * shift / t)).toFloat()
-            }
-        }
+        /**
+         * Upstream Fourier-shift coefficients (`hdrq_shift_table`): combined
+         * (cos,sin) of `-2π(u*sx+v*sy)/t` per candidate shift and bin
+         * (unsigned bin indices, textbook DFT shift). 49 candidates on the
+         * 7x7 grid at 1/6 steps over +-0.5 channel-px; shift `s` has
+         * `sx = -0.5+(s%7)/6`, `sy = -0.5+(s/7)/6`, bin `v*t+u`.
+         */
+        val shiftCos = FloatArray(SUBPIX_GRIDSQ * t * t)
+        val shiftSin = FloatArray(SUBPIX_GRIDSQ * t * t)
         /** Hann analysis taps over channel coords. */
         val hann = FloatArray(t) { i ->
             (0.5 - 0.5 * cos(2.0 * PI * (i + 0.5) / t)).toFloat()
         }
         /** Triangular synthesis taps over Bayer coords. */
         val tri = FloatArray(bt) { i -> min(i + 1, bt - i) / phase.toFloat() }
-        /** Wide raised-cosine taps for the mismatch support window. */
-        val rc = FloatArray(bt) { i ->
-            (0.5f - 0.17f * cos(2.0 * PI * (i + 0.5) / bt).toFloat())
+        /**
+         * Upstream mismatch support window (`calculate_mismatch_rgba`):
+         * `(0.5-0.17cos)` taps over the doubled tile support (2t channel
+         * px per axis, period t). Indexed by within-support channel
+         * coord `lx+t/2`.
+         */
+        val rcExt = FloatArray(2 * t) { i ->
+            (0.5f - 0.17f * cos(2.0 * PI * (i + 0.5) / t).toFloat())
         }
         /** Upstream deconvolution gains for this tile size. */
         val deconvCw: FloatArray = if (t == 8) floatArrayOf(
@@ -185,6 +191,16 @@ object HdrTileDeghost {
             var power = 0.0
             for (i in 0 until t) power += hann[i] * hann[i]
             winPower = (power * power).toFloat()
+            for (s in 0 until SUBPIX_GRIDSQ) {
+                val sx = -0.5 + (s % SUBPIX_GRID) * SUBPIX_FINE
+                val sy = -0.5 + (s / SUBPIX_GRID) * SUBPIX_FINE
+                for (v in 0 until t) for (u in 0 until t) {
+                    val a = (-2.0 * PI * (u * sx + v * sy) / t).toFloat()
+                    val j = s * t * t + v * t + u
+                    shiftCos[j] = cos(a.toDouble()).toFloat()
+                    shiftSin[j] = sin(a.toDouble()).toFloat()
+                }
+            }
             normLut = BayerPattern.entries.associateWith { pattern -> buildNormLut(pattern) }
         }
 
@@ -269,12 +285,20 @@ object HdrTileDeghost {
      *
      * @param strength Base Wiener tuning (upstream `robustness_norm` role):
      *   mismatched bins collapse to the reference regardless; the effective
-     *   noise term is `strength * motion * magnitude * highlights`, so
-     *   static tiles average up to [MAX_MOTION_NORM]x harder while motion,
-     *   blur-inferior, and clipped-alternate bins are protected.
+     *   noise term is `strength * damping * motion * magnitude *
+     *   highlights`, so static tiles average up to [MAX_MOTION_NORM]x
+     *   harder (scaled per companion by its exposure factor) while
+     *   motion, blur-inferior, and clipped-alternate bins are protected.
      * @param tileSize Per-channel tile edge: [TILE] (8, default — upstream's
      *   `tile_size_merge`, best localization) or [TILE_LARGE] (16, fallback
      *   for heavy blur). Must be one of the two.
+     * @param burstFactors Burst exposure factors (each frame's
+     *   [HdrPlusRobustness.exposureFactor] against the reference; the
+     *   reference contributes exactly 1) for upstream corr1/corr2
+     *   damping. Null (default) falls back to the pairwise burst
+     *   `[1, factor]` derived from [reference]/[moving] EXIF, so direct
+     *   callers still get bracket damping; [HdrRawMerge] passes the full
+     *   burst for the upstream-exact burst mean.
      */
     fun deghost(
         reference: HdrMergeFrame,
@@ -282,7 +306,8 @@ object HdrTileDeghost {
         movingCfa: UnpackedRawCfa,
         strength: Float = 8f,
         tileSize: Int = TILE,
-        stats: TileStatsCollector? = null
+        stats: TileStatsCollector? = null,
+        burstFactors: List<Float>? = null
     ): UnpackedRawCfa {
         require(strength.isFinite() && strength > 0f)
         require(tileSize == TILE || tileSize == TILE_LARGE) {
@@ -302,6 +327,17 @@ object HdrTileDeghost {
         // must use the same radiometric conversion as the downstream merge.
         val exposureGain = HdrRawMerge.calibration(moving) / HdrRawMerge.calibration(reference)
         require(exposureGain.isFinite() && exposureGain > 0f)
+        // Upstream bracket adaptation (hdr-plus-swift frequency.swift):
+        // the companion's linear exposure factor drives the per-companion
+        // motion ceiling and the burst corr1/corr2 strength damping, so
+        // cross-exposure pairs average with upstream's calibration instead
+        // of a fixed strength. Uniform pairs map to exactly the legacy
+        // behavior (damping 1, ceiling [MAX_MOTION_NORM]).
+        val factor = (1f / exposureGain).coerceIn(1f / 1024f, 1024f)
+        val factors = burstFactors ?: listOf(1f, factor)
+        val uniform = HdrPlusRobustness.isUniform(factors)
+        val dampedStrength = strength * HdrPlusRobustness.strengthDamping(factors)
+        val pairMaxMotion = HdrPlusRobustness.maxMotionForFactor(MAX_MOTION_NORM, factor, uniform)
         val out = FloatArray(width * height)
         val normLut = p.normLut.getValue(ref.pattern)
         // Full half-tile phase grid; tiles within a phase are disjoint, so
@@ -320,7 +356,8 @@ object HdrTileDeghost {
                         ref.values, movingCfa.values, width, height, ref.pattern,
                         startOx + tx * p.bt, startOy + ty * p.bt,
                         gain, exposureGain, reference.noiseModel, moving.noiseModel,
-                        strength, out, width, tile, p, stats
+                        dampedStrength, pairMaxMotion, factor,
+                        out, width, tile, p, stats
                     )
                 }
             }
@@ -348,10 +385,11 @@ object HdrTileDeghost {
         moving: HdrMergeFrame,
         movingCfa: UnpackedRawCfa,
         strength: Float = 8f,
-        tileSize: Int = TILE
+        tileSize: Int = TILE,
+        burstFactors: List<Float>? = null
     ): Pair<UnpackedRawCfa, TileStats> {
         val stats = TileStatsCollector()
-        val out = deghost(reference, moving, movingCfa, strength, tileSize, stats)
+        val out = deghost(reference, moving, movingCfa, strength, tileSize, stats, burstFactors)
         return out to stats.snapshot()
     }
 
@@ -443,10 +481,15 @@ object HdrTileDeghost {
         ref: FloatArray, mov: FloatArray, width: Int, height: Int,
         pattern: BayerPattern, ox: Int, oy: Int, gain: Float, exposureGain: Float,
         refNoise: CfaNoiseModel?, movNoise: CfaNoiseModel?,
-        strength: Float, out: FloatArray, outStride: Int, s: TileScratch, p: TilePass,
+        strength: Float, maxMotion: Float, factor: Float,
+        out: FloatArray, outStride: Int, s: TileScratch, p: TilePass,
         stats: TileStatsCollector? = null
     ) {
         val t = p.t
+        // Companion-domain peaks per Bayer quad for the upstream highlight
+        // discount (factor > 1 case below): quad (lx,ly) spans the four
+        // channel sites sampled at that (lx,ly) across the channel loop.
+        s.quadMax.fill(0f, 0, t * t)
         // Channel quad offsets for this pattern: slot 0=R,1=G-top,2=G-bottom,3=B.
         var movClipped = 0
         var movHi = 0.0
@@ -462,6 +505,8 @@ object HdrTileDeghost {
                 val m = raw * gain
                 s.refRe[c][ly * t + lx] = r
                 s.movRe[c][ly * t + lx] = m
+                val q = ly * t + lx
+                if (raw > s.quadMax[q]) s.quadMax[q] = raw
                 if (raw >= TILE_GAIN_CLIP) movClipped++
                 movHi += ((m - MOV_HI_LO) / MOV_HI_SPAN).coerceIn(0f, 1f)
                 refMean += r
@@ -489,31 +534,46 @@ object HdrTileDeghost {
                 s.movMean[c] *= f
             }
         }
-        // Alternate-side highlight discount (upstream `highlights_norm`): maps
+        // Alternate-side highlight discount for darker companions: maps
         // the gain-matched alternate into reference brightness and smoothly
-        // discounts tiles piling near white, where a clipped alternate would
-        // inject color casts. Only applies when the alternate is the darker
-        // frame (tileGain > 1); a brighter alternate that clips is already
-        // rejected bin-wise by its large spectral residual. Clean tiles stay
-        // at exactly 1.
+        // discounts tiles piling near white, where an amplified darker
+        // frame would inject color casts. Only applies when the alternate
+        // is the darker frame (tileGain > 1). Clean tiles stay at exactly 1.
         val movFrac = (movHi / tileSites).toFloat()
         val altShrink = if (tileGain > 1.001f)
             ((1f - movFrac) * (1f - movFrac))
                 .coerceIn(0.04f / min(tileGain, 4f), 1f)
         else 1f
-        // Mismatch residual on the refined spatial planes (before the FFTs
-        // consume them): raised-cosine-weighted mean abs difference in
+        // Upstream highlight discount (`calculate_highlights_norm_rgba`)
+        // for longer companions (factor > 1): tiles where the companion's
+        // own exposure piles near white are forced toward the reference,
+        // so clipped long-exposure highlights cannot inject color casts.
+        // Disjoint from [altShrink] (factor > 1 implies tileGain < 1);
+        // clean tiles stay at exactly 1.
+        val highlights = if (factor > 1.001f) {
+            var hiFrac = 0.0
+            for (q in 0 until t * t) {
+                hiFrac += ((s.quadMax[q] - MOV_HI_LO) / MOV_HI_SPAN).coerceIn(0f, 1f)
+            }
+            HdrPlusRobustness.highlightsNorm(factor, (hiFrac / (t * t)).toFloat())
+        } else 1f
+        // Mismatch residual over the doubled tile support (upstream
+        // `calculate_mismatch_rgba`: 2t channel-px per axis under the
+        // `(0.5-0.17cos)` window), read directly from the frames with the
+        // refined tile gain: raised-cosine-weighted mean abs difference in
         // noise-sigma units. Gain refinement already absorbed the best
         // global DC fit, so what remains is motion/blur/ghost energy.
+        // Reads clamp at borders (our convention; upstream zero-pads).
         var absNum = 0.0
         var absDen = 0.0
+        val half = t / 2
         for (c in 0..3) {
             val (dx, dy) = s.quadOff[c]!!
-            val rp = s.refRe[c]
-            val mp = s.movRe[c]
-            for (ly in 0 until t) for (lx in 0 until t) {
-                val w = p.rc[lx * 2 + dx] * p.rc[ly * 2 + dy]
-                absNum += w * abs(rp[ly * t + lx] - mp[ly * t + lx])
+            for (ly in -half until 3 * half) for (lx in -half until 3 * half) {
+                val x = (ox + lx * 2 + dx).coerceIn(dx, width - 2 + dx)
+                val y = (oy + ly * 2 + dy).coerceIn(dy, height - 2 + dy)
+                val w = p.rcExt[lx + half] * p.rcExt[ly + half]
+                absNum += w * abs(ref[y * width + x] - mov[y * width + x] * tileGain)
                 absDen += w
             }
         }
@@ -558,7 +618,7 @@ object HdrTileDeghost {
             (absNum / absDen.coerceAtLeast(1e-12)).toFloat(),
             sqrt(0.5 * (refVarAvg + movVarAvg) + 1e-12).toFloat()
         )
-        val motion = motionNorm(mismatch)
+        val motion = motionNorm(mismatch, maxMotion)
         // A broken correspondence must reject every band, including DC.
         // Independent Wiener bins otherwise keep unrelated low frequencies
         // from moving water or a blurred branch and form tile-shaped holes.
@@ -584,10 +644,12 @@ object HdrTileDeghost {
         // slightly more robust than max, which lets one bad channel —
         // chroma aberration, clip, spike — veto the whole bin), then
         // pairwise blend. The noise term carries the full upstream stack:
-        // caller strength x per-tile motion boost (static averages harder)
-        // x per-bin magnitude preference (sharper alternate earns weight)
-        // x alternate highlight discount. Highlight rescue happens locally
-        // during synthesis, after motion rejection.
+        // caller strength (corr-damped for brackets) x per-tile motion
+        // boost (static averages harder, ceiling adapted to the companion
+        // exposure) x per-bin magnitude preference (sharper alternate
+        // earns weight) x alternate highlight discounts (both the darker
+        // companion ramp and upstream's longer-companion norm). Highlight
+        // rescue happens locally during synthesis, after motion rejection.
         // Per-bin scratch (squared difference energy per channel).
         val binD = s.binD
         val bins = t * t
@@ -603,7 +665,7 @@ object HdrTileDeghost {
             }
             // Magnitude preference needs ratio^4 = (sumA/sumR)^2: no roots.
             val mag = magnitudeNorm(sumSqA / (sumSqR + 1e-24f), mismatch, b == 0)
-            val denScale = mag * motion * altShrink * strength
+            val denScale = mag * motion * altShrink * highlights * strength
             var wMin = Float.MAX_VALUE
             var wMax = -Float.MAX_VALUE
             var wSum = 0f
@@ -639,40 +701,52 @@ object HdrTileDeghost {
         // scaled by local tile means (which change around displaced edges).
         val referenceScale = tileGain / exposureGain
         for (c in 0..3) {
-            val (dx, dy) = s.quadOff[c]!!
             for (b in 0 until bins) {
                 val w = max(s.weight[b], motionReject)
                 s.movRe[c][b] = w * s.refRe[c][b] * referenceScale + (1f - w) * s.movRe[c][b]
                 s.movIm[c][b] = w * s.refIm[c][b] * referenceScale + (1f - w) * s.movIm[c][b]
             }
-            // Mismatch-gated deconvolution lift (upstream
-            // `deconvolute_frequency_domain`, applied here per pairwise
-            // blend rather than once on the final sum): AC bins well below
-            // the DC magnitude earn up to ~1.17x HF lift; dominant bins
-            // earn nothing, so noise-like content is untouched and DC
-            // (tile brightness) is never touched.
-            if (mismatch < 0.3f) {
-                val mw = (1f - 10f * (mismatch - 0.2f)).coerceIn(0f, 1f)
-                if (mw > 0f) {
-                    val dcR = s.movRe[c][0]
-                    val dcI = s.movIm[c][0]
-                    val magDc = sqrt(dcR * dcR + dcI * dcI)
-                    if (magDc > 0f && magDc.isFinite()) {
-                        val re = s.movRe[c]
-                        val im = s.movIm[c]
-                        for (b in 1 until bins) {
-                            val magBin = sqrt(re[b] * re[b] + im[b] * im[b])
-                            val dw = mw * (1.25f - 25f * magBin / magDc).coerceIn(0f, 1f)
-                            if (dw > 0f) {
-                                val g = (1f + dw * p.deconvCw[b % t]) *
-                                    (1f + dw * p.deconvCw[b / t])
-                                re[b] *= g
-                                im[b] *= g
+        }
+        // Mismatch-gated deconvolution lift (upstream
+        // `deconvolute_frequency_domain`, applied here per pairwise blend
+        // rather than once on the final sum): AC bins well below the DC
+        // magnitude earn up to ~1.17x HF lift; dominant bins earn nothing,
+        // so noise-like content is untouched and DC (tile brightness) is
+        // never touched. Magnitudes sum over all four channels and one
+        // shared gain applies to every channel, exactly like upstream
+        // (per-channel gains would tint the lift).
+        if (mismatch < 0.3f) {
+            val mw = (1f - 10f * (mismatch - 0.2f)).coerceIn(0f, 1f)
+            if (mw > 0f) {
+                var magDc = 0.0
+                for (c in 0..3) {
+                    val dcR = s.movRe[c][0].toDouble()
+                    val dcI = s.movIm[c][0].toDouble()
+                    magDc += sqrt(dcR * dcR + dcI * dcI)
+                }
+                if (magDc > 0.0 && magDc.isFinite()) {
+                    for (b in 1 until bins) {
+                        var magBin = 0.0
+                        for (c in 0..3) {
+                            val br = s.movRe[c][b].toDouble()
+                            val bi = s.movIm[c][b].toDouble()
+                            magBin += sqrt(br * br + bi * bi)
+                        }
+                        val dw = mw * (1.25f - 25f * (magBin / magDc).toFloat()).coerceIn(0f, 1f)
+                        if (dw > 0f) {
+                            val g = (1f + dw * p.deconvCw[b % t]) *
+                                (1f + dw * p.deconvCw[b / t])
+                            for (c in 0..3) {
+                                s.movRe[c][b] *= g
+                                s.movIm[c][b] *= g
                             }
                         }
                     }
                 }
             }
+        }
+        for (c in 0..3) {
+            val (dx, dy) = s.quadOff[c]!!
             fft2D(s.movRe[c], s.movIm[c], true, p, s.tmpRe, s.tmpIm)
             for (ly in 0 until t) for (lx in 0 until t) {
                 val x = ox + lx * 2 + dx
@@ -712,17 +786,22 @@ object HdrTileDeghost {
     }
 
     /**
-     * Fourier subpixel refinement (hdr-plus-swift `merge/frequency.metal`
-     * idea, reduced grid): score the 3x3 shift grid {-[SUBPIX_STEP], 0,
-     * +[SUBPIX_STEP]}^2 in channel px by the noise-normalized spectral
-     * residual, applying each candidate as a phase ramp
-     * `exp(-2pi*i*(u*sx+v*sy)/TILE)` to the alternate spectrum. The best
-     * shift is baked into [s] alternate planes in place; the zero shift
-     * always scores first, so flat/noisy tiles keep identity.
+     * Fourier subpixel refinement (hdr-plus-swift
+     * `merge_frequency_domain`, RAWR `hdrq_merge` cross-correlation
+     * form): score the 7x7 shift grid at 1/6 steps over +-0.5 channel-px
+     * and bake the winner into [s] alternate planes in place as a phase
+     * ramp `exp(-2pi*i*(u*sx+v*sy)/TILE)`. Scoring maximizes the
+     * noise-weighted cross-correlation `sum(cos*A+sin*B)` with per-bin
+     * cross terms `A = sum_ch(ref·al)/noise`,
+     * `B = sum_ch(ref x al)/noise` — the same argmin as the
+     * least-squares residual in real arithmetic (rotation preserves
+     * `|al|`, and `|ref|^2` is shift-independent), at one dot product
+     * per candidate. The zero shift scores first and first-maximum wins,
+     * so flat/noisy tiles keep identity.
      *
-     * No extra FFTs: works on the already-computed spectra. Per-bin trig is
-     * avoided via precomputed per-shift/per-frequency cos/sin tables; the
-     * hot loop is multiply-add only.
+     * No extra FFTs: works on the already-computed spectra, with
+     * precomputed per-shift/per-bin cos/sin tables; the hot loop is
+     * multiply-add only.
      */
     private fun refineSubpixel(s: TileScratch, p: TilePass) {
         // Energy gate: flat tiles carry no phase to lock onto. Compare
@@ -739,101 +818,58 @@ object HdrTileDeghost {
             noiseFloor += s.binNoise[c].toDouble()
         }
         if (acEnergy < SUBPIX_ENERGY_GATE * noiseFloor) return
-        var bestSx = 0
-        var bestSy = 0
-        var bestScore = scoreShift(s, p, 0, 0)
-        for (sy in -1..1) for (sx in -1..1) {
-            if (sx == 0 && sy == 0) continue
-            val score = scoreShift(s, p, sx, sy)
-            if (score < bestScore) {
-                bestScore = score
-                bestSx = sx
-                bestSy = sy
-            }
-        }
-        if (bestSx == 0 && bestSy == 0) return
-        applyShift(s, p, bestSx, bestSy)
-    }
-
-    /** Noise-normalized spectral residual under candidate shift ([sx],[sy] in grid steps). */
-    private fun scoreShift(s: TileScratch, p: TilePass, sx: Int, sy: Int): Double {
-        val t = p.t
-        val bins = t * t
-        if (sx == 0 && sy == 0) {
-            var total = 0.0
+        // Noise-weighted cross terms, summed over channels once: every
+        // candidate then scores from these two floats per bin.
+        for (b in 0 until bins) {
+            var a = 0.0
+            var bb = 0.0
             for (c in 0..3) {
                 val inv = 1.0 / s.binNoise[c].toDouble()
-                val rr = s.refRe[c]
-                val ri = s.refIm[c]
-                val mr = s.movRe[c]
-                val mi = s.movIm[c]
-                for (b in 0 until bins) {
-                    val dr = rr[b] - mr[b]
-                    val di = ri[b] - mi[b]
-                    total += (dr * dr + di * di) * inv
-                }
+                a += (s.refRe[c][b] * s.movRe[c][b] + s.refIm[c][b] * s.movIm[c][b]) * inv
+                bb += (s.refIm[c][b] * s.movRe[c][b] - s.refRe[c][b] * s.movIm[c][b]) * inv
             }
-            return total
+            s.corrA[b] = a.toFloat()
+            s.corrB[b] = bb.toFloat()
         }
-        val cosX = p.subCos[sx + 1]
-        val sinX = p.subSin[sx + 1]
-        val cosY = p.subCos[sy + 1]
-        val sinY = p.subSin[sy + 1]
-        var total = 0.0
-        for (c in 0..3) {
-            val inv = 1.0 / s.binNoise[c].toDouble()
-            val rr = s.refRe[c]
-            val ri = s.refIm[c]
-            val mr = s.movRe[c]
-            val mi = s.movIm[c]
-            for (v in 0 until t) {
-                val cv = cosY[v]
-                val sv = sinY[v]
-                for (u in 0 until t) {
-                    // Combined ramp: angle = (u*sx + v*sy); cos/sin via
-                    // angle-addition of the per-axis tables.
-                    val cu = cosX[u]
-                    val su = sinX[u]
-                    val wr = cu * cv - su * sv
-                    val wi = su * cv + cu * sv
-                    val b = v * t + u
-                    val mvr = mr[b]
-                    val mvi = mi[b]
-                    val sr = wr * mvr - wi * mvi
-                    val si = wr * mvi + wi * mvr
-                    val dr = rr[b] - sr
-                    val di = ri[b] - si
-                    total += (dr * dr + di * di) * inv
-                }
+        var best = SUBPIX_ZERO
+        var bestScore = scoreShift(s, p, SUBPIX_ZERO)
+        for (cand in 0 until SUBPIX_GRIDSQ) {
+            if (cand == SUBPIX_ZERO) continue
+            val score = scoreShift(s, p, cand)
+            if (score > bestScore) {
+                bestScore = score
+                best = cand
             }
+        }
+        if (best == SUBPIX_ZERO) return
+        applyShift(s, p, best)
+    }
+
+    /** Noise-weighted cross-correlation under candidate shift [cand] (0..48). */
+    private fun scoreShift(s: TileScratch, p: TilePass, cand: Int): Double {
+        val bins = p.t * p.t
+        val base = cand * bins
+        var total = 0.0
+        for (b in 0 until bins) {
+            total += p.shiftCos[base + b] * s.corrA[b] + p.shiftSin[base + b] * s.corrB[b]
         }
         return total
     }
 
-    /** Bakes grid-step shift ([sx],[sy]) into the alternate spectra in place. */
-    private fun applyShift(s: TileScratch, p: TilePass, sx: Int, sy: Int) {
-        val t = p.t
-        val cosX = p.subCos[sx + 1]
-        val sinX = p.subSin[sx + 1]
-        val cosY = p.subCos[sy + 1]
-        val sinY = p.subSin[sy + 1]
+    /** Bakes candidate shift [cand] (0..48) into the alternate spectra in place. */
+    private fun applyShift(s: TileScratch, p: TilePass, cand: Int) {
+        val bins = p.t * p.t
+        val base = cand * bins
         for (c in 0..3) {
             val mr = s.movRe[c]
             val mi = s.movIm[c]
-            for (v in 0 until t) {
-                val cv = cosY[v]
-                val sv = sinY[v]
-                for (u in 0 until t) {
-                    val cu = cosX[u]
-                    val su = sinX[u]
-                    val wr = cu * cv - su * sv
-                    val wi = su * cv + cu * sv
-                    val b = v * t + u
-                    val mvr = mr[b]
-                    val mvi = mi[b]
-                    mr[b] = wr * mvr - wi * mvi
-                    mi[b] = wr * mvi + wi * mvr
-                }
+            for (b in 0 until bins) {
+                val wr = p.shiftCos[base + b]
+                val wi = p.shiftSin[base + b]
+                val mvr = mr[b]
+                val mvi = mi[b]
+                mr[b] = wr * mvr - wi * mvi
+                mi[b] = wr * mvi + wi * mvr
             }
         }
     }
@@ -851,13 +887,19 @@ object HdrTileDeghost {
 
     /**
      * Static/motion adaptation (hdr-plus-swift `motion_norm`, Liba et al.
-     * 2019 Fig. 9f shape): static tiles return [MAX_MOTION_NORM] for harder
+     * 2019 Fig. 9f shape): static tiles return [maxMotion] for harder
      * averaging, motion tiles ramp down to 1 (no boost, ghosts collapse).
+     * [maxMotion] is the upstream per-companion ceiling
+     * ([HdrPlusRobustness.maxMotionForFactor]): longer companions average
+     * harder, shorter ones stay near the floor; uniform pairs use
+     * [MAX_MOTION_NORM].
      */
-    internal fun motionNorm(mismatch: Float): Float {
+    internal fun motionNorm(mismatch: Float, maxMotion: Float = MAX_MOTION_NORM): Float {
         if (!mismatch.isFinite()) return 1f
-        return (MAX_MOTION_NORM - (mismatch - 0.02f) *
-            (MAX_MOTION_NORM - 1f) / 0.15f).coerceIn(1f, MAX_MOTION_NORM)
+        val ceiling = maxMotion.coerceAtLeast(1f)
+        if (!ceiling.isFinite()) return 1f
+        return (ceiling - (mismatch - 0.02f) *
+            (ceiling - 1f) / 0.15f).coerceIn(1f, ceiling)
     }
 
     /**
@@ -911,6 +953,9 @@ object HdrTileDeghost {
         val binNoise = FloatArray(4)
         val weight = FloatArray(t * t)
         val binD = FloatArray(4)
+        val quadMax = FloatArray(t * t)
+        val corrA = FloatArray(t * t)
+        val corrB = FloatArray(t * t)
         val quadOff = arrayOfNulls<Pair<Int, Int>>(4)
         // Reused 1D FFT column scratch: sized for the large pass so both
         // tile sizes share the code path with zero per-tile allocation.

@@ -38,12 +38,36 @@ internal object DualRawSaver {
         val le = requireNotNull(lowResult[CaptureResult.SENSOR_EXPOSURE_TIME])
         val he = requireNotNull(highResult[CaptureResult.SENSOR_EXPOSURE_TIME])
         require(le > 0 && he > 0)
-        fun black(r: CaptureResult): FloatArray = r[CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL]
-            ?: FloatArray(4) { c[CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN]!!.getOffsetForIndex(it%2,it/2).toFloat() }
-        fun white(r: CaptureResult): Float = (r[CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL]
-            ?: c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL]!!).toFloat()
-        val lb = black(lowResult); val hb = black(highResult)
-        val lw = white(lowResult); val hw = white(highResult)
+        fun reportedBlack(r: CaptureResult): FloatArray? = r[CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL]
+            ?.takeIf { it.size == 4 }
+            ?: c[CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN]?.let { pattern ->
+                FloatArray(4) { pattern.getOffsetForIndex(it % 2, it / 2).toFloat() }
+            }
+        fun reportedWhite(r: CaptureResult): Float? =
+            (r[CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL]
+                ?: c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL])?.toFloat()
+        // Unusable pairs (Vivo X300 Ultra default mode: white=0 or white <=
+        // black) fail the merge require below; sample each frame's own bytes
+        // instead. The merged DNG's tags are forced by
+        // DualRawDngMetadata.patch, so only the merge math needs these.
+        fun repaired(image: Image, r: CaptureResult): Pair<FloatArray, Float>? {
+            val b = reportedBlack(r)
+            val w = reportedWhite(r)
+            if (b != null && w != null && !DngLevelRepair.needsRepair(b, w)) return b to w
+            val plane = image.planes.singleOrNull() ?: return null
+            val sample = DngLevelRepair.sample(plane.buffer, plane.rowStride, plane.pixelStride,
+                image.width, image.height) ?: return null
+            val (rb, rw) = DngLevelRepair.repair(sample)
+            Log.w("RawLensDualRaw", "Dual levels sampled from frame (reported black=" +
+                "${b?.joinToString(",")} white=$w unusable): black=${rb.joinToString(",")} white=$rw")
+            return rb to rw
+        }
+        val (lb, lw) = checkNotNull(repaired(low, lowResult)) {
+            "Dual RAW levels unusable and unsampleable (low)"
+        }
+        val (hb, hw) = checkNotNull(repaired(high, highResult)) {
+            "Dual RAW levels unusable and unsampleable (high)"
+        }
         require(lb.size == 4 && hb.size == 4 && lb.all { it.isFinite() && it < lw } && hb.all { it.isFinite() && it < hw })
         val scale = (le.toDouble()*lowIso/(he.toDouble()*highIso)).toFloat()
         check(scale.isFinite() && scale >= 1.5f) { "Camera did not apply the exposure bracket" }

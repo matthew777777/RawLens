@@ -37,6 +37,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ScrollView
 import android.graphics.Typeface
 import android.graphics.Color
+import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.text.InputType
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
@@ -87,6 +88,7 @@ class MainActivity : Activity() {
     private lateinit var quickPanel: LinearLayout
     private lateinit var gridQuick: TextView
     private lateinit var histogramQuick: TextView
+    private lateinit var levelQuick: TextView
     private lateinit var aeMeteringQuick: TextView
     private lateinit var hdrQuick: TextView
     private lateinit var timerQuick: TextView
@@ -110,6 +112,9 @@ class MainActivity : Activity() {
     private var rawZslSettingsStatus: TextView? = null
     private var gridEnabled = true
     private var histogramEnabled = true
+    private var levelEnabled = false
+    private lateinit var levelOverlay: LevelOverlayView
+    private var levelTracker: LevelTracker? = null
     /** Focus-peaking master switch (default on); the overlay auto-shows on manual/tap focus. */
     private var focusPeakingEnabled = true
     private var focusPeakingColor = FocusPeakingColor.GREEN
@@ -297,11 +302,13 @@ class MainActivity : Activity() {
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
         focusPeakingOverlay = findViewById(R.id.focusPeakingOverlay)
         guideOverlay = findViewById(R.id.guideOverlay)
+        levelOverlay = findViewById(R.id.levelOverlay)
         histogramView = findViewById(R.id.histogramView)
         waveformView = findViewById(R.id.waveformView)
         quickPanel = findViewById(R.id.quickSettingsPanel)
         gridQuick = findViewById(R.id.gridQuick)
         histogramQuick = findViewById(R.id.histogramQuick)
+        levelQuick = findViewById(R.id.levelQuick)
         aeMeteringQuick = findViewById(R.id.aeMeteringQuick)
         hdrQuick = findViewById(R.id.hdrQuick)
         timerQuick = findViewById(R.id.timerQuick)
@@ -320,6 +327,7 @@ class MainActivity : Activity() {
         refreshCaptureFormatControl()
         gridEnabled = lensPreferences().getBoolean(KEY_GRID, true)
         histogramEnabled = lensPreferences().getBoolean(KEY_HISTOGRAM, true)
+        levelEnabled = lensPreferences().getBoolean(KEY_LEVEL, false)
         focusPeakingEnabled = lensPreferences().getBoolean(KEY_FOCUS_PEAKING, true)
         focusPeakingColor = FocusPeakingColor.fromPreference(
             lensPreferences().getString(KEY_FOCUS_PEAKING_COLOR, null)
@@ -333,6 +341,14 @@ class MainActivity : Activity() {
             lensPreferences().getInt(KEY_AE_METERING_MODE, AeMeteringMode.AUTO.preferenceValue)
         )
         guideOverlay.gridEnabled = gridEnabled
+        levelTracker = LevelTracker(this) { state ->
+            runOnUiThread {
+                if (levelEnabled && ::levelOverlay.isInitialized) {
+                    if (state.isFlat) levelOverlay.setFlat() else levelOverlay.setState(state)
+                }
+            }
+        }
+        syncLevelVisibility()
         syncScopeVisibility()
         // Tap the scope to switch between histogram and waveform. The mode is
         // remembered; the data source (linear RAW vs AgX JPEG preview) follows
@@ -510,8 +526,21 @@ class MainActivity : Activity() {
             },
             onFocusPeakingActive = { active ->
                 runOnUiThread { setFocusPeakingVisible(active) }
+            },
+            bguViewfinder = findViewById(R.id.bguViewfinder),
+            initialFacePriorityEnabled = lensPreferences().getBoolean(KEY_FACE_PRIORITY, false),
+            onFaces = { boxes ->
+                runOnUiThread {
+                    meteringOverlay.setFaces(
+                        boxes.map { RectF(it.left, it.top, it.right, it.bottom) },
+                        boxes.indexOfFirst { it.tracked }
+                    )
+                }
             }
         )
+        controller.onVfRouteChanged = { isBgu ->
+            runOnUiThread { applyVfRoute(isBgu) }
+        }
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
@@ -529,11 +558,12 @@ class MainActivity : Activity() {
             setOnClickListener { cycleVfPreviewMode() }
         }
         refreshVfPreviewButton()
-        // The RAW VF debug overlay is the engine switch: tap to cycle AUTO/GPU/CPU.
+        // The RAW VF debug overlay is the engine switch: tap to cycle AUTO/BGU/BGU_CPU/GPU/CPU.
         rawVfDebugOverlay.isClickable = true
         rawVfDebugOverlay.isFocusable = true
         rawVfDebugOverlay.setOnClickListener { cycleVfEngineMode() }
         refreshVfEngineContentDescription()
+        applyVfRoute(controller.isBguActive())
         videoHudTop = findViewById(R.id.videoHudTop)
         videoHudLeft = findViewById(R.id.videoHudLeft)
         videoHudTimecode = findViewById(R.id.videoHudTimecode)
@@ -647,6 +677,7 @@ class MainActivity : Activity() {
             setStatus(scopeStatusLabel())
             true
         }
+        levelQuick.setOnClickListener { toggleLevel() }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         rawSrQuick.setOnClickListener { toggleRawSuperResolution() }
         fusionQuick.setOnClickListener { toggleBurstFusion() }
@@ -987,6 +1018,7 @@ class MainActivity : Activity() {
         startCameraWhenReady()
         if (gpsEnabled()) gpsProvider?.start()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
+        if (levelEnabled) levelTracker?.start()
         scheduleScope()
         applyPowerSave()
         registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
@@ -1032,6 +1064,7 @@ class MainActivity : Activity() {
     private fun applyPowerSave() {
         val saver = getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
         findViewById<RawViewfinder>(R.id.rawViewfinder)?.setPowerSave(saver)
+        findViewById<BguViewfinder>(R.id.bguViewfinder)?.setPowerSave(saver)
     }
 
     override fun onPause() {
@@ -1039,6 +1072,7 @@ class MainActivity : Activity() {
         runCatching { unregisterReceiver(powerSaveReceiver) }
         gpsProvider?.stop()
         orientationListener.disable()
+        levelTracker?.stop()
         countdownRunnable?.let(window.decorView::removeCallbacks)
         countdownRunnable = null
         // A recording must be finalized before the stills session tears down;
@@ -1070,6 +1104,7 @@ class MainActivity : Activity() {
         logRecorder = null
         controller.destroy()
         findViewById<RawViewfinder>(R.id.rawViewfinder).dispose()
+        findViewById<BguViewfinder>(R.id.bguViewfinder)?.dispose()
         findViewById<DirectLogPreviewView>(R.id.recordPreview)?.dispose()
         MemoryLeakDiagnostics.sample("activity-destroyed")
         super.onDestroy()
@@ -1289,7 +1324,8 @@ class MainActivity : Activity() {
         findViewById(R.id.vfPreviewButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
         findViewById(R.id.gridQuick),
-        findViewById(R.id.histogramQuick), findViewById(R.id.aeMeteringQuick),
+        findViewById(R.id.histogramQuick), findViewById(R.id.levelQuick),
+        findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
         findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
         findViewById(R.id.rawSrQuick), findViewById(R.id.ettrQuick),
@@ -1345,8 +1381,12 @@ class MainActivity : Activity() {
         params.topMargin = viewfinder.top
         guideOverlay.layoutParams = params
         findViewById<RawViewfinder>(R.id.rawViewfinder).layoutParams = FrameLayout.LayoutParams(params)
+        findViewById<BguViewfinder>(R.id.bguViewfinder)?.layoutParams = FrameLayout.LayoutParams(params)
         if (::focusPeakingOverlay.isInitialized) {
             focusPeakingOverlay.layoutParams = FrameLayout.LayoutParams(params)
+        }
+        if (::levelOverlay.isInitialized) {
+            levelOverlay.layoutParams = FrameLayout.LayoutParams(params)
         }
         guideOverlay.translationX = 0f
         guideOverlay.translationY = 0f
@@ -1807,7 +1847,7 @@ class MainActivity : Activity() {
         // Snapshot the viewfinder while still rolling: after the drain there
         // are no offers for seconds, so a later snapshot would only show the
         // watchdog-cleared state, not the rolling zero-copy path.
-        val rollingVf = findViewById<RawViewfinder>(R.id.rawViewfinder)?.snapshot()
+        val rollingVf = controller.vfSnapshot()
         // Container close blocks on the encode drain: off the UI thread, then
         // restore on it (mirrors the stills save/rearm split).
         Thread({
@@ -1945,7 +1985,7 @@ class MainActivity : Activity() {
     private fun stabSidecarFor(source: File): File =
         File(source.parent, source.nameWithoutExtension + StabSidecar.FILE_SUFFIX)
 
-    /** Stabilized re-encode next to a staged take (`<stem>_LOG_STAB.mp4`). */
+    /** Stabilized re-encode next to a staged take (`<stem>_LOG709_STAB.mp4`). */
     private fun stabOutputFor(source: File): File =
         File(source.parent, "${source.nameWithoutExtension}_STAB.mp4")
 
@@ -2128,7 +2168,7 @@ class MainActivity : Activity() {
                     getColor(if (videoRecording) R.color.danger else R.color.text_primary)
                 )
                 // Viewfinder proof, live: fps + GPU (Vulkan zero-copy) vs CPU.
-                val vf = findViewById<RawViewfinder>(R.id.rawViewfinder)?.snapshot()
+                val vf = controller.vfSnapshot()
                 videoDebugOverlay.text = formatVideoDebug(snap, vf?.fps ?: 0f, vf?.gpu == true)
                 videoDebugRunnable?.let { videoHudTimecode.postDelayed(it, 500L) }
             }
@@ -2644,7 +2684,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** RAW VF debug-overlay tap: cycle the engine AUTO -> GPU -> CPU. */
+    /** RAW VF debug-overlay tap: cycle the engine AUTO -> BGU -> BGU_CPU -> GPU -> CPU. */
     private fun cycleVfEngineMode() {
         val next = controller.cycleVfEngineMode()
         lensPreferences().edit().putString(KEY_VF_ENGINE_MODE, next.name).apply()
@@ -2656,7 +2696,15 @@ class MainActivity : Activity() {
     private fun refreshVfEngineContentDescription() {
         val mode = runCatching { controller.vfEngineMode() }.getOrDefault(VfEngineMode.AUTO)
         rawVfDebugOverlay.contentDescription =
-            "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU engine."
+            "RAW viewfinder engine ${mode.name}. Tap to switch the BGU / BGU-CPU / GPU / CPU engine."
+    }
+
+    /** Shows exactly one VF surface: BGU or legacy, per the controller route. */
+    private fun applyVfRoute(isBgu: Boolean) {
+        findViewById<BguViewfinder>(R.id.bguViewfinder)?.visibility =
+            if (isBgu) android.view.View.VISIBLE else android.view.View.GONE
+        findViewById<RawViewfinder>(R.id.rawViewfinder)?.visibility =
+            if (isBgu) android.view.View.GONE else android.view.View.VISIBLE
     }
 
     private fun cycleVfResolution() {
@@ -3311,9 +3359,10 @@ class MainActivity : Activity() {
     }
 
     private fun updateQuickControls() {
-        if (!::gridQuick.isInitialized) return
+        if (!::gridQuick.isInitialized || !::levelQuick.isInitialized) return
         val grid = gridQuick
         val histogram = histogramQuick
+        val level = levelQuick
         val aeMetering = aeMeteringQuick
         val hdr = hdrQuick
         val timer = timerQuick
@@ -3331,6 +3380,9 @@ class MainActivity : Activity() {
         val power = if (histogramEnabled) "on" else "off"
         histogram.contentDescription =
             "Exposure scope, $graph, $power. Tap to turn ${if (histogramEnabled) "off" else "on"}, long-press to switch graphs."
+        level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
+        level.contentDescription =
+            "Virtual horizon ${if (levelEnabled) "on" else "off"}. Tap to turn ${if (levelEnabled) "off" else "on"}."
         aeMeteringMode = controller.getAeMeteringMode()
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
             val rawMetering = runCatching { controller.getProgramAeProfile().metering }
@@ -3375,6 +3427,7 @@ class MainActivity : Activity() {
         ettr.alpha = if (ettrAvailable) 1f else 0.4f
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(histogram, histogramEnabled)
+        setQuickTileState(level, levelEnabled)
         setQuickTileState(hdr, hdrEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
@@ -3431,6 +3484,26 @@ class MainActivity : Activity() {
             if (histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
         waveformView.visibility =
             if (histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleLevel() {
+        levelEnabled = !levelEnabled
+        lensPreferences().edit().putBoolean(KEY_LEVEL, levelEnabled).apply()
+        syncLevelVisibility()
+        updateQuickControls()
+        setStatus(if (levelEnabled) "LEVEL ON" else "LEVEL OFF")
+    }
+
+    private fun syncLevelVisibility() {
+        if (!::levelOverlay.isInitialized) return
+        levelOverlay.visibility = if (levelEnabled) View.VISIBLE else View.GONE
+        if (levelEnabled) {
+            if (activityResumed) levelTracker?.start()
+        } else {
+            levelTracker?.stop()
+            levelOverlay.setFlat()
+            levelOverlay.contentDescription = "Virtual horizon off"
+        }
     }
 
     /** Edge-triggered by the controller's manual/tap-focus auto-show policy. */
@@ -4860,6 +4933,21 @@ class MainActivity : Activity() {
             refreshEttrButtons()
             content.addView(ettrHeadroomButton)
             content.addView(ettrIsoLimitButton)
+            content.addView(sectionTitle("Face priority"))
+            content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (lime box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
+            content.addView(CheckBox(this).apply {
+                text = "Face-priority AF/AE"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_FACE_PRIORITY, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_FACE_PRIORITY, enabled).apply()
+                    controller.setFacePriorityEnabled(enabled)
+                    setStatus(
+                        if (!enabled) "FACE OFF"
+                        else if (controller.isFaceDetectSupported()) "FACE ON" else "FACE N/A"
+                    )
+                }
+            })
             markActive(exposureTab)
             polish()
         }
@@ -6279,6 +6367,7 @@ class MainActivity : Activity() {
         const val KEY_VF_ENGINE_MODE = "vf_engine_mode"
         const val KEY_GRID = "viewfinder_grid"
         const val KEY_HISTOGRAM = "viewfinder_histogram"
+        const val KEY_LEVEL = "viewfinder_level"
         const val KEY_SCOPE_MODE = "scope_mode"
         const val KEY_FOCUS_PEAKING = "focus_peaking"
         const val KEY_FOCUS_PEAKING_COLOR = "focus_peaking_color"
@@ -6294,6 +6383,7 @@ class MainActivity : Activity() {
         const val KEY_DYNAMIC_EXPOSURE_SHUTTER_LIMIT = "dynamic_exposure_shutter_limit"
         const val KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER = "dynamic_exposure_auto_shutter"
         const val KEY_ETTR_ENABLED = "ettr_enabled"
+        const val KEY_FACE_PRIORITY = "face_priority"
         const val KEY_ETTR_HEADROOM_EV = "ettr_headroom_ev"
         const val KEY_ETTR_ISO_LIMIT = "ettr_iso_limit"
         const val KEY_CAPTURE_EXPOSURE_MODE = "capture_exposure_mode"

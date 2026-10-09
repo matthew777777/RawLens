@@ -81,6 +81,9 @@ const float LEVEL_EPS = 0.002;
 // (same anchors as the AMaZE JPEG path).
 const float DESAT_LO = 0.70;
 const float DESAT_HI = 0.99;
+// Demosaiced output ceiling, mirrors MhcReference.OUTPUT_CLAMP_HI
+// (see vf_mhc.comp).
+const float OUTPUT_CLAMP_HI = 4.0;
 
 // Phase-preserving edge mirror (single reflection covers our +-2
 // stencil on any dims >= 8).
@@ -325,9 +328,9 @@ vec3 mhcRgb(ivec2 s) {
         }
     }
     // Clamp negatives like RawTherapee (a camera matrix turns edge
-    // undershoot into complementary fringes); overshoot stays unclipped
-    // like the MHC paper (the grade handles >1).
-    return vec3(max(r, 0.0), max(g, 0.0), max(b, 0.0));
+    // undershoot into complementary fringes); overshoot clamps at
+    // OUTPUT_CLAMP_HI (see vf_mhc.comp).
+    return vec3(clamp(r, 0.0, OUTPUT_CLAMP_HI), clamp(g, 0.0, OUTPUT_CLAMP_HI), clamp(b, 0.0, OUTPUT_CLAMP_HI));
 }
 
 // ---- direct-encode record grade: no warp, no saturation ----

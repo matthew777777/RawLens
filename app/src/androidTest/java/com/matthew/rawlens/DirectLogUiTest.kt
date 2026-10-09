@@ -129,7 +129,7 @@ class DirectLogUiTest {
                         MediaStore.Video.Media.DATE_ADDED
                     ),
                     "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",
-                    arrayOf("%_LOG.mp4"),
+                    arrayOf("%_LOG709.mp4"),
                     "${MediaStore.Video.Media.DATE_ADDED} DESC"
                 )?.use { cursor ->
                     if (cursor.moveToFirst()) {
@@ -149,7 +149,7 @@ class DirectLogUiTest {
                 if (publishedUri != null) break
                 SystemClock.sleep(1000)
             }
-            assertTrue("No _LOG.mp4 published to MediaStore", publishedUri != null)
+            assertTrue("No _LOG709.mp4 published to MediaStore", publishedUri != null)
             android.util.Log.i(TAG, "SPIKE ui published=$displayName uri=$publishedUri")
 
             // 4. Take health: a smooth take drops nothing, keeps the

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log variant of the superpixel: identical math, but the output is
+// Direct-Log variant of the superpixel: identical integer core, but the output is
 // RGBA16F so the log grade downstream keeps >8-bit precision (no banding
 // in the 10-bit encode). The viewfinder keeps its own RGBA8 variant
 // (vf_superpixel); the push-constant layout is shared, so both pipelines
-// use the same descriptor set layout and packing.
+// use the same descriptor set layout and packing. Levels are the same Q6
+// blackQ/denQ bits (see VfLevels.kt); the interior value crosses one
+// correctly-rounded division (operands < 2^24, error << fp16 ulp).
 //
 // Regenerate the SPIR-V with:
 //   glslangValidator -V --target-env vulkan1.1 vf_superpixel_f16.comp -o vf_superpixel_f16.spv
@@ -44,14 +46,19 @@ uint fetchCode(ivec2 s) {
 }
 
 // Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
-// into u_black/u_invRange on the CPU, so this is a straight-line fetch + MAD
-// with dynamic uniform indexing and no per-channel branches.
+// into Q6 ints on the CPU (bit-cast through u_black/u_invRange), so this is
+// a straight-line fetch + integer normalize with dynamic uniform indexing
+// and no per-channel branches. Clip decisions are integer-exact; the
+// interior value is the 16-bit fixed-point ratio through one division.
 float fetchN(ivec2 q, int ch) {
     ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
-    float code = float(fetchCode(s));
-    float blk = p.u_black[ch];
-    float inv = p.u_invRange[ch];
-    return clamp((code - blk) * inv, 0.0, 1.0);
+    int code = int(fetchCode(s));
+    int bq = floatBitsToInt(p.u_black[ch]);
+    int dq = floatBitsToInt(p.u_invRange[ch]);
+    int num = code * 64 - bq;
+    if (num <= 0) return 0.0;
+    if (num >= dq) return 1.0;
+    return float(num) / float(dq);
 }
 
 // Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-

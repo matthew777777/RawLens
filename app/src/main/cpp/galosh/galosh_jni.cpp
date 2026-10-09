@@ -34,13 +34,20 @@ Java_com_matthew_rawlens_GaloshVulkan_nativeProbeCaps(JNIEnv* env, jobject /*thi
 
 JNIEXPORT jlong JNICALL
 Java_com_matthew_rawlens_GaloshVulkan_nativeInit(JNIEnv* env, jobject /*thiz*/,
-                                                jobject assetManager) {
+                                                jobject assetManager, jstring cachePath) {
     char errmsg[512];
     GaloshContext* ctx = galosh_create(errmsg, sizeof(errmsg));
     if (ctx == nullptr) {
         GALOSH_LOGE("create failed: %s", errmsg);
         throw_runtime(env, errmsg);
         return 0;
+    }
+    if (cachePath != nullptr) {
+        const char* path = env->GetStringUTFChars(cachePath, nullptr);
+        if (path != nullptr) {
+            galosh_set_pipeline_cache_path(ctx, path);
+            env->ReleaseStringUTFChars(cachePath, path);
+        }
     }
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
     const int n = galosh_load_shaders(ctx, mgr, errmsg, sizeof(errmsg));

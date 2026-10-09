@@ -20,8 +20,14 @@ import java.nio.ByteOrder
  */
 class GaloshDenoiser(context: Context) {
     private val assets = context.applicationContext.assets
+    private val appContext = context.applicationContext
 
     @Volatile private var handle = 0L
+
+    private fun initVulkan(): Long {
+        val cache = VulkanPipelineCache.file(appContext.cacheDir, VulkanPipelineCache.HOST_GALOSH)
+        return GaloshVulkan.init(assets, cache)
+    }
 
     /** Per-run cost of the last [denoise] call (any thread). */
     data class Timings(val packMs: Long, val gpuMs: Double, val unpackMs: Long)
@@ -38,7 +44,7 @@ class GaloshDenoiser(context: Context) {
         Thread {
             try {
                 synchronized(this) {
-                    if (handle == 0L) handle = GaloshVulkan.init(assets)
+                    if (handle == 0L) handle = initVulkan()
                 }
             } catch (failure: Exception) {
                 Log.w(LOG_TAG, "Galosh prewarm failed, first capture will init lazily", failure)
@@ -62,7 +68,7 @@ class GaloshDenoiser(context: Context) {
             } else {
                 cfa.values
             }
-            if (handle == 0L) handle = GaloshVulkan.init(assets)
+            if (handle == 0L) handle = initVulkan()
             var t = System.nanoTime()
             val n = cfa.width * cfa.height
             val input = ByteBuffer.allocateDirect(n * Float.SIZE_BYTES)

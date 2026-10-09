@@ -16,11 +16,20 @@ import java.io.OutputStream
  * must never be passed as custom fields.
  */
 object FloatCfaDngWriter {
+    /**
+     * @param baselineExposureEv display compensation for exposure-bracket merges
+     *   (reference/shortest ratio in EV): merged samples live in the shortest
+     *   frame's normalization, so external developers need this BaselineExposure
+     *   (plus the reference ExposureTime/ISO below) to place brightness
+     *   correctly. Null (default) writes no exposure tags — legacy behavior
+     *   for uniform merges, which are already at native brightness.
+     */
     fun write(
         output: OutputStream,
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
-        gps: GpsLocation? = null
+        gps: GpsLocation? = null,
+        baselineExposureEv: Double? = null
     ) {
         cfa.requireAmazeCompatible()
         require(cfa.values.size == cfa.width * cfa.height)
@@ -49,6 +58,18 @@ object FloatCfaDngWriter {
             srationals(50721, matrix)
             rationals(50728, neutral)
             shorts(50778, metadata.referenceIlluminant1 ?: 21)
+        }
+        if (baselineExposureEv != null) {
+            require(baselineExposureEv.isFinite() && kotlin.math.abs(baselineExposureEv) < 2000.0) {
+                "BaselineExposure must be finite and sane"
+            }
+            fields.srationals(50730, doubleArrayOf(baselineExposureEv))
+            metadata.exposureTimeNanos?.takeIf { it > 0 }?.let {
+                fields.rationals(33434, doubleArrayOf(it / 1e9))
+            }
+            metadata.sensitivityIso?.takeIf { it in 1..65535 }?.let {
+                fields.shorts(34855, it)
+            }
         }
         // Preserve the full camera colour calibration. Omitting calibration/forward matrices
         // while retaining AsShotNeutral can change the rendering in external RAW developers.

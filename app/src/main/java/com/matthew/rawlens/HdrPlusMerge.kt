@@ -25,8 +25,14 @@ import java.nio.ByteOrder
  */
 class HdrPlusMerge(context: Context) {
     private val assets = context.applicationContext.assets
+    private val appContext = context.applicationContext
 
     @Volatile private var handle = 0L
+
+    private fun initVulkan(): Long {
+        val cache = VulkanPipelineCache.file(appContext.cacheDir, VulkanPipelineCache.HOST_HDRPLUS)
+        return HdrPlusVulkan.init(assets, cache)
+    }
 
     /** Per-run cost of the last [merge] call (any thread). */
     data class Timings(val packMs: Long, val gpuMs: Double, val unpackMs: Long)
@@ -63,7 +69,7 @@ class HdrPlusMerge(context: Context) {
         Thread {
             try {
                 synchronized(this) {
-                    if (handle == 0L) handle = HdrPlusVulkan.init(assets)
+                    if (handle == 0L) handle = initVulkan()
                 }
             } catch (failure: Exception) {
                 Log.w(LOG_TAG, "HDR+ prewarm failed, first capture will init lazily", failure)
@@ -96,7 +102,7 @@ class HdrPlusMerge(context: Context) {
                     "HDR+ frame $index crop ${frame.crop.width}x${frame.crop.height} != ${width}x$height"
                 }
             }
-            if (handle == 0L) handle = HdrPlusVulkan.init(assets)
+            if (handle == 0L) handle = initVulkan()
             if (HdrPlusVulkan.loadedShaderCount(handle) != HdrPlusVulkan.expectedShaderCount()) {
                 Log.w(LOG_TAG, "HDR+ shader modules incomplete, aborting merge")
                 return null
@@ -211,20 +217,43 @@ class HdrPlusMerge(context: Context) {
         val currTs = ArrayList<Long>(frames.size - 1)
         val gyros = ArrayList<Double>(frames.size - 1)
         val ratios = ArrayList<DoubleArray>(frames.size - 1)
+        val madDense = ArrayList<DoubleArray>(frames.size - 1)
+        val texDense = ArrayList<DoubleArray>(frames.size - 1)
+        // One native call per pair replaces the two Kotlin map passes
+        // (bitwise identical, host-gated) and adds the dense maps; the
+        // scratch is reused across pairs (overwritten every call).
+        val nativeScratch = HdrPlusMeterNative.Scratch(width, height)
+            .takeIf { HdrPlusMeterNative.available }
+        if (nativeScratch == null) {
+            Log.w(LOG_TAG, "HDR+ native meter unavailable, Kotlin fallback (danger term off)")
+        }
         for (i in 1 until frames.size) {
             deltas += HdrPlusMotionMeter.meanAbsDiffNormalized(
                 packed[i - 1], packed[i], width * height,
                 normalizationRange = ranges[i]
             )
-            hots += HdrPlusMotionMeter.blockHotFraction(
-                packed[i - 1], packed[i], width, height,
-                normalizationRange = ranges[i],
-                hotRatio = HdrPlusAutoTuning.HOT_RATIO
-            )
-            HdrPlusMotionMeter.blockMismatchRatios(
-                packed[i - 1], packed[i], width, height,
-                normalizationRange = ranges[i]
-            )?.let { ratios += it }
+            val native = nativeScratch?.let {
+                HdrPlusMeterNative.meterPair(
+                    packed[i - 1], packed[i], width, height, ranges[i],
+                    HdrPlusAutoTuning.HOT_RATIO, it
+                )
+            }
+            if (native != null) {
+                hots += native.hot
+                ratios += native.ratio
+                madDense += native.madDense
+                texDense += native.texDense
+            } else {
+                hots += HdrPlusMotionMeter.blockHotFraction(
+                    packed[i - 1], packed[i], width, height,
+                    normalizationRange = ranges[i],
+                    hotRatio = HdrPlusAutoTuning.HOT_RATIO
+                )
+                HdrPlusMotionMeter.blockMismatchRatios(
+                    packed[i - 1], packed[i], width, height,
+                    normalizationRange = ranges[i]
+                )?.let { ratios += it }
+            }
             prevTs += frames[i - 1].timestampNanos
             currTs += frames[i].timestampNanos
             val gyro = frames[i].gyroRadiansPerSecond
@@ -233,13 +262,17 @@ class HdrPlusMerge(context: Context) {
         // Ratio grids ride along only when every pair measured one (else
         // the map builder would mix resolutions); the brain treats a
         // partial set as missing and falls back to frame strengths.
+        // Dense grids follow the same all-or-nothing discipline (the
+        // danger term stays off unless every pair measured dense).
         val fullRatios = ratios.takeIf { it.size == frames.size - 1 } ?: emptyList()
+        val fullMadDense = madDense.takeIf { it.size == frames.size - 1 } ?: emptyList()
+        val fullTexDense = texDense.takeIf { it.size == frames.size - 1 } ?: emptyList()
         val (mapX, mapY) = if (fullRatios.isEmpty()) (0 to 0)
         else HdrPlusMotionMeter.mapCells(width, height)
         return HdrPlusMotionMeter.summarize(
             deltas, prevTs, currTs, gyros, hots,
             stats.map { it.meanLevel }, stats.map { it.sharpness },
-            fullRatios, mapX, mapY
+            fullRatios, mapX, mapY, fullMadDense, fullTexDense
         )
     }
 

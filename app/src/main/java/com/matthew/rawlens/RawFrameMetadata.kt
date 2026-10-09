@@ -38,8 +38,8 @@ data class LensShadingSnapshot(
     val gains: ImmutableFloatValues
 )
 
-enum class BlackLevelSource { DYNAMIC, STATIC, MISSING }
-enum class WhiteLevelSource { DYNAMIC, STATIC, MISSING }
+enum class BlackLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED }
+enum class WhiteLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED }
 
 /**
  * Frozen metadata from the exact TotalCaptureResult paired to one RAW_SENSOR Image timestamp.
@@ -129,8 +129,8 @@ object RawFrameMetadataFactory {
             ?.let { pattern -> FloatArray(4) { index ->
                 pattern.getOffsetForIndex(index and 1, index shr 1).toFloat()
             } }
-        val black = dynamicBlack ?: staticBlack
-        val blackSource = when {
+        val reportedBlack = dynamicBlack ?: staticBlack
+        val reportedBlackSource = when {
             dynamicBlack != null -> BlackLevelSource.DYNAMIC
             staticBlack != null -> BlackLevelSource.STATIC
             else -> BlackLevelSource.MISSING
@@ -140,12 +140,28 @@ object RawFrameMetadataFactory {
             ?.takeIf { it > 0 }?.toFloat()
         val staticWhite = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.takeIf { it > 0 }?.toFloat()
-        val white = dynamicWhite ?: staticWhite
-        val whiteSource = when {
+        val reportedWhite = dynamicWhite ?: staticWhite
+        val reportedWhiteSource = when {
             dynamicWhite != null -> WhiteLevelSource.DYNAMIC
             staticWhite != null -> WhiteLevelSource.STATIC
             else -> WhiteLevelSource.MISSING
         }
+
+        // Missing/insane pairs (Vivo X300 Ultra default mode: white=0
+        // placeholders or white <= black) would fail the save or write a
+        // black DNG. Sample the frame's own bytes instead; the tags stay
+        // self-consistent with the payload. Sane HALs never sample.
+        val sampled = if (DngLevelRepair.needsRepair(reportedBlack, reportedWhite)) {
+            image.planes.singleOrNull()?.let { plane ->
+                DngLevelRepair.sample(plane.buffer, plane.rowStride, plane.pixelStride,
+                    image.width, image.height)
+            }
+        } else null
+        val repaired = sampled?.let(DngLevelRepair::repair)
+        val black = repaired?.first ?: reportedBlack
+        val white = repaired?.second ?: reportedWhite
+        val blackSource = if (repaired != null) BlackLevelSource.SAMPLED else reportedBlackSource
+        val whiteSource = if (repaired != null) WhiteLevelSource.SAMPLED else reportedWhiteSource
 
         val pixelSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val imageCrop = image.cropRect.snapshot()!!

@@ -16,6 +16,7 @@ RawLens is a photography-first, open-source Android camera built around a scene-
 - PROGRAM custom AE: shutter-vs-ISO priority slider (ISO priority by default), center / average / spot RAW metering, highlight guard, damped closed loop gliding toward target at ~1 stop/s, per-lens ISO/shutter min/max, ISO-lock / shutter-lock auto, neutral brightness bias, automatic handheld shutter limit; converged ETTR freezes PROGRAM and owns the exposure
 - Adaptive RAW development exposure for AUTO/ZSL and adjustable PROGRAM strength, shared across bursts
 - Tap/drag focus and exposure metering targets
+- Optional face-priority AF/AE from HAL face detection (Settings → Exposure), with face boxes on the viewfinder; tap targets override faces
 - RAW-capable lens discovery and lens switching
 - Live histogram, rule-of-thirds grid, rotation-vector horizon/level guide with gravity fallback, 2/5-second timer, torch, OIS toggle, and Camera2 diagnostics
 - Per-camera DNG calibration overrides for black/white levels, noise profile, and color/calibration/forward matrices

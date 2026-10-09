@@ -38,6 +38,8 @@ object VulkanEncoderBridge {
         val gradeSpv: ByteArray? = null,
         /** Phase B: WB/CCM/log grade on GPU; the blit becomes a dumb copy. */
         val grade: Boolean = true,
+        /** Pipeline-cache file (null keeps the cache in-memory only). */
+        val cachePath: String? = null,
         val gains: FloatArray = VfLogGrade.PROBE_GAINS,
         val ccm: FloatArray = VfLogGrade.IDENTITY_CCM,
         val exposureEv: Float = 0f,
@@ -95,6 +97,7 @@ object VulkanEncoderBridge {
             val target = LogVideoProbe.Target(
                 width = p.width, height = p.height, fps = p.fps, bitrate = p.bitrate
             )
+            p.cachePath?.let(VfVulkan::setPipelineCachePathNative)
             val initRc = VfVulkan.initNative(p.spv)
             if (initRc != VfVulkan.OK) {
                 return BridgeReport(codecName = name, error = "vulkan init: ${VfVulkan.describe(initRc)}")

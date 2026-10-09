@@ -19,7 +19,23 @@ data class RawDevelopmentSettings(
     val galosh: GaloshSettings = GaloshSettings(),
     val adaptiveExposureStrength: Float = 0f,
     val sharedAdaptiveExposure: SharedAdaptiveExposure? = null,
-    val adaptiveExposureTuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+    val adaptiveExposureTuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
+    /**
+     * Non-null enables HDR-merge adaptive exposure in [RawDevelopmentCoordinator.developMergedJpeg]:
+     * the merge's display compensation ([exposureEv]) is folded into the analysis and the
+     * HDR-tuned correction is added on top, so high-DR interiors lift to natural brightness
+     * while spikes ride AgX's range. HDR bracket path only; null (default) keeps the legacy
+     * fixed-exposure develop used by uniform HDR+/fusion merges.
+     */
+    val hdrAdaptiveTuning: HdrAdaptiveTuning? = null,
+    /**
+     * Capture-time ETTR headroom ([EttrSettings.headroomEv]), or null when the frame was
+     * not ETTR-exposed. ETTR frames are already optimally bright: verified-bright frames
+     * keep zero positive lift (a bright haze gradient needs ~0 EV to stay blue), darker
+     * frames fall back to the residual-to-target cap. Single-shot path only (HDR brackets
+     * never use ETTR).
+     */
+    val ettrHeadroomEv: Float? = null
 )
 
 data class SceneLinearGpuFrame(
@@ -138,11 +154,12 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 if (cpuCfa != null) AdaptiveDevelopmentExposure.analyze(
-                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning
+                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    settings.ettrHeadroomEv
                 )
                 else AdaptiveDevelopmentExposure.analyzeRaw(
                     rawPlane, layout, normalization, geometry.processingCrop, lensModel,
-                    adaptiveWorkspace, settings.adaptiveExposureTuning
+                    adaptiveWorkspace, settings.adaptiveExposureTuning, settings.ettrHeadroomEv
                 )
             }
         } else null
@@ -246,7 +263,8 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 AdaptiveDevelopmentExposure.analyze(
-                    frame.samples, adaptiveWorkspace, settings.adaptiveExposureTuning
+                    frame.samples, adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    settings.ettrHeadroomEv
                 )
             }
         } else null
@@ -459,7 +477,10 @@ class RawDevelopmentCoordinator(context: Context) {
         cfa.requireAmazeCompatible()
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
-                AdaptiveDevelopmentExposure.analyze(cfa, adaptiveWorkspace, settings.adaptiveExposureTuning)
+                AdaptiveDevelopmentExposure.analyze(
+                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    settings.ettrHeadroomEv
+                )
             }
         } else null
         val resolvedExposureEv = settings.exposureEv +
@@ -501,8 +522,45 @@ class RawDevelopmentCoordinator(context: Context) {
         // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
         // between the merged-DNG write and this develop; no internal hook here
         // so inference never runs twice for one capture.
+        // HDR brackets add HDR-tuned adaptive exposure on top of the display
+        // compensation: without it the develop restores reference brightness
+        // exactly, which meters high-DR scenes dark. Uniform merges keep the
+        // legacy fixed exposure (null tuning).
+        val hdrAdaptive = settings.hdrAdaptiveTuning?.let {
+            AdaptiveDevelopmentExposure.analyzeHdr(
+                cfa, Math.pow(2.0, settings.exposureEv), adaptiveWorkspace, it
+            )
+        }
+        val resolvedExposureEv = settings.exposureEv + (hdrAdaptive?.correctionEv ?: 0.0)
+        if (hdrAdaptive != null) {
+            Log.i(LOG_TAG, "Merged HDR develop displayEV=${"%.2f".format(settings.exposureEv)} " +
+                "adaptiveEV=${"%.2f".format(hdrAdaptive.correctionEv)} " +
+                "appliedEV=${"%.2f".format(resolvedExposureEv)} " +
+                "lowKey=${hdrAdaptive.lowKey}")
+        }
         val transform = SceneLinearColorProcessor.resolve(
-            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+            SceneLinearColorMetadata.from(metadata), resolvedExposureEv
+        )
+        // HDR merges develop through a softer highlight shoulder so rescued
+        // short-frame highlights keep gradation instead of flattening on the
+        // full-strength asymptote (0.5 recovers the outdoor trees on the
+        // IMG_20261008_142321_830 interior while rendering the interior
+        // identically; harder user choices are respected via min()).
+        // Uniform merges keep the user's shoulder untouched.
+        val developOutput = if (settings.hdrAdaptiveTuning != null) {
+            outputSettings.copy(
+                highlightShoulder = minOf(outputSettings.highlightShoulder, HDR_HIGHLIGHT_SHOULDER)
+            )
+        } else outputSettings
+        // HDR merges keep saturated-highlight color: only the exactly-1.0
+        // all-frames-clipped fallback neutralizes (uniform merges keep the
+        // LDR window).
+        val whiteWindow = if (settings.hdrAdaptiveTuning != null) floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_HDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_HDR_END
+        ) else floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         )
         return developWithTileDropRetry("merged-frame ${cfa.width}x${cfa.height}") {
             amaze.process(
@@ -510,12 +568,13 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = outputSettings
+                fusedOutputSettings = developOutput,
+                whiteWindow = whiteWindow
             ) { output ->
                 if (output.internalFormat == AmazeTextureFormat.RGBA8) {
-                    jpegOutput.processEncoded(output, outputSettings)
+                    jpegOutput.processEncoded(output, developOutput)
                 } else {
-                    jpegOutput.process(output, outputSettings)
+                    jpegOutput.process(output, developOutput)
                 }
             }
         }
@@ -697,6 +756,13 @@ class RawDevelopmentCoordinator(context: Context) {
 
     companion object {
         private const val LOG_TAG = "RawLensDevelop"
+        /**
+         * HDR-merge highlight-shoulder ceiling: full strength flattens rescued
+         * short-frame highlights on the 1.7 asymptote (outdoor trees go white);
+         * 0.5 keeps their gradation through AgX's range while rendering
+         * sub-knee content identically (verified on IMG_20261008_142321_830).
+         */
+        const val HDR_HIGHLIGHT_SHOULDER = 0.5f
         /** Band height for the bridge uploads: 256 rows peak at ~17MB transient. */
         private const val BRIDGE_BAND_ROWS = 256
         fun estimateMemory(

@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Zero-copy RAW viewfinder superpixel: 2x2 Bayer quad -> canonical R/Gr/Gb/B,
-// normalized exactly like VfCpuNeon.copy (float, no 8-bit quantization
-// until the RGBA8 store). One invocation per display texel; Vulkan 1.1.
+// normalized in Q6 fixed-point integer (no float in the per-pixel path), one
+// invocation per display texel; Vulkan 1.1.
+//
+// Levels arrive bit-cast through the legacy float push slots (VfLevels.kt:
+// blackQ/denQ in 64ths of a code); the native fill memcpys the words and the
+// shader recovers the ints with floatBitsToInt. The formula is identical on
+// all three tiers (Vulkan/EGL/NEON), so bytes agree by construction:
+//
+//   num = code * 64 - blackQ; 0 if num <= 0; 255 if num >= denQ;
+//   else (num * 255 + denQ / 2) / denQ (round-half-up, all int32-safe).
 //
 // Regenerate the SPIR-V with:
 //   glslangValidator -V --target-env vulkan1.1 vf_superpixel.comp -o vf_superpixel.spv
@@ -22,7 +30,8 @@ layout(binding = 2) uniform sampler2D shadeMap;
 
 // Packing order avoids std430 padding surprises: 16-byte members first.
 // Total 112 bytes (8 pad after u_pitch for the vec4 alignment); the C
-// side mirrors this layout exactly.
+// side mirrors this layout exactly. u_black/u_invRange carry Q6
+// blackQ/denQ ints bit-cast to float (see VfLevels.kt).
 layout(push_constant) uniform Params {
     ivec4 u_chans;
     vec4 u_black;
@@ -42,14 +51,17 @@ uint fetchCode(ivec2 s) {
 }
 
 // Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
-// into u_black/u_invRange on the CPU, so this is a straight-line fetch + MAD
+// into Q6 ints on the CPU, so this is a straight-line fetch + integer MAD
 // with dynamic uniform indexing and no per-channel branches.
-float fetchN(ivec2 q, int ch) {
+int fetchByte(ivec2 q, int ch) {
     ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
-    float code = float(fetchCode(s));
-    float blk = p.u_black[ch];
-    float inv = p.u_invRange[ch];
-    return clamp((code - blk) * inv, 0.0, 1.0);
+    int code = int(fetchCode(s));
+    int bq = floatBitsToInt(p.u_black[ch]);
+    int dq = floatBitsToInt(p.u_invRange[ch]);
+    int num = code * 64 - bq;
+    if (num <= 0) return 0;
+    if (num >= dq) return 255;
+    return (num * 255 + dq / 2) / dq;
 }
 
 // Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-
@@ -78,8 +90,11 @@ void main() {
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(ij, p.u_frameSize))) return;
     ivec2 q = p.u_quadBase + ij * p.u_step;
-    vec4 b = vec4(fetchN(q, p.u_chans.x), fetchN(q, p.u_chans.y),
-                  fetchN(q, p.u_chans.z), fetchN(q, p.u_chans.w));
+    ivec4 bytes = ivec4(fetchByte(q, p.u_chans.x), fetchByte(q, p.u_chans.y),
+                        fetchByte(q, p.u_chans.z), fetchByte(q, p.u_chans.w));
+    // int -> float is exact (bytes <= 255); the /255 is correctly rounded,
+    // so the RGBA8 store converts back to the exact same byte.
+    vec4 b = vec4(bytes) / 255.0;
     if (p.u_shadeDims.z != 0) {
         b *= shadeQuad(q, p.u_chans);
     }

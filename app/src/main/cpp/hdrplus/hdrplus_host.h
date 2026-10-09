@@ -28,6 +28,10 @@ const char* hdrplus_shader_name(int i);
 
 // Creates instance + device + compute queue + command pool.
 HdrPlusContext* hdrplus_create(char* errmsg, size_t errmsg_len);
+// Persistence path for the process pipeline cache (e.g. the app cache
+// dir's hdrplus.bin). Call before hdrplus_load_shaders for a warm start;
+// null/empty keeps an in-memory-only cache.
+void hdrplus_set_pipeline_cache_path(HdrPlusContext* ctx, const char* path);
 // Loads every manifest shader from "spirv/hdrplus/<name>.spv" via assetMgr
 // (AAssetManager* on Android, base-dir path as const char* on desktop)
 // and creates the compute pipelines. Returns the loaded count, or -1

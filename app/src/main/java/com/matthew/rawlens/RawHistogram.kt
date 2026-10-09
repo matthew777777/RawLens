@@ -48,7 +48,6 @@ object RawHistogramThrottle {
  */
 object RawHistogramSampler {
     private const val BIN_COUNT = 64
-    private const val TARGET_BLOCKS = 8_000
 
     /** Rec.709 luminance from linear channel values already normalized to 0..1. */
     internal fun luminanceOf(red: Double, green: Double, blue: Double): Double =
@@ -92,9 +91,7 @@ object RawHistogramSampler {
         val luminance = IntArray(BIN_COUNT)
         val blocksWide = image.width / 2
         val blocksHigh = image.height / 2
-        val blockStep = kotlin.math.sqrt(
-            (blocksWide.toLong() * blocksHigh / TARGET_BLOCKS.toDouble()).coerceAtLeast(1.0)
-        ).toInt().coerceAtLeast(1)
+        val blockStep = meterGridStep(blocksWide.toLong() * blocksHigh, SCOPE_TARGET_BLOCKS)
 
         var blockY = 0
         while (blockY < blocksHigh) {
@@ -107,8 +104,10 @@ object RawHistogramSampler {
                 val start0 = y0 * (plane.rowStride / 2)
                 val start1 = start0 + plane.rowStride / 2
                 if (start0 >= 0 && start1 + image.width <= shortCapacity) {
-                    shortView.get(start0, rowEven, 0, image.width)
-                    shortView.get(start1, rowOdd, 0, image.width)
+                    // Indexed bulk get needs ShortBufferCompat: the absolute
+                    // overload is missing below newer runtimes (API 30 crash).
+                    ShortBufferCompat.getBulk(shortView, start0, rowEven, 0, image.width)
+                    ShortBufferCompat.getBulk(shortView, start1, rowOdd, 0, image.width)
                     bulkEven = rowEven
                     bulkOdd = rowOdd
                 }

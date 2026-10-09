@@ -26,6 +26,10 @@ const char* galosh_shader_name(int i);
 // Creates instance + device + compute queue + pool. Float16/16-bit-storage
 // device features follow device support and are recorded in the context.
 GaloshContext* galosh_create(char* errmsg, size_t errmsg_len);
+// Persistence path for the process pipeline cache (e.g. the app cache
+// dir's galosh.bin). Call before galosh_load_shaders for a warm start;
+// null/empty keeps an in-memory-only cache.
+void galosh_set_pipeline_cache_path(GaloshContext* ctx, const char* path);
 // Loads every manifest shader from "spirv/galosh/<name>.spv" via assetMgr
 // (AAssetManager*). Returns the loaded count, or -1 with errmsg set.
 int galosh_load_shaders(GaloshContext* ctx, void* assetMgr, char* errmsg, size_t errmsg_len);

@@ -160,13 +160,23 @@ object HdrPlusAutoSelect {
         val mh = metering.mapCellsY
         val mapsUsable = ratios.size == frameCount - 1 && mw > 0 && mh > 0 &&
             ratios.all { it.size == mw * mh }
+        // Dense-MAD danger grids (native meter): same neighbor-max
+        // discipline as the ratios; absent without native metering.
+        val madDense = metering.pairMadDense
+        val dangerUsable = mapsUsable && madDense.size == frameCount - 1 &&
+            madDense.all { it.size == mw * mh }
         val strengthMaps = if (manualStrength != null || !mapsUsable) null
         else kept.map { o ->
             val local = DoubleArray(mw * mh) { i ->
                 adjacentPairs(o, frameCount).map { p -> ratios[p][i] }.maxOrNull()
                     ?: Double.NaN
             }
-            buildStrengthMap(local, mw, mh, dark01)
+            val danger = if (!dangerUsable) null
+            else DoubleArray(mw * mh) { i ->
+                adjacentPairs(o, frameCount).map { p -> madDense[p][i] }.maxOrNull()
+                    ?: Double.NaN
+            }
+            buildStrengthMap(local, mw, mh, dark01, danger)
         }
         return HdrPlusAutoDecision(
             strength = manualStrength ?: roundedAuto,
@@ -184,14 +194,19 @@ object HdrPlusAutoSelect {
     /**
      * Curves per-block neighbor-mismatch maxes to strengths and smooths
      * with a 3x3 box blur (replicate edges) so 32px transitions stay
-     * invisible. Non-finite ratios go strict (safe direction). Full float
-     * precision — no slider rounding (that would band the map).
+     * invisible. Non-finite ratios go strict (safe direction). The
+     * dense-MAD danger grid (null without native metering) takes the
+     * minimum with the ratio strength per block: it catches the
+     * sub-sample jitter (thin wires) that stride-16 sampling misses.
+     * Full float precision — no slider rounding (that would band
+     * the map).
      */
     private fun buildStrengthMap(
         local: DoubleArray,
         mw: Int,
         mh: Int,
-        dark01: Double
+        dark01: Double,
+        danger: DoubleArray? = null
     ): FloatArray {
         val t = HdrPlusAutoTuning
         val curved = DoubleArray(local.size) { i ->
@@ -202,7 +217,18 @@ object HdrPlusAutoSelect {
                 else -> t.AUTO_STRENGTH_MAX + (t.AUTO_STRENGTH_MIN - t.AUTO_STRENGTH_MAX) *
                     (r - t.MAP_RATIO_CLEAN) / (t.MAP_RATIO_MOTION - t.MAP_RATIO_CLEAN)
             }
-            (s + t.STRENGTH_DARK_BOOST * dark01)
+            val d = danger?.get(i)
+            val ds = if (d == null) t.AUTO_STRENGTH_MAX.toDouble()
+            else {
+                val v = d.takeIf { it.isFinite() } ?: t.MAP_DANGER_STRICT
+                when {
+                    v <= t.MAP_DANGER_CLEAN -> t.AUTO_STRENGTH_MAX.toDouble()
+                    v >= t.MAP_DANGER_STRICT -> t.AUTO_STRENGTH_MIN.toDouble()
+                    else -> t.AUTO_STRENGTH_MAX + (t.AUTO_STRENGTH_MIN - t.AUTO_STRENGTH_MAX) *
+                        (v - t.MAP_DANGER_CLEAN) / (t.MAP_DANGER_STRICT - t.MAP_DANGER_CLEAN)
+                }
+            }
+            (minOf(s, ds) + t.STRENGTH_DARK_BOOST * dark01)
                 .coerceIn(t.AUTO_STRENGTH_MIN.toDouble(), t.AUTO_STRENGTH_MAX.toDouble())
         }
         return FloatArray(local.size) { i ->

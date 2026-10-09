@@ -103,4 +103,19 @@ object HdrPlusAutoTuning {
     const val MAP_RATIO_CLEAN = 1.0
     /** Block mismatch ratio at/above this merges at the floor. */
     const val MAP_RATIO_MOTION = 4.0
+    /**
+     * Dense-MAD danger ramp (native meter): full-res mean |prev-curr|
+     * per 32px cell, normalized. Stride-16 sampling skips the 1-2px
+     * wires that actually ghost (s16 ratio AUC 0.39 on merge-labeled
+     * blocks); dense MAD ranks them first (AUC 0.82 pooled, 0.77-1.00
+     * per burst). Calibrated on s16-lenient blocks only (the ratio
+     * already owns strict ones): CLEAN sits below the positives' p10
+     * (0.0043), STRICT near their median (0.0104); ~7% of s16-lenient
+     * clean blocks read above STRICT, all with real dense jitter.
+     * Fit: 551 merge-sensitive blocks (|s13-s3| > 0.008, micro-ghosts
+     * visually confirmed) over 3 still + 2 shaky bursts, Oct 2026.
+     */
+    const val MAP_DANGER_CLEAN = 0.004
+    /** Dense MAD at/above this merges at the floor (see above). */
+    const val MAP_DANGER_STRICT = 0.012
 }

@@ -529,6 +529,8 @@ class DirectLogRecorder(
         val f16spv = appContext.assets.open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
         val yuvspv = appContext.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
         val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        VfVulkan.setPipelineCachePathNative(
+            VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         check(VfVulkan.initF16Native(f16spv) == VfVulkan.OK) { "f16 init failed" }
         // Grade init first: twin command buffers + isolated sets live with
@@ -544,7 +546,9 @@ class DirectLogRecorder(
         rcdCount.set(0)
         fun tryInitFused(): Boolean {
             return try {
-                val fusedspv = appContext.assets.open("shaders/vf/vf_mhcyuv.spv").use { it.readBytes() }
+                val asset = VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())
+                Log.i(TAG, "fused asset $asset")
+                val fusedspv = appContext.assets.open(asset).use { it.readBytes() }
                 if (VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) {
                     useFused = true
                     true

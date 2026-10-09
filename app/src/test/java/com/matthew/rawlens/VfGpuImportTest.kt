@@ -51,17 +51,33 @@ class VfGpuImportTest {
         assertTrue(shader.contains("gl_FragColor"))
     }
 
-    @Test fun `GPU shader is ESSL 3 with integer Bayer fetch and highp unpack`() {
+    @Test fun `GPU shader is ESSL 3 with integer Q6 fetch and mediump tail`() {
         val shader = VfGpuImport.gpuFragmentShader()
         assertTrue(shader.startsWith("#version 300 es"))
         assertTrue(shader.contains("usampler2D u_bayer"))
         assertTrue(shader.contains("texelFetch(u_bayer"))
         assertTrue(shader.contains("in highp vec2 tex"))
-        assertTrue(shader.contains("uniform highp vec4 u_black"))
-        assertTrue(shader.contains("uniform highp vec4 u_invRange"))
+        assertTrue(shader.contains("uniform highp ivec4 u_blackQ"))
+        assertTrue(shader.contains("uniform highp ivec4 u_denQ"))
+        assertTrue(shader.contains("vfFetchByte"))
+        assertTrue(shader.contains("precision mediump float"))
+        assertFalse(shader.contains("uniform highp vec4 u_black"))
+        assertFalse(shader.contains("uniform highp vec4 u_invRange"))
         assertTrue(shader.contains("out vec4 fragColor"))
         assertFalse(shader.contains("gl_FragColor"))
         assertFalse(shader.contains("texture2D"))
+    }
+
+    @Test fun `both shaders run the tonemap in mediump with a pinned dither`() {
+        // fp16-class ALU for the whole tail; only the IGN hash keeps highp
+        // (VFHP), where mediump intermediates would coarsen into banding.
+        for (shader in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
+            assertTrue(shader.contains("precision mediump float"))
+            assertTrue(shader.contains("VFHP float ign(VFHP vec2"))
+            assertTrue(shader.contains("VFHP float d0 = ign(gl_FragCoord.xy, 0.0)"))
+        }
+        assertTrue(VfGpuImport.cpuFragmentShader().contains("#define VFHP mediump"))
+        assertTrue(VfGpuImport.gpuFragmentShader().contains("#define VFHP highp"))
     }
 
     @Test fun `both shaders declare the lens green-row uniform they use`() {

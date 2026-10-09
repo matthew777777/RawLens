@@ -5,6 +5,7 @@ package com.matthew.rawlens
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -241,6 +242,51 @@ class HdrPlusMotionMeterTest {
                 currTimestampsNs = listOf(2L),
                 pairGyroRadS = listOf(0.01),
                 pairMismatchRatios = listOf(doubleArrayOf(0.5), doubleArrayOf(0.5))
+            )
+        }
+    }
+
+    @Test fun summarizeCarriesDenseGrids() {
+        val mad = listOf(doubleArrayOf(0.002, 0.02), doubleArrayOf(0.003, 0.004))
+        val tex = listOf(doubleArrayOf(0.01, 0.03), doubleArrayOf(0.011, 0.012))
+        val summary = HdrPlusMotionMeter.summarize(
+            pairDeltas = listOf(0.002, 0.006),
+            prevTimestampsNs = listOf(1_000_000_000L, 1_033_000_000L),
+            currTimestampsNs = listOf(1_033_000_000L, 1_066_000_000L),
+            pairGyroRadS = listOf(0.01, 0.03),
+            pairMadDense = mad,
+            pairTexDense = tex
+        )
+        assertEquals(2, summary.pairMadDense.size)
+        assertArrayEquals(doubleArrayOf(0.002, 0.02), summary.pairMadDense[0], 0.0)
+        assertArrayEquals(doubleArrayOf(0.011, 0.012), summary.pairTexDense[1], 0.0)
+        val bare = HdrPlusMotionMeter.summarize(
+            pairDeltas = listOf(0.002, 0.006),
+            prevTimestampsNs = listOf(1_000_000_000L, 1_033_000_000L),
+            currTimestampsNs = listOf(1_033_000_000L, 1_066_000_000L),
+            pairGyroRadS = listOf(0.01, 0.03)
+        )
+        assertTrue(bare.pairMadDense.isEmpty())
+        assertTrue(bare.pairTexDense.isEmpty())
+    }
+
+    @Test fun summarizeRejectsPartialDenseGrids() {
+        assertThrows(IllegalArgumentException::class.java) {
+            HdrPlusMotionMeter.summarize(
+                pairDeltas = listOf(0.1, 0.2),
+                prevTimestampsNs = listOf(1L, 2L),
+                currTimestampsNs = listOf(2L, 3L),
+                pairGyroRadS = listOf(0.01, 0.02),
+                pairMadDense = listOf(doubleArrayOf(0.5))
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HdrPlusMotionMeter.summarize(
+                pairDeltas = listOf(0.1, 0.2),
+                prevTimestampsNs = listOf(1L, 2L),
+                currTimestampsNs = listOf(2L, 3L),
+                pairGyroRadS = listOf(0.01, 0.02),
+                pairTexDense = listOf(doubleArrayOf(0.5))
             )
         }
     }

@@ -10,8 +10,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * On-device pixel parity for the native NEON fallback sampler: same
- * quad-fetch + reciprocal-normalize contract the zero-copy GPU tiers use.
+ * On-device pixel parity for the native CPU fallback sampler: same
+ * quad-fetch + Q6 fixed-point contract the zero-copy GPU tiers use.
  * Asserts through the real JNI (including symbol linkage), with no camera.
  */
 @RunWith(AndroidJUnit4::class)
@@ -73,9 +73,9 @@ class VfCpuNeonInstrumentedTest {
             source, shortsPerRow * 2, 2, left, top, width, height, step,
             channels, black, white, output
         )
-        // Scalar reference: identical op order, so NEON bytes must match exactly
-        // across the 4-wide vector block and the scalar tail.
-        val inv = FloatArray(4) { i -> 1f / (white - black[i]).coerceAtLeast(1f) }
+        // Exact integer reference (VfLevels): the same formula and Q6 ints
+        // the native core evaluates, so bytes must match across bands.
+        val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
         val expected = ByteArray(width * height * 4)
         var o = 0
         for (y in 0 until height) for (x in 0 until width) for (c in 0..3) {
@@ -83,8 +83,7 @@ class VfCpuNeonInstrumentedTest {
             val sx = left + x * step + ch % 2
             val sy = top + y * step + ch / 2
             val code = shorts[sy * shortsPerRow + sx].toInt() and 0xffff
-            val n = ((code - black[ch]) * inv[ch]).coerceIn(0f, 1f)
-            expected[o++] = (n * 255f + 0.5f).toInt().toByte()
+            expected[o++] = VfLevels.normalizeByte(code, blackQ[ch], denQ[ch]).toByte()
         }
         assertEquals(expected.size, output.remaining())
         for (i in expected.indices) {
@@ -110,17 +109,14 @@ class VfCpuNeonInstrumentedTest {
         assertEquals(width * 4, output.remaining())
         val bytes = ByteArray(output.remaining())
         output.get(bytes)
-        // Same op order as the native sampler (reciprocal multiply, not
-        // division) so the reference cannot drift by 1 ulp.
-        val inv = 1f / 1023f
+        val (blackQ, denQ) = VfLevels.toFixedQ6(FloatArray(4), 1023f)
         for (x in intArrayOf(0, 1, 2, 3, 4, 539, 1077, 1078, 1079)) {
             for (c in 0..3) {
                 val sx = x * 2 + c % 2
                 val sy = c / 2
                 val code = shorts[sy * shortsPerRow + sx].toInt() and 0xffff
-                val n = ((code - 0f) * inv).coerceIn(0f, 1f)
                 assertEquals(
-                    "x=$x c=$c", (n * 255f + 0.5f).toInt(),
+                    "x=$x c=$c", VfLevels.normalizeByte(code, blackQ[c], denQ[c]),
                     bytes[(x * 4 + c)].toInt() and 255
                 )
             }
@@ -149,16 +145,15 @@ class VfCpuNeonInstrumentedTest {
             source, shortsPerRow * 2, 2, 0, 0, width, height, step,
             channels, black, white, output
         )
-        val inv = FloatArray(4) { i -> 1f / (white - black[i]).coerceAtLeast(1f) }
+        val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
         assertEquals(width * height * 4, output.remaining())
         for (y in 0 until height) for (x in 0 until width) for (c in 0..3) {
             val ch = channels[c]
             val sx = x * step + ch % 2
             val sy = y * step + ch / 2
             val code = shorts[sy * shortsPerRow + sx].toInt() and 0xffff
-            val n = ((code - black[ch]) * inv[ch]).coerceIn(0f, 1f)
             assertEquals(
-                "x=$x y=$y c=$c", (n * 255f + 0.5f).toInt(),
+                "x=$x y=$y c=$c", VfLevels.normalizeByte(code, blackQ[ch], denQ[ch]),
                 output.get().toInt() and 255
             )
         }
@@ -187,16 +182,15 @@ class VfCpuNeonInstrumentedTest {
             source, shortsPerRow * 2, 2, 0, 0, width, height, step,
             channels, black, white, output
         )
-        val inv = FloatArray(4) { i -> 1f / (white - black[i]).coerceAtLeast(1f) }
+        val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
         assertEquals(width * height * 4, output.remaining())
         for (y in 0 until height) for (x in 0 until width) for (c in 0..3) {
             val ch = channels[c]
             val sx = x * step + ch % 2
             val sy = y * step + ch / 2
             val code = shorts[sy * shortsPerRow + sx].toInt() and 0xffff
-            val n = ((code - black[ch]) * inv[ch]).coerceIn(0f, 1f)
             assertEquals(
-                "x=$x y=$y c=$c", (n * 255f + 0.5f).toInt(),
+                "x=$x y=$y c=$c", VfLevels.normalizeByte(code, blackQ[ch], denQ[ch]),
                 output.get().toInt() and 255
             )
         }
@@ -206,18 +200,27 @@ class VfCpuNeonInstrumentedTest {
         assumeTrue("vf native library unavailable", VfCpuNeon.available)
         val src = direct(64)
         val dst = direct(64)
+        // Q6 for black=0, white=1023: blackQ=0, denQ=(1023*64+0.5).toInt().
+        val levels = intArrayOf(0, 0, 0, 0, 65472, 65472, 65472, 65472)
         assertEquals(
             VfCpuNeon.BAD_ARGUMENT,
             VfCpuNeon.copyNative(
                 src, 0, 8, 2, 1, 0, 1, 1, 2,
-                intArrayOf(0, 1, 2, 3), FloatArray(4), 1023f, dst, 0
+                intArrayOf(0, 1, 2, 3), levels, dst, 0
             )
         )
         assertEquals(
             VfCpuNeon.OK,
             VfCpuNeon.copyNative(
                 src, 0, 8, 2, 0, 0, 1, 1, 2,
-                intArrayOf(0, 1, 2, 3), FloatArray(4), 1023f, dst, 0
+                intArrayOf(0, 1, 2, 3), levels, dst, 0
+            )
+        )
+        assertEquals(
+            VfCpuNeon.BAD_ARGUMENT,
+            VfCpuNeon.copyNative(
+                src, 0, 8, 2, 0, 0, 1, 1, 2,
+                intArrayOf(0, 1, 2, 3), intArrayOf(0, 0, 0, 0, 0, 64, 64, 64), dst, 0
             )
         )
     }
