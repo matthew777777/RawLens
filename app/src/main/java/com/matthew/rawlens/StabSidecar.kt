@@ -22,7 +22,7 @@ internal object StabSidecar {
     const val FORMAT = "rawlens-stab-sidecar"
     const val FORMAT_VERSION = 1
 
-    /** File suffix for the staged sidecar (`<stem>_LOG.stab.json`). */
+    /** File suffix for the staged sidecar (`<stem>_LOG709.stab.json`). */
     const val FILE_SUFFIX = ".stab.json"
 
     /**

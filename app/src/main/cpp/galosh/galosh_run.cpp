@@ -205,7 +205,7 @@ int galosh_make_pipeline(GaloshContext* ctx, void* assetMgr, const char* asset, 
         cpi.stage.pNext = &rss;
         cpi.stage.flags = VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT;
     }
-    if (vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, pipe) !=
+    if (vkCreateComputePipelines(ctx->device, galosh_pipeline_cache(ctx), 1, &cpi, nullptr, pipe) !=
         VK_SUCCESS) {
         vkDestroyPipelineLayout(ctx->device, *pl, nullptr);
         *pl = VK_NULL_HANDLE;
@@ -261,11 +261,18 @@ int galosh_init_pipelines(GaloshContext* ctx, void* assetMgr, char* errmsg, size
             snprintf(errmsg, errmsg_len, "query pool failed");
         return -1;
     }
+    // Persist the warmed cache now: the process may die before release.
+    galosh_save_pipeline_cache(ctx);
     return 0;
 }
 
 void galosh_destroy_pipelines(GaloshContext* ctx) {
     if (ctx == nullptr || ctx->device == VK_NULL_HANDLE) return;
+    galosh_save_pipeline_cache(ctx);
+    if (ctx->pipelineCache != VK_NULL_HANDLE) {
+        vkDestroyPipelineCache(ctx->device, ctx->pipelineCache, nullptr);
+        ctx->pipelineCache = VK_NULL_HANDLE;
+    }
     if (ctx->qpool != VK_NULL_HANDLE) vkDestroyQueryPool(ctx->device, ctx->qpool, nullptr);
     if (ctx->dpool != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx->device, ctx->dpool, nullptr);
     for (int i = 0; i < GALOSH_K_COUNT; i++) {

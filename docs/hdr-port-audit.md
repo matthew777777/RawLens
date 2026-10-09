@@ -114,6 +114,32 @@ The vendored files record their independently verified PhotonCamera source commi
   intact — both scenes are alignment-limited, so gains materialize as
   noise rather than sharpness. A fast-motion bracket set would be needed
   to separate sharpness.
+- Phase 4 HDR+ parity (2026-10-08, bracket branch of hdr-plus-swift
+  `frequency.swift`/`frequency.metal` at 69cb057 — the same upstream the
+  Vulkan HDR+ port matches on its uniform path): new `HdrPlusRobustness`
+  ports the exposure-factor model (`f = exposure_comp/exposure_ref`),
+  burst corr1/corr2 strength damping (conservative-only, clamped to <= 1
+  since the DNG noise model already captures companion noise),
+  per-companion motion ceilings (`min(4,f)*sqrt(base)`), the longer-
+  companion highlight discount, and uniform detection. `HdrTileDeghost`
+  consumes them (burst factors threaded through `HdrRawMerge`, pairwise
+  fallback for direct callers; uniform pairs are bit-identical to legacy),
+  upgrades subpixel search to upstream's 7x7 grid at 1/6 steps over
+  +-0.5px via the RAWR cross-correlation argmax (textbook unsigned-DFT
+  shift, precomputed shift tables), widens mismatch support to upstream's
+  doubled tile window, and sums deconvolution magnitudes over channels
+  with one shared gain. Intentional bracket adaptations kept: DNG-noise
+  bins, EXIF+median+per-tile gain matching, DC low-frequency consensus,
+  motion floor reject, darker-companion highlight ramp, magnitude
+  preference on brackets, per-site anti-ringing clamp. Deferred (no
+  upstream-exact equivalent needed yet): global mismatch mean-0.12
+  normalization. Real-bracket A/B on the 2026-10-06 handshake-smear set
+  (IMG_20261006_090946_373, F02 1/25s blurred): sharpness tie, reference
+  fidelity -7.9% MAD (less smear), shadow variance -1.4%, highlight
+  rescue identical, noise +0.8% (less averaging of the blurred long
+  frame — the correct tradeoff), merge cost ~1.38x (inside the
+  quality-first budget). The `blurredLongExposureKeepsReferenceSharpness`
+  regression now passes; full suite 1401 green.
 - Abort HDR on missing/nonfinite FlowNet output; clamp raw model flow to ±32 model px
   and reject fields that do not strictly improve exposure-matched proxy correspondence
   or leave fewer than 85% of sampled points in bounds (a field that merely ties

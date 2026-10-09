@@ -107,7 +107,8 @@ class DngSaver(private val context: Context) {
                    gps: GpsLocation? = null,
                    displayName: String? = null,
                    sixteenBit: Boolean = false,
-                   hdrPlusProvenance: HdrPlusProvenance? = null): String {
+                   hdrPlusProvenance: HdrPlusProvenance? = null,
+                   baselineExposureEv: Double? = null): String {
         val resolvedName = displayName ?: CaptureFileNames.hdrDng(captureId)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -122,7 +123,8 @@ class DngSaver(private val context: Context) {
             resolver.openOutputStream(uri, "w")?.use {
                 if (sixteenBit) HdrPlusDngWriter.write(it, cfa, metadata, gps,
                     captureTimeMillis = captureId, provenance = hdrPlusProvenance)
-                else FloatCfaDngWriter.write(it, cfa, metadata, gps)
+                else FloatCfaDngWriter.write(it, cfa, metadata, gps,
+                    baselineExposureEv = baselineExposureEv)
             } ?: throw IOException("Could not open HDR DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish HDR DNG")
@@ -170,8 +172,23 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create media entry")
 
+        // Sampled levels mean the HAL's reported pair was unusable: the
+        // platform writer would bake that garbage into the tags (or throw),
+        // while TinyDNG consumes the repaired metadata. Reroute unless the
+        // user pinned both level tags deliberately (their patch fixes the
+        // platform file afterwards).
+        val levelsSampled = metadata.blackLevelSource == BlackLevelSource.SAMPLED ||
+            metadata.whiteLevelSource == WhiteLevelSource.SAMPLED
+        val userPinnedLevels = overrides.blackLevels != null && overrides.whiteLevel != null
+        val effectiveBackend = if (levelsSampled && !userPinnedLevels && backend != DngWriterBackend.TINY_DNG) {
+            Log.w(LOG_TAG, "HAL black/white levels unusable (sampled black=" +
+                "${metadata.blackLevels?.toList()?.joinToString(",")} white=${metadata.whiteLevel}); " +
+                "forcing TinyDNG backend for $displayName")
+            DngWriterBackend.TINY_DNG
+        } else backend
+
         try {
-            val actualBackend = when (backend) {
+            val actualBackend = when (effectiveBackend) {
                 DngWriterBackend.ANDROID -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
                         writeAndroid(output, image, characteristics, result, orientation, gps)

@@ -186,4 +186,14 @@ struct HdrPlusContext {
     rawlens::hdrplus::Program programs[rawlens::hdrplus::kShaderCount];
     std::uint32_t loaded_shaders = 0;
     double last_gpu_ms = 0.0;
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
+    std::string pipeline_cache_path;  // empty = in-memory cache only
 };
+
+// Lazily creates ctx->pipeline_cache, warming it from
+// pipeline_cache_path when set. The result (possibly null on failure;
+// null means "no cache") is the cache argument for pipeline creation.
+VkPipelineCache hdrplus_pipeline_cache(HdrPlusContext* ctx);
+// Persists ctx->pipeline_cache to pipeline_cache_path when a path is set.
+// No-op otherwise; never fatal.
+void hdrplus_save_pipeline_cache(HdrPlusContext* ctx);

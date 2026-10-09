@@ -2,6 +2,7 @@ package com.matthew.rawlens
 
 import android.hardware.camera2.CaptureResult
 import android.media.Image
+import android.util.Log
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
@@ -40,6 +41,13 @@ object NativeDngWriter {
         }
         val white = (overrides.whiteLevel ?: metadata.whiteLevel?.toDouble()
             ?: error("Camera2 did not report a white level")).roundToInt()
+        if (overrides.blackLevels == null && overrides.whiteLevel == null &&
+            (metadata.blackLevelSource == BlackLevelSource.SAMPLED ||
+                metadata.whiteLevelSource == WhiteLevelSource.SAMPLED)
+        ) {
+            Log.w("RawLensDng", "DNG levels sampled from frame (HAL-reported levels unusable): " +
+                "black=${black.joinToString(",")} white=$white")
+        }
         val tags = TinyDngMetadata.create(metadata, overrides, outputPattern,
             black, white, active)
         result.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {

@@ -254,9 +254,11 @@ object LinearMain {
                     (if (r.evRelative == null) "" else " ev=%+.2f".format(r.evRelative)) +
                     (if (r.meanRobustness == null) "" else " meanR=%.3f".format(r.meanRobustness)))
             }
-            // Causation experiment: swap the CPU merge onto GAT-guide
-            // covariances (exactly what the Vulkan path consumes) to test
-            // whether the guide input explains the VK spikes.
+            // Causation experiment: swap the CPU merge onto unclamped
+            // GAT-guide covariances (both paths consume the GAT guide since
+            // 2026-10-08; the default additionally applies the zipper-gate
+            // minor-axis clamp) to test whether the clamp explains output
+            // differences.
             var refFrame: RawSrBayerMerge.MergeFrame
             var movFrames: List<RawSrBayerMerge.MergeFrame>
             if (opts.cpuGatCov) {

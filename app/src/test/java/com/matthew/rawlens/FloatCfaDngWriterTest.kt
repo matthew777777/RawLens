@@ -40,6 +40,65 @@ class FloatCfaDngWriterTest {
         assertTrue(remaining.isEmpty())
     }
 
+    @Test fun writesBaselineExposureAndReferenceExposureTags() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        `when`(metadata.exposureTimeNanos).thenReturn(10_000_000L)
+        `when`(metadata.sensitivityIso).thenReturn(153)
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also {
+            FloatCfaDngWriter.write(it, cfa, metadata, baselineExposureEv = 2.0)
+        }.toByteArray()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buffer.getShort(8).toInt() and 0xffff
+        var baseline: Double? = null
+        var exposure: Double? = null
+        var iso: Int? = null
+        for (i in 0 until count) {
+            val p = 10 + i * 12
+            when (buffer.getShort(p).toInt() and 0xffff) {
+                50730 -> {
+                    assertEquals(10, buffer.getShort(p + 2).toInt())
+                    val offset = buffer.getInt(p + 8)
+                    baseline = buffer.getInt(offset).toDouble() / buffer.getInt(offset + 4)
+                }
+                33434 -> {
+                    assertEquals(5, buffer.getShort(p + 2).toInt())
+                    val offset = buffer.getInt(p + 8)
+                    exposure = (buffer.getInt(offset).toLong() and 0xffffffffL).toDouble() /
+                        (buffer.getInt(offset + 4).toLong() and 0xffffffffL)
+                }
+                34855 -> {
+                    assertEquals(3, buffer.getShort(p + 2).toInt())
+                    iso = buffer.getShort(p + 8).toInt() and 0xffff
+                }
+            }
+        }
+        assertEquals(2.0, baseline ?: Double.NaN, 1e-6)
+        assertEquals(0.01, exposure ?: Double.NaN, 1e-9)
+        assertEquals(153, iso)
+    }
+
+    @Test fun omitsExposureTagsForUniformMergesByDefault() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        `when`(metadata.exposureTimeNanos).thenReturn(10_000_000L)
+        `when`(metadata.sensitivityIso).thenReturn(153)
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also {
+            FloatCfaDngWriter.write(it, cfa, metadata)
+        }.toByteArray()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buffer.getShort(8).toInt() and 0xffff
+        val tags = HashSet<Int>()
+        for (i in 0 until count) tags.add(buffer.getShort(10 + i * 12).toInt() and 0xffff)
+        assertTrue(tags.intersect(setOf(50730, 33434, 34855)).isEmpty())
+    }
+
     @Test fun writesFloatCfaDngTagsAndUnclampedSamples() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.cameraId).thenReturn("0")

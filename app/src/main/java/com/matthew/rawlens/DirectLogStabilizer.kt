@@ -80,6 +80,8 @@ class DirectLogStabilizer(private val appContext: Context) {
 
         // Vulkan warp stage (device persists from the take; init is idempotent).
         val devSpv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        VfVulkan.setPipelineCachePathNative(
+            VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(devSpv) == VfVulkan.OK) { "vulkan init failed" }
         val warpSpv = appContext.assets.open("shaders/vf/vf_stabwarp.spv").use { it.readBytes() }
         val initRc = VfStab.initStabNative(warpSpv, w, h)

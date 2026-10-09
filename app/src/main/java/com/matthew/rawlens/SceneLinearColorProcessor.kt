@@ -93,6 +93,17 @@ data class ResolvedSceneLinearTransform(
  */
 object SceneLinearColorProcessor {
     const val CPU_GLSL_TOLERANCE = 2.5e-4f
+    /**
+     * Pre-matrix white-blend windows (see [neutralizeCameraHighlight] and the
+     * `u_white_window` uniform in `amaze/final.glsl` + `amaze/final_display.glsl`).
+     * LDR: near-white is clipped, so blend 0.70..0.99 toward neutral. HDR: merged
+     * values up to 1.0 are valid short-frame highlights — only the exactly-1.0
+     * all-frames-clipped fallback neutralizes, so bright color survives.
+     */
+    const val WHITE_WINDOW_LDR_START = 0.70f
+    const val WHITE_WINDOW_LDR_END = 0.99f
+    const val WHITE_WINDOW_HDR_START = 0.995f
+    const val WHITE_WINDOW_HDR_END = 1.0f
 
     fun resolve(metadata: SceneLinearColorMetadata, exposureEv: Double = 0.0): ResolvedSceneLinearTransform {
         require(exposureEv.isFinite() && exposureEv in -16.0..16.0) {
@@ -244,8 +255,8 @@ object SceneLinearColorProcessor {
     fun neutralizeCameraHighlight(
         rgb: FloatArray,
         cameraWhiteNormalized: FloatArray,
-        start: Float = 0.70f,
-        end: Float = 0.99f
+        start: Float = WHITE_WINDOW_LDR_START,
+        end: Float = WHITE_WINDOW_LDR_END
     ): FloatArray {
         require(rgb.size == 3 && cameraWhiteNormalized.size == 3)
         require(start.isFinite() && end.isFinite() && start < end)

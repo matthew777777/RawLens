@@ -23,10 +23,11 @@ object GaloshVulkan {
 
     /**
      * Creates instance + device + compute queue and loads every manifest
-     * SPIR-V module. Returns an opaque handle for [release].
+     * SPIR-V module. Returns an opaque handle for [release]. [cacheFile]
+     * persists the pipeline cache across runs (null keeps it in-memory).
      */
-    fun init(assetManager: AssetManager): Long {
-        val handle = nativeInit(assetManager)
+    fun init(assetManager: AssetManager, cacheFile: java.io.File? = null): Long {
+        val handle = nativeInit(assetManager, cacheFile?.absolutePath)
         require(handle != 0L) { "galosh init returned a null handle" }
         return handle
     }
@@ -80,7 +81,7 @@ object GaloshVulkan {
     private external fun nativeDumpName(handle: Long, index: Int): String
     private external fun nativeDumpData(handle: Long, index: Int): FloatArray
     private external fun nativeProbeCaps(): String
-    private external fun nativeInit(assetManager: AssetManager): Long
+    private external fun nativeInit(assetManager: AssetManager, cachePath: String?): Long
     private external fun nativeRelease(handle: Long)
     private external fun nativeLoadedShaderCount(handle: Long): Int
     private external fun nativeExpectedShaderCount(): Int

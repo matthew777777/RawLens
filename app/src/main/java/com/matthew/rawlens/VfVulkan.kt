@@ -67,8 +67,10 @@ internal object VfVulkan {
     /**
      * Pack compute params. Layout must match `vf_vulkan_vf.cpp` and the push-constant
      * block in `vf_superpixel.comp`: iparams = [ch0..ch3, left, top, width, height,
-     * step, pitch], fparams = [black0..3, invRange0..3]. Pitch is the sensor-plane
-     * stride in pixels (rowStride / pixelStride), the same value the CPU sampler uses.
+     * step, pitch], fparams = Q6 fixed-point [blackQ0..3, denQ0..3] bit-cast to float
+     * ([VfLevels]; the native fill memcpys the words and the shader recovers the
+     * ints with `floatBitsToInt`). Pitch is the sensor-plane stride in pixels
+     * (rowStride / pixelStride), the same value the CPU sampler uses.
      */
     fun packParams(
         channels: IntArray,
@@ -80,10 +82,8 @@ internal object VfVulkan {
             channels[0], channels[1], channels[2], channels[3],
             left, top, width, height, step, pitch
         )
-        val fparams = FloatArray(8) { i ->
-            if (i < 4) levels[i] else 1f / (white - levels[i - 4]).coerceAtLeast(1f)
-        }
-        return iparams to fparams
+        val (blackQ, denQ) = VfLevels.toFixedQ6(levels, white)
+        return iparams to VfLevels.toBits(blackQ, denQ)
     }
 
     /** Ceil-division dispatch group count shared with the native dispatch. */
@@ -91,6 +91,13 @@ internal object VfVulkan {
 
     /** Create the persistent device + superpixel pipeline from SPIR-V bytes. Idempotent. */
     external fun initNative(spv: ByteArray): Int
+
+    /**
+     * Persistence file for the process pipeline cache. Call before
+     * [initNative] for a warm start; also applies to the live device
+     * (subsequently created pipelines) and every later (re)init.
+     */
+    external fun setPipelineCachePathNative(path: String)
 
     /**
      * Create the Direct-Log f16 superpixel variant (same bindings, rgba16f
@@ -113,7 +120,7 @@ internal object VfVulkan {
     /**
      * Run superpixel on [inputBuffer].
      * @param iparams [ch0..ch3, left, top, width, height, step, pitch] (10 ints)
-     * @param fparams [black0..3, invRange0..3] (8 floats)
+     * @param fparams Q6 [blackQ0..3, denQ0..3] bit-cast to float (8 words, see [VfLevels])
      */
     external fun computeNative(
         inputBuffer: HardwareBuffer,
@@ -163,4 +170,12 @@ internal object VfVulkan {
 
     /** Evict all cached imports (session boundary). Keeps device + pipeline. */
     external fun resetNative()
+
+    /**
+     * True when the shared device enabled shaderFloat16
+     * (VK_KHR_shader_float16_int8): the fused record kernel then runs its
+     * fp16 SPIR-V ([VfLogGrade.fusedAsset]), else the fp32 twin. False
+     * before [initNative].
+     */
+    external fun supportsF16MathNative(): Boolean
 }

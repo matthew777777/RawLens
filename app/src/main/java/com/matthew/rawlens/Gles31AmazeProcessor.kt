@@ -67,12 +67,16 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         fusedOutputSettings: JpegOutputSettings? = null,
+        whiteWindow: FloatArray = floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        ),
         consume: (AmazeGpuOutput) -> T
     ): T {
         AmazePipelineContract.validateInput(input)
         return processInput(
             CpuAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, consume
+            fusedOutputSettings, whiteWindow, consume
         )
     }
 
@@ -82,6 +86,10 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         fusedOutputSettings: JpegOutputSettings? = null,
+        whiteWindow: FloatArray = floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        ),
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -89,7 +97,7 @@ class Gles31AmazeProcessor(
         }
         return processInput(
             DirectRawAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, consume
+            fusedOutputSettings, whiteWindow, consume
         )
     }
 
@@ -103,7 +111,7 @@ class Gles31AmazeProcessor(
         require(input.samples.width >= 4 && input.samples.height >= 4)
         require(input.samples.values.size == input.samples.width * input.samples.height)
         return processInput(QuadInput(input), 1f, cameraToAcescgColumnMajor,
-            cameraWhiteNormalized, null, consume)
+            cameraWhiteNormalized, null, consume = consume)
     }
 
     /**
@@ -352,6 +360,8 @@ class Gles31AmazeProcessor(
     /** Idempotent Vulkan RCD bring-up (viewfinder usually already owns the device). */
     private fun ensureRcdVulkan() {
         val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        VfVulkan.setPipelineCachePathNative(
+            VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "RCD vulkan init failed" }
         val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "RCD grade init failed" }
@@ -374,9 +384,16 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         fusedOutputSettings: JpegOutputSettings?,
+        whiteWindow: FloatArray = floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        ),
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(clipPoint.isFinite() && clipPoint > 0f) { "AMaZE clip point must be finite and positive" }
+        require(whiteWindow.size == 2 && whiteWindow.all(Float::isFinite) &&
+            whiteWindow[0] < whiteWindow[1]
+        ) { "AMaZE white window must be two finite values with start < end" }
         require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
             "Camera-to-ACEScg matrix must contain nine finite values"
         }
@@ -410,6 +427,7 @@ class Gles31AmazeProcessor(
                 cameraToAcescgColumnMajor,
                 cameraWhiteNormalized,
                 fusedOutputSettings?.resolvedForPlatform(),
+                whiteWindow,
                 session.programs,
                 session.textures,
                 session.uploads
@@ -514,6 +532,7 @@ class Gles31AmazeProcessor(
         private val cameraToAcescgColumnMajor: FloatArray,
         private val cameraWhiteNormalized: FloatArray,
         private val fusedSettings: JpegOutputSettings?,
+        private val whiteWindow: FloatArray,
         private val programs: ProgramCache,
         private val texturePool: TexturePool,
         private val uploadBuffers: UploadBuffers
@@ -755,6 +774,7 @@ class Gles31AmazeProcessor(
                 ivec4("u_fc", cfaUniform)
                 mat3("u_camera_to_acescg", demosaicCameraToAcescg)
                 vec3("u_camera_white_normalized", demosaicCameraWhiteNormalized)
+                vec2("u_white_window", whiteWindow)
                 ivec2(
                     "u_inner",
                     AmazePipelineContract.PAD + AmazePipelineContract.BORDER,
@@ -848,6 +868,8 @@ class Gles31AmazeProcessor(
                 GLES31.glUniform4f(location(name), values[0], values[1], values[2], values[3])
             fun vec3(name: String, values: FloatArray) =
                 GLES31.glUniform3f(location(name), values[0], values[1], values[2])
+            fun vec2(name: String, values: FloatArray) =
+                GLES31.glUniform2f(location(name), values[0], values[1])
             fun mat3(name: String, columnMajor: FloatArray) =
                 GLES31.glUniformMatrix3fv(location(name), 1, false, columnMajor, 0)
 

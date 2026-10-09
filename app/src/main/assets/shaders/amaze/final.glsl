@@ -16,6 +16,8 @@ uniform highp mat3 u_camera_to_acescg;
 // Camera-space neutral white (AsShotNeutral / max component). Highlight neutralization MUST
 // happen before white balance / color conversion to prevent clipped-channel magenta casts.
 uniform highp vec3 u_camera_white_normalized;
+// White-blend window in pre-matrix camera RGB (see final_display.glsl).
+uniform highp vec2 u_white_window;
 
 const int HALO = 2;   // half-grid reads hpos(q) can land one column left of q
 const int TW = LW + 2 * HALO;
@@ -75,7 +77,7 @@ void main() {
     // progressively remove chroma by converging on the camera's measured neutral white. This is
     // deliberately before WB/calibration/color matrices: doing it afterwards cannot undo the
     // magenta generated when a clipped channel is amplified by white balance.
-    highp vec3 whiteBlendRgb = smoothstep(vec3(0.70), vec3(0.99), cameraRgb);
+    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 

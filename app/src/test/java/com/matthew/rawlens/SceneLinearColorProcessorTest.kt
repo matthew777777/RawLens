@@ -254,6 +254,38 @@ class SceneLinearColorProcessorTest {
         )
     }
 
+    @Test
+    fun hdrWhiteWindowKeepsValidHighlightColorAndNeutralizesOnlyFallback() {
+        val white = floatArrayOf(0.5f, 1.0f, 0.25f)
+        val start = SceneLinearColorProcessor.WHITE_WINDOW_HDR_START
+        val end = SceneLinearColorProcessor.WHITE_WINDOW_HDR_END
+
+        // Valid short-frame highlight (0.9, saturated red): untouched.
+        assertArrayEquals(
+            floatArrayOf(0.9f, 0.2f, 0.15f),
+            SceneLinearColorProcessor.neutralizeCameraHighlight(
+                floatArrayOf(0.9f, 0.2f, 0.15f), white, start, end
+            ),
+            1e-6f
+        )
+        // The LDR window would have washed the same pixel toward neutral.
+        val ldrWashed = SceneLinearColorProcessor.neutralizeCameraHighlight(
+            floatArrayOf(0.9f, 0.2f, 0.15f), white
+        )
+        assertTrue(
+            "LDR window must blend 0.9 highlights (HDR fix would be a no-op): ${ldrWashed.toList()}",
+            ldrWashed[0] < 0.9f
+        )
+        // Exactly-1.0 all-frames-clipped fallback still neutralizes.
+        assertArrayEquals(
+            white,
+            SceneLinearColorProcessor.neutralizeCameraHighlight(
+                floatArrayOf(1.0f, 0.9f, 0.9f), white, start, end
+            ),
+            1e-6f
+        )
+    }
+
     private fun metadata(
         neutral: DoubleArray? = null,
         gains: FloatArray? = null,

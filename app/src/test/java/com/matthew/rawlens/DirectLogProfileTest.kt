@@ -38,9 +38,15 @@ class DirectLogProfileTest {
     }
 
     @Test
-    fun fileSuffixesDistinctAndBt709KeepsLegacyName() {
-        // The UI test publishes `%_LOG.mp4`: the default profile keeps it.
-        assertEquals("_LOG", DirectLogProfile.BT709.fileSuffix)
+    fun fileSuffixesAreLogPlusHudLabelAndDistinct() {
+        // Every profile (BT709 included) names takes `_LOG<HUD>.mp4`;
+        // the device tests publish `%_LOG709.mp4` for the default profile.
+        for (p in DirectLogProfile.entries) {
+            assertEquals("_LOG" + p.hudLabel, p.fileSuffix)
+        }
+        assertEquals("_LOG709", DirectLogProfile.BT709.fileSuffix)
+        assertEquals("_LOGSLOG3", DirectLogProfile.SLOG3.fileSuffix)
+        assertEquals("_LOGHLG", DirectLogProfile.HLG.fileSuffix)
         val suffixes = DirectLogProfile.entries.map { it.fileSuffix }
         assertEquals(suffixes.size, suffixes.toSet().size)
     }

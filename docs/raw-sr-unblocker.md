@@ -35,6 +35,19 @@ variance under boxing, so a pure ratio would slash every noisy flat and
 kill the denoising fusion that 1x merging exists for. Noise carries no
 detail to protect; only lost *signal* variance attenuates.
 
+Domain lock (regression 2026-10-08): `gray` MUST be the plain normalized
+quad mean (linear; `RawSrCovarianceGuide.plainMean`), NEVER the
+GAT-stabilized guide the kernels consume. `Vn = A·gray + B` is a linear
+noise estimate, so feeding it stabilized gray compares stabilized variance
+(noise floor ~0.25, vs a linear estimate an order of magnitude smaller) and
+slashes every noisy flat exactly like the pure ratio this gate exists to
+avoid (REDMI5 robustness mean 0.93 → 0.04; the "same plane the alignment
+pyramid consumes" phrasing above predates guide stabilization and does NOT
+mean the stabilized guide). Both call sites — CPU `buildMovingFrame` and
+the GPU `ubGuideProvider` upload — use `plainMean`; the
+`RawSrUnblockerDomainTest` pins the producer linear and the fold a no-op on
+model noise.
+
 ## 2. Contract
 
 - Flat → exactly 1; Nyquist checker → exactly 0 (its box mean is

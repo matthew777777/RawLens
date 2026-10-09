@@ -233,7 +233,9 @@ object RawFocusPeakingSampler {
                         bandOk = false
                         break
                     }
-                    shortView.get(start, bandRows[k], 0, image.width)
+                    // Indexed bulk get needs ShortBufferCompat: the absolute
+                    // overload is missing below newer runtimes (API 30 crash).
+                    ShortBufferCompat.getBulk(shortView, start, bandRows[k], 0, image.width)
                 }
             }
             for (col in 0 until cols) {

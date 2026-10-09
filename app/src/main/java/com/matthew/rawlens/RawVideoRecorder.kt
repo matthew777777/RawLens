@@ -141,10 +141,10 @@ internal class RawVideoRecorder(
      * sustains full-res 30 fps in stills mode, so recording adds only the
      * encoder thread, on separate cores.
      */
-    @Volatile private var vfView: RawViewfinder? = null
+    @Volatile private var vfView: VfEngine? = null
     private var vfChars: CameraCharacteristics? = null
 
-    fun attachViewfinder(view: RawViewfinder?) {
+    fun attachViewfinder(view: VfEngine?) {
         vfView = view
     }
 

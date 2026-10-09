@@ -11,6 +11,10 @@ uniform highp mat3 u_camera_to_acescg;
 // Camera-space neutral white (AsShotNeutral / max component). Highlight neutralization MUST
 // happen before white balance / color conversion to prevent clipped-channel magenta casts.
 uniform highp vec3 u_camera_white_normalized;
+// White-blend window in pre-matrix camera RGB: single frames use 0.70/0.99
+// (near-white is clipped), HDR merges use 0.995/1.0 (only the all-frames-
+// clipped fallback is achromatic; valid short-frame highlights keep color).
+uniform highp vec2 u_white_window;
 
 const int HALO = 2;
 const int TW = LW + 2 * HALO;
@@ -69,7 +73,7 @@ void main() {
     // Sensor-domain white-point protection, identical to the non-fused path. Detect clipping
     // from 70%..99% in demosaiced camera RGB and blend toward camera-space neutral white before
     // WB/calibration/color conversion. This turns clipped magenta highlights into neutral white.
-    highp vec3 whiteBlendRgb = smoothstep(vec3(0.70), vec3(0.99), cameraRgb);
+    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 

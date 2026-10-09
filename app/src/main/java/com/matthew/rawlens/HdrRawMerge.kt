@@ -82,7 +82,11 @@ data class HdrMergeFrame(
  *     downstream); bins broken by motion blur, ghosts, or misregistration collapse to
  *     the sharp reference instead of smearing. Highlights clipped in the reference are
  *     still rescued by the short exposure via darktable's fallback path, which the
- *     tile blend preserves (clipped tiles have no matchable structure).
+ *     tile blend preserves (clipped tiles have no matchable structure). The pre-pass
+ *     carries HDR+ parity for deghosting and robustness (upstream bracket branch:
+ *     corr-damped strength, per-companion motion ceilings, 49-candidate subpixel
+ *     search, doubled mismatch support — see [HdrPlusRobustness]); alignment stays
+ *     translation pre-align + FlowNet above it.
  */
 object HdrRawMerge {
     internal const val EPS_WEIGHT = 1e-8f
@@ -172,6 +176,13 @@ object HdrRawMerge {
         private val blockMax = FloatArray(cw * ch)
         private val blockMin = FloatArray(cw * ch)
         private val whiteLevel = calList.maxOrNull() ?: 1f
+        // Burst exposure factors for upstream corr1/corr2 damping in the
+        // deghost pre-pass (hdr-plus-swift frequency.swift burst mean):
+        // factor[i] = exposure[i]/exposure[ref] = cal[ref]/cal[i].
+        private val burstFactors: List<Float> = run {
+            val refCal = calList[referenceIndex]
+            calList.map { (refCal / it).coerceIn(1f / 1024f, 1024f) }
+        }
         /**
          * Warp scratch, shared across frames like the block buffers — but
          * allocated lazily: merges where every frame is identity (null
@@ -251,7 +262,8 @@ object HdrRawMerge {
                         reference, frame,
                         frame.cfa.copy(values = registered),
                         options.wienerStrength,
-                        options.deghostTileSize
+                        options.deghostTileSize,
+                        burstFactors
                     )
                     if (stats.dcRejectFrac > dropFrac) {
                         // Fully-ghosted alternate: nearly every tile collapsed
@@ -268,7 +280,8 @@ object HdrRawMerge {
                         reference, frame,
                         frame.cfa.copy(values = registered),
                         options.wienerStrength,
-                        options.deghostTileSize
+                        options.deghostTileSize,
+                        null, burstFactors
                     ).values
                 }
             }

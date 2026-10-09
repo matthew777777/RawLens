@@ -344,8 +344,9 @@ class GradeYuvPrecisionDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
-        val fusedspv = context.assets.open("shaders/vf/vf_mhcyuv.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
+        // Capability-gated asset: the query needs the device (false before init).
+        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
@@ -427,8 +428,9 @@ class GradeYuvPrecisionDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
-        val fusedspv = context.assets.open("shaders/vf/vf_mhcyuv.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
+        // Capability-gated asset: the query needs the device (false before init).
+        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
@@ -516,8 +518,9 @@ class GradeYuvPrecisionDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
-        val fusedspv = context.assets.open("shaders/vf/vf_mhcyuv.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
+        // Capability-gated asset: the query needs the device (false before init).
+        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()

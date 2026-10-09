@@ -64,4 +64,33 @@ class LogcatFileWriterTest {
         assertEquals(8L * 1024L * 1024L, LogcatFileWriter.MAX_BYTES)
         assertEquals(5, LogcatFileWriter.KEEP_SESSIONS)
     }
+
+    @Test fun `spawn failure marker names the cause and the headers-only session`() {
+        // A spawn that throws used to leave an orphaned headers-only session
+        // that exported as a mysteriously empty log (vivo field report: a
+        // 2-line file with no diagnosis at all).
+        assertEquals(
+            "----- logcat capture failed to start (IOException: Permission denied); " +
+                "session has headers only, app continues -----",
+            LogcatFileWriter.captureSpawnFailedMarker("IOException: Permission denied")
+        )
+    }
+
+    @Test fun `silence marker names the pid and the wait`() {
+        // A live-but-silent logcat must be a diagnosed device restriction,
+        // never an incomplete recording.
+        assertEquals(
+            "----- logcat produced no lines for pid 1234 after 15s " +
+                "(device logd may restrict app logs); session has headers only, app continues -----",
+            LogcatFileWriter.captureSilentMarker(1234, 15)
+        )
+    }
+
+    @Test fun `silence timeout is decisive but not hasty`() {
+        // logcat dumps the pid buffer within milliseconds on a working
+        // device; the watchdog must wait long enough to rule out slow
+        // startup, yet fire well before the first scheduled mirror.
+        assertTrue(LogcatFileWriter.SILENCE_TIMEOUT_MS >= 10_000L)
+        assertTrue(LogcatFileWriter.SILENCE_TIMEOUT_MS < LogcatFileWriter.MIRROR_INTERVAL_MS)
+    }
 }

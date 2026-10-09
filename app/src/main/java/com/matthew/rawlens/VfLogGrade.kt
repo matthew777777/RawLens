@@ -26,6 +26,15 @@ internal object VfLogGrade {
     fun describe(code: Int): String = VfVulkan.describe(code)
 
     /**
+     * Fused record-stage SPIR-V asset for this device: the float16-math
+     * variant when [VfVulkan.supportsF16MathNative] holds, else the fp32
+     * twin (identical structure, same ±8-code grade gate). Pure so the
+     * selection itself stays host-testable; the capability bit is native.
+     */
+    fun fusedAsset(f16Math: Boolean): String =
+        if (f16Math) "shaders/vf/vf_mhcyuv_f16.spv" else "shaders/vf/vf_mhcyuv.spv"
+
+    /**
      * Pack grade params. C++ reads dims[2] + up to 18 floats
      * (gains[4], ccm row-major[9], exposure, bypass01, contrast,
      * saturation, outMode). Slots 15/16 (contrast/saturation) are RESERVED:

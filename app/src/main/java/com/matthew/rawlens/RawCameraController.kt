@@ -18,6 +18,7 @@ import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.BlackLevelPattern
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.Face
 import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
@@ -218,7 +219,10 @@ class RawCameraController(
     private val onRawWaveform: (RgbWaveform) -> Unit = { },
     initialFocusPeakingEnabled: Boolean = true,
     private val onFocusPeaking: (FocusPeakingFrame) -> Unit = { },
-    private val onFocusPeakingActive: (Boolean) -> Unit = { }
+    private val onFocusPeakingActive: (Boolean) -> Unit = { },
+    private val bguViewfinder: VfEngine? = null,
+    initialFacePriorityEnabled: Boolean = false,
+    private val onFaces: (List<FaceOverlayBox>) -> Unit = { }
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val cameraExecutor = Executor { command ->
@@ -496,6 +500,8 @@ class RawCameraController(
     private var scopeScanAccumNs = 0L
     private var scopeSamples = 0
     private var lastScopeLogMs = 0L
+    /** Last sampler-failure log; camera thread + metering executor share it. */
+    @Volatile private var lastSamplerErrorLogMs = Long.MIN_VALUE
     /** Focus-peaking master switch (default on); the auto-show policy gates delivery. */
     @Volatile private var focusPeakingEnabled = initialFocusPeakingEnabled
     private var lastFocusPeakingSampleMs = Long.MIN_VALUE
@@ -513,6 +519,19 @@ class RawCameraController(
     private var lastPreviewMetadataPublishMs = 0L
     private var afRegion: MeteringRectangle? = null
     private var aeRegion: MeteringRectangle? = null
+    // Face-priority AF/AE (HAL STATISTICS_FACES): regions applied only while no
+    // tap target overrides them (see applyCameraControls). Camera thread only,
+    // except maxFaceCount/faceDetectRejected which the UI reads for the N/A note.
+    private var facePriorityEnabled: Boolean = initialFacePriorityEnabled
+    @Volatile private var maxFaceCount: Int = 0
+    @Volatile private var faceDetectRejected: Boolean = false
+    private var faceAfRegion: MeteringRectangle? = null
+    private var faceAeRegion: MeteringRectangle? = null
+    private var trackedFace: HalFace? = null
+    private var faceRegionRect: Rect? = null
+    private var faceMissCount: Int = 0
+    private var lastFaceRegionPushMs: Long = 0L
+    private var lastFacePublishMs: Long = 0L
 
     // Open Camera continuous-picture autofocus port.
     // Touch focus is held (AF_MODE_AUTO + regions) until an explicit release:
@@ -644,6 +663,10 @@ class RawCameraController(
         rawPreviewRetryUntilMs = 0L
         rawPreviewFailures = 0
         rawViewfinder?.invalidateSession()
+        bguViewfinder?.invalidateSession()
+        // A fresh session retries BGU (it may have failed only transiently).
+        bguDead = false
+        notifyVfRoute()
         // A fresh session deserves a fresh verdict on the repeating stream.
         rawZslStreamBroken = false
         consecutiveDeadChains = 0
@@ -652,6 +675,9 @@ class RawCameraController(
         rawZslHasFrame = false
         rawHistogramDisabledForSession = false
         rawHistogramStreaming = false
+        maxFaceCount = characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
+        faceDetectRejected = false
+        clearFaceState()
         clampControlsToCamera()
         
         val pixelArraySize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
@@ -871,7 +897,7 @@ class RawCameraController(
                         characteristics?.let { publishFocusPeakingIfDue(image, it) }
                         // The dual-RAW worker owns these allocations through Vulkan completion;
                         // don't concurrently hand the same AHB to the viewfinder GPU context.
-                        if (!activeDualRaw) characteristics?.let { rawViewfinder?.offer(image, it, latestPreviewResult) }
+                        if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
                         if (previewRawTimestamps.remove(image.timestamp)) {
                             RawImageOwnership.release(image)
                             continue
@@ -1487,6 +1513,69 @@ class RawCameraController(
                 }
             }
         }
+        bguViewfinder?.onStarvation = {
+            cameraHandler.post {
+                // The BGU engine has no internal fallback: any persistent
+                // failure degrades to the legacy engine for this session.
+                if (!bguDead) {
+                    bguDead = true
+                    Log.w(LOG_TAG, "BGU viewfinder failed; falling back to legacy")
+                    notifyVfRoute()
+                    publishRawVfDebug(force = true)
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------- VF engine route
+    //
+    // The controller owns the global engine mode and routes every viewfinder
+    // call to the active engine. AUTO prefers BGU (the default way) with
+    // automatic per-session fallback to legacy on failure; the overlay tap
+    // cycles AUTO -> BGU -> BGU_CPU -> GPU -> CPU for manual override.
+
+    private var vfGlobalMode: VfEngineMode = VfEngineMode.AUTO
+    private var bguDead = false
+    private var lastVfRouteIsBgu = false
+
+    /** Fired on the camera thread when the active engine flips (true = BGU). */
+    var onVfRouteChanged: ((Boolean) -> Unit)? = null
+
+    private fun activeVf(): VfEngine? =
+        if (resolveVfRoute(vfGlobalMode, AUTO_PREFERS_BGU, bguDead, bguViewfinder != null)) {
+            bguViewfinder
+        } else {
+            rawViewfinder
+        }
+
+    private fun notifyVfRoute() {
+        val isBgu = resolveVfRoute(vfGlobalMode, AUTO_PREFERS_BGU, bguDead, bguViewfinder != null)
+        // The legacy engine keeps its internal tier override; map the global
+        // mode onto it (BGU/AUTO both mean "legacy automatic").
+        rawViewfinder?.setEngineMode(
+            when (vfGlobalMode) {
+                VfEngineMode.GPU -> VfEngineMode.GPU
+                VfEngineMode.CPU -> VfEngineMode.CPU
+                else -> VfEngineMode.AUTO
+            }
+        )
+        // The BGU engine takes the global mode verbatim: BGU_CPU pins its
+        // NEON guide path, every other mode releases the pin. Re-asserted on
+        // every route change so taps flip mid-stream without a rebuild.
+        bguViewfinder?.setEngineMode(vfGlobalMode)
+        if (isBgu != lastVfRouteIsBgu) {
+            lastVfRouteIsBgu = isBgu
+            onVfRouteChanged?.invoke(isBgu)
+        }
+    }
+
+    /** Latest stats from the active engine for the debug overlay. */
+    fun vfSnapshot(): RawVfStats? = activeVf()?.snapshot()
+
+    /** True when offers currently route to the BGU engine. */
+    fun isBguActive(): Boolean {
+        val active = activeVf()
+        return active != null && active === bguViewfinder
     }
 
     private val shutterDispatchPending = AtomicBoolean(false)
@@ -1714,9 +1803,11 @@ class RawCameraController(
             return
         }
         val resolved = settings.resolvedForPlatform()
-        val vf = rawViewfinder ?: return
-        vf.setAgx(resolved)
-        vf.setPreviewExposureStrength(adaptivePreviewStrength(captureExposureMode, resolved))
+        val strength = adaptivePreviewStrength(captureExposureMode, resolved)
+        rawViewfinder?.setAgx(resolved)
+        rawViewfinder?.setPreviewExposureStrength(strength)
+        bguViewfinder?.setAgx(resolved)
+        bguViewfinder?.setPreviewExposureStrength(strength)
     }
 
     /** Denoise controls are frozen at shutter press and cannot change during queued saves. */
@@ -2349,6 +2440,7 @@ class RawCameraController(
             // job so the merge and the VF stop stuttering each other. The
             // finally below always restores the previous edge.
             rawViewfinder?.setRecordMode(true)
+            bguViewfinder?.setRecordMode(true)
             try {
                 runSuperResolutionJob(
                     capture, decision, c, orientation, cameraId,
@@ -2363,6 +2455,7 @@ class RawCameraController(
                 onState("SR ERROR")
             } finally {
                 rawViewfinder?.setRecordMode(false)
+                bguViewfinder?.setRecordMode(false)
                 if (outputFormat.includesJpeg) endJpegProcessing()
                 cameraHandler.post {
                     pendingSaveCount.decrementAndGet()
@@ -4060,6 +4153,134 @@ class RawCameraController(
         return MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX)
     }
 
+    /** Settings toggle for face-priority AF/AE. Drops the tracked face either way. */
+    fun setFacePriorityEnabled(enabled: Boolean) {
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setFacePriorityEnabled(enabled) }
+            return
+        }
+        if (facePriorityEnabled == enabled) return
+        facePriorityEnabled = enabled
+        clearFaceState()
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+    }
+
+    /** False before the first open, on lenses without face stats, or after a HAL rejection. */
+    fun isFaceDetectSupported(): Boolean = maxFaceCount > 0 && !faceDetectRejected
+
+    private fun clearFaceState() {
+        trackedFace = null
+        faceRegionRect = null
+        faceAfRegion = null
+        faceAeRegion = null
+        faceMissCount = 0
+        onFaces(emptyList())
+    }
+
+    /** FULL scores every face for the tracker; OFF is set explicitly so a toggle-off sticks. */
+    private fun applyFaceDetectMode(builder: CaptureRequest.Builder) {
+        if (faceDetectRejected) return
+        val mode = if (facePriorityEnabled && maxFaceCount > 0)
+            CameraMetadata.STATISTICS_FACE_DETECT_MODE_FULL
+        else CameraMetadata.STATISTICS_FACE_DETECT_MODE_OFF
+        try {
+            builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, mode)
+        } catch (failure: IllegalArgumentException) {
+            // A HAL that advertises faces but rejects the key must not break the
+            // repeating stream: latch off for this session and run faceless.
+            faceDetectRejected = true
+            Log.w(LOG_TAG, "Face-detect mode rejected; running without faces", failure)
+        }
+    }
+
+    /**
+     * Tracks one HAL face across preview results and steers the AF/AE regions
+     * at it. Camera thread; throttles both the repeating pushes (jittery boxes
+     * must not rebuild the stream every frame) and the overlay publication.
+     */
+    private fun handlePreviewFaces(result: TotalCaptureResult) {
+        if (!facePriorityEnabled || maxFaceCount <= 0 || faceDetectRejected) return
+        val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val crop = result.get(CaptureResult.SCALER_CROP_REGION) ?: active
+        val faces = result.get(CaptureResult.STATISTICS_FACES)
+            ?.mapNotNull { halFaceIn(it, active) } ?: emptyList()
+        val selected = FacePriority.select(faces, trackedFace)
+        if (selected == null) {
+            // Debounce: a single faceless result is usually a blink, not a departure.
+            if (++faceMissCount >= FACE_MISS_TOLERANCE && trackedFace != null) {
+                trackedFace = null
+                faceRegionRect = null
+                faceAfRegion = null
+                faceAeRegion = null
+                updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+            }
+        } else {
+            faceMissCount = 0
+            trackedFace = selected
+            val rect = Rect(selected.left, selected.top, selected.right, selected.bottom)
+            // Metering rectangles must sit inside the crop, like tap targets.
+            if (!rect.intersect(crop)) {
+                if (faceAfRegion != null || faceAeRegion != null) {
+                    faceRegionRect = null
+                    faceAfRegion = null
+                    faceAeRegion = null
+                    updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+                }
+            } else {
+                val tolerance = (active.width() * FACE_REGION_MOVE_FRACTION).toInt().coerceAtLeast(1)
+                val previous = faceRegionRect
+                val moved = previous == null ||
+                    Math.abs(previous.left - rect.left) > tolerance ||
+                    Math.abs(previous.top - rect.top) > tolerance ||
+                    Math.abs(previous.right - rect.right) > tolerance ||
+                    Math.abs(previous.bottom - rect.bottom) > tolerance
+                val now = SystemClock.elapsedRealtime()
+                if (moved && now - lastFaceRegionPushMs >= FACE_REGION_PUSH_MIN_INTERVAL_MS) {
+                    lastFaceRegionPushMs = now
+                    faceRegionRect = Rect(rect)
+                    val region = MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX)
+                    faceAfRegion = region
+                    faceAeRegion = region
+                    updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+                }
+            }
+        }
+        publishFaces(faces, selected, active)
+    }
+
+    private fun halFaceIn(face: Face, active: Rect): HalFace? {
+        val bounds = face.bounds ?: return null
+        val left = bounds.left.coerceIn(active.left, active.right)
+        val top = bounds.top.coerceIn(active.top, active.bottom)
+        val right = bounds.right.coerceIn(active.left, active.right)
+        val bottom = bounds.bottom.coerceIn(active.top, active.bottom)
+        if (right <= left || bottom <= top) return null
+        return HalFace(left, top, right, bottom, face.score)
+    }
+
+    private fun publishFaces(faces: List<HalFace>, tracked: HalFace?, active: Rect) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFacePublishMs < FACE_OVERLAY_INTERVAL_MS) return
+        lastFacePublishMs = now
+        val width = viewfinder.width
+        val height = viewfinder.height
+        if (width <= 0 || height <= 0) return
+        // Same un-offset convention as taps: overlay pixels are fractions of the
+        // viewfinder size, so boxes land where a tap at the same spot meters.
+        val sensorActive = SensorActiveArray(active.left, active.top, active.right, active.bottom)
+        val rotation = characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val mirrored = characteristics?.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        onFaces(faces.map { face ->
+            val box = FacePriority.mapToView(face, sensorActive, rotation, mirrored)
+            FaceOverlayBox(
+                box.left * width, box.top * height,
+                box.right * width, box.bottom * height,
+                face == tracked
+            )
+        })
+    }
+
     fun cycleIso() {
         if (!isOnCameraThread()) {
             cameraHandler.post(::cycleIso)
@@ -4229,7 +4450,30 @@ class RawCameraController(
         // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
         if (!RawHistogramThrottle.shouldSample(now, lastFocusPeakingSampleMs, FOCUS_PEAKING_INTERVAL_MS)) return
         lastFocusPeakingSampleMs = now
-        RawFocusPeakingSampler.sample(image, cameraCharacteristics)?.let(onFocusPeaking)
+        sampleSafely("focus-peaking") {
+            RawFocusPeakingSampler.sample(image, cameraCharacteristics)?.let(onFocusPeaking)
+        }
+    }
+
+    /**
+     * Live RAW samplers (scope, peaking, metering) are best-effort per-frame work
+     * on camera/metering threads, where an uncaught throwable kills the app — a
+     * NoSuchMethodError in the histogram sampler did exactly that on API 30.
+     * Never let one bad frame take down the session; skip it and log (throttled).
+     */
+    private inline fun <T> sampleSafely(tag: String, block: () -> T?): T? {
+        return try {
+            block()
+        } catch (t: Throwable) {
+            val now = SystemClock.elapsedRealtime()
+            if (lastSamplerErrorLogMs == Long.MIN_VALUE ||
+                now - lastSamplerErrorLogMs >= SAMPLER_ERROR_LOG_INTERVAL_MS
+            ) {
+                lastSamplerErrorLogMs = now
+                Log.e(LOG_TAG, "RAW $tag sample failed; frame skipped", t)
+            }
+            null
+        }
     }
 
     fun setDynamicExposureSettings(settings: DynamicExposureSettings) {
@@ -4366,10 +4610,12 @@ class RawCameraController(
                 // ETTR needs full-density tails; PROGRAM alone is served by the
                 // sparse region-cropped path, which shares one sample when both
                 // loops are due.
-                val sample = if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
-                else RawEttrSampler.sampleProgram(
-                    image, cameraCharacteristics, programAeProfile.metering
-                )
+                val sample = sampleSafely("metering") {
+                    if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
+                    else RawEttrSampler.sampleProgram(
+                        image, cameraCharacteristics, programAeProfile.metering
+                    )
+                }
                     val sampleMs = SystemClock.elapsedRealtime() - sampleStartMs
                     lastMeteringSampleMs = sampleMs
                     if (sampleMs > SICK_SAMPLE_LOG_MS) {
@@ -5078,7 +5324,7 @@ class RawCameraController(
         // WYSIWYG preview: BOTH modes render our scene-referred pipeline from the RAW
         // feed — raw-clean Reinhard for DNG_ONLY, cheap AgX for JPEG/JPEG_DNG. Never
         // ISP YUV. The tonemap is a per-frame VF uniform, so the stream stays identical.
-        val useRawViewfinder = rawViewfinder != null && reader != null && rawRetryReady
+        val useRawViewfinder = (rawViewfinder != null || bguViewfinder != null) && reader != null && rawRetryReady
         val useRawStream = useRawViewfinder || useRawZsl || useRawHistogram || useRawEttr || useRawProgram
         try {
             val preserveBuffer = preserveRawZslBuffer && rawZslStreaming && useRawZsl
@@ -5242,6 +5488,7 @@ class RawCameraController(
                 val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
                 val shutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
                 rawViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
+                bguViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { lastPreviewSensorTimestamp = it }
                 if (iso > 0) lastIso = iso
                 if (shutter > 0) lastExposureNanos = shutter
@@ -5262,6 +5509,7 @@ class RawCameraController(
                     }
                 }
                 latestPreviewResult = result
+                handlePreviewFaces(result)
                 val includesRaw = rawSurface != null && request.tag == true
                 if (includesRaw) rawStreamResults++
                 val rawTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
@@ -5375,12 +5623,20 @@ class RawCameraController(
             CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
             CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE
         )
-        afRegion?.takeIf { (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0 }
-            ?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
-        val aeRegions = aeRegion?.let { arrayOf(it) } ?: standardAeMeteringRegions()
+        // Face-priority regions lose to tap targets: an explicit tap always wins,
+        // and clearing the tap hands control back to the tracked face. Regions
+        // are harmless where AF/AE run open-loop (manual/PROGRAM sensor drive):
+        // the HAL ignores them, so no mode gating is needed here.
+        (afRegion ?: faceAfRegion)?.takeIf {
+            (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
+        }?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
+        val aeRegions = aeRegion?.let { arrayOf(it) }
+            ?: faceAeRegion?.let { arrayOf(it) }
+            ?: standardAeMeteringRegions()
         if (aeRegions != null && isAeMeteringSupported()) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, aeRegions)
         }
+        applyFaceDetectMode(builder)
         val manualExposure = selectedIso != null || selectedExposureNanos != null
         val programLive = !manualExposure && programCustomActive() &&
             dynamicIso != null && dynamicShutterNanos != null
@@ -5826,7 +6082,7 @@ class RawCameraController(
     }
 
     private fun publishRawVfDebug(force: Boolean = false) {
-        val vf = rawViewfinder ?: return
+        val vf = activeVf() ?: return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastRawVfDebugMs < RAW_VF_DEBUG_INTERVAL_MS) return
         lastRawVfDebugMs = now
@@ -5855,7 +6111,10 @@ class RawCameraController(
         val effects = if (!stats.glActive || devBits.isNotEmpty()) {
             "Yes ($glLabel${if (devBits.isNotEmpty()) " +" + devBits.joinToString("+") else ""})"
         } else "No"
-        return "$fpsText $msText\n$vfText · $rawText\nEffects: $effects"
+        // A dead forced engine shows as starved (VfEngineMode contract), never
+        // as a silently black VF.
+        val starveText = if (stats.starved) " STARVED" else ""
+        return "$fpsText$starveText $msText\n$vfText · $rawText\nEffects: $effects"
     }
 
     private fun oisModeName(value: Int?): String = when (value) {
@@ -6115,10 +6374,12 @@ class RawCameraController(
         val lutStartNs = System.nanoTime()
         val lut = if (scopeAgxApplied) AgxDisplayTransform.buildScopeLut(jpegOutputSettings) else null
         val scanStartNs = System.nanoTime()
-        if (scopeMode == ScopeMode.WAVEFORM) {
-            RawWaveformSampler.sample(image, cameraCharacteristics, lut)?.let(onRawWaveform)
-        } else {
-            RawHistogramSampler.sample(image, cameraCharacteristics, lut)?.let(onRawHistogram)
+        sampleSafely("scope") {
+            if (scopeMode == ScopeMode.WAVEFORM) {
+                RawWaveformSampler.sample(image, cameraCharacteristics, lut)?.let(onRawWaveform)
+            } else {
+                RawHistogramSampler.sample(image, cameraCharacteristics, lut)?.let(onRawHistogram)
+            }
         }
         noteScopeSample(now, scanStartNs - lutStartNs, System.nanoTime() - scanStartNs)
     }
@@ -6408,6 +6669,14 @@ class RawCameraController(
                 val effectiveMerged = if (denoise.aiEnabled) {
                     developer.denoiseCfa(merged, snapshots[referenceIndex].first) ?: merged
                 } else merged
+                // Shortest-frame normalization compensation, shared by the JPEG
+                // develop and the DNG BaselineExposure tag below.
+                val bracketExposures = snapshots.map {
+                    it.third.exposureTimeNanos.toDouble() * it.third.sensitivityIso
+                }.sorted()
+                val displayEv = kotlin.math.ln(
+                    bracketExposures[bracketExposures.size / 2] / bracketExposures.first()
+                ) / kotlin.math.ln(2.0)
                 if (outputFormat.includesDng || saveDebugFrames) {
                     val evList = evRelative.joinToString(",") {
                         if (it == null) "?" else "%+.1f".format(it)
@@ -6417,17 +6686,14 @@ class RawCameraController(
                         "F$index(dcReject=${"%.0f".format(stats.dcRejectFrac * 100)}%)"
                     }
                     referenceDng = DngSaver(context).saveMerged(
-                        effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps
+                        effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps,
+                        baselineExposureEv = displayEv
                     )
                 }
                 if (outputFormat.includesJpeg) {
-                    val exposures = snapshots.map {
-                        it.third.exposureTimeNanos.toDouble() * it.third.sensitivityIso
-                    }.sorted()
-                    val displayEv = kotlin.math.ln(exposures[exposures.size / 2] / exposures.first()) /
-                        kotlin.math.ln(2.0)
                     val developed = developer.developMergedJpeg(effectiveMerged, snapshots[referenceIndex].first,
-                        RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv), outputSettings)
+                        RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv,
+                            hdrAdaptiveTuning = HdrAdaptiveTuning()), outputSettings)
                     try {
                         val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
                             snapshots[referenceIndex].second, captureTimeMillis = captureId,
@@ -6541,7 +6807,11 @@ class RawCameraController(
                         galosh = captureGaloshSettings,
                         adaptiveExposureStrength = adaptiveExposureStrength,
                         sharedAdaptiveExposure = sharedAdaptiveExposure,
-                        adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(outputSettings)
+                        adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(outputSettings),
+                        // ETTR frames are already optimally bright: develop caps the
+                        // adaptive lift at the residual to the ETTR target instead of
+                        // pushing bright skies past white.
+                        ettrHeadroomEv = if (ettrCaptureActive()) ettrSettings.headroomEv else null
                     )
                     // Denoise-once: at most one stage runs per capture. Galosh
                     // wins when enabled and AI is skipped for that capture;
@@ -6920,7 +7190,7 @@ class RawCameraController(
             !rawHistogramDisabledForSession
         val wantEttr = ettrSettings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
-        if (!wantHistogram && !wantEttr && !wantProgram && rawViewfinder == null) return
+        if (!wantHistogram && !wantEttr && !wantProgram && rawViewfinder == null && bguViewfinder == null) return
         updateRepeatingRequest(allowRawZsl = zslRestartFitsReader())
     }
 
@@ -7067,10 +7337,14 @@ class RawCameraController(
      * buffer drop, no flicker. Must be called on the camera thread.
      */
     private fun pushVfRenderState() {
-        val vf = rawViewfinder ?: return
-        vf.setRenderJpeg(!vfPreviewMode.resolve(captureFormat))
-        vf.setAgx(jpegOutputSettings)
-        vf.setPreviewExposureStrength(adaptivePreviewStrength(captureExposureMode, jpegOutputSettings))
+        val jpeg = !vfPreviewMode.resolve(captureFormat)
+        val strength = adaptivePreviewStrength(captureExposureMode, jpegOutputSettings)
+        rawViewfinder?.setRenderJpeg(jpeg)
+        rawViewfinder?.setAgx(jpegOutputSettings)
+        rawViewfinder?.setPreviewExposureStrength(strength)
+        bguViewfinder?.setRenderJpeg(jpeg)
+        bguViewfinder?.setAgx(jpegOutputSettings)
+        bguViewfinder?.setPreviewExposureStrength(strength)
     }
 
     /** WYSIWYG VF mode + selectable resolution. Mode switches never rebuild the stream. */
@@ -7092,6 +7366,7 @@ class RawCameraController(
         }
         vfTargetLongEdge = validated
         rawViewfinder?.setTargetLongEdge(validated)
+        bguViewfinder?.setTargetLongEdge(validated)
     }
 
     /**
@@ -7100,18 +7375,20 @@ class RawCameraController(
      * thread.
      */
     fun setVfEngineMode(mode: VfEngineMode) {
-        rawViewfinder?.setEngineMode(mode)
+        vfGlobalMode = mode
+        notifyVfRoute()
         cameraHandler.post { publishRawVfDebug(force = true) }
     }
 
-    /** Overlay-tap cycle AUTO -> GPU -> CPU; returns the new mode for persistence. */
+    /** Overlay-tap cycle AUTO -> BGU -> BGU_CPU -> GPU -> CPU; returns the new mode for persistence. */
     fun cycleVfEngineMode(): VfEngineMode {
-        val next = rawViewfinder?.cycleEngineMode() ?: VfEngineMode.AUTO.next()
+        vfGlobalMode = vfGlobalMode.next()
+        notifyVfRoute()
         cameraHandler.post { publishRawVfDebug(force = true) }
-        return next
+        return vfGlobalMode
     }
 
-    fun vfEngineMode(): VfEngineMode = rawViewfinder?.engineMode ?: VfEngineMode.AUTO
+    fun vfEngineMode(): VfEngineMode = vfGlobalMode
 
     /**
      * Durable session fallback, reserved for a rejected stream combination that
@@ -7325,6 +7602,7 @@ class RawCameraController(
 
     fun stop() {
         rawViewfinder?.invalidateSession()
+        bguViewfinder?.invalidateSession()
         rawViewfinderStreaming = false
         synchronized(cameraStateLock) {
             if (!running && !opening && camera == null) return
@@ -7376,6 +7654,7 @@ class RawCameraController(
         rawZslCapacity = 0
         latestPreviewResult = null
         lastRawZslStatus = null
+        clearFaceState()
     }
 
     fun destroy() {
@@ -7384,6 +7663,7 @@ class RawCameraController(
         destroyed = true
         cameraRouteCache.clear()
         rawViewfinder?.onStarvation = null
+        bguViewfinder?.onStarvation = null
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.surfaceTextureListener = null
         // Queue teardown behind any accepted saves. The executor is serial, so EGL resources are
@@ -7687,7 +7967,23 @@ class RawCameraController(
     )
 
     companion object {
+        /**
+         * BGU is the default engine: AUTO prefers BGU while healthy, with
+         * automatic per-session fallback to legacy on any BGU failure (fresh
+         * sessions retry BGU) and forced GPU/CPU modes as manual escape.
+         * Flipped before the step-5 parity gate formally passed; the gate's
+         * open items (parity pairs, cost A/B, border-UB decision) ride along.
+         */
+        private const val AUTO_PREFERS_BGU = true
         private const val ASPECT_RATIO_TOLERANCE = 0.015
+        /** Consecutive faceless results before the tracked face (and its regions) drops. */
+        private const val FACE_MISS_TOLERANCE = 5
+        /** Minimum gap between face-region repeating pushes; HAL boxes jitter every frame. */
+        private const val FACE_REGION_PUSH_MIN_INTERVAL_MS = 150L
+        /** Face-box overlay cadence; full preview rate would just churn invalidates. */
+        private const val FACE_OVERLAY_INTERVAL_MS = 80L
+        /** Region rebuild threshold as a fraction of the active-array width. */
+        private const val FACE_REGION_MOVE_FRACTION = 0.02f
         private const val CAPTURE_TIMEOUT_MS = 8_000L
         private const val PAIR_TIMEOUT_MS = 5_000L
         /** Bounds result-waiting RAW images to ~5 at 30 fps so a lagging HAL
@@ -7982,6 +8278,8 @@ class RawCameraController(
         private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
         /** Scope cost telemetry cadence: one LUT/scan average line per 5 s. */
         private const val SCOPE_LOG_INTERVAL_MS = 5000L
+        /** Sampler-failure log cadence: a sick sampler must not flood logcat. */
+        private const val SAMPLER_ERROR_LOG_INTERVAL_MS = 5000L
         /** Live peaking verdicts ride the same ~4 Hz cadence as the scope. */
         private const val FOCUS_PEAKING_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */

@@ -1,37 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Fast CPU fallback for the RAW viewfinder: 2x2 Bayer quad -> canonical
-// R/Gr/Gb/B bytes, normalized exactly like the zero-copy GPU tiers (reciprocal
-// multiply, clamp, round-half-up to 8 bit). Replaces the old Kotlin sampler,
-// whose per-sample ByteBuffer bounds checks cost ~100+ ms per frame.
+// R/Gr/Gb/B bytes, normalized in Q6 fixed-point integer exactly like the
+// zero-copy GPU tiers (VfLevels.kt: same formula, same ints, so bytes agree
+// by construction). Replaces the old float sampler; integer needs no SIMD
+// to win here (the strided Bayer gather is latency-bound at ~77 ns/sample,
+// dwarfing arithmetic), so one scalar core serves ARMv7/ARM64/x86 alike.
 //
 // Two tiers, selected by stride:
-//  - packed (pixelStride == 2, even rowStride): direct uint16 row access with a
-//    NEON float32x4 normalize core on ARM (scalar on x86 emulators);
+//  - packed (pixelStride == 2, even rowStride): direct uint16 row access;
 //  - generic: scalar byte-addressed loop for exotic HAL strides.
 //
-// Threading: the strided Bayer gather is latency-bound (~77 ns/sample
-// single-threaded on MediaTek, ~240 ms for a 1020x765 frame), so output rows
-// are split into bands over a persistent pool (caller + 3 workers, created
-// once, no per-frame spawn). Bands are disjoint by construction. All plane
-// access ends before return.
+// Threading: output rows are split into bands over a persistent pool
+// (caller + 3 workers, created once, no per-frame spawn). Bands are
+// disjoint by construction. All plane access ends before return.
 #include <jni.h>
 
 #include <android/log.h>
 #include <algorithm>
-#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <thread>
-
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#include <arm_neon.h>
-#define VF_NEON 1
-#else
-#define VF_NEON 0
-#endif
 
 #define LOG_TAG "RawLensVfCpu"
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
@@ -45,6 +36,11 @@
 // Maximum VF extent per axis. Must match VfCpuNeon.MAX_EDGE (Kotlin validates
 // first; this is the native backstop).
 #define VF_CPU_MAX_EDGE 1080
+
+// Q6 fixed-point scale (VfLevels.SCALE) and denominator backstop
+// (VfLevels.MAX_DEN_Q): denQ in [1, MAX] keeps num * 255 in int32.
+#define VF_Q6_SCALE 64
+#define VF_Q6_MAX_DEN (65535 * VF_Q6_SCALE)
 
 // Bands per dispatch: the caller plus persistent workers. Four matches the
 // PhotonCamera reference and spreads the gather over little/big cores.
@@ -67,47 +63,24 @@ struct SuperpixelJob {
     int dx[4];
     int dy[4];
     int ch[4];
-    float black[4];
-    float invRange[4];
+    int blackQ[4];
+    int denQ[4];
     uint8_t* dst;
 };
 
-inline uint8_t normalizeScalar(uint16_t code, float black, float invRange) {
-    float n = (static_cast<float>(code) - black) * invRange;
-    if (n <= 0.f) return 0;
-    if (n >= 1.f) return 255;
-    return static_cast<uint8_t>(n * 255.f + 0.5f);
+// Q6 normalize (VfLevels.normalizeByte): num = code*64 - blackQ;
+// 0 below black, 255 at/above white, round-half-up between. All
+// intermediates fit int32 (denQ <= 65535*64 by validation).
+inline uint8_t normalizeInt(uint16_t code, int blackQ, int denQ) {
+    const int num = static_cast<int>(code) * VF_Q6_SCALE - blackQ;
+    if (num <= 0) return 0;
+    if (num >= denQ) return 255;
+    return static_cast<uint8_t>((num * 255 + denQ / 2) / denQ);
 }
-
-#if VF_NEON
-// Normalize 4 codes -> 4 bytes with one float32x4 chain. Matches the scalar
-// formula bit-for-bit on the rounding boundary for all 16-bit inputs: the
-// multiply/add order and the +0.5 round-half-up are identical, and the clamp
-// runs before scaling in both.
-inline void normalizeNeon4(const uint16_t codes[4], float black, float invRange,
-                           uint8_t out[4]) {
-    uint32x4_t u32 = {codes[0], codes[1], codes[2], codes[3]};
-    float32x4_t f = vcvtq_f32_u32(u32);
-    f = vsubq_f32(f, vdupq_n_f32(black));
-    f = vmulq_n_f32(f, invRange);
-    f = vmaxq_f32(f, vdupq_n_f32(0.f));
-    f = vminq_f32(f, vdupq_n_f32(1.f));
-    // Separate mul + add (not vmla): identical rounding to the scalar
-    // `n * 255f + 0.5f`, so NEON and scalar bytes agree bit-for-bit.
-    f = vaddq_f32(vmulq_n_f32(f, 255.f), vdupq_n_f32(0.5f));
-    uint32x4_t i = vcvtq_u32_f32(f);
-    out[0] = static_cast<uint8_t>(vgetq_lane_u32(i, 0));
-    out[1] = static_cast<uint8_t>(vgetq_lane_u32(i, 1));
-    out[2] = static_cast<uint8_t>(vgetq_lane_u32(i, 2));
-    out[3] = static_cast<uint8_t>(vgetq_lane_u32(i, 3));
-}
-#endif
 
 // Packed band [y0, y1): pixelStride == 2, rowStride even. Each output row
 // reads two adjacent source rows; per output pixel the 4 sites are permuted
-// into canonical order by dx/dy. 8 output pixels per iteration with row
-// prefetch: the strided loads can't vectorize, but 32 in-flight gathers plus
-// prefetch keep the memory pipeline fed; threads multiply that further.
+// into canonical order by dx/dy. Row prefetch + threads keep the gather fed.
 void packedBand(const SuperpixelJob& job, int y0, int y1) {
     const uint16_t* src = job.src16;
     const int shortsPerRow = job.shortsPerRow;
@@ -121,45 +94,21 @@ void packedBand(const SuperpixelJob& job, int y0, int y1) {
         const uint16_t* row0 = src + static_cast<ptrdiff_t>(quadTop) * shortsPerRow;
         const uint16_t* row1 = row0 + shortsPerRow;
         uint8_t* outRow = dst + static_cast<ptrdiff_t>(y) * width * 4;
-        int x = 0;
-#if VF_NEON
-        for (; x + 8 <= width; x += 8) {
-            // ~512 B ahead on both source rows, streaming hint: each source
-            // row is visited once (step >= 2, disjoint bands), so prefetched
-            // lines must not displace anything cached. PRFM never faults, so
-            // the tail iteration needs no bounds check.
-            __builtin_prefetch(row0 + left + x * step + 256, 0, 0);
-            __builtin_prefetch(row1 + left + x * step + 256, 0, 0);
-            uint16_t codes[4][8];
-            for (int k = 0; k < 8; ++k) {
-                const int ql = left + (x + k) * step;
-                for (int c = 0; c < 4; ++c) {
-                    const uint16_t* row = (job.dy[c] == 0) ? row0 : row1;
-                    codes[c][k] = row[ql + job.dx[c]];
-                }
+        for (int x = 0; x < width; ++x) {
+            if ((x & 7) == 0) {
+                // ~512 B ahead on both source rows, streaming hint: each
+                // source row is visited once (step >= 2, disjoint bands),
+                // so prefetched lines must not displace anything cached.
+                // PRFM never faults, so no bounds check needed.
+                __builtin_prefetch(row0 + left + x * step + 256, 0, 0);
+                __builtin_prefetch(row1 + left + x * step + 256, 0, 0);
             }
-            uint8_t bytes[4][8];
-            for (int c = 0; c < 4; ++c) {
-                const int ch = job.ch[c];
-                normalizeNeon4(codes[c], job.black[ch], job.invRange[ch], bytes[c]);
-                normalizeNeon4(codes[c] + 4, job.black[ch], job.invRange[ch], bytes[c] + 4);
-            }
-            for (int k = 0; k < 8; ++k) {
-                uint8_t* px = outRow + (x + k) * 4;
-                px[0] = bytes[0][k];
-                px[1] = bytes[1][k];
-                px[2] = bytes[2][k];
-                px[3] = bytes[3][k];
-            }
-        }
-#endif
-        for (; x < width; ++x) {
             const int ql = left + x * step;
             uint8_t* px = outRow + x * 4;
             for (int c = 0; c < 4; ++c) {
                 const uint16_t* row = (job.dy[c] == 0) ? row0 : row1;
                 const int ch = job.ch[c];
-                px[c] = normalizeScalar(row[ql + job.dx[c]], job.black[ch], job.invRange[ch]);
+                px[c] = normalizeInt(row[ql + job.dx[c]], job.blackQ[ch], job.denQ[ch]);
             }
         }
     }
@@ -193,7 +142,7 @@ void genericBand(const SuperpixelJob& job, int y0, int y1) {
                 // Sensor planes are little-endian; NDK targets are LE.
                 // No byteswap needed (verified on arm64/armv7/x86_64).
                 const int ch = job.ch[c];
-                px[c] = normalizeScalar(code, job.black[ch], job.invRange[ch]);
+                px[c] = normalizeInt(code, job.blackQ[ch], job.denQ[ch]);
             }
         }
     }
@@ -294,17 +243,15 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfCpuNeon_copyNative(
     JNIEnv* env, jobject, jobject srcBuf, jint srcOffset, jint rowStride,
     jint pixelStride, jint left, jint top, jint width, jint height, jint step,
-    jintArray channels, jfloatArray blackLevels, jfloat white, jobject dstBuf,
-    jint dstOffset) {
-    if (!srcBuf || !dstBuf || !channels || !blackLevels) return VF_CPU_BAD_ARGUMENT;
+    jintArray channels, jintArray levels, jobject dstBuf, jint dstOffset) {
+    if (!srcBuf || !dstBuf || !channels || !levels) return VF_CPU_BAD_ARGUMENT;
     if (env->GetArrayLength(channels) != 4 ||
-        env->GetArrayLength(blackLevels) != 4) {
+        env->GetArrayLength(levels) != 8) {
         return VF_CPU_BAD_ARGUMENT;
     }
     if ((left & 1) != 0 || (top & 1) != 0 || step < 2 || (step & 1) != 0 ||
         width <= 0 || height <= 0 || width > VF_CPU_MAX_EDGE || height > VF_CPU_MAX_EDGE ||
-        rowStride <= 0 || pixelStride <= 0 || srcOffset < 0 || dstOffset < 0 ||
-        !std::isfinite(white) || white <= 0.f) {
+        rowStride <= 0 || pixelStride <= 0 || srcOffset < 0 || dstOffset < 0) {
         return VF_CPU_BAD_ARGUMENT;
     }
     uint8_t* srcBase =
@@ -317,12 +264,20 @@ Java_com_matthew_rawlens_VfCpuNeon_copyNative(
     if (srcCap < 0 || dstCap < 0) return VF_CPU_NOT_DIRECT;
 
     jint chOf[4];
-    jfloat blackIn[4];
+    jint q6[8];
     env->GetIntArrayRegion(channels, 0, 4, chOf);
-    env->GetFloatArrayRegion(blackLevels, 0, 4, blackIn);
+    env->GetIntArrayRegion(levels, 0, 8, q6);
     if (env->ExceptionCheck()) return VF_CPU_BAD_ARGUMENT;
     for (int c = 0; c < 4; ++c) {
-        if (chOf[c] < 0 || chOf[c] > 3 || !std::isfinite(blackIn[c])) {
+        if (chOf[c] < 0 || chOf[c] > 3) {
+            return VF_CPU_BAD_ARGUMENT;
+        }
+    }
+    // Q6 backstop (Kotlin computes the levels; this guards the ABI):
+    // blackQ >= 0, denQ >= 1 (no division by zero) and <= MAX (no
+    // num*255 overflow in 32 bit).
+    for (int i = 0; i < 4; ++i) {
+        if (q6[i] < 0 || q6[4 + i] <= 0 || q6[4 + i] > VF_Q6_MAX_DEN) {
             return VF_CPU_BAD_ARGUMENT;
         }
     }
@@ -331,13 +286,6 @@ Java_com_matthew_rawlens_VfCpuNeon_copyNative(
         ch[c] = chOf[c];
         dx[c] = chOf[c] % 2;
         dy[c] = chOf[c] / 2;
-    }
-    float black[4], invRange[4];
-    for (int i = 0; i < 4; ++i) {
-        black[i] = blackIn[i];
-        float range = white - blackIn[i];
-        if (range < 1.f) range = 1.f;
-        invRange[i] = 1.f / range;
     }
 
     // Bounds-check the last visited sample up front; the hot loops stay bare.
@@ -363,8 +311,8 @@ Java_com_matthew_rawlens_VfCpuNeon_copyNative(
         job.ch[c] = ch[c];
     }
     for (int i = 0; i < 4; ++i) {
-        job.black[i] = black[i];
-        job.invRange[i] = invRange[i];
+        job.blackQ[i] = q6[i];
+        job.denQ[i] = q6[4 + i];
     }
     uint8_t* src = srcBase + srcOffset;
     uint8_t* dst = dstBase + dstOffset;

@@ -101,7 +101,20 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         textSize = 10f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
     }
+    private val facePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(160, 255, 255, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.25f * density
+    }
+    private val faceTrackedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(214, 255, 51)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+    }
     private val focusRect = RectF()
+    /** HAL face boxes in overlay pixels; the lime one drives AF/AE. Not touch handles. */
+    private var faceBoxes: List<RectF> = emptyList()
+    private var trackedFace = -1
 
     /** Sharp AF lock badge state, driven by the camera controller. */
     private var focusLocked = false
@@ -190,7 +203,18 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         invalidate()
     }
 
+    /** Face boxes from the controller; [tracked] is the index driving AF/AE (-1 none). */
+    fun setFaces(boxes: List<RectF>, tracked: Int) {
+        faceBoxes = boxes
+        trackedFace = tracked
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
+        for ((index, box) in faceBoxes.withIndex()) {
+            val paint = if (index == trackedFace) faceTrackedPaint else facePaint
+            canvas.drawRoundRect(box, 6f * density, 6f * density, paint)
+        }
         if (!targetsVisible) return
         focusRect.set(
             afPoint.x - afHalfSide, afPoint.y - afHalfSide,

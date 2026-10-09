@@ -20,10 +20,11 @@ object HdrPlusVulkan {
 
     /**
      * Creates instance + device + compute queue and loads every manifest
-     * SPIR-V module. Returns an opaque handle for [release].
+     * SPIR-V module. Returns an opaque handle for [release]. [cacheFile]
+     * persists the pipeline cache across runs (null keeps it in-memory).
      */
-    fun init(assetManager: AssetManager): Long {
-        val handle = nativeInit(assetManager)
+    fun init(assetManager: AssetManager, cacheFile: java.io.File? = null): Long {
+        val handle = nativeInit(assetManager, cacheFile?.absolutePath)
         require(handle != 0L) { "hdrplus init returned a null handle" }
         return handle
     }
@@ -77,7 +78,7 @@ object HdrPlusVulkan {
         alignOnce, width, height, output
     )
 
-    private external fun nativeInit(assetManager: AssetManager): Long
+    private external fun nativeInit(assetManager: AssetManager, cachePath: String?): Long
     private external fun nativeRelease(handle: Long)
     private external fun nativeLoadedShaderCount(handle: Long): Int
     private external fun nativeExpectedShaderCount(): Int

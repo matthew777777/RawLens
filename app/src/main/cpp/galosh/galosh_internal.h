@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -74,6 +75,8 @@ struct GaloshContext {
     bool storage16 = false;
     bool shaderF16 = false;
     bool sg_ok = false;  // subgroup-32 pinnable (o32_pass12_sg eligible)
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    std::string pipelineCachePath;  // empty = in-memory cache only
     GaloshKern kerns[GALOSH_K_COUNT];
     VkDescriptorPool dpool = VK_NULL_HANDLE;
     VkQueryPool qpool = VK_NULL_HANDLE;
@@ -99,3 +102,11 @@ void galosh_destroy_pipelines(GaloshContext* ctx);
 int galosh_make_pipeline(GaloshContext* ctx, void* assetMgr, const char* asset, int nbind,
                          int pushBytes, int sg32, VkDescriptorSetLayout* dsl, VkPipelineLayout* pl,
                          VkPipeline* pipe, char* errmsg, size_t errmsg_len);
+
+// Lazily creates ctx->pipelineCache, warming it from pipelineCachePath when
+// set. The result (possibly null on failure; null means "no cache") is the
+// cache argument for pipeline creation.
+VkPipelineCache galosh_pipeline_cache(GaloshContext* ctx);
+// Persists ctx->pipelineCache to pipelineCachePath when a path is set.
+// No-op otherwise; never fatal.
+void galosh_save_pipeline_cache(GaloshContext* ctx);

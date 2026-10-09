@@ -172,8 +172,11 @@ add_library(galosh SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_caps.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_host.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_run.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_jni.cpp")
-target_include_directories(galosh PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/galosh")
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh/galosh_jni.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_pipeline_cache.cpp")
+target_include_directories(galosh PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/galosh"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(galosh PRIVATE -Wall -Wextra -Werror=return-type)
 find_library(GALOSH_VULKAN_LIB vulkan REQUIRED)
 find_library(GALOSH_LOG_LIB log REQUIRED)
@@ -188,8 +191,11 @@ target_link_options(galosh PRIVATE "-Wl,-z,max-page-size=16384")
 add_library(hdrplus SHARED
     "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_host.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_run.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_jni.cpp")
-target_include_directories(hdrplus PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus")
+    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus/hdrplus_jni.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_pipeline_cache.cpp")
+target_include_directories(hdrplus PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/hdrplus"
+    "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(hdrplus PRIVATE -Wall -Wextra -Werror=return-type)
 find_library(HDRPLUS_VULKAN_LIB vulkan REQUIRED)
 find_library(HDRPLUS_LOG_LIB log REQUIRED)
@@ -231,11 +237,66 @@ if(ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_options(rawLensCinemaRaw PRIVATE -mfpu=neon)
 endif()
 
+# BGU viewfinder spike: JNI bridge to Halide AOT filters. The .a archives are
+# prebuilt per ABI by tools/halide/build_aot.sh and checked in (ncnn precedent).
+set(BGU_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/bgu_spike_downsample.a")
+if(NOT EXISTS "${BGU_FILTER_LIB}")
+    message(FATAL_ERROR "Halide spike filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
+endif()
+add_library(halide_bgu_spike STATIC IMPORTED GLOBAL)
+set_target_properties(halide_bgu_spike PROPERTIES IMPORTED_LOCATION "${BGU_FILTER_LIB}")
+set(BGU_FIT_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/bgu_fit.a")
+if(NOT EXISTS "${BGU_FIT_LIB}")
+    message(FATAL_ERROR "Halide fit filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
+endif()
+add_library(halide_bgu_fit STATIC IMPORTED GLOBAL)
+set_target_properties(halide_bgu_fit PROPERTIES IMPORTED_LOCATION "${BGU_FIT_LIB}")
+set(BGU_LOOK_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/bgu_look.a")
+if(NOT EXISTS "${BGU_LOOK_LIB}")
+    message(FATAL_ERROR "Halide look filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
+endif()
+add_library(halide_bgu_look STATIC IMPORTED GLOBAL)
+set_target_properties(halide_bgu_look PROPERTIES IMPORTED_LOCATION "${BGU_LOOK_LIB}")
+add_library(rawLensBgu SHARED halide_bgu_jni.cpp halide_bgu_fit_jni.cpp halide_bgu_look_jni.cpp)
+target_include_directories(rawLensBgu PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(rawLensBgu PRIVATE halide_bgu_spike halide_bgu_fit halide_bgu_look log)
+target_link_options(rawLensBgu PRIVATE "-Wl,-z,max-page-size=16384")
+
+# HDR+ motion meter: JNI bridge to the Halide AOT meter filter (same
+# prebuilt-archive discipline as BGU). Zero-copy direct buffers; the
+# Kotlin meter stays as the fallback when this library is absent.
+set(METER_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/hdrplus_meter.a")
+if(NOT EXISTS "${METER_FILTER_LIB}")
+    message(FATAL_ERROR "Halide meter filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
+endif()
+add_library(halide_hdrplus_meter STATIC IMPORTED GLOBAL)
+set_target_properties(halide_hdrplus_meter PROPERTIES IMPORTED_LOCATION "${METER_FILTER_LIB}")
+add_library(rawLensHdrMeter SHARED halide_meter_jni.cpp)
+target_include_directories(rawLensHdrMeter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(rawLensHdrMeter PRIVATE halide_hdrplus_meter log)
+target_link_options(rawLensHdrMeter PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Fused scope+meter sampler: JNI bridge to the Halide AOT scope_meter
+# filter (same prebuilt-archive discipline). Zero-copy direct buffers;
+# the Kotlin samplers stay as the fallback when this library is absent.
+set(SCOPE_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/scope_meter.a")
+if(NOT EXISTS "${SCOPE_FILTER_LIB}")
+    message(FATAL_ERROR "Halide scope filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
+endif()
+add_library(halide_scope_meter STATIC IMPORTED GLOBAL)
+set_target_properties(halide_scope_meter PROPERTIES IMPORTED_LOCATION "${SCOPE_FILTER_LIB}")
+add_library(rawLensScopeMeter SHARED halide_scope_jni.cpp)
+target_include_directories(rawLensScopeMeter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(rawLensScopeMeter PRIVATE halide_scope_meter log)
+target_link_options(rawLensScopeMeter PRIVATE "-Wl,-z,max-page-size=16384")
+
 # Zero-copy viewfinder: EGL import bridge, the Vulkan superpixel compute
 # module (import HAL RAW -> RGBA8 superpixel export buffer), and the NEON CPU
 # fallback sampler (fast native replacement for the old Kotlin copy).
-add_library(rawLensVfEgl SHARED vf_egl_jni.cpp vf_vulkan_vf.cpp vf_cpu_neon.cpp)
-add_library(rawLensDualRaw SHARED dual_raw_vulkan.cpp)
+add_library(rawLensVfEgl SHARED vf_egl_jni.cpp vf_vulkan_vf.cpp vf_cpu_neon.cpp vulkan_pipeline_cache.cpp bgu_slice_cpu.cpp)
+# NOTE: dual_raw_vulkan.cpp textually includes vf_vulkan_vf.cpp, so it
+# needs every translation unit the viewfinder module uses.
+add_library(rawLensDualRaw SHARED dual_raw_vulkan.cpp vulkan_pipeline_cache.cpp)
 target_link_libraries(rawLensDualRaw PRIVATE android log vulkan)
 target_link_options(rawLensDualRaw PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_libraries(rawLensVfEgl PRIVATE EGL GLESv2 android log vulkan)

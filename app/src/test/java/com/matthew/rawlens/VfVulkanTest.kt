@@ -29,19 +29,20 @@ class VfVulkanTest {
         )
         assertArrayEquals(intArrayOf(0, 1, 2, 3, 0, 0, 680, 510, 6, 4080), iparams)
         assertEquals(8, fparams.size)
-        assertArrayEquals(floatArrayOf(64f, 64f, 64f, 64f), fparams.copyOfRange(0, 4), 0f)
-        // Reciprocal normalization identical to VfCpuNeon.copy.
-        val expected = 1f / (1023f - 64f)
-        for (i in 4..7) assertEquals(expected, fparams[i], 1e-7f)
+        // Q6 fixed point bit-cast through the float slots (see VfLevels).
+        val blackQ = 64 * 64
+        val denQ = ((1023f - 64f) * 64 + 0.5f).toInt()
+        for (i in 0..3) assertEquals(blackQ, fparams[i].toRawBits())
+        for (i in 4..7) assertEquals(denQ, fparams[i].toRawBits())
     }
 
-    @Test fun `reciprocal clamps degenerate white-minus-black`() {
+    @Test fun `fixed-point clamps degenerate white-minus-black`() {
         val (_, fparams) = VfVulkan.packParams(
             intArrayOf(0, 1, 2, 3), 0, 0, 1, 1, 2, 4080,
             floatArrayOf(1023f, 2000f, 0f, 0f), 1023f
         )
-        assertEquals(1f, fparams[4], 0f)
-        assertEquals(1f, fparams[5], 0f)
+        assertEquals(64, fparams[4].toRawBits())
+        assertEquals(64, fparams[5].toRawBits())
     }
 
     @Test fun `dispatch groups cover partial tiles`() {

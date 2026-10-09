@@ -46,6 +46,24 @@ class AmazePipelineContractTest {
     }
 
     @Test
+    fun finalShadersTakeWhiteWindowUniformInsteadOfHardcodedThresholds() {
+        // The CPU mirror (neutralizeCameraHighlight) is window-parameterized;
+        // both final shaders must take the same u_white_window uniform so HDR
+        // merges can narrow the blend to the exactly-1.0 clipped fallback.
+        // A hardcoded smoothstep here would silently desaturate valid HDR
+        // highlights even though the host binds the uniform.
+        for (asset in listOf("amaze/final.glsl", "amaze/final_display.glsl")) {
+            val shader = File("src/main/assets/shaders/$asset").readText()
+            assertTrue("$asset declares u_white_window",
+                shader.contains("uniform highp vec2 u_white_window;"))
+            assertTrue("$asset blends with u_white_window",
+                shader.contains("smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb)"))
+            assertTrue("$asset keeps no hardcoded white window",
+                !shader.contains("smoothstep(vec3(0.70), vec3(0.99), cameraRgb)"))
+        }
+    }
+
+    @Test
     fun passGraphMatchesPhotonCameraAmazeNode() {
         assertEquals(13, AmazePipelineContract.passes.size)
         assertEquals("amaze/pad.glsl", AmazePipelineContract.passes.first().shader)

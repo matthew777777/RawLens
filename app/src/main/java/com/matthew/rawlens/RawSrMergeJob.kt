@@ -840,9 +840,18 @@ object RawSrMergeJob {
         val effective = try {
             val params = RawSrRobustness.gpuParams(input.packed)
             if (!params.modelValid) robustness
-            else RawSrUnblocker.applyToFrameAndSpread(robustness, RawSrUnblocker.computeFrame(
-                guide, params.alpha[1].toDouble(), params.beta[1].toDouble()),
-                flow, RawSrRobustness.motionThresholdPx(tuning))
+            else {
+                // The unblocker noise gate is specified over the plain
+                // normalized quad mean (normative §1), NOT the
+                // GAT-stabilized guide the kernels consume: stabilized
+                // variance (~0.25 floor) against a linear noise estimate
+                // slashes every noisy flat.
+                val plain = RawSrCovarianceGuide.plainMean(input.packed)
+                val u = RawSrUnblocker.computeFrame(
+                    plain, params.alpha[1].toDouble(), params.beta[1].toDouble())
+                RawSrUnblocker.applyToFrameAndSpread(robustness, u,
+                    flow, RawSrRobustness.motionThresholdPx(tuning))
+            }
         } catch (cancelled: java.util.concurrent.CancellationException) {
             throw cancelled
         } catch (_: Exception) {

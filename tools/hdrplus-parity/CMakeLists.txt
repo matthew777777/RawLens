@@ -17,8 +17,9 @@ set(HDRPLUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/hdrplus")
 add_executable(hdrplus_parity
     "${CMAKE_CURRENT_SOURCE_DIR}/parity.cpp"
     "${HDRPLUS_DIR}/hdrplus_host.cpp"
-    "${HDRPLUS_DIR}/hdrplus_run.cpp")
-target_include_directories(hdrplus_parity PRIVATE "${HDRPLUS_DIR}")
+    "${HDRPLUS_DIR}/hdrplus_run.cpp"
+    "${HDRPLUS_DIR}/../vulkan_pipeline_cache.cpp")
+target_include_directories(hdrplus_parity PRIVATE "${HDRPLUS_DIR}" "${HDRPLUS_DIR}/..")
 set_target_properties(hdrplus_parity PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 if(MSVC)
     target_compile_options(hdrplus_parity PRIVATE /W4)

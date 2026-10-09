@@ -105,6 +105,38 @@ object RawSrCovarianceGuide {
         }
         val input = frame.uploadInput()
         val resolved = resolve(input, frame.noiseProfile)
+        return Guide(
+            reduceQuads(input, resolved.alpha, resolved.beta, resolved.stabilize),
+            resolved.status
+        )
+    }
+
+    /**
+     * Plain normalized quad-mean gray WITHOUT GAT stabilization: same
+     * geometry as [guide] (per-tap black/white normalization averaged per
+     * quad), but the linear mean plane. This is the domain the
+     * unblocker's `Vn = A·gray + B` noise gate is specified over
+     * (normative docs/raw-sr-unblocker.md §1: the inpainted quad-gray
+     * field with green *normalized* coefficients). Feeding
+     * GAT-stabilized gray instead compares stabilized variance (noise
+     * floor ~0.25) against a linear noise estimate and slashes every
+     * noisy flat (regression 2026-10-08: robustness mean 0.93 → 0.04).
+     */
+    fun plainMean(frame: RawSrPackedFrame): RawSrGrayImage {
+        require(frame.width % 2 == 0 && frame.height % 2 == 0) {
+            "Guide quad reduction requires complete Bayer quads"
+        }
+        val input = frame.uploadInput()
+        val resolved = resolve(input, frame.noiseProfile)
+        return reduceQuads(input, resolved.alpha, resolved.beta, false)
+    }
+
+    private fun reduceQuads(
+        input: GpuRawAmazeInput,
+        alpha: DoubleArray,
+        beta: DoubleArray,
+        stabilize: Boolean
+    ): RawSrGrayImage {
         val source = input.buffer.duplicate().order(ByteOrder.nativeOrder())
         val base = source.position()
         val crop = input.crop
@@ -127,16 +159,16 @@ object RawSrCovarianceGuide {
                     val black = input.normalization.blackAt(sx, sy).toDouble()
                     val white = input.normalization.whiteLevel.toDouble()
                     val observed = RawSrCoreGuide.normalize(code, black, white)
-                    sum += if (!resolved.stabilize) {
+                    sum += if (!stabilize) {
                         observed
                     } else {
-                        RawSrCoreGuide.stabilize(observed, resolved.alpha[phase], resolved.beta[phase])
+                        RawSrCoreGuide.stabilize(observed, alpha[phase], beta[phase])
                     }
                 }
                 values[qy * outWidth + qx] = RawSrCoreGuide.quadMean(sum).toFloat()
             }
         }
-        return Guide(RawSrGrayImage(outWidth, outHeight, values), resolved.status)
+        return RawSrGrayImage(outWidth, outHeight, values)
     }
 
     /** GPU parameters for one burst frame; plain-path fields are always populated. */
