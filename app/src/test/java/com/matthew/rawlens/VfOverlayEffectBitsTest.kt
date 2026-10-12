@@ -24,6 +24,16 @@ class VfOverlayEffectBitsTest {
         assertEquals(listOf("UHDR"), vfOverlayEffectBits(true, settings))
     }
 
+    @Test fun `wavelet flag adds badge`() {
+        val settings = JpegOutputSettings()
+        assertEquals(listOf("WAVELET"), vfOverlayEffectBits(false, settings, wavelet = true))
+        assertEquals(
+            listOf("UHDR", "WAVELET"),
+            vfOverlayEffectBits(false, JpegOutputSettings(ultraHdr = true), wavelet = true)
+        )
+        assertTrue(vfOverlayEffectBits(false, settings).isEmpty())
+    }
+
     @Test fun `default settings report no effects`() {
         assertFalse(vfOverlayEffectBits(false, JpegOutputSettings()).isNotEmpty())
     }

@@ -539,7 +539,10 @@ class MainActivity : Activity() {
             }
         )
         controller.onVfRouteChanged = { isBgu ->
-            runOnUiThread { applyVfRoute(isBgu) }
+            runOnUiThread {
+                applyVfRoute(isBgu)
+                videoRecorder?.attachViewfinder(recorderViewfinder(isBgu))
+            }
         }
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
@@ -1665,9 +1668,10 @@ class MainActivity : Activity() {
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
             audioEnabled = withAudio
-            // Live RAW VF during the take: frames fan out to the viewfinder
-            // (Vulkan zero-copy lease) while the encode thread encodes.
-            attachViewfinder(findViewById(R.id.rawViewfinder))
+            // Live RAW VF during the take: frames fan out to the same routed
+            // engine visibility shows (Vulkan zero-copy lease) while the
+            // encode thread encodes.
+            attachViewfinder(recorderViewfinder(controller.isBguActive()))
         }
         try {
             recorder.start(file, videoContainerMeta(manager, cameraId, size))
@@ -2458,9 +2462,6 @@ class MainActivity : Activity() {
 
     private fun toggleRawSuperResolution() {
         val enabled = !rawSuperResolutionSettings.enabled
-        if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-            applyCaptureExposureMode(CaptureExposureMode.ZSL)
-        }
         // Quick tiles are exclusive: SR takes the ring from fusion and HDR+.
         if (enabled && burstFusionSettings.enabled) {
             applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
@@ -2469,15 +2470,17 @@ class MainActivity : Activity() {
             applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
         }
         if (applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = enabled))) {
+            // Switch modes only on success: enabling first keeps a LOCKED
+            // toggle from stranding the camera in ZSL with SR still off.
+            if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
+                applyCaptureExposureMode(CaptureExposureMode.ZSL)
+            }
             setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
         }
     }
 
     private fun toggleBurstFusion() {
         val enabled = !burstFusionSettings.enabled
-        if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-            applyCaptureExposureMode(CaptureExposureMode.ZSL)
-        }
         // Quick tiles are exclusive: fusion takes the ring from SR and HDR+.
         if (enabled && rawSuperResolutionSettings.enabled) {
             applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
@@ -2486,15 +2489,17 @@ class MainActivity : Activity() {
             applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
         }
         if (applyBurstFusionSettings(burstFusionSettings.copy(enabled = enabled))) {
+            // Switch modes only on success: enabling first keeps a LOCKED
+            // toggle from stranding the camera in ZSL with fusion still off.
+            if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
+                applyCaptureExposureMode(CaptureExposureMode.ZSL)
+            }
             setStatus(if (enabled) "FUSION • WARMING" else "FUSION OFF")
         }
     }
 
     private fun toggleHdrPlus() {
         val enabled = !hdrPlusSettings.enabled
-        if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-            applyCaptureExposureMode(CaptureExposureMode.ZSL)
-        }
         // Quick tiles are exclusive: HDR+ takes the ring from SR and fusion.
         if (enabled && rawSuperResolutionSettings.enabled) {
             applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
@@ -2503,6 +2508,11 @@ class MainActivity : Activity() {
             applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
         }
         if (applyHdrPlusSettings(hdrPlusSettings.copy(enabled = enabled))) {
+            // Switch modes only on success: enabling first keeps a LOCKED
+            // toggle from stranding the camera in ZSL with HDR+ still off.
+            if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
+                applyCaptureExposureMode(CaptureExposureMode.ZSL)
+            }
             setStatus(if (enabled) "HDR+ • WARMING" else "HDR+ OFF")
         }
     }
@@ -2706,6 +2716,14 @@ class MainActivity : Activity() {
         findViewById<RawViewfinder>(R.id.rawViewfinder)?.visibility =
             if (isBgu) android.view.View.GONE else android.view.View.VISIBLE
     }
+
+    /** Recording fan-out target: the same routed engine [applyVfRoute] shows. */
+    private fun recorderViewfinder(isBgu: Boolean): VfEngine? =
+        selectRoutedViewfinder<VfEngine>(
+            isBgu,
+            findViewById<BguViewfinder>(R.id.bguViewfinder),
+            findViewById<RawViewfinder>(R.id.rawViewfinder)
+        )
 
     private fun cycleVfResolution() {
         val next = when (vfResolution) {
@@ -3906,7 +3924,13 @@ class MainActivity : Activity() {
         return DenoiseSettings(
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
             saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
-            aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f
+            aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
+            wavelet = WaveletSettings(
+                enabled = prefs.getBoolean(KEY_WAVELET_ENABLED, false),
+                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 200) / 100f,
+                luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
+                maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7)
+            )
         )
     }
 
@@ -3919,6 +3943,10 @@ class MainActivity : Activity() {
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))
+            .putBoolean(KEY_WAVELET_ENABLED, settings.wavelet.enabled)
+            .putInt(KEY_WAVELET_STRENGTH_PCT, (settings.wavelet.strength * 100 + 0.5f).toInt().coerceIn(0, 200))
+            .putInt(KEY_WAVELET_LUMA_PCT, (settings.wavelet.luma * 100 + 0.5f).toInt().coerceIn(0, 100))
+            .putInt(KEY_WAVELET_SCALES, settings.wavelet.maxScale.coerceIn(1, 7))
             .apply()
         return true
     }
@@ -5128,7 +5156,14 @@ class MainActivity : Activity() {
                 }
             })
             content.addView(sectionTitle("HDR+ merge"))
-            content.addView(sectionDesc("Noise-reduction strength. Higher merges harder: cleaner stills, more ghosting on motion."))
+            content.addView(sectionDesc(
+                "Noise-reduction strength " +
+                    "${HdrPlusSettings.MIN_STRENGTH.toInt()}–${HdrPlusSettings.MAX_STRENGTH.toInt()}. " +
+                    "Higher merges harder: cleaner stills, more ghosting on motion. " +
+                    "AUTO picks ${HdrPlusAutoTuning.AUTO_STRENGTH_MIN.toInt()}–" +
+                    "${HdrPlusAutoTuning.AUTO_STRENGTH_MAX.toInt()} from scene motion " +
+                    "and ignores the slider."
+            ))
             fun strengthRowText(value: Float): String =
                 HdrPlusSettings.strengthSliderText(value) +
                     if (hdrPlusSettings.autoStrength) " • AUTO" else ""
@@ -5421,6 +5456,78 @@ class MainActivity : Activity() {
             content.addView(galoshFastMode)
             galoshSubordinate += galoshFastMode
             galoshSubordinate.forEach { it.isEnabled = galosh.enabled }
+
+            content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
+            val waveSubordinate = ArrayList<View>()
+            val waveMaster = CheckBox(this).apply {
+                text = "Wavelet luma+chroma denoise (Vulkan)\nPost-demosaic darktable-profiled wavelets on camera-linear RGB; JPEG only, never the DNG. Off when Galosh is on (mutual exclusion)."
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = settings.wavelet.enabled
+                setOnCheckedChangeListener { button, value ->
+                    val proposed = settings.copy(wavelet = settings.wavelet.copy(enabled = value))
+                    if (persistDenoiseSettings(proposed)) {
+                        settings = proposed
+                        waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
+                        if (settings.wavelet.enabled) controllerIfReady?.prewarmWavelet()
+                    } else if (button.isChecked != settings.wavelet.enabled) {
+                        button.isChecked = settings.wavelet.enabled
+                    }
+                }
+            }
+            content.addView(waveMaster)
+            fun addWaveSlider(
+                title: String,
+                maximum: Int,
+                initial: Int,
+                format: (Int) -> String,
+                update: (WaveletSettings, Int) -> WaveletSettings
+            ) {
+                var selected = initial.coerceIn(0, maximum)
+                val label = TextView(this).apply {
+                    text = "$title: ${format(selected)}"
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 14f
+                    setPadding(dp(12), dp(8), dp(12), 0)
+                }
+                content.addView(label)
+                val bar = SeekBar(this).apply {
+                    max = maximum
+                    progress = selected
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                            selected = progress
+                            label.text = "$title: ${format(selected)}"
+                        }
+                        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                        override fun onStopTrackingTouch(seekBar: SeekBar) {
+                            val proposed = settings.copy(wavelet = update(settings.wavelet, selected))
+                            if (persistDenoiseSettings(proposed)) {
+                                settings = proposed
+                                setStatus("WAVELET ${title.uppercase(Locale.US)} • ${format(selected)}")
+                            } else {
+                                selected = initial.coerceIn(0, maximum)
+                                seekBar.progress = selected
+                            }
+                        }
+                    })
+                }
+                content.addView(bar)
+                waveSubordinate += label
+                waveSubordinate += bar
+            }
+            addWaveSlider("Strength", 200, (settings.wavelet.strength * 100 + 0.5f).toInt(),
+                { "$it%" }) { s, v -> s.copy(strength = v / 100f) }
+            addWaveSlider("Luma", 100, (settings.wavelet.luma * 100 + 0.5f).toInt(),
+                { "$it%" }) { s, v -> s.copy(luma = v / 100f) }
+            addWaveSlider("Scales", 7, settings.wavelet.maxScale,
+                { if (it <= 1) "$it scale" else "$it scales" }) { s, v -> s.copy(maxScale = v.coerceAtLeast(1)) }
+            content.addView(TextView(this).apply {
+                text = "Strength 100% and 7 scales are the validated defaults; luma 25% keeps fine detail while chroma (fixed 75%) does the heavy lifting. Noise comes from the sensor profile, so higher ISO denoises harder automatically."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 12f
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+            })
+            waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
 
             markActive(denoiseTab)
             polish()
@@ -6420,6 +6527,10 @@ class MainActivity : Activity() {
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
         const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
         const val KEY_GALOSH_ENABLED = "galosh_enabled"
+        const val KEY_WAVELET_ENABLED = "wavelet_enabled"
+        const val KEY_WAVELET_STRENGTH_PCT = "wavelet_strength_pct"
+        const val KEY_WAVELET_LUMA_PCT = "wavelet_luma_pct"
+        const val KEY_WAVELET_SCALES = "wavelet_scales"
         const val KEY_GALOSH_SAVE_ORIGINAL_DNG = "galosh_save_original_dng"
         const val KEY_GALOSH_STRENGTH_PCT = "galosh_strength_pct"
         const val KEY_GALOSH_LUMA_PCT = "galosh_luma_pct"
@@ -6434,7 +6545,7 @@ class MainActivity : Activity() {
         /** Mirrors HistogramView RAW-hold: YUV resumes once the view stops preferring RAW. */
         const val HISTOGRAM_RAW_HOLD_MS = 2_000L
         const val MIN_RAW_ZSL_FRAMES = 1
-        const val MAX_RAW_ZSL_FRAMES = 30
+        const val MAX_RAW_ZSL_FRAMES = 59
         const val DEFAULT_RAW_ZSL_FRAME_COUNT = 8
     }
 }

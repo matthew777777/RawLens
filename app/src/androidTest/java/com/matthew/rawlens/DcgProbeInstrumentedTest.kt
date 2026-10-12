@@ -58,14 +58,16 @@ class DcgProbeInstrumentedTest {
                 log("CONFIGURED ${device.id}/$physical RAW=$size outputs=$count")
             } catch (e: Exception) { f.cancel(false); readers.forEach { it.close() }; throw e }
         }
-        fun capture(label: String, iso: Int, exposure: Long, saveDng: Boolean = false): () -> Unit {
+        fun capture(label: String, iso: Int, exposure: Long, saveDng: Boolean = false, saveRaw16: Boolean = true): () -> Unit {
             val images = readers.mapIndexed { index, reader ->
                 CompletableFuture<Long>().also { future -> reader.setOnImageAvailableListener({ source ->
                     source.acquireNextImage()?.use { image ->
                         try {
                             val plane = image.planes[0]; val b = plane.buffer.order(ByteOrder.LITTLE_ENDIAN)
-                            val bytes = ByteArray(b.remaining()); b.duplicate().get(bytes)
-                            File(outputDir, "$label-$index.raw16").writeBytes(bytes)
+                            if (saveRaw16) {
+                                val bytes = ByteArray(b.remaining()); b.duplicate().get(bytes)
+                                File(outputDir, "$label-$index.raw16").writeBytes(bytes)
+                            }
                             var sum = 0.0; var squares = 0.0; var n = 0; var min = 65535; var max = 0
                             for (y in 0 until image.height step 8) for (x in 0 until image.width step 8) {
                                 val v = b.getShort(y * plane.rowStride + x * plane.pixelStride).toInt() and 65535
@@ -135,6 +137,36 @@ class DcgProbeInstrumentedTest {
             }
         } finally {
             File(outputDir, "merge-report.txt").writeText(report.toString())
+            thread.quitSafely()
+        }
+    }
+    @Test fun isoSweep() {
+        outputDir.mkdirs()
+        try {
+            log("DEVICE ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} SDK=${android.os.Build.VERSION.SDK_INT}")
+            log("HINT point the phone at a static, evenly lit surface; a variance step between adjacent ISOs marks the conversion-gain switch")
+            val isos = listOf(50, 100, 200, 400, 800, 1600, 3200, 6400, 12800)
+            attempt("iso sweep fixed shutter") {
+                Route(open("0"), null).use { route ->
+                    for (iso in isos) {
+                        try { route.capture("sweep-fixed-iso$iso", iso, 20_000_000L, saveRaw16 = false)() }
+                        catch (e: Exception) { log("STEP_FAIL fixed iso=$iso: $e") }
+                    }
+                }
+            }
+            attempt("iso sweep matched exposure") {
+                Route(open("0"), null).use { route ->
+                    for (iso in isos) {
+                        val shutter = (20_000_000L * 400 / iso).coerceIn(100_000L, 400_000_000L)
+                        try { route.capture("sweep-matched-iso$iso", iso, shutter)() }
+                        catch (e: Exception) { log("STEP_FAIL matched iso=$iso: $e") }
+                    }
+                }
+            }
+            log("HINT read the IMAGE mean/spatialVariance columns: the DCG switch is the ISO where variance drops against the trend")
+        } finally {
+            devices.toList().forEach { it.close() }
+            File(outputDir, "iso-sweep-report.txt").writeText(report.toString())
             thread.quitSafely()
         }
     }

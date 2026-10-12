@@ -92,10 +92,17 @@ class VideoModeUiTest {
             assertTrue("Video HUD never appeared", hudVisible)
             screenshot("vui_video_idle")
 
-            // 3. Mid-roll: viewfinder live on the zero-copy GPU path while
-            // the encode thread writes (release build cadence asserted).
+            // 3. Mid-roll: the ROUTED (visible) viewfinder is live on the
+            // zero-copy GPU path while the encode thread writes (release
+            // build cadence asserted). BGU is the default route; legacy
+            // only when forced or after BGU fallback.
             SystemClock.sleep(2500)
-            val vf = activity.findViewById<RawViewfinder>(R.id.rawViewfinder).snapshot()
+            val bguView = activity.findViewById<BguViewfinder>(R.id.bguViewfinder)
+            val vf = if (bguView != null && bguView.visibility == View.VISIBLE) {
+                bguView.snapshot()
+            } else {
+                (view(R.id.rawViewfinder) as RawViewfinder).snapshot()
+            }
             android.util.Log.i(
                 TAG, "SPIKE ui vf fps=${vf.fps} gpu=${vf.gpu} glActive=${vf.glActive} " +
                     "raw=${vf.rawWidth}x${vf.rawHeight}"
