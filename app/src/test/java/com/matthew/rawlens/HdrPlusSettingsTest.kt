@@ -46,6 +46,19 @@ class HdrPlusSettingsTest {
         }
     }
 
+    @Test fun strengthAbove16Accepted() {
+        // No clamp at 16 anywhere in the 1..22 contract (slider,
+        // settings, merge decision, and native valid() all span it).
+        for (strength in listOf(16.1f, 17f, 20f, 21.9f, 22f)) {
+            assertEquals(strength, HdrPlusSettings(strength = strength).strength, 0f)
+            assertEquals(
+                strength,
+                HdrPlusSettings.progressToStrength(HdrPlusSettings.strengthToProgress(strength)),
+                0.051f
+            )
+        }
+    }
+
     @Test fun activeFrameCountClampsToMergeBounds() {
         val on = HdrPlusSettings(enabled = true)
         assertEquals(2, on.activeFrameCount(1))
@@ -61,23 +74,33 @@ class HdrPlusSettingsTest {
         assertEquals("HDR+\nMERGING", on.quickText(8, 8, true, true))
         assertEquals("HDR+\nUNAVAILABLE", on.quickText(8, 8, false, false))
         assertEquals("HDR+\nWARMING", on.quickText(8, 3, true, false))
-        assertEquals("HDR+\nAUTO ×8", on.quickText(8, 8, true, false))
+        assertEquals("HDR+\nHQ ×8", on.quickText(8, 8, true, false))
         assertEquals(
-            "HDR+\nHQ ×8",
-            on.copy(autoQuality = false).quickText(8, 8, true, false)
+            "HDR+\nAUTO ×8",
+            on.copy(autoQuality = true).quickText(8, 8, true, false)
         )
         assertEquals(
             "HDR+\nFAST ×8",
-            on.copy(autoQuality = false, highQuality = false).quickText(8, 8, true, false)
+            on.copy(highQuality = false).quickText(8, 8, true, false)
         )
     }
 
-    @Test fun autoDefaultsOn() {
-        assertEquals(true, HdrPlusSettings().autoStrength)
-        assertEquals(true, HdrPlusSettings().autoQuality)
+    @Test fun autoDefaultsOff() {
+        assertEquals(false, HdrPlusSettings().autoStrength)
+        assertEquals(false, HdrPlusSettings().autoQuality)
         val reloaded = HdrPlusSettings.fromPreferences(emptyMap<String, Any>())
-        assertEquals(true, reloaded.autoStrength)
-        assertEquals(true, reloaded.autoQuality)
+        assertEquals(false, reloaded.autoStrength)
+        assertEquals(false, reloaded.autoQuality)
+    }
+
+    @Test fun defaultsToManualHqStrength3() {
+        val fresh = HdrPlusSettings.fromPreferences(emptyMap<String, Any>())
+        assertEquals(HdrPlusSettings(), fresh)
+        assertEquals(3f, fresh.strength, 0f)
+        assertEquals(3f, HdrPlusSettings.DEFAULT_STRENGTH, 0f)
+        assertEquals(true, fresh.highQuality)
+        assertEquals(false, fresh.autoStrength)
+        assertEquals(false, fresh.autoQuality)
     }
 
     @Test fun highQualityDefaultsOn() {
@@ -101,7 +124,7 @@ class HdrPlusSettingsTest {
         assertEquals(120, HdrPlusSettings.strengthToProgress(13f))
         assertEquals(0, HdrPlusSettings.strengthToProgress(-1f))
         assertEquals(210, HdrPlusSettings.strengthToProgress(99f))
-        assertEquals(120, HdrPlusSettings.strengthToProgress(Float.NaN))
+        assertEquals(20, HdrPlusSettings.strengthToProgress(Float.NaN))
     }
 
     @Test fun strengthSliderRoundTripsEveryStep() {

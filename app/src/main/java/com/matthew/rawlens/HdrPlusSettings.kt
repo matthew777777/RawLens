@@ -18,6 +18,8 @@ data class HdrPlusSettings(
     /**
      * Upstream "noise reduction" slider, 1..22 (RAWR `Config.strength`).
      * Higher merges more aggressively (cleaner, more ghosting).
+     * Defaults to 3.0 (conservative: ghost-safe, matches the auto
+     * curve floor).
      */
     val strength: Float = DEFAULT_STRENGTH,
     /**
@@ -33,15 +35,17 @@ data class HdrPlusSettings(
     /**
      * True = the auto brain picks strength from motion (manual slider
      * value is kept as the fallback). Dragging the slider turns this
-     * off; the settings checkbox turns it back on.
+     * off; the settings checkbox turns it back on. Off by default:
+     * the manual slider value is used unless the user opts in.
      */
-    val autoStrength: Boolean = true,
+    val autoStrength: Boolean = false,
     /**
      * True = the auto brain picks Fast/HQ from motion. Long-pressing
      * the quick tile cycles AUTO -> HQ -> FAST -> AUTO; [highQuality]
-     * holds the manual choice while auto is off.
+     * holds the manual choice while auto is off. Off by default, so
+     * fresh installs merge HQ at the manual strength.
      */
-    val autoQuality: Boolean = true
+    val autoQuality: Boolean = false
 ) {
     init {
         require(strength.isFinite() && strength in MIN_STRENGTH..MAX_STRENGTH) {
@@ -80,15 +84,15 @@ data class HdrPlusSettings(
                 ?: DEFAULT_STRENGTH,
             highQuality = values["hdr_plus_high_quality"] as? Boolean ?: true,
             keepSourceBurst = values["hdr_plus_keep_source_burst"] as? Boolean ?: false,
-            autoStrength = values["hdr_plus_auto_strength"] as? Boolean ?: true,
-            autoQuality = values["hdr_plus_auto_quality"] as? Boolean ?: true
+            autoStrength = values["hdr_plus_auto_strength"] as? Boolean ?: false,
+            autoQuality = values["hdr_plus_auto_quality"] as? Boolean ?: false
         )
         const val MIN_ZSL_FRAMES = 1
         const val MIN_MERGE_FRAMES = 2
         const val MAX_MERGE_FRAMES = 30
         const val MIN_STRENGTH = 1f
         const val MAX_STRENGTH = 22f
-        const val DEFAULT_STRENGTH = 13f
+        const val DEFAULT_STRENGTH = 3f
         /**
          * Settings strength slider contract: integer progress 0..210 maps
          * linearly to 1.0..22.0 in 0.1 steps. Both directions clamp;
