@@ -55,6 +55,8 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var powerSave = false
     @Volatile private var renderJpeg = true
     @Volatile private var evStrength = 1f
+    @Volatile private var previewHeadroom = 1f
+    @Volatile private var previewSoftHeadroom = 0.85f
     @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f)
     @Volatile private var frameIntervalNs = 1_000_000_000L / 30
     override var onStarvation: (() -> Unit)? = null
@@ -85,6 +87,9 @@ class BguViewfinder @JvmOverloads constructor(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
             r.agxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder
         )
+        // The VF meter runs the save's tuning, so VF EV == save EV.
+        previewHeadroom = r.highlightHeadroom
+        previewSoftHeadroom = r.highlightSoftHeadroom
     }
 
     override fun setEngineMode(mode: VfEngineMode) {
@@ -153,13 +158,26 @@ class BguViewfinder @JvmOverloads constructor(
     private var appliedEv = 0f
     private var evCounter = 0
     private var lastEvTarget = 0f
+    private val evWorkspace = AdaptiveDevelopmentExposure.workspace()
+    // Sensor-AE normalization: log2 reference of (exposureNs * ISO) that
+    // follows slow drift but not instant AE steps; aeNormEv compensates the
+    // steps feed-forward so the VF never jumps when the HAL re-exposes.
+    private var aeRefLog2 = Double.NaN
+    private var aeNormEv = 0f
+    // Last-good color hold for result-less offers (recording). Published
+    // only as immutable snapshots; keyed by camera identity, and NOT reset
+    // by invalidateSession (the stop->record transition must keep preview's
+    // color, not flash green).
+    @Volatile private var colorHold: ColorHold? = null
+    private var colorHoldCam: CameraCharacteristics? = null
 
     private data class GeoKey(val imgW: Int, val imgH: Int, val crop: String, val longEdge: Int)
     private var geoCacheKey: GeoKey? = null
     private var geoCache: BguGuideGeo? = null
 
     private data class LensCache(
-        val key: String, val gains: FloatArray, val cols: Int, val rows: Int, val atMs: Long
+        val key: String, val gains: FloatArray, val raw: FloatArray,
+        val cols: Int, val rows: Int, val atMs: Long
     )
     private var lensCache: LensCache? = null
 
@@ -312,7 +330,10 @@ class BguViewfinder @JvmOverloads constructor(
         statSmpMs = if (statSmpMs == 0f) smpMs else statSmpMs * 0.9f + smpMs * 0.1f
 
         val parT0 = SystemClock.elapsedRealtimeNanos()
-        val params = snapshotParams(c, result, quad, lowW, lowH, geo, channels, white) ?: return
+        val params = snapshotParams(
+            c, result, buf, rowStride, pixelStride, image.width, image.height,
+            levels, geo, white
+        ) ?: return
         val parMs = (SystemClock.elapsedRealtimeNanos() - parT0) / 1e6f
         statParMs = if (statParMs == 0f) parMs else statParMs * 0.9f + parMs * 0.1f
 
@@ -451,6 +472,14 @@ class BguViewfinder @JvmOverloads constructor(
         } catch (_: Exception) {
             return false
         }
+        // Normalize LUT for this frame's levels (bit-exact vs the formula;
+        // uploaded before compute so the shader never divides).
+        val (lutMax, lutBytes) = try {
+            val (blackQ, denQ) = VfLevels.toFixedQ6(levels, white)
+            VfLevels.lutFor(blackQ, denQ)
+        } catch (_: Exception) {
+            return false
+        }
         // GL->Vulkan ordering for this slot's export: wait (sleep-poll,
         // 250 ms cap) for the render thread's sample fence before the
         // dispatch reuses the buffer. Instant in the common case; the cap
@@ -526,7 +555,8 @@ class BguViewfinder @JvmOverloads constructor(
             val offerMs = (vkT0 - offerT0) / 1e6f
             statOfferMs = if (statOfferMs == 0f) offerMs else statOfferMs * 0.9f + offerMs * 0.1f
             rc = try {
-                VfVulkan.computeNative(hb, iparams, fparams)
+                val up = VfVulkan.uploadLutNative(lutMax, lutBytes)
+                if (up != VfVulkan.OK) up else VfVulkan.computeNative(hb, iparams, fparams)
             } catch (_: Exception) {
                 fail("vulkan-exception")
                 return false
@@ -600,8 +630,10 @@ class BguViewfinder @JvmOverloads constructor(
 
     private fun snapshotParams(
         c: CameraCharacteristics, result: CaptureResult?,
-        quad: ByteArray, lowW: Int, lowH: Int, geo: BguGuideGeo,
-        channels: IntArray, white: Float
+        buf: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int,
+        imgW: Int, imgH: Int,
+        levels: FloatArray, geo: BguGuideGeo,
+        white: Float
     ): LookParams? {
         val cfa = try {
             c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -610,77 +642,74 @@ class BguViewfinder @JvmOverloads constructor(
             return null
         }
         val greenRow = if (cfa == 2 || cfa == 3) 1 else 0
-        // WB gains in canonical [R, Gr, Gb, B]: HAL-applied gains first (what
-        // the scene actually used), as-shot neutral inversion next, unity last.
-        val wb = FloatArray(4) { 1f }
+        // Fresh color parts from this result (null when unreported): HAL WB
+        // gains first (what the scene actually used), as-shot neutral
+        // inversion next. Missing parts resolve from the last-good hold
+        // (recording offers no result; unity would flash green), unity last.
         val halGains = try {
             result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
         } catch (_: Exception) {
             null
         }
-        if (halGains != null) {
-            val sensor = floatArrayOf(halGains.red, halGains.greenEven, halGains.greenOdd, halGains.blue)
+        val neutralPts = try {
+            result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+        } catch (_: Exception) {
+            null
+        }
+        val freshWb: FloatArray? = halGains?.let { gains ->
+            val sensor = floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
             val mapped = floatArrayOf(sensor[0], sensor[if (greenRow == 0) 1 else 2],
                 sensor[if (greenRow == 0) 2 else 1], sensor[3])
-            for (k in 0..3) {
-                wb[k] = mapped[k].takeIf { it.isFinite() && it > 0f }?.coerceIn(1f / 16, 16f) ?: 1f
+            FloatArray(4) { k ->
+                mapped[k].takeIf { it.isFinite() && it > 0f }?.coerceIn(1f / 16, 16f) ?: 1f
             }
-        } else {
-            val neutral = try {
-                result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
-            } catch (_: Exception) {
-                null
-            }
-            if (neutral != null && neutral.size >= 3) {
-                val n = DoubleArray(3) { neutral[it].toDouble() }
-                val inv = doubleArrayOf(1 / n[0], 1 / n[1], 1 / n[2])
-                for (k in 0..3) {
-                    val v = inv[if (k == 0) 0 else if (k == 3) 2 else 1]
-                    wb[k] = v.takeIf { it.isFinite() && it > 0 }?.toFloat()?.coerceIn(1f / 16, 16f) ?: 1f
-                }
+        } ?: neutralPts?.takeIf { it.size >= 3 }?.let { neutral ->
+            val n = DoubleArray(3) { neutral[it].toDouble() }
+            val inv = doubleArrayOf(1 / n[0], 1 / n[1], 1 / n[2])
+            FloatArray(4) { k ->
+                val v = inv[if (k == 0) 0 else if (k == 3) 2 else 1]
+                v.takeIf { it.isFinite() && it > 0 }?.toFloat()?.coerceIn(1f / 16, 16f) ?: 1f
             }
         }
         // RAW-branch CCM: the HAL transform (row-major rationals) to the
-        // look's column-major floats, identity when unreported or unusable.
-        val ccm = FloatArray(9)
+        // look's column-major floats; null unless every element is usable.
         val halCcm = try {
             result?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
         } catch (_: Exception) {
             null
         }
-        var ccmOk = halCcm != null
-        if (halCcm != null) {
+        val freshCcm: FloatArray? = halCcm?.let { matrix ->
+            val out = FloatArray(9)
             for (col in 0..2) for (row in 0..2) {
-                val v = halCcm.getElement(col, row).toDouble()
-                if (!v.isFinite()) {
-                    ccmOk = false
-                    break
-                }
-                ccm[col * 3 + row] = v.toFloat()
+                val v = matrix.getElement(col, row).toDouble()
+                if (!v.isFinite()) return@let null
+                out[col * 3 + row] = v.toFloat()
             }
+            out
         }
-        if (!ccmOk) {
-            for (i in 0..8) ccm[i] = if (i % 4 == 0) 1f else 0f
+        val freshNeutral: DoubleArray? =
+            neutralPts?.takeIf { it.size >= 3 }?.let { n -> DoubleArray(3) { n[it].toDouble() } }
+        val freshGains: FloatArray? =
+            halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+        if (colorHoldCam !== c) {
+            colorHold = null
+            colorHoldCam = c
         }
+        val color = resolveColorHold(freshWb, freshCcm, freshNeutral, freshGains, colorHold)
+        if (result != null) colorHold = color
+        val wb = color.wb
+        val ccm = color.ccm
         // JPEG-branch calibration: same save-path contract (dual-illuminant
         // solve with HAL-CCM fallback), cached across repeats.
         val calibrated = try {
-            calibratedColor(c, result, halGains, wb, ccm)
+            calibratedColor(c, color.neutral, color.gainsSensor, wb, ccm)
         } catch (_: Exception) {
             null
         }
         val aces = calibrated?.cameraToAcescgColumnMajor ?: ccm.copyOf()
         val camWhite = calibrated?.cameraWhiteNormalized ?: floatArrayOf(1f, 1f, 1f)
-        // Adaptive preview EV: estimate at ~3 Hz on a strided subset (the
-        // sort dominates), same save-path rule, one-pole smoothing.
-        if (++evCounter >= 10) {
-            evCounter = 0
-            lastEvTarget = estimateEv(quad, lowW, lowH)
-        }
-        val target = (lastEvTarget * evStrength.coerceIn(0f, 1f)).coerceIn(-3f, 3f)
-        appliedEv += (target - appliedEv) * 0.3f
-        statEv = appliedEv
-        // Lens map: throttled re-parse with content-keyed reuse.
+        // Lens map first: the EV meter below must run in the look's develop
+        // domain (throttled re-parse with content-keyed reuse, cheap here).
         val lens = snapshotLens(c, result)
         val active = try {
             c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
@@ -691,9 +720,106 @@ class BguViewfinder @JvmOverloads constructor(
         val aT = active?.top ?: 0
         val aR = active?.right ?: geo.left + geo.width * geo.step
         val aB = active?.bottom ?: geo.top + geo.height * geo.step
+        // Sensor-AE feed-forward: the HAL re-exposes in instant steps
+        // (1/49 <-> 1/100 observed) that used to slam the VF before the slow
+        // meter could chase them. The reference follows drift but not steps,
+        // so aeNormEv cancels each step on the same offer it lands.
+        val expNs = try {
+            result?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        } catch (_: Exception) {
+            null
+        }
+        val iso = try {
+            result?.get(CaptureResult.SENSOR_SENSITIVITY)
+        } catch (_: Exception) {
+            null
+        }
+        if (expNs != null && iso != null) {
+            val cur = aeExposureLog2(expNs, iso)
+            if (cur.isFinite()) {
+                var (ref, norm) = aeUpdate(aeRefLog2, cur, AE_REF_ALPHA)
+                if (kotlin.math.abs(norm) > 2.5f && aeRefLog2.isFinite()) {
+                    // Anti-windup: compensation near saturation (a multi-EV
+                    // swing) — fast-forward the reference so the saturated
+                    // leak lasts offers, not seconds. Still exact: the shift
+                    // below covers the whole reference move at any rate.
+                    ref += (cur - ref) * 0.3
+                    norm = (ref - cur).toFloat()
+                }
+                // Exactness shift: the reference moved by dRef, so the
+                // scene-only chase state moves equally opposite — render (=
+                // applied + norm) is preserved across reference adaptation by
+                // construction, at any adapt rate. Only the REFERENCE part
+                // shifts, never the exposure part: sensor steps must still
+                // punch through norm into the render to cancel the
+                // brighter/darker RAW on the same offer.
+                val dRef = if (aeRefLog2.isFinite()) (ref - aeRefLog2).toFloat() else 0f
+                aeRefLog2 = ref
+                aeNormEv = norm.coerceIn(-3f, 3f)
+                if (dRef != 0f) {
+                    lastEvTarget = (lastEvTarget - dRef).coerceIn(-1.5f, 1.5f)
+                    appliedEv -= dRef
+                }
+            }
+        }
+        // Adaptive preview EV at ~3 Hz: the SAVE'S OWN dense meter
+        // (AdaptiveDevelopmentExposure.analyzeRaw) over the shown region —
+        // same 65k population, lens model, rule, and tuning the capture
+        // develops through, so VF EV == save EV by construction. Coarse
+        // sparse meters (3k points, legacy's included) undershoot the dense
+        // save meter by ~0.2 EV (missed sub-grid shadows); ~2 ms at 3 Hz is
+        // negligible. Exponential chase with a deadband (no snap-on-seed:
+        // the one-pole below ramps from 0 in ~10 frames, smooth by itself).
+        if (++evCounter >= 10) {
+            evCounter = 0
+            val correction = try {
+                val model = lens?.let {
+                    LensShadingModel(
+                        it.rows, it.cols, it.raw,
+                        IntRectSnapshot(aL, aT, aR, aB), false
+                    )
+                }
+                val pattern = BayerPattern.fromCamera2(cfa)
+                AdaptiveDevelopmentExposure.analyzeRaw(
+                    buf,
+                    RawPlaneLayout(imgW, imgH, rowStride, pixelStride),
+                    RawNormalization(pattern, levels.toList(), white),
+                    RawCrop(geo.left, geo.top, geo.width * geo.step, geo.height * geo.step),
+                    model, evWorkspace,
+                    AdaptiveExposureTuning(
+                        highlightHeadroom = previewHeadroom.toDouble(),
+                        highlightSoftHeadroom = previewSoftHeadroom.toDouble()
+                    ).bounded(),
+                    null
+                ).correctionEv
+            } catch (_: Exception) {
+                Double.NaN
+            }
+            if (correction.isFinite()) {
+                // Scene-only target: subtract the feed-forward term so the
+                // meter never chases sensor-AE steps (it read RAW the sensor
+                // brightened by -aeNormEv; adding it back yields the scene
+                // value). Render adds aeNormEv back below, so their sum is
+                // exact at every offer — steps cancel, drift absorbs.
+                val stepped = ((correction * evStrength.coerceIn(0f, 1f)).toFloat() - aeNormEv)
+                    .coerceIn(-1.5f, 1.5f)
+                // Exponential chase with a deadband: big scene moves snap the
+                // target in one update (the one-pole below still glides the
+                // render smoothly — no delay, no staircase), small errors ease
+                // in, averaging flicker out. No snap-on-seed: the one-pole
+                // ramps from 0 in ~10 frames, smooth by itself.
+                lastEvTarget = AdaptiveDevelopmentExposure.chaseToward(
+                    lastEvTarget, stepped, 0.05f
+                )
+            }
+        }
+        appliedEv += (lastEvTarget - appliedEv) * 0.3f
+        // Total rendered EV: slow scene glide + instant AE-step cancellation.
+        val totalEv = appliedEv + aeNormEv
+        statEv = totalEv
         val snapAgx = agx
         val fparams = floatArrayOf(
-            appliedEv, snapAgx[0], snapAgx[1], snapAgx[2], snapAgx[3],
+            totalEv, snapAgx[0], snapAgx[1], snapAgx[2], snapAgx[3],
             snapAgx[4], snapAgx[5], snapAgx[6], snapAgx[7]
         )
         val iparams = intArrayOf(
@@ -706,78 +832,113 @@ class BguViewfinder @JvmOverloads constructor(
         )
     }
 
-    private fun estimateEv(quad: ByteArray, lowW: Int, lowH: Int): Float {
-        val plane = lowW * lowH
-        val samples = FloatArray(plane) // strided subset below fills a prefix
-        var count = 0
-        var i = 0
-        while (i < plane && count < samples.size) {
-            // Merged normalized value of low texel i (planar channels).
-            val r = (quad[i].toInt() and 0xff) / 255f
-            val gr = (quad[plane + i].toInt() and 0xff) / 255f
-            val gb = (quad[2 * plane + i].toInt() and 0xff) / 255f
-            val b = (quad[3 * plane + i].toInt() and 0xff) / 255f
-            val v = (r + gr + gb + b) * 0.25f
-            if (v.isFinite() && v > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
-                samples[count++] = v
-            }
-            i += 4
-        }
-        if (count == 0) return 0f
-        return try {
-            AdaptiveDevelopmentExposure.analyzeSamples(samples, count).correctionEv.toFloat()
-        } catch (_: Exception) {
-            0f
-        }
-    }
+    private data class LensSnap(
+        val gains: FloatArray, val raw: FloatArray, val cols: Int, val rows: Int
+    )
 
-    private data class LensSnap(val gains: FloatArray, val cols: Int, val rows: Int)
+    // Lens crossfade: a freshly arrived (or changed) shading map glides in
+    // over LENS_GLIDE_OFFERS offers instead of popping. Keyed by map content;
+    // steady state returns cached references (zero alloc), blending copies
+    // transiently. Prev arrays hold the last EMITTED gains (crossfade start).
+    private var lensGlideKey: String? = null
+    private var lensGlide = 1f
+    private var lensPrevGains: FloatArray? = null
+    private var lensPrevRaw: FloatArray? = null
+    private var lensDiagDone = false
 
     private fun snapshotLens(c: CameraCharacteristics, result: CaptureResult?): LensSnap? {
+        // HAL pre-applied shading: no map to apply (meter and look both run
+        // unlensed, like the legacy path). A static read, cheap every frame.
+        val preApplied = try {
+            c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true
+        } catch (_: Exception) {
+            false
+        }
+        if (preApplied) {
+            if (!lensDiagDone) {
+                lensDiagDone = true
+                Log.i(TAG, "lens HAL pre-applied: meter+look run unlensed")
+            }
+            return null
+        }
         val now = SystemClock.elapsedRealtime()
         val cached = lensCache
-        if (cached != null && now - cached.atMs < 1000) return cached.let {
-            LensSnap(it.gains, it.cols, it.rows)
+        if (cached == null || now - cached.atMs >= 1000) {
+            val map = try {
+                result?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
+            } catch (_: Exception) {
+                null
+            }
+            if (map != null) {
+                try {
+                    val rows = map.rowCount
+                    val cols = map.columnCount
+                    if (rows > 0 && cols > 0 && map.gainFactorCount == rows * cols * 4) {
+                        val raw = FloatArray(rows * cols * 4)
+                        map.copyGainFactors(raw, 0)
+                        if (raw.all { it.isFinite() && it >= 1f }) {
+                            val mid = raw.size / 2
+                            val key = "$cols,$rows,${raw[0]},${raw[mid]},${raw[raw.size - 1]}"
+                            if (cached != null && cached.key == key) {
+                                lensCache = cached.copy(atMs = now)
+                            } else {
+                                // Transpose cell-interleaved [R, Ge, Go, B] to
+                                // the planar layout the AOT filter requires
+                                // (dim-0 stride 1); ~1 Hz, tiny. The raw
+                                // interleaved array is kept for the EV meter's
+                                // lens model (shared reference, no copy).
+                                val cells = rows * cols
+                                val gains = FloatArray(cells * 4)
+                                for (cell in 0 until cells) for (ch in 0..3) {
+                                    gains[ch * cells + cell] = raw[cell * 4 + ch]
+                                }
+                                lensCache = LensCache(key, gains, raw, cols, rows, now)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Keep the previous cache.
+                }
+            }
         }
-        val map = try {
-            result?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
-        } catch (_: Exception) {
-            null
-        } ?: return cached?.let { LensSnap(it.gains, it.cols, it.rows) }
-        return try {
-            val rows = map.rowCount
-            val cols = map.columnCount
-            if (rows <= 0 || cols <= 0 || map.gainFactorCount != rows * cols * 4) {
-                return cached?.let { LensSnap(it.gains, it.cols, it.rows) }
-            }
-            val raw = FloatArray(rows * cols * 4)
-            map.copyGainFactors(raw, 0)
-            if (raw.any { !it.isFinite() || it < 1f }) {
-                return cached?.let { LensSnap(it.gains, it.cols, it.rows) }
-            }
-            val mid = raw.size / 2
-            val key = "$cols,$rows,${raw[0]},${raw[mid]},${raw[raw.size - 1]}"
-            if (cached != null && cached.key == key) {
-                lensCache = cached.copy(atMs = now)
-                return LensSnap(cached.gains, cached.cols, cached.rows)
-            }
-            // Transpose cell-interleaved [R, Ge, Go, B] to the planar layout
-            // the AOT filter requires (dim-0 stride 1); ~1 Hz, tiny.
-            val cells = rows * cols
-            val gains = FloatArray(cells * 4)
-            for (cell in 0 until cells) for (ch in 0..3) {
-                gains[ch * cells + cell] = raw[cell * 4 + ch]
-            }
-            lensCache = LensCache(key, gains, cols, rows, now)
-            LensSnap(gains, cols, rows)
-        } catch (_: Exception) {
-            cached?.let { LensSnap(it.gains, it.cols, it.rows) }
+        val snap = lensCache ?: return null
+        if (!lensDiagDone) {
+            lensDiagDone = true
+            Log.i(TAG, "lens live map ${snap.cols}x${snap.rows} key=${snap.key}")
         }
+        // Crossfade to the cached map: a fresh arrival fades in from unity, a
+        // map switch glides from the last emitted gains. Both the shader gains
+        // AND the meter's raw model fade together, so render and EV chase
+        // agree at every step — no edge pop.
+        if (lensGlideKey != snap.key) {
+            lensGlideKey = snap.key
+            lensGlide = 0f
+            if (lensPrevGains?.size != snap.gains.size ||
+                lensPrevRaw?.size != snap.raw.size
+            ) {
+                lensPrevGains = FloatArray(snap.gains.size) { 1f }
+                lensPrevRaw = FloatArray(snap.raw.size) { 1f }
+            }
+        }
+        if (lensGlide >= 1f) {
+            lensPrevGains = snap.gains
+            lensPrevRaw = snap.raw
+            return LensSnap(snap.gains, snap.raw, snap.cols, snap.rows)
+        }
+        lensGlide = (lensGlide + 1f / LENS_GLIDE_OFFERS).coerceAtMost(1f)
+        val t = lensGlide
+        val fromG = lensPrevGains!!
+        val fromR = lensPrevRaw!!
+        val g = FloatArray(snap.gains.size) { glideGain(fromG[it], snap.gains[it], t) }
+        val r = FloatArray(snap.raw.size) { glideGain(fromR[it], snap.raw[it], t) }
+        lensPrevGains = g.copyOf()
+        lensPrevRaw = r.copyOf()
+        return LensSnap(g, r, snap.cols, snap.rows)
     }
 
     private fun calibratedColor(
-        c: CameraCharacteristics, result: CaptureResult?,
-        halGains: android.hardware.camera2.params.RggbChannelVector?,
+        c: CameraCharacteristics,
+        neutral: DoubleArray?, gainsSensor: FloatArray?,
         canonicalGains: FloatArray, ccm: FloatArray
     ): VfCalibratedColor {
         fun mat(key: CameraCharacteristics.Key<android.hardware.camera2.params.ColorSpaceTransform>): DoubleArray? {
@@ -818,16 +979,6 @@ class BguViewfinder @JvmOverloads constructor(
             calibStaticsCam = c
             calibStatics = fresh
             fresh
-        }
-        val neutral = try {
-            result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { n ->
-                if (n.size >= 3) DoubleArray(3) { n[it].toDouble() } else null
-            }
-        } catch (_: Exception) {
-            null
-        }
-        val gainsSensor = halGains?.let {
-            floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue)
         }
         return calibratedCache.resolve(st.static, st.ill1, st.ill2, neutral, gainsSensor, canonicalGains, ccm)
     }
@@ -1120,9 +1271,9 @@ class BguViewfinder @JvmOverloads constructor(
         // presented fps + draw/swap cost + fit cost + guide size, 10 s cadence.
         if (now - lastStatsMs >= 10_000L) {
             lastStatsMs = now
-            Log.i(TAG, "stats fps=%.1f frameMs=%.1f drawMs=%.1f swapMs=%.1f fenMs=%.1f offerMs=%.1f smpMs=%.1f parMs=%.1f vkMs=%.1f fitMs=%.1f cpuMs=%.1f vf=%dx%d seq=%d busy=%d".format(
+            Log.i(TAG, "stats fps=%.1f frameMs=%.1f drawMs=%.1f swapMs=%.1f fenMs=%.1f offerMs=%.1f smpMs=%.1f parMs=%.1f vkMs=%.1f fitMs=%.1f cpuMs=%.1f ev=%+.2f vf=%dx%d seq=%d busy=%d".format(
                 statFps, statMs, statDrawMs, statSwapMs, statFenceMs, statOfferMs, statSmpMs, statParMs,
-                statVkMs, statFitMs, statCpuMs, job.geo.width, job.geo.height, job.seq, statBusy))
+                statVkMs, statFitMs, statCpuMs, statEv, job.geo.width, job.geo.height, job.seq, statBusy))
         }
     }
 
@@ -1522,6 +1673,9 @@ class BguViewfinder @JvmOverloads constructor(
         geoCacheKey = null
         geoCache = null
         lensCache = null
+        aeRefLog2 = Double.NaN
+        aeNormEv = 0f
+        lensDiagDone = false
         calibStaticsCam = null
         calibStatics = null
         latestGrid = null
@@ -1608,8 +1762,78 @@ class BguViewfinder @JvmOverloads constructor(
 
         /** EGL_RENDERABLE_TYPE bit for OpenGL ES 3.x configs (EGL_KHR_create_context). */
         private const val EGL_OPENGL_ES3_BIT = 0x0040
+
+        /**
+         * One lens-crossfade step: lerp from the last emitted gain toward the
+         * new target. First arrival fades in from unity, map switches glide
+         * from the old map — edges never pop. t in 0..1.
+         */
+        internal fun glideGain(from: Float, to: Float, t: Float): Float = from + (to - from) * t
+
+        /** Offers (~30 Hz) to glide a fresh shading map in. */
+        internal const val LENS_GLIDE_OFFERS = 24
+
+        /** Per-offer follow rate of the AE reference (tau ~3 s at 30 Hz). */
+        internal const val AE_REF_ALPHA = 0.01
+
+        /** log2 sensor exposure (ns * ISO); NaN when unreported/unusable. */
+        internal fun aeExposureLog2(expNs: Long, iso: Int): Double =
+            if (expNs > 0 && iso > 0) kotlin.math.log2(expNs.toDouble() * iso) else Double.NaN
+
+        /**
+         * One AE-reference step. Returns (newRef, normEv): the reference
+         * one-pole-follows [cur] (seeds on first call), and normEv = ref - cur
+         * is the instant feed-forward compensation — a +1 EV sensor step
+         * yields normEv ~= -1 on that same offer, so render stays put while
+         * the slow meter never sees the step. Self-balancing: as ref absorbs
+         * the step, the meter target absorbs the same amount (see
+         * snapshotParams), so their sum never moves at any adapt rate.
+         */
+        internal fun aeUpdate(refLog2: Double, curLog2: Double, alpha: Double): Pair<Double, Float> {
+            val ref = if (refLog2.isFinite()) refLog2 + (curLog2 - refLog2) * alpha else curLog2
+            return ref to (ref - curLog2).toFloat()
+        }
+
+        /** Unity WB when no result and no hold ever seeded. */
+        internal val UNITY_WB = floatArrayOf(1f, 1f, 1f, 1f)
+
+        /** Identity CCM (column-major) when no result and no hold ever seeded. */
+        internal val IDENTITY_CCM = FloatArray(9) { if (it % 4 == 0) 1f else 0f }
+
+        /**
+         * Merge result-derived color parts with the last-good hold: fresh
+         * parts win; missing parts fall back to [held], then the unity /
+         * identity defaults. Returned arrays are always fresh copies, so a
+         * published hold is never mutated downstream.
+         */
+        internal fun resolveColorHold(
+            freshWb: FloatArray?, freshCcm: FloatArray?,
+            freshNeutral: DoubleArray?, freshGains: FloatArray?,
+            held: ColorHold?
+        ): ColorHold = ColorHold(
+            wb = (freshWb ?: held?.wb ?: UNITY_WB).copyOf(),
+            ccm = (freshCcm ?: held?.ccm ?: IDENTITY_CCM).copyOf(),
+            neutral = (freshNeutral ?: held?.neutral)?.copyOf(),
+            gainsSensor = (freshGains ?: held?.gainsSensor)?.copyOf()
+        )
     }
 }
+
+/**
+ * Last-good color inputs for offers without a capture result (RAW video
+ * recording). Unity WB + identity CCM would flash green, so the engine
+ * holds the last result-derived values (same scene, seconds old).
+ */
+internal data class ColorHold(
+    /** Canonical [R, Gr, Gb, B] WB, sanitized. */
+    val wb: FloatArray,
+    /** HAL CCM, column-major, sanitized. */
+    val ccm: FloatArray,
+    /** SENSOR_NEUTRAL_COLOR_POINT or null. */
+    val neutral: DoubleArray?,
+    /** HAL RggbChannelVector in sensor order or null. */
+    val gainsSensor: FloatArray?
+)
 
 /**
  * Pure render-starvation verdict: true only when a started stream stops

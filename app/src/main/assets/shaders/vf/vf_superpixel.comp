@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Zero-copy RAW viewfinder superpixel: 2x2 Bayer quad -> canonical R/Gr/Gb/B,
-// normalized in Q6 fixed-point integer (no float in the per-pixel path), one
-// invocation per display texel; Vulkan 1.1.
+// normalized via a memoized LUT (no float and no integer division in the
+// per-pixel path), one invocation per display texel; Vulkan 1.1.
 //
-// Levels arrive bit-cast through the legacy float push slots (VfLevels.kt:
-// blackQ/denQ in 64ths of a code); the native fill memcpys the words and the
-// shader recovers the ints with floatBitsToInt. The formula is identical on
-// all three tiers (Vulkan/EGL/NEON), so bytes agree by construction:
+// Levels arrive as a CPU-baked LUT (VfLevels.lutFor: normalize bytes per
+// sensor site for codes 0..bound, tail 0xFF) uploaded to binding 3 before
+// each dispatch; the bit-cast Q6 push words (u_black/u_invRange) stay in
+// the shared push block for the f16 twin, which keeps its float division
+// (precision path — a byte LUT would quantize its >8-bit output). The LUT
+// bytes equal the Q6 formula on every code (host-tested), and the formula
+// is identical on all three tiers (Vulkan/EGL/NEON), so bytes agree by
+// construction:
 //
 //   num = code * 64 - blackQ; 0 if num <= 0; 255 if num >= denQ;
 //   else (num * 255 + denQ / 2) / denQ (round-half-up, all int32-safe).
@@ -27,6 +31,10 @@ layout(binding = 1, rgba8) uniform writeonly image2D img_out;
 // sampled. Only the record path binds a live map (the viewfinder
 // shades in GL); enable stays 0 otherwise.
 layout(binding = 2) uniform sampler2D shadeMap;
+// Normalize LUT: 4 sites x 65536 codes of memoized bytes, 4-packed LE u32
+// (site s at s * 65536 + code). Codes above the uploaded prefix read the
+// 0xFF tail = 255, so no clamp and no push word.
+layout(binding = 3) readonly buffer Lut { uint lut[]; };
 
 // Packing order avoids std430 padding surprises: 16-byte members first.
 // Total 112 bytes (8 pad after u_pitch for the vec4 alignment); the C
@@ -50,18 +58,14 @@ uint fetchCode(ivec2 s) {
     return ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
 }
 
-// Runtime-specialized unpack: black/white for the exact RAW bit depth are baked
-// into Q6 ints on the CPU, so this is a straight-line fetch + integer MAD
-// with dynamic uniform indexing and no per-channel branches.
+// LUT unpack: black/white for the exact RAW bit depth are baked into the
+// binding-3 table on the CPU, so this is a straight-line code fetch + LUT
+// fetch with no division and no per-channel branches.
 int fetchByte(ivec2 q, int ch) {
     ivec2 s = q + ivec2(ch & 1, (ch >> 1) & 1);
-    int code = int(fetchCode(s));
-    int bq = floatBitsToInt(p.u_black[ch]);
-    int dq = floatBitsToInt(p.u_invRange[ch]);
-    int num = code * 64 - bq;
-    if (num <= 0) return 0;
-    if (num >= dq) return 255;
-    return (num * 255 + dq / 2) / dq;
+    uint idx = uint(ch) * 65536u + fetchCode(s);
+    uint word = lut[idx >> 2u];
+    return int((word >> ((idx & 3u) * 8u)) & 0xFFu);
 }
 
 // Lens-shading gains (R, Gr, Gb, B) for one quad, one hardware-

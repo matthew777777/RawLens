@@ -53,3 +53,11 @@ internal fun resolveVfRoute(
     VfEngineMode.GPU, VfEngineMode.CPU -> false
     VfEngineMode.AUTO -> !bguDead && autoPrefersBgu && hasBgu
 }
+
+/**
+ * Map a resolved VF route onto nullable engine views. Recording must feed
+ * the same engine visibility shows: BGU when routed there (legacy only if
+ * BGU is absent), otherwise legacy.
+ */
+internal fun <T : Any> selectRoutedViewfinder(isBgu: Boolean, bgu: T?, legacy: T?): T? =
+    if (isBgu) bgu ?: legacy else legacy

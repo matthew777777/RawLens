@@ -106,4 +106,20 @@ internal object VfRecordPreview {
         box: Int,
         slot: Int,
     ): Int
+
+    /**
+     * Blocking twin of [previewSubmitNative]: identical pixels, completion
+     * via fence wait instead of an exported sync fd. For drivers without
+     * semaphore-fd export (software/validation Vulkan); the record path
+     * keeps the fd twin. Returns [VfVulkan.OK] or a positive diagnostic.
+     */
+    external fun previewBlockingNative(
+        p010Buffer: HardwareBuffer,
+        previewBuffer: HardwareBuffer,
+        idims: IntArray,
+        isrc: IntArray,
+        istrides: IntArray,
+        box: Int,
+        slot: Int,
+    ): Int
 }
