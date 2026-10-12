@@ -107,6 +107,27 @@ class HdrPlusAutoSelectTest {
         assertEquals((0..3).toList(), manual.keepIndices)
     }
 
+    @Test fun manualStrengthAbove16ReachesMergeUnclamped() {
+        // Field report (Oct 2026): strengths above 16 appeared to do
+        // nothing. The manual path carries 1..22 end to end with no
+        // clamp — the observed ceiling was the packFrame Java-heap OOM
+        // at high frame counts, not the strength value.
+        val still = metering(
+            deltas = List(3) { 0.01 },
+            hots = List(3) { 0.0 },
+            means = List(4) { 0.09 },
+            sharps = List(4) { 0.011 }
+        )
+        for (strength in listOf(16.1f, 17f, 20f, 22f)) {
+            val manual = HdrPlusAutoSelect.select(
+                metering = still, frameCount = 4, sensitivityIso = 50,
+                manualStrength = strength, manualQuality = true, preferredRef = 1
+            )
+            assertEquals(strength, manual.strength, 0f)
+            assertFalse(manual.strengthAuto)
+        }
+    }
+
     @Test fun minKeepRescuesTopTwo() {
         // Two-frame burst where the brightness band would orphan frame 0:
         // means [0.05, 0.5] center on 0.275, frame 0 falls below half.

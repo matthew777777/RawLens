@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <cstdlib>
+#include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #include "hdrplus_host.h"
@@ -20,6 +23,21 @@ static void throw_runtime(JNIEnv* env, const char* msg) {
     jclass cls = env->FindClass("java/lang/RuntimeException");
     if (cls != nullptr) env->ThrowNew(cls, msg != nullptr ? msg : "hdrplus error");
 }
+
+static void throw_oom(JNIEnv* env, const char* msg) {
+    jclass cls = env->FindClass("java/lang/OutOfMemoryError");
+    if (cls != nullptr)
+        env->ThrowNew(cls, msg != nullptr ? msg : "hdrplus out of memory");
+}
+
+// malloc-backed direct buffers for the packed HDR+ frames and merge
+// output: ByteBuffer.allocateDirect is charged to the 512MB Java heap
+// (largeHeap is already on) and OOMs past ~12 frames at 12MP (logcat
+// 2026-10-11, HdrPlusMerge.packFrame), while malloc memory is not. The
+// registry makes free idempotent and refuses foreign (ART-owned) buffers,
+// so a stray free can neither corrupt the heap nor double-free.
+static std::mutex gAllocMutex;
+static std::unordered_set<void*> gAllocs;
 
 extern "C" {
 
@@ -72,6 +90,49 @@ Java_com_matthew_rawlens_HdrPlusVulkan_nativeLoadedShaderCount(JNIEnv* env, jobj
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_HdrPlusVulkan_nativeExpectedShaderCount(JNIEnv* /*env*/, jobject /*thiz*/) {
     return hdrplus_shader_count();
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_matthew_rawlens_HdrPlusVulkan_nativeAllocBuffer(JNIEnv* env, jobject /*thiz*/,
+                                                        jlong bytes) {
+    if (bytes <= 0) {
+        throw_runtime(env, "hdrplus alloc: invalid size");
+        return nullptr;
+    }
+    void* p = std::malloc(static_cast<size_t>(bytes));
+    if (p == nullptr) {
+        throw_oom(env, "hdrplus alloc: native out of memory");
+        return nullptr;
+    }
+    jobject buf = env->NewDirectByteBuffer(p, bytes);
+    if (buf == nullptr) {
+        std::free(p);
+        throw_oom(env, "hdrplus alloc: NewDirectByteBuffer failed");
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(gAllocMutex);
+        gAllocs.insert(p);
+    }
+    return buf;
+}
+
+JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_HdrPlusVulkan_nativeFreeBuffer(JNIEnv* env, jobject /*thiz*/,
+                                                       jobject buffer) {
+    if (buffer == nullptr) return;
+    void* p = env->GetDirectBufferAddress(buffer);
+    if (p == nullptr) return;
+    bool owned = false;
+    {
+        std::lock_guard<std::mutex> lock(gAllocMutex);
+        auto it = gAllocs.find(p);
+        if (it != gAllocs.end()) {
+            gAllocs.erase(it);
+            owned = true;
+        }
+    }
+    if (owned) std::free(p);
 }
 
 JNIEXPORT jdouble JNICALL

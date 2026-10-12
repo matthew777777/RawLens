@@ -19,7 +19,10 @@ import java.nio.ByteOrder
  *
  * Frames upload as raw uint16 codes (never normalized on the host), so
  * the GPU sees bit-identical input to RAWR's ring views; per-frame
- * black/white travel alongside for the in-shader normalization. The
+ * black/white travel alongside for the in-shader normalization. Packed
+ * frames and the merge output live in malloc-backed native buffers
+ * ([HdrPlusVulkan.allocBuffer]) freed per merge — ART direct buffers
+ * are charged to the Java heap and OOM past ~12 frames at 12MP. The
  * Vulkan handle is process-lifetime (pipeline creation is too slow per
  * capture) and [merge] is synchronized: one in-flight run at a time.
  */
@@ -108,76 +111,92 @@ class HdrPlusMerge(context: Context) {
                 return null
             }
             var t = System.nanoTime()
-            val packed = frames.mapIndexed { index, frame -> packFrame(frame, index) }
-            val blacks = FloatArray(frames.size * 4)
-            val whites = FloatArray(frames.size)
-            frames.forEachIndexed { index, frame ->
-                rotatedBlacks(frame, blacks, index * 4)
-                whites[index] = frame.normalization.whiteLevel
-            }
-            // Meter first: the auto brain picks strength/path/frames/ref
-            // from read-only views of the packed buffers. Scores travel in
-            // locals, so the decision can never observe a stale volatile.
-            val metering = meterMotion(frames, packed, blacks, whites, width, height)
-            val decision = HdrPlusAutoSelect.select(
-                metering = metering,
-                frameCount = frames.size,
-                sensitivityIso = frames[refIndex].sensitivityIso,
-                manualStrength = settings.strength.takeIf { !settings.autoStrength },
-                manualQuality = settings.highQuality.takeIf { !settings.autoQuality },
-                preferredRef = refIndex
-            )
-            val keptPacked = decision.keepIndices.map { packed[it] }.toTypedArray()
-            val keptBlacks = FloatArray(decision.keepIndices.size * 4)
-            val keptWhites = FloatArray(decision.keepIndices.size)
-            decision.keepIndices.forEachIndexed { keptPos, srcPos ->
-                blacks.copyInto(keptBlacks, keptPos * 4, srcPos * 4, srcPos * 4 + 4)
-                keptWhites[keptPos] = whites[srcPos]
-            }
-            val output = ByteBuffer.allocateDirect(width * height * Float.SIZE_BYTES)
-                .order(ByteOrder.nativeOrder())
-            val packedAt = System.nanoTime()
-            val frameStrengths = decision.frameStrengths?.toFloatArray()
-            require(frameStrengths == null || frameStrengths.size == keptPacked.size) {
-                "HDR+ frame strengths ${frameStrengths?.size} != kept ${keptPacked.size}"
-            }
-            val maps = decision.strengthMaps
-            val flatMaps = maps?.let { list ->
-                require(list.size == keptPacked.size) {
-                    "HDR+ strength maps ${list.size} != kept ${keptPacked.size}"
+            // Packed frames live in malloc-backed native buffers (never ART
+            // direct buffers: those are charged to the 512MB Java heap and
+            // OOM past ~12 frames at 12MP). The finally below frees every
+            // packed frame even when a later pack/meter/merge step throws.
+            val packed = ArrayList<ByteBuffer>(frames.size)
+            try {
+                frames.forEachIndexed { index, frame -> packed += packFrame(frame, index) }
+                val blacks = FloatArray(frames.size * 4)
+                val whites = FloatArray(frames.size)
+                frames.forEachIndexed { index, frame ->
+                    rotatedBlacks(frame, blacks, index * 4)
+                    whites[index] = frame.normalization.whiteLevel
                 }
-                val cells = metering.mapCellsX * metering.mapCellsY
-                require(cells > 0 && list.all { it.size == cells }) {
-                    "HDR+ strength maps must each hold ${metering.mapCellsX}x${metering.mapCellsY}"
+                // Meter first: the auto brain picks strength/path/frames/ref
+                // from read-only views of the packed buffers. Scores travel in
+                // locals, so the decision can never observe a stale volatile.
+                val metering = meterMotion(frames, packed, blacks, whites, width, height)
+                val decision = HdrPlusAutoSelect.select(
+                    metering = metering,
+                    frameCount = frames.size,
+                    sensitivityIso = frames[refIndex].sensitivityIso,
+                    manualStrength = settings.strength.takeIf { !settings.autoStrength },
+                    manualQuality = settings.highQuality.takeIf { !settings.autoQuality },
+                    preferredRef = refIndex
+                )
+                val keptPacked = decision.keepIndices.map { packed[it] }.toTypedArray()
+                val keptBlacks = FloatArray(decision.keepIndices.size * 4)
+                val keptWhites = FloatArray(decision.keepIndices.size)
+                decision.keepIndices.forEachIndexed { keptPos, srcPos ->
+                    blacks.copyInto(keptBlacks, keptPos * 4, srcPos * 4, srcPos * 4 + 4)
+                    keptWhites[keptPos] = whites[srcPos]
                 }
-                FloatArray(list.size * cells) { i -> list[i / cells][i % cells] }
+                val output = HdrPlusVulkan.allocBuffer(width.toLong() * height * Float.SIZE_BYTES)
+                    .order(ByteOrder.nativeOrder())
+                val packedAt: Long
+                val gpuMs: Double
+                val values: FloatArray
+                try {
+                    packedAt = System.nanoTime()
+                    val frameStrengths = decision.frameStrengths?.toFloatArray()
+                    require(frameStrengths == null || frameStrengths.size == keptPacked.size) {
+                        "HDR+ frame strengths ${frameStrengths?.size} != kept ${keptPacked.size}"
+                    }
+                    val maps = decision.strengthMaps
+                    val flatMaps = maps?.let { list ->
+                        require(list.size == keptPacked.size) {
+                            "HDR+ strength maps ${list.size} != kept ${keptPacked.size}"
+                        }
+                        val cells = metering.mapCellsX * metering.mapCellsY
+                        require(cells > 0 && list.all { it.size == cells }) {
+                            "HDR+ strength maps must each hold ${metering.mapCellsX}x${metering.mapCellsY}"
+                        }
+                        FloatArray(list.size * cells) { i -> list[i / cells][i % cells] }
+                    }
+                    gpuMs = HdrPlusVulkan.merge(
+                        handle, keptPacked, keptBlacks, keptWhites, decision.refIndex,
+                        IntArray(0), decision.strength, frameStrengths, flatMaps, tileSize, searchDistance,
+                        decision.highQuality, alignOnce, width, height, output
+                    )
+                    val inferredAt = System.nanoTime()
+                    values = FloatArray(width * height)
+                    output.asFloatBuffer().get(values)
+                    lastTimings = Timings(
+                        (packedAt - t) / 1_000_000, gpuMs, (System.nanoTime() - inferredAt) / 1_000_000
+                    )
+                } finally {
+                    runCatching { HdrPlusVulkan.freeBuffer(output) }
+                }
+                val sensorCropX = first.layout.sensorOriginX + first.crop.left
+                val sensorCropY = first.layout.sensorOriginY + first.crop.top
+                lastMotion = metering
+                lastDecision = decision
+                Log.i(LOG_TAG, "HDR+ merge ${width}x$height N=${keptPacked.size}/${frames.size} " +
+                    "ref=${decision.refIndex} " +
+                    "gpu=${"%.1f".format(gpuMs)}ms strength=${decision.strength}" +
+                    (if (decision.highQuality) " HQ" else " fast"))
+                Log.i(LOG_TAG, metering.logLine(frames.size))
+                Log.i(LOG_TAG, decision.logLine(frames.size))
+                return UnpackedRawCfa(
+                    width, height,
+                    first.normalization.sensorPattern.shifted(sensorCropX, sensorCropY),
+                    values, first.crop, sensorCropX, sensorCropY
+                )
+            } finally {
+                packed.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
             }
-            val gpuMs = HdrPlusVulkan.merge(
-                handle, keptPacked, keptBlacks, keptWhites, decision.refIndex,
-                IntArray(0), decision.strength, frameStrengths, flatMaps, tileSize, searchDistance,
-                decision.highQuality, alignOnce, width, height, output
-            )
-            val inferredAt = System.nanoTime()
-            val values = FloatArray(width * height)
-            output.asFloatBuffer().get(values)
-            val sensorCropX = first.layout.sensorOriginX + first.crop.left
-            val sensorCropY = first.layout.sensorOriginY + first.crop.top
-            lastTimings = Timings(
-                (packedAt - t) / 1_000_000, gpuMs, (System.nanoTime() - inferredAt) / 1_000_000
-            )
-            lastMotion = metering
-            lastDecision = decision
-            Log.i(LOG_TAG, "HDR+ merge ${width}x$height N=${keptPacked.size}/${frames.size} " +
-                "ref=${decision.refIndex} " +
-                "gpu=${"%.1f".format(gpuMs)}ms strength=${decision.strength}" +
-                (if (decision.highQuality) " HQ" else " fast"))
-            Log.i(LOG_TAG, metering.logLine(frames.size))
-            Log.i(LOG_TAG, decision.logLine(frames.size))
-            return UnpackedRawCfa(
-                width, height,
-                first.normalization.sensorPattern.shifted(sensorCropX, sensorCropY),
-                values, first.crop, sensorCropX, sensorCropY
-            )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "HDR+ merge failed", failure)
             return null
@@ -278,7 +297,9 @@ class HdrPlusMerge(context: Context) {
 
     /**
      * Tight-packs the frame's crop as uint16 codes (native order) into a
-     * direct buffer. Row strides are honored; no normalization is applied
+     * malloc-backed native buffer ([HdrPlusVulkan.allocBuffer], freed by
+     * the caller — never an ART direct buffer, which is charged to the
+     * Java heap). Row strides are honored; no normalization is applied
      * (black/white travel separately, exactly like RAWR's ring views).
      */
     private fun packFrame(frame: FrameInput, index: Int): ByteBuffer {
@@ -293,7 +314,7 @@ class HdrPlusMerge(context: Context) {
         require(lastIndex + U16_BYTES <= input.limit().toLong()) {
             "HDR+ frame $index buffer is truncated for its stride and crop"
         }
-        val out = ByteBuffer.allocateDirect(crop.width * crop.height * U16_BYTES.toInt())
+        val out = HdrPlusVulkan.allocBuffer(crop.width.toLong() * crop.height * U16_BYTES)
             .order(ByteOrder.nativeOrder())
         if (layout.pixelStride == U16_BYTES.toInt()) {
             val row = ByteArray(crop.width * U16_BYTES.toInt())

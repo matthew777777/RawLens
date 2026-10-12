@@ -40,6 +40,23 @@ object HdrPlusVulkan {
     fun lastGpuMs(handle: Long): Double = nativeLastGpuMs(handle)
 
     /**
+     * malloc-backed direct buffer of [bytes] for packed HDR+ frames and
+     * the merge output. Unlike [ByteBuffer.allocateDirect] this memory is
+     * NOT charged to the 512MB Java heap (largeHeap is already on):
+     * packing a 12MP burst as ART direct buffers OOMs past ~12 frames
+     * (logcat 2026-10-11, HdrPlusMerge.packFrame), while the same bytes
+     * in native memory merge fine. Every buffer must be released with
+     * [freeBuffer] (try/finally); the native registry makes double-free
+     * a no-op and refuses buffers it did not allocate. Throws
+     * [OutOfMemoryError] when malloc fails.
+     */
+    fun allocBuffer(bytes: Long): ByteBuffer =
+        nativeAllocBuffer(bytes) ?: throw OutOfMemoryError("hdrplus alloc returned null")
+
+    /** Releases a buffer from [allocBuffer]; foreign buffers are ignored. */
+    fun freeBuffer(buffer: ByteBuffer) = nativeFreeBuffer(buffer)
+
+    /**
      * Full burst merge. Each frame buffer must be direct with at least
      * W*H uint16 samples (row-major RAW codes, even W/H, 2..64 frames);
      * [blacks] holds 4 floats per frame in (y&1)*2+(x&1) phase order with
@@ -79,6 +96,8 @@ object HdrPlusVulkan {
     )
 
     private external fun nativeInit(assetManager: AssetManager, cachePath: String?): Long
+    private external fun nativeAllocBuffer(bytes: Long): ByteBuffer?
+    private external fun nativeFreeBuffer(buffer: ByteBuffer)
     private external fun nativeRelease(handle: Long)
     private external fun nativeLoadedShaderCount(handle: Long): Int
     private external fun nativeExpectedShaderCount(): Int
