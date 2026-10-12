@@ -1,0 +1,26 @@
+{
+  "oracle": "denoiseprofile_oracle.py (DT denoiseprofile wavelets/Y0U0V0/new-VST)",
+  "precision": "float32",
+  "force_y": 0.25,
+  "force_uv": 0.75,
+  "bias": 0.0,
+  "note": "Trimmed from rawr native/raw_denoise/tests/data/manifest.json (87c2209): one fixture set vendored (~7 MB). Copy the other two sets from a rawr checkout to run the full gate.",
+  "fixtures": [
+    {
+      "stem": "RAWR_20260926_000415_161",
+      "tuning": "s1_sh1",
+      "crop": [512, 512],
+      "origin": [1020, 2040],
+      "channels": 4,
+      "strength": 1.0,
+      "shadows": 1.0,
+      "wb": [2.226085662841797, 1.0, 1.689768671989441],
+      "a_norm": 4.29875541385627e-07,
+      "b_norm": 5.725716434312744e-08,
+      "scales": 6,
+      "input": "RAWR_20260926_000415_161_crop_input.f32",
+      "output": "RAWR_20260926_000415_161_s1_sh1_output.f32",
+      "dng": "RAWR_20260926_000415_161.dng"
+    }
+  ]
+}
