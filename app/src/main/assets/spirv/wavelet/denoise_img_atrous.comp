@@ -1,0 +1,112 @@
+#version 450
+
+// Tiled edge-aware a-trous, dual mode (mirrors eaw_dn_decompose + accumulate).
+// B3-spline 5x5, stride 2^scale, clamped
+// tile-local reads. The tile carries a halo H >= 2*sum(mult) so the inner
+// tile region is bit-exact vs full frame.
+//
+// LOCAL_X/Y: workgroup size (default 16x16).
+//
+// mode 0 (estimate): write coarse + detail + per-workgroup detail^2
+//   partials, no accumulate. A follow-up threshold pass reduces partials
+//   to thresh[scale].
+// mode 1 (apply): read stored detail + thresh[scaleIdx], soft-threshold
+//   accumulate. No taps, no coarse rewrite (estimate already wrote it).
+//   Splitting estimate/apply around the threshold pass saves re-reading the
+//   25-tap neighborhood: ~45% traffic at cache-miss-dominated coarse scales.
+//   The detail buffer reuses an idle tile image (zero extra memory).
+
+#ifndef LOCAL_X
+#define LOCAL_X 16
+#endif
+#ifndef LOCAL_Y
+#define LOCAL_Y 16
+#endif
+
+layout(local_size_x = LOCAL_X, local_size_y = LOCAL_Y) in;
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D fineImg;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D coarseImg;
+layout(set = 0, binding = 2, rgba16f) uniform image2D accumImg;
+layout(set = 0, binding = 3, std430) buffer Partials {
+    vec4 sums[];
+};
+layout(set = 0, binding = 4, std430) readonly buffer Thresholds {
+    vec4 thresh[];
+};
+layout(set = 0, binding = 5, rgba16f) uniform image2D detailImg;
+
+layout(push_constant) uniform Parameters {
+    uint tileE;
+    uint innerW;
+    uint innerH;
+    uint halo;
+    uint mult; // 1u << scale
+    float invSigma2;
+    uint mode; // 0 estimate, 1 apply (thresholds from thresh[scaleIdx])
+    uint scaleIdx;
+    uint groupsX;
+}
+p;
+
+shared vec3 sdata[LOCAL_X * LOCAL_Y];
+
+float b3tap(int i) {
+    if (i == 0 || i == 4) return 1.0 / 16.0;
+    if (i == 1 || i == 3) return 4.0 / 16.0;
+    return 6.0 / 16.0;
+}
+
+void main() {
+    uint lx = gl_GlobalInvocationID.x;
+    uint ly = gl_GlobalInvocationID.y;
+    uint lid = gl_LocalInvocationID.y * uint(LOCAL_X) + gl_LocalInvocationID.x;
+    const int mult = int(p.mult);
+    vec3 det = vec3(0.0);
+    if (lx < p.tileE && ly < p.tileE) {
+        vec3 c0 = imageLoad(fineImg, ivec2(lx, ly)).rgb;
+        vec3 wgt = vec3(0.0);
+        vec3 acc = vec3(0.0);
+        for (int jj = 0; jj < 5; jj++) {
+            int yy = clamp(int(ly) + mult * (jj - 2), 0, int(p.tileE) - 1);
+            for (int ii = 0; ii < 5; ii++) {
+                int xx = clamp(int(lx) + mult * (ii - 2), 0, int(p.tileE) - 1);
+                vec3 v = imageLoad(fineImg, ivec2(xx, yy)).rgb;
+                vec3 d = c0 - v;
+                float e = dot(d, d) * p.invSigma2 * 0.02 - 9.0;
+                float w = b3tap(jj) * b3tap(ii) * (e > 20.0 ? 0.0 : exp2(-max(e, 0.0)));
+                wgt += vec3(w);
+                acc += w * v;
+            }
+        }
+        vec3 cavg = acc / wgt;
+        det = c0 - cavg;
+        imageStore(coarseImg, ivec2(lx, ly), vec4(cavg, 0.0));
+        if (p.mode == 0u) {
+            imageStore(detailImg, ivec2(lx, ly), vec4(det, 0.0));
+        } else {
+            vec3 d = imageLoad(detailImg, ivec2(lx, ly)).rgb;
+            vec3 t = thresh[p.scaleIdx].xyz;
+            vec3 amt = max(d - t, vec3(0.0)) + min(d + t, vec3(0.0));
+            vec3 prev = imageLoad(accumImg, ivec2(lx, ly)).rgb;
+            imageStore(accumImg, ivec2(lx, ly), vec4(prev + amt, 0.0));
+        }
+    }
+    // Per-workgroup detail^2 partials (estimate mode). Threads outside the
+    // inner exact region contribute zero so halo data never biases sums.
+    vec3 mine = vec3(0.0);
+    if (p.mode == 0u && lx < p.tileE && ly < p.tileE && lx >= p.halo &&
+        lx < p.halo + p.innerW && ly >= p.halo && ly < p.halo + p.innerH) {
+        mine = det * det;
+    }
+    sdata[lid] = mine;
+    barrier();
+    for (uint stride = uint((LOCAL_X * LOCAL_Y) / 2); stride > 0u; stride >>= 1u) {
+        if (lid < stride) sdata[lid] += sdata[lid + stride];
+        barrier();
+    }
+    if (p.mode == 0u && lid == 0u) {
+        uint wg = gl_WorkGroupID.y * p.groupsX + gl_WorkGroupID.x;
+        sums[wg] = vec4(sdata[0], 0.0);
+    }
+}

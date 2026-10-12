@@ -1,0 +1,52 @@
+#version 450
+
+// Tiled VST precondition + Y0U0V0 conversion for production stills.
+// Reads the full-frame pre-WB linear source image (clamped global reads give
+// exact tile halos, including DT edge behavior at frame borders) and writes
+// the extended tile buffer. The Y0U0V0 matrix already folds
+// strength/compensate_strength scaling (host-side, like process_wavelets).
+
+#ifndef LOCAL_X
+#define LOCAL_X 16
+#endif
+#ifndef LOCAL_Y
+#define LOCAL_Y 16
+#endif
+
+layout(local_size_x = LOCAL_X, local_size_y = LOCAL_Y) in;
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D srcImage;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D tileImage;
+
+layout(push_constant) uniform Parameters {
+    uint srcW;
+    uint srcH;
+    int originX; // extended-tile origin in source pixels (may be < 0, clamped)
+    int originY;
+    uint tileE; // extended tile extent (square)
+    float a; // a_green * compensate_p
+    float p0;
+    float p1;
+    float p2;
+    float b; // b_green
+    float _pad0;
+    float _pad1;
+    mat3 toYuv; // WB-adaptive, strength-scaled, GLSL column order
+}
+p;
+
+void main() {
+    uint lx = gl_GlobalInvocationID.x;
+    uint ly = gl_GlobalInvocationID.y;
+    if (lx >= p.tileE || ly >= p.tileE) return;
+    ivec2 q = ivec2(p.originX + int(lx), p.originY + int(ly));
+    q.x = clamp(q.x, 0, int(p.srcW) - 1);
+    q.y = clamp(q.y, 0, int(p.srcH) - 1);
+    vec3 rgb = imageLoad(srcImage, q).rgb;
+    vec3 pv = vec3(p.p0, p.p1, p.p2);
+    vec3 expon = 1.0 - pv * 0.5;
+    vec3 scale = 2.0 / ((2.0 - pv) * sqrt(p.a));
+    vec3 tmp = pow(max(rgb + p.b, vec3(0.0)), expon) * scale;
+    vec3 yuv = p.toYuv * tmp;
+    imageStore(tileImage, ivec2(lx, ly), vec4(yuv, 0.0));
+}

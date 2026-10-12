@@ -1,0 +1,50 @@
+#version 450
+
+// GPU-side BayesShrink thresholds (mirrors variance_stabilizing_xform).
+// Reduces the estimate-pass partial sums for one scale and writes
+// thrs[scale]. No host round-trip: the apply pass reads these directly.
+// thrs = adjt * sb2 / sqrt(max(1e-6, sum/(n-1) - sb2)), adjt = 8*force^2*4
+// with per-channel Y/UV forces. n counts INNER-region pixels only.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Partials {
+    vec4 sums[];
+};
+layout(set = 0, binding = 1, std430) buffer Thresholds {
+    vec4 thrs[];
+};
+
+layout(push_constant) uniform Parameters {
+    uint partialCount;
+    uint innerPixels;
+    float sb2;
+    float forceY;
+    float forceUv;
+    uint scaleIdx;
+}
+p;
+
+shared vec3 sdata[256];
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+    vec3 acc = vec3(0.0);
+    for (uint i = lid; i < p.partialCount; i += 256u) {
+        acc += sums[i].xyz;
+    }
+    sdata[lid] = acc;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lid < stride) sdata[lid] += sdata[lid + stride];
+        barrier();
+    }
+    if (lid == 0u) {
+        vec3 varY = sdata[0] / float(p.innerPixels - 1u);
+        vec3 stdX = sqrt(max(varY - p.sb2, vec3(1e-6)));
+        vec3 adjt = vec3(8.0 * p.forceY * p.forceY * 4.0, 8.0 * p.forceUv * p.forceUv * 4.0,
+                         8.0 * p.forceUv * p.forceUv * 4.0);
+        vec3 t = adjt * p.sb2 / stdX;
+        thrs[p.scaleIdx] = vec4(t, 0.0);
+    }
+}
