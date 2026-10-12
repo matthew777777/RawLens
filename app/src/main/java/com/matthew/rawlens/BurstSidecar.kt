@@ -54,6 +54,8 @@ object BurstSidecar {
     const val META_FILE = "burst.json"
     const val FORMAT = "rawlens-burst-meta"
     const val FORMAT_VERSION = 1
+    /** Deepest ZSL ring the sidecar schema covers (matches the capture ceiling). */
+    const val MAX_SIDECAR_FRAMES = 59
     /** Downloads base: Files collection rejects DCIM, so sidecars live here. */
     const val SIDECAR_BASE = "Download/RawLens"
 
@@ -148,7 +150,7 @@ object BurstSidecar {
         intrinsics: IntrinsicsSnapshot?,
         frames: List<FrameMeta>
     ): String {
-        require(frames.size in 2..30) { "burst needs 2..30 frames, got ${frames.size}" }
+        require(frames.size in 2..MAX_SIDECAR_FRAMES) { "burst needs 2..$MAX_SIDECAR_FRAMES frames, got ${frames.size}" }
         fun esc(s: String): String = buildString {
             for (c in s) when (c) {
                 '"' -> append("\\\"")

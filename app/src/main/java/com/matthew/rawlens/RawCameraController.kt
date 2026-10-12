@@ -70,9 +70,11 @@ internal fun adaptivePreviewStrength(mode: CaptureExposureMode, settings: JpegOu
  */
 internal fun vfOverlayEffectBits(
     jpegTonemap: Boolean,
-    settings: JpegOutputSettings
+    settings: JpegOutputSettings,
+    wavelet: Boolean = false
 ): List<String> = buildList {
     if (settings.ultraHdr) add("UHDR")
+    if (wavelet) add("WAVELET")
     if (jpegTonemap && (settings.agxContrast != 1f ||
         settings.agxSaturation != 1f ||
         settings.agxPurityBoost != 1f ||
@@ -619,7 +621,8 @@ class RawCameraController(
         val configuredIds = enabledCameraIds()
         val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
         rawCameraIds = candidates.filter { cameraId ->
-            resolveOpenCameraId(cameraId) != null
+            val openId = resolveOpenCameraId(cameraId)
+            openId != null && openId !in unopenableOpenIds
         }.sortedBy(::opticalMetric)
         val id = selectedCameraId?.takeIf(rawCameraIds::contains)
             ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
@@ -696,7 +699,33 @@ class RawCameraController(
         onState("OPENING RAW")
         val ladderRoute = if (sessionRouteAltActive) "direct-physical" else "primary"
         Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo $sessionComboIndex]")
-        cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
+        try {
+            cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
+        } catch (failure: IllegalArgumentException) {
+            // Queryable but not openable: hidden/vendor IDs answer
+            // getCameraCharacteristics yet the service reports them as unknown
+            // devices on open (vivo V2562). Must not escape: this runs on the
+            // camera thread, where it kills the process. The rejection is
+            // deterministic per open ID, so ladder to the direct-physical
+            // route first, then exclude the failed IDs and fall through to
+            // the next lens instead of wedging on a black viewfinder.
+            opening = false
+            Log.w(LOG_TAG, "openCamera rejected $openCameraId (selected $id)", failure)
+            if (!running) return
+            if (advancePastFailedOpen(openCameraId)) return
+            unopenableOpenIds += openCameraId
+            unopenableOpenIds += sessionFailedOpenIds
+            val fallback = nextLensAfterOpenRejected(candidates, unopenableOpenIds, ::resolveOpenCameraId)
+            if (fallback == null) {
+                Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=$unopenableOpenIds)")
+                onState("CAMERA UNAVAILABLE")
+                return
+            }
+            Log.w(LOG_TAG, "Lens $id unopenable via $openCameraId; falling back to $fallback")
+            selectedCameraId = null
+            open()
+            return
+        }
         } catch (failure: CameraAccessException) {
             opening = false
             Log.w(LOG_TAG, "openCamera failed: ${cameraAccessReason(failure)}")
@@ -1372,13 +1401,11 @@ class RawCameraController(
 
     /**
      * Full-combo reader depth: the whole ZSL ring plus pairing headroom,
-     * transition slack, and rearm overlap (see createSession).
+     * transition slack, and rearm overlap (see createSession), clamped to
+     * the HAL queue hard cap so deep rings degrade to a smaller effective
+     * ring instead of a rejected session or a dead process.
      */
-    private fun fullReaderMaxImages(): Int = maxOf(
-        MIN_ACQUIRED_RAW_IMAGES,
-        maxOf(rawZslFrameCount, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
-            ZSL_REARM_OVERLAP_SLOTS
-    )
+    private fun fullReaderMaxImages(): Int = fullReaderMaxImagesFor(rawZslFrameCount)
 
     private var rawPreviewRetryUntilMs = 0L
     private var rawPreviewFailures = 0
@@ -1411,6 +1438,14 @@ class RawCameraController(
     private var sessionRouteAltActive = false
     private var sessionLadderLensId: String? = null
     private val sessionFailedOpenIds = mutableSetOf<String>()
+    /**
+     * Open IDs the camera service rejected as unknown devices. Unlike
+     * [sessionFailedOpenIds] (cleared on every lens change), this denylist
+     * lives with the controller: rejection is deterministic per open ID, so a
+     * lens that resolves characteristics yet refuses [android.hardware.camera2.CameraManager.openCamera]
+     * stays excluded until the user re-runs lens discovery ([reloadLenses]).
+     */
+    private val unopenableOpenIds = mutableSetOf<String>()
     private var sessionPrimaryRoute: CameraRoute? = null
     private var sessionAltRoute: CameraRoute? = null
     /** Consumed reopen attempts for transient route resolution (see [retryOpenForTransientRoute]). */
@@ -1931,10 +1966,10 @@ class RawCameraController(
         if (rawZslRequested) {
             val need = zslSelectedFrameCount(outputFormat)
             // SR/fusion/HDR+ merge to one artifact: reserve one slot, not the burst.
-            // (SR wins if several are somehow on; the quick tiles are exclusive.)
-            val mergeMode = rawSuperResolutionSettings.enabled || burstFusionSettings.enabled ||
-                hdrPlusSettings.enabled
-            val needSlots = if (mergeMode) 1 else need
+            val needSlots = availabilitySlotCountFor(
+                rawSuperResolutionSettings, burstFusionSettings, hdrPlusSettings,
+                rawZslFrameCount, outputFormat
+            )
             // Single-flight merge: a second press fails fast here, before
             // any take drains the ring — the preserved ring then takes
             // instantly on re-tap after the merge finishes.
@@ -2123,18 +2158,11 @@ class RawCameraController(
         pendingFrameSaveCount.get(), rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS
     )
 
-    private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int {
-        val requestedFrameCount = if (rawSuperResolutionSettings.enabled)
-            rawSuperResolutionSettings.activeFrameCount(rawZslFrameCount)
-        else rawZslFrameCount
-        // SR merges to one artifact (one save slot); JPEG cap applies only to per-frame saves.
-        if (rawSuperResolutionSettings.enabled) return requestedFrameCount
-        return if (outputFormat.includesJpeg) {
-            minOf(requestedFrameCount, MAX_IN_FLIGHT_JPEG_SAVES)
-        } else {
-            requestedFrameCount
-        }
-    }
+    private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int =
+        zslSelectedFrameCountFor(
+            rawSuperResolutionSettings, burstFusionSettings, hdrPlusSettings,
+            rawZslFrameCount, outputFormat
+        )
 
     private fun beginCapture(
         outputFormat: CaptureFormat,
@@ -5106,6 +5134,11 @@ class RawCameraController(
         developer.prewarmGalosh()
     }
 
+    fun prewarmWavelet() {
+        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        developer.prewarmWavelet()
+    }
+
     /** Camera-provided values shown in the guided DNG override editor. */
     fun dngMetadataDefaults(): DngMetadataDefaults {
         val camera = characteristics
@@ -5254,6 +5287,10 @@ class RawCameraController(
         }
         selectedCameraId = null
         resetSessionLadder()
+        // Explicit re-discovery re-probes every saved lens, so a rejection
+        // recorded earlier (possibly against a half-initialized camera
+        // service) must not pin any lens out.
+        unopenableOpenIds.clear()
         restartCameraForConfigurationChange()
     }
 
@@ -6106,7 +6143,7 @@ class RawCameraController(
         val rawText = if (stats.rawWidth > 0 && stats.rawHeight > 0) {
             "RAW: ${stats.rawWidth}×${stats.rawHeight}"
         } else "RAW: --"
-        val devBits = vfOverlayEffectBits(stats.jpeg, jpegOutputSettings)
+        val devBits = vfOverlayEffectBits(stats.jpeg, jpegOutputSettings, denoiseSettings.wavelet.enabled)
         val glLabel = if (stats.glActive) "RAW" else "FALLBACK"
         val effects = if (!stats.glActive || devBits.isNotEmpty()) {
             "Yes ($glLabel${if (devBits.isNotEmpty()) " +" + devBits.joinToString("+") else ""})"
@@ -7144,9 +7181,16 @@ class RawCameraController(
     private fun refreshCaptureAvailability() {
         // ZSL-aware shutter: a 30-frame burst needs 30 slots, so the 1-slot
         // default would leave the shutter enabled through the whole save drain
-        // and invite futile presses (QUEUE FULL). Gate on the full burst.
+        // and invite futile presses (QUEUE FULL). Gate on the full burst —
+        // except merges, which save one artifact (one slot, like admission).
         val hasCapacity = if (rawZslRequested) {
-            hasProcessingCapacity(zslSelectedFrameCount(captureFormat), captureFormat)
+            hasProcessingCapacity(
+                availabilitySlotCountFor(
+                    rawSuperResolutionSettings, burstFusionSettings, hdrPlusSettings,
+                    rawZslFrameCount, captureFormat
+                ),
+                captureFormat
+            )
         } else {
             hasProcessingCapacity()
         }
@@ -8024,7 +8068,17 @@ class RawCameraController(
          * transient (retryable, never latching) cooldown. Zero-pair windows
          * still latch burst-mode immediately. */
         private const val ZSL_SLOW_WINDOW_EXTENSIONS = 2
-        private const val MAX_ZSL_FRAMES = 30
+        // Configured ZSL ring ceiling. 59 is the deepest full-resolution RAW
+        // ring verified on the reference HAL (Xiaomi 25080RABDG/MT6878 at
+        // 30 fps, zero failures); the reader hard cap plus
+        // clampZslCapacityForReader shrink the effective ring to whatever the
+        // HAL queue fits, so requesting 59 never over-allocates elsewhere.
+        private const val MAX_ZSL_FRAMES = 59
+        // Hard ceiling for the RAW ImageReader queue. The reference HAL
+        // configures a session with at most 61 RAW buffers and aborts the
+        // process when ImageReader exceeds 62, so the computed depth
+        // (ring + pairing + transition + rearm headroom) clamps here.
+        private const val READER_MAXIMAGES_HARD_CAP = 61
         private const val RAW_ZSL_TARGET_FPS = 30
         private fun hdrBracketSuffix(index: Int): String = "F%02d".format(index)
         /** RAW target on every repeating request (MotionCam RAW-viewfinder port): the
@@ -8110,6 +8164,24 @@ class RawCameraController(
          */
         internal fun whiteLevelBitDepth(whiteLevel: Int?): Int =
             whiteLevel?.let { 32 - Integer.numberOfLeadingZeros(it) } ?: 10
+
+        /**
+         * Next-lens fallback after [android.hardware.camera2.CameraManager.openCamera]
+         * rejects an open ID as an unknown device. Rejection is deterministic
+         * per open ID, so every candidate whose route opens through a rejected
+         * ID is skipped together (composite siblings sharing one logical
+         * camera die with it); unresolvable candidates are skipped as well.
+         * Null means no fallback remains and the open must surface a terminal
+         * state instead of retrying.
+         */
+        internal fun nextLensAfterOpenRejected(
+            candidates: List<String>,
+            rejectedOpenIds: Set<String>,
+            openIdOf: (String) -> String?
+        ): String? = candidates.firstOrNull { id ->
+            val openId = openIdOf(id)
+            openId != null && openId !in rejectedOpenIds
+        }
 
         /**
          * Plain width/height pair for session-combo selection. `android.util.Size`
@@ -8228,11 +8300,68 @@ class RawCameraController(
          * clamps back to the requested count; a reader below that floor yields
          * zero (viewfinder-only, no ZSL ring).
          */
+        /**
+         * Pure reader sizing behind [fullReaderMaxImages]: ring plus pairing,
+         * transition, and rearm headroom, clamped to the HAL queue hard cap.
+         * Unit-testable without the Android framework.
+         */
+        internal fun fullReaderMaxImagesFor(frameCount: Int): Int = minOf(
+            maxOf(
+                MIN_ACQUIRED_RAW_IMAGES,
+                maxOf(frameCount, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
+                    ZSL_REARM_OVERLAP_SLOTS
+            ),
+            READER_MAXIMAGES_HARD_CAP
+        )
+
         internal fun clampZslCapacityForReader(requestedFrameCount: Int, readerMaxImages: Int): Int {
             val roomForRing = readerMaxImages - RAW_PREVIEW_RESERVED_SLOTS - ZSL_REARM_OVERLAP_SLOTS
             if (roomForRing < MAX_IN_FLIGHT_JPEG_SAVES) return 0
             return minOf(requestedFrameCount, roomForRing)
         }
+
+        /**
+         * Pure ZSL selection size behind [RawCameraController.zslSelectedFrameCount].
+         * Merge modes save one artifact (one save slot), so each uses its
+         * own 2..30 merge bounds and bypasses the per-frame JPEG queue cap;
+         * plain bursts keep the cap in JPEG modes (JPEG development holds
+         * large intermediates per frame). Unit-testable without the Android
+         * framework.
+         */
+        internal fun zslSelectedFrameCountFor(
+            sr: RawSuperResolutionSettings,
+            fusion: RawBurstFusionSettings,
+            hdrPlus: HdrPlusSettings,
+            configuredCount: Int,
+            outputFormat: CaptureFormat
+        ): Int {
+            if (sr.enabled) return sr.activeFrameCount(configuredCount)
+            if (fusion.enabled) return fusion.activeFrameCount(configuredCount)
+            if (hdrPlus.enabled) return hdrPlus.activeFrameCount(configuredCount)
+            return if (outputFormat.includesJpeg) {
+                minOf(configuredCount, MAX_IN_FLIGHT_JPEG_SAVES)
+            } else {
+                configuredCount
+            }
+        }
+
+        /**
+         * Pure save-slot reservation behind [RawCameraController.refreshCaptureAvailability]
+         * and the admission check in beginSingleCapture: merge modes save one
+         * artifact, so the shutter gates on one slot — otherwise a 12-frame
+         * HDR+ selection in a JPEG mode would grey out the shutter against
+         * the 6-slot per-frame JPEG budget. Plain bursts gate on the full
+         * selection. Unit-testable without the Android framework.
+         */
+        internal fun availabilitySlotCountFor(
+            sr: RawSuperResolutionSettings,
+            fusion: RawBurstFusionSettings,
+            hdrPlus: HdrPlusSettings,
+            configuredCount: Int,
+            outputFormat: CaptureFormat
+        ): Int =
+            if (sr.enabled || fusion.enabled || hdrPlus.enabled) 1
+            else zslSelectedFrameCountFor(sr, fusion, hdrPlus, configuredCount, outputFormat)
 
         /** Request-level recoveries before a stillborn stream rebuilds the session. */
         private const val RAW_PREVIEW_COMPAT_ESCALATION_FAILURES = 1

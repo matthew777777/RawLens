@@ -199,4 +199,28 @@ class SessionStreamComboTest {
         // max(capacity, 6) + 14 must stay within the reader.
         assertEquals(0, RawCameraController.clampZslCapacityForReader(30, 18))
     }
+
+    @Test
+    fun readerDepthKeepsHeadroomBelowCap() {
+        // Ring plus pairing (6) + transition (2) + spare (2) + rearm (4).
+        assertEquals(44, RawCameraController.fullReaderMaxImagesFor(30))
+        assertEquals(22, RawCameraController.fullReaderMaxImagesFor(8))
+        // JPEG floor: tiny rings still size for six in-flight JPEG saves.
+        assertEquals(20, RawCameraController.fullReaderMaxImagesFor(1))
+    }
+
+    @Test
+    fun readerDepthClampsToHardCap() {
+        // 59 + 14 headroom would request 73 buffers; the HAL queue hard cap
+        // (61: session configure limit, abort past 62) wins instead.
+        assertEquals(61, RawCameraController.fullReaderMaxImagesFor(59))
+        assertEquals(61, RawCameraController.fullReaderMaxImagesFor(100))
+    }
+
+    @Test
+    fun clampShrinksDeepRingIntoCappedReader() {
+        // A 59-frame request on the capped 61-buffer reader keeps a 47-frame
+        // ring (61 - 14 headroom): deep but provably inside the queue.
+        assertEquals(47, RawCameraController.clampZslCapacityForReader(59, 61))
+    }
 }

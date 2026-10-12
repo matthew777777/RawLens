@@ -71,6 +71,26 @@ class BurstSidecarTest {
         assertEquals(plain.fxPixels * 3000.0 / 4000.0, transposed.fyPixels, 1e-3)
     }
 
+    @Test fun `meta json spans the full deep-ring burst`() {
+        fun meta(index: Int) = BurstSidecar.FrameMeta(
+            "IMG_1_F%02d.dng".format(index), 100L + index, 10_000_000L, 0L, 100, null
+        )
+        // Deepest ZSL ring (59) serializes; one frame more is rejected.
+        val deep = (0 until BurstSidecar.MAX_SIDECAR_FRAMES).map(::meta)
+        val json = BurstSidecar.buildMetaJson("IMG_1", 90, false, 0, 1, null, deep)
+        assertEquals(BurstSidecar.MAX_SIDECAR_FRAMES, "\"file\":".toRegex().findAll(json).count())
+        try {
+            BurstSidecar.buildMetaJson("IMG_1", 90, false, 0, 1, null, deep + meta(deep.size))
+            fail("accepted ${deep.size + 1} frames")
+        } catch (expected: IllegalArgumentException) {
+        }
+        try {
+            BurstSidecar.buildMetaJson("IMG_1", 90, false, 0, 1, null, deep.take(1))
+            fail("accepted a single frame")
+        } catch (expected: IllegalArgumentException) {
+        }
+    }
+
     @Test fun `meta json is deterministic and marks missing gyro null`() {
         val frames = listOf(
             BurstSidecar.FrameMeta(
