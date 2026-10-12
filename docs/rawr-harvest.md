@@ -78,3 +78,61 @@ Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe exclude
 4. Kotlin: VfMonitor.kt, ScopeView.kt, overlay view, MainActivity MONITOR UI.
 5. Build (`./gradlew :app:assembleDebug`), host unit tests for throttle/prefs,
    on-device verification, update this log with verdicts.
+
+---
+
+# P0.5 profiled wavelet denoise (DONE 2026-10-11, needs on-device check)
+
+Source: rawr @ 87c2209 (release 0.3.1, /tmp/rawr). Restored our removed
+wavelet stage (gone since `remove(wavelets)` ecce15a..f42db74, which was
+GLES chroma-only, no VST) and rebuilt the core on rawr's validated Vulkan
+module instead of resurrecting the old shaders.
+
+## What landed
+
+- Vendored byte-identical: `DenoisePipeline.hpp/.cpp`, 4 `denoise_img_*.comp`
+  (+ our `.spv`), `NOTICE.md` (darktable upstream). Provenance:
+  `assets/spirv/wavelet/UPSTREAM.md`.
+- `librawLensWavelet` (own Vulkan device, staging upload/download RGBA16F,
+  timestamp timing) + `WaveletVulkan`/`WaveletDenoiser` Kotlin facade.
+  Noise = green SENSOR_NOISE_PROFILE normalized rawr-style; WB green==1
+  from the resolved transform; uncalibrated fallback never throws.
+- Luma + chroma: forceY (detail gate x luma slider) + forceUv 0.75,
+  rawr defaults (strength 1, 7 scales, shadows 1).
+- Pipeline: camera-linear tap in `final.glsl`/`rcd_final.glsl`
+  (white-blend kept, AMaZE pre-balance undone via `u_demosaic_unbalance`
+  so the wavelet sees true pre-WB camera RGB), RGBA16F readback,
+  Vulkan denoise, `to_acescg.glsl` tail, then the normal JPEG path.
+  resolve(): merged-path off, Galosh XOR wavelet, AI+wavelet may stack.
+  Failures degrade to un-denoised JPEG (no re-demosaic); DNG untouched.
+- UI: denoise-tab wavelet section (enable/strength/luma/scales) +
+  persisted prefs + prewarm + WAVELET overlay badge.
+- Validation: `tools/wavelet-parity/run_parity.sh` (MoltenVK bench +
+  one frozen fixture set, rawr tolerances): PARITY_PASS
+  (max 1.70e-3, p99 2.57e-4, mean 4.98e-5, ratio 0.113, seam 1.09;
+  52 ms GPU for 512px/6 scales on this Mac). `WaveletDenoiseTest` 10/10,
+  full suite green, `assembleDebug` clean.
+
+## Deliberate domain notes
+
+- Highlight neutralization stays ON pre-wavelet (camera domain,
+  highlight-only) — matches darktable's post-highlight-reconstruction
+  denoise order; the parity gate covers the core, not our highlights.
+- Quad-Bayer has no camera-linear tap yet (rejected loudly); fused
+  output is forced off when wavelet runs (UltraHDR still works unfused).
+
+## Perf verdict (Halide vs Vulkan)
+
+Vulkan (done): rawr's port is already GPU, tiled to any frame size,
+validates to 5e-3 max, and reuses our Galosh-style JNI/host pattern —
+no new dependency. Halide: rejected — a new native toolchain + runtime
+for a from-scratch rewrite with no parity story; its CPU path would
+lose to GPU compute and its Android GPU backends are immature next to
+direct Vulkan. Remaining cost is the fp16 readback+upload round trip
+(same as Galosh); AHB zero-copy interop is the future optimization.
+
+## On-device checks
+
+Enable wavelet, shoot high-ISO JPEG: luma/chroma smoothing vs detail,
+no color cast (WB path), fallback when Galosh is on, timing in logcat
+(`wavelet WxH ... wall=.. gpu=..`).
