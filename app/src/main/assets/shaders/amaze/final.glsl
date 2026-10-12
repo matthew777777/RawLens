@@ -18,6 +18,12 @@ uniform highp mat3 u_camera_to_acescg;
 uniform highp vec3 u_camera_white_normalized;
 // White-blend window in pre-matrix camera RGB (see final_display.glsl).
 uniform highp vec2 u_white_window;
+// Wavelet path: emit pre-matrix camera RGB (white-blend still applied, like
+// darktable's post-highlight-reconstruction denoise input) instead of ACEScg.
+uniform int u_camera_linear;
+// Inverse of the executor's demosaic pre-balance D (balanced CFA basis back
+// to true camera RGB). Only read when u_camera_linear != 0.
+uniform highp vec3 u_demosaic_unbalance;
 
 const int HALO = 2;   // half-grid reads hpos(q) can land one column left of q
 const int TW = LW + 2 * HALO;
@@ -81,6 +87,10 @@ void main() {
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 
+    if (u_camera_linear != 0) {
+        imageStore(img_out, o + u_outoff, vec4(cameraRgb * u_demosaic_unbalance, 1.0));
+        return;
+    }
     highp vec3 acescg = u_camera_to_acescg * cameraRgb;
     imageStore(img_out, o + u_outoff, vec4(acescg, 1.0));
 }

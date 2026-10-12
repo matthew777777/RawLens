@@ -19,12 +19,21 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
+/** Working-space domain of an [AmazeGpuOutput] texture. */
+enum class AmazeColorDomain {
+    /** Scene-linear ACEScg (default; what the JPEG develop consumes). */
+    ACESCG,
+    /** Pre-WB camera-linear RGB (wavelet denoise input domain). */
+    CAMERA_LINEAR
+}
+
 data class AmazeGpuOutput(
     val textureId: Int,
     val width: Int,
     val height: Int,
     val internalFormat: AmazeTextureFormat = AmazeTextureFormat.RGBA16F,
-    val gainmapTextureId: Int = 0
+    val gainmapTextureId: Int = 0,
+    val colorDomain: AmazeColorDomain = AmazeColorDomain.ACESCG
 )
 
 /**
@@ -71,12 +80,13 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         AmazePipelineContract.validateInput(input)
         return processInput(
             CpuAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, whiteWindow, consume
+            fusedOutputSettings, whiteWindow, cameraLinear, consume
         )
     }
 
@@ -90,6 +100,7 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -97,7 +108,7 @@ class Gles31AmazeProcessor(
         }
         return processInput(
             DirectRawAmazeInput(input), clipPoint, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-            fusedOutputSettings, whiteWindow, consume
+            fusedOutputSettings, whiteWindow, cameraLinear, consume
         )
     }
 
@@ -127,6 +138,7 @@ class Gles31AmazeProcessor(
         input: GpuRawAmazeInput,
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -161,6 +173,7 @@ class Gles31AmazeProcessor(
             white = norm.whiteLevel,
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
+            cameraLinear = cameraLinear,
             consume = consume
         )
     }
@@ -175,6 +188,7 @@ class Gles31AmazeProcessor(
         input: UnpackedRawCfa,
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -205,6 +219,7 @@ class Gles31AmazeProcessor(
             white = 65535f,
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
+            cameraLinear = cameraLinear,
             consume = consume
         )
     }
@@ -222,6 +237,7 @@ class Gles31AmazeProcessor(
         white: Float,
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
+        cameraLinear: Boolean,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
@@ -267,7 +283,10 @@ class Gles31AmazeProcessor(
                         try { VfEglImport.closeSyncFd(fd) } catch (_: Exception) {}
                     }
                 }
-                return rcdTail(rgb, width, height, cameraToAcescgColumnMajor, cameraWhiteNormalized, consume)
+                return rcdTail(
+                    rgb, width, height, cameraToAcescgColumnMajor, cameraWhiteNormalized,
+                    cameraLinear, consume
+                )
             } finally {
                 try { rgb.close() } catch (_: Exception) {}
                 try { scratch.close() } catch (_: Exception) {}
@@ -290,6 +309,7 @@ class Gles31AmazeProcessor(
         height: Int,
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
+        cameraLinear: Boolean,
         consume: (AmazeGpuOutput) -> T
     ): T {
         val session = processingSession()
@@ -334,6 +354,11 @@ class Gles31AmazeProcessor(
                                 check(it >= 0) { "rcd_final uniform 'u_camera_white_normalized' is missing" }
                             }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
                         )
+                        GLES31.glUniform1i(
+                            GLES31.glGetUniformLocation(program, "u_camera_linear").also {
+                                check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
+                            }, if (cameraLinear) 1 else 0
+                        )
                         GLES31.glBindImageTexture(
                             0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
                         )
@@ -344,7 +369,13 @@ class Gles31AmazeProcessor(
                             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
                         )
                         checkGl("RCD tail dispatch")
-                        consume(AmazeGpuOutput(output.id, width, height, AmazeTextureFormat.RGBA16F))
+                        consume(
+                            AmazeGpuOutput(
+                                output.id, width, height, AmazeTextureFormat.RGBA16F,
+                                colorDomain = if (cameraLinear) AmazeColorDomain.CAMERA_LINEAR
+                                else AmazeColorDomain.ACESCG
+                            )
+                        )
                     } finally {
                         session.textures.release(output)
                     }
@@ -355,6 +386,166 @@ class Gles31AmazeProcessor(
                 VfEglImport.destroyEGLImage(eglImage)
             }
         }
+    }
+
+    /**
+     * Reads an RGBA16F output texture back to a direct RGBA16F ByteBuffer
+     * (W*H*8 bytes, texture row order: image top row first, matching the
+     * demosaic output layout, so re-upload round-trips exactly). Wavelet
+     * stage input. Must run
+     * on this session's worker while its EGL context is current (i.e. from
+     * a [process]/[processRaw]/[processRcdRaw]/[processRcdCfa] consume
+     * callback). Throws when half-float color buffers are unsupported.
+     */
+    fun readbackHalfFloat(output: AmazeGpuOutput): ByteBuffer {
+        require(output.internalFormat == AmazeTextureFormat.RGBA16F) {
+            "Half-float readback needs an RGBA16F output"
+        }
+        processingSession() ?: throw IllegalStateException("AMaZE session is not running")
+        check(processingThreadId == Thread.currentThread().id) {
+            "Half-float readback must stay on the AMaZE worker thread"
+        }
+        val limits = queryLimits()
+        check(limits.halfFloatColorBuffer) {
+            "Half-float color buffers unsupported (${limits.versionString})"
+        }
+        val bytes = output.width * output.height * 8
+        val pixels = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
+        val fbo = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
+        check(fbo != 0) { "Could not allocate half-float readback framebuffer" }
+        try {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+            GLES30.glFramebufferTexture2D(
+                GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                GLES30.GL_TEXTURE_2D, output.textureId, 0
+            )
+            check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) ==
+                GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                "Half-float readback framebuffer is incomplete"
+            }
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 2)
+            try {
+                GLES30.glReadPixels(
+                    0, 0, output.width, output.height,
+                    GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, pixels
+                )
+            } finally {
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+            }
+            checkGl("half-float readback")
+        } finally {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+        }
+        return pixels
+    }
+
+    /**
+     * Uploads a camera-linear RGBA16F buffer and converts it to scene-linear
+     * ACEScg with [cameraToAcescgColumnMajor] (the same folded matrix the
+     * demosaic finals use). Wavelet tail: hands an ACEScg [AmazeGpuOutput]
+     * texture to [consume], released afterwards. Same worker/context
+     * confinement as [readbackHalfFloat].
+     */
+    fun <T> transformCameraLinear(
+        camera: ByteBuffer,
+        width: Int,
+        height: Int,
+        cameraToAcescgColumnMajor: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
+        val session = processingSession()
+            ?: throw IllegalStateException("AMaZE session is not running")
+        check(processingThreadId == Thread.currentThread().id) {
+            "Camera-linear transform must stay on the AMaZE worker thread"
+        }
+        val input = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
+        val output = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
+        try {
+            input.uploadRgba16f(camera)
+            dispatchToAcescg(session, input.id, output, width, height, cameraToAcescgColumnMajor)
+            return consume(
+                AmazeGpuOutput(output.id, width, height, AmazeTextureFormat.RGBA16F)
+            )
+        } finally {
+            session.textures.release(output)
+            session.textures.release(input)
+        }
+    }
+
+    /**
+     * Converts a camera-linear RGBA16F texture already on the GPU to
+     * scene-linear ACEScg (same matrix as [transformCameraLinear], no
+     * readback/upload). Wavelet readback-failure path. Same worker/context
+     * confinement as [readbackHalfFloat].
+     */
+    fun <T> transformCameraTexture(
+        camera: AmazeGpuOutput,
+        cameraToAcescgColumnMajor: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(camera.internalFormat == AmazeTextureFormat.RGBA16F) {
+            "Camera-linear transform needs an RGBA16F texture"
+        }
+        require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
+        val session = processingSession()
+            ?: throw IllegalStateException("AMaZE session is not running")
+        check(processingThreadId == Thread.currentThread().id) {
+            "Camera-linear transform must stay on the AMaZE worker thread"
+        }
+        val output = session.textures.acquire(camera.width, camera.height, GLES30.GL_RGBA16F)
+        try {
+            dispatchToAcescg(
+                session, camera.textureId, output, camera.width, camera.height,
+                cameraToAcescgColumnMajor
+            )
+            return consume(
+                AmazeGpuOutput(output.id, camera.width, camera.height, AmazeTextureFormat.RGBA16F)
+            )
+        } finally {
+            session.textures.release(output)
+        }
+    }
+
+    /** Raw-GLES dispatch of amaze/to_acescg.glsl (mirrors the rcdTail style). */
+    private fun dispatchToAcescg(
+        session: ProcessingSession,
+        inputTextureId: Int,
+        output: GlTexture,
+        width: Int,
+        height: Int,
+        cameraToAcescgColumnMajor: FloatArray
+    ) {
+        val program = session.programs.get("amaze/to_acescg.glsl")
+        GLES31.glUseProgram(program)
+        GLES31.glUniform2i(
+            GLES31.glGetUniformLocation(program, "u_outsize").also {
+                check(it >= 0) { "to_acescg uniform 'u_outsize' is missing" }
+            }, width, height
+        )
+        val matrix = session.uploads.floats(9)
+        matrix.put(cameraToAcescgColumnMajor).flip()
+        GLES31.glUniformMatrix3fv(
+            GLES31.glGetUniformLocation(program, "u_camera_to_acescg").also {
+                check(it >= 0) { "to_acescg uniform 'u_camera_to_acescg' is missing" }
+            }, 1, false, matrix
+        )
+        GLES31.glBindImageTexture(
+            0, inputTextureId, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16F
+        )
+        GLES31.glBindImageTexture(
+            1, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
+        )
+        GLES31.glDispatchCompute(
+            (width + AmazePipelineContract.LOCAL_SIZE_X - 1) / AmazePipelineContract.LOCAL_SIZE_X,
+            (height + AmazePipelineContract.LOCAL_SIZE_Y - 1) / AmazePipelineContract.LOCAL_SIZE_Y,
+            1
+        )
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+        )
+        checkGl("camera-linear to ACEScg")
     }
 
     /** Idempotent Vulkan RCD bring-up (viewfinder usually already owns the device). */
@@ -388,6 +579,7 @@ class Gles31AmazeProcessor(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         ),
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(clipPoint.isFinite() && clipPoint > 0f) { "AMaZE clip point must be finite and positive" }
@@ -402,6 +594,12 @@ class Gles31AmazeProcessor(
             cameraWhiteNormalized.maxOrNull()!! > 0f
         ) {
             "Camera neutral white must contain three finite non-negative values with a positive peak"
+        }
+        require(!cameraLinear || fusedOutputSettings == null) {
+            "Camera-linear output needs the unfused RGBA16F path (wavelet input domain)"
+        }
+        require(!cameraLinear || input !is QuadInput) {
+            "Camera-linear output is not supported on the Quad-Bayer graph yet"
         }
         val session = processingSession()
         return session.egl.run {
@@ -428,6 +626,7 @@ class Gles31AmazeProcessor(
                 cameraWhiteNormalized,
                 fusedOutputSettings?.resolvedForPlatform(),
                 whiteWindow,
+                cameraLinear,
                 session.programs,
                 session.textures,
                 session.uploads
@@ -447,7 +646,8 @@ class Gles31AmazeProcessor(
                         input.width,
                         input.height,
                         if (executor.fusedOutput) AmazeTextureFormat.RGBA8 else AmazeTextureFormat.RGBA16F,
-                        executor.gainmapOutput?.id ?: 0
+                        executor.gainmapOutput?.id ?: 0,
+                        if (cameraLinear) AmazeColorDomain.CAMERA_LINEAR else AmazeColorDomain.ACESCG
                     )
                 )
                 val completedAt = SystemClock.elapsedRealtime()
@@ -533,6 +733,7 @@ class Gles31AmazeProcessor(
         private val cameraWhiteNormalized: FloatArray,
         private val fusedSettings: JpegOutputSettings?,
         private val whiteWindow: FloatArray,
+        private val cameraLinear: Boolean,
         private val programs: ProgramCache,
         private val texturePool: TexturePool,
         private val uploadBuffers: UploadBuffers
@@ -775,6 +976,13 @@ class Gles31AmazeProcessor(
                 mat3("u_camera_to_acescg", demosaicCameraToAcescg)
                 vec3("u_camera_white_normalized", demosaicCameraWhiteNormalized)
                 vec2("u_white_window", whiteWindow)
+                if (fusedSettings == null) {
+                    integer("u_camera_linear", if (cameraLinear) 1 else 0)
+                    vec3(
+                        "u_demosaic_unbalance",
+                        FloatArray(3) { 1f / demosaicBalance[it].coerceAtLeast(1e-6f) }
+                    )
+                }
                 ivec2(
                     "u_inner",
                     AmazePipelineContract.PAD + AmazePipelineContract.BORDER,
@@ -996,6 +1204,21 @@ class Gles31AmazeProcessor(
                 GLES31.GL_RED, GLES31.GL_FLOAT, buffer
             )
             checkGl("CFA upload")
+        }
+
+        fun uploadRgba16f(source: ByteBuffer) {
+            require(internalFormat == GLES30.GL_RGBA16F && source.remaining() >= width * height * 8)
+            GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, id)
+            GLES31.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
+            try {
+                GLES31.glTexSubImage2D(
+                    GLES31.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                    GLES31.GL_RGBA, GLES31.GL_HALF_FLOAT, source
+                )
+            } finally {
+                GLES31.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+            }
+            checkGl("RGBA16F upload")
         }
 
         fun uploadRgba32f(values: FloatArray, uploads: UploadBuffers) {

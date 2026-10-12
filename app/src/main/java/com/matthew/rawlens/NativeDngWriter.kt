@@ -7,6 +7,20 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
 
+/**
+ * Zero-copy predicate for the DNG plane bridge: the plane is already a dense
+ * unpacked-16-bit raster (no buffer offset, no row padding, 2-byte pixels).
+ * Reference HALs deliver exactly this layout, so DNG writes take the buffer
+ * as-is; anything else falls back to the staging repack. File top-level (not
+ * an object member) so host tests exercise it without loading the native lib.
+ */
+internal fun isContiguousUnpackedRaw(
+    bufferOffset: Int,
+    rowStride: Int,
+    pixelStride: Int,
+    width: Int
+): Boolean = bufferOffset == 0 && rowStride == width * 2 && pixelStride == 2
+
 /** Camera2 metadata/stride bridge into the pinned TinyDNG v3 writer. */
 object NativeDngWriter {
     @Synchronized
@@ -71,7 +85,7 @@ object NativeDngWriter {
         val required = offset.toLong() + (image.height - 1L) * plane.rowStride +
             (image.width - 1L) * plane.pixelStride + 2L
         require(required <= source.limit()) { "RAW_SENSOR plane is truncated" }
-        if (offset == 0 && plane.rowStride == image.width * 2 && plane.pixelStride == 2) {
+        if (isContiguousUnpackedRaw(offset, plane.rowStride, plane.pixelStride, image.width)) {
             source.position(0)
             return source
         }

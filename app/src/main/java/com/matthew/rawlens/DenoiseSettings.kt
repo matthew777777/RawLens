@@ -27,17 +27,62 @@ package com.matthew.rawlens
  * [saveOriginalDng] only matters when [aiEnabled]: the denoised DNG is
  * always written (subject to the capture format including DNG); this flag
  * additionally keeps the untouched archival sensor DNG.
+ *
+ * Post-demosaic stage ([wavelet]): profiled à-trous wavelet luma+chroma
+ * denoise on pre-WB camera-linear RGB via the vendored RAWR core (a
+ * darktable denoiseprofile port). Unlike the pre-demosaic stages it feeds
+ * the developed JPEG only, never the DNG. See [WaveletSettings].
+ *
+ * Stage arbitration lives in [resolveDenoise] (rawr resolve() parity).
  */
 data class DenoiseSettings(
     val aiEnabled: Boolean = false,
     val saveOriginalDng: Boolean = true,
-    val aiStrength: Float = 1f
+    val aiStrength: Float = 1f,
+    val wavelet: WaveletSettings = WaveletSettings()
 ) {
     init {
         require(aiStrength.isFinite() && aiStrength in 0f..1f) {
             "aiStrength must be in [0,1], was $aiStrength"
         }
     }
+}
+
+/** Pre-demosaic stage surviving arbitration for one capture. */
+enum class PreDemosaicStage { OFF, AI, GALOSH }
+
+/** Per-capture denoise plan. */
+data class ResolvedDenoise(
+    val preDemosaic: PreDemosaicStage,
+    /** Post-demosaic wavelet runs (JPEG only). */
+    val wavelet: Boolean
+)
+
+/**
+ * Per-capture stage arbitration, rawr DenoiseConfig.resolve() parity:
+ *
+ * - Merged path ([mergedPath], HDR+/SR output): everything off — the
+ *   merge output is pre-denoised, exactly like rawr's multiframe rule.
+ * - Galosh wins over AI (existing RawLens precedent: single denoise
+ *   stage) and over wavelet (rawr's mutual exclusion: profiled wavelet
+ *   and Galosh both denoise; stacking over-smooths and doubles GPU cost).
+ * - AI and wavelet may stack (pre- + post-demosaic, as the old wavelet
+ *   did on AI output).
+ */
+fun resolveDenoise(
+    denoise: DenoiseSettings,
+    galosh: GaloshSettings,
+    mergedPath: Boolean
+): ResolvedDenoise {
+    if (mergedPath) return ResolvedDenoise(PreDemosaicStage.OFF, false)
+    val galoshOn = galosh.enabled && galosh.strength > 0f
+    val pre = when {
+        galoshOn -> PreDemosaicStage.GALOSH
+        denoise.aiEnabled -> PreDemosaicStage.AI
+        else -> PreDemosaicStage.OFF
+    }
+    val wave = denoise.wavelet.enabled && denoise.wavelet.strength > 0f && !galoshOn
+    return ResolvedDenoise(pre, wave)
 }
 
 /** Camera2/DNG normalized Poisson-Gaussian model, in CFA order R, Gr, Gb, B. */
