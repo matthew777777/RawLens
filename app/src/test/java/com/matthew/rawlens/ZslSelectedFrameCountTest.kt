@@ -1,0 +1,95 @@
+// SPDX-FileCopyrightText: 2026 RawLens contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package com.matthew.rawlens
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class ZslSelectedFrameCountTest {
+    private val srOff = RawSuperResolutionSettings()
+    private val fusionOff = RawBurstFusionSettings()
+    private val hdrOff = HdrPlusSettings()
+
+    private fun selected(
+        sr: RawSuperResolutionSettings = srOff,
+        fusion: RawBurstFusionSettings = fusionOff,
+        hdrPlus: HdrPlusSettings = hdrOff,
+        configured: Int,
+        format: CaptureFormat
+    ): Int = RawCameraController.zslSelectedFrameCountFor(
+        sr, fusion, hdrPlus, configured, format
+    )
+
+    private fun slots(
+        sr: RawSuperResolutionSettings = srOff,
+        fusion: RawBurstFusionSettings = fusionOff,
+        hdrPlus: HdrPlusSettings = hdrOff,
+        configured: Int,
+        format: CaptureFormat
+    ): Int = RawCameraController.availabilitySlotCountFor(
+        sr, fusion, hdrPlus, configured, format
+    )
+
+    @Test fun hdrPlusJpegDngKeepsConfiguredCount() {
+        // Logcat 2026-10-11: 12 selected in JPEG+DNG merged 6/6 — the
+        // per-frame JPEG queue cap must not apply to merge-to-one HDR+.
+        val hdrOn = HdrPlusSettings(enabled = true)
+        assertEquals(12, selected(hdrPlus = hdrOn, configured = 12, format = CaptureFormat.JPEG_DNG))
+        assertEquals(12, selected(hdrPlus = hdrOn, configured = 12, format = CaptureFormat.JPEG))
+        assertEquals(12, selected(hdrPlus = hdrOn, configured = 12, format = CaptureFormat.DNG_ONLY))
+    }
+
+    @Test fun hdrPlusHonorsMergeBounds() {
+        val hdrOn = HdrPlusSettings(enabled = true)
+        assertEquals(30, selected(hdrPlus = hdrOn, configured = 59, format = CaptureFormat.JPEG_DNG))
+        assertEquals(30, selected(hdrPlus = hdrOn, configured = 59, format = CaptureFormat.DNG_ONLY))
+        assertEquals(2, selected(hdrPlus = hdrOn, configured = 1, format = CaptureFormat.DNG_ONLY))
+        assertEquals(2, selected(hdrPlus = hdrOn, configured = 2, format = CaptureFormat.JPEG_DNG))
+    }
+
+    @Test fun fusionBypassesJpegCapLikeHdrPlus() {
+        val fusionOn = RawBurstFusionSettings(enabled = true)
+        assertEquals(12, selected(fusion = fusionOn, configured = 12, format = CaptureFormat.JPEG_DNG))
+        assertEquals(30, selected(fusion = fusionOn, configured = 59, format = CaptureFormat.JPEG_DNG))
+        assertEquals(2, selected(fusion = fusionOn, configured = 1, format = CaptureFormat.DNG_ONLY))
+    }
+
+    @Test fun superResolutionUnchanged() {
+        val srOn = RawSuperResolutionSettings(enabled = true)
+        assertEquals(12, selected(sr = srOn, configured = 12, format = CaptureFormat.JPEG_DNG))
+        assertEquals(30, selected(sr = srOn, configured = 59, format = CaptureFormat.JPEG_DNG))
+        assertEquals(2, selected(sr = srOn, configured = 1, format = CaptureFormat.DNG_ONLY))
+    }
+
+    @Test fun plainBurstKeepsJpegCap() {
+        // Per-frame JPEG saves still serialize through the 6-slot
+        // development worker; DNG-only bursts keep the full selection.
+        assertEquals(6, selected(configured = 12, format = CaptureFormat.JPEG_DNG))
+        assertEquals(6, selected(configured = 12, format = CaptureFormat.JPEG))
+        assertEquals(12, selected(configured = 12, format = CaptureFormat.DNG_ONLY))
+        assertEquals(30, selected(configured = 30, format = CaptureFormat.DNG_ONLY))
+        assertEquals(4, selected(configured = 4, format = CaptureFormat.JPEG_DNG))
+    }
+
+    @Test fun availabilitySlotsCountOneForMerges() {
+        // The shutter gate must not grey out on large merge selections
+        // in JPEG modes: merges save one artifact (one slot), so the
+        // 6-slot per-frame JPEG budget never applies to them.
+        val srOn = RawSuperResolutionSettings(enabled = true)
+        val fusionOn = RawBurstFusionSettings(enabled = true)
+        val hdrOn = HdrPlusSettings(enabled = true)
+        for (format in CaptureFormat.entries) {
+            assertEquals(1, slots(sr = srOn, configured = 30, format = format))
+            assertEquals(1, slots(fusion = fusionOn, configured = 30, format = format))
+            assertEquals(1, slots(hdrPlus = hdrOn, configured = 30, format = format))
+        }
+    }
+
+    @Test fun availabilitySlotsGateFullPlainBurst() {
+        assertEquals(6, slots(configured = 12, format = CaptureFormat.JPEG_DNG))
+        assertEquals(6, slots(configured = 12, format = CaptureFormat.JPEG))
+        assertEquals(30, slots(configured = 30, format = CaptureFormat.DNG_ONLY))
+        assertEquals(4, slots(configured = 4, format = CaptureFormat.JPEG_DNG))
+    }
+}
