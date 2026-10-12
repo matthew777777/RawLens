@@ -255,14 +255,12 @@ object AdaptiveDevelopmentExposure {
      * Shared with the VF live preview estimator ([VfGpuImport.estimatePreviewCorrectionEv]).
      *
      * @param ettrHeadroomEv capture-time ETTR headroom (see [EttrSettings.headroomEv]),
-     *   or null when the frame was not ETTR-exposed. ETTR frames are already optimally
-     *   bright by construction (the loop placed the hottest channel at 2^-headroom),
-     *   so positive develop lift only erodes the headroom ETTR deliberately kept and
-     *   washes bright skies white. Non-null applies two tiers: frames whose measured
-     *   highlights confirm ETTR-like brightness (p99.5 at/above [ETTR_VERIFY_HIGHLIGHT])
-     *   keep zero positive lift — the exposure is already right; darker frames (stale
-     *   loop, ISO-limited night) fall back to the residual-to-target cap, which
-     *   degrades to the legacy clamp instead of leaving them dark.
+     *   or null when the frame was not ETTR-exposed. ETTR frames are already near-optimally
+     *   bright by construction (the loop placed the hottest channel near 2^-headroom),
+     *   so develop lift is capped at the residual needed to complete the measured p99.5
+     *   to the loop target: bright frames take a small completion lift that keeps skies
+     *   blue, while dark/stale frames (loop still tracking, ISO-limited night) keep most
+     *   of the legacy lift instead of rendering too dark.
      */
     internal fun analyzeSamples(
         samples: FloatArray,
@@ -300,16 +298,15 @@ object AdaptiveDevelopmentExposure {
         correction = min(correction, log2(bounded.highlightSoftHeadroom / highlightBroad.coerceAtLeast(1e-6)))
         if (ettrHeadroomEv != null) {
             require(ettrHeadroomEv.isFinite()) { "ETTR headroom must be finite" }
+            // Single residual tier: complete p99.5 to the loop target and stop.
+            // A hard-zero tier for verified-bright frames (shipped, reverted
+            // 2026-10-09) held them at 0 EV and rendered too-dark shadows on
+            // device; the residual keeps the hot tail at target — skies stay
+            // blue — while mids still lift (replica-verified on 175945/180030).
             correction = min(
                 correction,
                 log2(RawEttrMeter.targetLevel(ettrHeadroomEv) / highlight.coerceAtLeast(1e-6))
             )
-            // Verified ETTR brightness: the loop's exposure is already right,
-            // so no positive develop lift at all (a bright haze gradient needs
-            // ~0 EV to stay blue; any lift pushes it past white). Absolute
-            // level, deliberately headroom-independent: big-headroom frames
-            // stay dark enough to miss it and keep the residual tier above.
-            if (highlight >= ETTR_VERIFY_HIGHLIGHT) correction = min(correction, 0.0)
         }
 
         val median = percentile(samples, count, 0.50).toDouble()
@@ -326,6 +323,25 @@ object AdaptiveDevelopmentExposure {
     private fun log2(value: Double): Double = ln(value) / LN_2
     private fun exp2(value: Double): Double = kotlin.math.exp(value * LN_2)
 
+    /**
+     * Exponential chase of a display EV toward a meter reading: big scene
+     * moves (|err| > 1 EV, never flicker) snap the TARGET in one update — the
+     * viewfinder's per-offer one-pole still glides the RENDER smoothly, so no
+     * delay and no staircase — while small errors ease in at half rate, which
+     * averages flicker oscillation out instead of pumping after it. Holds
+     * inside [deadband]. Pure and unit-tested; the viewfinder calls it on
+     * every meter update.
+     */
+    fun chaseToward(current: Float, reading: Float, deadband: Float): Float {
+        require(deadband >= 0f)
+        if (!current.isFinite()) return if (reading.isFinite()) reading else 0f
+        if (!reading.isFinite()) return current
+        val err = reading - current
+        if (kotlin.math.abs(err) <= deadband) return current
+        val alpha = if (kotlin.math.abs(err) > 1f) 1f else 0.5f
+        return current + err * alpha
+    }
+
     private const val MAX_SAMPLES = 65_536
     private const val MIN_SAMPLES = 64
     internal const val SHADOW_FLOOR = 1e-4f
@@ -338,12 +354,6 @@ object AdaptiveDevelopmentExposure {
     // gradation instead of clipping when the spike guard alone would allow +1EV.
     const val DEFAULT_HIGHLIGHT_SOFT_HEADROOM = 0.85
     private const val MAX_CORRECTION_EV = 1.5
-    /**
-     * p99.5 level confirming ETTR-like brightness: ETTR-daylight frames sit
-     * at 0.55+ while stale/limited dark frames sit well below, so verified
-     * frames take zero positive lift and dark ones keep the residual tier.
-     */
-    private const val ETTR_VERIFY_HIGHLIGHT = 0.45
     private const val LOW_KEY_MEDIAN = 0.012
     private const val LOW_KEY_UPPER = 0.05
     private const val LOW_KEY_POSITIVE_SCALE = 0.25

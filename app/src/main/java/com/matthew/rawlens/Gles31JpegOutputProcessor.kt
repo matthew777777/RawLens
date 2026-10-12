@@ -72,6 +72,9 @@ class Gles31JpegOutputProcessor(context: Context) {
     fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg {
         val startedAt = SystemClock.elapsedRealtime()
         require(scene.internalFormat == AmazeTextureFormat.RGBA16F)
+        require(scene.colorDomain == AmazeColorDomain.ACESCG) {
+            "JPEG develop needs scene-linear ACEScg, not camera-linear (wavelet tail missing?)"
+        }
         val resolved = settings.resolvedForPlatform()
         val encodedTexture = IntArray(1)
         val gainTexture = IntArray(1)

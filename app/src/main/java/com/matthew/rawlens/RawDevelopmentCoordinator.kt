@@ -86,11 +86,15 @@ class RawDevelopmentCoordinator(context: Context) {
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
     private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
     private val galoshDenoiser by lazy { GaloshDenoiser(appContext) }
+    private val waveletDenoiser by lazy { WaveletDenoiser(appContext) }
 
     fun probe(width: Int, height: Int): AmazeCapability = amaze.probe(width, height)
 
     /** Enable-time Vulkan preload; first capture's denoise stays fast. */
     fun prewarmGalosh() = galoshDenoiser.prewarm()
+
+    /** Enable-time Vulkan preload for the post-demosaic wavelet stage. */
+    fun prewarmWavelet() = waveletDenoiser.ensureInit()
 
     fun <T> develop(
         rawPlane: ByteBuffer,
@@ -171,8 +175,23 @@ class RawDevelopmentCoordinator(context: Context) {
             resolvedExposureEv
         )
         val transformAt = SystemClock.elapsedRealtime()
+        // Post-demosaic wavelet (rawr resolve() parity): single-frame only,
+        // never Quad-Bayer (no camera-linear tap there yet), never fused
+        // (the wavelet stage needs the unfused RGBA16F frame).
+        val waveletPlan = resolveDenoise(settings.denoise, settings.galosh, mergedPath = false).wavelet &&
+            !metadata.quadBayer
+        val effectiveFused = if (waveletPlan) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
-            consume(SceneLinearGpuFrame(output, preDemosaic, transform))
+            if (waveletPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
+                output.internalFormat == AmazeTextureFormat.RGBA16F
+            ) {
+                consumeWaveletDenoised(
+                    output, metadata, normalization, transform, preDemosaic,
+                    settings.denoise.wavelet, consume
+                )
+            } else {
+                consume(SceneLinearGpuFrame(output, preDemosaic, transform))
+            }
         }
         fun runAmaze(): T {
             return if (directGpu) {
@@ -182,7 +201,8 @@ class RawDevelopmentCoordinator(context: Context) {
                     ),
                     cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                     cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                    fusedOutputSettings = fusedOutputSettings,
+                    fusedOutputSettings = effectiveFused,
+                    cameraLinear = waveletPlan,
                     consume = consumeOutput
                 )
             } else {
@@ -190,7 +210,8 @@ class RawDevelopmentCoordinator(context: Context) {
                     requireNotNull(cpuCfa),
                     cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                     cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                    fusedOutputSettings = fusedOutputSettings,
+                    fusedOutputSettings = effectiveFused,
+                    cameraLinear = waveletPlan,
                     consume = consumeOutput
                 )
             }
@@ -209,6 +230,7 @@ class RawDevelopmentCoordinator(context: Context) {
                         ),
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                        cameraLinear = waveletPlan,
                         consume = consumeOutput
                     )
                 } else {
@@ -216,6 +238,7 @@ class RawDevelopmentCoordinator(context: Context) {
                         requireNotNull(cpuCfa),
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                        cameraLinear = waveletPlan,
                         consume = consumeOutput
                     )
                 }
@@ -240,6 +263,70 @@ class RawDevelopmentCoordinator(context: Context) {
                 "GPU+output=${completedAt - transformAt}ms total=${completedAt - startedAt}ms"
         )
         return result
+    }
+
+    /**
+     * Post-demosaic wavelet detour: reads the camera-linear frame back,
+     * runs the profiled wavelet (Vulkan), converts to ACEScg, and hands a
+     * standard scene-linear frame to [consume]. Any wavelet failure falls
+     * back to the un-denoised readback (no re-demosaic); the JPEG never
+     * fails for denoise reasons. JPEG only — the DNG path is untouched.
+     */
+    private fun <T> consumeWaveletDenoised(
+        output: AmazeGpuOutput,
+        metadata: RawFrameMetadata,
+        normalization: RawNormalization,
+        transform: ResolvedSceneLinearTransform,
+        preDemosaic: PreDemosaicResult,
+        settings: WaveletSettings,
+        consume: (SceneLinearGpuFrame) -> T
+    ): T {
+        val camera = try {
+            amaze.readbackHalfFloat(output)
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "Wavelet readback failed, developing without denoise", failure)
+            return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
+        }
+        val blackAvg = normalization.blackLevels.average()
+        val (noiseA, noiseB) = WaveletDenoiser.noiseAB(
+            metadata.noiseProfile?.toDoubleArray(),
+            normalization.whiteLevel.toDouble() - blackAvg
+        )
+        val wb = FloatArray(3) { transform.whiteBalance[it].toFloat() }.let { gains ->
+            val g = gains[1].takeIf { it.isFinite() && it > 0f } ?: 1f
+            floatArrayOf(gains[0] / g, 1f, gains[2] / g)
+        }
+        val denoised = ByteBuffer.allocateDirect(camera.remaining()).order(ByteOrder.nativeOrder())
+        val ok = try {
+            waveletDenoiser.process(
+                camera, denoised, output.width, output.height,
+                settings.bounded(), noiseA, noiseB, wb
+            )
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
+            false
+        }
+        val upload = if (ok) denoised else camera
+        return amaze.transformCameraLinear(
+            upload, output.width, output.height,
+            transform.glslColumnMajorMatrix()
+        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
+    }
+
+    /**
+     * Readback itself failed (no CPU pixels): convert on-GPU straight from
+     * the camera-linear texture. The JPEG still develops, un-denoised —
+     * the capture never fails for wavelet reasons.
+     */
+    private fun <T> consumeFallbackCameraLinear(
+        output: AmazeGpuOutput,
+        transform: ResolvedSceneLinearTransform,
+        preDemosaic: PreDemosaicResult,
+        consume: (SceneLinearGpuFrame) -> T
+    ): T {
+        return amaze.transformCameraTexture(
+            output, transform.glslColumnMajorMatrix()
+        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
     }
 
     private fun <T> developQuadBayer(
@@ -488,14 +575,39 @@ class RawDevelopmentCoordinator(context: Context) {
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), resolvedExposureEv
         )
+        val waveletPlan = resolveDenoise(settings.denoise, settings.galosh, mergedPath = false).wavelet &&
+            !metadata.quadBayer
         return developWithTileDropRetry("cfa-frame ${cfa.width}x${cfa.height}") {
             amaze.process(
                 cfa,
                 clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = outputSettings
-            ) { output -> finishJpeg(output, outputSettings) }
+                fusedOutputSettings = if (waveletPlan) null else outputSettings,
+                cameraLinear = waveletPlan
+            ) { output ->
+                if (waveletPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
+                    output.internalFormat == AmazeTextureFormat.RGBA16F
+                ) {
+                    val normalization = metadata.normalizationOrNull()
+                    if (normalization == null) {
+                        Log.w(LOG_TAG, "Wavelet skipped: CFA normalization metadata is invalid")
+                        amaze.transformCameraTexture(
+                            output, transform.glslColumnMajorMatrix()
+                        ) { aces -> finishJpeg(aces, outputSettings) }
+                    } else {
+                        consumeWaveletDenoised(
+                            output, metadata, normalization, transform,
+                            PreDemosaicResult(
+                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
+                            ),
+                            settings.denoise.wavelet
+                        ) { frame -> finishJpeg(frame.texture, outputSettings) }
+                    }
+                } else {
+                    finishJpeg(output, outputSettings)
+                }
+            }
         }
     }
 

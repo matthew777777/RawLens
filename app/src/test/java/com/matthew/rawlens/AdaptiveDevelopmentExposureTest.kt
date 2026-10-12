@@ -138,39 +138,40 @@ class AdaptiveDevelopmentExposureTest {
     }
 
     @Test
-    fun ettrVerifiedBrightFrameKeepsZeroLift() {
+    fun ettrBrightFrameCapsAtResidualToTarget() {
         // ETTR shape (IMG_20261004 whites): dim mids (big legacy need) with
-        // the hot tail confirming ETTR-like brightness (p99.5 ~0.78, above
-        // the 0.45 verify level). Legacy lifts +0.35 and washes the sky;
-        // verified ETTR develop must hold zero — the exposure is already
-        // right, and a bright haze gradient needs ~0 EV to stay blue.
+        // a nearly converged hot tail (p99.5 ~0.78, just under the 0.81 loop
+        // target). ETTR develop completes the tail to target (~+0.05) instead
+        // of the legacy +0.35 — hot pixels stop at the level ETTR exposed
+        // for, so skies keep color while mids still lift.
         val values = FloatArray(4096) { index ->
             if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.51f
         }
         val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
         assertEquals(0.353, legacy.correctionEv, 0.03)
         val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(0.0, ettr.correctionEv, 1e-9)
+        assertEquals(0.054, ettr.correctionEv, 0.02)
     }
 
     @Test
-    fun ettrBrightFrameVerifiesRegardlessOfConvergence() {
+    fun ettrTrackingFrameKeepsPartialCompletionLift() {
         // Hot tail below the ETTR target (loop still tracking, like the
-        // 175945 frame) but bright enough to verify (p99.5 ~0.62): what
-        // matters for rendering is the absolute level, not the distance
-        // to target — develop holds zero instead of the legacy +0.69.
+        // 175945 frame at p99.5 ~0.62): develop completes the tail to the
+        // 0.81 target (+0.39) instead of the legacy +0.69 — shadows lift
+        // while the hot tail stops where ETTR exposed for (regression: a
+        // hard-zero tier here rendered too-dark shadows on device).
         val values = FloatArray(4096) { index ->
             if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.34f
         }
         val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
         assertEquals(0.685, legacy.correctionEv, 0.03)
         val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(0.0, ettr.correctionEv, 1e-9)
+        assertEquals(0.386, ettr.correctionEv, 0.03)
     }
 
     @Test
     fun ettrMidDarkFrameFallsBackToResidualCap() {
-        // Below the verify level (p99.5 ~0.31) the residual-to-target tier
+        // With a dim hot tail (p99.5 ~0.31) the residual-to-target cap
         // governs: +1.40 completes toward the ETTR target without reaching
         // the legacy +1.5 clamp — a darker frame still gets its lift.
         val values = FloatArray(4096) { index ->
@@ -197,16 +198,17 @@ class AdaptiveDevelopmentExposureTest {
     }
 
     @Test
-    fun ettrZeroHeadroomHoldsWhiteAndMatchesLegacyWhenDark() {
-        // Headroom 0 exposes to white itself: a bright frame verifies and
-        // holds zero (any lift only clips harder), while a dark frame
-        // misses verification and its residual degrades exactly to the
-        // spike guard — identical to legacy develop.
+    fun ettrZeroHeadroomDegradesToSpikeGuard() {
+        // Headroom 0 exposes to white itself, so the residual target is 1.0
+        // and the ETTR cap degrades exactly to the spike guard — bright and
+        // dark frames develop identically to legacy (the cap only bites when
+        // ETTR deliberately kept headroom below white).
         val bright = FloatArray(4096) { index ->
             if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.51f
         }
+        val legacyBright = AdaptiveDevelopmentExposure.analyze(cfa(bright))
         val ettrBright = AdaptiveDevelopmentExposure.analyze(cfa(bright), ettrHeadroomEv = 0f)
-        assertEquals(0.0, ettrBright.correctionEv, 1e-9)
+        assertEquals(legacyBright.correctionEv, ettrBright.correctionEv, 1e-12)
         val dark = FloatArray(4096) { index ->
             if (index < 3891) 0.02f else 0.02f + (index - 3891) / 205f * 0.13f
         }
@@ -277,5 +279,30 @@ class AdaptiveDevelopmentExposureTest {
             width, height, BayerPattern.RGGB, values,
             RawCrop(0, 0, width, height)
         )
+    }
+
+    @Test fun chaseTowardSnapsBigMovesAndDampsFlap() {
+        // Big scene moves snap the target in one update (no delay/staircase);
+        // the viewfinder's one-pole still glides the render smoothly.
+        assertEquals(1.5f, AdaptiveDevelopmentExposure.chaseToward(0f, 1.5f, 0.05f), 1e-6f)
+        assertEquals(-1.5f, AdaptiveDevelopmentExposure.chaseToward(0f, -1.5f, 0.05f), 1e-6f)
+        // Small errors ease in at half rate; inside the deadband it holds.
+        assertEquals(0.3f, AdaptiveDevelopmentExposure.chaseToward(0f, 0.6f, 0.05f), 1e-6f)
+        assertEquals(0f, AdaptiveDevelopmentExposure.chaseToward(0f, 0.04f, 0.05f), 1e-6f)
+        // Flicker oscillation averages out instead of pumping: alternating
+        // +/-0.4 readings settle near zero, far below the reading amplitude
+        // (a slew limiter would triangle-wave the full +/-0.4).
+        var v = 0f
+        repeat(20) { i ->
+            v = AdaptiveDevelopmentExposure.chaseToward(v, if (i % 2 == 0) 0.4f else -0.4f, 0.05f)
+        }
+        assertTrue("flap not damped: $v", kotlin.math.abs(v) < 0.2f)
+        // Small steady errors still converge (no overshoot/oscillation).
+        v = 0f
+        repeat(20) { v = AdaptiveDevelopmentExposure.chaseToward(v, 0.6f, 0.05f) }
+        assertEquals(0.6f, v, 0.06f)
+        // Non-finite inputs never poison the display EV.
+        assertEquals(0.5f, AdaptiveDevelopmentExposure.chaseToward(Float.NaN, 0.5f, 0.05f), 1e-6f)
+        assertEquals(0.5f, AdaptiveDevelopmentExposure.chaseToward(0.5f, Float.NaN, 0.05f), 1e-6f)
     }
 }
