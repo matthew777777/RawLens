@@ -2014,6 +2014,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.pitch, frame.levels, frame.white
         )
         return try {
+            val (blackQ, denQ) = VfLevels.toFixedQ6(frame.levels, frame.white)
+            val (lutMax, lutBytes) = VfLevels.lutFor(blackQ, denQ)
+            if (VfVulkan.uploadLutNative(lutMax, lutBytes) != VfVulkan.OK) return VfVulkan.SUBMIT_FAILED
             if (copy) VfVulkan.computeCopyNative(frame.buffer, iparams, fparams)
             else VfVulkan.computeNative(frame.buffer, iparams, fparams)
         } catch (_: Exception) {

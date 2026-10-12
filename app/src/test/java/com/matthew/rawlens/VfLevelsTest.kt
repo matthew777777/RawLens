@@ -125,4 +125,36 @@ class VfLevelsTest {
         assertTrue(VfLevels.isSane(black, white))
         VfLevels.toFixedQ6(black, white)
     }
+
+    @Test fun `lut matches formula on every code`() {
+        // Production-ish levels (10-bit black 64) plus hostile corners:
+        // black 0, mismatched per-site pairs, tiny range, huge range.
+        val cases = listOf(
+            Pair(FloatArray(4) { 64f }, 1023f),
+            Pair(floatArrayOf(0f, 0f, 0f, 0f), 1023f),
+            Pair(floatArrayOf(64f, 63.5f, 64.5f, 64f), 4095f),
+            Pair(floatArrayOf(100f, 100f, 100f, 100f), 101f),
+            Pair(floatArrayOf(0f, 0f, 0f, 0f), 65535f),
+            Pair(floatArrayOf(256f, 64f, 900f, 63.9f), 16383f)
+        )
+        for ((black, white) in cases) {
+            val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
+            val (bound, bytes) = VfLevels.lutFor(blackQ, denQ)
+            assertEquals(4 * (bound + 1), bytes.size)
+            for (s in 0..3) {
+                // Table entries are bit-exact vs the formula...
+                for (code in 0..bound) {
+                    assertEquals(
+                        "site $s code $code black=${black[s]} white=$white",
+                        VfLevels.normalizeByte(code, blackQ[s], denQ[s]),
+                        bytes[s * (bound + 1) + code].toInt() and 0xff
+                    )
+                }
+                // ...and every code above the bound is 255 on every site.
+                for (code in bound + 1..65535) {
+                    assertEquals(255, VfLevels.normalizeByte(code, blackQ[s], denQ[s]))
+                }
+            }
+        }
+    }
 }

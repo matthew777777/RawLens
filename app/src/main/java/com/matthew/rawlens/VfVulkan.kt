@@ -140,6 +140,17 @@ internal object VfVulkan {
     ): Int
 
     /**
+     * Upload the normalize LUT ([VfLevels.lutFor]: [lutMax] cutoff + 4
+     * packed site rows) into the binding-3 table before [computeNative] /
+     * [computeCopyNative]. The table memoizes the Q6 formula per sensor
+     * site, so the shader replaces 4 integer divisions per pixel with 4
+     * buffer fetches, bit-exact by construction. Call every dispatch (a
+     * few KB memcpy); a non-OK code means the dispatch must not run with
+     * a stale table — drop the frame like a compute failure.
+     */
+    external fun uploadLutNative(lutMax: Int, lut: ByteArray): Int
+
+    /**
      * Tier black-output probe: max byte over a coarse grid of the export
      * buffer (0..255), or -1 when the export cannot be CPU-locked. Call after
      * a compute fence, with GL drained, on probation frames only.

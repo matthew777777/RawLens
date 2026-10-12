@@ -362,6 +362,24 @@ internal object VfLogGrade {
         fullRgb: Int,
     ): Int
 
+    /**
+     * Blocking twin of [gradeYuvSubmitNative]: identical pixels, completion
+     * via fence wait instead of an exported sync fd. For drivers without
+     * semaphore-fd export (software/validation Vulkan); the record path
+     * keeps the fd twin. Returns [VfVulkan.OK] (or a positive diagnostic;
+     * -20 keeps its loud P010-layout meaning).
+     */
+    external fun gradeYuvBlockingNative(
+        expBuffer: HardwareBuffer,
+        codecBuffer: HardwareBuffer,
+        idims: IntArray,
+        isrc: IntArray,
+        fparams: FloatArray,
+        istrides: IntArray,
+        slot: Int,
+        fullRgb: Int,
+    ): Int
+
     /** Upload a baked warp LUT (129 RGBA half words); required before any grade submit. */
     external fun gradeLutUploadNative(halfBits: ShortArray): Int
 

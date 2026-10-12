@@ -76,6 +76,88 @@ class BguSampleTest {
         assertEquals(251.toByte(), out[3])
     }
 
+    @Test fun lensGlideFadesInFromUnity() {
+        // First arrival: t=0 emits unity (no pop vs unlensed), t=1 the map.
+        assertEquals(1f, BguViewfinder.glideGain(1f, 1.39f, 0f), 1e-6f)
+        assertEquals(1.39f, BguViewfinder.glideGain(1f, 1.39f, 1f), 1e-6f)
+        // Midpoint is the average: linear glide.
+        assertEquals(1.195f, BguViewfinder.glideGain(1f, 1.39f, 0.5f), 1e-6f)
+        // Per-offer step for the worst observed edge gain (1.39x) stays tiny:
+        // 0.39/24 offers ~ 0.016 gain per frame — a smooth gradient, not a pop.
+        val step = (1.39f - 1f) / BguViewfinder.LENS_GLIDE_OFFERS
+        assertTrue("glide step $step too coarse", step < 0.02f)
+    }
+
+    @Test fun aeFeedForwardCancelsSensorStep() {
+        // Doubling exposure (or ISO) is +1 EV of sensor light.
+        val base = BguViewfinder.aeExposureLog2(20_000_000L, 1000)
+        assertEquals(1.0, BguViewfinder.aeExposureLog2(40_000_000L, 1000) - base, 1e-9)
+        assertEquals(1.0, BguViewfinder.aeExposureLog2(20_000_000L, 2000) - base, 1e-9)
+        assertTrue(BguViewfinder.aeExposureLog2(0L, 1000).isNaN())
+        assertTrue(BguViewfinder.aeExposureLog2(20_000_000L, 0).isNaN())
+        // First call seeds: no compensation against itself.
+        val (ref0, norm0) = BguViewfinder.aeUpdate(Double.NaN, base, BguViewfinder.AE_REF_ALPHA)
+        assertEquals(base, ref0, 1e-9)
+        assertEquals(0f, norm0, 1e-6f)
+        // A +1 EV sensor step is cancelled ~fully on the same offer: the
+        // reference (alpha 0.01) barely moves, normEv ~= -1.
+        val (ref1, norm1) = BguViewfinder.aeUpdate(ref0, base + 1.0, BguViewfinder.AE_REF_ALPHA)
+        assertEquals(0.01, ref1 - ref0, 1e-9)
+        assertEquals(-0.99f, norm1, 1e-6f)
+        // Holding the new exposure converges the reference: compensation
+        // migrates into the (scene-only) meter target, sum never moves.
+        var ref = ref1
+        var norm = norm1
+        repeat(2000) {
+            val (r, n) = BguViewfinder.aeUpdate(ref, base + 1.0, BguViewfinder.AE_REF_ALPHA)
+            ref = r; norm = n
+        }
+        assertEquals(0f, norm, 1e-3f)
+        // The observed 1/49 -> 1/100 step (~-1.03 EV) cancels the same way.
+        val dark = BguViewfinder.aeExposureLog2(10_000_000L, 8000)
+        val (_, normStep) = BguViewfinder.aeUpdate(dark + 1.03, dark, BguViewfinder.AE_REF_ALPHA)
+        assertEquals(1.02f, normStep, 0.02f)
+    }
+
+    @Test fun colorHoldFillsNullResultFromLastGood() {
+        // Last-good preview color (daylight-ish): the recording case, where
+        // the recorder offers frames with result=null and unity/identity
+        // would flash green.
+        val hold = ColorHold(
+            wb = floatArrayOf(1.9f, 1f, 1f, 1.5f),
+            ccm = FloatArray(9) { if (it % 4 == 0) 1.2f else 0.1f },
+            neutral = doubleArrayOf(0.4, 1.0, 0.7),
+            gainsSensor = floatArrayOf(1.9f, 1f, 1f, 1.5f)
+        )
+        val held = BguViewfinder.resolveColorHold(null, null, null, null, hold)
+        assertArrayEquals(hold.wb, held.wb, 0f)
+        assertArrayEquals(hold.ccm, held.ccm, 0f)
+        assertArrayEquals(hold.neutral, held.neutral, 0.0)
+        assertArrayEquals(hold.gainsSensor, held.gainsSensor, 0f)
+        // No hold ever seeded: unity/identity defaults (unchanged fallback).
+        val fresh = BguViewfinder.resolveColorHold(null, null, null, null, null)
+        assertArrayEquals(floatArrayOf(1f, 1f, 1f, 1f), fresh.wb, 0f)
+        assertArrayEquals(FloatArray(9) { if (it % 4 == 0) 1f else 0f }, fresh.ccm, 0f)
+        assertNull(fresh.neutral)
+        assertNull(fresh.gainsSensor)
+        // Fresh result parts win over a stale hold; missing parts mix.
+        val mixed = BguViewfinder.resolveColorHold(
+            floatArrayOf(2.1f, 1f, 1f, 1.3f), null, null,
+            floatArrayOf(2.1f, 1f, 1f, 1.3f), hold
+        )
+        assertArrayEquals(floatArrayOf(2.1f, 1f, 1f, 1.3f), mixed.wb, 0f)
+        assertArrayEquals(hold.ccm, mixed.ccm, 0f)
+        assertArrayEquals(hold.neutral, mixed.neutral, 0.0)
+        assertArrayEquals(floatArrayOf(2.1f, 1f, 1f, 1.3f), mixed.gainsSensor, 0f)
+        // Defensive copies: mutating inputs after resolve is contained.
+        val wbIn = floatArrayOf(2f, 1f, 1f, 1f)
+        val out = BguViewfinder.resolveColorHold(wbIn, null, null, null, hold)
+        wbIn[0] = 99f
+        hold.wb[1] = 99f
+        assertEquals(2f, out.wb[0], 0f)
+        assertEquals(1f, out.wb[1], 0f)
+    }
+
     @Test fun rejectsOutOfBounds() {
         val out = ByteArray(2 * 2 * 4)
         assertFalse(

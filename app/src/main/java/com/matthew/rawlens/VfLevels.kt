@@ -114,4 +114,36 @@ internal object VfLevels {
         if (num >= denQ) return 255
         return (num * 255 + denQ / 2) / denQ
     }
+
+    /**
+     * Normalize LUT for the Vulkan superpixel (binding 3): memoizes
+     * [normalizeByte] per sensor site (Camera2 order, like [toFixedQ6]) so
+     * the shader replaces 4 integer divisions per pixel with 4 buffer
+     * fetches. Returns (bound, bytes): [bound] is the cutoff — every code
+     * strictly above it maps to 255 on every site (by the `num >= denQ` arm,
+     * proven in [VfLevelsTest]) — and [bytes] packs the 4 sites
+     * contiguously, site s at s * (bound + 1) + code, covering 0..bound.
+     * The native buffer covers the full 64K range per site (tail stays
+     * 0xFF), so the shader indexes codes directly with no clamp and no
+     * push word.
+     */
+    fun lutFor(blackQ: IntArray, denQ: IntArray): Pair<Int, ByteArray> {
+        require(blackQ.size == 4 && denQ.size == 4) { "Q6 levels must have 4 entries" }
+        require(blackQ.all { it >= 0 } && denQ.all { it > 0 }) { "bad Q6 levels" }
+        // First code mapping to 255 on site i: ceil((denQ + blackQ) / 64),
+        // since num = code * 64 - blackQ >= denQ iff code >= that.
+        var bound = 0
+        for (i in 0..3) {
+            val firstWhite = (denQ[i].toLong() + blackQ[i].toLong() + SCALE - 1) / SCALE
+            if (firstWhite > bound) bound = firstWhite.toInt()
+        }
+        bound = bound.coerceIn(0, 65535)
+        val bytes = ByteArray(4 * (bound + 1))
+        for (s in 0..3) {
+            for (code in 0..bound) {
+                bytes[s * (bound + 1) + code] = normalizeByte(code, blackQ[s], denQ[s]).toByte()
+            }
+        }
+        return bound to bytes
+    }
 }

@@ -3,6 +3,7 @@ package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -64,5 +65,12 @@ class VfEngineModeTest {
         assertTrue(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = false, hasBgu = true))
         assertFalse(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = true, hasBgu = true))
         assertFalse(resolveVfRoute(VfEngineMode.GPU, autoPrefersBgu = true, bguDead = false, hasBgu = true))
+    }
+
+    @Test fun `recording follows the routed viewfinder view`() {
+        assertEquals("bgu", selectRoutedViewfinder(true, "bgu", "legacy"))
+        assertEquals("legacy", selectRoutedViewfinder(false, "bgu", "legacy"))
+        assertEquals("legacy", selectRoutedViewfinder(true, null, "legacy"))
+        assertNull(selectRoutedViewfinder(false, "bgu", null))
     }
 }

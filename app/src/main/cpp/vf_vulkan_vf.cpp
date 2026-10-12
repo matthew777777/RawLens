@@ -266,6 +266,20 @@ struct Context {
     void* stagingMapped = nullptr;
     VkDeviceSize stagingSize = 0;
     bool stagingCoherent = true;
+    // Normalize LUT (superpixel binding 3): 4 sites x 65536 codes,
+    // host-visible + coherent, mapped persistently. Fixed full-range size
+    // so uploads are pure memcpys (no per-frame alloc, no descriptor
+    // churn); the tail beyond the uploaded prefix is 0xFF (codes above
+    // the LUT bound always normalize to 255). Default fill is 0x00
+    // (black): a dispatch before the first upload reads black, which the
+    // tier probe catches, instead of garbage. Written under vkMutex; a
+    // torn read only affects a BUSY-skipped (unpresented) dispatch.
+    VkBuffer lutBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory lutMemory = VK_NULL_HANDLE;
+    void* lutMapped = nullptr;
+    bool lutCoherent = true;
+    bool lutBound = false;
+    uint32_t lutRow = 0;
     // Phase-B grade stage (probe-only; the viewfinder never initializes it):
     // superpixel export -> WB/CCM/log -> graded export. Shares the device,
     // queue, fence and command buffer; imports are cached by AHB pointer
@@ -518,6 +532,105 @@ void destroyStaging(Context* ctx) {
     ctx->stagingMapped = nullptr;
     ctx->stagingSize = 0;
     ctx->stagingCoherent = true;
+}
+
+// Normalize-LUT table: 4 sensor sites x full 16-bit code range, one byte
+// per (site, code). Fixed size so uploads never realloc and the binding-3
+// descriptor is written once; the tail past each upload stays 0xFF.
+constexpr uint32_t kLutSites = 4;
+constexpr uint32_t kLutCodes = 65536;
+constexpr VkDeviceSize kLutBytes = (VkDeviceSize)kLutSites * kLutCodes;
+
+void destroyLut(Context* ctx) {
+    if (ctx->lutMapped != nullptr && ctx->lutMemory != VK_NULL_HANDLE) {
+        vkUnmapMemory(ctx->device, ctx->lutMemory);
+    }
+    if (ctx->lutBuffer != VK_NULL_HANDLE) vkDestroyBuffer(ctx->device, ctx->lutBuffer, nullptr);
+    if (ctx->lutMemory != VK_NULL_HANDLE) vkFreeMemory(ctx->device, ctx->lutMemory, nullptr);
+    ctx->lutBuffer = VK_NULL_HANDLE;
+    ctx->lutMemory = VK_NULL_HANDLE;
+    ctx->lutMapped = nullptr;
+    ctx->lutCoherent = true;
+    ctx->lutBound = false;
+    ctx->lutRow = 0;
+}
+
+// Create (once) + bind (once) the LUT buffer. Host-visible + coherent
+// preferred, plain host-visible with explicit flush as fallback (staging
+// pattern). Default fill is 0x00: a dispatch before the first upload
+// reads black, which the tier probe catches. Creation runs under vkMutex
+// before any in-flight work can reference binding 3 (reap gate + fence
+// wait serialize dispatches; see dispatchSuperpixel).
+int ensureLut(Context* ctx) {
+    if (ctx->lutBuffer == VK_NULL_HANDLE) {
+        VkBufferCreateInfo bufInfo{};
+        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufInfo.size = kLutBytes;
+        bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(ctx->device, &bufInfo, nullptr, &ctx->lutBuffer) != VK_SUCCESS) {
+            LOGW("vf-vk: lut: create failed");
+            return VFVK_SUBMIT_FAILED;
+        }
+        VkMemoryRequirements req{};
+        vkGetBufferMemoryRequirements(ctx->device, ctx->lutBuffer, &req);
+        VkPhysicalDeviceMemoryProperties memProps{};
+        vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memProps);
+        uint32_t memType = pickMemoryTypeWithProps(
+            req.memoryTypeBits, memProps,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ctx->lutCoherent = true;
+        if (memType == UINT32_MAX) {
+            memType = pickMemoryTypeWithProps(req.memoryTypeBits, memProps,
+                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            ctx->lutCoherent = false;
+        }
+        if (memType == UINT32_MAX) {
+            LOGW("vf-vk: lut: no host-visible memory type");
+            destroyLut(ctx);
+            return VFVK_SUBMIT_FAILED;
+        }
+        VkMemoryAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc.allocationSize = req.size;
+        alloc.memoryTypeIndex = memType;
+        if (vkAllocateMemory(ctx->device, &alloc, nullptr, &ctx->lutMemory) != VK_SUCCESS ||
+            vkBindBufferMemory(ctx->device, ctx->lutBuffer, ctx->lutMemory, 0) != VK_SUCCESS ||
+            vkMapMemory(ctx->device, ctx->lutMemory, 0, VK_WHOLE_SIZE, 0, &ctx->lutMapped) !=
+                VK_SUCCESS ||
+            !ctx->lutMapped) {
+            LOGW("vf-vk: lut: alloc/bind/map failed");
+            destroyLut(ctx);
+            return VFVK_SUBMIT_FAILED;
+        }
+        std::memset(ctx->lutMapped, 0, (size_t)kLutBytes);
+        if (!ctx->lutCoherent) {
+            VkMappedMemoryRange range{};
+            range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+            range.memory = ctx->lutMemory;
+            range.offset = 0;
+            range.size = VK_WHOLE_SIZE;
+            vkFlushMappedMemoryRanges(ctx->device, 1, &range);
+        }
+        LOGI("vf-vk: lut ready size=%llu coherent=%d",
+             (unsigned long long)kLutBytes, ctx->lutCoherent ? 1 : 0);
+    }
+    if (!ctx->lutBound) {
+        VkDescriptorBufferInfo lutInfo{};
+        lutInfo.buffer = ctx->lutBuffer;
+        lutInfo.offset = 0;
+        lutInfo.range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = ctx->descriptorSet;
+        write.dstBinding = 3;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &lutInfo;
+        vkUpdateDescriptorSets(ctx->device, 1, &write, 0, nullptr);
+        ctx->lutBound = true;
+    }
+    return VFVK_OK;
 }
 
 // motioncam ensureRawBuffer pattern: keep the buffer while it fits, else
@@ -884,7 +997,7 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
         LOGW("vf-vk: shader module failed");
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    VkDescriptorSetLayoutBinding bindings[4]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -897,9 +1010,13 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setInfo.bindingCount = 3;
+    setInfo.bindingCount = 4;
     setInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &ctx->setLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(ctx->device, module, nullptr);
@@ -935,7 +1052,7 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
     savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 1;
+    poolSizes[0].descriptorCount = 2;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[1].descriptorCount = 1;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -2366,6 +2483,7 @@ static void teardownContext() {
     if (ctx->outputBuffer) AHardwareBuffer_release(ctx->outputBuffer);
     ctx->outputBuffer = nullptr;
     destroyStaging(ctx);
+    destroyLut(ctx);
     if (ctx->fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, ctx->fence, nullptr);
     if (ctx->commandPool != VK_NULL_HANDLE)
         vkDestroyCommandPool(ctx->device, ctx->commandPool, nullptr);
@@ -2685,6 +2803,10 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     shadeWrite.pImageInfo = &shadeInfo;
     vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
 
+    // Normalize LUT (binding 3): created + bound once; per-frame bytes
+    // land via uploadLutNative before compute.
+    if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
+
     vkResetFences(g->device, 1, &g->fence);
     vkResetCommandBuffer(g->commandBuffer, 0);
     VkCommandBufferBeginInfo begin{};
@@ -2798,6 +2920,53 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
         return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
     }
     g->computeArmed = false;
+    return VFVK_OK;
+}
+
+// Normalize-LUT upload (VfLevels.lutFor bytes): scatter the 4 packed
+// site rows (codes 0..lutMax each) into the full-range segments. The
+// tail past lutMax stays 0xFF on first upload and when the bound
+// shrinks (newly exposed strips held stale prefix bytes); a growing
+// bound only overwrites. Runs under vkMutex like every other upload;
+// a torn read only affects a BUSY-skipped (unpresented) dispatch.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_uploadLutNative(
+    JNIEnv* env, jobject, jint lutMax, jbyteArray lut) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (!lut || lutMax < 0 || lutMax >= (jint)kLutCodes) return VFVK_BAD_ARGUMENT;
+    const uint32_t row = (uint32_t)lutMax + 1u;
+    const jsize want = (jsize)row * (jsize)kLutSites;
+    if (env->GetArrayLength(lut) != want) return VFVK_BAD_ARGUMENT;
+    if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
+    std::vector<jbyte> tmp((size_t)want);
+    env->GetByteArrayRegion(lut, 0, want, tmp.data());
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    uint8_t* dst = static_cast<uint8_t*>(g->lutMapped);
+    if (g->lutRow == 0) {
+        for (uint32_t s = 0; s < kLutSites; ++s) {
+            std::memset(dst + (size_t)s * kLutCodes + row, 0xFF, (size_t)(kLutCodes - row));
+        }
+    } else if (row < g->lutRow) {
+        for (uint32_t s = 0; s < kLutSites; ++s) {
+            std::memset(dst + (size_t)s * kLutCodes + row, 0xFF, (size_t)(g->lutRow - row));
+        }
+    }
+    for (uint32_t s = 0; s < kLutSites; ++s) {
+        std::memcpy(dst + (size_t)s * kLutCodes, tmp.data() + (size_t)s * row, row);
+    }
+    g->lutRow = row;
+    if (!g->lutCoherent) {
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = g->lutMemory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        if (vkFlushMappedMemoryRanges(g->device, 1, &range) != VK_SUCCESS) {
+            LOGW("vf-vk: lut: flush failed");
+            return VFVK_SUBMIT_FAILED;
+        }
+    }
     return VFVK_OK;
 }
 
@@ -3066,9 +3235,11 @@ static bool ensureTwinResources(Context* ctx) {
     ctx->twinPreviewCmd[0] = twins[15];
     ctx->twinPreviewCmd[1] = twins[16];
     ctx->twinPreviewCmd[2] = twins[17];
+    // setLayout needs 2 STORAGE_BUFFER + 1 STORAGE_IMAGE + 1 sampler
+    // per set (bindings 0/3, 1, 2), so 3 sets need 6/3/3.
     VkDescriptorPoolSize recComputeSizes[3]{};
     recComputeSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    recComputeSizes[0].descriptorCount = 3;
+    recComputeSizes[0].descriptorCount = 6;
     recComputeSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     recComputeSizes[1].descriptorCount = 3;
     recComputeSizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -3098,15 +3269,19 @@ static bool ensureTwinResources(Context* ctx) {
         recAlloc.descriptorPool = ctx->recComputePool;
         recAlloc.descriptorSetCount = 1;
         recAlloc.pSetLayouts = &ctx->setLayout;
-        if (vkAllocateDescriptorSets(ctx->device, &recAlloc, &ctx->recComputeSets[i]) != VK_SUCCESS) {
-            LOGW("vf-vk: recorder compute set %d failed", i);
+        VkResult recComputeRes =
+            vkAllocateDescriptorSets(ctx->device, &recAlloc, &ctx->recComputeSets[i]);
+        if (recComputeRes != VK_SUCCESS) {
+            LOGW("vf-vk: recorder compute set %d failed %d", i, recComputeRes);
             destroyGrade(ctx);
             return false;
         }
         recAlloc.descriptorPool = ctx->recGradePool;
         recAlloc.pSetLayouts = &ctx->gradeSetLayout;
-        if (vkAllocateDescriptorSets(ctx->device, &recAlloc, &ctx->recGradeSets[i]) != VK_SUCCESS) {
-            LOGW("vf-vk: recorder grade set %d failed", i);
+        VkResult recGradeRes =
+            vkAllocateDescriptorSets(ctx->device, &recAlloc, &ctx->recGradeSets[i]);
+        if (recGradeRes != VK_SUCCESS) {
+            LOGW("vf-vk: recorder grade set %d failed %d", i, recGradeRes);
             destroyGrade(ctx);
             return false;
         }
@@ -3937,6 +4112,195 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
     return fd;
 }
 
+// Blocking twin of gradeYuvSubmitNative: identical validation, imports,
+// descriptors, barriers and dispatch, but completion via the shared fence
+// (gradeNative convention) instead of an exported sync fd. For drivers
+// without semaphore-fd export (software/validation Vulkan) and as a
+// documented fallback; the record path keeps the fd twin. Same-queue FIFO
+// still orders this behind a preceding computeSubmitNative.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
+    JNIEnv* env, jobject, jobject expBuffer, jobject codecBuffer,
+    jintArray idims, jintArray isrc, jfloatArray fparams, jintArray istrides, jint slot,
+    jint fullRgb) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (slot < 0 || slot > 2) return VFVK_BAD_ARGUMENT;
+    if (fullRgb != 0 && fullRgb != 1) return VFVK_BAD_ARGUMENT;
+    if (g->yuvPipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
+    if (!expBuffer || !codecBuffer || !idims || !isrc || !fparams || !istrides) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    const jsize fLen = env->GetArrayLength(fparams);
+    if (env->GetArrayLength(idims) < 2 || env->GetArrayLength(isrc) < 2 ||
+        fLen < 17 || env->GetArrayLength(istrides) < 4) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    AHardwareBuffer* expBuf = AHardwareBuffer_fromHardwareBuffer(env, expBuffer);
+    AHardwareBuffer* dstBuf = AHardwareBuffer_fromHardwareBuffer(env, codecBuffer);
+    if (!expBuf || !dstBuf) return VFVK_BAD_ARGUMENT;
+
+    GradeYuvParams params{};
+    jint ii[2], si[2], st[4];
+    jfloat ff[17];
+    env->GetIntArrayRegion(idims, 0, 2, ii);
+    env->GetIntArrayRegion(isrc, 0, 2, si);
+    env->GetFloatArrayRegion(fparams, 0, 17, ff);
+    env->GetIntArrayRegion(istrides, 0, 4, st);
+    int outMode = 0;
+    if (fLen >= 18) {
+        jfloat m = 0;
+        env->GetFloatArrayRegion(fparams, 17, 1, &m);
+        outMode = (int)(m + 0.5f);
+    }
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 2) return VFVK_BAD_ARGUMENT;
+    params.dims[0] = ii[0];
+    params.dims[1] = ii[1];
+    params.srcDims[0] = si[0];
+    params.srcDims[1] = si[1];
+    foldGradeCcm(ff, params.ccm);
+    params.misc[0] = ff[14];
+    params.misc[1] = params.misc[2] = params.misc[3] = 0.0f;
+    params.misc2[1] = (float)outMode;
+    params.misc2[2] = ff[16];
+    params.misc2[3] = 0.0f;
+    if (params.dims[0] <= 0 || params.dims[1] <= 0 ||
+        params.dims[0] > VFVK_MAX_EDGE * 2 || params.dims[1] > VFVK_MAX_EDGE * 2) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    const int yStrideB = st[0], uvStrideB = st[1];
+    const int fw = st[2], fh = st[3];
+    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+        (yStrideB % 2) != 0 || (uvStrideB % 4) != 0) {
+        LOGW("vf-vk: yuv strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
+        return VFVK_BAD_ARGUMENT;
+    }
+    params.misc[1] = (float)(yStrideB / 2);
+    params.misc[2] = (float)(uvStrideB / 2);
+    params.misc[3] = (float)((int64_t)yStrideB * fh);
+    params.misc2[0] = (fullRgb != 0) ? 1.0f : 0.0f;
+
+    ImportedImage inImg;
+    int r = gradeImage(g, expBuf, "yuv-in", &g->gradeIns, &inImg);
+    if (r != VFVK_OK) return r;
+    ImportedBuffer dstImg;
+    {
+        int rr = importP010Out(g, dstBuf, yStrideB, uvStrideB, fw, fh, &dstImg);
+        if (rr != VFVK_OK) return (rr == -20) ? -20 : rr;
+    }
+
+    VkCommandBuffer cmd = g->twinGradeCmd[slot];
+    if (cmd == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
+    VkDescriptorImageInfo inInfo{};
+    inInfo.imageView = inImg.view;
+    inInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorBufferInfo outInfo{};
+    outInfo.buffer = dstImg.buffer;
+    outInfo.offset = 0;
+    outInfo.range = VK_WHOLE_SIZE;
+    if (!g->gradeLutReady) return VFVK_NOT_INITIALIZED;
+    VkDescriptorImageInfo lutInfo{};
+    lutInfo.sampler = g->gradeLutSampler;
+    lutInfo.imageView = g->gradeLutView;
+    lutInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet writes[3]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->yuvSets[slot];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[0].pImageInfo = &inInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->yuvSets[slot];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &outInfo;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = g->yuvSets[slot];
+    writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].pImageInfo = &lutInfo;
+    vkUpdateDescriptorSets(g->device, 3, writes, 0, nullptr);
+
+    vkResetFences(g->device, 1, &g->fence);
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(cmd, &begin);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: yuv blocking begin failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    layoutBarrier(cmd, inImg.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    {
+        VkBufferMemoryBarrier acquire{};
+        acquire.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        acquire.srcAccessMask = 0;
+        acquire.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        acquire.dstQueueFamilyIndex = g->queueFamily;
+        acquire.buffer = dstImg.buffer;
+        acquire.offset = 0;
+        acquire.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->yuvPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->yuvPipelineLayout, 0, 1, &g->yuvSets[slot], 0, nullptr);
+    vkCmdPushConstants(cmd, g->yuvPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(params), &params);
+    const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;
+    const uint32_t gy = (uint32_t)(params.dims[1] + 7) / 8;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    layoutBarrier(cmd, inImg.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    VkBufferMemoryBarrier outBarrier{};
+    outBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    outBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    outBarrier.dstAccessMask = 0;
+    outBarrier.srcQueueFamilyIndex = g->queueFamily;
+    outBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    outBarrier.buffer = dstImg.buffer;
+    outBarrier.offset = 0;
+    outBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &outBarrier, 0, nullptr);
+    vr = vkEndCommandBuffer(cmd);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: yuv blocking end failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vr = vkQueueSubmit(g->queue, 1, &submit, g->fence);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: yuv blocking submit failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    vr = vkWaitForFences(g->device, 1, &g->fence, VK_TRUE, 2000000000ull);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: yuv blocking fence wait failed %d", vr);
+        const VkResult retired = vkQueueWaitIdle(g->queue);
+        if (retired == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    return VFVK_OK;
+}
+
 // ---- Record preview (Direct-Log monitor): staged P010 in, RGBA8 out.
 // Same-queue ordered after the encode submit, own exported sync fd for
 // the EGL present path. Best-effort: any failure skips the preview for
@@ -4154,6 +4518,180 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
         return -VFVK_SUBMIT_FAILED;
     }
     return fd;
+}
+
+// Blocking twin of previewSubmitNative: identical validation, imports,
+// descriptors, barriers and dispatch, but completion via the shared fence
+// (gradeNative convention) instead of an exported sync fd. For drivers
+// without semaphore-fd export (software/validation Vulkan) and as a
+// documented fallback; the record path keeps the fd twin. Same-queue FIFO
+// still orders this behind a preceding encode submit.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
+    JNIEnv* env, jobject, jobject p010Buffer, jobject previewBuffer,
+    jintArray idims, jintArray isrc, jintArray istrides, jint box, jint slot) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (slot < 0 || slot > 2) return VFVK_BAD_ARGUMENT;
+    if (g->previewPipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
+    if (!p010Buffer || !previewBuffer || !idims || !isrc || !istrides) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    if (env->GetArrayLength(idims) < 2 || env->GetArrayLength(isrc) < 2 ||
+        env->GetArrayLength(istrides) < 4) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    AHardwareBuffer* srcBuf = AHardwareBuffer_fromHardwareBuffer(env, p010Buffer);
+    AHardwareBuffer* dstBuf = AHardwareBuffer_fromHardwareBuffer(env, previewBuffer);
+    if (!srcBuf || !dstBuf) return VFVK_BAD_ARGUMENT;
+
+    PreviewParams params{};
+    jint ii[2], si[2], st[4];
+    env->GetIntArrayRegion(idims, 0, 2, ii);
+    env->GetIntArrayRegion(isrc, 0, 2, si);
+    env->GetIntArrayRegion(istrides, 0, 4, st);
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    params.dims[0] = ii[0];
+    params.dims[1] = ii[1];
+    params.srcDims[0] = si[0];
+    params.srcDims[1] = si[1];
+    params.strides[3] = box;
+    if (params.dims[0] <= 0 || params.dims[1] <= 0 ||
+        params.dims[0] > VFVK_MAX_EDGE || params.dims[1] > VFVK_MAX_EDGE ||
+        params.srcDims[0] <= 0 || params.srcDims[1] <= 0 ||
+        params.srcDims[0] > VFVK_MAX_EDGE * 2 || params.srcDims[1] > VFVK_MAX_EDGE * 2) {
+        return VFVK_BAD_ARGUMENT;
+    }
+    if (box < 2 || (box % 2) != 0 ||
+        params.srcDims[0] != params.dims[0] * box ||
+        params.srcDims[1] != params.dims[1] * box) {
+        LOGW("vf-vk: preview box mismatch %dx%d -> %dx%d box=%d",
+             params.srcDims[0], params.srcDims[1], params.dims[0], params.dims[1], box);
+        return VFVK_BAD_ARGUMENT;
+    }
+    const int yStrideB = st[0], uvStrideB = st[1];
+    const int fw = st[2], fh = st[3];
+    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+        (yStrideB % 2) != 0 || (uvStrideB % 4) != 0 ||
+        fw != params.srcDims[0] || fh != params.srcDims[1]) {
+        LOGW("vf-vk: preview strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
+        return VFVK_BAD_ARGUMENT;
+    }
+    params.strides[0] = yStrideB / 2;
+    params.strides[1] = uvStrideB / 2;
+    params.strides[2] = yStrideB * fh;
+
+    ImportedBuffer srcImg;
+    {
+        int rr = importP010Out(g, srcBuf, yStrideB, uvStrideB, fw, fh, &srcImg);
+        if (rr != VFVK_OK) return (rr == -20) ? -20 : rr;
+    }
+    ImportedImage dstImg;
+    {
+        int r = gradeImage(g, dstBuf, "preview-out", &g->previewOuts, &dstImg);
+        if (r != VFVK_OK) return r;
+    }
+
+    VkCommandBuffer cmd = g->twinPreviewCmd[slot];
+    if (cmd == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
+    VkDescriptorBufferInfo inInfo{};
+    inInfo.buffer = srcImg.buffer;
+    inInfo.offset = 0;
+    inInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorImageInfo outInfo{};
+    outInfo.imageView = dstImg.view;
+    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->previewSets[slot];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo = &inInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->previewSets[slot];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &outInfo;
+    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
+
+    vkResetFences(g->device, 1, &g->fence);
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(cmd, &begin);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: preview blocking begin failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    {
+        VkBufferMemoryBarrier acquire{};
+        acquire.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        acquire.srcAccessMask = 0;
+        acquire.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        acquire.dstQueueFamilyIndex = g->queueFamily;
+        acquire.buffer = srcImg.buffer;
+        acquire.offset = 0;
+        acquire.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
+    }
+    layoutBarrier(cmd, dstImg.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->previewPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->previewPipelineLayout, 0, 1, &g->previewSets[slot], 0, nullptr);
+    vkCmdPushConstants(cmd, g->previewPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(params), &params);
+    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    {
+        VkBufferMemoryBarrier release{};
+        release.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        release.dstAccessMask = 0;
+        release.srcQueueFamilyIndex = g->queueFamily;
+        release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        release.buffer = srcImg.buffer;
+        release.offset = 0;
+        release.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &release, 0, nullptr);
+    }
+    layoutBarrier(cmd, dstImg.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    vr = vkEndCommandBuffer(cmd);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: preview blocking end failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vr = vkQueueSubmit(g->queue, 1, &submit, g->fence);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: preview blocking submit failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    vr = vkWaitForFences(g->device, 1, &g->fence, VK_TRUE, 2000000000ull);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: preview blocking fence wait failed %d", vr);
+        const VkResult retired = vkQueueWaitIdle(g->queue);
+        if (retired == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    return VFVK_OK;
 }
 
 // ---- RCD demosaic (Direct-Log record path): one pipeline, u_mode
