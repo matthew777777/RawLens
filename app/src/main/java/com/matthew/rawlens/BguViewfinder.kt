@@ -150,6 +150,8 @@ class BguViewfinder @JvmOverloads constructor(
 
     @Volatile private var lastOfferMs = 0L
     @Volatile private var firstOfferMs = 0L
+    /** Next due time for the throttled `bgu-vf-preview` memory sample. */
+    @Volatile private var memSampleNextMs = 0L
     private var seq = 0L
     private var busyStreak = 0
     private var failStreak = 0
@@ -170,6 +172,11 @@ class BguViewfinder @JvmOverloads constructor(
     // color, not flash green).
     @Volatile private var colorHold: ColorHold? = null
     private var colorHoldCam: CameraCharacteristics? = null
+    // Last-good black/white normalization. Same recording gap as color:
+    // the dynamic per-frame levels vanish with the result, and the static
+    // pattern fallback differs per channel by a few DN — after WB and the
+    // shadow lift that reads as a greenish cast. Keyed by colorHoldCam.
+    @Volatile private var levelsHold: LevelsHold? = null
 
     private data class GeoKey(val imgW: Int, val imgH: Int, val crop: String, val longEdge: Int)
     private var geoCacheKey: GeoKey? = null
@@ -270,6 +277,11 @@ class BguViewfinder @JvmOverloads constructor(
         if (now - lastOfferMs < floorMs) return
         if (firstOfferMs == 0L) firstOfferMs = now
         lastOfferMs = now
+        MemoryLeakDiagnostics.bguVfFrame()
+        if (now >= memSampleNextMs) {
+            memSampleNextMs = now + MemoryLeakDiagnostics.PERIODIC_INTERVAL_MS
+            MemoryLeakDiagnostics.sample("bgu-vf-preview", extra = "offers=$seq")
+        }
         val offerT0 = SystemClock.elapsedRealtimeNanos()
         if (!VfVulkan.available) {
             fail("vulkan-unavailable")
@@ -313,8 +325,28 @@ class BguViewfinder @JvmOverloads constructor(
         } catch (_: Exception) {
             return
         }
-        val levels = blackLevels(c, result)
-        val white = whiteLevel(c, result)
+        // Normalization hold: recording offers no result, so the dynamic
+        // per-frame black/white levels would fall back to statics and tint
+        // the take greenish. Fresh result levels prime the hold; result-less
+        // offers reuse the last-good preview values (same scene, seconds
+        // old); a cold engine with no hold yet keeps the static fallback.
+        if (colorHoldCam !== c) {
+            colorHold = null
+            levelsHold = null
+            colorHoldCam = c
+        }
+        val freshLevels = if (result != null) {
+            LevelsHold(blackLevels(c, result), whiteLevel(c, result))
+        } else {
+            null
+        }
+        val norm = resolveLevelsHold(
+            freshLevels, levelsHold,
+            LevelsHold(blackLevels(c, null), whiteLevel(c, null))
+        )
+        if (freshLevels != null) levelsHold = LevelsHold(norm.levels.copyOf(), norm.white)
+        val levels = norm.levels.copyOf()
+        val white = norm.white
         val inv = FloatArray(4) { i ->
             val den = white - levels[i]
             if (den > 1f) 1f / den else 1f / 1023f
@@ -693,6 +725,7 @@ class BguViewfinder @JvmOverloads constructor(
             halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
         if (colorHoldCam !== c) {
             colorHold = null
+            levelsHold = null
             colorHoldCam = c
         }
         val color = resolveColorHold(freshWb, freshCcm, freshNeutral, freshGains, colorHold)
@@ -1702,6 +1735,7 @@ class BguViewfinder @JvmOverloads constructor(
     override fun dispose() {
         if (disposed) return
         disposed = true
+        MemoryLeakDiagnostics.sampleAsync("bgu-vf-disposed")
         try {
             holder.removeCallback(this)
         } catch (_: Exception) {
@@ -1816,6 +1850,17 @@ class BguViewfinder @JvmOverloads constructor(
             neutral = (freshNeutral ?: held?.neutral)?.copyOf(),
             gainsSensor = (freshGains ?: held?.gainsSensor)?.copyOf()
         )
+
+        /**
+         * Normalization precedence: fresh result levels win, else the
+         * last-good preview hold, else the static fallback. Defensive copy.
+         */
+        internal fun resolveLevelsHold(
+            fresh: LevelsHold?, held: LevelsHold?, fallback: LevelsHold
+        ): LevelsHold {
+            val pick = fresh ?: held ?: fallback
+            return LevelsHold(pick.levels.copyOf(), pick.white)
+        }
     }
 }
 
@@ -1824,6 +1869,19 @@ class BguViewfinder @JvmOverloads constructor(
  * recording). Unity WB + identity CCM would flash green, so the engine
  * holds the last result-derived values (same scene, seconds old).
  */
+/**
+ * Last-good black/white normalization for offers without a capture result
+ * (RAW video recording). The dynamic per-frame levels vanish with the
+ * result; the static pattern fallback differs per channel and would tint
+ * the take greenish, so the engine holds preview's last values.
+ */
+internal data class LevelsHold(
+    /** Per-channel black levels in CFA phase order. */
+    val levels: FloatArray,
+    /** White level. */
+    val white: Float
+)
+
 internal data class ColorHold(
     /** Canonical [R, Gr, Gb, B] WB, sanitized. */
     val wb: FloatArray,
