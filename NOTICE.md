@@ -193,13 +193,17 @@ Upstream authors provide their work without endorsement of RawLens.
 
 - Project: CRS-Encoder
 - Repository: https://github.com/matthew777777/CRS-Encoder
-- Pinned commit: `55cceb2ef74c23f761be72af5bce04c16267e0bc` (2026-10-04:
-  multithreaded encode, SSE2, edge-clamp, container I/O buffering)
+- Pinned commit: `3c9519c73d9b9c874fae1e74587290cf7b9dbe17` (2026-10-12:
+  per-frame nested-plane lens-shading map for CRS interop)
 - License: GNU General Public License version 3 only
 - Vendored files (SPDX headers intact):
-  `app/src/main/cpp/crs/include/CRS/Encoder.h` and
-  `app/src/main/cpp/crs/src/Encoder.cpp` are verbatim upstream,
-  including `encode_parallel()` and the x86 SSE2 paths.
+  `app/src/main/cpp/crs/include/CRS/Encoder.h`,
+  `app/src/main/cpp/crs/include/CRS/LensShading.h`,
+  `app/src/main/cpp/crs/src/Encoder.cpp`, and
+  `app/src/main/cpp/crs/src/detail/` (SIMD, bit packing, tile loop,
+  container constants) are verbatim upstream, including `encode_parallel()`
+  and the x86 SSE2 paths. The refactor is byte-identical to `55cceb2`
+  (all golden hashes unchanged per upstream).
   `app/src/main/cpp/crs/include/CRS/ContainerWriter.h` and
   `app/src/main/cpp/crs/src/ContainerWriter.cpp` are a RawLens fork of
   the upstream writer: raw-fd I/O with a staging buffer (large-block writes
