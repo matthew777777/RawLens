@@ -11,6 +11,7 @@ import android.graphics.PointF
 import android.graphics.RectF
 import android.os.SystemClock
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -125,6 +126,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private var fadePending: Runnable? = null
     private var dragMode = DragNone
     private var dragging = false
+    /** Second finger down (pinch-zoom): swallow the gesture, never a tap. */
+    private var multiTouch = false
     private val ticker = object : Runnable {
         override fun run() {
             if (!focusLocked || lockIndefinite) return
@@ -280,6 +283,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 touchDownY = event.y
                 longPressFired = false
                 dragging = false
+                multiTouch = false
                 dragMode = hitTest(event.x, event.y)
                 longPressPending?.let(::removeCallbacks)
                 // Pressing an existing handle starts a potential drag, never a
@@ -298,7 +302,20 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 }
                 return true
             }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                // Second finger (pinch-zoom): this gesture is not a tap. Cancel
+                // the hold and swallow everything until the last finger lifts.
+                multiTouch = true
+                longPressPending?.let(::removeCallbacks)
+                longPressPending = null
+                return true
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // Stay swallowed until ACTION_UP/CANCEL ends the gesture.
+                return true
+            }
             MotionEvent.ACTION_MOVE -> {
+                if (multiTouch) return true
                 if (dragMode != DragNone) {
                     if (!dragging &&
                         hypot(event.x - touchDownX, event.y - touchDownY) > touchSlop
@@ -322,6 +339,14 @@ class FocusMeteringOverlay @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> {
                 longPressPending?.let(::removeCallbacks)
                 longPressPending = null
+                if (multiTouch) {
+                    multiTouch = false
+                    longPressFired = false
+                    dragMode = DragNone
+                    dragging = false
+                    Log.i(LOG_TAG, "Touch gesture ignored (multi-touch)")
+                    return true
+                }
                 // A fired long-press already locked; the lift is not a tap.
                 // Reset the tap-pair clock so the next two quick taps form the
                 // double-tap that releases the indefinite lock.
@@ -374,6 +399,23 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                     ((focusAreaTime != -1L &&
                         now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout()) ||
                         isDoubleTap)
+                // Bounce gate: the release above always wins, but a refocus
+                // faster than the bounce window is an accidental tap — swallow
+                // it without moving the reticle. The scan-in-flight half of the
+                // gate lives in the controller, which knows the AF state.
+                if (!clearFocusAreas && !AutoFocusPolicy.shouldAcceptTap(
+                        now, lastTapUpMs, lastTapUpX, lastTapUpY,
+                        event.x, event.y,
+                        minOf(width, height).toFloat(),
+                        scanInFlight = false
+                    )
+                ) {
+                    lastTapUpMs = now
+                    lastTapUpX = event.x
+                    lastTapUpY = event.y
+                    Log.i(LOG_TAG, "Touch tap ignored (bounce)")
+                    return true
+                }
                 if (clearFocusAreas) {
                     lastTapUpMs = 0L
                     clearTargets()
@@ -415,6 +457,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 longPressFired = false
                 dragMode = DragNone
                 dragging = false
+                multiTouch = false
                 return true
             }
         }
@@ -479,6 +522,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     }
 
     companion object {
+        // Shared camera tag so one grep follows a tap from overlay to HAL verdict.
+        private const val LOG_TAG = "RawLensCamera"
         private const val LOCK_TICK_MS = 500L
         // Long enough to peel a square out after the tap that revealed it:
         // covers the AF scan timeout, while locks hold indefinitely anyway.
