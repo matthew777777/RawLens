@@ -40,6 +40,9 @@ import android.graphics.Color
 import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.io.ByteArrayOutputStream
@@ -49,8 +52,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.os.Build
 import android.os.SystemClock
 
@@ -171,13 +172,7 @@ class MainActivity : Activity() {
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
     private var videoMeterRunnable: Runnable? = null
-    private var histogramBottomMarginDefault = -1
     private var videoMeterBottomMarginDefault = -1
-    private lateinit var videoHudTop: View
-    private lateinit var videoHudLeft: TextView
-    private lateinit var videoHudTimecode: TextView
-    private lateinit var videoHudRight: TextView
-    private lateinit var directLogEvSlider: RuleSliderView
     private lateinit var videoAudioMeter: AudioMeterView
     private lateinit var videoDebugOverlay: TextView
 
@@ -187,6 +182,10 @@ class MainActivity : Activity() {
         // launch (no permission needed); the crash handler below flushes the
         // fatal trace before the process dies, so the file survives crashes.
         if (lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)) LogcatFileWriter.start(this)
+        MemoryLeakDiagnostics.startPeriodic()
+        MemoryLeakDiagnostics.sampleAsync("activity-created")
+        DeviceImpactProbe.install(this)
+        DeviceImpactProbe.startHeartbeat()
         offerCrashedLogIfAny()
         // Viewfinder must never let the phone auto-lock mid-shoot.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -257,22 +256,10 @@ class MainActivity : Activity() {
             lensPreferences().getInt(KEY_VF_RESOLUTION, VfResolution.MAX)
         )
         
-        // Full screen immersive mode
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
-            window.insetsController?.let {
-                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN)
-        }
+        // Full-screen immersive mode (re-applied on resume/focus: permission
+        // dialogs and pickers clear it, which used to leave the status bar
+        // over the camera until the app was restarted).
+        ImmersiveMode.apply(window)
 
         status = findViewById(R.id.status)
         isoControl = findViewById(R.id.isoControl)
@@ -510,6 +497,7 @@ class MainActivity : Activity() {
                 // next cold start skips the stillborn attempt entirely.
                 lensPreferences().edit().putBoolean(KEY_RAW_STREAM_COMPAT_MODE, true).apply()
             },
+            initialHdrPlusSettings = hdrPlusSettings,
             initialScopeMode = scopeMode,
             onRawWaveform = { waveform ->
                 runOnUiThread {
@@ -567,45 +555,28 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.setOnClickListener { cycleVfEngineMode() }
         refreshVfEngineContentDescription()
         applyVfRoute(controller.isBguActive())
-        videoHudTop = findViewById(R.id.videoHudTop)
-        videoHudLeft = findViewById(R.id.videoHudLeft)
-        videoHudTimecode = findViewById(R.id.videoHudTimecode)
-        videoHudRight = findViewById(R.id.videoHudRight)
-        directLogEvSlider = findViewById(R.id.directLogEvSlider)
-        directLogEvSlider.label = "LOG EV"
-        directLogEvSlider.max = 60 // -2.0..+4.0 in 0.1 steps
-        syncDirectLogEvSlider()
-        directLogEvSlider.onProgressChanged = { progress, fromUser ->
-            if (fromUser) {
-                val ev = progress / 10f - 2f
-                directLogEvSlider.valueText = formatDirectLogEv(ev)
-                // Live: the camera thread reads exposureEv per frame.
-                logRecorder?.exposureEv = ev
-            }
-        }
-        directLogEvSlider.onStopTracking = { progress ->
-            val ev = progress / 10f - 2f
-            lensPreferences().edit().putFloat(KEY_DIRECT_LOG_EV, ev).apply()
-            setStatus("LOG EV ${formatDirectLogEv(ev)}")
-        }
         videoAudioMeter = findViewById(R.id.videoAudioMeter)
         videoDebugOverlay = findViewById(R.id.videoDebugOverlay)
+        // First-rotation race (same class the scope's deferred seat fixes):
+        // the stats text (and its measured size) lands after the
+        // entering-rotation seat, parking a landscape strip computed from
+        // stale 1-line bounds over the black bar until the next rotation.
+        // Re-seat whenever the measured size changes in video landscape
+        // (size-guarded, so margin-only layouts never recurse).
+        videoDebugOverlay.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
+            if ((r - l) != (orr - ol) || (b - t) != (ob - ot)) {
+                if (isVideoMode && (deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270)) {
+                    positionWholeRotatedPanels()
+                }
+            }
+        }
         videoCrop = runCatching {
             VideoCrop.valueOf(lensPreferences().getString(KEY_VIDEO_CROP, null) ?: "")
         }.getOrDefault(VideoCrop.OPEN_GATE)
         directLogEnabled = lensPreferences().getBoolean(KEY_DIRECT_LOG, false)
         videoAudioMeter.setOnClickListener { toggleVideoSound() }
-        // Direct-Log fps toggle: tap the left HUD chip (LOG • 30FPS) to flip
-        // 30 <-> 24 for the next take. Idle only; mid-take taps are ignored.
-        videoHudLeft.setOnClickListener {
-            if (isVideoMode && directLogEnabled && !videoRecording) cycleDirectLogFps()
-        }
-        // Direct-Log profile toggle: tap the right HUD chip (709/SLOG3/HLG)
-        // to cycle the record output for the next take. Idle only
-        // (the recording gate lives in cycleDirectLogProfile).
-        videoHudRight.setOnClickListener {
-            if (isVideoMode && directLogEnabled) cycleDirectLogProfile()
-        }
+        // No top text in video mode: fps/profile switches live in the
+        // Settings Video tab (one tap on the video settings button).
         shutter.setOnClickListener {
             if (isVideoMode) toggleVideoRecording()
             else triggerCapture(shutter, forceBurst = false)
@@ -708,6 +679,12 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.settingsButton).setOnClickListener {
             hideManualControl()
             showSettings()
+        }
+        // Video-mode settings entry: identical dialog, but always lands on
+        // the Video tab. The photo entry above keeps the default tab.
+        findViewById<View>(R.id.videoSettingsButton).setOnClickListener {
+            closeFloatingPanels()
+            showSettings(SETTINGS_VIDEO_TAB)
         }
         // Single tap (or joint drag) installs AF + AE together: one repeating
         // update + one AF START, retargeting instantly even while locked.
@@ -1017,7 +994,14 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Dialogs/pickers shown while paused (permissions, folder grant, lens
+        // discovery alerts) pop the system bars back; hide them again every
+        // time we come back so first install is fullscreen without a restart.
+        ImmersiveMode.apply(window)
         activityResumed = true
+        MemoryLeakDiagnostics.sampleAsync("activity-resumed")
+        DeviceImpactProbe.setForeground(true)
+        DeviceImpactProbe.startFrameTracking(window)
         startCameraWhenReady()
         if (gpsEnabled()) gpsProvider?.start()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
@@ -1025,6 +1009,13 @@ class MainActivity : Activity() {
         scheduleScope()
         applyPowerSave()
         registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // AlertDialogs (lens discovery, errors) clear immersive flags when
+        // they take focus; restore fullscreen when focus comes back.
+        if (hasFocus) ImmersiveMode.apply(window)
     }
 
     /**
@@ -1072,6 +1063,8 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         activityResumed = false
+        DeviceImpactProbe.setForeground(false)
+        DeviceImpactProbe.stopFrameTracking(window)
         runCatching { unregisterReceiver(powerSaveReceiver) }
         gpsProvider?.stop()
         orientationListener.disable()
@@ -1084,15 +1077,28 @@ class MainActivity : Activity() {
         scopeRunnable?.let(histogramView::removeCallbacks)
         scopeRunnable = null
         controller.stop()
+        // PSS sample off-thread (jank); the report itself is counter-only and UI-safe.
+        MemoryLeakDiagnostics.sampleAsync("activity-paused")
+        MemoryLeakDiagnostics.dumpReport()
+        // Citizenship proof: camera/GPS/video state now, threads again in 8 s.
+        DeviceImpactProbe.auditBackground(citizenshipExtra())
+        DeviceImpactProbe.auditStorage(this)
         super.onPause()
     }
+
+    /** Resource state for background/shutdown audits; never throws. */
+    private fun citizenshipExtra(): String = runCatching {
+        "camera=${if (controller.isRunning()) "open" else "closed"} " +
+            "gps=${if (gpsProvider?.isRunning() == true) "on" else "off"} " +
+            "video=$videoRecording dlog=${logRecorder != null} rawvid=${videoRecorder != null}"
+    }.getOrDefault("camera=? gps=?")
 
     override fun onDestroy() {
         lensDiscovery.close()
         // Safety net only (onPause already stops cleanly): never leak the
         // container handle; the file stays valid, just shorter.
         try {
-            videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+            videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
             videoDebugRunnable = null
             videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
             videoMeterRunnable = null
@@ -1109,7 +1115,12 @@ class MainActivity : Activity() {
         findViewById<RawViewfinder>(R.id.rawViewfinder).dispose()
         findViewById<BguViewfinder>(R.id.bguViewfinder)?.dispose()
         findViewById<DirectLogPreviewView>(R.id.recordPreview)?.dispose()
+        MemoryLeakDiagnostics.stopPeriodic()
+        MemoryLeakDiagnostics.dumpReport()
         MemoryLeakDiagnostics.sample("activity-destroyed")
+        DeviceImpactProbe.auditShutdown(citizenshipExtra())
+        DeviceImpactProbe.auditStorage(this)
+        DeviceImpactProbe.stopHeartbeat()
         super.onDestroy()
     }
 
@@ -1184,22 +1195,37 @@ class MainActivity : Activity() {
      * row or quick panel, never behind them. Called after every visibility change.
      * Both scope views share one slot; only the active mode is visible.
      */
+    /**
+     * Height the scope row must clear above the panel: the manual rule
+     * slider or the quick panel (the end-side audio meter never overlaps
+     * the start-side scope, so it needs no lift).
+     */
+    private fun floatingLiftPx(): Int {
+        val floatingHeight = when {
+            ::manualPanel.isInitialized && manualPanel.visibility == View.VISIBLE ->
+                (manualPanel.height.takeIf { it > 0 } ?: dp(124))
+            ::quickPanel.isInitialized && quickPanel.visibility == View.VISIBLE ->
+                (quickPanel.height.takeIf { it > 0 } ?: dp(200))
+            else -> 0
+        }
+        return if (floatingHeight > 0) floatingHeight + dp(12) else 0
+    }
+
     private fun updateOverlayStack() {
         if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
             !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
         val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
-        val floatingHeight = when {
-            manualPanel.visibility == View.VISIBLE ->
-                (manualPanel.height.takeIf { it > 0 } ?: dp(124))
-            quickPanel.visibility == View.VISIBLE ->
-                (quickPanel.height.takeIf { it > 0 } ?: dp(200))
-            else -> 0
-        }
-        val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
+        val lift = floatingLiftPx()
         scopeViews().forEach { scope ->
             (scope.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                params.gravity = Gravity.START or Gravity.BOTTOM
-                params.marginStart = dp(16)
+                // Video landscape: the stats strip owns the user-top edge, so
+                // the scope yields to the opposite edge (90° only — at 270°
+                // the strip is already opposite and the scope never sits
+                // under it). Photo mode always keeps START.
+                val yieldEnd = isVideoMode && deviceOrientationDegrees == 90
+                params.gravity = Gravity.BOTTOM or (if (yieldEnd) Gravity.END else Gravity.START)
+                params.marginStart = if (yieldEnd) 0 else dp(16)
+                params.marginEnd = if (yieldEnd) dp(16) else 0
                 params.bottomMargin = panelHeight + dp(16) + lift
                 scope.layoutParams = params
             }
@@ -1216,6 +1242,9 @@ class MainActivity : Activity() {
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
         deviceOrientationDegrees = degrees
         if (::controller.isInitialized) controller.onDeviceOrientationChanged(degrees)
+        // World-horizontal video letterbox (the overlay canvas is
+        // portrait-locked, so landscape draws side bars).
+        if (::guideOverlay.isInitialized) guideOverlay.videoOrientationDegrees = degrees
 
         // Keep a single portrait activity/camera session.  Every foreground control rotates
         // around its own center, while its position and touch target remain stable.
@@ -1282,34 +1311,86 @@ class MainActivity : Activity() {
             rawVfDebugOverlay.translationX = 0f
             rawVfDebugOverlay.translationY = 0f
         }
+        if (::videoDebugOverlay.isInitialized) {
+            val vdParams = (videoDebugOverlay.layoutParams as? FrameLayout.LayoutParams)
+                ?: FrameLayout.LayoutParams(wrapContent(), wrapContent())
+            if (quarterTurn) {
+                // Landscape: ride the user's top edge (the portrait side edge
+                // the user holding the rotated phone sees as top), over the
+                // viewfinder just below the black top band: START for 90, END
+                // for 270. The strip is nearly full-width, so plain edge
+                // gravity would still pivot near screen center: pull the
+                // bounds off-screen by half the width/height difference so
+                // the rotated bar lands exactly on the edge.
+                val onStart = deviceOrientationDegrees == 90
+                vdParams.gravity = Gravity.TOP or
+                    (if (onStart) Gravity.START else Gravity.END)
+                val vdSideInset =
+                    if (videoDebugOverlay.width > videoDebugOverlay.height) {
+                        (videoDebugOverlay.width - videoDebugOverlay.height) / 2
+                    } else 0
+                val vfTop =
+                    if (::guideOverlay.isInitialized && guideOverlay.height > 0) guideOverlay.top
+                    else dp(96)
+                // Fully below the black top band with breathing room (the
+                // guide rect starts slightly above the visible image).
+                vdParams.topMargin = vfTop + dp(20) + vdSideInset
+                vdParams.bottomMargin = 0
+                vdParams.marginStart = if (onStart) dp(16) - vdSideInset else 0
+                vdParams.marginEnd = if (onStart) 0 else dp(16) - vdSideInset
+            } else {
+                vdParams.gravity = Gravity.TOP or Gravity.END
+                vdParams.topMargin = dp(96)
+                vdParams.bottomMargin = 0
+                vdParams.marginStart = 0
+                vdParams.marginEnd = dp(16)
+            }
+            videoDebugOverlay.layoutParams = vdParams
+            videoDebugOverlay.translationX = 0f
+            videoDebugOverlay.translationY = 0f
+        }
+        // Audio meter follows the scope yield (START at 90°, END otherwise).
+        if (::videoAudioMeter.isInitialized) repositionMeterForVideo(isVideoMode)
         if (!::waveformView.isInitialized) return
+        seatScopeSlot()
+    }
+
+    /**
+     * Seats the shared histogram/waveform slot above the capture panel.
+     * Unconditional: orientation events can land before layout (or right
+     * after GONE -> VISIBLE) when width/height are still 0, and skipping the
+     * seat then parks a quarter-turned scope behind the panel until the next
+     * rotation. Pre-layout passes fall back to the fixed layout slot, and a
+     * single deferred pass corrects with real measurements after layout.
+     */
+    private fun seatScopeSlot(deferred: Boolean = false) {
+        updateOverlayStack()
+        val quarterTurn = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
+        // One seat in every mode: above the measured panel (whose 232dp
+        // minimum the old fixed video override never cleared — the scope hid
+        // behind the opaque panel in video and peeked out "cut" in landscape).
+        val panelHeight =
+            findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
+        val baseBottomMargin = panelHeight + dp(16) + floatingLiftPx()
         val scope = activeScopeView()
-        if (scope.width > 0 && scope.height > 0) {
-            updateOverlayStack()
-            // Both scope views share one slot and size: compute once, apply to both.
-            val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
-            val floatingHeight = when {
-                manualPanel.visibility == View.VISIBLE ->
-                    (manualPanel.height.takeIf { it > 0 } ?: dp(124))
-                quickPanel.visibility == View.VISIBLE ->
-                    (quickPanel.height.takeIf { it > 0 } ?: dp(200))
-                else -> 0
+        val widthPx = ScopeSlot.sizePx(scope.width, scope.layoutParams.width)
+        val heightPx = ScopeSlot.sizePx(scope.height, scope.layoutParams.height)
+        // Both scope views share one slot and size: compute once, apply to both.
+        // Idempotent: recompute from the base every time instead of adding to
+        // the previous margin, so repeated rotations never drift.
+        val bottomMargin = ScopeSlot.bottomMarginPx(quarterTurn, widthPx, heightPx, baseBottomMargin)
+        scopeViews().forEach { view ->
+            (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.bottomMargin = bottomMargin
+                view.layoutParams = params
             }
-            val lift = if (floatingHeight > 0) floatingHeight + dp(12) else 0
-            val baseBottomMargin = panelHeight + dp(16) + lift
-            val rotationInset = if (quarterTurn && scope.width > scope.height) {
-                (scope.width - scope.height) / 2
-            } else 0
-            scopeViews().forEach { view ->
-                // Idempotent: recompute from the base stack position every time instead
-                // of adding to the previous margin, so repeated rotations never drift.
-                (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                    params.bottomMargin = baseBottomMargin + rotationInset
-                    view.layoutParams = params
-                }
-                view.translationX = 0f
-                view.translationY = 0f
-            }
+            view.translationX = 0f
+            view.translationY = 0f
+        }
+        if (!deferred && scope.visibility == View.VISIBLE &&
+            (scope.width <= 0 || scope.height <= 0)
+        ) {
+            scope.post { if (!isFinishing && !isDestroyed) seatScopeSlot(deferred = true) }
         }
     }
 
@@ -1335,9 +1416,7 @@ class MainActivity : Activity() {
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton),
-        findViewById(R.id.videoHudLeft),
-        findViewById(R.id.videoHudTimecode),
-        findViewById(R.id.videoHudRight)
+        findViewById(R.id.videoSettingsButton)
     )
 
     /** Debug overlays + scope rotate with the device; top/bottom status labels
@@ -1464,12 +1543,12 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
-    // RAW Video mode: Blackmagic-style full-bleed HUD (top strip with red
-    // timecode, bottom bar with crop + audio meter) over the live RAW
-    // viewfinder. The red dot under the quick access toggles photo <->
-    // video, the shutter ring toggles recording, and the photo switcher
-    // exits back to photo. Orthogonal to CaptureExposureMode so no stills
-    // state machine is touched.
+    // RAW Video mode: Blackmagic-style full-bleed HUD (stats strip with
+    // the record timecode, settings button, bottom bar with crop + audio
+    // meter) over the live RAW viewfinder. The red dot under the quick
+    // access toggles photo <-> video, the shutter ring toggles recording,
+    // and the photo switcher exits back to photo. Orthogonal to
+    // CaptureExposureMode so no stills state machine is touched.
     // ------------------------------------------------------------------
 
     private fun enterVideoMode() {
@@ -1485,19 +1564,12 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.topBar)?.visibility = View.GONE
         findViewById<View>(R.id.exposureControls)?.visibility = View.GONE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
-        repositionScopeForVideo(inVideo = true)
         repositionMeterForVideo(inVideo = true)
-        reseatDirectLogEvSlider()
-        videoHudTop.visibility = View.VISIBLE
+        findViewById<View>(R.id.videoSettingsButton)?.visibility = View.VISIBLE
         videoAudioMeter.visibility = View.VISIBLE
         videoDebugOverlay.visibility = View.VISIBLE
-        if (directLogEnabled) {
-            syncDirectLogEvSlider()
-            directLogEvSlider.visibility = View.VISIBLE
-        } else {
-            directLogEvSlider.visibility = View.GONE
-        }
-        refreshVideoHudStatic()
+        repositionScopeForVideo()
+        refreshVideoAudioDescription()
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
         findViewById<View>(R.id.shutter).contentDescription =
             if (directLogEnabled) "Record Direct Log video" else "Record RAW video"
@@ -1510,6 +1582,11 @@ class MainActivity : Activity() {
         setStatus("VIDEO READY")
         updateQuickControls()
         scheduleVideoHud()
+        // Newly visible HUD views need the current rotation: entering video
+        // while already in landscape would otherwise show them unrotated
+        // until the next orientation event (widths are valid after layout).
+        applyDeviceOrientation(deviceOrientationDegrees, animate = false)
+        videoDebugOverlay.post { positionWholeRotatedPanels() }
     }
 
     private fun exitVideoMode() {
@@ -1526,11 +1603,10 @@ class MainActivity : Activity() {
         guideOverlay.videoActive = false
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.shutter_core)
         findViewById<View>(R.id.shutter).contentDescription = "Capture RAW photo"
-        videoHudTop.visibility = View.GONE
+        findViewById<View>(R.id.videoSettingsButton)?.visibility = View.GONE
         videoAudioMeter.visibility = View.GONE
         videoDebugOverlay.visibility = View.GONE
-        directLogEvSlider.visibility = View.GONE
-        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
         videoMeterRunnable = null
@@ -1538,29 +1614,36 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.topBar)?.visibility = View.VISIBLE
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.VISIBLE
-        repositionScopeForVideo(inVideo = false)
+        repositionScopeForVideo()
         repositionMeterForVideo(inVideo = false)
         refreshVideoButton()
         applyCaptureExposureMode(lastPhotoExposureMode)
         refreshCaptureFormatControl()
-        refreshVideoSensorInfo()
+        // Restore the stills info chips (DNG bit depth / sensor): video mode
+        // overwrote them and refreshVideoSensorInfo() is a no-op once
+        // isVideoMode is false, so without this they stay stuck on
+        // CRS/BT709 labels in photo mode.
+        if (::controller.isInitialized) controller.republishInfo()
+        // Restore the photo scope edge (video landscape may have yielded it).
+        updateOverlayStack()
     }
 
-    /** Floating scope drops above the capture panel in video, restored after. */
-    private fun repositionScopeForVideo(inVideo: Boolean) {
-        scopeViews().forEach { scope ->
-            val params = scope.layoutParams as? FrameLayout.LayoutParams ?: return@forEach
-            if (inVideo) {
-                if (histogramBottomMarginDefault < 0) histogramBottomMarginDefault = params.bottomMargin
-                params.bottomMargin = dp(150)
-            } else if (histogramBottomMarginDefault >= 0) {
-                params.bottomMargin = histogramBottomMarginDefault
-            }
-            scope.layoutParams = params
-        }
+    /** Floating scope re-seats above the capture panel on video transitions. */
+    private fun repositionScopeForVideo() {
+        // One seat in every mode (see seatScopeSlot): the old fixed 150dp
+        // video override sat inside the 232dp-minimum panel, hiding the scope
+        // behind it. The panel height settles async after the chrome flips,
+        // so re-seat again after layout in both directions.
+        seatScopeSlot()
+        activeScopeView().post { if (!isFinishing && !isDestroyed) seatScopeSlot() }
     }
 
-    /** Audio meter floats above the capture panel (same pattern as histogram). */
+    /**
+     * Audio meter floats above the capture panel (same pattern as histogram).
+     * At 90° landscape the scope yields to the END edge, so the meter takes
+     * START to stay out from under the histogram; every other orientation
+     * keeps the END corner. Idempotent; safe on every rotation.
+     */
     private fun repositionMeterForVideo(inVideo: Boolean) {
         val params = videoAudioMeter.layoutParams as? FrameLayout.LayoutParams ?: return
         if (inVideo) {
@@ -1570,21 +1653,19 @@ class MainActivity : Activity() {
             val panelHeight =
                 findViewById<View>(R.id.controlPanel)?.height ?: dp(232)
             params.bottomMargin = panelHeight + dp(16)
-        } else if (videoMeterBottomMarginDefault >= 0) {
-            params.bottomMargin = videoMeterBottomMarginDefault
+            val meterStart = deviceOrientationDegrees == 90
+            params.gravity = Gravity.BOTTOM or (if (meterStart) Gravity.START else Gravity.END)
+            params.marginStart = if (meterStart) dp(16) else 0
+            params.marginEnd = if (meterStart) 0 else dp(16)
+        } else {
+            if (videoMeterBottomMarginDefault >= 0) {
+                params.bottomMargin = videoMeterBottomMarginDefault
+            }
+            params.gravity = Gravity.END or Gravity.BOTTOM
+            params.marginStart = 0
+            params.marginEnd = dp(16)
         }
         videoAudioMeter.layoutParams = params
-    }
-
-    /** Direct-Log EV slider sits just above the capture panel, beside the
-     * audio meter (same bottom edge, disjoint horizontal band). Idempotent;
-     * safe to call on every video-mode entry. */
-    private fun reseatDirectLogEvSlider() {
-        val params = directLogEvSlider.layoutParams as? FrameLayout.LayoutParams ?: return
-        val panelHeight =
-            findViewById<View>(R.id.controlPanel)?.height?.takeIf { it > 0 } ?: dp(232)
-        params.bottomMargin = panelHeight + dp(16)
-        directLogEvSlider.layoutParams = params
     }
 
     // Dedicated red dot under the quick-panel access: a MODE toggle with the
@@ -1653,6 +1734,15 @@ class MainActivity : Activity() {
             setStatus("NO RAW VIDEO CAMERA")
             return
         }
+        // Snapshot the preview lens-shading grid before the video session
+        // takes over the camera; each recorded frame resamples it to its
+        // own crop as the per-frame `lensShadingMap` triplet (null records
+        // without the map).
+        val lensShadingSnapshot = try {
+            controller.snapshotPreviewLensShading(cameraId)
+        } catch (_: Exception) {
+            null
+        }
         controller.stop()
         // Stage in android/data (external files dir): visible under
         // Android/data/<pkg>/files/raw-video, no MediaStore churn during
@@ -1667,6 +1757,7 @@ class MainActivity : Activity() {
         val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.crs")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
+            lensShading = lensShadingSnapshot
             audioEnabled = withAudio
             // Live RAW VF during the take: frames fan out to the same routed
             // engine visibility shows (Vulkan zero-copy lease) while the
@@ -1690,7 +1781,7 @@ class MainActivity : Activity() {
         refreshVideoButton()
         rawBadge.text = "● REC"
         rawBadge.setTextColor(getColor(R.color.danger))
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         setStatus("REC • ${videoCrop.label.uppercase(Locale.US)}")
         scheduleVideoHud()
         scheduleVideoMeter()
@@ -1736,7 +1827,7 @@ class MainActivity : Activity() {
         val recorder = DirectLogRecorder(manager, cameraId, applicationContext).apply {
             audioEnabled = withAudio
             stabEnabled = stabOutputMode() != StabOutputMode.OG_ONLY
-            exposureEv = directLogEvPref()
+            exposureEv = directLogGainPref()
             fps = directLogFpsPref()
             logProfile = profile
             videoDemosaic = videoDemosaic()
@@ -1765,7 +1856,7 @@ class MainActivity : Activity() {
         refreshVideoButton()
         rawBadge.text = "● LOG • ${profile.hudLabel}"
         rawBadge.setTextColor(getColor(R.color.danger))
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         setStatus("REC • ${profile.hudLabel} • HEVC10")
         scheduleVideoHud()
         window.decorView.postDelayed({
@@ -1844,7 +1935,7 @@ class MainActivity : Activity() {
         videoRecording = false
         Log.i(LOG_TAG, "video stop requested rearm=$rearmPreview")
         setStatus("STOPPING…")
-        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
         videoMeterRunnable = null
@@ -1905,7 +1996,7 @@ class MainActivity : Activity() {
         videoRecording = false
         Log.i(LOG_TAG, "direct-log stop requested rearm=$rearmPreview")
         setStatus("STOPPING…")
-        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         videoMeterRunnable?.let { videoAudioMeter.removeCallbacks(it) }
         videoMeterRunnable = null
@@ -2013,7 +2104,7 @@ class MainActivity : Activity() {
             findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
             findViewById<View>(R.id.shutter).contentDescription = "Record Direct Log video"
             refreshVideoButton()
-            refreshVideoHudStatic()
+            refreshVideoAudioDescription()
             refreshCaptureFormatControl()
             rawBadge.text = logBadgeLabel()
             rawBadge.setTextColor(getColor(R.color.danger))
@@ -2073,7 +2164,7 @@ class MainActivity : Activity() {
             findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
             findViewById<View>(R.id.shutter).contentDescription = "Record RAW video"
             refreshVideoButton()
-            refreshVideoHudStatic()
+            refreshVideoAudioDescription()
             refreshCaptureFormatControl()
             rawBadge.text = "CRS"
             rawBadge.setTextColor(getColor(R.color.danger))
@@ -2143,42 +2234,92 @@ class MainActivity : Activity() {
     }
 
     private fun scheduleVideoHud() {
-        videoDebugRunnable?.let { videoHudTimecode.removeCallbacks(it) }
+        videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         val tick = object : Runnable {
             override fun run() {
                 if (!isVideoMode) return
-                if (logRecorder != null) {
-                    val snap = logRecorder?.snapshot() ?: return
-                    videoHudTimecode.text =
-                        (if (videoRecording) "● " else "") + videoTimecode(snap.elapsedMs)
-                    videoHudTimecode.setTextColor(
-                        getColor(if (videoRecording) R.color.danger else R.color.text_primary)
-                    )
-                    videoDebugOverlay.text = String.format(
-                        Locale.US, "%s %s %.1fFPS D%d %.0fMB\nMEM %d%% IO %d%% ENC %d%%\nWF%d FB%d P%d %.1fms",
-                        snap.profile, snap.demosaic, snap.outputFps, snap.framesDropped,
-                        snap.fileBytes / 1e6, snap.memPct, snap.ioBusyPct, snap.encBusyPct,
-                        snap.waitFreeFrames, snap.fallbackWaits, snap.previewFrames,
-                        snap.cpuChainMsAvg
-                    )
-                    videoDebugRunnable?.let { videoHudTimecode.postDelayed(it, 500L) }
-                    return
+                val log = logRecorder
+                val rec = videoRecorder
+                when {
+                    log != null -> {
+                        val snap = log.snapshot()
+                        renderVideoStatsBox(
+                            videoTimecode(snap.elapsedMs),
+                            String.format(
+                                Locale.US, "%s %s %.1fFPS D%d %.0fMB\nMEM %d%% IO %d%% ENC %d%% WF%d FB%d P%d %.1fms",
+                                snap.profile, snap.demosaic, snap.outputFps, snap.framesDropped,
+                                snap.fileBytes / 1e6, snap.memPct, snap.ioBusyPct, snap.encBusyPct,
+                                snap.waitFreeFrames, snap.fallbackWaits, snap.previewFrames,
+                                snap.cpuChainMsAvg
+                            )
+                        )
+                    }
+                    rec != null -> {
+                        val snap = rec.snapshot()
+                        // Viewfinder proof, live: fps + GPU (Vulkan zero-copy) vs CPU.
+                        val vf = controller.vfSnapshot()
+                        renderVideoStatsBox(
+                            videoTimecode(snap.elapsedMs),
+                            formatVideoDebug(snap, vf?.fps ?: 0f, vf?.gpu == true)
+                        )
+                    }
+                    else -> renderIdleVideoStats()
                 }
-                val snap = videoRecorder?.snapshot()
-                if (snap == null || !isVideoMode) return
-                videoHudTimecode.text =
-                    (if (videoRecording) "● " else "") + videoTimecode(snap.elapsedMs)
-                videoHudTimecode.setTextColor(
-                    getColor(if (videoRecording) R.color.danger else R.color.text_primary)
-                )
-                // Viewfinder proof, live: fps + GPU (Vulkan zero-copy) vs CPU.
-                val vf = controller.vfSnapshot()
-                videoDebugOverlay.text = formatVideoDebug(snap, vf?.fps ?: 0f, vf?.gpu == true)
-                videoDebugRunnable?.let { videoHudTimecode.postDelayed(it, 500L) }
+                videoDebugRunnable?.let { videoDebugOverlay.postDelayed(it, 500L) }
             }
         }
         videoDebugRunnable = tick
-        videoHudTimecode.post(tick)
+        videoDebugOverlay.post(tick)
+    }
+
+    /**
+     * Idle stats box: the same lines a take shows, zeroed, with live
+     * viewfinder proof — the rectangle always carries full info plus the
+     * counter, recording or not.
+     */
+    private fun renderIdleVideoStats() {
+        if (directLogEnabled) {
+            renderVideoStatsBox(
+                videoTimecode(0),
+                String.format(
+                    Locale.US, "%s %s %dFPS D0 0MB\nMEM 0%% IO 0%% ENC 0%% WF0 FB0 P0 0.0ms",
+                    directLogProfile().name, videoDemosaic().name, directLogFpsPref()
+                )
+            )
+            return
+        }
+        val vf = controller.vfSnapshot()
+        renderVideoStatsBox(
+            videoTimecode(0),
+            formatVideoDebug(
+                RawVideoRecorder.VideoStats(
+                    recording = false, elapsedMs = 0L, fps = 0f, frameIntervalMs = 0f,
+                    encodeMsAvg = 0f, encodeMsMax = 0f, resultWaitMsAvg = 0f, resultWaitMsMax = 0f,
+                    closeMsAvg = 0f, closeMsMax = 0f, writeMsAvg = 0f, writeMsMax = 0f,
+                    framesAcquired = 0, framesEncoded = 0, framesDropped = 0,
+                    commitSkipped = 0, latePurged = 0, queueDepth = 0, reorderDepth = 0,
+                    fileBytes = 0L, audioChunks = 0, audioFrames = 0L,
+                    gyroSamples = 0L, accelSamples = 0L, cropLabel = videoCrop.label
+                ),
+                vf?.fps ?: 0f, vf?.gpu == true
+            )
+        )
+    }
+
+    /**
+     * Stats box content: the record timecode as the first line (red while
+     * rolling, plain in idle), then the stats body. Both video paths share
+     * this for takes and idle alike.
+     */
+    private fun renderVideoStatsBox(timecode: String, body: String) {
+        val head = (if (videoRecording) "● " else "") + timecode
+        val full = "$head\n$body"
+        val spanned = SpannableString(full)
+        spanned.setSpan(
+            ForegroundColorSpan(getColor(if (videoRecording) R.color.danger else R.color.text_primary)),
+            0, head.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        videoDebugOverlay.text = spanned
     }
 
     /** 10 Hz audio meter feed; the view peak-holds and decays on its own. */
@@ -2197,28 +2338,19 @@ class MainActivity : Activity() {
         videoAudioMeter.post(tick)
     }
 
-    /** Static HUD labels: codec/fps left, profile+sound right in LOG, meter desc. */
-    private fun refreshVideoHudStatic() {
-        if (directLogEnabled) {
-            videoHudLeft.text = "LOG • ${directLogFpsPref()}FPS"
-            val sound = videoSoundOn()
-            videoHudRight.text = "${directLogProfile().hudLabel} • ${if (sound) "A" else "S"}"
-            videoAudioMeter.contentDescription =
-                if (sound) "Sound on. Tap to mute next takes."
-                else "Sound off. Tap to record sound next takes."
-            return
-        }
-        videoHudLeft.text = "CRS • ${RawVideoRecorder.FPS}FPS"
+    /** Audio meter description follows the sound toggle (no top text in video mode). */
+    private fun refreshVideoAudioDescription() {
         val sound = videoSoundOn()
-        videoHudRight.text = "${videoCropShort()} • ${if (sound) "A" else "S"}"
         videoAudioMeter.contentDescription =
             if (sound) "Sound on. Tap to mute next takes."
             else "Sound off. Tap to record sound next takes."
     }
 
-    /** Persisted Direct-Log grade lift, 0 EV out of the box (metered exposure renders correctly). */
-    private fun directLogEvPref(): Float =
-        lensPreferences().getFloat(KEY_DIRECT_LOG_EV, 0f).coerceIn(-2f, 4f)
+    /** Persisted Direct-Log grade gain in EV stops, 0 (= ×1.0 neutral) out of
+     * the box. Digital gain folded into the grade — the sensor keeps
+     * auto-exposing; the recorder applies 2^value per frame. */
+    private fun directLogGainPref(): Float =
+        lensPreferences().getFloat(KEY_DIRECT_LOG_GAIN, 0f).coerceIn(-2f, 4f)
 
     /** Persisted Direct-Log frame rate: 24 or 30, 30 out of the box. Any
      * other stored value heals to 30. Applies to the next take (encoder
@@ -2229,7 +2361,7 @@ class MainActivity : Activity() {
     private fun cycleDirectLogFps() {
         val next = if (directLogFpsPref() == 24) 30 else 24
         lensPreferences().edit().putInt(KEY_DIRECT_LOG_FPS, next).apply()
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         setStatus("LOG ${next}FPS — NEXT TAKE")
     }
@@ -2255,20 +2387,16 @@ class MainActivity : Activity() {
         val next = directLogProfile().next()
         lensPreferences().edit().putString(KEY_DIRECT_LOG_PROFILE, next.name).apply()
         rawBadge.text = logBadgeLabel()
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         updateQuickControls()
         setStatus("LOG ${next.hudLabel} — NEXT TAKE")
     }
 
-    private fun formatDirectLogEv(ev: Float): String =
-        "%+.1fEV".format(Locale.US, ev)
+    private fun formatDirectLogGain(ev: Float): String =
+        "×%.1f".format(Locale.US, Math.pow(2.0, ev.toDouble()))
 
-    private fun syncDirectLogEvSlider() {
-        val ev = directLogEvPref()
-        directLogEvSlider.setProgressFromUser(((ev + 2f) * 10).toInt(), fromUser = false)
-        directLogEvSlider.valueText = formatDirectLogEv(ev)
-    }
+    private fun logGainText(ev: Float): String = "LOG gain: ${formatDirectLogGain(ev)}"
 
     private fun videoSoundOn(): Boolean =
         lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true) &&
@@ -2278,7 +2406,7 @@ class MainActivity : Activity() {
     private fun toggleVideoSound() {
         val next = !lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true)
         lensPreferences().edit().putBoolean(KEY_VIDEO_AUDIO, next).apply()
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         setStatus(if (next) "SOUND ON • NEXT TAKE" else "SOUND OFF • NEXT TAKE")
     }
 
@@ -2302,8 +2430,10 @@ class MainActivity : Activity() {
     private fun formatVideoDebug(s: RawVideoRecorder.VideoStats, vfFps: Float, vfGpu: Boolean): String {
         val rec = videoRecorder
         val w = rec?.frameSize?.width ?: 0
-        val resolved = try {
-            videoCrop.resolve(w.coerceAtLeast(2), rec?.frameSize?.height ?: 4)
+        // No recorder in idle: skip the resolve entirely so dims stays empty
+        // (resolving the 0x0 fallback would print a bogus "0x…" size).
+        val resolved = if (rec == null) null else try {
+            videoCrop.resolve(w.coerceAtLeast(2), rec.frameSize.height)
         } catch (_: Exception) {
             null
         }
@@ -2313,9 +2443,13 @@ class MainActivity : Activity() {
         val mbs = mb / secs
         val audioKf = s.audioFrames / 1000
         val gyroHz = (s.gyroSamples / secs).toInt()
+        // Idle (no recorder yet) has no frame size: crop short stands alone
+        // instead of leaving a leading blank.
+        val head = if (dims.isEmpty()) videoCropShort() else "$dims ${videoCropShort()}"
+        // Strip layout: two dense lines under the timecode, not a tall box.
         return String.format(
-            Locale.US, "%.1fFPS %.1fms\n%s %s\nQ%d D%d F%d S%d\nA%dkf G%dHz\nVF %.0fFPS %s\n%.0fMB %.0fMB/s",
-            s.fps, s.encodeMsAvg, dims, videoCropShort(),
+            Locale.US, "%.1fFPS %.1fms %s Q%d D%d F%d S%d\nA%dkf G%dHz VF %.0fFPS %s %.0fMB %.0fMB/s",
+            s.fps, s.encodeMsAvg, head,
             s.queueDepth, s.framesDropped, s.framesEncoded, s.commitSkipped,
             audioKf, gyroHz, vfFps, if (vfGpu) "GPU" else "CPU", mb, mbs
         )
@@ -2339,7 +2473,7 @@ class MainActivity : Activity() {
         videoRecorder?.crop = videoCrop // mid-record safe, no session reconfig
         guideOverlay.videoCrop = videoCrop
         refreshVideoSensorInfo()
-        refreshVideoHudStatic()
+        refreshVideoAudioDescription()
         setStatus("CROP • ${videoCrop.label.uppercase(Locale.US)}")
         updateQuickControls()
     }
@@ -3502,6 +3636,10 @@ class MainActivity : Activity() {
             if (histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
         waveformView.visibility =
             if (histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
+        // A GONE -> VISIBLE scope has no measured size yet: seat it now from
+        // the fixed slot (plus a deferred measured correction) so showing it
+        // in landscape never parks it behind the panel until next rotation.
+        if (activeScopeView().visibility == View.VISIBLE) seatScopeSlot()
     }
 
     private fun toggleLevel() {
@@ -4070,7 +4208,12 @@ class MainActivity : Activity() {
         shareLogUri(uri)
     }
 
-    private fun showSettings() {
+    /**
+     * Settings sheet. [initialTab] selects the opening page (see
+     * [SETTINGS_VIDEO_TAB]); every entry point except the video-mode
+     * settings button uses the default General tab.
+     */
+    private fun showSettings(initialTab: Int = 0) {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), dp(8))
@@ -4656,7 +4799,7 @@ class MainActivity : Activity() {
                     directLogEnabled = enabled
                     lensPreferences().edit().putBoolean(KEY_DIRECT_LOG, enabled).apply()
                     if (isVideoMode && !videoRecording) {
-                        refreshVideoHudStatic()
+                        refreshVideoAudioDescription()
                         refreshVideoSensorInfo()
                         rawBadge.text = if (enabled) logBadgeLabel() else "CRS"
                         setStatus(if (enabled) "${directLogProfile().hudLabel} • HEVC 10-BIT" else "CRS • TYPE-7")
@@ -4665,7 +4808,7 @@ class MainActivity : Activity() {
                     }
                 }
             })
-            content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .crs: BT.709, S-Log3, or HLG via the video HUD or the LOG quick tile. Full sensor, live RAW viewfinder; sound follows the Sound toggle."))
+            content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .crs: BT.709, S-Log3, or HLG in this tab or the LOG quick tile. Full sensor, live RAW viewfinder; sound follows the Sound toggle."))
             content.addView(Button(this).apply {
                 fun refresh() {
                     text = "LOG profile: ${directLogProfile().hudLabel}"
@@ -4699,6 +4842,33 @@ class MainActivity : Activity() {
                 }
             })
             content.addView(sectionDesc("MHC (fused, one dispatch) is the realtime record path. RCD runs the 4-mode split path and drops to a few fps at 4K: A/B comparison only."))
+            var logGainEv = directLogGainPref()
+            val logGainLabel = TextView(this).apply {
+                text = logGainText(logGainEv)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(4), dp(12), 0)
+            }
+            content.addView(logGainLabel)
+            content.addView(SeekBar(this).apply {
+                max = 60 // -2.0..+4.0 EV stops in 0.1 steps, shown as ×gain
+                progress = ((logGainEv + 2f) * 10).toInt().coerceIn(0, max)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        logGainEv = progress / 10f - 2f
+                        logGainLabel.text = logGainText(logGainEv)
+                        // Live: the camera thread reads exposureEv per frame.
+                        logRecorder?.exposureEv = logGainEv
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        lensPreferences().edit().putFloat(KEY_DIRECT_LOG_GAIN, logGainEv).apply()
+                        setStatus("LOG GAIN • ${formatDirectLogGain(logGainEv)}")
+                    }
+                })
+            })
+            content.addView(sectionDesc("Digital gain folded into the grade (×1.0 = neutral): brightens the log image without touching sensor exposure. Applies live, including mid-take."))
             content.addView(CheckBox(this).apply {
                 text = "Video sound"
                 setTextColor(getColor(R.color.text_primary))
@@ -5732,7 +5902,7 @@ class MainActivity : Activity() {
         tabRow.setOnTouchListener(swipeTouch)
         container.setOnTouchListener(swipeTouch)
         tabScroll.contentDescription = "Settings tabs. Swipe left or right anywhere to flip tabs."
-        goTab(0)
+        goTab(initialTab)
         dialog = AlertDialog.Builder(this)
             .setTitle("Settings")
             .setView(container)
@@ -5964,7 +6134,7 @@ class MainActivity : Activity() {
         var progressDialog: AlertDialog? = null
         var progressOverlay: View? = null
         if (firstRun) {
-            hideStatusBar()
+            // Already immersive from onCreate; the overlay just covers the UI.
             progressOverlay = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -6011,8 +6181,8 @@ class MainActivity : Activity() {
                 progressOverlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
                 progressOverlay = null
                 if (lenses.isEmpty()) {
-                    // No selection page follows, so hand the status bar back.
-                    if (firstRun) showStatusBar()
+                    // No selection page follows; stay fullscreen (the dialog
+                    // re-hides the bars via onWindowFocusChanged on dismiss).
                     AlertDialog.Builder(this)
                         .setTitle("No RAW lenses found")
                         .setMessage("The camera service did not expose a RAW-capable camera ID.")
@@ -6023,32 +6193,10 @@ class MainActivity : Activity() {
                 val missingSaved = selectedLensIds()
                     .filterNot { savedId -> lenses.any { it.id == savedId } }
                     .map { unavailableLens(it) }
-                // First run keeps the status bar hidden: the selection page
-                // restores it when Save / Use default dismisses it.
+                // First run stays fullscreen throughout: dismissing the
+                // selection page re-applies immersive mode, never shows bars.
                 showLensSelection(lenses + missingSaved, firstRun)
             }
-        }
-    }
-
-    /** First-run onboarding chrome: true full-screen black over the app. */
-    private fun hideStatusBar() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.hide(WindowInsets.Type.statusBars())
-        } else {
-            @Suppress("DEPRECATION")
-            window.setFlags(
-                WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN
-            )
-        }
-    }
-
-    private fun showStatusBar() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.show(WindowInsets.Type.statusBars())
-        } else {
-            @Suppress("DEPRECATION")
-            window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         }
     }
 
@@ -6337,7 +6485,9 @@ class MainActivity : Activity() {
             root.requestFocus()
             fun dismissPage() {
                 (root.parent as? ViewGroup)?.removeView(root)
-                showStatusBar()
+                // Used to showStatusBar() here: first install kept the
+                // notification bar until relaunch. Stay fullscreen instead.
+                ImmersiveMode.apply(window)
             }
             saveButton.setOnClickListener {
                 val ids = checked.filterValues { it }.keys.toMutableSet()
@@ -6459,12 +6609,15 @@ class MainActivity : Activity() {
         // v2: the v1 default (+1.5) compensated for the old lift-everything
         // chain; the corrected chain meters at 0, so stored v1 values are
         // not carried over.
-        const val KEY_DIRECT_LOG_EV = "direct_log_ev_v2"
+        // Stored key keeps the legacy name so existing values survive the LOG EV -> LOG gain rename.
+        const val KEY_DIRECT_LOG_GAIN = "direct_log_ev_v2"
         const val KEY_DIRECT_LOG_FPS = "direct_log_fps"
         const val KEY_DIRECT_LOG = "direct_log_video"
         const val KEY_DIRECT_LOG_PROFILE = "direct_log_profile"
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = SettingsBackup.STORE_MAIN
+        /** Settings sheet page index of the Video tab (keep in sync with tabPages order). */
+        const val SETTINGS_VIDEO_TAB = 2
         const val KEY_SELECTED_LENSES = "selected_lens_ids"
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"

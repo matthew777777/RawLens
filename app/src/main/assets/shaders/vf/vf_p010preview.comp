@@ -4,7 +4,7 @@
 // encoder) -> small RGBA8 display image, in one tiny dispatch. This is what
 // the take monitor shows INSTEAD of a separately-demosaiced viewfinder: no
 // second WB/CCM/grade, no contended full-res dispatch — the preview IS the
-// encode pixels (pre-compression), so LOG EV and grade-slider moves show
+// encode pixels (pre-compression), so LOG gain and grade-slider moves show
 // live and WYSIWYG.
 //
 // The kernel box-downsamples luma 1:1 with the chroma grid (box x box Y taps

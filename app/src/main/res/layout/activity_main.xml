@@ -102,60 +102,25 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
-    <!-- RAW Video HUD (Blackmagic language): full-bleed image with overlaid
-         top strip (codec/fps | red timecode | crop/sound) and bottom bar
-         (crop chip | REC | audio meter). Shown in VIDEO mode only, while the
-         photo chrome (topBar, controlPanel) hides. Text rotates with the
-         device; meter and REC stay fixed like reference hardware. -->
-    <LinearLayout
-        android:id="@+id/videoHudTop"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="16dp"
-        android:visibility="gone">
-
-        <com.matthew.rawlens.RotatingTextView
-            android:id="@+id/videoHudLeft"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:fontFamily="monospace"
-            android:letterSpacing="0.06"
-            android:text="CRS • 30FPS"
-            android:textColor="@color/text_primary"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-
-        <com.matthew.rawlens.RotatingTextView
-            android:id="@+id/videoHudTimecode"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:gravity="center"
-            android:letterSpacing="0.08"
-            android:text="00:00:00:00"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <com.matthew.rawlens.RotatingTextView
-            android:id="@+id/videoHudRight"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:fontFamily="monospace"
-            android:gravity="end"
-            android:letterSpacing="0.06"
-            android:text="GATE • A"
-            android:textColor="@color/text_primary"
-            android:textSize="11sp"
-            android:textStyle="bold" />
-    </LinearLayout>
+    <!-- RAW Video HUD (Blackmagic language): full-bleed image with a stats
+         strip, a photo-style settings button top-start (always opens
+         Settings at the Video tab), and bottom bar (crop chip | REC | audio
+         meter). Shown in VIDEO mode only, while the photo chrome (topBar,
+         controlPanel) hides. No top text: the record timecode lives as the
+         first line of the stats strip (red while rolling); fps/profile
+         switches live in the Settings Video tab. Meter and REC stay fixed
+         like reference hardware. -->
+    <!-- Video-mode settings access: same look and rotation behavior as the
+         photo top-bar button, but always opens Settings at the Video tab. -->
+    <com.matthew.rawlens.RotatingImageButton
+        android:id="@+id/videoSettingsButton"
+        style="@style/TopBarButton"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="12dp"
+        android:contentDescription="Video settings"
+        android:src="@drawable/ic_settings"
+        android:visibility="gone" />
 
     <!-- Floating audio meter: bottom-end above the capture panel in video
          mode (runtime margin), mirroring the histogram's floating pattern.
@@ -172,23 +137,11 @@
         android:focusable="true"
         android:visibility="gone" />
 
-    <!-- Direct-Log grade lift slider: -2..+4 EV in 0.1 steps, live during
-         the take (the recorder reads exposureEv per frame). Direct-Log
-         video mode only; floats just above the capture panel beside the
-         audio meter (marginEnd 142dp clears the 110dp meter + 16dp gap;
-         marginBottom is re-seated at runtime to panel height + 16dp). -->
-    <com.matthew.rawlens.RuleSliderView
-        android:id="@+id/directLogEvSlider"
-        android:layout_width="match_parent"
-        android:layout_height="68dp"
-        android:layout_gravity="bottom"
-        android:layout_marginStart="24dp"
-        android:layout_marginEnd="142dp"
-        android:layout_marginBottom="248dp"
-        android:visibility="gone" />
-
-    <!-- RAW Video debug overlay: same mono contract as rawVfDebugOverlay
-         (fps / encode ms / drops / queue / MB/s / audio+gyro rates). -->
+    <!-- RAW Video stats strip: same mono contract as rawVfDebugOverlay
+         (fps / encode ms / drops / queue / MB/s / audio+gyro rates) with the
+         record timecode as its first line (red while rolling), laid out as
+         a wide rounded strip over a translucent fill so the viewfinder
+         shows through. -->
     <TextView
         android:id="@+id/videoDebugOverlay"
         android:layout_width="wrap_content"
@@ -196,12 +149,13 @@
         android:layout_gravity="top|end"
         android:layout_marginEnd="16dp"
         android:layout_marginTop="96dp"
-        android:background="@drawable/manual_control_panel"
+        android:background="@drawable/video_stats_frame"
         android:fontFamily="monospace"
         android:maxWidth="300dp"
         android:minHeight="48dp"
         android:gravity="center_vertical"
         android:padding="12dp"
+        android:text="00:00:00:00"
         android:textColor="@color/text_primary"
         android:textSize="10sp"
         android:visibility="gone" />
