@@ -65,6 +65,25 @@ class FrameLeaseRegistryTest {
     }
 
     @Test
+    fun liveCountTracksAdoptToFinalRelease() {
+        val registry = FrameLeaseRegistry<Any> { }
+        val first = Any()
+        val second = Any()
+        assertEquals(0, registry.liveCount())
+        registry.adopt(first)
+        registry.adopt(second)
+        assertEquals(2, registry.liveCount())
+        // A borrowed frame stays live past camera release (GPU pin).
+        val lease = registry.borrow(first)!!
+        registry.release(first)
+        assertEquals(2, registry.liveCount())
+        lease.close()
+        assertEquals(1, registry.liveCount())
+        registry.release(second)
+        assertEquals(0, registry.liveCount())
+    }
+
+    @Test
     fun recorderProtocolTransfersOneLeaseToFenceClose() {
         // Mirrors DirectLogRecorder: adopt -> borrow -> camera release on
         // the camera thread, then the transferred lease closes on the

@@ -29,10 +29,14 @@ object GaloshVulkan {
     fun init(assetManager: AssetManager, cacheFile: java.io.File? = null): Long {
         val handle = nativeInit(assetManager, cacheFile?.absolutePath)
         require(handle != 0L) { "galosh init returned a null handle" }
+        MemoryLeakDiagnostics.vulkanHandleAllocated()
         return handle
     }
 
-    fun release(handle: Long) = nativeRelease(handle)
+    fun release(handle: Long) {
+        nativeRelease(handle)
+        MemoryLeakDiagnostics.vulkanHandleReleased()
+    }
 
     fun loadedShaderCount(handle: Long): Int = nativeLoadedShaderCount(handle)
 

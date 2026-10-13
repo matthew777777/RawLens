@@ -67,7 +67,7 @@ enum class VideoDemosaic(val label: String) {
  * monitor shows the staged encode pixels (one tiny P010->RGBA8 dispatch
  * per frame, same-queue ordered behind the encode) instead of a
  * separately-demosaiced viewfinder: no second full-res dispatch contends
- * with the record submits, and the monitor IS the encode (LOG EV and
+ * with the record submits, and the monitor IS the encode (LOG gain and
  * grade moves show live). Preview is best-effort and never gates the
  * encode: every skip degrades to an older monitor frame.
  *
@@ -404,6 +404,7 @@ class DirectLogRecorder(
     private var startRealtimeMs: Long = 0L
 
     fun start(output: File) {
+        MemoryLeakDiagnostics.sampleAsync("directlog-start")
         check(device == null) { "Already started" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
@@ -1056,6 +1057,11 @@ class DirectLogRecorder(
             0L
         }
         teardown()
+        // stop() runs on the DirectLog stop thread, so a synchronous PSS sample is safe here.
+        MemoryLeakDiagnostics.sample(
+            "directlog-stop",
+            extra = "acq=${acquired.get()} graded=${graded.get()} drop=${dropped.get()}"
+        )
         return Stats(
             sensorSize = "${rawSize?.width}x${rawSize?.height}",
             cropRect = cropRect?.let { "${it.width}x${it.height}@(${it.left},${it.top})" } ?: "?",
@@ -1390,6 +1396,7 @@ class DirectLogRecorder(
         s.ptsUs = cfrUs
         frameCounter++
         graded.incrementAndGet()
+        MemoryLeakDiagnostics.directLogFrame()
         if (shadeD != null) shadedCount.incrementAndGet()
         // Monitor preview for this graded frame (best-effort; never
         // throws, never gates: any skip keeps an older monitor frame).

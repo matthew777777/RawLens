@@ -43,6 +43,8 @@ internal class FrameLeaseRegistry<T : Any>(private val releaseNative: (T) -> Uni
 
     @Synchronized fun count(source: Any): Int = entries.values.count { it.source === source }
     @Synchronized fun gpuOnlyCount(): Int = entries.values.count { it.cameraReleased && it.borrows > 0 }
+    /** Exact live frames (adopted, not yet fully released); read by memory diagnostics. */
+    @Synchronized fun liveCount(): Int = entries.size
 
     private fun finishIfReleased(frame: T, entry: Entry) {
         if (!entry.cameraReleased || entry.borrows != 0) return
@@ -62,4 +64,5 @@ internal object RawImageOwnership {
     fun release(image: Image) { if (!registry.release(image)) image.close() }
     fun count(reader: Any): Int = registry.count(reader)
     fun gpuOnlyCount(): Int = registry.gpuOnlyCount()
+    fun liveCount(): Int = registry.liveCount()
 }
