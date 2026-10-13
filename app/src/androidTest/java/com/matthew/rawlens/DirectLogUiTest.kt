@@ -92,7 +92,7 @@ class DirectLogUiTest {
             var hudVisible = false
             var recBadge = ""
             instrumentation.runOnMainSync {
-                hudVisible = view(R.id.videoHudTop).visibility == View.VISIBLE
+                hudVisible = view(R.id.videoSettingsButton).visibility == View.VISIBLE
                 recBadge = (activity.findViewById<TextView>(R.id.rawBadge)).text.toString()
             }
             assertTrue("Video HUD never appeared", hudVisible)

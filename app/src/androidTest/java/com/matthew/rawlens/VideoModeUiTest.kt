@@ -82,12 +82,12 @@ class VideoModeUiTest {
             }
             assertEquals("MCRAW", badge)
 
-            // 2. Shutter starts the take; the HUD top strip appears.
+            // 2. Shutter starts the take; the video HUD appears.
             click(view(R.id.shutter))
             SystemClock.sleep(1500)
             var hudVisible = false
             instrumentation.runOnMainSync {
-                hudVisible = view(R.id.videoHudTop).visibility == View.VISIBLE
+                hudVisible = view(R.id.videoSettingsButton).visibility == View.VISIBLE
             }
             assertTrue("Video HUD never appeared", hudVisible)
             screenshot("vui_video_idle")

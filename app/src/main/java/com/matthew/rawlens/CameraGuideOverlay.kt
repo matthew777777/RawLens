@@ -52,6 +52,18 @@ class CameraGuideOverlay @JvmOverloads constructor(
             field = value
             invalidate()
         }
+    /**
+     * Device orientation in degrees (0/90/180/270 from the orientation
+     * listener). The letterbox stays world-horizontal like the level line:
+     * landscape draws side bars on the portrait-locked canvas, which the
+     * user holding the rotated phone sees as top/bottom. Portrait rendering
+     * is unchanged.
+     */
+    var videoOrientationDegrees: Int = 0
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     fun setContentInsets(top: Int, end: Int, bottom: Int) {
         contentTop = top.toFloat()
@@ -78,23 +90,72 @@ class CameraGuideOverlay @JvmOverloads constructor(
     }
 
     /**
-     * Centered cinematic letterbox for the active [videoCrop]. The preview
-     * shows the full sensor frame, so the visible height fraction is
-     * `sensorW / ratio / sensorH` approximated from the view aspect: bars =
-     * `(H - W / ratio) / 2`. Open Gate (ratio null) draws nothing.
+     * Centered cinematic letterbox for the active [videoCrop], kept
+     * world-horizontal like the level line: the canvas is portrait-locked,
+     * so in landscape the bars move to the view's left/right edges. The
+     * preview shows the full sensor frame, so the visible fraction is
+     * `sensorW / ratio / sensorH` approximated from the view aspect:
+     * portrait bars = `(H - W / ratio) / 2`, landscape bars =
+     * `(W - H / ratio) / 2`. Open Gate (ratio null) draws nothing.
      */
     private fun drawVideoLetterbox(canvas: Canvas) {
         val ratio = (videoCrop?.ratio ?: return).toFloat()
         val right = (width - contentEnd).coerceAtLeast(0f)
         val bottom = (height - contentBottom).coerceAtLeast(contentTop)
-        val viewH = bottom - contentTop
-        if (right <= 0f || viewH <= 0f) return
-        val visibleH = right / ratio
-        val bar = (viewH - visibleH) / 2f
-        if (bar <= 0f) return
-        canvas.drawRect(0f, contentTop, right, contentTop + bar, letterboxPaint)
-        canvas.drawRect(0f, bottom - bar, right, bottom, letterboxPaint)
-        canvas.drawLine(0f, contentTop + bar, right, contentTop + bar, letterboxEdgePaint)
-        canvas.drawLine(0f, bottom - bar, right, bottom - bar, letterboxEdgePaint)
+        val bars = VideoLetterbox.compute(
+            viewW = right,
+            viewH = bottom - contentTop,
+            ratio = ratio,
+            orientationDegrees = videoOrientationDegrees
+        ) ?: return
+        if (bars.topBottom) {
+            canvas.drawRect(0f, contentTop, right, contentTop + bars.bar, letterboxPaint)
+            canvas.drawRect(0f, bottom - bars.bar, right, bottom, letterboxPaint)
+            canvas.drawLine(0f, contentTop + bars.bar, right, contentTop + bars.bar, letterboxEdgePaint)
+            canvas.drawLine(0f, bottom - bars.bar, right, bottom - bars.bar, letterboxEdgePaint)
+        } else {
+            canvas.drawRect(0f, contentTop, bars.bar, bottom, letterboxPaint)
+            canvas.drawRect(right - bars.bar, contentTop, right, bottom, letterboxPaint)
+            canvas.drawLine(bars.bar, contentTop, bars.bar, bottom, letterboxEdgePaint)
+            canvas.drawLine(right - bars.bar, contentTop, right - bars.bar, bottom, letterboxEdgePaint)
+        }
+    }
+}
+
+/**
+ * Orientation-aware RAW Video letterbox geometry (pure math; the overlay
+ * only draws it). The activity is portrait-locked while the phone rotates
+ * freely, so fixed top/bottom bars would appear as side bars in landscape.
+ * Like the level line, the letterbox stays world-horizontal: a portrait
+ * device (0/180 deg) draws top/bottom bars, a landscape device (90/270 deg)
+ * draws left/right bars.
+ */
+object VideoLetterbox {
+    /**
+     * @param topBottom true for top/bottom bars (portrait device), false for
+     * left/right bars (landscape device).
+     * @param bar bar thickness in px.
+     */
+    data class Bars(val topBottom: Boolean, val bar: Float)
+
+    /**
+     * Centered letterbox over a [viewW]x[viewH] full-frame preview for a crop
+     * with width/height [ratio] at [orientationDegrees] device orientation
+     * (any integer; normalized to quadrants). Null when the view is empty or
+     * the crop covers the frame (no bars).
+     */
+    fun compute(viewW: Float, viewH: Float, ratio: Float, orientationDegrees: Int): Bars? {
+        if (viewW <= 0f || viewH <= 0f || ratio <= 0f) return null
+        val landscape = when ((orientationDegrees % 360 + 360) % 360) {
+            90, 270 -> true
+            else -> false
+        }
+        return if (!landscape) {
+            val bar = (viewH - viewW / ratio) / 2f
+            if (bar <= 0f) null else Bars(topBottom = true, bar = bar)
+        } else {
+            val bar = (viewW - viewH / ratio) / 2f
+            if (bar <= 0f) null else Bars(topBottom = false, bar = bar)
+        }
     }
 }
