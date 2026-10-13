@@ -2,10 +2,39 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [Unreleased]
+## [1.0.0] - 2026-10-13
 
 ### Added
 
+- Camera2 RAW lens discovery and switching
+- Opt-in RAW zero-shutter-lag capture with a memory-bounded pre-shutter buffer
+- Timestamp-paired ZSL selection using exposure/readout completion, freshness, focus, exposure, lens state, ISO, and frame-time gyroscope motion
+- Request-epoch isolation and RAW queue draining across ZSL control and capture transitions
+- Explicit repeating-RAW flush and ImageReader overlap capacity for reliable six-frame bursts after ZSL
+- Live ZSL state badge and automatic fallback to normal RAW capture
+- Full-resolution DNG capture and six-frame RAW burst mode
+- Manual ISO, shutter, white-balance, and exposure-compensation controls
+- Independent focus and exposure metering targets
+- Histogram, grid, level, capture timer, torch, and diagnostic overlay
+- Portrait camera layout with rotation-aware preview and controls
+- AUTO, PROGRAM shutter-first AE, and MANUAL capture modes alongside ZSL RAW motion selection
+- Dynamic exposure balance with configurable ISO and shutter ceilings
+- Standard Auto, Center Weighted, Frame Average, and Spot AE metering modes
+- OIS toggle, configurable 2/5-second timer, and portrait-oriented control layout
+- Configurable RAW ZSL output count from 1 to 30 frames, targeting up to 30 FPS where supported
+- Six-frame JPEG/JPEG+DNG ZSL output; DNG-only supports the full 30-frame selection
+- Per-camera DNG metadata overrides for noise profiles, color matrices, calibration matrices, and black/white levels
+- Rotation-vector horizon guide with orientation-aware remapping, gravity fallback, and smoothed roll/pitch rendering
+- Persisted JPEG / JPEG+DNG / DNG-only capture-format selector without ISP-JPEG substitution
+- AgX JPEG output controls: Base/Golden/Punchy looks, contrast, saturation, purity, hue preservation,
+  highlight/shadow range, gamut compression, and reset-to-official-Base
+- Bounded adaptive RAW development exposure for AUTO/ZSL, adjustable PROGRAM strength, shared across bursts
+- Optional RAW prefilter and post-demosaic denoise controls with chroma/luma cleanup, grain retention, and edge protection
+- Exact RAW image/result metadata snapshots and stride-safe unclamped CFA unpacking
+- CPU-reference lens-shading, hot/dead-pixel correction, and pre-demosaic darktable
+  inpaint-opposed highlight reconstruction
+- PhotonCamera-derived 13-pass tiled AMaZE GLES 3.1 demosaic executor with explicit capability
+  gating, fixed-memory scratch resources, actual-CFA phase handling, and unbounded RGB output
 - Face-priority AF/AE from HAL face detection (Settings → Exposure → Face priority): tracks the largest face into the AF/AE metering regions with tap override, miss debounce, and jitter-gated light repeating pushes; all faces draw on the viewfinder overlay with the tracked one in lime (`FacePriority` selection/mapping is pure Kotlin with host tests, `RawPreviewGeometry.viewPoint` inverts the tap mapping)
 - Fused scope+meter sampler (Halide AOT, gate green, app wiring in): one `scope_meter` filter call replaces the four camera-thread Bayer samplers (histogram, waveform, ETTR/PROGRAM metering incl. the guard scan, focus-peaking energy/mean) with bitwise-identical outputs — 119-case host gate (all CFAs, white/black variants, LUT on/off, metering regions, ETTR/PROGRAM densities, padded strides, flat/extreme/spike/stripe frames; hash `710f60b7a2942a8d`). `rawLensScopeMeter` JNI (zero-copy direct buffers, HAL row stride) + `ScopeMeterNative` facade (existing samplers as fallback) + `ScopeMeterAB` on-device transfer check (bitwise diff + timings to logcat); step/density formulas are shared helpers so tuning cannot diverge. Geometry decisions (steps, regions) stay host-side; the gate caught two real codegen hazards now documented as schedule rules (simplifier `d*(1/x)`→`d/x` rewrite defeated by opaque reciprocal params, LLVM FMA on bare `a*a+b*b` defeated by materialized squares) plus scalar-side FMA (checks now build with `-ffp-contract=off` to match JVM separate-rounding semantics)
 - Settings backup as JSON (Settings → General → Settings backup): Export writes every preferences store (camera, JPEG, video, exposure, burst, denoise, lenses, DNG calibration, PROGRAM profiles) to one typed, deterministically ordered `rawlens-settings-<stamp>.json` via the system file picker; Import validates the file, replaces all settings, and offers a restart to apply them (`SettingsBackup` codec is pure Kotlin with host round-trip tests)
@@ -77,6 +106,7 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - SR capture-to-save performance (identical pixels, phone + desktop): native submit path reuses one command buffer + fence instead of alloc/free per submit; RAW16 uploads reuse pooled staging with a contiguous fast path; CPU merges route CFA taps via hoisted ordinals with unrolled covariance lerp; reference CFA/pyramid built once per burst instead of per frame; >8-core desktops scale workers to 16; DNG writers pack shorts in bulk. Measured ~25% faster CPU merge with bitwise-identical output (943 unit tests green)
 - RAW video spike bench gains a multithreaded encode entry (`CinemaRawSpike.encodeParallel`, byte-identical to serial, 0 = core count) for measuring per-frame threading on-device; the recorder itself keeps frame-level parallelism (N workers × serial encode), where intra-frame threading would oversubscribe. Vendored encoder synced to upstream `55cceb2` (parallel entry, x86 SSE2). Pinned by `encodeParallelParity` on-device and `tools/mcraw/parallel_parity.cpp` on-host
 - First-install photo-folder grant: the welcome flow fires the same `ACTION_OPEN_DOCUMENT_TREE` picker burst settings offers right after camera permission, so gyro sidecars (`burst.json` + `gyro/` CSVs) save next to the DNGs in `DCIM/RawLens/<burst>` by default. The prompt fires exactly once and never blocks entry (cancel/deny/unavailable picker still opens the camera; sidecars fall back to Downloads until granted). `SidecarTreeAccessTest` pins the once-only decision
+- RAW video per-frame `lensShadingMap`: every recorded frame resamples the preview HAL lens-shading grid to its own encoded crop and carries the `lensShadingMapWidth` / `lensShadingMapHeight` / `lensShadingMap` triplet in the MotionCam Pro shape (four nested R/Gr/Gb/B planes, upstream `LensShading.h` schema), so MotionCam Tools bakes vignetting correction into its DNG output; mid-take crop switches stay correct, and frames skip the keys silently when the HAL already applied correction, the preview ran on another lens, or the map fails validation. Vendored encoder synced to upstream `3c9519c` (fd-fork `ContainerWriter` kept), and container metadata gains the `uniqueCameraModel` lower-camel twin. `CinemaRawLensShadingTest` pins the resample/remap/crop math plus the upstream golden planes on-host, `tools/mcraw/parallel_parity.cpp` re-pins the encoder bytes
 
 ### Changed
 
@@ -140,40 +170,10 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - HDR+ merges above ~15 frames dying with `HDR+ ERROR` on 512MB-heap devices (12MP logcat 2026-10-11: three 30-frame bursts OOM in `packFrame` allocating 25MB ART direct buffers at a 505MB footprint — `largeHeap` is already on, so every packed frame plus the output copy sat on the Java heap at once). Packed frames and the merge output now live in malloc-backed native buffers (`HdrPlusVulkan.allocBuffer`, freed per merge in try/finally behind a registry-guarded native free that refuses foreign buffers), moving ~25MB/frame off the Java heap; metering samples/order, the auto decision, the JNI merge call, and the merged bytes are unchanged. `HdrPlusAutoSelectTest` pins manual strength above 16 reaching the merge unclamped (no strength clamp existed — the observed ceiling was the frame-count OOM) and `HdrPlusSettingsTest` pins 17–22 as valid settings; the strength setting now states the AUTO 3–13 cap explicitly
 - HDR+ merges slow (55s at N=30 HQ: 40s one-shot GPU submit, 12s host pack/meter/upload) and viewfinder collapsing to ~12fps with vkMs spiking 13→75ms during the merge. Frames pack straight into cached+coherent native staging (an uncached-staging attempt metered at 55s — ~2s per pair on Mali reads — so the arena now prefers cached+coherent with an uncached fallback), the GPU run submits per-frame chunks, fence-paced (`ChunkDriver`, same dispatch sequence — bit-identical output, `HDRPLUS_SINGLE_SUBMIT=1` records one buffer for A/B diagnosis), so viewfinder work interleaves between chunks instead of stalling behind one 40s submit, companion device images reuse one slot (~700MB native saved at N=30), and the viewfinder runs its record profile (480p@<=10fps) for the whole HDR+ job like the SR merge does. New `HDR+ host: pack=Xms meter=Yms` log line splits host phases
 - HDR+ presses dying without a merge whenever the ZSL ring was thin, stalled, or off (full-ring discipline waited out the window, then the timeout fell through to a plain burst or `ZSL NOT READY` — the merge silently dropped). HDR+ now always merges: 2+ ring frames merge immediately even when partial, thinner rings top fresh frames up into the merge (`HDR+ TOP-UP`, completing through `saveHdrPlusMerge`), including the session-ZSL-disabled and timeout paths; a lone survivor saves plain and only a zero-frame chain errors. `resolveTake` pins the MERGE/TOPUP/WAIT policy in `HdrPlusSettingsTest`
-
-## [1.0.0] - 2026-08-31
-
-### Added
-
-- Camera2 RAW lens discovery and switching
-- Opt-in RAW zero-shutter-lag capture with a memory-bounded pre-shutter buffer
-- Timestamp-paired ZSL selection using exposure/readout completion, freshness, focus, exposure, lens state, ISO, and frame-time gyroscope motion
-- Request-epoch isolation and RAW queue draining across ZSL control and capture transitions
-- Explicit repeating-RAW flush and ImageReader overlap capacity for reliable six-frame bursts after ZSL
-- Live ZSL state badge and automatic fallback to normal RAW capture
-- Full-resolution DNG capture and six-frame RAW burst mode
-- Manual ISO, shutter, white-balance, and exposure-compensation controls
-- Independent focus and exposure metering targets
-- Histogram, grid, level, capture timer, torch, and diagnostic overlay
-- Portrait camera layout with rotation-aware preview and controls
-- AUTO, PROGRAM shutter-first AE, and MANUAL capture modes alongside ZSL RAW motion selection
-- Dynamic exposure balance with configurable ISO and shutter ceilings
-- Standard Auto, Center Weighted, Frame Average, and Spot AE metering modes
-- OIS toggle, configurable 2/5-second timer, and portrait-oriented control layout
-- Configurable RAW ZSL output count from 1 to 30 frames, targeting up to 30 FPS where supported
-- Six-frame JPEG/JPEG+DNG ZSL output; DNG-only supports the full 30-frame selection
-- Per-camera DNG metadata overrides for noise profiles, color matrices, calibration matrices, and black/white levels
-- Rotation-vector horizon guide with orientation-aware remapping, gravity fallback, and smoothed roll/pitch rendering
-- Persisted JPEG / JPEG+DNG / DNG-only capture-format selector without ISP-JPEG substitution
-- AgX JPEG output controls: Base/Golden/Punchy looks, contrast, saturation, purity, hue preservation,
-  highlight/shadow range, gamut compression, and reset-to-official-Base
-- Bounded adaptive RAW development exposure for AUTO/ZSL, adjustable PROGRAM strength, shared across bursts
-- Optional RAW prefilter and post-demosaic denoise controls with chroma/luma cleanup, grain retention, and edge protection
-- Exact RAW image/result metadata snapshots and stride-safe unclamped CFA unpacking
-- CPU-reference lens-shading, hot/dead-pixel correction, and pre-demosaic darktable
-  inpaint-opposed highlight reconstruction
-- PhotonCamera-derived 13-pass tiled AMaZE GLES 3.1 demosaic executor with explicit capability
-  gating, fixed-memory scratch resources, actual-CFA phase handling, and unbounded RGB output
+- RAW Video crop letterbox stuck in portrait: the guide overlay always drew top/bottom bars on the portrait-locked canvas, so in landscape they appeared as side bars while the recorded crop is a horizontal strip. The letterbox now stays world-horizontal like the level line — side bars on the canvas in landscape (seen as top/bottom by the user), unchanged top/bottom bars in portrait — driven by the existing device-orientation listener. Encoder cropping untouched. `VideoLetterboxTest` pins the quadrants and the landscape match to the encoder crop
+- Stills info chips stuck on video labels after leaving RAW Video / Direct Log: exiting video mode called `refreshVideoSensorInfo()`, which early-returns once photo mode is set, and the controller only publishes its DNG/sensor labels on camera open or white-level change (publications during the exit are still routed to the video labels) — so MCRAW/BT709 text lingered above the shutter. The exit path now republishes the controller's cached stills labels (`republishInfo()`), restoring the bit-depth/sensor chips
+- Video HUD redesign (RAW Video + Direct Log): the top text strip and the standalone record counter are gone — no text floats at the top in either orientation. The timecode now lives as the first line of the stats readout (red while rolling), which is restyled from a filled box into a wide rounded translucent strip showing full info plus the counter in takes and in idle alike (idle zeroes with live viewfinder proof). A photo-style settings button sits top-start and always opens Settings at the Video tab (fps/profile switches moved there); all other settings entries still open at General. In landscape the strip rides the user's top edge over the viewfinder with the scope yielding to the opposite edge and the audio meter mirroring away from the scope, so nothing clips, hides under the histogram, or floats over the black bands
+- Tap-to-focus hardening and stuck-AUTO recovery (Xiaomi logcat: blurry VF with AF_MODE AUTO + FOCUSED_LOCKED under a FOCUS NOT LOCKED status): failed scans now release to continuous-picture after a 1.5 s readable hold instead of pinning the blurry AUTO lock for the full 10 s; a lone INACTIVE only fails past an 800 ms grace with no scan state seen (was 200 ms unconditionally), passive-HAL lock states count as sharp, and a FOCUSED_LOCKED arriving after the failure verdict upgrades to a real lock instead of contradicting the status. Accidental taps are gated at both layers — the overlay swallows bounce taps inside 350 ms and second-finger (pinch) gestures without moving the reticle, the controller drops taps during still capture plus same-spot mid-scan hammering while far retargets always pass, and AF START defers past an in-flight still bounded by the scan timeout. Idle stays continuous-picture wherever the HAL offers it (AUTO only while a tap scan/lock is in flight). Diagnosis is covered for next time: each session logs its AF modes/regions/idle choice, and every tap leaves a transition-only trace (tap → START → AF-state transitions with ms-since-START → locked/failed with reason → back to continuous, plus ignored-tap/deferred-START lines), so a future logcat shows the whole focus story instead of just peaking toggles. `AutoFocusPolicy` is pure Kotlin pinned by `AutoFocusPolicyTest`
 
 ### Behavior and documentation
 
@@ -191,8 +191,3 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Adaptive development exposure is applied only to JPEG development; DNG pixels and capture metadata remain unchanged
 - README and related project documentation track the current UI, 30-frame ZSL, six-frame bursts, adaptive exposure,
   AgX controls, denoise settings, build-time native dependency, and portrait-only activity behavior
-
-### Planned
-
-- Physical-device validation across supported Camera2 capability combinations
-- Motion-aware shutter-priority exposure policy refinement
