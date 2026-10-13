@@ -189,6 +189,10 @@ class RawVideoRecordTest {
             assertEquals(4, container.getJSONArray("blackLevel").length())
             assertTrue(container.getDouble("whiteLevel") > container.getJSONArray("blackLevel").getDouble(0))
             assertEquals(9, container.getJSONArray("colorMatrix1").length())
+            assertEquals(
+                container.getString("UniqueCameraModel"),
+                container.getString("uniqueCameraModel")
+            )
             val audio = container.getJSONObject("extraData")
             assertEquals(48000, audio.getInt("audioSampleRate"))
             // Stereo-first like the audible reference; mono when the

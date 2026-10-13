@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Pins the upstream 55cceb2 encoder update: encode_parallel() must be
+// Pins the upstream encoder behavior (synced at 3c9519c; the detail/
+// refactor is byte-identical to 55cceb2): encode_parallel() must be
 // byte-identical to encode(), the convenience overload must match the full
 // form, the edge-tile padding clamp must produce upstream's golden bytes,
 // and the fd-fork ContainerWriter must emit byte-exact audio/motion payloads

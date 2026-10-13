@@ -154,6 +154,18 @@ internal class RawVideoRecorder(
     /** Set false before [start] to skip motion logging. */
     var motionEnabled: Boolean = true
 
+    /**
+     * Preview HAL lens-shading grid to embed, set before [start] (never
+     * mutated after). Each frame resamples it to its own encoded crop and
+     * carries the per-frame `lensShadingMapWidth` / `lensShadingMapHeight` /
+     * `lensShadingMap` triplet (MotionCam Pro shape), so mid-take crop
+     * switches stay correct. Null records without the map, as does a HAL
+     * that already applied correction or geometry the map cannot cover.
+     */
+    var lensShading: LensShadingSnapshot? = null
+    private var shadingCfa: Int? = null
+    private var shadingActive: IntRectSnapshot? = null
+
     private var camThread: HandlerThread? = null
     private var camHandler: Handler? = null
     private var device: CameraDevice? = null
@@ -244,6 +256,7 @@ internal class RawVideoRecorder(
     private var lastFrameTs = -1L // committer thread only
 
     fun start(output: File, containerMetadataJson: String) {
+        MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
         check(device == null) { "Already started" }
         require(CinemaRawWriter.available) { "cinemaraw native library unavailable" }
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
@@ -288,6 +301,19 @@ internal class RawVideoRecorder(
         val orientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val front = chars.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
+
+        // Per-frame lens-shading context: disabled when the HAL already
+        // applied correction (embedding would double-correct) or when the
+        // geometry needed to cover the frame is missing.
+        if (chars.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) == true) {
+            shadingCfa = null
+            shadingActive = null
+        } else {
+            shadingCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+            shadingActive = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let {
+                IntRectSnapshot(it.left, it.top, it.right, it.bottom)
+            }
+        }
 
         // P4 streams start before the container opens so their presence is
         // recorded in container metadata. Chunks queue behind the first
@@ -409,6 +435,22 @@ internal class RawVideoRecorder(
                 // A later-skipped head only shifts the first committed
                 // frame to a small positive offset — still relative.
                 if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
+                // Per-frame lens-shading triplet over this frame's own crop
+                // (a few thousand bilinear samples, far below the encode
+                // cost). Any failure records this frame without the map.
+                val shadingTriplet = try {
+                    val snap = lensShading
+                    val cfa = shadingCfa
+                    val active = shadingActive
+                    if (snap != null && cfa != null && active != null) {
+                        CinemaRawLensShading.resample(
+                            snap, cfa, active, frameSize.width, frameSize.height,
+                            resolved.top, resolved.height
+                        )?.let { CinemaRawLensShading.toFrameJson(it) }
+                    } else null
+                } catch (_: Exception) {
+                    null
+                }
                 val task = EncodeTask(
                     seq = nextSeq++,
                     image = img,
@@ -423,7 +465,9 @@ internal class RawVideoRecorder(
                     frameJson = "{\"width\":${frameSize.width}," +
                         "\"height\":${resolved.height}," +
                         "\"compressionType\":7,\"timestamp\":$ts," +
-                        "\"crop\":\"${crop.name}\"}",
+                        "\"crop\":\"${crop.name}\"" +
+                        (if (shadingTriplet != null) ",$shadingTriplet" else "") +
+                        "}",
                 )
                 if (!encodeQueue.offer(task)) {
                     // Latest-wins for video: drop the oldest queued frame.
@@ -535,6 +579,11 @@ internal class RawVideoRecorder(
         // containerFrames = committed in-order frames (footer == encoded - latePurged).
         val encodedCount = encoded.get()
         val lateCount = latePurged.get()
+        // stop() runs on the VideoStop thread, so a synchronous PSS sample is safe here.
+        MemoryLeakDiagnostics.sample(
+            "rawvideo-stop",
+            extra = "acq=${acquired.get()} enc=$encodedCount drop=${dropped.get()}"
+        )
         return Stats(
             framesAcquired = acquired.get(),
             framesEncoded = encodedCount,
@@ -680,6 +729,7 @@ internal class RawVideoRecorder(
                     reorderLock.notifyAll()
                 }
                 encoded.incrementAndGet()
+                MemoryLeakDiagnostics.rawVideoFrame()
             } catch (e: Exception) {
                 Log.w(TAG, "frame encode failed: ${e.message}")
                 buf?.let { it.clear(); payloadPool.offer(it) }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // P0 spike bridge: RAW16 -> packed-RAW10 packer (planned P3 pack stage) plus
 // direct access to the vendored MediaCinemaRAW type-7 encoder (GPL-3.0-only,
-// app/src/main/cpp/cinemaraw, upstream 55cceb2). Timing is done in Kotlin with
+// app/src/main/cpp/cinemaraw, upstream 3c9519c). Timing is done in Kotlin with
 // nanoTime(); these entry points do a single pack/encode each so per-stage
 // medians isolate pack cost from encode cost (Path A vs Path B verdict).
 // The parallel entry is bench-only: the recorder parallelizes across frames
