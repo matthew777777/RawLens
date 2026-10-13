@@ -158,6 +158,33 @@ class BguSampleTest {
         assertEquals(1f, out.wb[1], 0f)
     }
 
+    @Test fun levelsHoldFillsNullResultFromLastGood() {
+        // Recording offers no result: the dynamic per-frame black/white
+        // levels must hold preview's last-good values, not fall back to the
+        // static pattern (per-channel delta reads as a greenish cast).
+        val held = LevelsHold(floatArrayOf(66f, 64f, 65f, 63f), 1023f)
+        val statik = LevelsHold(floatArrayOf(64f, 64f, 64f, 64f), 1023f)
+        val rec = BguViewfinder.resolveLevelsHold(null, held, statik)
+        assertArrayEquals(held.levels, rec.levels, 0f)
+        assertEquals(held.white, rec.white, 0f)
+        // Cold engine, no hold ever seeded: static fallback unchanged.
+        val cold = BguViewfinder.resolveLevelsHold(null, null, statik)
+        assertArrayEquals(statik.levels, cold.levels, 0f)
+        assertEquals(statik.white, cold.white, 0f)
+        // Fresh result levels win over a stale hold.
+        val fresh = LevelsHold(floatArrayOf(67f, 64f, 64f, 62f), 4095f)
+        val live = BguViewfinder.resolveLevelsHold(fresh, held, statik)
+        assertArrayEquals(fresh.levels, live.levels, 0f)
+        assertEquals(fresh.white, live.white, 0f)
+        // Defensive copies: mutating inputs after resolve is contained.
+        val inLv = floatArrayOf(70f, 70f, 70f, 70f)
+        val out = BguViewfinder.resolveLevelsHold(LevelsHold(inLv, 1023f), held, statik)
+        inLv[0] = 99f
+        held.levels[1] = 99f
+        assertEquals(70f, out.levels[0], 0f)
+        assertEquals(1023f, out.white, 0f)
+    }
+
     @Test fun rejectsOutOfBounds() {
         val out = ByteArray(2 * 2 * 4)
         assertFalse(
