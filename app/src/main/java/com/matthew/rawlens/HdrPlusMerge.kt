@@ -110,13 +110,19 @@ class HdrPlusMerge(context: Context) {
                 Log.w(LOG_TAG, "HDR+ shader modules incomplete, aborting merge")
                 return null
             }
+            val nativeBefore = MemoryLeakDiagnostics.nativeBufferOutstandingBytes()
+            MemoryLeakDiagnostics.sample(
+                "hdrplus-merge-start",
+                extra = "N=${frames.size} ref=$refIndex ${width}x$height"
+            )
             var t = System.nanoTime()
             // Packed frames live in malloc-backed native buffers (never ART
             // direct buffers: those are charged to the 512MB Java heap and
             // OOM past ~12 frames at 12MP). The finally below frees every
             // packed frame even when a later pack/meter/merge step throws.
             val packed = ArrayList<ByteBuffer>(frames.size)
-            try {
+            var keptCount = 0
+            val result = try {
                 frames.forEachIndexed { index, frame -> packed += packFrame(frame, index) }
                 val blacks = FloatArray(frames.size * 4)
                 val whites = FloatArray(frames.size)
@@ -189,7 +195,8 @@ class HdrPlusMerge(context: Context) {
                     (if (decision.highQuality) " HQ" else " fast"))
                 Log.i(LOG_TAG, metering.logLine(frames.size))
                 Log.i(LOG_TAG, decision.logLine(frames.size))
-                return UnpackedRawCfa(
+                keptCount = keptPacked.size
+                UnpackedRawCfa(
                     width, height,
                     first.normalization.sensorPattern.shifted(sensorCropX, sensorCropY),
                     values, first.crop, sensorCropX, sensorCropY
@@ -197,12 +204,38 @@ class HdrPlusMerge(context: Context) {
             } finally {
                 packed.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
             }
+            // Packed frames and the merge output are freed by the finally
+            // above, so the balance check and done-sample below observe the
+            // true post-merge state (sampling before it false-alarms every
+            // merge, logcat 2026-10-12).
+            MemoryLeakDiagnostics.hdrMerge()
+            checkNativeBalance(nativeBefore, "merge")
+            MemoryLeakDiagnostics.sample(
+                "hdrplus-merge-done",
+                extra = "N=$keptCount/${frames.size} ${width}x$height"
+            )
+            return result
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "HDR+ merge failed", failure)
+            MemoryLeakDiagnostics.sample("hdrplus-merge-failed", extra = failure.javaClass.simpleName)
             return null
         } catch (oom: OutOfMemoryError) {
             Log.w(LOG_TAG, "HDR+ merge OOM", oom)
+            MemoryLeakDiagnostics.sample("hdrplus-merge-failed", extra = "OOM")
             return null
+        }
+    }
+
+    /**
+     * Packed/output native buffers are freed by the merge finally-blocks, so the process-wide
+     * outstanding total must be unchanged afterwards (merges are single-flight). Any delta is
+     * a per-merge native leak, surfaced here instead of hiding inside the PSS trend.
+     */
+    private fun checkNativeBalance(before: Long, where: String) {
+        val after = MemoryLeakDiagnostics.nativeBufferOutstandingBytes()
+        if (after != before) {
+            Log.w(LOG_TAG, "HDR+ native-buffer imbalance after $where: " +
+                "before=${before / 1024 / 1024}MB after=${after / 1024 / 1024}MB")
         }
     }
 

@@ -21,4 +21,13 @@ class RawLensApp : Application() {
             // Never crash startup because crash logging is unavailable.
         }
     }
+
+    /**
+     * Probe only: logs the memory pressure level so session logs show what
+     * the system asked for. Release policy stays in the activity/controller.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        runCatching { DeviceImpactProbe.noteTrimMemory(level) }
+    }
 }

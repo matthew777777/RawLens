@@ -26,10 +26,14 @@ object HdrPlusVulkan {
     fun init(assetManager: AssetManager, cacheFile: java.io.File? = null): Long {
         val handle = nativeInit(assetManager, cacheFile?.absolutePath)
         require(handle != 0L) { "hdrplus init returned a null handle" }
+        MemoryLeakDiagnostics.vulkanHandleAllocated()
         return handle
     }
 
-    fun release(handle: Long) = nativeRelease(handle)
+    fun release(handle: Long) {
+        nativeRelease(handle)
+        MemoryLeakDiagnostics.vulkanHandleReleased()
+    }
 
     fun loadedShaderCount(handle: Long): Int = nativeLoadedShaderCount(handle)
 
@@ -50,11 +54,17 @@ object HdrPlusVulkan {
      * a no-op and refuses buffers it did not allocate. Throws
      * [OutOfMemoryError] when malloc fails.
      */
-    fun allocBuffer(bytes: Long): ByteBuffer =
-        nativeAllocBuffer(bytes) ?: throw OutOfMemoryError("hdrplus alloc returned null")
+    fun allocBuffer(bytes: Long): ByteBuffer {
+        val buffer = nativeAllocBuffer(bytes) ?: throw OutOfMemoryError("hdrplus alloc returned null")
+        MemoryLeakDiagnostics.nativeBufferAllocated(buffer.capacity().toLong())
+        return buffer
+    }
 
     /** Releases a buffer from [allocBuffer]; foreign buffers are ignored. */
-    fun freeBuffer(buffer: ByteBuffer) = nativeFreeBuffer(buffer)
+    fun freeBuffer(buffer: ByteBuffer) {
+        nativeFreeBuffer(buffer)
+        MemoryLeakDiagnostics.nativeBufferReleased(buffer.capacity().toLong())
+    }
 
     /**
      * Full burst merge. Each frame buffer must be direct with at least

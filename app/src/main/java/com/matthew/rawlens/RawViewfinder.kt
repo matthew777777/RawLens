@@ -331,6 +331,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private val worker = Handler(thread.looper)
     private var epoch = 0L
     private var lastSample = 0L
+    /** Next due time for the throttled `raw-vf-preview` memory sample. Camera thread only. */
+    private var memSampleNextMs = 0L
     @Volatile var targetLongEdge = VfResolution.MAX
         private set
     /**
@@ -598,7 +600,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         invalidateSession()
         super.onDetachedFromWindow()
     }
-    override fun dispose() { invalidateSession(); worker.post { worker.removeCallbacks(vulkanRecoverRunnable); releaseGl(); thread.quitSafely() } }
+    override fun dispose() { invalidateSession(); MemoryLeakDiagnostics.sampleAsync("raw-vf-disposed"); worker.post { worker.removeCallbacks(vulkanRecoverRunnable); releaseGl(); thread.quitSafely() } }
 
     override fun invalidateSession() {
         // A queued draw that never runs (dispose) must not pin the idle gate.
@@ -809,6 +811,16 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         synchronized(lock) {
             if (now - lastSample < sampleIntervalMs) return
             lastSample = now
+        }
+        MemoryLeakDiagnostics.vfFrame()
+        // PSS reads every frame would cost milliseconds at 30 fps; one sample per 30 s of
+        // live preview is enough to attribute growth to the viewfinder in a session log.
+        if (now >= memSampleNextMs) {
+            memSampleNextMs = now + MemoryLeakDiagnostics.PERIODIC_INTERVAL_MS
+            MemoryLeakDiagnostics.sample(
+                "raw-vf-preview",
+                extra = "vf=${statVfWidth}x${statVfHeight} gpu=$statGpuPath engine=$engineMode"
+            )
         }
         try {
             val plane = image.planes[0]

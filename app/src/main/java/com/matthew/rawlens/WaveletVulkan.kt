@@ -39,11 +39,15 @@ object WaveletVulkan {
         require(ensureLoaded()) { "rawLensWavelet unavailable" }
         val handle = nativeInit(assetManager)
         require(handle != 0L) { "wavelet init returned a null handle" }
+        MemoryLeakDiagnostics.vulkanHandleAllocated()
         return handle
     }
 
     fun release(handle: Long) {
-        if (handle != 0L) nativeDestroy(handle)
+        if (handle != 0L) {
+            nativeDestroy(handle)
+            MemoryLeakDiagnostics.vulkanHandleReleased()
+        }
     }
 
     /**

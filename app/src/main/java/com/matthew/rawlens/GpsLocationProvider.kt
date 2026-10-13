@@ -87,6 +87,9 @@ class GpsLocationProvider(private val context: Context) {
         }
     }
 
+    /** True while location updates are requested; read by background audits. */
+    fun isRunning(): Boolean = started
+
     /**
      * Freshest usable fix, or null when location is disabled, unpermitted, or
      * only stale positions exist. Never throws: every platform failure maps

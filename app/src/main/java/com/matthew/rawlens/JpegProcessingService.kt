@@ -38,6 +38,7 @@ class JpegProcessingService : Service() {
             // burst finishes far inside this.
             .apply { acquire(WAKELOCK_TIMEOUT_MS) }
         sampleDiagnosticsAsync("jpeg-service-created")
+        DeviceImpactProbe.serviceStarted("jpeg")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -51,6 +52,7 @@ class JpegProcessingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        DeviceImpactProbe.serviceStopped("jpeg")
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         sampleDiagnosticsAsync("jpeg-service-destroyed")

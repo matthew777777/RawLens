@@ -7,7 +7,7 @@ import android.media.MediaFormat
  * Direct-Log record output profile: the final encode applied to developed
  * linear (WB/CCM/exposure-folded) sensor RGB before the YUV pack.
  *
- * All profiles share the front end (MHC demosaic, per-frame WB/CCM, LOG EV);
+ * All profiles share the front end (MHC demosaic, per-frame WB/CCM, LOG gain);
  * they differ only in the output transfer, gamut matrix, and container
  * signalling. The enum is the extension point for later work (full
  * S-Gamut3/S-Log3, further log curves, technical/creative LUTs): a new

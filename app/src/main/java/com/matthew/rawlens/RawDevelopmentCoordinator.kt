@@ -103,6 +103,7 @@ class RawDevelopmentCoordinator(context: Context) {
         fusedOutputSettings: JpegOutputSettings? = null,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
+        MemoryLeakDiagnostics.stillCapture()
         val startedAt = SystemClock.elapsedRealtime()
         if (metadata.quadBayer &&
             metadata.rawDevelopmentUnsupportedReason == RawBayerLayout.QUAD_REQUIRES_DEMOSAIC) {
@@ -560,6 +561,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
@@ -629,6 +631,7 @@ class RawDevelopmentCoordinator(context: Context) {
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
     ): DevelopedJpeg {
+        MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         cfa.requireAmazeCompatible()
         // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
@@ -739,11 +742,15 @@ class RawDevelopmentCoordinator(context: Context) {
         input: MergedTextureJpegInput,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         outputSettings: JpegOutputSettings = JpegOutputSettings()
-    ): DevelopedJpeg = mergedDevelop.develop(input, settings) { scene ->
-        require(scene.internalFormat == AmazeTextureFormat.RGBA16F) {
-            "Merged develop must emit scene-linear RGBA16F"
+    ): DevelopedJpeg {
+        // Covers developMergedImagesJpeg too (it delegates here).
+        MemoryLeakDiagnostics.stillCapture()
+        return mergedDevelop.develop(input, settings) { scene ->
+            require(scene.internalFormat == AmazeTextureFormat.RGBA16F) {
+                "Merged develop must emit scene-linear RGBA16F"
+            }
+            mergedJpegOutput.process(scene, outputSettings)
         }
-        mergedJpegOutput.process(scene, outputSettings)
     }
 
     /**
@@ -863,7 +870,11 @@ class RawDevelopmentCoordinator(context: Context) {
         mergedEgl = null
         jpegOutput.close()
         amaze.close()
-        MemoryLeakDiagnostics.sample("development-coordinator-closed", expectGlReleased = true)
+        MemoryLeakDiagnostics.sample(
+            "development-coordinator-closed",
+            expectGlReleased = true,
+            expectNativeReleased = true
+        )
     }
 
     companion object {

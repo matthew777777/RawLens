@@ -68,6 +68,7 @@ class Gles31AmazeProcessor(
         session.egl.close()
         processingSession = null
         processingThreadId = null
+        MemoryLeakDiagnostics.sample("amaze-session-closed")
     }
 
     fun <T> process(
@@ -601,6 +602,7 @@ class Gles31AmazeProcessor(
         require(!cameraLinear || input !is QuadInput) {
             "Camera-linear output is not supported on the Quad-Bayer graph yet"
         }
+        MemoryLeakDiagnostics.sample("amaze-capture-start", extra = "${input.width}x${input.height}")
         val session = processingSession()
         return session.egl.run {
             makeCurrent()
@@ -661,6 +663,7 @@ class Gles31AmazeProcessor(
                 )
                 result
             }
+            MemoryLeakDiagnostics.amazeCapture()
             MemoryLeakDiagnostics.sample("amaze-frame-released")
             result
         }
