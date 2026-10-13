@@ -32,6 +32,12 @@ internal object CrsMetadata {
         json.put("referenceIlluminant1", chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1))
         json.put("referenceIlluminant2", chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2))
         json.put("sensorOrientation", orientation)
+        // Lower-camel twin of UniqueCameraModel for readers that follow the
+        // lower-camel JSON naming (PhotonCamera emits both; DNG exporters
+        // copy UniqueCameraModel to tag 50708).
+        json.optString("UniqueCameraModel", "").takeIf { it.isNotEmpty() }?.let {
+            if (!json.has("uniqueCameraModel")) json.put("uniqueCameraModel", it)
+        }
         json.put("realtimeTimestamps", realtime)
         json.put("hasMotion", motion)
         json.put("gyroMapperVersion", GyroCameraFrameMapper.MAPPER_VERSION)
