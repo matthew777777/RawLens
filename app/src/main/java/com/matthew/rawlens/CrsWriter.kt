@@ -43,12 +43,16 @@ internal object CrsWriter {
      * Encode one RAW16 frame into [destination] (position advanced by the
      * payload size). Worker-thread safe. Returns the payload byte count;
      * negative native codes become exceptions (-3 = destination too small).
+     * With [bin], each 2x2 block bins to one binned-Bayer sample at half
+     * resolution (R/B single-tap, diamond-averaged green); [cfa] is the
+     * Camera2 color-filter arrangement (0..3) routing the binning taps.
      */
     fun encodeFrame(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
-        cropTop: Int, cropHeight: Int, destination: ByteBuffer
+        cropTop: Int, cropHeight: Int, destination: ByteBuffer,
+        bin: Boolean, cfa: Int
     ): Int {
-        checkFrameGeometry(width, height, cropTop, cropHeight)
+        checkFrameGeometry(width, height, cropTop, cropHeight, bin, cfa)
         require(source.isDirect && destination.isDirect) {
             "CrsWriter needs direct buffers"
         }
@@ -57,7 +61,8 @@ internal object CrsWriter {
         val written = try {
             containerEncodeFrame(
                 source, source.position(), size, width, height, stride,
-                cropTop, cropHeight, destination, dstOffset, destination.remaining()
+                cropTop, cropHeight, bin, cfa,
+                destination, dstOffset, destination.remaining()
             )
         } catch (e: UnsatisfiedLinkError) {
             throw IllegalStateException("crs encoder missing", e)
@@ -91,12 +96,21 @@ internal object CrsWriter {
         if (written < 0) throw IllegalStateException("writeFrame failed: code=$written")
     }
 
-    private fun checkFrameGeometry(width: Int, height: Int, cropTop: Int, cropHeight: Int) {
+    private fun checkFrameGeometry(
+        width: Int, height: Int, cropTop: Int, cropHeight: Int, bin: Boolean, cfa: Int
+    ) {
         require(width > 0 && height > 0 && width % 2 == 0) { "Bad extent ${width}x$height" }
         require(height % 4 == 0) { "Encoder requires height % 4 == 0, got $height" }
         require(cropTop >= 0 && cropTop % 2 == 0) { "cropTop must be even, got $cropTop" }
         require(cropHeight > 0 && cropTop + cropHeight <= height) {
             "Bad crop top=$cropTop height=$cropHeight for h=$height"
+        }
+        require(cfa in 0..3) { "Bad CFA arrangement $cfa" }
+        if (bin) {
+            require(width % 4 == 0) { "Binning requires width % 4 == 0, got $width" }
+            require(cropHeight % 8 == 0) {
+                "Binning requires cropHeight % 8 == 0, got $cropHeight"
+            }
         }
     }
 
@@ -178,6 +192,7 @@ internal object CrsWriter {
     external fun containerEncodeFrame(
         src: ByteBuffer, srcOffset: Int, size: Int,
         w: Int, h: Int, stride: Int, cropTop: Int, cropHeight: Int,
+        bin: Boolean, cfa: Int,
         dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
     ): Int
 

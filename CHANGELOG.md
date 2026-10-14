@@ -4,6 +4,10 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 
 ## [Unreleased]
 
+### Added
+
+- RAW video binning (Settings → Video → Binning, off by default, applies to the next take): each 2x2 block bins to one binned-Bayer sample at half resolution inside the encoder — R/B take the plain 2x2 box tap while green averages the 4 G pixels forming a diamond around the output sample (the two in-block G's plus the right/below neighbours, rounded mean, same-colour edge mirrors) for all four CFA arrangements. Smaller, cleaner .crs takes; the live viewfinder still runs full-res, the HUD shows the encoded extent with a BIN tag, frame JSON carries the binned dimensions, and the container records `"binning":"diamond2x2"`. N/A in Direct Log; sensors whose width is not % 4 record unbinned with a log line. Pinned by the `parallel_parity` diamond tap checks + golden, the `roundtrip` decoder cross-check, and `VideoCropTest`/`RawVideoBinningTest`. Original binning snippet by Eszdman (https://github.com/eszdman)
+
 ### Fixed
 
 - Fake tap-to-focus locks on retap (logcat trace: FOCUSED_LOCKED +203 ms completes the scan, then the real ACTIVE_SCAN starts at +265 ms): the HAL still reports the previous lock for ~200 ms after a new START, and latching it badged the wrong distance while the viewfinder stayed blurry for the 10 s hold. Lock verdicts now need a scan state or 300 ms past START (`AutoFocusPolicy.verdictReady`); locks persist across frames so genuine verdicts only land slightly later, never lost. `verdictFloorRejectsStaleLatch` pins the floor. The AF mode name table also learns CONTINUOUS_VIDEO (was UNKNOWN(3) in the session caps line) and the idle fallback chain prefers it over OFF
