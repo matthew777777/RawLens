@@ -6,6 +6,7 @@ package com.matthew.rawlens
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -168,6 +169,8 @@ class MainActivity : Activity() {
     private var folderPickerForVideo = false
     /** Settings JSON awaiting the export picker result; cleared once written or cancelled. */
     private var pendingSettingsJson: String? = null
+    /** Downloaded update APK awaiting the unknown-sources grant; installed on return. */
+    private var pendingInstallFile: File? = null
     private var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
@@ -240,11 +243,21 @@ class MainActivity : Activity() {
                 captureExposureMode = CaptureExposureMode.ZSL
             }
         }
+        // HDR bracket and HDR+ both merge one shutter press into one DNG, so
+        // a stale both-on pair cannot survive: it resolves to HDR+.
+        hdrEnabled = HdrShutterExclusivity.resolveStale(
+            hdrEnabled, hdrPlusSettings.enabled).first
+        if (rawSuperResolutionSettings.enabled || burstFusionSettings.enabled) {
+            // Same rule against the other ZSL mergers: the merger keeps
+            // the shutter, the bracket drops.
+            hdrEnabled = false
+        }
         // Capture mode is now the single source of truth for ZSL.  Keeping the legacy flag in
         // sync also makes a process restart reproduce exactly what the mode button shows.
         lensPreferences().edit()
             .putInt(KEY_CAPTURE_EXPOSURE_MODE, captureExposureMode.ordinal)
             .putBoolean(KEY_RAW_ZSL, captureExposureMode == CaptureExposureMode.ZSL)
+            .putBoolean(KEY_HDR_ENABLED, hdrEnabled)
             .apply()
         captureFormat = CaptureFormat.fromPreference(
             lensPreferences().getString(KEY_CAPTURE_FORMAT, null)
@@ -283,8 +296,16 @@ class MainActivity : Activity() {
         manualAuto = findViewById(R.id.manualAutoButton)
         manualLimits = findViewById(R.id.manualLimitsButton)
         debugOverlay = findViewById(R.id.debugOverlay)
-        debugOverlay.visibility = if (lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         rawVfDebugOverlay = findViewById(R.id.rawVfDebugOverlay)
+        // The two debug overlays share one corner and are mutually
+        // exclusive (see showDebugTab). Reconcile stale prefs the same
+        // way, keeping the RAW VF overlay (the interactive engine switch).
+        if (lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false) &&
+            lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
+        ) {
+            lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, false).apply()
+        }
+        debugOverlay.visibility = if (lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         rawVfDebugOverlay.visibility = if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
         focusPeakingOverlay = findViewById(R.id.focusPeakingOverlay)
@@ -331,7 +352,9 @@ class MainActivity : Activity() {
         levelTracker = LevelTracker(this) { state ->
             runOnUiThread {
                 if (levelEnabled && ::levelOverlay.isInitialized) {
-                    if (state.isFlat) levelOverlay.setFlat() else levelOverlay.setState(state)
+                    // Flat (steeply up/down) states still carry pitch, so the
+                    // overlay can show the bubble pinned at its track end.
+                    levelOverlay.setState(state)
                 }
             }
         }
@@ -779,6 +802,209 @@ class MainActivity : Activity() {
             cameraViewportReady = true
             startCameraWhenReady()
         }
+        maybeCheckForUpdatesOnStartup()
+    }
+
+    /**
+     * Startup update check: at most once per 24h, off the main thread,
+     * silent unless a newer GitHub release exists. Never blocks camera
+     * startup and never shows anything on failure.
+     */
+    private fun maybeCheckForUpdatesOnStartup() {
+        // F-Droid builds leave updates to the store.
+        if (!BuildConfig.ENABLE_UPDATE_CHECK) return
+        if (!UpdateChecker.isAutoCheckDue(this)) return
+        Thread {
+            val result = UpdateChecker.check(this)
+            UpdateChecker.markChecked(this)
+            if (result is UpdateChecker.CheckResult.UpdateAvailable &&
+                !UpdateChecker.isSkipped(this, result.info.tag)
+            ) {
+                runOnUiThread { if (!isFinishing) showUpdateDialog(result.info) }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /** Manual check from Settings → About: always reports the outcome. */
+    private fun checkForUpdatesManually() {
+        if (!BuildConfig.ENABLE_UPDATE_CHECK) return
+        setStatus("CHECKING FOR UPDATES…")
+        Thread {
+            val result = UpdateChecker.check(this)
+            UpdateChecker.markChecked(this)
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                when (result) {
+                    is UpdateChecker.CheckResult.UpdateAvailable ->
+                        showUpdateDialog(result.info)
+                    is UpdateChecker.CheckResult.UpToDate ->
+                        setStatus("RAWLENS IS UP TO DATE")
+                    is UpdateChecker.CheckResult.Failed ->
+                        setStatus("UPDATE CHECK FAILED • ${result.reason.uppercase()}")
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun showUpdateDialog(info: UpdateChecker.UpdateInfo) {
+        val current = UpdateChecker.installedVersionName(this) ?: "?"
+        val size = if (info.apkSizeBytes > 0) {
+            "%.0f MB".format(Locale.US, info.apkSizeBytes / 1048576.0)
+        } else null
+        val notes = info.body.ifEmpty { "See the release page for details." }
+            .take(1200)
+        val message = StringBuilder("RawLens ${info.tag} is available " +
+            "(installed: $current)")
+        if (size != null) message.append(" • APK $size")
+        message.append("\n\n").append(notes)
+        // A download that finished before e.g. an app restart installs
+        // directly instead of downloading again.
+        val staged = UpdateInstaller.stagedApk(this, info.tag)
+        AlertDialog.Builder(this)
+            .setTitle("Update available")
+            .setMessage(message.toString())
+            .setPositiveButton(if (staged != null) "Install" else "Download") { _, _ ->
+                if (staged != null) attemptInstall(staged) else downloadAndInstallUpdate(info)
+            }
+            .setNeutralButton("Skip this version") { _, _ ->
+                UpdateChecker.skipTag(this, info.tag)
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    /**
+     * Fully in-app update: downloads the release APK with the system
+     * DownloadManager (progress dialog here, system notification too)
+     * and fires the system installer on completion. Falls back to the
+     * browser only when the release carries no APK asset.
+     */
+    private fun downloadAndInstallUpdate(info: UpdateChecker.UpdateInfo) {
+        if (info.apkUrl.isNullOrEmpty()) {
+            openUpdateInBrowser(info.htmlUrl.ifEmpty { null })
+            return
+        }
+        val downloadId = try {
+            UpdateInstaller.startDownload(this, info)
+        } catch (e: Exception) {
+            setStatus("UPDATE DOWNLOAD FAILED")
+            return
+        }
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true
+        }
+        val statusText = TextView(this).apply {
+            text = "Starting download…"
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 12f
+            setPadding(0, dp(8), 0, 0)
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), 0)
+            addView(bar, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(statusText)
+        }
+        var cancelled = false
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Downloading RawLens ${info.tag}")
+            .setView(container)
+            .setCancelable(false)
+            .setNegativeButton("Cancel") { _, _ ->
+                cancelled = true
+                UpdateInstaller.cancel(this, downloadId)
+                setStatus("UPDATE DOWNLOAD CANCELLED")
+            }
+            .show()
+        Thread {
+            try {
+                while (!cancelled) {
+                    val progress = try {
+                        UpdateInstaller.query(this, downloadId)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (progress == null) {
+                        Thread.sleep(500)
+                        continue
+                    }
+                    val doneMb = progress.downloadedBytes / 1048576.0
+                    val totalMb = progress.totalBytes / 1048576.0
+                    runOnUiThread {
+                        if (progress.totalBytes > 0) {
+                            bar.isIndeterminate = false
+                            bar.max = 100
+                            bar.progress = ((100L * progress.downloadedBytes) /
+                                progress.totalBytes).toInt().coerceIn(0, 100)
+                            statusText.text = "%.0f of %.0f MB".format(
+                                Locale.US, doneMb, totalMb
+                            )
+                        } else {
+                            statusText.text = "%.0f MB downloaded".format(Locale.US, doneMb)
+                        }
+                    }
+                    if (progress.isFinished) {
+                        val ok = progress.status == DownloadManager.STATUS_SUCCESSFUL
+                        val file = UpdateInstaller.apkFile(this, info.tag)
+                        runOnUiThread {
+                            dialog.dismiss()
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            if (ok && file.exists() && file.length() > 0) {
+                                attemptInstall(file)
+                            } else {
+                                setStatus("UPDATE DOWNLOAD FAILED")
+                            }
+                        }
+                        return@Thread
+                    }
+                    Thread.sleep(500)
+                }
+            } catch (_: InterruptedException) {
+                // Cancel path; dialog already dismissed by the button.
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun attemptInstall(file: File) {
+        when (val outcome = UpdateInstaller.install(this, file)) {
+            is UpdateInstaller.InstallOutcome.Launched -> {
+                pendingInstallFile = null
+                setStatus("INSTALLING UPDATE…")
+            }
+            is UpdateInstaller.InstallOutcome.NeedsUnknownSources -> {
+                // First in-app update on this install: Android requires a
+                // per-app unknown-sources grant; install on return.
+                pendingInstallFile = file
+                try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(
+                        UpdateInstaller.unknownSourcesIntent(this),
+                        UPDATE_INSTALL_SOURCES
+                    )
+                } catch (_: Exception) {
+                    pendingInstallFile = null
+                    setStatus("CANNOT OPEN INSTALL SETTINGS")
+                }
+            }
+            is UpdateInstaller.InstallOutcome.Failed ->
+                setStatus("UPDATE INSTALL FAILED • ${outcome.reason.uppercase()}")
+        }
+    }
+
+    /** Last resort when a release has no APK asset: open its page in the browser. */
+    private fun openUpdateInBrowser(url: String?) {
+        if (url.isNullOrEmpty()) {
+            setStatus("UPDATE LINK UNAVAILABLE")
+            return
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            setStatus("NO BROWSER TO OPEN UPDATE")
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -848,6 +1074,13 @@ class MainActivity : Activity() {
                     setStatus("SETTINGS IMPORT FAILED")
                 }
             }
+            return
+        }
+        if (requestCode == UPDATE_INSTALL_SOURCES) {
+            // The unknown-sources screen returns no reliable result; just
+            // retry — granted now, the installer fires, else we re-prompt.
+            val pending = pendingInstallFile
+            if (pending != null) attemptInstall(pending)
             return
         }
         if (requestCode == SIDECAR_TREE_REQUEST && resultCode == RESULT_OK) {
@@ -2549,11 +2782,45 @@ class MainActivity : Activity() {
     }
 
     private fun toggleHdrEnabled() {
-        hdrEnabled = !hdrEnabled
+        val target = HdrShutterExclusivity.bracketToggled(
+            hdrEnabled, hdrPlusSettings.enabled)
+        // HDR bracket and the ZSL mergers all merge one shutter press into
+        // one DNG, so they cannot run together: enabling the bracket turns
+        // the mergers off. While a merge is saving it stays locked on, and
+        // the bracket stays off with it, so two tiles never show on.
+        if (target.first && rawSuperResolutionSettings.enabled &&
+            !applyRawSuperResolutionSettings(
+                rawSuperResolutionSettings.copy(enabled = false))) {
+            return
+        }
+        if (target.first && burstFusionSettings.enabled &&
+            !applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))) {
+            return
+        }
+        if (target.second != hdrPlusSettings.enabled &&
+            !applyHdrPlusSettings(hdrPlusSettings.copy(enabled = target.second))) {
+            return
+        }
+        hdrEnabled = target.first
         lensPreferences().edit().putBoolean(KEY_HDR_ENABLED, hdrEnabled).apply()
+        if (hdrEnabled) {
+            // Leaving ZSL with the bracket: its frames are forward
+            // captures, so the AUTO metering takes over again.
+            val nextMode = HdrShutterExclusivity.modeAfterBracketEnabled(captureExposureMode)
+            if (nextMode != captureExposureMode) applyCaptureExposureMode(nextMode)
+        }
         preloadFlowNetForMergedHdr()
         Log.i(LOG_TAG, "HDR enabled=$hdrEnabled")
         setStatus(if (hdrEnabled) "HDR ON" else "HDR OFF")
+        updateQuickControls()
+    }
+
+    /** A merger tile took the shutter: the HDR bracket turns off. */
+    private fun turnHdrBracketOff() {
+        if (!hdrEnabled) return
+        hdrEnabled = false
+        lensPreferences().edit().putBoolean(KEY_HDR_ENABLED, false).apply()
+        Log.i(LOG_TAG, "HDR enabled=false")
         updateQuickControls()
     }
 
@@ -2604,6 +2871,9 @@ class MainActivity : Activity() {
             applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
         }
         if (applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = enabled))) {
+            // SR takes the shutter from the HDR bracket too: it merges one
+            // press into one DNG, like the bracket does.
+            if (enabled) turnHdrBracketOff()
             // Switch modes only on success: enabling first keeps a LOCKED
             // toggle from stranding the camera in ZSL with SR still off.
             if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
@@ -2623,6 +2893,8 @@ class MainActivity : Activity() {
             applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
         }
         if (applyBurstFusionSettings(burstFusionSettings.copy(enabled = enabled))) {
+            // Fusion takes the shutter from the HDR bracket too.
+            if (enabled) turnHdrBracketOff()
             // Switch modes only on success: enabling first keeps a LOCKED
             // toggle from stranding the camera in ZSL with fusion still off.
             if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
@@ -2633,7 +2905,9 @@ class MainActivity : Activity() {
     }
 
     private fun toggleHdrPlus() {
-        val enabled = !hdrPlusSettings.enabled
+        val pair = HdrShutterExclusivity.plusToggled(
+            hdrEnabled, hdrPlusSettings.enabled)
+        val enabled = pair.second
         // Quick tiles are exclusive: HDR+ takes the ring from SR and fusion.
         if (enabled && rawSuperResolutionSettings.enabled) {
             applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
@@ -2642,6 +2916,9 @@ class MainActivity : Activity() {
             applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
         }
         if (applyHdrPlusSettings(hdrPlusSettings.copy(enabled = enabled))) {
+            // HDR+ takes the shutter from the HDR bracket: both merge one
+            // shutter press into one DNG, so the bracket turns off.
+            if (pair.first != hdrEnabled) turnHdrBracketOff()
             // Switch modes only on success: enabling first keeps a LOCKED
             // toggle from stranding the camera in ZSL with HDR+ still off.
             if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
@@ -2828,7 +3105,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** RAW VF debug-overlay tap: cycle the engine AUTO -> BGU -> BGU_CPU -> GPU -> CPU. */
+    /** RAW VF debug-overlay tap: cycle the engine AUTO -> GPU -> CPU -> BGU -> BGU_CPU. */
     private fun cycleVfEngineMode() {
         val next = controller.cycleVfEngineMode()
         lensPreferences().edit().putString(KEY_VF_ENGINE_MODE, next.name).apply()
@@ -2840,7 +3117,7 @@ class MainActivity : Activity() {
     private fun refreshVfEngineContentDescription() {
         val mode = runCatching { controller.vfEngineMode() }.getOrDefault(VfEngineMode.AUTO)
         rawVfDebugOverlay.contentDescription =
-            "RAW viewfinder engine ${mode.name}. Tap to switch the BGU / BGU-CPU / GPU / CPU engine."
+            "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU / BGU / BGU-CPU engine."
     }
 
     /** Shows exactly one VF surface: BGU or legacy, per the controller route. */
@@ -5224,6 +5501,9 @@ class MainActivity : Activity() {
                         rawSuperResolutionSettings.copy(enabled = enabled)
                     )
                     if (applied) {
+                        // Same shutter rule as the quick tile: SR owns the
+                        // press, so the HDR bracket turns off.
+                        if (enabled) turnHdrBracketOff()
                         setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
                     } else if (button.isChecked != rawSuperResolutionSettings.enabled) {
                         button.isChecked = rawSuperResolutionSettings.enabled
@@ -5744,24 +6024,54 @@ class MainActivity : Activity() {
                 setTextColor(getColor(R.color.text_primary))
             })
             content.addView(sectionTitle("Camera diagnostics"))
+            // The two debug overlays stack on the same corner: enabling one
+            // switches the other off. The guard stops the programmatic
+            // uncheck from ping-ponging back through the other listener.
+            var overlayExclusionGuard = false
+            var cameraDebugCheckBox: CheckBox? = null
+            var rawVfDebugCheckBox: CheckBox? = null
             content.addView(CheckBox(this).apply {
                 text = "Camera2 debug overlay"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)
+                cameraDebugCheckBox = this
                 setOnCheckedChangeListener { _, enabled ->
+                    if (overlayExclusionGuard) return@setOnCheckedChangeListener
                     lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, enabled).apply()
                     debugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
-                    if (enabled) debugOverlay.post { positionWholeRotatedPanels() }
+                    if (enabled) {
+                        overlayExclusionGuard = true
+                        try {
+                            lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false).apply()
+                            rawVfDebugCheckBox?.isChecked = false
+                            rawVfDebugOverlay.visibility = View.GONE
+                        } finally {
+                            overlayExclusionGuard = false
+                        }
+                        debugOverlay.post { positionWholeRotatedPanels() }
+                    }
                 }
             })
             content.addView(CheckBox(this).apply {
                 text = "RAW viewfinder debug overlay"
                 setTextColor(getColor(R.color.text_primary))
                 isChecked = lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
+                rawVfDebugCheckBox = this
                 setOnCheckedChangeListener { _, enabled ->
+                    if (overlayExclusionGuard) return@setOnCheckedChangeListener
                     lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, enabled).apply()
                     rawVfDebugOverlay.visibility = if (enabled) View.VISIBLE else View.GONE
-                    if (enabled) rawVfDebugOverlay.post { positionWholeRotatedPanels() }
+                    if (enabled) {
+                        overlayExclusionGuard = true
+                        try {
+                            lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, false).apply()
+                            cameraDebugCheckBox?.isChecked = false
+                            debugOverlay.visibility = View.GONE
+                        } finally {
+                            overlayExclusionGuard = false
+                        }
+                        rawVfDebugOverlay.post { positionWholeRotatedPanels() }
+                    }
                 }
             })
             content.addView(sectionTitle("App log"))
@@ -5825,6 +6135,31 @@ class MainActivity : Activity() {
                         .show()
                 }
             })
+            // F-Droid builds leave updates to the store: no checker UI.
+            if (BuildConfig.ENABLE_UPDATE_CHECK) {
+            content.addView(Button(this).apply {
+                text = "Check for updates"
+                setOnClickListener { checkForUpdatesManually() }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "Check for updates on startup"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(UpdateChecker.KEY_AUTO_CHECK, true)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit()
+                        .putBoolean(UpdateChecker.KEY_AUTO_CHECK, enabled)
+                        .apply()
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Compares the installed version against the latest " +
+                    "GitHub release (matthew777777/RawLens), at most once a " +
+                    "day. Download fetches the release APK in the app and " +
+                    "opens the system installer; nothing is uploaded."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
+            }
             markActive(aboutTab)
             polish()
         }
@@ -6599,6 +6934,7 @@ class MainActivity : Activity() {
         const val SIDECAR_TREE_REQUEST = 44
         const val SETTINGS_EXPORT_REQUEST = 45
         const val SETTINGS_IMPORT_REQUEST = 46
+        const val UPDATE_INSTALL_SOURCES = 47
         /** Rejects absurd import files before parsing (a real backup is tens of KB). */
         const val MAX_SETTINGS_IMPORT_BYTES = 2 * 1024 * 1024
         const val AUDIO_PERMISSION = 45

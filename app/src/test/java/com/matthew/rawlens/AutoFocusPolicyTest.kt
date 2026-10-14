@@ -85,16 +85,34 @@ class AutoFocusPolicyTest {
     }
 
     @Test fun bounceWindowRejectsFastRetap() {
+        // Near the previous tap (30px of a 120px threshold): spacing applies.
         assertFalse(
             AutoFocusPolicy.shouldAcceptTap(
                 nowMs = 1_349L, lastTapMs = 1_000L, lastTapX = 100f, lastTapY = 100f,
-                x = 900f, y = 900f, minViewDimPx = 1_000f, scanInFlight = false
+                x = 120f, y = 110f, minViewDimPx = 1_000f, scanInFlight = false
             )
         )
         assertTrue(
             AutoFocusPolicy.shouldAcceptTap(
                 nowMs = 1_350L, lastTapMs = 1_000L, lastTapX = 100f, lastTapY = 100f,
+                x = 120f, y = 110f, minViewDimPx = 1_000f, scanInFlight = false
+            )
+        )
+    }
+
+    @Test fun farRetargetPassesInsideBounceWindow() {
+        // Re-aiming across the frame is deliberate even 100 ms later, idle
+        // or mid-scan: never swallowed as bounce.
+        assertTrue(
+            AutoFocusPolicy.shouldAcceptTap(
+                nowMs = 1_100L, lastTapMs = 1_000L, lastTapX = 100f, lastTapY = 100f,
                 x = 900f, y = 900f, minViewDimPx = 1_000f, scanInFlight = false
+            )
+        )
+        assertTrue(
+            AutoFocusPolicy.shouldAcceptTap(
+                nowMs = 1_100L, lastTapMs = 1_000L, lastTapX = 100f, lastTapY = 100f,
+                x = 900f, y = 900f, minViewDimPx = 1_000f, scanInFlight = true
             )
         )
     }
@@ -122,6 +140,76 @@ class AutoFocusPolicyTest {
                 x = 105f, y = 100f, minViewDimPx = 1_000f, scanInFlight = false
             )
         )
+    }
+
+    @Test fun verdictFloorRejectsStaleLatch() {
+        // Retap: previous FOCUSED still reported ~200 ms after the new START.
+        assertFalse(AutoFocusPolicy.verdictReady(true, false, 203L, 300L))
+        assertFalse(AutoFocusPolicy.verdictReady(true, false, 299L, 300L))
+        // Past the floor the persisting lock completes the scan.
+        assertTrue(AutoFocusPolicy.verdictReady(true, false, 300L, 300L))
+        // A scan proves the new cycle runs: verdicts count immediately.
+        assertTrue(AutoFocusPolicy.verdictReady(true, true, 0L, 300L))
+        // Verdicts before START are genuine idle state, never stale.
+        assertTrue(AutoFocusPolicy.verdictReady(false, false, 0L, 300L))
+    }
+
+    @Test fun idleFallsBackToContinuousVideoBeforeOff() {
+        assertEquals(
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
+            AutoFocusPolicy.defaultAfMode(
+                intArrayOf(
+                    CaptureRequest.CONTROL_AF_MODE_OFF,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                )
+            )
+        )
+        assertEquals(
+            CaptureRequest.CONTROL_AF_MODE_AUTO,
+            AutoFocusPolicy.defaultAfMode(
+                intArrayOf(
+                    CaptureRequest.CONTROL_AF_MODE_AUTO,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                )
+            )
+        )
+    }
+
+    @Test fun idleScanNudgeOnlyForAutoParkedLenses() {
+        assertTrue(
+            AutoFocusPolicy.needsIdleScanNudge(intArrayOf(CaptureRequest.CONTROL_AF_MODE_AUTO))
+        )
+        assertTrue(
+            AutoFocusPolicy.needsIdleScanNudge(
+                intArrayOf(
+                    CaptureRequest.CONTROL_AF_MODE_AUTO,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                )
+            )
+        )
+        assertFalse(
+            AutoFocusPolicy.needsIdleScanNudge(
+                intArrayOf(
+                    CaptureRequest.CONTROL_AF_MODE_AUTO,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                )
+            )
+        )
+        assertFalse(
+            AutoFocusPolicy.needsIdleScanNudge(
+                intArrayOf(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            )
+        )
+        assertFalse(
+            AutoFocusPolicy.needsIdleScanNudge(intArrayOf(CaptureRequest.CONTROL_AF_MODE_MACRO))
+        )
+        assertFalse(AutoFocusPolicy.needsIdleScanNudge(intArrayOf()))
+    }
+
+    @Test fun scanBudgetClearsSlowGenuineLocks() {
+        // Field log: genuine locks landed at +2023/+2031 ms on a slow HAL.
+        assertTrue(AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS > 2_500L)
+        assertTrue(AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS <= 5_000L)
     }
 
     @Test fun failureHoldShorterThanLockHold() {

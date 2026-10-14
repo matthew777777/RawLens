@@ -1,6 +1,6 @@
 # RawLens 1.0 — release notes
 
-First public release: a photography-first, fully offline Camera2 RAW camera. No gallery, cloud sync, accounts, or runtime network use.
+First public release: a photography-first Camera2 RAW camera. No gallery, cloud sync, accounts, ads, or analytics; the only network use is the optional update check (disabled in F-Droid builds).
 
 Requires Android 10+ and a rear camera advertising the Camera2 `RAW` capability (RAW availability is device- and lens-dependent).
 

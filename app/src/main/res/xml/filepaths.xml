@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider paths: the in-app updater stages the downloaded release
+    APK under getExternalFilesDir(Download)/ and hands it to the system
+    installer. Nothing else is shared. -->
+<paths>
+    <external-files-path name="updates" path="Download/" />
+</paths>

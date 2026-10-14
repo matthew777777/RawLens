@@ -65,6 +65,37 @@ class BguViewfinder @JvmOverloads constructor(
         targetLongEdge = longEdge.coerceIn(240, 2160)
     }
 
+    /**
+     * Effective guide long edge for the GPU path. Log evidence
+     * (2026-10-13): blurry-BGU reporters were pinned at the 480 bucket —
+     * a 408-wide guide upscaled ~3.5x to the screen — on GPUs with
+     * vkMs ~1 ms, i.e. 90% headroom unused, while legacy/CPU paths looked
+     * sharp. A user resolution choice made for the legacy engine should
+     * not strand BGU below the screen's own size: lift the GPU target to
+     * the surface long edge, capped at the proven 1080 envelope. Record
+     * and power-save caps stay authoritative, and the CPU guide (whose
+     * cost scales brutally with guide size) keeps the raw user target.
+     */
+    internal fun effectiveTargetLongEdge(): Int {
+        val base = bguEffectiveTarget(
+            userTarget = targetLongEdge,
+            surfaceLongEdge = maxOf(width, height),
+            gpuPath = !cpuFallback && !cpuForced,
+            recordMode = recordMode,
+            powerSave = powerSave
+        )
+        // Detail boost (log-driven, 2026-10-14): the step-4 guide is the
+        // last structural softness vs legacy (point-sampled quads upscaled
+        // ~1.9x). A step-2 guide quadruples guide texels and dispatch
+        // cost, so it engages only where measured vkMs headroom proves
+        // the GPU can pay it — blurry-log devices sat at vkMs ~1 ms,
+        // mid-range phones at 6-11 ms stay on step-4. [guideBoost] is
+        // latched with hysteresis in offer(); record/power-save and the
+        // CPU guide never boost.
+        return if (guideBoost && !cpuFallback && !cpuForced && !recordMode && !powerSave)
+            maxOf(base, BOOST_TARGET) else base
+    }
+
     override fun setRecordMode(active: Boolean) {
         recordMode = active
     }
@@ -122,7 +153,10 @@ class BguViewfinder @JvmOverloads constructor(
         val lowW: Int, val lowH: Int, val rotation: Int, val mirrored: Boolean,
         // True when the CPU fallback produced this job's guide: render
         // uploads the job's cpuGuides bytes instead of binding its EGL image.
-        val cpu: Boolean
+        val cpu: Boolean,
+        // Sensor timestamp (boot-clock ns) of the source frame, for
+        // motion-to-photon age telemetry in the stats line.
+        val sensorTsNs: Long = 0L
     )
 
     private data class GridJob(val seq: Long, val grid: BguGrid)
@@ -141,6 +175,10 @@ class BguViewfinder @JvmOverloads constructor(
     private object Poison
 
     @Volatile private var latestGrid: GridJob? = null
+    /** Throttled look-params snapshot (handler-owned; see offer). */
+    private var cachedParams: LookParams? = null
+    private var cachedParamsSeq = 0L
+    private var cachedParamsCam: CameraCharacteristics? = null
 
     // ------------------------------------------------------- mutable state
 
@@ -199,6 +237,22 @@ class BguViewfinder @JvmOverloads constructor(
 
     private val calibratedCache = VfCalibratedColorCache()
     private var vulkanReady = false
+    // Tier ladder: sampled-image tier is primary (Adreno-safe), the
+    // TRANSFER bridge tier copies via the transfer engine (zero CPU copies),
+    // the CPU-plane upload tier covers streams they reject (no import, no
+    // lock), and the lock+memcpy tier is the last GPU rung. Per-session
+    // latches.
+    private var imagePipelineReady = false
+    private var imageTierDead = false
+    private var bridgeTierDead = false
+    private var planeTierDead = false
+    private var imageVerified = false
+    private var bridgeVerified = false
+    private var planeVerified = false
+    private var copyVerified = false
+
+    /** GPU sub-tiers with black-output probation (offer thread only). */
+    private enum class BguGpuTier { IMAGE, BRIDGE, PLANE, COPY }
 
     // Export triple-buffer: offer() computes into one slot while render
     // samples the latest completed one. Two fresher frames always separate a
@@ -229,6 +283,17 @@ class BguViewfinder @JvmOverloads constructor(
 
     // Stats (render-owned, read by snapshot()).
     @Volatile private var statFps = 0f
+    // Rotating low-sample buffers: a fresh ~200 KB allocation per frame at
+    // 30 fps is pure GC churn on the camera handler (dropped-frame jitter).
+    // Live quads are bounded by sampler(1) + fitQueue(2) + fitting(1) = 4.
+    private val quadPool = arrayOfNulls<ByteArray>(6)
+    private var quadPoolNext = 0
+    @Volatile private var guideBoost = false
+    private var boostOffers = 0L
+    @Volatile private var statSharp = 0f
+    @Volatile private var statEffTarget = 1080
+    @Volatile private var statAgeMs = 0f
+    @Volatile private var statAgeMaxMs = 0f
     @Volatile private var statMs = 0f
     @Volatile private var statFitMs = 0f
     @Volatile private var statVkMs = 0f
@@ -277,6 +342,33 @@ class BguViewfinder @JvmOverloads constructor(
         if (now - lastOfferMs < floorMs) return
         if (firstOfferMs == 0L) firstOfferMs = now
         lastOfferMs = now
+        // Backlog guard: the reader drains FIFO, so when the render thread
+        // falls far behind, every further frame is stale before it can
+        // present — and the low-sample + guide dispatch below (the expensive
+        // part of offer) would bury the camera handler deeper. Skip cheap,
+        // before any sampling, until the presenter catches up. Threshold is
+        // generous (5 frames): at 2-3 the guard itself juddered pans by
+        // dropping frames the presenter was about to show (field report).
+        if (seq - lastRenderedSeq > 5) {
+            statBusy++
+            return
+        }
+        // Stale-frame skip: the shared RAW reader drains FIFO (ZSL needs
+        // every frame), so when offer cost exceeds the frame interval —
+        // panning pushes smpMs to ~20 ms — queued frames arrive here
+        // already old, and sampling each one in full keeps the drain
+        // permanently behind (measured age 780 ms at 30 fps, 2026-10-13).
+        // A frame older than ~4 frame intervals can never be the freshest
+        // thing the presenter could show; skip its sampling so the drain
+        // races back to live frames. VF-only: the caller's image lifecycle
+        // (ZSL retention, scopes, peaking) is unaffected by returning here.
+        val frameAgeMs = (SystemClock.elapsedRealtimeNanos() - image.timestamp) / 1_000_000L
+        // Upper bound guards non-boot-clock timestamp sources: an absurd
+        // age means the clocks do not match on this device, not staleness.
+        if (frameAgeMs in 121L..5_000L) {
+            statBusy++
+            return
+        }
         MemoryLeakDiagnostics.bguVfFrame()
         if (now >= memSampleNextMs) {
             memSampleNextMs = now + MemoryLeakDiagnostics.PERIODIC_INTERVAL_MS
@@ -299,14 +391,24 @@ class BguViewfinder @JvmOverloads constructor(
             null
         }
         val crop = cropRect?.let { intArrayOf(it.left, it.top, it.right, it.bottom) }
-        val key = GeoKey(image.width, image.height, crop?.joinToString(",") ?: "full", targetLongEdge)
+        boostOffers++
+        val nextBoost = guideBoostNext(guideBoost, statVkMs, boostOffers)
+        if (guideBoost && !nextBoost) boostOffers = 0 // re-warm after a release
+        guideBoost = nextBoost
+        val effTarget = effectiveTargetLongEdge()
+        statEffTarget = effTarget
+        val key = GeoKey(image.width, image.height, crop?.joinToString(",") ?: "full", effTarget)
         var geo = geoCache
         if (geo == null || geoCacheKey != key) {
             geo = try {
-                BguGeometry.guideGeometry(image.width, image.height, crop, targetLongEdge)
+                BguGeometry.guideGeometry(image.width, image.height, crop, effTarget)
             } catch (_: Exception) {
                 return
             }
+            // Blur diagnosis: geometry changes are rare and always causal
+            // (target, crop, or stream size moved) — log each transition.
+            Log.i(TAG, "geo ${geoCacheKey?.let { "${it.imgW}x${it.imgH}/${it.crop}/${it.longEdge}" } ?: "init"} -> " +
+                "${image.width}x${image.height}/${key.crop}/${effTarget} = ${geo.width}x${geo.height} step=${geo.step}")
             geoCacheKey = key
             geoCache = geo
         }
@@ -351,21 +453,42 @@ class BguViewfinder @JvmOverloads constructor(
             val den = white - levels[i]
             if (den > 1f) 1f / den else 1f / 1023f
         }
-        val quad = ByteArray(lowW * lowH * 4)
+        val quadSize = lowW * lowH * 4
+        val quadIdx = quadPoolNext
+        quadPoolNext = (quadPoolNext + 1) % quadPool.size
+        val quad = quadPool[quadIdx]?.takeIf { it.size == quadSize }
+            ?: ByteArray(quadSize).also { quadPool[quadIdx] = it }
         val smpT0 = SystemClock.elapsedRealtimeNanos()
         val sampled = BguSample.sampleLowFrame(
             buf, rowStride, pixelStride, geo.left, geo.top, geo.step * BguGeometry.LOW_DF,
             lowW, lowH, channels, levels, inv, quad
         )
         if (!sampled) return
+        val sharp = BguSample.guideSharpness(quad, lowW, lowH)
+        statSharp = if (statSharp == 0f) sharp else statSharp * 0.9f + sharp * 0.1f
         val smpMs = (SystemClock.elapsedRealtimeNanos() - smpT0) / 1e6f
         statSmpMs = if (statSmpMs == 0f) smpMs else statSmpMs * 0.9f + smpMs * 0.1f
 
         val parT0 = SystemClock.elapsedRealtimeNanos()
-        val params = snapshotParams(
-            c, result, buf, rowStride, pixelStride, image.width, image.height,
-            levels, geo, white
-        ) ?: return
+        // Tone inputs (WB/CCM/ACES/lens map) move slowly; rebuilding them
+        // every frame costs ~7 ms of camera-handler time on slower phones
+        // (pure motion-to-photon latency). Refresh every 3rd offer (~100 ms
+        // at 30 fps — invisible tone lag), reuse the immutable snapshot
+        // between (fit jobs consume them sequentially on one thread).
+        val params = if (cachedParams == null || cachedParamsCam !== c ||
+            seq - cachedParamsSeq >= 3
+        ) {
+            snapshotParams(
+                c, result, buf, rowStride, pixelStride, image.width, image.height,
+                levels, geo, white
+            )?.also {
+                cachedParams = it
+                cachedParamsSeq = seq
+                cachedParamsCam = c
+            } ?: return
+        } else {
+            cachedParams!!
+        }
         val parMs = (SystemClock.elapsedRealtimeNanos() - parT0) / 1e6f
         statParMs = if (statParMs == 0f) parMs else statParMs * 0.9f + parMs * 0.1f
 
@@ -375,7 +498,7 @@ class BguViewfinder @JvmOverloads constructor(
         // records which guide it carries, so mid-stream taps flip cleanly.
         val useCpu = cpuFallback || cpuForced
         val guideOk = if (!useCpu) {
-            offerGpuGuide(image, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
+            offerGpuGuide(image, buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
         } else {
             offerCpuGuide(buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
         }
@@ -398,7 +521,7 @@ class BguViewfinder @JvmOverloads constructor(
         } catch (_: Exception) {
             false
         }
-        renderQueue.offerOrDrop(RenderJob(seq, slot, geo, lowW, lowH, rotation, mirrored, useCpu))
+        renderQueue.offerOrDrop(RenderJob(seq, slot, geo, lowW, lowH, rotation, mirrored, useCpu, image.timestamp))
     }
 
     /**
@@ -471,7 +594,8 @@ class BguViewfinder @JvmOverloads constructor(
      * Returns false to drop the frame (fatal or transient).
      */
     private fun offerGpuGuide(
-        image: android.media.Image, rowStride: Int, pixelStride: Int, geo: BguGuideGeo,
+        image: android.media.Image, buf: ByteBuffer, rowStride: Int, pixelStride: Int,
+        geo: BguGuideGeo,
         slot: Int, channels: IntArray, levels: FloatArray, white: Float, offerT0: Long
     ): Boolean {
         val export = synchronized(exportLock) {
@@ -564,6 +688,24 @@ class BguViewfinder @JvmOverloads constructor(
             }
             vulkanReady = true
         }
+        if (vulkanReady && !imagePipelineReady && !imageTierDead) {
+            val imgSpv = try {
+                context.assets.open("shaders/vf/vf_superpixel_img.spv").use { it.readBytes() }
+            } catch (_: Exception) {
+                null
+            }
+            val imgCode = if (imgSpv == null) VfVulkan.IMAGE_UNSUPPORTED else try {
+                VfVulkan.initImageNative(imgSpv)
+            } catch (_: Exception) {
+                VfVulkan.IMAGE_UNSUPPORTED
+            }
+            if (imgCode == VfVulkan.OK) {
+                imagePipelineReady = true
+            } else {
+                imageTierDead = true
+                Log.w(TAG, "BGU image tier unavailable (${VfVulkan.describe(imgCode)}); upload tier covers")
+            }
+        }
         // The HardwareBuffer handle is a per-offer reference: acquire it next
         // to its only use and close it once the synchronous dispatch returns
         // (the finalizer warns on every leaked handle otherwise).
@@ -577,6 +719,57 @@ class BguViewfinder @JvmOverloads constructor(
             return false
         }
         nullBufferStreak = 0
+        // Bridge-then-plane-then-copy upload ladder: the bridge rung copies
+        // the imported camera allocation via the transfer engine (zero CPU
+        // copies) and latches on any rejection; the plane tier uploads the
+        // CPU plane (no import, no lock); the lock+memcpy tier is the last
+        // GPU rung. Offer thread only.
+        var gpuTier = BguGpuTier.COPY
+        fun runUploadLadder(): Int {
+            // The bridge runs the img pipeline: a pipeline that failed to
+            // init dooms it too (skip the doomed JNI); a rejected image tier
+            // does not (the transfer engine is a separate read path).
+            if (imagePipelineReady && !bridgeTierDead) {
+                val bridgeCode = VfVulkan.computeBridgeNative(hb, iparams, fparams)
+                when (vfBridgeAction(bridgeCode, blackOutput = false)) {
+                    VfTierAction.SKIP_FRAME -> return bridgeCode
+                    VfTierAction.PRESENT -> {
+                        gpuTier = BguGpuTier.BRIDGE
+                        if (tierBlackOutput(buf, image.width, image.height, rowStride, pixelStride, levels, white, BguGpuTier.BRIDGE)) {
+                            bridgeTierDead = true
+                            Log.w(TAG, "BGU bridge tier black output; upload tier covers")
+                        } else {
+                            return bridgeCode
+                        }
+                    }
+                    else -> {
+                        bridgeTierDead = true
+                        Log.w(TAG, "BGU bridge tier rejected (${VfVulkan.describe(bridgeCode)}); upload tier covers")
+                    }
+                }
+            }
+            if (!planeTierDead) {
+                val planeCode = runPlaneTier(buf, rowStride, image.height, iparams, fparams)
+                when (vfPlaneAction(planeCode, blackOutput = false)) {
+                    VfTierAction.SKIP_FRAME -> return planeCode
+                    VfTierAction.PRESENT -> {
+                        gpuTier = BguGpuTier.PLANE
+                        if (tierBlackOutput(buf, image.width, image.height, rowStride, pixelStride, levels, white, BguGpuTier.PLANE)) {
+                            planeTierDead = true
+                            Log.w(TAG, "BGU plane tier black output; lock-copy tier covers")
+                        } else {
+                            return planeCode
+                        }
+                    }
+                    else -> {
+                        planeTierDead = true
+                        Log.w(TAG, "BGU plane tier rejected (${VfVulkan.describe(planeCode)}); lock-copy tier covers")
+                    }
+                }
+            }
+            gpuTier = BguGpuTier.COPY
+            return VfVulkan.computeCopyNative(hb, iparams, fparams)
+        }
         val rc: Int
         try {
             if (VfVulkan.ensureOutputNative(export) != VfVulkan.OK) {
@@ -588,7 +781,32 @@ class BguViewfinder @JvmOverloads constructor(
             statOfferMs = if (statOfferMs == 0f) offerMs else statOfferMs * 0.9f + offerMs * 0.1f
             rc = try {
                 val up = VfVulkan.uploadLutNative(lutMax, lutBytes)
-                if (up != VfVulkan.OK) up else VfVulkan.computeNative(hb, iparams, fparams)
+                if (up != VfVulkan.OK) {
+                    up
+                } else if (!imageTierDead) {
+                    val imgCode = VfVulkan.computeImageNative(hb, iparams, fparams)
+                    when (vfImageAction(imgCode, blackOutput = false)) {
+                        VfTierAction.SKIP_FRAME -> imgCode
+                        VfTierAction.PRESENT -> {
+                            if (tierBlackOutput(buf, image.width, image.height, rowStride, pixelStride, levels, white, BguGpuTier.IMAGE)) {
+                                imageTierDead = true
+                                Log.w(TAG, "BGU image tier black output; bridge/upload tiers cover")
+                                runUploadLadder()
+                            } else {
+                                gpuTier = BguGpuTier.IMAGE
+                                imgCode
+                            }
+                        }
+                        else -> {
+                            imageTierDead = true
+                            Log.w(TAG, "BGU image tier rejected (${VfVulkan.describe(imgCode)}); bridge/upload tiers cover")
+                            if (imgCode == VfVulkan.BUSY) imgCode
+                            else runUploadLadder()
+                        }
+                    }
+                } else {
+                    runUploadLadder()
+                }
             } catch (_: Exception) {
                 fail("vulkan-exception")
                 return false
@@ -609,12 +827,127 @@ class BguViewfinder @JvmOverloads constructor(
             return false
         }
         if (rc != VfVulkan.OK) {
+            // Upload tier is the last GPU rung: its failure drops to the
+            // NEON guide instead of failing over to legacy.
+            if (imageTierDead && BguSliceCpu.available) {
+                if (!cpuFallback) {
+                    cpuFallback = true
+                    Log.w(TAG, "BGU upload tier failed (vulkan-$rc); CPU fallback engaged")
+                }
+                return false
+            }
             if (++failStreak >= 5) fail("vulkan-$rc")
+            return false
+        }
+        // Copy-tier probation: a black upload output drops to NEON guide.
+        // Only the copy rung's own output convicts it (image/plane outputs
+        // probate inline at dispatch).
+        if (gpuTier == BguGpuTier.COPY && !copyVerified &&
+            tierBlackOutput(buf, image.width, image.height, rowStride, pixelStride, levels, white, BguGpuTier.COPY)
+        ) {
+            if (BguSliceCpu.available) {
+                cpuFallback = true
+                Log.w(TAG, "BGU upload tier black output; CPU fallback engaged")
+            } else {
+                fail("vulkan-copy-black")
+            }
             return false
         }
         busyStreak = 0
         failStreak = 0
         return true
+    }
+
+    /**
+     * CPU-plane upload dispatch: a rowStride*height slice of the Camera2
+     * plane into staging, then superpixel. No hardware-buffer import or
+     * lock, so streams the image tier rejects still render.
+     * COPY_UPLOAD_FAILED when no sliceable plane is available (the caller
+     * latches the tier and the lock-copy rung covers).
+     */
+    private fun runPlaneTier(
+        buf: ByteBuffer, rowStride: Int, imgH: Int, iparams: IntArray, fparams: FloatArray
+    ): Int {
+        val bytes = rowStride.toLong() * imgH
+        if (bytes <= 0 || bytes > Int.MAX_VALUE || bytes > buf.remaining()) {
+            return VfVulkan.COPY_UPLOAD_FAILED
+        }
+        val view = buf.duplicate()
+        view.position(buf.position())
+        view.limit(buf.position() + bytes.toInt())
+        val slice = view.slice().order(buf.order())
+        return try {
+            VfVulkan.computePlaneNative(slice, bytes.toInt(), iparams, fparams)
+        } catch (_: Exception) {
+            VfVulkan.SUBMIT_FAILED
+        }
+    }
+
+    /**
+     * Black-output probation for one GPU tier (offer thread only). Lit
+     * output verifies the tier at once; near-zero output convicts only
+     * with a strong sparse input signal, so dark scenes never latch.
+     * Unsampleable exports (no CPU-read usage) assume healthy.
+     */
+    private fun tierBlackOutput(
+        buf: ByteBuffer, imgW: Int, imgH: Int, rowStride: Int, pixelStride: Int,
+        levels: FloatArray, white: Float, tier: BguGpuTier
+    ): Boolean {
+        if (tierVerified(tier)) return false
+        val outputMax = try {
+            VfVulkan.sampleOutputNative()
+        } catch (_: Exception) {
+            -1
+        }
+        if (outputMax < 0 || outputMax > 2) {
+            markTierVerified(tier)
+            return false
+        }
+        var inputMax = 0
+        try {
+            val dup = buf.duplicate()
+            dup.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val stepY = max(1, imgH / 16)
+            val stepX = max(1, imgW / 16)
+            var y = 0
+            while (y < imgH) {
+                var x = 0
+                while (x < imgW) {
+                    val off = y * rowStride + x * pixelStride
+                    if (off + 1 < dup.capacity()) {
+                        val v = dup.getShort(off).toInt() and 0xFFFF
+                        if (v > inputMax) inputMax = v
+                    }
+                    x += stepX
+                }
+                y += stepY
+            }
+        } catch (_: Exception) {
+            return false
+        }
+        val black = levels.maxOrNull()?.toInt() ?: 0
+        val verdict = RawViewfinder.probeVfTierOutput(inputMax, black, white.toInt(), outputMax)
+        if (verdict == RawViewfinder.Companion.VfTierProbe.VERIFIED) {
+            markTierVerified(tier)
+            return false
+        }
+        return verdict == RawViewfinder.Companion.VfTierProbe.BROKEN
+    }
+
+    private fun tierVerified(tier: BguGpuTier): Boolean = when (tier) {
+        BguGpuTier.IMAGE -> imageVerified
+        BguGpuTier.BRIDGE -> bridgeVerified
+        BguGpuTier.PLANE -> planeVerified
+        BguGpuTier.COPY -> copyVerified
+    }
+
+    private fun markTierVerified(tier: BguGpuTier) {
+        when (tier) {
+            BguGpuTier.IMAGE -> imageVerified = true
+            BguGpuTier.BRIDGE -> bridgeVerified = true
+            BguGpuTier.PLANE -> planeVerified = true
+            BguGpuTier.COPY -> copyVerified = true
+        }
     }
 
     private data class LookParams(
@@ -1298,15 +1631,38 @@ class BguViewfinder @JvmOverloads constructor(
         statFps = fpsWindow.fps
         lastSwapMs = now
         lastRenderedSeq = job.seq
+        // Frame age at present: sensor timestamp -> swap completion. This
+        // is the motion-to-photon proxy the fps number cannot show: a
+        // pipeline can hold 30 fps while displaying 200 ms-old frames.
+        if (job.sensorTsNs > 0L) {
+            val ageMs = (SystemClock.elapsedRealtimeNanos() - job.sensorTsNs) / 1e6f
+            if (ageMs in 0f..2000f) {
+                statAgeMs = if (statAgeMs == 0f) ageMs else statAgeMs * 0.9f + ageMs * 0.1f
+                if (ageMs > statAgeMaxMs) statAgeMaxMs = ageMs
+            }
+        }
         statVfW = job.geo.width
         statVfH = job.geo.height
         // Steady-state telemetry (legacy VF_STATS_LOG_INTERVAL_MS convention):
         // presented fps + draw/swap cost + fit cost + guide size, 10 s cadence.
         if (now - lastStatsMs >= 10_000L) {
             lastStatsMs = now
-            Log.i(TAG, "stats fps=%.1f frameMs=%.1f drawMs=%.1f swapMs=%.1f fenMs=%.1f offerMs=%.1f smpMs=%.1f parMs=%.1f vkMs=%.1f fitMs=%.1f cpuMs=%.1f ev=%+.2f vf=%dx%d seq=%d busy=%d".format(
-                statFps, statMs, statDrawMs, statSwapMs, statFenceMs, statOfferMs, statSmpMs, statParMs,
-                statVkMs, statFitMs, statCpuMs, statEv, job.geo.width, job.geo.height, job.seq, statBusy))
+            // Blur diagnosis: guide size alone is ambiguous — pair it with the
+            // target that produced it, the surface it stretches to, and the
+            // upscale factor (up ~1.0 = crisp, ~3x = visibly soft).
+            // Displayed upscale: rotation swaps the guide axes on portrait
+            // phones, so the honest factor is the worse axis ratio (the old
+            // width-only math understated it ~1.4x vs the real ~1.9x).
+            val quarter = job.rotation % 180 != 0
+            val dispW = if (quarter) job.geo.height else job.geo.width
+            val dispH = if (quarter) job.geo.width else job.geo.height
+            val up = if (dispW > 0 && dispH > 0)
+                maxOf(width.toFloat() / dispW, height.toFloat() / dispH) else 0f
+            Log.i(TAG, "stats fps=%.1f age=%.0f ageMax=%.0f sharp=%.3f frameMs=%.1f drawMs=%.1f swapMs=%.1f fenMs=%.1f offerMs=%.1f smpMs=%.1f parMs=%.1f vkMs=%.1f fitMs=%.1f cpuMs=%.1f ev=%+.2f vf=%dx%d tgt=%d surf=%dx%d up=%.1fx seq=%d busy=%d".format(
+                statFps, statAgeMs, statAgeMaxMs, statSharp, statMs, statDrawMs, statSwapMs, statFenceMs, statOfferMs, statSmpMs, statParMs,
+                statVkMs, statFitMs, statCpuMs, statEv, job.geo.width, job.geo.height,
+                statEffTarget, width, height, up, job.seq, statBusy))
+            statAgeMaxMs = 0f
         }
     }
 
@@ -1702,6 +2058,14 @@ class BguViewfinder @JvmOverloads constructor(
         statCpuMs = 0f
         // Fresh retry per session: the next session re-probes the GPU path.
         cpuFallback = false
+        imagePipelineReady = false
+        imageTierDead = false
+        bridgeTierDead = false
+        planeTierDead = false
+        imageVerified = false
+        bridgeVerified = false
+        planeVerified = false
+        copyVerified = false
         synchronized(exportLock) { for (i in 0..2) cpuGuideSeq[i] = 0L }
         geoCacheKey = null
         geoCache = null
@@ -1793,6 +2157,46 @@ class BguViewfinder @JvmOverloads constructor(
 
     companion object {
         private const val TAG = "BguViewfinder"
+
+        /** BGU GPU guide floor cap: the proven full-rate envelope. */
+        internal const val GPU_TARGET_CAP = 1080
+
+        /** Step-2 guide target (sensor/2) when the detail boost engages. */
+        internal const val BOOST_TARGET = 2160
+
+        /** Boost engages below this sustained dispatch cost (ms). */
+        internal const val BOOST_ON_VK_MS = 2.5f
+
+        /** Boost releases above this sustained dispatch cost (ms). */
+        internal const val BOOST_OFF_VK_MS = 7f
+
+        /** Offers to observe before the boost may engage (~3 s at 30 fps). */
+        internal const val BOOST_WARMUP_OFFERS = 90L
+
+        /**
+         * Pure boost latch (unit-tested): warm up first, engage on proven
+         * headroom, release well past the engage point so the guide size
+         * cannot flap between geometries.
+         */
+        internal fun guideBoostNext(current: Boolean, vkMs: Float, offers: Long): Boolean {
+            if (offers < BOOST_WARMUP_OFFERS || vkMs <= 0f) return current
+            return if (current) vkMs < BOOST_OFF_VK_MS else vkMs < BOOST_ON_VK_MS
+        }
+
+        /**
+         * Pure floor policy behind [effectiveTargetLongEdge] (unit-tested):
+         * GPU path only, never in record/power-save, lifted to the surface
+         * long edge but never above [GPU_TARGET_CAP] and never below the
+         * user's own target.
+         */
+        internal fun bguEffectiveTarget(
+            userTarget: Int, surfaceLongEdge: Int, gpuPath: Boolean,
+            recordMode: Boolean, powerSave: Boolean
+        ): Int {
+            if (!gpuPath || recordMode || powerSave) return userTarget
+            if (surfaceLongEdge <= 0) return userTarget
+            return maxOf(userTarget, minOf(surfaceLongEdge, GPU_TARGET_CAP))
+        }
 
         /** EGL_RENDERABLE_TYPE bit for OpenGL ES 3.x configs (EGL_KHR_create_context). */
         private const val EGL_OPENGL_ES3_BIT = 0x0040

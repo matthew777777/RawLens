@@ -181,6 +181,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     private class GpuFrame(val buffer: android.hardware.HardwareBuffer, private val lease: AutoCloseable) : FrameState, AutoCloseable {
         override fun close() { try { buffer.close() } finally { lease.close() } }
+        // CPU-plane upload bytes for the packed/BLOB fallback tier: a rowStride*height
+        // slice of the plane buffer, valid while the lease holds the image open.
+        var planeBytes: java.nio.ByteBuffer? = null
+        var planeByteCount: Int = 0
         var width = 0
         var height = 0
         var left = 0
@@ -290,18 +294,31 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** GL-worker-only consecutive Vulkan failure count. */
     private var consecutiveVulkanFailures = 0
     /**
-     * Vulkan sub-tier latches (zero-copy import / gpu-copy staging), set on the
-     * GL worker by explicit failures or the black-output probe. Both latched
-     * implies [vulkanDisabledForSession]. Volatile: reset on the camera thread
-     * by [invalidateSession]. Reset per session.
+     * Vulkan sub-tier latches (zero-copy import / plane upload / gpu-copy
+     * staging), set on the GL worker by explicit failures or the black-output
+     * probe. All three latched implies [vulkanDisabledForSession]. Volatile:
+     * reset on the camera thread by [invalidateSession]. Reset per session.
      */
     @Volatile private var vulkanZeroCopyDisabled = false
+    @Volatile private var vulkanBridgeDisabled = false
+    @Volatile private var vulkanPlaneDisabled = false
     @Volatile private var vulkanCopyDisabled = false
+    /** Sampled-image tier latches (primary on Adreno+Mali). GL worker only. */
+    @Volatile private var vulkanImageDisabled = false
+    private var vulkanImageVerified = false
+    private var vulkanImageReady = false
     /** Black-output probation verdicts; a verified tier skips probing. GL worker only. */
     private var vulkanZeroCopyVerified = false
+    private var vulkanBridgeVerified = false
+    private var vulkanPlaneVerified = false
     private var vulkanCopyVerified = false
     /** Copy tier has dispatched at least once (gates its probation). GL worker only. */
     private var vulkanCopyActive = false
+    /** Plane tier has dispatched at least once (gates its probation). GL worker only. */
+    private var vulkanBridgeActive = false
+    private var vulkanPlaneActive = false
+    /** Zero-copy tier has dispatched at least once (gates its probation). GL worker only. */
+    private var vulkanZeroCopyActive = false
     /** Latest input-signal reading for tier probation. Camera writes, GL worker reads. */
     @Volatile private var vfInputSignal: VfInputSignal? = null
     /** Cleared once every Vulkan tier is verified or latched (or never used). */
@@ -653,10 +670,19 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         vfSanitizeLogged = false
         vfLevelsFallbackActive = false
         vulkanZeroCopyDisabled = false
+        vulkanBridgeDisabled = false
+        vulkanPlaneDisabled = false
         vulkanCopyDisabled = false
+        vulkanImageDisabled = false
+        vulkanImageVerified = false
         vulkanZeroCopyVerified = false
+        vulkanBridgeVerified = false
+        vulkanPlaneVerified = false
         vulkanCopyVerified = false
         vulkanCopyActive = false
+        vulkanBridgeActive = false
+        vulkanPlaneActive = false
+        vulkanZeroCopyActive = false
         vfInputSignal = null
         vfProbeInputSignal = true
         // Evict cached Vulkan imports (session buffers are gone); the export buffer
@@ -766,7 +792,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         Log.i("RawViewfinder", "VF engine override: ${mode.name}")
     }
 
-    /** Overlay-tap cycle: AUTO -> GPU -> CPU -> AUTO. Returns the new mode. */
+    /** Overlay-tap cycle (see [VfEngineMode.next]). Returns the new mode. */
     fun cycleEngineMode(): VfEngineMode {
         val next = engineMode.next()
         setEngineMode(next)
@@ -1158,6 +1184,16 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         val frame = GpuFrame(buffer, lease)
         try {
             frame.width = width
+            runCatching {
+                val bytes = (plane.rowStride.toLong() * image.height).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                if (bytes > 0 && bytes <= plane.buffer.remaining()) {
+                    val view = plane.buffer.duplicate()
+                    view.position(plane.buffer.position())
+                    view.limit(plane.buffer.position() + bytes)
+                    frame.planeBytes = view.slice().order(plane.buffer.order())
+                    frame.planeByteCount = bytes
+                }
+            }
             frame.height = height
             frame.left = left
             frame.top = top
@@ -1684,7 +1720,35 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             var importBuffer: android.hardware.HardwareBuffer? = null
             var bayer = false
             var vkCopy = false
-            if (!vulkanDisabledForSession && !vulkanZeroCopyDisabled) {
+            var vkPlane = false
+            var vkBridge = false
+            var vkImage = false
+            // Primary: sampled R16_UINT image import. Adreno-safe
+            // zero-copy; rejection or black output advances the ladder.
+            if (!vulkanDisabledForSession && !vulkanImageDisabled) {
+                val computeStarted = SystemClock.elapsedRealtime()
+                val code = runVulkanSuperpixel(frame, VulkanTier.IMAGE)
+                computeMs = SystemClock.elapsedRealtime() - computeStarted
+                if (code == VfVulkan.BUSY) {
+                    noteVulkanBusy()
+                    return@Runnable
+                }
+                if (code == VfVulkan.OK && vulkanExport != null) {
+                    if (probeImageTier()) {
+                        importBuffer = vulkanExport
+                        vkImage = true
+                    }
+                } else {
+                    noteImageFailure(code)
+                }
+            }
+            if (importBuffer == null && !vulkanDisabledForSession && !vulkanZeroCopyDisabled) {
+                if (!vulkanZeroCopyVerified) {
+                    // First zero-copy dispatch needs a fresh input signal for
+                    // its probation (a latched image tier clears probing).
+                    vulkanZeroCopyActive = true
+                    vfProbeInputSignal = true
+                }
                 val computeStarted = SystemClock.elapsedRealtime()
                 val code = runVulkanSuperpixel(frame, copy = false)
                 computeMs = SystemClock.elapsedRealtime() - computeStarted
@@ -1698,9 +1762,61 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     return@Runnable
                 }
                 if (code == VfVulkan.OK && vulkanExport != null) {
-                    if (probeVulkanTier(zeroCopy = true)) importBuffer = vulkanExport
+                    if (probeVulkanTier(VulkanTier.BUFFER)) importBuffer = vulkanExport
                 } else {
-                    noteVulkanFailure(VfVulkan.describe(code), zeroCopy = true)
+                    noteVulkanFailure(VfVulkan.describe(code), VulkanTier.BUFFER)
+                }
+            }
+            // TRANSFER bridge-copy: the copy engine reads the imported camera
+            // allocation into an owned R16 image — zero CPU copies even where
+            // direct compute reads misbehave. Below the direct-read tiers,
+            // above the CPU-touching uploads.
+            if (importBuffer == null && !vulkanDisabledForSession && !vulkanBridgeDisabled) {
+                if (!vulkanBridgeVerified) {
+                    // First bridge dispatch needs a fresh input signal for its
+                    // probation (an earlier tier may have cleared probing already).
+                    vulkanBridgeActive = true
+                    vfProbeInputSignal = true
+                }
+                val computeStarted = SystemClock.elapsedRealtime()
+                val code = runVulkanSuperpixel(frame, VulkanTier.BRIDGE)
+                computeMs = SystemClock.elapsedRealtime() - computeStarted
+                if (code == VfVulkan.BUSY) {
+                    // Same backpressure gate as the zero-copy tier above.
+                    noteVulkanBusy()
+                    return@Runnable
+                }
+                if (code == VfVulkan.OK && vulkanExport != null) {
+                    if (probeVulkanTier(VulkanTier.BRIDGE)) {
+                        importBuffer = vulkanExport
+                        vkBridge = true
+                    }
+                } else {
+                    noteVulkanFailure(VfVulkan.describe(code), VulkanTier.BRIDGE)
+                }
+            }
+            if (importBuffer == null && !vulkanDisabledForSession && !vulkanPlaneDisabled) {
+                if (!vulkanPlaneVerified) {
+                    // First plane dispatch needs a fresh input signal for its
+                    // probation (an earlier tier may have cleared probing already).
+                    vulkanPlaneActive = true
+                    vfProbeInputSignal = true
+                }
+                val computeStarted = SystemClock.elapsedRealtime()
+                val code = runVulkanSuperpixel(frame, VulkanTier.PLANE)
+                computeMs = SystemClock.elapsedRealtime() - computeStarted
+                if (code == VfVulkan.BUSY) {
+                    // Same backpressure gate as the zero-copy tier above.
+                    noteVulkanBusy()
+                    return@Runnable
+                }
+                if (code == VfVulkan.OK && vulkanExport != null) {
+                    if (probeVulkanTier(VulkanTier.PLANE)) {
+                        importBuffer = vulkanExport
+                        vkPlane = true
+                    }
+                } else {
+                    noteVulkanFailure(VfVulkan.describe(code), VulkanTier.PLANE)
                 }
             }
             if (importBuffer == null && !vulkanDisabledForSession && !vulkanCopyDisabled) {
@@ -1719,12 +1835,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     return@Runnable
                 }
                 if (code == VfVulkan.OK && vulkanExport != null) {
-                    if (probeVulkanTier(zeroCopy = false)) {
+                    if (probeVulkanTier(VulkanTier.COPY)) {
                         importBuffer = vulkanExport
                         vkCopy = true
                     }
                 } else {
-                    noteVulkanFailure(VfVulkan.describe(code), zeroCopy = false)
+                    noteVulkanFailure(VfVulkan.describe(code), VulkanTier.COPY)
                 }
             }
             if (importBuffer == null && glEs3 && gpuProgram != 0 && !gpuDisabledForSession) {
@@ -1754,6 +1870,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             // The Bayer path imports a different HAL buffer per frame and
             // keeps per-frame images (owned = destroyed below).
             val cacheable = !bayer && importBuffer === vulkanExport
+            // EGL failures attribute to the presenting Vulkan tier (image
+            // presents count as zero-copy: the sampled tier keeps no failure
+            // counter of its own).
+            val presentedTier = if (vkCopy) VulkanTier.COPY else if (vkPlane) VulkanTier.PLANE else if (vkBridge) VulkanTier.BRIDGE else VulkanTier.BUFFER
             var eglImage = 0L
             var ownsEglImage = true
             if (cacheable && exportEglSource === importBuffer && exportEglImage != 0L) {
@@ -1766,7 +1886,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     0L
                 }
                 if (eglImage == 0L) {
-                    if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import", zeroCopy = !vkCopy)
+                    if (bayer) noteGpuFailure("egl-import") else noteVulkanFailure("egl-import", presentedTier)
                     return@Runnable
                 }
                 if (cacheable) {
@@ -1787,7 +1907,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                         // A stale cached image binds dirty once: drop it so the
                         // next frame recreates, then fail down the tier chain.
                         if (!ownsEglImage) dropExportEglImage()
-                        noteVulkanFailure("egl-bind=$bindError", zeroCopy = !vkCopy)
+                        noteVulkanFailure("egl-bind=$bindError", presentedTier)
                         return@Runnable
                     }
                     applyCpuTonemap(frame, frame.width, frame.height)
@@ -1845,7 +1965,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 }
                 if (!gpuActiveLogged) {
                     gpuActiveLogged = true
-                    val tier = if (bayer) "egl" else if (vkCopy) "vulkan-copy" else "vulkan-zero"
+                    val tier = if (bayer) "egl" else if (vkCopy) "vulkan-copy" else if (vkPlane) "vulkan-plane" else if (vkBridge) "vulkan-bridge" else if (vkImage) "vulkan-image" else "vulkan-zero"
                     Log.i("RawViewfinder", "VF GPU active ($tier)")
                 }
                 noteFrameRendered(frame.epoch, gpu = true)
@@ -1902,10 +2022,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      * falls through to the next tier in the same frame, so no black frame is
      * ever shown). Verified tiers skip probing entirely. GL worker only.
      */
-    private fun probeVulkanTier(zeroCopy: Boolean): Boolean {
-        if (zeroCopy && vulkanZeroCopyVerified) return true
-        if (!zeroCopy && vulkanCopyVerified) return true
-        val tier = if (zeroCopy) "zero-copy" else "gpu-copy"
+    private fun probeVulkanTier(tier: VulkanTier): Boolean {
+        if (tier == VulkanTier.BUFFER && vulkanZeroCopyVerified) return true
+        if (tier == VulkanTier.BRIDGE && vulkanBridgeVerified) return true
+        if (tier == VulkanTier.PLANE && vulkanPlaneVerified) return true
+        if (tier == VulkanTier.COPY && vulkanCopyVerified) return true
+        val name = vulkanTierName(tier)
         val signal = vfInputSignal ?: return true // input sample not arrived yet: present, keep probing
         // Compute fence already waited; drain queued GL so the export sample
         // cannot race the previous frame's tonemap read. Probation only.
@@ -1918,54 +2040,89 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         if (outputMax < 0) {
             // Export not CPU-lockable: probation can never conclude; assume
             // healthy so this costs one warning instead of a glFinish per frame.
-            Log.w("RawViewfinder", "VF $tier output unsampleable; assuming healthy")
-            if (zeroCopy) vulkanZeroCopyVerified = true else vulkanCopyVerified = true
+            Log.w("RawViewfinder", "VF $name output unsampleable; assuming healthy")
+            markVulkanTierVerified(tier)
             maybeClearInputProbe()
             return true
         }
         return when (probeVfTierOutput(signal.dataMax, signal.black, signal.white, outputMax)) {
             VfTierProbe.VERIFIED -> {
-                if (zeroCopy) vulkanZeroCopyVerified = true else vulkanCopyVerified = true
+                markVulkanTierVerified(tier)
                 maybeClearInputProbe()
-                Log.i("RawViewfinder", "VF $tier verified (outputMax=$outputMax)")
+                Log.i("RawViewfinder", "VF $name verified (outputMax=$outputMax)")
                 true
             }
             // Dark scene or lens cap: present (correct output either way), keep probing.
             VfTierProbe.INCONCLUSIVE -> true
             VfTierProbe.BROKEN -> {
-                Log.w("RawViewfinder", "VF $tier black output (inputMax=${signal.dataMax} outputMax=$outputMax); advancing tier")
-                latchVulkanSubTier(zeroCopy, "black-output")
+                Log.w("RawViewfinder", "VF $name black output (inputMax=${signal.dataMax} outputMax=$outputMax); advancing tier")
+                latchVulkanSubTier(tier, "black-output")
                 false
             }
         }
     }
 
+    /** Log label for a Vulkan sub-tier (the sampled tier probes separately). */
+    private fun vulkanTierName(tier: VulkanTier): String = when (tier) {
+        VulkanTier.IMAGE -> "image"
+        VulkanTier.BUFFER -> "zero-copy"
+        VulkanTier.BRIDGE -> "bridge-copy"
+        VulkanTier.PLANE -> "plane-upload"
+        VulkanTier.COPY -> "gpu-copy"
+    }
+
+    /** Mark one Vulkan sub-tier verified (probation concluded). GL worker only. */
+    private fun markVulkanTierVerified(tier: VulkanTier) {
+        when (tier) {
+            VulkanTier.BUFFER -> vulkanZeroCopyVerified = true
+            VulkanTier.BRIDGE -> vulkanBridgeVerified = true
+            VulkanTier.PLANE -> vulkanPlaneVerified = true
+            VulkanTier.COPY -> vulkanCopyVerified = true
+            VulkanTier.IMAGE -> Unit
+        }
+    }
+
     /** Latch one Vulkan sub-tier dead for the session. Never schedules recovery. */
-    private fun latchVulkanSubTier(zeroCopy: Boolean, reason: String) {
-        val tier = if (zeroCopy) "zero-copy" else "gpu-copy"
-        if (zeroCopy) vulkanZeroCopyDisabled = true else vulkanCopyDisabled = true
+    private fun latchVulkanSubTier(tier: VulkanTier, reason: String) {
+        val name = vulkanTierName(tier)
+        when (tier) {
+            VulkanTier.BUFFER -> vulkanZeroCopyDisabled = true
+            VulkanTier.BRIDGE -> vulkanBridgeDisabled = true
+            VulkanTier.PLANE -> vulkanPlaneDisabled = true
+            VulkanTier.COPY -> vulkanCopyDisabled = true
+            VulkanTier.IMAGE -> Unit
+        }
         consecutiveVulkanFailures = 0
         maybeClearInputProbe()
-        if (vulkanZeroCopyDisabled && vulkanCopyDisabled) {
+        if (vulkanZeroCopyDisabled && vulkanBridgeDisabled && vulkanPlaneDisabled && vulkanCopyDisabled) {
             if (!vulkanDisabledForSession) {
                 vulkanDisabledForSession = true
                 Log.w("RawViewfinder", "VF Vulkan failed ($reason); EGL/NEON cover for session")
             }
         } else {
-            Log.w("RawViewfinder", "VF Vulkan $tier failed ($reason); trying next tier")
+            Log.w("RawViewfinder", "VF Vulkan $name failed ($reason); trying next tier")
         }
     }
 
     private fun maybeClearInputProbe() {
-        // The copy tier only needs a signal once it actually dispatches; a
-        // healthy zero-copy session stops probing after one verified frame.
-        val zeroResolved = vulkanZeroCopyVerified || vulkanZeroCopyDisabled
+        // A sub-tier only needs a signal once it actually dispatches (its
+        // rung re-arms probing); a healthy image session stops probing after
+        // one verified frame, and tiers behind a healthy tier never run.
+        val imageResolved = vulkanImageVerified || vulkanImageDisabled
+        val zeroResolved = vulkanZeroCopyVerified || vulkanZeroCopyDisabled || !vulkanZeroCopyActive
+        val bridgeResolved = vulkanBridgeVerified || vulkanBridgeDisabled || !vulkanBridgeActive
+        val planeResolved = vulkanPlaneVerified || vulkanPlaneDisabled || !vulkanPlaneActive
         val copyResolved = vulkanCopyVerified || vulkanCopyDisabled || !vulkanCopyActive
-        if (zeroResolved && copyResolved) vfProbeInputSignal = false
+        if (imageResolved && zeroResolved && bridgeResolved && planeResolved && copyResolved) vfProbeInputSignal = false
     }
 
+    private enum class VulkanTier { IMAGE, BUFFER, BRIDGE, PLANE, COPY }
+
     /** Vulkan tier: lazy init + export buffer + superpixel dispatch. GL worker only. */
-    private fun runVulkanSuperpixel(frame: GpuFrame, copy: Boolean): Int {
+    private fun runVulkanSuperpixel(frame: GpuFrame, copy: Boolean): Int =
+        runVulkanSuperpixel(frame, if (copy) VulkanTier.COPY else VulkanTier.BUFFER)
+
+    private fun runVulkanSuperpixel(frame: GpuFrame, tier: VulkanTier): Int {
         if (!vulkanInitialized) {
             val spv = loadVulkanSpv() ?: return VfVulkan.PIPELINE_FAILED
             val code = try {
@@ -1978,6 +2135,20 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             if (code != VfVulkan.OK) return code
             vulkanInitialized = true
             Log.i("RawViewfinder", "VF Vulkan ready")
+        }
+        // The bridge rung runs the same img pipeline (owned R16 target), so it
+        // needs the same lazy pipeline init — the image tier may have been
+        // quirk-skipped without ever running.
+        if ((tier == VulkanTier.IMAGE || tier == VulkanTier.BRIDGE) && !vulkanImageReady) {
+            val imgSpv = loadVulkanImageSpv() ?: return VfVulkan.IMAGE_UNSUPPORTED
+            val imgCode = try {
+                VfVulkan.initImageNative(imgSpv)
+            } catch (_: Exception) {
+                VfVulkan.IMAGE_UNSUPPORTED
+            }
+            if (imgCode != VfVulkan.OK) return imgCode
+            vulkanImageReady = true
+            Log.i("RawViewfinder", "VF Vulkan image tier ready")
         }
         if (vulkanExport == null || vulkanExportWidth != frame.width || vulkanExportHeight != frame.height) {
             // The cached EGLImage wraps the old buffer: drop it before the
@@ -2029,8 +2200,17 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             val (blackQ, denQ) = VfLevels.toFixedQ6(frame.levels, frame.white)
             val (lutMax, lutBytes) = VfLevels.lutFor(blackQ, denQ)
             if (VfVulkan.uploadLutNative(lutMax, lutBytes) != VfVulkan.OK) return VfVulkan.SUBMIT_FAILED
-            if (copy) VfVulkan.computeCopyNative(frame.buffer, iparams, fparams)
-            else VfVulkan.computeNative(frame.buffer, iparams, fparams)
+            when (tier) {
+                VulkanTier.IMAGE -> VfVulkan.computeImageNative(frame.buffer, iparams, fparams)
+                VulkanTier.BUFFER -> VfVulkan.computeNative(frame.buffer, iparams, fparams)
+                VulkanTier.BRIDGE -> VfVulkan.computeBridgeNative(frame.buffer, iparams, fparams)
+                VulkanTier.PLANE -> {
+                    val plane = frame.planeBytes
+                    if (plane == null || frame.planeByteCount <= 0) return VfVulkan.COPY_UPLOAD_FAILED
+                    VfVulkan.computePlaneNative(plane, frame.planeByteCount, iparams, fparams)
+                }
+                VulkanTier.COPY -> VfVulkan.computeCopyNative(frame.buffer, iparams, fparams)
+            }
         } catch (_: Exception) {
             VfVulkan.SUBMIT_FAILED
         }
@@ -2047,12 +2227,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     /** Vulkan sub-tier failure: warn, and skip the sub-tier after repeated failures. */
-    private fun noteVulkanFailure(reason: String, zeroCopy: Boolean) {
+    private fun noteVulkanFailure(reason: String, tier: VulkanTier) {
         consecutiveVulkanFailures++
         if (VfVulkan.shouldDisableImmediately(reason) ||
             consecutiveVulkanFailures >= VfGpuImport.MAX_CONSECUTIVE_FAILURES
         ) {
-            latchVulkanSubTier(zeroCopy, reason)
+            latchVulkanSubTier(tier, reason)
             if (VfVulkan.shouldRecover(reason)) scheduleVulkanRecovery()
         } else {
             Log.w("RawViewfinder", "VF Vulkan frame failed ($reason); trying next tier")
@@ -2079,7 +2259,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         vulkanRecoverPosted = false
         val currentEpoch = synchronized(lock) { epoch }
         if (vulkanRecoverEpoch != currentEpoch ||
-            (!vulkanDisabledForSession && !vulkanZeroCopyDisabled && !vulkanCopyDisabled)
+            (!vulkanDisabledForSession && !vulkanZeroCopyDisabled && !vulkanBridgeDisabled && !vulkanPlaneDisabled && !vulkanCopyDisabled)
         ) return
         // Imports are dropped by the reinit and re-created on demand; the
         // Kotlin export buffer stays valid and is simply re-imported.
@@ -2100,12 +2280,72 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         consecutiveVulkanFailures = 0
         vulkanDisabledForSession = false
         vulkanZeroCopyDisabled = false
+        vulkanBridgeDisabled = false
+        vulkanPlaneDisabled = false
         vulkanCopyDisabled = false
+        vulkanImageDisabled = false
+        vulkanImageVerified = false
+        vulkanImageReady = false
         vulkanZeroCopyVerified = false
+        vulkanBridgeVerified = false
+        vulkanPlaneVerified = false
         vulkanCopyVerified = false
         vulkanCopyActive = false
+        vulkanBridgeActive = false
+        vulkanPlaneActive = false
+        vulkanZeroCopyActive = false
         vfProbeInputSignal = true
         Log.i("RawViewfinder", "VF Vulkan recovered; re-probing zero-copy")
+    }
+
+    private fun loadVulkanImageSpv(): ByteArray? = try {
+        context.assets.open("shaders/vf/vf_superpixel_img.spv").use { it.readBytes() }
+    } catch (e: Exception) {
+        Log.w("RawViewfinder", "VF Vulkan image SPIR-V missing", e)
+        null
+    }
+
+    /** Black-output probation for the sampled-image tier. GL worker only. */
+    private fun probeImageTier(): Boolean {
+        if (vulkanImageVerified) return true
+        val signal = vfInputSignal ?: return true
+        glFinish()
+        val outputMax = try {
+            VfVulkan.sampleOutputNative()
+        } catch (_: Exception) {
+            -1
+        }
+        if (outputMax < 0) {
+            vulkanImageVerified = true
+            maybeClearInputProbe()
+            return true
+        }
+        return when (probeVfTierOutput(signal.dataMax, signal.black, signal.white, outputMax)) {
+            VfTierProbe.VERIFIED -> {
+                vulkanImageVerified = true
+                maybeClearInputProbe()
+                Log.i("RawViewfinder", "VF image tier verified (outputMax=$outputMax)")
+                true
+            }
+            VfTierProbe.INCONCLUSIVE -> true
+            VfTierProbe.BROKEN -> {
+                Log.w("RawViewfinder", "VF image tier black output (inputMax=${signal.dataMax} outputMax=$outputMax); advancing tier")
+                vulkanImageDisabled = true
+                maybeClearInputProbe()
+                false
+            }
+        }
+    }
+
+    private fun noteImageFailure(code: Int) {
+        if (code == VfVulkan.IMAGE_UNSUPPORTED || code == VfVulkan.DEVICE_LOST) {
+            vulkanImageDisabled = true
+            Log.w("RawViewfinder", "VF image tier unsupported (${VfVulkan.describe(code)}); upload tiers cover")
+            maybeClearInputProbe()
+        } else {
+            noteVulkanFailure(VfVulkan.describe(code), VulkanTier.BUFFER)
+            if (vulkanZeroCopyDisabled) vulkanImageDisabled = true
+        }
     }
 
     /** SPIR-V bytes for Vulkan bring-up; null when the asset is missing. GL worker only. */

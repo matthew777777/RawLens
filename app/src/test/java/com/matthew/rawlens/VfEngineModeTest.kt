@@ -8,12 +8,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VfEngineModeTest {
-    @Test fun `overlay tap cycles AUTO BGU BGU_CPU GPU CPU`() {
-        assertEquals(VfEngineMode.BGU, VfEngineMode.AUTO.next())
-        assertEquals(VfEngineMode.BGU_CPU, VfEngineMode.BGU.next())
-        assertEquals(VfEngineMode.GPU, VfEngineMode.BGU_CPU.next())
+    @Test fun `overlay tap cycles AUTO GPU CPU BGU BGU_CPU`() {
+        assertEquals(VfEngineMode.GPU, VfEngineMode.AUTO.next())
         assertEquals(VfEngineMode.CPU, VfEngineMode.GPU.next())
-        assertEquals(VfEngineMode.AUTO, VfEngineMode.CPU.next())
+        assertEquals(VfEngineMode.BGU, VfEngineMode.CPU.next())
+        assertEquals(VfEngineMode.BGU_CPU, VfEngineMode.BGU.next())
+        assertEquals(VfEngineMode.AUTO, VfEngineMode.BGU_CPU.next())
     }
 
     @Test fun `short labels keep path and override distinguishable`() {
@@ -36,35 +36,36 @@ class VfEngineModeTest {
     }
 
     @Test fun `forced BGU stays BGU even when dead`() {
-        assertTrue(resolveVfRoute(VfEngineMode.BGU, autoPrefersBgu = false, bguDead = true, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.BGU, autoPrefersBgu = true, bguDead = false, hasBgu = false))
+        assertTrue(resolveVfRoute(VfEngineMode.BGU, legacyDead = false, bguDead = true, hasBgu = true))
+        assertFalse(resolveVfRoute(VfEngineMode.BGU, legacyDead = false, bguDead = false, hasBgu = false))
     }
 
     @Test fun `forced BGU_CPU routes BGU and never falls back`() {
-        assertTrue(resolveVfRoute(VfEngineMode.BGU_CPU, autoPrefersBgu = false, bguDead = true, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.BGU_CPU, autoPrefersBgu = true, bguDead = false, hasBgu = false))
+        assertTrue(resolveVfRoute(VfEngineMode.BGU_CPU, legacyDead = true, bguDead = true, hasBgu = true))
+        assertFalse(resolveVfRoute(VfEngineMode.BGU_CPU, legacyDead = false, bguDead = false, hasBgu = false))
     }
 
     @Test fun `forced legacy modes never route BGU`() {
-        assertFalse(resolveVfRoute(VfEngineMode.GPU, autoPrefersBgu = true, bguDead = false, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.CPU, autoPrefersBgu = true, bguDead = false, hasBgu = true))
+        assertFalse(resolveVfRoute(VfEngineMode.GPU, legacyDead = true, bguDead = true, hasBgu = true))
+        assertFalse(resolveVfRoute(VfEngineMode.CPU, legacyDead = true, bguDead = true, hasBgu = true))
     }
 
-    @Test fun `AUTO prefers BGU only while alive preferred and present`() {
-        assertTrue(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = false, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = true, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = false, bguDead = false, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = false, hasBgu = false))
+    @Test fun `AUTO routes legacy first, BGU only when legacy dead or absent`() {
+        // Ladder: legacy GPU -> legacy CPU (inside legacy) -> BGU GPU ->
+        // BGU CPU (inside BGU). BGU engages only past a dead/absent legacy.
+        assertFalse(resolveVfRoute(VfEngineMode.AUTO, legacyDead = false, bguDead = false, hasBgu = true, hasLegacy = true))
+        assertTrue(resolveVfRoute(VfEngineMode.AUTO, legacyDead = true, bguDead = false, hasBgu = true, hasLegacy = true))
+        assertTrue(resolveVfRoute(VfEngineMode.AUTO, legacyDead = false, bguDead = false, hasBgu = true, hasLegacy = false))
+        // Both dead: back to legacy as the last-resort engine.
+        assertFalse(resolveVfRoute(VfEngineMode.AUTO, legacyDead = true, bguDead = true, hasBgu = true, hasLegacy = true))
+        assertFalse(resolveVfRoute(VfEngineMode.AUTO, legacyDead = true, bguDead = false, hasBgu = false, hasLegacy = true))
     }
 
-    @Test fun `BGU is the default way with legacy fallback`() {
-        // Default intent, pinned: AUTO (the unset-preference mode) routes to
-        // BGU while healthy, and any BGU failure degrades to legacy for the
-        // session (fresh sessions retry BGU). Forced modes bypass both.
+    @Test fun `legacy is the default way with BGU as last option`() {
         assertEquals(VfEngineMode.AUTO, VfEngineMode.fromPreference(null))
-        assertTrue(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = false, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.AUTO, autoPrefersBgu = true, bguDead = true, hasBgu = true))
-        assertFalse(resolveVfRoute(VfEngineMode.GPU, autoPrefersBgu = true, bguDead = false, hasBgu = true))
+        assertFalse(resolveVfRoute(VfEngineMode.AUTO, legacyDead = false, bguDead = false, hasBgu = true, hasLegacy = true))
+        assertTrue(resolveVfRoute(VfEngineMode.AUTO, legacyDead = true, bguDead = false, hasBgu = true, hasLegacy = true))
+        assertFalse(resolveVfRoute(VfEngineMode.GPU, legacyDead = false, bguDead = false, hasBgu = true, hasLegacy = true))
     }
 
     @Test fun `recording follows the routed viewfinder view`() {

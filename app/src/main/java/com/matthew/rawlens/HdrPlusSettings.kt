@@ -11,7 +11,8 @@ package com.matthew.rawlens
  * or per-frequency Wiener merge ("Higher quality") — with the reference
  * frame's black/white normalization. One merged CFA DNG out. Mutually
  * exclusive with RAW SR and burst fusion in the quick panel (all three
- * own the ZSL ring at shutter time).
+ * own the ZSL ring at shutter time) and with the HDR bracket tile (both
+ * merge one shutter press into one DNG: enabling one turns the other off).
  */
 data class HdrPlusSettings(
     val enabled: Boolean = false,

@@ -76,10 +76,14 @@ internal class LevelTracker(
     }
 
     private fun shouldDeliver(previous: VirtualHorizon.State, next: VirtualHorizon.State): Boolean {
-        if (previous.isLevel != next.isLevel || previous.isFlat != next.isFlat) return true
-        if (next.isFlat) return false
+        if (previous.isLevel != next.isLevel || previous.isRollLevel != next.isRollLevel ||
+            previous.isPitchLevel != next.isPitchLevel || previous.isFlat != next.isFlat
+        ) return true
+        // Pitch stays deliverable while flat: roll is noise there, but the
+        // bubble pinned at its track end is how the user tilts back to level.
         return kotlin.math.abs(next.tiltDegrees - previous.tiltDegrees) >= 0.05f ||
-            kotlin.math.abs(next.errorDegrees - previous.errorDegrees) >= 0.05f
+            kotlin.math.abs(next.errorDegrees - previous.errorDegrees) >= 0.05f ||
+            kotlin.math.abs(next.pitchDegrees - previous.pitchDegrees) >= 0.05f
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit

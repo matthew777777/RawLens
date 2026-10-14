@@ -20,6 +20,11 @@ class RawLensApp : Application() {
         } catch (_: Throwable) {
             // Never crash startup because crash logging is unavailable.
         }
+        try {
+            DirectLogBreadcrumb.reportPrevious(this)
+        } catch (_: Throwable) {
+            // Never crash startup because breadcrumb reporting is unavailable.
+        }
     }
 
     /**

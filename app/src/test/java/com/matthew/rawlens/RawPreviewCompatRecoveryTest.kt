@@ -3,6 +3,8 @@
 
 package com.matthew.rawlens
 
+import android.hardware.HardwareBuffer
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -102,5 +104,56 @@ class RawPreviewCompatRecoveryTest {
             failures = 2, deliveredImages = 0, compatMode = true,
             altRouteAvailable = true, comboIndex = 2, comboCount = 3
         ))
+    }
+
+    // Regression: on MT6878 the RAW reader trial with GPU-sampled usage
+    // configures fine and then delivers zero buffers. A stillborn trial
+    // must disarm once (rebuild without GPU usage) before the compat
+    // escalation spends the plan axis on a usage problem.
+    @Test
+    fun stillbornGpuTrialDisarmsAfterOneRequestRecovery() {
+        assertTrue(RawCameraController.shouldDisarmVfGpuReaderTrial(
+            failures = 1, deliveredImages = 0, trialArmed = true
+        ))
+    }
+
+    @Test
+    fun gpuTrialFirstStarvationStaysRequestLevel() {
+        // Same cheap prudence as the other stillborn rungs: one
+        // request-level retry before paying for a session rebuild.
+        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+            failures = 0, deliveredImages = 0, trialArmed = true
+        ))
+    }
+
+    @Test
+    fun gpuTrialFlowingStreamNeverDisarms() {
+        // Buffers arriving means the trial allocation works on this HAL:
+        // starvation is a viewfinder/rendering problem, not a usage problem.
+        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+            failures = 4, deliveredImages = 12, trialArmed = true
+        ))
+    }
+
+    @Test
+    fun gpuTrialDisarmFiresAtMostOnce() {
+        // Once disarmed the rung is spent: a stillborn disarmed session is
+        // the compat escalation's (then the ladder's), never a re-disarm.
+        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+            failures = 3, deliveredImages = 0, trialArmed = false
+        ))
+    }
+
+    @Test
+    fun gpuReaderProbeMatchesTrialUsagePlusCameraWrite() {
+        // The pre-flight must probe exactly what the trial reader requests
+        // (plus the HAL's producer bit): a looser superset risks false
+        // refusals that wrongly disarm a working trial.
+        assertEquals(
+            HardwareBuffer.USAGE_CPU_READ_OFTEN or
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+                RawCameraController.GRALLOC_USAGE_HW_CAMERA_WRITE,
+            RawCameraController.gpuReaderProbeUsage()
+        )
     }
 }

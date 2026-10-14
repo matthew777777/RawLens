@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Source-only builds (F-Droid): -DRAWLENS_PREBUILT_NATIVE=OFF ignores the
+# vendored ncnn/Halide archives even when present. ncnnMl falls back to the
+# emulator-tested JNI stub and the Halide .so files are not built; their
+# Kotlin callers already treat a missing library as unavailable.
+option(RAWLENS_PREBUILT_NATIVE "Link vendored prebuilt ncnn/Halide archives" ON)
+
 # Reference kernel: checksum-verified upstream body, scalar arithmetic on all ABIs.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(AMAZE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
@@ -99,7 +105,7 @@ target_link_options(dngCreator PRIVATE "-Wl,-z,max-page-size=16384")
 set(PHOTON_FLOW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flownet")
 set(PHOTON_NCNN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/${ANDROID_ABI}")
 set(PHOTON_NCNN_LIB "${PHOTON_NCNN_DIR}/lib")
-if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a")
+if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
     set(FLOW_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/flownet-generated")
     file(MAKE_DIRECTORY "${FLOW_GEN_DIR}")
     find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
@@ -139,8 +145,9 @@ if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a")
     set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
 else()
-    # Emulator ABIs do not have PhotonCamera's prebuilt ncnn archive. Keep the app loadable;
-    # HdrFlowNetAligner will receive null and use identity alignment for those builds.
+    # Emulator ABIs do not have PhotonCamera's prebuilt ncnn archive, and
+    # source-only builds ignore it. Keep the app loadable; HdrFlowNetAligner
+    # will receive null and use identity alignment for those builds.
     add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/flownet_stub.cpp")
     target_link_libraries(ncnnMl PRIVATE log)
 endif()
@@ -258,6 +265,9 @@ endif()
 
 # BGU viewfinder spike: JNI bridge to Halide AOT filters. The .a archives are
 # prebuilt per ABI by tools/halide/build_aot.sh and checked in (ncnn precedent).
+# Source-only builds skip this library; BguSpike/BguFit/BguLook report
+# unavailable and the viewfinder fails over to the legacy engine.
+if(RAWLENS_PREBUILT_NATIVE)
 set(BGU_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/bgu_spike_downsample.a")
 if(NOT EXISTS "${BGU_FILTER_LIB}")
     message(FATAL_ERROR "Halide spike filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
@@ -280,10 +290,14 @@ add_library(rawLensBgu SHARED halide_bgu_jni.cpp halide_bgu_fit_jni.cpp halide_b
 target_include_directories(rawLensBgu PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rawLensBgu PRIVATE halide_bgu_spike halide_bgu_fit halide_bgu_look log)
 target_link_options(rawLensBgu PRIVATE "-Wl,-z,max-page-size=16384")
+else()
+message(STATUS "rawlens: source-only build, rawLensBgu skipped")
+endif()
 
 # HDR+ motion meter: JNI bridge to the Halide AOT meter filter (same
 # prebuilt-archive discipline as BGU). Zero-copy direct buffers; the
 # Kotlin meter stays as the fallback when this library is absent.
+if(RAWLENS_PREBUILT_NATIVE)
 set(METER_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/hdrplus_meter.a")
 if(NOT EXISTS "${METER_FILTER_LIB}")
     message(FATAL_ERROR "Halide meter filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
@@ -294,10 +308,14 @@ add_library(rawLensHdrMeter SHARED halide_meter_jni.cpp)
 target_include_directories(rawLensHdrMeter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rawLensHdrMeter PRIVATE halide_hdrplus_meter log)
 target_link_options(rawLensHdrMeter PRIVATE "-Wl,-z,max-page-size=16384")
+else()
+message(STATUS "rawlens: source-only build, rawLensHdrMeter skipped")
+endif()
 
 # Fused scope+meter sampler: JNI bridge to the Halide AOT scope_meter
 # filter (same prebuilt-archive discipline). Zero-copy direct buffers;
 # the Kotlin samplers stay as the fallback when this library is absent.
+if(RAWLENS_PREBUILT_NATIVE)
 set(SCOPE_FILTER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/halide/filters/${ANDROID_ABI}/scope_meter.a")
 if(NOT EXISTS "${SCOPE_FILTER_LIB}")
     message(FATAL_ERROR "Halide scope filter missing for ${ANDROID_ABI}; run tools/halide/build_aot.sh")
@@ -308,6 +326,9 @@ add_library(rawLensScopeMeter SHARED halide_scope_jni.cpp)
 target_include_directories(rawLensScopeMeter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(rawLensScopeMeter PRIVATE halide_scope_meter log)
 target_link_options(rawLensScopeMeter PRIVATE "-Wl,-z,max-page-size=16384")
+else()
+message(STATUS "rawlens: source-only build, rawLensScopeMeter skipped")
+endif()
 
 # Zero-copy viewfinder: EGL import bridge, the Vulkan superpixel compute
 # module (import HAL RAW -> RGBA8 superpixel export buffer), and the NEON CPU

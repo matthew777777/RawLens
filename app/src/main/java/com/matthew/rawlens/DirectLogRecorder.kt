@@ -404,6 +404,7 @@ class DirectLogRecorder(
     private var startRealtimeMs: Long = 0L
 
     fun start(output: File) {
+        DirectLogBreadcrumb.mark(appContext, "start")
         MemoryLeakDiagnostics.sampleAsync("directlog-start")
         check(device == null) { "Already started" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
@@ -653,6 +654,7 @@ class DirectLogRecorder(
             throw e
         }
         mc.start()
+        DirectLogBreadcrumb.mark(appContext, "codec-started")
         true10Bit = true
         // App-owned P010 staging (GPU-written, CPU-readable): 3 ping-pong
         // buffers at encode res. Strides come from the allocator and are
@@ -745,6 +747,7 @@ class DirectLogRecorder(
                     }
                 }
             }.build()
+            DirectLogBreadcrumb.mark(appContext, "session-repeating")
             session!!.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
@@ -1016,7 +1019,9 @@ class DirectLogRecorder(
         return stabGyroSamples
     }
 
-    fun stop(): Stats {        accepting = false
+    fun stop(): Stats {
+        DirectLogBreadcrumb.mark(appContext, "stopping")
+        accepting = false
         try { session?.stopRepeating() } catch (_: Exception) {}
         try { session?.abortCaptures() } catch (_: Exception) {}
         // Audio flushes first so its tail lands before the video EOS.
@@ -1057,6 +1062,7 @@ class DirectLogRecorder(
             0L
         }
         teardown()
+        DirectLogBreadcrumb.clear(appContext)
         // stop() runs on the DirectLog stop thread, so a synchronous PSS sample is safe here.
         MemoryLeakDiagnostics.sample(
             "directlog-stop",
@@ -1395,7 +1401,9 @@ class DirectLogRecorder(
         s.fd = fd
         s.ptsUs = cfrUs
         frameCounter++
-        graded.incrementAndGet()
+        if (graded.incrementAndGet() == 1) {
+            DirectLogBreadcrumb.mark(appContext, "first-frame")
+        }
         MemoryLeakDiagnostics.directLogFrame()
         if (shadeD != null) shadedCount.incrementAndGet()
         // Monitor preview for this graded frame (best-effort; never

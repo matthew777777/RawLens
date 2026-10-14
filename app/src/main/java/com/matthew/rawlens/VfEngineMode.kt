@@ -3,11 +3,12 @@ package com.matthew.rawlens
 
 /**
  * RAW viewfinder engine override, switched by tapping the RAW VF debug
- * overlay. AUTO (default) routes to the preferred engine with automatic
- * fallback; BGU/GPU/CPU force one engine for A/B comparison, and BGU_CPU
- * forces the BGU engine onto its NEON guide path (same engine, CPU guide +
- * GL slice — the manual form of the automatic CPU fallback). Forced modes
- * never fall back (a dead forced engine shows as starved).
+ * overlay. AUTO (default) routes down the priority ladder — legacy GPU,
+ * then legacy CPU (NEON), then BGU GPU, then BGU CPU — with automatic
+ * fallback; GPU/CPU/BGU/BGU_CPU force one rung for A/B comparison, and
+ * BGU_CPU forces the BGU engine onto its NEON guide path (same engine,
+ * CPU guide + GL slice). Forced modes never fall back (a dead forced
+ * engine shows as starved).
  */
 enum class VfEngineMode {
     AUTO,
@@ -16,13 +17,13 @@ enum class VfEngineMode {
     GPU,
     CPU;
 
-    /** Cycle order for overlay taps: AUTO -> BGU -> BGU_CPU -> GPU -> CPU -> AUTO. */
+    /** Cycle order for overlay taps: AUTO -> GPU -> CPU -> BGU -> BGU_CPU -> AUTO. */
     fun next(): VfEngineMode = when (this) {
-        AUTO -> BGU
-        BGU -> BGU_CPU
-        BGU_CPU -> GPU
+        AUTO -> GPU
         GPU -> CPU
-        CPU -> AUTO
+        CPU -> BGU
+        BGU -> BGU_CPU
+        BGU_CPU -> AUTO
     }
 
     /** Short overlay label: actual path + override stay distinguishable. */
@@ -44,14 +45,24 @@ enum class VfEngineMode {
 /**
  * Pure VF route decision: true routes offers + visibility to the BGU engine,
  * false to legacy. Forced modes never fall back (a dead forced engine shows
- * as starved); AUTO prefers BGU only while it is alive and preferred.
+ * as starved). AUTO walks the ladder legacy-first: legacy while it is
+ * present and alive, BGU only once legacy is dead or absent, legacy again
+ * when BGU is also dead (its internal CPU rung is the last resort).
  */
 internal fun resolveVfRoute(
-    mode: VfEngineMode, autoPrefersBgu: Boolean, bguDead: Boolean, hasBgu: Boolean
+    mode: VfEngineMode,
+    legacyDead: Boolean = false,
+    bguDead: Boolean = false,
+    hasBgu: Boolean = true,
+    hasLegacy: Boolean = true
 ): Boolean = when (mode) {
     VfEngineMode.BGU, VfEngineMode.BGU_CPU -> hasBgu
     VfEngineMode.GPU, VfEngineMode.CPU -> false
-    VfEngineMode.AUTO -> !bguDead && autoPrefersBgu && hasBgu
+    VfEngineMode.AUTO -> when {
+        hasLegacy && !legacyDead -> false
+        hasBgu && !bguDead -> true
+        else -> false
+    }
 }
 
 /**
