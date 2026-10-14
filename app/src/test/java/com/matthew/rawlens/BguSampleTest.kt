@@ -185,6 +185,22 @@ class BguSampleTest {
         assertEquals(1023f, out.white, 0f)
     }
 
+    @Test fun sharpnessFlatIsZeroCheckerboardIsHigh() {
+        val w = 8
+        val h = 8
+        val flat = ByteArray(w * h * 4) { 100 }
+        assertEquals(0f, BguSample.guideSharpness(flat, w, h), 0.0001f)
+        // Gr plane (plane 1) as a 0/255 checkerboard: every neighbour
+        // gradient is 255, so the score saturates at 1.
+        val check = ByteArray(w * h * 4)
+        for (j in 0 until h) for (i in 0 until w) {
+            check[w * h + j * w + i] = if ((i + j) % 2 == 0) 0 else -1
+        }
+        assertEquals(1f, BguSample.guideSharpness(check, w, h), 0.0001f)
+        // Degenerate sizes score 0 instead of dividing by zero.
+        assertEquals(0f, BguSample.guideSharpness(ByteArray(4), 1, 1), 0.0001f)
+    }
+
     @Test fun rejectsOutOfBounds() {
         val out = ByteArray(2 * 2 * 4)
         assertFalse(

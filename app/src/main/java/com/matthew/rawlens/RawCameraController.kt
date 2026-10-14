@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
+import android.hardware.HardwareBuffer
 import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.hardware.camera2.params.MeteringRectangle
@@ -550,12 +551,17 @@ class RawCameraController(
     /** Last AF state logged while a tap scan/lock is in flight (transition-only trace). */
     private var lastLoggedTouchAfState: Int? = null
     private var lastLoggedTouchAfStateValid = false
+    /** Last idle continuous-AF state/mode logged (transition-only trace). */
+    private var lastLoggedIdleAfState: Int? = null
+    private var lastLoggedIdleAfMode: Int? = null
     /** Last accepted tap: accidental-tap gate (time + same-spot mid-scan). */
     private var lastTouchTapElapsedMs = 0L
     private var lastTouchTapX = 0f
     private var lastTouchTapY = 0f
     /** True once FOCUSED_LOCKED is held (badge-worthy); false while scanning or on failure. */
     private var touchFocusLockedSharp = false
+    /** Set on tap-scan failure: the release drops the AF region (full-frame). */
+    private var dropAfRegionOnRelease = false
     /** Long-press locks ignore the auto-release timer until double-tap. */
     private var focusLockIndefinite = false
     /** Long-press also freezes AE (CONTROL_AE_LOCK) until the same reset. */
@@ -676,7 +682,9 @@ class RawCameraController(
         rawPreviewFailures = 0
         rawViewfinder?.invalidateSession()
         bguViewfinder?.invalidateSession()
-        // A fresh session retries BGU (it may have failed only transiently).
+        // A fresh session retries the full ladder from legacy (engines may
+        // have failed only transiently).
+        legacyDead = false
         bguDead = false
         notifyVfRoute()
         // A fresh session deserves a fresh verdict on the repeating stream.
@@ -722,12 +730,21 @@ class RawCameraController(
             Log.w(LOG_TAG, "openCamera rejected $openCameraId (selected $id)", failure)
             if (!running) return
             if (advancePastFailedOpen(openCameraId)) return
+            // An ID that opened before reporting unknown-device is a camera
+            // service hiccup, not a bad lens: never denylist it, and stop the
+            // cascade (the next lens would fail the same way). Retry instead.
+            if (!shouldDenylistOnOpenRejected(openCameraId, openedOnceOpenIds) &&
+                scheduleOpenRejectionRetry()
+            ) {
+                Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
+                return
+            }
             unopenableOpenIds += openCameraId
             unopenableOpenIds += sessionFailedOpenIds
             val fallback = nextLensAfterOpenRejected(candidates, unopenableOpenIds, ::resolveOpenCameraId)
             if (fallback == null) {
                 Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=$unopenableOpenIds)")
-                onState("CAMERA UNAVAILABLE")
+                if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
                 return
             }
             Log.w(LOG_TAG, "Lens $id unopenable via $openCameraId; falling back to $fallback")
@@ -756,6 +773,8 @@ class RawCameraController(
                 opening = false
                 camera = device
                 openRetryCount = 0
+                openRejectionRetryCount = 0
+                openedOnceOpenIds += device.id
             }
             Log.i(LOG_TAG, "Camera device opened: ${device.id}")
             createSession(device, generation)
@@ -833,6 +852,16 @@ class RawCameraController(
             onState("RAW UNAVAILABLE")
             return
         }
+        // Packed-RAW probe (field diagnostics): a packed RAW10/RAW12
+        // re-plan would be the rung below the CPU-plane upload tier, but no
+        // unpack path exists (every RAW consumer assumes 16-bit samples),
+        // so sessions stay RAW_SENSOR regardless of availability.
+        val packedRawSizes =
+            (map.getOutputSizes(android.graphics.ImageFormat.RAW10)?.size ?: 0) +
+                (map.getOutputSizes(android.graphics.ImageFormat.RAW12)?.size ?: 0)
+        if (packedRawSizes > 0) {
+            Log.i(LOG_TAG, "Packed RAW available ($packedRawSizes sizes); sessions stay RAW_SENSOR (no unpack path)")
+        }
         // The activity is deliberately portrait-locked. Match Photon's preview geometry: camera
         // stream sizes stay in their native landscape order while the view uses the swapped
         // dimensions (3:4 for a 4:3 stream), irrespective of the phone's physical orientation.
@@ -891,18 +920,38 @@ class RawCameraController(
         // the gralloc queue into overflow + Mali unlock errors. Degraded combos
         // carry a burst-minimum reader instead and run without a ZSL ring.
         val readerMaxImages = combo.readerMaxImages
-        // NOTE (Step 2 finding): adding USAGE_GPU_SAMPLED_IMAGE here starves this
-        // reader completely on the test HAL (Xiaomi 25080RABDG / MT6878) — session
-        // configures but no RAW images are ever delivered, killing ZSL + VF + RAW
-        // histogram. Zero-copy EGL import of these buffers (4-arg default usage) fails
-        // with EGL_BAD_ALLOC, so the GPU VF path stays fenced behind runtime probing
-        // with the CPU sampler as the healthy default. See VfGpuImport.
-        val reader = ImageReader.newInstance(
-            rawSize.width,
-            rawSize.height,
-            android.graphics.ImageFormat.RAW_SENSOR,
-            readerMaxImages
-        ).also {
+        // GPU-sampled reader trial: CPU_READ keeps every plane consumer
+        // (ZSL, histogram, peaking, NEON, upload tiers) working while
+        // GPU_SAMPLED_IMAGE lets gralloc hand the sampled-image tier a
+        // GPU-shareable allocation (drivers that need one reject CPU-only
+        // buffers). Known-starving HALs (Xiaomi 25080RABDG / MT6878:
+        // session configures, zero images arrive) disarm via the stillborn
+        // ladder and persist the verdict; EGL import of CPU-only buffers
+        // stays fenced behind runtime probing. See VfGpuImport.
+        if (vfGpuReaderTrialArmed && !vfGpuReaderPreflightOk(rawSize.width, rawSize.height)) {
+            // Allocator refuses the trial usage up front (MT6878-class
+            // grallocs): skip the stillborn session entirely and go
+            // straight CPU-only. Not persisted: the probe is free and
+            // size-adaptive, unlike an observed starvation verdict.
+            Log.w(LOG_TAG, "GPU-reader pre-flight refused ${rawSize.width}x${rawSize.height}; CPU-only reader")
+            vfGpuReaderTrialArmed = false
+        }
+        val reader = if (vfGpuReaderTrialArmed) {
+            ImageReader.newInstance(
+                rawSize.width,
+                rawSize.height,
+                android.graphics.ImageFormat.RAW_SENSOR,
+                readerMaxImages,
+                HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
+            )
+        } else {
+            ImageReader.newInstance(
+                rawSize.width,
+                rawSize.height,
+                android.graphics.ImageFormat.RAW_SENSOR,
+                readerMaxImages
+            )
+        }.also {
             rawReaderMaxImages = readerMaxImages
             it.setOnImageAvailableListener({ reader ->
                 if (!isCurrent(generation)) return@setOnImageAvailableListener
@@ -923,6 +972,14 @@ class RawCameraController(
                         lastRawImageReceivedMs = SystemClock.elapsedRealtime()
                         if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
                             Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
+                        }
+                        if (vfGpuTrialConvicted) {
+                            // Control verdict: the trial delivered zero, the
+                            // disarmed session delivers — GPU usage starves
+                            // this HAL. Persist so cold starts skip the trial.
+                            vfGpuTrialConvicted = false
+                            persistVfGpuReaderVerdict()
+                            Log.w(LOG_TAG, "GPU-reader trial convicted; CPU-only reader persisted")
                         }
                         RawImageOwnership.adopt(image, reader) {
                             cameraHandler.post { closeRetiredRawReaders() }
@@ -1142,7 +1199,7 @@ class RawCameraController(
             LOG_TAG,
             "RAW stream combo raw=${rawSize.width}x${rawSize.height} preview=$previewLabel " +
                 "maxImages=$rawReaderMaxImages minFrameNs=${minFrameNs ?: "?"} stallNs=${stallNs ?: "?"} " +
-                "compat=$rawStreamCompatMode combo=$comboLabel attempt=${comboIndex + 1}/$comboCount"
+                "compat=$rawStreamCompatMode gpuTrial=$vfGpuReaderTrialArmed combo=$comboLabel attempt=${comboIndex + 1}/$comboCount"
         )
     }
 
@@ -1308,6 +1365,7 @@ class RawCameraController(
             }
             Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             logAfCapabilities()
+            nudgeIdleAutofocusIfNeeded()
             onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -1438,6 +1496,19 @@ class RawCameraController(
      */
     private var rawStreamCompatMode = initialRawStreamCompatMode
     /**
+     * GPU-sampled reader trial: armed unless a persisted verdict convicted
+     * GPU usage on this device. The trial reader allocates CPU_READ plus
+     * GPU_SAMPLED_IMAGE, so gralloc hands the sampled-image tier a
+     * GPU-shareable allocation (drivers that need one reject CPU-only
+     * buffers); every plane consumer (ZSL, histogram, peaking, NEON,
+     * upload tiers) keeps working through CPU_READ. A stillborn trial
+     * disarms via [recoverRawPreview] and rebuilds with the default
+     * CPU-only reader. Camera-thread only.
+     */
+    private var vfGpuReaderTrialArmed = !vfGpuReaderStarvedPersisted()
+    /** A disarmed trial awaits its control verdict (first delivered image persists it). */
+    private var vfGpuTrialConvicted = false
+    /**
      * Session fallback ladder: HALs that reject the full RAW+preview combo
      * (Xiaomi 14 Ultra rejects it async on every route) retry with degraded
      * combos and, for vendor composites, a direct-physical route instead of
@@ -1456,16 +1527,43 @@ class RawCameraController(
      * stays excluded until the user re-runs lens discovery ([reloadLenses]).
      */
     private val unopenableOpenIds = mutableSetOf<String>()
+    /** Open IDs that opened successfully at least once (controller lifetime). */
+    private val openedOnceOpenIds = mutableSetOf<String>()
     private var sessionPrimaryRoute: CameraRoute? = null
     private var sessionAltRoute: CameraRoute? = null
     /** Consumed reopen attempts for transient route resolution (see [retryOpenForTransientRoute]). */
     private var openRetryCount = 0
+    /** Consumed reopen attempts after open rejections (see [scheduleOpenRejectionRetry]). */
+    private var openRejectionRetryCount = 0
+    /** Pending idle-AF nudge on AUTO-only lenses (see [nudgeIdleAutofocusIfNeeded]). */
+    private var pendingIdleAfNudge: Runnable? = null
 
     private fun resetSessionLadder() {
         sessionComboIndex = 0
         sessionRouteAltActive = false
         sessionFailedOpenIds.clear()
         openRetryCount = 0
+        openRejectionRetryCount = 0
+    }
+
+    /**
+     * Bounded reopen after an open rejection that smells transient: an ID
+     * that opened moments ago reporting unknown-device means the camera
+     * service hiccuped (in the field log every lens failed within 2 ms),
+     * not that each lens went bad. Mirrors [retryOpenForTransientRoute]'s
+     * generation guard with a longer budget (~30 s) so a briefly wedged
+     * service recovers without user intervention.
+     */
+    private fun scheduleOpenRejectionRetry(): Boolean {
+        if (openRejectionRetryCount >= OPEN_REJECTION_RETRY_MAX) return false
+        openRejectionRetryCount++
+        Log.w(LOG_TAG, "Open rejected; retry $openRejectionRetryCount/$OPEN_REJECTION_RETRY_MAX")
+        onState("OPENING RAW")
+        val retryGeneration = lifecycleGeneration
+        cameraHandler.postDelayed({
+            if (isCurrent(retryGeneration) && camera == null && !opening) open()
+        }, OPEN_REJECTION_RETRY_DELAY_MS)
+        return true
     }
 
     /**
@@ -1488,8 +1586,56 @@ class RawCameraController(
         return true
     }
 
+    /** Persisted GPU-usage verdict (false until a trial starves this device). */
+    private fun vfGpuReaderStarvedPersisted(): Boolean = try {
+        context.getSharedPreferences(VF_GPU_READER_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(VF_GPU_READER_STARVED_KEY, false)
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * Allocator pre-flight for the GPU-reader trial: asks gralloc whether
+     * the trial usage can back this RAW size at all. False goes straight
+     * CPU-only without spending a stillborn session + rebuild to learn it.
+     * Any framework failure refuses (safe direction: CPU-only reader).
+     */
+    private fun vfGpuReaderPreflightOk(width: Int, height: Int): Boolean = try {
+        HardwareBuffer.isSupported(width, height, HAL_PIXEL_FORMAT_RAW16, 1, gpuReaderProbeUsage())
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Persist the GPU-usage starvation verdict (device-local, never backed up). */
+    private fun persistVfGpuReaderVerdict() {
+        try {
+            context.getSharedPreferences(VF_GPU_READER_PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(VF_GPU_READER_STARVED_KEY, true).apply()
+        } catch (_: Exception) {
+            // Best effort: without persistence the trial simply re-arms next launch.
+        }
+    }
+
     private fun recoverRawPreview(reason: String) {
         if (!running || captureInProgress.get()) return
+        // A stillborn GPU-usage trial resolves first: the usage axis, not
+        // the plan axis, starved this session. Disarm and rebuild with the
+        // default reader; the first delivered image persists the verdict.
+        if (shouldDisarmVfGpuReaderTrial(rawPreviewFailures, rawStreamImages, vfGpuReaderTrialArmed)) {
+            vfGpuReaderTrialArmed = false
+            vfGpuTrialConvicted = true
+            // The usage axis changed: retry the full combo under it before
+            // degrading sizes again (same as the compat escalation below).
+            sessionComboIndex = 0
+            Log.w(
+                LOG_TAG,
+                "RAW preview stillborn under GPU-reader trial (images=0 results=$rawStreamResults failures=$rawStreamFailures " +
+                    "plan=$lastSessionPlanLabel); rebuilding without GPU usage"
+            )
+            onState("RECOVERING PREVIEW")
+            restartCameraForConfigurationChange()
+            return
+        }
         // A repeating RAW stream that delivered zero buffers cannot recover at
         // the request level: the stall is the session/stream configuration
         // itself (Samsung: request retries 1..4 change nothing while zero RAW
@@ -1551,8 +1697,17 @@ class RawCameraController(
     init {
         rawViewfinder?.onStarvation = {
             cameraHandler.post {
-                // A blocked renderer is not a dead camera stream. Restarting a healthy
-                // RAW session during SR adds a visible cut and discards its ZSL ring.
+                // Legacy is the first AUTO rung: its GPU->NEON ladder is
+                // exhausted when it starves, so BGU takes over for the
+                // session. A blocked renderer is not a dead camera stream:
+                // the camera recovery below still runs when the stream
+                // itself is stale (restarting during SR would add a cut).
+                if (vfGlobalMode == VfEngineMode.AUTO && !legacyDead) {
+                    legacyDead = true
+                    Log.w(LOG_TAG, "Legacy viewfinder failed; falling back to BGU")
+                    notifyVfRoute()
+                    publishRawVfDebug(force = true)
+                }
                 if (RawSrGpuScheduling.shouldRecoverCamera(SystemClock.elapsedRealtime(), lastRawImageReceivedMs)) {
                     recoverRawPreview("No fresh RAW image or display frame")
                 }
@@ -1560,8 +1715,8 @@ class RawCameraController(
         }
         bguViewfinder?.onStarvation = {
             cameraHandler.post {
-                // The BGU engine has no internal fallback: any persistent
-                // failure degrades to the legacy engine for this session.
+                // BGU is the last AUTO rung: any persistent failure marks
+                // it dead and routing returns to legacy (last resort).
                 if (!bguDead) {
                     bguDead = true
                     Log.w(LOG_TAG, "BGU viewfinder failed; falling back to legacy")
@@ -1575,11 +1730,12 @@ class RawCameraController(
     // ------------------------------------------------------- VF engine route
     //
     // The controller owns the global engine mode and routes every viewfinder
-    // call to the active engine. AUTO prefers BGU (the default way) with
-    // automatic per-session fallback to legacy on failure; the overlay tap
-    // cycles AUTO -> BGU -> BGU_CPU -> GPU -> CPU for manual override.
+    // call to the active engine. AUTO walks the ladder legacy GPU, legacy
+    // CPU (NEON), BGU GPU, BGU CPU; the overlay tap cycles AUTO -> GPU ->
+    // CPU -> BGU -> BGU_CPU for manual override.
 
     private var vfGlobalMode: VfEngineMode = VfEngineMode.AUTO
+    private var legacyDead = false
     private var bguDead = false
     private var lastVfRouteIsBgu = false
 
@@ -1587,14 +1743,21 @@ class RawCameraController(
     var onVfRouteChanged: ((Boolean) -> Unit)? = null
 
     private fun activeVf(): VfEngine? =
-        if (resolveVfRoute(vfGlobalMode, AUTO_PREFERS_BGU, bguDead, bguViewfinder != null)) {
+        if (resolveVfRoute(
+                vfGlobalMode, legacyDead, bguDead,
+                bguViewfinder != null, rawViewfinder != null
+            )
+        ) {
             bguViewfinder
         } else {
             rawViewfinder
         }
 
     private fun notifyVfRoute() {
-        val isBgu = resolveVfRoute(vfGlobalMode, AUTO_PREFERS_BGU, bguDead, bguViewfinder != null)
+        val isBgu = resolveVfRoute(
+            vfGlobalMode, legacyDead, bguDead,
+            bguViewfinder != null, rawViewfinder != null
+        )
         // The legacy engine keeps its internal tier override; map the global
         // mode onto it (BGU/AUTO both mean "legacy automatic").
         rawViewfinder?.setEngineMode(
@@ -3976,9 +4139,11 @@ class RawCameraController(
         }
 
         val wasTouchActive = openCameraTouchFocusActive
+        dropAfRegionOnRelease = false
         removeOpenCameraContinuousFocusReset()
         removeOpenCameraTouchFocusTimeout()
         removePendingTouchFocusStart()
+        removeIdleAfNudge()
         // A CANCEL is only needed to interrupt a previous touch scan/lock.
         // First taps skip it entirely: one less capture + one less repeating
         // rebuild on the critical path.
@@ -4110,6 +4275,50 @@ class RawCameraController(
     private fun removePendingTouchFocusStart() {
         pendingTouchFocusStart?.let(cameraHandler::removeCallbacks)
         pendingTouchFocusStart = null
+    }
+
+    /**
+     * AUTO-only lenses (no continuous mode advertising): idle parks the focus
+     * at the last position forever, so one full-frame scan stands in for
+     * continuous AF at session start and after every touch release. The result
+     * is ignored (the touch handler is gated on touch state); the lens moves
+     * and holds. Never fires on continuous-capable lenses.
+     */
+    private fun nudgeIdleAutofocusIfNeeded() {
+        val modes = characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        if (!AutoFocusPolicy.needsIdleScanNudge(modes)) return
+        removeIdleAfNudge()
+        pendingIdleAfNudge = Runnable {
+            pendingIdleAfNudge = null
+            if (openCameraTouchFocusActive || selectedFocusDistanceDiopters != null) return@Runnable
+            if (captureInProgress.get() || cameraCaptureSequenceActive) return@Runnable
+            sendIdleAfStart()
+        }.also { cameraHandler.postDelayed(it, IDLE_AF_NUDGE_DELAY_MS) }
+    }
+
+    private fun sendIdleAfStart() {
+        val device = camera ?: return
+        val currentSession = session ?: return
+        val surface = singleShotTarget() ?: return
+        try {
+            val start = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                applyCameraControls(this)
+                if (dynamicExposureSettings.enabled) {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                }
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+            }
+            currentSession.capture(start.build(), debugCaptureCallback, cameraHandler)
+            Log.i(LOG_TAG, "Idle AF scan (AUTO-only lens)")
+        } catch (failure: CameraAccessException) {
+            Log.w(LOG_TAG, "Idle AF scan failed: ${cameraAccessReason(failure)}")
+        }
+    }
+
+    private fun removeIdleAfNudge() {
+        pendingIdleAfNudge?.let(cameraHandler::removeCallbacks)
+        pendingIdleAfNudge = null
     }
 
     fun setAePoint(viewX: Float, viewY: Float) {
@@ -5993,6 +6202,16 @@ class RawCameraController(
             CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
             CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
             CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
+                if (!AutoFocusPolicy.verdictReady(
+                        touchFocusStartSent, touchFocusScanSeen,
+                        SystemClock.elapsedRealtime() - touchFocusStartElapsedMs
+                    )
+                ) {
+                    // Stale latch: the previous lock is still reported before
+                    // the new scan starts. Stay in FOCUSING; the persisting
+                    // lock completes on a later frame past the floor.
+                    return
+                }
                 openCameraTouchFocusCompleted = true
                 removeOpenCameraTouchFocusTimeout()
                 removePendingTouchFocusStart()
@@ -6039,6 +6258,8 @@ class RawCameraController(
      */
     private fun upgradeLateTouchFocusLock() {
         touchFocusLockedSharp = true
+        // The region did lock after all: keep it for the continuous tail.
+        dropAfRegionOnRelease = false
         removeOpenCameraContinuousFocusReset()
         if (focusLockIndefinite) {
             focusLockDeadlineMs = 0L
@@ -6084,6 +6305,8 @@ class RawCameraController(
             return
         }
         focusLockDeadlineMs = SystemClock.elapsedRealtime() + TOUCH_FOCUS_FAILURE_HOLD_MS
+        // The point failed to lock: don't let continuous inherit the bias.
+        dropAfRegionOnRelease = true
         scheduleOpenCameraContinuousFocusReset(TOUCH_FOCUS_FAILURE_HOLD_MS)
         updateRepeatingRequest(preserveRawZslBuffer = true)
     }
@@ -6128,6 +6351,13 @@ class RawCameraController(
         // Clear before the CANCEL + repeating rebuild below so both carry
         // AE_LOCK=false and the HAL actually releases a held exposure lock.
         aeLockIndefinite = false
+        if (dropAfRegionOnRelease) {
+            // The tap point just failed to lock (corner/sky): resume
+            // full-frame continuous instead of biasing it there forever.
+            dropAfRegionOnRelease = false
+            afRegion = null
+            Log.i(LOG_TAG, "Failed tap region dropped; full-frame continuous")
+        }
         val device = camera
         val currentSession = session
         val surface = singleShotTarget()
@@ -6159,6 +6389,7 @@ class RawCameraController(
         onState("CONTINUOUS AF")
         Log.i(LOG_TAG, "AF back to continuous")
         publishPeakingActiveIfChanged()
+        nudgeIdleAutofocusIfNeeded()
     }
 
     private fun clipPercent(fraction: Float): String =
@@ -6177,6 +6408,23 @@ class RawCameraController(
         val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
         val afState = result.get(CaptureResult.CONTROL_AF_STATE)
         val afTrigger = request.get(CaptureRequest.CONTROL_AF_TRIGGER)
+        // Idle continuous-AF trace (transitions only): without this, a
+        // "blurry VF" report with no taps is undecidable — the tap trace
+        // covers scans, but idle PASSIVE_* states were previously invisible.
+        if (!openCameraTouchFocusActive &&
+            (afState != lastLoggedIdleAfState || afMode != lastLoggedIdleAfMode)
+        ) {
+            lastLoggedIdleAfState = afState
+            lastLoggedIdleAfMode = afMode
+            val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            Log.i(
+                LOG_TAG,
+                "Idle AF ${afStateName(afState)} mode=${afModeName(afMode)}" +
+                    (focusDistance?.let {
+                        " fd=${String.format(java.util.Locale.US, "%.2f", it)}D"
+                    } ?: "")
+            )
+        }
         val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
         val aeTrigger = request.get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER)
@@ -6292,6 +6540,7 @@ class RawCameraController(
         CaptureResult.CONTROL_AF_MODE_OFF -> "OFF"
         CaptureResult.CONTROL_AF_MODE_AUTO -> "AUTO"
         CaptureResult.CONTROL_AF_MODE_MACRO -> "MACRO"
+        CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO -> "CONT_VIDEO"
         CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE -> "CONT_PICTURE"
         CaptureResult.CONTROL_AF_MODE_EDOF -> "EDOF"
         else -> "UNKNOWN($value)"
@@ -7552,6 +7801,11 @@ class RawCameraController(
             cameraHandler.post { setVfTargetLongEdge(validated) }
             return
         }
+        if (validated != vfTargetLongEdge) {
+            // Blur diagnosis: who/when the VF resolution moved (user button,
+            // persisted pref at startup, or any future governor).
+            Log.i(LOG_TAG, "VF target $vfTargetLongEdge -> ${validated}px")
+        }
         vfTargetLongEdge = validated
         rawViewfinder?.setTargetLongEdge(validated)
         bguViewfinder?.setTargetLongEdge(validated)
@@ -7568,7 +7822,7 @@ class RawCameraController(
         cameraHandler.post { publishRawVfDebug(force = true) }
     }
 
-    /** Overlay-tap cycle AUTO -> BGU -> BGU_CPU -> GPU -> CPU; returns the new mode for persistence. */
+    /** Overlay-tap cycle AUTO -> GPU -> CPU -> BGU -> BGU_CPU; returns the new mode for persistence. */
     fun cycleVfEngineMode(): VfEngineMode {
         vfGlobalMode = vfGlobalMode.next()
         notifyVfRoute()
@@ -7802,6 +8056,7 @@ class RawCameraController(
             lifecycleGeneration++
             openCameraTouchFocusActive = false
             openCameraTouchFocusCompleted = false
+            dropAfRegionOnRelease = false
             touchFocusStartSent = false
             touchFocusScanSeen = false
             lastLoggedTouchAfStateValid = false
@@ -7814,6 +8069,7 @@ class RawCameraController(
             removeOpenCameraTouchFocusTimeout()
             removeOpenCameraContinuousFocusReset()
             removePendingTouchFocusStart()
+            removeIdleAfNudge()
             cancelRawZslWatchdog()
             cancelProgramRampTick()
             motionTracker.stop()
@@ -8161,14 +8417,6 @@ class RawCameraController(
     )
 
     companion object {
-        /**
-         * BGU is the default engine: AUTO prefers BGU while healthy, with
-         * automatic per-session fallback to legacy on any BGU failure (fresh
-         * sessions retry BGU) and forced GPU/CPU modes as manual escape.
-         * Flipped before the step-5 parity gate formally passed; the gate's
-         * open items (parity pairs, cost A/B, border-UB decision) ride along.
-         */
-        private const val AUTO_PREFERS_BGU = true
         private const val ASPECT_RATIO_TOLERANCE = 0.015
         /** Consecutive faceless results before the tracked face (and its regions) drops. */
         private const val FACE_MISS_TOLERANCE = 5
@@ -8287,6 +8535,34 @@ class RawCameraController(
             failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
 
         /**
+         * GPU-reader trial disarm: the RAW reader trial with GPU-sampled
+         * usage delivered zero buffers after request-level recovery had its
+         * chance, so the allocation itself starves this HAL (MT6878: the
+         * session configures, zero images arrive). Disarm once and rebuild
+         * with the default CPU-only reader; the first delivered image of
+         * the disarmed session persists the verdict, so later cold starts
+         * skip the stillborn attempt entirely. Fires before the compat
+         * escalation: the usage axis resolves before the plan axis.
+         */
+        internal fun shouldDisarmVfGpuReaderTrial(
+            failures: Int,
+            deliveredImages: Int,
+            trialArmed: Boolean
+        ): Boolean = trialArmed && deliveredImages == 0 &&
+            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
+
+        /**
+         * Allocator probe usage for the GPU-reader trial: exactly the trial
+         * reader usage plus the camera-write producer bit, so a refusal
+         * means the trial allocation itself is unbackable (a looser
+         * superset would risk false refusals that wrongly disarm a working
+         * trial). No GPU_DATA_BUFFER: unproven need, extra refusal surface.
+         */
+        internal fun gpuReaderProbeUsage(): Long =
+            HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+                GRALLOC_USAGE_HW_CAMERA_WRITE
+
+        /**
          * Stillborn-in-compat escalation: the compat rebuild already proved
          * request toggles cannot revive this session, so a RAW stream that
          * still delivers zero buffers advances the session fallback ladder
@@ -8332,6 +8608,17 @@ class RawCameraController(
             val openId = openIdOf(id)
             openId != null && openId !in rejectedOpenIds
         }
+
+        /**
+         * A rejection is only denylist-worthy when the ID never opened: an ID
+         * that opened before and now reports unknown-device means the camera
+         * service hiccuped (in the field log every lens failed within 2 ms),
+         * so the caller retries instead of excluding a healthy lens.
+         */
+        internal fun shouldDenylistOnOpenRejected(
+            openId: String,
+            openedOnceOpenIds: Set<String>
+        ): Boolean = openId !in openedOnceOpenIds
 
         /**
          * Plain width/height pair for session-combo selection. `android.util.Size`
@@ -8515,6 +8802,18 @@ class RawCameraController(
 
         /** Request-level recoveries before a stillborn stream rebuilds the session. */
         private const val RAW_PREVIEW_COMPAT_ESCALATION_FAILURES = 1
+        /**
+         * Private GPU-reader verdict store (deliberately outside
+         * [SettingsBackup.KNOWN_STORES]): GPU-usage starvation is a property
+         * of this device's HAL/gralloc, so the verdict must never travel to
+         * another device via settings backup.
+         */
+        private const val VF_GPU_READER_PREFS = "vf_gpu_reader"
+        private const val VF_GPU_READER_STARVED_KEY = "starved"
+        /** HAL pixel format for RAW16 sessions (gralloc allocator queries). */
+        internal const val HAL_PIXEL_FORMAT_RAW16 = 0x20
+        /** Gralloc producer bit (GRALLOC_USAGE_HW_CAMERA_WRITE) the HAL adds at allocation. */
+        internal const val GRALLOC_USAGE_HW_CAMERA_WRITE = 0x20000L
         /** Fallback preview stays usable as a viewfinder at or above this size. */
         private const val FALLBACK_PREVIEW_MIN_WIDTH = 640
         private const val FALLBACK_PREVIEW_MIN_HEIGHT = 480
@@ -8541,8 +8840,13 @@ class RawCameraController(
         /** Transient route-resolution reopen budget (Xiaomi characteristics settle late). */
         private const val OPEN_RETRY_MAX = 3
         private const val OPEN_RETRY_DELAY_MS = 1500L
+        /** Longer budget for open rejections: a wedged service needs seconds. */
+        private const val OPEN_REJECTION_RETRY_MAX = 15
+        private const val OPEN_REJECTION_RETRY_DELAY_MS = 2000L
+        /** Settle before the idle-AF nudge scan on AUTO-only lenses. */
+        private const val IDLE_AF_NUDGE_DELAY_MS = 500L
         private const val LOG_TAG = "RawLensCamera"
-        private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = 2_500L
+        private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS
         /** Timed tap-lock hold before auto-return to continuous AF. */
         private const val TOUCH_FOCUS_LOCK_TIMEOUT_MS = AutoFocusPolicy.LOCK_HOLD_MS
         /** Failed-scan hold before auto-return to continuous AF (fast recovery). */

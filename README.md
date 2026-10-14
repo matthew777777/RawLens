@@ -1,6 +1,6 @@
 # RawLens
 
-RawLens is a photography-first, open-source Android camera built around a scene-referred RAW pipeline. It captures full-resolution Camera2 sensor data as DNG files and develops calibrated RAW JPEG output while providing direct exposure controls and a minimal portrait-oriented viewfinder. The app has no gallery, cloud sync, account system, or runtime network communication.
+RawLens is a photography-first, open-source Android camera built around a scene-referred RAW pipeline. It captures full-resolution Camera2 sensor data as DNG files and develops calibrated RAW JPEG output while providing direct exposure controls and a minimal portrait-oriented viewfinder. The app has no gallery, cloud sync, or account system; its only network use is the optional in-app update check (disabled in F-Droid builds).
 
 > [!IMPORTANT]
 > Hardware support is device-dependent. RawLens requires a rear camera that advertises the Camera2 `RAW` capability. Some manufacturers expose RAW only on selected lenses or restrict simultaneous stream configurations.
@@ -60,7 +60,7 @@ From the repository root:
 
 The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-The DNG target compiles the checked-in PhotonCamera `dngCreator.cpp` directly, generates an exact build copy of PhotonCamera's `DngCreator.java`, and downloads the same unmodified ParticlesDevs `tiny_dng_writer.h` requested by PhotonCamera's CMake project. Still captures use PhotonCamera's `setParameters` → `setCompression(false)` → `writeBuffer(OutputStream, …)` sequence. RawLens only bridges its frozen Camera2 metadata into the parameter fields, repacks a padded RAW plane when necessary, and supplies the pending MediaStore output stream. It does not patch TinyDNG or add a preview image. The installed app does not make network requests at runtime.
+The DNG target compiles the checked-in PhotonCamera `dngCreator.cpp` directly, generates an exact build copy of PhotonCamera's `DngCreator.java`, and downloads the same unmodified ParticlesDevs `tiny_dng_writer.h` requested by PhotonCamera's CMake project. Still captures use PhotonCamera's `setParameters` → `setCompression(false)` → `writeBuffer(OutputStream, …)` sequence. RawLens only bridges its frozen Camera2 metadata into the parameter fields, repacks a padded RAW plane when necessary, and supplies the pending MediaStore output stream. It does not patch TinyDNG or add a preview image. Aside from the optional update check (Settings → About; disabled in F-Droid builds), the installed app makes no network requests at runtime.
 
 To create a distributable release, configure your own Android signing key and build a signed release APK or App Bundle using Android Studio. Signing credentials and keystores must never be committed.
 

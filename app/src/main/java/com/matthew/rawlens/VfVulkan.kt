@@ -27,6 +27,7 @@ internal object VfVulkan {
     const val DEVICE_LOST = 9
     const val BUSY = 10
     const val COPY_UPLOAD_FAILED = 11
+    const val IMAGE_UNSUPPORTED = 12
 
     val available: Boolean
 
@@ -54,6 +55,7 @@ internal object VfVulkan {
         DEVICE_LOST -> "device-lost"
         BUSY -> "busy"
         COPY_UPLOAD_FAILED -> "copy-upload"
+        IMAGE_UNSUPPORTED -> "image-unsupported"
         else -> "code-$code"
     }
 
@@ -129,12 +131,58 @@ internal object VfVulkan {
     ): Int
 
     /**
+     * Create the sampled-image superpixel pipeline ([computeImageNative])
+     * on the shared device. Call after [initNative]; idempotent. A non-OK
+     * code means the image tier is unavailable and callers must upload.
+     */
+    external fun initImageNative(spv: ByteArray): Int
+
+    /**
+     * Sampled-image primary tier: import [inputBuffer] as a sampled R16_UINT
+     * image and run superpixel. [IMAGE_UNSUPPORTED] means this stream is
+     * not zero-copyable (BLOB / non-R16 / unsampled) — latch the tier and
+     * use [computePlaneNative] / [computeCopyNative] for the session.
+     */
+    external fun computeImageNative(
+        inputBuffer: HardwareBuffer,
+        iparams: IntArray,
+        fparams: FloatArray
+    ): Int
+
+    /**
+     * TRANSFER bridge-copy tier: buffer import (shared cache) + copy engine
+     * into an owned R16 image + the sampled superpixel pipeline. Zero CPU
+     * copies even where direct compute reads misbehave; sits below the
+     * direct-read tiers and above the CPU-touching uploads. Uses the
+     * [initImageNative] pipeline; [IMAGE_UNSUPPORTED] here means the tier is
+     * unavailable (advance), not that the stream is unimportable.
+     */
+    external fun computeBridgeNative(
+        inputBuffer: HardwareBuffer,
+        iparams: IntArray,
+        fparams: FloatArray
+    ): Int
+
+    /**
      * GPU-copy twin of [computeNative]: lock+memcpy [inputBuffer] into the
      * host-visible staging buffer, then the same superpixel dispatch. Same
      * fence/export/reap semantics; only the input mechanism differs.
      */
     external fun computeCopyNative(
         inputBuffer: HardwareBuffer,
+        iparams: IntArray,
+        fparams: FloatArray
+    ): Int
+
+    /**
+     * CPU-plane upload tier: copy the Camera2 plane's direct buffer
+     * ([byteCount] = rowStride * height bytes) into staging and dispatch.
+     * No hardware-buffer lock or import, so it covers streams whose
+     * allocation cannot be imported (packed or BLOB layouts).
+     */
+    external fun computePlaneNative(
+        planeBuffer: java.nio.ByteBuffer,
+        byteCount: Int,
         iparams: IntArray,
         fparams: FloatArray
     ): Int
@@ -189,4 +237,51 @@ internal object VfVulkan {
      * before [initNative].
      */
     external fun supportsF16MathNative(): Boolean
+}
+
+/** Next step after one VF tier attempt (pure, unit-tested). */
+internal enum class VfTierAction {
+    PRESENT,
+    ADVANCE_TO_BRIDGE,
+    ADVANCE_TO_PLANE,
+    ADVANCE_TO_COPY,
+    ADVANCE_TO_CPU,
+    SKIP_FRAME
+}
+
+/**
+ * Tier-ladder verdict for the sampled-image tier: present on a clean
+ * dispatch, skip on backpressure, otherwise advance to the bridge-copy
+ * tier. A black output ([blackOutput] from the probation probe) advances
+ * too — a validated image import that reads black is not retried per frame.
+ */
+internal fun vfImageAction(code: Int, blackOutput: Boolean): VfTierAction = when {
+    code == VfVulkan.BUSY -> VfTierAction.SKIP_FRAME
+    code == VfVulkan.OK && !blackOutput -> VfTierAction.PRESENT
+    else -> VfTierAction.ADVANCE_TO_BRIDGE
+}
+
+/**
+ * Ladder verdict for the TRANSFER bridge-copy tier: the last rung before
+ * CPU-touching uploads. Present on a clean dispatch, skip on backpressure,
+ * otherwise advance to the plane-upload tier.
+ */
+internal fun vfBridgeAction(code: Int, blackOutput: Boolean): VfTierAction = when {
+    code == VfVulkan.BUSY -> VfTierAction.SKIP_FRAME
+    code == VfVulkan.OK && !blackOutput -> VfTierAction.PRESENT
+    else -> VfTierAction.ADVANCE_TO_PLANE
+}
+
+/** Ladder verdict for the CPU-plane upload tier (no import involved). */
+internal fun vfPlaneAction(code: Int, blackOutput: Boolean): VfTierAction = when {
+    code == VfVulkan.BUSY -> VfTierAction.SKIP_FRAME
+    code == VfVulkan.OK && !blackOutput -> VfTierAction.PRESENT
+    else -> VfTierAction.ADVANCE_TO_COPY
+}
+
+/** Ladder verdict for the lock+memcpy upload tier. */
+internal fun vfCopyAction(code: Int, blackOutput: Boolean): VfTierAction = when {
+    code == VfVulkan.BUSY -> VfTierAction.SKIP_FRAME
+    code == VfVulkan.OK && !blackOutput -> VfTierAction.PRESENT
+    else -> VfTierAction.ADVANCE_TO_CPU
 }

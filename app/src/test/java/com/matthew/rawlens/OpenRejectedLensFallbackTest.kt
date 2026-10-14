@@ -4,7 +4,9 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OpenRejectedLensFallbackTest {
@@ -75,5 +77,15 @@ class OpenRejectedLensFallbackTest {
                 listOf("0", "2"), emptySet(), routes::get
             )
         )
+    }
+
+    // Regression: on Xiaomi 24030PN60G all six lenses reported unknown-device
+    // within 2 ms (a camera-service hiccup); the old code denylisted every
+    // healthy lens that had opened seconds earlier and wedged the VF ~50 s.
+    @Test
+    fun previouslyOpenedIdIsNeverDenylisted() {
+        assertFalse(RawCameraController.shouldDenylistOnOpenRejected("0", setOf("0", "6")))
+        assertTrue(RawCameraController.shouldDenylistOnOpenRejected("3", setOf("0", "6")))
+        assertTrue(RawCameraController.shouldDenylistOnOpenRejected("3", emptySet()))
     }
 }

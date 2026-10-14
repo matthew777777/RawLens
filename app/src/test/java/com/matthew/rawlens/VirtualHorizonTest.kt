@@ -86,6 +86,77 @@ class VirtualHorizonTest {
         assertFalse(VirtualHorizon.compute(ox, oy, oz).isLevel)
     }
 
+    private fun gravityForRollPitch(
+        rollDegrees: Float, pitchDegrees: Float, magnitude: Float = 9.81f
+    ): Triple<Float, Float, Float> {
+        val roll = Math.toRadians(rollDegrees.toDouble())
+        val pitch = Math.toRadians(pitchDegrees.toDouble())
+        return Triple(
+            (sin(roll) * cos(pitch) * magnitude).toFloat(),
+            (cos(roll) * cos(pitch) * magnitude).toFloat(),
+            (-sin(pitch) * magnitude).toFloat()
+        )
+    }
+
+    @Test fun `pitch reports signed elevation to sky and ground`() {
+        val (ux, uy, uz) = gravityForRollPitch(0f, 10f)
+        val up = VirtualHorizon.compute(ux, uy, uz)
+        assertEquals(10f, up.pitchDegrees, 0.05f)
+        assertTrue(up.pitchDegrees > 0f)
+        val (dx, dy, dz) = gravityForRollPitch(0f, -10f)
+        val down = VirtualHorizon.compute(dx, dy, dz)
+        assertEquals(-10f, down.pitchDegrees, 0.05f)
+    }
+
+    @Test fun `level requires both roll and pitch level`() {
+        val (rx, ry, rz) = gravityForRollPitch(0f, 10f)
+        val pitched = VirtualHorizon.compute(rx, ry, rz)
+        assertTrue(pitched.isRollLevel)
+        assertFalse(pitched.isPitchLevel)
+        assertFalse(pitched.isLevel)
+        val (lx, ly, lz) = gravityForRollPitch(0f, 1f)
+        val both = VirtualHorizon.compute(lx, ly, lz)
+        assertTrue(both.isPitchLevel)
+        assertTrue(both.isLevel)
+    }
+
+    @Test fun `pitch is measured in landscape too`() {
+        val (gx, gy, gz) = gravityForRollPitch(-93f, 10f)
+        val state = VirtualHorizon.compute(gx, gy, gz)
+        assertFalse(state.isFlat)
+        assertEquals(-3f, state.errorDegrees, 0.1f)
+        assertEquals(10f, state.pitchDegrees, 0.1f)
+        assertFalse(state.isLevel)
+    }
+
+    @Test fun `steep pitch is flat for roll but keeps pitch`() {
+        val (gx, gy, gz) = gravityForRollPitch(0f, 80f)
+        val state = VirtualHorizon.compute(gx, gy, gz)
+        assertTrue(state.isFlat)
+        assertEquals(80f, state.pitchDegrees, 0.5f)
+        assertFalse(state.isLevel)
+        val (dx, dy, dz) = gravityForRollPitch(0f, -90f)
+        assertEquals(-90f, VirtualHorizon.compute(dx, dy, dz).pitchDegrees, 0.5f)
+    }
+
+    @Test fun `pitch bubble fraction is centered clamped and signed`() {
+        assertEquals(0f, VirtualHorizon.pitchOffsetFraction(0f), 0.001f)
+        assertEquals(0.5f, VirtualHorizon.pitchOffsetFraction(15f), 0.001f)
+        assertEquals(-0.5f, VirtualHorizon.pitchOffsetFraction(-15f), 0.001f)
+        assertEquals(1f, VirtualHorizon.pitchOffsetFraction(45f), 0.001f)
+        assertEquals(-1f, VirtualHorizon.pitchOffsetFraction(-45f), 0.001f)
+    }
+
+    @Test fun `pitched to sky is not level even with perfect roll`() {
+        // Upright roll, camera elevated 10°: gy = cos(pitch), gz = -sin(pitch).
+        val pitch = Math.toRadians(10.0)
+        val state = VirtualHorizon.compute(
+            0f, (cos(pitch) * 9.81).toFloat(), (-sin(pitch) * 9.81).toFloat()
+        )
+        assertFalse(state.isFlat)
+        assertFalse(state.isLevel)
+    }
+
     @Test fun `zero vector is flat and safe`() {
         val state = VirtualHorizon.compute(0f, 0f, 0f)
         assertTrue(state.isFlat)

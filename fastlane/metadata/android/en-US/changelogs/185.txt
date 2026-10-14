@@ -1,0 +1,11 @@
+First public release: a photography-first Camera2 RAW camera.
+
+- Full-resolution RAW_SENSOR stills as DNG; JPEG / JPEG+DNG / DNG-only
+- AUTO, PROGRAM, ZSL, and MANUAL exposure modes; tap/drag AF+AE targets
+- RAW zero-shutter-lag ring with motion-aware frame picking
+- HDR brackets, HDR+ merge, and RAW super-resolution (Linear/Mosaic)
+- AMaZE/RCD demosaic; AgX Base/Golden/Punchy JPEG looks
+- GALOSH and wavelet denoise options
+- Direct Log video (4K P010 HEVC) and RAW video capture
+- Histogram, waveform, focus peaking, horizon/level guide
+- Per-lens DNG calibration overrides; settings backup/restore

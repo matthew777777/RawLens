@@ -57,5 +57,95 @@ class VfVulkanTest {
         assertEquals("input-import", VfVulkan.describe(VfVulkan.INPUT_IMPORT_FAILED))
         assertEquals("output-import", VfVulkan.describe(VfVulkan.OUTPUT_IMPORT_FAILED))
         assertEquals("submit", VfVulkan.describe(VfVulkan.SUBMIT_FAILED))
+        assertEquals("image-unsupported", VfVulkan.describe(VfVulkan.IMAGE_UNSUPPORTED))
+        // An incompatible HAL buffer must never schedule device recreation.
+        assertFalse(VfVulkan.shouldRecover(VfVulkan.describe(VfVulkan.IMAGE_UNSUPPORTED)))
+    }
+
+    @Test fun `image tier presents clean and skips busy`() {
+        assertEquals(VfTierAction.PRESENT, vfImageAction(VfVulkan.OK, blackOutput = false))
+        assertEquals(VfTierAction.SKIP_FRAME, vfImageAction(VfVulkan.BUSY, blackOutput = false))
+    }
+
+    @Test fun `image rejection or black output advances to bridge copy`() {
+        // Import rejection (BLOB / non-R16 / unsampled) and the silent
+        // black import both latch the image tier, never retry per frame.
+        // The transfer-engine bridge rung is next: zero CPU copies even
+        // where direct compute reads misbehave.
+        assertEquals(
+            VfTierAction.ADVANCE_TO_BRIDGE,
+            vfImageAction(VfVulkan.IMAGE_UNSUPPORTED, blackOutput = false)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_BRIDGE,
+            vfImageAction(VfVulkan.OK, blackOutput = true)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_BRIDGE,
+            vfImageAction(VfVulkan.INPUT_IMPORT_FAILED, blackOutput = false)
+        )
+    }
+
+    @Test fun `bridge tier presents clean and skips busy`() {
+        assertEquals(VfTierAction.PRESENT, vfBridgeAction(VfVulkan.OK, blackOutput = false))
+        assertEquals(VfTierAction.SKIP_FRAME, vfBridgeAction(VfVulkan.BUSY, blackOutput = false))
+    }
+
+    @Test fun `bridge failure or black output advances to plane upload`() {
+        // The bridge is the last rung before CPU-touching uploads: its
+        // import shares the buffer cache (same rejection), and a black
+        // bridge output convicts the transfer path for the session.
+        assertEquals(
+            VfTierAction.ADVANCE_TO_PLANE,
+            vfBridgeAction(VfVulkan.INPUT_IMPORT_FAILED, blackOutput = false)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_PLANE,
+            vfBridgeAction(VfVulkan.OK, blackOutput = true)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_PLANE,
+            vfBridgeAction(VfVulkan.SUBMIT_FAILED, blackOutput = false)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_PLANE,
+            vfBridgeAction(VfVulkan.IMAGE_UNSUPPORTED, blackOutput = false)
+        )
+    }
+
+    @Test fun `plane tier presents clean and skips busy`() {
+        assertEquals(VfTierAction.PRESENT, vfPlaneAction(VfVulkan.OK, blackOutput = false))
+        assertEquals(VfTierAction.SKIP_FRAME, vfPlaneAction(VfVulkan.BUSY, blackOutput = false))
+    }
+
+    @Test fun `plane failure or black output advances to lock copy`() {
+        // The plane tier needs no import or lock; when it still fails (or
+        // reads black) the AHB lock+memcpy tier covers, never a per-frame
+        // retry of the broken upload.
+        assertEquals(
+            VfTierAction.ADVANCE_TO_COPY,
+            vfPlaneAction(VfVulkan.COPY_UPLOAD_FAILED, blackOutput = false)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_COPY,
+            vfPlaneAction(VfVulkan.OK, blackOutput = true)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_COPY,
+            vfPlaneAction(VfVulkan.SUBMIT_FAILED, blackOutput = false)
+        )
+    }
+
+    @Test fun `copy tier presents clean and drops to cpu on failure`() {
+        assertEquals(VfTierAction.PRESENT, vfCopyAction(VfVulkan.OK, blackOutput = false))
+        assertEquals(VfTierAction.SKIP_FRAME, vfCopyAction(VfVulkan.BUSY, blackOutput = false))
+        assertEquals(
+            VfTierAction.ADVANCE_TO_CPU,
+            vfCopyAction(VfVulkan.COPY_UPLOAD_FAILED, blackOutput = false)
+        )
+        assertEquals(
+            VfTierAction.ADVANCE_TO_CPU,
+            vfCopyAction(VfVulkan.OK, blackOutput = true)
+        )
     }
 }

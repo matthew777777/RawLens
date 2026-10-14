@@ -51,6 +51,13 @@
 // The zero-copy tiers are unaffected (different mechanism); Kotlin falls
 // through to the next tier exactly like any other nonzero code.
 #define VFVK_COPY_UPLOAD_FAILED 11
+// computeImageNative only: the HAL buffer cannot be exposed as a sampled
+// R16_UINT Vulkan image (BLOB layout, non-R16 external format, missing
+// sampled feature, or no compatible memory type). This is the
+// rejection: the stream is not zero-copyable, so Kotlin latches the image
+// tier dead for the session and uses the upload (copy) tier instead of
+// retrying the import per frame.
+#define VFVK_IMAGE_UNSUPPORTED 12
 // Viewfinder fence wait. The wait runs UNLOCKED (see computeNative),
 // so it can be generous: 500ms. The old 2s wait held the shared queue
 // mutex for whole fused record dispatches queued ahead (~30-50ms),
@@ -71,6 +78,9 @@
 // buffers, so a smaller cap FIFO-thrashes and re-imports 25 MB every frame
 // (imports map existing pool memory; they allocate no new pages).
 #define INPUT_CACHE_CAP 24
+// Covers every live viewfinder export (BGU's 3 rotating slots + the legacy
+// single export): steady state never evicts, so no dispatch-time churn.
+#define OUTPUT_CACHE_CAP 6
 
 namespace {
 
@@ -217,6 +227,13 @@ struct ImportedImage {
 struct ImportedBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    // AHB row stride in pixels: authoritative row math for the imported
+    // layout (the Camera2 plane stride can disagree on padded grallocs).
+    uint32_t stridePixels = 0;
+    // AHB pixel dims: the full-res geometry the bridge rung copies (the push
+    // block's frameSize is the stepped OUTPUT geometry, not the import).
+    uint32_t width = 0;
+    uint32_t height = 0;
 };
 
 struct Context {
@@ -253,8 +270,41 @@ struct Context {
     std::string pipelineCachePath;  // empty = in-memory cache only
     std::map<AHardwareBuffer*, ImportedBuffer> inputs;
     std::vector<AHardwareBuffer*> inputOrder;
+    // Sampled-image zero-copy (Adreno-safe primary): the HAL
+    // buffer imported as an R16_UINT VkImage, fetched via usampler2D. Own
+    // pipeline/layout/set because binding 0 is a combined sampler, not an
+    // SSBO. Imports are cached by pointer like the buffer inputs.
+    VkDescriptorSetLayout imgSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout imgPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline imgPipeline = VK_NULL_HANDLE;
+    VkDescriptorPool imgPool = VK_NULL_HANDLE;
+    VkDescriptorSet imgSet = VK_NULL_HANDLE;
+    VkSampler rawSampler = VK_NULL_HANDLE;
+    bool imgLutBound = false;
+    std::map<AHardwareBuffer*, ImportedImage> imgInputs;
+    std::vector<AHardwareBuffer*> imgInputOrder;
+    // TRANSFER bridge-copy rung: when the HAL allocation imports but direct
+    // compute reads misbehave, the copy engine (vkCmdCopyBufferToImage) is a
+    // separate read path that still avoids every CPU copy. The camera buffer
+    // is imported once (shared `inputs` cache), copied per frame into this
+    // owned R16 image, and the proven img shader reads the owned image. One
+    // slot: reallocated on geometry change (lens switch), torn down with the
+    // device. Written only under vkMutex.
+    VkImage bridgeImage = VK_NULL_HANDLE;
+    VkDeviceMemory bridgeMemory = VK_NULL_HANDLE;
+    VkImageView bridgeView = VK_NULL_HANDLE;
+    uint32_t bridgeW = 0;
+    uint32_t bridgeH = 0;
     AHardwareBuffer* outputBuffer = nullptr;
+    // Current viewfinder output import (non-owning copy of the cached entry;
+    // OutSwap keeps swapping it by value for recorder twins).
     ImportedImage output;
+    // Output import cache: BGU rotates 3 export slots, so a single slot
+    // destroyed + re-imported every dispatch. The map owns the imports;
+    // eviction never takes the current buffer (the one in-flight dispatch,
+    // if any, references it — see the reap gate in computeNative).
+    std::map<AHardwareBuffer*, ImportedImage> outputs;
+    std::vector<AHardwareBuffer*> outputOrder;
     // GPU-copy tier (motioncam-style staging memcpy): host-visible buffer the
     // CPU fills per frame; the same superpixel pipeline reads it instead of
     // the imported HAL allocation. For HALs whose external-memory import
@@ -630,6 +680,21 @@ int ensureLut(Context* ctx) {
         vkUpdateDescriptorSets(ctx->device, 1, &write, 0, nullptr);
         ctx->lutBound = true;
     }
+    if (ctx->imgSet != VK_NULL_HANDLE && !ctx->imgLutBound) {
+        VkDescriptorBufferInfo lutInfo{};
+        lutInfo.buffer = ctx->lutBuffer;
+        lutInfo.offset = 0;
+        lutInfo.range = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = ctx->imgSet;
+        write.dstBinding = 3;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &lutInfo;
+        vkUpdateDescriptorSets(ctx->device, 1, &write, 0, nullptr);
+        ctx->imgLutBound = true;
+    }
     return VFVK_OK;
 }
 
@@ -710,6 +775,96 @@ void destroyImportedBuffer(Context* ctx, ImportedBuffer* buf) {
     *buf = ImportedBuffer{};
 }
 
+void destroyBridge(Context* ctx) {
+    if (ctx->bridgeView != VK_NULL_HANDLE) vkDestroyImageView(ctx->device, ctx->bridgeView, nullptr);
+    if (ctx->bridgeImage != VK_NULL_HANDLE) vkDestroyImage(ctx->device, ctx->bridgeImage, nullptr);
+    if (ctx->bridgeMemory != VK_NULL_HANDLE) vkFreeMemory(ctx->device, ctx->bridgeMemory, nullptr);
+    ctx->bridgeView = VK_NULL_HANDLE;
+    ctx->bridgeImage = VK_NULL_HANDLE;
+    ctx->bridgeMemory = VK_NULL_HANDLE;
+    ctx->bridgeW = 0;
+    ctx->bridgeH = 0;
+}
+
+// Owned R16 transfer target for the bridge rung. Driver-created OPTIMAL, so
+// the img shader reads exactly what the copy engine wrote: no sampling
+// granularity, no stride ambiguity, stripe-impossible by construction.
+int ensureBridge(Context* ctx, uint32_t w, uint32_t h) {
+    if (ctx->bridgeImage != VK_NULL_HANDLE && ctx->bridgeW == w && ctx->bridgeH == h) {
+        return VFVK_OK;
+    }
+    // Size change only (lens switch): the reap gate has already drained the
+    // in-flight dispatch; idle makes the realloc safe.
+    vkDeviceWaitIdle(ctx->device);
+    destroyBridge(ctx);
+    VkImageCreateInfo imgInfo{};
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.format = VK_FORMAT_R16_UINT;
+    imgInfo.extent.width = w;
+    imgInfo.extent.height = h;
+    imgInfo.extent.depth = 1;
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkResult r = vkCreateImage(ctx->device, &imgInfo, nullptr, &ctx->bridgeImage);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: bridge: image create %ux%u failed %d", w, h, r);
+        destroyBridge(ctx);
+        return VFVK_SUBMIT_FAILED;
+    }
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(ctx->device, ctx->bridgeImage, &req);
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memProps);
+    uint32_t memType = pickMemoryTypeWithProps(req.memoryTypeBits, memProps,
+                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memType == UINT32_MAX) memType = pickMemoryType(req.memoryTypeBits, memProps.memoryTypeCount);
+    if (memType == UINT32_MAX) {
+        LOGW("vf-vk: bridge: no memory type");
+        destroyBridge(ctx);
+        return VFVK_SUBMIT_FAILED;
+    }
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = req.size;
+    alloc.memoryTypeIndex = memType;
+    r = vkAllocateMemory(ctx->device, &alloc, nullptr, &ctx->bridgeMemory);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: bridge: alloc failed %d", r);
+        destroyBridge(ctx);
+        return VFVK_SUBMIT_FAILED;
+    }
+    r = vkBindImageMemory(ctx->device, ctx->bridgeImage, ctx->bridgeMemory, 0);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: bridge: bind failed %d", r);
+        destroyBridge(ctx);
+        return VFVK_SUBMIT_FAILED;
+    }
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = ctx->bridgeImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R16_UINT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    r = vkCreateImageView(ctx->device, &viewInfo, nullptr, &ctx->bridgeView);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: bridge: view failed %d", r);
+        destroyBridge(ctx);
+        return VFVK_SUBMIT_FAILED;
+    }
+    ctx->bridgeW = w;
+    ctx->bridgeH = h;
+    LOGI("vf-vk: bridge: owned R16 %ux%u ready", w, h);
+    return VFVK_OK;
+}
+
 // FIFO eviction for the pointer-keyed input import cache, shared by all
 // get-or-import sites. The cap (24) covers the largest reader pool (22),
 // so steady-state viewfinder frames never evict: any eviction means the
@@ -730,6 +885,31 @@ void evictOldestInput(Context* ctx) {
     if (evictions == 1 || evictions % 64 == 0) {
         LOGW("vf-vk: input import cache evicted %llu buffer(s) (cap %d); live pool exceeds cache",
              (unsigned long long)evictions, INPUT_CACHE_CAP);
+    }
+}
+
+// FIFO eviction for the output import cache. Unlike inputs, the current
+// buffer is always skipped: the single in-flight dispatch (if any) writes
+// through the current import, and destroying it mid-flight lost the device.
+// The cap covers every live export, so any eviction is already pathological.
+void evictOldestOutput(Context* ctx) {
+    static uint64_t evictions = 0;
+    for (auto oit = ctx->outputOrder.begin(); oit != ctx->outputOrder.end(); ++oit) {
+        if (*oit == ctx->outputBuffer) continue;
+        AHardwareBuffer* oldest = *oit;
+        ctx->outputOrder.erase(oit);
+        auto mit = ctx->outputs.find(oldest);
+        if (mit != ctx->outputs.end()) {
+            destroyImported(ctx, &mit->second);
+            ctx->outputs.erase(mit);
+        }
+        AHardwareBuffer_release(oldest);
+        evictions++;
+        if (evictions == 1 || evictions % 64 == 0) {
+            LOGW("vf-vk: output import cache evicted %llu buffer(s) (cap %d); live pool exceeds cache",
+                 (unsigned long long)evictions, OUTPUT_CACHE_CAP);
+        }
+        return;
     }
 }
 
@@ -865,42 +1045,62 @@ int importInputBuffer(Context* ctx, AHardwareBuffer* buf, ImportedBuffer* out) {
     }
     VkPhysicalDeviceMemoryProperties memProps{};
     vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memProps);
-    uint32_t memType = pickMemoryType(ahbProps.memoryTypeBits, memProps.memoryTypeCount);
-    if (memType == UINT32_MAX) {
-        LOGW("vf-vk: input: no memory type");
+    if (ahbProps.allocationSize == 0 || ahbProps.memoryTypeBits == 0) {
+        LOGW("vf-vk: input: empty AHB properties");
         return VFVK_INPUT_IMPORT_FAILED;
     }
+    // Plain buffer first (Adreno 840 path): no external-memory buffer
+    // create-info chained, and the memory type comes from the AHB's bits
+    // ALONE. Chaining VkExternalMemoryBufferCreateInfo makes some Adreno
+    // drivers reject or zero the import — and the plain buffer's own
+    // memoryTypeBits exclude the AHB's type, so requiring a type in the
+    // intersection rejects every import there. The AHB import lives only
+    // in the allocate call (VkImportAndroidHardwareBufferInfoANDROID +
+    // dedicated). Deliberately not spec-shaped at bind time; the chained
+    // retry below stays spec-shaped for drivers that require it (Mali).
     VkExternalMemoryBufferCreateInfo extBuf{};
     extBuf.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
     extBuf.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    bool plainBuffer = true;
     VkBufferCreateInfo bufInfo{};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.pNext = &extBuf;
     bufInfo.size = ahbProps.allocationSize;
-    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     r = vkCreateBuffer(ctx->device, &bufInfo, nullptr, &out->buffer);
     if (r != VK_SUCCESS) {
-        LOGW("vf-vk: input: buffer create failed %d", r);
-        return VFVK_INPUT_IMPORT_FAILED;
+        LOGW("vf-vk: input: plain buffer create failed %d; retrying external", r);
+        plainBuffer = false;
+        bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufInfo.pNext = &extBuf;
+        r = vkCreateBuffer(ctx->device, &bufInfo, nullptr, &out->buffer);
+        if (r != VK_SUCCESS) {
+            LOGW("vf-vk: input: buffer create failed %d", r);
+            return VFVK_INPUT_IMPORT_FAILED;
+        }
     }
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(ctx->device, out->buffer, &req);
-    // The imported allocation AND the storage buffer must support this type.
-    // Choosing from AHB properties alone can make vkBindBufferMemory invalid.
-    memType = pickMemoryType(ahbProps.memoryTypeBits & req.memoryTypeBits,
-                             memProps.memoryTypeCount);
-    if (memType == UINT32_MAX) {
-        LOGW("vf-vk: input: no compatible buffer memory type");
-        destroyImportedBuffer(ctx, out);
-        return VFVK_INPUT_IMPORT_FAILED;
-    }
     if (req.size > ahbProps.allocationSize) {
         LOGW("vf-vk: input: requirements %llu exceed allocation %llu",
              (unsigned long long)req.size, (unsigned long long)ahbProps.allocationSize);
         vkDestroyBuffer(ctx->device, out->buffer, nullptr);
         *out = ImportedBuffer{};
         return VFVK_INPUT_IMPORT_FAILED;
+    }
+    uint32_t memType;
+    if (plainBuffer) {
+        memType = pickMemoryType(ahbProps.memoryTypeBits, memProps.memoryTypeCount);
+    } else {
+        // Chained form is a real external-memory buffer: the type must
+        // satisfy both sides (proven Mali shape).
+        memType = pickMemoryType(ahbProps.memoryTypeBits & req.memoryTypeBits,
+                                 memProps.memoryTypeCount);
+        if (memType == UINT32_MAX) {
+            LOGW("vf-vk: input: no compatible buffer memory type");
+            destroyImportedBuffer(ctx, out);
+            return VFVK_INPUT_IMPORT_FAILED;
+        }
     }
     VkMemoryDedicatedAllocateInfo dedicated{};
     dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
@@ -914,16 +1114,46 @@ int importInputBuffer(Context* ctx, AHardwareBuffer* buf, ImportedBuffer* out) {
     alloc.pNext = &import;
     alloc.allocationSize = ahbProps.allocationSize;
     alloc.memoryTypeIndex = memType;
-    r = vkAllocateMemory(ctx->device, &alloc, nullptr, &out->memory);
-    if (r != VK_SUCCESS) {
-        LOGW("vf-vk: input: import alloc failed %d", r);
-        vkDestroyBuffer(ctx->device, out->buffer, nullptr);
-        *out = ImportedBuffer{};
-        return VFVK_INPUT_IMPORT_FAILED;
+    if (memType == UINT32_MAX) {
+        // Plain path with pathological AHB bits (nonzero bits outside the
+        // type table): skip straight to the chained retry below.
+        r = VK_ERROR_INITIALIZATION_FAILED;
+    } else {
+        r = vkAllocateMemory(ctx->device, &alloc, nullptr, &out->memory);
+        if (r == VK_SUCCESS) {
+            r = vkBindBufferMemory(ctx->device, out->buffer, out->memory, 0);
+        }
     }
-    r = vkBindBufferMemory(ctx->device, out->buffer, out->memory, 0);
+    if (r != VK_SUCCESS && plainBuffer) {
+        // Plain import rejected at alloc/bind: retry once with the chained
+        // external-memory buffer form (STORAGE-only, proven shape) before
+        // giving up on the tier.
+        LOGW("vf-vk: input: plain import failed %d; retrying external", r);
+        destroyImportedBuffer(ctx, out);
+        bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufInfo.pNext = &extBuf;
+        if (vkCreateBuffer(ctx->device, &bufInfo, nullptr, &out->buffer) != VK_SUCCESS) {
+            *out = ImportedBuffer{};
+            return VFVK_INPUT_IMPORT_FAILED;
+        }
+        vkGetBufferMemoryRequirements(ctx->device, out->buffer, &req);
+        memType = pickMemoryType(ahbProps.memoryTypeBits & req.memoryTypeBits,
+                                 memProps.memoryTypeCount);
+        if (memType == UINT32_MAX || req.size > ahbProps.allocationSize) {
+            vkDestroyBuffer(ctx->device, out->buffer, nullptr);
+            *out = ImportedBuffer{};
+            return VFVK_INPUT_IMPORT_FAILED;
+        }
+        dedicated.buffer = out->buffer;
+        alloc.memoryTypeIndex = memType;
+        r = vkAllocateMemory(ctx->device, &alloc, nullptr, &out->memory);
+        if (r == VK_SUCCESS) {
+            r = vkBindBufferMemory(ctx->device, out->buffer, out->memory, 0);
+        }
+        plainBuffer = false;
+    }
     if (r != VK_SUCCESS) {
-        LOGW("vf-vk: input: bind failed %d", r);
+        LOGW("vf-vk: input: import alloc/bind failed %d", r);
         destroyImportedBuffer(ctx, out);
         return VFVK_INPUT_IMPORT_FAILED;
     }
@@ -932,10 +1162,271 @@ int importInputBuffer(Context* ctx, AHardwareBuffer* buf, ImportedBuffer* out) {
     // pool buffer (the import cache makes repeats cheap and quiet).
     AHardwareBuffer_Desc desc{};
     AHardwareBuffer_describe(buf, &desc);
-    LOGI("vf-vk: input: buffer import ok %ux%u ahbFormat=%u layers=%u usage=%llu size=%llu types=%#x memType=%u",
+    out->stridePixels = desc.stride;
+    out->width = desc.width;
+    out->height = desc.height;
+    LOGI("vf-vk: input: buffer import ok %ux%u ahbFormat=%u layers=%u usage=%llu size=%llu types=%#x memType=%u plain=%d stride=%u",
          desc.width, desc.height, desc.format, desc.layers, (unsigned long long)desc.usage,
-         (unsigned long long)ahbProps.allocationSize, ahbProps.memoryTypeBits, memType);
+         (unsigned long long)ahbProps.allocationSize, ahbProps.memoryTypeBits, memType,
+         plainBuffer ? 1 : 0, desc.stride);
     return VFVK_OK;
+}
+
+// Sampled-image import: only a 2D, non-BLOB buffer that the
+// driver exposes as VK_FORMAT_R16_UINT with SAMPLED_IMAGE support is
+// zero-copyable. Anything else returns VFVK_IMAGE_UNSUPPORTED so the caller
+// latches this tier and uploads instead — never a silent black import.
+// OPTIMAL tiling only: the driver owns the layout, texelFetch is exact.
+int importInputImage(Context* ctx, AHardwareBuffer* buf, ImportedImage* out) {
+    *out = ImportedImage{};
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(buf, &desc);
+    if (desc.format == AHARDWAREBUFFER_FORMAT_BLOB || desc.height <= 1 ||
+        desc.layers != 1 || desc.width == 0) {
+        LOGW("vf-vk: image: not a 2D R16 image %ux%u ahbFormat=%u layers=%u",
+             desc.width, desc.height, desc.format, desc.layers);
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    // Alignment quirk (MT6878/Mali): an OPTIMAL R16 import whose row bytes
+    // are not a multiple of 64, or whose height is not a multiple of 16,
+    // samples back spatially modulated (smooth magenta/grey bands over the
+    // scene) instead of the sensor grid — the texture unit walks rows at
+    // 64B granularity and tiles at 16px, and 4080x3060 satisfies neither
+    // (8160 = 64x127.5, 3060 = 16x191.25) while 3264x2448 satisfies both.
+    // The black-output probe cannot see the bands (lit output), so reject
+    // up front: the buffer tier is proven zero-copy on these streams.
+    // Conservative by design — worst case a working config renders one
+    // tier down, never striped. Both engines share this choke point.
+    if (((uint64_t)desc.width * 2u % 64u) != 0 || (desc.height % 16u) != 0) {
+        static bool quirkLogged = false;
+        if (!quirkLogged) {
+            quirkLogged = true;
+            LOGW("vf-vk: image: unaligned geometry %ux%u rejected (row %lluB); buffer tier covers",
+                 desc.width, desc.height, (unsigned long long)desc.width * 2u);
+        }
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    VkAndroidHardwareBufferFormatPropertiesANDROID fmtProps{};
+    fmtProps.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID;
+    VkAndroidHardwareBufferPropertiesANDROID ahbProps{};
+    ahbProps.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+    ahbProps.pNext = &fmtProps;
+    if (ctx->getAhbProps(ctx->device, buf, &ahbProps) != VK_SUCCESS) {
+        LOGW("vf-vk: image: ahb-props failed");
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    if (fmtProps.format != VK_FORMAT_R16_UINT ||
+        (fmtProps.formatFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0) {
+        LOGW("vf-vk: image: vkFormat=%d features=%#x external=%llu not sampled R16_UINT",
+             fmtProps.format, fmtProps.formatFeatures,
+             (unsigned long long)fmtProps.externalFormat);
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    VkExternalMemoryImageCreateInfo extImg{};
+    extImg.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+    extImg.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    VkImageCreateInfo imgInfo{};
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.pNext = &extImg;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.format = VK_FORMAT_R16_UINT;
+    imgInfo.extent = {desc.width, desc.height, 1};
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(ctx->device, &imgInfo, nullptr, &out->image) != VK_SUCCESS) {
+        LOGW("vf-vk: image: create failed");
+        *out = ImportedImage{};
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(ctx->device, out->image, &req);
+    uint32_t typeBits = req.memoryTypeBits & ahbProps.memoryTypeBits;
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memProps);
+    uint32_t memType = pickMemoryType(typeBits, memProps.memoryTypeCount);
+    if (memType == UINT32_MAX) {
+        LOGW("vf-vk: image: no compatible memory type");
+        vkDestroyImage(ctx->device, out->image, nullptr);
+        *out = ImportedImage{};
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    VkMemoryDedicatedAllocateInfo dedicated{};
+    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+    dedicated.image = out->image;
+    VkImportAndroidHardwareBufferInfoANDROID import{};
+    import.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+    import.pNext = &dedicated;
+    import.buffer = buf;
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.pNext = &import;
+    alloc.allocationSize = ahbProps.allocationSize;
+    alloc.memoryTypeIndex = memType;
+    if (vkAllocateMemory(ctx->device, &alloc, nullptr, &out->memory) != VK_SUCCESS ||
+        vkBindImageMemory(ctx->device, out->image, out->memory, 0) != VK_SUCCESS) {
+        LOGW("vf-vk: image: import alloc/bind failed");
+        destroyImported(ctx, out);
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = out->image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R16_UINT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(ctx->device, &viewInfo, nullptr, &out->view) != VK_SUCCESS) {
+        LOGW("vf-vk: image: view failed");
+        destroyImported(ctx, out);
+        return VFVK_IMAGE_UNSUPPORTED;
+    }
+    LOGI("vf-vk: image: R16_UINT sampled import ok %ux%u memType=%u", desc.width,
+         desc.height, memType);
+    return VFVK_OK;
+}
+
+void evictOldestImgInput(Context* ctx) {
+    AHardwareBuffer* oldest = ctx->imgInputOrder.front();
+    ctx->imgInputOrder.erase(ctx->imgInputOrder.begin());
+    auto it = ctx->imgInputs.find(oldest);
+    if (it != ctx->imgInputs.end()) {
+        destroyImported(ctx, &it->second);
+        ctx->imgInputs.erase(it);
+    }
+    AHardwareBuffer_release(oldest);
+}
+
+void destroyImagePipeline(Context* ctx) {
+    for (auto& entry : ctx->imgInputs) destroyImported(ctx, &entry.second);
+    for (AHardwareBuffer* b : ctx->imgInputOrder) AHardwareBuffer_release(b);
+    ctx->imgInputs.clear();
+    ctx->imgInputOrder.clear();
+    if (ctx->rawSampler != VK_NULL_HANDLE) vkDestroySampler(ctx->device, ctx->rawSampler, nullptr);
+    ctx->rawSampler = VK_NULL_HANDLE;
+    if (ctx->imgPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->imgPipeline, nullptr);
+    ctx->imgPipeline = VK_NULL_HANDLE;
+    if (ctx->imgPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(ctx->device, ctx->imgPipelineLayout, nullptr);
+    ctx->imgPipelineLayout = VK_NULL_HANDLE;
+    if (ctx->imgSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->imgSetLayout, nullptr);
+    ctx->imgSetLayout = VK_NULL_HANDLE;
+    if (ctx->imgPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx->device, ctx->imgPool, nullptr);
+    ctx->imgPool = VK_NULL_HANDLE;
+    ctx->imgSet = VK_NULL_HANDLE;
+    ctx->imgLutBound = false;
+}
+
+// Sampled-image twin of createPipeline: binding 0 is the R16 raw sampler,
+// bindings 1-3 (storage output, shading sampler, LUT) match the buffer
+// pipeline so push packing and the export path are shared.
+bool createImagePipeline(Context* ctx, const uint32_t* code, size_t words) {
+    VkShaderModuleCreateInfo modInfo{};
+    modInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    modInfo.codeSize = words * sizeof(uint32_t);
+    modInfo.pCode = code;
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(ctx->device, &modInfo, nullptr, &module) != VK_SUCCESS) {
+        LOGW("vf-vk: image shader module failed");
+        return false;
+    }
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = 4;
+    setInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &ctx->imgSetLayout) !=
+        VK_SUCCESS) {
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkPushConstantRange push{};
+    push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push.size = sizeof(SuperpixelParams);
+    VkPipelineLayoutCreateInfo pipeLayoutInfo{};
+    pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeLayoutInfo.setLayoutCount = 1;
+    pipeLayoutInfo.pSetLayouts = &ctx->imgSetLayout;
+    pipeLayoutInfo.pushConstantRangeCount = 1;
+    pipeLayoutInfo.pPushConstantRanges = &push;
+    if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->imgPipelineLayout) !=
+        VK_SUCCESS) {
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkComputePipelineCreateInfo pipeInfo{};
+    pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipeInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeInfo.stage.module = module;
+    pipeInfo.stage.pName = "main";
+    pipeInfo.layout = ctx->imgPipelineLayout;
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo,
+                                          nullptr, &ctx->imgPipeline);
+    vkDestroyShaderModule(ctx->device, module, nullptr);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: image compute pipeline failed %d", r);
+        return false;
+    }
+    savePipelineCache(ctx);
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(ctx->device, &samplerInfo, nullptr, &ctx->rawSampler) != VK_SUCCESS) {
+        LOGW("vf-vk: image raw sampler failed");
+        return false;
+    }
+    VkDescriptorPoolSize poolSizes[3]{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 2;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[1].descriptorCount = 1;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = 1;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 3;
+    poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(ctx->device, &poolInfo, nullptr, &ctx->imgPool) != VK_SUCCESS) {
+        return false;
+    }
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = ctx->imgPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &ctx->imgSetLayout;
+    if (vkAllocateDescriptorSets(ctx->device, &allocInfo, &ctx->imgSet) != VK_SUCCESS) {
+        return false;
+    }
+    return true;
 }
 
 void layoutBarrier(VkCommandBuffer cmd, VkImage image,
@@ -2472,6 +2963,8 @@ static void teardownContext() {
     // Best-effort idle first: returns promptly (with an error) on a lost device.
     vkDeviceWaitIdle(ctx->device);
     destroyGrade(ctx);
+    destroyImagePipeline(ctx);
+    destroyBridge(ctx);
     destroyShadeDummyImage(ctx);
     destroyShadeSampler(ctx);
     destroyGradeLut(ctx);
@@ -2479,8 +2972,11 @@ static void teardownContext() {
     for (AHardwareBuffer* b : ctx->inputOrder) AHardwareBuffer_release(b);
     ctx->inputs.clear();
     ctx->inputOrder.clear();
-    destroyImported(ctx, &ctx->output);
-    if (ctx->outputBuffer) AHardwareBuffer_release(ctx->outputBuffer);
+    for (auto& entry : ctx->outputs) destroyImported(ctx, &entry.second);
+    for (AHardwareBuffer* b : ctx->outputOrder) AHardwareBuffer_release(b);
+    ctx->outputs.clear();
+    ctx->outputOrder.clear();
+    ctx->output = ImportedImage{};
     ctx->outputBuffer = nullptr;
     destroyStaging(ctx);
     destroyLut(ctx);
@@ -2576,54 +3072,76 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
         delete ctx;
         return VFVK_DEVICE_FAILED;
     }
+    // Device scan: try every physical device, requiring the
+    // mandatory external-memory extensions and a queue with BOTH graphics
+    // and compute on that same device. Picking the first enumerated GPU
+    // unconditionally stranded Adreno devices whose first GPU lacks AHB.
+    bool hasExternalMem = false, hasAhb = false, hasForeign = false;
+    bool hasSem = false, hasSemFd = false, hasF16 = false;
+    bool anyQueue = false;
     for (uint32_t i = 0; i < n && ctx->gpu == VK_NULL_HANDLE; ++i) {
+        VkPhysicalDeviceProperties devProps{};
+        vkGetPhysicalDeviceProperties(gpus[i], &devProps);
+        if (devProps.apiVersion < VK_API_VERSION_1_1) continue;
         uint32_t qCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(gpus[i], &qCount, nullptr);
         VkQueueFamilyProperties props[16];
         uint32_t m = qCount > 16 ? 16 : qCount;
         vkGetPhysicalDeviceQueueFamilyProperties(gpus[i], &m, props);
+        uint32_t family = UINT32_MAX;
         for (uint32_t q = 0; q < m; ++q) {
-            if ((props[q].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0) {
-                ctx->gpu = gpus[i];
-                ctx->queueFamily = q;
+            if ((props[q].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) ==
+                (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) {
+                family = q;
                 break;
             }
         }
+        if (family == UINT32_MAX) continue;
+        anyQueue = true;
+        uint32_t extCount = 0;
+        if (vkEnumerateDeviceExtensionProperties(gpus[i], nullptr, &extCount, nullptr) !=
+            VK_SUCCESS)
+            continue;
+        bool extMem = false, ahb = false, foreign = false, sem = false, semFd = false,
+             f16 = false;
+        uint32_t cap = extCount > 256 ? 256 : extCount;
+        std::vector<VkExtensionProperties> exts(cap);
+        if (vkEnumerateDeviceExtensionProperties(gpus[i], nullptr, &cap, exts.data()) ==
+            VK_SUCCESS) {
+            for (uint32_t e = 0; e < cap; ++e) {
+                if (!std::strcmp(exts[e].extensionName,
+                                 VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
+                    foreign = true;
+                if (!std::strcmp(exts[e].extensionName, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME))
+                    extMem = true;
+                if (!std::strcmp(exts[e].extensionName,
+                                 VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME))
+                    ahb = true;
+                if (!std::strcmp(exts[e].extensionName, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME))
+                    sem = true;
+                if (!std::strcmp(exts[e].extensionName,
+                                 VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME))
+                    semFd = true;
+                if (!std::strcmp(exts[e].extensionName,
+                                 VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME))
+                    f16 = true;
+            }
+        }
+        if (!extMem || !ahb || !foreign) continue;
+        ctx->gpu = gpus[i];
+        ctx->queueFamily = family;
+        hasExternalMem = extMem;
+        hasAhb = ahb;
+        hasForeign = foreign;
+        hasSem = sem;
+        hasSemFd = semFd;
+        hasF16 = f16;
+        LOGI("vf-vk: selected device %s (gpu %u family %u)", devProps.deviceName, i, family);
     }
     if (ctx->gpu == VK_NULL_HANDLE) {
         vkDestroyInstance(ctx->instance, nullptr);
         delete ctx;
-        return VFVK_DEVICE_FAILED;
-    }
-    uint32_t extCount = 0;
-    vkEnumerateDeviceExtensionProperties(ctx->gpu, nullptr, &extCount, nullptr);
-    bool hasExternalMem = false, hasAhb = false, hasForeign = false;
-    bool hasSem = false, hasSemFd = false, hasF16 = false;
-    {
-        uint32_t cap = extCount > 256 ? 256 : extCount;
-        std::vector<VkExtensionProperties> exts(cap);
-        if (vkEnumerateDeviceExtensionProperties(ctx->gpu, nullptr, &cap, exts.data()) == VK_SUCCESS) {
-            for (uint32_t i = 0; i < cap; ++i) {
-                if (!std::strcmp(exts[i].extensionName, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
-                    hasForeign = true;
-                if (!std::strcmp(exts[i].extensionName, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME))
-                    hasExternalMem = true;
-                if (!std::strcmp(exts[i].extensionName,
-                                 VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME))
-                    hasAhb = true;
-                if (!std::strcmp(exts[i].extensionName, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME))
-                    hasSem = true;
-                if (!std::strcmp(exts[i].extensionName, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME))
-                    hasSemFd = true;
-                if (!std::strcmp(exts[i].extensionName, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME))
-                    hasF16 = true;
-            }
-        }
-    }
-    if (!hasExternalMem || !hasAhb || !hasForeign) {
-        vkDestroyInstance(ctx->instance, nullptr);
-        delete ctx;
-        return VFVK_NO_EXTENSION;
+        return anyQueue ? VFVK_NO_EXTENSION : VFVK_DEVICE_FAILED;
     }
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queueInfo{};
@@ -2923,6 +3441,308 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     return VFVK_OK;
 }
 
+// Sampled-image dispatch: same fence/export discipline as dispatchSuperpixel,
+// but the input is the imported R16 image. Foreign acquire/release follows
+// Acquire: GENERAL -> SHADER_READ_ONLY on FOREIGN_EXT -> queue, then back.
+static int dispatchSuperpixelImage(std::unique_lock<std::mutex>& vkGuard,
+                                   const SuperpixelParams& params,
+                                   const ImportedImage& input) {
+    VkDescriptorImageInfo inputInfo{};
+    inputInfo.sampler = g->rawSampler;
+    inputInfo.imageView = input.view;
+    inputInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo outputInfo{};
+    outputInfo.imageView = g->output.view;
+    outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->imgSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &inputInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->imgSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &outputInfo;
+    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
+    if (!ensureShadeSampler(g) || !ensureShadeDummy(g)) return VFVK_SUBMIT_FAILED;
+    VkDescriptorImageInfo shadeInfo{};
+    shadeInfo.sampler = g->shadeSampler;
+    shadeInfo.imageView = g->shadeDummyView;
+    shadeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet shadeWrite{};
+    shadeWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    shadeWrite.dstSet = g->imgSet;
+    shadeWrite.dstBinding = 2;
+    shadeWrite.descriptorCount = 1;
+    shadeWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadeWrite.pImageInfo = &shadeInfo;
+    vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
+    if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
+
+    vkResetFences(g->device, 1, &g->fence);
+    vkResetCommandBuffer(g->commandBuffer, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(g->commandBuffer, &begin);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: image begin failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    VkImageMemoryBarrier acquire{};
+    acquire.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    acquire.srcAccessMask = 0;
+    acquire.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    acquire.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    acquire.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    acquire.dstQueueFamilyIndex = g->queueFamily;
+    acquire.image = input.image;
+    acquire.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    acquire.subresourceRange.levelCount = 1;
+    acquire.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &acquire);
+    layoutBarrier(g->commandBuffer, g->output.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    vkCmdBindPipeline(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, g->imgPipeline);
+    vkCmdBindDescriptorSets(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->imgPipelineLayout, 0, 1, &g->imgSet, 0, nullptr);
+    vkCmdPushConstants(g->commandBuffer, g->imgPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(params), &params);
+    const uint32_t gx = (uint32_t)(params.frameSize[0] + 7) / 8;
+    const uint32_t gy = (uint32_t)(params.frameSize[1] + 7) / 8;
+    vkCmdDispatch(g->commandBuffer, gx, gy, 1);
+    layoutBarrier(g->commandBuffer, g->output.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, g->queueFamily,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT);
+    VkImageMemoryBarrier release{};
+    release.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    release.dstAccessMask = 0;
+    release.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    release.srcQueueFamilyIndex = g->queueFamily;
+    release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    release.image = input.image;
+    release.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    release.subresourceRange.levelCount = 1;
+    release.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(g->commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &release);
+    vr = vkEndCommandBuffer(g->commandBuffer);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: image end failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &g->commandBuffer;
+    vr = vkQueueSubmit(g->queue, 1, &submit, g->fence);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: image submit failed %d", vr);
+        g->computeArmed = false;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    g->computeArmed = true;
+    vfComputeInFlight.fetch_add(1);
+    const uint64_t gen = vkGeneration.load();
+    VkFence fence = g->fence;
+    VkDevice device = g->device;
+    vkGuard.unlock();
+    vr = vkWaitForFences(device, 1, &fence, VK_TRUE, VFVK_VF_WAIT_NS);
+    vkGuard.lock();
+    vfComputeInFlight.fetch_sub(1);
+    if (g == nullptr || vkGeneration.load() != gen) return VFVK_NOT_INITIALIZED;
+    if (vr == VK_TIMEOUT) return VFVK_BUSY;
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: image fence wait failed %d; retiring before release", vr);
+        const VkResult retired = vkQueueWaitIdle(g->queue);
+        g->computeArmed = false;
+        if (retired == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    g->computeArmed = false;
+    return VFVK_OK;
+}
+
+// TRANSFER bridge-copy dispatch: the camera allocation (imported once,
+// shared with the buffer tier) is copied by the transfer engine into the
+// owned R16 image, then the proven img pipeline reads the owned image. Same
+// fence/export discipline as the other dispatches; the only new work is the
+// acquire -> copy -> shader-read chain on the owned image. The copy covers
+// the FULL import dims (the push block's frameSize is the stepped output
+// geometry; the img shader steps through full-res like the image tier).
+static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
+                                    const SuperpixelParams& params,
+                                    const ImportedBuffer& input) {
+    VkDescriptorImageInfo inputInfo{};
+    inputInfo.sampler = g->rawSampler;
+    inputInfo.imageView = g->bridgeView;
+    inputInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo outputInfo{};
+    outputInfo.imageView = g->output.view;
+    outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->imgSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &inputInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->imgSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &outputInfo;
+    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
+    if (!ensureShadeSampler(g) || !ensureShadeDummy(g)) return VFVK_SUBMIT_FAILED;
+    VkDescriptorImageInfo shadeInfo{};
+    shadeInfo.sampler = g->shadeSampler;
+    shadeInfo.imageView = g->shadeDummyView;
+    shadeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet shadeWrite{};
+    shadeWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    shadeWrite.dstSet = g->imgSet;
+    shadeWrite.dstBinding = 2;
+    shadeWrite.descriptorCount = 1;
+    shadeWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadeWrite.pImageInfo = &shadeInfo;
+    vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
+    if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
+
+    vkResetFences(g->device, 1, &g->fence);
+    vkResetCommandBuffer(g->commandBuffer, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(g->commandBuffer, &begin);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: bridge begin failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    // Adopt the HAL's fresh contents for the copy engine (not the shader).
+    VkBufferMemoryBarrier bufBarrier{};
+    bufBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bufBarrier.srcAccessMask = 0;
+    bufBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    bufBarrier.dstQueueFamilyIndex = g->queueFamily;
+    bufBarrier.buffer = input.buffer;
+    bufBarrier.offset = 0;
+    bufBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(g->commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &bufBarrier, 0,
+                         nullptr);
+    // Owned image: previous frame's shader read -> transfer write. The image
+    // is app-owned (no queue transfer), but the execution dependency is real.
+    layoutBarrier(g->commandBuffer, g->bridgeImage,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                  VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = input.stridePixels;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent.width = input.width;
+    region.imageExtent.height = input.height;
+    region.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(g->commandBuffer, input.buffer, g->bridgeImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    layoutBarrier(g->commandBuffer, g->bridgeImage,
+                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
+    layoutBarrier(g->commandBuffer, g->output.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    vkCmdBindPipeline(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, g->imgPipeline);
+    vkCmdBindDescriptorSets(g->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->imgPipelineLayout, 0, 1, &g->imgSet, 0, nullptr);
+    vkCmdPushConstants(g->commandBuffer, g->imgPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(params), &params);
+    const uint32_t gx = (uint32_t)(params.frameSize[0] + 7) / 8;
+    const uint32_t gy = (uint32_t)(params.frameSize[1] + 7) / 8;
+    vkCmdDispatch(g->commandBuffer, gx, gy, 1);
+    layoutBarrier(g->commandBuffer, g->output.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, g->queueFamily,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT);
+    // Return the borrowed RAW allocation to Camera2/CPU.
+    bufBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bufBarrier.dstAccessMask = 0;
+    bufBarrier.srcQueueFamilyIndex = g->queueFamily;
+    bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    vkCmdPipelineBarrier(g->commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &bufBarrier, 0,
+                         nullptr);
+    // Park the owned image back in GENERAL for the next frame's chain.
+    layoutBarrier(g->commandBuffer, g->bridgeImage,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
+    vr = vkEndCommandBuffer(g->commandBuffer);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: bridge end failed %d", vr);
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &g->commandBuffer;
+    vr = vkQueueSubmit(g->queue, 1, &submit, g->fence);
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: bridge submit failed %d", vr);
+        g->computeArmed = false;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    g->computeArmed = true;
+    vfComputeInFlight.fetch_add(1);
+    const uint64_t gen = vkGeneration.load();
+    VkFence fence = g->fence;
+    VkDevice device = g->device;
+    vkGuard.unlock();
+    vr = vkWaitForFences(device, 1, &fence, VK_TRUE, VFVK_VF_WAIT_NS);
+    vkGuard.lock();
+    vfComputeInFlight.fetch_sub(1);
+    if (g == nullptr || vkGeneration.load() != gen) return VFVK_NOT_INITIALIZED;
+    if (vr == VK_TIMEOUT) return VFVK_BUSY;
+    if (vr != VK_SUCCESS) {
+        LOGW("vf-vk: bridge fence wait failed %d; retiring before release", vr);
+        const VkResult retired = vkQueueWaitIdle(g->queue);
+        g->computeArmed = false;
+        if (retired == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
+    }
+    g->computeArmed = false;
+    return VFVK_OK;
+}
+
 // Normalize-LUT upload (VfLevels.lutFor bytes): scatter the 4 packed
 // site rows (codes 0..lutMax each) into the full-range segments. The
 // tail past lutMax stays 0xFF on first upload and when the bound
@@ -2979,16 +3799,28 @@ Java_com_matthew_rawlens_VfVulkan_ensureOutputNative(
     AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, outputBuffer);
     if (!buf) return VFVK_BAD_ARGUMENT;
     if (g->outputBuffer == buf) return VFVK_OK;
-    destroyImported(g, &g->output);
-    if (g->outputBuffer) AHardwareBuffer_release(g->outputBuffer);
-    g->outputBuffer = nullptr;
-    int r = importAhb(g, buf, VK_IMAGE_USAGE_STORAGE_BIT, "output", false, &g->output);
+    // Get-or-import the output (BGU rotates 3 export slots, so cache by
+    // pointer like the inputs; the single-slot version re-imported here).
+    auto it = g->outputs.find(buf);
+    if (it != g->outputs.end()) {
+        g->outputBuffer = buf;
+        g->output = it->second;
+        return VFVK_OK;
+    }
+    ImportedImage imported;
+    int r = importAhb(g, buf, VK_IMAGE_USAGE_STORAGE_BIT, "output", false, &imported);
     if (r != VFVK_OK) {
         LOGW("vf-vk: output storage import failed");
         return VFVK_OUTPUT_IMPORT_FAILED;
     }
+    if (g->outputOrder.size() >= OUTPUT_CACHE_CAP) {
+        evictOldestOutput(g);
+    }
     AHardwareBuffer_acquire(buf);
+    g->outputs[buf] = imported;
+    g->outputOrder.push_back(buf);
     g->outputBuffer = buf;
+    g->output = imported;
     LOGI("vf-vk: output import ready");
     return VFVK_OK;
 }
@@ -3036,8 +3868,139 @@ Java_com_matthew_rawlens_VfVulkan_computeNative(
 
     SuperpixelParams params{};
     if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    // Buffer-tier row math follows the imported allocation's stride, which
+    // is authoritative for this layout (the Camera2 plane stride can
+    // disagree on padded grallocs). Copy/plane tiers keep the plane pitch:
+    // their staging uploads are linear by construction.
+    if (input.stridePixels > 0 && params.frameSize[0] > 0 &&
+        input.stridePixels >= (uint32_t)params.frameSize[0]) {
+        params.pitch = (int32_t)input.stridePixels;
+    } else {
+        static bool strideWarned = false;
+        if (!strideWarned) {
+            strideWarned = true;
+            LOGW("vf-vk: input: bad import stride %u for width %d; keeping plane pitch %d",
+                 input.stridePixels, params.frameSize[0], params.pitch);
+        }
+    }
 
     return dispatchSuperpixel(vkGuard, params, input.buffer, true);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_initImageNative(JNIEnv* env, jobject, jbyteArray spv) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (g->imgPipeline != VK_NULL_HANDLE) return VFVK_OK;
+    if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
+    jsize bytes = env->GetArrayLength(spv);
+    std::vector<uint32_t> code(bytes / 4);
+    env->GetByteArrayRegion(spv, 0, bytes, reinterpret_cast<jbyte*>(code.data()));
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    if (!createImagePipeline(g, code.data(), code.size())) {
+        destroyImagePipeline(g);
+        return VFVK_PIPELINE_FAILED;
+    }
+    LOGI("vf-vk: image pipeline ready");
+    return VFVK_OK;
+}
+
+// Sampled-image primary tier: sampled R16_UINT image import + superpixel.
+// Rejection (VFVK_IMAGE_UNSUPPORTED) means this stream is not zero-copyable;
+// the caller latches the tier and uploads via computeCopyNative instead.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_computeImageNative(
+    JNIEnv* env, jobject, jobject inputBuffer, jintArray iparams, jfloatArray fparams) {
+    std::unique_lock<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (g->imgPipeline == VK_NULL_HANDLE) return VFVK_IMAGE_UNSUPPORTED;
+    if (!inputBuffer || !iparams || !fparams) return VFVK_BAD_ARGUMENT;
+    if (g->outputBuffer == nullptr) return VFVK_OUTPUT_IMPORT_FAILED;
+    AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, inputBuffer);
+    if (!buf) return VFVK_BAD_ARGUMENT;
+    if (g->computeArmed) {
+        const VkResult fs = vkGetFenceStatus(g->device, g->fence);
+        if (fs == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        if (fs != VK_SUCCESS) return VFVK_BUSY;
+        g->computeArmed = false;
+    }
+    auto it = g->imgInputs.find(buf);
+    if (it == g->imgInputs.end()) {
+        ImportedImage imported;
+        int r = importInputImage(g, buf, &imported);
+        if (r != VFVK_OK) return r;
+        if (g->imgInputOrder.size() >= INPUT_CACHE_CAP) evictOldestImgInput(g);
+        AHardwareBuffer_acquire(buf);
+        g->imgInputs[buf] = imported;
+        g->imgInputOrder.push_back(buf);
+        it = g->imgInputs.find(buf);
+    }
+    const ImportedImage& input = it->second;
+    SuperpixelParams params{};
+    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    return dispatchSuperpixelImage(vkGuard, params, input);
+}
+
+// TRANSFER bridge-copy tier: buffer import (shared cache) + copy engine +
+// owned R16 + the img pipeline. Sits between the direct-read tiers and the
+// CPU-touching uploads: zero CPU copies even where direct reads misbehave.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_computeBridgeNative(
+    JNIEnv* env, jobject, jobject inputBuffer, jintArray iparams, jfloatArray fparams) {
+    std::unique_lock<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (g->imgPipeline == VK_NULL_HANDLE) return VFVK_IMAGE_UNSUPPORTED;
+    if (!inputBuffer || !iparams || !fparams) return VFVK_BAD_ARGUMENT;
+    if (g->outputBuffer == nullptr) return VFVK_OUTPUT_IMPORT_FAILED;
+    AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, inputBuffer);
+    if (!buf) return VFVK_BAD_ARGUMENT;
+    if (g->computeArmed) {
+        const VkResult fs = vkGetFenceStatus(g->device, g->fence);
+        if (fs == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        if (fs != VK_SUCCESS) return VFVK_BUSY;
+        g->computeArmed = false;
+    }
+    auto it = g->inputs.find(buf);
+    if (it == g->inputs.end()) {
+        ImportedBuffer imported;
+        int r = importInputBuffer(g, buf, &imported);
+        if (r != VFVK_OK) return VFVK_INPUT_IMPORT_FAILED;
+        if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
+            evictOldestInput(g);
+        }
+        AHardwareBuffer_acquire(buf);
+        g->inputs[buf] = imported;
+        g->inputOrder.push_back(buf);
+        it = g->inputs.find(buf);
+    }
+    const ImportedBuffer& input = it->second;
+    SuperpixelParams params{};
+    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    // The copy region is exact or the tier refuses: a wrong rowLength would
+    // skew every row silently (the black-output probe cannot see skew). The
+    // owned image spans the FULL import dims — frameSize is the stepped
+    // output geometry, and the img shader steps through full-res.
+    if (input.width == 0 || input.height == 0 || input.stridePixels < input.width) {
+        static bool bridgeStrideWarned = false;
+        if (!bridgeStrideWarned) {
+            bridgeStrideWarned = true;
+            LOGW("vf-vk: bridge: bad import geometry %ux%u stride %u; refusing",
+                 input.width, input.height, input.stridePixels);
+        }
+        return VFVK_SUBMIT_FAILED;
+    }
+    if (params.frameSize[0] <= 0 || params.frameSize[1] <= 0) return VFVK_BAD_ARGUMENT;
+    int br = ensureBridge(g, input.width, input.height);
+    if (br != VFVK_OK) return br;
+    int r = dispatchSuperpixelBridge(vkGuard, params, input);
+    if (r == VFVK_OK) {
+        static bool bridgeLogged = false;
+        if (!bridgeLogged) {
+            bridgeLogged = true;
+            LOGI("vf-vk: bridge: dispatch ok (import+transfer path)");
+        }
+    }
+    return r;
 }
 
 // GPU-copy tier (motioncam pattern): lock the input AHB, memcpy into the
@@ -3103,6 +4066,50 @@ Java_com_matthew_rawlens_VfVulkan_computeCopyNative(
     return dispatchSuperpixel(vkGuard, params, g->stagingBuffer, false);
 }
 
+// CPU-plane upload tier: copy the Camera2 plane's direct ByteBuffer into
+// the same staging buffer, then dispatch. This is the fallback for streams
+// whose hardware buffer cannot be imported at all (packed formats, BLOB
+// allocations): the plane is always CPU-readable, so no AHB lock or
+// external-memory import is involved. byteCount is rowStride * height.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfVulkan_computePlaneNative(
+    JNIEnv* env, jobject, jobject planeBuffer, jint byteCount,
+    jintArray iparams, jfloatArray fparams) {
+    std::unique_lock<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (!planeBuffer || byteCount <= 0 || !iparams || !fparams) return VFVK_BAD_ARGUMENT;
+    if (g->outputBuffer == nullptr) return VFVK_OUTPUT_IMPORT_FAILED;
+    void* src = env->GetDirectBufferAddress(planeBuffer);
+    jlong capacity = env->GetDirectBufferCapacity(planeBuffer);
+    if (src == nullptr || capacity < byteCount) {
+        LOGW("vf-vk: plane: not a direct buffer holding %d bytes", byteCount);
+        return VFVK_COPY_UPLOAD_FAILED;
+    }
+    if (g->computeArmed) {
+        const VkResult fs = vkGetFenceStatus(g->device, g->fence);
+        if (fs == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        if (fs != VK_SUCCESS) return VFVK_BUSY;
+        g->computeArmed = false;
+    }
+    int sr = ensureStaging(g, (VkDeviceSize)byteCount);
+    if (sr != VFVK_OK) return sr;
+    std::memcpy(g->stagingMapped, src, (size_t)byteCount);
+    if (!g->stagingCoherent) {
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = g->stagingMemory;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        if (vkFlushMappedMemoryRanges(g->device, 1, &range) != VK_SUCCESS) {
+            LOGW("vf-vk: plane: flush failed");
+            return VFVK_COPY_UPLOAD_FAILED;
+        }
+    }
+    SuperpixelParams params{};
+    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    return dispatchSuperpixel(vkGuard, params, g->stagingBuffer, false);
+}
+
 // Tier black-output probe: stride-aware max byte over a coarse grid of the
 // export buffer (RGBA8 linear superpixel, pre-tonemap). The caller samples
 // after the compute fence, with GL drained, so the read is deterministic.
@@ -3156,12 +4163,20 @@ Java_com_matthew_rawlens_VfVulkan_resetNative(JNIEnv*, jobject) {
     if (g == nullptr) return;
     vkDeviceWaitIdle(g->device);
     destroyGrade(g);
+    // Session boundary: drop sampled-image imports only (pipeline stays).
+    for (auto& entry : g->imgInputs) destroyImported(g, &entry.second);
+    for (AHardwareBuffer* b : g->imgInputOrder) AHardwareBuffer_release(b);
+    g->imgInputs.clear();
+    g->imgInputOrder.clear();
     for (auto& entry : g->inputs) destroyImportedBuffer(g, &entry.second);
     for (AHardwareBuffer* b : g->inputOrder) AHardwareBuffer_release(b);
     g->inputs.clear();
     g->inputOrder.clear();
-    destroyImported(g, &g->output);
-    if (g->outputBuffer) AHardwareBuffer_release(g->outputBuffer);
+    for (auto& entry : g->outputs) destroyImported(g, &entry.second);
+    for (AHardwareBuffer* b : g->outputOrder) AHardwareBuffer_release(b);
+    g->outputs.clear();
+    g->outputOrder.clear();
+    g->output = ImportedImage{};
     g->outputBuffer = nullptr;
 }
 

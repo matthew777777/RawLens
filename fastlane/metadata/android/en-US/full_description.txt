@@ -1,0 +1,33 @@
+RawLens is a photography-first, open-source Android camera built around a
+scene-referred RAW pipeline. It captures full-resolution Camera2 sensor data
+as DNG files and develops calibrated RAW JPEG output, with direct exposure
+controls and a minimal portrait-oriented viewfinder. No gallery, cloud sync,
+accounts, ads, or analytics.
+
+Features:
+- Full-resolution RAW_SENSOR stills saved as DNG, JPEG, or JPEG+DNG
+- Single-frame and six-frame burst release modes
+- AUTO, PROGRAM (custom RAW-driven AE), ZSL, and MANUAL exposure modes
+- Manual ISO, shutter speed, white balance, and exposure compensation
+- Center-weighted, frame-average, and spot AE metering
+- Optional RAW zero-shutter-lag capture from a bounded pre-shutter buffer
+- Tap/drag focus and exposure metering targets, face-priority AF/AE
+- HDR brackets merged into one HDR DNG, plus HDR+ and RAW super-resolution
+- RAW JPEG development with AgX Base, Golden, and Punchy looks
+- Per-camera DNG calibration overrides (levels, noise profile, color matrices)
+- Live histogram, grid, horizon/level guide, timer, torch, OIS toggle
+- Optional GPS geotagging embedded in saved DNG/JPEG files (off by default)
+
+Requirements: Android 10 or newer, and a rear camera that advertises the
+Camera2 RAW capability. RAW support is device- and lens-dependent.
+
+F-Droid build note: this build compiles from source only. The optional
+Halide-accelerated viewfinder rung falls back to the legacy engine, the
+HDR/scope meters use their Kotlin fallbacks, and the prebuilt neural-network
+helpers are inactive (no AI denoise; FlowNet alignment uses the identity
+fallback). Capture, DNG/JPEG output, HDR+, super-resolution, and GALOSH and
+wavelet denoise are fully available. In-app update checks are disabled;
+updates come through F-Droid.
+
+Source code and issue tracker: https://github.com/matthew777777/RawLens
+License: GNU General Public License v3 or later.

@@ -19,7 +19,12 @@ var appVersionName = versionProps.getProperty("VERSION_NAME") ?: "1.0.0"
 val isPackagingBuild = gradle.startParameter.taskNames.any {
     it.contains("assemble", ignoreCase = true) || it.contains("bundle", ignoreCase = true)
 } && !gradle.startParameter.isDryRun
-if (isPackagingBuild) {
+// F-Droid / reproducible builds: `-PfdroidBuild` (or FDROID_BUILD=1) freezes
+// the version from version.properties, disables the in-app GitHub update
+// check, and builds native code from source only (no vendored ncnn/Halide
+// archives; the emulator-tested stubs and Kotlin fallbacks take over).
+val isFdroidBuild = project.hasProperty("fdroidBuild") || System.getenv("FDROID_BUILD") == "1"
+if (isPackagingBuild && !isFdroidBuild) {
     appVersionName.split(".").toMutableList().let { parts ->
         parts.last().toIntOrNull()?.let { patch ->
             parts[parts.size - 1] = (patch + 1).toString()
@@ -36,6 +41,8 @@ if (isPackagingBuild) {
 android {
     namespace = "com.matthew.rawlens"
     compileSdk = 35
+    // Pinned so local, CI, and F-Droid builds use the same NDK.
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.matthew.rawlens"
@@ -44,6 +51,18 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "ENABLE_UPDATE_CHECK", if (isFdroidBuild) "false" else "true")
+        externalNativeBuild {
+            cmake {
+                if (isFdroidBuild) {
+                    arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
+                }
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {
