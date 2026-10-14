@@ -30,6 +30,7 @@ c++ -std=c++17 -O2 -Iapp/src/main/cpp/cinemaraw/include \
 # Self-contained (no decoder checkouts): serial/parallel parity, shorthand
 # overload, edge-clamp goldens, chunked container round-trip.
 c++ -std=c++17 -O2 -Iapp/src/main/cpp/cinemaraw/include \
+    -Iapp/src/main/cpp/cinemaraw/src \
     tools/mcraw/parallel_parity.cpp app/src/main/cpp/cinemaraw/src/Encoder.cpp \
     app/src/main/cpp/cinemaraw/src/ContainerWriter.cpp \
     -o "$out/parallel_parity"

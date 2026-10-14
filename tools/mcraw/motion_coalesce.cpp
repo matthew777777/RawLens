@@ -64,7 +64,7 @@ int main() {
             path, R"({"extraData":{"audioSampleRate":48000,"audioChannels":1}})");
         std::vector<uint8_t> raw(64 * 8 * 2, 17), payload;
         mediacinemaraw::encode(raw.data(), raw.size(), 64, 8, 128, false, 0, 8,
-                              false, payload);
+                              false, 0, payload);
         int64_t sensorTs = kFrameTs0;
         for (int f = 0; f < kFrames; ++f) {
             // Mimic the recorder: many tiny sensor drains between frames.

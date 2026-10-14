@@ -48,6 +48,12 @@ import java.util.concurrent.atomic.AtomicLongArray
  * - [crop] switches Open Gate / 16:9 / 2.39:1 / 2.00:1 via the encoder's
  *   crop args with no session reconfiguration. Safe to change
  *   mid-recording (fps locks at record start).
+ * - [binning] bins each 2x2 block to one binned-Bayer sample at half
+ *   resolution (R/B single-tap, diamond-averaged green) inside the
+ *   encoder; the viewfinder fan-out still sees full-res frames. Take-const
+ *   (a mid-take resolution change would break players): read once at
+ *   [start] into [binActive], which also gates the frame-JSON dimensions
+ *   and the % 8 crop resolve.
  * - P4 streams: PCM16 stereo-first audio ([AudioPcmRecorder]) and continuous
  *   gyro/accel ([MotionRecorder]) share the video frame timeline. Capture
  *   runs on boot-time ns, but every on-disk timestamp is
@@ -131,6 +137,19 @@ internal class RawVideoRecorder(
 
     /** Switchable any time, including mid-recording; no session reconfig. */
     @Volatile var crop: VideoCrop = VideoCrop.OPEN_GATE
+
+    /** 2x binning request, set before [start]. Take-const: see [binActive]. */
+    var binning: Boolean = false
+
+    /**
+     * Live binning state for this take ([binning] + Bayer CFA + width % 4),
+     * resolved in [start]. False when the toggle is off or the geometry
+     * cannot bin (logged); the HUD and frame metadata read this, never the
+     * raw preference.
+     */
+    @Volatile var binActive = false
+        private set
+    private var binCfa = 0
 
     /**
      * Live preview fan-out: when attached, every acquired frame is offered to
@@ -296,6 +315,15 @@ internal class RawVideoRecorder(
 
         val chars = cameraManager.getCameraCharacteristics(cameraId)
         vfChars = chars
+        val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        binActive = binningActive(binning, sensorCfa, frameSize.width)
+        binCfa = if (sensorCfa != null && sensorCfa in 0..3) sensorCfa else 0
+        if (binning && !binActive) {
+            Log.w(
+                TAG, "binning off for this take: cfa=$sensorCfa " +
+                    "${frameSize.width}x${frameSize.height}"
+            )
+        }
         val realtime = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
         val orientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
@@ -368,10 +396,14 @@ internal class RawVideoRecorder(
         // worker can never starve the others into a pool deadlock (checkout
         // below is non-blocking regardless). Sized for the worst case
         // (near-incompressible frame); overflow drops the frame instead of
-        // growing.
-        val ew = (frameSize.width + 63) / 64 * 64
+        // growing. Binned takes size from the encoded (half-res) extent —
+        // the tallest binned window is the % 8-trimmed full height.
+        val boundW = if (binActive) frameSize.width / 2 else frameSize.width
+        val boundH =
+            if (binActive) frameSize.height / 8 * 8 / 2 else frameSize.height
+        val ew = (boundW + 63) / 64 * 64
         val payloadBound =
-            (ew.toLong() * frameSize.height * 2 + ew * frameSize.height / 4 + 65536)
+            (ew.toLong() * boundH * 2 + ew * boundH / 4 + 65536)
                 .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         payloadPool = ArrayBlockingQueue(workers + 2)
         repeat(workers + 2) {
@@ -428,7 +460,8 @@ internal class RawVideoRecorder(
                     dropped.incrementAndGet()
                     continue
                 }
-                val resolved = crop.resolve(frameSize.width, frameSize.height)
+                val resolved =
+                    crop.resolve(frameSize.width, frameSize.height, binActive)
                 val ts = img.timestamp
                 // Container timestamp origin: first queued frame (volatile
                 // write; the queue hands happens-before to the workers).
@@ -451,6 +484,11 @@ internal class RawVideoRecorder(
                 } catch (_: Exception) {
                     null
                 }
+                // Frame JSON carries ENCODED dimensions: the binned
+                // extent when binActive, so decoders size the payload
+                // correctly (`originalWidth`/`rowStride` derive from these).
+                val encW = if (binActive) frameSize.width / 2 else frameSize.width
+                val encH = if (binActive) resolved.height / 2 else resolved.height
                 val task = EncodeTask(
                     seq = nextSeq++,
                     image = img,
@@ -462,8 +500,8 @@ internal class RawVideoRecorder(
                     cropTop = resolved.top,
                     cropHeight = resolved.height,
                     timestampNs = ts,
-                    frameJson = "{\"width\":${frameSize.width}," +
-                        "\"height\":${resolved.height}," +
+                    frameJson = "{\"width\":$encW," +
+                        "\"height\":$encH," +
                         "\"compressionType\":7,\"timestamp\":$ts," +
                         "\"crop\":\"${crop.name}\"" +
                         (if (shadingTriplet != null) ",$shadingTriplet" else "") +
@@ -694,7 +732,7 @@ internal class RawVideoRecorder(
                 val t0 = SystemClock.elapsedRealtimeNanos()
                 val bytes = CinemaRawWriter.encodeFrame(
                     task.src, task.size, task.width, task.height, task.stride,
-                    task.cropTop, task.cropHeight, buf
+                    task.cropTop, task.cropHeight, buf, binActive, binCfa
                 )
                 val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
                 // Benign races on stats: worst case a slightly stale overlay.
@@ -1146,6 +1184,16 @@ internal class RawVideoRecorder(
 
     companion object {
         private const val TAG = "RawVideoRecorder"
+
+        /**
+         * Take-const binning decision shared by the recorder, the HUD, and
+         * the container metadata: the settings [pref] plus a Bayer [cfa]
+         * (Camera2 0..3, routes the binning taps) plus a binnable width.
+         * Pure so the HUD can preview it before the take exists.
+         */
+        fun binningActive(pref: Boolean, cfa: Int?, sensorW: Int): Boolean =
+            pref && cfa != null && cfa in 0..3 && VideoCrop.supportsBinning(sensorW)
+
         const val FPS = 30
         // Outstanding Images must stay <= QUEUE_CAP + workers in hand with
         // margin: the acquire loop drops (never wedges) when encode

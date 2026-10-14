@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Pins the upstream encoder behavior (synced at 3c9519c; the detail/
-// refactor is byte-identical to 55cceb2): encode_parallel() must be
-// byte-identical to encode(), the convenience overload must match the full
-// form, the edge-tile padding clamp must produce upstream's golden bytes,
-// and the fd-fork ContainerWriter must emit byte-exact audio/motion payloads
+// Pins the encoder behavior (synced at 3c9519c; the detail/ refactor is
+// byte-identical to 55cceb2, except the bin kernel, which is the local
+// diamond: R/B single-tap, diamond-averaged green): encode_parallel() must
+// be byte-identical to encode(), the convenience overload must match the
+// full form, the edge-tile padding clamp must produce upstream's golden
+// bytes, the binned taps must match the diamond spec pixel-for-pixel, and
+// the fd-fork ContainerWriter must emit byte-exact audio/motion payloads
 // through its chunked write path. Self-contained: no decoder checkouts.
 #include <MediaCinemaRAW/ContainerWriter.h>
 #include <MediaCinemaRAW/Encoder.h>
+
+#include "detail/Binning.h"
 
 #include <cassert>
 #include <cstdint>
@@ -43,7 +47,7 @@ uint16_t xorshiftNext(uint32_t& s) {
 }
 
 void checkParallel(int width, int height, int slack, bool raw10, int cropTop,
-                   int cropHeight, bool bin) {
+                   int cropHeight, bool bin, int cfa) {
     const size_t rowBytes = raw10 ? size_t(width) / 4 * 5 : size_t(width) * 2;
     const int stride = int(rowBytes) + slack;
     std::vector<uint8_t> raw(size_t(height - 1) * stride + rowBytes, 0);
@@ -64,21 +68,97 @@ void checkParallel(int width, int height, int slack, bool raw10, int cropTop,
         }
     std::vector<uint8_t> serial, par;
     mediacinemaraw::encode(raw.data(), raw.size(), width, height, stride, raw10,
-                           cropTop, cropHeight, bin, serial);
+                           cropTop, cropHeight, bin, cfa, serial);
     for (unsigned t : {0u, 1u, 2u, 3u, 7u}) {
         mediacinemaraw::encode_parallel(raw.data(), raw.size(), width, height, stride,
-                                        raw10, cropTop, cropHeight, bin, par, t);
+                                        raw10, cropTop, cropHeight, bin, cfa, par, t);
         assert(par == serial);
     }
     // Repeated parallel calls are deterministic.
     std::vector<uint8_t> par2;
     mediacinemaraw::encode_parallel(raw.data(), raw.size(), width, height, stride,
-                                    raw10, cropTop, cropHeight, bin, par2, 0);
+                                    raw10, cropTop, cropHeight, bin, cfa, par2, 0);
     assert(par2 == serial);
     std::cout << "parallel parity " << width << "x" << height
               << (raw10 ? " raw10" : " raw16") << (bin ? " bin" : "")
+              << (bin ? " cfa=" + std::to_string(cfa) : "")
               << " cropTop=" << cropTop << " cropH=" << cropHeight << " ok ("
               << serial.size() << " bytes)\n";
+}
+
+// Diamond binning, pixel-for-pixel: the shipped BinnedSample helper over a
+// crafted frame must equal the spec taps (R/B single-tap, green diamond
+// with same-colour edge mirrors, +2 rounding) for every CFA, RAW16 and
+// packed RAW10 alike, with and without a crop offset. Distinct per-pixel
+// values catch any misrouted tap; the sweeps cover the right/bottom edge
+// clamps and the bottom-right corner.
+void checkDiamond(int width, int height, bool raw10, int cropTop, int cropHeight,
+                  int cfa) {
+    assert(width % 4 == 0 && cropHeight % 8 == 0);
+    const size_t rowBytes = raw10 ? size_t(width) / 4 * 5 : size_t(width) * 2;
+    const int stride = int(rowBytes) + 8;
+    std::vector<uint8_t> raw(size_t(height - 1) * stride + rowBytes, 0);
+    std::vector<uint16_t> pixels(size_t(width) * height, 0);
+    uint32_t st = 0x85EBCA6Bu;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            uint16_t v = xorshiftNext(st);
+            if (raw10) v %= 1024;
+            // Fold in the coordinates so every pixel differs from its
+            // neighbours: a misrouted tap cannot hide behind equal values.
+            v = uint16_t((v + x * 131u + y * 17u) & (raw10 ? 1023u : 65535u));
+            pixels[size_t(y) * width + x] = v;
+            if (raw10) {
+                raw[size_t(y) * stride + x / 4 * 5 + x % 4] = uint8_t(v >> 2);
+                if (x % 4 == 0) raw[size_t(y) * stride + x / 4 * 5 + 4] = 0;
+                raw[size_t(y) * stride + x / 4 * 5 + 4] = uint8_t(
+                    raw[size_t(y) * stride + x / 4 * 5 + 4] | ((v & 3) << (2 * (x % 4))));
+            } else {
+                raw[size_t(y) * stride + x * 2] = uint8_t(v);
+                raw[size_t(y) * stride + x * 2 + 1] = uint8_t(v >> 8);
+            }
+        }
+    auto sample = [&](int x, int y) -> uint16_t {
+        const uint8_t* row = raw.data() + size_t(y + cropTop) * stride;
+        if (raw10)
+            return uint16_t((uint16_t(row[x / 4 * 5 + x % 4]) << 2) |
+                            ((row[x / 4 * 5 + 4] >> (2 * (x % 4))) & 3));
+        return uint16_t(uint16_t(row[x * 2]) | (uint16_t(row[x * 2 + 1]) << 8));
+    };
+    const bool greenEven = (cfa == 1 || cfa == 2);
+    const int encW = width / 2, encH = cropHeight / 2;
+    for (int oy = 0; oy < encH; ++oy)
+        for (int ox = 0; ox < encW; ++ox) {
+            const int sx = ox * 2, sy = cropTop + oy * 2, prow = oy * 2;
+            const bool isGreen = ((((ox + oy) & 1) == 0) == greenEven);
+            uint16_t expected;
+            if (!isGreen) {
+                expected = pixels[size_t(sy + (oy & 1)) * width + sx + (ox & 1)];
+            } else if (!greenEven) {
+                const uint32_t t = pixels[size_t(sy) * width + sx + 1];
+                const uint32_t l = pixels[size_t(sy + 1) * width + sx];
+                const uint32_t r =
+                    (ox + 1 < encW) ? pixels[size_t(sy + 1) * width + sx + 2] : l;
+                const uint32_t b =
+                    (prow + 2 < cropHeight) ? pixels[size_t(sy + 2) * width + sx + 1] : t;
+                expected = uint16_t((t + l + r + b + 2) >> 2);
+            } else {
+                const uint32_t a = pixels[size_t(sy) * width + sx];
+                const uint32_t q = pixels[size_t(sy + 1) * width + sx + 1];
+                const uint32_t r =
+                    (ox + 1 < encW) ? pixels[size_t(sy) * width + sx + 2] : a;
+                const uint32_t b =
+                    (prow + 2 < cropHeight) ? pixels[size_t(sy + 2) * width + sx] : a;
+                expected = uint16_t((a + q + r + b + 2) >> 2);
+            }
+            const uint16_t got = mediacinemaraw::detail::BinnedSample(
+                sample, ox, oy, encW, cropHeight, cfa);
+            assert(got == expected);
+        }
+    std::cout << "diamond bin " << width << "x" << height
+              << (raw10 ? " raw10" : " raw16") << " cfa=" << cfa
+              << " cropTop=" << cropTop << " cropH=" << cropHeight << " ok ("
+              << encW << "x" << encH << " samples)\n";
 }
 
 int64_t loadI64(const std::string& b, size_t p) {
@@ -124,27 +204,40 @@ int main() {
     // encode_parallel() byte-identity across RAW16/RAW10, bin, stride slack,
     // crops, and partial edge tiles (band splits must not disturb tile order
     // or the padding clamp).
-    checkParallel(64, 8, 16, false, 0, 8, false);
-    checkParallel(68, 12, 0, false, 0, 12, false);
-    checkParallel(68, 16, 8, true, 2, 12, false);
-    checkParallel(128, 8, 4, false, 0, 8, true);
-    checkParallel(260, 24, 24, true, 0, 24, false);
+    checkParallel(64, 8, 16, false, 0, 8, false, 0);
+    checkParallel(68, 12, 0, false, 0, 12, false, 0);
+    checkParallel(68, 16, 8, true, 2, 12, false, 0);
+    for (int cfa = 0; cfa < 4; ++cfa)
+        checkParallel(128, 8, 4, false, 0, 8, true, cfa);
+    checkParallel(64, 16, 0, false, 4, 8, true, 0);
+    checkParallel(128, 16, 8, true, 0, 16, true, 1);
+    checkParallel(260, 24, 24, true, 0, 24, false, 0);
+    // Diamond taps, pixel-for-pixel, over every CFA plus RAW10 and cropped
+    // variants (the sweeps hit the right/bottom edge mirrors and corners).
+    for (int cfa = 0; cfa < 4; ++cfa) {
+        checkDiamond(8, 8, false, 0, 8, cfa);
+        checkDiamond(12, 16, false, 4, 8, cfa);
+    }
+    checkDiamond(8, 8, true, 0, 8, 0);
+    checkDiamond(12, 16, true, 4, 8, 1);
     // Error parity: same geometry rejection before any thread spawns.
     {
         std::vector<uint8_t> tiny(64, 0), tmp;
-        for (int bad = 0; bad < 2; ++bad) {
+        for (int bad = 0; bad < 3; ++bad) {
+            const int stride = bad == 1 ? 10 : 128;
+            const int top = bad == 0 ? 1 : 0;
+            const int cfa = bad == 2 ? 9 : 0;
             bool s = false, p = false;
             try {
                 mediacinemaraw::encode(tiny.data(), tiny.size(), 64, 8,
-                                       bad ? 10 : 128, false, bad ? 0 : 1, 8,
-                                       false, tmp);
+                                       stride, false, top, 8, false, cfa, tmp);
             } catch (const std::invalid_argument&) {
                 s = true;
             }
             try {
                 mediacinemaraw::encode_parallel(tiny.data(), tiny.size(), 64, 8,
-                                                bad ? 10 : 128, false,
-                                                bad ? 0 : 1, 8, false, tmp, 4);
+                                                stride, false, top, 8, false,
+                                                cfa, tmp, 4);
             } catch (const std::invalid_argument&) {
                 p = true;
             }
@@ -166,7 +259,7 @@ int main() {
             }
         std::vector<uint8_t> full, easy;
         mediacinemaraw::encode(rawO.data(), rawO.size(), wO, hO, sO, false, 0,
-                               hO, false, full);
+                               hO, false, 0, full);
         mediacinemaraw::encode(rawO.data(), rawO.size(), wO, hO, sO, easy);
         assert(easy == full);
         constexpr int wR = 64, hR = 8, sR = wR / 4 * 5;
@@ -180,7 +273,7 @@ int main() {
                     rawR[y * sR + x / 4 * 5 + 4] | ((v & 3) << (2 * (x % 4))));
             }
         mediacinemaraw::encode(rawR.data(), rawR.size(), wR, hR, sR, true, 0,
-                               hR, false, full);
+                               hR, false, 0, full);
         mediacinemaraw::encode(rawR.data(), rawR.size(), wR, hR, sR, easy, true);
         assert(easy == full);
         std::cout << "shorthand overload parity ok\n";
@@ -200,7 +293,7 @@ int main() {
             }
         std::vector<uint8_t> outB;
         mediacinemaraw::encode(rawB.data(), rawB.size(), wB, hB, sB, false, 0,
-                               hB, false, outB);
+                               hB, false, 0, outB);
         assert(u32le(outB, 0) == 128);  // ew preserved
         assert(u32le(outB, 4) == 4);    // h preserved
         assert(u32le(outB, 8) == 16);   // off1: zero tile payload
@@ -217,10 +310,32 @@ int main() {
             }
         std::vector<uint8_t> outC;
         mediacinemaraw::encode(rawC.data(), rawC.size(), wC, hC, sC, false, 0,
-                               hC, false, outC);
+                               hC, false, 0, outC);
         assert(outC.size() == 156);
         assert(fnv1a(outC) == 0x6f46729dbbcc0211ULL);
         std::cout << "unaligned-width golden 64x4 ok\n";
+    }
+
+    // Diamond-bin golden: 8x8 coordinate ramp binned 4x4 (cfa 0). Pins the
+    // kernel bytes end-to-end (taps + packing); checkDiamond above pins the
+    // tap values themselves.
+    {
+        constexpr int wD = 8, hD = 8, sD = wD * 2;
+        std::vector<uint8_t> rawD(hD * sD, 0);
+        for (int y = 0; y < hD; ++y)
+            for (int x = 0; x < wD; ++x) {
+                const uint16_t v = static_cast<uint16_t>(y * wD + x);
+                rawD[y * sD + x * 2] = static_cast<uint8_t>(v);
+                rawD[y * sD + x * 2 + 1] = static_cast<uint8_t>(v >> 8);
+            }
+        std::vector<uint8_t> outD;
+        mediacinemaraw::encode(rawD.data(), rawD.size(), wD, hD, sD, false, 0,
+                               hD, true, 0, outD);
+        assert(u32le(outD, 0) == 64);  // padded width of the 4-wide frame
+        assert(u32le(outD, 4) == 4);
+        assert(outD.size() == 284);
+        assert(fnv1a(outD) == 0x503b02f6156850e0ULL);
+        std::cout << "diamond-bin golden 8x8 ok\n";
     }
 
     // Chunked ContainerWriter path: single calls larger than the internal
@@ -230,7 +345,7 @@ int main() {
         const std::string path = "/private/tmp/rawlens-parity-chunk.mcraw";
         std::vector<uint8_t> raw(64 * 8 * 2, 7), payload;
         mediacinemaraw::encode(raw.data(), raw.size(), 64, 8, 128, false, 0, 8,
-                               false, payload);
+                               false, 0, payload);
         std::vector<mediacinemaraw::GyroSample> gyro1(6000), gyro2(10);
         for (size_t i = 0; i < gyro1.size(); ++i)
             gyro1[i] = {int64_t(100 + i), 0.1f * float(i), -0.2f * float(i),

@@ -56,8 +56,8 @@ Java_com_matthew_rawlens_CinemaRawWriter_containerOpen(
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CinemaRawWriter_containerEncodeFrame(
     JNIEnv* env, jobject /*thiz*/, jobject src, jint srcOffset, jint size,
-    jint w, jint h, jint stride, jint cropTop, jint cropHeight, jobject dst,
-    jint dstOffset, jint dstCapacity) {
+    jint w, jint h, jint stride, jint cropTop, jint cropHeight, jboolean bin,
+    jint cfa, jobject dst, jint dstOffset, jint dstCapacity) {
     const uint8_t* s =
         static_cast<const uint8_t*>(env->GetDirectBufferAddress(src));
     uint8_t* d = static_cast<uint8_t*>(env->GetDirectBufferAddress(dst));
@@ -66,7 +66,7 @@ Java_com_matthew_rawlens_CinemaRawWriter_containerEncodeFrame(
         thread_local std::vector<uint8_t> payload;
         mediacinemaraw::encode(s + srcOffset, static_cast<size_t>(size), w, h,
                                stride, /*raw10=*/false, cropTop, cropHeight,
-                               /*bin=*/false, payload);
+                               bin != JNI_FALSE, cfa, payload);
         if (static_cast<jint>(payload.size()) > dstCapacity) return -3;
         std::memcpy(d + dstOffset, payload.data(), payload.size());
         return static_cast<jint>(payload.size());

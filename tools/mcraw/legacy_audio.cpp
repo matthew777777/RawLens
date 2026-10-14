@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
                 path, R"({"extraData":{"audioSampleRate":48000,"audioChannels":1}})");
             std::vector<uint8_t> raw(64 * 8 * 2, 17), payload;
             mediacinemaraw::encode(raw.data(), raw.size(), 64, 8, 128, false,
-                                  0, 8, false, payload);
+                                  0, 8, false, 0, payload);
             int64_t sensorTs = 0;
             for (int f = 0; f < 3; ++f) {
                 for (int d = 0; d < 10; ++d) {

@@ -65,13 +65,15 @@ internal object CinemaRawSpike {
      * Encode one frame; returns the payload byte count. [size] is the input
      * plane byte count, [stride] its row stride. Mirrors the encoder's
      * geometry contract (even width, height % 4 == 0, even cropTop).
+     * [cfa] is the Camera2 CFA arrangement (0..3) routing binned taps.
      */
     fun encode(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
         raw10: Boolean, cropTop: Int, cropHeight: Int, bin: Boolean,
-        destination: ByteBuffer
+        destination: ByteBuffer, cfa: Int = 0
     ): Int {
         checkEncodeGeometry(width, height, cropTop, cropHeight)
+        require(cfa in 0..3) { "Bad CFA arrangement $cfa" }
         require(source.isDirect && destination.isDirect) { "CinemaRawSpike needs direct buffers" }
         if (!available) throw IllegalStateException("cinemaraw native library unavailable")
         val dstOffset = destination.position()
@@ -79,7 +81,7 @@ internal object CinemaRawSpike {
         val written = try {
             encodeNative(
                 source, source.position(), size, width, height, stride,
-                raw10, cropTop, cropHeight, bin, destination, dstOffset, capacity
+                raw10, cropTop, cropHeight, bin, cfa, destination, dstOffset, capacity
             )
         } catch (e: UnsatisfiedLinkError) {
             throw IllegalStateException("cinemaraw encoder missing", e)
@@ -98,10 +100,11 @@ internal object CinemaRawSpike {
     fun encodeParallel(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
         raw10: Boolean, cropTop: Int, cropHeight: Int, bin: Boolean,
-        threads: Int, destination: ByteBuffer
+        threads: Int, destination: ByteBuffer, cfa: Int = 0
     ): Int {
         checkEncodeGeometry(width, height, cropTop, cropHeight)
         require(threads >= 0) { "threads must be >= 0, got $threads" }
+        require(cfa in 0..3) { "Bad CFA arrangement $cfa" }
         require(source.isDirect && destination.isDirect) { "CinemaRawSpike needs direct buffers" }
         if (!available) throw IllegalStateException("cinemaraw native library unavailable")
         val dstOffset = destination.position()
@@ -109,7 +112,7 @@ internal object CinemaRawSpike {
         val written = try {
             encodeParallelNative(
                 source, source.position(), size, width, height, stride,
-                raw10, cropTop, cropHeight, bin, threads,
+                raw10, cropTop, cropHeight, bin, cfa, threads,
                 destination, dstOffset, capacity
             )
         } catch (e: UnsatisfiedLinkError) {
@@ -137,12 +140,12 @@ internal object CinemaRawSpike {
     external fun encodeNative(
         src: ByteBuffer, srcOffset: Int, size: Int, w: Int, h: Int,
         stride: Int, raw10: Boolean, cropTop: Int, cropHeight: Int,
-        bin: Boolean, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
+        bin: Boolean, cfa: Int, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
     ): Int
 
     external fun encodeParallelNative(
         src: ByteBuffer, srcOffset: Int, size: Int, w: Int, h: Int,
         stride: Int, raw10: Boolean, cropTop: Int, cropHeight: Int,
-        bin: Boolean, threads: Int, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
+        bin: Boolean, cfa: Int, threads: Int, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
     ): Int
 }

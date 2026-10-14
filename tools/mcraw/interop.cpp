@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
         mediacinemaraw::ContainerWriter writer(path,
             R"({"extraData":{"audioSampleRate":48000,"audioChannels":1}})");
         std::vector<uint8_t> raw(64*8*2, 17), payload;
-        mediacinemaraw::encode(raw.data(),raw.size(),64,8,128,false,0,8,false,payload);
+        mediacinemaraw::encode(raw.data(),raw.size(),64,8,128,false,0,8,false,0,payload);
         writer.writeFrame(payload,1000000000,R"({"width":64,"height":8,"compressionType":7})");
         int16_t samples[] = {1,-2,32767,-32768};
         writer.writeAudio(samples,4,1000000000);
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
             mediacinemaraw::ContainerWriter writer(spath,
                 R"({"extraData":{"audioSampleRate":48000,"audioChannels":2}})");
             std::vector<uint8_t> raw(64*8*2, 17), payload;
-            mediacinemaraw::encode(raw.data(),raw.size(),64,8,128,false,0,8,false,payload);
+            mediacinemaraw::encode(raw.data(),raw.size(),64,8,128,false,0,8,false,0,payload);
             writer.writeFrame(payload,1000000000,R"({"width":64,"height":8,"compressionType":7})");
             int16_t stereo[] = {1000,-1000,2000,-2000,3000,-3000,4000,-4000};
             writer.writeAudio(stereo,8,1000000000);

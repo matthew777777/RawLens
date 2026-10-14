@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "Binning.h"
 #include "BitPacking.h"
 #include "Simd.h"
 
@@ -26,10 +27,11 @@ struct ValidatedGeometry {
 
 inline ValidatedGeometry ValidateGeometry(const uint8_t* rawData, size_t rawSize, int width,
                                           int height, int strideBytes, bool isPackedRaw10,
-                                          int cropTop, int cropHeight, bool downscale4x) {
+                                          int cropTop, int cropHeight, bool downscale4x,
+                                          int cfa) {
     if (rawData == nullptr || width <= 0 || height <= 0 || width > 65536 || height > 65536 ||
         (width & 1) || (isPackedRaw10 && width % 4) || cropTop < 0 || (cropTop & 1) ||
-        cropHeight <= 0 || cropTop > height - cropHeight)
+        cropHeight <= 0 || cropTop > height - cropHeight || cfa < 0 || cfa > 3)
         throw std::invalid_argument("Invalid RAW geometry");
     const size_t rowBytes = isPackedRaw10 ? size_t(width) / 4 * 5 : size_t(width) * 2;
     if (strideBytes < 0 || size_t(strideBytes) < rowBytes ||
@@ -49,8 +51,9 @@ inline ValidatedGeometry ValidateGeometry(const uint8_t* rawData, size_t rawSize
 // are independent: parallel workers run this on disjoint ranges and the
 // caller concatenates in band order for byte-identical output.
 inline void EncodeTileRows(const uint8_t* rawData, int strideBytes, bool isPackedRaw10, int cropTop,
-                           bool downscale4x, int width, int paddedWidth, int yBegin, int yEnd,
-                           std::vector<uint8_t>& tileBytes, std::vector<uint16_t>& channelBits,
+                           int cropHeight, bool downscale4x, int cfa, int width, int paddedWidth,
+                           int yBegin, int yEnd, std::vector<uint8_t>& tileBytes,
+                           std::vector<uint16_t>& channelBits,
                            std::vector<uint16_t>& channelRefs) {
     auto sample = [&](int x, int y) -> uint16_t {
         const uint8_t* row = rawData + size_t(y + cropTop) * strideBytes;
@@ -66,13 +69,8 @@ inline void EncodeTileRows(const uint8_t* rawData, int strideBytes, bool isPacke
             return 0;
         if (!downscale4x)
             return sample(x, y);
-        const int sx = (x / 2) * 4 + x % 2;
-        const int sy = (y / 2) * 4 + y % 2;
-        // Average four same-colour samples; retain the original black/white
-        // levels.
-        return static_cast<uint16_t>((uint32_t(sample(sx, sy)) + sample(sx + 2, sy) +
-                                      sample(sx, sy + 2) + sample(sx + 2, sy + 2) + 2) /
-                                     4);
+        // Binned Bayer at half resolution: R/B single-tap, diamond green.
+        return BinnedSample(sample, x, y, width, cropHeight, cfa);
     };
 
     for (int y = yBegin; y < yEnd; y += kTileHeight)

@@ -37,11 +37,11 @@ void AppendFooter(std::vector<uint8_t>& out, std::vector<uint16_t>& bits,
 } // namespace
 
 void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
-            bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x,
+            bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x, int cfa,
             std::vector<uint8_t>& output) {
     const detail::ValidatedGeometry geometry =
         detail::ValidateGeometry(rawData, rawSize, width, height, strideBytes, isPackedRaw10,
-                                 cropTop, cropHeight, downscale4x);
+                                 cropTop, cropHeight, downscale4x, cfa);
     // clear() keeps capacity, so repeated encodes into the same buffer reuse
     // it; the reserve below covers the worst case once.
     output.clear();
@@ -58,23 +58,24 @@ void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int s
     bits.reserve(channelCapacity);
     refs.reserve(channelCapacity);
 
-    detail::EncodeTileRows(rawData, strideBytes, isPackedRaw10, cropTop, downscale4x,
-                           geometry.width, geometry.paddedWidth, 0, geometry.height, output, bits,
-                           refs);
+    detail::EncodeTileRows(rawData, strideBytes, isPackedRaw10, cropTop, cropHeight,
+                           downscale4x, cfa, geometry.width, geometry.paddedWidth, 0,
+                           geometry.height, output, bits, refs);
     AppendFooter(output, bits, refs);
 }
 
 void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
             std::vector<uint8_t>& output, bool isPackedRaw10) {
-    encode(rawData, rawSize, width, height, strideBytes, isPackedRaw10, 0, height, false, output);
+    encode(rawData, rawSize, width, height, strideBytes, isPackedRaw10, 0, height, false, 0,
+           output);
 }
 
 void encode_parallel(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
-                     bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x,
+                     bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x, int cfa,
                      std::vector<uint8_t>& output, unsigned threadCount) {
     const detail::ValidatedGeometry geometry =
         detail::ValidateGeometry(rawData, rawSize, width, height, strideBytes, isPackedRaw10,
-                                 cropTop, cropHeight, downscale4x);
+                                 cropTop, cropHeight, downscale4x, cfa);
     output.clear();
     const size_t estimate = EstimatePayloadSize(geometry.paddedWidth, geometry.height);
     output.reserve(estimate);
@@ -96,9 +97,9 @@ void encode_parallel(const uint8_t* rawData, size_t rawSize, int width, int heig
         workers = static_cast<unsigned>(bandCount);
 
     if (workers <= 1) {
-        detail::EncodeTileRows(rawData, strideBytes, isPackedRaw10, cropTop, downscale4x,
-                               geometry.width, geometry.paddedWidth, 0, geometry.height, output,
-                               bits, refs);
+        detail::EncodeTileRows(rawData, strideBytes, isPackedRaw10, cropTop, cropHeight,
+                               downscale4x, cfa, geometry.width, geometry.paddedWidth, 0,
+                               geometry.height, output, bits, refs);
     } else {
         struct BandJob {
             std::vector<uint8_t> bytes;
@@ -126,9 +127,9 @@ void encode_parallel(const uint8_t* rawData, size_t rawSize, int width, int heig
             threads.emplace_back([&, i] {
                 try {
                     detail::EncodeTileRows(rawData, strideBytes, isPackedRaw10, cropTop,
-                                           downscale4x, geometry.width, geometry.paddedWidth,
-                                           jobs[i].yBegin, jobs[i].yEnd, jobs[i].bytes,
-                                           jobs[i].bits, jobs[i].refs);
+                                           cropHeight, downscale4x, cfa, geometry.width,
+                                           geometry.paddedWidth, jobs[i].yBegin, jobs[i].yEnd,
+                                           jobs[i].bytes, jobs[i].bits, jobs[i].refs);
                 } catch (...) {
                     errors[i] = std::current_exception();
                 }

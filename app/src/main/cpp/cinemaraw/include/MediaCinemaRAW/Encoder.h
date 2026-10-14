@@ -21,9 +21,16 @@ namespace mediacinemaraw {
 // `rowBytes` is `width * 2` for RAW16 and `width / 4 * 5` for packed RAW10.
 //
 // `cropTop`/`cropHeight` select an even-aligned row window to encode, which
-// preserves the Bayer CFA phase. When `downscale4x` is set, each output pixel
-// is the rounded mean of four same-colour source samples; that mode is lossy
-// by nature and additionally requires `width % 4 == 0`.
+// preserves the Bayer CFA phase. When `downscale4x` is set, each 2x2 source
+// block bins to one output sample: R and B take the plain 2x2 box (the
+// block's single same-colour tap) while green averages the 4 G pixels
+// forming a diamond around the output sample — the two in-block G's plus
+// the two across the block corners in the right/below neighbours, rounded
+// mean. That mode is lossy by nature and additionally requires
+// `width % 4 == 0` (so the binned width stays even for the tile codec).
+// `cfa` is the Camera2 SENSOR_INFO_COLOR_FILTER_ARRANGEMENT numbering
+// (0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR); it routes the binning taps and is
+// validated even when `downscale4x` is false.
 //
 // The output dimensions must satisfy: encoded width even, encoded height a
 // multiple of four. `output` is cleared first; encoding into a reused vector
@@ -31,10 +38,10 @@ namespace mediacinemaraw {
 //
 // Throws std::invalid_argument when the geometry is invalid (null input,
 // odd width, `height % 4 != 0` where required, odd `cropTop`,
-// `cropTop + cropHeight > height`, `strideBytes` below the row size, or a
-// truncated `rawSize`).
+// `cropTop + cropHeight > height`, `strideBytes` below the row size, a
+// truncated `rawSize`, or `cfa` outside [0, 3]).
 void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
-            bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x,
+            bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x, int cfa,
             std::vector<uint8_t>& output);
 
 // Multithreaded encode(). Tile rows are independent, so workers encode
@@ -43,11 +50,11 @@ void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int s
 // `threadCount == 1` (and single-band frames) use the serial path with no
 // thread overhead. Throws exactly like encode(), before spawning threads.
 void encode_parallel(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
-                     bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x,
+                     bool isPackedRaw10, int cropTop, int cropHeight, bool downscale4x, int cfa,
                      std::vector<uint8_t>& output, unsigned threadCount);
 
 // Full-frame lossless shorthand: `cropTop = 0`, `cropHeight = height`,
-// `downscale4x = false`. Equivalent to the 10-argument form.
+// `downscale4x = false`. Equivalent to the 11-argument form with `cfa = 0`.
 void encode(const uint8_t* rawData, size_t rawSize, int width, int height, int strideBytes,
             std::vector<uint8_t>& output, bool isPackedRaw10 = false);
 

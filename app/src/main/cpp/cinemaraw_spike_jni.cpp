@@ -77,7 +77,7 @@ int packRaw10Impl(const uint8_t* src, int srcStride, int w, int h, uint8_t* dst)
 
 int encodeImpl(JNIEnv* env, jobject src, jint srcOffset, jint size, jint w,
                jint h, jint stride, bool raw10, jint cropTop, jint cropHeight,
-               bool bin, jobject dst, jint dstOffset, jint dstCapacity,
+               bool bin, int cfa, jobject dst, jint dstOffset, jint dstCapacity,
                int threads) {
     const uint8_t* s =
         static_cast<const uint8_t*>(env->GetDirectBufferAddress(src));
@@ -88,11 +88,12 @@ int encodeImpl(JNIEnv* env, jobject src, jint srcOffset, jint size, jint w,
         if (threads < 0) {
             mediacinemaraw::encode(s + srcOffset, static_cast<size_t>(size), w,
                                    h, stride, raw10, cropTop, cropHeight, bin,
-                                   out);
+                                   cfa, out);
         } else {
             mediacinemaraw::encode_parallel(
                 s + srcOffset, static_cast<size_t>(size), w, h, stride, raw10,
-                cropTop, cropHeight, bin, out, static_cast<unsigned>(threads));
+                cropTop, cropHeight, bin, cfa, out,
+                static_cast<unsigned>(threads));
         }
         if (static_cast<jint>(out.size()) > dstCapacity) return -3;
         std::memcpy(d + dstOffset, out.data(), out.size());
@@ -123,10 +124,10 @@ JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CinemaRawSpike_encodeNative(
     JNIEnv* env, jobject /*thiz*/, jobject src, jint srcOffset, jint size,
     jint w, jint h, jint stride, jboolean raw10, jint cropTop,
-    jint cropHeight, jboolean bin, jobject dst, jint dstOffset,
+    jint cropHeight, jboolean bin, jint cfa, jobject dst, jint dstOffset,
     jint dstCapacity) {
     return encodeImpl(env, src, srcOffset, size, w, h, stride, raw10, cropTop,
-                      cropHeight, bin, dst, dstOffset, dstCapacity,
+                      cropHeight, bin, cfa, dst, dstOffset, dstCapacity,
                       /*threads=*/-1);
 }
 
@@ -134,10 +135,11 @@ JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CinemaRawSpike_encodeParallelNative(
     JNIEnv* env, jobject /*thiz*/, jobject src, jint srcOffset, jint size,
     jint w, jint h, jint stride, jboolean raw10, jint cropTop,
-    jint cropHeight, jboolean bin, jint threads, jobject dst, jint dstOffset,
-    jint dstCapacity) {
+    jint cropHeight, jboolean bin, jint cfa, jint threads, jobject dst,
+    jint dstOffset, jint dstCapacity) {
     return encodeImpl(env, src, srcOffset, size, w, h, stride, raw10, cropTop,
-                      cropHeight, bin, dst, dstOffset, dstCapacity, threads);
+                      cropHeight, bin, cfa, dst, dstOffset, dstCapacity,
+                      threads);
 }
 
 }  // extern "C"

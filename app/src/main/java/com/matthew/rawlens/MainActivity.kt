@@ -1990,6 +1990,7 @@ class MainActivity : Activity() {
         val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.mcraw")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
+            binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
             // Live RAW VF during the take: frames fan out to the same routed
@@ -2008,14 +2009,18 @@ class MainActivity : Activity() {
         videoRecorder = recorder
         videoOutputFile = file
         videoRecording = true
-        Log.i(LOG_TAG, "video start ${file.name} ${size.width}x${size.height} audio=$withAudio")
+        Log.i(
+            LOG_TAG, "video start ${file.name} ${size.width}x${size.height} " +
+                "audio=$withAudio bin=${recorder.binActive}"
+        )
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
         findViewById<View>(R.id.shutter).contentDescription = "Stop RAW video"
         refreshVideoButton()
         rawBadge.text = "● REC"
         rawBadge.setTextColor(getColor(R.color.danger))
         refreshVideoAudioDescription()
-        setStatus("REC • ${videoCrop.label.uppercase(Locale.US)}")
+        val binTag = if (recorder.binActive) " • BIN" else ""
+        setStatus("REC • ${videoCrop.label.uppercase(Locale.US)}$binTag")
         scheduleVideoHud()
         scheduleVideoMeter()
         // Silent session death (stolen camera, dead HAL stream) looks
@@ -2719,16 +2724,46 @@ class MainActivity : Activity() {
             return
         }
         val rec = videoRecorder
-        val dims = if (rec != null) {
-            val r = runCatching {
-                videoCrop.resolve(rec.frameSize.width, rec.frameSize.height)
-            }.getOrNull()
-            if (r != null) "${r.width}x${r.height}" else "${rec.frameSize.width}x?"
-        } else {
-            "FULL SENSOR"
+        val idlePreview = if (rec == null) videoBinPreview() else null
+        val binned = rec?.binActive == true || idlePreview != null
+        val dims = when {
+            rec != null -> {
+                val r = runCatching {
+                    videoCrop.resolve(rec.frameSize.width, rec.frameSize.height, binned)
+                }.getOrNull()
+                if (r != null) {
+                    val w = if (binned) r.width / 2 else r.width
+                    val h = if (binned) r.height / 2 else r.height
+                    "${w}x$h"
+                } else "${rec.frameSize.width}x?"
+            }
+            idlePreview != null -> idlePreview
+            else -> "FULL SENSOR"
         }
+        val binTag = if (binned) " • BIN" else ""
         findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${RawVideoRecorder.FPS}FPS"
-        findViewById<TextView>(R.id.dngInfo)?.text = "MCRAW • ${videoCrop.label.uppercase(Locale.US)}"
+        findViewById<TextView>(R.id.dngInfo)?.text =
+            "MCRAW • ${videoCrop.label.uppercase(Locale.US)}$binTag"
+    }
+
+    /**
+     * Idle-mode encoded-dims preview (`"2040x1528 BIN"` style) when the next
+     * take would bin, else null. Best-effort: any camera failure falls back
+     * to the plain full-sensor line.
+     */
+    private fun videoBinPreview(): String? {
+        if (!lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)) return null
+        val manager =
+            getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+                ?: return null
+        val (cameraId, size) = runCatching { videoCameraInfo(manager) }.getOrNull() ?: return null
+        val chars = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
+            ?: return null
+        val cfa = chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        if (!RawVideoRecorder.binningActive(true, cfa, size.width)) return null
+        val r = runCatching { videoCrop.resolve(size.width, size.height, true) }.getOrNull()
+            ?: return null
+        return "${size.width / 2}x${r.height / 2} BIN"
     }
 
     private fun videoCameraInfo(
@@ -2756,9 +2791,15 @@ class MainActivity : Activity() {
         val chars = manager.getCameraCharacteristics(cameraId)
         val orientation =
             chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        val cfa =
+            chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        val bin = RawVideoRecorder.binningActive(
+            lensPreferences().getBoolean(KEY_VIDEO_BINNING, false), cfa, size.width
+        )
         return "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
             "\"width\":${size.width},\"height\":${size.height}," +
             "\"crop\":\"${videoCrop.name}\",\"fps\":${RawVideoRecorder.FPS}," +
+            (if (bin) "\"binning\":\"diamond2x2\"," else "") +
             "\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Video\"}"
     }
 
@@ -5168,6 +5209,17 @@ class MainActivity : Activity() {
                 }
             })
             content.addView(sectionDesc("RAW .mcraw container crop. N/A in Direct Log (full sensor)."))
+            content.addView(CheckBox(this).apply {
+                text = "Binning (half resolution)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_VIDEO_BINNING, enabled).apply()
+                    if (isVideoMode && !videoRecording) refreshVideoSensorInfo()
+                    setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
+                }
+            })
+            content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .mcraw: R/B single-tap, diamond-averaged green. Applies to the next take; N/A in Direct Log."))
             content.addView(sectionTitle("Stabilization"))
             content.addView(Button(this).apply {
                 fun refresh() {
@@ -6939,6 +6991,7 @@ class MainActivity : Activity() {
         const val MAX_SETTINGS_IMPORT_BYTES = 2 * 1024 * 1024
         const val AUDIO_PERMISSION = 45
         const val KEY_VIDEO_CROP = "video_crop"
+        const val KEY_VIDEO_BINNING = "video_binning"
         const val KEY_VIDEO_AUDIO = "video_audio"
         const val KEY_VIDEO_STAB_OUTPUT = "video_stab_output"
         const val KEY_VIDEO_DEMOSAIC = "video_demosaic"
