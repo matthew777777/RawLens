@@ -1,0 +1,4 @@
+- F-Droid source-only build: AI stack on CPU, no updater permissions, R8
+- First-launch update consent; updater stays off in F-Droid builds
+- RAW video 2x2 binning with diamond-averaged green (Settings toggle)
+- Super-resolution now saves on deep-black scenes (NaN guard)
