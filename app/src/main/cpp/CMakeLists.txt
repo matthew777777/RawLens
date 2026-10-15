@@ -7,9 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Source-only builds (F-Droid): -DRAWLENS_PREBUILT_NATIVE=OFF ignores the
-# vendored ncnn/Halide archives even when present. ncnnMl falls back to the
-# emulator-tested JNI stub and the Halide .so files are not built; their
-# Kotlin callers already treat a missing library as unavailable.
+# vendored ncnn/Halide archives even when present. ncnnMl is then built
+# from the pinned upstream ncnn sources (CPU-only) with the real JNI
+# bridge, so all three ML models run; the Halide .so files are not built
+# and their Kotlin callers already treat a missing library as unavailable.
 option(RAWLENS_PREBUILT_NATIVE "Link vendored prebuilt ncnn/Halide archives" ON)
 
 # Reference kernel: checksum-verified upstream body, scalar arithmetic on all ABIs.
@@ -100,8 +101,10 @@ target_include_directories(dngCreator PRIVATE
 target_link_libraries(dngCreator log dl m jnigraphics jpeg_turbo_static)
 target_link_options(dngCreator PRIVATE "-Wl,-z,max-page-size=16384")
 
-# Vendored PhotonCamera FlowNet-v2/ncnn port: model runtime, custom correlation layers,
-# and ABI-specific ncnn static libraries. See app/src/main/cpp/flownet/UPSTREAM.md.
+# PhotonCamera FlowNet-v2/ncnn port: model runtime + custom correlation layers.
+# Prebuilt mode links the ABI-specific ncnn static libraries; source-only
+# mode builds the same against upstream ncnn from a pinned source archive
+# (CPU-only). See app/src/main/cpp/flownet/UPSTREAM.md.
 set(PHOTON_FLOW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flownet")
 set(PHOTON_NCNN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ncnn/${ANDROID_ABI}")
 set(PHOTON_NCNN_LIB "${PHOTON_NCNN_DIR}/lib")
@@ -144,12 +147,53 @@ if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
     target_link_libraries(ncnnMl PRIVATE "${PHOTON_NCNN_LIB}/libncnn.a" ${FLOW_VULKAN_LIBS} android log)
     set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
-else()
-    # Emulator ABIs do not have PhotonCamera's prebuilt ncnn archive, and
-    # source-only builds ignore it. Keep the app loadable; HdrFlowNetAligner
-    # will receive null and use identity alignment for those builds.
+elseif(RAWLENS_PREBUILT_NATIVE)
+    # Default build on an ABI without prebuilt archives (x86/x86_64
+    # emulators): keep the historical lightweight stub. These ABIs never
+    # ship, so compiling upstream ncnn for them is pure bloat.
     add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/flownet_stub.cpp")
     target_link_libraries(ncnnMl PRIVATE log)
+else()
+    # Source-only build: compile the real JNI
+    # bridge + CPU custom layers against upstream ncnn from the pinned
+    # source archive (same pin + hash as the desktop host build in
+    # tools/sr-vulkan/src/main/cpp-ncnn/CMakeLists.txt). CPU-only: Vulkan
+    # needs glslang, which source builds do not vendor; the bridge
+    # selects CPU automatically (NCNN_VULKAN guards + backend env
+    # overrides), so KernelNet, FlowNet, and RawNIND all run.
+    set(NCNN_SHA "c6b351b56fbe32e0381ae00331e3df649b20d7b7")
+    set(NCNN_URL "https://github.com/Tencent/ncnn/archive/${NCNN_SHA}.tar.gz")
+    set(NCNN_SHA256 "a48593360583c333ffb70f7167845a29c491e37248fb6bb6a6f5f7db01b7c241")
+    set(NCNN_VULKAN OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(ncnn URL ${NCNN_URL} URL_HASH SHA256=${NCNN_SHA256})
+    FetchContent_MakeAvailable(ncnn)
+    if(NCNN_VULKAN)
+        message(FATAL_ERROR "rawlens: source-only build requires NCNN_VULKAN=OFF")
+    endif()
+    add_library(ncnnMl SHARED
+        "${CMAKE_CURRENT_SOURCE_DIR}/ncnnMl.cpp"
+        "${PHOTON_FLOW_DIR}/layer/flownetupsample.cpp"
+        "${PHOTON_FLOW_DIR}/layer/flownetcorrlookup.cpp"
+        "${PHOTON_FLOW_DIR}/layer/flownetcorrfused.cpp")
+    target_include_directories(ncnnMl PRIVATE
+        "${ncnn_SOURCE_DIR}/src"
+        "${ncnn_BINARY_DIR}/src"
+        "${PHOTON_FLOW_DIR}" "${PHOTON_FLOW_DIR}/layer")
+    target_compile_options(ncnnMl PRIVATE -fno-rtti -fno-exceptions)
+    target_link_libraries(ncnnMl PRIVATE ncnn android log)
+    set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
+    # Wiring assertion: source-only builds must link the real bridge, never
+    # the stub. Fails the build instead of silently shipping dead ML.
+    get_target_property(_ncnnml_srcs ncnnMl SOURCES)
+    if(_ncnnml_srcs MATCHES "flownet_stub")
+        message(FATAL_ERROR "rawlens: source-only build would use the ncnn stub")
+    endif()
 endif()
 
 # Unified srvulkan compute backend: the SAME sources the desktop build

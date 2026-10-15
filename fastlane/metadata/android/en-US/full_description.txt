@@ -22,10 +22,10 @@ Requirements: Android 10 or newer, and a rear camera that advertises the
 Camera2 RAW capability. RAW support is device- and lens-dependent.
 
 F-Droid build note: this build compiles from source only. The optional
-Halide-accelerated viewfinder rung falls back to the legacy engine, the
-HDR/scope meters use their Kotlin fallbacks, and the prebuilt neural-network
-helpers are inactive (no AI denoise; FlowNet alignment uses the identity
-fallback). Capture, DNG/JPEG output, HDR+, super-resolution, and GALOSH and
+Halide-accelerated viewfinder rung falls back to the legacy engine and the
+HDR/scope meters use their Kotlin fallbacks; the neural features (AI
+denoise, FlowNet alignment, super-resolution kernels) run on CPU instead
+of GPU. Capture, DNG/JPEG output, HDR+, super-resolution, and GALOSH and
 wavelet denoise are fully available. In-app update checks are disabled;
 updates come through F-Droid.
 

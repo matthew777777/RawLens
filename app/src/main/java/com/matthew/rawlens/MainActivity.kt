@@ -802,6 +802,12 @@ class MainActivity : Activity() {
             cameraViewportReady = true
             startCameraWhenReady()
         }
+        // One-time update consent first: the startup check below stays
+        // fully offline until the user opts in. Enabling here checks
+        // immediately instead of waiting for the next launch.
+        UpdateConsent.showIfNeeded(this) { enabled ->
+            if (enabled) maybeCheckForUpdatesOnStartup()
+        }
         maybeCheckForUpdatesOnStartup()
     }
 
@@ -811,8 +817,9 @@ class MainActivity : Activity() {
      * startup and never shows anything on failure.
      */
     private fun maybeCheckForUpdatesOnStartup() {
-        // F-Droid builds leave updates to the store.
-        if (!BuildConfig.ENABLE_UPDATE_CHECK) return
+        // F-Droid builds leave updates to the store, and everyone else
+        // stays fully offline until the start-screen consent opts in.
+        if (!UpdateConsent.isAutoCheckAllowed(this)) return
         if (!UpdateChecker.isAutoCheckDue(this)) return
         Thread {
             val result = UpdateChecker.check(this)

@@ -10,9 +10,10 @@ step-by-step submission process.
 a **source-only** build:
 
 - The vendored `libncnn.a` / `libglslang.a` archives are ignored; `ncnnMl`
-  falls back to `flownet_stub.cpp` — the exact configuration emulator ABIs
-  already ship. AI denoise is skipped (plain path), KernelNet uses the
-  analytic path, FlowNet alignment uses identity.
+  is compiled against upstream ncnn built from the pinned source archive
+  (CPU-only, same pin as the desktop host build). AI denoise, FlowNet
+  alignment, and KernelNet super-resolution kernels all run — on CPU
+  instead of GPU.
 - The Halide AOT `.a` filters are ignored; `rawLensBgu`, `rawLensHdrMeter`,
   and `rawLensScopeMeter` are not built. The viewfinder fails over to the
   legacy engine, the HDR/scope meters use their Kotlin fallbacks.
@@ -20,11 +21,13 @@ a **source-only** build:
   == false`); Settings → About shows no updater UI.
 - The version is frozen from `app/version.properties` (no auto-bump), so the
   built APK matches the tagged release.
+- Only `arm64-v8a` + `armeabi-v7a` are packaged; the x86/x86_64 emulator
+  ABIs (and their ~18MB-per-ABI from-source ncnn) stay local-only.
 
 Everything else — capture, DNG/JPEG output, HDR+, super-resolution, GALOSH
 and wavelet denoise, video — is identical to the GitHub build. The only
 build-time downloads are Maven Central / Google Maven artifacts and the
-pinned libjpeg-turbo source tarball (SHA-256 verified in CMake).
+pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 
 ## Pre-submission checklist
 
@@ -65,14 +68,6 @@ Changelog: https://github.com/matthew777777/RawLens/releases
 
 AutoName: RawLens
 
-MaintainerNotes: |-
-  Source-only build (-PfdroidBuild): the vendored ncnn/Halide .a archives
-  are deleted below and CMake falls back to the emulator-tested JNI stub
-  (ncnn) and Kotlin/legacy fallbacks (Halide). The .spv files under
-  assets/shaders and assets/spirv are compiled from the .comp sources
-  committed next to them. Upstream releases are plain version tags
-  (e.g. 1.0.184) with the version frozen in app/version.properties.
-
 RepoType: git
 Repo: https://github.com/matthew777777/RawLens.git
 
@@ -81,22 +76,40 @@ Builds:
     versionCode: 185
     commit: <full-hash>
     timeout: 10800
+    gradle:
+      - yes
+    output: app/build/outputs/apk/release/RawLens-*-release.apk
+    scanignore:
+      - app/src/main/assets/models
+      - python/rawnind-train
+      - tools/sr-vulkan/src/main/resources/kernelnet_aniso_v2_2_params.ncnn.bin
+      - app/src/androidTest/assets/amaze_reference.bin
     scandelete:
       - app/src/main/cpp/ncnn
       - app/src/main/cpp/halide/filters
-    scanignore:
-      - app/src/main/assets/shaders
-      - app/src/main/assets/spirv
-    gradle:
-      - yes
     gradleprops:
       - fdroidBuild
-    output: app/build/outputs/apk/release/RawLens-*-release.apk
+
+MaintainerNotes: |-
+  Source-only build (-PfdroidBuild): the vendored ncnn/Halide .a archives
+  are deleted below; ncnnMl is built from pinned upstream ncnn sources
+  (CPU-only) with the real JNI bridge, and the Halide libraries use
+  Kotlin/legacy fallbacks. scanignore covers only
+  trained neural-network weight files (.ncnn.bin), which are data, not
+  code; the .spv shaders need no exception (not flagged). Upstream
+  releases are plain version tags (e.g. 1.0.184) with the version
+  frozen in app/version.properties.
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: app/version.properties|VERSION_CODE=(\d+)|.|VERSION_NAME=(.+)
+CurrentVersion: 1.0.184
+CurrentVersionCode: 185
 ```
+
+(Order and escaping above match `fdroid rewritemeta` canonical output;
+verify with `fdroid rewritemeta` + `fdroid lint` + `fdroid checkupdates --auto`
+before pushing recipe changes.)
 
 Notes for reviewers (also useful in the merge-request description):
 
@@ -106,8 +119,9 @@ Notes for reviewers (also useful in the merge-request description):
 - The GitHub updater (GitHub releases API + in-app APK install) exists
   upstream but is compiled out of F-Droid builds; no update-related Anti-Feature
   applies to the packaged build.
-- `scanignore` covers only SPIR-V shader assets whose `.comp` sources are
-  committed alongside.
+- `scanignore` covers only trained-model weight files (`.ncnn.bin`, data
+  not code) and one Amaze golden-test fixture; the `.spv` shaders are not
+  flagged by the scanner and need no exception.
 
 ## Submission steps
 
