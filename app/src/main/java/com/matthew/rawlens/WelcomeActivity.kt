@@ -41,6 +41,9 @@ class WelcomeActivity : Activity() {
         }
         setContentView(R.layout.activity_welcome)
         status = findViewById(R.id.welcomeStatus)
+        // First-install update consent (GitHub builds only; F-Droid never
+        // asks). Returning users get the same dialog from MainActivity.
+        UpdateConsent.showIfNeeded(this)
         findViewById<Button>(R.id.openCameraButton).setOnClickListener {
             if (checkSelfPermission(Manifest.permission.CAMERA) ==
                 PackageManager.PERMISSION_GRANTED

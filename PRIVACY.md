@@ -16,7 +16,7 @@ Android or the device manufacturer may provide system services used by the camer
 
 ## Update checks
 
-GitHub builds can compare the installed version against the latest RawLens release on GitHub: an automatic check at most once every 24 hours (on by default, disable it under Settings → About), plus a manual "Check for updates" button on the same screen. The check fetches only the public release metadata (tag, notes, APK link) over HTTPS; choosing to update downloads the release APK and hands it to the system installer. Nothing is uploaded, and no identifiers, telemetry, or analytics are sent — GitHub inevitably observes the request the way any web server observes a page view. Builds distributed through F-Droid disable the update check entirely, so they never contact the network for it.
+GitHub builds can compare the installed version against the latest RawLens release on GitHub: the first launch asks with an on/off switch, and only an opt-in enables the automatic check (at most once every 24 hours; the choice can be flipped anytime under Settings → About). Off means fully offline — the app makes no network connections on its own. A manual "Check for updates" button on the same screen is always an explicit per-tap decision. The check fetches only the public release metadata (tag, notes, APK link) over HTTPS; choosing to update downloads the release APK and hands it to the system installer. Nothing is uploaded, and no identifiers, telemetry, or analytics are sent — GitHub inevitably observes the request the way any web server observes a page view. Builds distributed through F-Droid disable the update check entirely, so they never contact the network for it.
 
 ## Changes
 

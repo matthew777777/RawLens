@@ -52,6 +52,13 @@ android {
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "ENABLE_UPDATE_CHECK", if (isFdroidBuild) "false" else "true")
+        // Store builds ship ARM only: x86/x86_64 exist solely for local
+        // emulator testing, and from-source ncnn is ~18MB per x86 ABI.
+        ndk {
+            if (isFdroidBuild) {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            }
+        }
         externalNativeBuild {
             cmake {
                 if (isFdroidBuild) {
