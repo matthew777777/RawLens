@@ -5226,7 +5226,7 @@ class MainActivity : Activity() {
                     setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
                 }
             })
-            content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .crs: R/B single-tap, diamond-averaged green. Applies to the next take; N/A in Direct Log."))
+            content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .crs: averaged R/B and diamond-averaged green. Applies to the next take; N/A in Direct Log."))
             content.addView(sectionTitle("Stabilization"))
             content.addView(Button(this).apply {
                 fun refresh() {
