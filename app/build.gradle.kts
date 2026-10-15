@@ -72,6 +72,16 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("release") {
+            // F-Droid builds strip the updater-only permissions via the
+            // overlay manifest (merged over src/main/AndroidManifest.xml).
+            if (isFdroidBuild) {
+                manifest.srcFile("fdroid/AndroidManifest.xml")
+            }
+        }
+    }
+
     signingConfigs {
         // Local performance/release testing signs with the debug key so no
         // secret is needed. CI/Play builds override via environment:
@@ -155,6 +165,31 @@ android {
         }
     }
 
+}
+
+// F-Droid builds must not ship the updater-only permissions (stripped by
+// app/fdroid/AndroidManifest.xml). Fails the build if they survive the
+// manifest merge, so a future manifest refactor cannot silently re-add
+// them to store builds.
+if (isFdroidBuild) {
+    val checkFdroidPermissions by tasks.registering {
+        description = "Fails if updater-only permissions survived the F-Droid manifest merge."
+        doLast {
+            val merged = layout.buildDirectory.dir("intermediates/merged_manifests/release")
+                .get().asFile.walkTopDown().firstOrNull { it.name == "AndroidManifest.xml" }
+                ?: error("checkFdroidPermissions: merged release manifest not found")
+            val leaked = listOf(
+                "android.permission.INTERNET",
+                "android.permission.REQUEST_INSTALL_PACKAGES",
+            ).filter { merged.readText().contains(it) }
+            if (leaked.isNotEmpty()) {
+                error("checkFdroidPermissions: stripped permissions still present: $leaked")
+            }
+        }
+    }
+    tasks.matching { it.name == "processReleaseMainManifest" }.configureEach {
+        finalizedBy(checkFdroidPermissions)
+    }
 }
 
 dependencies {

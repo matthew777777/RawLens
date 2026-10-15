@@ -18,7 +18,10 @@ a **source-only** build:
   and `rawLensScopeMeter` are not built. The viewfinder fails over to the
   legacy engine, the HDR/scope meters use their Kotlin fallbacks.
 - The in-app GitHub update check is compiled out (`BuildConfig.ENABLE_UPDATE_CHECK
-  == false`); Settings → About shows no updater UI.
+  == false`); Settings → About shows no updater UI. Its `INTERNET` and
+  `REQUEST_INSTALL_PACKAGES` permissions are stripped from the manifest
+  (`app/fdroid/AndroidManifest.xml` overlay), enforced by the
+  `checkFdroidPermissions` task, which fails the build if they survive.
 - The version is frozen from `app/version.properties` (no auto-bump), so the
   built APK matches the tagged release.
 - Only `arm64-v8a` + `armeabi-v7a` are packaged; the x86/x86_64 emulator
