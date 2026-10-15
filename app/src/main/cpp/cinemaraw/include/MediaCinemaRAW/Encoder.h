@@ -22,11 +22,11 @@ namespace mediacinemaraw {
 //
 // `cropTop`/`cropHeight` select an even-aligned row window to encode, which
 // preserves the Bayer CFA phase. When `downscale4x` is set, each 2x2 source
-// block bins to one output sample: R and B take the plain 2x2 box (the
-// block's single same-colour tap) while green averages the 4 G pixels
-// forming a diamond around the output sample — the two in-block G's plus
-// the two across the block corners in the right/below neighbours, rounded
-// mean. That mode is lossy by nature and additionally requires
+// block bins to one output sample: R and B average the 4 nearest
+// same-colour taps (2x2 on their square sublattice) while green averages
+// the 4 G pixels forming a diamond around the output sample — the two
+// in-block G's plus the two across the block corners in the right/below
+// neighbours, rounded mean. That mode is lossy by nature and additionally requires
 // `width % 4 == 0` (so the binned width stays even for the tile codec).
 // `cfa` is the Camera2 SENSOR_INFO_COLOR_FILTER_ARRANGEMENT numbering
 // (0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR); it routes the binning taps and is

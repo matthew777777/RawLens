@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // 2x Bayer binning for the type-7 encoder's downscale path: each output
-// sample covers one 2x2 source block. R and B take the plain 2x2 box —
-// the block holds a single same-colour tap, and the square-lattice box
-// already nulls their alias folds. Green averages the 4 G pixels forming
-// a diamond around the output sample instead of the 2 in the block: the
-// two in-block G's plus the two across the block corners in the
-// right/below neighbours (rounded mean, so black/white levels survive).
+// sample covers one 2x2 source block. R and B average the 4 nearest
+// same-colour taps (2x2 on their square sublattice, causal: in-block plus
+// right/below/diagonal neighbours) — the box nulls the worst alias folds
+// and matches green's -6 dB noise gain, where a single tap would fold at
+// full strength. Green averages the 4 G pixels forming a diamond around
+// the output sample instead of the 2 in the block: the two in-block G's
+// plus the two across the block corners in the right/below neighbours.
+// Rounded means throughout, so black/white levels survive.
 //
-// Original snippet by Eszdman (https://github.com/eszdman).
+// Original diamond-green snippet by Eszdman (https://github.com/eszdman).
 //
 // Taps below are block-relative (sx, sy) = (2*ox, 2*oy) for output (ox,
 // oy); `sample(x, y)` reads the cropped source row y (0 <= y < cropHeight)
@@ -48,10 +50,18 @@ inline uint16_t BinnedSample(Sample sample, int ox, int oy, int encWidth,
     const int sy = oy * 2;
     const bool isGreen = ((((ox + oy) & 1) == 0) == BinGreenOnEven(cfa));
     if (!isGreen) {
-        // R/B: the block's single same-colour tap. Output (ox, oy) keeps
-        // the source CFA phase, so the tap parity matches by construction
-        // for every Bayer arrangement.
-        return sample(sx + (ox & 1), sy + (oy & 1));
+        // R/B: 2x2 box on the square sublattice (in-block tap plus the
+        // right/below/diagonal same-colour neighbours), causal like the
+        // diamond. Output (ox, oy) keeps the source CFA phase, so the tap
+        // parity matches by construction for every Bayer arrangement;
+        // edges mirror to the same-colour in-block tap.
+        const int x0 = sx + (ox & 1), y0 = sy + (oy & 1);
+        const int x1 = (ox + 1 < encWidth) ? x0 + 2 : x0;
+        const int y1 = (y0 + 2 < cropHeight) ? y0 + 2 : y0;
+        return static_cast<uint16_t>(
+            (uint32_t(sample(x0, y0)) + sample(x1, y0) + sample(x0, y1) +
+             sample(x1, y1) + 2) >>
+            2);
     }
     uint32_t t0, t1, t2, t3;
     if (!BinGreenOnEven(cfa)) {

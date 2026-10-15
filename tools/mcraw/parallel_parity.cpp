@@ -87,11 +87,11 @@ void checkParallel(int width, int height, int slack, bool raw10, int cropTop,
 }
 
 // Diamond binning, pixel-for-pixel: the shipped BinnedSample helper over a
-// crafted frame must equal the spec taps (R/B single-tap, green diamond
-// with same-colour edge mirrors, +2 rounding) for every CFA, RAW16 and
-// packed RAW10 alike, with and without a crop offset. Distinct per-pixel
-// values catch any misrouted tap; the sweeps cover the right/bottom edge
-// clamps and the bottom-right corner.
+// crafted frame must equal the spec taps (R/B 2x2 box, green diamond with
+// same-colour edge mirrors, +2 rounding) for every CFA, RAW16 and packed
+// RAW10 alike, with and without a crop offset. Distinct per-pixel values
+// catch any misrouted tap; the sweeps cover the right/bottom edge clamps
+// and the bottom-right corner.
 void checkDiamond(int width, int height, bool raw10, int cropTop, int cropHeight,
                   int cfa) {
     assert(width % 4 == 0 && cropHeight % 8 == 0);
@@ -133,7 +133,17 @@ void checkDiamond(int width, int height, bool raw10, int cropTop, int cropHeight
             const bool isGreen = ((((ox + oy) & 1) == 0) == greenEven);
             uint16_t expected;
             if (!isGreen) {
-                expected = pixels[size_t(sy + (oy & 1)) * width + sx + (ox & 1)];
+                // 2x2 box on the square sublattice; rows below are absolute
+                // (pre-crop row + top), clamped in pre-crop space.
+                const int bx = sx + (ox & 1), byp = prow + (oy & 1);
+                const int rx = (ox + 1 < encW) ? bx + 2 : bx;
+                const int ryp = (byp + 2 < cropHeight) ? byp + 2 : byp;
+                const int by = byp + cropTop, ry = ryp + cropTop;
+                expected = uint16_t((uint32_t(pixels[size_t(by) * width + bx]) +
+                                     pixels[size_t(by) * width + rx] +
+                                     pixels[size_t(ry) * width + bx] +
+                                     pixels[size_t(ry) * width + rx] + 2) >>
+                                    2);
             } else if (!greenEven) {
                 const uint32_t t = pixels[size_t(sy) * width + sx + 1];
                 const uint32_t l = pixels[size_t(sy + 1) * width + sx];
@@ -334,7 +344,7 @@ int main() {
         assert(u32le(outD, 0) == 64);  // padded width of the 4-wide frame
         assert(u32le(outD, 4) == 4);
         assert(outD.size() == 284);
-        assert(fnv1a(outD) == 0x503b02f6156850e0ULL);
+        assert(fnv1a(outD) == 0xfecfd97ff350db85ULL);
         std::cout << "diamond-bin golden 8x8 ok\n";
     }
 

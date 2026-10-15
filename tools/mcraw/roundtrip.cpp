@@ -50,13 +50,18 @@ int main(int argc, char** argv) {
         for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
             unsigned expected;
             if (bin) {
-                // Diamond binning: R/B single-tap, green diamond (in-block
-                // pair plus right/below neighbours, rounded mean, same-colour
-                // edge mirrors). Tap rows are absolute (top + pre-crop row).
+                // Diamond binning: R/B 2x2 box, green diamond (in-block pair
+                // plus right/below neighbours, rounded mean, same-colour edge
+                // mirrors). Tap rows are absolute (top + pre-crop row).
                 const int sx = x*2, sy = top+y*2, prow = y*2;
                 const bool isGreen = (((x+y)&1)==0) == greenEven;
                 if (!isGreen) {
-                    expected = pixels[(sy+(y&1))*width+sx+(x&1)];
+                    const int bx = sx+(x&1), byp = prow+(y&1);
+                    const int rx = (x+1<w) ? bx+2 : bx;
+                    const int ryp = (byp+2<cropped) ? byp+2 : byp;
+                    const int by = byp+top, ry = ryp+top;
+                    expected = (unsigned(pixels[by*width+bx])+pixels[by*width+rx]
+                        +pixels[ry*width+bx]+pixels[ry*width+rx]+2)/4;
                 } else if (!greenEven) {
                     const unsigned t = pixels[sy*width+sx+1];
                     const unsigned l = pixels[(sy+1)*width+sx];
