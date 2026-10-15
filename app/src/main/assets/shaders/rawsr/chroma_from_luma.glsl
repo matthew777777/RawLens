@@ -3,7 +3,9 @@
 // G * smooth(R/G) / G * smooth(B/G) with a separable sigma-1.0 Gaussian
 // (radius 3) over color ratios. G passes through untouched.
 // Clamped borders, center guide floor, and Float accumulation order match the
-// CPU twin op for op (up to GPU FMA contraction, ~1ulp).
+// CPU twin op for op (up to GPU FMA contraction, ~1ulp). A dead-guide tap in
+// the window (guide exactly 0) poisons the window sum (x/0); such lanes keep
+// the original value, so the output stays finite for the DNG writer.
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -20,6 +22,7 @@ const float K3 = 0.00443304817524;
 float kw(int o) {
     return o == 0 ? K0 : (o == 1 ? K1 : (o == 2 ? K2 : K3));
 }
+bool finite(float x) { return !isnan(x) && !isinf(x); }
 vec2 tapRatio(ivec2 t) {
     t = clamp(t, ivec2(0), u_size - ivec2(1));
     vec4 v = texelFetch(u_merged, t, 0);
@@ -50,5 +53,9 @@ void main() {
         sumR += w * hR;
         sumB += w * hB;
     }
-    imageStore(img_out, p, vec4(m.y * sumR, m.y, m.y * sumB, 1.0));
+    float r = m.y * sumR;
+    float b = m.y * sumB;
+    if (!finite(r)) r = m.x;
+    if (!finite(b)) b = m.z;
+    imageStore(img_out, p, vec4(r, m.y, b, 1.0));
 }

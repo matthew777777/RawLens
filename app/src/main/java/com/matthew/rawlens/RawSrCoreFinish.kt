@@ -138,7 +138,10 @@ object RawSrCoreFinish {
      * Determinism: clamped borders, center pixels at/below [GUIDE_EPS]
      * keep their original lanes, and Float accumulation in fixed tap
      * order matches `chroma_from_luma.glsl` op for op (up to GPU FMA
-     * contraction, ~1ulp).
+     * contraction, ~1ulp). A dead-guide tap in the window (guide
+     * exactly 0: fallback cell, deep shadow) makes its ratios undefined
+     * (x/0) and poisons the window sum; such lanes keep their original
+     * value, so the output stays finite for the DNG writer.
      */
     fun stabilize(rgb: FloatArray, width: Int, height: Int): Int {
         require(width > 0 && height > 0)
@@ -177,8 +180,13 @@ object RawSrCoreFinish {
                     sumR += w * tmpR[yy * width + x]
                     sumB += w * tmpB[yy * width + x]
                 }
-                rgb[o] = g * sumR
-                rgb[o + 2] = g * sumB
+                val r = g * sumR
+                val b = g * sumB
+                // Dead-guide taps poison the window sum (x/0 above); keep
+                // the original lanes there (the center-guard fallback), so
+                // the output stays finite for the DNG writer.
+                if (r.isFinite()) rgb[o] = r
+                if (b.isFinite()) rgb[o + 2] = b
                 count++
             }
         }
