@@ -106,10 +106,15 @@ android {
 
     buildTypes {
         release {
-            // No minify/shrink: the app carries JNI entry points (ncnn,
-            // amaze_reference, jpeg, vulkan) that R8 would need explicit
-            // keep rules for, and perf comparisons stay on identical code.
-            isMinifyEnabled = false
+            // R8 code shrinking runs for F-Droid builds (store requirement;
+            // JNI entry points and layout-inflated views are covered by
+            // proguard-rules.pro). GitHub releases stay unobfuscated for
+            // now so perf comparisons run on identical code.
+            isMinifyEnabled = isFdroidBuild
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             isShrinkResources = false
             isDebuggable = false
             isJniDebuggable = false
