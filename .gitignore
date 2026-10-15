@@ -37,3 +37,7 @@ fastlane/test_output/
 /references/ImageStackAlignator/
 
 /references/tinydng/
+
+# Session transcripts/trajectories accidentally committed once; never again.
+conversation-*.txt
+trajectory-*.json
