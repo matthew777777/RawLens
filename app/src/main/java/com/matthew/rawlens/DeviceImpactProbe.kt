@@ -94,11 +94,15 @@ object DeviceImpactProbe {
     internal fun trimName(level: Int): String = when (level) {
         ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> "UI_HIDDEN"
         ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> "BACKGROUND"
-        ComponentCallbacks2.TRIM_MEMORY_MODERATE -> "MODERATE"
-        ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "COMPLETE"
-        ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> "RUNNING_LOW"
-        ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "RUNNING_MODERATE"
-        ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> "RUNNING_CRITICAL"
+        // Literals: TRIM_MEMORY_MODERATE/COMPLETE/RUNNING_* are deprecated
+        // since API 35, but old devices still deliver these levels. The
+        // values are stable platform constants (60/80/10/5/15), so match
+        // them directly instead of touching the deprecated fields.
+        60 -> "MODERATE"
+        80 -> "COMPLETE"
+        10 -> "RUNNING_LOW"
+        5 -> "RUNNING_MODERATE"
+        15 -> "RUNNING_CRITICAL"
         else -> "level=$level"
     }
 

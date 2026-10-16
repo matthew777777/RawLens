@@ -174,6 +174,31 @@ internal class RawVideoRecorder(
     var motionEnabled: Boolean = true
 
     /**
+     * Photo-tile handoff: manual snapshot + metered preview fallback + locks.
+     * Set before [start] via [configureVideoManual]; live tweaks go through
+     * [setVideoManualControl] which rebuilds the repeating request.
+     */
+    var videoManual: VideoManualSnapshot = VideoManualSnapshot()
+    var videoLocks: VideoRecordLocks = VideoRecordLocks()
+    var videoMeteredIso: Int = 100
+    var videoMeteredShutterNanos: Long = 10_000_000L
+    var videoMeteredFocus: Float? = null
+
+    fun configureVideoManual(
+        snapshot: VideoManualSnapshot,
+        meteredIso: Int,
+        meteredShutterNanos: Long,
+        meteredFocus: Float?,
+        locks: VideoRecordLocks,
+    ) {
+        videoManual = snapshot
+        videoMeteredIso = meteredIso
+        videoMeteredShutterNanos = meteredShutterNanos
+        videoMeteredFocus = meteredFocus
+        videoLocks = locks
+    }
+
+    /**
      * Preview HAL lens-shading grid to embed, set before [start] (never
      * mutated after). Each frame resamples it to its own encoded crop and
      * carries the per-frame `lensShadingMapWidth` / `lensShadingMapHeight` /
@@ -532,12 +557,10 @@ internal class RawVideoRecorder(
             encodeThreads = Array(workers) { index ->
                 Thread({ workerLoop(index) }, "RawVideoEncode-$index").apply { start() }
             }
+            val charsAtStart = chars
             val req = device!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(r.surface)
-                set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                applyVideoManualToRequest(this, charsAtStart)
             }.build()
             session!!.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(session: CameraCaptureSession,
@@ -649,6 +672,238 @@ internal class RawVideoRecorder(
 
     /** Latest mic peak 0..1 for HUD meters (0 when silent); safe any thread. */
     fun audioLevel(): Float = audio?.lastPeak ?: 0f
+
+    /**
+     * Photo-tile range for the live slider while rolling. Uses this take's
+     * characteristics (the stills controller is stopped, so its ranges are
+     * null). Shutter caps at the 1/[FPS] frame budget.
+     */
+    fun videoControlRange(control: ManualControl): ManualControlRange? {
+        val chars = try {
+            vfChars ?: cameraManager.getCameraCharacteristics(cameraId)
+        } catch (_: Exception) {
+            return null
+        }
+        return when (control) {
+            ManualControl.ISO -> {
+                if (!hasManualSensor(chars)) return null
+                val range = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                    ?: return null
+                val current = (videoManual.iso ?: videoMeteredIso).coerceIn(range.lower, range.upper)
+                ManualControlRange(
+                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
+                    videoManual.iso == null && !videoLocks.lockExposure,
+                )
+            }
+            ManualControl.SHUTTER -> {
+                if (!hasManualSensor(chars)) return null
+                val range = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                    ?: return null
+                val cappedMax = minOf(range.upper, 1_000_000_000L / FPS).coerceAtLeast(range.lower)
+                val current = (videoManual.shutterNanos ?: videoMeteredShutterNanos)
+                    .coerceIn(range.lower, cappedMax)
+                ManualControlRange(
+                    range.lower, cappedMax, current,
+                    videoManual.shutterNanos == null && !videoLocks.lockExposure,
+                )
+            }
+            ManualControl.WHITE_BALANCE -> {
+                val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    ?: intArrayOf()
+                if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) {
+                    return null
+                }
+                ManualControlRange(
+                    VideoManualPolicy.MIN_WB_KELVIN.toLong(),
+                    VideoManualPolicy.MAX_WB_KELVIN.toLong(),
+                    (videoManual.wbKelvin ?: 5500).toLong(),
+                    videoManual.wbKelvin == null,
+                )
+            }
+            ManualControl.FOCUS_DISTANCE -> {
+                val minDist = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+                    ?.takeIf { it > 0f } ?: return null
+                val scale = 1_000f
+                val current = ((videoManual.focusDiopters ?: videoMeteredFocus ?: 0f) * scale).toLong()
+                    .coerceIn(0L, (minDist * scale).toLong())
+                ManualControlRange(
+                    0L, (minDist * scale).toLong(), current,
+                    videoManual.focusDiopters == null,
+                )
+            }
+            ManualControl.EXPOSURE_COMPENSATION -> {
+                val range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                    ?: return null
+                val current = (videoManual.evIndex ?: 0).coerceIn(range.lower, range.upper)
+                ManualControlRange(
+                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
+                    (videoManual.evIndex ?: 0) == 0,
+                )
+            }
+        }
+    }
+
+    /** Live mid-take tweak from the photo-tile slider; rebuilds the request. */
+    fun setVideoManualControl(control: ManualControl, value: Long?) {
+        when (control) {
+            ManualControl.ISO -> videoManual = videoManual.copy(iso = value?.toInt())
+            ManualControl.SHUTTER -> videoManual = videoManual.copy(shutterNanos = value)
+            ManualControl.WHITE_BALANCE -> videoManual = videoManual.copy(wbKelvin = value?.toInt())
+            ManualControl.FOCUS_DISTANCE -> videoManual = videoManual.copy(
+                focusDiopters = value?.let { it.toFloat() / 1_000f },
+            )
+            ManualControl.EXPOSURE_COMPENSATION -> videoManual = videoManual.copy(
+                evIndex = value?.toInt(),
+            )
+        }
+        refreshVideoRequest()
+    }
+
+    private fun hasManualSensor(chars: CameraCharacteristics): Boolean =
+        (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf())
+            .contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+
+    private fun refreshVideoRequest() {
+        val handler = camHandler ?: return
+        val dev = device ?: return
+        val sess = session ?: return
+        val surf = try {
+            reader?.surface
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val chars = try {
+            vfChars ?: cameraManager.getCameraCharacteristics(cameraId)
+        } catch (_: Exception) {
+            return
+        }
+        handler.post {
+            try {
+                val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    addTarget(surf)
+                    applyVideoManualToRequest(this, chars)
+                }.build()
+                sess.setRepeatingRequest(req, null, handler)
+            } catch (e: Exception) {
+                Log.w(TAG, "video manual refresh failed: ${e.message}")
+            }
+        }
+    }
+
+    internal fun applyVideoManualToRequest(
+        builder: CaptureRequest.Builder,
+        chars: CameraCharacteristics,
+    ) {
+        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
+        // Focus: manual diopters or a focus lock freezes the lens; otherwise
+        // continuous video AF when advertised.
+        val manualFocus = videoManual.focusDiopters
+        val lockedFocus = VideoManualPolicy.resolveFocusLock(manualFocus, videoLocks.lockFocus)
+        val afModes = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        fun coerceAf(mode: Int): Int {
+            if (afModes.contains(mode)) return mode
+            if (afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)) {
+                return CaptureRequest.CONTROL_AF_MODE_OFF
+            }
+            return afModes.firstOrNull() ?: mode
+        }
+        val frozenFocus = manualFocus ?: if (lockedFocus) videoMeteredFocus else null
+        if (frozenFocus != null) {
+            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(CaptureRequest.CONTROL_AF_MODE_OFF))
+            try {
+                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, frozenFocus)
+            } catch (_: IllegalArgumentException) {
+                // Fixed-focus hardware rejects the key; AF OFF alone still holds.
+            }
+        } else {
+            val continuous = when {
+                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) ->
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                else -> CaptureRequest.CONTROL_AF_MODE_AUTO
+            }
+            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(continuous))
+        }
+        // Exposure: explicit manual or a locked take drives the sensor (AE OFF);
+        // otherwise hardware AE with EV offset.
+        val resolvedIso = VideoManualPolicy.resolveIso(
+            videoManual.iso, videoMeteredIso, videoLocks.lockExposure,
+        )
+        val resolvedShutter = VideoManualPolicy.resolveShutter(
+            videoManual.shutterNanos, videoMeteredShutterNanos, videoLocks.lockExposure,
+        )
+        val manualSensor = hasManualSensor(chars) && (resolvedIso != null || resolvedShutter != null)
+        if (manualSensor) {
+            val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val timeRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val iso = VideoManualPolicy.clampIso(
+                resolvedIso ?: videoMeteredIso,
+                isoRange?.lower ?: (resolvedIso ?: videoMeteredIso),
+                isoRange?.upper ?: (resolvedIso ?: videoMeteredIso),
+            )
+            val shutter = VideoManualPolicy.clampShutter(
+                resolvedShutter ?: videoMeteredShutterNanos,
+                timeRange?.lower ?: (resolvedShutter ?: videoMeteredShutterNanos),
+                timeRange?.upper ?: (resolvedShutter ?: videoMeteredShutterNanos),
+                FPS,
+            )
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
+        } else {
+            val aeModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
+            val aeMode = if (aeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
+                CaptureRequest.CONTROL_AE_MODE_ON
+            } else {
+                aeModes.firstOrNull() ?: CaptureRequest.CONTROL_AE_MODE_ON
+            }
+            builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
+            val evRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            val ev = (videoManual.evIndex ?: 0).coerceIn(
+                evRange?.lower ?: 0, evRange?.upper ?: 0,
+            )
+            try {
+                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev)
+            } catch (_: IllegalArgumentException) {
+            }
+        }
+        // WB: manual Kelvin drives OFF + gains; a WB lock freezes auto.
+        val manualWb = videoManual.wbKelvin
+        val awbModes = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
+        fun coerceAwb(mode: Int): Int {
+            if (awbModes.contains(mode)) return mode
+            if (awbModes.contains(CaptureRequest.CONTROL_AWB_MODE_AUTO)) {
+                return CaptureRequest.CONTROL_AWB_MODE_AUTO
+            }
+            return awbModes.firstOrNull() ?: mode
+        }
+        if (manualWb != null) {
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_OFF))
+            builder.set(
+                CaptureRequest.COLOR_CORRECTION_MODE,
+                CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
+            )
+            val gains = VideoManualPolicy.wbGainsForKelvin(manualWb)
+            builder.set(
+                CaptureRequest.COLOR_CORRECTION_GAINS,
+                android.hardware.camera2.params.RggbChannelVector(
+                    gains[0], gains[1], gains[2], gains[3],
+                ),
+            )
+        } else {
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_AUTO))
+            if (VideoManualPolicy.resolveAwbLock(null, videoLocks.lockWb) &&
+                chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+            ) {
+                try {
+                    builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                } catch (_: IllegalArgumentException) {
+                }
+            }
+        }
+    }
 
     fun snapshot(): VideoStats = VideoStats(
         recording = device != null,

@@ -1127,7 +1127,7 @@ class Gles31AmazeProcessor(
                 .replace("#import quad", if ("quad/" in asset) read("shaders/quad/common.glsl") else "")
                 .replace("#import agx_output", agxOutputCommon)
             val source = if (body.startsWith("#version")) body else "#version 310 es\n$body"
-            compile(if (slicedDispatch) RawSrGpuScheduling.shaderSource(source) else source, asset)
+            compile(if (slicedDispatch) GpuScheduling.shaderSource(source) else source, asset)
         }.also(GLES31::glUseProgram)
 
         private fun read(path: String): String =

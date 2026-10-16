@@ -29,7 +29,7 @@ data class MergedLinearRgb(val width: Int, val height: Int, val rgb: FloatArray)
             // pixels with the serial index math untouched, so the repack is
             // bitwise-identical at any worker count (200MB pass at full res).
             val out = FloatArray(rgba.size / 4 * 3)
-            RawSrWorkers.forEachShard(rgba.size / 4) { p0, p1 ->
+            ShardWorkers.forEachShard(rgba.size / 4) { p0, p1 ->
                 for (p in p0 until p1) {
                     val o = p * 3
                     val r = p * 4
@@ -60,9 +60,9 @@ data class MergeProvenance(
     val sourceCameraId: String,
     val lensShadingApplied: Boolean,
     /**
-     * Measured effective merged frame count (mean support, see
-     * RawSrMergedNoise). 1.0 is the unscaled reference profile. Recorded
-     * for audit; the NoiseProfile tag itself carries the scaled pairs.
+     * Measured effective merged frame count (mean support). 1.0 is the
+     * unscaled reference profile. Recorded for audit; the NoiseProfile tag
+     * itself carries the scaled pairs.
      */
     val effectiveFrames: Double = 1.0
 ) {
@@ -114,12 +114,13 @@ data class MergeProvenance(
  * BaselineNoise is deliberately unwritten: absent means 1.0, which is the
  * truthful value for un-denoised merge output.
  *
- * Merged bursts may pass [noiseProfileOverride]: the post-merge S/O pairs
- * from [RawSrMergedNoise] (reference profile scaled by the measured
- * effective frame count). Null keeps the reference profile exactly.
+ * Merged bursts may pass [noiseProfileOverride]: post-merge S/O pairs
+ * (reference profile scaled by the measured effective frame count).
+ * Null keeps the reference profile exactly.
  */
 object LinearRgbDngWriter {
-    const val ALGORITHM_VERSION = "RawLens-RawSr/4M-scale1-neutral-highlights"
+    // PhotonCamera-parity linear merge version. Future SR hook: bump on SR return.
+    const val ALGORITHM_VERSION = "RawLens-LinearMerge/4N-scale1-neutral-highlights"
     const val QUANTIZATION_SCALE = 65535.0
     const val DERIVATION = "DerivedFromRawBurst"
     /**
@@ -277,7 +278,7 @@ object LinearRgbDngWriter {
         // Sensor noise model for profiled denoise downstream; same RGB S/O
         // pairs as the source-Bayer path. Omitted when the reference metadata
         // carries no model (cfaPattern is nullable, so no requireNotNull).
-        // A merged-burst override (post-merge S/O from RawSrMergedNoise)
+        // A merged-burst override (post-merge S/O scaled by effective frames)
         // takes precedence when it is a well-formed RGB profile; anything
         // else falls back to the reference model, never to fabrication.
         val mergedProfile = noiseProfileOverride
@@ -308,7 +309,7 @@ object LinearRgbDngWriter {
         // Sharded over samples: each sample quantizes independently into
         // disjoint byte pairs, so any worker count emits identical bytes.
         val samples = pixels * 3
-        RawSrWorkers.forEachShard(samples) { p0, p1 ->
+        ShardWorkers.forEachShard(samples) { p0, p1 ->
             var o = p0 * 2
             for (p in p0 until p1) {
                 val q = quantize(triplets[offset + p])

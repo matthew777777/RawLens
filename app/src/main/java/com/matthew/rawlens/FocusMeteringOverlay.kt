@@ -44,10 +44,6 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     var onAeDragged: ((Float, Float) -> Unit)? = null
     /** Joint drag of both squares when they overlap. Defaults to [onTapBoth]. */
     var onBothDragged: ((Float, Float) -> Unit)? = null
-    @Deprecated("Use onTapBoth for taps and onAfDragged for AF drags")
-    var onAfPointChanged: ((Float, Float) -> Unit)? = null
-    @Deprecated("Use onTapBoth for taps and onAeDragged for AE drags")
-    var onAePointChanged: ((Float, Float) -> Unit)? = null
     var onTargetsCleared: (() -> Unit)? = null
     var onOverlayTouched: (() -> Unit)? = null
     /** Press-and-hold: freeze AE + AF at the point indefinitely (until double-tap/reset). */
@@ -84,21 +80,21 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
     private val lockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(214, 255, 51)
+        color = Color.rgb(201, 162, 39)
         style = Paint.Style.FILL
     }
     private val lockShacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(214, 255, 51)
+        color = Color.rgb(201, 162, 39)
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val lockKeyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(24, 28, 16)
+        color = Color.rgb(28, 21, 0)
         style = Paint.Style.FILL
     }
     private val lockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(214, 255, 51)
+        color = Color.rgb(201, 162, 39)
         textSize = 10f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
     }
@@ -108,12 +104,12 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         strokeWidth = 1.25f * density
     }
     private val faceTrackedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(214, 255, 51)
+        color = Color.rgb(201, 162, 39)
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * density
     }
     private val focusRect = RectF()
-    /** HAL face boxes in overlay pixels; the lime one drives AF/AE. Not touch handles. */
+    /** HAL face boxes in overlay pixels; the gold one drives AF/AE. Not touch handles. */
     private var faceBoxes: List<RectF> = emptyList()
     private var trackedFace = -1
 
@@ -148,7 +144,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     }
 
     /**
-     * Shows or hides the small lime lock dot under the reticle.
+     * Shows or hides the small gold lock dot under the reticle.
      * @param deadlineMs elapsed-realtime expiry for timed locks (ignored when indefinite).
      */
     fun setFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) {
@@ -233,7 +229,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         if (focusLocked) drawLockBadge(canvas)
     }
 
-    /** Small lime dot below the AF reticle; timed locks also show seconds remaining. */
+    /** Small gold dot below the AF reticle; timed locks also show seconds remaining. */
     private fun drawLockBadge(canvas: Canvas) {
         val cx = afPoint.x
         val cy = afPoint.y + afHalfSide + 10f * density
@@ -251,7 +247,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
 
     /**
      * Padlock badge for the indefinite AE/AF hold: shackle arc plus a filled
-     * body with a keyhole dot, all in the RawLens lime. Drawn with canvas
+     * body with a keyhole dot, all in RawLens gold. Drawn with canvas
      * primitives so no drawable asset is needed.
      */
     private fun drawPadlock(canvas: Canvas, cx: Float, cy: Float) {
@@ -367,12 +363,12 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                     scheduleFade()
                     invalidate()
                     when (mode) {
-                        DragAf -> (onAfDragged ?: onAfPointChanged)?.invoke(afPoint.x, afPoint.y)
-                        DragAe -> (onAeDragged ?: onAePointChanged)?.invoke(aePoint.x, aePoint.y)
+                        DragAf -> onAfDragged?.invoke(afPoint.x, afPoint.y)
+                        DragAe -> onAeDragged?.invoke(aePoint.x, aePoint.y)
                         else -> (onBothDragged ?: onTapBoth)?.invoke(afPoint.x, afPoint.y)
                             ?: run {
-                                onAePointChanged?.invoke(aePoint.x, aePoint.y)
-                                onAfPointChanged?.invoke(afPoint.x, afPoint.y)
+                                onAeDragged?.invoke(aePoint.x, aePoint.y)
+                                onAfDragged?.invoke(afPoint.x, afPoint.y)
                             }
                     }
                     return true
@@ -424,27 +420,20 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                     // Tap on the AF square (no drag): refocus AF only, keep a
                     // separated AE. Fires the same callback as an AF drag.
                     showAfAt(event.x, event.y)
-                    (onAfDragged ?: onAfPointChanged)?.invoke(afPoint.x, afPoint.y)
+                    onAfDragged?.invoke(afPoint.x, afPoint.y)
                 } else if (downMode == DragAe && nearAe) {
                     // Tap on the AE square (no drag): re-meter AE only, keep AF.
                     showAeAt(event.x, event.y)
-                    (onAeDragged ?: onAePointChanged)?.invoke(aePoint.x, aePoint.y)
+                    onAeDragged?.invoke(aePoint.x, aePoint.y)
                 } else {
                     // Single tap joins AF + AE at the new point through one
                     // coalesced callback (one repeating update + one AF START).
                     showReticleAt(event.x, event.y)
-                    if (onTapBoth != null || onBothDragged != null || onAfDragged != null ||
-                        onAeDragged != null
-                    ) {
-                        (onTapBoth ?: onBothDragged)?.invoke(afPoint.x, afPoint.y)
-                            ?: run {
-                                onAeDragged?.invoke(aePoint.x, aePoint.y)
-                                onAfDragged?.invoke(afPoint.x, afPoint.y)
-                            }
-                    } else {
-                        onAePointChanged?.invoke(aePoint.x, aePoint.y)
-                        onAfPointChanged?.invoke(afPoint.x, afPoint.y)
-                    }
+                    (onTapBoth ?: onBothDragged)?.invoke(afPoint.x, afPoint.y)
+                        ?: run {
+                            onAeDragged?.invoke(aePoint.x, aePoint.y)
+                            onAfDragged?.invoke(afPoint.x, afPoint.y)
+                        }
                 }
                 lastTapUpMs = now
                 lastTapUpX = event.x

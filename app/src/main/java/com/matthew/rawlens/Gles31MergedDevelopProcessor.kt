@@ -132,8 +132,8 @@ object MergedDevelopWeights {
  *
  * Threading mirrors [Gles31JpegOutputProcessor]: exactly one instance per EGL
  * context, used only on the thread that owns that context — in production the
- * merge thread, inside `VkRawSrProcessor.processPacked.consume` (through the
- * coordinator's image bridge) while the input textures are live. Textures are
+ * merge thread (through the coordinator's image bridge) while the input
+ * textures are live. Textures are
  * context-local, so this processor must never run on the AMaZE context (or
  * vice versa).
  */

@@ -28,25 +28,7 @@ class GpsDngWriterTest {
         assertEquals(tiff.entry(273).value + tiff.entry(279).value, bytes.size)
     }
 
-    @Test fun mosaicSrCarriesGpsSubIfd() {
-        val bytes = ByteArrayOutputStream().also {
-            MosaicSrDngWriter.write(
-                it,
-                MosaicSrCfa(2, 2, BayerPattern.RGGB, FloatArray(4) { 0.25f }),
-                metadata(),
-                MosaicSrProvenance(
-                    selectedFrames = 2, acceptedFrames = 2, rejectedFrames = 0,
-                    referenceTimestampNs = 123L, sourceWidth = 2, sourceHeight = 2,
-                    sourceCameraId = "0", lensShadingApplied = false
-                ),
-                gps
-            )
-        }.toByteArray()
-        val tiff = Tiff(bytes)
-        assertTrue(tiff.has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
-        assertGpsContents(tiff.subIfd(GpsTiffDirectory.TAG_GPS_IFD_POINTER), gps)
-        assertEquals(tiff.entry(273).value + tiff.entry(279).value, bytes.size)
-    }
+    // Future SR hook: mosaicSrCarriesGpsSubIfd test here.
 
     @Test fun floatCfaCarriesGpsSubIfd() {
         val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16) { 0.5f }, RawCrop(0, 0, 4, 4))
@@ -69,19 +51,7 @@ class GpsDngWriterTest {
             FloatCfaDngWriter.write(it, cfa, metadata())
         }.toByteArray()
         assertFalse(Tiff(float).has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
-        val mosaic = ByteArrayOutputStream().also {
-            MosaicSrDngWriter.write(
-                it,
-                MosaicSrCfa(2, 2, BayerPattern.RGGB, FloatArray(4) { 0.25f }),
-                metadata(),
-                MosaicSrProvenance(
-                    selectedFrames = 2, acceptedFrames = 2, rejectedFrames = 0,
-                    referenceTimestampNs = 123L, sourceWidth = 2, sourceHeight = 2,
-                    sourceCameraId = "0", lensShadingApplied = false
-                )
-            )
-        }.toByteArray()
-        assertFalse(Tiff(mosaic).has(GpsTiffDirectory.TAG_GPS_IFD_POINTER))
+        // Future SR hook: mosaic no-fix omission assertion here.
     }
 
     @Test fun gpsPointerEntryIsSortedAndInline() {

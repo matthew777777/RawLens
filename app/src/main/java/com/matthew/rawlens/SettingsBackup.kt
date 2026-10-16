@@ -27,7 +27,8 @@ object SettingsBackup {
     val KNOWN_STORES: Set<String> = setOf(
         STORE_MAIN,
         DngMetadataOverrideStore.PREFS_NAME,
-        ProgramAeProfileStore.PREFS_NAME
+        ProgramAeProfileStore.PREFS_NAME,
+        VendorKeyStore.PREFS_NAME
     )
 
     /** Deterministic export of [stores] (store name to its `SharedPreferences.all`). */

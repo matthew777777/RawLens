@@ -7,28 +7,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ZslSelectedFrameCountTest {
-    private val srOff = RawSuperResolutionSettings()
     private val fusionOff = RawBurstFusionSettings()
     private val hdrOff = HdrPlusSettings()
 
     private fun selected(
-        sr: RawSuperResolutionSettings = srOff,
         fusion: RawBurstFusionSettings = fusionOff,
         hdrPlus: HdrPlusSettings = hdrOff,
         configured: Int,
         format: CaptureFormat
     ): Int = RawCameraController.zslSelectedFrameCountFor(
-        sr, fusion, hdrPlus, configured, format
+        fusion, hdrPlus, configured, format
     )
 
     private fun slots(
-        sr: RawSuperResolutionSettings = srOff,
         fusion: RawBurstFusionSettings = fusionOff,
         hdrPlus: HdrPlusSettings = hdrOff,
         configured: Int,
         format: CaptureFormat
     ): Int = RawCameraController.availabilitySlotCountFor(
-        sr, fusion, hdrPlus, configured, format
+        fusion, hdrPlus, configured, format
     )
 
     @Test fun hdrPlusJpegDngKeepsConfiguredCount() {
@@ -55,12 +52,7 @@ class ZslSelectedFrameCountTest {
         assertEquals(2, selected(fusion = fusionOn, configured = 1, format = CaptureFormat.DNG_ONLY))
     }
 
-    @Test fun superResolutionUnchanged() {
-        val srOn = RawSuperResolutionSettings(enabled = true)
-        assertEquals(12, selected(sr = srOn, configured = 12, format = CaptureFormat.JPEG_DNG))
-        assertEquals(30, selected(sr = srOn, configured = 59, format = CaptureFormat.JPEG_DNG))
-        assertEquals(2, selected(sr = srOn, configured = 1, format = CaptureFormat.DNG_ONLY))
-    }
+    // Future SR hook: superResolutionUnchanged test here.
 
     @Test fun plainBurstKeepsJpegCap() {
         // Per-frame JPEG saves still serialize through the 6-slot
@@ -76,11 +68,9 @@ class ZslSelectedFrameCountTest {
         // The shutter gate must not grey out on large merge selections
         // in JPEG modes: merges save one artifact (one slot), so the
         // 6-slot per-frame JPEG budget never applies to them.
-        val srOn = RawSuperResolutionSettings(enabled = true)
         val fusionOn = RawBurstFusionSettings(enabled = true)
         val hdrOn = HdrPlusSettings(enabled = true)
         for (format in CaptureFormat.entries) {
-            assertEquals(1, slots(sr = srOn, configured = 30, format = format))
             assertEquals(1, slots(fusion = fusionOn, configured = 30, format = format))
             assertEquals(1, slots(hdrPlus = hdrOn, configured = 30, format = format))
         }

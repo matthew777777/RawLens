@@ -10,9 +10,10 @@ class SettingsBackupTest {
     private val main = "rawlens_settings"
     private val dng = "rawlens_dng_metadata"
     private val ae = "rawlens_program_ae_v2"
+    private val vendorKeys = "rawlens_vendor_keys"
 
-    @Test fun knownStoresCoverAllThreePrefsFiles() {
-        assertEquals(setOf(main, dng, ae), SettingsBackup.KNOWN_STORES)
+    @Test fun knownStoresCoverAllFourPrefsFiles() {
+        assertEquals(setOf(main, dng, ae, vendorKeys), SettingsBackup.KNOWN_STORES)
     }
 
     @Test fun roundTripsAllValueTypes() {

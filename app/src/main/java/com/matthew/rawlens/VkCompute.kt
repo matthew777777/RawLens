@@ -11,6 +11,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
+ * UNIVERSAL HUB — permanent shared Vulkan compute host. Never remove:
+ * HDR/HDR+ merges and future pipelines run dispatches here.
+ *
  * Unified Vulkan compute host (shared phone/desktop bytes): the exact
  * analogue of the retired GLES host — [VkImage]/[VkArena] mirror its
  * texture/arena twins, [VkProgramCache]/[VkBound]/[VkSession] mirror
@@ -22,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 
 // ---------------------------------------------------------------------------
-// Manifest (tools/srvk_shader_transform.py, version 2).
+// Manifest (generated shader metadata, version 2).
 
 private sealed interface JVal {
     data class Str(val v: String) : JVal
@@ -32,7 +35,7 @@ private sealed interface JVal {
 }
 
 /** Minimal exact-shape JSON reader for the generated manifest (no arrays). */
-private object SrvkJson {
+private object HubJson {
     fun parse(text: String): Map<String, JVal> {
         val p = Parser(text)
         val root = p.value()
@@ -146,15 +149,15 @@ private fun Map<String, JVal>.obj(key: String, what: String): Map<String, JVal> 
     (get(key) ?: throw IllegalArgumentException("$what.$key missing")).asObj("$what.$key")
 
 /** One shader's binding contract, exactly as the transform emitted it. */
-internal data class SrvkShaderEntry(
+internal data class HubShaderEntry(
     val blockBinding: Int,
     val blockBytes: Int,
-    val uniforms: Map<String, SrvkUniform>,
-    val opaque: Map<String, SrvkOpaque>
+    val uniforms: Map<String, HubUniform>,
+    val opaque: Map<String, HubOpaque>
 )
 
-internal data class SrvkUniform(val offset: Int, val bytes: Int, val type: String)
-internal data class SrvkOpaque(
+internal data class HubUniform(val offset: Int, val bytes: Int, val type: String)
+internal data class HubOpaque(
     val binding: Int,
     val kind: String,
     val otype: String,
@@ -162,20 +165,20 @@ internal data class SrvkOpaque(
     val esslBinding: Int?
 )
 
-internal class SrvkManifest(private val assets: AssetManager) {
-    val shaders: Map<String, SrvkShaderEntry> by lazy {
+internal class HubManifest(private val assets: AssetManager) {
+    val shaders: Map<String, HubShaderEntry> by lazy {
         val text = assets.open("spirv/manifest.json").bufferedReader().readText()
-        val root = SrvkJson.parse(text)
+        val root = HubJson.parse(text)
         val version = root.long("version", "manifest")
         require(version == 2L) { "unsupported shader manifest version $version" }
         root.obj("shaders", "manifest").mapValues { (name, v) ->
             val e = v.asObj("shaders.$name")
-            SrvkShaderEntry(
+            HubShaderEntry(
                 blockBinding = e.long("blockBinding", name).toInt(),
                 blockBytes = e.long("blockBytes", name).toInt(),
                 uniforms = e.obj("uniforms", name).mapValues { (u, uv) ->
                     val m = uv.asObj("$name.uniforms.$u")
-                    SrvkUniform(
+                    HubUniform(
                         m.long("offset", u).toInt(),
                         m.long("bytes", u).toInt(),
                         m.str("type", u)
@@ -185,7 +188,7 @@ internal class SrvkManifest(private val assets: AssetManager) {
                     val m = ov.asObj("$name.opaque.$o")
                     val fmt = m["format"]
                     val essl = m["esslBinding"]
-                    SrvkOpaque(
+                    HubOpaque(
                         m.long("binding", o).toInt(),
                         m.str("kind", o),
                         m.str("otype", o),
@@ -197,7 +200,7 @@ internal class SrvkManifest(private val assets: AssetManager) {
         }
     }
 
-    fun entry(asset: String): SrvkShaderEntry =
+    fun entry(asset: String): HubShaderEntry =
         shaders[asset] ?: throw IllegalArgumentException("no manifest entry for $asset")
 }
 
@@ -205,8 +208,8 @@ internal class SrvkManifest(private val assets: AssetManager) {
 // Images (GL-texture twin).
 
 internal object VkFormats {
-    /** GLES internal-format token -> SrvkFormat int (srvk_compute.h). */
-    fun toSrvk(glFormat: Int): Int = when (glFormat) {
+    /** GLES internal-format token -> HubFormat int (srvk_compute.h). */
+    fun toHubFormat(glFormat: Int): Int = when (glFormat) {
         GLES30.GL_R32F -> 0
         GLES30.GL_R32UI -> 1
         GLES30.GL_RGBA32F -> 2
@@ -228,7 +231,7 @@ internal object VkFormats {
  * opaque Int handles to the orchestration).
  */
 internal class VkImage(
-    private val vk: SrVulkan.Handle,
+    private val vk: VulkanHub.Handle,
     val width: Int,
     val height: Int,
     val internalFormat: Int,
@@ -360,11 +363,26 @@ internal class VkImage(
 // ---------------------------------------------------------------------------
 // Arena (Arena twin).
 
-internal class VkArena(private val vk: SrVulkan.Handle) : Closeable {
-    val memory = RawSrTextureMemory()
+/** Actual live texture-storage accounting, excluding driver overhead and borrowed Camera2 planes. */
+class TextureMemory {
+    var liveBytes = 0L; private set
+    var peakBytes = 0L; private set
+    fun allocate(bytes: Long) {
+        require(bytes >= 0)
+        liveBytes = Math.addExact(liveBytes, bytes)
+        peakBytes = maxOf(peakBytes, liveBytes)
+    }
+    fun release(bytes: Long) {
+        require(bytes in 0..liveBytes)
+        liveBytes -= bytes
+    }
+}
+
+internal class VkArena(private val vk: VulkanHub.Handle) : Closeable {
+    val memory = TextureMemory()
     private val live = LinkedHashSet<VkImage>()
     fun texture(width: Int, height: Int, format: Int) =
-        VkImage(vk, width, height, format, vk.createImage(width, height, VkFormats.toSrvk(format))).also {
+        VkImage(vk, width, height, format, vk.createImage(width, height, VkFormats.toHubFormat(format))).also {
             live.add(it); memory.allocate(it.byteSize); register(it)
         }
 
@@ -422,7 +440,7 @@ fun vkDownloadR32fRegion(id: Int, x: Int, y: Int, w: Int, h: Int): FloatArray =
 internal class VkProgram(
     val pipeline: Long,
     val module: Long,
-    val entry: SrvkShaderEntry
+    val entry: HubShaderEntry
 ) {
     // Program-persistent uniform staging (zeroed at creation): exactly the
     // GL program-state semantics — values a pass block does not rewrite
@@ -434,11 +452,11 @@ internal class VkProgram(
 }
 
 internal class VkProgramCache(
-    private val vk: SrVulkan.Handle,
+    private val vk: VulkanHub.Handle,
     private val assets: AssetManager
 ) : Closeable {
     private val programs = LinkedHashMap<String, VkProgram>()
-    private val manifest = SrvkManifest(assets)
+    private val manifest = HubManifest(assets)
 
     fun get(asset: String): VkProgram = programs.getOrPut(asset) {
         val stem = asset.substringAfterLast("/").removeSuffix(".glsl")
@@ -470,7 +488,7 @@ internal class VkProgramCache(
     }
 }
 
-internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkProgram, private val asset: String) {
+internal class VkBound(private val vk: VulkanHub.Handle, private val program: VkProgram, private val asset: String) {
     private val entry = program.entry
     private val ubo = program.uboStaging
 
@@ -523,7 +541,7 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
         // enough for their own smaller budget), every submit fence-waits in
         // native code (10s, like the GL fence; a hang throws instead of
         // hanging), and the sleep yields to the viewfinder queue between
-        // slices. Desktop sets srvk.sliceBudget huge for one full-grid
+        // slices. Desktop sets hub.sliceBudget huge for one full-grid
         // slice per pass (offset 0, identical math — the offset only
         // translates global IDs); unset means phone budgets.
         //
@@ -536,10 +554,10 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
         // schedule while the finer granularity quadruples the worst-case
         // preemption rate. Slicing preserves coordinates and arithmetic
         // at any budget.
-        val budgetOverride = System.getProperty("srvk.sliceBudget")?.toIntOrNull()
+        val budgetOverride = System.getProperty("hub.sliceBudget")?.toIntOrNull()
         val budget = budgetOverride
             ?: if (asset.endsWith("block_match.glsl") || asset.endsWith("lk_refine.glsl")) 4096 else 262144
-        for ((index, slice) in RawSrGpuScheduling.slices(width, height, localX, localY, budget).withIndex()) {
+        for ((index, slice) in GpuScheduling.slices(width, height, localX, localY, budget).withIndex()) {
             setDispatchOffset(slice.x, slice.y)
             vk.writeUniforms(program.pipeline, ubo.duplicate().order(ByteOrder.nativeOrder()))
             vk.dispatch(program.pipeline, slice.groupsX, slice.groupsY, 1)
@@ -548,7 +566,7 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
         }
     }
 
-    private fun uniform(name: String): SrvkUniform =
+    private fun uniform(name: String): HubUniform =
         entry.uniforms[name] ?: throw IllegalArgumentException("Vulkan uniform $name missing")
 
     private fun ints(name: String, want: String, values: IntArray) {
@@ -585,7 +603,7 @@ internal class VkBound(private val vk: SrVulkan.Handle, private val program: VkP
 }
 
 internal data class VkSession(
-    val vk: SrVulkan.Handle,
+    val vk: VulkanHub.Handle,
     val programs: VkProgramCache,
     val uploads: UploadBuffers
 ) {

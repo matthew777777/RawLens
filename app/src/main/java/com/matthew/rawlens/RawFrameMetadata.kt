@@ -112,6 +112,17 @@ data class RawFrameMetadata(
 }
 
 object RawFrameMetadataFactory {
+    /**
+     * Physical-result routing contract (reference: Unspektrawesome `captureValue`).
+     * Returns the physical camera id to read sensor keys from, or null when the
+     * frame has no physical source or the id is stale/unknown. Pure strings in
+     * and out so it stays JVM-testable without the Android framework.
+     */
+    internal fun selectPhysicalResultId(
+        activePhysicalId: String?,
+        availableIds: Set<String>
+    ): String? = activePhysicalId?.takeIf { it in availableIds }
+
     fun capture(
         cameraId: String,
         image: Image,
@@ -123,7 +134,20 @@ object RawFrameMetadataFactory {
         val cfaResult = runCatching { cfaValue?.let(BayerPattern::fromCamera2) }
         val cfa = cfaResult.getOrNull()
 
-        val dynamicBlack = result.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+        // Physical-first routing: when the HAL reports which physical camera
+        // produced this frame, sensor keys below read from that physical result
+        // and fall back to the logical result per key. Pipeline states
+        // (AF/AE/lens/flash) and frame identity stay logical. With no physical
+        // source this degrades to a plain logical read, identical to before.
+        val physicalResults = runCatching { result.physicalCameraTotalResults }.getOrNull()
+        val physicalId = selectPhysicalResultId(
+            result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
+            physicalResults?.keys ?: emptySet()
+        )
+        val physical: TotalCaptureResult? = physicalId?.let { physicalResults?.get(it) }
+        fun <T> sensorKey(key: CaptureResult.Key<T>): T? = physical?.get(key) ?: result.get(key)
+
+        val dynamicBlack = sensorKey(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
         val staticBlack = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             ?.let { pattern -> FloatArray(4) { index ->
@@ -136,7 +160,7 @@ object RawFrameMetadataFactory {
             else -> BlackLevelSource.MISSING
         }
 
-        val dynamicWhite = result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+        val dynamicWhite = sensorKey(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
             ?.takeIf { it > 0 }?.toFloat()
         val staticWhite = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.takeIf { it > 0 }?.toFloat()
@@ -170,7 +194,7 @@ object RawFrameMetadataFactory {
         val preCorrection = characteristics
             .get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE).snapshot()
         val rawCrop = if (Build.VERSION.SDK_INT >= 34) {
-            result.get(CaptureResult.SCALER_RAW_CROP_REGION).snapshot()
+            sensorKey(CaptureResult.SCALER_RAW_CROP_REGION).snapshot()
         } else null
         val geometry = RawBufferGeometry.resolve(
             image.width,
@@ -182,29 +206,29 @@ object RawFrameMetadataFactory {
             imageCrop
         )
 
-        val lensMap = result.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
+        val lensMap = sensorKey(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
             ?.let { map ->
                 val factors = FloatArray(map.gainFactorCount)
                 map.copyGainFactors(factors, 0)
                 LensShadingSnapshot(map.rowCount, map.columnCount, ImmutableFloatValues(factors))
             }
-        val hotPixels = result.get(CaptureResult.STATISTICS_HOT_PIXEL_MAP)
+        val hotPixels = sensorKey(CaptureResult.STATISTICS_HOT_PIXEL_MAP)
             ?.map { it.snapshot() }.orEmpty()
-        val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+        val gains = sensorKey(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
             ImmutableFloatValues(floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue))
         }
-        val neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+        val neutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
             ?.toDoubleValues()
-        val noise = result.get(CaptureResult.SENSOR_NOISE_PROFILE)?.let { pairs ->
+        val noise = sensorKey(CaptureResult.SENSOR_NOISE_PROFILE)?.let { pairs ->
             ImmutableDoubleValues(DoubleArray(pairs.size * 2) { index ->
                 if (index and 1 == 0) pairs[index / 2].first else pairs[index / 2].second
             })
         }
         val rawBinning = if (Build.VERSION.SDK_INT >= 31) {
-            result.get(CaptureResult.SENSOR_RAW_BINNING_FACTOR_USED)
+            sensorKey(CaptureResult.SENSOR_RAW_BINNING_FACTOR_USED)
         } else null
         val pixelMode = if (Build.VERSION.SDK_INT >= 31) {
-            result.get(CaptureResult.SENSOR_PIXEL_MODE)
+            sensorKey(CaptureResult.SENSOR_PIXEL_MODE)
         } else null
 
         val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
@@ -246,10 +270,10 @@ object RawFrameMetadataFactory {
             rawPlanePixelStride = plane?.pixelStride,
             exifOrientation = exifOrientation,
             sensorOrientationDegrees = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
-            sensitivityIso = result.get(CaptureResult.SENSOR_SENSITIVITY),
-            exposureTimeNanos = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
-            frameDurationNanos = result.get(CaptureResult.SENSOR_FRAME_DURATION),
-            rollingShutterSkewNanos = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
+            sensitivityIso = sensorKey(CaptureResult.SENSOR_SENSITIVITY),
+            exposureTimeNanos = sensorKey(CaptureResult.SENSOR_EXPOSURE_TIME),
+            frameDurationNanos = sensorKey(CaptureResult.SENSOR_FRAME_DURATION),
+            rollingShutterSkewNanos = sensorKey(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
             cfaPattern = cfa,
             rawDevelopmentUnsupportedReason = unsupported,
             blackLevels = black?.let(::ImmutableFloatValues),
@@ -267,8 +291,8 @@ object RawFrameMetadataFactory {
             hotPixels = hotPixels,
             wbGains = gains,
             neutralColorPoint = neutral,
-            colorCorrectionTransform = result
-                .get(CaptureResult.COLOR_CORRECTION_TRANSFORM).toDoubleValues(),
+            colorCorrectionTransform = sensorKey(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+                .toDoubleValues(),
             colorMatrix1 = characteristics
                 .get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1).toDoubleValues(),
             colorMatrix2 = characteristics
@@ -294,11 +318,11 @@ object RawFrameMetadataFactory {
             aeState = result.get(CaptureResult.CONTROL_AE_STATE),
             lensState = result.get(CaptureResult.LENS_STATE),
             quadBayer = quadBayer,
-            aperture = result.get(CaptureResult.LENS_APERTURE)
+            aperture = sensorKey(CaptureResult.LENS_APERTURE)
                 ?.takeIf { it.isFinite() && it > 0f },
-            focalLengthMm = result.get(CaptureResult.LENS_FOCAL_LENGTH)
+            focalLengthMm = sensorKey(CaptureResult.LENS_FOCAL_LENGTH)
                 ?.takeIf { it.isFinite() && it > 0f },
-            focusDistanceM = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            focusDistanceM = sensorKey(CaptureResult.LENS_FOCUS_DISTANCE)
                 ?.takeIf { it.isFinite() && it > 0f }?.let { 1f / it },
             flashFired = result.get(CaptureResult.FLASH_STATE)?.let {
                 it == CaptureResult.FLASH_STATE_FIRED || it == CaptureResult.FLASH_STATE_PARTIAL

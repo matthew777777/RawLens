@@ -624,7 +624,8 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
-    /** Develops an unclamped, normalized CFA produced by RAW HDR/SR merging. */
+    /** Develops an unclamped, normalized CFA produced by RAW HDR merging. */
+    // Future SR hook: route SR merges through this develop path.
     fun developMergedJpeg(
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
@@ -731,9 +732,9 @@ class RawDevelopmentCoordinator(context: Context) {
      * JPEG-ready Bitmap without a second demosaic or repeated RAW corrections.
      *
      * Must run with a current EGL context holding [input] textures (call
-     * [developMergedImagesJpeg] from inside
-     * `VkRawSrProcessor.processPacked.consume`; it owns the develop
-     * context). Applies the reference camera-to-working-colour transform.
+     * [developMergedImagesJpeg] from inside the merge consume block; it owns
+     * the develop context). Applies the reference camera-to-working-colour
+     * transform.
      * The merged texture already carries reference fallback, and prime DNG
      * pixels are never read here. Orientation is EXIF-carried via [input]
      * reference metadata at save time; output pixels are never rotated.
@@ -757,9 +758,9 @@ class RawDevelopmentCoordinator(context: Context) {
      * Vulkan-merge variant of [developMergedTextureJpeg]: downloads the live
      * merged images in bands, re-uploads them as GL textures on the retained
      * develop EGL context, and delegates to the texture engine. Must run
-     * inside `VkRawSrProcessor.processPacked.consume` while the images are
-     * live. Peak transient is one upload band (~17MB), never the whole
-     * ~200MB frame; the bridge textures are deleted before returning.
+     * while the merged images are live. Peak transient is one upload band
+     * (~17MB), never the whole ~200MB frame; the bridge textures are
+     * deleted before returning.
      */
     fun developMergedImagesJpeg(
         mergedImageId: Int,

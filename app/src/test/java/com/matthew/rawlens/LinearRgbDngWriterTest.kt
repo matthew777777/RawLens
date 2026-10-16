@@ -43,11 +43,11 @@ class LinearRgbDngWriterTest {
             s = (s * 1103515245 + 12345) % 2147483648
             (s % 10000) / 10000f
         }
-        RawSrWorkers.overrideCount = 1
+        ShardWorkers.overrideCount = 1
         val serial = try {
             MergedLinearRgb.toTriplets(rgba)
         } finally {
-            RawSrWorkers.overrideCount = null
+            ShardWorkers.overrideCount = null
         }
         assertArrayEquals(serial, MergedLinearRgb.toTriplets(rgba), 0f)
     }
