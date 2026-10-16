@@ -1,3 +1,7 @@
+> Status 2026-10-16: SR was removed from the app (all RawSr/MosaicSr/Vulkan paths,
+> settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
+> design archive for a future SR reintroduction.
+
 # RAW viewfinder / SR contention audit — 2026-09-23
 
 Read all 20 supplied log exports (190,196 lines). The `(1)` exports overlap the

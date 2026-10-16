@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// JNI bridge for com.matthew.rawlens.SrVulkan. THE SAME FILE builds for
+// JNI bridge for com.matthew.rawlens.VulkanHub. THE SAME FILE builds for
 // Android (NDK) and desktop; only the log sink differs. Native methods throw
 // java.lang.RuntimeException with the core's message on failure.
 #include <jni.h>
@@ -27,7 +27,7 @@ static void throw_runtime(JNIEnv* env, const char* msg) {
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeInit(JNIEnv* env, jobject /*thiz*/) {
+Java_com_matthew_rawlens_VulkanHub_nativeInit(JNIEnv* env, jobject /*thiz*/) {
     char errmsg[SRVK_ERR_LEN];
     SrvkContext* ctx = srvk_create(errmsg, sizeof(errmsg));
     if (ctx == NULL) {
@@ -42,7 +42,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeInit(JNIEnv* env, jobject /*thiz*/) {
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDeviceInfo(JNIEnv* env, jobject /*thiz*/, jlong handle) {
+Java_com_matthew_rawlens_VulkanHub_nativeDeviceInfo(JNIEnv* env, jobject /*thiz*/, jlong handle) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
         throw_runtime(env, "null srvulkan context");
@@ -54,7 +54,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDeviceInfo(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDeviceCount(JNIEnv* env, jobject /*thiz*/, jlong handle) {
+Java_com_matthew_rawlens_VulkanHub_nativeDeviceCount(JNIEnv* env, jobject /*thiz*/, jlong handle) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
         throw_runtime(env, "null srvulkan context");
@@ -64,7 +64,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDeviceCount(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDeviceName(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeDeviceName(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                    jint index) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
@@ -77,7 +77,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDeviceName(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeLoadModule(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeLoadModule(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                    jobject words) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
@@ -106,7 +106,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeLoadModule(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDestroyModule(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeDestroyModule(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                        jlong module) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
@@ -117,7 +117,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDestroyModule(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeShutdown(JNIEnv* env, jobject /*thiz*/, jlong handle) {
+Java_com_matthew_rawlens_VulkanHub_nativeShutdown(JNIEnv* env, jobject /*thiz*/, jlong handle) {
     SrvkContext* ctx = (SrvkContext*)(uintptr_t)handle;
     if (ctx == NULL) {
         throw_runtime(env, "null srvulkan context");
@@ -148,7 +148,7 @@ static void* check_direct(JNIEnv* env, jobject buf, jlong* capacity) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeCreateImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeCreateImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                     jint w, jint h, jint format) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return 0;
@@ -162,7 +162,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeCreateImage(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeWriteImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeWriteImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                     jlong image, jobject bytes) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -177,7 +177,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeWriteImage(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeReadImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeReadImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                    jlong image, jobject out) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -192,7 +192,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeReadImage(JNIEnv* env, jobject /*thiz*/,
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeReadImageRegion(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeReadImageRegion(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                         jlong image, jint x, jint y, jint w, jint h,
                                                         jobject out) {
     SrvkContext* ctx = check_ctx(env, handle);
@@ -209,7 +209,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeReadImageRegion(JNIEnv* env, jobject /*t
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDestroyImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeDestroyImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                       jlong image) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -217,7 +217,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDestroyImage(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeCreatePipeline(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeCreatePipeline(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                         jlong module, jint uboBinding,
                                                         jint uboSize, jintArray imgBindings,
                                                         jintArray imgKinds) {
@@ -247,7 +247,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeCreatePipeline(JNIEnv* env, jobject /*th
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeBindImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeBindImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                    jlong pipeline, jint binding, jlong image) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -260,7 +260,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeBindImage(JNIEnv* env, jobject /*thiz*/,
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeWriteUniforms(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeWriteUniforms(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                        jlong pipeline, jobject bytes) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -275,7 +275,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeWriteUniforms(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDispatch(JNIEnv* env, jobject /*thiz*/, jlong handle,
+Java_com_matthew_rawlens_VulkanHub_nativeDispatch(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                   jlong pipeline, jint gx, jint gy, jint gz) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;
@@ -288,7 +288,7 @@ Java_com_matthew_rawlens_SrVulkan_nativeDispatch(JNIEnv* env, jobject /*thiz*/, 
 }
 
 JNIEXPORT void JNICALL
-Java_com_matthew_rawlens_SrVulkan_nativeDestroyPipeline(JNIEnv* env, jobject /*thiz*/,
+Java_com_matthew_rawlens_VulkanHub_nativeDestroyPipeline(JNIEnv* env, jobject /*thiz*/,
                                                          jlong handle, jlong pipeline) {
     SrvkContext* ctx = check_ctx(env, handle);
     if (ctx == NULL) return;

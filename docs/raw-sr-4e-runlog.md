@@ -1,3 +1,7 @@
+> Status 2026-10-16: SR was removed from the app (all RawSr/MosaicSr/Vulkan paths,
+> settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
+> design archive for a future SR reintroduction.
+
 # Prompt 4E run log — real-scene scale-1 merge image-quality gate
 
 ## 0. Criteria declared BEFORE judging (2026-09-11)

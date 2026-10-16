@@ -1,3 +1,7 @@
+> Status 2026-10-16: SR was removed from the app (all RawSr/MosaicSr/Vulkan paths,
+> settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
+> design archive for a future SR reintroduction.
+
 # RawLens RAW ZSL Super-Resolution
 
 ## Technical implementation plan and agent work prompts

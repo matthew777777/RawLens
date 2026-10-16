@@ -70,14 +70,12 @@ Moving means are sampled at `q + flow(q)·0.5`: our flows are **raw-unit**
 vectors (`RawSrTileFlow.dx/dy`, same convention as the reference's default
 FFT-grey mode), and the stats grid is half-resolution, so the raw-unit flow
 scales by 0.5 onto the quad lattice (reference `cuda_warp_dogson` verbatim).
-Flow lookup bilinearly blends the four surrounding tiles at the quad
-center in raw coordinates (`2q+1`), Sabre-style dense warp — the SAME
-continuous warp the merge gather uses (`flowAtSmoothInto`, deliberate
-deviation from the reference tile snap: a snapped r over-accepts where
-the blended gather lands wrong, so r scores the warp that renders).
-Non-finite corners fall back to the containing tile; a non-finite
+Flow lookup reads the containing tile's vector at the quad center in
+raw coordinates (`2q+1`) with no blending (`flowAtNearestInto`,
+reference `cpu_warp_dogson` verbatim) — the SAME tile-snapped warp the
+merge gather uses, so r scores the warp that renders. A non-finite
 result rejects the quad. (GPU twin: the flow texture stores RAW-unit
-vectors on the raw lattice, the shader blends identically, then scales
+vectors on the raw lattice, the shader snaps identically, then scales
 the shift onto the quad lattice, `center = q + flow·0.5` — same
 geometry.) The
 moving sample uses Dogson biquadratic weights

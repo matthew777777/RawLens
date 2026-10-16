@@ -1,3 +1,7 @@
+> Status 2026-10-16: SR was removed from the app (all RawSr/MosaicSr/Vulkan paths,
+> settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
+> design archive for a future SR reintroduction.
+
 # SR Vulkan rewrite plan: 1:1 port of the CPU linear chain + JAMY-L
 
 Status: plan only. No code changed. CPU behavior must stay IDENTICAL;
