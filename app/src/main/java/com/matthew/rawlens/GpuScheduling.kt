@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
-/** Bounded independent invocation rectangles; preserves coordinates and arithmetic. */
-internal object RawSrGpuScheduling {
+/**
+ * UNIVERSAL HUB — permanent shared GPU dispatch scheduling. Never remove:
+ * HDR/HDR+ Vulkan and GLES paths slice large dispatches here.
+ *
+ * Bounded independent invocation rectangles; preserves coordinates and arithmetic.
+ */
+internal object GpuScheduling {
     data class Slice(val x: Int, val y: Int, val groupsX: Int, val groupsY: Int)
 
     fun slices(width: Int, height: Int, localX: Int, localY: Int, budget: Int): Sequence<Slice> {

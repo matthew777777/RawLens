@@ -5,8 +5,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 /**
- * Shared CPU worker pool for the mosaic (CPU) merge chain: unpack, alignment,
- * robustness, precision and accumulation are all row/tile-sharded here.
+ * UNIVERSAL HUB — permanent shared CPU worker pool. Never remove: HDR/HDR+
+ * pipelines and future code shard row/tile loops here via [forEachShard].
+ *
+ * Shared CPU worker pool: unpack, alignment, robustness, precision and
+ * accumulation are all row/tile-sharded here.
  *
  * Shards are contiguous index ranges run in order; every shard executes the
  * same serial code as the single-threaded path, so sharding never changes a
@@ -14,7 +17,7 @@ import java.util.concurrent.Future
  * for any worker count. Callers keep their own buffers (disjoint writes,
  * shared reads); the join provides the only needed visibility edge.
  */
-internal object RawSrWorkers {
+internal object ShardWorkers {
     /** Test override for the worker count (exact-output equivalence checks). */
     @Volatile var overrideCount: Int? = null
 

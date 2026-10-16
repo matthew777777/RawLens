@@ -8,13 +8,18 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
+ * UNIVERSAL HUB — permanent shared Vulkan compute backend. Never remove:
+ * HDR/HDR+ merges and future pipelines hook here. (Native library and JNI
+ * ABI still carry the historical `srvulkan`/`srvk` names until the planned
+ * project restructure; the Kotlin surface is the stable contract.)
+ *
  * Kotlin facade for the unified native `srvulkan` library (same C++/JNI
  * sources on Android and desktop). Loading order: explicit
  * `-Dsrvulkan.lib=<path>` override, then `System.loadLibrary` (Android
  * packaging and developers with the lib on `java.library.path`), then
  * classpath extraction of the Gradle-staged per-platform binary.
  */
-object SrVulkan {
+object VulkanHub {
     @Volatile private var loaded = false
 
     @Synchronized
@@ -36,7 +41,7 @@ object SrVulkan {
                     "/${System.getProperty("os.arch")} (need Linux/macOS)"
             )
         val resource = "/native/$dir/$file"
-        val stream = SrVulkan::class.java.getResourceAsStream(resource)
+        val stream = VulkanHub::class.java.getResourceAsStream(resource)
             ?: throw UnsatisfiedLinkError(
                 "srvulkan: $resource missing from the classpath " +
                     "(build the native lib: :tools:sr-vulkan:buildNative)"
@@ -64,7 +69,7 @@ object SrVulkan {
     private fun extractSibling(anchor: File, name: String, resource: String) {
         val target = File(anchor.parentFile, name)
         if (target.isFile) return
-        val stream = SrVulkan::class.java.getResourceAsStream(resource) ?: return
+        val stream = VulkanHub::class.java.getResourceAsStream(resource) ?: return
         val tmp = File.createTempFile("sibling-", "-$name", anchor.parentFile)
         try {
             stream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
