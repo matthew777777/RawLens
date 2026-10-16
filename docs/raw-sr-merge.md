@@ -278,33 +278,38 @@ robustness stage.
   output on any test including poisoned flow/noise inputs; repeated GPU runs
   bit-identical; CPU oracle run-to-run equal.
 
-## 13. Bilinear-everywhere + unblocker + contested veto (2026-10-05/06, RawLens improvement)
+## 13. Tile-snap warp + unblocker + contested veto (2026-10-05/06 RawLens improvement, corrected 2026-10-16 to the reference tile snap)
 
-Sabre-style dense warp, always on, no gates: merge gather AND
-robustness warp both bilinear-sample the flow (`flowAtSmoothInto`,
-C0-continuous, tears impossible by construction), and per-pixel
-rejection (not flow vetoes) handles mistakes. The robustness warp
-uses the SAME bilinear lookup as the gather, so r scores the warp
-that actually renders. Non-finite corners fall back to the containing
-tile; non-finite results skip with oob++ (invalid-flow propagation
+Reference tile-snap flow lookup, always on, no gates: merge gather AND
+robustness warp both read the containing tile's vector with no blending
+(`flowAtNearestInto`, `merge.py::cpu_accumulate` / `cpu_warp_dogson`
+verbatim). The 2026-10-05 bilinear blend (`flowAtSmoothInto`) is REVERTED:
+at a flow discontinuity it invents warps no tile estimated and smears
+sharp content into dots/ghosts (measured 0.375 smear on a 0.8-contrast
+edge; the retired blend is pinned by no test). Per-pixel rejection (not
+flow vetoes) handles mistakes, and the robustness warp uses the SAME
+tile-snapped lookup as the gather, so r scores the warp that actually
+renders. A non-finite result skips with oob++ (invalid-flow propagation
 preserved). The pre-Sabre gated smoother (`flowAtGatedSmoothInto`,
 `FlowPhotoGate`, gradK) and all its tuning/CLI/shader surface are
-DELETED, not default-off — the gates were scaffolding around the
-self-inflicted tile snap. CPU and GPU transcribe the same formulas
-in float32 (`merge_accumulate.glsl`, `robustness.glsl`).
+DELETED, not default-off. CPU and GPU transcribe the same formulas
+in float32 (`merge_accumulate.glsl`, `robustness.glsl`). `flowAtSmoothInto`
+survives only as a dormant A/B helper for `upsampleFlowToQuads`.
 
 The unblocker fold (`RawSrUnblocker`, always on) caps robustness by
-the variance-loss keep-weight (`r' = min(r, u)`, Sabre
-`weight = min(1 - unblocker, frame_weight)`), then the contested-warp
-veto zeroes quads where the 3x3 tile flow spread exceeds the motion
-threshold while u < 0.5 (period-ghost bends would render at any
-partial weight), and a second 5x5 local minimum spreads the fold
-(Sabre dilate). The keep verdict judges the PRE-fold field, so frame
-selection is unchanged; without a usable noise model the field rides
-through (no model, no gate). GPU mirrors the order exactly
-(robustness → min → modulate → min → accumulate) with the CPU guide
-gray uploaded verbatim (4E precedent: the pyramid's linear grey
-lives in a different domain and would gate differently).
+the variance-loss keep-weight where the 3x3 tile flow spread exceeds
+the motion threshold (`r' = min(r, u)` on irregular flow, `r' = r`
+under smooth flow — paper S.3 AND-condition, tags 4N/5L; a null flow
+keeps the legacy unconditional cap), then the contested-warp
+veto zeroes quads where the spread is irregular while u < 0.5
+(period-ghost bends would render at any partial weight), and a second
+5x5 local minimum spreads the fold (Sabre dilate). The keep verdict
+judges the PRE-fold field, so frame selection is unchanged; without
+a usable noise model the field rides through (no model, no gate). GPU
+mirrors the order exactly (robustness → min → modulate → min →
+accumulate) with the CPU guide gray uploaded verbatim (4E precedent:
+the pyramid's linear grey lives in a different domain and would gate
+differently).
 
 Validated on the Xiaomi burst (Xiaomi REDMI Note 15 Pro 5G,
 4080x3060 x8): quilt zmax 1.39 (REF Jamy-L 2.27, gated 2.23,

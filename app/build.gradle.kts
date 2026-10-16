@@ -52,12 +52,14 @@ android {
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "ENABLE_UPDATE_CHECK", if (isFdroidBuild) "false" else "true")
-        // Store builds ship ARM only: x86/x86_64 exist solely for local
-        // emulator testing, and from-source ncnn is ~18MB per x86 ABI.
+        // ARM-only app: every build (local, CI, store) ships arm64-v8a +
+        // armeabi-v7a. x86/x86_64 emulator ABIs are excluded, so native
+        // code (libjpeg-turbo, ncnn, Halide filters) is never compiled
+        // for them. (This used to be F-Droid-only; from-source ncnn is
+        // ~18MB per extra ABI, and the x86 libjpeg-turbo SIMD build
+        // needs nasm, which dev machines often lack.)
         ndk {
-            if (isFdroidBuild) {
-                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
-            }
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
         }
         externalNativeBuild {
             cmake {
@@ -199,9 +201,9 @@ if (isFdroidBuild) {
 
 dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
-    implementation("androidx.core:core-ktx:1.9.0")
+    implementation("androidx.core:core-ktx:1.19.1")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.mockito:mockito-core:5.21.0")
+    testImplementation("org.mockito:mockito-core:5.24.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
 }

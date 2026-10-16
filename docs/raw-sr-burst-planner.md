@@ -1,3 +1,7 @@
+> Status 2026-10-16: SR was removed from the app (all RawSr/MosaicSr/Vulkan paths,
+> settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
+> design archive for a future SR reintroduction.
+
 # RAW SR burst admission (2026-09-10)
 
 `RawSrBurstPlanner` performs CPU admission before GPU allocation. It reads duplicate RAW buffers,

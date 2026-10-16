@@ -55,17 +55,19 @@ detail to protect; only lost *signal* variance attenuates.
 
 - CPU: `RawSrMergeJob.buildMovingFrame` bakes the field into the frame's
   robustness after the support gate (`applyToFrameAndSpread`:
-  `r' = min(r, clamp(u, 0, 1))` — the keep-weight caps agreement
-  instead of compounding it, Sabre
-  `weight = min(1 - unblocker, frame_weight)` — then the
-  contested-warp veto, then a second 5x5 local minimum over the folded
-  field; non-finite inputs to zero, `FLAG_UNBLOCKED = 1024` where
-  `u < 0.999`). One site serves the Linear oracle and the Mosaic chain
-  alike. `Rc` folds the effective weights, so the support overwrite and
-  the future merged-noise scale account for unblocking automatically.
-  The keep verdict judges the pre-fold field (frame selection is
-  independent of blocking); without a usable noise model the field
-  rides through (no model, no gate).
+  `r' = min(r, clamp(u, 0, 1))` where the 3x3 tile flow spread exceeds
+  the motion threshold, `r' = r` under smooth flow — paper S.3
+  AND-condition — then the contested-warp veto, then a second 5x5
+  local minimum over the folded field; non-finite inputs to zero,
+  `FLAG_UNBLOCKED = 1024` where the cap actually attenuates).
+  A null flow keeps the legacy unconditional cap (A/B helper path).
+  One site serves the Linear oracle and the Mosaic chain alike. `Rc`
+  folds the effective weights, so the support overwrite and the future
+  merged-noise scale account for unblocking automatically. The keep
+  verdict judges the pre-fold field (frame selection is independent of
+  blocking); without a usable noise model the field rides through
+  (no model, no gate). Algorithm tags `RawSr/4N` + `MosaicSr/5L`
+  mark the gated fold.
 - Contested-warp veto (RawLens, not Sabre — Sabre's dense flow never
   ghosts): quads whose 3x3 tile flow spread exceeds the motion
   threshold while u < 0.5 (`VETO_UNBLOCKER_THRESHOLD`: majority of
