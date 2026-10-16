@@ -7,11 +7,13 @@ import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import androidx.core.view.WindowCompat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 import org.mockito.Mockito.anyInt
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockStatic
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
@@ -28,9 +30,11 @@ class ImmersiveModeTest {
         val controller = mock(WindowInsetsController::class.java)
         `when`(window.insetsController).thenReturn(controller)
 
-        ImmersiveMode.apply(window, Build.VERSION_CODES.R)
+        mockStatic(WindowCompat::class.java).use { compat ->
+            ImmersiveMode.apply(window, Build.VERSION_CODES.R)
 
-        verify(window).setDecorFitsSystemWindows(false)
+            compat.verify { WindowCompat.setDecorFitsSystemWindows(window, false) }
+        }
         verify(controller).hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
         verify(controller).systemBarsBehavior =
             WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -41,9 +45,11 @@ class ImmersiveModeTest {
         val window = mock(Window::class.java)
         `when`(window.insetsController).thenReturn(null)
 
-        ImmersiveMode.apply(window, Build.VERSION_CODES.R)
+        mockStatic(WindowCompat::class.java).use { compat ->
+            ImmersiveMode.apply(window, Build.VERSION_CODES.R)
 
-        verify(window).setDecorFitsSystemWindows(false)
+            compat.verify { WindowCompat.setDecorFitsSystemWindows(window, false) }
+        }
         verify(window, never()).decorView
     }
 

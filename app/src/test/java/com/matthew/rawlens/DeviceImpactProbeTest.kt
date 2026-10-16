@@ -27,17 +27,13 @@ class DeviceImpactProbeTest {
     @Test fun `trim names cover every level`() {
         assertEquals("UI_HIDDEN", DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN))
         assertEquals("BACKGROUND", DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND))
-        assertEquals("MODERATE", DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_MODERATE))
-        assertEquals("COMPLETE", DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_COMPLETE))
-        assertEquals("RUNNING_LOW", DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW))
-        assertEquals(
-            "RUNNING_MODERATE",
-            DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE)
-        )
-        assertEquals(
-            "RUNNING_CRITICAL",
-            DeviceImpactProbe.trimName(ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
-        )
+        // Deprecated TRIM_MEMORY_* constants are matched by literal value
+        // in trimName; pin the platform values (60/80/10/5/15) here too.
+        assertEquals("MODERATE", DeviceImpactProbe.trimName(60))
+        assertEquals("COMPLETE", DeviceImpactProbe.trimName(80))
+        assertEquals("RUNNING_LOW", DeviceImpactProbe.trimName(10))
+        assertEquals("RUNNING_MODERATE", DeviceImpactProbe.trimName(5))
+        assertEquals("RUNNING_CRITICAL", DeviceImpactProbe.trimName(15))
         assertEquals("level=999", DeviceImpactProbe.trimName(999))
     }
 

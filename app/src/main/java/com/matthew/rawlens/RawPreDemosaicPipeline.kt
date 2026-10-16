@@ -104,7 +104,7 @@ object LensShadingCorrector {
         if (model != null && !model.alreadyApplied) {
             // Row-sharded with the gain inlined (same gainAt values the
             // saturation map returns, without a virtual call per pixel).
-            RawSrWorkers.forEachShard(input.height) { y0, y1 ->
+            ShardWorkers.forEachShard(input.height) { y0, y1 ->
                 for (y in y0 until y1) {
                     val sensorY = input.sensorCropTop + y
                     for (x in 0 until input.width) {

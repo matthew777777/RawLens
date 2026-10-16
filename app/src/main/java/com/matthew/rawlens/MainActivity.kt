@@ -70,6 +70,7 @@ class MainActivity : Activity() {
     private lateinit var lensDiscovery: LensDiscovery
     private lateinit var dngMetadataOverrideStore: DngMetadataOverrideStore
     private lateinit var programAeProfileStore: ProgramAeProfileStore
+    private lateinit var vendorKeyStore: VendorKeyStore
     private var gpsProvider: GpsLocationProvider? = null
     private lateinit var manualPanel: LinearLayout
     private lateinit var manualSlider: RuleSliderView
@@ -95,7 +96,7 @@ class MainActivity : Activity() {
     private lateinit var hdrQuick: TextView
     private lateinit var timerQuick: TextView
     private lateinit var releaseQuick: TextView
-    private lateinit var rawSrQuick: TextView
+    // Future SR hook: rawSrQuick tile field here.
     private lateinit var fusionQuick: TextView
     private lateinit var hdrPlusQuick: TextView
     private lateinit var ettrQuick: TextView
@@ -133,7 +134,7 @@ class MainActivity : Activity() {
     private var releaseMode = 0 // 0 single, 1 burst
     private var hdrEnabled = false
     private var captureExposureMode = CaptureExposureMode.AUTO
-    private var rawSuperResolutionSettings = RawSuperResolutionSettings()
+    // Future SR hook: rawSuperResolutionSettings field here.
     private var burstFusionSettings = RawBurstFusionSettings()
     private var hdrPlusSettings = HdrPlusSettings()
     private var programHintShown = false
@@ -209,12 +210,7 @@ class MainActivity : Activity() {
         }
         preloadFlowNetForMergedHdr()
         preloadRawNindIfEnabled()
-        // KernelNet is the default merge path (RawSrKernelNetAniso.enabled,
-        // default on): preload the model at startup so it is ready when the
-        // first merge runs. The analytic path stays available when the model
-        // is missing or the switch is off.
-        if (RawSrKernelNetAniso.enabled) RawSrKernelNetAniso.preload(applicationContext)
-        rawSuperResolutionSettings = RawSuperResolutionSettings.fromPreferences(lensPreferences().all)
+        // Future SR hook: KernelNet preload + RawSuperResolutionSettings load here.
         burstFusionSettings = RawBurstFusionSettings.fromPreferences(lensPreferences().all)
         hdrPlusSettings = HdrPlusSettings.fromPreferences(lensPreferences().all)
         captureExposureMode = CaptureExposureMode.entries.getOrElse(
@@ -226,18 +222,13 @@ class MainActivity : Activity() {
         if (lensPreferences().getBoolean(KEY_RAW_ZSL, false)) {
             captureExposureMode = CaptureExposureMode.ZSL
         }
-        if (rawSuperResolutionSettings.enabled) captureExposureMode = CaptureExposureMode.ZSL
+        // Future SR hook: force ZSL when SR is enabled (migration + stale pairs).
         if (burstFusionSettings.enabled) {
-            // Quick tiles are exclusive: a stale enabled pair resolves to SR.
-            if (rawSuperResolutionSettings.enabled) {
-                burstFusionSettings = burstFusionSettings.copy(enabled = false)
-            } else {
-                captureExposureMode = CaptureExposureMode.ZSL
-            }
+            captureExposureMode = CaptureExposureMode.ZSL
         }
         if (hdrPlusSettings.enabled) {
-            // Quick tiles are exclusive: a stale enabled triple resolves to SR, then fusion.
-            if (rawSuperResolutionSettings.enabled || burstFusionSettings.enabled) {
+            // Quick tiles are exclusive: a stale enabled pair resolves to fusion.
+            if (burstFusionSettings.enabled) {
                 hdrPlusSettings = hdrPlusSettings.copy(enabled = false)
             } else {
                 captureExposureMode = CaptureExposureMode.ZSL
@@ -247,7 +238,7 @@ class MainActivity : Activity() {
         // a stale both-on pair cannot survive: it resolves to HDR+.
         hdrEnabled = HdrShutterExclusivity.resolveStale(
             hdrEnabled, hdrPlusSettings.enabled).first
-        if (rawSuperResolutionSettings.enabled || burstFusionSettings.enabled) {
+        if (burstFusionSettings.enabled) {
             // Same rule against the other ZSL mergers: the merger keeps
             // the shutter, the bracket drops.
             hdrEnabled = false
@@ -290,6 +281,7 @@ class MainActivity : Activity() {
         lensDiscovery = LensDiscovery(this)
         dngMetadataOverrideStore = DngMetadataOverrideStore(this)
         programAeProfileStore = ProgramAeProfileStore(this)
+        vendorKeyStore = VendorKeyStore(this)
         gpsProvider = GpsLocationProvider(this)
         manualPanel = findViewById(R.id.manualControlPanel)
         manualSlider = findViewById(R.id.manualControlSlider)
@@ -321,7 +313,7 @@ class MainActivity : Activity() {
         hdrQuick = findViewById(R.id.hdrQuick)
         timerQuick = findViewById(R.id.timerQuick)
         releaseQuick = findViewById(R.id.releaseQuick)
-        rawSrQuick = findViewById(R.id.rawSrQuick)
+        // Future SR hook: rawSrQuick = findViewById(R.id.rawSrQuick) here.
         fusionQuick = findViewById(R.id.fusionQuick)
         // Temporarily hidden from Quick Control; logic stays wired for easy re-enable.
         fusionQuick.visibility = View.GONE
@@ -451,7 +443,6 @@ class MainActivity : Activity() {
             true,
             lensPreferences().getBoolean(KEY_RAW_ZSL, false),
             lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawSuperResolutionSettings,
             burstFusionSettings,
             dynamicExposureSettings(),
             ettrSettings(),
@@ -547,7 +538,8 @@ class MainActivity : Activity() {
                         boxes.indexOfFirst { it.tracked }
                     )
                 }
-            }
+            },
+            vendorKeys = { cameraId -> vendorKeyStore.get(cameraId) }
         )
         controller.onVfRouteChanged = { isBgu ->
             runOnUiThread {
@@ -676,7 +668,7 @@ class MainActivity : Activity() {
         }
         levelQuick.setOnClickListener { toggleLevel() }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
-        rawSrQuick.setOnClickListener { toggleRawSuperResolution() }
+        // Future SR hook: rawSrQuick click -> toggleRawSuperResolution() here.
         fusionQuick.setOnClickListener { toggleBurstFusion() }
         hdrPlusQuick.setOnClickListener { toggleHdrPlus() }
         hdrPlusQuick.setOnLongClickListener { cycleHdrPlusQuality(); true }
@@ -739,12 +731,12 @@ class MainActivity : Activity() {
                     onProgramAxisScrubbed(axis, progress)
                 } ?: run {
                     val control = activeManualControl
-                    val range = control?.let { controller.manualControlRange(it) }
+                    val range = control?.let { manualRangeFor(it) }
                     if (control != null && range != null) {
                         manualAuto.isEnabled = true
                         pendingSliderUpdate?.let(manualSlider::removeCallbacks)
                         val value = sliderValue(control, range, progress)
-                        pendingSliderUpdate = Runnable { controller.setManualControl(control, value) }.also {
+                        pendingSliderUpdate = Runnable { setManualValueFor(control, value) }.also {
                             manualSlider.postDelayed(it, SLIDER_UPDATE_DELAY_MS)
                         }
                     }
@@ -759,8 +751,8 @@ class MainActivity : Activity() {
                 commitProgramAxis(axis, progress)
             } ?: run {
                 activeManualControl?.let { control ->
-                    controller.manualControlRange(control)?.let { range ->
-                        controller.setManualControl(control, sliderValue(control, range, progress))
+                    manualRangeFor(control)?.let { range ->
+                        setManualValueFor(control, sliderValue(control, range, progress))
                     }
                 }
             }
@@ -775,7 +767,7 @@ class MainActivity : Activity() {
                 return@setOnClickListener
             }
             activeManualControl?.let { control ->
-                controller.setManualControl(control, null)
+                setManualValueFor(control, null)
                 showManualControl(control, allowToggle = false)
             }
         }
@@ -1652,7 +1644,7 @@ class MainActivity : Activity() {
         findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
         findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
-        findViewById(R.id.rawSrQuick), findViewById(R.id.ettrQuick),
+        findViewById(R.id.ettrQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton),
@@ -1798,11 +1790,12 @@ class MainActivity : Activity() {
         closeFloatingPanels()
         guideOverlay.videoCrop = videoCrop
         guideOverlay.videoActive = true
-        // Cinema chrome: photo top bar, exposure chips and lens pill hide for
-        // full-bleed framing; the capture panel (red dot / shutter / switcher)
-        // stays so transport and mode exit keep working.
+        // Cinema chrome: photo top bar and lens pill hide for full-bleed
+        // framing; the capture panel (red dot / shutter / switcher) stays so
+        // transport and mode exit keep working. Exposure chips (SS/ISO/WB/
+        // focus/EV) stay visible with the same live photo-tile settings.
         findViewById<View>(R.id.topBar)?.visibility = View.GONE
-        findViewById<View>(R.id.exposureControls)?.visibility = View.GONE
+        findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
         repositionMeterForVideo(inVideo = true)
         findViewById<View>(R.id.videoSettingsButton)?.visibility = View.VISIBLE
@@ -1983,6 +1976,15 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             null
         }
+        // Photo-tile handoff: manual selections + metered fallback frozen per locks.
+        val videoSnapshot = runCatching { controller.snapshotVideoManual() }
+            .getOrDefault(VideoManualSnapshot())
+        val meteredIso = runCatching { controller.snapshotVideoMeteredIso() }.getOrDefault(100)
+        val meteredShutter = runCatching { controller.snapshotVideoMeteredShutter() }
+            .getOrDefault(10_000_000L)
+        val meteredFocus = runCatching { controller.snapshotVideoMeteredFocus() }.getOrNull()
+        val recordLocks = videoRecordLocks()
+        hideManualControl()
         controller.stop()
         // Stage in android/data (external files dir): visible under
         // Android/data/<pkg>/files/raw-video, no MediaStore churn during
@@ -2000,6 +2002,7 @@ class MainActivity : Activity() {
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
+            configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
             // Live RAW VF during the take: frames fan out to the same routed
             // engine visibility shows (Vulkan zero-copy lease) while the
             // encode thread encodes.
@@ -2060,6 +2063,14 @@ class MainActivity : Activity() {
             setStatus("NO RAW VIDEO CAMERA")
             return
         }
+        val videoSnapshot = runCatching { controller.snapshotVideoManual() }
+            .getOrDefault(VideoManualSnapshot())
+        val meteredIso = runCatching { controller.snapshotVideoMeteredIso() }.getOrDefault(100)
+        val meteredShutter = runCatching { controller.snapshotVideoMeteredShutter() }
+            .getOrDefault(10_000_000L)
+        val meteredFocus = runCatching { controller.snapshotVideoMeteredFocus() }.getOrNull()
+        val recordLocks = videoRecordLocks()
+        hideManualControl()
         controller.stop()
         val dir = videoStageDir()
         if (!dir.exists() && !dir.mkdirs()) {
@@ -2076,6 +2087,7 @@ class MainActivity : Activity() {
             fps = directLogFpsPref()
             logProfile = profile
             videoDemosaic = videoDemosaic()
+            configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
             attachPreviewDisplay(findViewById(R.id.recordPreview))
         }
         // Take monitor: overlay the staged encode pixels (aspect-fit)
@@ -2836,11 +2848,7 @@ class MainActivity : Activity() {
         // one DNG, so they cannot run together: enabling the bracket turns
         // the mergers off. While a merge is saving it stays locked on, and
         // the bracket stays off with it, so two tiles never show on.
-        if (target.first && rawSuperResolutionSettings.enabled &&
-            !applyRawSuperResolutionSettings(
-                rawSuperResolutionSettings.copy(enabled = false))) {
-            return
-        }
+        // Future SR hook: turn SR off here when the bracket takes the shutter.
         if (target.first && burstFusionSettings.enabled &&
             !applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))) {
             return
@@ -2909,34 +2917,13 @@ class MainActivity : Activity() {
             .performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
 
-    private fun toggleRawSuperResolution() {
-        val enabled = !rawSuperResolutionSettings.enabled
-        // Quick tiles are exclusive: SR takes the ring from fusion and HDR+.
-        if (enabled && burstFusionSettings.enabled) {
-            applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
-        }
-        if (enabled && hdrPlusSettings.enabled) {
-            applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
-        }
-        if (applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = enabled))) {
-            // SR takes the shutter from the HDR bracket too: it merges one
-            // press into one DNG, like the bracket does.
-            if (enabled) turnHdrBracketOff()
-            // Switch modes only on success: enabling first keeps a LOCKED
-            // toggle from stranding the camera in ZSL with SR still off.
-            if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-                applyCaptureExposureMode(CaptureExposureMode.ZSL)
-            }
-            setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
-        }
-    }
+    // Future SR hook: toggleRawSuperResolution() here (exclusive tile: SR takes
+    // the ring from fusion and HDR+, plus the HDR bracket shutter).
 
     private fun toggleBurstFusion() {
         val enabled = !burstFusionSettings.enabled
-        // Quick tiles are exclusive: fusion takes the ring from SR and HDR+.
-        if (enabled && rawSuperResolutionSettings.enabled) {
-            applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
-        }
+        // Quick tiles are exclusive: fusion takes the ring from HDR+.
+        // Future SR hook: turn SR off here too.
         if (enabled && hdrPlusSettings.enabled) {
             applyHdrPlusSettings(hdrPlusSettings.copy(enabled = false))
         }
@@ -2956,10 +2943,8 @@ class MainActivity : Activity() {
         val pair = HdrShutterExclusivity.plusToggled(
             hdrEnabled, hdrPlusSettings.enabled)
         val enabled = pair.second
-        // Quick tiles are exclusive: HDR+ takes the ring from SR and fusion.
-        if (enabled && rawSuperResolutionSettings.enabled) {
-            applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
-        }
+        // Quick tiles are exclusive: HDR+ takes the ring from fusion.
+        // Future SR hook: turn SR off here too.
         if (enabled && burstFusionSettings.enabled) {
             applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
         }
@@ -2976,31 +2961,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun applyRawSuperResolutionSettings(settings: RawSuperResolutionSettings): Boolean {
-        if (!controller.setRawSuperResolutionSettings(settings)) {
-            setStatus("SR LOCKED • SAVING")
-            return false
-        }
-        rawSuperResolutionSettings = settings
-        lensPreferences().edit().apply {
-            settings.toPreferences().forEach { (key, value) ->
-                when (value) {
-                    is Boolean -> putBoolean(key, value)
-                    is String -> putString(key, value)
-                    is Float -> putFloat(key, value)
-                }
-            }
-        }.apply()
-        updateQuickControls()
-        return true
-    }
-
-    private fun rawSuperResolutionQuickText(): String {
-        return rawSuperResolutionSettings.quickText(
-            lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
-            rawZslStatus.bufferedFrames, rawZslStatus.srAvailable, rawZslStatus.srBusy
-        )
-    }
+    // Future SR hook: applyRawSuperResolutionSettings() +
+    // rawSuperResolutionQuickText() here (controller push, prefs, tile text).
 
     private fun applyBurstFusionSettings(settings: RawBurstFusionSettings): Boolean {
         if (!controller.setBurstFusionSettings(settings)) {
@@ -3226,9 +3188,7 @@ class MainActivity : Activity() {
             refreshScopeContentDescription()
         }
         captureExposureMode = mode
-        if (mode != CaptureExposureMode.ZSL && rawSuperResolutionSettings.enabled) {
-            applyRawSuperResolutionSettings(rawSuperResolutionSettings.copy(enabled = false))
-        }
+        // Future SR hook: turn SR off here when leaving ZSL.
         if (mode != CaptureExposureMode.ZSL && burstFusionSettings.enabled) {
             applyBurstFusionSettings(burstFusionSettings.copy(enabled = false))
         }
@@ -3260,6 +3220,11 @@ class MainActivity : Activity() {
     }
 
     private fun openIsoControl() {
+        // While rolling the recorder owns the sensor: same tile, live take request.
+        if (videoRecording) {
+            showManualControl(ManualControl.ISO)
+            return
+        }
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
             showProgramAxisSlider(isIso = true)
             return
@@ -3268,6 +3233,11 @@ class MainActivity : Activity() {
     }
 
     private fun openShutterControl() {
+        // While rolling the recorder owns the sensor: same tile, live take request.
+        if (videoRecording) {
+            showManualControl(ManualControl.SHUTTER)
+            return
+        }
         if (captureExposureMode == CaptureExposureMode.PROGRAM) {
             showProgramAxisSlider(isIso = false)
             return
@@ -3281,6 +3251,11 @@ class MainActivity : Activity() {
      * seeded from the live pair. Holding a locked axis releases it.
      */
     private fun toggleProgramAxisLock(isIso: Boolean) {
+        // PROGRAM locks need the live preview loop; while rolling use the take request instead.
+        if (videoRecording) {
+            setStatus("STOP TO EDIT PROGRAM • TAKE IS ROLLING")
+            return
+        }
         if (captureExposureMode != CaptureExposureMode.PROGRAM) {
             setStatus(if (isIso) "ISO HOLD IN PROGRAM" else "S HOLD IN PROGRAM")
             return
@@ -3334,12 +3309,17 @@ class MainActivity : Activity() {
      */
     private fun showProgramAxisSlider(isIso: Boolean) {
         hideQuickControls()
+        // While rolling the take request owns the sensor: PROGRAM editor needs preview.
+        if (videoRecording) {
+            showManualControl(if (isIso) ManualControl.ISO else ManualControl.SHUTTER)
+            return
+        }
         if (!controller.hasManualSensorControl()) {
             setStatus("ANDROID AE • NO MANUAL SENSOR")
             return
         }
         val axis = if (isIso) ManualControl.ISO else ManualControl.SHUTTER
-        val range = controller.manualControlRange(axis)
+        val range = manualRangeFor(axis)
         if (range == null) {
             setStatus("${if (isIso) "ISO" else "S"} N/A")
             return
@@ -3373,7 +3353,7 @@ class MainActivity : Activity() {
         manualAuto.isEnabled = true
         refreshRuleSliderAccessibility()
         manualPanel.visibility = View.VISIBLE
-        lensSwitcher.visibility = View.INVISIBLE
+        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         updateOverlayStack()
         manualPanel.post { updateOverlayStack() }
         scheduleManualPanelHide()
@@ -3381,7 +3361,7 @@ class MainActivity : Activity() {
 
     /** Live-scrub a PROGRAM axis lock: engage the lock immediately, persist on release. */
     private fun onProgramAxisScrubbed(axis: ManualControl, progress: Int) {
-        val range = controller.manualControlRange(axis) ?: return
+        val range = manualRangeFor(axis) ?: return
         val value = sliderValue(axis, range, progress)
         val current = programProfile()
         val next = when (axis) {
@@ -3423,6 +3403,12 @@ class MainActivity : Activity() {
     }
 
     private fun openManualModeThen(control: ManualControl) {
+        // While rolling the stills mode switch would only affect the next preview;
+        // the take request already owns the sensor, so open the tile directly.
+        if (videoRecording) {
+            isoControl.post { showManualControl(control) }
+            return
+        }
         if (captureExposureMode != CaptureExposureMode.MANUAL) applyCaptureExposureMode(CaptureExposureMode.MANUAL)
         isoControl.post { showManualControl(control) }
     }
@@ -3812,7 +3798,7 @@ class MainActivity : Activity() {
     private fun showQuickControls() {
         hideManualControl()
         updateQuickControls()
-        lensSwitcher.visibility = View.INVISIBLE
+        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         quickPanel.alpha = 0f
         quickPanel.translationY = dp(18).toFloat()
         quickPanel.visibility = View.VISIBLE
@@ -3826,7 +3812,7 @@ class MainActivity : Activity() {
         quickPanel.visibility = View.GONE
         quickPanel.alpha = 1f
         quickPanel.translationY = 0f
-        lensSwitcher.visibility = View.VISIBLE
+        lensSwitcher.visibility = if (isVideoMode) View.GONE else View.VISIBLE
         updateOverlayStack()
     }
 
@@ -3844,7 +3830,7 @@ class MainActivity : Activity() {
         val hdr = hdrQuick
         val timer = timerQuick
         val release = releaseQuick
-        val rawSr = rawSrQuick
+        // Future SR hook: val rawSr = rawSrQuick here.
         val fusion = fusionQuick
         val hdrPlus = hdrPlusQuick
         val ettr = ettrQuick
@@ -3884,10 +3870,7 @@ class MainActivity : Activity() {
         hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
         timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
         release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
-        rawSr.text = rawSuperResolutionQuickText()
-        val rawSrAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
-        rawSr.isEnabled = rawSrAvailable
-        rawSr.alpha = if (rawSrAvailable) 1f else 0.4f
+        // Future SR hook: rawSr tile text/availability here.
         fusion.text = burstFusionQuickText()
         val fusionAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
         fusion.isEnabled = fusionAvailable
@@ -3908,7 +3891,7 @@ class MainActivity : Activity() {
         setQuickTileState(hdr, hdrEnabled)
         setQuickTileState(timer, timerSeconds > 0)
         setQuickTileState(release, releaseMode != 0)
-        setQuickTileState(rawSr, rawSuperResolutionSettings.enabled)
+        // Future SR hook: setQuickTileState(rawSr, ...) here.
         setQuickTileState(fusion, burstFusionSettings.enabled)
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
@@ -4117,13 +4100,81 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Video lock-on-record switches (default off: continuous AE/AWB/AF). */
+    private fun videoRecordLocks(): VideoRecordLocks =
+        VideoRecordLocks.load { key -> lensPreferences().getBoolean(key, false) }
+
+    /** Range source follows the camera owner: recorder while rolling, controller otherwise. */
+    private fun manualRangeFor(control: ManualControl): ManualControlRange? {
+        if (videoRecording) {
+            runCatching { videoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
+            runCatching { logRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
+            return null
+        }
+        return runCatching { controller.manualControlRange(control) }.getOrNull()
+    }
+
+    private fun setManualValueFor(control: ManualControl, value: Long?) {
+        if (videoRecording) {
+            if (videoRecorder != null) {
+                videoRecorder?.setVideoManualControl(control, value)
+                refreshVideoChip(control)
+                return
+            }
+            if (logRecorder != null) {
+                logRecorder?.setVideoManualControl(control, value)
+                refreshVideoChip(control)
+                return
+            }
+        }
+        controller.setManualControl(control, value)
+    }
+
+    /** Optimistic chip refresh while rolling (the stills controller is stopped). */
+    private fun refreshVideoChip(control: ManualControl) {
+        val range = manualRangeFor(control) ?: return
+        when (control) {
+            ManualControl.ISO -> isoControl.text = controlText("ISO", range.current.toString())
+            ManualControl.SHUTTER -> shutterControl.text =
+                controlText("S", formatShutter(range.current))
+            ManualControl.WHITE_BALANCE -> wbControl.text =
+                controlText("WB", "${range.current}K")
+            ManualControl.FOCUS_DISTANCE -> focusControl.text =
+                controlText("AF", if (range.automatic) "AF" else formatFocusDistance(range.current))
+            ManualControl.EXPOSURE_COMPENSATION -> {
+                val isManualExposure = runCatching {
+                    (videoRecorder?.videoManual ?: logRecorder?.videoManual)?.let {
+                        VideoManualPolicy.wantsManualExposure(it)
+                    } ?: false
+                }.getOrDefault(false)
+                evControl.text = if (isManualExposure) {
+                    controlText("EV", "EV --")
+                } else {
+                    controlText("EV", formatVideoEvStops(range.current))
+                }
+            }
+        }
+    }
+
+    private fun formatVideoEvStops(index: Long): String {
+        val step = runCatching {
+            val manager = getSystemService(CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            val cameraId = videoCameraInfo(manager)?.first ?: return@runCatching null
+            manager.getCameraCharacteristics(cameraId)
+                .get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                ?.toFloat()
+        }.getOrNull() ?: return "EV $index"
+        if (step <= 0f) return "EV $index"
+        return String.format(Locale.US, "EV %+.1f", index * step)
+    }
+
     private fun showManualControl(control: ManualControl, allowToggle: Boolean = true) {
         hideQuickControls()
         if (allowToggle && activeManualControl == control && manualPanel.visibility == View.VISIBLE) {
             hideManualControl()
             return
         }
-        val range = controller.manualControlRange(control)
+        val range = manualRangeFor(control)
         if (range == null) {
             setStatus("${shortControlName(control)} N/A")
             return
@@ -4141,7 +4192,8 @@ class MainActivity : Activity() {
         manualAuto.isEnabled = !range.automatic
         refreshRuleSliderAccessibility()
         manualPanel.visibility = View.VISIBLE
-        lensSwitcher.visibility = View.INVISIBLE
+        // Video mode keeps the lens pill hidden; photo mode parks it.
+        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         updateOverlayStack()
         manualPanel.post { updateOverlayStack() }
         scheduleManualPanelHide()
@@ -4150,7 +4202,7 @@ class MainActivity : Activity() {
     /** Full value stays available to accessibility even though the ruler draws ticks only. */
     private fun refreshRuleSliderAccessibility() {
         activeProgramAxis?.let { axis ->
-            val range = runCatching { controller.manualControlRange(axis) }.getOrNull() ?: return
+            val range = manualRangeFor(axis) ?: return
             val value = sliderValue(axis, range, manualSlider.progress)
             val valueText = formatManualValue(axis, value)
             manualSlider.valueText = rulerValueText(axis, value)
@@ -4161,7 +4213,7 @@ class MainActivity : Activity() {
             return
         }
         val control = activeManualControl ?: return
-        val range = runCatching { controller.manualControlRange(control) }.getOrNull() ?: return
+        val range = manualRangeFor(control) ?: return
         val value = sliderValue(control, range, manualSlider.progress)
         val valueText = formatManualValue(control, value)
         manualSlider.valueText = rulerValueText(control, value)
@@ -4204,7 +4256,10 @@ class MainActivity : Activity() {
         }
         pendingSliderUpdate = null
         manualPanel.visibility = View.GONE
-        lensSwitcher.visibility = View.VISIBLE
+        // Video mode keeps the lens pill hidden; photo mode restores it.
+        if (::lensSwitcher.isInitialized) {
+            lensSwitcher.visibility = if (isVideoMode) View.GONE else View.VISIBLE
+        }
         activeManualControl = null
         activeProgramAxis = null
         updateOverlayStack()
@@ -4242,7 +4297,7 @@ class MainActivity : Activity() {
     private fun updateAutomaticPanelValue(iso: Int, shutter: Long, wb: Int) {
         val control = activeManualControl ?: return
         if (manualPanel.visibility != View.VISIBLE) return
-        val range = controller.manualControlRange(control) ?: return
+        val range = manualRangeFor(control) ?: return
         if (!range.automatic) return
         val value = when (control) {
             ManualControl.ISO -> iso.toLong()
@@ -4670,7 +4725,7 @@ class MainActivity : Activity() {
                 text = "Camera 0 only. Saves a 16-bit DNG from two sequential exposures, " +
                     "using the short exposure to recover clipped highlights. " +
                     "Does not reduce shadow noise. No alignment or motion correction; " +
-                    "keep the phone and scene still. Overrides the release mode and RAW SR " +
+                    "keep the phone and scene still. Overrides the release mode " +
                     "while enabled. Resets when the app restarts or you change cameras."
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
@@ -4678,6 +4733,10 @@ class MainActivity : Activity() {
             content.addView(Button(this).apply {
                 text = "DNG sensor calibration (levels • noise • color)"
                 setOnClickListener { showDngMetadataOverrideEditor() }
+            })
+            content.addView(Button(this).apply {
+                text = "Vendor keys (per lens • session + request)"
+                setOnClickListener { showVendorKeysEditor() }
             })
             content.addView(TextView(this).apply {
                 text = "DNG writer backend"
@@ -5227,6 +5286,35 @@ class MainActivity : Activity() {
                 }
             })
             content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .crs: averaged R/B and diamond-averaged green. Applies to the next take; N/A in Direct Log."))
+            content.addView(sectionTitle("Locks on record"))
+            content.addView(CheckBox(this).apply {
+                text = "Lock exposure on record"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(VideoRecordLocks.KEY_LOCK_EXPOSURE, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(VideoRecordLocks.KEY_LOCK_EXPOSURE, enabled).apply()
+                    setStatus(if (enabled) "AE LOCK ON RECORD" else "AE CONTINUOUS IN TAKES")
+                }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "Lock white balance on record"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(VideoRecordLocks.KEY_LOCK_WB, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(VideoRecordLocks.KEY_LOCK_WB, enabled).apply()
+                    setStatus(if (enabled) "AWB LOCK ON RECORD" else "AWB CONTINUOUS IN TAKES")
+                }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "Lock focus on record"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = lensPreferences().getBoolean(VideoRecordLocks.KEY_LOCK_FOCUS, false)
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(VideoRecordLocks.KEY_LOCK_FOCUS, enabled).apply()
+                    setStatus(if (enabled) "AF LOCK ON RECORD" else "AF CONTINUOUS IN TAKES")
+                }
+            })
+            content.addView(sectionDesc("Freeze the preview AE/AWB/AF at REC (manual tiles always hold). Off = continuous auto during takes. SS/ISO/WB/focus/EV tiles stay live before and during takes."))
             content.addView(sectionTitle("Stabilization"))
             content.addView(Button(this).apply {
                 fun refresh() {
@@ -5468,7 +5556,7 @@ class MainActivity : Activity() {
             content.addView(ettrHeadroomButton)
             content.addView(ettrIsoLimitButton)
             content.addView(sectionTitle("Face priority"))
-            content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (lime box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
+            content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (gold box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
             content.addView(CheckBox(this).apply {
                 text = "Face-priority AF/AE"
                 setTextColor(getColor(R.color.text_primary))
@@ -5548,122 +5636,8 @@ class MainActivity : Activity() {
                     setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
                 }
             })
-            content.addView(CheckBox(this).apply {
-                text = "RAW super-resolution merge"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = rawSuperResolutionSettings.enabled
-                setOnCheckedChangeListener { button, enabled ->
-                    if (enabled && captureExposureMode != CaptureExposureMode.ZSL) {
-                        applyCaptureExposureMode(CaptureExposureMode.ZSL)
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(enabled = enabled)
-                    )
-                    if (applied) {
-                        // Same shutter rule as the quick tile: SR owns the
-                        // press, so the HDR bracket turns off.
-                        if (enabled) turnHdrBracketOff()
-                        setStatus(if (enabled) "RAW SR • WARMING" else "RAW SR OFF")
-                    } else if (button.isChecked != rawSuperResolutionSettings.enabled) {
-                        button.isChecked = rawSuperResolutionSettings.enabled
-                    }
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "RAW SR DNG: " + when (rawSuperResolutionSettings.dngMode) {
-                        RawSrDngMode.LINEAR_RGB -> "LINEAR RGB (RECOMMENDED)"
-                        RawSrDngMode.MOSAIC_SR -> "MOSAIC SR • RAWTHERAPEE"
-                    }
-                }
-                refresh()
-                setOnClickListener {
-                    val mode = when (rawSuperResolutionSettings.dngMode) {
-                        RawSrDngMode.LINEAR_RGB -> RawSrDngMode.MOSAIC_SR
-                        RawSrDngMode.MOSAIC_SR -> RawSrDngMode.LINEAR_RGB
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(dngMode = mode)
-                    )
-                    refresh()
-                    if (applied) setStatus("RAW SR DNG • ${mode.label}")
-                }
-            })
-            content.addView(CheckBox(this).apply {
-                text = "Sharpest-frame reference"
-                setTextColor(getColor(R.color.text_primary))
-                isChecked = rawSuperResolutionSettings.sharpestReference
-                setOnCheckedChangeListener { button, sharpest ->
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(sharpestReference = sharpest)
-                    )
-                    if (applied) {
-                        setStatus(if (sharpest) "RAW SR REF • SHARPEST" else "RAW SR REF • STABLE")
-                    } else if (button.isChecked != rawSuperResolutionSettings.sharpestReference) {
-                        button.isChecked = rawSuperResolutionSettings.sharpestReference
-                    }
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "RAW SR kernels: " + when (rawSuperResolutionSettings.kernelPreset) {
-                        RawSrKernelPreset.REFERENCE -> "ADAPTIVE (RECOMMENDED)"
-                        RawSrKernelPreset.DECOUPLED_SHARP -> "DECOUPLED SHARP"
-                    }
-                }
-                refresh()
-                setOnClickListener {
-                    val preset = when (rawSuperResolutionSettings.kernelPreset) {
-                        RawSrKernelPreset.REFERENCE -> RawSrKernelPreset.DECOUPLED_SHARP
-                        RawSrKernelPreset.DECOUPLED_SHARP -> RawSrKernelPreset.REFERENCE
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(kernelPreset = preset)
-                    )
-                    refresh()
-                    if (applied) setStatus("RAW SR KERNELS • ${preset.label}")
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "Mosaic output: " + when (rawSuperResolutionSettings.mosaicScale) {
-                        RawSrMosaicScale.NATIVE -> "NATIVE RESOLUTION"
-                        RawSrMosaicScale.SR -> "SR 2X AREA (RECOMMENDED)"
-                    }
-                }
-                refresh()
-                setOnClickListener {
-                    val scale = when (rawSuperResolutionSettings.mosaicScale) {
-                        RawSrMosaicScale.NATIVE -> RawSrMosaicScale.SR
-                        RawSrMosaicScale.SR -> RawSrMosaicScale.NATIVE
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(mosaicScale = scale)
-                    )
-                    refresh()
-                    if (applied) setStatus("MOSAIC SCALE • ${scale.label}")
-                }
-            })
-            content.addView(Button(this).apply {
-                fun refresh() {
-                    text = "Linear output: " + when (rawSuperResolutionSettings.linearScale) {
-                        RawSrLinearScale.X1 -> "1X (RECOMMENDED)"
-                        RawSrLinearScale.SR -> "SR 2X AREA"
-                    }
-                }
-                refresh()
-                setOnClickListener {
-                    val scale = when (rawSuperResolutionSettings.linearScale) {
-                        RawSrLinearScale.X1 -> RawSrLinearScale.SR
-                        RawSrLinearScale.SR -> RawSrLinearScale.X1
-                    }
-                    val applied = applyRawSuperResolutionSettings(
-                        rawSuperResolutionSettings.copy(linearScale = scale)
-                    )
-                    refresh()
-                    if (applied) setStatus("LINEAR SCALE • ${scale.label}")
-                }
-            })
+            // Future SR hook: SR settings rows here (merge enable checkbox, DNG mode,
+            // sharpest reference, kernel preset, mosaic scale, linear scale).
             content.addView(sectionTitle("HDR+ merge"))
             content.addView(sectionDesc(
                 "Noise-reduction strength " +
@@ -6371,6 +6345,7 @@ class MainActivity : Activity() {
                 { it.forwardMatrix1 }, { it.forwardMatrix2 }, { profile, first, second -> profile.copy(forwardMatrix1 = first, forwardMatrix2 = second) })
         }
         row("PROGRAM AE limits\nISO/shutter bounds for this lens") { showProgramPanel() }
+        row("Vendor keys\nSession + request tags for this lens") { showVendorKeysEditor() }
         AlertDialog.Builder(this).setTitle("RAW DNG calibration")
             .setView(content).setNeutralButton("Reset all", null).setNegativeButton("Close", null)
             .show().also { dialog ->
@@ -6499,6 +6474,243 @@ class MainActivity : Activity() {
             setStatus("CALIB NOT SAVED")
             return false
         }
+    }
+
+    /** Per-lens vendor key/tag editor: session-early keys plus per-request keys. */
+    private fun showVendorKeysEditor() {
+        val cameraId = controller.activeCameraId()
+        if (cameraId == null) {
+            setStatus("WAIT FOR CAMERA")
+            return
+        }
+        val profile = vendorKeyStore.get(cameraId)
+        val onCount = profile.activeEntries().size
+        var editor: AlertDialog? = null
+        fun edit(entry: VendorKeyEntry?) {
+            editor?.dismiss()
+            showVendorKeyEditDialog(cameraId, entry) { showVendorKeysEditor() }
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Camera $cameraId • ${profile.entries.size} keys ($onCount on)\n" +
+                    "Session keys load before the session opens (Vivo DCG needs this). " +
+                    "Request keys ride every capture. Black/white levels are not camera " +
+                    "keys — set them under Sensor levels."
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+                setPadding(0, 0, 0, dp(8))
+            })
+        }
+        fun row(label: String, action: () -> Unit) = Button(this).apply {
+            text = label
+            isAllCaps = false
+            setOnClickListener { action() }
+        }.also(content::addView)
+        profile.entries.sortedBy { it.name }.forEach { entry ->
+            row(entry.summary()) { edit(entry) }
+        }
+        row("Add key") { edit(null) }
+        if (VendorKeyProfile.presets().entries.none { preset -> profile.entries.any { it.name == preset.name } }) {
+            row("Add Vivo DCG preset (off)") {
+                val missing = VendorKeyProfile.presets().entries
+                    .filter { preset -> profile.entries.none { it.name == preset.name } }
+                if (saveVendorKeys(cameraId, VendorKeyProfile(profile.entries + missing))) {
+                    editor?.dismiss()
+                    showVendorKeysEditor()
+                }
+            }
+        }
+        row("Keys advertised on this lens") {
+            editor?.dismiss()
+            showVendorDiscoveryDialog(cameraId)
+        }
+        row("Reopen camera (applies session keys)") {
+            controller.reopenCamera()
+            setStatus("REOPENING")
+        }
+        editor = AlertDialog.Builder(this).setTitle("Vendor keys • $cameraId")
+            .setView(ScrollView(this).apply { addView(content) })
+            .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
+            .show().also { dialog ->
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    vendorKeyStore.clear(cameraId)
+                    controller.refreshVendorKeys()
+                    dialog.dismiss()
+                    setStatus("VENDOR RESET")
+                }
+            }
+    }
+
+    private fun showVendorKeyEditDialog(
+        cameraId: String,
+        existing: VendorKeyEntry?,
+        prefillName: String? = null,
+        prefillScope: VendorKeyScope? = null,
+        onSaved: () -> Unit
+    ) {
+        var type = existing?.type ?: VendorKeyType.INT
+        var scope = existing?.scope ?: prefillScope ?: VendorKeyScope.REQUEST
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Reverse-domain names only (section.key). Scalars take one " +
+                    "number or true/false; arrays take comma-separated values."
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+            })
+        }
+        val nameInput = EditText(this).apply {
+            hint = "Key name (e.g. vivo.control.forceSensorMode)"
+            setText(existing?.name ?: prefillName ?: "")
+            setSelectAllOnFocus(true)
+        }
+        container.addView(nameInput)
+        val typeButton = Button(this).apply { isAllCaps = false }
+        fun refreshType() {
+            typeButton.text = "Type • ${type.label}"
+        }
+        refreshType()
+        typeButton.setOnClickListener {
+            val labels = VendorKeyType.entries.map { it.label }.toTypedArray()
+            AlertDialog.Builder(this).setTitle("Value type")
+                .setSingleChoiceItems(labels, type.ordinal) { choice, which ->
+                    type = VendorKeyType.entries[which]
+                    refreshType()
+                    choice.dismiss()
+                }
+                .setNegativeButton("Cancel", null).show()
+        }
+        container.addView(typeButton)
+        val scopeButton = Button(this).apply { isAllCaps = false }
+        fun refreshScope() {
+            scopeButton.text = "Scope • ${scope.id}"
+        }
+        refreshScope()
+        scopeButton.setOnClickListener {
+            val options = VendorKeyScope.entries.toTypedArray()
+            AlertDialog.Builder(this).setTitle("Scope")
+                .setSingleChoiceItems(options.map { it.id }.toTypedArray(), scope.ordinal) { choice, which ->
+                    scope = options[which]
+                    refreshScope()
+                    choice.dismiss()
+                }
+                .setNegativeButton("Cancel", null).show()
+        }
+        container.addView(scopeButton)
+        val valueInput = EditText(this).apply {
+            hint = "Value (e.g. 1, or 64, 64, 64, 64)"
+            setText(existing?.value ?: "")
+            setSelectAllOnFocus(true)
+        }
+        container.addView(valueInput)
+        val enabledBox = CheckBox(this).apply {
+            text = "Enabled"
+            isChecked = existing?.enabled ?: true
+            setTextColor(getColor(R.color.text_primary))
+        }
+        container.addView(enabledBox)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add vendor key" else "Edit vendor key")
+            .setView(ScrollView(this).apply { addView(container) })
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .apply { if (existing != null) setNeutralButton("Delete", null) }
+            .show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val name = nameInput.text.toString().trim()
+            if (VendorKeyApply.isLevelTag(name)) {
+                nameInput.error = "Not a camera key — set levels under Sensor levels"
+                return@setOnClickListener
+            }
+            val candidate = try {
+                VendorKeyEntry(name, type, scope, valueInput.text.toString(), enabledBox.isChecked)
+                    .also(VendorKeyEntry::validate)
+            } catch (failure: IllegalArgumentException) {
+                val message = failure.message ?: "Invalid key"
+                if ("name" in message.lowercase()) nameInput.error = message
+                else valueInput.error = message
+                return@setOnClickListener
+            }
+            val current = vendorKeyStore.get(cameraId)
+            val merged = (current.entries.filter { it.name.trim() != candidate.name.trim() } + candidate)
+                .sortedBy { it.name }
+            try {
+                VendorKeyProfile(merged).validate()
+            } catch (failure: IllegalArgumentException) {
+                valueInput.error = failure.message
+                return@setOnClickListener
+            }
+            if (saveVendorKeys(cameraId, VendorKeyProfile(merged))) {
+                dialog.dismiss()
+                onSaved()
+            }
+        }
+        if (existing != null) {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                val current = vendorKeyStore.get(cameraId)
+                val kept = current.entries.filter { it.name.trim() != existing.name.trim() }
+                if (saveVendorKeys(cameraId, VendorKeyProfile(kept))) {
+                    dialog.dismiss()
+                    onSaved()
+                }
+            }
+        }
+    }
+
+    /** Advertised keys for the open lens; tapping one starts an add prefilled with it. */
+    private fun showVendorDiscoveryDialog(cameraId: String) {
+        val keys = controller.vendorKeyDiscovery()
+        val added = vendorKeyStore.get(cameraId).entries.map { it.name.trim() }.toSet()
+        var list: AlertDialog? = null
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = if (keys.isEmpty()) "Nothing advertised yet — wait for the camera."
+                else "${keys.size} keys advertised on $cameraId. Tap one to add it."
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+                setPadding(0, 0, 0, dp(8))
+            })
+        }
+        // Cap the rows so a tag-heavy HAL cannot blow up the dialog.
+        keys.take(MAX_VENDOR_DISCOVERY_ROWS).forEach { found ->
+            val label = "${found.name} • ${found.scopeHint.id}" +
+                if (found.name in added) " • added" else ""
+            Button(this).apply {
+                text = label
+                isAllCaps = false
+                setOnClickListener {
+                    list?.dismiss()
+                    showVendorKeyEditDialog(cameraId, null, found.name, found.scopeHint) {
+                        showVendorKeysEditor()
+                    }
+                }
+            }.also(body::addView)
+        }
+        if (keys.size > MAX_VENDOR_DISCOVERY_ROWS) {
+            body.addView(TextView(this).apply {
+                text = "…and ${keys.size - MAX_VENDOR_DISCOVERY_ROWS} more."
+                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+            })
+        }
+        list = AlertDialog.Builder(this).setTitle("Advertised keys • $cameraId")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setNegativeButton("Close", null).show()
+    }
+
+    private fun saveVendorKeys(cameraId: String, profile: VendorKeyProfile): Boolean {
+        try {
+            vendorKeyStore.save(cameraId, profile)
+        } catch (failure: Exception) {
+            setStatus("VENDOR NOT SAVED")
+            return false
+        }
+        // Request keys take effect on the live repeating request; session keys
+        // wait for the next open (see "Reopen camera" above).
+        controller.refreshVendorKeys()
+        setStatus(if (profile.activeEntries().isEmpty()) "VENDOR OFF" else "VENDOR SAVED")
+        return true
     }
 
     private fun rawZslFrameCountText(frameCount: Int): String =
@@ -7017,6 +7229,8 @@ class MainActivity : Activity() {
         const val KEY_SELECTED_LENSES = "selected_lens_ids"
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
         const val KEY_LAST_CAMERA_ID = "last_camera_id"
+        /** Row cap for the advertised vendor-key picker so tag-heavy HALs stay usable. */
+        const val MAX_VENDOR_DISCOVERY_ROWS = 400
         const val KEY_DEBUG_OVERLAY = "camera_debug_overlay"
         const val KEY_LOGCAT_FILE = "logcat_file_enabled"
         const val KEY_RAW_VF_DEBUG_OVERLAY = "raw_vf_debug_overlay"
@@ -7030,8 +7244,7 @@ class MainActivity : Activity() {
         const val KEY_OIS = "optical_image_stabilization"
         const val KEY_RAW_ZSL = "raw_zero_shutter_lag"
         const val KEY_RAW_ZSL_FRAME_COUNT = "raw_zsl_frame_count"
-        const val KEY_RAW_SR_ENABLED = "raw_super_resolution_enabled"
-        const val KEY_RAW_SR_DNG_MODE = "raw_super_resolution_dng_mode"
+        // Future SR hook: KEY_RAW_SR_ENABLED / KEY_RAW_SR_DNG_MODE here.
         const val KEY_ZSL_HYBRID_TOPUP = "zsl_hybrid_topup"
         const val KEY_DYNAMIC_EXPOSURE = "dynamic_exposure"
         const val KEY_DYNAMIC_EXPOSURE_BALANCE = "dynamic_exposure_balance"

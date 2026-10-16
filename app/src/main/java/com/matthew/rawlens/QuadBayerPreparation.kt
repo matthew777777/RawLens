@@ -18,7 +18,7 @@ internal object QuadBayerPreparation {
         val samples = RawSensorUnpacker.unpackNormalized(source, layout, normalization, crop, byteOrder)
         require(samples.width >= 4 && samples.height >= 4)
         if (lens != null && !lens.alreadyApplied) {
-            RawSrWorkers.forEachShard(samples.height) { y0, y1 ->
+            ShardWorkers.forEachShard(samples.height) { y0, y1 ->
                 for (y in y0 until y1) for (x in 0 until samples.width) {
                     val sx = samples.sensorCropLeft + x
                     val sy = samples.sensorCropTop + y

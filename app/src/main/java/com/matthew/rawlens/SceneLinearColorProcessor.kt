@@ -216,7 +216,7 @@ object SceneLinearColorProcessor {
         val m10 = m[3]; val m11 = m[4]; val m12 = m[5]
         val m20 = m[6]; val m21 = m[7]; val m22 = m[8]
         val output = FloatArray(input.size)
-        RawSrWorkers.forEachShard(input.size / 4) { p0, p1 ->
+        ShardWorkers.forEachShard(input.size / 4) { p0, p1 ->
             for (p in p0 until p1) {
                 val offset = p * 4
                 val x = input[offset].toDouble()

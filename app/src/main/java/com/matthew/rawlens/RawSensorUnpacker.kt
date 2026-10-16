@@ -154,7 +154,7 @@ object RawSensorUnpacker {
         // bulk short transfer instead of one getShort call per pixel; the
         // shorts — and the per-pixel normalization below — are identical.
         val bulkRows = pixelStride == 2
-        RawSrWorkers.forEachShard(crop.height) { y0, y1 ->
+        ShardWorkers.forEachShard(crop.height) { y0, y1 ->
             val shardInput = if (bulkRows) input.duplicate().order(byteOrder) else input
             val rowCodes = if (bulkRows) ShortArray(crop.width) else null
             for (y in y0 until y1) {

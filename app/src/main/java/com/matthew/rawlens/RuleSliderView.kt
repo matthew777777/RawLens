@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.roundToInt
@@ -16,7 +17,7 @@ import kotlin.math.roundToInt
 /**
  * Minimal floating ruler slider, after the reference camera apps:
  * a translucent dark strip with the axis code + live value stacked on top,
- * a slim tick band, edge min/max hints, and a lime needle. Values are fed in
+ * a slim tick band, edge min/max hints, and a gold needle. Values are fed in
  * via [valueText]/[minText]/[maxText] so the strip stays self-sufficient and
  * the exposure chips are free for status.
  */
@@ -101,18 +102,20 @@ class RuleSliderView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
     }
     private val needlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(214, 255, 51)
+        color = Color.rgb(201, 162, 39)
         strokeWidth = 2.5f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val needleGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(64, 214, 255, 51)
+        color = Color.argb(64, 201, 162, 39)
         strokeWidth = 6f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(150, 255, 255, 255)
-        textSize = 8.5f * resources.displayMetrics.scaledDensity
+        textSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, 8.5f, resources.displayMetrics
+        )
         typeface = android.graphics.Typeface.create(
             android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
         )
@@ -121,7 +124,9 @@ class RuleSliderView @JvmOverloads constructor(
     }
     private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(245, 255, 255, 255)
-        textSize = 14f * resources.displayMetrics.scaledDensity
+        textSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, 14f, resources.displayMetrics
+        )
         typeface = android.graphics.Typeface.create(
             android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
         )
@@ -129,7 +134,9 @@ class RuleSliderView @JvmOverloads constructor(
     }
     private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(120, 255, 255, 255)
-        textSize = 8f * resources.displayMetrics.scaledDensity
+        textSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, 8f, resources.displayMetrics
+        )
         typeface = android.graphics.Typeface.create(
             android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL
         )
@@ -201,7 +208,7 @@ class RuleSliderView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Lime needle marks the current position; the fill track is intentionally omitted
+        // Gold needle marks the current position; the fill track is intentionally omitted
         // so the strip reads as a ruler rather than a progress bar.
         val fraction = if (max > 0) progress.toFloat() / max.toFloat() else 0f
         val needleX = startX + span * fraction.coerceIn(0f, 1f)

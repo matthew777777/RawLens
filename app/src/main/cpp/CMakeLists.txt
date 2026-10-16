@@ -148,9 +148,9 @@ if(EXISTS "${PHOTON_NCNN_LIB}/libncnn.a" AND RAWLENS_PREBUILT_NATIVE)
     set_target_properties(ncnnMl PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     target_link_options(ncnnMl PRIVATE "-Wl,-z,max-page-size=16384")
 elseif(RAWLENS_PREBUILT_NATIVE)
-    # Default build on an ABI without prebuilt archives (x86/x86_64
-    # emulators): keep the historical lightweight stub. These ABIs never
-    # ship, so compiling upstream ncnn for them is pure bloat.
+    # Fallback for an ABI without prebuilt archives (unreachable while
+    # app/build.gradle.kts filters to ARM ABIs): keep the historical
+    # lightweight stub so compiling upstream ncnn for it stays pure bloat-free.
     add_library(ncnnMl SHARED "${CMAKE_CURRENT_SOURCE_DIR}/flownet_stub.cpp")
     target_link_libraries(ncnnMl PRIVATE log)
 else()
@@ -199,7 +199,7 @@ endif()
 # Unified srvulkan compute backend: the SAME sources the desktop build
 # compiles (tools/sr-vulkan/src/main/cpp), referenced by path so the file
 # is literally shared. Serves the app's VkRawSrProcessor through the
-# com.matthew.rawlens.SrVulkan JNI facade (same package, same symbols).
+# com.matthew.rawlens.VulkanHub JNI facade (same package, same symbols).
 set(SRVK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/sr-vulkan/src/main/cpp")
 if(EXISTS "${SRVK_DIR}/srvk_compute.cpp")
     add_library(srvulkan SHARED

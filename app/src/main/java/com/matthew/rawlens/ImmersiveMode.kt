@@ -8,6 +8,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import androidx.core.view.WindowCompat
 
 /**
  * Single owner of the app's fullscreen chrome. The camera must stay
@@ -35,7 +36,7 @@ object ImmersiveMode {
      */
     fun apply(window: Window, sdkInt: Int = Build.VERSION.SDK_INT) {
         if (sdkInt >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             window.insetsController?.let {
                 it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                 it.systemBarsBehavior =
