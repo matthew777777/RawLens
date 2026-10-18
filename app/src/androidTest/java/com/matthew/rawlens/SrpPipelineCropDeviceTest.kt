@@ -120,7 +120,8 @@ class SrpPipelineCropDeviceTest {
             Log.i("SrpCropDevice", "crop ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
             val rgb = VulkanPipeline.run(
-                { refImg }, compImgs, config, handle,
+                { refImg }, compImgs.map { t -> { _: java.nio.ByteBuffer -> t() } },
+                config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
                     fft = fft, ica = assetBytes("ica")),

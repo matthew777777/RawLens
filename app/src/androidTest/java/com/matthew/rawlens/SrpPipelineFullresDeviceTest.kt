@@ -85,12 +85,12 @@ class SrpPipelineFullresDeviceTest {
             // the buffer, so reuse is aliasing-safe.
             var refBox: Array<FloatArray>? =
                 DngRead.readNormalized(refPath, refMeta)
-            var decodeBuf: java.nio.ByteBuffer? = null
+            // Frames decode into the pipeline-lent staging (same bytes
+            // as a private buffer): no 50 MB decode staging lives
+            // alongside the loop state.
             val compImgs = frames.drop(1).map { f ->
-                {
-                    val b = decodeBuf
-                        ?: SrpBridge.directFloats(refMeta.width * refMeta.height).also { decodeBuf = it }
-                    DngRead.readNormalizedInto(f.absolutePath, DngRead.readMeta(f.absolutePath), b)
+                { stage: java.nio.ByteBuffer ->
+                    DngRead.readNormalizedInto(f.absolutePath, DngRead.readMeta(f.absolutePath), stage)
                 }
             }
             val h = refBox!!.size

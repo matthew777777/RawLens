@@ -283,7 +283,8 @@ private fun merge(plan: Plan) {
             try {
                 val fft = spv(dir, "fft")
                 val buf = VulkanPipeline.run(
-                    { refImg }, compImgs, config, handle,
+                    { refImg }, compImgs.map { t -> { _: java.nio.ByteBuffer -> t() } },
+                    config, handle,
                     AlignGpu.Spirvs(
                         align = spv(dir, "align"),
                         corr = spv(dir, "corr"),

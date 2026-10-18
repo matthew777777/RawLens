@@ -25,7 +25,10 @@ import java.nio.ByteBuffer
  * @param comparisons remaining burst frames (`J_2..J_N`) as decode
  *   thunks, consumed once in order: each frame is decoded when its turn
  *   comes and released after merging (same bytes and order as an
- *   upfront list).
+ *   upfront list). Each thunk receives a reusable `w*h`-float staging
+ *   buffer owned by the pipeline: decoding into it (fully rewritten)
+ *   avoids one 50 MB staging allocation per frame; thunks that decode
+ *   elsewhere may ignore it.
  * @param config pipeline config (tile sizes, kernel/robustness params,
  * curves; cf. [EndToEnd.run]).
  * @param handle native context from `SrpBridge.nativeCreate`.
@@ -172,7 +175,7 @@ object VulkanPipeline {
 
     fun run(
         reference: () -> Array<FloatArray>,
-        comparisons: List<() -> Array<FloatArray>>,
+        comparisons: List<(ByteBuffer) -> Array<FloatArray>>,
         config: PipelineConfig = PipelineConfig(),
         handle: Long,
         alignSpirvs: AlignGpu.Spirvs,
@@ -191,13 +194,6 @@ object VulkanPipeline {
         val loop = EndToEnd.loopConfig(config)
         val outH = (h * config.scale).toInt()
         val outW = (w * config.scale).toInt()
-
-        // Grey device-output staging, sized by the frame: shared by the
-        // ref phase and every comparison (sequential fence-waited
-        // entries, fully rewritten per use). Survives into the finish
-        // below with the pack staging (100 MB); everything bigger dies
-        // first.
-        val greyOut = SrpBridge.directFloats(w * h)
 
         /**
          * Grey of `frame` into `rows` (same bytes as the staged path).
@@ -247,10 +243,14 @@ object VulkanPipeline {
         val pinnedInit = run {
             // 1a. Init (own scope): the 50 MB grey rows die here, so
             // they are not live during the pin uploads below (the pin
-            // needs the level arrays, never the rows).
+            // needs the level arrays, never the rows). Both grey
+            // staging buffers are one-shot temps (dead with the block):
+            // the shared pack staging is allocated post-pin, and the
+            // loop reuses the kernel scratch as grey output (see below).
             val unpinned = run {
                 val rows = Array(h) { FloatArray(w) }
-                val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h), greyOut, rows)
+                val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h),
+                    SrpBridge.directFloats(w * h), rows)
                 timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) }
             }
             // 1b. Pin level residents on-device (L2 spectra + statics,
@@ -284,22 +284,21 @@ object VulkanPipeline {
         val abBuf = pack(config.kernelAlpha + config.kernelBeta)
 
         // 3. Merge-work scratch (own scope: the `run` block opened
-        // here closes before the download below, so the kernel
-        // transients ~140 MB at full-res die first). Same
-        // reusable-buffer discipline as before — every buffer fully
-        // rewritten per use, entries fence-wait, so sequential reuse is
-        // aliasing-safe. `frameBuf`/`greyOut` live outside (allocated
-        // post-pin, surviving into the finish); the loop rows are
-        // loop-scoped below.
+        // here closes before the download below, so the work vectors die
+        // first). `kernPre` doubles as the loop grey output (grey bytes
+        // are consumed into rows before kernels overwrite it) and as the
+        // kernel preprocess output — disjoint lifetimes, same values.
+        // The decimate/kerngrad/cov chain buffers are per-call
+        // transients (dead before the next align): caching them would
+        // pin ~90 MB across the align window. `frameBuf` lives outside
+        // (allocated post-pin, surviving into the finish); the loop rows
+        // are loop-scoped below.
         run {
         val finest0 = pinnedInit.levels.last()
         val ftx0 = finest0.nTx
         val fty0 = finest0.nTy
         val rSize0 = if (config.bayer) gw * gh else w * h
         val kernPre = SrpBridge.directFloats(w * h)
-        val kernGrey = SrpBridge.directFloats((w / 2) * (h / 2))
-        val kernGrads = SrpBridge.directFloats((w / 2 - 1) * (h / 2 - 1) * 2)
-        val kernCov = SrpBridge.directFloats((w / 2) * (h / 2) * 4)
         val kp = config.kernelParams
         val kpBuf = pack(floatArrayOf(kp.kDetail, kp.kDenoise, kp.dTh, kp.dTr,
             kp.kStretch, kp.kShrink,
@@ -307,14 +306,19 @@ object VulkanPipeline {
             java.lang.Float.intBitsToFloat(if (kp.iso) 1 else 0)))
         val mergeFlowFlat = FloatArray(ftx0 * fty0 * 2)
         val mergeFlow = SrpBridge.directFloats(ftx0 * fty0 * 2)
-        val mergeR = FloatArray(rSize0)
+        // Guide-grid robustness map staging: the robust-compute output
+        // lands here directly (no host round-trip), and the no-robust
+        // path fills it from `onesR`. Drops the two 12.5 MB host copies.
+        val onesR = FloatArray(rSize0) { 1f }
         val mergeRDirect = SrpBridge.directFloats(rSize0)
         val smapOut = SrpBridge.directFloats(ftx0 * fty0)
-        val robustR = SrpBridge.directFloats(gw * gh)
 
         // 3a. Per-frame kernels via entries (GAT -> decimate -> kerngrad ->
         // cov on the grey grid), cf. `EndToEnd.frameKernels` + `estimate_kernels`.
         fun frameKernelsGpu(frame: Array<FloatArray>): ByteBuffer {
+            val kernGrey = SrpBridge.directFloats((w / 2) * (h / 2))
+            val kernGrads = SrpBridge.directFloats((w / 2 - 1) * (h / 2 - 1) * 2)
+            val kernCov = SrpBridge.directFloats((w / 2) * (h / 2) * 4)
             val pre = run {
                 when (config.kernelPreprocessing) {
                     null -> return@run packImageInto(frame, kernPre)
@@ -351,7 +355,9 @@ object VulkanPipeline {
         }
 
         // 3b. Splat one frame's samples into the resident accumulators.
-        fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rFlat: FloatArray) {
+        // `rBuf` already holds the guide-grid robustness map (written
+        // by robust-compute, or filled with ones): no host round-trip.
+        fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rBuf: ByteBuffer) {
             val cov = frameKernelsGpu(frame)
             val ftx = flow[0].size
             val fty = flow.size
@@ -360,8 +366,9 @@ object VulkanPipeline {
                 mergeFlowFlat[(y * ftx + x) * 2] = flow[y][x][0]
                 mergeFlowFlat[(y * ftx + x) * 2 + 1] = flow[y][x][1]
             }
+            rBuf.rewind()
             timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.mergeSplatRes(handle, packImageInto(frame, frameBuf),
-                packInto(mergeFlowFlat, mergeFlow), cov, packInto(rFlat, mergeRDirect), numRes, denRes,
+                packInto(mergeFlowFlat, mergeFlow), cov, rBuf, numRes, denRes,
                 spirvs.mergeSplat, w, h, outW, outH, tile,
                 config.scale, config.bayer, ftx, fty)) }
         }
@@ -371,8 +378,7 @@ object VulkanPipeline {
         // dead before the comparison loop below.
         val finest = pinnedInit.levels.last()
         val zeroFlow = Array(finest.nTy) { Array(finest.nTx) { floatArrayOf(0f, 0f) } }
-        val rSize = if (config.bayer) gw * gh else w * h
-        mergeFrame(refBox!!, zeroFlow, FloatArray(rSize) { 1f })
+        mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect))
         refBox = null
 
         // 5. Per comparison frame (decoded just in time, released after
@@ -383,15 +389,20 @@ object VulkanPipeline {
         val loopRows = Array(h) { FloatArray(w) }
         var frameNo = 0
         for (frameThunk in comparisons) {
-            val frame = frameThunk()
+            // The frame decodes into the shared pack staging (same
+            // bytes as a private staging buffer): the rows are built
+            // before the first pack overwrites it.
+            val frame = frameThunk(frameBuf)
             heapLog("frame-$frameNo-decoded")
             frameNo++
-            val frameGrey = greyOfInto(frame, frameBuf, greyOut, loopRows)
+            val frameGrey = greyOfInto(frame, frameBuf, kernPre, loopRows)
             val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
             val ftx = flow[0].size
             val fty = flow.size
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
-            val r: FloatArray = if (config.robustnessEnabled) {
+            // Robustness map straight into the merge staging (same
+            // bytes as the old host round-trip through `robustR`).
+            val rBuf: ByteBuffer = if (config.robustnessEnabled) {
                 for (y in 0 until fty) for (x in 0 until ftx) {
                     mergeFlowFlat[(y * ftx + x) * 2] = flow[y][x][0]
                     mergeFlowFlat[(y * ftx + x) * 2 + 1] = flow[y][x][1]
@@ -402,18 +413,15 @@ object VulkanPipeline {
                 smapOut.rewind()
                 timed("robustCompute") { checkRc("robustCompute", SrpBridge.robustComputeRes(handle, packImageInto(frame, frameBuf),
                     meansRes, varsRes,
-                    packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, smapOut, robustR.apply { rewind() },
+                    packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, smapOut, mergeRDirect.apply { rewind() },
                     spirvs.robust, w, h, tile, lutN,
                     config.robustnessParams.noiseCorrection,
                     config.robustnessParams.t, ftx, fty)) }
-                robustR.rewind()
-                robustR.asFloatBuffer().get(mergeR)
-                mergeR
+                mergeRDirect
             } else {
-                mergeR.fill(1f)
-                mergeR
+                packInto(onesR, mergeRDirect)
             }
-            mergeFrame(frame, flow, r)
+            mergeFrame(frame, flow, rBuf)
         }
         } // 3. work block ends: kernel scratch, loop rows and merge
           // vectors die here, before the 150 MB download below.
