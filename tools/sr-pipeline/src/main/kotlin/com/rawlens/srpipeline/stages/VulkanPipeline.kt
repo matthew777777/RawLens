@@ -17,20 +17,25 @@ import java.nio.ByteBuffer
  * grey grid), which can differ from [EndToEnd.frameKernels]' partial
  * windows on the outermost rim; the end-to-end gate is interior-quantile.
  *
- * @param reference reference raw frame `[H][W]` (`J_1`).
+ * @param reference reference raw frame (`J_1`) as a decode thunk,
+ *   invoked once first (same bytes and order as passing the frame).
+ *   The thunk lets memory-tight callers release their frame right
+ *   after this call: the decoded array dies with the ref phase below,
+ *   so only one comparison frame is ever live during the loop.
  * @param comparisons remaining burst frames (`J_2..J_N`) as decode
  *   thunks, consumed once in order: each frame is decoded when its turn
- *   comes and released after merging, so only the reference plus one
- *   comparison are ever live (same bytes and order as an upfront list).
+ *   comes and released after merging (same bytes and order as an
+ *   upfront list).
  * @param config pipeline config (tile sizes, kernel/robustness params,
  * curves; cf. [EndToEnd.run]).
  * @param handle native context from `SrpBridge.nativeCreate`.
  * @param alignSpirvs align-loop modules; [spirvs] the remaining stage
  * modules.
- * @return merged RGB image as flat rows (`[H*scale]` rows of
- * `[W*scale*3]` floats) after `divide`: same values as the CPU
- * `[H][W][3]` nesting, without its 12.5M per-pixel arrays (~400MB
- * transient at full-res).
+ * @return the downloaded `num` buffer after the in-place on-device
+ * `divide`: `outH*outW*3` floats in pipeline row order (bottom-up),
+ * NaN where no sample contributed. Callers apply the tail NaN-to-black
+ * rule and the row flip (same bytes as the old row-array return, with
+ * no 150 MB row copy on top of the download).
  */
 object VulkanPipeline {
 
@@ -49,16 +54,6 @@ object VulkanPipeline {
     private fun pack(data: FloatArray): ByteBuffer {
         val b = SrpBridge.directFloats(data.size)
         b.asFloatBuffer().put(data)
-        b.rewind()
-        return b
-    }
-
-    private fun packImage(img: Array<FloatArray>): ByteBuffer {
-        val h = img.size
-        val w = img[0].size
-        val b = SrpBridge.directFloats(h * w)
-        val fb = b.asFloatBuffer()
-        for (y in 0 until h) fb.put(img[y])
         b.rewind()
         return b
     }
@@ -87,6 +82,48 @@ object VulkanPipeline {
 
     private fun checkRc(what: String, rc: Int) {
         require(rc == 0) { "VulkanPipeline: $what failed with status $rc" }
+    }
+
+    /**
+     * Tail NaN rule on flat floats, cf. `process()`/`finish()`:
+     * degenerate 0/0 pixels (no contributing sample) are NaN out of
+     * `main()` and become black — uint16 DNG cannot store NaN (the
+     * writer would map it to 0 per channel, leaking the surviving
+     * channels), so zero the whole pixel. Per-pixel map: same values in
+     * any row order.
+     */
+    fun nanToBlack(fb: java.nio.FloatBuffer, total: Int) {
+        for (i in 0 until total) {
+            if (fb.get(i).isNaN()) {
+                val px = (i / 3) * 3
+                fb.put(px, 0f)
+                fb.put(px + 1, 0f)
+                fb.put(px + 2, 0f)
+            }
+        }
+    }
+
+    /**
+     * Vertical row flip in place (single-row temp): pipeline rows run
+     * sensor-bottom-up while the DNG stores native top-down. A
+     * permutation: same bytes as copying flipped.
+     */
+    fun flipRowsInPlace(fb: java.nio.FloatBuffer, outW: Int, outH: Int) {
+        val row = FloatArray(outW * 3)
+        val tmp = FloatArray(outW * 3)
+        for (y in 0 until outH / 2) {
+            val a = y * outW * 3
+            val b = (outH - 1 - y) * outW * 3
+            fb.position(a)
+            fb.get(row)
+            fb.position(b)
+            fb.get(tmp)
+            fb.position(b)
+            fb.put(row)
+            fb.position(a)
+            fb.put(tmp)
+        }
+        fb.rewind()
     }
 
     /** Stage clock, enabled with `-Dsrpipeline.profile=true`. */
@@ -118,81 +155,110 @@ object VulkanPipeline {
     }
 
     fun run(
-        reference: Array<FloatArray>,
+        reference: () -> Array<FloatArray>,
         comparisons: List<() -> Array<FloatArray>>,
         config: PipelineConfig = PipelineConfig(),
         handle: Long,
         alignSpirvs: AlignGpu.Spirvs,
         spirvs: Spirvs,
-    ): Array<FloatArray> {
+    ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
-        val h = reference.size
-        val w = reference[0].size
+        // Decode the reference first: its shape sizes all run scratch.
+        // The box is nulled once the ref phase below is done, so the
+        // 50 MB frame dies before the comparison loop on callers that
+        // release their own copy in the thunk.
+        var refBox: Array<FloatArray>? = reference()
+        val h = refBox!!.size
+        val w = refBox!![0].size
         val tile = config.tileSizes.first()
         val loop = EndToEnd.loopConfig(config)
         val outH = (h * config.scale).toInt()
         val outW = (w * config.scale).toInt()
 
-        // Grey: on-device FFT lowpass when the config selects it (the
-        // entry is proven against the Python complex64 reference);
-        // anything else stays on the CPU [Grey] path.
-        fun greyOf(frame: Array<FloatArray>): Array<FloatArray> {
+        // Grey pack/upload staging, sized by the frame: shared by the
+        // ref phase and every comparison (sequential fence-waited
+        // entries, fully rewritten per use). These two survive into the
+        // finish below (100 MB); everything bigger dies first.
+        val frameBuf = SrpBridge.directFloats(w * h)
+        val greyOut = SrpBridge.directFloats(w * h)
+
+        /** Grey of `frame` into `rows` (same bytes as the staged path). */
+        fun greyOfInto(
+            frame: Array<FloatArray>,
+            out: ByteBuffer,
+            rows: Array<FloatArray>,
+        ): Array<FloatArray> {
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }
-            val h = frame.size
-            val w = frame[0].size
-            val out = SrpBridge.directFloats(h * w)
-            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImage(frame), out,
+            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, frameBuf), out,
                 spirvs.fft, w, h)) }
+            // Same device bytes straight into the rows: no flat
+            // intermediate (50 MB at full-res).
             out.rewind()
-            val flat = FloatArray(h * w)
-            out.asFloatBuffer().get(flat)
-            return Array(h) { y -> FloatArray(w) { x -> flat[y * w + x] } }
+            val fb = out.asFloatBuffer()
+            for (y in 0 until h) fb.get(rows[y])
+            return rows
         }
 
-        // 1. Reference grey + GPU alignment initialisation (grey inlined:
-        // the 50MB ref grey is dead after init, like the unpinned init's
-        // ~320MB of host copies, which die with the pin call; the pinned
-        // copy carries stripped arrays, see pinLevelResidents).
-        // 1b. Pin level residents on-device (L2 spectra + statics, one
-        // upload per run, reused across frames); freed in the run
-        // finally below.
-        val pinnedInit = timed("alignPin") {
-            AlignGpu.pinLevelResidents(
-                timed("alignInit") { AlignGpu.initGpu(greyOf(reference), loop, handle, alignSpirvs.ica) },
-                loop, handle, alignSpirvs)
-        }
-
-        // 2. Reference local stats (bayer 3-channel guide grid).
+        // Accumulators + stats (device-resident across frames: no host
+        // round-trip per frame — download once after divide). The stats
+        // residents replace the two 3-channel host buffers (75 MB at
+        // full-res); same shader, same bytes (see the `robustness
+        // residents match staged entries bit-exact` proof).
+        val total = outH * outW * 3
         val gw = w / 2
         val gh = h / 2
-        val meansBuf = SrpBridge.directFloats(3 * gw * gh)
-        val varsBuf = SrpBridge.directFloats(3 * gw * gh)
-        if (config.robustnessEnabled) {
-            timed("robustInit") { checkRc("robustInit", SrpBridge.robustInit(handle, packImage(reference),
-                meansBuf, varsBuf, spirvs.robust, w, h)) }
+        val meansRes = SrpBridge.createResident(handle, (3 * gw * gh).toLong())
+        require(meansRes != 0L) { "VulkanPipeline: resident means alloc failed" }
+        val varsRes = SrpBridge.createResident(handle, (3 * gw * gh).toLong())
+        require(varsRes != 0L) { "VulkanPipeline: resident vars alloc failed" }
+        val numRes = SrpBridge.createResident(handle, total.toLong())
+        require(numRes != 0L) { "VulkanPipeline: resident num alloc failed" }
+        val denRes = SrpBridge.createResident(handle, total.toLong())
+        require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
+        // 1. Ref phase (own scope): grey rows, init host temporaries
+        // and the decoded frame all die here, before the loop.
+        val pinnedInit = run {
+            val rows = Array(h) { FloatArray(w) }
+            val refGrey = greyOfInto(refBox!!, greyOut, rows)
+            // 1b. Pin level residents on-device (L2 spectra + statics,
+            // one upload per run, reused across frames); freed in the
+            // run finally below. The unpinned init's ~320MB of host
+            // copies die with the pin call; the pinned copy carries
+            // stripped arrays, see pinLevelResidents.
+            val pinned = timed("alignPin") {
+                AlignGpu.pinLevelResidents(
+                    timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) },
+                    loop, handle, alignSpirvs)
+            }
+            // 2. Reference local stats straight into the residents.
+            if (config.robustnessEnabled) {
+                timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
+                    handle, packImageInto(refBox!!, frameBuf), meansRes, varsRes,
+                    spirvs.robust, w, h)) }
+            }
+            pinned
         }
 
+        try {
         // Shared LUT + GAT profile buffers (rewound per use).
         val lutBuf = pack(config.sigmaSqCurve + config.dSqCurve)
         val lutN = config.sigmaSqCurve.size
         val abBuf = pack(config.kernelAlpha + config.kernelBeta)
 
-        // Run-level reusable host scratch (all shapes fixed per run):
-        // kills the per-frame garbage (pack buffers, grey flat/rows,
-        // kernel transients, merge/robust vectors) that otherwise peaks
-        // the Java heap on full-res bursts. Every buffer is fully
-        // rewritten per use; entries fence-wait, so sequential reuse is
-        // aliasing-safe.
+        // 3. Merge-work scratch (own scope: the `run` block opened
+        // here closes before the download below, so the kernel
+        // transients ~140 MB at full-res die first). Same
+        // reusable-buffer discipline as before — every buffer fully
+        // rewritten per use, entries fence-wait, so sequential reuse is
+        // aliasing-safe. `frameBuf`/`greyOut` live outside (ref phase +
+        // finish); the loop rows are loop-scoped below.
+        run {
         val finest0 = pinnedInit.levels.last()
         val ftx0 = finest0.nTx
         val fty0 = finest0.nTy
         val rSize0 = if (config.bayer) gw * gh else w * h
-        val frameBuf = SrpBridge.directFloats(w * h)
-        val greyOut = SrpBridge.directFloats(w * h)
-        val greyFlat = FloatArray(w * h)
-        val greyRows = Array(h) { FloatArray(w) }
         val kernPre = SrpBridge.directFloats(w * h)
         val kernGrey = SrpBridge.directFloats((w / 2) * (h / 2))
         val kernGrads = SrpBridge.directFloats((w / 2 - 1) * (h / 2 - 1) * 2)
@@ -209,25 +275,7 @@ object VulkanPipeline {
         val smapOut = SrpBridge.directFloats(ftx0 * fty0)
         val robustR = SrpBridge.directFloats(gw * gh)
 
-        /** Grey of `frame` into reusable buffers (same bytes as [greyOf]). */
-        fun greyOfInto(
-            frame: Array<FloatArray>,
-            out: ByteBuffer,
-            flat: FloatArray,
-            rows: Array<FloatArray>,
-        ): Array<FloatArray> {
-            if (!config.bayer || config.greyMethod != "FFT") {
-                return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
-            }
-            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, frameBuf), out,
-                spirvs.fft, w, h)) }
-            out.rewind()
-            out.asFloatBuffer().get(flat)
-            for (y in 0 until h) flat.copyInto(rows[y], 0, y * w, y * w + w)
-            return rows
-        }
-
-        // 3. Per-frame kernels via entries (GAT -> decimate -> kerngrad ->
+        // 3a. Per-frame kernels via entries (GAT -> decimate -> kerngrad ->
         // cov on the grey grid), cf. `EndToEnd.frameKernels` + `estimate_kernels`.
         fun frameKernelsGpu(frame: Array<FloatArray>): ByteBuffer {
             val pre = run {
@@ -265,14 +313,7 @@ object VulkanPipeline {
             return kernCov.apply { rewind() }
         }
 
-        // 4. Accumulators (device-resident across frames: no host
-        // round-trip per frame — download once after divide).
-        val total = outH * outW * 3
-        val numRes = SrpBridge.createResident(handle, total.toLong())
-        require(numRes != 0L) { "VulkanPipeline: resident num alloc failed" }
-        val denRes = SrpBridge.createResident(handle, total.toLong())
-        require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
-        try {
+        // 3b. Splat one frame's samples into the resident accumulators.
         fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rFlat: FloatArray) {
             val cov = frameKernelsGpu(frame)
             val ftx = flow[0].size
@@ -288,20 +329,24 @@ object VulkanPipeline {
                 config.scale, config.bayer, ftx, fty)) }
         }
 
-        // 5. Reference merge (zero flow on the finest tile grid, r = 1
-        // over the guide grid).
+        // 4. Reference merge (zero flow on the finest tile grid, r = 1
+        // over the guide grid), then release the decoded frame: it is
+        // dead before the comparison loop below.
         val finest = pinnedInit.levels.last()
         val zeroFlow = Array(finest.nTy) { Array(finest.nTx) { floatArrayOf(0f, 0f) } }
         val rSize = if (config.bayer) gw * gh else w * h
-        mergeFrame(reference, zeroFlow, FloatArray(rSize) { 1f })
+        mergeFrame(refBox!!, zeroFlow, FloatArray(rSize) { 1f })
+        refBox = null
 
-        // 6. Per comparison frame (decoded just in time, released after
+        // 5. Per comparison frame (decoded just in time, released after
         // merging — only one comparison is ever live; a prefetch worker
         // was tried and reverted: it cost wall time to CPU contention
         // and broke -Xmx512m survival with its extra live frame).
+        // Loop rows are scoped here: they die with the work block.
+        val loopRows = Array(h) { FloatArray(w) }
         for (frameThunk in comparisons) {
             val frame = frameThunk()
-            val frameGrey = greyOfInto(frame, greyOut, greyFlat, greyRows)
+            val frameGrey = greyOfInto(frame, greyOut, loopRows)
             val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
             val ftx = flow[0].size
             val fty = flow.size
@@ -315,8 +360,8 @@ object VulkanPipeline {
                 timed("smap") { checkRc("smap", SrpBridge.smap(handle, packInto(mergeFlowFlat, mergeFlow), smapOut.apply { rewind() },
                     spirvs.robust, ftx, fty, rp.mt, rp.s1, rp.s2)) }
                 smapOut.rewind()
-                timed("robustCompute") { checkRc("robustCompute", SrpBridge.robustCompute(handle, packImageInto(frame, frameBuf),
-                    meansBuf.apply { rewind() }, varsBuf.apply { rewind() },
+                timed("robustCompute") { checkRc("robustCompute", SrpBridge.robustComputeRes(handle, packImageInto(frame, frameBuf),
+                    meansRes, varsRes,
                     packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, smapOut, robustR.apply { rewind() },
                     spirvs.robust, w, h, tile, lutN,
                     config.robustnessParams.noiseCorrection,
@@ -330,23 +375,22 @@ object VulkanPipeline {
             }
             mergeFrame(frame, flow, r)
         }
+        } // 3. work block ends: kernel scratch, loop rows and merge
+          // vectors die here, before the 150 MB download below.
 
-        // 7. Normalise in place (on-device), download once.
+        // 6. Normalise in place (on-device), download once. Only the
+        // pack staging, pinned residents and tiny profile buffers are
+        // still alive on the host.
         timed("divide") { checkRc("divide", SrpBridge.divideRes(handle, numRes, denRes, spirvs.divide, total)) }
         val outBuf = SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }
         outBuf.rewind()
-        // In-place divide ran num=num/den on-device; den stays resident.
-        // The returned image bulk-reads the single downloaded num buffer
-        // straight into its rows: 150MB + row objects, no per-pixel
-        // arrays, no flat copy.
-        val fb = outBuf.asFloatBuffer()
-        val image = Array(outH) { FloatArray(outW * 3) }
-        for (y in 0 until outH) fb.get(image[y])
         dumpClock()
-        return image
+        return outBuf
         } finally {
             AlignGpu.freeLevelSpectra(pinnedInit, handle)
+            SrpBridge.freeResident(handle, meansRes)
+            SrpBridge.freeResident(handle, varsRes)
             SrpBridge.freeResident(handle, numRes)
             SrpBridge.freeResident(handle, denRes)
         }

@@ -281,6 +281,56 @@ object SrpBridge {
     ): Int
 
     /**
+     * init_robustness with device-resident stats. Returns the
+     * `srp::Status` ordinal (0 = ok). `refBuffer` holds
+     * `width*height` raw floats; `meansRes`/`varsRes` are residents of
+     * exactly `3*gh*gw` floats each (from [createResident]) that receive
+     * the stats and stay on-device — no host download. Same shader and
+     * input bytes as [nativeRobustInit]: bit-identical on-device stats.
+     */
+    @JvmStatic
+    external fun nativeRobustInitRes(
+        handle: Long,
+        refBuffer: ByteBuffer,
+        meansRes: Long,
+        varsRes: Long,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+    ): Int
+
+    /**
+     * compute_robustness minus the smap leg with device-resident
+     * reference stats. Returns the `srp::Status` ordinal (0 = ok).
+     * `compBuffer` holds `width*height` raw floats; `meansRes`/`varsRes`
+     * are the residents written by [nativeRobustInitRes]; `flowBuffer`
+     * holds `ftx*fty*2` pairs; `lutBuffer` holds `2*lutN` curve floats;
+     * `sBuffer` holds the `ftx*fty` spread map; `outBuffer` receives the
+     * `gh*gw` robustness map. `tBits` carries t by bit pattern. Same
+     * shader and bytes as [nativeRobustCompute]: bit-identical output.
+     */
+    @JvmStatic
+    external fun nativeRobustComputeRes(
+        handle: Long,
+        compBuffer: ByteBuffer,
+        meansRes: Long,
+        varsRes: Long,
+        flowBuffer: ByteBuffer,
+        lutBuffer: ByteBuffer,
+        sBuffer: ByteBuffer,
+        outBuffer: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        tileSize: Int,
+        lutN: Int,
+        noiseCorrection: Int,
+        tBits: Int,
+        ftx: Int,
+        fty: Int,
+    ): Int
+
+    /**
      * compute_s (op 6) over direct buffers. Returns the `srp::Status`
      * ordinal (0 = ok). `flowBuffer` holds `ntx*nty*2` interleaved-pair
      * floats (finite only); `sBuffer` receives `ntx*nty` floats. Mt/s1/s2
@@ -839,6 +889,84 @@ object SrpBridge {
         }
         return nativeRobustCompute(handle, compBuffer, meansBuffer,
             varsBuffer, flowBuffer, lutBuffer, sBuffer, outBuffer, spirv,
+            width, height, tileSize, lutN, if (noiseCorrection) 1 else 0,
+            java.lang.Float.floatToIntBits(t), ftx, fty)
+    }
+
+    /**
+     * Validated wrapper for [nativeRobustInitRes]: throws
+     * IllegalArgumentException before crossing JNI on bad arguments.
+     * Drops the two 3-channel host stats buffers of [robustInit] (75 MB
+     * at full-res): the stats live on-device for the whole run.
+     */
+    @JvmStatic
+    fun robustInitRes(
+        handle: Long,
+        refBuffer: ByteBuffer,
+        meansRes: Long,
+        varsRes: Long,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+    ): Int {
+        require(handle != 0L) { "SrpBridge: null context handle" }
+        require(meansRes != 0L) { "SrpBridge: null means resident handle" }
+        require(varsRes != 0L) { "SrpBridge: null vars resident handle" }
+        require(width >= 2 && height >= 2) {
+            "SrpBridge: bad dimensions"
+        }
+        checkDirect(refBuffer, width * height, "refBuffer")
+        require(spirv.isNotEmpty() && spirv.size % 4 == 0) {
+            "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
+        }
+        return nativeRobustInitRes(handle, refBuffer, meansRes, varsRes,
+            spirv, width, height)
+    }
+
+    /**
+     * Validated wrapper for [nativeRobustComputeRes]: throws
+     * IllegalArgumentException before crossing JNI on bad arguments.
+     * Reads the reference stats from the [robustInitRes] residents
+     * instead of host buffers (no per-frame 75 MB re-upload).
+     */
+    @JvmStatic
+    fun robustComputeRes(
+        handle: Long,
+        compBuffer: ByteBuffer,
+        meansRes: Long,
+        varsRes: Long,
+        flowBuffer: ByteBuffer,
+        lutBuffer: ByteBuffer,
+        sBuffer: ByteBuffer,
+        outBuffer: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        tileSize: Int,
+        lutN: Int,
+        noiseCorrection: Boolean,
+        t: Float,
+        ftx: Int,
+        fty: Int,
+    ): Int {
+        require(handle != 0L) { "SrpBridge: null context handle" }
+        require(meansRes != 0L) { "SrpBridge: null means resident handle" }
+        require(varsRes != 0L) { "SrpBridge: null vars resident handle" }
+        require(width >= 2 && height >= 2 && tileSize >= 2 && lutN > 0 && ftx > 0 && fty > 0) {
+            "SrpBridge: bad dimensions"
+        }
+        val gw = width / 2
+        val gh = height / 2
+        checkDirect(compBuffer, width * height, "compBuffer")
+        checkDirect(flowBuffer, ftx * fty * 2, "flowBuffer")
+        checkDirect(lutBuffer, 2 * lutN, "lutBuffer")
+        checkDirect(sBuffer, ftx * fty, "sBuffer")
+        checkDirect(outBuffer, gw * gh, "outBuffer")
+        require(spirv.isNotEmpty() && spirv.size % 4 == 0) {
+            "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
+        }
+        return nativeRobustComputeRes(handle, compBuffer, meansRes, varsRes,
+            flowBuffer, lutBuffer, sBuffer, outBuffer, spirv,
             width, height, tileSize, lutN, if (noiseCorrection) 1 else 0,
             java.lang.Float.floatToIntBits(t), ftx, fty)
     }

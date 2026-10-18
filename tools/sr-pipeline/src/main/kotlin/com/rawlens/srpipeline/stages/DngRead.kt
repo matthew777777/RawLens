@@ -160,6 +160,28 @@ object DngRead {
         require(meta.black.size == 4) { "DngRead: need 4 black levels" }
         require(meta.cfa.size == 4) { "DngRead: need 4 CFA values" }
         val buf = SrpBridge.directFloats(w * h)
+        return readNormalizedInto(path, meta, buf)
+    }
+
+    /**
+     * Same bytes as [readNormalized], decoding into the caller-owned
+     * direct buffer `buf` (capacity >= `w*h` floats, fully rewritten):
+     * lets memory-tight callers decode frame after frame without one
+     * 50 MB staging allocation per frame.
+     */
+    fun readNormalizedInto(
+        path: String,
+        meta: Meta,
+        buf: java.nio.ByteBuffer,
+    ): Array<FloatArray> {
+        val w = meta.width
+        val h = meta.height
+        require(meta.black.size == 4) { "DngRead: need 4 black levels" }
+        require(meta.cfa.size == 4) { "DngRead: need 4 CFA values" }
+        require(buf.capacity() >= w * h * 4) {
+            "DngRead: staging buffer too small for ${w}x$h"
+        }
+        buf.rewind()
         val rc = SrpBridge.nativeDngNormalized(
             path, buf, w, h, meta.black, meta.white, meta.cfa)
         require(rc == 0) { "DngRead: normalized decode failed with status $rc: $path" }

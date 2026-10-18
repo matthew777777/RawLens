@@ -754,6 +754,89 @@ class SrpBridgeTest {
     }
 
     @Test
+    fun `robustness residents match staged entries bit-exact`() {
+        // The Res entries are scheduling-only (same robustness.comp
+        // shader, same input bytes; stats never leave the device), so on
+        // a deterministic device the composition must equal the staged
+        // path bit for bit. This gates the heap-fit slice that drops the
+        // two 75 MB full-res host stats buffers.
+        val robSpv = System.getProperty("srpipeline.spv_robust", "")
+        assumeTrue("native proof needs -Dsrpipeline.lib", lib.isNotEmpty() && File(lib).exists())
+        assumeTrue("native proof needs -Dsrpipeline.spv_robust", robSpv.isNotEmpty() && File(robSpv).exists())
+        SrpBridge.loadPath(lib)
+        val handle = SrpBridge.nativeCreate()
+        assumeTrue("no Vulkan compute device", handle != 0L)
+        try {
+            val spirv = File(robSpv).readBytes()
+            val fixDir = File(System.getProperty("srpipeline.fixtures", "parity/fixtures"))
+            val ref128 = com.rawlens.srpipeline.parity.NpyReader.load(File(fixDir, "robustness_in_ref_raw.npy"))
+            val comp128 = com.rawlens.srpipeline.parity.NpyReader.load(File(fixDir, "robustness_in_comp_raw.npy"))
+            val flow128 = com.rawlens.srpipeline.parity.NpyReader.load(File(fixDir, "robustness_in_flow.npy"))
+            val w128 = ref128.shape[1]
+            val h128 = ref128.shape[0]
+            val gw128 = w128 / 2
+            val gh128 = h128 / 2
+            val ftx128 = flow128.shape[1]
+            val fty128 = flow128.shape[0]
+            fun packFlat(data: FloatArray): java.nio.ByteBuffer {
+                val b = SrpBridge.directFloats(data.size)
+                b.asFloatBuffer().put(data)
+                b.rewind()
+                return b
+            }
+            // Staged composition (proven bit-exact vs the port above).
+            val means128Buf = SrpBridge.directFloats(3 * gw128 * gh128)
+            val vars128Buf = SrpBridge.directFloats(3 * gw128 * gh128)
+            var rc = SrpBridge.robustInit(handle, packFlat(ref128.data), means128Buf, vars128Buf,
+                spirv, w128, h128)
+            assertEquals("staged robustInit dispatch status", 0, rc)
+            val flow128Buf = packFlat(flow128.data)
+            val s128Buf = SrpBridge.directFloats(ftx128 * fty128)
+            rc = SrpBridge.smap(handle, flow128Buf, s128Buf, spirv, ftx128, fty128)
+            assertEquals("smap dispatch status", 0, rc)
+            val lutBuf = packFlat(floatArrayOf(0f, 0f, 0f, 0f))
+            val stagedOut = SrpBridge.directFloats(gw128 * gh128)
+            rc = SrpBridge.robustCompute(handle, packFlat(comp128.data), means128Buf, vars128Buf,
+                packFlat(flow128.data), lutBuf, s128Buf, stagedOut, spirv,
+                w128, h128, 16, 2, false, 0.12f, ftx128, fty128)
+            assertEquals("staged robustCompute dispatch status", 0, rc)
+            // Resident composition on the same inputs.
+            val meansRes = SrpBridge.createResident(handle, (3 * gw128 * gh128).toLong())
+            val varsRes = SrpBridge.createResident(handle, (3 * gw128 * gh128).toLong())
+            try {
+                assertTrue("means resident alloc failed", meansRes != 0L)
+                assertTrue("vars resident alloc failed", varsRes != 0L)
+                rc = SrpBridge.robustInitRes(handle, packFlat(ref128.data), meansRes, varsRes,
+                    spirv, w128, h128)
+                assertEquals("resident robustInit dispatch status", 0, rc)
+                val resOut = SrpBridge.directFloats(gw128 * gh128)
+                flow128Buf.rewind()
+                s128Buf.rewind()
+                lutBuf.rewind()
+                rc = SrpBridge.robustComputeRes(handle, packFlat(comp128.data), meansRes, varsRes,
+                    flow128Buf, lutBuf, s128Buf, resOut, spirv,
+                    w128, h128, 16, 2, false, 0.12f, ftx128, fty128)
+                assertEquals("resident robustCompute dispatch status", 0, rc)
+                stagedOut.rewind()
+                resOut.rewind()
+                val wantStaged = FloatArray(gw128 * gh128)
+                val gotRes = FloatArray(gw128 * gh128)
+                stagedOut.asFloatBuffer().get(wantStaged)
+                resOut.asFloatBuffer().get(gotRes)
+                var maxRes = 0f
+                for (i in wantStaged.indices) maxRes = maxOf(maxRes, kotlin.math.abs(gotRes[i] - wantStaged[i]))
+                println("jni robustRes maxabs_vs_staged=$maxRes")
+                assertEquals(0f, maxRes, 0f)
+            } finally {
+                SrpBridge.freeResident(handle, meansRes)
+                SrpBridge.freeResident(handle, varsRes)
+            }
+        } finally {
+            SrpBridge.nativeDestroy(handle)
+        }
+    }
+
+    @Test
     fun `greyFft matches recorded lowpass through jni`() {
         val fftSpv = System.getProperty("srpipeline.spv_fft", "")
         assumeTrue("native proof needs -Dsrpipeline.lib", lib.isNotEmpty() && File(lib).exists())

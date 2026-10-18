@@ -119,8 +119,8 @@ class SrpPipelineCropDeviceTest {
             )
             Log.i("SrpCropDevice", "crop ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
-            val merged = VulkanPipeline.run(
-                refImg, compImgs, config, handle,
+            val rgb = VulkanPipeline.run(
+                { refImg }, compImgs, config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
                     fft = fft, ica = assetBytes("ica")),
@@ -131,24 +131,11 @@ class SrpPipelineCropDeviceTest {
                     mergeSplat = assetBytes("merge_splat"),
                     fft = fft),
             )
-            val outH = merged.size
-            require(merged[0].size % 3 == 0) { "flat row width must hold RGB triples" }
-            val outW = merged[0].size / 3
-            for (y in 0 until outH) {
-                val r = merged[y]
-                for (x in 0 until outW) {
-                    val b = x * 3
-                    if (r[b].isNaN() || r[b + 1].isNaN() || r[b + 2].isNaN()) {
-                        r[b] = 0f
-                        r[b + 1] = 0f
-                        r[b + 2] = 0f
-                    }
-                }
-            }
-            val rgb = SrpBridge.directFloats(outH * outW * 3)
-            val fb = rgb.asFloatBuffer()
-            for (y in 0 until outH) fb.put(merged[outH - 1 - y])
+            val outH = h
+            val outW = w
+            VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)
             rgb.rewind()
+            VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
             val profile = SrpBridge.readDngColorProfile(refPath)
             val orientation = SrpBridge.readDngOrientation(refPath)
             val out = File(outDir, "merged-device.dng").absolutePath

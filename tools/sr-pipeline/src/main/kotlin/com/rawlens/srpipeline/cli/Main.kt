@@ -257,19 +257,33 @@ private fun merge(plan: Plan) {
     println("sr-pipeline: ${w}x$h snr=${"%.2f".format(snr)} tile=${fin.tileSize} " +
         "backend=${plan.backend} noiseCorrection=$noiseCorrection")
 
-    // Flat rows end to end (`[H]` rows of `[W*3]`): the Vulkan path
-    // returns them directly; the CPU oracle's `[H][W][3]` nesting is
-    // copied once here (exact values, desktop heap only).
-    val merged: Array<FloatArray> = when (plan.backend) {
-        "cpu" -> flattenImage(EndToEnd.run(refImg, compImgs, config))
+    // Flat floats end to end: the Vulkan path returns the downloaded
+    // buffer directly (no row copy); the CPU oracle's `[H][W][3]`
+    // nesting is copied once here (exact values, desktop heap only).
+    // The tail NaN rule + row flip below are a per-pixel map and a
+    // permutation: identical bytes in either order.
+    val outH = (h * plan.scale).toInt()
+    val outW = (w * plan.scale).toInt()
+    val rgb = when (plan.backend) {
+        "cpu" -> {
+            val merged = flattenImage(EndToEnd.run(refImg, compImgs, config))
+            require(merged.size == outH && merged[0].size == outW * 3) {
+                "sr-pipeline: oracle shape mismatch"
+            }
+            val buf = SrpBridge.directFloats(outH * outW * 3)
+            val fb = buf.asFloatBuffer()
+            for (y in 0 until outH) fb.put(merged[outH - 1 - y])
+            buf.rewind()
+            buf
+        }
         else -> {
             val dir = plan.spvDir!!
             val handle = SrpBridge.nativeCreate()
             require(handle != 0L) { "sr-pipeline: nativeCreate failed" }
             try {
                 val fft = spv(dir, "fft")
-                VulkanPipeline.run(
-                    refImg, compImgs, config, handle,
+                val buf = VulkanPipeline.run(
+                    { refImg }, compImgs, config, handle,
                     AlignGpu.Spirvs(
                         align = spv(dir, "align"),
                         corr = spv(dir, "corr"),
@@ -286,39 +300,18 @@ private fun merge(plan: Plan) {
                         fft = fft,
                     ),
                 )
+                buf
             } finally {
                 SrpBridge.nativeDestroy(handle)
             }
         }
     }
-
-    val outH = merged.size
-    require(merged[0].size % 3 == 0) { "sr-pipeline: flat row width must hold RGB triples" }
-    val outW = merged[0].size / 3
-    // Tail NaN rule, cf. `process()`/`finish()`: degenerate 0/0 pixels
-    // (no contributing sample) are NaN out of `main()` and become black.
-    // uint16 DNG cannot store NaN (the writer would map it to 0 per
-    // channel, leaking the surviving channels), so zero the whole pixel
-    // here like the reference tail does (debug off).
-    for (y in 0 until outH) {
-        val r = merged[y]
-        for (x in 0 until outW) {
-            val b = x * 3
-            if (r[b].isNaN() || r[b + 1].isNaN() || r[b + 2].isNaN()) {
-                r[b] = 0f
-                r[b + 1] = 0f
-                r[b + 2] = 0f
-            }
-        }
-    }
-    val rgb = SrpBridge.directFloats(outH * outW * 3)
-    val fb = rgb.asFloatBuffer()
+    VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)
+    rgb.rewind()
     // Pipeline rows run sensor-bottom-up (the GRBG->RGGB input flip is
     // only undone inside the finished PNG path); the DNG stores true
-    // native top-down, so emit rows flipped. Zero extra pass: same copy
-    // (whole-row bulk puts now that rows are flat).
-    for (y in 0 until outH) fb.put(merged[outH - 1 - y])
-    rgb.rewind()
+    // native top-down, so emit rows flipped, in place.
+    VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
     Files.createDirectories(plan.outputDir)
     val out = plan.outputDir.resolve("merged.dng").toString()
     // Camera color passthrough from the reference frame (rendering), cf.
