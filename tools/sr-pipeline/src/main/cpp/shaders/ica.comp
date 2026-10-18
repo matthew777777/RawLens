@@ -59,15 +59,16 @@ void main() {
   }
 
   // --- cpu_ica refine ---
-  // FMA determinism: desktop (CPU numpy + MoltenVK) evaluates the
-  // op-0 Hessian fused and op 1 unfused; Mali fuses a different tree,
-  // which niter=3 feedback amplifies into flow divergence. Pinned at
-  // the SPIR-V level (see the build note): op-0 pairs become FMA
-  // extended instructions (single rounding on every driver) while the
-  // precise qualifiers below emit NoContraction over op 1 (a no-op
-  // where no fusion happens; FMA extinsts ignore it). Same values as
-  // desktop throughout (proven by the unchanged checkpoints),
-  // bit-identical on Mali.
+  // Eval determinism (see build-ica/README): both drivers are
+  // deterministic, but differ input-dependently (niter-1 1-ULP seeds at
+  // 62 tiles, niter-3 feedback amplifies to 667 px / 12 LSB device vs
+  // desktop). FMA pins (SPIR-V level) are honored by Metal; Mali honors
+  // them structurally but rounds some FMAs input-dependently and
+  // decomposes others. The `precise` qualifiers below DO emit
+  // NoContraction, but both drivers ignore it for fusion decisions
+  // (Metal always; Mali per the 49-decoration NC experiment), as do
+  // Function- and SSBO-volatile store/load barriers. Do not rely on
+  // decorations to steer either compiler. Gate: envelope parity.
   float clip_radius = uintBitsToFloat(p.pad[2]);
   uint niter = p.pad[3];
   float A00 = hess[t].x;
