@@ -1,0 +1,187 @@
+#version 450
+// Portable complex FFT primitives + frequency-domain helpers (Vulkan 1.2,
+// no shared memory, no 64-bit; MoltenVK-safe). All complex data is vec2
+// (re, im) float32 in std430 buffers; the host passes float32 views.
+//
+// FFT convention matches torch.fft: forward unnormalized
+//   X[k] = sum_n x[n] exp(-2*pi*i*n*k/N),
+// inverse = conj(forward(conj(x)))/N. Twiddle tables are built on the
+// host (float32) and uploaded; the shader never calls sin/cos.
+//
+// Push overlay: pad[0]=op, pad[1]=N (1D length, pow2, or W for 2D ops),
+//   pad[2]=count/H, pad[3]=stride/W2, pad[4]=batch_stride, pad[5]=len or
+//   float-bits(s) or dir flag per op. Buffers: A in, B in2/twiddle, C out.
+//
+// Ops:
+//   0 bitrev1d   C[b*bs+k*st]   = A[b*bs+rev(k)*st]            (exact permute)
+//   1 butterfly  one DIT pass, len=pad[5], twiddles in B      (float32 FMA ok)
+//   2 shift1d    C[i] = A[(i+N/2)%N] per FFT                   (exact permute)
+//   3 bandzero2d zero rows y<H/4|y>=H-H/4 or cols x<W/4|x>=W-W/4 (exact index)
+//   4 conjscale  C = conj(A)*s, s=floatbits(pad[5])            (negate exact)
+//   5 cmul       C = A*B                                      (float32)
+//   6 cmulconj   C = A*conj(B)                                (float32)
+//   7 shift2d    2D (ifft)shift, dir=pad[5] (0 fwd,1 inv)      (exact permute)
+//   8 cscale     C = A*s, s=floatbits(pad[5])                 (float32)
+//   9 realext    C = A.x*s, s=floatbits(pad[5])               (float32)
+//   10 transpose2d (lead,h,w) pairs -> (lead,w,h) pairs        (exact permute)
+//   11 stacksplit  C[dst+i] = A[src+i], pad[1..2]             (exact permute)
+//   12 padrows     zero-extend rows n->m, pad[1..3]=n,m,count (exact permute)
+//   13 slicerows   gather first n of m-wide rows, pad[1..3]   (exact permute)
+//   14 broadcast   C[r*n+k] = A[k], pad[1..2]=n,count         (exact permute)
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { vec2 A_[]; };
+layout(set = 0, binding = 1) readonly buffer B { vec2 B_[]; };
+layout(set = 0, binding = 2) buffer C { vec2 C_[]; };
+
+uint bitrev(uint k, uint bits) {
+  uint r = 0u;
+  for (uint b = 0u; b < bits; b++) { r = (r << 1u) | (k & 1u); k >>= 1u; }
+  return r;
+}
+uint ilog2(uint n) {
+  uint l = 0u;
+  while ((1u << (l + 1u)) <= n) l++;
+  return l;
+}
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint op = p.pad[0];
+  uint N = p.pad[1];
+
+  if (op == 0u) {
+    // --- bit-reversal permute, one invocation per element ---
+    uint count = p.pad[2];
+    uint st = p.pad[3];
+    uint bs = p.pad[4];
+    uint bits = ilog2(N);
+    uint b = i / N;
+    if (b >= count) return;
+    uint k = i % N;
+    C_[b * bs + k * st] = A_[b * bs + bitrev(k, bits) * st];
+  } else if (op == 1u) {
+    // --- one DIT butterfly pass, one invocation per butterfly ---
+    uint count = p.pad[2];
+    uint st = p.pad[3];
+    uint bs = p.pad[4];
+    uint len = p.pad[5];
+    uint hlf = len / 2u;
+    uint per = N / 2u;
+    uint b = i / per;
+    if (b >= count) return;
+    uint k = i % per;
+    uint group = k / hlf;
+    uint j = k % hlf;
+    uint i0 = group * len + j;
+    uint i1 = i0 + hlf;
+    vec2 u = A_[b * bs + i0 * st];
+    vec2 v = A_[b * bs + i1 * st];
+    vec2 w = B_[j * (N / len)];
+    vec2 vw = cmul(v, w);
+    C_[b * bs + i0 * st] = u + vw;
+    C_[b * bs + i1 * st] = u - vw;
+  } else if (op == 2u) {
+    // --- 1D fftshift per FFT ---
+    uint count = p.pad[2];
+    uint st = p.pad[3];
+    uint bs = p.pad[4];
+    uint b = i / N;
+    if (b >= count) return;
+    uint k = i % N;
+    C_[b * bs + k * st] = A_[b * bs + ((k + N / 2u) % N) * st];
+  } else if (op == 3u) {
+    // --- 2D band-zero (matches compute_grey_images //4 cuts) ---
+    uint W = N;
+    uint H = p.pad[2];
+    uint y = i / W;
+    uint x = i % W;
+    if (y >= H) return;
+    bool cut = (y < H / 4u) || (y >= H - H / 4u) || (x < W / 4u) || (x >= W - W / 4u);
+    C_[i] = cut ? vec2(0.0, 0.0) : A_[i];
+  } else if (op == 4u) {
+    // --- conjugate + scale ---
+    float s = uintBitsToFloat(p.pad[5]);
+    C_[i] = vec2(A_[i].x * s, -A_[i].y * s);
+  } else if (op == 5u) {
+    // --- pointwise complex multiply ---
+    C_[i] = cmul(A_[i], B_[i]);
+  } else if (op == 6u) {
+    // --- pointwise multiply by conjugate ---
+    vec2 b = B_[i];
+    C_[i] = cmul(A_[i], vec2(b.x, -b.y));
+  } else if (op == 7u) {
+    // --- 2D (inverse) shift ---
+    uint W = N;
+    uint H = p.pad[2];
+    uint dir = p.pad[5];
+    uint y = i / W;
+    uint x = i % W;
+    if (y >= H) return;
+    uint sy = (dir == 0u) ? (H / 2u) : (H - H / 2u);
+    uint sx = (dir == 0u) ? (W / 2u) : (W - W / 2u);
+    uint y2 = (y + sy) % H;
+    uint x2 = (x + sx) % W;
+    C_[y2 * W + x2] = A_[i];
+  } else if (op == 8u) {
+    // --- complex scale ---
+    float s = uintBitsToFloat(p.pad[5]);
+    C_[i] = A_[i] * s;
+  } else if (op == 9u) {
+    // --- real extract + scale ---
+    float s = uintBitsToFloat(p.pad[5]);
+    C_[i] = vec2(A_[i].x * s, 0.0);
+  } else if (op == 10u) {
+    // --- (lead,h,w)->(lead,w,h) pair transpose, mirrors TransposeLead ---
+    uint H = N;
+    uint W = p.pad[2];
+    uint L = p.pad[3];
+    uint hw = H * W;
+    uint b = i / hw;
+    if (b >= L) return;
+    uint t = i % hw;
+    uint x = t / H;
+    uint y = t % H;
+    C_[i] = A_[(b * H + y) * W + x];
+  } else if (op == 11u) {
+    // --- pair copy-range: C[dst+i] = A[src+i] (exact permute) ---
+    uint src = p.pad[1];
+    uint dst = p.pad[2];
+    C_[dst + i] = A_[src + i];
+  } else if (op == 12u) {
+    // --- Bluestein zero-pad: rows of n pairs -> rows of m pairs ---
+    uint n = N;
+    uint m = p.pad[2];
+    uint c = p.pad[3];
+    uint b = i / m;
+    if (b >= c) return;
+    uint k = i % m;
+    C_[i] = (k < n) ? A_[b * n + k] : vec2(0.0, 0.0);
+  } else if (op == 13u) {
+    // --- Bluestein slice: first n pairs of m-wide rows ---
+    uint n = N;
+    uint m = p.pad[2];
+    uint c = p.pad[3];
+    uint b = i / n;
+    if (b >= c) return;
+    uint k = i % n;
+    C_[i] = A_[b * m + k];
+  } else if (op == 14u) {
+    // --- row broadcast: one n-pair row -> count rows ---
+    uint n = N;
+    uint c = p.pad[2];
+    uint b = i / n;
+    if (b >= c) return;
+    C_[i] = A_[i % n];
+  }
+}

@@ -1,0 +1,35 @@
+#version 450
+// sr-pipeline merge-accumulate kernel (Vulkan 1.2, no extensions).
+//
+// Passthrough-style accumulation for the merge cartography stage:
+// each invocation accumulates one float element,
+//   acc[i] = acc[i] + gain * in[i],
+// so with gain == 1 and a zeroed accumulator it is a plain copy.
+// The host (SrpMergeAccumulateGpu) dispatches the full grid
+// ceil(count / 64) groups of 64 and uploads SrpMergeParams as push
+// constants; the tail guard below keeps partial final groups safe.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer InBuf {
+  float data[];
+} inBuf;
+
+layout(set = 0, binding = 1) buffer AccBuf {
+  float data[];
+} accBuf;
+
+layout(push_constant) uniform Params {
+  uint count;
+  uint width;
+  uint height;
+  float gain;
+} params;
+
+void main() {
+  uint gid = gl_GlobalInvocationID.x;
+  if (gid >= params.count) {
+    return;
+  }
+  accBuf.data[gid] = accBuf.data[gid] + params.gain * inBuf.data[gid];
+}

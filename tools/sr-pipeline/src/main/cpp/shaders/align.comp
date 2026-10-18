@@ -1,0 +1,71 @@
+#version 450
+// 1:1 port of block_matching.py cpu_l1_local_search (exhaustive L1, Alg.2).
+// The L2 FFT/correlation stage (align_lvl_block_matching_L2, torch FFT +
+// conv2d) stays on the host until a GPU FFT pass lands; this shader is the
+// per-level L1 refinement dispatched over the tile grid.
+// Order, bounds, and first-minimum-wins semantics match the CPU exactly:
+// out-of-bounds moving samples read as 0, ties keep the earliest shift.
+//
+// Push overlay: pad[0] = op (0; reserved, L1 search),
+//               pad[1] = searchRadius, pad[2] = nTilesX.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Ref { float refImg[]; };
+layout(set = 0, binding = 1) readonly buffer Tgt { float tgtImg[]; };
+layout(set = 0, binding = 2) buffer Flow { vec2 flow[]; };
+
+// CUDA round() semantics used by the CPU (round half away from zero;
+// GLSL round() is round-to-even and must NOT be used here).
+int round_half_away(float x) {
+  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
+}
+
+void main() {
+  uint t = gl_GlobalInvocationID.x;
+  if (t >= p.tileCount) return;
+  uint searchRadius = p.pad[1];
+  uint nTilesX = p.pad[2];
+  uint tileSize = p.tileSize;
+  uint W = p.width;
+  uint H = p.height;
+
+  uint tile_y = t / nTilesX;
+  uint tile_x = t % nTilesX;
+  int flow_x = round_half_away(flow[t].x);
+  int flow_y = round_half_away(flow[t].y);
+
+  float best_err = 1.0 / 0.0; // +inf
+  int best_sx = -int(searchRadius);
+  int best_sy = -int(searchRadius);
+  for (int sy = -int(searchRadius); sy <= int(searchRadius); sy++) {
+    for (int sx = -int(searchRadius); sx <= int(searchRadius); sx++) {
+      float err = 0.0;
+      for (uint ty = 0u; ty < tileSize; ty++) {
+        uint y = tile_y * tileSize + ty;
+        for (uint tx = 0u; tx < tileSize; tx++) {
+          uint x = tile_x * tileSize + tx;
+          int my = int(y) + flow_y + sy;
+          int mx = int(x) + flow_x + sx;
+          float m = (my >= 0 && my < int(H) && mx >= 0 && mx < int(W))
+              ? tgtImg[uint(my) * W + uint(mx)] : 0.0;
+          float diff = refImg[y * W + x] - m;
+          err += (diff >= 0.0) ? diff : -diff;
+        }
+      }
+      if (err < best_err) { // strict <: first minimum wins, as on CPU
+        best_err = err;
+        best_sx = sx;
+        best_sy = sy;
+      }
+    }
+  }
+  flow[t] = vec2(float(flow_x + best_sx), float(flow_y + best_sy));
+}

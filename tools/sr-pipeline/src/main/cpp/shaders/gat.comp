@@ -1,0 +1,51 @@
+#version 450
+// 1:1 port of utils_image.py cpu_GAT + cpu_decimate_to_grey (Alg.3 helpers).
+// CPU: float64 intermediates rounded on store to float32; GPU: float32
+// throughout (Metal has no double). Formula and order are identical, so
+// outputs agree to <=1 ulp; the executed parity proof quantifies this.
+// Vulkan 1.2 core only; no 64-bit atomics (MoltenVK portability subset).
+//
+// Push overlay: pad[0] = op (0 GAT full-res, 1 decimate full-res -> half-res).
+// Alpha/beta arrive as EXIF plane order [R,G1,B,G2] in the AlphaBeta SSBO.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer In { float raw_[]; };
+layout(set = 0, binding = 1) writeonly buffer Out { float out_[]; };
+layout(set = 0, binding = 2) readonly buffer AlphaBeta { vec4 alpha4; vec4 beta4; };
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint op = p.pad[0];
+  if (op == 0u) {
+    // --- cpu_GAT, one invocation per sensor pixel ---
+    uint y = i / p.width;
+    uint x = i % p.width;
+    uint px = x & 1u;
+    uint py = y & 1u;
+    // Spatial R,G1/G2,B -> EXIF plane indices 0,1/3,2 (branch-free).
+    uint k = px + py * (3u - 2u * px);
+    float a = (k == 0u) ? alpha4.x : (k == 1u) ? alpha4.y : (k == 2u) ? alpha4.z : alpha4.w;
+    float b = (k == 0u) ? beta4.x : (k == 1u) ? beta4.y : (k == 2u) ? beta4.z : beta4.w;
+    float vst = a * raw_[i] + 3.0 / 8.0 * a * a + b;
+    vst = max(vst, 0.0);
+    out_[i] = (2.0 / a) * sqrt(vst);
+  } else {
+    // --- cpu_decimate_to_grey, one invocation per grey pixel ---
+    uint outW = p.width / 2u;
+    uint y = i / outW;
+    uint x = i % outW;
+    uint W = p.width;
+    float c = raw_[(2u * y) * W + 2u * x] + raw_[(2u * y) * W + 2u * x + 1u]
+            + raw_[(2u * y + 1u) * W + 2u * x] + raw_[(2u * y + 1u) * W + 2u * x + 1u];
+    out_[i] = c / 4.0;
+  }
+}

@@ -1,0 +1,221 @@
+#version 450
+// 1:1 port of robustness.py (Alg.6-9): guide image, local stats, Dogson
+// (op-for-op identical to the proven Vulkan-port decomposition,
+// robustness.comp ops 0-6, dual parity there; op 7 is debug-only and
+// has no module counterpart).
+// warp, d/sigma, flow-penalty threshold, 5x5 local-min. One file, one
+// dispatch per stage selected by push pad[0]; generic float buffers are
+// reinterpreted per op as documented below. Order and formulas match the
+// CPU njit kernels exactly (clamped 3x3/5x5 windows, biquadratic Dogson,
+// round-half-away tile math, first-minimum-free threshold).
+//
+// Push overlay: pad[0]=op (0 guide,1 stats,2 warp,3 dsigma,4 thresh,5 min,
+//   6 smap, 7 accum) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
+//   pad[4]=tileHalf, pad[5]=lutN, pad[6..9]=t,Mt,s1,s2 bits,
+//   pad[10]=noiseCorrection, pad[11]=nTilesX (warp/thresh),
+//   pad[12]=fullW (guide op).
+// Buffers: A,B,C in; D,E out; S tile map (thresh); LUT sigma++d (dsigma).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) readonly buffer B { float B_[]; };
+layout(set = 0, binding = 2) readonly buffer C { float C_[]; };
+layout(set = 0, binding = 3) buffer D { float D_[]; };
+layout(set = 0, binding = 4) buffer E { float E_[]; };
+layout(set = 0, binding = 5) readonly buffer S { float S_[]; };
+layout(set = 0, binding = 6) readonly buffer LUT { float lut[]; };
+
+int clampInt(int x, int lo, int hi) { return min(max(x, lo), hi); }
+int round_half_away(float x) {
+  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
+}
+float dogson_q(float x) {
+  float ax = abs(x);
+  if (ax <= 0.5) return -2.0 * ax * ax + 1.0;
+  else if (ax <= 1.5) return ax * ax - 2.5 * ax + 1.5;
+  else return 0.0;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint op = p.pad[0];
+  uint W = p.pad[1];
+  uint H = p.pad[2];
+
+  if (op == 0u) {
+    // --- cpu_compute_guide_image: one invocation per guide pixel ---
+    uint y = i / W;
+    uint x = i % W;
+    uint fullW = p.pad[12];
+    float r = A_[(2u * y) * fullW + 2u * x];
+    float g1 = A_[(2u * y) * fullW + 2u * x + 1u];
+    float g2 = A_[(2u * y + 1u) * fullW + 2u * x];
+    float b = A_[(2u * y + 1u) * fullW + 2u * x + 1u];
+    D_[i] = sqrt(max(r, 0.0));
+    D_[W * H + i] = sqrt(max(0.5 * (g1 + g2), 0.0));
+    D_[2u * W * H + i] = sqrt(max(b, 0.0));
+  } else if (op == 1u) {
+    // --- cpu_compute_local_stats: one invocation per (channel,pixel) ---
+    uint nc = p.pad[3];
+    uint plane = W * H;
+    uint c = i / plane;
+    uint rem = i % plane;
+    uint y = rem / W;
+    uint x = rem % W;
+    float mean_ = 0.0, var_ = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        uint yy = uint(clampInt(int(y) + dy, 0, int(H) - 1));
+        uint xx = uint(clampInt(int(x) + dx, 0, int(W) - 1));
+        float v = A_[c * plane + yy * W + xx];
+        mean_ += v;
+        var_ += v * v;
+      }
+    }
+    mean_ /= 9.0;
+    D_[i] = mean_;
+    E_[i] = var_ / 9.0 - mean_ * mean_;
+  } else if (op == 2u) {
+    // --- cpu_warp_dogson: one invocation per guide pixel, all channels ---
+    uint nc = p.pad[3];
+    uint tileHalf = p.pad[4];
+    uint nTilesX = p.pad[11];
+    uint plane = W * H;
+    uint y = i / W;
+    uint x = i % W;
+    uint py = y / tileHalf;
+    uint px = x / tileHalf;
+    float fx = B_[(py * nTilesX + px) * 2u];
+    float fy = B_[(py * nTilesX + px) * 2u + 1u];
+    float ymov = float(y) + fy * 0.5;
+    float xmov = float(x) + fx * 0.5;
+    if (!(ymov >= 0.0 && ymov < float(H) && xmov >= 0.0 && xmov < float(W))) {
+      for (uint c = 0u; c < nc; c++) D_[c * plane + i] = 1.0 / 0.0; // +inf -> R=0
+      return;
+    }
+    int cy = round_half_away(ymov);
+    int cx = round_half_away(xmov);
+    float wacc = 0.0;
+    float b0 = 0.0, b1 = 0.0, b2 = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+      uint yy = uint(clampInt(cy + dy, 0, int(H) - 1));
+      float wy = dogson_q(float(int(yy)) - ymov);
+      for (int dx = -1; dx <= 1; dx++) {
+        uint xx = uint(clampInt(cx + dx, 0, int(W) - 1));
+        float w = wy * dogson_q(float(int(xx)) - xmov);
+        b0 += A_[yy * W + xx] * w;
+        if (nc > 1u) {
+          b1 += A_[plane + yy * W + xx] * w;
+          b2 += A_[2u * plane + yy * W + xx] * w;
+        }
+        wacc += w;
+      }
+    }
+    D_[i] = b0 / wacc;
+    if (nc > 1u) {
+      D_[plane + i] = b1 / wacc;
+      D_[2u * plane + i] = b2 / wacc;
+    }
+  } else if (op == 3u) {
+    // --- cpu_compute_d_sigma ---
+    uint nc = p.pad[3];
+    uint lutN = p.pad[5];
+    bool corr = p.pad[10] != 0u;
+    uint plane = W * H;
+    uint y = i / W;
+    uint x = i % W;
+    float d = 0.0, s = 0.0;
+    for (uint c = 0u; c < nc; c++) {
+      float e = A_[c * plane + i] - B_[c * plane + i];
+      d += e * e;
+      s += C_[c * plane + i];
+    }
+    if (corr) {
+      float bright = 0.0;
+      for (uint c = 0u; c < nc; c++) bright += A_[c * plane + i];
+      bright = clamp(bright / float(nc), 0.0, 1.0);
+      uint idn = uint(round_half_away(float(lutN - 1u) * bright));
+      float dnoise = lut[lutN + idn];
+      float snoise = lut[idn];
+      s = max(s, snoise);
+      if (d > 0.0) {
+        float shrink = d / (d + dnoise);
+        d *= shrink * shrink;
+      }
+    }
+    D_[i] = d;
+    E_[i] = s;
+  } else if (op == 4u) {
+    // --- cpu_robustness_threshold: R = clamp(S*exp(-d/sigma)-t, 0, 1) ---
+    // numba lowers float min/max to minnum/maxnum, so a NaN argument
+    // (OOB-warped pixels: inf means -> inf/inf shrink -> NaN d) maps to
+    // the lower bound 0, which Python writes there (measured). GLSL
+    // clamp(NaN) is undefined, so branch explicitly.
+    float t = uintBitsToFloat(p.pad[6]);
+    uint tileHalf = p.pad[4];
+    uint nTilesX = p.pad[11];
+    uint y = i / W;
+    uint x = i % W;
+    uint py = y / tileHalf;
+    uint px = x / tileHalf;
+    float Sv = S_[py * nTilesX + px];
+    float Rv = Sv * exp(-A_[i] / B_[i]) - t;
+    D_[i] = isnan(Rv) ? 0.0 : clamp(Rv, 0.0, 1.0);
+  } else if (op == 6u) {
+    // --- cpu_compute_s: one invocation per flow tile ---
+    // W=pad[1] is nTilesX, H=pad[2] is nTilesY here; A holds the flow
+    // interleaved (x,y). min/max/select run in scan order like the CPU.
+    uint ntx = W;
+    uint py = i / ntx;
+    uint px = i % ntx;
+    float Mt = uintBitsToFloat(p.pad[7]);
+    float s1 = uintBitsToFloat(p.pad[8]);
+    float s2 = uintBitsToFloat(p.pad[9]);
+    float mini0 = 1.0 / 0.0, mini1 = 1.0 / 0.0;
+    float maxi0 = -1.0 / 0.0, maxi1 = -1.0 / 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        int y = int(py) + dy;
+        int x = int(px) + dx;
+        if (x >= 0 && x < int(ntx) && y >= 0 && y < int(H)) {
+          float f0 = A_[(uint(y) * ntx + uint(x)) * 2u];
+          float f1 = A_[(uint(y) * ntx + uint(x)) * 2u + 1u];
+          maxi0 = max(maxi0, f0);
+          maxi1 = max(maxi1, f1);
+          mini0 = min(mini0, f0);
+          mini1 = min(mini1, f1);
+        }
+      }
+    }
+    float d0 = maxi0 - mini0;
+    float d1 = maxi1 - mini1;
+    D_[i] = (d0 * d0 + d1 * d1 > Mt * Mt) ? s1 : s2;
+  } else if (op == 7u) {
+    // --- debug accumulated-robustness: D = A + B, one invocation per
+    // pixel (replaces host utils.add). A single correctly-rounded add per
+    // lane matches numpy float32 `A += B` bit-exactly, NaN/Inf included.
+    D_[i] = A_[i] + B_[i];
+  } else {
+    // --- cpu_compute_local_min: 5x5 clamped minimum ---
+    uint y = i / W;
+    uint x = i % W;
+    float m = 1.0 / 0.0;
+    for (int dy = -2; dy <= 2; dy++) {
+      for (int dx = -2; dx <= 2; dx++) {
+        uint yy = uint(clampInt(int(y) + dy, 0, int(H) - 1));
+        uint xx = uint(clampInt(int(x) + dx, 0, int(W) - 1));
+        m = min(m, A_[yy * W + xx]);
+      }
+    }
+    D_[i] = m;
+  }
+}

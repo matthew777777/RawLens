@@ -1,0 +1,165 @@
+#version 450
+// 1:1 port of ICA.py cpu_compute_hessian + cpu_ica (Alg.2 ICA refinement,
+// Gauss-Newton, n_iter=3, per-tile Hessian). linalg.py helpers are inlined
+// in the formula order used by the CPU.
+// Push overlay: pad[0] = op (0 hessian, 1 refine),
+//               pad[1] = nTilesX,
+//               pad[2] = clip_radius bits (uintBitsToFloat),
+//               pad[3] = niter (3).
+// Hessian mode touches gradFull + hessian only; refine touches all buffers.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer RefImg { float refImg[]; };
+layout(set = 0, binding = 1) readonly buffer MovImg { float movImg[]; };
+layout(set = 0, binding = 2) readonly buffer GradX { float gradx[]; };
+layout(set = 0, binding = 3) readonly buffer GradY { float grady[]; };
+layout(set = 0, binding = 4) buffer Hess { vec4 hess[]; }; // h00,h01,h11,unused
+layout(set = 0, binding = 5) buffer Flow { vec2 flow[]; };
+
+int clampInt(int x, int lo, int hi) { return min(max(x, lo), hi); }
+int round_half_away(float x) {
+  return (x >= 0.0) ? int(floor(x + 0.5)) : int(ceil(x - 0.5));
+}
+
+void main() {
+  uint t = gl_GlobalInvocationID.x;
+  if (t >= p.tileCount) return;
+  uint op = p.pad[0];
+  uint nTilesX = p.pad[1];
+  uint tileSize = p.tileSize;
+  uint W = p.width;
+  uint H = p.height;
+  uint tile_y = t / nTilesX;
+  uint tile_x = t % nTilesX;
+
+  if (op == 0u) {
+    // --- cpu_compute_hessian: one invocation per tile ---
+    float h00 = 0.0, h01 = 0.0, h11 = 0.0;
+    for (uint i = 0u; i < tileSize; i++) {
+      for (uint j = 0u; j < tileSize; j++) {
+        uint gy = tile_y * tileSize + i;
+        uint gx = tile_x * tileSize + j;
+        float gx_ = gradx[gy * W + gx];
+        float gy_ = grady[gy * W + gx];
+        h00 += gx_ * gx_;
+        h01 += gx_ * gy_;
+        h11 += gy_ * gy_;
+      }
+    }
+    hess[t] = vec4(h00, h01, h11, 0.0);
+    return;
+  }
+
+  // --- cpu_ica refine ---
+  // FMA determinism: desktop (CPU numpy + MoltenVK) evaluates the
+  // op-0 Hessian fused and op 1 unfused; Mali fuses a different tree,
+  // which niter=3 feedback amplifies into flow divergence. Pinned at
+  // the SPIR-V level (see the build note): op-0 pairs become FMA
+  // extended instructions (single rounding on every driver) while the
+  // precise qualifiers below emit NoContraction over op 1 (a no-op
+  // where no fusion happens; FMA extinsts ignore it). Same values as
+  // desktop throughout (proven by the unchanged checkpoints),
+  // bit-identical on Mali.
+  float clip_radius = uintBitsToFloat(p.pad[2]);
+  uint niter = p.pad[3];
+  float A00 = hess[t].x;
+  float A01 = hess[t].y;
+  float A10 = hess[t].y;
+  float A11 = hess[t].z;
+  precise float det = A00 * A11 - A01 * A10;
+  if (abs(det) < 1e-10) return; // unsolvable: flow unchanged, as on CPU
+  precise float det_inv = 1.0 / det;
+  precise float ax = flow[t].x;
+  precise float ay = flow[t].y;
+
+  if (tileSize == 8u) {
+    // 8x8 path: clamped borders, tree reduction with per-addend clipping,
+    // no update clipping. Reduction order matches the CPU tree exactly.
+    float c0[64];
+    float c1[64];
+    for (uint it = 0u; it < niter; it++) {
+      uint idx = 0u;
+      for (uint ty = 0u; ty < 8u; ty++) {
+        uint y = tile_y * 8u + ty;
+        for (uint tx = 0u; tx < 8u; tx++) {
+          uint x = tile_x * 8u + tx;
+          float fx = float(x) + ax;
+          float fy = float(y) + ay;
+          int floor_x = int(floor(fx));
+          int floor_y = int(floor(fy));
+          float frac_x = fx - float(floor_x);
+          float frac_y = fy - float(floor_y);
+          floor_x = clampInt(floor_x, 0, int(W) - 1);
+          floor_y = clampInt(floor_y, 0, int(H) - 1);
+          int ceil_x = clampInt(floor_x + 1, 0, int(W) - 1);
+          int ceil_y = clampInt(floor_y + 1, 0, int(H) - 1);
+          float m00 = movImg[uint(floor_y) * W + uint(floor_x)];
+          float m01 = movImg[uint(floor_y) * W + uint(ceil_x)];
+          float m10 = movImg[uint(ceil_y) * W + uint(floor_x)];
+          float m11 = movImg[uint(ceil_y) * W + uint(ceil_x)];
+          precise float top = m00 + (m01 - m00) * frac_x;
+          precise float bot = m10 + (m11 - m10) * frac_x;
+          precise float interp = top + (bot - top) * frac_y;
+          precise float gradt = interp - refImg[y * W + x];
+          c0[idx] = -gradx[y * W + x] * gradt;
+          c1[idx] = -grady[y * W + x] * gradt;
+          idx++;
+        }
+      }
+      uint n = 32u;
+      while (n > 0u) {
+        for (uint tid = 0u; tid < n; tid++) {
+          c0[tid] += clamp(c0[tid + n], -clip_radius, clip_radius);
+          c1[tid] += clamp(c1[tid + n], -clip_radius, clip_radius);
+        }
+        n = n / 2u;
+      }
+      float B0 = c0[0];
+      float B1 = c1[0];
+      ax += det_inv * (A11 * B0 - A01 * B1);
+      ay += det_inv * (-A10 * B0 + A00 * B1);
+    }
+  } else {
+    // Generic path: zero outside the image, update step clipped.
+    for (uint it = 0u; it < niter; it++) {
+      precise float B0 = 0.0, B1 = 0.0;
+      for (uint ty = 0u; ty < tileSize; ty++) {
+        uint y = tile_y * tileSize + ty;
+        for (uint tx = 0u; tx < tileSize; tx++) {
+          uint x = tile_x * tileSize + tx;
+          float fx = float(x) + ax;
+          float fy = float(y) + ay;
+          int floor_x = int(floor(fx));
+          int floor_y = int(floor(fy));
+          float frac_x = fx - float(floor_x);
+          float frac_y = fy - float(floor_y);
+          float m00 = (floor_y >= 0 && floor_y < int(H) && floor_x >= 0 && floor_x < int(W))
+              ? movImg[uint(floor_y) * W + uint(floor_x)] : 0.0;
+          float m01 = (floor_y >= 0 && floor_y < int(H) && floor_x + 1 >= 0 && floor_x + 1 < int(W))
+              ? movImg[uint(floor_y) * W + uint(floor_x + 1)] : 0.0;
+          float m10 = (floor_y + 1 >= 0 && floor_y + 1 < int(H) && floor_x >= 0 && floor_x < int(W))
+              ? movImg[uint(floor_y + 1) * W + uint(floor_x)] : 0.0;
+          float m11 = (floor_y + 1 >= 0 && floor_y + 1 < int(H) && floor_x + 1 >= 0 && floor_x + 1 < int(W))
+              ? movImg[uint(floor_y + 1) * W + uint(floor_x + 1)] : 0.0;
+          precise float top = m00 + (m01 - m00) * frac_x;
+          precise float bot = m10 + (m11 - m10) * frac_x;
+          precise float interp = top + (bot - top) * frac_y;
+          precise float gradt = interp - refImg[y * W + x];
+          B0 += -gradx[y * W + x] * gradt;
+          B1 += -grady[y * W + x] * gradt;
+        }
+      }
+      ax += clamp(det_inv * (A11 * B0 - A01 * B1), -clip_radius, clip_radius);
+      ay += clamp(det_inv * (-A10 * B0 + A00 * B1), -clip_radius, clip_radius);
+    }
+  }
+  flow[t] = vec2(ax, ay);
+}

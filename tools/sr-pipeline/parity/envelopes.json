@@ -1,0 +1,341 @@
+{
+  "_source": {
+    "report": "/Users/monikamalinowska/Handheld-Multi-Frame-Super-Resolution-Vulkan/parity/parity_gpu_report.json",
+    "note": "All numeric bounds below are copied verbatim from the Vulkan parity report parity_gpu_report.json; per-stage envelope summaries are exact maxima over the copied rows."
+  },
+  "stages": {
+    "gat": {
+      "max_abs_diff": 0.0009765625,
+      "max_rel_diff": 2.393880436102336e-07,
+      "report_key": "gpu_gat_f00"
+    },
+    "decimate": {
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "report_key": "gpu_decimate_f00"
+    },
+    "align": {
+      "max_abs_diff": 1.1533498764038086e-05,
+      "max_rel_diff": null,
+      "report_key": "gpu_align_crop"
+    },
+    "ica": {
+      "max_abs_diff": 1.265108585357666e-05,
+      "max_rel_diff": null,
+      "levels": [
+        {
+          "level": 0,
+          "tile_size": 16,
+          "tiles": [
+            32,
+            32
+          ],
+          "hess_max_abs_diff": 1.7881393432617188e-07,
+          "refine_max_abs_diff": 1.265108585357666e-05,
+          "skip_path_agrees": true
+        },
+        {
+          "level": 1,
+          "tile_size": 16,
+          "tiles": [
+            15,
+            15
+          ],
+          "hess_max_abs_diff": 5.960464477539063e-08,
+          "refine_max_abs_diff": 5.498528480529785e-06,
+          "skip_path_agrees": true
+        },
+        {
+          "level": 2,
+          "tile_size": 16,
+          "tiles": [
+            3,
+            3
+          ],
+          "hess_max_abs_diff": 2.9802322387695312e-08,
+          "refine_max_abs_diff": 3.501772880554199e-07,
+          "skip_path_agrees": true
+        },
+        {
+          "level": 3,
+          "tile_size": 8,
+          "tiles": [
+            1,
+            1
+          ],
+          "hess_max_abs_diff": 0.0,
+          "refine_max_abs_diff": 0.0,
+          "skip_path_agrees": true
+        }
+      ],
+      "report_key": "gpu_ica_levels"
+    },
+    "kernels": {
+      "max_abs_diff": 0.0011538565158843994,
+      "max_rel_diff": 5.353301425185854e+22,
+      "report_key": "gpu_kernels_crop"
+    },
+    "robustness": {
+      "max_abs_diff": 0.00012624263763427734,
+      "max_rel_diff": 0.00021054022363387048,
+      "report_key": "gpu_robustness_crop"
+    },
+    "merge": {
+      "max_abs_diff": 0.00016045570373535156,
+      "max_rel_diff": 0.011960635893046856,
+      "num": {
+        "max_abs_diff": 7.972121238708496e-06,
+        "max_rel_diff": 0.011960595846176147
+      },
+      "den": {
+        "max_abs_diff": 0.00016045570373535156,
+        "max_rel_diff": 0.011960635893046856
+      },
+      "report_key": "gpu_merge_crop"
+    },
+    "grey_fft": {
+      "max_abs_diff": 2.60770320892334e-08,
+      "max_rel_diff": 6.53336537652649e-05,
+      "rows": {
+        "pot": {
+          "shape": [
+            512,
+            512
+          ],
+          "device": "Apple M1",
+          "max_abs_diff": 2.2351741790771484e-08,
+          "max_rel_diff": 6.53336537652649e-05,
+          "exact_fraction": 0.16216278076171875
+        },
+        "bluestein": {
+          "shape": [
+            100,
+            100
+          ],
+          "device": "Apple M1",
+          "max_abs_diff": 2.60770320892334e-08,
+          "max_rel_diff": 2.0223444607836427e-06,
+          "exact_fraction": 0.0697
+        }
+      },
+      "report_key": "gpu_grey_fft"
+    },
+    "l2": {
+      "max_abs_diff": 0.0,
+      "max_rel_diff": null,
+      "levels": [
+        {
+          "level": 1,
+          "tile_size": 16,
+          "tiles": [
+            15,
+            15
+          ],
+          "max_abs_diff": 0.0,
+          "int_agree": true,
+          "devices": {
+            "extract": "Apple M1",
+            "fft": "Apple M1"
+          }
+        },
+        {
+          "level": 2,
+          "tile_size": 16,
+          "tiles": [
+            3,
+            3
+          ],
+          "max_abs_diff": 0.0,
+          "int_agree": true,
+          "devices": {
+            "extract": "Apple M1",
+            "fft": "Apple M1"
+          }
+        },
+        {
+          "level": 3,
+          "tile_size": 8,
+          "tiles": [
+            1,
+            1
+          ],
+          "max_abs_diff": 0.0,
+          "int_agree": true,
+          "devices": {
+            "extract": "Apple M1",
+            "fft": "Apple M1"
+          }
+        }
+      ],
+      "report_key": "gpu_l2_levels"
+    },
+    "smap": {
+      "max_abs_diff": 0.0,
+      "max_rel_diff": null,
+      "report_key": "gpu_smap"
+    },
+    "divide": {
+      "max_abs_diff": 1.4901161193847656e-08,
+      "max_rel_diff": 1.7012159503337898e-07,
+      "mask_note": {
+        "masks_agree": false,
+        "mask_mismatches": 1,
+        "ftz_subnormal_pixels": 1,
+        "unexplained_mask_mismatches": 0,
+        "ftz_model_exact": true
+      },
+      "report_key": "gpu_divide"
+    },
+    "hessian": {
+      "max_abs_diff": 3.725290298461914e-08,
+      "max_rel_diff": null,
+      "levels": [
+        {
+          "level": 0,
+          "tiles": [
+            1,
+            1
+          ],
+          "max_abs_diff": 1.3969838619232178e-09,
+          "exact_fraction": 0.0
+        },
+        {
+          "level": 1,
+          "tiles": [
+            3,
+            3
+          ],
+          "max_abs_diff": 1.4901161193847656e-08,
+          "exact_fraction": 0.027777777777777776
+        },
+        {
+          "level": 2,
+          "tiles": [
+            15,
+            15
+          ],
+          "max_abs_diff": 3.725290298461914e-08,
+          "exact_fraction": 0.11555555555555555
+        },
+        {
+          "level": 3,
+          "tiles": [
+            32,
+            32
+          ],
+          "max_abs_diff": 1.4901161193847656e-08,
+          "exact_fraction": 0.542236328125
+        }
+      ],
+      "report_key": "gpu_hessian_wired"
+    },
+    "grad": {
+      "max_abs_diff": 1.2332905896528246e-07,
+      "max_rel_diff": null,
+      "rows": {
+        "kerngrad": {
+          "max_abs_diff": 3.725290298461914e-09,
+          "device": "Apple M1"
+        },
+        "sobel": {
+          "gx_exact": true,
+          "gy_exact": true,
+          "device": "Apple M1"
+        },
+        "sqrt": {
+          "max_diff": 1.2332905896528246e-07,
+          "device": "Apple M1"
+        },
+        "gamma": {
+          "max_diff": 5.960464477539063e-08,
+          "device": "Apple M1"
+        }
+      },
+      "report_key": "gpu_grad"
+    },
+    "resample": {
+      "max_abs_diff": 1.9073486328125e-06,
+      "max_rel_diff": null,
+      "levels": [
+        {
+          "level": 0,
+          "shape": [
+            10,
+            10
+          ],
+          "max_abs_diff": 2.421438694000244e-08
+        },
+        {
+          "level": 1,
+          "shape": [
+            59,
+            59
+          ],
+          "max_abs_diff": 4.0978193283081055e-08
+        },
+        {
+          "level": 2,
+          "shape": [
+            252,
+            252
+          ],
+          "max_abs_diff": 4.470348358154297e-08
+        },
+        {
+          "level": 3,
+          "shape": [
+            512,
+            512
+          ],
+          "max_abs_diff": 0.0
+        }
+      ],
+      "upscale_max_abs": 1.9073486328125e-06,
+      "report_key": "gpu_resample"
+    },
+    "demosaic": {
+      "max_abs_diff": 0.0076806508004665375,
+      "max_rel_diff": null,
+      "rows": {
+        "100": {
+          "shape": [
+            100,
+            100
+          ],
+          "max_abs_diff": 0.001361371949315071,
+          "p99_abs_diff": 7.965323311509565e-05,
+          "exact_fraction": 0.4541
+        },
+        "512": {
+          "shape": [
+            512,
+            512
+          ],
+          "max_abs_diff": 0.0076806508004665375,
+          "p99_abs_diff": 9.413762018084526e-05,
+          "exact_fraction": 0.46405792236328125
+        }
+      },
+      "report_key": "gpu_demosaic"
+    },
+    "endtoend": {
+      "max_abs_diff": 0.07441336661577225,
+      "max_rel_diff": 6.214574337005615,
+      "interior_quantiles_gpu": {
+        "n": 11059200,
+        "p50": 3.725290298461914e-09,
+        "p99": 0.0030979104526340957,
+        "p999": 0.011087477263063243,
+        "max": 0.07441336661577225
+      },
+      "interior_quantiles_control": {
+        "n": 11058816,
+        "p50": 0.0,
+        "p99": 0.011114161461591714,
+        "p999": 0.02922953573986912,
+        "max": 0.1510675847530365
+      },
+      "report_key": "gpu_endtoend_crop"
+    }
+  }
+}

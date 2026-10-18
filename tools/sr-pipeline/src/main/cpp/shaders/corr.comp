@@ -1,0 +1,131 @@
+#version 450
+// Align-L2 helpers (Vulkan 1.2, MoltenVK-safe). The FFT correlation itself
+// runs through fft.comp (see host/gpu_l2.py); this file holds the integer
+// and search kernels of block_matching.align_lvl_block_matching_L2.
+//
+// Push overlay: pad[0]=op, pad[1]=H, pad[2]=W, pad[3]=nTilesX,
+//   pad[4]=S (search patch size = tile + 2*radius), pad[5]=radius.
+// p.tileSize carries the tile size. Buffers per op below.
+//
+// Ops:
+//   0 extract  A=moving image (H*W), B=flow (n*2 floats) ->
+//              C=patches (n*S*S). Mirrors extract_flow_patches exactly:
+//              banker's rounding (torch .round(), NOT half-away),
+//              clamp-to-edge sampling. Bit-exact eligible.
+//   1 l2argmin A=patches (n*S*S), B=cropped corrs (n*C*C, C=2r+1) ->
+//              C=flow delta (n*2). Energy = box-sum(patch^2) - 2*corr over
+//              the ts window; strict-< first-minimum-wins matches
+//              torch.argmin. Energy values are order-dependent (measured);
+//              the winning (dx,dy) integers are reported for agreement.
+//   2 crop     A=full corrs (n*S*S) -> C=centre C×C crop (n*C*C),
+//              C=2r+1, crop=(S-1-C)/2 with the +1 offset. Mirrors the
+//              host crop in gpu_align_lvl_l2 / AlignGpu.cropCorrs exactly
+//              (pure permute, no arithmetic). B is unread (alias A).
+//   3 real2pairs A=float reals (n) -> C=interleaved pairs (2n floats:
+//              C[2i]=A[i], C[2i+1]=0). Mirrors FftChain::ToComplex
+//              exactly (pure interleave, no arithmetic). Lets the pinned
+//              correlate path build device pairs without a host bounce.
+//              B is unread (alias A).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) readonly buffer B { float B_[]; };
+layout(set = 0, binding = 2) buffer C { float C_[]; };
+
+int round_half_even(float x) {
+  float k = floor(x);
+  float f = x - k;
+  if (f < 0.5) return int(k);
+  if (f > 0.5) return int(k) + 1;
+  return (mod(k, 2.0) == 0.0) ? int(k) : int(k) + 1;
+}
+int clampInt(int x, int lo, int hi) { return min(max(x, lo), hi); }
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  uint op = p.pad[0];
+  // Per-op element counts differ: argmin is per-tile while pixelCount
+  // holds the n*2 flow length, so op 1 must be bounded by tileCount.
+  // Excess threads return before any indexing — overrun reads/writes
+  // are tolerated by MoltenVK but fault mobile GPUs (device lost).
+  if (op == 1u) {
+    if (i >= p.tileCount) return;
+  } else if (i >= p.pixelCount) return;
+
+  if (op == 0u) {
+    // --- extract_flow_patches: one invocation per patch pixel ---
+    uint H = p.pad[1];
+    uint W = p.pad[2];
+    uint ntx = p.pad[3];
+    uint S = p.pad[4];
+    uint r = p.pad[5];
+    uint ts = p.tileSize;
+    uint ss = S * S;
+    uint t = i / ss;
+    uint rem = i % ss;
+    uint py = rem / S;
+    uint px = rem % S;
+    uint nty = p.tileCount / ntx;
+    if (t >= nty * ntx) return;
+    uint ty = t / ntx;
+    uint tx = t % ntx;
+    int dx = round_half_even(B_[t * 2u]);
+    int dy = round_half_even(B_[t * 2u + 1u]);
+    int top = int(ty * ts) + dy;
+    int left = int(tx * ts) + dx;
+    int y = clampInt(top + int(py) - int(r), 0, int(H) - 1);
+    int x = clampInt(left + int(px) - int(r), 0, int(W) - 1);
+    C_[i] = A_[uint(y) * W + uint(x)];
+  } else if (op == 1u) {
+    // --- L2 energy + argmin: one invocation per tile ---
+    uint Csz = 2u * p.pad[5] + 1u;
+    uint S = p.pad[4];
+    uint ts = p.tileSize;
+    uint t = i;
+    float best = 3.402823466e+38; // +inf
+    int bdx = 0;
+    int bdy = 0;
+    for (uint cy = 0u; cy < Csz; cy++) {
+      for (uint cx = 0u; cx < Csz; cx++) {
+        float e = 0.0;
+        for (uint iy = 0u; iy < ts; iy++) {
+          for (uint jx = 0u; jx < ts; jx++) {
+            float v = A_[t * S * S + (cy + iy) * S + (cx + jx)];
+            e += v * v;
+          }
+        }
+        e -= 2.0 * B_[t * Csz * Csz + cy * Csz + cx];
+        if (e < best) {
+          best = e;
+          bdx = int(cx) - int(Csz / 2u);
+          bdy = int(cy) - int(Csz / 2u);
+        }
+      }
+    }
+    C_[t * 2u] = float(bdx);
+    C_[t * 2u + 1u] = float(bdy);
+  } else if (op == 2u) {
+    // --- centre C×C crop of each S×S map: one invocation per output ---
+    uint S = p.pad[4];
+    uint Csz = 2u * p.pad[5] + 1u;
+    uint crop = (S - 1u - Csz) / 2u;
+    uint cc = Csz * Csz;
+    uint t = i / cc;
+    uint rem = i % cc;
+    uint y = rem / Csz;
+    uint x = rem % Csz;
+    C_[i] = A_[(t * S + (crop + 1u + y)) * S + (crop + 1u + x)];
+  } else if (op == 3u) {
+    // --- real-to-pairs interleave: one invocation per real ---
+    C_[2u * i] = A_[i];
+    C_[2u * i + 1u] = 0.0;
+  }
+}

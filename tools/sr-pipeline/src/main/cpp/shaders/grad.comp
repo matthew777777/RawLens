@@ -1,0 +1,77 @@
+#version 450
+// Small fixed-kernel gradient + pointwise preprocessing ops (Vulkan 1.2,
+// MoltenVK-safe). No shared memory, no float64. Op-for-op identical to the
+// proven Vulkan-port decomposition (grad.comp ops 0-3, dual parity there).
+//
+// Push overlay: pad[0]=op, pad[1]=W, pad[2]=H, pad[3]=exp-bits (op 3).
+// Buffers: A in (float), C out (vec2 pairs for gradient ops, float for
+// pointwise ops — sized by the host per op).
+//
+// Ops:
+//   0 kerngrad  Fused `kernels.estimate_kernels` gradient pair
+//               (kernels.py:101-123): one invocation per output pixel,
+//               C = (gx, gy) of the (H-1)x(W-1) full-grad grid. The two
+//               torch conv2d passes are fused in closed form; summation
+//               order differs from torch -> measured bound.
+//   1 sobel     `ICA.init_ica` Sobel grads (ICA.py:23-24, zero padding
+//               like torch padding='same'): C = (gx, gy) over HxW.
+//               OOB reads are 0, exactly as torch zero padding.
+//   2 sqrtpre   `preprocess` sqrt (kernels.py:135-137):
+//               C = sqrt(max(A, 0)). Metal sqrt is correctly rounded.
+//   3 gammapre  `preprocess` gamma (kernels.py:138-139):
+//               C = pow(max(A, 0), e), e=floatbits(pad[3]) = float32(1/2.2).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) buffer C { float C_[]; };
+layout(set = 0, binding = 2) buffer CV { vec2 CV_[]; };
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint op = p.pad[0];
+  uint W = p.pad[1];
+  uint H = p.pad[2];
+
+  if (op == 0u) {
+    // --- fused kernel gradients: out grid is (H-1)x(W-1) ---
+    uint OW = W - 1u;
+    uint y = i / OW;
+    uint x = i % OW;
+    // tmp0 = -0.5*g[y,x] + 0.5*g[y,x+1]; tmp1 = +0.5*g[y,x] + 0.5*g[y,x+1]
+    float g00 = A_[y * W + x];
+    float g01 = A_[y * W + x + 1u];
+    float g10 = A_[(y + 1u) * W + x];
+    float g11 = A_[(y + 1u) * W + x + 1u];
+    float t0r0 = -0.5 * g00 + 0.5 * g01;
+    float t1r0 = 0.5 * g00 + 0.5 * g01;
+    float t0r1 = -0.5 * g10 + 0.5 * g11;
+    float t1r1 = 0.5 * g10 + 0.5 * g11;
+    // out0 = 0.5*t0[y,x] + 0.5*t0[y+1,x]; out1 = -0.5*t1[y,x] + 0.5*t1[y+1,x]
+    CV_[i] = vec2(0.5 * t0r0 + 0.5 * t0r1, -0.5 * t1r0 + 0.5 * t1r1);
+  } else if (op == 1u) {
+    // --- Sobel pair, zero padding ---
+    uint y = i / W;
+    uint x = i % W;
+    float xm = (x > 0u) ? A_[y * W + x - 1u] : 0.0;
+    float xp = (x + 1u < W) ? A_[y * W + x + 1u] : 0.0;
+    float ym = (y > 0u) ? A_[(y - 1u) * W + x] : 0.0;
+    float yp = (y + 1u < H) ? A_[(y + 1u) * W + x] : 0.0;
+    CV_[i] = vec2(-xm + xp, -ym + yp);
+  } else if (op == 2u) {
+    // --- sqrt preprocessing ---
+    C_[i] = sqrt(max(A_[i], 0.0));
+  } else if (op == 3u) {
+    // --- gamma preprocessing ---
+    float e = uintBitsToFloat(p.pad[3]);
+    C_[i] = pow(max(A_[i], 0.0), e);
+  }
+}

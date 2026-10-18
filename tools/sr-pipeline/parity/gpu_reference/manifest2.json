@@ -1,0 +1,1039 @@
+{
+  "seed": 0,
+  "cpu_repo": "/Users/monikamalinowska/Handheld-Multi-Frame-Super-Resolution",
+  "vk_repo": "/Users/monikamalinowska/Handheld-Multi-Frame-Super-Resolution-Vulkan",
+  "inputs_from": "parity/fixtures (gen_fixtures.py, SEED=0)",
+  "stages": {
+    "gat": {
+      "inputs": [
+        "gat_in_raw"
+      ],
+      "outputs": [
+        "gat_out_vst"
+      ],
+      "note": "gat(raw[32,32]) identical input",
+      "cpu": {
+        "gat_out_vst": {
+          "file": "cpu_gat_out_vst.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "gat_out_vst": {
+          "file": "gpu_gat_out_vst.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "gat_out_vst": {
+          "max_abs": 3.0517578125e-05,
+          "max_rel": 2.38144539685061e-07
+        }
+      }
+    },
+    "decimate": {
+      "inputs": [
+        "decimate_in_raw"
+      ],
+      "outputs": [
+        "decimate_out_grey"
+      ],
+      "note": "decimating raw[32,32] identical input",
+      "cpu": {
+        "decimate_out_grey": {
+          "file": "cpu_decimate_out_grey.npy",
+          "shape": [
+            16,
+            16
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "decimate_out_grey": {
+          "file": "gpu_decimate_out_grey.npy",
+          "shape": [
+            16,
+            16
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "decimate_out_grey": {
+          "max_abs": 5.960464477539063e-08,
+          "max_rel": 1.1802103276429099e-07
+        }
+      }
+    },
+    "grey_fft": {
+      "inputs": [
+        "grey_fft_in_raw"
+      ],
+      "outputs": [
+        "grey_fft_out_lowpass"
+      ],
+      "note": "FFT lowpass raw[32,32] identical input",
+      "cpu": {
+        "grey_fft_out_lowpass": {
+          "file": "cpu_grey_fft_out_lowpass.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "grey_fft_out_lowpass": {
+          "file": "gpu_grey_fft_out_lowpass.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "grey_fft_out_lowpass": {
+          "max_abs": 1.7881393432617188e-07,
+          "max_rel": 5.273427200337499e-05
+        }
+      }
+    },
+    "demosaic": {
+      "inputs": [
+        "demosaic_in_cfa"
+      ],
+      "outputs": [
+        "demosaic_out_grey"
+      ],
+      "note": "Menon2007 RGGB cfa[32,32] identical input",
+      "cpu": {
+        "demosaic_out_grey": {
+          "file": "cpu_demosaic_out_grey.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "demosaic_out_grey": {
+          "file": "gpu_demosaic_out_grey.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "demosaic_out_grey": {
+          "max_abs": 1.7881393432617188e-07,
+          "max_rel": 6.122822846652188e-07
+        }
+      }
+    },
+    "divide": {
+      "inputs": [
+        "divide_in_num",
+        "divide_in_den"
+      ],
+      "outputs": [
+        "divide_out_ratio"
+      ],
+      "note": "num/den [16,16,3] identical inputs, in place",
+      "cpu": {
+        "divide_out_ratio": {
+          "file": "cpu_divide_out_ratio.npy",
+          "shape": [
+            16,
+            16,
+            3
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "divide_out_ratio": {
+          "file": "gpu_divide_out_ratio.npy",
+          "shape": [
+            16,
+            16,
+            3
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "divide_out_ratio": {
+          "max_abs": 2.384185791015625e-07,
+          "max_rel": 1.1905490407389214e-07
+        }
+      }
+    },
+    "smap": {
+      "inputs": [
+        "smap_in_flow"
+      ],
+      "outputs": [
+        "smap_out_s"
+      ],
+      "note": "compute_s(flow[4,4,2]) identical input",
+      "cpu": {
+        "smap_out_s": {
+          "file": "cpu_smap_out_s.npy",
+          "shape": [
+            4,
+            4
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "smap_out_s": {
+          "file": "gpu_smap_out_s.npy",
+          "shape": [
+            4,
+            4
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "smap_out_s": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        }
+      }
+    },
+    "hessian": {
+      "inputs": [
+        "hessian_in_grey"
+      ],
+      "outputs": [
+        "hessian_out_gradx",
+        "hessian_out_grady",
+        "hessian_out_hessian"
+      ],
+      "note": "init_ica(grey[64,64],T16) identical input; GPU sobel feeds the on-device Hessian (chained, same root input)",
+      "cpu": {
+        "hessian_out_gradx": {
+          "file": "cpu_hessian_out_gradx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "hessian_out_grady": {
+          "file": "cpu_hessian_out_grady.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "hessian_out_hessian": {
+          "file": "cpu_hessian_out_hessian.npy",
+          "shape": [
+            4,
+            4,
+            2,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "hessian_out_gradx": {
+          "file": "gpu_hessian_out_gradx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "sobel@Apple M1 hessian@Apple M1"
+        },
+        "hessian_out_grady": {
+          "file": "gpu_hessian_out_grady.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "sobel@Apple M1 hessian@Apple M1"
+        },
+        "hessian_out_hessian": {
+          "file": "gpu_hessian_out_hessian.npy",
+          "shape": [
+            4,
+            4,
+            2,
+            2
+          ],
+          "device": "sobel@Apple M1 hessian@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "hessian_out_gradx": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        },
+        "hessian_out_grady": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        },
+        "hessian_out_hessian": {
+          "max_abs": 9.5367431640625e-07,
+          "max_rel": 4.2057694577190214e-07
+        }
+      }
+    },
+    "grad": {
+      "inputs": [
+        "grad_in_grey"
+      ],
+      "outputs": [
+        "grad_out_kerngrad",
+        "grad_out_sobel_gx",
+        "grad_out_sobel_gy",
+        "grad_out_sqrt",
+        "grad_out_gamma"
+      ],
+      "note": "kerngrad + sobel + sqrt/gamma of grey[64,64] identical input",
+      "cpu": {
+        "grad_out_kerngrad": {
+          "file": "cpu_grad_out_kerngrad.npy",
+          "shape": [
+            63,
+            63,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "grad_out_sobel_gx": {
+          "file": "cpu_grad_out_sobel_gx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "grad_out_sobel_gy": {
+          "file": "cpu_grad_out_sobel_gy.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "grad_out_sqrt": {
+          "file": "cpu_grad_out_sqrt.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "grad_out_gamma": {
+          "file": "cpu_grad_out_gamma.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "grad_out_kerngrad": {
+          "file": "gpu_grad_out_kerngrad.npy",
+          "shape": [
+            63,
+            63,
+            2
+          ],
+          "device": "kerngrad@Apple M1 sobel@Apple M1 sqrt@Apple M1 gamma@Apple M1"
+        },
+        "grad_out_sobel_gx": {
+          "file": "gpu_grad_out_sobel_gx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "kerngrad@Apple M1 sobel@Apple M1 sqrt@Apple M1 gamma@Apple M1"
+        },
+        "grad_out_sobel_gy": {
+          "file": "gpu_grad_out_sobel_gy.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "kerngrad@Apple M1 sobel@Apple M1 sqrt@Apple M1 gamma@Apple M1"
+        },
+        "grad_out_sqrt": {
+          "file": "gpu_grad_out_sqrt.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "kerngrad@Apple M1 sobel@Apple M1 sqrt@Apple M1 gamma@Apple M1"
+        },
+        "grad_out_gamma": {
+          "file": "gpu_grad_out_gamma.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "kerngrad@Apple M1 sobel@Apple M1 sqrt@Apple M1 gamma@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "grad_out_kerngrad": {
+          "max_abs": 2.9802322387695312e-08,
+          "max_rel": 0.00014863258026159333
+        },
+        "grad_out_sobel_gx": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        },
+        "grad_out_sobel_gy": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        },
+        "grad_out_sqrt": {
+          "max_abs": 1.1920928955078125e-07,
+          "max_rel": 1.3818324272542955e-07
+        },
+        "grad_out_gamma": {
+          "max_abs": 1.1920928955078125e-07,
+          "max_rel": 3.5583050974410714e-07
+        }
+      }
+    },
+    "resample": {
+      "inputs": [
+        "resample_in_grey"
+      ],
+      "outputs": [
+        "resample_out_down2",
+        "resample_out_pyr0",
+        "resample_out_pyr1",
+        "resample_out_pyr2",
+        "resample_out_upscaled_flow"
+      ],
+      "note": "gauss down2 + pyramid[1,2,2] + bilinup flow identical inputs",
+      "cpu": {
+        "resample_out_down2": {
+          "file": "cpu_resample_out_down2.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "resample_out_pyr0": {
+          "file": "cpu_resample_out_pyr0.npy",
+          "shape": [
+            10,
+            10
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "resample_out_pyr1": {
+          "file": "cpu_resample_out_pyr1.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "resample_out_pyr2": {
+          "file": "cpu_resample_out_pyr2.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "resample_out_upscaled_flow": {
+          "file": "cpu_resample_out_upscaled_flow.npy",
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "resample_out_down2": {
+          "file": "gpu_resample_out_down2.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "device": "resample.comp:gaussdown@Apple M1;resample.comp:gaussdown@Apple M1"
+        },
+        "resample_out_pyr0": {
+          "file": "gpu_resample_out_pyr0.npy",
+          "shape": [
+            10,
+            10
+          ],
+          "device": "resample.comp:gaussdown@Apple M1;resample.comp:gaussdown@Apple M1"
+        },
+        "resample_out_pyr1": {
+          "file": "gpu_resample_out_pyr1.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "device": "resample.comp:gaussdown@Apple M1;resample.comp:gaussdown@Apple M1"
+        },
+        "resample_out_pyr2": {
+          "file": "gpu_resample_out_pyr2.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "resample.comp:gaussdown@Apple M1;resample.comp:gaussdown@Apple M1"
+        },
+        "resample_out_upscaled_flow": {
+          "file": "gpu_resample_out_upscaled_flow.npy",
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "device": "resample.comp:gaussdown@Apple M1;resample.comp:gaussdown@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "resample_out_down2": {
+          "max_abs": 3.5762786865234375e-07,
+          "max_rel": 5.945925818183548e-07
+        },
+        "resample_out_pyr0": {
+          "max_abs": 3.5762786865234375e-07,
+          "max_rel": 5.408794916886654e-07
+        },
+        "resample_out_pyr1": {
+          "max_abs": 3.5762786865234375e-07,
+          "max_rel": 5.945925818183548e-07
+        },
+        "resample_out_pyr2": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        },
+        "resample_out_upscaled_flow": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        }
+      }
+    },
+    "kernels": {
+      "inputs": [
+        "kernels_in_raw"
+      ],
+      "outputs": [
+        "kernels_out_covs"
+      ],
+      "note": "estimate_kernels(raw[64,64]) identical input",
+      "cpu": {
+        "kernels_out_covs": {
+          "file": "cpu_kernels_out_covs.npy",
+          "shape": [
+            32,
+            32,
+            2,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "kernels_out_covs": {
+          "file": "gpu_kernels_out_covs.npy",
+          "shape": [
+            32,
+            32,
+            2,
+            2
+          ],
+          "device": "Apple M1 ['gat.comp:op0-GAT', 'grad.comp:kerngrad']"
+        }
+      },
+      "cpu_vs_gpu": {
+        "kernels_out_covs": {
+          "max_abs": 1.4007091522216797e-05,
+          "max_rel": 0.0011942773018775192
+        }
+      }
+    },
+    "align": {
+      "inputs": [
+        "align_in_ref_grey",
+        "align_in_mov_grey"
+      ],
+      "outputs": [
+        "align_out_flow"
+      ],
+      "note": "align() 128px FFT-grey pair identical inputs",
+      "cpu": {
+        "align_out_flow": {
+          "file": "cpu_align_out_flow.npy",
+          "shape": [
+            8,
+            8,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "align_out_flow": {
+          "file": "gpu_align_out_flow.npy",
+          "shape": [
+            8,
+            8,
+            2
+          ],
+          "device": "resample.comp:gaussdown;resample.comp:gaussdown;corr.comp:L2-l2@Apple M1;ica.comp:refine-l2@Apple M1;resample.comp:bilinup;corr.comp:L2-l1@Apple M1;ica.comp:refine-l1@Apple M1;resample.comp:bilinup;align.comp:L1-l0@Apple M1;ica.comp:refine-l0@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "align_out_flow": {
+          "max_abs": 3.546476364135742e-06,
+          "max_rel": 2.654607872733272e-05
+        }
+      }
+    },
+    "l2": {
+      "inputs": [
+        "l2_in_ref_lvl",
+        "l2_in_moving_lvl",
+        "l2_in_flow_init"
+      ],
+      "outputs": [
+        "l2_out_flow"
+      ],
+      "note": "L2 corr on coarsest lvl identical inputs (tile tensors rebuilt from the l2_in_ref_lvl fixture bytes with the same torch ops)",
+      "cpu": {
+        "l2_out_flow": {
+          "file": "cpu_l2_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "l2_out_flow": {
+          "file": "gpu_l2_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "l2_out_flow": {
+          "max_abs": 0.0,
+          "max_rel": 0.0
+        }
+      }
+    },
+    "ica": {
+      "inputs": [
+        "ica_in_ref_lvl",
+        "ica_in_mov_lvl",
+        "ica_in_flow_init"
+      ],
+      "outputs": [
+        "ica_out_flow"
+      ],
+      "note": "align_lvl_ica on coarsest lvl identical inputs (CPU grads feed the on-device refine, isolating that op)",
+      "cpu": {
+        "ica_out_flow": {
+          "file": "cpu_ica_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "ica_out_flow": {
+          "file": "gpu_ica_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "ica_out_flow": {
+          "max_abs": 1.7881393432617188e-07,
+          "max_rel": 2.781600417907647e-07
+        }
+      }
+    },
+    "robustness": {
+      "inputs": [
+        "robustness_in_ref_raw",
+        "robustness_in_comp_raw",
+        "robustness_in_flow"
+      ],
+      "outputs": [
+        "robustness_out_r"
+      ],
+      "note": "compute_robustness(128px pair + fixture flow) identical inputs",
+      "cpu": {
+        "robustness_out_r": {
+          "file": "cpu_robustness_out_r.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "robustness_out_r": {
+          "file": "gpu_robustness_out_r.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "device": "guide@Apple M1;stats@Apple M1|robustness.comp:guide@Apple M1;robustness.comp:stats@Apple M1;robustness.comp:warp@Apple M1;robustness.comp:dsigma@Apple M1;robustness.comp:smap@Apple M1;robustness.comp:thresh@Apple M1;robustness.comp:min@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "robustness_out_r": {
+          "max_abs": 8.979439735412598e-05,
+          "max_rel": 0.01140341683555428
+        }
+      }
+    },
+    "merge": {
+      "inputs": [
+        "merge_in_comp_raw",
+        "merge_in_flow",
+        "merge_in_covs",
+        "merge_in_r"
+      ],
+      "outputs": [
+        "merge_out_num",
+        "merge_out_den"
+      ],
+      "note": "merge(comp[128,128]) identical inputs -> num/den[256,256,3]",
+      "cpu": {
+        "merge_out_num": {
+          "file": "cpu_merge_out_num.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        },
+        "merge_out_den": {
+          "file": "cpu_merge_out_den.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "merge_out_num": {
+          "file": "gpu_merge_out_num.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "device": "('Apple M1', 'merge.comp:accumulate@Apple M1')"
+        },
+        "merge_out_den": {
+          "file": "gpu_merge_out_den.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "device": "('Apple M1', 'merge.comp:accumulate@Apple M1')"
+        }
+      },
+      "cpu_vs_gpu": {
+        "merge_out_num": {
+          "max_abs": 8.821487426757812e-06,
+          "max_rel": 0.00012705174556019544
+        },
+        "merge_out_den": {
+          "max_abs": 1.728534698486328e-05,
+          "max_rel": 0.000127124241748294
+        }
+      }
+    },
+    "endtoend": {
+      "inputs": [
+        "endtoend_in_burst"
+      ],
+      "outputs": [
+        "endtoend_out_image"
+      ],
+      "note": "main(burst[3,256,256],s2) identical inputs -> img[512,512,3]; both-finite maxabs 0.3285 on 8 px at x<8 (known gpu_align circular-pad vs CPU truncation border convention); interior max 6.5e-3; NaN-mask differs on 6 px (53 vs 59 NaN pixels)",
+      "cpu": {
+        "endtoend_out_image": {
+          "file": "cpu_endtoend_out_image.npy",
+          "shape": [
+            512,
+            512,
+            3
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "endtoend_out_image": {
+          "file": "gpu_endtoend_out_image.npy",
+          "shape": [
+            512,
+            512,
+            3
+          ],
+          "device": "Apple M1 (see report)"
+        }
+      },
+      "cpu_vs_gpu": {
+        "endtoend_out_image": {
+          "max_abs": 0.3284860849380493,
+          "max_rel": 328486084938.0493
+        }
+      }
+    },
+    "grey_fft_crop": {
+      "inputs": [
+        "grey_fft_crop_in_raw"
+      ],
+      "outputs": [
+        "grey_fft_crop_out_lowpass"
+      ],
+      "note": "FFT lowpass burst512-crop identical input",
+      "cpu": {
+        "grey_fft_crop_out_lowpass": {
+          "file": "cpu_grey_fft_crop_out_lowpass.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "grey_fft_crop_out_lowpass": {
+          "file": "gpu_grey_fft_crop_out_lowpass.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "device": "Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "grey_fft_crop_out_lowpass": {
+          "max_abs": 2.9802322387695312e-08,
+          "max_rel": 6.956853062165904e-06
+        }
+      }
+    },
+    "robustness_crop": {
+      "inputs": [
+        "robustness_crop_in_comp",
+        "robustness_crop_in_means",
+        "robustness_crop_in_var",
+        "robustness_crop_in_flow",
+        "robustness_crop_in_sig",
+        "robustness_crop_in_d"
+      ],
+      "outputs": [
+        "robustness_crop_out_r"
+      ],
+      "note": "compute_robustness(burst512-crop) identical inputs",
+      "cpu": {
+        "robustness_crop_out_r": {
+          "file": "cpu_robustness_crop_out_r.npy",
+          "shape": [
+            256,
+            256
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "robustness_crop_out_r": {
+          "file": "gpu_robustness_crop_out_r.npy",
+          "shape": [
+            256,
+            256
+          ],
+          "device": "guide@Apple M1;stats@Apple M1|robustness.comp:guide@Apple M1;robustness.comp:stats@Apple M1;robustness.comp:warp@Apple M1;robustness.comp:dsigma@Apple M1;robustness.comp:smap@Apple M1;robustness.comp:thresh@Apple M1;robustness.comp:min@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "robustness_crop_out_r": {
+          "max_abs": 0.00012624263763427734,
+          "max_rel": 0.00021058455298951495
+        }
+      }
+    },
+    "align_crop": {
+      "inputs": [
+        "align_crop_in_ref_grey",
+        "align_crop_in_mov_grey"
+      ],
+      "outputs": [
+        "align_crop_out_flow"
+      ],
+      "note": "align() burst512-crop identical inputs (final flow only; per-level flows stay GPU-SKIP)",
+      "cpu": {
+        "align_crop_out_flow": {
+          "file": "cpu_align_crop_out_flow.npy",
+          "shape": [
+            32,
+            32,
+            2
+          ],
+          "cpu_vs_fixture": {
+            "max_abs": 0.0,
+            "max_rel": 0.0
+          }
+        }
+      },
+      "gpu": {
+        "align_crop_out_flow": {
+          "file": "gpu_align_crop_out_flow.npy",
+          "shape": [
+            32,
+            32,
+            2
+          ],
+          "device": "resample.comp:gaussdown;resample.comp:gaussdown;resample.comp:gaussdown;corr.comp:L2-l3@Apple M1;ica.comp:refine-l3@Apple M1;resample.comp:bilinup;corr.comp:L2-l2@Apple M1;ica.comp:refine-l2@Apple M1;resample.comp:bilinup;corr.comp:L2-l1@Apple M1;ica.comp:refine-l1@Apple M1;resample.comp:bilinup;align.comp:L1-l0@Apple M1;ica.comp:refine-l0@Apple M1"
+        }
+      },
+      "cpu_vs_gpu": {
+        "align_crop_out_flow": {
+          "max_abs": 1.1533498764038086e-05,
+          "max_rel": 0.08478739822311779
+        }
+      }
+    }
+  }
+}

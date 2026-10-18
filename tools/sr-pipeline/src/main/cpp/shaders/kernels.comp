@@ -1,0 +1,118 @@
+#version 450
+// 1:1 port of kernels.py cpu_estimate_kernel + compute_k + hard_threshold /
+// linear (Alg.5 ComputeKernelCovariance), op-for-op identical to the proven
+// Vulkan-port decomposition (kernels.comp, dual parity there).
+// GAT/sqrt/gamma preprocess and the
+// torch conv2d gradients stay on the host in step 1; structure tensor,
+// eigen-decomposition (linalg.py get_eigen_elmts_2x2, inlined in CPU order),
+// kernel shaping, and covariance build run here, one invocation per grey
+// pixel. is_iso path writes the isotropicfallback, as on CPU.
+//
+// Bindings: grads = full_grads vec2 ((gy-1)*(gx-1)), cov = covs vec4
+// (xx,xy,yy,unused) at grey resolution, kparams = shaping scalars.
+// Push overlay: pad[1] = gradW, pad[2] = gradH, pad[3] = covW.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Grads { vec2 grads[]; };
+layout(set = 0, binding = 1) buffer Cov { vec4 cov[]; };
+layout(set = 0, binding = 2) readonly buffer KParams {
+  float k_detail; float k_denoise; float D_th; float D_tr;
+  float k_stretch; float k_shrink; uint selectionLaw; uint isIso;
+};
+
+// get_real_polyroots_2: |r1| >= |r2| ordering, delta clamped at 0.
+void polyroots2(float a, float b, float c, out vec2 roots) {
+  float delta = max(b * b - 4.0 * a * c, 0.0);
+  float r1 = (-b + sqrt(delta)) / (2.0 * a);
+  float r2 = (-b - sqrt(delta)) / (2.0 * a);
+  roots = (abs(r1) >= abs(r2)) ? vec2(r1, r2) : vec2(r2, r1);
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint gradW = p.pad[1];
+  uint gradH = p.pad[2];
+  uint covW = p.pad[3];
+  uint iy = i / covW;
+  uint ix = i % covW;
+
+  if (isIso != 0u) {
+    cov[i] = vec4(k_detail, 0.0, k_detail, 0.0);
+    return;
+  }
+
+  // 2x2 structure tensor over the gradient window (CPU accumulation order).
+  float t00 = 0.0, t01 = 0.0, t11 = 0.0;
+  for (uint dy = 0u; dy < 2u; dy++) {
+    for (uint dx = 0u; dx < 2u; dx++) {
+      int x = int(ix) - 1 + int(dx);
+      int y = int(iy) - 1 + int(dy);
+      if (y >= 0 && y < int(gradH) && x >= 0 && x < int(gradW)) {
+        vec2 g = grads[uint(y) * gradW + uint(x)];
+        t00 += g.x * g.x;
+        t01 += g.x * g.y;
+        t11 += g.y * g.y;
+      }
+    }
+  }
+
+  // get_eigen_val_2x2 + get_eigen_vect_2x2 (symmetric 2x2, CPU branches).
+  vec2 l;
+  polyroots2(1.0, -(t00 + t11), t00 * t11 - t01 * t01, l);
+  vec2 e1, e2;
+  if (t01 == 0.0 && t00 == t11) {
+    e1 = vec2(1.0, 0.0);
+    e2 = vec2(0.0, 1.0);
+  } else {
+    float e1x = t00 + t01 - l.y;
+    float e1y = t01 + t11 - l.y;
+    if (e1x == 0.0) {
+      e1 = vec2(0.0, 1.0);
+      e2 = vec2(1.0, 0.0);
+    } else if (e1y == 0.0) {
+      e1 = vec2(1.0, 0.0);
+      e2 = vec2(0.0, 1.0);
+    } else {
+      float nrm = sqrt(e1x * e1x + e1y * e1y);
+      e1x /= nrm;
+      e1y /= nrm;
+      float sgn = (e1x >= 0.0) ? 1.0 : -1.0; // copysign(1, e1x)
+      e1 = vec2(e1x, e1y);
+      e2 = vec2(-e1y * sgn, abs(e1x));
+    }
+  }
+
+  // compute_k (CPU: l1 may be ~0; max() guards the sqrt, identical on
+  // valid PSD inputs where the CPU never sees a negative).
+  float A = 1.0 + sqrt(max(l.x - l.y, 0.0) / max(l.x + l.y, 1e-30));
+  float D = clamp(1.0 - sqrt(max(l.x, 0.0)) / D_tr + D_th, 0.0, 1.0);
+  float k1s, k2s;
+  if (selectionLaw == 0u) { // hard_threshold (NaN falls to else, as on CPU)
+    if (A > 1.95) {
+      k1s = 1.0 / k_shrink;
+      k2s = k_stretch;
+    } else {
+      k1s = 1.0;
+      k2s = 1.0;
+    }
+  } else { // linear
+    k1s = (2.0 - A) + (A - 1.0) / k_shrink;
+    k2s = (2.0 - A) + (A - 1.0) * k_stretch;
+  }
+  float k1 = k_detail * ((1.0 - D) * k1s + D * k_denoise);
+  float k2 = k_detail * ((1.0 - D) * k2s + D * k_denoise);
+  float k1sq = k1 * k1;
+  float k2sq = k2 * k2;
+  cov[i] = vec4(k1sq * e1.x * e1.x + k2sq * e2.x * e2.x,
+                k1sq * e1.x * e1.y + k2sq * e2.x * e2.y,
+                k1sq * e1.y * e1.y + k2sq * e2.y * e2.y, 0.0);
+}

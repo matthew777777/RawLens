@@ -1,0 +1,341 @@
+#version 450
+// Menon2007 (DDFAPD) demosaicing grey path, RGGB only (Vulkan 1.2,
+// MoltenVK-safe). Line-by-line port of colour_demosaicing menon2007.py
+// (DDFAPD, refining on) plus the channel mean of
+// utils_image.demosaic_to_grey, op-for-op identical to the proven
+// Vulkan-port decomposition (demosaic.comp ops 0-11, dual parity there).
+// No shared memory, no float64: the CPU reference runs float64
+// throughout, so values are float-bounded (measured), while
+// masks/comparisons/selects are integer-exact.
+//
+// Verified building blocks (host-side probes, real data):
+// - RGGB masks procedural from pixel parity (== masks_CFA_Bayer).
+// - All 1D kernels symmetric: convolve == correlate; mirror boundary
+//   m(i,n) = -i (left) / 2n-2-i (right); np.pad 'reflect' shifts use the
+//   same right-edge map.
+// - h_1 outside-in accumulation == scipy float64; h_0 linear l2r;
+//   k_b center tap is 0 (0.5*(l+r), any order exact); FIR (1/3 taps)
+//   matches no simple order (measured).
+// - 2D sparse k is flipped by scipy convolve: taps are pre-flipped
+//   host-side (plus flipped-transpose), the shader correlates.
+// Push overlay: pad[0]=op, pad[1]=W, pad[2]=H.
+// Buffers: 0:A in float, 1:B..7:Hh float, 8:Rc 9:Gc 10:Bc vec2 banks.
+// Ops:
+//   0 green   A=CFA -> B=G_H, C=G_V.
+//   1 chroma  A=CFA, B=G_H, C=G_V -> D=D_H, E=D_V.
+//   2 decide  A=D_H, B=D_V, C=taps(50 pre-flipped) -> D=M.
+//   3 gselect A=G_H, B=G_V, C=M -> D=G.
+//   4 cnvkb   A=CFA, B=G -> Rc/Gc/Bc = (h,v) k_b convs of R0/G/B0.
+//   5 atgreen A=CFA, B=G, Rc/Gc/Bc -> G=R1a, Hh=B1a (at-green updates).
+//   6 cnvkb2  A=R1a, B=B1a -> Rc/Bc refreshed (Gc reused from op 4).
+//   7 cross   A=R1a, B=B1a, C=M, Rc/Gc/Bc -> G=R1, Hh=B1 (M-gated cross).
+//   8 refA    A=R1, B=G, C=B1, D=M -> E=R_G_m, F=B_G_m (FIR directional).
+//   9 refB    A=R1, B=G, C=B1, D=R_G_m, E=B_G_m -> F=R2, G=B2, Hh=G2.
+//   10 refC   A=R2, B=B2, C=G2, D=M -> E=R3, F=B3.
+//   11 grey   A=R3, B=B3, C=G2 -> D=(R+G+B)/3.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) buffer B { float B_[]; };
+layout(set = 0, binding = 2) buffer C { float C_[]; };
+layout(set = 0, binding = 3) buffer D { float D_[]; };
+layout(set = 0, binding = 4) buffer E { float E_[]; };
+layout(set = 0, binding = 5) buffer F { float F_[]; };
+layout(set = 0, binding = 6) buffer G { float G_[]; };
+layout(set = 0, binding = 7) buffer Hh { float H_[]; };
+layout(set = 0, binding = 8) buffer Rc { vec2 Rc_[]; };
+layout(set = 0, binding = 9) buffer Gc { vec2 Gc_[]; };
+layout(set = 0, binding = 10) buffer Bc { vec2 Bc_[]; };
+
+int mirr(int i, int n) {
+  if (i < 0) return -i;
+  if (i >= n) return 2 * n - 2 - i;
+  return i;
+}
+bool isR(uint x, uint y) { return ((x & 1u) == 0u) && ((y & 1u) == 0u); }
+bool isG(uint x, uint y) { return (((x + y) & 1u) == 1u); }
+bool isB(uint x, uint y) { return ((x & 1u) == 1u) && ((y & 1u) == 1u); }
+
+// h_0 linear-l2r + h_1 outside-in closed forms (verified vs scipy).
+float greenH(uint y, uint x, uint W, int iW) {
+  if (isG(x, y)) return A_[y * W + x];
+  int xx = int(x);
+  float t0 = A_[y * W + uint(mirr(xx - 2, iW))];
+  float t1 = A_[y * W + uint(mirr(xx - 1, iW))];
+  float t2 = A_[y * W + x];
+  float t3 = A_[y * W + uint(mirr(xx + 1, iW))];
+  float t4 = A_[y * W + uint(mirr(xx + 2, iW))];
+  float h0 = (((0.0 * t0 + 0.5 * t1) + 0.0 * t2) + 0.5 * t3) + 0.0 * t4;
+  float h1 = ((((-0.25) * t0 + (-0.25) * t4) + 0.0 * t1) + 0.0 * t3)
+              + 0.5 * t2;
+  return h0 + h1;
+}
+float greenV(uint y, uint x, uint W, int iH) {
+  if (isG(x, y)) return A_[y * W + x];
+  int yy = int(y);
+  float t0 = A_[uint(mirr(yy - 2, iH)) * W + x];
+  float t1 = A_[uint(mirr(yy - 1, iH)) * W + x];
+  float t2 = A_[y * W + x];
+  float t3 = A_[uint(mirr(yy + 1, iH)) * W + x];
+  float t4 = A_[uint(mirr(yy + 2, iH)) * W + x];
+  float h0 = (((0.0 * t0 + 0.5 * t1) + 0.0 * t2) + 0.5 * t3) + 0.0 * t4;
+  float h1 = ((((-0.25) * t0 + (-0.25) * t4) + 0.0 * t1) + 0.0 * t3)
+              + 0.5 * t2;
+  return h0 + h1;
+}
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  uint op = p.pad[0];
+  uint W = p.pad[1];
+  uint H = p.pad[2];
+  uint y = i / W;
+  uint x = i % W;
+  int yy = int(y);
+  int xx = int(x);
+  int iH = int(H);
+  int iW = int(W);
+
+  if (op == 0u) {
+    B_[i] = greenH(y, x, W, iW);
+    C_[i] = greenV(y, x, W, iH);
+  } else if (op == 1u) {
+    // C_H/C_V are sparse: nonzero only at R/B pixels (R-G_H etc.).
+    float cfa = A_[i];
+    float ch = 0.0;
+    if (isR(x, y) || isB(x, y)) ch = cfa - B_[i];
+    float cv = 0.0;
+    if (isR(x, y) || isB(x, y)) cv = cfa - C_[i];
+    uint xs = uint(mirr(xx + 2, iW));
+    float cfas = A_[y * W + xs];
+    float chs = 0.0;
+    if (isR(xs, y) || isB(xs, y)) chs = cfas - greenH(y, xs, W, iW);
+    uint ys = uint(mirr(yy + 2, iH));
+    float cfav = A_[ys * W + x];
+    float cvs = 0.0;
+    if (isR(x, ys) || isB(x, ys)) cvs = cfav - greenV(ys, x, W, iH);
+    D_[i] = abs(ch - chs);
+    E_[i] = abs(cv - cvs);
+  } else if (op == 2u) {
+    // Sparse flipped correlate (constant 0), row-major l2r; taps in C_.
+    float dh = 0.0;
+    float dv = 0.0;
+    for (int ky = -2; ky <= 2; ky++) {
+      int yi = yy + ky;
+      for (int kx = -2; kx <= 2; kx++) {
+        int xi = xx + kx;
+        float w = C_[uint(ky + 2) * 5u + uint(kx + 2)];
+        float v = C_[25u + uint(ky + 2) * 5u + uint(kx + 2)];
+        if (yi >= 0 && yi < iH && xi >= 0 && xi < iW) {
+          dh += A_[uint(yi) * W + uint(xi)] * w;
+          dv += B_[uint(yi) * W + uint(xi)] * v;
+        }
+      }
+    }
+    D_[i] = (dv >= dh) ? 1.0 : 0.0;
+  } else if (op == 3u) {
+    D_[i] = (C_[i] == 1.0) ? A_[i] : B_[i];
+  } else if (op == 4u) {
+    // k_b conv bank of R0/G/B0 (R0/B0 from CFA in-shader).
+    float rL = isR(uint(mirr(xx - 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx - 1, iW))] : 0.0;
+    float rR = isR(uint(mirr(xx + 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx + 1, iW))] : 0.0;
+    float rU = isR(x, uint(mirr(yy - 1, iH)))
+               ? A_[uint(mirr(yy - 1, iH)) * W + x] : 0.0;
+    float rD = isR(x, uint(mirr(yy + 1, iH)))
+               ? A_[uint(mirr(yy + 1, iH)) * W + x] : 0.0;
+    float bL = isB(uint(mirr(xx - 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx - 1, iW))] : 0.0;
+    float bR = isB(uint(mirr(xx + 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx + 1, iW))] : 0.0;
+    float bU = isB(x, uint(mirr(yy - 1, iH)))
+               ? A_[uint(mirr(yy - 1, iH)) * W + x] : 0.0;
+    float bD = isB(x, uint(mirr(yy + 1, iH)))
+               ? A_[uint(mirr(yy + 1, iH)) * W + x] : 0.0;
+    float gL = B_[y * W + uint(mirr(xx - 1, iW))];
+    float gR = B_[y * W + uint(mirr(xx + 1, iW))];
+    float gU = B_[uint(mirr(yy - 1, iH)) * W + x];
+    float gD = B_[uint(mirr(yy + 1, iH)) * W + x];
+    Rc_[i] = vec2(0.5 * (rL + rR), 0.5 * (rU + rD));
+    Gc_[i] = vec2(0.5 * (gL + gR), 0.5 * (gU + gD));
+    Bc_[i] = vec2(0.5 * (bL + bR), 0.5 * (bU + bD));
+  } else if (op == 5u) {
+    // At-green updates only (cross needs refreshed convs: see op 7).
+    float cfa = A_[i];
+    float g = B_[i];
+    float r = isR(x, y) ? cfa : 0.0;
+    float b = isB(x, y) ? cfa : 0.0;
+    bool rr = (yy & 1) == 0;
+    bool br = !rr;
+    if (isG(x, y) && rr) r = g + Rc_[i].x - Gc_[i].x;
+    if (isG(x, y) && br) r = g + Rc_[i].y - Gc_[i].y;
+    if (isG(x, y) && br) b = g + Bc_[i].x - Gc_[i].x;
+    if (isG(x, y) && rr) b = g + Bc_[i].y - Gc_[i].y;
+    G_[i] = r;
+    H_[i] = b;
+  } else if (op == 6u) {
+    // Refreshed k_b bank of the at-green-updated R1a/B1a (Gc reused).
+    float rL = A_[y * W + uint(mirr(xx - 1, iW))];
+    float rR = A_[y * W + uint(mirr(xx + 1, iW))];
+    float rU = A_[uint(mirr(yy - 1, iH)) * W + x];
+    float rD = A_[uint(mirr(yy + 1, iH)) * W + x];
+    float bL = B_[y * W + uint(mirr(xx - 1, iW))];
+    float bR = B_[y * W + uint(mirr(xx + 1, iW))];
+    float bU = B_[uint(mirr(yy - 1, iH)) * W + x];
+    float bD = B_[uint(mirr(yy + 1, iH)) * W + x];
+    Rc_[i] = vec2(0.5 * (rL + rR), 0.5 * (rU + rD));
+    Bc_[i] = vec2(0.5 * (bL + bR), 0.5 * (bU + bD));
+  } else if (op == 7u) {
+    // M-gated cross updates on the refreshed banks.
+    float r = A_[i];
+    float b = B_[i];
+    float m = C_[i];
+    bool rr = (yy & 1) == 0;
+    bool br = !rr;
+    if (br && isB(x, y)) {
+      if (m == 1.0) r = b + Rc_[i].x - Bc_[i].x;
+      else r = b + Rc_[i].y - Bc_[i].y;
+    }
+    if (rr && isR(x, y)) {
+      if (m == 1.0) b = r + Bc_[i].x - Rc_[i].x;
+      else b = r + Bc_[i].y - Rc_[i].y;
+    }
+    G_[i] = r;
+    H_[i] = b;
+  } else if (op == 8u) {
+    // Refining A: FIR directional convs of R_G/B_G, masked by M/Rm/Bm.
+    float r = A_[i];
+    float g = B_[i];
+    float b = C_[i];
+    float m = D_[i];
+    float rg0 = r - g;
+    float bg0 = b - g;
+    // horizontal FIR at (y,x): neighbors from input buffers.
+    float rgL = A_[y * W + uint(mirr(xx - 1, iW))]
+              - B_[y * W + uint(mirr(xx - 1, iW))];
+    float rgR = A_[y * W + uint(mirr(xx + 1, iW))]
+              - B_[y * W + uint(mirr(xx + 1, iW))];
+    float bgL = C_[y * W + uint(mirr(xx - 1, iW))]
+              - B_[y * W + uint(mirr(xx - 1, iW))];
+    float bgR = C_[y * W + uint(mirr(xx + 1, iW))]
+              - B_[y * W + uint(mirr(xx + 1, iW))];
+    float rgU = A_[uint(mirr(yy - 1, iH)) * W + x]
+              - B_[uint(mirr(yy - 1, iH)) * W + x];
+    float rgD = A_[uint(mirr(yy + 1, iH)) * W + x]
+              - B_[uint(mirr(yy + 1, iH)) * W + x];
+    float bgU = C_[uint(mirr(yy - 1, iH)) * W + x]
+              - B_[uint(mirr(yy - 1, iH)) * W + x];
+    float bgD = C_[uint(mirr(yy + 1, iH)) * W + x]
+              - B_[uint(mirr(yy + 1, iH)) * W + x];
+    float w3 = 1.0 / 3.0;
+    float firh_r = (rgL * w3 + rg0 * w3) + rgR * w3;
+    float firv_r = (rgU * w3 + rg0 * w3) + rgD * w3;
+    float firh_b = (bgL * w3 + bg0 * w3) + bgR * w3;
+    float firv_b = (bgU * w3 + bg0 * w3) + bgD * w3;
+    float rgm = 0.0;
+    if (isR(x, y)) rgm = (m == 1.0) ? firh_r : firv_r;
+    float bgm = 0.0;
+    if (isB(x, y)) bgm = (m == 1.0) ? firh_b : firv_b;
+    E_[i] = rgm;
+    F_[i] = bgm;
+  } else if (op == 9u) {
+    // Refining B: G update, then R/B at-green updates with k_b convs.
+    float r = A_[i];
+    float g = B_[i];
+    float b = C_[i];
+    float rgm = D_[i];
+    float bgm = E_[i];
+    if (isR(x, y)) g = r - rgm;
+    if (isB(x, y)) g = b - bgm;
+    bool br = (yy & 1) == 1;
+    bool bc = (xx & 1) == 1;
+    bool rc = !bc;
+    // k_b convs of R_G = R-G2 / B_G = B-G2 with the updated green field:
+    // G2[n] = R[n]-RGm[n] (R locs) / B[n]-BGm[n] (B locs) / G[n] (G locs).
+    float rL = isR(uint(mirr(xx - 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx - 1, iW))] : 0.0;
+    float rR = isR(uint(mirr(xx + 1, iW)), y)
+               ? A_[y * W + uint(mirr(xx + 1, iW))] : 0.0;
+    float rU = isR(x, uint(mirr(yy - 1, iH)))
+               ? A_[uint(mirr(yy - 1, iH)) * W + x] : 0.0;
+    float rD = isR(x, uint(mirr(yy + 1, iH)))
+               ? A_[uint(mirr(yy + 1, iH)) * W + x] : 0.0;
+    float bL = isB(uint(mirr(xx - 1, iW)), y)
+               ? C_[y * W + uint(mirr(xx - 1, iW))] : 0.0;
+    float bR = isB(uint(mirr(xx + 1, iW)), y)
+               ? C_[y * W + uint(mirr(xx + 1, iW))] : 0.0;
+    float bU = isB(x, uint(mirr(yy - 1, iH)))
+               ? C_[uint(mirr(yy - 1, iH)) * W + x] : 0.0;
+    float bD = isB(x, uint(mirr(yy + 1, iH)))
+               ? C_[uint(mirr(yy + 1, iH)) * W + x] : 0.0;
+    // Neighbor G2 values (updated green field).
+    uint xL = uint(mirr(xx - 1, iW));
+    uint xR = uint(mirr(xx + 1, iW));
+    uint yU = uint(mirr(yy - 1, iH));
+    uint yD = uint(mirr(yy + 1, iH));
+    float g2L = isR(xL, y) ? (A_[y * W + xL] - D_[y * W + xL])
+              : (isB(xL, y) ? (C_[y * W + xL] - E_[y * W + xL])
+                 : B_[y * W + xL]);
+    float g2R = isR(xR, y) ? (A_[y * W + xR] - D_[y * W + xR])
+              : (isB(xR, y) ? (C_[y * W + xR] - E_[y * W + xR])
+                 : B_[y * W + xR]);
+    float g2U = isR(x, yU) ? (A_[yU * W + x] - D_[yU * W + x])
+              : (isB(x, yU) ? (C_[yU * W + x] - E_[yU * W + x])
+                 : B_[yU * W + x]);
+    float g2D = isR(x, yD) ? (A_[yD * W + x] - D_[yD * W + x])
+              : (isB(x, yD) ? (C_[yD * W + x] - E_[yD * W + x])
+                 : B_[yD * W + x]);
+    float rg_h = 0.5 * ((rL - g2L) + (rR - g2R));
+    float rg_v = 0.5 * ((rU - g2U) + (rD - g2D));
+    float bg_h = 0.5 * ((bL - g2L) + (bR - g2R));
+    float bg_v = 0.5 * ((bU - g2U) + (bD - g2D));
+    // Refining updates R@G in blue rows then blue columns, B@G in red
+    // rows then red columns (row/col green sets are disjoint; the carried
+    // R_G_m/B_G_m fallbacks are never read back, only the fresh cnvs).
+    if (isG(x, y) && br) r = g + rg_v;
+    if (isG(x, y) && bc) r = g + rg_h;
+    if (isG(x, y) && !br) b = g + bg_v;
+    if (isG(x, y) && rc) b = g + bg_h;
+    F_[i] = r;
+    G_[i] = b;
+    H_[i] = g;
+  } else if (op == 10u) {
+    // Refining C: R_B directional convs, sequential R then B update.
+    float r = A_[i];
+    float b = B_[i];
+    float g = C_[i];
+    float m = D_[i];
+    float rb0 = r - b;
+    float rbL = (A_[y * W + uint(mirr(xx - 1, iW))]
+                 - B_[y * W + uint(mirr(xx - 1, iW))]);
+    float rbR = (A_[y * W + uint(mirr(xx + 1, iW))]
+                 - B_[y * W + uint(mirr(xx + 1, iW))]);
+    float rbU = (A_[uint(mirr(yy - 1, iH)) * W + x]
+                 - B_[uint(mirr(yy - 1, iH)) * W + x]);
+    float rbD = (A_[uint(mirr(yy + 1, iH)) * W + x]
+                 - B_[uint(mirr(yy + 1, iH)) * W + x]);
+    float w3 = 1.0 / 3.0;
+    float firh = (rbL * w3 + rb0 * w3) + rbR * w3;
+    float firv = (rbU * w3 + rb0 * w3) + rbD * w3;
+    float rbm = 0.0;
+    if (isB(x, y)) rbm = (m == 1.0) ? firh : firv;
+    if (isB(x, y)) r = b + rbm;
+    float rbm2 = 0.0;
+    if (isR(x, y)) rbm2 = (m == 1.0) ? firh : firv;
+    if (isR(x, y)) b = r - rbm2;
+    E_[i] = r;
+    F_[i] = b;
+  } else if (op == 11u) {
+    D_[i] = (A_[i] + B_[i] + C_[i]) / 3.0;
+  }
+}

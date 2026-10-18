@@ -1,0 +1,13 @@
+#version 450
+// sr-pipeline Phase-1 passthrough stub: writes zeros to a storage buffer.
+// Vulkan 1.2, no extensions required.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) buffer OutBuf {
+  uint data[];
+} outBuf;
+
+void main() {
+  outBuf.data[gl_GlobalInvocationID.x] = 0u;
+}

@@ -1,0 +1,29 @@
+#version 450
+// Elementwise divide (utils.divide: num /= den under errstate ignore),
+// op-for-op identical to the proven Vulkan-port decomposition
+// (divide.comp, dual parity there).
+// One invocation per element. IEEE division is correctly rounded, so with
+// identical float32 inputs this is bit-exact vs numpy, including 0/0 -> NaN
+// and x/0 -> +/-Inf propagation (sign of zero preserved by the hardware,
+// as on CPU). No FMA, no reduction order: nothing to bound.
+//
+// Buffers: A=num in, B=den in, C=num/den out (copied back over num).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float A_[]; };
+layout(set = 0, binding = 1) readonly buffer B { float B_[]; };
+layout(set = 0, binding = 2) buffer C { float C_[]; };
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= p.pixelCount) return;
+  C_[i] = A_[i] / B_[i];
+}

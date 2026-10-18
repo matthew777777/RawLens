@@ -1,0 +1,689 @@
+{
+  "seed": 0,
+  "stages": {
+    "gat": {
+      "files": {
+        "in_raw": {
+          "file": "gat_in_raw.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        },
+        "out_vst": {
+          "file": "gat_out_vst.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "gat(raw[32,32]) -> vst[32,32]"
+    },
+    "decimate": {
+      "files": {
+        "in_raw": {
+          "file": "decimate_in_raw.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        },
+        "out_grey": {
+          "file": "decimate_out_grey.npy",
+          "shape": [
+            16,
+            16
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "decimating raw[32,32] -> grey[16,16]"
+    },
+    "grey_fft": {
+      "files": {
+        "in_raw": {
+          "file": "grey_fft_in_raw.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        },
+        "out_lowpass": {
+          "file": "grey_fft_out_lowpass.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "FFT lowpass raw[32,32] -> grey[32,32]"
+    },
+    "grey_fft_crop": {
+      "files": {
+        "in_raw": {
+          "file": "grey_fft_crop_in_raw.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "out_lowpass": {
+          "file": "grey_fft_crop_out_lowpass.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "FFT lowpass burst512-crop -> grey[512,512] (crop parity)"
+    },
+    "demosaic": {
+      "files": {
+        "in_cfa": {
+          "file": "demosaic_in_cfa.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        },
+        "out_grey": {
+          "file": "demosaic_out_grey.npy",
+          "shape": [
+            32,
+            32
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "Menon2007 RGGB cfa[32,32] -> grey[32,32]"
+    },
+    "divide": {
+      "files": {
+        "in_num": {
+          "file": "divide_in_num.npy",
+          "shape": [
+            16,
+            16,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "in_den": {
+          "file": "divide_in_den.npy",
+          "shape": [
+            16,
+            16,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "out_ratio": {
+          "file": "divide_out_ratio.npy",
+          "shape": [
+            16,
+            16,
+            3
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "num/den [16,16,3] in place"
+    },
+    "smap": {
+      "files": {
+        "in_flow": {
+          "file": "smap_in_flow.npy",
+          "shape": [
+            4,
+            4,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_s": {
+          "file": "smap_out_s.npy",
+          "shape": [
+            4,
+            4
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "compute_s(flow[4,4,2]) -> S[4,4]"
+    },
+    "hessian": {
+      "files": {
+        "in_grey": {
+          "file": "hessian_in_grey.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_gradx": {
+          "file": "hessian_out_gradx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_grady": {
+          "file": "hessian_out_grady.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_hessian": {
+          "file": "hessian_out_hessian.npy",
+          "shape": [
+            4,
+            4,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "init_ica(grey[64,64],T16) -> grads + hessian[4,4,2,2]"
+    },
+    "grad": {
+      "files": {
+        "in_grey": {
+          "file": "grad_in_grey.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_kerngrad": {
+          "file": "grad_out_kerngrad.npy",
+          "shape": [
+            63,
+            63,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_sobel_gx": {
+          "file": "grad_out_sobel_gx.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_sobel_gy": {
+          "file": "grad_out_sobel_gy.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_sqrt": {
+          "file": "grad_out_sqrt.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_gamma": {
+          "file": "grad_out_gamma.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "kerngrad + sobel + sqrt/gamma of grey[64,64]"
+    },
+    "resample": {
+      "files": {
+        "in_grey": {
+          "file": "resample_in_grey.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_down2": {
+          "file": "resample_out_down2.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "dtype": "float32"
+        },
+        "out_pyr0": {
+          "file": "resample_out_pyr0.npy",
+          "shape": [
+            10,
+            10
+          ],
+          "dtype": "float32"
+        },
+        "out_pyr1": {
+          "file": "resample_out_pyr1.npy",
+          "shape": [
+            28,
+            28
+          ],
+          "dtype": "float32"
+        },
+        "out_pyr2": {
+          "file": "resample_out_pyr2.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_upscaled_flow": {
+          "file": "resample_out_upscaled_flow.npy",
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "gauss down2 + pyramid[1,2,2] + bilinup flow"
+    },
+    "kernels": {
+      "files": {
+        "in_raw": {
+          "file": "kernels_in_raw.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_covs": {
+          "file": "kernels_out_covs.npy",
+          "shape": [
+            32,
+            32,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "estimate_kernels(raw[64,64]) -> covs[32,32,2,2]"
+    },
+    "align": {
+      "files": {
+        "in_ref_grey": {
+          "file": "align_in_ref_grey.npy",
+          "shape": [
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "in_mov_grey": {
+          "file": "align_in_mov_grey.npy",
+          "shape": [
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "out_flow": {
+          "file": "align_out_flow.npy",
+          "shape": [
+            8,
+            8,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "align() 128px raw pair (FFT grey) -> flow[8,8,2]"
+    },
+    "align_crop": {
+      "files": {
+        "in_ref_grey": {
+          "file": "align_crop_in_ref_grey.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "in_mov_grey": {
+          "file": "align_crop_in_mov_grey.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "out_flow": {
+          "file": "align_crop_out_flow.npy",
+          "shape": [
+            32,
+            32,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_lvl0": {
+          "file": "align_crop_out_lvl0.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_lvl1": {
+          "file": "align_crop_out_lvl1.npy",
+          "shape": [
+            3,
+            3,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_lvl2": {
+          "file": "align_crop_out_lvl2.npy",
+          "shape": [
+            15,
+            15,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_lvl3": {
+          "file": "align_crop_out_lvl3.npy",
+          "shape": [
+            32,
+            32,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "align() burst512-crop -> flow[32,32,2] + per-level flows (factors=[1, 2, 4, 4] tile_sizes=[16, 16, 16, 8] radii=[1, 4, 4, 4] metrics=['L1', 'L2', 'L2', 'L2'] grey=FFT ica_n=3 clip=True upscale=bilinear preprocessing=None)"
+    },
+    "l2": {
+      "files": {
+        "in_ref_lvl": {
+          "file": "l2_in_ref_lvl.npy",
+          "shape": [
+            26,
+            26
+          ],
+          "dtype": "float32"
+        },
+        "in_moving_lvl": {
+          "file": "l2_in_moving_lvl.npy",
+          "shape": [
+            26,
+            26
+          ],
+          "dtype": "float32"
+        },
+        "in_flow_init": {
+          "file": "l2_in_flow_init.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_flow": {
+          "file": "l2_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "L2 corr on coarsest lvl -> flow tiles"
+    },
+    "ica": {
+      "files": {
+        "in_ref_lvl": {
+          "file": "ica_in_ref_lvl.npy",
+          "shape": [
+            26,
+            26
+          ],
+          "dtype": "float32"
+        },
+        "in_mov_lvl": {
+          "file": "ica_in_mov_lvl.npy",
+          "shape": [
+            26,
+            26
+          ],
+          "dtype": "float32"
+        },
+        "in_flow_init": {
+          "file": "ica_in_flow_init.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_flow": {
+          "file": "ica_out_flow.npy",
+          "shape": [
+            1,
+            1,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "align_lvl_ica on coarsest lvl -> flow[1,1,2]"
+    },
+    "robustness": {
+      "files": {
+        "in_ref_raw": {
+          "file": "robustness_in_ref_raw.npy",
+          "shape": [
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "in_comp_raw": {
+          "file": "robustness_in_comp_raw.npy",
+          "shape": [
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "in_flow": {
+          "file": "robustness_in_flow.npy",
+          "shape": [
+            8,
+            8,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_r": {
+          "file": "robustness_out_r.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "compute_robustness(128px pair) -> r[64,64]"
+    },
+    "robustness_crop": {
+      "files": {
+        "in_comp": {
+          "file": "robustness_crop_in_comp.npy",
+          "shape": [
+            512,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "in_means": {
+          "file": "robustness_crop_in_means.npy",
+          "shape": [
+            3,
+            256,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "in_var": {
+          "file": "robustness_crop_in_var.npy",
+          "shape": [
+            3,
+            256,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "in_flow": {
+          "file": "robustness_crop_in_flow.npy",
+          "shape": [
+            32,
+            32,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "in_sig": {
+          "file": "robustness_crop_in_sig.npy",
+          "shape": [
+            2
+          ],
+          "dtype": "float32"
+        },
+        "in_d": {
+          "file": "robustness_crop_in_d.npy",
+          "shape": [
+            2
+          ],
+          "dtype": "float32"
+        },
+        "out_r": {
+          "file": "robustness_crop_out_r.npy",
+          "shape": [
+            256,
+            256
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "compute_robustness(burst512-crop) -> r (crop parity)"
+    },
+    "merge": {
+      "files": {
+        "in_comp_raw": {
+          "file": "merge_in_comp_raw.npy",
+          "shape": [
+            128,
+            128
+          ],
+          "dtype": "float32"
+        },
+        "in_flow": {
+          "file": "merge_in_flow.npy",
+          "shape": [
+            8,
+            8,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "in_covs": {
+          "file": "merge_in_covs.npy",
+          "shape": [
+            64,
+            64,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        },
+        "in_r": {
+          "file": "merge_in_r.npy",
+          "shape": [
+            64,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "out_num": {
+          "file": "merge_out_num.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "dtype": "float32"
+        },
+        "out_den": {
+          "file": "merge_out_den.npy",
+          "shape": [
+            256,
+            256,
+            3
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "merge(comp[128,128]) -> num/den[256,256,3]"
+    },
+    "endtoend": {
+      "files": {
+        "in_burst": {
+          "file": "endtoend_in_burst.npy",
+          "shape": [
+            3,
+            256,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "out_image": {
+          "file": "endtoend_out_image.npy",
+          "shape": [
+            512,
+            512,
+            3
+          ],
+          "dtype": "float32"
+        }
+      },
+      "note": "main(burst[3,256,256],s2) -> img[512,512,3]"
+    }
+  }
+}

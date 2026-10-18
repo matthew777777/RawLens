@@ -1,0 +1,120 @@
+#version 450
+// 1:1 port of merge.py cpu_accumulate (Alg.4 Accumulation): per-HR-pixel 3x3,
+// op-for-op identical to the proven Vulkan-port decomposition
+// (merge.comp:accumulate, dual parity there).
+// anisotropic Gaussian splat with bilinear-interpolated then inverted 2x2
+// covariance, robustness weight, and RGGB channel select. One invocation per
+// HR pixel; accumulation into the resident float32 num/den pair uses one
+// invocation per HR pixel (atomic-free by construction, as on CPU where each
+// HR pixel is owned by exactly one prange task).
+// Push overlay: pad[1] = nTilesX, pad[2] = hrW.
+// width/height = LR size; scale, tileSize, mode as usual.
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer Comp { float compImg[]; };
+layout(set = 0, binding = 1) readonly buffer Align { vec2 align_[]; };
+layout(set = 0, binding = 2) readonly buffer Cov { vec4 cov[]; }; // xx,xy,yy
+layout(set = 0, binding = 3) readonly buffer Rob { float rob[]; };
+layout(set = 0, binding = 4) buffer Num { float num_[]; }; // tightly packed H*W*3
+layout(set = 0, binding = 5) buffer Den { float den_[]; };
+
+void main() {
+  uint id = gl_GlobalInvocationID.x;
+  if (id >= p.pixelCount) return;
+  uint hrW = p.pad[2];
+  uint lrW = p.width;
+  uint lrH = p.height;
+  uint nTilesX = p.pad[1];
+  uint tileSize = p.tileSize;
+  bool bayer = (p.mode == 0u);
+  uint nch = bayer ? 3u : 1u;
+
+  uint hri = id / hrW;
+  uint hrj = id % hrW;
+  float lr_x = (float(hrj) + 0.5) / p.scale;
+  float lr_y = (float(hri) + 0.5) / p.scale;
+  uint px = uint(lr_x / float(tileSize));
+  uint py = uint(lr_y / float(tileSize));
+  vec2 F = align_[py * nTilesX + px];
+
+  // Robustness sampled on the guide grid (nearest), bayer vs grey paths.
+  float local_r;
+  if (bayer) {
+    // CPU is int(lr//2 - 0.5): Python // FLOORS before subtracting, so this
+    // is floor-then-subtract, NOT truncation (they differ by one for half of
+    // all pixels). Replicated exactly; min() matches the CPU.
+    int ir = min(int(floor(lr_y / 2.0) - 0.5), int(lrH / 2u) - 1);
+    int jr = min(int(floor(lr_x / 2.0) - 0.5), int(lrW / 2u) - 1);
+    local_r = rob[uint(max(ir, 0)) * (lrW / 2u) + uint(max(jr, 0))];
+    // NOTE: CPU uses int() truncation (toward zero) for frac below; kept here.
+  } else {
+    int ir = min(int(lr_y), int(lrH) - 1);
+    int jr = min(int(lr_x), int(lrW) - 1);
+    local_r = rob[uint(max(ir, 0)) * lrW + uint(max(jr, 0))];
+  }
+
+  float mov_x = lr_x + F.x;
+  float mov_y = lr_y + F.y;
+  if (!(mov_x >= 0.0 && mov_x < float(lrW) && mov_y >= 0.0 && mov_y < float(lrH)))
+    return;
+
+  // Covariance-grid coordinates (grey grid offset, half-rate in bayer mode).
+  float kmap_j = bayer ? mov_x / 2.0 - 0.5 : mov_x - 0.5;
+  float kmap_i = bayer ? mov_y / 2.0 - 0.5 : mov_y - 0.5;
+  // frac from truncation (stays negative for negative inputs), as on CPU.
+  float frac_x = kmap_j - float(int(kmap_j));
+  float frac_y = kmap_i - float(int(kmap_i));
+  int floor_x = max(int(kmap_j), 0);
+  int floor_y = max(int(kmap_i), 0);
+  uint covW = bayer ? lrW / 2u : lrW;
+  uint covH = bayer ? lrH / 2u : lrH;
+  uint ceil_x = min(uint(floor_x) + 1u, covW - 1u);
+  uint ceil_y = min(uint(floor_y) + 1u, covH - 1u);
+  vec4 tr = cov[uint(floor_y) * covW + uint(floor_x)];
+  vec4 tl = cov[uint(floor_y) * covW + ceil_x];
+  vec4 br = cov[uint(ceil_y) * covW + uint(floor_x)];
+  vec4 bl = cov[uint(ceil_y) * covW + ceil_x];
+  float cxx = mix(mix(tr.x, tl.x, frac_x), mix(br.x, bl.x, frac_x), frac_y);
+  float cxy = mix(mix(tr.y, tl.y, frac_x), mix(br.y, bl.y, frac_x), frac_y);
+  float cyy = mix(mix(tr.z, tl.z, frac_x), mix(br.z, bl.z, frac_x), frac_y);
+  float det = cxx * cyy - cxy * cxy;
+  float inv = 1.0 / det;
+  float ixx = inv * cyy;
+  float ixy = -inv * cxy;
+  float iyy = inv * cxx;
+
+  int center_j = int(mov_x);
+  int center_i = int(mov_y);
+  float mov_j = mov_x - 0.5;
+  float mov_i = mov_y - 0.5;
+  vec3 val = vec3(0.0);
+  vec3 acc = vec3(0.0);
+  for (int di = -1; di <= 1; di++) {
+    for (int dj = -1; dj <= 1; dj++) {
+      int j = center_j + dj;
+      int i2 = center_i + di;
+      if (!(j >= 0 && j < int(lrW) && i2 >= 0 && i2 < int(lrH))) continue;
+      uint ch = bayer ? uint(i2 % 2 + j % 2) : 0u; // RGGB hardcoded, as on CPU
+      float c = compImg[uint(i2) * lrW + uint(j)];
+      float dx = float(j) - mov_j;
+      float dy = float(i2) - mov_i;
+      float z = ixx * dx * dx + 2.0 * ixy * dx * dy + iyy * dy * dy;
+      z = max(z, 0.0);
+      float w = exp(-0.5 * z);
+      val[ch] += w * local_r * c;
+      acc[ch] += w * local_r;
+    }
+  }
+  for (uint ch = 0u; ch < nch; ch++) {
+    num_[id * 3u + ch] += val[ch];
+    den_[id * 3u + ch] += acc[ch];
+  }
+}
