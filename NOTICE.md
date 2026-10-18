@@ -223,6 +223,27 @@ Upstream authors provide their work without endorsement of RawLens.
   exposed only through the spike bench (per-frame threading would
   oversubscribe the frame workers).
 
+## CRS-Decoder (vendored, offline burst merge onward)
+
+- Project: CRS-Decoder
+- Local source: `/Users/monikamalinowska/CRS-Decoder`
+  (sibling checkout; no upstream repository URL recorded)
+- License: GNU General Public License version 3 only
+- Vendored files (SPDX headers intact):
+  `app/src/main/cpp/crsdecode/include/CRS/ContainerReader.h`,
+  `Decoder.h`, `LensShading.h`, `MotionSample.h`,
+  `app/src/main/cpp/crsdecode/src/ContainerReader.cpp`,
+  `Decoder.cpp`, and `app/src/main/cpp/crsdecode/src/detail/` (SIMD
+  helpers, delta unpacking, tile loop, container constants) are verbatim
+  upstream, including the ARM NEON and x86 SSE2 paths.
+- Purpose: version-3 `.crs` container reading plus lossless type-7
+  frame decoding for the offline burst-merge screen (`_BURST.crs`
+  takes list back into pixels and per-frame JSON).
+- RawLens JNI bridge (`app/src/main/cpp/burstcrs_reader_jni.cpp`,
+  `CrsReader.kt`) is RawLens's own code under the repository
+  license. One reader per merge thread; corrupt takes report failure
+  through return values and never unwind through JNI.
+
 ## RAWR merge_hdrplus (vendored shaders + header, HDR+ port)
 
 - Project: Rawr (Android RAW camera)

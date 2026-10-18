@@ -41,7 +41,7 @@ The DNG sensor calibration editor is guided by the active camera's declared meta
 
 ## Requirements
 
-- Android 10 or newer (API 29+)
+- Android 11 or newer (API 30+; GPU video record needs Android 13+ for half-float buffers)
 - A Camera2 camera advertising `REQUEST_AVAILABLE_CAPABILITIES_RAW`
 - Android Studio with JDK 17, or a compatible command-line Android build environment
 - Android SDK 35 for compilation
@@ -66,13 +66,14 @@ To create a distributable release, configure your own Android signing key and bu
 
 ## Desktop super-resolution (no device)
 
-`tools/` hosts the unified SR library (`tools/sr-vulkan`, same sources the
-app compiles for NDK) plus mosaic/linear burst-DNG CLIs for Linux and macOS
-(M1 included). Start at [tools/README.md](tools/README.md):
+`tools/sr-pipeline` hosts the desktop JVM CLI harness for the multi-frame
+super-resolution pipeline (burst frame directory in, super-resolved output
+out) for Linux and macOS (M1 included). Start at
+[tools/sr-pipeline/README.md](tools/sr-pipeline/README.md):
 
 ```bash
-./gradlew :tools:mosaic-desktop:installDist :tools:linear-sr-desktop:installDist
-./gradlew :tools:sr-vulkan:check   # parity + unit tests
+./gradlew :tools:sr-pipeline:installDist
+./gradlew :tools:sr-pipeline:test
 ```
 
 ## GitHub release checklist

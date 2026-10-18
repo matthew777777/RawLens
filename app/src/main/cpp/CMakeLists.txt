@@ -236,7 +236,7 @@ target_link_libraries(galosh PRIVATE ${GALOSH_VULKAN_LIB} ${GALOSH_LOG_LIB} ${GA
 set_target_properties(galosh PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_link_options(galosh PRIVATE "-Wl,-z,max-page-size=16384")
 
-# Profiled wavelet denoise (Vulkan): 1:1 port of RAWR's raw_denoise
+# Profiled wavelet denoise (Vulkan): 1:1 port of the upstream raw_denoise
 # (itself a port of darktable denoiseprofile). SPIR-V comes from app assets
 # (spirv/wavelet/); see assets UPSTREAM.md for provenance.
 set(WAVELET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/wavelet")
@@ -255,7 +255,7 @@ target_link_libraries(rawLensWavelet PRIVATE ${WAVELET_VULKAN_LIB} ${WAVELET_LOG
 set_target_properties(rawLensWavelet PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_link_options(rawLensWavelet PRIVATE "-Wl,-z,max-page-size=16384")
 
-# HDR+ burst merge (Vulkan): 1:1 port of RAWR's merge_hdrplus recorder
+# HDR+ burst merge (Vulkan): 1:1 port of the upstream merge_hdrplus recorder
 # (itself a port of Burst Photo / hdr-plus-swift). SPIR-V comes from app
 # assets (spirv/hdrplus/); see assets UPSTREAM.md + README for provenance.
 add_library(hdrplus SHARED

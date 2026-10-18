@@ -2,10 +2,10 @@
 > settings, writers, and UI); HDR/HDR+ are untouched. This doc is retained as the
 > design archive for a future SR reintroduction.
 
-# RAWR harvest — P0.1 exposure/focus monitoring (IN PROGRESS, paused)
+# Upstream harvest — P0.1 exposure/focus monitoring (IN PROGRESS, paused)
 
 Source: https://github.com/adityawarmanfw/rawr @ f41e6c2 (cloned to /tmp/rawr).
-Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe excluded per user.
+Both repos GPL-3.0 — ports keep upstream notices. HDR+/Wroński/multiframe excluded per user.
 
 ## What was decided
 
@@ -16,7 +16,7 @@ Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe exclude
   simpler than sharing handles with srvulkan at 2–5 Hz throttle).
 - SPIR-V checked into `app/src/main/assets/spirv/mon/` (RawLens pattern, same as
   `spirv/hdrplus/`); overlays take runtime binaries already. image_scopes needs
-  its `image_scopes_shaders_spv.hpp` generated via rawr's
+  its `image_scopes_shaders_spv.hpp` generated via the upstream
   `native/image_scopes/tools/embed_spirv.py` (stdlib-only python3) — keeps the
   vendored .cpp 100% pristine.
 - Data taps, all from OUR raw VF (user requirement):
@@ -24,10 +24,10 @@ Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe exclude
     GL worker (same program/uniforms, ~480px wide, ~3 Hz). Feeds scopes measure
     + focus/false-color/zebra.
   - RAW clip state: `VfCpuNeon.copy` at monitor geometry on camera thread
-    (normalized R/Gr/Gb/B bytes) → new `rawlens_clip_pack.comp` packs rawr's
-    R16 word (clip nibble@0, warn@4, shadowWarn@8, floor@12; thresholds
+    (normalized R/Gr/Gb/B bytes) → new `rawlens_clip_pack.comp` packs the
+    upstream R16 word (clip nibble@0, warn@4, shadowWarn@8, floor@12; thresholds
     0.995/0.98/0.01/<=black → bytes 254/250/2/0).
-- Skip rawr's RAW-CFA-waveform path: rawr's own app never calls
+- Skip the upstream RAW-CFA-waveform path: the upstream app never calls
   `recordRawWaveformRender` (no raw_stats producer lib exists). Revisit later.
 - Overlay display v1: overlay RGBA8 shown in an Android View aligned to the VF
   rect (zero hot-path risk). Exact GLES composite in the present shader is a
@@ -44,14 +44,14 @@ Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe exclude
   config_types.h, version.h, cpu_reference.h, monitoring_overlays.cpp,
   cpu_reference.cpp
 - `app/src/main/assets/spirv/mon/`: 8 `scopes_*.comp` + `scopes_common.glsl`,
-  5 `mon_*.comp` (rawr names preserved under prefix)
+  5 `mon_*.comp` (upstream names preserved under prefix)
 - Nothing added to CMake yet; nothing references these files yet.
 
 ## Key API facts (verified by reading full sources)
 
 - image_scopes: `recordDisplayExposureStats` (block 2/4) → 8-float stats;
   `recordDisplayWaveform` (Luma/RgbOverlay, 512 dispatches) + render
-  (512x384 target in rawr app); `recordVectorscope` (grid 128/256);
+  (512x384 target in the upstream app); `recordVectorscope` (grid 128/256);
   frame-slot retire/discard discipline; copy helpers for readback.
   Input/target must be R8G8B8A8 GENERAL.
 - monitoring_overlays: `recordCombined` runs standalone sequence
@@ -87,10 +87,10 @@ Both repos GPL-3.0 — ports keep rawr notices. HDR+/Wroński/multiframe exclude
 
 # P0.5 profiled wavelet denoise (DONE 2026-10-11, needs on-device check)
 
-Source: rawr @ 87c2209 (release 0.3.1, /tmp/rawr). Restored our removed
+Source: upstream @ 87c2209 (release 0.3.1, /tmp/rawr). Restored our removed
 wavelet stage (gone since `remove(wavelets)` ecce15a..f42db74, which was
-GLES chroma-only, no VST) and rebuilt the core on rawr's validated Vulkan
-module instead of resurrecting the old shaders.
+GLES chroma-only, no VST) and rebuilt the core on the upstream validated
+Vulkan module instead of resurrecting the old shaders.
 
 ## What landed
 
@@ -99,10 +99,10 @@ module instead of resurrecting the old shaders.
   `assets/spirv/wavelet/UPSTREAM.md`.
 - `librawLensWavelet` (own Vulkan device, staging upload/download RGBA16F,
   timestamp timing) + `WaveletVulkan`/`WaveletDenoiser` Kotlin facade.
-  Noise = green SENSOR_NOISE_PROFILE normalized rawr-style; WB green==1
+  Noise = green SENSOR_NOISE_PROFILE normalized upstream-style; WB green==1
   from the resolved transform; uncalibrated fallback never throws.
 - Luma + chroma: forceY (detail gate x luma slider) + forceUv 0.75,
-  rawr defaults (strength 1, 7 scales, shadows 1).
+  upstream defaults (strength 1, 7 scales, shadows 1).
 - Pipeline: camera-linear tap in `final.glsl`/`rcd_final.glsl`
   (white-blend kept, AMaZE pre-balance undone via `u_demosaic_unbalance`
   so the wavelet sees true pre-WB camera RGB), RGBA16F readback,
@@ -112,7 +112,7 @@ module instead of resurrecting the old shaders.
 - UI: denoise-tab wavelet section (enable/strength/luma/scales) +
   persisted prefs + prewarm + WAVELET overlay badge.
 - Validation: `tools/wavelet-parity/run_parity.sh` (MoltenVK bench +
-  one frozen fixture set, rawr tolerances): PARITY_PASS
+  one frozen fixture set, upstream tolerances): PARITY_PASS
   (max 1.70e-3, p99 2.57e-4, mean 4.98e-5, ratio 0.113, seam 1.09;
   52 ms GPU for 512px/6 scales on this Mac). `WaveletDenoiseTest` 10/10,
   full suite green, `assembleDebug` clean.
@@ -127,7 +127,7 @@ module instead of resurrecting the old shaders.
 
 ## Perf verdict (Halide vs Vulkan)
 
-Vulkan (done): rawr's port is already GPU, tiled to any frame size,
+Vulkan (done): the upstream port is already GPU, tiled to any frame size,
 validates to 5e-3 max, and reuses our Galosh-style JNI/host pattern —
 no new dependency. Halide: rejected — a new native toolchain + runtime
 for a from-scratch rewrite with no parity story; its CPU path would

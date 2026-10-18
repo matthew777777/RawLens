@@ -1,26 +1,21 @@
 # tools/
 
-Host-side code: the unified super-resolution library, desktop burst CLIs,
-and one-off verification scripts. Everything here runs on Linux/macOS
-(M1 Apple Silicon included) with no device; the Android app lives in
-`app/` and shares the SR sources below line-for-line (see
-`sr-vulkan/PARITY.md`).
+Host-side code: the super-resolution pipeline harness, capture-format
+checks, and one-off verification scripts. Everything here runs on Linux/macOS
+(M1 Apple Silicon included) with no device. Numerical parity is judged by the
+error envelopes in `sr-pipeline/PARITY.md`.
 
 ## Super-resolution (start here)
 
 | Path | What |
 |---|---|
-| `sr-vulkan/` | Unified SR merging library for Android (NDK) + desktop. [README](sr-vulkan/README.md) has prerequisites, build/run, vkcheck, host ncnn, and limits. |
-| `mosaic-desktop/` | Mosaic SR → derived-Bayer DNG CLI on the library. |
-| `linear-sr-desktop/` | Linear RGB SR → LinearRaw DNG CLI on the library (`--backend vulkan`). |
-| `parity_sr_vulkan.py` | Mechanical 1:1 enforcement (runs in `:tools:sr-vulkan:check`). |
+| `sr-pipeline/` | Desktop JVM CLI harness for the multi-frame SR pipeline (burst frames in, super-resolved output out). Wired into the build as `:tools:sr-pipeline`; [README](sr-pipeline/README.md) has run flags and tests. |
+| `sr-vulkan/src/main/cpp` | SR Vulkan sources compiled into the app NDK build by path (not a standalone Gradle project). |
 | `jamy_parity_oracle.py` | Independent NumPy transcription of the Jamy-L SR core; generates the `JamyCoreParityTest` goldens (`python3 tools/jamy_parity_oracle.py --out <dir>`). |
-| `srvk_shader_transform.py` | Stages GLSL → `*.vk.glsl` + `*.spv` + `manifest.json`. |
-| `srvk_spirv_check.py` | Pins checked-in SPIR-V to the shader tree. |
 
 ```bash
-./gradlew :tools:mosaic-desktop:installDist :tools:linear-sr-desktop:installDist
-./gradlew :tools:sr-vulkan:check   # parity + unit tests
+./gradlew :tools:sr-pipeline:installDist
+./gradlew :tools:sr-pipeline:test
 ```
 
 ## Capture-format checks

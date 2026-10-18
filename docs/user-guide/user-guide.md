@@ -112,16 +112,39 @@ ETTR converged freezes PROGRAM and owns exposure.
 
 ## 5. Lens discovery (Image 1)
 
-Checked = viewfinder pill, widest first per group.
+One card per lens. Checked = viewfinder pill, widest first.
 
-- `5 RAW lenses • 2 groups`, `Select all / Clear`.
-- `DIRECT CAMERAS • 3 — Pick these first.` e.g. Ultra-wide 16 mm ID 2 ☑
-  (1.67 mm, 3264×2448, 8 MP), Wide 24 mm ID 0 ☑ (6.06 mm, 4080×3060,
-  12.5 MP). Leave duplicate Wide ID 3 ☐ unchecked.
-- `LOGICAL 3 • 2 LENSES` e.g. ID 3/2 ☐ — only for missing lenses.
-- `SAVE` persists, empty rejected with `PICK A RAW LENS`.
+- Header reads `N lenses • M routes`: routes are the IDs that reach a
+  lens, optics are the lenses themselves.
+- Each card shows a `★ RECOMMENDED` route first (direct beats logical
+  beats vendor). Extra routes to the same lens hide under
+  `+ N more routes (same lens)` — open only when the recommended ID
+  fails or a special sensor mode needs it.
+- Capability notes ride on each card: ISO range, slowest exposure, max
+  RAW size when it differs from the sensor array, `N RAW sizes` when
+  several are advertised, `Lists RAW10/RAW12/RAW14` when packed formats
+  exist (info only — capture stays `RAW_SENSOR`, no unpack path), and
+  `Sensor-mode switch` when the HAL advertises one (special modes still
+  need a per-lens vendor key in Settings). Routes also carry verdicts
+  from real camera use: `RAW verified on this device` (frames flowed),
+  `Opened OK before`, or dimmed `Open rejected before · try anyway`.
+  Verified routes win the recommendation. The lens report enumerates
+  every RAW size per route.
+- Lenses with several RAW sizes offer a `RAW size` row on the card
+  (`Auto` = largest first, as before). The choice moves to the front of
+  the session ladder; a refused or stale size falls back automatically.
+  Full-res knowingly shrinks ZSL burst depth.
+- Lenses listing packed formats offer a `RAW format` row (`Auto` =
+  `RAW_SENSOR`, always the default). Packed capture unpacks to 16-bit
+  and follows the same development and DNG path; a refused session
+  clears the choice back to auto and rebuilds unpacked.
+- `Recommended / All / Clear` presets. First install starts unchecked;
+  `Recommended` checks the suggested set in one tap. `SAVE` persists,
+  empty rejected with `PICK A RAW LENS`.
+- `Copy lens report` copies every route plus capabilities for support
+  chats — no second app needed.
 
-Recommended: check ID 2 + ID 0 only → `0.7× / 1×`.
+Recommended: keep the pre-checked set → `0.7× / 1×`.
 
 ## 6. Settings JPEG (Images 2 + 4)
 
