@@ -24,8 +24,11 @@ data class RawDevelopmentSettings(
      * Non-null enables HDR-merge adaptive exposure in [RawDevelopmentCoordinator.developMergedJpeg]:
      * the merge's display compensation ([exposureEv]) is folded into the analysis and the
      * HDR-tuned correction is added on top, so high-DR interiors lift to natural brightness
-     * while spikes ride AgX's range. HDR bracket path only; null (default) keeps the legacy
-     * fixed-exposure develop used by uniform HDR+/fusion merges.
+     * while spikes ride AgX's range. HDR bracket path only; null (default) keeps the
+     * single-frame LDR adaptive path below, which uniform HDR+/fusion merges use: their
+     * same-exposure average lives in the identical normalized domain as a single frame
+     * (nothing above white to roll off), so [adaptiveExposureStrength] scales the
+     * [AdaptiveDevelopmentExposure.analyze] correction on the merged CFA itself.
      */
     val hdrAdaptiveTuning: HdrAdaptiveTuning? = null,
     /**
@@ -43,6 +46,57 @@ data class SceneLinearGpuFrame(
     val preDemosaic: PreDemosaicResult,
     val colorTransform: ResolvedSceneLinearTransform
 )
+
+/**
+ * Resolves the adaptive correction for a merged CFA ([RawDevelopmentCoordinator.developMergedJpeg]).
+ * Pure JVM (no GL): an explicit [RawDevelopmentSettings.hdrAdaptiveTuning] (HDR brackets)
+ * folds the display compensation into [AdaptiveDevelopmentExposure.analyzeHdr]. Otherwise
+ * the choice follows measured content, not the call site: a merge carrying above-white
+ * signal (multi-exposure highlights, or lens-boosted bright corners an LDR white-pin
+ * would crush) meters through the HDR path with the user's shoulder, while content at
+ * or below white meters through the single-frame [AdaptiveDevelopmentExposure.analyze]
+ * on the merged CFA itself. Returns null when no adaptive path is armed, preserving
+ * the legacy fixed-exposure develop.
+ */
+internal fun resolveMergedAdaptive(
+    cfa: UnpackedRawCfa,
+    settings: RawDevelopmentSettings,
+    workspace: AdaptiveDevelopmentExposure.Workspace = AdaptiveDevelopmentExposure.workspace()
+): AdaptiveExposureResult? {
+    settings.hdrAdaptiveTuning?.let {
+        return AdaptiveDevelopmentExposure.analyzeHdr(
+            cfa, Math.pow(2.0, settings.exposureEv), workspace, it
+        )
+    }
+    if (settings.adaptiveExposureStrength > 0f) {
+        return (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
+            if ((cfa.values.maxOrNull() ?: 0f) > ABOVE_WHITE_CONTENT) {
+                val ldrTuning = settings.adaptiveExposureTuning.bounded()
+                AdaptiveDevelopmentExposure.analyzeHdr(
+                    cfa, Math.pow(2.0, settings.exposureEv), workspace,
+                    HdrAdaptiveTuning(
+                        highlightShoulder = ldrTuning.highlightShoulder,
+                        centerWeight = ldrTuning.centerWeight,
+                        focusX = ldrTuning.focusX,
+                        focusY = ldrTuning.focusY
+                    )
+                )
+            } else {
+                AdaptiveDevelopmentExposure.analyze(
+                    cfa, workspace, settings.adaptiveExposureTuning, settings.ettrHeadroomEv
+                )
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * Above-white signal threshold for merged-content routing: sensor saturation
+ * is 1.0, so anything above it is multi-exposure highlight data or
+ * lens-boosted bright content the LDR white-pin would crush.
+ */
+internal const val ABOVE_WHITE_CONTENT = 1.0f
 
 data class RawDevelopmentMemoryEstimate(
     val rawImageBytes: Long,
@@ -96,6 +150,45 @@ class RawDevelopmentCoordinator(context: Context) {
     /** Enable-time Vulkan preload for the post-demosaic wavelet stage. */
     fun prewarmWavelet() = waveletDenoiser.ensureInit()
 
+    // Highlight-reconstruction Vulkan device: opened lazily on the first
+    // large-ROI photo, never closed (process lifetime, like the wavelet
+    // handle). Each photo builds its own GpuContext borrowing it, so Vk
+    // sessions stay confined to their develop worker thread; programs,
+    // images, and staging release per photo. Any failure permanently
+    // disables the Vulkan arm — the CPU twin stays.
+    private val hlVkLock = Any()
+    @Volatile private var hlVkHandle: VulkanHub.Handle? = null
+    @Volatile private var hlVkDead = false
+
+    // Highlight-stage CPU pool: convert/pack row bands and pre-stage tiles
+    // split over four daemon workers. Bands/tiles are disjoint and reduces
+    // order-fixed, so parallel runs are bit-identical to sequential —
+    // the parity gates cannot tell. Process lifetime, like the handles.
+    private val hlWorkers: java.util.concurrent.ExecutorService =
+        java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
+            Thread(r, "hl-worker").apply { isDaemon = true }
+        }
+
+    /** Per-photo HL Vulkan session, or null when Vulkan is unavailable. */
+    internal fun hlGpuContext(): VulkanHub.GpuContext? {
+        if (hlVkDead) return null
+        val handle = hlVkHandle ?: synchronized(hlVkLock) {
+            hlVkHandle ?: try {
+                VulkanHub.open().also { hlVkHandle = it }
+            } catch (failure: Exception) {
+                Log.w(LOG_TAG, "HL Vulkan unavailable, CPU only", failure)
+                hlVkDead = true
+                return null
+            }
+        }
+        return try {
+            VulkanHub.GpuContext(handle, appContext.assets)
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "HL Vulkan session failed, CPU only", failure)
+            null
+        }
+    }
+
     fun <T> develop(
         rawPlane: ByteBuffer,
         metadata: RawFrameMetadata,
@@ -118,14 +211,19 @@ class RawDevelopmentCoordinator(context: Context) {
             ?: throw UnsupportedOperationException("RAW row stride is missing")
         val pixelStride = metadata.rawPlanePixelStride
             ?: throw UnsupportedOperationException("RAW pixel stride is missing")
-        val layout = RawPlaneLayout(
+        // Packed planes carry stride 0, which RawPlaneLayout rightly refuses:
+        // only unpacked frames get a layout. Packed frames unpack through
+        // the bridge below, and their adaptive metering analyzes the
+        // resulting CFA instead of sampling the packed plane.
+        val packedFormat = PackedRawFormat.ofInt(metadata.rawImageFormat)
+        val layout = if (packedFormat == null) RawPlaneLayout(
             metadata.imageWidth,
             metadata.imageHeight,
             rowStride,
             pixelStride,
             geometry.sensorOriginX,
             geometry.sensorOriginY
-        )
+        ) else null
         // Sparse metadata defects and the optional MAD detector still require the reference CPU
         // implementation. Normal captures take the zero-copy-to-JVM direct GPU path.
         // NOTE: AI Bayer denoise is applied by the caller (denoiseCaptureCfa /
@@ -148,9 +246,19 @@ class RawDevelopmentCoordinator(context: Context) {
             )
             preparedAt = SystemClock.elapsedRealtime()
         } else {
-            val unpacked = RawSensorUnpacker.unpackNormalized(
-                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
-            )
+            val unpacked = if (packedFormat == null) {
+                RawSensorUnpacker.unpackNormalized(
+                    rawPlane, requireNotNull(layout),
+                    normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+                )
+            } else {
+                RawPackedUnpacker.unpackFrameNormalized(
+                    rawPlane, metadata.imageWidth, metadata.imageHeight,
+                    rowStride, pixelStride, metadata.rawImageFormat, normalization,
+                    geometry.sensorOriginX, geometry.sensorOriginY,
+                    geometry.processingCrop, ByteOrder.nativeOrder()
+                )
+            }
             preDemosaic = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
             cpuCfa = requireNotNull(preDemosaic.cfa)
             preparedAt = SystemClock.elapsedRealtime()
@@ -163,7 +271,10 @@ class RawDevelopmentCoordinator(context: Context) {
                     settings.ettrHeadroomEv
                 )
                 else AdaptiveDevelopmentExposure.analyzeRaw(
-                    rawPlane, layout, normalization, geometry.processingCrop, lensModel,
+                    // Packed frames never reach here: their branch above
+                    // always produces a CFA, so analyze() wins instead.
+                    rawPlane, requireNotNull(layout),
+                    normalization, geometry.processingCrop, lensModel,
                     adaptiveWorkspace, settings.adaptiveExposureTuning, settings.ettrHeadroomEv
                 )
             }
@@ -176,34 +287,64 @@ class RawDevelopmentCoordinator(context: Context) {
             resolvedExposureEv
         )
         val transformAt = SystemClock.elapsedRealtime()
-        // Post-demosaic wavelet (rawr resolve() parity): single-frame only,
+        // Post-demosaic wavelet (resolver parity): single-frame only,
         // never Quad-Bayer (no camera-linear tap there yet), never fused
         // (the wavelet stage needs the unfused RGBA16F frame).
         val waveletPlan = resolveDenoise(settings.denoise, settings.galosh, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val effectiveFused = if (waveletPlan) null else fusedOutputSettings
+        // Highlight reconstruction runs on the same camera-linear tap but is
+        // independent of wavelet: the toggle alone requests the tap, runs the
+        // RT stage on the readback, and re-uploads. Never fused (like wavelet,
+        // it needs the unfused RGBA16F frame); off restores the exact old path.
+        val hlPlan = (fusedOutputSettings?.hlReconstruction ?: false) && !metadata.quadBayer
+        val cameraLinearPlan = waveletPlan || hlPlan
+        val effectiveFused = if (cameraLinearPlan) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
-            if (waveletPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
+            if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                 output.internalFormat == AmazeTextureFormat.RGBA16F
             ) {
-                consumeWaveletDenoised(
-                    output, metadata, normalization, transform, preDemosaic,
-                    settings.denoise.wavelet, consume
-                )
+                if (waveletPlan) {
+                    consumeWaveletDenoised(
+                        output, metadata, normalization, transform, preDemosaic,
+                        settings.denoise.wavelet,
+                        fusedOutputSettings?.hlReconstruction ?: false,
+                        { hlGpuContext() },
+                        consume
+                    )
+                } else {
+                    consumeHlReconstructed(
+                        output, metadata, normalization, transform, preDemosaic,
+                        fusedOutputSettings?.hlReconstruction ?: false,
+                        { hlGpuContext() },
+                        consume
+                    )
+                }
             } else {
                 consume(SceneLinearGpuFrame(output, preDemosaic, transform))
             }
         }
+        // The HL tap must see true channel values: sensor-white
+        // desaturation would force unclipped brights toward neutral white
+        // and manufacture phantom clipping (RT runs recovery pre-desat).
+        // Wavelet-alone keeps the LDR window (denoise input unchanged).
+        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        )
         fun runAmaze(): T {
             return if (directGpu) {
+                // directGpu needs pixelStride 2, which packed planes never
+                // have, so layout is non-null on exactly this branch.
                 amaze.processRaw(
                     GpuRawAmazeInput(
-                        rawPlane, layout, geometry.processingCrop, normalization, lensModel
+                        rawPlane, requireNotNull(layout), geometry.processingCrop, normalization, lensModel
                     ),
                     cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                     cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                     fusedOutputSettings = effectiveFused,
-                    cameraLinear = waveletPlan,
+                    whiteWindow = tapWhiteWindow,
+                    cameraLinear = cameraLinearPlan,
                     consume = consumeOutput
                 )
             } else {
@@ -212,7 +353,8 @@ class RawDevelopmentCoordinator(context: Context) {
                     cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                     cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                     fusedOutputSettings = effectiveFused,
-                    cameraLinear = waveletPlan,
+                    whiteWindow = tapWhiteWindow,
+                    cameraLinear = cameraLinearPlan,
                     consume = consumeOutput
                 )
             }
@@ -227,11 +369,11 @@ class RawDevelopmentCoordinator(context: Context) {
                 if (directGpu) {
                     amaze.processRcdRaw(
                         GpuRawAmazeInput(
-                            rawPlane, layout, geometry.processingCrop, normalization, lensModel
+                            rawPlane, requireNotNull(layout), geometry.processingCrop, normalization, lensModel
                         ),
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                        cameraLinear = waveletPlan,
+                        cameraLinear = cameraLinearPlan,
                         consume = consumeOutput
                     )
                 } else {
@@ -239,7 +381,7 @@ class RawDevelopmentCoordinator(context: Context) {
                         requireNotNull(cpuCfa),
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                        cameraLinear = waveletPlan,
+                        cameraLinear = cameraLinearPlan,
                         consume = consumeOutput
                     )
                 }
@@ -280,6 +422,8 @@ class RawDevelopmentCoordinator(context: Context) {
         transform: ResolvedSceneLinearTransform,
         preDemosaic: PreDemosaicResult,
         settings: WaveletSettings,
+        hlReconstruct: Boolean = true,
+        gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         val camera = try {
@@ -297,19 +441,72 @@ class RawDevelopmentCoordinator(context: Context) {
             val g = gains[1].takeIf { it.isFinite() && it > 0f } ?: 1f
             floatArrayOf(gains[0] / g, 1f, gains[2] / g)
         }
-        val denoised = ByteBuffer.allocateDirect(camera.remaining()).order(ByteOrder.nativeOrder())
+        // RT "Color propagation" on the demosaiced camera-linear frame
+        // (pre-WB): repairs clipped-channel color before denoise/WB. Any
+        // highlight failure returns the readback untouched, so the capture
+        // never fails for reconstruction reasons. Per-stage ms go to logcat
+        // under "HlRecon" for the Vulkan optimization pass.
+        val reconstructed = HlReconstructionStage.applyIfEnabled(
+            camera, output.width, output.height, hlReconstruct,
+            hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
+        )
+        val denoised = ByteBuffer.allocateDirect(reconstructed.remaining()).order(ByteOrder.nativeOrder())
         val ok = try {
             waveletDenoiser.process(
-                camera, denoised, output.width, output.height,
+                reconstructed, denoised, output.width, output.height,
                 settings.bounded(), noiseA, noiseB, wb
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
             false
         }
-        val upload = if (ok) denoised else camera
+        val upload = if (ok) denoised else reconstructed
         return amaze.transformCameraLinear(
             upload, output.width, output.height,
+            transform.glslColumnMajorMatrix()
+        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
+    }
+
+    /** Levels for the highlight stage from capture metadata (sRGB luminance
+     * row when the device ships no color matrix). */
+    private fun hlStageInputs(
+        metadata: RawFrameMetadata,
+        normalization: RawNormalization
+    ) = HlReconstructionStage.Inputs(
+        whiteLevel = normalization.whiteLevel,
+        blackLevels = normalization.blackLevels.toFloatArray(),
+        xyzRow = metadata.colorMatrix1?.takeIf { it.size >= 9 }?.let {
+            floatArrayOf(it[3].toFloat(), it[4].toFloat(), it[5].toFloat())
+        } ?: floatArrayOf(0.2126f, 0.7152f, 0.0722f)
+    )
+
+    /**
+     * Highlight reconstruction without wavelet: same camera-linear tap and
+     * re-upload, no denoise. Lets the HL toggle work standalone — wavelet
+     * stays off unless the user enables it.
+     */
+    private fun <T> consumeHlReconstructed(
+        output: AmazeGpuOutput,
+        metadata: RawFrameMetadata,
+        normalization: RawNormalization,
+        transform: ResolvedSceneLinearTransform,
+        preDemosaic: PreDemosaicResult,
+        hlReconstruct: Boolean,
+        gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
+        consume: (SceneLinearGpuFrame) -> T
+    ): T {
+        val camera = try {
+            amaze.readbackHalfFloat(output)
+        } catch (failure: Exception) {
+            Log.w(LOG_TAG, "HL readback failed, developing without reconstruction", failure)
+            return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
+        }
+        val reconstructed = HlReconstructionStage.applyIfEnabled(
+            camera, output.width, output.height, hlReconstruct,
+            hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
+        )
+        return amaze.transformCameraLinear(
+            reconstructed, output.width, output.height,
             transform.glslColumnMajorMatrix()
         ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
     }
@@ -338,11 +535,33 @@ class RawDevelopmentCoordinator(context: Context) {
             ?: throw UnsupportedOperationException("Quad-Bayer buffer geometry is not proven")
         val normalization = metadata.normalizationOrNull()
             ?: throw UnsupportedOperationException("Quad-Bayer normalization metadata is invalid")
+        // Packed quad frames decode to tight 16-bit first; unpacked frames
+        // flow through untouched. Either way QuadBayerPreparation keeps its
+        // 16-bit layout contract.
+        val quadPacked = PackedRawFormat.ofInt(metadata.rawImageFormat)
+        val quadRowStride = requireNotNull(metadata.rawPlaneRowStride)
+        val quadPlane: ByteBuffer
+        val quadLayout: RawPlaneLayout
+        if (quadPacked == null) {
+            quadPlane = rawPlane
+            quadLayout = RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
+                quadRowStride, requireNotNull(metadata.rawPlanePixelStride),
+                geometry.sensorOriginX, geometry.sensorOriginY)
+        } else {
+            val shorts = RawPackedUnpacker.decodePlaneToShorts(
+                rawPlane, metadata.imageWidth, metadata.imageHeight, quadRowStride, 0,
+                quadPacked, ByteOrder.nativeOrder()
+            )
+            val bytes = ByteBuffer.allocateDirect(shorts.size * 2).order(ByteOrder.nativeOrder())
+            bytes.asShortBuffer().put(shorts)
+            bytes.rewind()
+            quadPlane = bytes
+            quadLayout = RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
+                metadata.imageWidth * 2, 2,
+                geometry.sensorOriginX, geometry.sensorOriginY)
+        }
         val frame = QuadBayerPreparation.unpack(
-            rawPlane,
-            RawPlaneLayout(metadata.imageWidth, metadata.imageHeight,
-                requireNotNull(metadata.rawPlaneRowStride), requireNotNull(metadata.rawPlanePixelStride),
-                geometry.sensorOriginX, geometry.sensorOriginY),
+            quadPlane, quadLayout,
             normalization, geometry.processingCrop, RawPreDemosaicPipeline.lensShadingModel(metadata)
         )
         val defects = RawDefectCorrector.correctInPlace(
@@ -449,13 +668,11 @@ class RawDevelopmentCoordinator(context: Context) {
             val normalization = metadata.normalizationOrNull() ?: return null
             val rowStride = metadata.rawPlaneRowStride ?: return null
             val pixelStride = metadata.rawPlanePixelStride ?: return null
-            val layout = RawPlaneLayout(
-                metadata.imageWidth, metadata.imageHeight,
-                rowStride, pixelStride,
-                geometry.sensorOriginX, geometry.sensorOriginY
-            )
-            val unpacked = RawSensorUnpacker.unpackNormalized(
-                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            val unpacked = RawPackedUnpacker.unpackFrameNormalized(
+                rawPlane, metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride, metadata.rawImageFormat, normalization,
+                geometry.sensorOriginX, geometry.sensorOriginY,
+                geometry.processingCrop, ByteOrder.nativeOrder()
             )
             val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
             val cfa = prepared.cfa ?: return null
@@ -489,13 +706,11 @@ class RawDevelopmentCoordinator(context: Context) {
             val normalization = metadata.normalizationOrNull() ?: return null
             val rowStride = metadata.rawPlaneRowStride ?: return null
             val pixelStride = metadata.rawPlanePixelStride ?: return null
-            val layout = RawPlaneLayout(
-                metadata.imageWidth, metadata.imageHeight,
-                rowStride, pixelStride,
-                geometry.sensorOriginX, geometry.sensorOriginY
-            )
-            val unpacked = RawSensorUnpacker.unpackNormalized(
-                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            val unpacked = RawPackedUnpacker.unpackFrameNormalized(
+                rawPlane, metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride, metadata.rawImageFormat, normalization,
+                geometry.sensorOriginX, geometry.sensorOriginY,
+                geometry.processingCrop, ByteOrder.nativeOrder()
             )
             val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
             val cfa = prepared.cfa ?: return null
@@ -530,13 +745,11 @@ class RawDevelopmentCoordinator(context: Context) {
             val normalization = metadata.normalizationOrNull() ?: return null
             val rowStride = metadata.rawPlaneRowStride ?: return null
             val pixelStride = metadata.rawPlanePixelStride ?: return null
-            val layout = RawPlaneLayout(
-                metadata.imageWidth, metadata.imageHeight,
-                rowStride, pixelStride,
-                geometry.sensorOriginX, geometry.sensorOriginY
-            )
-            val unpacked = RawSensorUnpacker.unpackNormalized(
-                rawPlane, layout, normalization, geometry.processingCrop, ByteOrder.nativeOrder()
+            val unpacked = RawPackedUnpacker.unpackFrameNormalized(
+                rawPlane, metadata.imageWidth, metadata.imageHeight,
+                rowStride, pixelStride, metadata.rawImageFormat, normalization,
+                geometry.sensorOriginX, geometry.sensorOriginY,
+                geometry.processingCrop, ByteOrder.nativeOrder()
             )
             val prepared = RawPreDemosaicPipeline.process(unpacked, metadata, settings.preDemosaic)
             val cfa = prepared.cfa ?: return null
@@ -579,31 +792,52 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, settings.galosh, mergedPath = false).wavelet &&
             !metadata.quadBayer
+        val hlPlan = outputSettings.hlReconstruction && !metadata.quadBayer
+        val cameraLinearPlan = waveletPlan || hlPlan
+        // Same blend-free tap contract as develop(): the HL stage must see
+        // true channel values (see the tapWhiteWindow note there).
+        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        )
         return developWithTileDropRetry("cfa-frame ${cfa.width}x${cfa.height}") {
             amaze.process(
                 cfa,
                 clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = if (waveletPlan) null else outputSettings,
-                cameraLinear = waveletPlan
+                fusedOutputSettings = if (cameraLinearPlan) null else outputSettings,
+                whiteWindow = tapWhiteWindow,
+                cameraLinear = cameraLinearPlan
             ) { output ->
-                if (waveletPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
+                if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                     output.internalFormat == AmazeTextureFormat.RGBA16F
                 ) {
                     val normalization = metadata.normalizationOrNull()
                     if (normalization == null) {
-                        Log.w(LOG_TAG, "Wavelet skipped: CFA normalization metadata is invalid")
+                        Log.w(LOG_TAG, "Camera-linear tap skipped: CFA normalization metadata is invalid")
                         amaze.transformCameraTexture(
                             output, transform.glslColumnMajorMatrix()
                         ) { aces -> finishJpeg(aces, outputSettings) }
-                    } else {
+                    } else if (waveletPlan) {
                         consumeWaveletDenoised(
                             output, metadata, normalization, transform,
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet
+                            settings.denoise.wavelet,
+                            outputSettings.hlReconstruction,
+                            { hlGpuContext() }
+                        ) { frame -> finishJpeg(frame.texture, outputSettings) }
+                    } else {
+                        consumeHlReconstructed(
+                            output, metadata, normalization, transform,
+                            PreDemosaicResult(
+                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
+                            ),
+                            outputSettings.hlReconstruction,
+                            { hlGpuContext() }
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
                 } else {
@@ -640,19 +874,20 @@ class RawDevelopmentCoordinator(context: Context) {
         // so inference never runs twice for one capture.
         // HDR brackets add HDR-tuned adaptive exposure on top of the display
         // compensation: without it the develop restores reference brightness
-        // exactly, which meters high-DR scenes dark. Uniform merges keep the
-        // legacy fixed exposure (null tuning).
-        val hdrAdaptive = settings.hdrAdaptiveTuning?.let {
-            AdaptiveDevelopmentExposure.analyzeHdr(
-                cfa, Math.pow(2.0, settings.exposureEv), adaptiveWorkspace, it
-            )
-        }
-        val resolvedExposureEv = settings.exposureEv + (hdrAdaptive?.correctionEv ?: 0.0)
-        if (hdrAdaptive != null) {
-            Log.i(LOG_TAG, "Merged HDR develop displayEV=${"%.2f".format(settings.exposureEv)} " +
-                "adaptiveEV=${"%.2f".format(hdrAdaptive.correctionEv)} " +
+        // exactly, which meters high-DR scenes dark. Uniform same-exposure
+        // merges (HDR+/fusion) meter through the single-frame LDR path on the
+        // merged CFA itself when adaptive strength is armed (null tuning plus
+        // zero strength keeps the legacy fixed exposure).
+        val mergedAdaptive = resolveMergedAdaptive(cfa, settings, adaptiveWorkspace)
+        val resolvedExposureEv = settings.exposureEv +
+            (mergedAdaptive?.correctionEv ?: 0.0) *
+            if (settings.hdrAdaptiveTuning != null) 1.0
+            else settings.adaptiveExposureStrength.coerceIn(0f, 1f).toDouble()
+        if (mergedAdaptive != null) {
+            Log.i(LOG_TAG, "Merged develop displayEV=${"%.2f".format(settings.exposureEv)} " +
+                "adaptiveEV=${"%.2f".format(mergedAdaptive.correctionEv)} " +
                 "appliedEV=${"%.2f".format(resolvedExposureEv)} " +
-                "lowKey=${hdrAdaptive.lowKey}")
+                "lowKey=${mergedAdaptive.lowKey}")
         }
         val transform = SceneLinearColorProcessor.resolve(
             SceneLinearColorMetadata.from(metadata), resolvedExposureEv
@@ -693,6 +928,40 @@ class RawDevelopmentCoordinator(context: Context) {
                     jpegOutput.process(output, developOutput)
                 }
             }
+        }
+    }
+
+    /**
+     * Develops an already-demosaiced linear RGB frame (sharp-merge SR
+     * output, camera-native linear, top row first) to a display JPEG.
+     * Amaze is bypassed — the frame is already RGB — but the color
+     * contract is identical to [developMergedJpeg]: the same rcd_final
+     * tail (negative clip, sensor-white desaturation, camera-to-ACEScg)
+     * feeds the same [jpegOutput] AGX/encode. Exposure is fixed
+     * ([RawDevelopmentSettings.exposureEv]; adaptive metering analyzes
+     * CFA and has no RGB leg yet), matching the legacy fixed-exposure
+     * develop. No tile-drop retry: one full-frame dispatch, not AMaZE
+     * tiling (see [developWithTileDropRetry]).
+     */
+    fun developMfsrJpeg(
+        rgb: java.nio.ByteBuffer,
+        width: Int,
+        height: Int,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        outputSettings: JpegOutputSettings = JpegOutputSettings()
+    ): DevelopedJpeg {
+        MemoryLeakDiagnostics.stillCapture()
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+        )
+        return amaze.processMfsrRgb(
+            rgb, width, height,
+            transform.glslColumnMajorMatrix(),
+            transform.glslCameraWhiteNormalized()
+        ) { output ->
+            jpegOutput.process(output, outputSettings)
         }
     }
 

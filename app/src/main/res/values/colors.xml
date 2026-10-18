@@ -1,5 +1,5 @@
 <resources>
-    <!-- Core theme: cozy dark + toned Nikon gold. New tokens derive from these two. -->
+    <!-- Core theme: cozy dark + sea sand. New tokens derive from these two. -->
     <color name="surface">#070809</color>
     <color name="surface_container">#121417</color>
     <color name="panel">#F2121417</color>
@@ -10,10 +10,10 @@
     <color name="text_primary">#F7F8F4</color>
     <color name="text_secondary">#9DA4A8</color>
     <color name="text_muted">#6E757B</color>
-    <color name="accent">#C9A227</color>
-    <color name="accent_dark">#1C1500</color>
-    <color name="accent_soft">#1AC9A227</color>
-    <color name="focus">#C9A227</color>
-    <color name="metering">#FFB342</color>
+    <color name="accent">#DDC08D</color>
+    <color name="accent_dark">#241B0C</color>
+    <color name="accent_soft">#1ADDC08D</color>
+    <color name="focus">#DDC08D</color>
+    <color name="metering">#E5A861</color>
     <color name="danger">#FF7A7A</color>
 </resources>

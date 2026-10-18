@@ -29,15 +29,65 @@ class SessionStreamComboTest {
     )
 
     @Test
+    fun defaultStepIsRawOnlyFullBuffers() {
+        // Raw-only default: full RAW with a ZSL-capable reader and no
+        // preview target at all (taps/metering already run from the RAW
+        // viewfinder). Most HALs sustain full rate this way.
+        val first = combos().first()
+        assertEquals(size(4096, 3072), first.raw)
+        assertNull(first.preview)
+        assertEquals(20, first.readerMaxImages)
+        assertEquals("RAW ONLY FULL", first.label)
+    }
+
+    @Test
     fun fullComboRequestsSmallestPreviewOnly() {
         // Invisible-stream rule: the smallest preview available, requested
-        // only so HALs needing a preview target sustain the RAW stream. No
-        // aspect, coverage, or viewfinder requirement applies.
-        val full = combos().first()
+        // only when the ISP probe proves the HAL stalls raw-only (~20 fps
+        // without any preview request). No aspect, coverage, or viewfinder
+        // requirement applies.
+        val full = combos()[1]
         assertEquals(size(4096, 3072), full.raw)
         assertEquals(size(640, 480), full.preview)
         assertEquals(20, full.readerMaxImages)
         assertEquals("FULL", full.label)
+    }
+
+    @Test
+    fun rawOnlyFullSkippedWhenBuffersEqual() {
+        // Degraded readers with the same depth would retry an identical
+        // session: no RAW ONLY FULL step, the ladder starts at FULL.
+        val ladder = combos(fullMaxImages = 8, reducedMaxImages = 8)
+        assertEquals("FULL", ladder.first().label)
+    }
+
+    @Test
+    fun fpsProbeVerdict() {
+        // 45 sensor-timestamped frames: 30 fps streams pass, ~20 fps MTK
+        // stalls trip the preview remedy; the 25 fps gate itself passes.
+        val fullRate = RawCameraController.rawFpsForProbeWindow(44, 44_000_000_000L / 30)
+        assertEquals(30.0, fullRate, 0.01)
+        assertEquals(false, RawCameraController.previewRequestNeededForFps(fullRate))
+        val stalled = RawCameraController.rawFpsForProbeWindow(44, 44_000_000_000L / 20)
+        assertEquals(20.0, stalled, 0.01)
+        assertEquals(true, RawCameraController.previewRequestNeededForFps(stalled))
+        assertEquals(false, RawCameraController.previewRequestNeededForFps(25.0))
+        assertEquals(false, RawCameraController.previewRequestNeededForFps(
+            RawCameraController.rawFpsForProbeWindow(44, 0L)
+        ))
+    }
+
+    @Test
+    fun firstPreviewComboIsFullStep() {
+        // The 20 fps jump lands on FULL (smallest preview, full buffers),
+        // never on a degraded tail step.
+        val ladder = combos()
+        val full = ladder.indexOfFirst { it.label == "FULL" }
+        assertEquals(full, RawCameraController.firstPreviewComboIndex(ladder))
+        assertEquals(
+            -1,
+            RawCameraController.firstPreviewComboIndex(combos(previews = emptyList()))
+        )
     }
 
     @Test
@@ -62,6 +112,7 @@ class SessionStreamComboTest {
         )
         assertEquals(
             listOf(
+                SessionStreamCombo(size(4096, 3072), null, 20, "RAW ONLY FULL"),
                 SessionStreamCombo(size(4096, 3072), size(176, 144), 20, "FULL"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 20, "MIN PREVIEW"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 8, "MIN BUFFERS"),
@@ -80,6 +131,7 @@ class SessionStreamComboTest {
         val ladder = combos()
         assertEquals(
             listOf(
+                SessionStreamCombo(size(4096, 3072), null, 20, "RAW ONLY FULL"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 20, "FULL"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 8, "MIN BUFFERS"),
                 SessionStreamCombo(size(2048, 1536), size(640, 480), 8, "SMALL RAW"),
@@ -94,7 +146,7 @@ class SessionStreamComboTest {
     fun singleRawSizeSkipsSmallRawStep() {
         val ladder = combos(raw = listOf(size(4096, 3072)))
         assertEquals(
-            listOf("FULL", "MIN BUFFERS", "RAW ONLY"),
+            listOf("RAW ONLY FULL", "FULL", "MIN BUFFERS", "RAW ONLY"),
             ladder.map { it.label }
         )
     }
@@ -106,6 +158,7 @@ class SessionStreamComboTest {
         val ladder = combos(previews = emptyList())
         assertEquals(
             listOf(
+                SessionStreamCombo(size(4096, 3072), null, 20, "RAW ONLY FULL"),
                 SessionStreamCombo(size(4096, 3072), null, 8, "RAW ONLY"),
                 SessionStreamCombo(size(2048, 1536), null, 8, "RAW ONLY MIN")
             ),
@@ -126,6 +179,7 @@ class SessionStreamComboTest {
         val ladder = combos(previews = listOf(size(640, 480)))
         assertEquals(
             listOf(
+                SessionStreamCombo(size(4096, 3072), null, 20, "RAW ONLY FULL"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 20, "FULL"),
                 SessionStreamCombo(size(4096, 3072), size(640, 480), 8, "MIN BUFFERS"),
                 SessionStreamCombo(size(2048, 1536), size(640, 480), 8, "SMALL RAW"),
@@ -222,5 +276,53 @@ class SessionStreamComboTest {
         // A 59-frame request on the capped 61-buffer reader keeps a 47-frame
         // ring (61 - 14 headroom): deep but provably inside the queue.
         assertEquals(47, RawCameraController.clampZslCapacityForReader(59, 61))
+    }
+
+    @Test
+    fun preferredSizeMovesItsCombosFirstStably() {
+        val ladder = combos()
+        val preferred = size(2048, 1536)
+        val ordered = RawCameraController.orderCombosForPreferredSize(ladder, preferred)
+        // Every preferred-raw combo leads, in ladder order; the rest follow
+        // untouched, so HAL rejection still degrades exactly as before.
+        assertEquals(
+            ladder.filter { it.raw == preferred },
+            ordered.take(ladder.count { it.raw == preferred })
+        )
+        assertEquals(ladder.filter { it.raw != preferred }, ordered.drop(ladder.count { it.raw == preferred }))
+        assertEquals(preferred, ordered.first().raw)
+    }
+
+    @Test
+    fun preferredSizeFallsBackToAuto() {
+        val ladder = combos()
+        assertEquals(ladder, RawCameraController.orderCombosForPreferredSize(ladder, null))
+        assertEquals(
+            ladder,
+            RawCameraController.orderCombosForPreferredSize(ladder, size(1, 1))
+        )
+    }
+
+    @Test
+    fun sizePreferenceParsing() {
+        assertEquals(size(4080, 3072), RawCameraController.parseRawSizePreference("4080x3072"))
+        assertNull(RawCameraController.parseRawSizePreference(null))
+        assertNull(RawCameraController.parseRawSizePreference("huge"))
+        assertNull(RawCameraController.parseRawSizePreference("0x3072"))
+    }
+
+    @Test
+    fun formatPreferenceResolvesPackedOnlyWhenAvailable() {
+        val sensor = android.graphics.ImageFormat.RAW_SENSOR
+        val raw12 = android.graphics.ImageFormat.RAW12
+        val both = setOf(sensor, raw12)
+        // Auto and unknown names stay unpacked: packed is strictly opt-in.
+        assertEquals(sensor, RawCameraController.resolveRawFormatPreference(null, both))
+        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("YUV", both))
+        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW14", both))
+        // An opted-in format wins only where the map lists it.
+        assertEquals(raw12, RawCameraController.resolveRawFormatPreference("RAW12", both))
+        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW12", setOf(sensor)))
+        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW10", both))
     }
 }

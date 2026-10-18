@@ -17,7 +17,7 @@ import kotlin.math.roundToInt
 /**
  * Minimal floating ruler slider, after the reference camera apps:
  * a translucent dark strip with the axis code + live value stacked on top,
- * a slim tick band, edge min/max hints, and a gold needle. Values are fed in
+ * a slim tick band, edge min/max hints, and a sand needle. Values are fed in
  * via [valueText]/[minText]/[maxText] so the strip stays self-sufficient and
  * the exposure chips are free for status.
  */
@@ -102,12 +102,12 @@ class RuleSliderView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
     }
     private val needlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 162, 39)
+        color = Color.rgb(221, 192, 141)
         strokeWidth = 2.5f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val needleGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(64, 201, 162, 39)
+        color = Color.argb(64, 221, 192, 141)
         strokeWidth = 6f * density
         strokeCap = Paint.Cap.ROUND
     }
@@ -208,7 +208,7 @@ class RuleSliderView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Gold needle marks the current position; the fill track is intentionally omitted
+        // Sand needle marks the current position; the fill track is intentionally omitted
         // so the strip reads as a ruler rather than a progress bar.
         val fraction = if (max > 0) progress.toFloat() / max.toFloat() else 0f
         val needleX = startX + span * fraction.coerceIn(0f, 1f)

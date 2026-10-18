@@ -12,29 +12,29 @@
         android:orientation="vertical"
         android:paddingStart="22dp"
         android:paddingEnd="22dp"
-        android:paddingTop="48dp"
-        android:paddingBottom="40dp">
+        android:paddingTop="24dp"
+        android:paddingBottom="24dp">
 
         <!-- Cozy hero: glowing camera medallion -->
         <FrameLayout
-            android:layout_width="112dp"
-            android:layout_height="112dp">
+            android:layout_width="64dp"
+            android:layout_height="64dp">
 
             <View
-                android:layout_width="112dp"
-                android:layout_height="112dp"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
                 android:background="@drawable/welcome_hero_ring"
                 android:alpha="0.9" />
 
             <View
-                android:layout_width="88dp"
-                android:layout_height="88dp"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
                 android:layout_gravity="center"
                 android:background="@drawable/glass_button" />
 
             <ImageView
-                android:layout_width="52dp"
-                android:layout_height="52dp"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
                 android:layout_gravity="center"
                 android:contentDescription="RawLens camera"
                 android:src="@drawable/photo_camera_photograph_svgrepo_com" />
@@ -43,7 +43,7 @@
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
+            android:layout_marginTop="10dp"
             android:gravity="center"
             android:orientation="horizontal">
 
@@ -83,7 +83,7 @@
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -92,7 +92,7 @@
                 android:layout_height="wrap_content"
                 android:text="RawLens"
                 android:textColor="@color/text_primary"
-                android:textSize="36sp"
+                android:textSize="28sp"
                 android:textStyle="bold" />
 
             <View
@@ -104,24 +104,14 @@
                 android:background="@drawable/welcome_dot" />
         </LinearLayout>
 
-        <TextView
-            android:layout_width="260dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:text="Your cozy little darkroom — real sensor RAW, honest light, no noise."
-            android:textColor="@color/text_secondary"
-            android:textSize="14sp"
-            android:lineSpacingExtra="2dp" />
-
         <!-- Cozy feature cards with accent markers -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="16dp"
             android:background="@drawable/welcome_card"
             android:orientation="vertical"
-            android:padding="18dp">
+            android:padding="14dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -135,7 +125,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="10dp"
                 android:gravity="top"
                 android:orientation="horizontal">
 
@@ -164,7 +154,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="Full-resolution DNG + warm calibrated JPEG with AgX looks."
+                        android:text="Full-resolution DNG + warm AgX JPEG."
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
                 </LinearLayout>
@@ -173,7 +163,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="10dp"
                 android:gravity="top"
                 android:orientation="horizontal">
 
@@ -202,7 +192,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="ISO, shutter, WB and EV with AUTO, PROGRAM, ZSL and MANUAL."
+                        android:text="ISO, shutter, WB, EV: AUTO, PROGRAM, ZSL, MANUAL."
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
                 </LinearLayout>
@@ -211,7 +201,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="10dp"
                 android:gravity="top"
                 android:orientation="horizontal">
 
@@ -231,7 +221,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Every lens, warmly welcomed"
+                        android:text="Brave the hard light"
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
@@ -240,7 +230,45 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="RAW lens discovery, one-tap switching, histogram, grid and guides."
+                        android:text="HDR/HDR+ merging, ETTR guard, wavelet denoise."
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="top"
+                android:orientation="horizontal">
+
+                <View
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="5dp"
+                    android:background="@drawable/welcome_dot" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Motion in RAW too"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="RAW video + flat Direct-Log, ready to grade."
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
                 </LinearLayout>
@@ -251,10 +279,10 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="10dp"
             android:background="@drawable/welcome_card"
             android:orientation="vertical"
-            android:padding="18dp">
+            android:padding="14dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -268,17 +296,16 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="1 · Allow the camera   2 · Grant the photo folder   3 · Pick your RAW lenses   4 · Go shoot"
+                android:layout_marginTop="8dp"
+                android:text="1 · Allow camera   2 · Grant folder   3 · Pick lenses   4 · Shoot"
                 android:textColor="@color/text_primary"
-                android:textSize="13sp"
-                android:lineSpacingExtra="4dp" />
+                android:textSize="13sp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="Needs Android 10+ and a rear camera with Camera2 RAW — support varies by device."
+                android:layout_marginTop="6dp"
+                android:text="Needs Android 11+ and Camera2 RAW — GPU video needs Android 13+."
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
         </LinearLayout>
@@ -286,21 +313,21 @@
         <Button
             android:id="@+id/openCameraButton"
             android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:layout_marginTop="24dp"
+            android:layout_height="52dp"
+            android:layout_marginTop="16dp"
             android:background="@drawable/welcome_cta"
-            android:text="Open Camera  →"
+            android:text="Get Started  →"
             android:textAllCaps="false"
             android:textColor="@color/accent_dark"
-            android:textSize="17sp"
+            android:textSize="16sp"
             android:textStyle="bold"
-            android:minHeight="60dp" />
+            android:minHeight="52dp" />
 
         <TextView
             android:id="@+id/welcomeStatus"
             android:layout_width="260dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="8dp"
             android:gravity="center"
             android:text="First camera access, then the photo-folder grant so burst gyro files save next to your DNGs, then lenses. Your photos stay in DCIM/RawLens — no accounts, no cloud."
             android:textColor="@color/text_muted"

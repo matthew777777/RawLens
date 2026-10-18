@@ -9,29 +9,45 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 
 /**
- * First-install welcome screen.
+ * First-install welcome screens.
  *
- * Flow: welcome content (from README highlights) -> "Open Camera" button ->
- * CAMERA runtime permission -> automatic photo-folder grant (the same
- * `ACTION_OPEN_DOCUMENT_TREE` picker burst settings offers, so gyro
- * sidecars save next to the DNGs in `DCIM/RawLens` by default) ->
- * [MainActivity] which runs lens discovery on first run. Everything after
- * that is unchanged.
+ * Order ([WelcomeFlow]): welcome content -> one full-black permissions page
+ * (camera grant + photo-folder grant + optional location tags + the
+ * keep-up-to-date ask, updater builds only) -> [MainActivity] which runs
+ * lens discovery on first run.
+ * The update ask never layers over the welcome content anymore; returning
+ * users (welcome already completed, or lenses already set up from an
+ * earlier version without these screens) skip straight to [MainActivity],
+ * where [UpdateConsent] still asks once. Everything after that is
+ * unchanged.
  *
  * The folder grant is best-effort: a cancel, a deny, or an unavailable
- * picker still proceeds to [MainActivity] (sidecars fall back to
- * Downloads until the folder is granted from burst settings).
- *
- * Returning users (welcome already completed, or lenses already set up from
- * an earlier version without this screen) skip straight to [MainActivity].
+ * picker stays on the permissions page (sidecars fall back to Downloads
+ * until the folder is granted from burst settings). Continuing never
+ * blocks on any grant: [MainActivity] re-asks the camera itself when it
+ * still lacks it.
  */
 class WelcomeActivity : Activity() {
 
-    private lateinit var status: TextView
+    private var step = WelcomeFlow.Step.WELCOME
+
+    private var welcomeStatus: TextView? = null
+
+    private var cameraStatus: TextView? = null
+    private var cameraButton: Button? = null
+    private var folderStatus: TextView? = null
+    private var locationSwitch: Switch? = null
+    private var updateSection: LinearLayout? = null
+    private var updateSwitch: Switch? = null
+    /** True while the optional location request from Continue is outstanding. */
+    private var awaitingLocationResult = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,16 +55,20 @@ class WelcomeActivity : Activity() {
             openCamera()
             return
         }
+        // No update dialog here: the keep-up-to-date ask has its own page
+        // (see showPermissionsPage) instead of layering over welcome.
+        showWelcomePage()
+    }
+
+    /** Welcome content page: nothing overlays it. */
+    private fun showWelcomePage() {
+        step = WelcomeFlow.Step.WELCOME
+        clearPermissionRefs()
         setContentView(R.layout.activity_welcome)
-        status = findViewById(R.id.welcomeStatus)
-        // First-install update consent (GitHub builds only; F-Droid never
-        // asks). Returning users get the same dialog from MainActivity.
-        UpdateConsent.showIfNeeded(this)
+        welcomeStatus = findViewById(R.id.welcomeStatus)
         findViewById<Button>(R.id.openCameraButton).setOnClickListener {
-            if (checkSelfPermission(Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                completeAndOpenCamera()
+            if (hasCameraPermission()) {
+                showPermissionsPage()
             } else {
                 requestPermissions(
                     arrayOf(Manifest.permission.CAMERA),
@@ -58,18 +78,110 @@ class WelcomeActivity : Activity() {
         }
     }
 
+    /**
+     * Full-black permissions page: camera row, photo-folder row, the
+     * optional location switch, and the keep-up-to-date ask (updater
+     * builds only), then lens discovery.
+     */
+    private fun showPermissionsPage() {
+        step = WelcomeFlow.Step.PERMISSIONS
+        setContentView(R.layout.activity_welcome_permissions)
+        cameraStatus = findViewById(R.id.permCameraStatus)
+        cameraButton = findViewById(R.id.permCameraButton)
+        folderStatus = findViewById(R.id.permFolderStatus)
+        locationSwitch = findViewById(R.id.locationSwitch)
+        updateSection = findViewById(R.id.updateSection)
+        updateSwitch = findViewById(R.id.updateSwitch)
+        updateSection?.visibility =
+            if (WelcomeFlow.showsUpdateAsk(step, BuildConfig.ENABLE_UPDATE_CHECK)) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+        refreshCameraRow()
+        refreshFolderRow()
+        cameraButton?.setOnClickListener {
+            if (!hasCameraPermission()) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.CAMERA),
+                    CAMERA_PERMISSION,
+                )
+            }
+        }
+        findViewById<Button>(R.id.permFolderButton).setOnClickListener {
+            SidecarTreeAccess.markFirstInstallPrompted(this)
+            pickPhotoFolder()
+        }
+        findViewById<Button>(R.id.permContinueButton).setOnClickListener {
+            continueFromPermissionsPage()
+        }
+    }
+
+    private fun clearPermissionRefs() {
+        cameraStatus = null
+        cameraButton = null
+        folderStatus = null
+        locationSwitch = null
+        updateSection = null
+        updateSwitch = null
+    }
+
+    private fun hasCameraPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun refreshCameraRow() {
+        if (hasCameraPermission()) {
+            cameraStatus?.text = "Granted — ready to discover RAW lenses and shoot."
+            cameraButton?.text = "Camera Allowed ✓"
+            cameraButton?.isEnabled = false
+            cameraButton?.alpha = 0.6f
+        } else {
+            cameraStatus?.text = "Camera access is needed to discover RAW lenses and shoot."
+            cameraButton?.text = "Allow Camera"
+            cameraButton?.isEnabled = true
+            cameraButton?.alpha = 1f
+        }
+    }
+
+    private fun refreshFolderRow() {
+        val uri = SidecarTreeAccess.savedTreeUri(this)
+        folderStatus?.text = if (uri != null) {
+            val label = SidecarTreeAccess.displayPath(uri)
+            if (label.isNullOrEmpty()) "Folder chosen." else "Chosen: $label."
+        } else {
+            "Not chosen yet."
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == LOCATION_PERMISSION) {
+            // Optional location decision from Continue: granted tags photos,
+            // denied simply leaves them untagged. Either way entry proceeds.
+            setSaveLocation(
+                grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+            )
+            if (awaitingLocationResult) {
+                awaitingLocationResult = false
+                openCamera()
+            }
+            return
+        }
         if (requestCode != CAMERA_PERMISSION) return
+        if (step == WelcomeFlow.Step.PERMISSIONS) {
+            refreshCameraRow()
+            return
+        }
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            completeAndOpenCamera()
+            showPermissionsPage()
         } else {
-            status.text = "Camera access is needed to discover RAW lenses and shoot. " +
-                "Tap Open Camera to try again."
+            welcomeStatus?.text = "Camera access is needed to discover RAW lenses and shoot. " +
+                "Tap Get Started to try again."
         }
     }
 
@@ -79,24 +191,70 @@ class WelcomeActivity : Activity() {
             prefs.getBoolean(KEY_LENS_SETUP_COMPLETE, false)
     }
 
+    /**
+     * Continue from the permissions page: records the page choices and
+     * hands off to [MainActivity], which runs lens discovery on first run.
+     * Location is optional and never blocks entry — a switch-on without a
+     * grant asks once via the system dialog, then proceeds either way, and
+     * the same toggle stays available later under Settings.
+     */
+    private fun continueFromPermissionsPage() {
+        val wantLocation = locationSwitch?.isChecked == true
+        if (wantLocation && !hasLocationPermission()) {
+            completeWelcomeAndUpdateChoice()
+            awaitingLocationResult = true
+            requestPermissions(
+                GpsLocationProvider.permissions(),
+                LOCATION_PERMISSION,
+            )
+        } else {
+            setSaveLocation(wantLocation && hasLocationPermission())
+            completeAndOpenCamera()
+        }
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+
+    /** Same opt-in MainActivity's Settings toggle persists. */
+    private fun setSaveLocation(enabled: Boolean) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SAVE_LOCATION, enabled)
+            .apply()
+    }
+
+    /**
+     * Records the permissions-page choices (including the keep-up-to-date
+     * switch on updater builds) and hands off to [MainActivity], which runs
+     * lens discovery on first run.
+     */
     private fun completeAndOpenCamera() {
+        completeWelcomeAndUpdateChoice()
+        openCamera()
+    }
+
+    private fun completeWelcomeAndUpdateChoice() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_WELCOME_COMPLETE, true)
             .apply()
-        if (SidecarTreeAccess.needsFirstInstallPrompt(this)) {
-            SidecarTreeAccess.markFirstInstallPrompted(this)
-            status.text = "One more grant: choose DCIM/RawLens next so burst " +
-                "gyro files save next to your DNGs."
-            pickPhotoFolder()
-        } else {
-            openCamera()
+        if (BuildConfig.ENABLE_UPDATE_CHECK) {
+            val enabled = updateSwitch?.isChecked ?: true
+            getSharedPreferences(UpdateChecker.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(UpdateConsent.KEY_CONSENT_ASKED, true)
+                .putBoolean(UpdateChecker.KEY_AUTO_CHECK, enabled)
+                .apply()
         }
     }
 
     /**
-     * Same folder grant burst settings offers, fired automatically on first
-     * install. Never blocks entry: any failure proceeds to the camera.
+     * Same folder grant burst settings offers, fired from the permissions
+     * page. Never blocks entry: any failure stays on the page.
      */
     private fun pickPhotoFolder() {
         try {
@@ -111,7 +269,7 @@ class WelcomeActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, SIDECAR_TREE_REQUEST)
         } catch (_: Exception) {
-            openCamera()
+            refreshFolderRow()
         }
     }
 
@@ -122,7 +280,19 @@ class WelcomeActivity : Activity() {
         if (resultCode == RESULT_OK) {
             data?.data?.let { SidecarTreeAccess.saveTreeUri(this, it) }
         }
-        openCamera()
+        // Stay on the permissions page so the keep-up-to-date ask and the
+        // Continue button remain on their own screen; the row just reflects
+        // the new folder state.
+        refreshFolderRow()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (step == WelcomeFlow.Step.PERMISSIONS) {
+            showWelcomePage()
+            return
+        }
+        super.onBackPressed()
     }
 
     private fun openCamera() {
@@ -132,9 +302,12 @@ class WelcomeActivity : Activity() {
 
     private companion object {
         const val CAMERA_PERMISSION = 42
+        const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
         const val PREFS_NAME = "rawlens_settings"
         const val KEY_WELCOME_COMPLETE = "welcome_complete"
         const val KEY_LENS_SETUP_COMPLETE = "lens_setup_complete"
+        /** Kept in sync with MainActivity: the same opt-in its Settings toggle persists. */
+        const val KEY_SAVE_LOCATION = "save_location_gps"
     }
 }

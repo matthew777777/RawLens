@@ -141,7 +141,7 @@ object UpdateInstaller {
     /**
      * Fires the system installer for a downloaded APK. Returns
      * [InstallOutcome.NeedsUnknownSources] when the caller must route
-     * through [unknownSourcesIntent] first (minSdk 29, so
+     * through [unknownSourcesIntent] first (minSdk 30, so
      * `canRequestPackageInstalls` always exists).
      */
     fun install(context: Context, file: File): InstallOutcome {
