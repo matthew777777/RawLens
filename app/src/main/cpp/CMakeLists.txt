@@ -307,6 +307,23 @@ if(ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_options(rawLensCrs PRIVATE -mfpu=neon)
 endif()
 
+# CRS container reader (vendored decoder, GPL-3.0-only; see
+# NOTICE.md). Offline burst merge reads _BURST.crs takes back through
+# this library; the writer above stays write-only.
+add_library(rawLensBurstCrs SHARED
+    crsdecode/src/ContainerReader.cpp
+    crsdecode/src/Decoder.cpp
+    burstcrs_reader_jni.cpp)
+target_include_directories(rawLensBurstCrs PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/crsdecode/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/crsdecode/src")
+set_target_properties(rawLensBurstCrs PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+target_link_libraries(rawLensBurstCrs PRIVATE log)
+target_link_options(rawLensBurstCrs PRIVATE "-Wl,-z,max-page-size=16384")
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(rawLensBurstCrs PRIVATE -mfpu=neon)
+endif()
+
 # BGU viewfinder spike: JNI bridge to Halide AOT filters. The .a archives are
 # prebuilt per ABI by tools/halide/build_aot.sh and checked in (ncnn precedent).
 # Source-only builds skip this library; BguSpike/BguFit/BguLook report

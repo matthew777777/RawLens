@@ -59,6 +59,12 @@
             android:exported="true"
             android:screenOrientation="portrait">
         </activity>
+        <!-- Offline burst merge: staged _BURST.crs takes only, never RAW video. -->
+        <activity
+            android:name=".MergesActivity"
+            android:exported="false"
+            android:screenOrientation="portrait">
+        </activity>
         <!-- In-app updater: serves the staged release APK to the system
             installer. Paths limited to the update staging dir (filepaths). -->
         <provider

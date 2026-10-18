@@ -212,7 +212,7 @@ object BurstSidecar {
     ) {
         requireSubfolder(subfolder)
         val resolver = context.contentResolver
-        // Downloads (minSdk 29) accepts text/csv + application/json under
+        // Downloads (API 29+, below minSdk 30) accepts text/csv + application/json under
         // Download/; Files/Images with a DCIM path throw
         // IllegalArgumentException on insert.
         val collection = MediaStore.Downloads.getContentUri("external")

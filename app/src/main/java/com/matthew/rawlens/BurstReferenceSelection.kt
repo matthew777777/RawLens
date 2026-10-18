@@ -358,8 +358,22 @@ internal object GreenThumbnailSampler {
         if (!whiteLevel.isFinite() || blackLevels.any { !it.isFinite() }) return null
         if (blackLevels.any { whiteLevel <= it }) return null
         if (cropWidth < 8 || cropHeight < 8 || cropWidth % 2 != 0 || cropHeight % 2 != 0) return null
-        if (pixelStride < 2 || rowStride < (cropWidth - 1) * pixelStride + 2) return null
         val plane = image.planes?.firstOrNull() ?: return null
+        // Packed sessions sample native codes through a row-cached reader;
+        // out-of-frame crops refuse exactly like overrun offsets below.
+        val packedSampler = if (pixelStride < 2) {
+            val packed = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(
+                    plane.buffer, width, height, rowStride, 0, packed
+                )
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
+        if (packedSampler == null &&
+            (pixelStride < 2 || rowStride < (cropWidth - 1) * pixelStride + 2)
+        ) return null
         val quadsW = cropWidth / 2
         val quadsH = cropHeight / 2
         val step = ((maxOf(quadsW, quadsH) + maxQuads - 1) / maxQuads).coerceAtLeast(1)
@@ -385,11 +399,19 @@ internal object GreenThumbnailSampler {
                 val sensorX = sensorOriginX + planeX
                 val sensorY = sensorOriginY + planeY
                 if (pattern.colorAt(sensorX, sensorY) != CfaColor.GREEN) continue
-                val offset = dataOrigin +
-                    planeY.toLong() * rowStride +
-                    planeX.toLong() * pixelStride
-                if (offset + 2 > limit) return null
-                val code = input.getShort(offset.toInt()).toInt() and 0xffff
+                val code = if (packedSampler != null) {
+                    try {
+                        packedSampler.codeAt(planeX, planeY)
+                    } catch (_: IllegalArgumentException) {
+                        return null
+                    }
+                } else {
+                    val offset = dataOrigin +
+                        planeY.toLong() * rowStride +
+                        planeX.toLong() * pixelStride
+                    if (offset + 2 > limit) return null
+                    input.getShort(offset.toInt()).toInt() and 0xffff
+                }
                 val black = blackLevels[((sensorY and 1) shl 1) or (sensorX and 1)]
                 greenSum += (code - black).coerceAtLeast(0f) / (whiteLevel - black)
                 greens++
