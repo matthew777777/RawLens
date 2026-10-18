@@ -63,6 +63,15 @@ data class PipelineConfig(
      * `config.alignment.preprocessing` (null by default, mirroring Python).
      */
     val alignmentPreprocessing: String? = null,
+    /**
+     * Memory-tight host discipline for the 512 MB on-device ceiling:
+     * collects after every merged frame (all per-frame transients are
+     * dead then), so GC timing cannot decide survival at the ragged
+     * edge. Values-identical (collection changes no values); desktop
+     * defaults to false (allocation rate is not the binding constraint
+     * there, wall time is).
+     */
+    val memoryTight: Boolean = false,
 )
 
 object EndToEnd {

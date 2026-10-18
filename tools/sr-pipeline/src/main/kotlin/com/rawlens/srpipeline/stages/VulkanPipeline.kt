@@ -388,7 +388,10 @@ object VulkanPipeline {
         // Loop rows are scoped here: they die with the work block.
         val loopRows = Array(h) { FloatArray(w) }
         var frameNo = 0
-        for (frameThunk in comparisons) {
+        // One frame end to end (own scope): the decoded frame, pyramid,
+        // per-call transients and flow all die here, so a memory-tight
+        // collector reclaims them before the next frame.
+        fun frameStep(frameThunk: (ByteBuffer) -> Array<FloatArray>) {
             // The frame decodes into the shared pack staging (same
             // bytes as a private staging buffer): the rows are built
             // before the first pack overwrites it.
@@ -422,6 +425,13 @@ object VulkanPipeline {
                 packInto(onesR, mergeRDirect)
             }
             mergeFrame(frame, flow, rBuf)
+        }
+        for (frameThunk in comparisons) {
+            frameStep(frameThunk)
+            // Memory-tight discipline (cf. `memoryTight`): everything
+            // above is dead here; collect before the next frame so GC
+            // timing cannot decide survival at the 512 MB ceiling.
+            if (config.memoryTight) System.gc()
         }
         } // 3. work block ends: kernel scratch, loop rows and merge
           // vectors die here, before the 150 MB download below.

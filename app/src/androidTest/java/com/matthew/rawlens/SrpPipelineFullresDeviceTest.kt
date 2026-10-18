@@ -22,15 +22,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Full 8-frame FULL-RES burst through the app-integrated pipeline
+ * Full-res burst through the app-integrated pipeline
  * ([VulkanPipeline.run] from the shared tools module, same config
  * recipe as the desktop CLI: full 3060x4080 frames, scale 1, LUT on).
- * Writes `merged-device-fullres.dng` to the app external dir; pull it
- * and compare against the desktop reference
- * (`/tmp/sr-crop/fullres-desktop/merged.dng`, 4080x3060, 30.2 s
- * desktop Vulkan) under the envelope gate. Test asserts rc==0s +
- * output exists + logs wall/heap; pixel identity is checked on the
- * host (no multi-MB blob in test output).
+ * Frame count via `-e rawlensSrpCount N` (default: all pushed DNGs,
+ * cycling the burst in sorted order when N exceeds it); writes
+ * `merged-device-fullres[N].dng` to the
+ * app external dir. Pull it and compare against the desktop reference
+ * run over the same cycled sequence under the envelope gate. Test
+ * asserts rc==0s + output exists + logs wall/heap; pixel identity is
+ * checked on the host (no multi-MB blob in test output).
  *
  * Burst + LUT must be pushed beforehand to /data/local/tmp/sr-burst
  * (world-readable, survives app reinstalls).
@@ -59,15 +60,30 @@ class SrpPipelineFullresDeviceTest {
         // Phase heap + stage clock: the live-set curve is load-bearing
         // under the 512 MB ceiling (set before first VulkanPipeline use).
         System.setProperty("srpipeline.profile", "true")
-        val burstDir = File("/data/local/tmp/sr-burst")
+        // Burst dir + frame count are runner args so proofs are not tied
+        // to one staging dir (`-e rawlensSrpDir /data/local/tmp/...`,
+        // `-e rawlensSrpCount N`); the LUT is the single `*.npz` in the
+        // dir, validated against the burst like the desktop CLI does.
+        val burstDir = File(args.getString("rawlensSrpDir") ?: "/data/local/tmp/sr-burst")
         val listing = burstDir.list() ?: emptyArray()
         Log.i("SrpFullresDevice", "burst dir ${burstDir.absolutePath} lists ${listing.size}: " +
             listing.sorted().take(10).joinToString(","))
         val frames = listing.filter { it.lowercase().endsWith(".dng") }
             .map { File(burstDir, it) }.filter { it.isFile }.sortedBy { it.name }
-        assumeTrue("push 8 burst DNGs to ${burstDir.absolutePath} first", frames.size == 8)
-        val lutFile = File(burstDir, "IMG_20260927_134544_522_noise.npz")
-        assumeTrue("push the noise LUT next to the burst first", lutFile.isFile)
+        // Frame count (default: all pushed DNGs): longer proofs cycle
+        // the burst in sorted order (frame[i] = frames[i % size]), so
+        // the sequence matches a desktop dir with the same cycling.
+        // Memory is per-frame steady, so count costs wall time, not heap.
+        val count = args.getString("rawlensSrpCount")?.toIntOrNull() ?: frames.size
+        require(count in 2..64) { "rawlensSrpCount must hold 2..64 frames" }
+        assumeTrue("push burst DNGs to ${burstDir.absolutePath} first", frames.isNotEmpty())
+        val seq = (0 until count).map { frames[it % frames.size] }
+        Log.i("SrpFullresDevice", "frame count $count (cycled over ${frames.size})")
+        val lutFiles = listing.filter { it.lowercase().endsWith(".npz") }
+            .map { File(burstDir, it) }.filter { it.isFile }
+        assumeTrue("push exactly one noise LUT (*.npz) next to the burst first",
+            lutFiles.size == 1)
+        val lutFile = lutFiles[0]
         val outDir = context.getExternalFilesDir(null)
             ?: context.filesDir
 
@@ -76,7 +92,7 @@ class SrpPipelineFullresDeviceTest {
         assumeTrue("no Vulkan compute device", handle != 0L)
         try {
             Log.i("SrpFullresDevice", "device: ${SrpBridge.nativeDeviceInfo(handle)}")
-            val refPath = frames[0].absolutePath
+            val refPath = seq[0].absolutePath
             val refMeta = DngRead.readMeta(refPath)
             // The reference decodes through a temp (dead before the
             // pipeline's init window); the shared decode staging is
@@ -88,7 +104,7 @@ class SrpPipelineFullresDeviceTest {
             // Frames decode into the pipeline-lent staging (same bytes
             // as a private buffer): no 50 MB decode staging lives
             // alongside the loop state.
-            val compImgs = frames.drop(1).map { f ->
+            val compImgs = seq.drop(1).map { f ->
                 { stage: java.nio.ByteBuffer ->
                     DngRead.readNormalizedInto(f.absolutePath, DngRead.readMeta(f.absolutePath), stage)
                 }
@@ -113,6 +129,9 @@ class SrpPipelineFullresDeviceTest {
                 robustnessEnabled = true,
                 sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq,
                 icaIterations = 3,
+                // Collect after every frame: GC timing must not decide
+                // survival at the 512 MB ceiling (values-identical).
+                memoryTight = true,
             )
             Log.i("SrpFullresDevice", "fullres ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
@@ -142,7 +161,9 @@ class SrpPipelineFullresDeviceTest {
             VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
             val profile = SrpBridge.readDngColorProfile(refPath)
             val orientation = SrpBridge.readDngOrientation(refPath)
-            val out = File(outDir, "merged-device-fullres.dng").absolutePath
+            val outName = if (count == 8) "merged-device-fullres.dng"
+                else "merged-device-fullres$count.dng"
+            val out = File(outDir, outName).absolutePath
             val rc = SrpBridge.writeDng(out, outW, outH, rgb, profile.make, profile.model,
                 profile.colorMatrix, profile.neutral, profile.illuminant, orientation)
             assertEquals("writeDng status", 0, rc)
