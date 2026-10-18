@@ -3,10 +3,14 @@
 
 package com.matthew.rawlens
 
+import android.content.ContentResolver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.util.Log
 import java.io.IOException
 
@@ -67,6 +71,99 @@ object SidecarTreeAccess {
     /** Records that the automatic first-install prompt has fired. */
     fun markFirstInstallPrompted(context: Context) {
         prefs(context).edit().putBoolean(KEY_FIRST_INSTALL_PROMPTED, true).apply()
+    }
+
+    /**
+     * Photo-folder picker intent, built the way PhotonCamera requests it
+     * through SimpleStorage: the primary volume's own tree intent plus the
+     * target folder as the starting location — a bare
+     * `ACTION_OPEN_DOCUMENT_TREE` without volume context misbehaves on some
+     * skins (empty listings, everything refused). It opens in DCIM/RawLens
+     * once our own shots created it — the exact folder the sidecars belong
+     * in, serving old users — else in DCIM, where new users grant the
+     * parent their first shots will extend. The grant itself is persisted
+     * afterwards by [saveTreeUri], exactly like the reference.
+     */
+    fun pickerIntent(context: Context, resolver: ContentResolver): Intent {
+        val base = try {
+            val storage = context.getSystemService(StorageManager::class.java)
+                ?: return Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            storage.primaryStorageVolume.createOpenDocumentTreeIntent()
+        } catch (_: Exception) {
+            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        }
+        return base.apply {
+            initialPhotoDirUri(resolver)?.let {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, it)
+            }
+        }
+    }
+
+    /** Hint URI for [pickerIntent]; null when it cannot be built. */
+    private fun initialPhotoDirUri(resolver: ContentResolver): Uri? = try {
+        val documentId = if (
+            hasOwnRawLensDir(resolver) || createRawLensDir(resolver)
+        ) {
+            "primary:DCIM/RawLens"
+        } else {
+            "primary:DCIM"
+        }
+        DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents", documentId
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Ensures DCIM/RawLens exists like PhotonCamera's folder does: our
+     * first DNG save creates it implicitly, but the picker needs it
+     * beforehand. Inserts a momentary hidden placeholder through
+     * MediaStore (no permission needed for our own files) and deletes it
+     * right away — the directory itself stays behind. Verified on-device.
+     */
+    private fun createRawLensDir(resolver: ContentResolver): Boolean {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, ".rawlens-folder-probe.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = try {
+            resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+        } catch (_: Exception) {
+            return false
+        }
+        try {
+            resolver.openOutputStream(uri)?.close() ?: return false
+            return true
+        } catch (_: Exception) {
+            return false
+        } finally {
+            try {
+                resolver.delete(uri, null, null)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * True when our own shots already created DCIM/RawLens. Scoped storage
+     * shows an app its own files with no permission, so this needs none.
+     * The prefix match is slash-agnostic on purpose: our own saver inserts
+     * the path without a trailing slash, which MediaStore may store verbatim.
+     */
+    private fun hasOwnRawLensDir(resolver: ContentResolver): Boolean = try {
+        resolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Images.Media._ID),
+            "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?",
+            arrayOf("DCIM/RawLens%"),
+            null
+        )?.use { it.count > 0 } ?: false
+    } catch (_: Exception) {
+        false
     }
 
     private fun prefs(context: Context) =

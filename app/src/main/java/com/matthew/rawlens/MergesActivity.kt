@@ -40,13 +40,17 @@ class MergesActivity : Activity() {
     private lateinit var runButton: Button
 
     private var rows: List<BurstTakeRow> = emptyList()
+    private var publishedRows: List<PublishedTake> = emptyList()
     private var selected: File? = null
+    private var selectedPublished: PublishedTake? = null
     private var method = BurstMergeRunner.Method.MFSR
     private var format = CaptureFormat.DNG_ONLY
     private val mergeRunning = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        ImmersiveMode.apply(window)
         val prefs = getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
         method = runCatching {
             BurstMergeRunner.Method.valueOf(
@@ -114,7 +118,13 @@ class MergesActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        ImmersiveMode.apply(window)
         reloadTakes()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) ImmersiveMode.apply(window)
     }
 
     private fun prefs() = getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
@@ -123,40 +133,70 @@ class MergesActivity : Activity() {
         getExternalFilesDir(BurstCrsStore.STAGE_SUBDIR) ?: File(filesDir, BurstCrsStore.STAGE_SUBDIR)
 
     private fun reloadTakes() {
-        detailLine.text = "Loading staged takes…"
+        detailLine.text = "Loading burst takes…"
         Thread({
             val staged = BurstMergeTakes.loadStage(stageDir())
-            val published = BurstMergeTakes.publishedCount(contentResolver)
+            val published = BurstMergeTakes.loadPublished(contentResolver)
             runOnUiThread {
                 rows = staged
+                publishedRows = published
                 if (selected?.let { file -> rows.none { it.file.absolutePath == file.absolutePath } } == true) {
                     selected = null
                 }
-                renderList(published)
+                if (selectedPublished?.let { pub ->
+                        publishedRows.none { it.uri == pub.uri }
+                    } == true
+                ) {
+                    selectedPublished = null
+                }
+                renderList()
             }
         }, "MergesList").start()
     }
 
-    private fun renderList(published: Int) {
+    private fun renderList() {
         listBox.removeAllViews()
         val head = when {
-            rows.isEmpty() -> "No staged burst takes. Flip the B switch in ZSL and tap the shutter."
-            else -> "${rows.size} staged take${if (rows.size == 1) "" else "s"} • $published published in DCIM/RawLens/Bursts"
+            rows.isEmpty() && publishedRows.isEmpty() ->
+                "No burst takes yet. Enable the dump in Settings → Burst (ZSL) and tap the shutter."
+            else -> "${rows.size} staged • ${publishedRows.size} published in DCIM/RawLens/Bursts"
         }
         detailLine.text = head
         rows.forEach { row ->
             val active = row.file.absolutePath == selected?.absolutePath
             listBox.addView(Button(this).apply {
-                text = rowText(row)
+                text = "STAGED\n${rowText(row)}"
                 stylePick(this, active)
                 setOnClickListener {
                     it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     selected = row.file
-                    renderList(published)
+                    selectedPublished = null
+                    renderList()
                 }
             })
         }
-        runButton.isEnabled = selected != null && !mergeRunning.get()
+        publishedRows.forEach { pub ->
+            val active = pub.uri == selectedPublished?.uri
+            listBox.addView(Button(this).apply {
+                text = "SAVED\n${publishedText(pub)}"
+                stylePick(this, active)
+                setOnClickListener {
+                    it.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    selectedPublished = pub
+                    selected = null
+                    renderList()
+                }
+            })
+        }
+        runButton.isEnabled = (selected != null || selectedPublished != null) && !mergeRunning.get()
+    }
+
+    private fun publishedText(pub: PublishedTake): String {
+        val mb = pub.sizeBytes / 1e6
+        val date = if (pub.lastModified > 0) {
+            SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(pub.lastModified))
+        } else "?"
+        return "${pub.displayName.removeSuffix(".crs")}\n${"%.1f".format(mb)}MB • $date • copies to stage to merge"
     }
 
     private fun rowText(row: BurstTakeRow): String {
@@ -188,7 +228,9 @@ class MergesActivity : Activity() {
     }
 
     private fun runSelected() {
-        val take = selected ?: return
+        val published = selectedPublished
+        val stagedNow = selected
+        if (stagedNow == null && published == null) return
         if (!mergeRunning.compareAndSet(false, true)) return
         runButton.isEnabled = false
         statusLine.text = ""
@@ -202,9 +244,18 @@ class MergesActivity : Activity() {
         )
         Thread({
             try {
+                // Published takes have no local path: copy back into the
+                // stage dir first (the published original is kept).
+                val take = if (published != null) {
+                    runOnUiThread { progressLine.text = "${published.displayName}\nCopying to stage…" }
+                    BurstMergeTakes.restage(contentResolver, published, stageDir())
+                } else {
+                    requireNotNull(stagedNow)
+                }
                 val result = BurstMergeRunner(this).run(take, method, format, inputs) { progress ->
                     runOnUiThread { progressLine.text = progressText(take, progress) }
                 }
+                reloadTakes()
                 runOnUiThread {
                     mergeRunning.set(false)
                     runButton.isEnabled = true

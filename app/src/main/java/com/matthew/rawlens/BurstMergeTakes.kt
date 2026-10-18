@@ -22,6 +22,14 @@ internal data class BurstTakeRow(
     val height: Int?
 )
 
+/** A published `_BURST.crs` from the shared library (no local path). */
+internal data class PublishedTake(
+    val displayName: String,
+    val sizeBytes: Long,
+    val lastModified: Long,
+    val uri: android.net.Uri
+)
+
 internal object BurstMergeTakes {
     fun loadStage(stageDir: File): List<BurstTakeRow> {
         val takes = BurstCrsStore.listTakes(stageDir)
@@ -32,22 +40,88 @@ internal object BurstMergeTakes {
     }
 
     /**
-     * Published burst takes in `DCIM/RawLens/Bursts`, or 0 when the
-     * library is unreadable. Staged takes are the merge source; this
-     * count is inventory only.
+     * Published burst takes (`DCIM/RawLens/Bursts`, SAF fallback alike),
+     * oldest first. These have no local path, so the merge copies the
+     * selected one back into the stage dir first ([restage]).
      */
-    fun publishedCount(resolver: ContentResolver): Int {
+    fun loadPublished(
+        resolver: ContentResolver,
+        uriFor: (Long) -> android.net.Uri = { id ->
+            android.net.Uri.withAppendedPath(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id.toString()
+            )
+        }
+    ): List<PublishedTake> {
         return try {
             resolver.query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Video.Media._ID),
+                arrayOf(
+                    MediaStore.Video.Media._ID,
+                    MediaStore.Video.Media.DISPLAY_NAME,
+                    MediaStore.Video.Media.SIZE,
+                    MediaStore.Video.Media.DATE_MODIFIED
+                ),
                 "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",
                 arrayOf("%_BURST.crs"),
-                null
-            )?.use { cursor -> cursor.count } ?: 0
+                "${MediaStore.Video.Media.DATE_MODIFIED} ASC"
+            )?.use { cursor ->
+                val idCol = cursor.getColumnIndex(MediaStore.Video.Media._ID)
+                val nameCol = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
+                val sizeCol = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+                val dateCol = cursor.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+                if (idCol < 0 || nameCol < 0) return emptyList()
+                val out = ArrayList<PublishedTake>()
+                while (cursor.moveToNext()) {
+                    val name = runCatching { cursor.getString(nameCol) }.getOrNull()
+                        ?: continue
+                    if (!name.uppercase(java.util.Locale.US).endsWith("_BURST.CRS")) continue
+                    val id = runCatching { cursor.getLong(idCol) }.getOrNull() ?: continue
+                    val size = if (sizeCol >= 0) {
+                        runCatching { cursor.getLong(sizeCol) }.getOrDefault(0L)
+                    } else 0L
+                    val modifiedSecs = if (dateCol >= 0) {
+                        runCatching { cursor.getLong(dateCol) }.getOrDefault(0L)
+                    } else 0L
+                    out += PublishedTake(
+                        displayName = name,
+                        sizeBytes = size,
+                        lastModified = modifiedSecs * 1000,
+                        uri = uriFor(id)
+                    )
+                }
+                out
+            } ?: emptyList()
         } catch (_: Exception) {
-            0
+            emptyList()
         }
+    }
+
+    /**
+     * Copies a published take back into [stageDir] so the file-based
+     * reader and merge can use it. Reuses an identical staged copy when
+     * one already exists. The published original is kept.
+     */
+    fun restage(resolver: ContentResolver, published: PublishedTake, stageDir: File): File {
+        require(published.displayName.uppercase(java.util.Locale.US).endsWith("_BURST.CRS")) {
+            "Not a burst take: ${published.displayName}"
+        }
+        if (!stageDir.exists() && !stageDir.mkdirs()) {
+            throw java.io.IOException("Could not create burst stage")
+        }
+        val staged = File(stageDir, published.displayName)
+        if (staged.isFile && published.sizeBytes > 0 && staged.length() == published.sizeBytes &&
+            BurstCrsStore.listTakes(stageDir).any { it.file.absolutePath == staged.absolutePath }
+        ) {
+            return staged
+        }
+        (resolver.openInputStream(published.uri)
+            ?: throw java.io.IOException("Could not open ${published.displayName}")).use { input ->
+            staged.outputStream().use { output -> input.copyTo(output) }
+        }
+        if (!staged.isFile || staged.length() <= 0) {
+            throw java.io.IOException("Restage produced an empty file")
+        }
+        return staged
     }
 
     /**
