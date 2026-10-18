@@ -115,7 +115,7 @@ object HdrTileDeghost {
     private const val WARP_VARIANCE_INFLATION = 1.25f
     /**
      * Fourier subpixel search grid (hdr-plus-swift `merge_frequency_domain`
-     * / RAWR `hdrq_shift_table`): 7x7 candidates at 1/6 steps over +-0.5
+     * / upstream `hdrq_shift_table`): 7x7 candidates at 1/6 steps over +-0.5
      * channel-px (49 shifts), scored on the already-computed spectra via
      * the cross-correlation argmax — the same argmin as least squares in
      * real arithmetic (rotation preserves magnitude), at one dot product
@@ -787,7 +787,7 @@ object HdrTileDeghost {
 
     /**
      * Fourier subpixel refinement (hdr-plus-swift
-     * `merge_frequency_domain`, RAWR `hdrq_merge` cross-correlation
+     * `merge_frequency_domain`, upstream `hdrq_merge` cross-correlation
      * form): score the 7x7 shift grid at 1/6 steps over +-0.5 channel-px
      * and bake the winner into [s] alternate planes in place as a phase
      * ramp `exp(-2pi*i*(u*sx+v*sy)/TILE)`. Scoring maximizes the

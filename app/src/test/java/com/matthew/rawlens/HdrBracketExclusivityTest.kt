@@ -38,6 +38,54 @@ class HdrBracketExclusivityTest {
         assertEquals(false to false, HdrShutterExclusivity.resolveStale(false, false))
     }
 
+    @Test fun plusOffRestoresModeFromBeforeHdrPlus() {
+        assertEquals(
+            CaptureExposureMode.AUTO,
+            HdrShutterExclusivity.modeAfterPlusDisabled(
+                CaptureExposureMode.ZSL, CaptureExposureMode.AUTO
+            )
+        )
+        assertEquals(
+            CaptureExposureMode.PROGRAM,
+            HdrShutterExclusivity.modeAfterPlusDisabled(
+                CaptureExposureMode.ZSL, CaptureExposureMode.PROGRAM
+            )
+        )
+        assertEquals(
+            CaptureExposureMode.MANUAL,
+            HdrShutterExclusivity.modeAfterPlusDisabled(
+                CaptureExposureMode.ZSL, CaptureExposureMode.MANUAL
+            )
+        )
+    }
+
+    @Test fun plusOffKeepsExplicitlyChosenMode() {
+        // HDR+ enabled while already in ZSL: nothing to restore.
+        assertEquals(
+            CaptureExposureMode.ZSL,
+            HdrShutterExclusivity.modeAfterPlusDisabled(
+                CaptureExposureMode.ZSL, null
+            )
+        )
+        assertEquals(
+            CaptureExposureMode.ZSL,
+            HdrShutterExclusivity.modeAfterPlusDisabled(
+                CaptureExposureMode.ZSL, CaptureExposureMode.ZSL
+            )
+        )
+        // A manual mode change while HDR+ was on is the new intent: keep it.
+        for (mode in listOf(
+            CaptureExposureMode.AUTO,
+            CaptureExposureMode.PROGRAM,
+            CaptureExposureMode.MANUAL
+        )) {
+            assertEquals(
+                mode,
+                HdrShutterExclusivity.modeAfterPlusDisabled(mode, CaptureExposureMode.AUTO)
+            )
+        }
+    }
+
     @Test fun bracketOnLeavesZslForAutoOnly() {
         assertEquals(
             CaptureExposureMode.AUTO,

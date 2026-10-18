@@ -120,7 +120,7 @@ object HdrPlusRobustness {
      *
      * @param baseMax burst-base ceiling (our [HdrTileDeghost] operating
      *   point; upstream derives it from the strength curve).
-     * @param uniform true for same-exposure bursts (fusion path):
+     * @param uniform true for same-exposure bursts:
      *   returns [baseMax] unchanged, like upstream's uniform branch.
      */
     fun maxMotionForFactor(baseMax: Float, factor: Float, uniform: Boolean): Float {
@@ -146,9 +146,9 @@ object HdrPlusRobustness {
     }
 
     /**
-     * Whether a burst counts as uniform exposure (fusion path): every
-     * factor within [tolerance] of 1. Upstream threads an explicit
-     * bool; we derive it so direct deghost callers need no new flag.
+     * Whether a burst counts as uniform exposure: every factor within
+     * [tolerance] of 1. Upstream threads an explicit bool; we derive
+     * it so direct deghost callers need no new flag.
      */
     fun isUniform(factors: List<Float>, tolerance: Float = 0.05f): Boolean =
         factors.isNotEmpty() && factors.all { it.isFinite() && kotlin.math.abs(it - 1f) <= tolerance }

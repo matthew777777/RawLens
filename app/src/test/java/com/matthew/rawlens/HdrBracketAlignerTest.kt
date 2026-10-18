@@ -1,6 +1,7 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,7 +27,7 @@ class HdrBracketAlignerTest {
         val mov = UnpackedRawCfa(size, size, BayerPattern.RGGB, movValues, RawCrop(0, 0, size, size))
         val shift = HdrBracketAligner.estimateShift(
             HdrMergeFrame(ref, 10_000_000L, 100),
-            HdrMergeFrame(mov, 10_000_000L, 100))
+            HdrMergeFrame(mov, 10_000_000L, 100)) ?: error("expected a shift")
         assertEquals(dx.toFloat(), shift.dx, 1.5f)
         assertEquals(dy.toFloat(), shift.dy, 1.5f)
     }
@@ -39,7 +40,7 @@ class HdrBracketAlignerTest {
         val a = UnpackedRawCfa(size, size, BayerPattern.RGGB, values, RawCrop(0, 0, size, size))
         val shift = HdrBracketAligner.estimateShift(
             HdrMergeFrame(a, 10_000_000L, 100),
-            HdrMergeFrame(a.copy(), 10_000_000L, 100))
+            HdrMergeFrame(a.copy(), 10_000_000L, 100)) ?: error("expected a shift")
         assertTrue(kotlin.math.abs(shift.dx) < 1.5f && kotlin.math.abs(shift.dy) < 1.5f)
     }
 
@@ -50,6 +51,27 @@ class HdrBracketAlignerTest {
         val (dx, dy) = f!!.displacement(0, 0)
         assertEquals(2f, dx, 0f)
         assertEquals(3f, dy, 0f)
+    }
+
+    @Test fun nullShiftWhenReferenceHasNoValidQuads() {
+        // All-black reference: every quad sits below BLACK_FLOOR, so no
+        // offset has any valid overlap. The matcher must report failure
+        // (null -> caller merges unwarped) rather than the extreme-corner
+        // offset argmin falls back to when every cost is MAX_VALUE.
+        val size = 32
+        val ref = UnpackedRawCfa(size, size, BayerPattern.RGGB,
+            FloatArray(size * size), RawCrop(0, 0, size, size))
+        val mov = UnpackedRawCfa(size, size, BayerPattern.RGGB,
+            FloatArray(size * size) { i ->
+                val x = i % size
+                val y = i / size
+                ((x * 0.02f + y * 0.013f + ((x * y) % 7) * 0.01f)).coerceIn(0.05f, 0.9f)
+            }, RawCrop(0, 0, size, size))
+        assertNull(
+            HdrBracketAligner.estimateShift(
+                HdrMergeFrame(ref, 10_000_000L, 100),
+                HdrMergeFrame(mov, 10_000_000L, 100))
+        )
     }
 
     @Test fun snapEvenRoundsToCompleteCells() {

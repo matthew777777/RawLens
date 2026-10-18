@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Translation of RAWR's pipeline/src/HdrPlusRecorder.cpp (recordReference,
+// Translation of the upstream pipeline/src/HdrPlusRecorder.cpp (recordReference,
 // per-companion prepare/align/merge, recordFinalize, and the frequency
 // recorder) plus the runHdrPlus/runHdrPlusFrequency drive loops from
 // AndroidBurstCoordinator.cpp.
@@ -9,12 +9,12 @@
 // Preserved exactly: descriptor bindings, dispatch group counts, barrier
 // placement and semantics, pass order, the align-slot copy, and the
 // total-mismatch clear. Host-only differences (no effect on output bits):
-// run-scoped allocation instead of RAWR's aliasing arena, one descriptor
+// run-scoped allocation instead of the upstream aliasing arena, one descriptor
 // set per dispatch from a run pool, a single command buffer/submission
-// instead of RAWR's interleaved chunks, and one whole-run GPU timestamp
+// instead of the upstream interleaved chunks, and one whole-run GPU timestamp
 // pair instead of per-chunk queries.
 //
-// Intentional deviations from RAWR toward Burst Photo (hdr-plus-swift
+// Intentional deviations from upstream toward Burst Photo (hdr-plus-swift
 // 69cb057, exposure-control-off uniform path; see PARITY.md): the tile
 // border pass is skipped (upstream returns early for unknown black), the
 // frame count divides instead of multiplying by a reciprocal, and the
@@ -38,10 +38,10 @@ namespace {
 
 constexpr std::uint32_t divUp(std::uint32_t x, std::uint32_t y) { return (x + y - 1u) / y; }
 
-// Push-constant structs mirror the GLSL blocks (copied from RAWR's
+// Push-constant structs mirror the GLSL blocks (copied from the upstream
 // HdrPlusRecorder.cpp anonymous namespace; ivec2 members are 8-byte aligned),
 // except AccumulatePc/MismatchNormPc carry the frame count for an upstream-
-// exact division instead of RAWR's reciprocal multiply.
+// exact division instead of its reciprocal multiply.
 struct PreparePc {
     float blackDelta[4];
     std::int32_t padX, padY, width, height, paddedWidth, paddedHeight;
@@ -140,7 +140,7 @@ struct FreqAccumulatePc {
 };
 
 // Guards against compiler padding surprises (sizes derived from the GLSL
-// std430 layouts, cross-checked with RAWR's structs).
+// std430 layouts, cross-checked with the upstream structs).
 static_assert(sizeof(PreparePc) == 40, "PreparePc layout");
 static_assert(sizeof(HotPixelPc) == 24, "HotPixelPc layout");
 static_assert(sizeof(BlurPc) == 40, "BlurPc layout");
@@ -164,7 +164,7 @@ struct RawNormalization {
 
 }  // namespace
 
-// Named scratch store with RAWR-arena-like lookup (image(name)/buffer(name)).
+// Named scratch store with arena-like lookup (image(name)/buffer(name)).
 class Scratch {
    public:
     Scratch(RunArena& arena, std::string& err) : arena_(arena), err_(err) {}
@@ -188,8 +188,8 @@ class Scratch {
     bool hasImage(const std::string& name) const { return images_.count(name) != 0u; }
     bool hasBuffer(const std::string& name) const { return buffers_.count(name) != 0u; }
 
-    // Same resource lists as RAWR's makeHdrPlusScratchLayout (lifetimes only
-    // drive RAWR's aliasing, which this host skips: one allocation each).
+    // Same resource lists as the upstream makeHdrPlusScratchLayout (lifetimes only
+    // drive the upstream aliasing, which this host skips: one allocation each).
     bool buildSpatial(const hp::Geometry& g) {
         const std::uint32_t cellsX = g.width / 2u, cellsY = g.height / 2u;
         if (!addImage("hdrp_ref_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
@@ -224,7 +224,7 @@ class Scratch {
                addBuffer("hdrp_columns", std::uint64_t(cellsX) * 8u) && addBuffer("hdrp_noise", 16u);
     }
 
-    // Same resource lists as RAWR's makeHdrPlusFrequencyScratchLayout.
+    // Same resource lists as the upstream makeHdrPlusFrequencyScratchLayout.
     bool buildFrequency(const hp::FrequencyGeometry& f, std::uint32_t width, std::uint32_t height) {
         const auto& g = f.align;
         if (!addImage("hdrp_ref_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
@@ -584,15 +584,36 @@ bool FrequencyRecorder::recordReference(VkImageView rawU16, const RawNormalizati
              divUp(tx, 16), divUp(ty, 16)))
         return false;
     // The reference spectrum seeds both the reference and the running merge.
-    // (RAWR records these two back-to-back with no barrier between: same
-    // input, disjoint outputs — no hazard. The barrier below orders them
-    // against the later merge reads; the clear's barrier also separates.)
+    // Upstream computes the same transform twice (same input, disjoint
+    // outputs, no barrier between — no hazard). This host seeds final_ft
+    // with an exact image copy of ref_ft instead of a redundant dispatch:
+    // a copy moves bytes without recomputing them, so the seeded values
+    // are bit-identical to the removed dispatch's. (Shader math untouched;
+    // host scheduling only. The barriers mirror the align-store copy.)
     if (!run(Shader::HdrqForwardDft, {ib(0, rgba), ib(1, scratch_.image("hdrq_ref_ft"))}, {}, &tp,
              sizeof(tp), tx, ty))
         return false;
-    if (!run(Shader::HdrqForwardDft, {ib(0, rgba), ib(1, scratch_.image("hdrq_final_ft"))}, {}, &tp,
-             sizeof(tp), tx, ty))
-        return false;
+    {
+        const auto& refFt = scratch_.image("hdrq_ref_ft");
+        const auto& finalFt = scratch_.image("hdrq_final_ft");
+        VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                   VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT};
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toTransfer, 0, nullptr, 0,
+                             nullptr);
+        VkImageCopy copy{};
+        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.extent = {2u * geometry_.rgbaWidth, geometry_.rgbaHeight, 1};
+        vkCmdCopyImage(cmd_, refFt.image, VK_IMAGE_LAYOUT_GENERAL, finalFt.image,
+                       VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+        VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+        vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0,
+                             nullptr);
+    }
     // Per-pass total mismatch starts at zero.
     VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
@@ -642,9 +663,9 @@ bool FrequencyRecorder::recordCompanionMerge(std::uint32_t frameCount, std::uint
              {ib(0, refRgba), ib(1, alignedRgba), ib(2, scratch_.image("hdrq_rms")), ib(3, mismatch)},
              {}, &mp, sizeof(mp), tx, ty))
         return false;
-    // RAWR only barriers here when a profiling mark is set; the mismatch
+    // Upstream only barriers here when a profiling mark is set; the mismatch
     // image is consumed by HdrqRegionMean/HdrqMerge after the forward DFT
-    // below, whose own barrier orders them. Keep RAWR's exact barrier
+    // below, whose own barrier orders them. Keep the upstream exact barrier
     // placement: no barrier here.
     TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
     if (!run(Shader::HdrqForwardDft, {ib(0, alignedRgba), ib(1, scratch_.image("hdrq_aligned_ft"))}, {},
@@ -668,7 +689,7 @@ bool FrequencyRecorder::recordCompanionMerge(std::uint32_t frameCount, std::uint
              {bb(2, scratch_.buffer("hdrq_mean"))}, &np, sizeof(np), divUp(tx, 16), divUp(ty, 16)))
         return false;
     compute_write_barrier(cmd_);
-    // slot is the companion's frame index (RAWR passes i as the slot).
+    // slot is the companion's frame index (upstream passes i as the slot).
     const float companionStrength =
         frameStrengths_ != nullptr ? frameStrengths_[slot] : config_.strength;
     const auto norms = hp::frequencyNorms(companionStrength);
@@ -841,7 +862,7 @@ bool Recorder::recordFinalize() {
 }
 
 // Drive loops mirroring AndroidBurstCoordinator::runHdrPlus /
-// runHdrPlusFrequency (same pass/companion/level order; RAWR's chunk
+// runHdrPlusFrequency (same pass/companion/level order; the upstream chunk
 // submissions are collapsed into one command buffer — submission
 // boundaries only schedule work, they cannot change output bits).
 bool run_spatial(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Scratch& scratch,
@@ -899,7 +920,7 @@ bool run_frequency(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cm
         if (!recorder.recordReference(views[ref], norms[ref])) return false;
         for (std::uint32_t i = 0; i < frameCount; ++i) {
             if (i == ref) continue;
-            // RAWR passes the frame index as the align-store slot.
+            // Upstream passes the frame index as the align-store slot.
             if (!recorder.recordCompanionAlign(views[i], norms[i], i)) return false;
             if (!recorder.recordCompanionMerge(frameCount, i)) return false;
         }
@@ -1006,7 +1027,7 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         if (!scratch.buildSpatial(spatial)) return fail(err);
     }
 
-    // Input frames as R16UI images (same contract as RAWR's ring views).
+    // Input frames as R16UI images (same contract as the upstream ring views).
     const VkDeviceSize frameBytes = VkDeviceSize(W) * H * 2u;
     std::vector<GpuImage*> inputs;
     for (std::uint32_t i = 0; i < N; ++i) {
@@ -1020,7 +1041,7 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         std::memcpy(static_cast<char*>(upload->mapped) + i * frameBytes, frames[i],
                     static_cast<size_t>(frameBytes));
     }
-    // Hot pixels: flat ivec2 list in a device-local buffer (RAWR caps at 2^20 pairs).
+    // Hot pixels: flat ivec2 list in a device-local buffer (upstream caps at 2^20 pairs).
     GpuBuffer* hotBuf = nullptr;
     GpuBuffer* hotStage = nullptr;
     std::uint32_t hotPairs = 0;

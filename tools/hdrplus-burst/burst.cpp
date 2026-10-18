@@ -5,7 +5,7 @@
 // host + recorder sources the app ships (minus JNI) on desktop Vulkan,
 // and writes the merged CFA as a 16-bit normalized DNG (same layout as
 // the app's HdrPlusDngWriter: black 0, white 65535, reference frame's
-// color metadata). This is the RAWR-style workflow: point it at a burst
+// color metadata). This is the burst-merge workflow: point it at a burst
 // directory and get a merged DNG back.
 //
 // Usage:

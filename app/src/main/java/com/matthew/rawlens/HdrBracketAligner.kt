@@ -171,7 +171,7 @@ object HdrBracketAligner {
         reference: HdrMergeFrame,
         moving: HdrMergeFrame,
         maxShiftPx: Int = 64
-    ): Shift = estimateShiftPacked(packReference(reference), moving, maxShiftPx)
+    ): Shift? = estimateShiftPacked(packReference(reference), moving, maxShiftPx)
 
     /**
      * Same matcher as [estimateShift], but the reference side is packed
@@ -180,11 +180,18 @@ object HdrBracketAligner {
      * quad mosaic + one prefilter scratch (~100MB on 12MP) plus small
      * coarse grids. [lastTimings] covers the moving-side proxy work.
      */
+    /**
+     * Null means no valid overlap: every coarse offset's SAD came back
+     * non-finite (too few valid quads under the black floor / match
+     * ceiling), so there is no measured shift. Callers merge that frame
+     * unwarped rather than warping the extreme-corner offset argmin would
+     * otherwise fall back to.
+     */
     fun estimateShiftPacked(
         packed: PackedReference,
         moving: HdrMergeFrame,
         maxShiftPx: Int = 64
-    ): Shift {
+    ): Shift? {
         val mov = moving.cfa
         require(packed.width == mov.width && packed.height == mov.height)
         require(packed.pattern == mov.pattern) { "Bracket frames must share the CFA pattern" }
@@ -215,8 +222,14 @@ object HdrBracketAligner {
         for (dy in -coarseRange..coarseRange) for (dx in -coarseRange..coarseRange)
             coarseOffsets += dx to dy
         val coarseCosts = parEval(coarseOffsets) { (dx, dy) -> sad(rc, mc, cw, ch, dx, dy, scale, noise) }
-        val (bestDx, bestDy) = argmin(coarseOffsets, coarseCosts)
         val coarseMs = (System.nanoTime() - t) / 1_000_000
+        // sad() yields Float.MAX_VALUE when an offset has no valid quads;
+        // MAX_VALUE is finite, so test the sentinel, not finiteness.
+        if (coarseCosts.all { it >= Float.MAX_VALUE }) {
+            lastTimings = Timings(proxyMs, coarseMs, 0)
+            return null
+        }
+        val (bestDx, bestDy) = argmin(coarseOffsets, coarseCosts)
         t = System.nanoTime()
         // Fine: single ±2 round at quad resolution, then parabola subpixel.
         val rq = packed.quads

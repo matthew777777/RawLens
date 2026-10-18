@@ -71,7 +71,7 @@ data class HdrPlusProvenance(
  * samples are black-subtracted and normalized, so clamp [0, 1], ×65535,
  * round half up ([LinearRgbDngWriter.quantize]) describes the file
  * exactly, with BlackLevel 0 and WhiteLevel 65535. Capture facts live in
- * the EXIF sub-IFD ([DngExifDirectory], like RAWR's DNG EXIF block) plus
+ * the EXIF sub-IFD ([DngExifDirectory], like the upstream DNG EXIF block) plus
  * IFD0 exposure/ISO, with the merge provenance in ImageDescription.
  *
  * TIFF serialization is owned by the pinned TinyDNG writer
@@ -175,7 +175,7 @@ object HdrPlusDngWriter {
 
     /**
      * Human-readable multi-line provenance record for ImageDescription, in
-     * the sectioned style of RAWR's multiframe descriptions (header,
+     * the sectioned style of upstream multiframe descriptions (header,
      * PARAMETERS, base-frame selection, per-frame notes, TIMINGS, source).
      * Deterministic for a fixed input; unknown values serialize as `?`,
      * never fabricated.

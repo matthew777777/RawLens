@@ -34,4 +34,21 @@ object HdrShutterExclusivity {
      */
     fun modeAfterBracketEnabled(current: CaptureExposureMode): CaptureExposureMode =
         if (current == CaptureExposureMode.ZSL) CaptureExposureMode.AUTO else current
+
+    /**
+     * Exposure mode after HDR+ is turned off. Enabling HDR+ pulls the
+     * camera into ZSL for its ring buffer, so turning the tile off would
+     * otherwise strand the user in ZSL burst output. The mode from before
+     * HDR+ forced ZSL is restored; a manual mode change made while HDR+
+     * was on is the user's new intent and is left alone, as is a camera
+     * that was already in ZSL before HDR+.
+     */
+    fun modeAfterPlusDisabled(
+        current: CaptureExposureMode,
+        modeBeforePlus: CaptureExposureMode?
+    ): CaptureExposureMode =
+        if (current == CaptureExposureMode.ZSL &&
+            modeBeforePlus != null &&
+            modeBeforePlus != CaptureExposureMode.ZSL
+        ) modeBeforePlus else current
 }

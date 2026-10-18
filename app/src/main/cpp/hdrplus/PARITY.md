@@ -2,7 +2,7 @@
 
 Upstream: https://github.com/martin-marek/hdr-plus-swift at
 `69cb0572bb6712e160c448260125cb6099bdfd87` (2024-08-24), GPL-3.0.
-Intermediate: RAWR `merge_hdrplus` at `f41e6c2c493cb2ebfe37ca7dcb98a6e38a5d40a5`
+Intermediate: the `merge_hdrplus` port at `f41e6c2c493cb2ebfe37ca7dcb98a6e38a5d40a5`
 (GPL-3.0-only), which ported Burst Photo's merge to GLSL compute.
 
 ## Claim
@@ -16,24 +16,26 @@ mapping, tile-border repair skipped). Every kernel and every dispatch step
 was compared line-by-line against the Swift/Metal original; gratuitous
 deviations were fixed (see "Fixes applied"), and the remaining differences
 are performance-motivated reformulations with identical real-number math
-(see "Remaining deviations"). RAWR measured ~80 dB PSNR vs the Metal
-original on RZSL bursts for the Fast path; our port is bit-exact vs RAWR
-except for the documented upstream-parity patches below.
+(see "Remaining deviations"). The intermediate port measured ~80 dB PSNR vs
+the Metal original on RZSL bursts for the Fast path; our port is bit-exact
+vs the intermediate port except for the documented upstream-parity patches
+below.
 
 Two deliberate scope boundaries (not bugs):
 
 - The app only produces uniform-exposure Bayer ZSL bursts, so X-Trans
   kernels, bracketed-exposure branches, exposure-control tone mapping, the
   strength-23 temporal-average mode and the DNG/CLI tooling are not ported.
-- HQ defaults to RAWR's align-once mode (align pass 0 only, continuous warp
-  weights). The upstream-exact schedule is `frequency_align_once = 0`
+- HQ defaults to the intermediate port's align-once mode (align pass 0 only,
+  continuous warp weights). The upstream-exact schedule is `frequency_align_once = 0`
   (per-pass alignment, upstream warp weights); the parity runner covers both
   modes and both clear the same bars.
 
 Assumption used throughout: a Metal `texture.read` outside the texture
 returns zero. Burst Photo relies on safe out-of-bounds reads (its
-`correct_upsampling_error` multiplies them by zero), and RAWR's stable ~80 dB
-measurement implies deterministic zeros rather than undefined values.
+`correct_upsampling_error` multiplies them by zero), and the intermediate
+port's stable ~80 dB measurement implies deterministic zeros rather than
+undefined values.
 
 ## Method
 
@@ -41,10 +43,11 @@ measurement implies deterministic zeros rather than undefined values.
    `burstphoto/merge`, `burstphoto/texture`, `burstphoto/exposure`,
    `denoise.swift` driver).
 2. Verified the 28 vendored `.comp` shaders + `RawMergeHdrPlusGpu.h` were
-   byte-identical to RAWR (pre-patch md5s in UPSTREAM.md), then compared each
-   shader's math, loop bounds, index expressions and accumulation order
-   against its Metal kernel, and each push constant / binding / group count /
-   barrier in `hdrplus_run.cpp` against RAWR's `HdrPlusRecorder.cpp` and
+   byte-identical to the intermediate port (pre-patch md5s in UPSTREAM.md),
+   then compared each shader's math, loop bounds, index expressions and
+   accumulation order against its Metal kernel, and each push constant /
+   binding / group count / barrier in `hdrplus_run.cpp` against the
+   intermediate port's `HdrPlusRecorder.cpp` and
    `AndroidBurstCoordinator.cpp` drive loops (which were themselves checked
    against the Swift dispatch sequence).
 3. Fixed every deviation that costs nothing (wrong values, wrong order, wrong
@@ -55,7 +58,7 @@ measurement implies deterministic zeros rather than undefined values.
 
 | Shader | Metal original | Verdict |
 |---|---|---|
-| `hdrp_prepare` | `prepare_texture_bayer` | MATCH (uniform black; rebase onto ref black is a no-op for equal blacks; empty hot-pixel list is a no-op; sensor-list concealment replaces the burst detector by RAWR design) |
+| `hdrp_prepare` | `prepare_texture_bayer` | MATCH (uniform black; rebase onto ref black is a no-op for equal blacks; empty hot-pixel list is a no-op; sensor-list concealment replaces the burst detector by intermediate design) |
 | `hdrp_hot_pixel` | `find_hotpixels_*` + conceal | DOCUMENTED SUBSET (sensor list + median-of-4; see deviations) |
 | `hdrp_avg_pool` | `avg_pool` scale 2, black 0 | MATCH (incl. fp16-quantize emulation and `/4` vs `*0.25`, both exact) |
 | `hdrp_blur` | `blur_mosaic_texture` k2/k16 | MATCH (binomial tables, truncation, border renormalization, fp16 rule) |
@@ -74,7 +77,7 @@ measurement implies deterministic zeros rather than undefined values.
 
 | Shader | Metal original | Verdict |
 |---|---|---|
-| `hdrq_to_rgba` | `convert_to_rgba` | MATCH in per-pass mode (align-once adds a pass-0 offset by RAWR design) |
+| `hdrq_to_rgba` | `convert_to_rgba` | MATCH in per-pass mode (align-once adds a pass-0 offset by intermediate design) |
 | `hdrq_warp_rgba` | warp + `convert_to_rgba` fused | MATCH in per-pass mode (`continuous=0`); `continuous=1` is the align-once variant |
 | `hdrq_rms` | `calculate_rms_rgba` | MATCH (loop order, `0.25*sqrt/8`) |
 | `hdrq_mismatch` | `calculate_abs_diff_rgba` + `calculate_mismatch_rgba` | MATCH except tree-reduction order; the `width-1` end quirk replicated |
@@ -83,7 +86,7 @@ measurement implies deterministic zeros rather than undefined values.
 | `hdrq_shift_table` | shift-coefficient preamble of `merge_frequency_domain` | MATCH (same expression, precomputed) |
 | `hdrq_merge` | `merge_frequency_domain` uniform | MATCH given the same best shift; shift search is a cross-correlation argmax (same argmin in real arithmetic, see deviations); Wiener weight, magnitude/motion norms, merge update exact |
 | `hdrq_deconvolute` | `deconvolute_frequency_domain` tile 8 | MATCH (gain table, weight, update) |
-| `hdrq_forward_dft` | `forward_dft` | MATCH (RAWR ports the DFT reference where upstream dispatches its hand FFT — same transform up to rounding; twiddle association fixed) |
+| `hdrq_forward_dft` | `forward_dft` | MATCH (the intermediate port takes the DFT reference where upstream dispatches its hand FFT — same transform up to rounding; twiddle association fixed) |
 | `hdrq_backward_dft` | `backward_dft` | MATCH (same FFT-vs-DFT note; `/N/64` normalization exact) |
 | `hdrq_border` | `reduce_artifacts_tile_border` | FIXED by removal: upstream-off skips it (black `-1`); it is vendored but undispatched |
 | `hdrq_accumulate` | `convert_to_bayer` + crop + `add_texture` | MATCH (phase unpack, offsets, pass order, `/1` exact) |
@@ -96,8 +99,8 @@ measurement implies deterministic zeros rather than undefined values.
 - `robustness` / `frequencyNorms`: MATCH — same formulas (uniform-exposure
   reduction of the exposure corrections: corr1 = corr2 = 1).
 - Dispatch values, bindings, group counts, barriers, pass/companion/level
-  order, align-slot copy, mismatch clear: MATCH vs RAWR's recorder, which
-  matches the Swift sequence step-for-step (verified: prepare → pyramid →
+  order, align-slot copy, mismatch clear: MATCH vs the intermediate recorder,
+  which matches the Swift sequence step-for-step (verified: prepare → pyramid →
   align levels coarse-to-fine → warp → merge → accumulate → finalize;
   frequency: rgba → rms → forward → per-companion warp/mismatch/mean/norm/
   merge → deconvolve → backward → accumulate ×4 → finalize).
@@ -107,8 +110,8 @@ measurement implies deterministic zeros rather than undefined values.
 ## Fixes applied (this audit)
 
 Deviations from Burst Photo that cost nothing to fix were fixed; each
-breaks RAWR byte-identity for that file on purpose (pre-patch md5s, equal
-to RAWR `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
+breaks intermediate byte-identity for that file on purpose (pre-patch md5s,
+equal to `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
 
 1. HQ tile-border pass skipped (`hdrplus_run.cpp` `recordPassFinish`):
    upstream `reduce_artifacts_tile_border` returns early for unknown black
@@ -140,8 +143,9 @@ to RAWR `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
   ~2^-11 relative cost noise; can flip integer vectors on near-ties.
 - Parallel summation orders in tile costs, upsampling correction and the
   mismatch window (serial upstream). Rounding-level; can flip near-ties.
-- FFT-vs-DFT: upstream dispatches its hand-rolled FFT for 8x8 tiles; RAWR
-  ports the DFT reference both approximate. Rounding-level (~1e-7).
+- FFT-vs-DFT: upstream dispatches its hand-rolled FFT for 8x8 tiles; the
+  intermediate port takes the DFT reference — both approximate.
+  Rounding-level (~1e-7).
 - Shift-search reformulation: cross-correlation argmax instead of
   least-squares argmin — the same argmin in real arithmetic (rotation
   preserves magnitude), possibly different float rounding on near-ties.
@@ -150,8 +154,9 @@ to RAWR `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
 - `sqrt` is correctly rounded (identical); fp16 quantization matches
   (round-to-nearest-even both sides); int/float conversions exact.
 - Hot pixels: sensor list + median-of-4 concealment instead of the
-  burst-average detector (RAWR design; empty list = no-op; Camera2 wiring
-  pending). Black rebase onto the reference is a no-op for equal blacks.
+  burst-average detector (intermediate design; empty list = no-op; Camera2
+  wiring pending). Black rebase onto the reference is a no-op for equal
+  blacks.
 - Align-once HQ (default) vs per-pass HQ (upstream-exact): documented mode,
   both covered by the parity runner.
 - Output convention: normalized float CFA + app 16-bit DNG writer vs

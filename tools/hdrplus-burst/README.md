@@ -2,7 +2,7 @@
 
 Merges a real DNG burst through the exact merge the app ships
 (`app/src/main/cpp/hdrplus/`, minus JNI) on desktop Vulkan
-(MoltenVK on macOS) — the RAWR-style workflow: point it at burst
+(MoltenVK on macOS) — the burst-merge workflow: point it at burst
 frames, get a merged DNG back. DNG I/O uses the same vendored
 tinydng the app uses natively.
 

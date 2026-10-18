@@ -5,6 +5,7 @@ package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -13,6 +14,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class HdrPlusDngWriterTest {
+    companion object {
+        @BeforeClass @JvmStatic
+        fun assumeHostDngLib() = HostDngLib.assumeAvailable()
+    }
+
     @Test fun writesUint16CfaDngTagsAndQuantizedSamples() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.cameraId).thenReturn("0")

@@ -23,7 +23,7 @@ namespace hdrplus {
 
 namespace hp = ::rawr::raw_merge_hdrplus_gpu;
 
-// 1:1 with RAWR's Hdrp*/Hdrq* ShaderId block (VulkanExecutor.h order).
+// 1:1 with the upstream Hdrp*/Hdrq* ShaderId block (VulkanExecutor.h order).
 enum class Shader : std::uint32_t {
     HdrpPrepare = 0,
     HdrpHotPixel,
@@ -62,7 +62,7 @@ constexpr std::uint32_t kShaderCount = static_cast<std::uint32_t>(Shader::Count)
 const char* shader_asset_name(Shader s);
 
 // Descriptor bindings declared by each vendored shader (verified against
-// the GLSL `layout(set = 0, binding = N)` lines and RAWR's record() calls).
+// the GLSL `layout(set = 0, binding = N)` lines and the upstream record() calls).
 struct BindingInfo {
     std::uint32_t binding;
     VkDescriptorType type;  // STORAGE_IMAGE or STORAGE_BUFFER only
@@ -107,7 +107,7 @@ struct BufferBinding {
 };
 
 // Run-scoped resources: every image/buffer created for one merge, freed
-// together at the end. Equivalent to one RAWR arena lifetime; unlike the
+// together at the end. Equivalent to one upstream arena lifetime; unlike the
 // arena there is no cross-lifetime aliasing (simpler host, same output).
 class RunArena {
    public:
@@ -141,7 +141,7 @@ class RunArena {
 };
 
 // Descriptor helper: one immutable set per dispatch from a run-scoped pool
-// (same snapshot semantics as RAWR's per-batch transient pools).
+// (same snapshot semantics as the upstream per-batch transient pools).
 class RunDescriptors {
    public:
     RunDescriptors(VkDevice device) : device_(device) {}
@@ -161,13 +161,13 @@ class RunDescriptors {
 };
 
 // Mirrors VulkanExecutor::record: bind pipeline, push constants (128-byte
-// range like RAWR), snapshot descriptors, dispatch.
+// range like upstream), snapshot descriptors, dispatch.
 bool record(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Shader shader,
             const ImageBinding* images, std::uint32_t image_count, const BufferBinding* buffers,
             std::uint32_t buffer_count, const void* push, std::uint32_t push_bytes, std::uint32_t gx,
             std::uint32_t gy, std::string& err);
 
-// 1:1 with RAWR's computeWriteBarrier: SHADER_WRITE -> SHADER_READ|WRITE.
+// 1:1 with the upstream computeWriteBarrier: SHADER_WRITE -> SHADER_READ|WRITE.
 void compute_write_barrier(VkCommandBuffer cmd);
 
 }  // namespace hdrplus

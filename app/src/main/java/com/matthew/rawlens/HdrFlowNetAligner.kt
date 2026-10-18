@@ -102,36 +102,6 @@ class HdrFlowNetAligner(context: Context) {
     internal fun exposureMatchScale(moving: HdrMergeFrame, reference: HdrMergeFrame): Float =
         exposureScale(moving) / exposureScale(reference)
 
-    private fun hasUsableCorrespondence(base: FloatBuffer, moving: FloatBuffer, flow: FloatArray): Boolean {
-        var alignedError = 0.0
-        var identityError = 0.0
-        var valid = 0
-        var tested = 0
-        for (y in 8 until MODEL_HEIGHT - 8 step 8) for (x in 8 until MODEL_WIDTH - 8 step 8) {
-            val p = y * MODEL_WIDTH + x
-            val sx = x + flow[p * 2]
-            val sy = y + flow[p * 2 + 1]
-            tested++
-            if (sx < 0f || sy < 0f || sx >= MODEL_WIDTH - 1f || sy >= MODEL_HEIGHT - 1f) continue
-            val ix = sx.toInt(); val iy = sy.toInt()
-            val fx = sx - ix; val fy = sy - iy
-            for (c in 0..2) {
-                val ref = base.get(p * 4 + c)
-                val a = moving.get((iy * MODEL_WIDTH + ix) * 4 + c)
-                val b = moving.get((iy * MODEL_WIDTH + ix + 1) * 4 + c)
-                val d = moving.get(((iy + 1) * MODEL_WIDTH + ix) * 4 + c)
-                val e = moving.get(((iy + 1) * MODEL_WIDTH + ix + 1) * 4 + c)
-                val warped = (a * (1f - fx) + b * fx) * (1f - fy) +
-                    (d * (1f - fx) + e * fx) * fy
-                alignedError += kotlin.math.abs(ref - warped)
-                identityError += kotlin.math.abs(ref - moving.get(p * 4 + c))
-            }
-            valid++
-        }
-        if (valid < tested * 0.85) return false
-        return alignedError <= identityError
-    }
-
     private fun renderModelInput(cfa: UnpackedRawCfa, exposure: Float, raw: Boolean = false): FloatBuffer {
         val out = ByteBuffer.allocateDirect(MODEL_WIDTH * MODEL_HEIGHT * 4 * Float.SIZE_BYTES)
             .order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -245,5 +215,53 @@ class HdrFlowNetAligner(context: Context) {
         const val MODEL_HEIGHT = 384
         /** Per-axis model-px clamp for raw FlowNet output (outlier bound). */
         const val MAX_MODEL_FLOW = 32f
+        /**
+         * Required relative win of the dense field over identity. Genuine
+         * motion corrections improve the proxy error by much more; below
+         * this the field is a tie that would only resample.
+         */
+        const val DENSE_IMPROVEMENT_MARGIN = 0.01
+
+        /**
+         * Dense-field acceptance gate (pure function, JVM-testable). The
+         * field must beat identity by [improvementMargin]: a field that
+         * merely ties still resamples (softens) with zero geometric
+         * benefit, so ties and near-ties fall back to translation.
+         */
+        internal fun hasUsableCorrespondence(
+            base: FloatBuffer,
+            moving: FloatBuffer,
+            flow: FloatArray,
+            improvementMargin: Double = DENSE_IMPROVEMENT_MARGIN
+        ): Boolean {
+            var alignedError = 0.0
+            var identityError = 0.0
+            var valid = 0
+            var tested = 0
+            for (y in 8 until MODEL_HEIGHT - 8 step 8) for (x in 8 until MODEL_WIDTH - 8 step 8) {
+                val p = y * MODEL_WIDTH + x
+                val sx = x + flow[p * 2]
+                val sy = y + flow[p * 2 + 1]
+                tested++
+                if (sx < 0f || sy < 0f || sx >= MODEL_WIDTH - 1f || sy >= MODEL_HEIGHT - 1f) continue
+                val ix = sx.toInt(); val iy = sy.toInt()
+                val fx = sx - ix; val fy = sy - iy
+                for (c in 0..2) {
+                    val ref = base.get(p * 4 + c)
+                    val a = moving.get((iy * MODEL_WIDTH + ix) * 4 + c)
+                    val b = moving.get((iy * MODEL_WIDTH + ix + 1) * 4 + c)
+                    val d = moving.get(((iy + 1) * MODEL_WIDTH + ix) * 4 + c)
+                    val e = moving.get(((iy + 1) * MODEL_WIDTH + ix + 1) * 4 + c)
+                    val warped = (a * (1f - fx) + b * fx) * (1f - fy) +
+                        (d * (1f - fx) + e * fx) * fy
+                    alignedError += kotlin.math.abs(ref - warped)
+                    identityError += kotlin.math.abs(ref - moving.get(p * 4 + c))
+                }
+                valid++
+            }
+            if (valid < tested * 0.85) return false
+            if (identityError <= 0.0) return false
+            return alignedError < identityError * (1.0 - improvementMargin)
+        }
     }
 }

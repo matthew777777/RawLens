@@ -20,7 +20,7 @@ constexpr VkDescriptorType kBuf = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 
 // Binding tables transcribed from the vendored GLSL (see host probing in
 // development: every table entry cross-checked against both the shader's
-// `layout(binding = N)` lines and RAWR's record() call sites).
+// `layout(binding = N)` lines and the upstream record() call sites).
 const BindingInfo kPrepare[] = {{0, kImg}, {1, kImg}};
 const BindingInfo kHotPixel[] = {{0, kImg}, {1, kBuf}};
 const BindingInfo kAvgPool[] = {{0, kImg}, {1, kImg}};
@@ -416,7 +416,12 @@ HdrPlusContext* hdrplus_create(char* errmsg, size_t errmsg_len) {
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "RawLens HDR+";
-    app.apiVersion = VK_API_VERSION_1_2;
+    // Vulkan 1.1, not 1.2: the port uses 1.0-core entry points only
+    // (instance/device/compute/memory/fence — no 1.1 KHR, no 1.2
+    // anything) with fp32 shaders on host-staged buffers, so 1.1-only
+    // Android 11/12 drivers run it bit-identically. Requesting 1.2 would
+    // needlessly exclude those drivers without changing any dispatch.
+    app.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ici.pApplicationInfo = &app;
@@ -580,7 +585,7 @@ int hdrplus_load_shaders(HdrPlusContext* ctx, void* assetMgr, char* errmsg, size
         dci.bindingCount = static_cast<std::uint32_t>(bindings.size());
         dci.pBindings = bindings.data();
         ok = vkCreateDescriptorSetLayout(ctx->device, &dci, nullptr, &program.dsl) == VK_SUCCESS;
-        VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};  // same range as RAWR
+        VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 128};  // same range as upstream
         if (ok) {
             VkPipelineLayoutCreateInfo lci{};
             lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

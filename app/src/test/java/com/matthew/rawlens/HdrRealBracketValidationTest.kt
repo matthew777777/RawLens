@@ -85,6 +85,7 @@ class HdrRealBracketValidationTest {
             if (k == refIdx) f
             else {
                 val shift = HdrBracketAligner.estimateShift(frames[refIdx], f)
+                    ?: error("no shift measured on validation bracket")
                 println("hdr-validation [$label]: shift F01->F%02d = (%.2f, %.2f)".format(k, shift.dx, shift.dy))
                 f.copy(flow = shift.asFlow())
             }

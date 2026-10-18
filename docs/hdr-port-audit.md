@@ -125,7 +125,7 @@ The vendored files record their independently verified PhotonCamera source commi
   consumes them (burst factors threaded through `HdrRawMerge`, pairwise
   fallback for direct callers; uniform pairs are bit-identical to legacy),
   upgrades subpixel search to upstream's 7x7 grid at 1/6 steps over
-  +-0.5px via the RAWR cross-correlation argmax (textbook unsigned-DFT
+  +-0.5px via the upstream cross-correlation argmax (textbook unsigned-DFT
   shift, precomputed shift tables), widens mismatch support to upstream's
   doubled tile window, and sums deconvolution magnitudes over channels
   with one shared gain. Intentional bracket adaptations kept: DNG-noise

@@ -4,20 +4,24 @@
 package com.matthew.rawlens
 
 /**
- * HDR+ ZSL burst merge (RAWR merge_hdrplus 1:1 port on Vulkan).
+ * HDR+ ZSL burst merge (upstream merge_hdrplus 1:1 port on Vulkan).
+ *
+ * Runs on Android 11+: fp32-only shaders, 1.0-core Vulkan entry points,
+ * host-staged frame buffers via plain direct buffers — no half-float
+ * HardwareBuffers, so unlike GPU video record it has no Android 13 floor.
  *
  * Merges the ZSL ring at sensor resolution: coarse-to-fine tile alignment
  * per alternate, then a robust merge — spatial weighted average ("Fast")
  * or per-frequency Wiener merge ("Higher quality") — with the reference
  * frame's black/white normalization. One merged CFA DNG out. Mutually
- * exclusive with RAW SR and burst fusion in the quick panel (all three
- * own the ZSL ring at shutter time) and with the HDR bracket tile (both
- * merge one shutter press into one DNG: enabling one turns the other off).
+ * exclusive with RAW SR in the quick panel (both own the ZSL ring at
+ * shutter time) and with the HDR bracket tile (both merge one shutter
+ * press into one DNG: enabling one turns the other off).
  */
 data class HdrPlusSettings(
     val enabled: Boolean = false,
     /**
-     * Upstream "noise reduction" slider, 1..22 (RAWR `Config.strength`).
+     * Upstream "noise reduction" slider, 1..22 (upstream `Config.strength`).
      * Higher merges more aggressively (cleaner, more ghosting).
      * Defaults to 3.0 (conservative: ghost-safe, matches the auto
      * curve floor).
@@ -26,7 +30,7 @@ data class HdrPlusSettings(
     /**
      * False = spatial ("Fast"); true = frequency ("Higher quality" 4-pass
      * Wiener). HQ is the default: HDR+ is an explicit quality opt-in, and
-     * RAWR's align-once mode keeps the frequency merge practical. Costs
+     * The upstream align-once mode keeps the frequency merge practical. Costs
      * ~0.85 GB vs ~0.5 GB at 12.5 MP and takes longer; long-press the
      * quick tile to cycle back to Fast.
      */
@@ -108,7 +112,7 @@ data class HdrPlusSettings(
         }
         fun strengthSliderText(strength: Float): String =
             String.format(java.util.Locale.US, "HDR+ strength: %.1f", strength)
-        /** Fixed alignment geometry (RAWR defaults; upstream tile-64 unsupported). */
+        /** Fixed alignment geometry (upstream defaults; tile-64 unsupported). */
         const val TILE_SIZE = 32
         const val SEARCH_DISTANCE = 64
     }

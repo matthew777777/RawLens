@@ -18,7 +18,7 @@ import java.nio.ByteOrder
  * path. Never throws for HDR+ reasons; callers map null to HDR+ ERROR.
  *
  * Frames upload as raw uint16 codes (never normalized on the host), so
- * the GPU sees bit-identical input to RAWR's ring views; per-frame
+ * the GPU sees bit-identical input to the upstream ring views; per-frame
  * black/white travel alongside for the in-shader normalization. Packed
  * frames and the merge output live in malloc-backed native buffers
  * ([HdrPlusVulkan.allocBuffer]) freed per merge — ART direct buffers
@@ -50,7 +50,11 @@ class HdrPlusMerge(context: Context) {
 
     /** One owned input frame with its frozen unpack geometry. */
     data class FrameInput(
-        val image: Image,
+        /**
+         * Live gralloc frame; null offline, where [pixels] carries the
+         * decoded uint16 Bayer plane instead. Exactly one must be set.
+         */
+        val image: Image?,
         val layout: RawPlaneLayout,
         val crop: RawCrop,
         val normalization: RawNormalization,
@@ -59,8 +63,16 @@ class HdrPlusMerge(context: Context) {
         /** Gyro ego-motion (rad/s) during this frame; NaN = unreported. */
         val gyroRadiansPerSecond: Float = Float.NaN,
         /** Sensor sensitivity for the darkness term; 0 = unknown. */
-        val sensitivityIso: Int = 0
-    )
+        val sensitivityIso: Int = 0,
+        /** Decoded offline pixels (row-major uint16, native order). */
+        val pixels: ByteBuffer? = null
+    ) {
+        init {
+            require((image != null) != (pixels != null)) {
+                "HDR+ FrameInput needs exactly one of image or pixels"
+            }
+        }
+    }
 
     /**
      * Creates the Vulkan device + loads all SPIR-V modules on a background
@@ -333,11 +345,13 @@ class HdrPlusMerge(context: Context) {
      * malloc-backed native buffer ([HdrPlusVulkan.allocBuffer], freed by
      * the caller — never an ART direct buffer, which is charged to the
      * Java heap). Row strides are honored; no normalization is applied
-     * (black/white travel separately, exactly like RAWR's ring views).
+     * (black/white travel separately, exactly like the upstream ring views).
      */
     private fun packFrame(frame: FrameInput, index: Int): ByteBuffer {
-        val plane = frame.image.planes.single()
-        val input = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val planeBuffer = frame.pixels
+            ?: frame.image?.planes?.single()?.buffer
+            ?: throw IllegalStateException("HDR+ frame $index has no pixels")
+        val input = planeBuffer.duplicate().order(ByteOrder.nativeOrder())
         val dataOrigin = input.position()
         val layout = frame.layout
         val crop = frame.crop
@@ -390,7 +404,7 @@ class HdrPlusMerge(context: Context) {
     companion object {
         private const val LOG_TAG = "HdrPlusMerge"
         private const val U16_BYTES = 2L
-        /** RAWR kMaxFrequencyFrames (align-store slots); spatial allows more. */
+        /** Upstream kMaxFrequencyFrames (align-store slots); spatial allows more. */
         const val MAX_NATIVE_FRAMES = 64
     }
 }

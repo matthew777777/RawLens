@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // HDR+ burst-merge Vulkan host: context create / SPIR-V load / merge /
-// destroy. The 28 compute kernels are RAWR's merge_hdrplus shaders vendored
-// byte-identical (see assets spirv/hdrplus/UPSTREAM.md); the dispatch
-// sequence in hdrplus_run.cpp is a 1:1 translation of RAWR's
+// destroy. The 28 compute kernels are the upstream merge_hdrplus shaders
+// vendored byte-identical (see assets spirv/hdrplus/UPSTREAM.md); the dispatch
+// sequence in hdrplus_run.cpp is a 1:1 translation of the upstream
 // HdrPlusRecorder.cpp + the runHdrPlus/runHdrPlusFrequency drive loops.
 // This host (instance/device/queue, allocation, descriptors, submit) is
-// RawLens's own compact equivalent of RAWR's ResourceArena/VulkanExecutor:
+// RawLens's own compact equivalent of the upstream ResourceArena/VulkanExecutor:
 // shader-visible behavior (bindings, push constants, dispatch sizes,
 // barriers, pass order) is identical, so output bits match.
 #pragma once
@@ -44,10 +44,10 @@ void hdrplus_destroy(HdrPlusContext* ctx);
 // spatial/frequency algorithm switch.
 typedef struct HdrPlusParams {
     float strength;       // upstream "noise reduction" slider, 1..22 (default 13)
-    uint32_t tile_size;   // 16 or 32 (upstream 64 unsupported, same as RAWR)
+    uint32_t tile_size;   // 16 or 32 (64 unsupported upstream)
     uint32_t search_distance;  // 32, 64 or 128 (default 64)
     int high_quality;     // 0 = spatial ("Fast"), nonzero = frequency ("Higher quality")
-    int frequency_align_once;  // nonzero = align once (RAWR default); 0 = upstream-exact per-pass
+    int frequency_align_once;  // nonzero = align once (upstream default); 0 = upstream-exact per-pass
     // Optional per-frame strengths (RawLens extension, step 4): one float per
     // input frame, each 1..22 like strength; the reference entry is validated
     // but unused (the reference adds unweighted). NULL (default) merges every
@@ -79,7 +79,7 @@ void hdrplus_default_params(HdrPlusParams* p);
 // even W/H, 2..64 frames); black_by_phase holds 4 floats per frame in
 // (y&1)*2+(x&1) order with phase 0 at the frame's (0,0); white holds one
 // float per frame. hot_pixels is an optional flat [x0,y0,...] int32 list
-// (may be NULL with hot_pixel_count 0, skipping concealment like RAWR).
+// (may be NULL with hot_pixel_count 0, skipping concealment like upstream).
 // Output is the merged normalized CFA (W*H floats, same geometry as the
 // inputs). Returns 0 on success. Single-threaded per context.
 int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const float* black_by_phase,
