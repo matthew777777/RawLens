@@ -36,11 +36,16 @@ import java.nio.ByteBuffer
  */
 internal object MfsrMerge {
 
+    /**
+     * One selected frame. The unpacked CFA is deliberately NOT retained:
+     * 8 full-res CFAs (50 MB each) exceed the 512 MB heap before the
+     * engine allocates; unpack runs just in time inside the decode thunk
+     * (one live CFA at a time), cf. the OOM this ordering fixes.
+     */
     data class MfsrFrame(
         val frame: BufferedRawFrame,
         val metadata: RawFrameMetadata,
-        val norm: RawNormalization,
-        val cfa: UnpackedRawCfa
+        val norm: RawNormalization
     )
 
     data class MfsrResult(
@@ -80,36 +85,31 @@ internal object MfsrMerge {
      */
     fun prepare(frames: List<BufferedRawFrame>, metadataOf: (BufferedRawFrame) -> RawFrameMetadata): List<MfsrFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val unpacked = frames.mapIndexedNotNull { index, frame ->
+        val usable = frames.mapIndexedNotNull { index, frame ->
             try {
                 val metadata = metadataOf(frame)
                 val norm = metadata.normalizationOrNull() ?: return@mapIndexedNotNull null
-                val plane = frame.image.planes?.firstOrNull() ?: return@mapIndexedNotNull null
-                val layout = RawPlaneLayout(
-                    metadata.imageWidth, metadata.imageHeight,
-                    plane.rowStride, plane.pixelStride, 0, 0
-                )
-                val cfa = RawSensorUnpacker.unpackNormalized(
-                    plane.buffer.duplicate(), layout, norm
-                )
-                MfsrFrame(frame, metadata, norm, cfa)
+                frame.image.planes?.firstOrNull() ?: return@mapIndexedNotNull null
+                MfsrFrame(frame, metadata, norm)
             } catch (failure: Exception) {
-                Log.w(LOG_TAG, "sharp prepare: frame $index unusable", failure)
+                Log.w(LOG_TAG, "mfsr prepare: frame $index unusable", failure)
                 null
             }
         }
-        if (unpacked.size < MfsrSettings.MIN_MERGE_FRAMES) return null
-        val refOrder = selectSharpest(unpacked) ?: return null
-        return refOrder.map { unpacked[it] }
+        if (usable.size < MfsrSettings.MIN_MERGE_FRAMES) return null
+        val refOrder = selectSharpest(usable) ?: return null
+        return refOrder.map { usable[it] }
     }
 
     private fun selectSharpest(frames: List<MfsrFrame>): List<Int>? {
         return try {
             val candidates = frames.mapIndexed { index, sharp ->
                 val image = sharp.frame.image
+                val w = sharp.metadata.imageWidth
+                val h = sharp.metadata.imageHeight
                 val thumb = GreenThumbnailSampler.sample(
-                    image, sharp.cfa.width, sharp.cfa.height,
-                    0, 0, sharp.cfa.width, sharp.cfa.height,
+                    image, w, h,
+                    0, 0, w, h,
                     image.planes[0].rowStride, image.planes[0].pixelStride,
                     sharp.norm.sensorPattern, 0, 0,
                     sharp.norm.blackLevels, sharp.norm.whiteLevel
@@ -206,9 +206,18 @@ internal object MfsrMerge {
         val count = settings.activeFrameCount().coerceAtMost(ordered.size)
         if (count < MfsrSettings.MIN_MERGE_FRAMES) return null
         val kept = ordered.take(count)
+        val w = kept[0].metadata.imageWidth
+        val h = kept[0].metadata.imageHeight
+        if (kept.any { it.metadata.imageWidth != w || it.metadata.imageHeight != h }) {
+            Log.w(LOG_TAG, "mfsr merge: mixed frame geometries, aborting")
+            return null
+        }
+        // Just-in-time unpack inside the engine thunks (one live CFA at
+        // a time): retaining all unpacked CFAs OOMs the 512 MB heap at
+        // full-res before the engine allocates.
         val engine = runEngine(
-            context, kept.map { it.cfa }, kept[0].metadata.noiseProfile?.toDoubleArray(),
-            settings
+            context, kept.map { sharp -> { decodeSharp(sharp) } }, w, h,
+            kept[0].metadata.noiseProfile?.toDoubleArray(), settings
         ) ?: return null
         return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
             engine.mergeMs, 0.0, kept[0].metadata, kept[0].frame.result)
@@ -226,9 +235,11 @@ internal object MfsrMerge {
         val count = settings.activeFrameCount().coerceAtMost(ordered.size)
         if (count < MfsrSettings.MIN_MERGE_FRAMES) return null
         val kept = ordered.take(count)
+        val w = kept[0].cfa.width
+        val h = kept[0].cfa.height
         val engine = runEngine(
-            context, kept.map { it.cfa }, kept[0].source.metadata.noiseProfile?.toDoubleArray(),
-            settings
+            context, kept.map { decoded -> { decodeRows(decoded.cfa) } }, w, h,
+            kept[0].source.metadata.noiseProfile?.toDoubleArray(), settings
         ) ?: return null
         return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
             engine.mergeMs, 0.0, kept[0].source.metadata, null)
@@ -298,22 +309,35 @@ internal object MfsrMerge {
     )
 
     /**
-     * Shared SR engine: native-resolution scale-1 merge over unpacked
-     * CFAs. Called by [merge] (live) and [mergeDecoded] (offline) alike.
+     * Unpacks + decodes one live frame to the engine's RGGB float rows.
+     * Runs inside the decode thunk (one live CFA at a time, dead on
+     * return), never retained across frames.
+     */
+    fun decodeSharp(sharp: MfsrFrame): Array<FloatArray> {
+        val plane = sharp.frame.image.planes[0]
+        val layout = RawPlaneLayout(
+            sharp.metadata.imageWidth, sharp.metadata.imageHeight,
+            plane.rowStride, plane.pixelStride, 0, 0
+        )
+        val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer.duplicate(), layout, sharp.norm)
+        return decodeRows(cfa)
+    }
+
+    /**
+     * Shared SR engine: native-resolution scale-1 merge over decode
+     * thunks. Called by [merge] (live) and [mergeDecoded] (offline)
+     * alike; thunks decode just in time (one live frame at a time under
+     * memoryTight), mirroring the CLI's decode-then-release discipline.
      */
     private fun runEngine(
         context: Context,
-        cfas: List<UnpackedRawCfa>,
+        decoders: List<() -> Array<FloatArray>>,
+        w: Int,
+        h: Int,
         noise: DoubleArray?,
         settings: MfsrSettings
     ): EngineOut? {
-        val count = cfas.size
-        val w = cfas[0].width
-        val h = cfas[0].height
-        if (cfas.any { it.width != w || it.height != h }) {
-            Log.w(LOG_TAG, "sharp merge: mixed frame geometries, aborting")
-            return null
-        }
+        val count = decoders.size
         try {
             SrpBridge.loadLibrary()
         } catch (e: UnsatisfiedLinkError) {
@@ -333,7 +357,9 @@ internal object MfsrMerge {
             }
             // Same recipe as the desktop CLI / crop gate (BurstConfig SNR
             // scan sizes the tiles); scale 1 keeps the source grid.
-            val first = decodeRows(cfas[0])
+            // First thunk decodes now (reference rows); the rest decode
+            // just in time inside the engine, one frame at a time.
+            val first = decoders[0]()
             val snr = BurstConfig.estimateSnr(first, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
@@ -355,8 +381,8 @@ internal object MfsrMerge {
             val t0 = System.nanoTime()
             val rgb = VulkanPipeline.run(
                 { first },
-                cfas.drop(1).map { cfa ->
-                    { _: ByteBuffer -> decodeRows(cfa) }
+                decoders.drop(1).map { decode ->
+                    { _: ByteBuffer -> decode() }
                 },
                 config, handle,
                 AlignGpu.Spirvs(
