@@ -85,6 +85,71 @@ class VendorKeysTest {
         assertFails { VendorKeyProfile.fromJson("{not json").entries }
     }
 
+    @Test fun `preset names trim and reject blanks and odd characters`() {
+        assertEquals("14-bit MediaTek", VendorKeyStore.cleanPresetName("  14-bit MediaTek "))
+        assertFails { VendorKeyStore.cleanPresetName("   ") }
+        assertFails { VendorKeyStore.cleanPresetName("a/b") }
+        assertFails { VendorKeyStore.cleanPresetName("x".repeat(VendorKeyStore.MAX_PRESET_NAME_CHARS + 1)) }
+    }
+
+    @Test fun `preset merge adds only missing keys and never deletes`() {
+        val lens = VendorKeyProfile(
+            listOf(
+                entry("vivo.control.forceSensorMode", VendorKeyType.INT, VendorKeyScope.SESSION, "1"),
+                entry("lens.only", VendorKeyType.INT, VendorKeyScope.REQUEST, "2")
+            )
+        )
+        val preset = VendorKeyProfile(
+            listOf(
+                entry("vivo.control.forceSensorMode", VendorKeyType.INT, VendorKeyScope.SESSION, "9"),
+                entry("preset.only", VendorKeyType.FLOAT, VendorKeyScope.REQUEST, "0.5")
+            )
+        )
+        val merged = lens.mergedWith(preset)
+        merged.validate()
+        // Lens value wins on the shared name; preset-only key is appended.
+        assertEquals("1", merged.entries.first { it.name == "vivo.control.forceSensorMode" }.value)
+        assertEquals(
+            listOf("lens.only", "preset.only", "vivo.control.forceSensorMode"),
+            merged.entries.map { it.name }
+        )
+        // Merging an empty preset keeps every key (canonically sorted).
+        assertEquals(
+            lens.entries.map { it.name }.sorted(),
+            lens.mergedWith(VendorKeyProfile()).entries.map { it.name }
+        )
+    }
+
+    @Test fun `numeric tags validate and round trip like names`() {
+        assertTrue(VendorKeyEntry.isNumericTag("0x80020000"))
+        assertTrue(VendorKeyEntry.isNumericTag("0X1a"))
+        assertFalse(VendorKeyEntry.isNumericTag("vivo.control.forceSensorMode"))
+        assertFalse(VendorKeyEntry.isNumericTag("80020000"))
+        assertFalse(VendorKeyEntry.isNumericTag("0x"))
+        assertFalse(VendorKeyEntry.isNumericTag("0x123456789"))
+        assertEquals(0x80020000.toInt(), VendorKeyEntry.numericTagValue("0x80020000"))
+        assertEquals(null, VendorKeyEntry.numericTagValue("vivo.control.forceSensorMode"))
+        val numeric = VendorKeyEntry("0x80020000", VendorKeyType.INT, VendorKeyScope.SESSION, "1")
+        numeric.validate()
+        assertEquals(numeric, VendorKeyProfile.fromJson(VendorKeyProfile(listOf(numeric)).toJson()).entries.single())
+        assertTrue(VendorKeyEntry.isPlausibleName("0x80020000"))
+        assertFails { entry(name = "0xZZ").validate() }
+    }
+
+    @Test fun `operating mode round trips and validates`() {
+        assertEquals(0, VendorKeyProfile().operatingMode)
+        assertEquals(37379, VendorKeyProfile.parseOperatingMode(" 37379 "))
+        assertFails { VendorKeyProfile.parseOperatingMode("") }
+        assertFails { VendorKeyProfile.parseOperatingMode("fast") }
+        assertFails { VendorKeyProfile.parseOperatingMode("-1") }
+        val profile = VendorKeyProfile(listOf(entry()), operatingMode = 37379)
+        profile.validate()
+        assertEquals(profile, VendorKeyProfile.fromJson(profile.toJson()))
+        assertFails { VendorKeyProfile(listOf(entry()), operatingMode = -1).validate() }
+        // Old backups without the field still load.
+        assertEquals(0, VendorKeyProfile.fromJson("""{"v":1,"entries":[]}""").operatingMode)
+    }
+
     @Test fun `summary labels rows for the settings editor`() {
         assertEquals(
             "vivo.control.forceSensorMode • Int32 • session • 1",

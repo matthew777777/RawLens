@@ -2,6 +2,7 @@ package com.matthew.rawlens
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -10,6 +11,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class FloatCfaDngWriterTest {
+    companion object {
+        @BeforeClass @JvmStatic
+        fun assumeHostDngLib() = HostDngLib.assumeAvailable()
+    }
+
     @Test fun capturedMatricesAreWrittenInRawSensorRowMajorOrder() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.cameraId).thenReturn("0")
@@ -97,6 +103,50 @@ class FloatCfaDngWriterTest {
         val tags = HashSet<Int>()
         for (i in 0 until count) tags.add(buffer.getShort(10 + i * 12).toInt() and 0xffff)
         assertTrue(tags.intersect(setOf(50730, 33434, 34855)).isEmpty())
+    }
+
+    @Test fun writesReferenceGeometryCropTags() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        `when`(metadata.bufferGeometry).thenReturn(
+            RawBufferGeometry.Supported(0, 0, RawCrop(1, 1, 2, 2), "test")
+        )
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also { FloatCfaDngWriter.write(it, cfa, metadata) }.toByteArray()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buffer.getShort(8).toInt() and 0xffff
+        val longs = HashMap<Int, List<Int>>()
+        for (i in 0 until count) {
+            val p = 10 + i * 12
+            if ((buffer.getShort(p + 2).toInt() and 0xffff) != 4) continue
+            val tag = buffer.getShort(p).toInt() and 0xffff
+            val n = buffer.getInt(p + 4)
+            val off = buffer.getInt(p + 8)
+            val base = if (n * 4 <= 4) p + 8 else off
+            longs[tag] = List(n) { k -> buffer.getInt(base + k * 4) }
+        }
+        // Same convention as the single-frame TinyDNG path: ActiveArea as
+        // (top, left, bottom, right), crop origin (0, 0), crop size.
+        assertEquals(listOf(1, 1, 3, 3), longs[50829])
+        assertEquals(listOf(0, 0), longs[50719])
+        assertEquals(listOf(2, 2), longs[50720])
+    }
+
+    @Test fun omitsCropTagsWhenGeometryUnsupported() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        `when`(metadata.bufferGeometry).thenReturn(RawBufferGeometry.Unsupported("test"))
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB, FloatArray(16), RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also { FloatCfaDngWriter.write(it, cfa, metadata) }.toByteArray()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buffer.getShort(8).toInt() and 0xffff
+        val tags = HashSet<Int>()
+        for (i in 0 until count) tags.add(buffer.getShort(10 + i * 12).toInt() and 0xffff)
+        assertTrue(tags.intersect(setOf(50829, 50719, 50720)).isEmpty())
     }
 
     @Test fun writesFloatCfaDngTagsAndUnclampedSamples() {

@@ -333,7 +333,7 @@ object LinearRgbDngWriter {
 
     /**
      * Human-readable multi-line provenance record for ImageDescription, in
-     * the sectioned style of RAWR's multiframe descriptions. Deterministic
+     * the sectioned style of upstream multiframe descriptions. Deterministic
      * for a fixed input; unknown reference timestamps serialize as `?`,
      * never as a fabricated zero. Visible for parser tests.
      */

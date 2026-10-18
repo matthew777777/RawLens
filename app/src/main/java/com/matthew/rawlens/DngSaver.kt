@@ -15,6 +15,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteOrder
 
 /**
  * Writes RAW_SENSOR as DNG while keeping DNG serialization separate from RawLens JPEG development.
@@ -187,8 +188,17 @@ class DngSaver(private val context: Context) {
             DngWriterBackend.TINY_DNG
         } else backend
 
+        // Packed frames cannot enter either Image-direct writer (DngCreator
+        // and the native writer assume 16-bit planes): they unpack to CFA
+        // first and save through the 16-bit HDR+ writer, which keeps GPS.
+        // White/black levels stay format-independent Camera2 sensor
+        // properties, so the same metadata normalizes both containers.
+        val packedFormat = PackedRawFormat.ofInt(image.format)
         try {
-            val actualBackend = when (effectiveBackend) {
+            val actualBackend = if (packedFormat != null) {
+                savePackedCfa(uri, image, metadata, gps, overrides, displayName)
+                DngWriterBackend.TINY_DNG
+            } else when (effectiveBackend) {
                 DngWriterBackend.ANDROID -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
                         writeAndroid(output, image, characteristics, result, orientation, gps)
@@ -214,7 +224,10 @@ class DngSaver(private val context: Context) {
                     gps = gps
                 )
             }
-            if (gps != null && actualBackend == DngWriterBackend.TINY_DNG) {
+            // Packed saves report TINY_DNG below only as the closest surviving
+            // label; their HDR+ file keeps GPS, so the discard warning must
+            // not fire for them.
+            if (gps != null && actualBackend == DngWriterBackend.TINY_DNG && packedFormat == null) {
                 // The pinned TinyDNG writer emits a single flat IFD and cannot
                 // carry the GPS sub-IFD; the fix is dropped rather than written
                 // half-correctly. The platform backend remains the GPS path.
@@ -240,11 +253,42 @@ class DngSaver(private val context: Context) {
             if (resolver.update(uri, values, null, null) != 1) {
                 throw IOException("Could not publish pending DNG media entry")
             }
-            Log.i(LOG_TAG, "DNG requestedBackend=$backend actualBackend=$actualBackend saved=$displayName")
+            Log.i(LOG_TAG, "DNG requestedBackend=$backend actualBackend=$actualBackend" +
+                (packedFormat?.let { " packed=${it.name}" } ?: "") + " saved=$displayName")
             return displayName
         } catch (failure: Exception) {
             resolver.delete(uri, null, null)
             throw failure
+        }
+    }
+
+    /**
+     * Packed single-frame save: unpacks to CFA through the bridge, then the
+     * 16-bit HDR+ writer (GPS-capable). User calibration overrides patch the
+     * file afterwards; a patch failure warns but never fails the save.
+     */
+    private fun savePackedCfa(
+        uri: android.net.Uri,
+        image: Image,
+        metadata: RawFrameMetadata,
+        gps: GpsLocation?,
+        overrides: DngMetadataOverrides,
+        displayName: String
+    ) {
+        val normalization = metadata.normalizationOrNull()
+            ?: throw IOException("Packed DNG normalization metadata is missing")
+        val plane = image.planes.single()
+        val cfa = RawPackedUnpacker.unpackFrameNormalized(
+            plane.buffer, image.width, image.height,
+            plane.rowStride, plane.pixelStride, image.format, normalization,
+            byteOrder = ByteOrder.LITTLE_ENDIAN
+        )
+        context.contentResolver.openOutputStream(uri, "w")?.use { output ->
+            HdrPlusDngWriter.write(output, cfa, metadata, gps)
+        } ?: throw IOException("Could not open DNG output stream")
+        if (!overrides.isEmpty()) {
+            runCatching { DngMetadataPatcher.apply(context, uri, overrides) }
+                .onFailure { Log.w(LOG_TAG, "Packed DNG calibration patch skipped for $displayName", it) }
         }
     }
 

@@ -45,7 +45,7 @@ object TinyDngImageWriter {
         val stream = TinyDngImageWriter::class.java.getResourceAsStream(resource)
             ?: throw UnsatisfiedLinkError(
                 "rawLensDng: $resource missing from the classpath " +
-                    "(build the native lib: :tools:sr-vulkan:buildDngNative)"
+                    "(build it with :app:buildDngNativeHost, or pass -Drawlens.dnglib=<path>)"
             )
         val tmp = File.createTempFile("librawLensDng-", "-$file").apply { deleteOnExit() }
         stream.use { input -> tmp.outputStream().use { input.copyTo(it) } }

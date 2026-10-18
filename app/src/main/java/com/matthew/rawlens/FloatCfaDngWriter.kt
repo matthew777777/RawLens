@@ -55,6 +55,25 @@ object FloatCfaDngWriter {
             shorts(50713, 2, 2)
             rationals(50714, doubleArrayOf(0.0, 0.0, 0.0, 0.0))
             longs(50717, 1)
+            // Reference-frame geometry parity: the merged CFA shares the
+            // reference frame's pixel grid, so carry its active area and
+            // default crop (same convention as the single-frame TinyDNG
+            // path). Without these, external developers demosaic the
+            // masked/optical-black border as image content. Skipped when
+            // the geometry is unsupported or exceeds the merged raster.
+            (metadata.bufferGeometry as? RawBufferGeometry.Supported)
+                ?.processingCrop?.let { active ->
+                    if (active.left + active.width <= cfa.width &&
+                        active.top + active.height <= cfa.height
+                    ) {
+                        longs(
+                            50829, active.top, active.left,
+                            active.top + active.height, active.left + active.width
+                        )
+                        longs(50719, 0, 0)
+                        longs(50720, active.width, active.height)
+                    }
+                }
             srationals(50721, matrix)
             rationals(50728, neutral)
             shorts(50778, metadata.referenceIlluminant1 ?: 21)

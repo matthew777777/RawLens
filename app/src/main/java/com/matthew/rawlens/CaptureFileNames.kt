@@ -28,8 +28,9 @@ object CaptureFileNames {
     const val TYPE_LINEAR = "LINEAR"
     const val TYPE_AI = "AI"
     const val TYPE_GALOSH = "GALOSH"
-    const val TYPE_FUSION = "FUSION"
     const val TYPE_HDRPLUS = "HDRPLUS"
+    const val TYPE_MFSR = "MFSR"
+    const val TYPE_BURST = "BURST"
 
     private const val STEM_PATTERN = "yyyyMMdd_HHmmss_SSS"
 
@@ -70,11 +71,6 @@ object CaptureFileNames {
 
     // Future SR hook: srDng() (IMG_<ts>_SR.dng) here.
 
-    /** Native-resolution burst fusion outputs: `IMG_<ts>_FUSION.dng/jpg`. */
-    fun fusionDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_FUSION, "dng")
-
-    fun fusionJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_FUSION, "jpg")
-
     /** HDR+ merged outputs: `IMG_<ts>_HDRPLUS.dng/jpg`. */
     fun hdrPlusDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "dng")
 
@@ -110,6 +106,9 @@ object CaptureFileNames {
         return fileName(captureTimeMillis, "F%02d".format(index), "dng")
     }
 
+    /** Offline-merge burst take: `IMG_<ts>_BURST.crs` (recordingType=BURST, never a video take). */
+    fun burstCrs(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_BURST, "crs")
+
     private val SUFFIX_REGEX = Regex("[A-Za-z0-9]+")
-    private val EXTENSION_REGEX = Regex("[A-Za-z0-9]{2,4}")
+    private val EXTENSION_REGEX = Regex("[A-Za-z0-9]{2,5}")
 }

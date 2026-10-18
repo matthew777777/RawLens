@@ -44,7 +44,7 @@ internal object CrsWriter {
      * payload size). Worker-thread safe. Returns the payload byte count;
      * negative native codes become exceptions (-3 = destination too small).
      * With [bin], each 2x2 block bins to one binned-Bayer sample at half
-     * resolution (R/B 4-tap box, diamond-averaged green); [cfa] is the
+     * resolution (inward R/B 4-tap box, diamond-averaged green); [cfa] is the
      * Camera2 color-filter arrangement (0..3) routing the binning taps.
      */
     fun encodeFrame(

@@ -40,8 +40,20 @@ data class JpegOutputSettings(
      * 1 = full exponential soft shoulder (knee 0.9, scale 0.8). Default 1.
      */
     val highlightShoulder: Float = 1f,
+    /**
+     * Fixed-center subject weight for the develop meter's brightness
+     * placement (log-average only; highlight guards stay global). 0 =
+     * uniform whole-frame metering. Range 0..3; default 0 (off).
+     */
+    val centerWeight: Float = 0f,
     /** Still-JPEG demosaic backend (AMaZE default; RCD via the Vulkan bridge). */
-    val demosaic: JpegDemosaic = JpegDemosaic.AMAZE
+    val demosaic: JpegDemosaic = JpegDemosaic.AMAZE,
+    /**
+     * RT "Color propagation" highlight reconstruction on the demosaiced
+     * camera-linear frame (pre-WB). Repairs clipped-channel color before
+     * tone mapping; disable to compare against plain clipping.
+     */
+    val hlReconstruction: Boolean = true
 ) {
     /** Ultra HDR is an Android 14 (API 34) platform JPEG feature. */
     fun resolvedForPlatform(): JpegOutputSettings {
@@ -60,7 +72,8 @@ data class JpegOutputSettings(
             adaptiveExposureProgramStrength = bounded(adaptiveExposureProgramStrength, 0f, 1f, 0.5f),
             highlightHeadroom = bounded(highlightHeadroom, 0.5f, 1.5f, 1f),
             highlightSoftHeadroom = bounded(highlightSoftHeadroom, 0.6f, 1f, 0.85f),
-            highlightShoulder = bounded(highlightShoulder, 0f, 1f, 1f)
+            highlightShoulder = bounded(highlightShoulder, 0f, 1f, 1f),
+            centerWeight = bounded(centerWeight, 0f, 3f, 0f)
         )
     }
 }

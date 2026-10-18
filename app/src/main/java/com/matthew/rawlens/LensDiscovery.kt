@@ -58,7 +58,34 @@ data class DiscoveredLens(
     /** One or two detail lines, e.g. "4.35 mm lens · 4000×3000 · 12.0 MP". */
     val details: String = "",
     /** Route explanation, e.g. "Direct camera 0" or "Logical 0 → physical 2". */
-    val route: String = ""
+    val route: String = "",
+    /** Probed ISO range label, e.g. "50–12800". Null when unreadable. */
+    val isoRange: String? = null,
+    /** Slowest advertised exposure in ms. Null when unreadable. */
+    val maxExposureMs: Long? = null,
+    /**
+     * True when the route advertises a sensor-mode session switch
+     * (e.g. `vivo.control.forceSensorMode`). Means "special sensor mode
+     * available", never a claim that DCG itself works.
+     */
+    val sensorModeSwitch: Boolean = false,
+    /**
+     * Largest advertised RAW_SENSOR output, e.g. "4080×3060". Shown only
+     * when it differs from the pixel array: equal means redundant, absent
+     * means nothing (physical blocks report sizes inconsistently).
+     */
+    val maxRawSize: String? = null,
+    /** Every advertised RAW_SENSOR size, largest first, e.g. "8160×6144". */
+    val rawSizes: List<String> = emptyList(),
+    /**
+     * Packed formats the map lists (subset of RAW10/RAW12/RAW14).
+     * Informational only: no unpack path exists, so sessions stay
+     * RAW_SENSOR. RAW_PRIVATE is intentionally never listed (opaque,
+     * never DNG-usable).
+     */
+    val packedFormats: List<String> = emptyList(),
+    /** Open-time verdict from real `openCamera` calls; UNKNOWN until opened. */
+    val verdict: LensVerdict = LensVerdict.UNKNOWN
 )
 
 /** A picker section with a header and an explanatory subtitle. */
@@ -88,10 +115,13 @@ class LensDiscovery(context: Context) {
     private val manager = context.getSystemService(CameraManager::class.java)
     private val executor = Executors.newSingleThreadExecutor()
 
-    fun discover(onComplete: (List<DiscoveredLens>) -> Unit) {
+    fun discover(
+        verdicts: LensVerdicts = LensVerdicts.EMPTY,
+        onComplete: (List<DiscoveredLens>) -> Unit
+    ) {
         executor.execute {
             try {
-                onComplete(discoverBlocking())
+                onComplete(discoverBlocking(verdicts))
             } catch (t: Throwable) {
                 // Never let a vendor characteristics bug kill discovery: report what we have.
                 Log.w(LOG_TAG, "Lens discovery failed; returning empty list", t)
@@ -104,7 +134,7 @@ class LensDiscovery(context: Context) {
         }
     }
 
-    private fun discoverBlocking(): List<DiscoveredLens> {
+    private fun discoverBlocking(verdicts: LensVerdicts): List<DiscoveredLens> {
             val official = cameraIds()
             Log.i(LOG_TAG, "Official camera IDs: $official")
 
@@ -154,12 +184,17 @@ class LensDiscovery(context: Context) {
                 if (physicalIds.isEmpty()) return@forEach
 
                 physicalIds.forEach physicalLoop@ { physicalId ->
-                    // API 29+ (RawLens minSdk) explicitly permits querying characteristics
+                    // API 29+ (below the RawLens minSdk 30) explicitly permits querying characteristics
                     // for physical IDs that are hidden from cameraIdList.
                     val physical = characteristics(physicalId) ?: return@physicalLoop
                     if (runCatching { isRearRaw(physical, logical) }.getOrDefault(false)) {
                         runCatching {
-                            discovered(id = "$logicalId/$physicalId", c = physical, route = "logical $logicalId → physical $physicalId")
+                            discovered(
+                                id = "$logicalId/$physicalId",
+                                c = physical,
+                                route = "logical $logicalId → physical $physicalId",
+                                logicalFallback = logical
+                            )
                         }.onSuccess { found["$logicalId/$physicalId"] = it }
                             .onFailure { Log.w(LOG_TAG, "Skipping route $logicalId/$physicalId", it) }
                     }
@@ -199,7 +234,7 @@ class LensDiscovery(context: Context) {
                         isRearRaw(compositeCharacteristics, logical) -> compositeCharacteristics
                         else -> characteristics(physicalId)?.takeIf { isRearRaw(it, logical) }
                     } ?: return@runCatching null
-                    discovered(composite, usable, "vendor route")
+                    discovered(composite, usable, "vendor route", logicalFallback = logical)
                 }.onSuccess { lens ->
                     if (lens != null) found[composite] = lens
                 }.onFailure {
@@ -208,7 +243,9 @@ class LensDiscovery(context: Context) {
             }
 
             Log.i(LOG_TAG, "Discovered RAW lenses: ${found.keys}")
-            return found.values.sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
+            return found.values
+                .map { lens -> applyVerdict(lens, routeVerdict(lens.id, verdicts)) }
+                .sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
     }
 
     fun close() = executor.shutdownNow()
@@ -280,7 +317,12 @@ class LensDiscovery(context: Context) {
         }
     }
 
-    private fun discovered(id: String, c: CameraCharacteristics, route: String): DiscoveredLens {
+    private fun discovered(
+        id: String,
+        c: CameraCharacteristics,
+        route: String,
+        logicalFallback: CameraCharacteristics? = null
+    ): DiscoveredLens {
         val focal = safeGet(c, CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
         val sensor = safeGet(c, CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         val pixels = safeGet(c, CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
@@ -290,6 +332,37 @@ class LensDiscovery(context: Context) {
         val megapixels = if (pixels != null) pixels.width * pixels.height / 1_000_000f else null
         val resolutionLabel = pixels?.let { "${it.width}×${it.height}" }
         val role = LensRole.forEquivalentMm(equivalent)
+        val isoRange = safeGet(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            ?.let { "${it.lower}–${it.upper}" }
+        val maxExposureMs = safeGet(c, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            ?.upper?.div(1_000_000L)
+        // Logical/physical routes open the logical device, so the logical
+        // camera's session keys decide whether a sensor-mode switch exists.
+        val sensorModeSwitch = hasSensorModeSwitch(c) ||
+            (logicalFallback != null && hasSensorModeSwitch(logicalFallback))
+        // Cheapest stream-level signal: every RAW_SENSOR output the map
+        // actually lists, plus packed formats. Informational only —
+        // physical blocks report sizes inconsistently, so absence never
+        // disqualifies a route.
+        val rawSizeList = runCatching {
+            safeGet(c, CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                ?.filter { it.width > 0 && it.height > 0 }
+                ?.sortedByDescending { it.width.toLong() * it.height }
+                ?.map { "${it.width}×${it.height}" }
+        }.getOrNull().orEmpty()
+        val maxRawSize = rawSizeList.firstOrNull()
+        val packedFormats = listOf(
+            "RAW10" to ImageFormat.RAW10,
+            "RAW12" to ImageFormat.RAW12,
+            "RAW14" to IMAGE_FORMAT_RAW14
+        )
+            .filter { (_, format) ->
+                runCatching {
+                    safeGet(c, CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        ?.getOutputSizes(format)?.isNotEmpty() == true
+                }.getOrDefault(false)
+            }.map { it.first }
         val (kind, logicalId, physicalId) = parseRoute(id, route)
         val routeText = when (kind) {
             LensRouteKind.STANDALONE -> "Direct camera $id"
@@ -308,12 +381,24 @@ class LensDiscovery(context: Context) {
         } else {
             "${role.displayName} · Camera $id"
         }
-        val details = buildList {
+        val probe = DiscoveredLens(
+            id = id,
+            label = "",
+            opticalMetric = Float.MAX_VALUE,
+            kind = kind,
+            isoRange = isoRange,
+            maxExposureMs = maxExposureMs,
+            sensorModeSwitch = sensorModeSwitch,
+            rawSizes = rawSizeList,
+            packedFormats = packedFormats
+        )
+        val details = (buildList {
             if (focal != null) add(String.format(Locale.US, "%.2f mm", focal))
             if (equivalent != null) add(String.format(Locale.US, "≈%.0f mm eq", equivalent))
             if (resolutionLabel != null) add(resolutionLabel)
             if (megapixels != null) add(String.format(Locale.US, "%.1f MP", megapixels))
-        }.joinToString(" · ").ifEmpty { "Characteristics unavailable" }
+            if (maxRawSize != null && maxRawSize != resolutionLabel) add("RAW $maxRawSize")
+        } + capabilityBadges(probe)).joinToString(" · ").ifEmpty { "Characteristics unavailable" }
         // Legacy single-line label stays for callers/tests that only render `label`.
         val label = "Camera $id · $title • $details • $routeText"
         val metric = if (focal != null && sensor != null && sensor.width > 0f) focal / sensor.width else Float.MAX_VALUE
@@ -331,8 +416,23 @@ class LensDiscovery(context: Context) {
             megapixels = megapixels,
             title = title,
             details = details,
-            route = routeText
+            route = routeText,
+            isoRange = isoRange,
+            maxExposureMs = maxExposureMs,
+            sensorModeSwitch = sensorModeSwitch,
+            maxRawSize = maxRawSize,
+            rawSizes = rawSizeList,
+            packedFormats = packedFormats
         )
+    }
+
+    private fun hasSensorModeSwitch(c: CameraCharacteristics): Boolean = try {
+        c.availableSessionKeys.any { key ->
+            val name = key.name.lowercase(Locale.US)
+            "sensormode" in name.replace(".", "").replace("_", "")
+        }
+    } catch (_: Throwable) {
+        false
     }
 
     private fun parseRoute(id: String, route: String): Triple<LensRouteKind, String?, String?> {
@@ -447,4 +547,166 @@ fun groupLenses(lenses: List<DiscoveredLens>): List<LensGroup> {
         )
     }
     return groups
+}
+
+/**
+ * Android 17 (API 37) packed 14-bit RAW format. This project's compile SDK
+ * predates the `ImageFormat.RAW14` constant, so it is addressed by value
+ * (44, verified against the android-37 SDK platform). `getOutputSizes`
+ * accepts any format int; on older releases it simply reports empty.
+ */
+internal const val IMAGE_FORMAT_RAW14 = 44
+
+/** Short capability badges for one route, e.g. `["ISO 50–12800", "Sensor-mode switch"]`. */
+fun capabilityBadges(lens: DiscoveredLens): List<String> = buildList {
+    if (lens.isoRange != null) add("ISO ${lens.isoRange}")
+    val maxMs = lens.maxExposureMs
+    if (maxMs != null && maxMs > 0) {
+        add(if (maxMs >= 1000) "Exp ≤ ${maxMs / 1000}s" else "Exp ≤ ${maxMs}ms")
+    }
+    if (lens.sensorModeSwitch) add("Sensor-mode switch")
+    if (lens.rawSizes.size > 1) add("${lens.rawSizes.size} RAW sizes")
+    if (lens.packedFormats.isNotEmpty()) add("Lists ${lens.packedFormats.joinToString("+")}")
+}
+
+/**
+ * Optic fingerprint: routes to the same physical lens share focal length,
+ * 35mm-equivalent, and sensor resolution, so they collapse into one card.
+ * Lenses without any optical data fall back to their route ID and never merge.
+ */
+fun opticFingerprint(lens: DiscoveredLens): String {
+    val focal = lens.focalMm?.let { String.format(Locale.US, "%.2f", it) }
+    val equivalent = lens.equivalentMm?.let { String.format(Locale.US, "%.0f", it) }
+    val mega = lens.megapixels?.let { String.format(Locale.US, "%.1f", it) }
+    if (focal == null && equivalent == null && lens.resolutionLabel == null && mega == null) {
+        return "id:${lens.id}"
+    }
+    return "f${focal ?: "?"}|eq${equivalent ?: "?"}|${lens.resolutionLabel ?: "?"}|mp${mega ?: "?"}"
+}
+
+/** One physical lens with every route that reaches it. First lens is recommended. */
+data class OpticGroup(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val lenses: List<DiscoveredLens>
+) {
+    val recommended: DiscoveredLens get() = lenses.first()
+    val alternates: List<DiscoveredLens> get() = lenses.drop(1)
+}
+
+private fun isUnavailableLens(lens: DiscoveredLens): Boolean =
+    lens.kind == LensRouteKind.UNAVAILABLE || "unavailable" in lens.label.lowercase()
+
+private fun routePriority(kind: LensRouteKind): Int = when (kind) {
+    LensRouteKind.STANDALONE -> 0
+    LensRouteKind.LOGICAL_PHYSICAL -> 1
+    LensRouteKind.VENDOR_COMPOSITE -> 2
+    LensRouteKind.UNAVAILABLE -> 3
+}
+
+private fun verdictPriority(verdict: LensVerdict): Int = when (verdict) {
+    LensVerdict.VERIFIED -> 0
+    LensVerdict.OPENABLE -> 1
+    LensVerdict.UNKNOWN -> 2
+    LensVerdict.DEAD -> 3
+}
+
+private val opticRouteOrder: Comparator<DiscoveredLens> =
+    compareBy<DiscoveredLens> { verdictPriority(it.verdict) }
+        .thenBy { routePriority(it.kind) }
+        .thenBy { it.opticalMetric }
+        .thenBy { it.id }
+
+/** Recommended route inside one optic: stream-verified first, then opened, direct, logical, vendor. */
+fun recommendRoute(lenses: List<DiscoveredLens>): DiscoveredLens =
+    lenses.sortedWith(opticRouteOrder).first()
+
+/**
+ * Evidence for one route ID. Every verdict is keyed by the exact route
+ * identity or open ID recorded when the camera call happened: an
+ * openable logical camera says nothing about its composites, so there is
+ * deliberately no prefix inference. Unknown until some camera call on
+ * this device proves otherwise.
+ */
+fun routeVerdict(routeId: String, verdicts: LensVerdicts): LensVerdict {
+    if (routeId in verdicts.verified) return LensVerdict.VERIFIED
+    if (routeId in verdicts.dead) return LensVerdict.DEAD
+    if (routeId in verdicts.openable) return LensVerdict.OPENABLE
+    return LensVerdict.UNKNOWN
+}
+
+/** One-line verdict note for picker details; null when there is nothing to say. */
+fun verdictNote(verdict: LensVerdict): String? = when (verdict) {
+    LensVerdict.VERIFIED -> "RAW verified on this device"
+    LensVerdict.OPENABLE -> "Opened OK before"
+    LensVerdict.DEAD -> "Open rejected before · try anyway"
+    LensVerdict.UNKNOWN -> null
+}
+
+/** Attaches an open-time verdict to a lens, keeping the legacy label in sync. */
+fun applyVerdict(lens: DiscoveredLens, verdict: LensVerdict): DiscoveredLens {
+    if (verdict == LensVerdict.UNKNOWN || lens.kind == LensRouteKind.UNAVAILABLE) {
+        return lens.copy(verdict = verdict)
+    }
+    val note = verdictNote(verdict) ?: return lens.copy(verdict = verdict)
+    if (note in lens.details) return lens.copy(verdict = verdict)
+    val details = "${lens.details} · $note"
+    return lens.copy(
+        verdict = verdict,
+        details = details,
+        label = "Camera ${lens.id} · ${lens.title} • $details • ${lens.route}"
+    )
+}
+
+/**
+ * Groups available routes by physical lens, widest first. Each group holds
+ * the recommended route first with the remaining routes as alternates.
+ * Unavailable placeholders stay in one trailing group, unmerged.
+ */
+fun groupByOptic(lenses: List<DiscoveredLens>): List<OpticGroup> {
+    val (missing, available) = lenses.partition(::isUnavailableLens)
+    val groups = available.groupBy(::opticFingerprint).values.map { routes ->
+        val ordered = routes.sortedWith(opticRouteOrder)
+        val head = ordered.first()
+        val routeText = if (ordered.size == 1) "1 route" else "${ordered.size} routes"
+        OpticGroup(
+            key = opticFingerprint(head),
+            title = head.title,
+            subtitle = "$routeText · recommended ID ${head.id}",
+            lenses = ordered
+        )
+    }.sortedWith(compareBy<OpticGroup> { it.recommended.opticalMetric }.thenBy { it.recommended.id })
+    if (missing.isEmpty()) return groups
+    return groups + OpticGroup(
+        key = "unavailable",
+        title = "Currently unavailable · ${missing.size}",
+        subtitle = "Saved before but not reported now. Keep checked to preserve them, uncheck to forget.",
+        lenses = missing.sortedBy { it.id }
+    )
+}
+
+/** One recommended route ID per optic; the first-run default check set. */
+fun recommendedLensIds(lenses: List<DiscoveredLens>): Set<String> =
+    groupByOptic(lenses.filterNot(::isUnavailableLens)).map { it.recommended.id }.toSet()
+
+/** Plain-text report of every route for support chats; no second app needed. */
+fun lensReport(
+    lenses: List<DiscoveredLens>,
+    chosenSize: (routeId: String) -> String? = { null },
+    chosenFormat: (routeId: String) -> String? = { null }
+): String = buildString {
+    appendLine("RawLens lens report · ${lenses.size} routes")
+    groupByOptic(lenses).forEach { group ->
+        appendLine()
+        appendLine("${group.title} (${group.lenses.size} route(s))")
+        group.lenses.forEach { lens ->
+            val badges = capabilityBadges(lens).ifEmpty { listOf("no extras probed") }
+            append("- ID ${lens.id} · ${lens.route} · ${lens.details} · ${badges.joinToString(", ")}")
+            if (lens.rawSizes.size > 1) append(" · sizes: ${lens.rawSizes.joinToString(", ")}")
+            chosenSize(lens.id)?.let { append(" · chosen $it") }
+            chosenFormat(lens.id)?.let { append(" · format $it") }
+            appendLine()
+        }
+    }
 }

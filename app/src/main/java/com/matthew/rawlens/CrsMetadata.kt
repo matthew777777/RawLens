@@ -10,7 +10,8 @@ import org.json.JSONObject
 /** MotionCam's metadata spelling and nesting are part of the on-disk contract. */
 internal object CrsMetadata {
     fun container(base: String, chars: CameraCharacteristics, realtime: Boolean,
-                  audioRate: Int, audioChannels: Int, motion: Boolean, orientation: Int): String {
+                  audioRate: Int, audioChannels: Int, motion: Boolean, orientation: Int,
+                  recordingType: String = "VIDEO"): String {
         val json = JSONObject(base)
         val cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         require(cfa != null && cfa in 0..3) { "CRS requires a Bayer sensor" }
@@ -48,7 +49,7 @@ internal object CrsMetadata {
         extra.put("audioChannels", if (audioRate > 0) audioChannels else 0)
         extra.put("formatName", "CRS")
         extra.put("frameRate", RawVideoRecorder.FPS)
-        extra.put("recordingType", "VIDEO")
+        extra.put("recordingType", recordingType)
         extra.put("useAccurateTimestamp", realtime)
         extra.put("mediaLayout", "embedded")
         json.put("extraData", extra)

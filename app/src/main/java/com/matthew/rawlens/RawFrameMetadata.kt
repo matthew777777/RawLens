@@ -101,7 +101,13 @@ data class RawFrameMetadata(
     /** Focus distance in meters (1/LENS_FOCUS_DISTANCE); feeds EXIF SubjectDistance. Null at infinity/unknown. */
     val focusDistanceM: Float? = null,
     /** True when the flash fired for this frame (FLASH_STATE); feeds EXIF Flash. Null when unknown. */
-    val flashFired: Boolean? = null
+    val flashFired: Boolean? = null,
+    /**
+     * Camera2 stream format of the frame (`RAW_SENSOR` unless a packed
+     * session was chosen). Defaults to `RAW_SENSOR` so every existing
+     * construction keeps meaning "unpacked 16-bit".
+     */
+    val rawImageFormat: Int = android.graphics.ImageFormat.RAW_SENSOR
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -113,7 +119,7 @@ data class RawFrameMetadata(
 
 object RawFrameMetadataFactory {
     /**
-     * Physical-result routing contract (reference: Unspektrawesome `captureValue`).
+     * Physical-result routing contract (the `captureValue` routing pattern).
      * Returns the physical camera id to read sensor keys from, or null when the
      * frame has no physical source or the id is stale/unknown. Pure strings in
      * and out so it stays JVM-testable without the Android framework.
@@ -139,7 +145,14 @@ object RawFrameMetadataFactory {
         // and fall back to the logical result per key. Pipeline states
         // (AF/AE/lens/flash) and frame identity stay logical. With no physical
         // source this degrades to a plain logical read, identical to before.
-        val physicalResults = runCatching { result.physicalCameraTotalResults }.getOrNull()
+        // Physical results need Android 12 (the runCatching below also
+        // covers HALs that throw, but only an SDK guard satisfies the
+        // minSdk-30 NewApi gate for the call itself).
+        val physicalResults = if (Build.VERSION.SDK_INT >= 31) {
+            runCatching { result.physicalCameraTotalResults }.getOrNull()
+        } else {
+            null
+        }
         val physicalId = selectPhysicalResultId(
             result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
             physicalResults?.keys ?: emptySet()
@@ -242,9 +255,14 @@ object RawFrameMetadataFactory {
             groupSize?.width, groupSize?.height
         )
         val quadBayer = groupedBayer && groupSize?.width == 2 && groupSize.height == 2
+        // Known packed formats carry stride 0 by design; geometry is
+        // validated again at decode time, so the gate only refuses packed
+        // frames it cannot name. Anything else keeps the 16-bit rules.
+        val packedFormat = PackedRawFormat.ofInt(image.format)
         val unsupported = when {
             plane == null -> "RAW_SENSOR must expose exactly one image plane"
-            plane.pixelStride < 2 -> "RAW_SENSOR pixel stride cannot hold a 16-bit sample"
+            plane.pixelStride < 2 && packedFormat == null ->
+                "RAW_SENSOR pixel stride cannot hold a 16-bit sample"
             plane.rowStride < (image.width - 1) * plane.pixelStride + 2 ->
                 "RAW_SENSOR row stride is shorter than the image width"
             cfaValue == null -> "Camera2 did not report a CFA arrangement"
@@ -326,7 +344,8 @@ object RawFrameMetadataFactory {
                 ?.takeIf { it.isFinite() && it > 0f }?.let { 1f / it },
             flashFired = result.get(CaptureResult.FLASH_STATE)?.let {
                 it == CaptureResult.FLASH_STATE_FIRED || it == CaptureResult.FLASH_STATE_PARTIAL
-            }
+            },
+            rawImageFormat = image.format
         )
     }
 

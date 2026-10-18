@@ -1,6 +1,7 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.*
+import org.junit.BeforeClass
 import org.junit.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -9,6 +10,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class LinearRgbDngWriterTest {
+    companion object {
+        @BeforeClass @JvmStatic
+        fun assumeHostDngLib() = HostDngLib.assumeAvailable()
+    }
+
     // ---- quantization policy ----
 
     @Test fun quantizationScaleAndClippingAreDocumented() {

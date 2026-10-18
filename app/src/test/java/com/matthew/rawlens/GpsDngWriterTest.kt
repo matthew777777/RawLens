@@ -1,6 +1,7 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.*
+import org.junit.BeforeClass
 import org.junit.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -14,6 +15,11 @@ import java.nio.ByteOrder
  * path by ExifInterface; both are pinned in [GpsLocationTest].
  */
 class GpsDngWriterTest {
+    companion object {
+        @BeforeClass @JvmStatic
+        fun assumeHostDngLib() = HostDngLib.assumeAvailable()
+    }
+
     private val gps = GpsLocation(48.858222, 2.2945, 35.5, timeMillis = 1780276800000L)
 
     @Test fun linearRgbCarriesGpsSubIfd() {

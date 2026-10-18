@@ -14,6 +14,12 @@ data class VendorKeyApplyReport(
     val skipped: List<String>
 )
 
+/** Probe-before-save outcome shown in the edit dialog. */
+data class VendorKeyProbeResult(
+    val supported: Boolean,
+    val detail: String
+)
+
 /**
  * Step 2 of the bit-by-bit build: SESSION-early + REQUEST application.
  *
@@ -59,40 +65,96 @@ object VendorKeyApply {
         return entries.partition { it.name.trim() in names }
     }
 
-    /** Session-early parameters, or null when this lens enables no session keys. */
+    /** Session-early parameters plus their report; request is null when nothing applied. */
     fun buildSessionParameters(
         device: CameraDevice,
         profile: VendorKeyProfile,
         characteristics: CameraCharacteristics,
         log: (String) -> Unit
-    ): CaptureRequest? {
+    ): Pair<CaptureRequest?, VendorKeyApplyReport> {
+        val applied = mutableListOf<String>()
+        val skipped = mutableListOf<String>()
         val entries = profile.sessionEntries()
-        if (entries.isEmpty()) return null
+        if (entries.isEmpty()) return null to VendorKeyApplyReport(applied, skipped)
         val advertised = runCatching {
             characteristics.availableSessionKeys.map { it.name }.toSet()
         }.getOrDefault(emptySet())
         val (attempt, refused) = partition(entries, advertised)
-        refused.forEach { log("vendor session: skip ${it.name} (not in availableSessionKeys)") }
+        refused.forEach {
+            log("vendor session: skip ${it.name} (not in availableSessionKeys)")
+            skipped += it.name
+        }
         val builder = try {
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         } catch (failure: Exception) {
             log("vendor session: template failed ($failure)")
-            return null
+            return null to VendorKeyApplyReport(applied, skipped)
         }
-        var applied = 0
         for (entry in attempt) {
             if (isLevelTag(entry.name)) {
                 log("vendor session: skip ${entry.name} (level tags are not request keys; use DNG calibration)")
+                skipped += entry.name
                 continue
             }
-            if (setOnBuilder(builder, entry, log, "session", null, null)) applied++
+            if (setOnBuilder(builder, entry, log, "session", null, null)) applied += entry.name
+            else skipped += entry.name
         }
-        if (applied == 0) return null
+        if (applied.isEmpty()) return null to VendorKeyApplyReport(applied, skipped)
         return try {
-            builder.build()
+            builder.build() to VendorKeyApplyReport(applied, skipped)
         } catch (failure: Exception) {
             log("vendor session: build failed ($failure)")
-            null
+            null to VendorKeyApplyReport(emptyList(), entries.map { it.name })
+        }
+    }
+
+    /** Pure fingerprint of session entries backing the reopen-needed badge. */
+    fun fingerprint(entries: List<VendorKeyEntry>): String =
+        entries.sortedBy { it.name.trim() }.joinToString("|") {
+            "${it.name.trim()}~${it.type.label}~${it.scope.id}~${it.value}~${it.enabled}"
+        }
+
+    /** Throwaway-builder probe against the live HAL. Never throws. */
+    fun probe(
+        builder: CaptureRequest.Builder,
+        characteristics: CameraCharacteristics,
+        entry: VendorKeyEntry,
+        physicalCameraId: String?
+    ): VendorKeyProbeResult {
+        if (isLevelTag(entry.name)) {
+            return VendorKeyProbeResult(false, "Level tags are not camera keys")
+        }
+        val value = try {
+            entry.parsedValue()
+        } catch (failure: IllegalArgumentException) {
+            return VendorKeyProbeResult(false, "Bad value (${failure.message})")
+        }
+        if (entry.scope == VendorKeyScope.SESSION) {
+            val advertised = runCatching {
+                characteristics.availableSessionKeys.map { it.name }.toSet()
+            }.getOrDefault(emptySet())
+            if (advertised.isNotEmpty() && entry.name.trim() !in advertised) {
+                return VendorKeyProbeResult(false, "Not in availableSessionKeys")
+            }
+        }
+        val tagHex = if (VendorKeyEntry.isNumericTag(entry.name)) {
+            entry.name.trim()
+        } else {
+            VendorKeyAndroid.resolveNativeTag(characteristics, entry.name)?.let(VendorKeyAndroid::tagHex)
+        }
+        val tagSuffix = tagHex?.let { " ($it)" }.orEmpty()
+        val ok = setAny(builder, entry.name, entry.type, value, physicalCameraId, characteristics)
+        if (!ok) {
+            return if (tagHex != null) {
+                VendorKeyProbeResult(false, "HAL rejected despite resolving $tagHex")
+            } else {
+                VendorKeyProbeResult(false, "HAL rejected (not on this lens)")
+            }
+        }
+        return if (entry.scope == VendorKeyScope.SESSION) {
+            VendorKeyProbeResult(true, "Accepted — takes effect after reopen$tagSuffix")
+        } else {
+            VendorKeyProbeResult(true, "Accepted on this lens$tagSuffix")
         }
     }
 
@@ -135,26 +197,36 @@ object VendorKeyApply {
             log("vendor $where: skip ${entry.name} (bad value: ${failure.message})")
             return false
         }
-        return try {
-            when (entry.type) {
-                VendorKeyType.INT -> setTyped(builder, entry.name, value as Int, Int::class.java, physicalCameraId, characteristics)
-                VendorKeyType.LONG -> setTyped(builder, entry.name, value as Long, Long::class.java, physicalCameraId, characteristics)
-                VendorKeyType.FLOAT -> setTyped(builder, entry.name, value as Float, Float::class.java, physicalCameraId, characteristics)
-                VendorKeyType.DOUBLE -> setTyped(builder, entry.name, value as Double, Double::class.java, physicalCameraId, characteristics)
-                VendorKeyType.BOOLEAN -> setTyped(builder, entry.name, value as Boolean, Boolean::class.java, physicalCameraId, characteristics)
-                VendorKeyType.BYTE -> setTyped(builder, entry.name, value as Byte, Byte::class.java, physicalCameraId, characteristics)
-                VendorKeyType.INT_ARRAY -> setTyped(builder, entry.name, value as IntArray, IntArray::class.java, physicalCameraId, characteristics)
-                VendorKeyType.LONG_ARRAY -> setTyped(builder, entry.name, value as LongArray, LongArray::class.java, physicalCameraId, characteristics)
-                VendorKeyType.FLOAT_ARRAY -> setTyped(builder, entry.name, value as FloatArray, FloatArray::class.java, physicalCameraId, characteristics)
-                VendorKeyType.BYTE_ARRAY -> setTyped(builder, entry.name, value as ByteArray, ByteArray::class.java, physicalCameraId, characteristics)
-            }
-        } catch (failure: IllegalArgumentException) {
-            log("vendor $where: skip ${entry.name} (HAL rejected: $failure)")
-            false
-        } catch (failure: Exception) {
-            log("vendor $where: skip ${entry.name} ($failure)")
-            false
+        if (!setAny(builder, entry.name, entry.type, value, physicalCameraId, characteristics)) {
+            log("vendor $where: skip ${entry.name} (HAL rejected)")
+            return false
         }
+        return true
+    }
+
+    /** Typed dispatch shared by the capture path and the probe. Never throws. */
+    private fun setAny(
+        builder: CaptureRequest.Builder,
+        name: String,
+        type: VendorKeyType,
+        value: Any,
+        physicalCameraId: String?,
+        characteristics: CameraCharacteristics?
+    ): Boolean = try {
+        when (type) {
+            VendorKeyType.INT -> setTyped(builder, name, value as Int, Int::class.java, physicalCameraId, characteristics)
+            VendorKeyType.LONG -> setTyped(builder, name, value as Long, Long::class.java, physicalCameraId, characteristics)
+            VendorKeyType.FLOAT -> setTyped(builder, name, value as Float, Float::class.java, physicalCameraId, characteristics)
+            VendorKeyType.DOUBLE -> setTyped(builder, name, value as Double, Double::class.java, physicalCameraId, characteristics)
+            VendorKeyType.BOOLEAN -> setTyped(builder, name, value as Boolean, Boolean::class.java, physicalCameraId, characteristics)
+            VendorKeyType.BYTE -> setTyped(builder, name, value as Byte, Byte::class.java, physicalCameraId, characteristics)
+            VendorKeyType.INT_ARRAY -> setTyped(builder, name, value as IntArray, IntArray::class.java, physicalCameraId, characteristics)
+            VendorKeyType.LONG_ARRAY -> setTyped(builder, name, value as LongArray, LongArray::class.java, physicalCameraId, characteristics)
+            VendorKeyType.FLOAT_ARRAY -> setTyped(builder, name, value as FloatArray, FloatArray::class.java, physicalCameraId, characteristics)
+            VendorKeyType.BYTE_ARRAY -> setTyped(builder, name, value as ByteArray, ByteArray::class.java, physicalCameraId, characteristics)
+        }
+    } catch (_: Exception) {
+        false
     }
 
     private fun <T> setTyped(

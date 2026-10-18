@@ -21,7 +21,12 @@ import kotlin.math.roundToInt
 /** Pending-MediaStore JPEG writer. Every failure deletes its unpublished entry. */
 class JpegSaver(private val context: Context) {
     @Throws(IOException::class)
-    fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult,
+    /**
+     * @param result live capture result for aperture/focal/AWB EXIF tags;
+     * null for offline merges, which carry no Camera2 result (those tags
+     * fall back to the synthesized metadata or are omitted).
+     */
+    fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult?,
              captureTimeMillis: Long = System.currentTimeMillis(),
              typeSuffix: String? = null,
              gps: GpsLocation? = null,
@@ -80,16 +85,29 @@ class JpegSaver(private val context: Context) {
                         ExifInterface.TAG_EXPOSURE_TIME,
                         metadata.exposureTimeNanos?.let { it / 1_000_000_000.0 }?.toString()
                     )
-                    result.get(CaptureResult.LENS_APERTURE)?.let {
+                    result?.get(CaptureResult.LENS_APERTURE)?.let {
                         setAttribute(ExifInterface.TAG_F_NUMBER, it.toString())
                     }
-                    result.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
+                    metadata.aperture?.let {
+                        if (result?.get(CaptureResult.LENS_APERTURE) == null) {
+                            setAttribute(ExifInterface.TAG_F_NUMBER, it.toString())
+                        }
+                    }
+                    result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
                         setAttribute(
                             ExifInterface.TAG_FOCAL_LENGTH,
                             "${(it * 1000f).roundToInt()}/1000"
                         )
                     }
-                    result.get(CaptureResult.CONTROL_AWB_MODE)?.let {
+                    metadata.focalLengthMm?.let {
+                        if (result?.get(CaptureResult.LENS_FOCAL_LENGTH) == null) {
+                            setAttribute(
+                                ExifInterface.TAG_FOCAL_LENGTH,
+                                "${(it * 1000f).roundToInt()}/1000"
+                            )
+                        }
+                    }
+                    result?.get(CaptureResult.CONTROL_AWB_MODE)?.let {
                         setAttribute(
                             ExifInterface.TAG_WHITE_BALANCE,
                             if (it == CaptureResult.CONTROL_AWB_MODE_AUTO) "0" else "1"

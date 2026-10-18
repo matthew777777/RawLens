@@ -33,6 +33,26 @@ class VendorKeyApplyTest {
         assertTrue(refused.isEmpty())
     }
 
+    @Test fun `fingerprint ignores order but flips on any change`() {
+        val one = entry("b.two")
+        val two = entry("a.one")
+        assertEquals(
+            VendorKeyApply.fingerprint(listOf(one, two)),
+            VendorKeyApply.fingerprint(listOf(two, one))
+        )
+        assertEquals("", VendorKeyApply.fingerprint(emptyList()))
+        assertEquals(
+            VendorKeyApply.fingerprint(listOf(one)),
+            VendorKeyApply.fingerprint(listOf(entry("b.two")))
+        )
+        assertNotEquals(
+            VendorKeyApply.fingerprint(listOf(entry("b.two"))),
+            VendorKeyApply.fingerprint(
+                listOf(VendorKeyEntry("b.two", VendorKeyType.INT, VendorKeyScope.SESSION, "2", enabled = false))
+            )
+        )
+    }
+
     @Test fun `session and request entries split by scope`() {
         val profile = VendorKeyProfile(
             listOf(
