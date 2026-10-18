@@ -75,13 +75,20 @@ class SrpPipelineFullresDeviceTest {
             Log.i("SrpFullresDevice", "device: ${SrpBridge.nativeDeviceInfo(handle)}")
             val refPath = frames[0].absolutePath
             val refMeta = DngRead.readMeta(refPath)
-            // One shared decode staging buffer (50 MB): every frame
-            // fully rewrites it, so no per-frame staging garbage.
-            val decodeBuf = SrpBridge.directFloats(refMeta.width * refMeta.height)
+            // The reference decodes through a temp (dead before the
+            // pipeline's init window); the shared decode staging is
+            // allocated lazily by the first comparison thunk, so it is
+            // not live during init either. Every decode fully rewrites
+            // the buffer, so reuse is aliasing-safe.
             var refBox: Array<FloatArray>? =
-                DngRead.readNormalizedInto(refPath, refMeta, decodeBuf)
+                DngRead.readNormalized(refPath, refMeta)
+            var decodeBuf: java.nio.ByteBuffer? = null
             val compImgs = frames.drop(1).map { f ->
-                { DngRead.readNormalizedInto(f.absolutePath, DngRead.readMeta(f.absolutePath), decodeBuf) }
+                {
+                    val b = decodeBuf
+                        ?: SrpBridge.directFloats(refMeta.width * refMeta.height).also { decodeBuf = it }
+                    DngRead.readNormalizedInto(f.absolutePath, DngRead.readMeta(f.absolutePath), b)
+                }
             }
             val h = refBox!!.size
             val w = refBox!![0].size

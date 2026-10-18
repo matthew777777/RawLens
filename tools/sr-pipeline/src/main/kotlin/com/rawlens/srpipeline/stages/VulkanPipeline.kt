@@ -175,23 +175,28 @@ object VulkanPipeline {
         val outH = (h * config.scale).toInt()
         val outW = (w * config.scale).toInt()
 
-        // Grey pack/upload staging, sized by the frame: shared by the
+        // Grey device-output staging, sized by the frame: shared by the
         // ref phase and every comparison (sequential fence-waited
-        // entries, fully rewritten per use). These two survive into the
-        // finish below (100 MB); everything bigger dies first.
-        val frameBuf = SrpBridge.directFloats(w * h)
+        // entries, fully rewritten per use). Survives into the finish
+        // below with the pack staging (100 MB); everything bigger dies
+        // first.
         val greyOut = SrpBridge.directFloats(w * h)
 
-        /** Grey of `frame` into `rows` (same bytes as the staged path). */
+        /**
+         * Grey of `frame` into `rows` (same bytes as the staged path).
+         * `packBuf` is the upload staging (caller-owned: a temp for the
+         * one-shot ref grey, the shared `frameBuf` for the loop).
+         */
         fun greyOfInto(
             frame: Array<FloatArray>,
+            packBuf: ByteBuffer,
             out: ByteBuffer,
             rows: Array<FloatArray>,
         ): Array<FloatArray> {
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }
-            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, frameBuf), out,
+            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, packBuf), out,
                 spirvs.fft, w, h)) }
             // Same device bytes straight into the rows: no flat
             // intermediate (50 MB at full-res).
@@ -218,10 +223,13 @@ object VulkanPipeline {
         val denRes = SrpBridge.createResident(handle, total.toLong())
         require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
         // 1. Ref phase (own scope): grey rows, init host temporaries
-        // and the decoded frame all die here, before the loop.
+        // and the decoded frame all die here, before the loop. The ref
+        // grey packs through a temp (dies with the block): the shared
+        // pack staging is only allocated after the pin below, so it is
+        // not live during the ~300 MB init window.
         val pinnedInit = run {
             val rows = Array(h) { FloatArray(w) }
-            val refGrey = greyOfInto(refBox!!, greyOut, rows)
+            val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h), greyOut, rows)
             // 1b. Pin level residents on-device (L2 spectra + statics,
             // one upload per run, reused across frames); freed in the
             // run finally below. The unpinned init's ~320MB of host
@@ -232,13 +240,19 @@ object VulkanPipeline {
                     timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) },
                     loop, handle, alignSpirvs)
             }
-            // 2. Reference local stats straight into the residents.
-            if (config.robustnessEnabled) {
-                timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
-                    handle, packImageInto(refBox!!, frameBuf), meansRes, varsRes,
-                    spirvs.robust, w, h)) }
-            }
             pinned
+        }
+
+        // Shared pack/upload staging, allocated only now (post-pin):
+        // keeping it out of the init window above saves 50 MB live
+        // there. Fully rewritten per use from here on.
+        val frameBuf = SrpBridge.directFloats(w * h)
+
+        // 2. Reference local stats straight into the residents.
+        if (config.robustnessEnabled) {
+            timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
+                handle, packImageInto(refBox!!, frameBuf), meansRes, varsRes,
+                spirvs.robust, w, h)) }
         }
 
         try {
@@ -252,8 +266,9 @@ object VulkanPipeline {
         // transients ~140 MB at full-res die first). Same
         // reusable-buffer discipline as before — every buffer fully
         // rewritten per use, entries fence-wait, so sequential reuse is
-        // aliasing-safe. `frameBuf`/`greyOut` live outside (ref phase +
-        // finish); the loop rows are loop-scoped below.
+        // aliasing-safe. `frameBuf`/`greyOut` live outside (allocated
+        // post-pin, surviving into the finish); the loop rows are
+        // loop-scoped below.
         run {
         val finest0 = pinnedInit.levels.last()
         val ftx0 = finest0.nTx
@@ -346,7 +361,7 @@ object VulkanPipeline {
         val loopRows = Array(h) { FloatArray(w) }
         for (frameThunk in comparisons) {
             val frame = frameThunk()
-            val frameGrey = greyOfInto(frame, greyOut, loopRows)
+            val frameGrey = greyOfInto(frame, frameBuf, greyOut, loopRows)
             val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
             val ftx = flow[0].size
             val fty = flow.size

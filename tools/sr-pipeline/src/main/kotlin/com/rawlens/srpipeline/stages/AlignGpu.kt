@@ -157,8 +157,13 @@ object AlignGpu {
         val w = refGrey[0].size
         val padH = if (h % config.tileSize == 0) 0 else config.tileSize - h % config.tileSize
         val padW = if (w % config.tileSize == 0) 0 else config.tileSize - w % config.tileSize
-        val padded = circularPad(refGrey, padH, padW)
-        val pyramid = Resample.buildGaussianPyramid(padded, config.factors, config.preprocessing)
+        // The padded copy (50 MB at full-res) is only the pyramid
+        // input: scope it so it dies before the per-level builds below
+        // instead of living until `initGpu` returns.
+        val pyramid = run {
+            val padded = circularPad(refGrey, padH, padW)
+            Resample.buildGaussianPyramid(padded, config.factors, config.preprocessing)
+        }
         val levels = pyramid.indices.map { i ->
             val c = n - i - 1
             val tileSize = config.tileSizes[c]
