@@ -9,7 +9,7 @@ Paste the prompt below into a new session to continue this work.
 ## Project
 
 Android camera app at `/Users/monikamalinowska/AndroidStudioProjects/RawLens`
-(package `com.matthew.rawlens`, minSdk 29, compileSdk 35). App module: `:app`.
+(package `com.matthew.rawlens`, minSdk 30, compileSdk 35). App module: `:app`.
 Build: `./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest`.
 ADB at `~/Library/Android/sdk/platform-tools/adb`. Test device (usually attached):
 Xiaomi 25080RABDG, Android 16, MediaTek MT6878, Mali-G615 MC2
@@ -203,7 +203,7 @@ Critical lessons (each cost a debugging round, all verified on-device):
 4. Push-constant layout is triple-locked: `.comp` source comment,
    `static_assert(sizeof==72)` in C++, `VfVulkanTest` packing test.
 5. SPIR-V is precompiled (`glslangValidator -V --target-env vulkan1.1`,
-   Vulkan 1.1 for minSdk 29) and shipped in `assets/shaders/vf/` with the
+   Vulkan 1.1 for minSdk 30) and shipped in `assets/shaders/vf/` with the
    `.comp` source + regen command in its header. glslang 16.6.0 via Homebrew.
 
 Files: `vf_vulkan_vf.cpp` (device/import/compute), `VfVulkan.kt` (bridge +

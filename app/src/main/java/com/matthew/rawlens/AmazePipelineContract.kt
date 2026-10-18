@@ -159,4 +159,30 @@ object AmazePipelineContract {
             CfaColor.BLUE -> 2
         }
     }
+
+    /**
+     * AMaZE highlight-guard threshold in the attenuate-only balanced working
+     * basis (`pad.glsl` multiplies the CFA by [demosaicBalance], whose largest
+     * gain is 1). RawTherapee compares its interpolations against
+     * `clip_pt = 1 / initialGain` — the achromatic neutral level at
+     * first-channel clip — and this is the same quantity here: a neutral pixel
+     * at sensor white reads [demosaicBalance] minimum in every channel, so the
+     * guards (gradcd ratio-to-HA fallback, bound/gcorr green clamps, rbpm R/B
+     * clamps) must compare against `clipPoint * min(demosaicBalance)`.
+     * Binding the unbalanced sensor white (1.0) instead leaves the guards
+     * ~1/min-gain stops late, so ratio interpolation runs through
+     * single-channel clipping and its chroma overshoot survives to white
+     * balance as a purple highlight halo.
+     */
+    fun balancedClipPoint(clipPoint: Float, demosaicBalance: FloatArray): Float {
+        require(clipPoint.isFinite() && clipPoint > 0f) {
+            "AMaZE clip point must be finite and positive"
+        }
+        require(demosaicBalance.size == 3 &&
+            demosaicBalance.all { it.isFinite() && it > 0f }
+        ) {
+            "AMaZE demosaic balance must contain three finite positive gains"
+        }
+        return clipPoint * demosaicBalance.minOrNull()!!
+    }
 }

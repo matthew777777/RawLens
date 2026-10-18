@@ -111,6 +111,7 @@ internal object VfGpuImport {
         source: ByteBuffer, rowStride: Int, pixelStride: Int,
         left: Int, top: Int, width: Int, height: Int, step: Int,
         levels: FloatArray, white: Float, samples: FloatArray,
+        weights: FloatArray? = null,
         lens: LensShadingModel? = null,
         pattern: BayerPattern? = null,
         sensorOriginX: Int = 0,
@@ -120,6 +121,19 @@ internal object VfGpuImport {
         require(left % 2 == 0 && top % 2 == 0 && step >= 2 && step % 2 == 0)
         require(width > 0 && height > 0 && levels.size == 4)
         require(samples.size >= MAX_PREVIEW_SAMPLES)
+        require(weights == null || weights.size >= MAX_PREVIEW_SAMPLES)
+        // Center weighting needs the parallel weights array; without it the
+        // estimate stays uniform even when the tuning arms it (documented —
+        // callers wanting the subject vote pass their scratch buffer).
+        val bounded = tuning.bounded()
+        val center = bounded.centerWeight
+        val focusX = bounded.focusX ?: 0.5f
+        val focusY = bounded.focusY ?: 0.5f
+        val useWeights = weights != null && center > 0f
+        // Quads tile left..left+width*step, so the vote centers on the
+        // visited span (same frame the save path meters).
+        val spanW = width * step
+        val spanH = height * step
         // Bounds-check the last visited sample up front (same convention as the
         // CPU sampler): a short plane yields NaN, never an over-read.
         val lastX = left + (width - 1) * step + 1
@@ -161,7 +175,14 @@ internal object VfGpuImport {
                             n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
                         }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
-                            samples[count++] = n
+                            samples[count] = n
+                            if (useWeights) {
+                                weights!![count] = AdaptiveDevelopmentExposure.spatialWeight(
+                                    quadLeft + dx - left, quadTop + dy - top,
+                                    spanW, spanH, center, focusX, focusY
+                                )
+                            }
+                            count++
                         }
                     }
                     x += stride
@@ -184,7 +205,14 @@ internal object VfGpuImport {
                             n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
                         }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
-                            samples[count++] = n
+                            samples[count] = n
+                            if (useWeights) {
+                                weights!![count] = AdaptiveDevelopmentExposure.spatialWeight(
+                                    quadLeft + dx - left, quadTop + dy - top,
+                                    spanW, spanH, center, focusX, focusY
+                                )
+                            }
+                            count++
                         }
                     }
                     x += stride
@@ -192,7 +220,9 @@ internal object VfGpuImport {
                 y += stride
             }
         }
-        return AdaptiveDevelopmentExposure.analyzeSamples(samples, count, tuning).correctionEv
+        return AdaptiveDevelopmentExposure.analyzeSamples(
+            samples, count, tuning, weights = if (useWeights) weights else null
+        ).correctionEv
     }
 
     // Shared AgX helpers + tonemap tail. Both fragment shaders are composed from

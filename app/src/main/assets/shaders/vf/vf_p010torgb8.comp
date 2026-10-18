@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log 8-bit SDR fallback: staged P010 (the exact bytes the 10-bit
+// paths would queue) -> full-res RGBA8 for the EGL encoder present. Same
+// sampling and color math as vf_p010preview.comp, but 1:1 (no box): each
+// output pixel reads its own Y plus its half-res UV pair. There is no
+// downsample loop, so the box>=2 contract of the preview kernel does not
+// apply here (that kernel's hbox = box/2 hits 0/0 at box=1; this kernel
+// has no hbox at all).
+//
+// Layout mirrors Rgb8Params in vf_vulkan_vf.cpp (push block, 28 bytes).
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_p010torgb8.comp -o vf_p010torgb8.spv
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Byte-exact P010 view (vf_gradeyuv convention): Y u16 codes then
+// interleaved UV u16 pairs, 10-bit codes in the upper bits.
+layout(binding = 0) readonly buffer P010 { uint words[]; };
+layout(binding = 1, rgba8) uniform writeonly image2D img_out;
+
+layout(push_constant) uniform Params {
+    ivec2 u_dims;      // out W/H == P010 W/H (full-res, even)
+    ivec2 u_srcDims;   // P010 W/H (same as u_dims)
+    ivec3 u_strides;   // yStrideW, uvStrideW (u16 units), uvBaseOffB
+} p;
+
+uint yCodeAt(int ox, int oy) {
+    uint idx = uint(oy) * uint(p.u_strides.x) + uint(ox);
+    uint w = words[idx >> 1u];
+    uint u16 = ((idx & 1u) == 0u) ? (w & 0xFFFFu) : (w >> 16u);
+    return u16 >> 6u;
+}
+
+// Chroma pair at half-res coords (mirrors the fused/grade-YUV write path:
+// pairIdx is always even, so low half = U, high half = V).
+uvec2 uvPairAt(int cx, int cy) {
+    uint pairIdx = uint(p.u_strides.z) / 2u
+        + uint(cy) * uint(p.u_strides.y)
+        + uint(cx) * 2u;
+    uint w = words[pairIdx >> 1u];
+    return uvec2((w & 0xFFFFu) >> 6u, (w >> 16u) >> 6u);
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+    float y = float(yCodeAt(ij.x, ij.y));
+    uvec2 uv = uvPairAt(ij.x >> 1, ij.y >> 1);
+    float u = float(uv.x);
+    float v = float(uv.y);
+    // Limited-range -> unorm, then the inverse of vf_gradeyuv's rgbToYuv
+    // (BT.709, Kr = 0.2126, Kb = 0.0722). The P010 already holds
+    // sRGB-encoded components, so this lands directly in display RGB,
+    // which is what the 8-bit SDR (BT.709 container) encode carries.
+    float yn = (y - 64.0) / (940.0 - 64.0);
+    float cb = (u - 64.0) / (960.0 - 64.0) - 0.5;
+    float cr = (v - 64.0) / (960.0 - 64.0) - 0.5;
+    float r = yn + 2.0 * (1.0 - 0.2126) * cr;
+    float b = yn + 2.0 * (1.0 - 0.0722) * cb;
+    float g = (yn - 0.2126 * r - 0.0722 * b) / 0.7152;
+    imageStore(img_out, ij, vec4(clamp(vec3(r, g, b), 0.0, 1.0), 1.0));
+}

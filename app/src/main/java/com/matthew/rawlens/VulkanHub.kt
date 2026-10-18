@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package com.matthew.rawlens
 
+import android.content.res.AssetManager
 import java.io.Closeable
 import java.io.File
 import java.nio.ByteBuffer
@@ -44,7 +45,7 @@ object VulkanHub {
         val stream = VulkanHub::class.java.getResourceAsStream(resource)
             ?: throw UnsatisfiedLinkError(
                 "srvulkan: $resource missing from the classpath " +
-                    "(build the native lib: :tools:sr-vulkan:buildNative)"
+                    "(build tools/sr-vulkan/src/main/cpp with cmake, then pass -Dsrvulkan.lib=<path>)"
             )
         val tmp = File.createTempFile("libsrvulkan-", "-$file").apply { deleteOnExit() }
         stream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
@@ -221,4 +222,30 @@ object VulkanHub {
     private external fun nativeDispatch(handle: Long, pipeline: Long, gx: Int, gy: Int, gz: Int)
     private external fun nativeDestroyPipeline(handle: Long, pipeline: Long)
     private external fun nativeShutdown(handle: Long)
+
+    /**
+     * Borrowed-device GPU session: [Handle] lifetime stays with the
+     * caller; programs, images, and staging release on [close].
+     * Confine to one thread like the other Vulkan orchestrators.
+     * (Relocated from the removed bracket HDR Vulkan merge; the
+     * highlight-reconstruction pipeline still borrows sessions.)
+     */
+    internal class GpuContext(vk: Handle, assets: AssetManager) : Closeable {
+        private val programs = VkProgramCache(vk, assets)
+        private val arena = VkArena(vk)
+        private val uploads = UploadBuffers()
+        val session = VkSession(vk, programs, uploads)
+
+        fun texture(w: Int, h: Int, format: Int): VkImage = arena.texture(w, h, format)
+        fun release(image: VkImage) = arena.release(image)
+
+        override fun close() {
+            try {
+                programs.close()
+            } finally {
+                uploads.close()
+                arena.close()
+            }
+        }
+    }
 }

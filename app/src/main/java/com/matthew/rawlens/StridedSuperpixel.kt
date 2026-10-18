@@ -78,8 +78,22 @@ internal object StridedSuperpixel {
         if (cropWidth < stride || cropHeight < stride) return null
         if (cropWidth % 2 != 0 || cropHeight % 2 != 0) return null
         if (cropLeft < 0 || cropTop < 0 || width < 2 || height < 2) return null
-        if (pixelStride < 2 || rowStride < (cropWidth - 1) * pixelStride + 2) return null
         val plane = image.planes?.firstOrNull() ?: return null
+        // Packed sessions sample native codes through a row-cached reader;
+        // out-of-frame crops refuse exactly like overrun offsets below.
+        val packedSampler = if (pixelStride < 2) {
+            val packed = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(
+                    plane.buffer, width, height, rowStride, 0, packed
+                )
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
+        if (packedSampler == null &&
+            (pixelStride < 2 || rowStride < (cropWidth - 1) * pixelStride + 2)
+        ) return null
         val (outW, outH) = outputDims(cropWidth, cropHeight, stride)
         // duplicate() resets byte order to big-endian; restore the source
         // buffer's order or every 16-bit sample misreads (same convention
@@ -101,11 +115,19 @@ internal object StridedSuperpixel {
                 val planeY = cropTop + oy * stride + iy
                 val sensorX = sensorOriginX + planeX
                 val sensorY = sensorOriginY + planeY
-                val offset = dataOrigin +
-                    planeY.toLong() * rowStride +
-                    planeX.toLong() * pixelStride
-                if (offset + 2 > limit) return null
-                val code = input.getShort(offset.toInt()).toInt() and 0xffff
+                val code = if (packedSampler != null) {
+                    try {
+                        packedSampler.codeAt(planeX, planeY)
+                    } catch (_: IllegalArgumentException) {
+                        return null
+                    }
+                } else {
+                    val offset = dataOrigin +
+                        planeY.toLong() * rowStride +
+                        planeX.toLong() * pixelStride
+                    if (offset + 2 > limit) return null
+                    input.getShort(offset.toInt()).toInt() and 0xffff
+                }
                 val black = blackLevels[((sensorY and 1) shl 1) or (sensorX and 1)]
                 val n = (code - black).coerceAtLeast(0f) / (whiteLevel - black)
                 when (pattern.colorAt(sensorX, sensorY)) {

@@ -1,0 +1,339 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Direct-Log FUSED RCD record stage, float16-math variant of
+// vf_rcdyuv.comp: identical structure and op order, all computed values
+// in float16_t (GL_EXT_shader_explicit_arithmetic_types_float16; needs
+// the VK_KHR_shader_float16_int8 device feature + shaderFloat16). The
+// fp32 original stays as the fallback SPIR-V for devices without the
+// feature. Params stay fp32 words (values convert to f16 on load);
+// export mapping stays fp32 (f16 would round 4K coordinates).
+//
+// Why fused: RCD modes and grade share one Vulkan queue (strictly
+// serial), so throughput is the SUM (measured ~236ms RCD + ~18ms grade
+// at 4K). The split stages also round-trip the 75MB RGB image plus a
+// 75MB grade re-read through DRAM. Fusing removes the grade re-read,
+// one dispatch, and the grade's image traffic; later work fuses the
+// RCD modes themselves.
+//
+// Iteration domain is the CROP (like vf_rcd.comp, so its shared CFA
+// tile stays valid), but only canonical export samplers do work: crop
+// site c works iff c == floor((e+0.5)*crop/export) for its export pixel
+// e (computed with grade's exact parenthesization so the fused taps
+// match the split path tap-for-tap), and only even-x export owners
+// pack (Y pairs + pair-mean UV, exactly like vf_gradeyuv.comp).
+// The odd partner's RGB is recomputed redundantly by the owner; partner
+// CFA taps outside the tile fall back to global reads (large ladder
+// steps), so any export/crop ratio stays correct.
+//
+// Deliberate differences from the split path: no bypass flag (the
+// recorder never bypasses), fullRgb is hard-wired to 1, no lens-shading
+// map (the RCD split path carries none either), fp32 throughout.
+// Keep in sync with vf_rcd.comp (mode 3) and vf_gradeyuv.comp (grade);
+// the fused-vs-split device probe gates drift.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_rcdyuv_f16.comp -o vf_rcdyuv_f16.spv
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Byte-exact sensor view (same convention as vf_rcd.comp): each uint
+// holds 2 LE pixels, stride is the Image plane pitch in pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+// Modes 1-2 results (R/B sites are final after mode 2; read-only here).
+layout(binding = 1, rgba16f) uniform readonly image2D img_rgb;
+// Mode-0 direction + low-pass scratch (read-only here).
+layout(binding = 2, rgba16f) uniform readonly image2D img_scratch;
+// Combined RCD + grade params (SSBO: 160 bytes exceeds the 128-byte
+// push-constant guarantee; mirrors RcdYuvParams in vf_vulkan_vf.cpp).
+struct RcdYuvParams {
+    ivec2 cDims;      // crop W/H (RCD domain, full res)
+    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 cChans;     // quad-offset map, channels[] convention
+    vec4 cBlack;      // per-quad-pos black levels
+    vec4 cInvRange;   // per-quad-pos 1/(white-black)
+    int cPitch;       // sensor row stride in pixels
+    int _pad0;
+    ivec2 oDims;      // export W/H (encode domain)
+    vec4 gCcmR;       // WB+exposure-folded CCM row R (CPU-folded)
+    vec4 gCcmG;
+    vec4 gCcmB;
+    vec4 gMisc;       // bypass(0), yStrideW, uvStrideW, uvBaseOffB
+    vec4 gMisc2;      // fullRgb(1), outMode, reserved, 0
+};
+layout(binding = 3) readonly buffer Params { RcdYuvParams u; };
+layout(binding = 4) writeonly buffer P010 { uint words[]; } buf_out;
+
+const float16_t RCD_EPS = 1e-5hf;
+const float16_t RCD_EPSSQ = 1e-10hf;
+
+// Phase-preserving edge mirror (single reflection covers our +-4
+// stencil on any dims >= 8; matches vf_rcd.comp).
+int mir(int i, int n) {
+    if (i < 0) i = -i;
+    if (i >= n) i = 2 * n - 2 - i;
+    return i;
+}
+ivec2 mirrorCrop(ivec2 s) {
+    return ivec2(mir(s.x, u.cDims.x), mir(s.y, u.cDims.y));
+}
+
+// Quad offset (0..3) of crop pixel s in sensor phase.
+int quadOf(ivec2 s) {
+    return (((s.y + u.cOrigin.y) & 1) << 1) | ((s.x + u.cOrigin.x) & 1);
+}
+
+// CFA color 0=R 1=G 2=B (RT FC convention) by inverting channels[].
+int colorAt(ivec2 s) {
+    int q = quadOf(s);
+    if (u.cChans.x == q) return 0;
+    if (u.cChans.y == q || u.cChans.z == q) return 1;
+    return 2;
+}
+
+float16_t normCode(ivec2 s) {
+    uint idx = uint(s.y + u.cOrigin.y) * uint(u.cPitch) + uint(s.x + u.cOrigin.x);
+    uint word = codes[idx >> 1u];
+    uint code = ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+    int q = quadOf(s);
+    return float16_t(clamp((float(code) - u.cBlack[q]) * u.cInvRange[q], 0.0, 1.0));
+}
+
+// Workgroup CFA tile (normalized); loaded once, then stencil taps are
+// shared reads. Partner-site taps outside the tile (large ladder steps)
+// fall back to global reads so any export/crop ratio stays correct.
+shared float16_t tile[16][16];
+
+void loadTile() {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
+    uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+    for (uint k = 0u; k < 4u; ++k) {
+        uint lin = lane * 4u + k;
+        ivec2 t = ivec2(int(lin & 15u), int(lin >> 4u));
+        tile[t.y][t.x] = normCode(mirrorCrop(base + t - ivec2(4)));
+    }
+    barrier();
+}
+
+float16_t fetchN(ivec2 s) {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
+    ivec2 m = mirrorCrop(s);
+    ivec2 t = m - base + ivec2(4);
+    if (t.x < 0 || t.y < 0 || t.x >= 16 || t.y >= 16) return normCode(m);
+    return tile[t.y][t.x];
+}
+
+// Prior-mode rgb read (imageLoad neither clamps nor mirrors).
+f16vec4 rgbAt(ivec2 s) {
+    return f16vec4(imageLoad(img_rgb, mirrorCrop(s)));
+}
+
+// Scratch direction read (mode 0 output, mirrored like rgb).
+f16vec4 dirAt(ivec2 s) {
+    return f16vec4(imageLoad(img_scratch, mirrorCrop(s)));
+}
+
+float16_t intp(float16_t d, float16_t h, float16_t v) { return d * (h - v) + v; }
+float16_t sqr(float16_t x) { return x * x; }
+
+// Refined discrimination from scratch values: central vs 4-diagonal
+// neighbourhood, the more decisive (farther from 0.5) wins.
+float16_t refineFrom(float16_t central, float16_t d0, float16_t d1, float16_t d2, float16_t d3) {
+    float16_t nb = 0.25hf * (d0 + d1 + d2 + d3);
+    return (abs(0.5 - central) < abs(0.5 - nb)) ? nb : central;
+}
+// Eps-floored blends/ratios in fp32: the f16 epsilons are subnormal and
+// flush to zero on mobile, which made flat-area 0/0 NaN and collapsed
+// zero-weighted means to black. Weights re-floor in fp32 (same 1e-5 as
+// the fp32 twin), matching it up to tap rounding.
+float16_t blendEps(float16_t a, float16_t xa, float16_t b, float16_t xb) {
+    float wa = 1e-5 + float(a);
+    float wb = 1e-5 + float(b);
+    return float16_t((wb * float(xa) + wa * float(xb)) / (wa + wb));
+}
+
+float16_t ratioEps(float16_t num, float16_t d0, float16_t d1) {
+    return float16_t(float(num) / (1e-5 + float(d0) + float(d1)));
+}
+
+
+// Final RCD RGB at crop site s: R/B sites are modes 1-2 final (plain
+// image read); green sites run the RT 4.3 refinement (same op order as
+// vf_rcd.comp mode 3: red block, then blue block).
+f16vec3 rcdRgbAt(ivec2 s) {
+    int c = colorAt(s);
+    // Non-green sites are modes 1-2 final: the exact texel (no mirror;
+    // matches vf_rcd.comp mode 3, which leaves these texels untouched).
+    if (c != 1) return f16vec3(imageLoad(img_rgb, s).rgb);
+    f16vec4 d = dirAt(s);
+    float16_t vhDisc = refineFrom(d.r,
+        dirAt(s + ivec2(-1, -1)).r, dirAt(s + ivec2(1, -1)).r,
+        dirAt(s + ivec2(-1, 1)).r, dirAt(s + ivec2(1, 1)).r);
+    float16_t rgb1 = f16vec4(imageLoad(img_rgb, s)).g;
+    float16_t n1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(0, -2)).g);
+    float16_t s1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(0, 2)).g);
+    float16_t w1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(-2, 0)).g);
+    float16_t e1 = RCD_EPS + abs(rgb1 - rgbAt(s + ivec2(2, 0)).g);
+    float16_t gN = rgbAt(s + ivec2(0, -1)).g;
+    float16_t gS = rgbAt(s + ivec2(0, 1)).g;
+    float16_t gW = rgbAt(s + ivec2(-1, 0)).g;
+    float16_t gE = rgbAt(s + ivec2(1, 0)).g;
+    vec4 px = imageLoad(img_rgb, s);
+    // c = 0 (red): cardinals +-1 are mosaic (tile), +-3 mode-2 (image).
+    {
+        float16_t cN = (colorAt(s + ivec2(0, -1)) == 0) ? fetchN(s + ivec2(0, -1)) : rgbAt(s + ivec2(0, -1)).r;
+        float16_t cS = (colorAt(s + ivec2(0, 1)) == 0) ? fetchN(s + ivec2(0, 1)) : rgbAt(s + ivec2(0, 1)).r;
+        float16_t cW = (colorAt(s + ivec2(-1, 0)) == 0) ? fetchN(s + ivec2(-1, 0)) : rgbAt(s + ivec2(-1, 0)).r;
+        float16_t cE = (colorAt(s + ivec2(1, 0)) == 0) ? fetchN(s + ivec2(1, 0)) : rgbAt(s + ivec2(1, 0)).r;
+        float16_t cN3 = (colorAt(s + ivec2(0, -3)) == 0) ? fetchN(s + ivec2(0, -3)) : rgbAt(s + ivec2(0, -3)).r;
+        float16_t cS3 = (colorAt(s + ivec2(0, 3)) == 0) ? fetchN(s + ivec2(0, 3)) : rgbAt(s + ivec2(0, 3)).r;
+        float16_t cW3 = (colorAt(s + ivec2(-3, 0)) == 0) ? fetchN(s + ivec2(-3, 0)) : rgbAt(s + ivec2(-3, 0)).r;
+        float16_t cE3 = (colorAt(s + ivec2(3, 0)) == 0) ? fetchN(s + ivec2(3, 0)) : rgbAt(s + ivec2(3, 0)).r;
+        float16_t sn = abs(cN - cS), ew = abs(cW - cE);
+        float16_t nG = n1 + sn + abs(cN - cN3);
+        float16_t sG = s1 + sn + abs(cS - cS3);
+        float16_t wG = w1 + ew + abs(cW - cW3);
+        float16_t eG = e1 + ew + abs(cE - cE3);
+        float16_t vEst = blendEps(sG, cS - gS, nG, cN - gN);
+        float16_t hEst = blendEps(wG, cE - gE, eG, cW - gW);
+        px.r = float(rgb1 + intp(vhDisc, hEst, vEst));
+    }
+    // c = 2 (blue): same with mosaic/blue selection.
+    {
+        float16_t cN = (colorAt(s + ivec2(0, -1)) == 2) ? fetchN(s + ivec2(0, -1)) : rgbAt(s + ivec2(0, -1)).b;
+        float16_t cS = (colorAt(s + ivec2(0, 1)) == 2) ? fetchN(s + ivec2(0, 1)) : rgbAt(s + ivec2(0, 1)).b;
+        float16_t cW = (colorAt(s + ivec2(-1, 0)) == 2) ? fetchN(s + ivec2(-1, 0)) : rgbAt(s + ivec2(-1, 0)).b;
+        float16_t cE = (colorAt(s + ivec2(1, 0)) == 2) ? fetchN(s + ivec2(1, 0)) : rgbAt(s + ivec2(1, 0)).b;
+        float16_t cN3 = (colorAt(s + ivec2(0, -3)) == 2) ? fetchN(s + ivec2(0, -3)) : rgbAt(s + ivec2(0, -3)).b;
+        float16_t cS3 = (colorAt(s + ivec2(0, 3)) == 2) ? fetchN(s + ivec2(0, 3)) : rgbAt(s + ivec2(0, 3)).b;
+        float16_t cW3 = (colorAt(s + ivec2(-3, 0)) == 2) ? fetchN(s + ivec2(-3, 0)) : rgbAt(s + ivec2(-3, 0)).b;
+        float16_t cE3 = (colorAt(s + ivec2(3, 0)) == 2) ? fetchN(s + ivec2(3, 0)) : rgbAt(s + ivec2(3, 0)).b;
+        float16_t sn = abs(cN - cS), ew = abs(cW - cE);
+        float16_t nG = n1 + sn + abs(cN - cN3);
+        float16_t sG = s1 + sn + abs(cS - cS3);
+        float16_t wG = w1 + ew + abs(cW - cW3);
+        float16_t eG = e1 + ew + abs(cE - cE3);
+        float16_t vEst = blendEps(sG, cS - gS, nG, cN - gN);
+        float16_t hEst = blendEps(wG, cE - gE, eG, cW - gW);
+        px.b = float(rgb1 + intp(vhDisc, hEst, vEst));
+    }
+    return f16vec3(px.rgb);
+}
+
+// ---- direct-encode record grade (same math as vf_gradeyuv.comp
+// fullRgb mode, in reference op order; CCM arrives WB+exposure-folded
+// on the CPU via foldGradeCcm, like GradeYuvParams) ----
+f16vec3 bt709Encode(f16vec3 v) {
+    v = clamp(v, 0.0hf, 1.0hf);
+    f16vec3 lo = 4.5hf * v;
+    f16vec3 hi = 1.099hf * pow(v, f16vec3(0.45hf)) - 0.099hf;
+    return mix(hi, lo, f16vec3(lessThan(v, f16vec3(0.018hf))));
+}
+
+float16_t hlgOetf(float16_t e) {
+    e = clamp(e, 0.0hf, 1.0hf);
+    if (e <= 1.0hf / 12.0hf) return sqrt(3.0hf * e);
+    return clamp(0.17883277hf * log(12.0hf * e - 0.28466892hf) + 0.55991073hf, 0.0hf, 1.0hf);
+}
+
+f16vec3 hlgEncode(f16vec3 v2020) {
+    return f16vec3(hlgOetf(v2020.r), hlgOetf(v2020.g), hlgOetf(v2020.b));
+}
+
+f16vec3 srgbToBt2020(f16vec3 v) {
+    return f16vec3(
+        dot(v, f16vec3(0.6274040hf, 0.3292820hf, 0.0433136hf)),
+        dot(v, f16vec3(0.0690970hf, 0.9195400hf, 0.0113612hf)),
+        dot(v, f16vec3(0.0163916hf, 0.0880132hf, 0.8955950hf)));
+}
+
+float16_t slog3cutY() {
+    return (420.0hf + log2((0.01125hf + 0.01hf) / 0.19hf) * 0.30102999566hf * 261.5hf) / 1023.0hf;
+}
+
+float16_t sonySlog3(float16_t x) {
+    x = max(x, 0.0hf);
+    if (x >= 0.01125hf) {
+        return (420.0hf + log2((x + 0.01hf) / 0.19hf) * 0.30102999566hf * 261.5hf) / 1023.0hf;
+    }
+    return (95.0hf + x * (slog3cutY() * 1023.0hf - 95.0hf) / 0.01125hf) / 1023.0hf;
+}
+
+f16vec3 slogEncode(f16vec3 v) {
+    return f16vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+}
+
+f16vec3 gradeOf(f16vec3 rgb) {
+    f16vec3 developed = f16vec3(dot(f16vec3(u.gCcmR.rgb), rgb), dot(f16vec3(u.gCcmG.rgb), rgb), dot(f16vec3(u.gCcmB.rgb), rgb));
+    int mode = int(u.gMisc2.y + 0.5);
+    if (mode == 1) return slogEncode(developed);
+    if (mode == 2) return hlgEncode(srgbToBt2020(developed));
+    return bt709Encode(developed);
+}
+
+f16vec3 rgbToYuv(f16vec3 rgb, int mode) {
+    if (mode == 2) {
+        float16_t y = 0.2627hf * rgb.r + 0.6780hf * rgb.g + 0.0593hf * rgb.b;
+        float16_t cb = (rgb.b - y) / 1.8814hf + 0.5hf;
+        float16_t cc = (rgb.r - y) / 1.4746hf + 0.5hf;
+        return f16vec3(y, cb, cc);
+    }
+    float16_t y = 0.2126hf * rgb.r + 0.7152hf * rgb.g + 0.0722hf * rgb.b;
+    float16_t cb = (rgb.b - y) / (2.0hf * (1.0hf - 0.0722hf)) + 0.5hf;
+    float16_t cc = (rgb.r - y) / (2.0hf * (1.0hf - 0.2126hf)) + 0.5hf;
+    return f16vec3(y, cb, cc);
+}
+
+uint pack10(float16_t v, float16_t low, float16_t high) {
+    uint code = uint(round(clamp(v, 0.0hf, 1.0hf) * (high - low) + low));
+    return (code << 6) & 0xFFC0u;
+}
+
+// Export pixel e samples crop site floor((e+0.5)*crop/export): the same
+// parenthesization as vf_gradeyuv.comp pixelLog, so taps agree exactly.
+ivec2 exportSample(ivec2 e) {
+    ivec2 c = ivec2((vec2(e) + vec2(0.5)) * vec2(u.cDims) / vec2(u.oDims));
+    return clamp(c, ivec2(0), u.cDims - ivec2(1));
+}
+
+f16vec3 gradeSite(ivec2 e) {
+    return gradeOf(rcdRgbAt(exportSample(e)));
+}
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    // The tile load covers threads past the edge too, so no early-out
+    // before the barrier: every invocation must participate.
+    loadTile();
+    if (any(greaterThanEqual(ij, u.cDims))) return;
+    // Only canonical export samplers do work: site c works iff it is
+    // the sampler of its export pixel (same float expression as
+    // exportSample, so agreement with the split path is exact).
+    ivec2 e = ivec2((vec2(ij) + vec2(0.5)) * vec2(u.oDims) / vec2(u.cDims));
+    e = clamp(e, ivec2(0), u.oDims - ivec2(1));
+    if (exportSample(e) != ij) return;
+    // Odd partner: the even owner recomputes it (pair-mean chroma needs
+    // no extra taps, so the partner's own invocation stays idle).
+    if ((e.x & 1) != 0) return;
+    int yStride = int(u.gMisc.y);  // u16 words per Y row
+    int outMode = int(u.gMisc2.y + 0.5);
+    f16vec3 lg0 = gradeSite(e);
+    f16vec3 lg1 = (e.x + 1 < u.oDims.x) ? gradeSite(e + ivec2(1, 0)) : lg0;
+    f16vec3 yuv0 = rgbToYuv(lg0, outMode);
+    f16vec3 yuv1 = rgbToYuv(lg1, outMode);
+    uint yCode0 = pack10(yuv0.x, 64.0hf, 940.0hf);
+    uint yCode1 = pack10(yuv1.x, 64.0hf, 940.0hf);
+    uint yIdx = uint(e.y) * uint(yStride) + uint(e.x);  // u16 units
+    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
+    if ((e.y & 1) == 0) {
+        // Full-RGB: chroma is this pair's mean (zero extra taps).
+        f16vec3 muv = (yuv0 + yuv1) * 0.5hf;
+        uint uCode = pack10(muv.g, 64.0hf, 960.0hf);
+        uint vCode = pack10(muv.b, 64.0hf, 960.0hf);
+        uint pairIdx = uint(u.gMisc.w) / 2u
+            + uint(e.y / 2) * uint(u.gMisc.z)
+            + uint(e.x / 2) * 2u;
+        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    }
+}

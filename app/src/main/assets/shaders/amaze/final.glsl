@@ -17,6 +17,9 @@ uniform highp mat3 u_camera_to_acescg;
 // happen before white balance / color conversion to prevent clipped-channel magenta casts.
 uniform highp vec3 u_camera_white_normalized;
 // White-blend window in pre-matrix camera RGB (see final_display.glsl).
+// The highlight-reconstruction tap passes WHITE_WINDOW_OFF here (edges far
+// above any pixel, blend stays 0): reconstruction must see true channel
+// values and owns clipping itself, like RT's pre-desaturation recovery.
 uniform highp vec2 u_white_window;
 // Wavelet path: emit pre-matrix camera RGB (white-blend still applied, like
 // darktable's post-highlight-reconstruction denoise input) instead of ACEScg.

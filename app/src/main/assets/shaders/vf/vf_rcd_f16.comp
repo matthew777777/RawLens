@@ -1,0 +1,337 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Ratio-Corrected Demosaicing (RCD v2.3), float16-math variant of
+// vf_rcd.comp: identical structure and op order, all computed values
+// in float16_t (GL_EXT_shader_explicit_arithmetic_types_float16; needs
+// the VK_KHR_shader_float16_int8 device feature + shaderFloat16). The
+// fp32 original stays as the fallback SPIR-V for devices without the
+// feature. Push block, bindings, dispatch shape, and mirror-edge
+// discipline are unchanged, so the same host submit drives either.
+//
+// Deliberate differences from the fp32 twin beyond precision: none in
+// structure; values convert to f16 on CFA load (normCode) and image
+// loads convert on tap. The parity + fused-vs-split probes gate drift.
+//
+// Regenerate the SPIR-V with:
+//   glslangValidator -V --target-env vulkan1.1 vf_rcd_f16.comp -o vf_rcd_f16.spv
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Byte-exact sensor view (same convention as vf_rcd.comp): each uint
+// holds 2 LE pixels, stride is the Image plane pitch in pixels.
+layout(binding = 0) readonly buffer Bayer { uint codes[]; };
+layout(binding = 1, rgba16f) uniform image2D img_rgb;
+layout(binding = 2, rgba16f) uniform image2D img_scratch;
+
+// Mirrors RcdParams in vf_vulkan_vf.cpp (72 bytes, fp32 words; values
+// convert to f16 on load).
+layout(push_constant) uniform Params {
+    ivec2 u_dims;      // crop W/H (RCD output dims, full res)
+    ivec2 u_origin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 u_chans;     // quad-offset map, channels[] convention
+    vec4 u_black;      // per-quad-pos black levels
+    vec4 u_invRange;   // per-quad-pos 1/(white-black)
+    int u_pitch;       // sensor row stride in pixels
+    int u_mode;        // 0 dirs, 1 green, 2 R/B at opposite, 3 R/B at green
+} p;
+
+const float16_t RCD_EPS = 1e-5hf;
+const float16_t RCD_EPSSQ = 1e-10hf;
+
+// Phase-preserving edge mirror (single reflection covers our +-4
+// stencil on any dims >= 8; the CPU parity reference mirrors too).
+int mir(int i, int n) {
+    if (i < 0) i = -i;
+    if (i >= n) i = 2 * n - 2 - i;
+    return i;
+}
+ivec2 mirror(ivec2 s) {
+    return ivec2(mir(s.x, p.u_dims.x), mir(s.y, p.u_dims.y));
+}
+
+// Quad offset (0..3) of crop pixel s in sensor phase.
+int quadOf(ivec2 s) {
+    return (((s.y + p.u_origin.y) & 1) << 1) | ((s.x + p.u_origin.x) & 1);
+}
+
+// CFA color 0=R 1=G 2=B (RT FC convention) by inverting channels[]
+// (canonical 1 AND 2 are both green: Gr and Gb share a quad diagonal).
+int colorAt(ivec2 s) {
+    int q = quadOf(s);
+    if (p.u_chans.x == q) return 0;
+    if (p.u_chans.y == q || p.u_chans.z == q) return 1;
+    return 2;
+}
+
+float16_t normCode(ivec2 s) {
+    uint idx = uint(s.y + p.u_origin.y) * uint(p.u_pitch) + uint(s.x + p.u_origin.x);
+    uint word = codes[idx >> 1u];
+    uint code = ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
+    int q = quadOf(s);
+    return float16_t(clamp((float(code) - p.u_black[q]) * p.u_invRange[q], 0.0, 1.0));
+}
+
+// Workgroup CFA tile (normalized f16); loaded once per dispatch, then
+// every stencil tap is a shared read.
+shared float16_t tile[16][16];
+
+void loadTile() {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
+    uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+    for (uint k = 0u; k < 4u; ++k) {
+        uint lin = lane * 4u + k;
+        ivec2 t = ivec2(int(lin & 15u), int(lin >> 4u));
+        tile[t.y][t.x] = normCode(mirror(base + t - ivec2(4)));
+    }
+    barrier();
+}
+
+float16_t fetchN(ivec2 s) {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
+    ivec2 m = mirror(s);
+    return tile[m.y - base.y + 4][m.x - base.x + 4];
+}
+
+// Prior-mode rgb read (imageLoad neither clamps nor mirrors).
+f16vec4 rgbAt(ivec2 s) {
+    return f16vec4(imageLoad(img_rgb, mirror(s)));
+}
+
+// Scratch direction read (mode 0 output, mirrored like rgb).
+f16vec4 dirAt(ivec2 s) {
+    return f16vec4(imageLoad(img_scratch, mirror(s)));
+}
+
+float16_t intp(float16_t d, float16_t h, float16_t v) { return d * (h - v) + v; }
+float16_t sqr(float16_t x) { return x * x; }
+
+// RT step 1.1 vertical / horizontal color-difference high-pass, squared.
+float16_t hpfV(ivec2 s) {
+    float16_t v = (fetchN(s + ivec2(0, -3)) - fetchN(s + ivec2(0, -1))
+             - fetchN(s + ivec2(0, 1)) + fetchN(s + ivec2(0, 3)))
+            - 3.0hf * (fetchN(s + ivec2(0, -2)) + fetchN(s + ivec2(0, 2)))
+            + 6.0hf * fetchN(s);
+    return sqr(v);
+}
+float16_t hpfH(ivec2 s) {
+    float16_t v = (fetchN(s + ivec2(-3, 0)) - fetchN(s + ivec2(-1, 0))
+             - fetchN(s + ivec2(1, 0)) + fetchN(s + ivec2(3, 0)))
+            - 3.0hf * (fetchN(s + ivec2(-2, 0)) + fetchN(s + ivec2(2, 0)))
+            + 6.0hf * fetchN(s);
+    return sqr(v);
+}
+
+// RT step 1.2: vertical discrimination VH_Dir = V/(V+H) at s.
+float16_t vhDir(ivec2 s) {
+    float16_t vStat = hpfV(s + ivec2(0, -1)) + hpfV(s) + hpfV(s + ivec2(0, 1));
+    float16_t hStat = hpfH(s + ivec2(-1, 0)) + hpfH(s) + hpfH(s + ivec2(1, 0));
+    float vFl = max(float(vStat), 1e-10);
+    float hFl = max(float(hStat), 1e-10);
+    return float16_t(vFl / (vFl + hFl));
+}
+
+// RT step 2 low-pass (unnormalized x4) at s.
+float16_t lpf(ivec2 s) {
+    return fetchN(s)
+        + 0.5hf * (fetchN(s + ivec2(0, -1)) + fetchN(s + ivec2(0, 1))
+               + fetchN(s + ivec2(-1, 0)) + fetchN(s + ivec2(1, 0)))
+        + 0.25hf * (fetchN(s + ivec2(-1, -1)) + fetchN(s + ivec2(1, -1))
+                + fetchN(s + ivec2(-1, 1)) + fetchN(s + ivec2(1, 1)));
+}
+
+// RT step 4.0 P/Q diagonal high-pass, squared (P=NW-SE, Q=NE-SW).
+float16_t hpfP(ivec2 s) {
+    float16_t v = (fetchN(s + ivec2(-3, -3)) - fetchN(s + ivec2(-1, -1))
+             - fetchN(s + ivec2(1, 1)) + fetchN(s + ivec2(3, 3)))
+            - 3.0hf * (fetchN(s + ivec2(-2, -2)) + fetchN(s + ivec2(2, 2)))
+            + 6.0hf * fetchN(s);
+    return sqr(v);
+}
+float16_t hpfQ(ivec2 s) {
+    float16_t v = (fetchN(s + ivec2(3, -3)) - fetchN(s + ivec2(1, -1))
+             - fetchN(s + ivec2(-1, 1)) + fetchN(s + ivec2(-3, 3)))
+            - 3.0hf * (fetchN(s + ivec2(2, -2)) + fetchN(s + ivec2(-2, 2)))
+            + 6.0hf * fetchN(s);
+    return sqr(v);
+}
+
+// RT step 4.1: diagonal discrimination PQ_Dir = P/(P+Q) at R/B site s.
+float16_t pqDir(ivec2 s) {
+    float16_t pStat = hpfP(s + ivec2(-1, -1)) + hpfP(s) + hpfP(s + ivec2(1, 1));
+    float16_t qStat = hpfQ(s + ivec2(1, -1)) + hpfQ(s) + hpfQ(s + ivec2(-1, 1));
+    float pFl = max(float(pStat), 1e-10);
+    float qFl = max(float(qStat), 1e-10);
+    return float16_t(pFl / (pFl + qFl));
+}
+
+// Refined discrimination from scratch values: central vs 4-diagonal
+// neighbourhood, the more decisive (farther from 0.5) wins.
+float16_t refineFrom(float16_t central, float16_t d0, float16_t d1, float16_t d2, float16_t d3) {
+    float16_t nb = 0.25hf * (d0 + d1 + d2 + d3);
+    return (abs(0.5hf - central) < abs(0.5hf - nb)) ? nb : central;
+}
+// Eps-floored blends/ratios in fp32: the f16 epsilons are subnormal and
+// flush to zero on mobile, which made flat-area 0/0 NaN and collapsed
+// zero-weighted means to black. Weights re-floor in fp32 (same 1e-5 as
+// the fp32 twin), matching it up to tap rounding.
+float16_t blendEps(float16_t a, float16_t xa, float16_t b, float16_t xb) {
+    float wa = 1e-5 + float(a);
+    float wb = 1e-5 + float(b);
+    return float16_t((wb * float(xa) + wa * float(xb)) / (wa + wb));
+}
+
+float16_t ratioEps(float16_t num, float16_t d0, float16_t d1) {
+    return float16_t(float(num) / (1e-5 + float(d0) + float(d1)));
+}
+
+
+void main() {
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    // The tile load covers threads past the edge too (mirrored), so no
+    // early-out before the barrier: every invocation must participate.
+    loadTile();
+    if (any(greaterThanEqual(ij, p.u_dims))) return;
+    int c = colorAt(ij);
+
+    if (p.u_mode == 0) {
+        // Directions + low-pass to scratch (VH everywhere; lpf/PQ at
+        // R/B sites, zero elsewhere and never read there).
+        float16_t vh = vhDir(ij);
+        float16_t lp = 0.0hf;
+        float16_t pq = 0.0hf;
+        if (c != 1) {
+            lp = lpf(ij);
+            pq = pqDir(ij);
+        }
+        imageStore(img_scratch, ij, vec4(f16vec4(vh, lp, pq, 0.0hf)));
+        return;
+    }
+    if (p.u_mode == 1) {
+        // Green full-res + R/B mosaic init (overwrites every texel).
+        float16_t g;
+        if (c == 1) {
+            g = fetchN(ij);
+        } else {
+            float16_t cfai = fetchN(ij);
+            float16_t nsAbs = abs(fetchN(ij + ivec2(0, -1)) - fetchN(ij + ivec2(0, 1)));
+            float16_t ewAbs = abs(fetchN(ij + ivec2(-1, 0)) - fetchN(ij + ivec2(1, 0)));
+            float16_t nGrad = RCD_EPS + (nsAbs + abs(cfai - fetchN(ij + ivec2(0, -2))))
+                + (abs(fetchN(ij + ivec2(0, -1)) - fetchN(ij + ivec2(0, -3))) + abs(fetchN(ij + ivec2(0, -2)) - fetchN(ij + ivec2(0, -4))));
+            float16_t sGrad = RCD_EPS + (nsAbs + abs(cfai - fetchN(ij + ivec2(0, 2))))
+                + (abs(fetchN(ij + ivec2(0, 1)) - fetchN(ij + ivec2(0, 3))) + abs(fetchN(ij + ivec2(0, 2)) - fetchN(ij + ivec2(0, 4))));
+            float16_t wGrad = RCD_EPS + (ewAbs + abs(cfai - fetchN(ij + ivec2(-2, 0))))
+                + (abs(fetchN(ij + ivec2(-1, 0)) - fetchN(ij + ivec2(-3, 0))) + abs(fetchN(ij + ivec2(-2, 0)) - fetchN(ij + ivec2(-4, 0))));
+            float16_t eGrad = RCD_EPS + (ewAbs + abs(cfai - fetchN(ij + ivec2(2, 0))))
+                + (abs(fetchN(ij + ivec2(1, 0)) - fetchN(ij + ivec2(3, 0))) + abs(fetchN(ij + ivec2(2, 0)) - fetchN(ij + ivec2(4, 0))));
+            // Ratio-corrected estimates (same-phase lpf two away, per RT).
+            f16vec4 d = dirAt(ij);
+            float16_t lpfi = d.g;
+            float16_t nEst = ratioEps(fetchN(ij + ivec2(0, -1)) * (lpfi + lpfi), lpfi, dirAt(ij + ivec2(0, -2)).g);
+            float16_t sEst = ratioEps(fetchN(ij + ivec2(0, 1)) * (lpfi + lpfi), lpfi, dirAt(ij + ivec2(0, 2)).g);
+            float16_t wEst = ratioEps(fetchN(ij + ivec2(-1, 0)) * (lpfi + lpfi), lpfi, dirAt(ij + ivec2(-2, 0)).g);
+            float16_t eEst = ratioEps(fetchN(ij + ivec2(1, 0)) * (lpfi + lpfi), lpfi, dirAt(ij + ivec2(2, 0)).g);
+            float16_t vEst = blendEps(nGrad, nEst, sGrad, sEst);
+            float16_t hEst = blendEps(eGrad, eEst, wGrad, wEst);
+            float16_t disc = refineFrom(d.r,
+                dirAt(ij + ivec2(-1, -1)).r, dirAt(ij + ivec2(1, -1)).r,
+                dirAt(ij + ivec2(-1, 1)).r, dirAt(ij + ivec2(1, 1)).r);
+            g = intp(disc, hEst, vEst);
+        }
+        float16_t r = (c == 0) ? fetchN(ij) : 0.0hf;
+        float16_t b = (c == 2) ? fetchN(ij) : 0.0hf;
+        imageStore(img_rgb, ij, vec4(f16vec4(r, g, b, 1.0hf)));
+        return;
+    }
+    if (p.u_mode == 2) {
+        // RT 4.2: R/B at opposite-color sites (green sites untouched).
+        if (c == 1) return;
+        int opp = 2 - c;
+        float16_t gHere = f16vec4(imageLoad(img_rgb, ij)).g;
+        f16vec4 d = dirAt(ij);
+        float16_t pqDisc = refineFrom(d.b,
+            dirAt(ij + ivec2(-1, -1)).b, dirAt(ij + ivec2(1, -1)).b,
+            dirAt(ij + ivec2(-1, 1)).b, dirAt(ij + ivec2(1, 1)).b);
+        // Diagonal gradients over mosaic (tile) + interpolated green.
+        float16_t nw = RCD_EPS + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(1, 1)))
+            + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(-3, -3)))
+            + abs(gHere - rgbAt(ij + ivec2(-2, -2)).g);
+        float16_t ne = RCD_EPS + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(-1, 1)))
+            + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(3, -3)))
+            + abs(gHere - rgbAt(ij + ivec2(2, -2)).g);
+        float16_t sw = RCD_EPS + abs(fetchN(ij + ivec2(1, -1)) - fetchN(ij + ivec2(-1, 1)))
+            + abs(fetchN(ij + ivec2(-1, 1)) - fetchN(ij + ivec2(-3, 3)))
+            + abs(gHere - rgbAt(ij + ivec2(-2, 2)).g);
+        float16_t se = RCD_EPS + abs(fetchN(ij + ivec2(-1, -1)) - fetchN(ij + ivec2(1, 1)))
+            + abs(fetchN(ij + ivec2(1, 1)) - fetchN(ij + ivec2(3, 3)))
+            + abs(gHere - rgbAt(ij + ivec2(2, 2)).g);
+        // Diagonal color differences (opp mosaic minus green).
+        float16_t nwE = fetchN(ij + ivec2(-1, -1)) - rgbAt(ij + ivec2(-1, -1)).g;
+        float16_t neE = fetchN(ij + ivec2(1, -1)) - rgbAt(ij + ivec2(1, -1)).g;
+        float16_t swE = fetchN(ij + ivec2(-1, 1)) - rgbAt(ij + ivec2(-1, 1)).g;
+        float16_t seE = fetchN(ij + ivec2(1, 1)) - rgbAt(ij + ivec2(1, 1)).g;
+        float16_t pEst = blendEps(se, seE, nw, nwE);
+        float16_t qEst = blendEps(sw, swE, ne, neE);
+        vec4 px = imageLoad(img_rgb, ij);
+        px[opp] = float(gHere + intp(pqDisc, qEst, pEst));
+        imageStore(img_rgb, ij, px);
+        return;
+    }
+    // RT 4.3: R/B at green sites, red then blue (sequential keeps live
+    // state small; one fused block spilled registers to DRAM).
+    if (c != 1) return;
+    f16vec4 d = dirAt(ij);
+    float16_t vhDisc = refineFrom(d.r,
+        dirAt(ij + ivec2(-1, -1)).r, dirAt(ij + ivec2(1, -1)).r,
+        dirAt(ij + ivec2(-1, 1)).r, dirAt(ij + ivec2(1, 1)).r);
+    float16_t rgb1 = f16vec4(imageLoad(img_rgb, ij)).g;
+    float16_t n1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(0, -2)).g);
+    float16_t s1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(0, 2)).g);
+    float16_t w1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(-2, 0)).g);
+    float16_t e1 = RCD_EPS + abs(rgb1 - rgbAt(ij + ivec2(2, 0)).g);
+    float16_t gN = rgbAt(ij + ivec2(0, -1)).g;
+    float16_t gS = rgbAt(ij + ivec2(0, 1)).g;
+    float16_t gW = rgbAt(ij + ivec2(-1, 0)).g;
+    float16_t gE = rgbAt(ij + ivec2(1, 0)).g;
+    vec4 px = imageLoad(img_rgb, ij);
+    // c = 0 (red): cardinals +-1 are mosaic (tile), +-3 mode-2 (image).
+    {
+        float16_t cN = (colorAt(ij + ivec2(0, -1)) == 0) ? fetchN(ij + ivec2(0, -1)) : rgbAt(ij + ivec2(0, -1)).r;
+        float16_t cS = (colorAt(ij + ivec2(0, 1)) == 0) ? fetchN(ij + ivec2(0, 1)) : rgbAt(ij + ivec2(0, 1)).r;
+        float16_t cW = (colorAt(ij + ivec2(-1, 0)) == 0) ? fetchN(ij + ivec2(-1, 0)) : rgbAt(ij + ivec2(-1, 0)).r;
+        float16_t cE = (colorAt(ij + ivec2(1, 0)) == 0) ? fetchN(ij + ivec2(1, 0)) : rgbAt(ij + ivec2(1, 0)).r;
+        float16_t cN3 = (colorAt(ij + ivec2(0, -3)) == 0) ? fetchN(ij + ivec2(0, -3)) : rgbAt(ij + ivec2(0, -3)).r;
+        float16_t cS3 = (colorAt(ij + ivec2(0, 3)) == 0) ? fetchN(ij + ivec2(0, 3)) : rgbAt(ij + ivec2(0, 3)).r;
+        float16_t cW3 = (colorAt(ij + ivec2(-3, 0)) == 0) ? fetchN(ij + ivec2(-3, 0)) : rgbAt(ij + ivec2(-3, 0)).r;
+        float16_t cE3 = (colorAt(ij + ivec2(3, 0)) == 0) ? fetchN(ij + ivec2(3, 0)) : rgbAt(ij + ivec2(3, 0)).r;
+        float16_t sn = abs(cN - cS), ew = abs(cW - cE);
+        float16_t nG = n1 + sn + abs(cN - cN3);
+        float16_t sG = s1 + sn + abs(cS - cS3);
+        float16_t wG = w1 + ew + abs(cW - cW3);
+        float16_t eG = e1 + ew + abs(cE - cE3);
+        float16_t vEst = blendEps(sG, cS - gS, nG, cN - gN);
+        float16_t hEst = blendEps(wG, cE - gE, eG, cW - gW);
+        px.r = float(rgb1 + intp(vhDisc, hEst, vEst));
+    }
+    // c = 2 (blue): same with mosaic/blue selection.
+    {
+        float16_t cN = (colorAt(ij + ivec2(0, -1)) == 2) ? fetchN(ij + ivec2(0, -1)) : rgbAt(ij + ivec2(0, -1)).b;
+        float16_t cS = (colorAt(ij + ivec2(0, 1)) == 2) ? fetchN(ij + ivec2(0, 1)) : rgbAt(ij + ivec2(0, 1)).b;
+        float16_t cW = (colorAt(ij + ivec2(-1, 0)) == 2) ? fetchN(ij + ivec2(-1, 0)) : rgbAt(ij + ivec2(-1, 0)).b;
+        float16_t cE = (colorAt(ij + ivec2(1, 0)) == 2) ? fetchN(ij + ivec2(1, 0)) : rgbAt(ij + ivec2(1, 0)).b;
+        float16_t cN3 = (colorAt(ij + ivec2(0, -3)) == 2) ? fetchN(ij + ivec2(0, -3)) : rgbAt(ij + ivec2(0, -3)).b;
+        float16_t cS3 = (colorAt(ij + ivec2(0, 3)) == 2) ? fetchN(ij + ivec2(0, 3)) : rgbAt(ij + ivec2(0, 3)).b;
+        float16_t cW3 = (colorAt(ij + ivec2(-3, 0)) == 2) ? fetchN(ij + ivec2(-3, 0)) : rgbAt(ij + ivec2(-3, 0)).b;
+        float16_t cE3 = (colorAt(ij + ivec2(3, 0)) == 2) ? fetchN(ij + ivec2(3, 0)) : rgbAt(ij + ivec2(3, 0)).b;
+        float16_t sn = abs(cN - cS), ew = abs(cW - cE);
+        float16_t nG = n1 + sn + abs(cN - cN3);
+        float16_t sG = s1 + sn + abs(cS - cS3);
+        float16_t wG = w1 + ew + abs(cW - cW3);
+        float16_t eG = e1 + ew + abs(cE - cE3);
+        float16_t vEst = blendEps(sG, cS - gS, nG, cN - gN);
+        float16_t hEst = blendEps(wG, cE - gE, eG, cW - gW);
+        px.b = float(rgb1 + intp(vhDisc, hEst, vEst));
+    }
+    imageStore(img_rgb, ij, px);
+}

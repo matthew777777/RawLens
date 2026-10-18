@@ -48,6 +48,13 @@ interface VfEngine {
     /** Adaptive preview-EV strength (same rule as saves). Any thread. */
     fun setPreviewExposureStrength(strength: Float)
 
+    /**
+     * Tap-to-meter point in view-normalized coordinates (null = frame
+     * center). Mirrors the installed AE region; the meter vote follows it.
+     * Only volatile writes; applies to the next estimate. Any thread.
+     */
+    fun setMeteringFocus(x: Float?, y: Float?)
+
     /** Switch the tonemap without touching the stream. Any thread. */
     fun setRenderJpeg(jpeg: Boolean)
 

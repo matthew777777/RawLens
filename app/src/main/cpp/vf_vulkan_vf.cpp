@@ -155,6 +155,16 @@ struct PreviewParams {
 };
 static_assert(sizeof(PreviewParams) == 32, "preview push layout drift");
 
+// Mirrors vf_p010torgb8.comp exactly (28 bytes): full-res out dims (==
+// P010 dims, no box), P010 strides. The 8-bit SDR fallback converts the
+// staged P010 1:1 instead of box-downsampling like the preview kernel.
+struct Rgb8Params {
+    int32_t dims[2];
+    int32_t srcDims[2];
+    int32_t strides[3];  // yStrideW, uvStrideW (u16), uvBaseOffB
+};
+static_assert(sizeof(Rgb8Params) == 28, "rgb8 push layout drift");
+
 // Mirrors vf_stabwarp.comp exactly (68 bytes): encode dims (out == src),
 // tight-input P010 strides, staging-output P010 strides, UV base offsets,
 // and the row-major out->source homography (last row 0 0 1, affine).
@@ -191,6 +201,28 @@ struct RcdParams {
     int32_t mode;
 };
 static_assert(sizeof(RcdParams) == 72, "rcd push constant layout drift");
+
+// Mirrors vf_rcdyuv.comp RcdYuvParams exactly (160 bytes, std430):
+// the RCD block (crop dims/origin/chans, per-quad black/invRange,
+// pitch) + the grade block (export dims, folded 3x3 CCM, P010
+// strides/base, fullRgb=1, profile). SSBO because 160 bytes exceeds
+// the 128-byte push-constant guarantee (same reason FusedParams is an
+// SSBO). GradeYuvParams field order is preserved (misc/misc2) so
+// foldGradeCcm output drops in unchanged.
+struct RcdYuvParams {
+    int32_t cDims[2];
+    int32_t cOrigin[2];
+    int32_t cChans[4];
+    float cBlack[4];
+    float cInvRange[4];
+    int32_t cPitch;
+    int32_t pad0;
+    int32_t oDims[2];
+    float gCcm[3][4];
+    float gMisc[4];   // bypass(0), yStrideW, uvStrideW, uvBaseOffB
+    float gMisc2[4];  // fullRgb(1), outMode, reserved, 0
+};
+static_assert(sizeof(RcdYuvParams) == 160, "rcd-yuv ssbo layout drift");
 
 // Mirrors vf_mhcyuv.comp FusedParams exactly (192 bytes, std430): the
 // MHC block (crop dims/origin/chans, FMA bias + inv-range per quad,
@@ -375,6 +407,16 @@ struct Context {
     VkDescriptorSet previewSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkCommandBuffer twinPreviewCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> previewOuts;
+    // 8-bit SDR fallback (Direct-Log): staged P010 in + full-res RGBA8
+    // out for the EGL encoder present. Own set layout + per-slot sets
+    // and twins; imports cached by pointer like the preview path.
+    VkDescriptorSetLayout rgb8SetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout rgb8PipelineLayout = VK_NULL_HANDLE;
+    VkPipeline rgb8Pipeline = VK_NULL_HANDLE;
+    VkDescriptorPool rgb8Pool = VK_NULL_HANDLE;
+    VkDescriptorSet rgb8Sets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkCommandBuffer twinRgb8Cmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::map<AHardwareBuffer*, ImportedImage> rgb8Outs;
     // RCD demosaic (Direct-Log record path): STORAGE_BUFFER CFA in +
     // STORAGE_IMAGE rgb (read-write across the 3 mode dispatches). Own
     // set layout + per-slot sets and twin command buffers; rgb imports
@@ -387,6 +429,27 @@ struct Context {
     VkCommandBuffer twinRcdCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> rgbOuts;
     std::map<AHardwareBuffer*, ImportedImage> scratchOuts;
+    // Fused RCD finalize + grade (Direct-Log RCD path): CFA + rgb +
+    // scratch in, P010 out. Own set layout + per-slot sets; dynamic
+    // per-submit command buffers (see acquireRcdCmd) and the
+    // rgb/scratch/P010 import caches.
+    VkDescriptorSetLayout rcdYuvSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout rcdYuvPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline rcdYuvPipeline = VK_NULL_HANDLE;
+    VkDescriptorPool rcdYuvPool = VK_NULL_HANDLE;
+    VkDescriptorSet rcdYuvSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkBuffer rcdYuvParamBufs[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory rcdYuvParamMems[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    void* rcdYuvParamMaps[3] = {nullptr, nullptr, nullptr};
+    // RCD dynamic command buffers (see acquireRcdCmd): per-submit CBs
+    // retired by fence, replacing the twin discipline which reset
+    // pending CBs (submit gaps are sub-ms, exec is 55ms+).
+    struct RcdInflight {
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+    };
+    std::vector<VkCommandBuffer> rcdFreeCbs;
+    std::vector<RcdInflight> rcdPending;
     // Malvar-He-Cutler fast demosaic (Direct-Log record path): single
     // dispatch, CFA in + write-only rgb out. Own set layout + per-slot
     // sets and twins; rgb imports share the rgbOuts map.
@@ -1825,6 +1888,91 @@ bool createPreviewPipeline(Context* ctx, const uint32_t* code, size_t words) {
     return true;
 }
 
+// 8-bit SDR fallback pipeline: STORAGE_BUFFER P010 in + STORAGE_IMAGE
+// full-res RGBA8 out + Rgb8Params push (28 bytes). Layout mirrors the
+// preview pipeline (same bindings); only the push block is smaller.
+bool createRgb8Pipeline(Context* ctx, const uint32_t* code, size_t words) {
+    VkShaderModuleCreateInfo modInfo{};
+    modInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    modInfo.codeSize = words * sizeof(uint32_t);
+    modInfo.pCode = code;
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(ctx->device, &modInfo, nullptr, &module) != VK_SUCCESS) {
+        LOGW("vf-vk: rgb8 shader module failed");
+        return false;
+    }
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = 2;
+    setInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &ctx->rgb8SetLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkPushConstantRange push{};
+    push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push.size = sizeof(Rgb8Params);
+    VkPipelineLayoutCreateInfo pipeLayoutInfo{};
+    pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeLayoutInfo.setLayoutCount = 1;
+    pipeLayoutInfo.pSetLayouts = &ctx->rgb8SetLayout;
+    pipeLayoutInfo.pushConstantRangeCount = 1;
+    pipeLayoutInfo.pPushConstantRanges = &push;
+    if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->rgb8PipelineLayout) != VK_SUCCESS) {
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->rgb8SetLayout, nullptr);
+        ctx->rgb8SetLayout = VK_NULL_HANDLE;
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkComputePipelineCreateInfo pipeInfo{};
+    pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipeInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeInfo.stage.module = module;
+    pipeInfo.stage.pName = "main";
+    pipeInfo.layout = ctx->rgb8PipelineLayout;
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->rgb8Pipeline);
+    vkDestroyShaderModule(ctx->device, module, nullptr);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: rgb8 compute pipeline failed %d", r);
+        return false;
+    }
+    savePipelineCache(ctx);
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[0].descriptorCount = 3;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[1].descriptorCount = 3;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 3;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(ctx->device, &poolInfo, nullptr, &ctx->rgb8Pool) != VK_SUCCESS) {
+        return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = ctx->rgb8Pool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &ctx->rgb8SetLayout;
+        if (vkAllocateDescriptorSets(ctx->device, &allocInfo, &ctx->rgb8Sets[i]) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // RCD demosaic pipeline: STORAGE_BUFFER CFA in + STORAGE_IMAGE rgb
 // (read-write across the 3 mode dispatches) + RcdParams push (72 bytes).
 bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
@@ -1907,6 +2055,150 @@ bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
         allocInfo.descriptorSetCount = 1;
         allocInfo.pSetLayouts = &ctx->rcdSetLayout;
         if (vkAllocateDescriptorSets(ctx->device, &allocInfo, &ctx->rcdSets[i]) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// RCD dynamic command buffers: the twin discipline (one CB per slot,
+// reset + re-record on every submit) is invalid when submit gaps
+// (sub-ms, back-to-back modes) are shorter than exec (55ms+):
+// resetting a pending CB destroyed RCD takes (device lost after a
+// few frames, then PIPELINE_FAILED after the viewfinder's recovery
+// teardown). RCD submits (modes + fused) instead take a CB from a
+// free list (reset only after its fence signaled, so never pending)
+// or allocate, submit it WITH a fence, and retire (fence, CB) pairs
+// when signaled. Capped: past the cap the submit returns BUSY and
+// the caller drops the frame (VfVulkan.BUSY precedent) — it never
+// blocks the camera thread and never resets a pending CB.
+#define RCD_INFLIGHT_CAP 16
+static int acquireRcdCmd(Context* ctx, VkCommandBuffer* cmd, VkFence* fence) {
+    for (size_t i = 0; i < ctx->rcdPending.size();) {
+        VkResult st = vkGetFenceStatus(ctx->device, ctx->rcdPending[i].fence);
+        if (st == VK_SUCCESS) {
+            vkDestroyFence(ctx->device, ctx->rcdPending[i].fence, nullptr);
+            ctx->rcdFreeCbs.push_back(ctx->rcdPending[i].cmd);
+            ctx->rcdPending.erase(ctx->rcdPending.begin() + i);
+        } else {
+            ++i;
+        }
+    }
+    if (ctx->rcdPending.size() >= RCD_INFLIGHT_CAP) return VFVK_BUSY;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    if (!ctx->rcdFreeCbs.empty()) {
+        cb = ctx->rcdFreeCbs.back();
+        ctx->rcdFreeCbs.pop_back();
+        // Retired only after its fence signaled: reset is safe here.
+        vkResetCommandBuffer(cb, 0);
+    } else {
+        VkCommandBufferAllocateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        info.commandPool = ctx->commandPool;
+        info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        info.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(ctx->device, &info, &cb) != VK_SUCCESS) {
+            return VFVK_SUBMIT_FAILED;
+        }
+    }
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence f = VK_NULL_HANDLE;
+    if (vkCreateFence(ctx->device, &fenceInfo, nullptr, &f) != VK_SUCCESS) {
+        ctx->rcdFreeCbs.push_back(cb);
+        return VFVK_SUBMIT_FAILED;
+    }
+    *cmd = cb;
+    *fence = f;
+    return VFVK_OK;
+}
+
+// Fused RCD finalize + grade pipeline: STORAGE_BUFFER CFA in +
+// STORAGE_IMAGE rgb/scratch in (modes 1-2/0 results) + RcdYuvParams
+// SSBO (160 bytes) + STORAGE_BUFFER P010 out. No push constants.
+bool createRcdYuvPipeline(Context* ctx, const uint32_t* code, size_t words) {
+    VkShaderModuleCreateInfo modInfo{};
+    modInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    modInfo.codeSize = words * sizeof(uint32_t);
+    modInfo.pCode = code;
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(ctx->device, &modInfo, nullptr, &module) != VK_SUCCESS) {
+        LOGW("vf-vk: rcd-yuv shader module failed");
+        return false;
+    }
+    VkDescriptorSetLayoutBinding bindings[5]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = 5;
+    setInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &ctx->rcdYuvSetLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkPipelineLayoutCreateInfo pipeLayoutInfo{};
+    pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeLayoutInfo.setLayoutCount = 1;
+    pipeLayoutInfo.pSetLayouts = &ctx->rcdYuvSetLayout;
+    if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->rcdYuvPipelineLayout) != VK_SUCCESS) {
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->rcdYuvSetLayout, nullptr);
+        ctx->rcdYuvSetLayout = VK_NULL_HANDLE;
+        vkDestroyShaderModule(ctx->device, module, nullptr);
+        return false;
+    }
+    VkComputePipelineCreateInfo pipeInfo{};
+    pipeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipeInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeInfo.stage.module = module;
+    pipeInfo.stage.pName = "main";
+    pipeInfo.layout = ctx->rcdYuvPipelineLayout;
+    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->rcdYuvPipeline);
+    vkDestroyShaderModule(ctx->device, module, nullptr);
+    if (r != VK_SUCCESS) {
+        LOGW("vf-vk: rcd-yuv compute pipeline failed %d", r);
+        return false;
+    }
+    savePipelineCache(ctx);
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[0].descriptorCount = 9;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[1].descriptorCount = 6;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 3;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+    if (vkCreateDescriptorPool(ctx->device, &poolInfo, nullptr, &ctx->rcdYuvPool) != VK_SUCCESS) {
+        return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = ctx->rcdYuvPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &ctx->rcdYuvSetLayout;
+        if (vkAllocateDescriptorSets(ctx->device, &allocInfo, &ctx->rcdYuvSets[i]) != VK_SUCCESS) {
             return false;
         }
     }
@@ -2132,6 +2424,54 @@ bool createFusedParams(Context* ctx) {
                         &ctx->fusedParamMaps[i]) != VK_SUCCESS) {
             LOGW("vf-vk: fused param map %d failed", i);
             ctx->fusedParamMaps[i] = nullptr;
+            return false;
+        }
+    }
+    return true;
+}
+
+// Per-slot RCD-fused param buffers: host-visible + coherent, mapped
+// persistently (160B params in 256B of allocation comfort; mirrors
+// createFusedParams).
+bool createRcdYuvParams(Context* ctx) {
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memProps);
+    for (int i = 0; i < 3; ++i) {
+        VkBufferCreateInfo bufInfo{};
+        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufInfo.size = 256;
+        bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(ctx->device, &bufInfo, nullptr, &ctx->rcdYuvParamBufs[i]) != VK_SUCCESS) {
+            LOGW("vf-vk: rcd-yuv param buffer %d failed", i);
+            return false;
+        }
+        VkMemoryRequirements req{};
+        vkGetBufferMemoryRequirements(ctx->device, ctx->rcdYuvParamBufs[i], &req);
+        uint32_t memType = pickMemoryTypeProps(
+            req.memoryTypeBits, memProps,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (memType == UINT32_MAX) {
+            LOGW("vf-vk: rcd-yuv param memory %d: no coherent type", i);
+            return false;
+        }
+        VkMemoryAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc.allocationSize = req.size;
+        alloc.memoryTypeIndex = memType;
+        if (vkAllocateMemory(ctx->device, &alloc, nullptr, &ctx->rcdYuvParamMems[i]) != VK_SUCCESS) {
+            LOGW("vf-vk: rcd-yuv param alloc %d failed", i);
+            return false;
+        }
+        if (vkBindBufferMemory(ctx->device, ctx->rcdYuvParamBufs[i],
+                               ctx->rcdYuvParamMems[i], 0) != VK_SUCCESS) {
+            LOGW("vf-vk: rcd-yuv param bind %d failed", i);
+            return false;
+        }
+        if (vkMapMemory(ctx->device, ctx->rcdYuvParamMems[i], 0, req.size, 0,
+                        &ctx->rcdYuvParamMaps[i]) != VK_SUCCESS) {
+            LOGW("vf-vk: rcd-yuv param map %d failed", i);
+            ctx->rcdYuvParamMaps[i] = nullptr;
             return false;
         }
     }
@@ -2558,16 +2898,17 @@ void destroyFused(Context* ctx) {
 
 void destroyStab(Context* ctx);
 void destroyGrade(Context* ctx) {
-    VkCommandBuffer twins[18] = {
+    VkCommandBuffer twins[21] = {
         ctx->twinComputeCmd[0], ctx->twinComputeCmd[1], ctx->twinComputeCmd[2],
         ctx->twinGradeCmd[0], ctx->twinGradeCmd[1], ctx->twinGradeCmd[2],
         ctx->twinRcdCmd[0], ctx->twinRcdCmd[1], ctx->twinRcdCmd[2],
         ctx->twinMhcCmd[0], ctx->twinMhcCmd[1], ctx->twinMhcCmd[2],
         ctx->twinFusedCmd[0], ctx->twinFusedCmd[1], ctx->twinFusedCmd[2],
-        ctx->twinPreviewCmd[0], ctx->twinPreviewCmd[1], ctx->twinPreviewCmd[2]};
+        ctx->twinPreviewCmd[0], ctx->twinPreviewCmd[1], ctx->twinPreviewCmd[2],
+        ctx->twinRgb8Cmd[0], ctx->twinRgb8Cmd[1], ctx->twinRgb8Cmd[2]};
     bool anyTwin = false;
-    for (int i = 0; i < 18; ++i) anyTwin = anyTwin || (twins[i] != VK_NULL_HANDLE);
-    if (anyTwin) vkFreeCommandBuffers(ctx->device, ctx->commandPool, 18, twins);
+    for (int i = 0; i < 21; ++i) anyTwin = anyTwin || (twins[i] != VK_NULL_HANDLE);
+    if (anyTwin) vkFreeCommandBuffers(ctx->device, ctx->commandPool, 21, twins);
     for (int i = 0; i < 3; ++i) {
         ctx->twinComputeCmd[i] = VK_NULL_HANDLE;
         ctx->twinGradeCmd[i] = VK_NULL_HANDLE;
@@ -2575,8 +2916,21 @@ void destroyGrade(Context* ctx) {
         ctx->twinMhcCmd[i] = VK_NULL_HANDLE;
         ctx->twinFusedCmd[i] = VK_NULL_HANDLE;
         ctx->twinPreviewCmd[i] = VK_NULL_HANDLE;
+        ctx->twinRgb8Cmd[i] = VK_NULL_HANDLE;
         ctx->recComputeSets[i] = VK_NULL_HANDLE;
         ctx->recGradeSets[i] = VK_NULL_HANDLE;
+    }
+    // RCD dynamic CBs (same teardown safety as the twins above: this
+    // runs after the queue is idle).
+    for (size_t i = 0; i < ctx->rcdPending.size(); ++i) {
+        if (ctx->rcdPending[i].fence != VK_NULL_HANDLE)
+            vkDestroyFence(ctx->device, ctx->rcdPending[i].fence, nullptr);
+    }
+    ctx->rcdPending.clear();
+    if (!ctx->rcdFreeCbs.empty()) {
+        vkFreeCommandBuffers(ctx->device, ctx->commandPool,
+                             (uint32_t)ctx->rcdFreeCbs.size(), ctx->rcdFreeCbs.data());
+        ctx->rcdFreeCbs.clear();
     }
     destroyFused(ctx);
     destroyShade(ctx);
@@ -2625,6 +2979,23 @@ void destroyGrade(Context* ctx) {
     ctx->previewSetLayout = VK_NULL_HANDLE;
     ctx->previewPool = VK_NULL_HANDLE;
     for (int i = 0; i < 3; ++i) ctx->previewSets[i] = VK_NULL_HANDLE;
+    for (auto& entry : ctx->rgb8Outs) {
+        destroyImported(ctx, &entry.second);
+        AHardwareBuffer_release(entry.first);
+    }
+    ctx->rgb8Outs.clear();
+    if (ctx->rgb8Pipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->rgb8Pipeline, nullptr);
+    if (ctx->rgb8PipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(ctx->device, ctx->rgb8PipelineLayout, nullptr);
+    if (ctx->rgb8SetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->rgb8SetLayout, nullptr);
+    if (ctx->rgb8Pool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(ctx->device, ctx->rgb8Pool, nullptr);
+    ctx->rgb8Pipeline = VK_NULL_HANDLE;
+    ctx->rgb8PipelineLayout = VK_NULL_HANDLE;
+    ctx->rgb8SetLayout = VK_NULL_HANDLE;
+    ctx->rgb8Pool = VK_NULL_HANDLE;
+    for (int i = 0; i < 3; ++i) ctx->rgb8Sets[i] = VK_NULL_HANDLE;
     for (auto& entry : ctx->rgbOuts) {
         destroyImported(ctx, &entry.second);
         AHardwareBuffer_release(entry.first);
@@ -2647,6 +3018,30 @@ void destroyGrade(Context* ctx) {
     ctx->rcdSetLayout = VK_NULL_HANDLE;
     ctx->rcdPool = VK_NULL_HANDLE;
     for (int i = 0; i < 3; ++i) ctx->rcdSets[i] = VK_NULL_HANDLE;
+    if (ctx->rcdYuvPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->rcdYuvPipeline, nullptr);
+    if (ctx->rcdYuvPipelineLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(ctx->device, ctx->rcdYuvPipelineLayout, nullptr);
+    if (ctx->rcdYuvSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(ctx->device, ctx->rcdYuvSetLayout, nullptr);
+    if (ctx->rcdYuvPool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(ctx->device, ctx->rcdYuvPool, nullptr);
+    ctx->rcdYuvPipeline = VK_NULL_HANDLE;
+    ctx->rcdYuvPipelineLayout = VK_NULL_HANDLE;
+    ctx->rcdYuvSetLayout = VK_NULL_HANDLE;
+    ctx->rcdYuvPool = VK_NULL_HANDLE;
+    for (int i = 0; i < 3; ++i) ctx->rcdYuvSets[i] = VK_NULL_HANDLE;
+    for (int i = 0; i < 3; ++i) {
+        if (ctx->rcdYuvParamMaps[i] != nullptr && ctx->rcdYuvParamMems[i] != VK_NULL_HANDLE) {
+            vkUnmapMemory(ctx->device, ctx->rcdYuvParamMems[i]);
+        }
+        ctx->rcdYuvParamMaps[i] = nullptr;
+        if (ctx->rcdYuvParamBufs[i] != VK_NULL_HANDLE)
+            vkDestroyBuffer(ctx->device, ctx->rcdYuvParamBufs[i], nullptr);
+        ctx->rcdYuvParamBufs[i] = VK_NULL_HANDLE;
+        if (ctx->rcdYuvParamMems[i] != VK_NULL_HANDLE)
+            vkFreeMemory(ctx->device, ctx->rcdYuvParamMems[i], nullptr);
+        ctx->rcdYuvParamMems[i] = VK_NULL_HANDLE;
+    }
     if (ctx->mhcPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->mhcPipeline, nullptr);
     if (ctx->mhcPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(ctx->device, ctx->mhcPipelineLayout, nullptr);
@@ -4222,12 +4617,20 @@ Java_com_matthew_rawlens_VfVulkan_initF16Native(JNIEnv* env, jobject, jbyteArray
 // (whichever runs first brings them up).
 static bool ensureTwinResources(Context* ctx) {
     if (ctx->twinComputeCmd[0] != VK_NULL_HANDLE) return true;
+    // The recorder sets below are allocated from the grade layouts; a
+    // null layout here means grade init has not run. Fail cleanly —
+    // several Mali drivers segfault on null-layout allocation instead
+    // of returning an error.
+    if (ctx->setLayout == VK_NULL_HANDLE || ctx->gradeSetLayout == VK_NULL_HANDLE) {
+        LOGW("vf-vk: twin resources need grade layouts first");
+        return false;
+    }
     VkCommandBufferAllocateInfo cmdInfo{};
     cmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cmdInfo.commandPool = ctx->commandPool;
     cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cmdInfo.commandBufferCount = 18;
-    VkCommandBuffer twins[18];
+    cmdInfo.commandBufferCount = 21;
+    VkCommandBuffer twins[21];
     if (vkAllocateCommandBuffers(ctx->device, &cmdInfo, twins) != VK_SUCCESS) {
         LOGW("vf-vk: twin command buffers failed");
         return false;
@@ -4250,6 +4653,9 @@ static bool ensureTwinResources(Context* ctx) {
     ctx->twinPreviewCmd[0] = twins[15];
     ctx->twinPreviewCmd[1] = twins[16];
     ctx->twinPreviewCmd[2] = twins[17];
+    ctx->twinRgb8Cmd[0] = twins[18];
+    ctx->twinRgb8Cmd[1] = twins[19];
+    ctx->twinRgb8Cmd[2] = twins[20];
     // setLayout needs 2 STORAGE_BUFFER + 1 STORAGE_IMAGE + 1 sampler
     // per set (bindings 0/3, 1, 2), so 3 sets need 6/3/3.
     VkDescriptorPoolSize recComputeSizes[3]{};
@@ -5535,6 +5941,217 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     return fd;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfRgb8Convert_initRgb8Native(JNIEnv* env, jobject, jbyteArray spv) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (g->rgb8Pipeline != VK_NULL_HANDLE) return VFVK_OK;
+    // Twin command buffers are standalone allocations (same pool, own
+    // slots): no grade dependency — the warp path never grades.
+    if (!ensureTwinResources(g)) return VFVK_DEVICE_FAILED;
+    if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
+    jsize bytes = env->GetArrayLength(spv);
+    std::vector<uint32_t> code(bytes / 4);
+    env->GetByteArrayRegion(spv, 0, bytes, reinterpret_cast<jbyte*>(code.data()));
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    if (!createRgb8Pipeline(g, code.data(), code.size())) {
+        destroyGrade(g);
+        return VFVK_PIPELINE_FAILED;
+    }
+    LOGI("vf-vk: rgb8 convert pipeline ready");
+    return VFVK_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfRgb8Convert_rgb8SubmitNative(
+    JNIEnv* env, jobject, jobject p010Buffer, jobject rgb8Buffer,
+    jintArray idims, jintArray isrc, jintArray istrides, jint slot) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return -VFVK_NOT_INITIALIZED;
+    if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    if (g->rgb8Pipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
+    if (!g->hasSemaphoreFd) return -1;
+    if (!p010Buffer || !rgb8Buffer || !idims || !isrc || !istrides) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    if (env->GetArrayLength(idims) < 2 || env->GetArrayLength(isrc) < 2 ||
+        env->GetArrayLength(istrides) < 4) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    AHardwareBuffer* srcBuf = AHardwareBuffer_fromHardwareBuffer(env, p010Buffer);
+    AHardwareBuffer* dstBuf = AHardwareBuffer_fromHardwareBuffer(env, rgb8Buffer);
+    if (!srcBuf || !dstBuf) return -VFVK_BAD_ARGUMENT;
+
+    Rgb8Params params{};
+    jint ii[2], si[2], st[4];
+    env->GetIntArrayRegion(idims, 0, 2, ii);
+    env->GetIntArrayRegion(isrc, 0, 2, si);
+    env->GetIntArrayRegion(istrides, 0, 4, st);
+    if (env->ExceptionCheck()) return -VFVK_BAD_ARGUMENT;
+    params.dims[0] = ii[0];
+    params.dims[1] = ii[1];
+    params.srcDims[0] = si[0];
+    params.srcDims[1] = si[1];
+    // Full-res 1:1 convert (the 8-bit SDR fallback): out dims must equal
+    // the P010 dims exactly, both even (YUV420 chroma grid).
+    if (params.dims[0] <= 0 || params.dims[1] <= 0 ||
+        params.dims[0] > VFVK_MAX_EDGE || params.dims[1] > VFVK_MAX_EDGE ||
+        params.dims[0] != params.srcDims[0] || params.dims[1] != params.srcDims[1] ||
+        (params.dims[0] % 2) != 0 || (params.dims[1] % 2) != 0) {
+        LOGW("vf-vk: rgb8 dims mismatch %dx%d vs %dx%d",
+             params.srcDims[0], params.srcDims[1], params.dims[0], params.dims[1]);
+        return -VFVK_BAD_ARGUMENT;
+    }
+    const int yStrideB = st[0], uvStrideB = st[1];
+    const int fw = st[2], fh = st[3];
+    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+        (yStrideB % 2) != 0 || (uvStrideB % 4) != 0 ||
+        fw != params.srcDims[0] || fh != params.srcDims[1]) {
+        LOGW("vf-vk: rgb8 strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
+        return -VFVK_BAD_ARGUMENT;
+    }
+    params.strides[0] = yStrideB / 2;
+    params.strides[1] = uvStrideB / 2;
+    params.strides[2] = yStrideB * fh;
+
+    // P010 in (the encode submit just validated + wrote it; cache hit).
+    ImportedBuffer srcImg;
+    {
+        int rr = importP010Out(g, srcBuf, yStrideB, uvStrideB, fw, fh, &srcImg);
+        if (rr != VFVK_OK) return (rr == -20) ? -20 : -rr;
+    }
+    // RGBA8 convert out (STORAGE_IMAGE, byte-exact for EGL re-import).
+    ImportedImage dstImg;
+    {
+        int r = gradeImage(g, dstBuf, "rgb8-out", &g->rgb8Outs, &dstImg);
+        if (r != VFVK_OK) return -r;
+    }
+
+    VkSemaphore sem = VK_NULL_HANDLE;
+    {
+        VkExportSemaphoreCreateInfo exportInfo{};
+        exportInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+        exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        semInfo.pNext = &exportInfo;
+        if (vkCreateSemaphore(g->device, &semInfo, nullptr, &sem) != VK_SUCCESS) {
+            return -VFVK_SUBMIT_FAILED;
+        }
+    }
+    VkCommandBuffer cmd = g->twinRgb8Cmd[slot];
+    if (cmd == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_PIPELINE_FAILED;
+    }
+    VkDescriptorBufferInfo inInfo{};
+    inInfo.buffer = srcImg.buffer;
+    inInfo.offset = 0;
+    inInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorImageInfo outInfo{};
+    outInfo.imageView = dstImg.view;
+    outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->rgb8Sets[slot];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo = &inInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->rgb8Sets[slot];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &outInfo;
+    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
+    vkResetCommandBuffer(cmd, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(cmd, &begin);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    // Same-queue ordered after the encode submit (FIFO): re-acquire both
+    // buffers from FOREIGN (the encode submit just released them).
+    {
+        VkBufferMemoryBarrier acquire{};
+        acquire.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        acquire.srcAccessMask = 0;
+        acquire.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        acquire.dstQueueFamilyIndex = g->queueFamily;
+        acquire.buffer = srcImg.buffer;
+        acquire.offset = 0;
+        acquire.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
+    }
+    layoutBarrier(cmd, dstImg.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rgb8Pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->rgb8PipelineLayout, 0, 1, &g->rgb8Sets[slot], 0, nullptr);
+    vkCmdPushConstants(cmd, g->rgb8PipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(params), &params);
+    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    // Release for the EGL present path: ownership back to FOREIGN;
+    // completion in wall time rides the exported sync fd, which the
+    // presenter adopts before sampling (GL waits on the GPU timeline).
+    {
+        VkBufferMemoryBarrier release{};
+        release.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        release.dstAccessMask = 0;
+        release.srcQueueFamilyIndex = g->queueFamily;
+        release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        release.buffer = srcImg.buffer;
+        release.offset = 0;
+        release.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &release, 0, nullptr);
+    }
+    layoutBarrier(cmd, dstImg.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    vr = vkEndCommandBuffer(cmd);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &sem;
+    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    VkSemaphoreGetFdInfoKHR fdInfo{};
+    fdInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    fdInfo.semaphore = sem;
+    fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    int fd = -1;
+    vr = g->getSemFd(g->device, &fdInfo, &fd);
+    vkDestroySemaphore(g->device, sem, nullptr);
+    if (vr != VK_SUCCESS || fd < 0) {
+        return -VFVK_SUBMIT_FAILED;
+    }
+    return fd;
+}
+
 // Blocking twin of previewSubmitNative: identical validation, imports,
 // descriptors, barriers and dispatch, but completion via the shared fence
 // (gradeNative convention) instead of an exported sync fd. For drivers
@@ -5802,8 +6419,13 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     r = gradeImage(g, scrBuf, "rcd-scratch", &g->scratchOuts, &scrImg);
     if (r != VFVK_OK) return -r;
 
-    VkCommandBuffer cmd = g->twinRcdCmd[slot];
-    if (cmd == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
+    // Dynamic per-submit CB (see acquireRcdCmd): never a twin reset.
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence submitFence = VK_NULL_HANDLE;
+    {
+        int cr = acquireRcdCmd(g, &cmd, &submitFence);
+        if (cr != VFVK_OK) return -cr;
+    }
     VkDescriptorBufferInfo inInfo{};
     inInfo.buffer = input.buffer;
     inInfo.offset = 0;
@@ -5845,7 +6467,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     if (vkCreateSemaphore(g->device, &semInfo, nullptr, &sem) != VK_SUCCESS) {
         return -VFVK_SUBMIT_FAILED;
     }
-    vkResetCommandBuffer(cmd, 0);
+    // No reset: acquireRcdCmd hands out fresh-or-retired CBs.
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -5942,11 +6564,359 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    vr = vkQueueSubmit(g->queue, 1, &submit, submitFence);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        vkDestroyFence(g->device, submitFence, nullptr);
+        g->rcdFreeCbs.push_back(cmd);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    g->rcdPending.push_back({cmd, submitFence});
+    VkSemaphoreGetFdInfoKHR fdInfo{};
+    fdInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    fdInfo.semaphore = sem;
+    fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    int fd = -1;
+    vr = g->getSemFd(g->device, &fdInfo, &fd);
+    vkDestroySemaphore(g->device, sem, nullptr);
+    if (vr != VK_SUCCESS || fd < 0) {
+        return -VFVK_SUBMIT_FAILED;
+    }
+    return fd;
+}
+
+// ---- Fused RCD finalize + grade (Direct-Log RCD path): modes 0-2 run
+// first via rcdSubmitNative, then this replaces mode 3 + gradeYuv with
+// one dispatch (RCD finalize at green sites + direct P010 encode, no
+// RGBA16F round trip). Same fd-exporting convention as the other
+// submits; the recorder closes superseded mode fds, this fd gates the
+// copy. Falls back to the split path when init fails. ----
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfRcd_initRcdYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return VFVK_NOT_INITIALIZED;
+    if (g->rcdYuvPipeline != VK_NULL_HANDLE && g->rcdYuvParamMaps[0] != nullptr) return VFVK_OK;
+    // Twin command buffers live with the grade init (as for RCD/YUV).
+    if (g->gradePipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
+    if (!ensureTwinResources(g)) return VFVK_DEVICE_FAILED;
+    if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
+    jsize bytes = env->GetArrayLength(spv);
+    std::vector<uint32_t> code(bytes / 4);
+    env->GetByteArrayRegion(spv, 0, bytes, reinterpret_cast<jbyte*>(code.data()));
+    if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
+    if (g->rcdYuvPipeline == VK_NULL_HANDLE &&
+        !createRcdYuvPipeline(g, code.data(), code.size())) {
+        return VFVK_PIPELINE_FAILED;
+    }
+    if (g->rcdYuvParamMaps[0] == nullptr && !createRcdYuvParams(g)) {
+        return VFVK_DEVICE_FAILED;
+    }
+    LOGI("vf-vk: rcd-yuv fused pipeline ready");
+    return VFVK_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
+    JNIEnv* env, jobject, jobject cfaBuffer, jobject rgbBuffer, jobject scratchBuffer,
+    jobject p010Buffer, jintArray rcdIparams, jfloatArray rcdFparams,
+    jintArray gradeIdims, jintArray gradeIsrc, jfloatArray gradeFparams,
+    jintArray istrides, jint slot) {
+    const std::lock_guard<std::mutex> vkGuard(vkMutex);
+    if (g == nullptr) return -VFVK_NOT_INITIALIZED;
+    if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    if (g->rcdYuvPipeline == VK_NULL_HANDLE || g->rcdYuvParamMaps[slot] == nullptr) {
+        return -VFVK_PIPELINE_FAILED;
+    }
+    if (!g->hasSemaphoreFd) return -1;
+    if (!cfaBuffer || !rgbBuffer || !scratchBuffer || !p010Buffer ||
+        !rcdIparams || !rcdFparams || !gradeIdims || !gradeIsrc || !gradeFparams || !istrides) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    const jsize gLen = env->GetArrayLength(gradeFparams);
+    if (env->GetArrayLength(rcdIparams) < 10 || env->GetArrayLength(rcdFparams) < 8 ||
+        env->GetArrayLength(gradeIdims) < 2 || env->GetArrayLength(gradeIsrc) < 2 ||
+        gLen < 17 || env->GetArrayLength(istrides) < 4) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    AHardwareBuffer* cfaBuf = AHardwareBuffer_fromHardwareBuffer(env, cfaBuffer);
+    AHardwareBuffer* rgbBuf = AHardwareBuffer_fromHardwareBuffer(env, rgbBuffer);
+    AHardwareBuffer* scrBuf = AHardwareBuffer_fromHardwareBuffer(env, scratchBuffer);
+    AHardwareBuffer* p010Buf = AHardwareBuffer_fromHardwareBuffer(env, p010Buffer);
+    if (!cfaBuf || !rgbBuf || !scrBuf || !p010Buf) return -VFVK_BAD_ARGUMENT;
+
+    RcdYuvParams params{};
+    jint ri[10];
+    jfloat rf[8];
+    env->GetIntArrayRegion(rcdIparams, 0, 10, ri);
+    env->GetFloatArrayRegion(rcdFparams, 0, 8, rf);
+    jint gi[2], gs[2], st[4];
+    jfloat gf[17];
+    env->GetIntArrayRegion(gradeIdims, 0, 2, gi);
+    env->GetIntArrayRegion(gradeIsrc, 0, 2, gs);
+    env->GetFloatArrayRegion(gradeFparams, 0, 17, gf);
+    env->GetIntArrayRegion(istrides, 0, 4, st);
+    // gf[17] selects the output profile (0 = BT.709, 1 = S-Log3,
+    // 2 = HLG); short arrays heal to BT.709 (gradeYuv convention).
+    int outMode = 0;
+    if (gLen >= 18) {
+        jfloat m = 0;
+        env->GetFloatArrayRegion(gradeFparams, 17, 1, &m);
+        outMode = (int)(m + 0.5f);
+    }
+    if (env->ExceptionCheck()) return -VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 2) return -VFVK_BAD_ARGUMENT;
+    params.cDims[0] = ri[0];
+    params.cDims[1] = ri[1];
+    params.cOrigin[0] = ri[2];
+    params.cOrigin[1] = ri[3];
+    for (int i = 0; i < 4; ++i) params.cChans[i] = ri[4 + i];
+    params.cPitch = ri[8];
+    // ri[9] (RCD mode) is ignored: the fused stage always finalizes.
+    for (int i = 0; i < 4; ++i) params.cBlack[i] = rf[i];
+    for (int i = 0; i < 4; ++i) params.cInvRange[i] = rf[4 + i];
+    if (params.cDims[0] <= 0 || params.cDims[1] <= 0 ||
+        params.cDims[0] > VFVK_MAX_EDGE || params.cDims[1] > VFVK_MAX_EDGE ||
+        params.cPitch <= 0 || params.cPitch > 16384 ||
+        params.cOrigin[0] < 0 || params.cOrigin[1] < 0) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    params.oDims[0] = gi[0];
+    params.oDims[1] = gi[1];
+    // Grade source dims are the crop by construction (the fused shader
+    // maps export->crop itself); reject a mismatched caller outright.
+    if (gs[0] != params.cDims[0] || gs[1] != params.cDims[1]) return -VFVK_BAD_ARGUMENT;
+    if (params.oDims[0] <= 0 || params.oDims[1] <= 0 ||
+        params.oDims[0] > VFVK_MAX_EDGE * 2 || params.oDims[1] > VFVK_MAX_EDGE * 2) {
+        return -VFVK_BAD_ARGUMENT;
+    }
+    foldGradeCcm(gf, params.gCcm);
+    const int yStrideB = st[0], uvStrideB = st[1];
+    const int fw = st[2], fh = st[3];
+    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+        (yStrideB % 2) != 0 || (uvStrideB % 4) != 0) {
+        LOGW("vf-vk: rcd-yuv strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
+        return -VFVK_BAD_ARGUMENT;
+    }
+    params.gMisc[0] = 0.0f;  // no bypass on the record path
+    params.gMisc[1] = (float)(yStrideB / 2);
+    params.gMisc[2] = (float)(uvStrideB / 2);
+    params.gMisc[3] = (float)((int64_t)yStrideB * fh);
+    params.gMisc2[0] = 1.0f;  // fullRgb: demosaiced RGB in
+    params.gMisc2[1] = (float)outMode;
+    params.gMisc2[2] = gf[16];
+    params.gMisc2[3] = 0.0f;
+
+    // CFA bytes in (shared input-buffer import, byte-exact).
+    auto it = g->inputs.find(cfaBuf);
+    if (it == g->inputs.end()) {
+        ImportedBuffer imported;
+        int r = importInputBuffer(g, cfaBuf, &imported);
+        if (r != VFVK_OK) return -VFVK_INPUT_IMPORT_FAILED;
+        if (g->inputOrder.size() >= INPUT_CACHE_CAP) {
+            evictOldestInput(g);
+        }
+        AHardwareBuffer_acquire(cfaBuf);
+        g->inputs[cfaBuf] = imported;
+        g->inputOrder.push_back(cfaBuf);
+        it = g->inputs.find(cfaBuf);
+    }
+    const ImportedBuffer& input = it->second;
+    // Modes 1-2 rgb + mode-0 scratch in (same caches as the RCD modes,
+    // so these imports hit).
+    ImportedImage rgbImg;
+    int r = gradeImage(g, rgbBuf, "rcd-rgb", &g->rgbOuts, &rgbImg);
+    if (r != VFVK_OK) return -r;
+    ImportedImage scrImg;
+    r = gradeImage(g, scrBuf, "rcd-scratch", &g->scratchOuts, &scrImg);
+    if (r != VFVK_OK) return -r;
+    // Codec P010 bytes out (storage buffer, byte-exact). Import first so
+    // a layout failure aborts before any dispatch is recorded.
+    ImportedBuffer dstImg;
+    {
+        int rr = importP010Out(g, p010Buf, yStrideB, uvStrideB, fw, fh, &dstImg);
+        if (rr != VFVK_OK) return (rr == -20) ? -20 : -rr;
+    }
+    memcpy(g->rcdYuvParamMaps[slot], &params, sizeof(params));
+
+    // Dynamic per-submit CB (see acquireRcdCmd): never a twin reset.
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence submitFence = VK_NULL_HANDLE;
+    {
+        int cr = acquireRcdCmd(g, &cmd, &submitFence);
+        if (cr != VFVK_OK) return -cr;
+    }
+    VkDescriptorBufferInfo inInfo{};
+    inInfo.buffer = input.buffer;
+    inInfo.offset = 0;
+    inInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorImageInfo rgbInfo{};
+    rgbInfo.imageView = rgbImg.view;
+    rgbInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo scrInfo{};
+    scrInfo.imageView = scrImg.view;
+    scrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorBufferInfo paramInfo{};
+    paramInfo.buffer = g->rcdYuvParamBufs[slot];
+    paramInfo.offset = 0;
+    paramInfo.range = sizeof(params);
+    VkDescriptorBufferInfo outInfo{};
+    outInfo.buffer = dstImg.buffer;
+    outInfo.offset = 0;
+    outInfo.range = VK_WHOLE_SIZE;
+    VkWriteDescriptorSet writes[5]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = g->rcdYuvSets[slot];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo = &inInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = g->rcdYuvSets[slot];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &rgbInfo;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = g->rcdYuvSets[slot];
+    writes[2].dstBinding = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[2].pImageInfo = &scrInfo;
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = g->rcdYuvSets[slot];
+    writes[3].dstBinding = 3;
+    writes[3].descriptorCount = 1;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[3].pBufferInfo = &paramInfo;
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet = g->rcdYuvSets[slot];
+    writes[4].dstBinding = 4;
+    writes[4].descriptorCount = 1;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[4].pBufferInfo = &outInfo;
+    vkUpdateDescriptorSets(g->device, 5, writes, 0, nullptr);
+
+    VkExportSemaphoreCreateInfo exportInfo{};
+    exportInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+    exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    VkSemaphoreCreateInfo semInfo{};
+    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semInfo.pNext = &exportInfo;
+    VkSemaphore sem = VK_NULL_HANDLE;
+    if (vkCreateSemaphore(g->device, &semInfo, nullptr, &sem) != VK_SUCCESS) {
+        return -VFVK_SUBMIT_FAILED;
+    }
+    // No reset: acquireRcdCmd hands out fresh-or-retired CBs.
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkResult vr = vkBeginCommandBuffer(cmd, &begin);
     if (vr != VK_SUCCESS) {
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
+    VkBufferMemoryBarrier bufBarrier{};
+    bufBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bufBarrier.srcAccessMask = 0;
+    bufBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    bufBarrier.dstQueueFamilyIndex = g->queueFamily;
+    bufBarrier.buffer = input.buffer;
+    bufBarrier.offset = 0;
+    bufBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &bufBarrier, 0, nullptr);
+    VkBufferMemoryBarrier paramBarrier{};
+    paramBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    paramBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    paramBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    paramBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    paramBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    paramBarrier.buffer = g->rcdYuvParamBufs[slot];
+    paramBarrier.offset = 0;
+    paramBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &paramBarrier, 0, nullptr);
+    // rgb + scratch arrive GENERAL from the mode submits (same-queue
+    // FIFO ordered ahead of this dispatch); re-assert read access.
+    layoutBarrier(cmd, rgbImg.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    layoutBarrier(cmd, scrImg.image,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+    {
+        VkBufferMemoryBarrier acquire{};
+        acquire.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        acquire.srcAccessMask = 0;
+        acquire.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        acquire.dstQueueFamilyIndex = g->queueFamily;
+        acquire.buffer = dstImg.buffer;
+        acquire.offset = 0;
+        acquire.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rcdYuvPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g->rcdYuvPipelineLayout, 0, 1, &g->rcdYuvSets[slot], 0, nullptr);
+    // Crop-domain dispatch (the shared CFA tile needs crop locality);
+    // only canonical export samplers pack (see vf_rcdyuv.comp).
+    const uint32_t gx = (uint32_t)(params.cDims[0] + 7) / 8;
+    const uint32_t gy = (uint32_t)(params.cDims[1] + 7) / 8;
+    vkCmdDispatch(cmd, gx, gy, 1);
+    layoutBarrier(cmd, rgbImg.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    layoutBarrier(cmd, scrImg.image,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
+                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                  g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+    bufBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    bufBarrier.dstAccessMask = 0;
+    bufBarrier.srcQueueFamilyIndex = g->queueFamily;
+    bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &bufBarrier, 0, nullptr);
+    VkBufferMemoryBarrier outBarrier{};
+    outBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    outBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    outBarrier.dstAccessMask = 0;
+    outBarrier.srcQueueFamilyIndex = g->queueFamily;
+    outBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    outBarrier.buffer = dstImg.buffer;
+    outBarrier.offset = 0;
+    outBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &outBarrier, 0, nullptr);
+    vr = vkEndCommandBuffer(cmd);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &sem;
+    vr = vkQueueSubmit(g->queue, 1, &submit, submitFence);
+    if (vr != VK_SUCCESS) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        vkDestroyFence(g->device, submitFence, nullptr);
+        g->rcdFreeCbs.push_back(cmd);
+        return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
+    }
+    g->rcdPending.push_back({cmd, submitFence});
     VkSemaphoreGetFdInfoKHR fdInfo{};
     fdInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
     fdInfo.semaphore = sem;

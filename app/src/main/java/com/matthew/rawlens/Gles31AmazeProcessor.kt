@@ -390,6 +390,114 @@ class Gles31AmazeProcessor(
     }
 
     /**
+     * Sharp-merge tail: host RGB float (SR merge output, camera-native
+     * linear, top row first) uploads to an RGB32F texture, then the same
+     * rcd_final pass (negative clip + sensor-white desaturation +
+     * camera-to-ACEScg) hands the RGBA16F scene-linear texture to
+     * [consume]. This is the Amaze bypass: identical color contract to
+     * [rcdTail] with no demosaic, so the JPEG develop downstream sees
+     * the same scene-linear frame. Same serial worker confinement as
+     * [process]. Any failure throws: the coordinator falls back to the
+     * DNG-only save.
+     */
+    fun <T> processMfsrRgb(
+        rgb: java.nio.ByteBuffer,
+        width: Int,
+        height: Int,
+        cameraToAcescgColumnMajor: FloatArray,
+        cameraWhiteNormalized: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        require(width >= 2 && height >= 2) { "Sharp RGB needs positive dimensions" }
+        require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
+            "Camera-to-ACEScg matrix must contain nine finite values"
+        }
+        require(cameraWhiteNormalized.size == 3 &&
+            cameraWhiteNormalized.all { it.isFinite() && it >= 0f } &&
+            cameraWhiteNormalized.maxOrNull()!! > 0f
+        ) {
+            "Camera neutral white must contain three finite non-negative values with a positive peak"
+        }
+        require(rgb.isDirect && rgb.order() == java.nio.ByteOrder.nativeOrder()) {
+            "Sharp RGB must be a native-order direct buffer"
+        }
+        require(rgb.capacity() >= width * height * 3 * 4) {
+            "Sharp RGB buffer too small for ${width}x$height triplets"
+        }
+        val session = processingSession()
+        return session.egl.run {
+            makeCurrent()
+            val uploadId = IntArray(1).also { GLES31.glGenTextures(1, it, 0) }[0]
+            check(uploadId != 0) { "Sharp RGB upload texture alloc failed" }
+            try {
+                GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, uploadId)
+                GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MIN_FILTER, GLES31.GL_NEAREST)
+                GLES31.glTexParameteri(GLES31.GL_TEXTURE_2D, GLES31.GL_TEXTURE_MAG_FILTER, GLES31.GL_NEAREST)
+                rgb.rewind()
+                GLES31.glTexImage2D(
+                    GLES31.GL_TEXTURE_2D, 0, GLES30.GL_RGB32F, width, height, 0,
+                    GLES31.GL_RGB, GLES31.GL_FLOAT, rgb
+                )
+                checkGl("Sharp RGB upload")
+                val program = session.programs.get("rcd/rcd_final.glsl")
+                val output = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
+                try {
+                    GLES31.glUseProgram(program)
+                    GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
+                    GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, uploadId)
+                    GLES31.glUniform1i(
+                        GLES31.glGetUniformLocation(program, "u_rgb").also {
+                            check(it >= 0) { "rcd_final uniform 'u_rgb' is missing" }
+                        }, 0
+                    )
+                    GLES31.glUniform2i(
+                        GLES31.glGetUniformLocation(program, "u_outsize").also {
+                            check(it >= 0) { "rcd_final uniform 'u_outsize' is missing" }
+                        }, width, height
+                    )
+                    val matrix = session.uploads.floats(9)
+                    matrix.put(cameraToAcescgColumnMajor).flip()
+                    GLES31.glUniformMatrix3fv(
+                        GLES31.glGetUniformLocation(program, "u_camera_to_acescg").also {
+                            check(it >= 0) { "rcd_final uniform 'u_camera_to_acescg' is missing" }
+                        }, 1, false, matrix
+                    )
+                    GLES31.glUniform3f(
+                        GLES31.glGetUniformLocation(program, "u_camera_white_normalized").also {
+                            check(it >= 0) { "rcd_final uniform 'u_camera_white_normalized' is missing" }
+                        }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
+                    )
+                    GLES31.glUniform1i(
+                        GLES31.glGetUniformLocation(program, "u_camera_linear").also {
+                            check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
+                        }, 0
+                    )
+                    GLES31.glBindImageTexture(
+                        0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
+                    )
+                    val gx = AmazePipelineContract.LOCAL_SIZE_X
+                    val gy = AmazePipelineContract.LOCAL_SIZE_Y
+                    GLES31.glDispatchCompute((width + gx - 1) / gx, (height + gy - 1) / gy, 1)
+                    GLES31.glMemoryBarrier(
+                        GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                    )
+                    checkGl("Sharp tail dispatch")
+                    consume(
+                        AmazeGpuOutput(
+                            output.id, width, height, AmazeTextureFormat.RGBA16F,
+                            colorDomain = AmazeColorDomain.ACESCG
+                        )
+                    )
+                } finally {
+                    session.textures.release(output)
+                }
+            } finally {
+                GLES31.glDeleteTextures(1, intArrayOf(uploadId), 0)
+            }
+        }
+    }
+
+    /**
      * Reads an RGBA16F output texture back to a direct RGBA16F ByteBuffer
      * (W*H*8 bytes, texture row order: image top row first, matching the
      * demosaic output layout, so re-upload round-trips exactly). Wavelet
@@ -1024,7 +1132,17 @@ class Gles31AmazeProcessor(
             val uniforms = AmazePipelineContract.uniformsFor(asset)
             if (AmazeUniform.SIZE in uniforms) bound.ivec2("u_size", window, window)
             if (AmazeUniform.CFA_PHASE in uniforms) bound.ivec4("u_fc", cfaUniform)
-            if (AmazeUniform.CLIP_POINT in uniforms) bound.float("u_clip", clipPoint)
+            // u_clip lives in the balanced working basis (pad.glsl already
+            // applied demosaicBalance), so the RT clip_pt semantics need the
+            // balance minimum folded in — see balancedClipPoint. Binding the
+            // raw clipPoint here disables the highlight guards for
+            // single-channel clipping (purple highlight halos).
+            if (AmazeUniform.CLIP_POINT in uniforms) {
+                bound.float(
+                    "u_clip",
+                    AmazePipelineContract.balancedClipPoint(clipPoint, demosaicBalance)
+                )
+            }
             bound.block()
         }
 

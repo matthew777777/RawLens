@@ -104,6 +104,15 @@ object SceneLinearColorProcessor {
     const val WHITE_WINDOW_LDR_END = 0.99f
     const val WHITE_WINDOW_HDR_START = 0.995f
     const val WHITE_WINDOW_HDR_END = 1.0f
+    /**
+     * White window that disables sensor-white desaturation: both edges sit
+     * far above any real pixel, so the `u_white_window` smoothstep stays 0.
+     * Used for the highlight-reconstruction tap — RT-style reconstruction
+     * must see true (possibly clipped) channel values, not pixels the
+     * demosaic already forced toward neutral white; it owns clipping
+     * itself. Never for display/fused output (magenta protection stays).
+     */
+    val WHITE_WINDOW_OFF = floatArrayOf(1e10f, 2e10f)
 
     fun resolve(metadata: SceneLinearColorMetadata, exposureEv: Double = 0.0): ResolvedSceneLinearTransform {
         require(exposureEv.isFinite() && exposureEv in -16.0..16.0) {

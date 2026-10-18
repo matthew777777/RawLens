@@ -379,6 +379,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Preview highlight guards (hard p99.5 / soft p95), mirroring the save path. */
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
+    /** Preview shoulder, mirroring the save-path meter (see [setAgx]). */
+    @Volatile private var previewShoulder = 1f
+    /** Preview center weight, mirroring the save-path meter (see [setAgx]). */
+    @Volatile private var previewCenterWeight = 0f
+    /** Tap-to-meter vote center (null = region center). See [VfEngine.setMeteringFocus]. */
+    @Volatile private var previewFocusX: Float? = null
+    @Volatile private var previewFocusY: Float? = null
     /** Display P3 JPEG target, mirrored so the VF shows the saved output gamut. */
     @Volatile private var previewP3 = false
     /** Calibrated color cache; snapshotRenderState runs on the camera thread only. */
@@ -407,6 +414,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     @Volatile private var previewExposureStrength = 0f
     /** Scratch for the 2 Hz preview-EV estimate; camera thread only. */
     private val previewEvScratch = FloatArray(VfGpuImport.MAX_PREVIEW_SAMPLES)
+    private val previewEvWeightScratch = FloatArray(VfGpuImport.MAX_PREVIEW_SAMPLES)
     private var lastPreviewEvMs = 0L
     private var previewEvSeeded = false
     @Volatile private var sampleIntervalMs = VfResolution.RATE_FULL_MS
@@ -572,6 +580,15 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var texHeight = 0
     private var viewportWidth = 1
     private var viewportHeight = 1
+    /**
+     * WYSIWYG content rect (surface pixels): the aspect-fill cover rect,
+     * which spans the surface and overflows it symmetrically on the cropped
+     * axis. Fires [onContentRectChanged] on the GL worker only when the
+     * rect actually moves, so overlays (grid, taps, faces, peaking) can
+     * align to the picture instead of the surface.
+     */
+    var onContentRectChanged: ((VfContentGeometry) -> Unit)? = null
+    private var lastContentRect = Rect()
     private val vertices = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         .apply { put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)); position(0) }
     private val coordinates = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -820,7 +837,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
         previewHeadroom = resolved.highlightHeadroom
-        previewSoftHeadroom = resolved.highlightSoftHeadroom
+        // Single source of truth with the save-path meter: the broad guard is
+        // re-solved under these AgX settings and the shoulder is carried over,
+        // so the preview EV matches the saved JPEG EV.
+        val meterTuning = AdaptiveExposureTuning.fromOutputSettings(settings)
+        previewSoftHeadroom = meterTuning.highlightSoftHeadroom.toFloat()
+        previewShoulder = meterTuning.highlightShoulder
+        previewCenterWeight = meterTuning.centerWeight
         previewP3 = resolved.displayP3
     }
 
@@ -828,6 +851,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         val bounded = tuning.bounded()
         previewHeadroom = bounded.highlightHeadroom.toFloat()
         previewSoftHeadroom = bounded.highlightSoftHeadroom.toFloat()
+        previewShoulder = bounded.highlightShoulder
+        previewCenterWeight = bounded.centerWeight
+    }
+
+    override fun setMeteringFocus(x: Float?, y: Float?) {
+        previewFocusX = x
+        previewFocusY = y
     }
 
     /** Called inline on the camera handler. All plane access ends before this method returns. */
@@ -1317,11 +1347,16 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         lastPreviewEvMs = now
         val tuning = AdaptiveExposureTuning(
             highlightHeadroom = previewHeadroom.toDouble(),
-            highlightSoftHeadroom = previewSoftHeadroom.toDouble()
+            highlightSoftHeadroom = previewSoftHeadroom.toDouble(),
+            highlightShoulder = previewShoulder,
+            centerWeight = previewCenterWeight,
+            focusX = previewFocusX,
+            focusY = previewFocusY
         ).bounded()
         val correction = VfGpuImport.estimatePreviewCorrectionEv(
             plane.buffer, plane.rowStride, plane.pixelStride,
             left, top, width, height, step, levels, white, previewEvScratch,
+            weights = previewEvWeightScratch,
             lens = lens.model, pattern = lens.pattern, tuning = tuning
         )
         if (!correction.isFinite()) return
@@ -1618,6 +1653,30 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1i(gpuLensGreenRowLoc, frame.lensGreenRow)
     }
 
+    /**
+     * Aspect-fill present viewport: the frame keeps its display aspect
+     * (rotation swaps axes) and spans the surface edge to edge, cropping
+     * the overflow symmetrically — no bars, no stretch. glClear is
+     * viewport-scissored, so the viewport resets to the full surface before
+     * the (first-frame) clear. GL worker only.
+     */
+    private fun coverPresentViewport(frameW: Int, frameH: Int, rotation: Int) {
+        glViewport(0, 0, viewportWidth, viewportHeight)
+        glClearColor(0f, 0f, 0f, 1f)
+        glClear(GL_COLOR_BUFFER_BIT)
+        val f = VfAspectFit.fill(viewportWidth, viewportHeight, frameW, frameH, rotation)
+        glViewport(f[0], f[1], f[2], f[3])
+        val rect = Rect(f[0], f[1], f[0] + f[2], f[1] + f[3])
+        if (rect != lastContentRect) {
+            lastContentRect.set(rect)
+            try {
+                onContentRectChanged?.invoke(VfContentGeometry(Rect(rect), frameW, frameH, rotation))
+            } catch (_: Exception) {
+                // A failing listener must never break the present path.
+            }
+        }
+    }
+
     /** Rotation/mirror UVs + fullscreen quad attribs. GL worker only. */
     private fun bindQuadAttribs(position: Int, uv: Int, rotation: Int, mirrored: Boolean) {
         // UVs depend only on orientation. Reuse the same eight floats between
@@ -1671,7 +1730,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             // Dropped frame carries no new cost sample; the queued draw
             // already covers the newer pending frame.
             if (shouldDropForFence()) return@Runnable
-            glViewport(0, 0, viewportWidth, viewportHeight)
+            coverPresentViewport(frame.width, frame.height, frame.rotation)
             glUseProgram(program)
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, texture)
@@ -1898,7 +1957,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
             try {
                 val toneStarted = SystemClock.elapsedRealtime()
-                glViewport(0, 0, viewportWidth, viewportHeight)
+                coverPresentViewport(frame.width, frame.height, frame.rotation)
                 if (!bayer) {
                     glUseProgram(program)
                     glActiveTexture(GL_TEXTURE0)

@@ -2,6 +2,18 @@
     <uses-feature android:name="android.hardware.camera.any" />
     <!-- DNG-only remains available when the optional GLES 3.1 RAW developer is unavailable. -->
     <uses-feature android:glEsVersion="0x00030001" android:required="false" />
+    <!-- Vulkan compute is mandatory: every native context requests Vulkan
+        1.1 with AHardwareBuffer import. Play hides the app from devices
+        that cannot pass the VulkanSupport runtime gate, instead of
+        installing onto versions that fail it. -->
+    <uses-feature
+        android:name="android.hardware.vulkan.level"
+        android:required="true"
+        android:version="1" />
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:required="true"
+        android:version="0x401000" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- RAW video sound: PCM16 inside the .crs. Requested at runtime only
         on first video-record press; stills never need the mic. No microphone

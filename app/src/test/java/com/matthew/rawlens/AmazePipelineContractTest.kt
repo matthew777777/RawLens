@@ -146,6 +146,71 @@ class AmazePipelineContractTest {
     }
 
     @Test
+    fun clipThresholdMatchesBalancedNeutralAtSensorWhite() {
+        // Daylight neutral (green clips first): pad.glsl's attenuate-only
+        // balance leaves a neutral pixel at sensor white reading 0.5 in every
+        // channel. The highlight guards must engage there — RawTherapee's
+        // clip_pt = 1/initialGain is exactly this neutral level — otherwise
+        // ratio interpolation runs through single-channel clipping and its
+        // chroma overshoot reaches white balance as a purple halo.
+        val white = floatArrayOf(0.5f, 1.0f, 0.67f)
+        val balance = FloatArray(3) { white.minOrNull()!! / white[it] }
+        val clip = AmazePipelineContract.balancedClipPoint(1f, balance)
+        assertEquals(0.5f, clip, 1e-6f)
+        // gradcd's 0.8x ratio-to-Hamilton-Adams fallback now engages for
+        // clipped-neutral data (0.5 > 0.4); with the old unbalanced 1.0 it
+        // never fired (0.5 > 0.8 is false).
+        assertTrue(0.5f > 0.8f * clip)
+    }
+
+    @Test
+    fun unityBalanceLeavesClipPointUntouched() {
+        assertEquals(
+            1f,
+            AmazePipelineContract.balancedClipPoint(1f, floatArrayOf(1f, 1f, 1f)),
+            0f
+        )
+        assertEquals(
+            3f,
+            AmazePipelineContract.balancedClipPoint(3f, floatArrayOf(1f, 1f, 1f)),
+            0f
+        )
+    }
+
+    @Test
+    fun hdrClipPointScalesProportionallyWithBalance() {
+        val balance = floatArrayOf(1f, 0.5f, 0.75f)
+        assertEquals(2f, AmazePipelineContract.balancedClipPoint(4f, balance), 1e-6f)
+    }
+
+    @Test
+    fun rejectsBadClipInputs() {
+        val balance = floatArrayOf(1f, 0.5f, 0.75f)
+        assertThrows(IllegalArgumentException::class.java) {
+            AmazePipelineContract.balancedClipPoint(0f, balance)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AmazePipelineContract.balancedClipPoint(Float.NaN, balance)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AmazePipelineContract.balancedClipPoint(1f, floatArrayOf(1f, 0.5f))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AmazePipelineContract.balancedClipPoint(1f, floatArrayOf(1f, 0f, 0.75f))
+        }
+    }
+
+    @Test
+    fun amazePassesBindTheBalancedClipPoint() {
+        // The u_clip guards compare balanced-basis interpolations, so the
+        // executor must fold the balance minimum in. Binding the raw
+        // clipPoint disables the highlight guards for single-channel
+        // clipping (purple highlight halos).
+        val source = File("src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt").readText()
+        assertTrue(source.contains("balancedClipPoint(clipPoint, demosaicBalance)"))
+    }
+
+    @Test
     fun rejectsOddOrTooSmallCfaBeforeGpuAllocation() {
         val input = UnpackedRawCfa(
             3, 4, BayerPattern.RGGB, FloatArray(12), RawCrop(0, 0, 3, 4)

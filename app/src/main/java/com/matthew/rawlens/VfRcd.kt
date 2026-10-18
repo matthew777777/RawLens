@@ -74,8 +74,43 @@ internal object VfRcd {
         return iparams to fparams
     }
 
+    /** Asset selector mirroring [VfLogGrade.fusedAsset]: f16 math when available. */
+    fun rcdAsset(f16Math: Boolean): String =
+        if (f16Math) "shaders/vf/vf_rcd_f16.spv" else "shaders/vf/vf_rcd.spv"
+
+    /** Fused-stage asset selector (same f16 gate as [rcdAsset]). */
+    fun rcdYuvAsset(f16Math: Boolean): String =
+        if (f16Math) "shaders/vf/vf_rcdyuv_f16.spv" else "shaders/vf/vf_rcdyuv.spv"
+
     /** Create the RCD pipeline from SPIR-V bytes. Idempotent. */
     external fun initRcdNative(spv: ByteArray): Int
+
+    /** Create the fused RCD-finalize + P010 grade pipeline. Idempotent. */
+    external fun initRcdYuvNative(spv: ByteArray): Int
+
+    /**
+     * Fused finalize: RCD mode-3 math at green sites over the crop +
+     * direct profile encode into [p010Buffer] (no RGBA16F round trip).
+     * Requires modes 0-2 already submitted on the same queue (FIFO
+     * ordered). Same fd convention as [rcdSubmitNative]: returns the
+     * completion sync fd or a negative code (fall back to mode 3 +
+     * grade-YUV). [gradeIdims] is the export size, [gradeIsrc] the crop
+     * size (must match the RCD dims), [gradeFparams] the 18 floats from
+     * [VfLogGrade.packGrade], [istrides] the P010 strides.
+     */
+    external fun rcdFusedYuvSubmitNative(
+        cfaBuffer: HardwareBuffer,
+        rgbBuffer: HardwareBuffer,
+        scratchBuffer: HardwareBuffer,
+        p010Buffer: HardwareBuffer,
+        rcdIparams: IntArray,
+        rcdFparams: FloatArray,
+        gradeIdims: IntArray,
+        gradeIsrc: IntArray,
+        gradeFparams: FloatArray,
+        istrides: IntArray,
+        slot: Int,
+    ): Int
 
     /**
      * Run one RCD mode: CFA storage buffer [cfaBuffer] + full-res rgb
