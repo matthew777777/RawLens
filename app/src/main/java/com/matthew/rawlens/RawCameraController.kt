@@ -1947,6 +1947,12 @@ class RawCameraController(
     init {
         rawViewfinder?.onStarvation = {
             cameraHandler.post {
+                // While stopped (a video take owns the camera) both
+                // viewfinders idle by design: no route flip, no camera
+                // recovery. Flipping here hides the legacy Surface, whose
+                // teardown (resetNative -> destroyGrade) kills the shared
+                // record pipelines mid-take and freezes the recording.
+                if (!running) return@post
                 // Legacy is the first AUTO rung: its GPU->NEON ladder is
                 // exhausted when it starves, so BGU takes over for the
                 // session. A blocked renderer is not a dead camera stream:
@@ -1967,6 +1973,9 @@ class RawCameraController(
         }
         bguViewfinder?.onStarvation = {
             cameraHandler.post {
+                // Same stopped-camera rule as legacy above: never reroute
+                // while a take owns the camera.
+                if (!running) return@post
                 // BGU is the last AUTO rung: any persistent failure marks
                 // it dead and routing returns to legacy (last resort).
                 if (!bguDead) {

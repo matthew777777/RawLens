@@ -146,7 +146,7 @@
         android:visibility="gone" />
 
     <!-- Top bar: 48dp targets, 12dp rhythm, status readable at 10sp. -->
-    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:layout_marginStart="12dp" android:layout_marginTop="8dp" android:layout_marginEnd="12dp" android:background="@drawable/slim_top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="8dp" android:paddingTop="6dp" android:paddingEnd="8dp" android:paddingBottom="6dp">
+    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:layout_marginStart="12dp" android:layout_marginTop="16dp" android:layout_marginEnd="12dp" android:background="@drawable/slim_top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="8dp" android:paddingTop="6dp" android:paddingEnd="8dp" android:paddingBottom="6dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" style="@style/TopBarButton" android:layout_marginStart="8dp" android:contentDescription="Toggle light" android:src="@drawable/ic_flash" />
         <FrameLayout android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="8dp">
@@ -475,23 +475,6 @@
                     android:textSize="10sp"
                     android:textStyle="bold" />
 
-                <!-- Offline-merge switch: tap toggles the shutter between
-                     normal merging and a single-tap dump of the whole ZSL
-                     ring to IMG_<ts>_BURST.crs. Small dedicated target,
-                     same chip language as the switcher above it. -->
-                <com.matthew.rawlens.RotatingTextView
-                    android:id="@+id/burstCrsButton"
-                    android:layout_width="72dp"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/control_chip"
-                    android:gravity="center"
-                    android:minHeight="48dp"
-                    android:text="B•OFF"
-                    android:contentDescription="Offline burst crs toggle"
-                    android:textColor="@color/text_primary"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -46,8 +47,16 @@ class WelcomeActivity : Activity() {
     private var locationSwitch: Switch? = null
     private var updateSection: LinearLayout? = null
     private var updateSwitch: Switch? = null
+    /** True once setContentView ran, so a decor view exists for immersive mode. */
+    private var contentReady = false
     /** True while the optional location request from Continue is outstanding. */
     private var awaitingLocationResult = false
+    /**
+     * Consecutive folder-grant cancels. A couple in a row means the phone
+     * itself is refusing (its provider hides every folder), so the row says
+     * so instead of inviting a third identical attempt.
+     */
+    private var folderCancels = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,11 +69,35 @@ class WelcomeActivity : Activity() {
         showWelcomePage()
     }
 
+    /**
+     * Fullscreen like the rest of the app. Must run after setContentView:
+     * before that the decor view does not exist yet and the call crashes.
+     * Permission dialogs and the folder picker pop the system bars back, so
+     * this is also re-applied on every resume and focus gain.
+     */
+    private fun applyImmersive() {
+        ImmersiveMode.apply(window)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Only when content is set: the early-return path above finishes
+        // without a decor view.
+        if (contentReady) applyImmersive()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && contentReady) applyImmersive()
+    }
+
     /** Welcome content page: nothing overlays it. */
     private fun showWelcomePage() {
         step = WelcomeFlow.Step.WELCOME
         clearPermissionRefs()
         setContentView(R.layout.activity_welcome)
+        contentReady = true
+        applyImmersive()
         welcomeStatus = findViewById(R.id.welcomeStatus)
         findViewById<Button>(R.id.openCameraButton).setOnClickListener {
             if (hasCameraPermission()) {
@@ -86,6 +119,8 @@ class WelcomeActivity : Activity() {
     private fun showPermissionsPage() {
         step = WelcomeFlow.Step.PERMISSIONS
         setContentView(R.layout.activity_welcome_permissions)
+        contentReady = true
+        applyImmersive()
         cameraStatus = findViewById(R.id.permCameraStatus)
         cameraButton = findViewById(R.id.permCameraButton)
         folderStatus = findViewById(R.id.permFolderStatus)
@@ -146,11 +181,17 @@ class WelcomeActivity : Activity() {
 
     private fun refreshFolderRow() {
         val uri = SidecarTreeAccess.savedTreeUri(this)
-        folderStatus?.text = if (uri != null) {
-            val label = SidecarTreeAccess.displayPath(uri)
-            if (label.isNullOrEmpty()) "Folder chosen." else "Chosen: $label."
-        } else {
-            "Not chosen yet."
+        folderStatus?.text = when {
+            uri == null && folderCancels >= 2 ->
+                "This phone keeps refusing the grant — safe to skip: " +
+                    "sidecars save to Downloads and import the same."
+            uri == null -> "Not chosen yet."
+            !SidecarTreeAccess.hasWriteAccess(this, uri) ->
+                "Grant didn't stick — tap Choose Photo Folder to try again."
+            else -> {
+                val label = SidecarTreeAccess.displayPath(uri)
+                if (label.isNullOrEmpty()) "Folder chosen." else "Chosen: $label."
+            }
         }
     }
 
@@ -258,16 +299,11 @@ class WelcomeActivity : Activity() {
      */
     private fun pickPhotoFolder() {
         try {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-                )
-            }
             @Suppress("DEPRECATION")
-            startActivityForResult(intent, SIDECAR_TREE_REQUEST)
+            startActivityForResult(
+                SidecarTreeAccess.pickerIntent(this, contentResolver),
+                SIDECAR_TREE_REQUEST
+            )
         } catch (_: Exception) {
             refreshFolderRow()
         }
@@ -278,7 +314,13 @@ class WelcomeActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != SIDECAR_TREE_REQUEST) return
         if (resultCode == RESULT_OK) {
-            data?.data?.let { SidecarTreeAccess.saveTreeUri(this, it) }
+            val tree = data?.data
+            Log.i(TAG, "folder picker OK uri=$tree")
+            tree?.let { SidecarTreeAccess.saveTreeUri(this, it) }
+            folderCancels = 0
+        } else {
+            Log.i(TAG, "folder picker cancelled result=$resultCode")
+            folderCancels++
         }
         // Stay on the permissions page so the keep-up-to-date ask and the
         // Continue button remain on their own screen; the row just reflects
@@ -301,6 +343,7 @@ class WelcomeActivity : Activity() {
     }
 
     private companion object {
+        const val TAG = "RawLensWelcome"
         const val CAMERA_PERMISSION = 42
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44

@@ -144,10 +144,9 @@ class MainActivity : Activity() {
     private var mfsrSettings = MfsrSettings()
     private lateinit var mfsrQuick: TextView
     private var modeBeforeMfsr: CaptureExposureMode? = null
-    /** Offline-merge switch: when on, the shutter dumps the ZSL ring to _BURST.crs. */
+    /** Offline-merge switch (Settings → Burst): when on, the shutter dumps the ZSL ring to _BURST.crs. */
     private var burstCrsEnabled = false
     private var modeBeforeBurst: CaptureExposureMode? = null
-    private lateinit var burstCrsButton: TextView
     private val burstDumpInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private var programHintShown = false
     private var sidecarSettingsStatus: TextView? = null
@@ -369,7 +368,6 @@ class MainActivity : Activity() {
         ettrQuick = findViewById(R.id.ettrQuick)
         timerBadge = findViewById(R.id.timerBadge)
         modeButton = findViewById(R.id.modeButton)
-        burstCrsButton = findViewById(R.id.burstCrsButton)
         flashButton = findViewById(R.id.flashButton)
         rawBadge = findViewById(R.id.rawBadge)
         rawStatusGroup = findViewById(R.id.rawStatusGroup)
@@ -684,9 +682,6 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.timerButton).setOnClickListener { cycleTimer() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
-        burstCrsButton.setOnClickListener { toggleBurstCrs() }
-        burstCrsButton.setOnLongClickListener { openMerges(); true }
-        refreshBurstCrsButton()
         // Dedicated red dot below the quick-panel access: a MODE toggle, never
         // part of the switcher. Tap = photo <-> video, long-press in video =
         // exit back to photo too. Recording itself lives on the shutter ring.
@@ -1207,16 +1202,11 @@ class MainActivity : Activity() {
 
     private fun pickSidecarFolder() {
         try {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-                )
-            }
             @Suppress("DEPRECATION")
-            startActivityForResult(intent, SIDECAR_TREE_REQUEST)
+            startActivityForResult(
+                SidecarTreeAccess.pickerIntent(this, contentResolver),
+                SIDECAR_TREE_REQUEST
+            )
         } catch (_: Exception) {
             setStatus("FOLDER PICKER UNAVAILABLE")
         }
@@ -1730,7 +1720,7 @@ class MainActivity : Activity() {
         // would clip to invisible. Keep horizontal so they stay visible above panel.
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
-        findViewById(R.id.vfPreviewButton), findViewById(R.id.burstCrsButton),
+        findViewById(R.id.vfPreviewButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
         findViewById(R.id.gridQuick),
         findViewById(R.id.histogramQuick), findViewById(R.id.levelQuick),
@@ -1945,16 +1935,14 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------
-    // Offline-merge burst switch: a small dedicated target under the mode
-    // switcher. ON dumps the whole ZSL ring to IMG_<ts>_BURST.crs
-    // (recordingType=BURST, staged under raw-bursts, published to
-    // DCIM/RawLens/Bursts); OFF restores normal merging. Like the merger
-    // tiles it needs ZSL, so enabling pulls the mode into ZSL and
-    // disabling restores the previous mode.
+    // Offline-merge burst switch (Settings → Burst): ON dumps the whole
+    // ZSL ring to IMG_<ts>_BURST.crs (recordingType=BURST, staged under
+    // raw-bursts, published to DCIM/RawLens/Bursts); OFF restores normal
+    // merging. Like the merger tiles it needs ZSL, so enabling pulls the
+    // mode into ZSL and disabling restores the previous mode.
     // ------------------------------------------------------------------
-    private fun toggleBurstCrs() {
-        burstCrsButton.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        val enabled = !burstCrsEnabled
+    private fun setBurstCrsEnabled(enabled: Boolean) {
+        if (enabled == burstCrsEnabled) return
         burstCrsEnabled = enabled
         lensPreferences().edit().putBoolean(KEY_BURST_CRS_ENABLED, enabled).apply()
         if (enabled) {
@@ -1974,7 +1962,6 @@ class MainActivity : Activity() {
             setStatus("BURST CRS OFF")
         }
         android.util.Log.i(LOG_TAG, "BurstCrs enabled=$enabled")
-        refreshBurstCrsButton()
     }
 
     /** Offline burst-merge screen: staged takes only, never RAW video. */
@@ -1985,20 +1972,6 @@ class MainActivity : Activity() {
             android.util.Log.w(LOG_TAG, "open merges failed: ${failure.message}")
             setStatus("MERGES UNAVAILABLE")
         }
-    }
-
-    private fun refreshBurstCrsButton() {
-        if (!::burstCrsButton.isInitialized) return
-        burstCrsButton.text = if (burstCrsEnabled) "B•ON" else "B•OFF"
-        burstCrsButton.background = getDrawable(
-            if (burstCrsEnabled) R.drawable.control_chip_active else R.drawable.control_chip
-        )
-        burstCrsButton.setTextColor(
-            getColor(if (burstCrsEnabled) R.color.accent_dark else R.color.text_primary)
-        )
-        burstCrsButton.contentDescription =
-            "Offline burst crs ${if (burstCrsEnabled) "on" else "off"}. " +
-                "Tap to toggle, long-press to open merges."
     }
 
     /** Single-tap dump: whole ZSL ring to one _BURST.crs, then publish. */
@@ -3509,7 +3482,6 @@ class MainActivity : Activity() {
             burstCrsEnabled = false
             lensPreferences().edit().putBoolean(KEY_BURST_CRS_ENABLED, false).apply()
             modeBeforeBurst = null
-            refreshBurstCrsButton()
         }
         val dynamic = dynamicExposureSettings().copy(enabled = mode == CaptureExposureMode.PROGRAM)
         lensPreferences().edit()
@@ -4234,8 +4206,6 @@ class MainActivity : Activity() {
         }
         val exposureModeActive = captureExposureMode != CaptureExposureMode.AUTO
         setQuickTileState(modeButton, exposureModeActive)
-        refreshBurstCrsButton()
-        if (::burstCrsButton.isInitialized) setQuickTileState(burstCrsButton, burstCrsEnabled)
     }
 
     private fun setQuickTileState(tile: TextView, active: Boolean) {
@@ -5754,6 +5724,18 @@ class MainActivity : Activity() {
             content.addView(settingsButton("OPEN MERGES").apply {
                 setOnClickListener { openMerges() }
             })
+            content.addView(CheckBox(this).apply {
+                text = "Save ZSL bursts to .crs for offline merge"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = burstCrsEnabled
+                setOnCheckedChangeListener { _, enabled ->
+                    if (enabled != burstCrsEnabled) setBurstCrsEnabled(enabled)
+                }
+            })
+            content.addView(sectionDesc(
+                "When on, the shutter dumps the whole ZSL ring to one " +
+                    "IMG_<ts>_BURST.crs instead of merging immediately."
+            ))
             content.addView(sectionTitle("Zero shutter lag"))
             content.addView(CheckBox(this).apply {
                 text = "RAW zero shutter lag"
