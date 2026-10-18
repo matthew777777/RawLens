@@ -430,6 +430,13 @@ object VulkanPipeline {
         // pack staging, pinned residents and tiny profile buffers are
         // still alive on the host.
         heapLog("pre-download")
+        // Drop the align host scratch (~100 MB L2 caches, never read
+        // again), then compact: the 150 MB download below is one
+        // contiguous non-movable block, and ART counts direct buffers
+        // against the Java heap — a fragmented 512 MB heap cannot place
+        // it even with free bytes to spare (observed on-device).
+        AlignGpu.freeLevelScratch(pinnedInit)
+        System.gc()
         timed("divide") { checkRc("divide", SrpBridge.divideRes(handle, numRes, denRes, spirvs.divide, total)) }
         val outBuf = SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }

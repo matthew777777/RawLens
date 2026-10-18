@@ -117,6 +117,22 @@ object AlignGpu {
             got.rewind()
             return got
         }
+
+        /**
+         * Drops all cached buffers (host heap only; device residents are
+         * freed separately). Values-identical: scratch is recomputed on
+         * next use. Called when a run no longer aligns (before the
+         * 150 MB download): the L2 caches alone retain ~100 MB.
+         */
+        fun clear() {
+            floats.clear()
+            directs.clear()
+        }
+    }
+
+    /** Drops every level's host scratch (see [LevelScratch.clear]). */
+    fun freeLevelScratch(init: GpuInit) {
+        for (lvl in init.levels) lvl.scratch.clear()
     }
 
     /**
