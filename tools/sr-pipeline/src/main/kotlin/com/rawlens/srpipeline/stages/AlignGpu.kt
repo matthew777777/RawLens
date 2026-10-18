@@ -33,6 +33,13 @@ object AlignGpu {
         return r
     }
 
+    /**
+     * Correlate host-chunk size in tiles (mirrors the native chain's
+     * internal chunking, cf. `FftChain::correlatePinned`): host corr
+     * pairs stay <= 4096*S*S floats (~9 MB), never full-level.
+     */
+    const val CorrelateChunkTiles = 4096
+
     /** Compiled kernels per op family. */
     data class Spirvs(
         val align: ByteArray,
@@ -55,11 +62,17 @@ object AlignGpu {
         val tileSize: Int,
         val radius: Int,
         /**
-         * Pinned reference spectra resident (one forward FFT per level,
-         * cf. [pinLevelResidents]), 0 when unpinned. L2 levels use it via
-         * [SrpBridge.correlatePinned]; 0 selects the staged path.
+         * Pinned reference spectra chunk residents (one forward FFT per
+         * 4096-tile chunk, cf. [pinLevelResidents]); empty when
+         * unpinned. L2 levels use them via [SrpBridge.correlatePinned]
+         * chunk by chunk; empty selects the staged path. Chunked (not
+         * one resident per level) so the host correlate scratch stays
+         * chunk-sized: a full-level corr pair is 56 MB at full-res,
+         * over the 512 MB on-device ceiling next to the loop state.
+         * Same per-tile math as one shot (the native chain chunks
+         * internally the same way): bit-identical.
          */
-        val refSpecRes: Long = 0L,
+        val refSpecChunks: List<Long> = emptyList(),
         /**
          * Pinned level statics (uploaded once per run, cf.
          * [pinLevelResidents]), 0 when unpinned: reference image for
@@ -260,18 +273,32 @@ object AlignGpu {
                     var cur = lvl.copy(refRes = refRes, gradXRes = gradXRes,
                         gradYRes = gradYRes, hessRes = hessRes)
                     if (config.metrics[c] == BlockMetric.L2) {
+                        // Spectra pinned per 4096-tile chunk (same
+                        // forward FFT per tile as one shot; the native
+                        // chain chunks internally the same way). One
+                        // resident per level would force full-level host
+                        // corr pairs (56 MB) in the loop below.
                         val tc = lvl.nTy * lvl.nTx
                         val s = lvl.tileSize + 2 * lvl.radius
-                        val flat = FloatArray(tc * s * s) { i -> lvl.tiles[i / (s * s)][i % (s * s)] }
-                        val res = SrpBridge.createResident(handle, 2L * tc * s * s)
-                        require(res != 0L) { "pinLevelResidents: spectra alloc failed" }
-                        partial.add(res)
-                        val rc = ptime("correlatePinRef") {
-                            SrpBridge.correlatePinRef(handle, packInto(flat, uploadScratch), res,
-                                spirvs.fft, spirvs.corr, tc, s)
+                        val chunks = ArrayList<Long>()
+                        var t0 = 0
+                        while (t0 < tc) {
+                            val ct = minOf(CorrelateChunkTiles, tc - t0)
+                            val cflat = FloatArray(ct * s * s) { i ->
+                                lvl.tiles[t0 + i / (s * s)][i % (s * s)]
+                            }
+                            val res = SrpBridge.createResident(handle, 2L * ct * s * s)
+                            require(res != 0L) { "pinLevelResidents: spectra alloc failed" }
+                            partial.add(res)
+                            val rc = ptime("correlatePinRef") {
+                                SrpBridge.correlatePinRef(handle, packInto(cflat, uploadScratch), res,
+                                    spirvs.fft, spirvs.corr, ct, s)
+                            }
+                            require(rc == 0) { "correlatePinRef failed with status $rc" }
+                            chunks.add(res)
+                            t0 += ct
                         }
-                        require(rc == 0) { "correlatePinRef failed with status $rc" }
-                        cur = cur.copy(refSpecRes = res)
+                        cur = cur.copy(refSpecChunks = chunks)
                     }
                     // Host copies are dead once residents hold the bytes:
                     // drop them (frees ~320MB retained heap at full-res).
@@ -279,7 +306,7 @@ object AlignGpu {
                     // the staged branches select on the resident handles,
                     // so empty arrays on a pinned level are unreachable
                     // (and fail loudly, not silently, if ever read).
-                    val stripped = if (cur.refSpecRes != 0L) {
+                    val stripped = if (cur.refSpecChunks.isNotEmpty()) {
                         cur.copy(ref = emptyArray(), tiles = emptyArray(),
                             gradX = emptyArray(), gradY = emptyArray(),
                             hessPacked = FloatArray(0))
@@ -320,7 +347,7 @@ object AlignGpu {
     /** Frees every pinned resident in [init] (no-op unpinned). */
     fun freeLevelSpectra(init: GpuInit, handle: Long) {
         for (lvl in init.levels) {
-            if (lvl.refSpecRes != 0L) SrpBridge.freeResident(handle, lvl.refSpecRes)
+            for (r in lvl.refSpecChunks) SrpBridge.freeResident(handle, r)
             if (lvl.refRes != 0L) SrpBridge.freeResident(handle, lvl.refRes)
             if (lvl.gradXRes != 0L) SrpBridge.freeResident(handle, lvl.gradXRes)
             if (lvl.gradYRes != 0L) SrpBridge.freeResident(handle, lvl.gradYRes)
@@ -396,7 +423,9 @@ object AlignGpu {
         val tc = lvl.nTy * lvl.nTx
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
-        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
+        // Moving upload is a per-call transient (dies at return): caching
+        // it would pin a full-frame 50 MB buffer across all frames.
+        val movBuf = packImgInto(moving, SrpBridge.directFloats(w * h))
         // Pinned levels skip the ref upload; unpinned levels stage both.
         val rc = if (lvl.refRes != 0L) {
             ptime("alignL1Res") { SrpBridge.alignL1Res(handle, lvl.refRes, movBuf,
@@ -426,7 +455,9 @@ object AlignGpu {
         val s = lvl.tileSize + 2 * lvl.radius
         val c = 2 * lvl.radius + 1
         val sc = lvl.scratch
-        val movBuf = packImgInto(moving, sc.direct("mov", moving.size * moving[0].size))
+        // Moving upload is a per-call transient (dies at return): caching
+        // it would pin a full-level 50 MB buffer across all frames.
+        val movBuf = packImgInto(moving, SrpBridge.directFloats(moving.size * moving[0].size))
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
         // Extract moving patches around the current flow. patchBuf
@@ -439,23 +470,49 @@ object AlignGpu {
         require(rc == 0) { "corrExtract failed with status $rc" }
         patchBuf.rewind()
         // Correlate against the reference tiles, crop to ±R, argmin.
-        // Pinned levels reuse the one-per-level ref spectra (no ref
-        // upload, no ref forward); unpinned levels stage both sides.
-        val corrBuf = sc.direct("corr", tc * s * s)
-        rc = if (lvl.refSpecRes != 0L) {
-            ptime("correlatePinned") { SrpBridge.correlatePinned(handle, patchBuf,
-                lvl.refSpecRes, corrBuf, spirvs.fft, spirvs.corr, tc, s) }
+        // Pinned levels walk the spectra chunk residents (no ref upload,
+        // no ref forward), correlating chunk by chunk into chunk-sized
+        // scratch: same per-tile math as one shot (the native chain
+        // chunks internally the same way). Unpinned levels stage both
+        // sides in one shot (unit-test path, small fixtures).
+        val cropped = sc.floats("cropped", tc * c * c)
+        if (lvl.refSpecChunks.isNotEmpty()) {
+            var t0 = 0
+            var ci = 0
+            while (t0 < tc) {
+                val ct = minOf(CorrelateChunkTiles, tc - t0)
+                val spec = lvl.refSpecChunks.getOrNull(ci)
+                    ?: throw IllegalStateException("spectra chunk missing for tile $t0")
+                val corrChunk = sc.direct("corr$ct", ct * s * s)
+                rc = ptime("correlatePinned") { SrpBridge.correlatePinned(handle,
+                    sliceFloats(patchBuf, t0 * s * s, ct * s * s),
+                    spec, corrChunk, spirvs.fft, spirvs.corr, ct, s) }
+                require(rc == 0) { "correlate failed with status $rc" }
+                corrChunk.rewind()
+                val fullChunk = sc.floats("full$ct", ct * s * s)
+                corrChunk.asFloatBuffer().get(fullChunk)
+                val croppedChunk = ptime("cropCorrsHost") {
+                    cropCorrs(fullChunk, ct, s, c, sc.floats("cropped$ct", ct * c * c))
+                }
+                croppedChunk.copyInto(cropped, t0 * c * c)
+                t0 += ct
+                ci++
+            }
+            require(ci == lvl.refSpecChunks.size) {
+                "spectra chunk count ${lvl.refSpecChunks.size} != $ci loop chunks"
+            }
         } else {
+            val corrBuf = sc.direct("corr", tc * s * s)
             val refFlat = FloatArray(tc * s * s) { i -> lvl.tiles[i / (s * s)][i % (s * s)] }
-            ptime("correlate") { SrpBridge.correlate(handle, pack(refFlat), patchBuf,
+            rc = ptime("correlate") { SrpBridge.correlate(handle, pack(refFlat), patchBuf,
                 corrBuf, spirvs.fft, tc, s) }
-        }
-        require(rc == 0) { "correlate failed with status $rc" }
-        corrBuf.rewind()
-        val full = sc.floats("full", tc * s * s)
-        corrBuf.asFloatBuffer().get(full)
-        val cropped = ptime("cropCorrsHost") {
-            cropCorrs(full, tc, s, c, sc.floats("cropped", tc * c * c))
+            require(rc == 0) { "correlate failed with status $rc" }
+            corrBuf.rewind()
+            val full = sc.floats("full", tc * s * s)
+            corrBuf.asFloatBuffer().get(full)
+            ptime("cropCorrsHost") {
+                cropCorrs(full, tc, s, c, cropped)
+            }
         }
         val cropBuf = packInto(cropped, sc.direct("crop", tc * c * c))
         val dflowBuf = sc.direct("dflow", tc * 2)
@@ -499,7 +556,10 @@ object AlignGpu {
         val h = moving.size
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
-        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
+        // Moving upload is a per-call transient (dies at return): caching
+        // it would pin a full-frame 50 MB buffer across all frames.
+        // (Shares nothing with gpuL1's: sequential fence-waited calls.)
+        val movBuf = packImgInto(moving, SrpBridge.directFloats(w * h))
         // Pinned levels skip the four static uploads; unpinned stage all.
         val statics = lvl.refRes != 0L && lvl.gradXRes != 0L &&
             lvl.gradYRes != 0L && lvl.hessRes != 0L
@@ -591,6 +651,18 @@ object AlignGpu {
         buf.rewind()
         return buf
     }
+
+    /**
+     * Zero-copy float window into a direct buffer (duplicate + slice):
+     * the view's address starts at `firstFloat`, capacity is exactly
+     * `countFloats`. Lets chunked dispatches address sub-ranges without
+     * copying; the native entries only need address + capacity.
+     */
+    private fun sliceFloats(buf: ByteBuffer, firstFloat: Int, countFloats: Int): ByteBuffer =
+        buf.duplicate().apply {
+            position(firstFloat * 4)
+            limit((firstFloat + countFloats) * 4)
+        }.slice().order(java.nio.ByteOrder.nativeOrder())
 
     /** Copies row-major `img` into reusable direct buffer `buf`. */
     private fun packImgInto(img: Array<FloatArray>, buf: ByteBuffer): ByteBuffer {

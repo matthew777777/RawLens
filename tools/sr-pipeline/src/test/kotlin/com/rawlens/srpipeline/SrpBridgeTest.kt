@@ -2102,14 +2102,19 @@ class SrpBridgeTest {
                 init, config, handle, spirvs)
             try {
                 // Three L2 levels pin spectra; every level pins statics.
-                val specCount = pinned.levels.count { it.refSpecRes != 0L }
+                val specLevels = pinned.levels.filter { it.refSpecChunks.isNotEmpty() }
                 val staticCount = pinned.levels.count {
                     it.refRes != 0L && it.gradXRes != 0L &&
                         it.gradYRes != 0L && it.hessRes != 0L
                 }
-                println("pinned align levels spectra=$specCount/${pinned.levels.size} statics=$staticCount/${pinned.levels.size}")
-                assertEquals("three L2 levels must pin spectra", 3, specCount)
+                println("pinned align levels spectra=${specLevels.size}/${pinned.levels.size} statics=$staticCount/${pinned.levels.size}")
+                assertEquals("three L2 levels must pin spectra", 3, specLevels.size)
                 assertEquals("all levels must pin statics", 4, staticCount)
+                // Crop tile counts fit one 4096 chunk each; the
+                // multi-chunk layout is proven by the desktop full-res
+                // bit-identity gate (finest L2 pins 3 chunks there).
+                assertTrue("crop levels pin a single chunk each",
+                    specLevels.all { it.refSpecChunks.size == 1 })
                 val got = com.rawlens.srpipeline.stages.AlignGpu.alignLevelsGpu(
                     pinned, moving, config, handle, spirvs)
                 var maxAbs = 0f
