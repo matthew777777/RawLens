@@ -120,9 +120,22 @@ Status SrpDispatchGroups(Context* ctx, VkBuffer* buffers, uint32_t nbuffers,
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &cmd;
-        if (vkQueueSubmit(queue, 1, &submit, fence) == VK_SUCCESS &&
-            vkWaitForFences(device, 1, &fence, VK_TRUE, kFenceTimeoutNs) == VK_SUCCESS) {
-          status = Status::kOk;
+        if (vkQueueSubmit(queue, 1, &submit, fence) == VK_SUCCESS) {
+          // Fence wait in 1 s slices, retrying VK_TIMEOUT: a timed-out
+          // wait must NEVER release the dispatch as complete — the
+          // buffers return to the pool (reuse, overwrite, evict-destroy)
+          // on kOk, and reusing them while the GPU is still running is
+          // driver use-after-free (observed as a mali-event-thread
+          // abort minutes later on slow full-res dispatches). Bound:
+          // 300 slices (5 min), then fail loudly instead of reusing.
+          VkResult wait = VK_TIMEOUT;
+          for (int i = 0; i < 300 && wait == VK_TIMEOUT; ++i) {
+            wait = vkWaitForFences(device, 1, &fence, VK_TRUE,
+                                   kFenceTimeoutNs);
+          }
+          if (wait == VK_SUCCESS) {
+            status = Status::kOk;
+          }
         }
       }
     }
