@@ -86,10 +86,19 @@ class SrpPipelineCropDeviceTest {
         assumeTrue("no Vulkan compute device", handle != 0L)
         try {
             Log.i("SrpCropDevice", "device: ${SrpBridge.nativeDeviceInfo(handle)}")
-            val cx = 1528
-            val cy = 1018
-            val cw = 1024
-            val ch = 1024
+            // Crop rect via `-e rawlensSrpCropRect x,y,w,h` (default the
+            // 1024 gate); must keep every pyramid level tileable
+            // (768 is the smallest legal here; 512 bottoms out).
+            val rect = args.getString("rawlensSrpCropRect")
+                ?.split(",")?.map { it.trim().toInt() }
+                ?: listOf(1528, 1018, 1024, 1024)
+            require(rect.size == 4 && rect.all { it > 0 }) {
+                "rawlensSrpCropRect must hold x,y,w,h positive integers"
+            }
+            val cx = rect[0]
+            val cy = rect[1]
+            val cw = rect[2]
+            val ch = rect[3]
             val refPath = frames[0].absolutePath
             val refImg = readFrame(refPath, cx, cy, cw, ch)
             val compImgs = frames.drop(1).map { f ->
@@ -139,7 +148,9 @@ class SrpPipelineCropDeviceTest {
             VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
             val profile = SrpBridge.readDngColorProfile(refPath)
             val orientation = SrpBridge.readDngOrientation(refPath)
-            val out = File(outDir, "merged-device.dng").absolutePath
+            val outName = if (cw == 1024 && ch == 1024) "merged-device.dng"
+                else "merged-device-${cw}x${ch}.dng"
+            val out = File(outDir, outName).absolutePath
             val rc = SrpBridge.writeDng(out, outW, outH, rgb, profile.make, profile.model,
                 profile.colorMatrix, profile.neutral, profile.illuminant, orientation)
             assertEquals("writeDng status", 0, rc)
