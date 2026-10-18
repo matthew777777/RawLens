@@ -22,7 +22,7 @@ constexpr int kHistBins = 64;
 constexpr int kWaveCols = 96;
 constexpr int kWaveLevels = 48;
 constexpr int kEttrBins = 256;
-constexpr int kFocusCols = 96;
+constexpr int kFocusCols = 128;
 constexpr int kLutSize = 1024;
 // RawEttrSampler.SPOT_SCALE widened exactly as Kotlin does (Float -> Double).
 const double kSpot = (double)0.158f;
@@ -114,7 +114,7 @@ void scanRegion(int w, int h, int metering, int *l, int *t, int *r, int *b) {
 }
 
 int rowsFor(int w, int h) {
-    int rows = (int)(96L * h / w);
+    int rows = (int)(128L * h / w);
     return clampInt(rows, 24, 96);
 }
 
@@ -125,8 +125,8 @@ struct Outputs {
     std::vector<int32_t> ecounts;  // 4 x 2, idx ch + 4*row
     double egreen[4];
     std::vector<int32_t> gbins;  // 256 x 4
-    std::vector<float> fenergy;  // 96 x R
-    std::vector<float> fmean;    // 96 x R
+    std::vector<float> fenergy;  // 128 x R
+    std::vector<float> fmean;    // 128 x R
 };
 
 void scalar_case(const std::vector<uint16_t> &data, int W, int H, int stride,
@@ -255,16 +255,16 @@ void scalar_case(const std::vector<uint16_t> &data, int W, int H, int stride,
         }
     }
 
-    // --- focus grid ---
+    // --- focus grid: min(Tenengrad, Laplacian), exact Kotlin order ---
     int rows = rowsFor(W, H);
-    o.fenergy.assign((size_t)96 * rows, 0.0f);
-    o.fmean.assign((size_t)96 * rows, 0.0f);
+    o.fenergy.assign((size_t)kFocusCols * rows, 0.0f);
+    o.fmean.assign((size_t)kFocusCols * rows, 0.0f);
     bool sameParity = cfa == 1 || cfa == 2;
     for (int row = 0; row < rows; row++) {
         float cyf = ((float)row + 0.5f) * (float)H / (float)rows;
         int qy = clampInt((int)cyf / 2 * 2, 0, H - 8);
-        for (int col = 0; col < 96; col++) {
-            float cxf = ((float)col + 0.5f) * (float)W / 96.0f;
+        for (int col = 0; col < kFocusCols; col++) {
+            float cxf = ((float)col + 0.5f) * (float)W / 128.0f;
             int qx = clampInt((int)cxf / 2 * 2, 0, W - 8);
             float patch[16];
             float pmean = 0.0f;
@@ -279,17 +279,35 @@ void scalar_case(const std::vector<uint16_t> &data, int W, int H, int stride,
                     pmean += n;
                 }
             }
-            float sum = 0.0f;
+            float tsum = 0.0f;
             for (int ty = 1; ty <= 2; ty++) {
                 for (int tx = 1; tx <= 2; tx++) {
                     float gx = patch[ty * 4 + tx + 1] - patch[ty * 4 + tx - 1];
                     float gy =
                         patch[(ty + 1) * 4 + tx] - patch[(ty - 1) * 4 + tx];
-                    sum += gx * gx + gy * gy;
+                    tsum += gx * gx + gy * gy;
                 }
             }
-            o.fenergy[(size_t)row * 96 + col] = sum / 4.0f;
-            o.fmean[(size_t)row * 96 + col] = pmean / 16.0f;
+            float lsum = 0.0f;
+            for (int t = 0; t < 4; t++) {
+                int ty = t / 2 + 1, tx = t % 2 + 1, idx = ty * 4 + tx;
+                float c = patch[idx];
+                float l = 0.0f;
+                l += patch[idx + 1];
+                l -= c;
+                l -= c;
+                l += patch[idx - 1];
+                l += patch[idx + 4];
+                l -= c;
+                l -= c;
+                l += patch[idx - 4];
+                lsum += l * l;
+            }
+            float ten = tsum / 4.0f, lap = lsum / 4.0f;
+            float ratio = ten > 0.0f ? lap / ten : 0.0f;
+            float e = ratio >= 0.5f ? (ten < lap ? ten : lap) : 0.0f;
+            o.fenergy[(size_t)row * kFocusCols + col] = e;
+            o.fmean[(size_t)row * kFocusCols + col] = pmean / 16.0f;
         }
     }
 }
@@ -307,7 +325,7 @@ int check_case(const std::vector<uint16_t> &data, int W, int H, int stride,
     Buffer<int32_t> hist(64, 4), wave(48, 96, 3), ebins(256, 4),
         ecounts(4, 2), gbins(256, 4);
     Buffer<double> egreen(4);
-    Buffer<float> fenergy(96, rows), fmean(96, rows);
+    Buffer<float> fenergy(kFocusCols, rows), fmean(kFocusCols, rows);
     // Host reciprocals with the exact Kotlin expressions (IEEE-identical);
     // the scalar reference below uses the same values.
     double invD[4];
@@ -357,14 +375,14 @@ int check_case(const std::vector<uint16_t> &data, int W, int H, int stride,
         }
         int shown = 0;
         for (int r = 0; r < rows && shown < 4; r++) {
-            for (int c = 0; c < 96 && shown < 4; c++) {
-                float g = fenergy(c, r), w = o.fenergy[(size_t)r * 96 + c];
+            for (int c = 0; c < kFocusCols && shown < 4; c++) {
+                float g = fenergy(c, r), w = o.fenergy[(size_t)r * kFocusCols + c];
                 if (memcmp(&g, &w, 4) != 0) {
                     printf("  fenergy(%d,%d): got %a want %a\n", c, r, g, w);
                     shown++;
                 }
                 g = fmean(c, r);
-                w = o.fmean[(size_t)r * 96 + c];
+                w = o.fmean[(size_t)r * kFocusCols + c];
                 if (memcmp(&g, &w, 4) != 0) {
                     printf("  fmean(%d,%d): got %a want %a\n", c, r, g, w);
                     shown++;

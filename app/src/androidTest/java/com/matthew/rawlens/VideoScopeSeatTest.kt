@@ -4,6 +4,7 @@ package com.matthew.rawlens
 import android.content.Intent
 import android.os.SystemClock
 import android.view.View
+import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
@@ -58,9 +59,13 @@ class VideoScopeSeatTest {
             instrumentation.runOnMainSync { view(R.id.videoRecordButton).performClick() }
             SystemClock.sleep(1500)
             instrumentation.runOnMainSync {
+                // The audio meter lives inside the stats box now: box visible
+                // with its AUD line means video chrome is up.
+                val stats = view(R.id.videoDebugOverlay) as TextView
+                assertTrue("Video chrome never appeared", stats.visibility == View.VISIBLE)
                 assertTrue(
-                    "Video chrome never appeared",
-                    view(R.id.videoAudioMeter).visibility == View.VISIBLE
+                    "Stats box has no audio line",
+                    stats.text.toString().contains("AUD")
                 )
             }
             assertScopeAbovePanel(activity, "video")

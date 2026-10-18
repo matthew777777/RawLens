@@ -80,21 +80,21 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         style = Paint.Style.FILL
     }
     private val lockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 162, 39)
+        color = Color.rgb(221, 192, 141)
         style = Paint.Style.FILL
     }
     private val lockShacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 162, 39)
+        color = Color.rgb(221, 192, 141)
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val lockKeyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(28, 21, 0)
+        color = Color.rgb(36, 27, 12)
         style = Paint.Style.FILL
     }
     private val lockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 162, 39)
+        color = Color.rgb(221, 192, 141)
         textSize = 10f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
     }
@@ -104,12 +104,12 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         strokeWidth = 1.25f * density
     }
     private val faceTrackedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(201, 162, 39)
+        color = Color.rgb(221, 192, 141)
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * density
     }
     private val focusRect = RectF()
-    /** HAL face boxes in overlay pixels; the gold one drives AF/AE. Not touch handles. */
+    /** HAL face boxes in overlay pixels; the sand one drives AF/AE. Not touch handles. */
     private var faceBoxes: List<RectF> = emptyList()
     private var trackedFace = -1
 
@@ -144,7 +144,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     }
 
     /**
-     * Shows or hides the small gold lock dot under the reticle.
+     * Shows or hides the small sand lock dot under the reticle.
      * @param deadlineMs elapsed-realtime expiry for timed locks (ignored when indefinite).
      */
     fun setFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) {
@@ -229,7 +229,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         if (focusLocked) drawLockBadge(canvas)
     }
 
-    /** Small gold dot below the AF reticle; timed locks also show seconds remaining. */
+    /** Small sand dot below the AF reticle; timed locks also show seconds remaining. */
     private fun drawLockBadge(canvas: Canvas) {
         val cx = afPoint.x
         val cy = afPoint.y + afHalfSide + 10f * density
@@ -247,7 +247,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
 
     /**
      * Padlock badge for the indefinite AE/AF hold: shackle arc plus a filled
-     * body with a keyhole dot, all in RawLens gold. Drawn with canvas
+     * body with a keyhole dot, all in RawLens sand. Drawn with canvas
      * primitives so no drawable asset is needed.
      */
     private fun drawPadlock(canvas: Canvas, cx: Float, cy: Float) {

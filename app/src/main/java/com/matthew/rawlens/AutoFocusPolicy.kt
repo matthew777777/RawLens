@@ -110,13 +110,17 @@ object AutoFocusPolicy {
         !startSent || scanSeen || elapsedSinceStartMs >= floorMs
 
     /**
-     * Tap gate shared by the overlay (bounce only, [scanInFlight] false) and
-     * the controller (bounce plus mid-scan same-spot suppression). Accidents
-     * are near: double-fires and same-spot hammering land within
-     * [retargetFraction] of [minViewDimPx] and need [bounceMs] of spacing
-     * (plus scan completion mid-scan). Far taps are deliberate retargets and
-     * always land immediately — a frustrated user re-aiming during a slow
-     * 2 s scan must never feel ignored (field log: 5 swallowed retaps).
+     * Tap gate: hardware double-fires landing within [bounceMs] at the same
+     * spot are accidents and dropped. Anything past the bounce window is a
+     * deliberate user action and always lands — including a same-spot retap
+     * mid-scan, which restarts the hunt (the handler CANCELs first, and the
+     * verdict floor absorbs the stale latch). Swallowing retaps while a
+     * low-contrast scan hunts is what forced tap-twice: the user, seeing no
+     * dots, taps again and the tap is eaten. Far taps are deliberate
+     * retargets and always land immediately — a frustrated user re-aiming
+     * during a slow 2 s scan must never feel ignored
+     * (field log: 5 swallowed retaps). [scanInFlight] is retained for
+     * call-site readability; it no longer suppresses intentional retaps.
      */
     fun shouldAcceptTap(
         nowMs: Long,
@@ -138,6 +142,6 @@ object AutoFocusPolicy {
         val threshold = retargetFraction * minViewDimPx
         if (dx * dx + dy * dy >= threshold * threshold) return true
         if (dt < bounceMs) return false
-        return !scanInFlight
+        return true
     }
 }

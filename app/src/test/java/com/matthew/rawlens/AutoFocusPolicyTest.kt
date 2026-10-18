@@ -117,9 +117,11 @@ class AutoFocusPolicyTest {
         )
     }
 
-    @Test fun midScanSameSpotSuppressedButRetargetPasses() {
-        // 12% of 1000px = 120px: 50px is hammering, 200px is a deliberate move.
-        assertFalse(
+    @Test fun midScanSameSpotRetapRestartsScan() {
+        // 12% of 1000px = 120px: past the bounce window a same-spot retap is
+        // deliberate (tap-twice fix) and restarts the hunt; the handler
+        // CANCELs first and the verdict floor absorbs the stale latch.
+        assertTrue(
             AutoFocusPolicy.shouldAcceptTap(
                 nowMs = 2_000L, lastTapMs = 1_000L, lastTapX = 100f, lastTapY = 100f,
                 x = 130f, y = 140f, minViewDimPx = 1_000f, scanInFlight = true

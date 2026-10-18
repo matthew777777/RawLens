@@ -157,15 +157,15 @@ class ScopeMeterNativeTest {
 
     @Test fun `scatter focus masks through the tested pipeline`() {
         val rows = 24
-        val energy = FloatArray(96 * rows)
-        val mean = FloatArray(96 * rows)
+        val energy = FloatArray(128 * rows)
+        val mean = FloatArray(128 * rows)
         // Two adjacent passing cells survive the despeckle.
         energy[0] = 1f
         energy[1] = 1f
         mean[0] = 1f
         mean[1] = 1f
         val frame = ScopeMeterNative.scatterFocus(energy, mean, rows, 90, true)
-        assertEquals(96, frame.cols)
+        assertEquals(128, frame.cols)
         assertEquals(rows, frame.rows)
         assertEquals(90, frame.rotation)
         assertTrue(frame.mirrored)
@@ -183,8 +183,8 @@ class ScopeMeterNativeTest {
         assertEquals(4 * 2 * 4, scratch.ecounts.capacity())
         assertEquals(4 * 8, scratch.egreen.capacity())
         assertEquals(256 * 4 * 4, scratch.gbins.capacity())
-        assertEquals(96 * 72 * 4, scratch.fenergy.capacity())
-        assertEquals(96 * 72 * 4, scratch.fmean.capacity())
+        assertEquals(128 * 72 * 4, scratch.fenergy.capacity())
+        assertEquals(128 * 72 * 4, scratch.fmean.capacity())
         assertEquals(1024 * 4, scratch.lut.capacity())
         assertEquals(18, scratch.iparams.size)
         // Same geometry reuses; changed geometry reallocates.

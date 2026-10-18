@@ -4,7 +4,7 @@
   "force_y": 0.25,
   "force_uv": 0.75,
   "bias": 0.0,
-  "note": "Trimmed from rawr native/raw_denoise/tests/data/manifest.json (87c2209): one fixture set vendored (~7 MB). Copy the other two sets from a rawr checkout to run the full gate.",
+  "note": "Trimmed from the upstream native/raw_denoise/tests/data/manifest.json (87c2209): one fixture set vendored (~7 MB). Copy the other two sets from an upstream checkout to run the full gate.",
   "fixtures": [
     {
       "stem": "RAWR_20260926_000415_161",

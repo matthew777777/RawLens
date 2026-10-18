@@ -1,7 +1,7 @@
 #!/bin/sh
 # Host parity gate for the vendored raw_denoise core (macOS + MoltenVK).
 # Builds denoise_bench against the vendored sources + our compiled SPIR-V,
-# runs it on the frozen fixture, and checks rawr's tolerances.
+# runs it on the frozen fixture, and checks the upstream tolerances.
 # Usage: tools/wavelet-parity/run_parity.sh [fixture-filter...]
 set -e
 cd "$(dirname "$0")"
@@ -10,7 +10,7 @@ UPSTREAM=../../app/src/main/cpp/wavelet/upstream
 SPV=../../app/src/main/assets/spirv/wavelet
 OUT=/tmp/wavelet-parity
 
-# Minimal path adaptation of rawr's verify script (upstream copy kept intact
+# Minimal path adaptation of the upstream verify script (upstream copy kept intact
 # next to it for diffing): point BIN/SHADERS/DATA/OUT at this layout.
 BIN="$ROOT/host/build/denoise_bench"
 SHADERS="$ROOT/$SPV"
@@ -23,7 +23,7 @@ c++ -std=c++20 -O2 -o "$BIN" \
   -I/opt/homebrew/include -L/opt/homebrew/lib -lMoltenVK \
   -framework Metal -framework Foundation -framework QuartzCore -framework IOSurface
 
-# Compare with rawr's gate (PASS_MAX/P99/MEAN/RATIO + seam check).
+# Compare with the upstream gate (PASS_MAX/P99/MEAN/RATIO + seam check).
 BIN="$BIN" SHADERS="$SHADERS" DATA="$DATA" OUT="$OUT" python3 - "$@" <<'EOF'
 import json, os, subprocess, sys
 import numpy as np

@@ -277,7 +277,8 @@ object RawEttrSampler {
         region: IntArray
     ): EttrRawSample? {
         val plane = image.planes.singleOrNull() ?: return null
-        if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
+        if (image.width < 2 || image.height < 2) return null
+        if (plane.pixelStride < 2 && PackedRawFormat.ofInt(image.format) == null) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
@@ -290,6 +291,19 @@ object RawEttrSampler {
         val pixelStride = plane.pixelStride
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val limit = buffer.limit()
+        // Packed sessions meter native codes through a row-cached reader;
+        // black/white LUTs below are already native-scale. Bad geometry
+        // refuses the frame like before, keeping program AE on HAL metering.
+        val packedSampler = if (plane.pixelStride < 2) {
+            val packed = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(
+                    buffer, width, height, rowStride, 0, packed
+                )
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
         // Bulk row reads: one bounds check + memcpy per visited row instead of a
         // checked getShort per pixel. Only valid for packed 2-byte pixels.
         val shortView = buffer.asShortBuffer()
@@ -340,6 +354,8 @@ object RawEttrSampler {
                 val phase = phaseRow or (x and 1)
                 val value: Int = if (bulkRow != null) {
                     bulkRow[x].toInt() and 0xffff
+                } else if (packedSampler != null) {
+                    packedSampler.codeAt(x, y)
                 } else {
                     val offset = y * rowStride + x * pixelStride
                     if (offset + 1 >= limit) {

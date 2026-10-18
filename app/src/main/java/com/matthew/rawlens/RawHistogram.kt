@@ -4,8 +4,10 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.params.BlackLevelPattern
 import android.media.Image
 import java.nio.ByteOrder
+import kotlin.math.pow
 
 data class RgbHistogram(
     val red: IntArray,
@@ -61,18 +63,57 @@ object RawHistogramSampler {
     fun sample(
         image: Image,
         characteristics: CameraCharacteristics,
-        scopeLut: FloatArray? = null
+        scopeLut: FloatArray? = null,
+        /**
+         * Scene-referred adaptive exposure (EV) applied as a linear gain
+         * BEFORE the AgX curve, mirroring develop's pre-tonemap exposureEv so
+         * the JPEG scope predicts the saved file. Honored only with a LUT;
+         * the linear-RAW (DNG) path ignores it, staying bit-exact.
+         */
+        exposureEv: Double = 0.0
     ): RgbHistogram? {
         val plane = image.planes.singleOrNull() ?: return null
-        if (plane.pixelStride < 2 || image.width < 2 || image.height < 2) return null
+        if (image.width < 2 || image.height < 2) return null
+        if (plane.pixelStride < 2 && PackedRawFormat.ofInt(image.format) == null) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
         val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.coerceAtLeast(1) ?: return null
+        return sample(image, plane, cfa, black, white, scopeLut, exposureEv)
+    }
+
+    /**
+     * Characteristics-free core: the static [CameraCharacteristics] keys are
+     * null under plain unit tests (android.jar stubs), so every
+     * framework-touching read stays in the outer overload and the pixel loop
+     * — including the scene-referred EV gain — stays unit-covered.
+     */
+    internal fun sample(
+        image: Image,
+        plane: Image.Plane,
+        cfa: Int,
+        black: BlackLevelPattern?,
+        white: Int,
+        scopeLut: FloatArray?,
+        exposureEv: Double
+    ): RgbHistogram? {
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val limit = buffer.limit()
+        // Packed sessions sample native codes through a row-cached reader;
+        // the black/white LUTs below are already native-scale, so the math
+        // is identical. Bad geometry refuses the frame like before.
+        val packedSampler = if (plane.pixelStride < 2) {
+            val packed = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(
+                    buffer, image.width, image.height, plane.rowStride, 0, packed
+                )
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
         // Same bulk-row discipline as the ETTR sampler: one bounds-checked memcpy
         // per visited row, then LUT-indexed pixels. This runs on the camera thread
         // at ~4 Hz, so per-pixel divisions and framework calls stay out of the loop.
@@ -85,6 +126,10 @@ object RawHistogramSampler {
         val invLut = DoubleArray(4) { i -> 1.0 / (white - blackLut[i]).coerceAtLeast(1) }
         val colorLut = IntArray(4) { i -> colorAt(cfa, i % 2, i / 2) }
         val channelLut = IntArray(4) { i -> channelAt(cfa, i % 2, i / 2) }
+        // Hoisted out of the pixel loop: 2^EV is the scene-referred gain
+        // develop applies pre-tonemap. Non-finite EV degrades to unity.
+        val exposureGain = if (scopeLut != null && exposureEv.isFinite() && exposureEv != 0.0)
+            2.0.pow(exposureEv) else 1.0
         val red = IntArray(BIN_COUNT)
         val green = IntArray(BIN_COUNT)
         val blue = IntArray(BIN_COUNT)
@@ -126,6 +171,8 @@ object RawHistogramSampler {
                     val row = if (dy == 0) bulkEven else bulkOdd
                     val value: Int = if (row != null) {
                         row[x].toInt() and 0xffff
+                    } else if (packedSampler != null) {
+                        packedSampler.codeAt(x, y)
                     } else {
                         val offset = y * plane.rowStride + x * plane.pixelStride
                         if (offset + 1 >= limit) continue
@@ -133,9 +180,7 @@ object RawHistogramSampler {
                     }
                     val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
                         .coerceIn(0.0, 1.0)
-                    val curved = if (scopeLut != null)
-                        AgxDisplayTransform.scopeLutLookup(scopeLut, normalized).toDouble()
-                    else normalized
+                    val curved = AgxDisplayTransform.scopeEncode(normalized, scopeLut, exposureGain)
                     val bin = (curved * (BIN_COUNT - 1)).toInt().coerceIn(0, BIN_COUNT - 1)
                     when (colorLut[phase]) {
                         0 -> red[bin]++

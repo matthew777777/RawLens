@@ -29,11 +29,11 @@ package com.matthew.rawlens
  * additionally keeps the untouched archival sensor DNG.
  *
  * Post-demosaic stage ([wavelet]): profiled à-trous wavelet luma+chroma
- * denoise on pre-WB camera-linear RGB via the vendored RAWR core (a
+ * denoise on pre-WB camera-linear RGB via the vendored wavelet core (a
  * darktable denoiseprofile port). Unlike the pre-demosaic stages it feeds
  * the developed JPEG only, never the DNG. See [WaveletSettings].
  *
- * Stage arbitration lives in [resolveDenoise] (rawr resolve() parity).
+ * Stage arbitration lives in [resolveDenoise] (resolver parity).
  */
 data class DenoiseSettings(
     val aiEnabled: Boolean = false,
@@ -59,12 +59,12 @@ data class ResolvedDenoise(
 )
 
 /**
- * Per-capture stage arbitration, rawr DenoiseConfig.resolve() parity:
+ * Per-capture stage arbitration (resolver parity):
  *
  * - Merged path ([mergedPath], HDR+/SR output): everything off — the
- *   merge output is pre-denoised, exactly like rawr's multiframe rule.
+ *   merge output is pre-denoised, exactly like the multiframe rule.
  * - Galosh wins over AI (existing RawLens precedent: single denoise
- *   stage) and over wavelet (rawr's mutual exclusion: profiled wavelet
+ *   stage) and over wavelet (mutual exclusion: profiled wavelet
  *   and Galosh both denoise; stacking over-smooths and doubles GPU cost).
  * - AI and wavelet may stack (pre- + post-demosaic, as the old wavelet
  *   did on AI output).

@@ -28,9 +28,9 @@ object ScopeStyle {
     const val BACKGROUND = 0xFF262626.toInt()
     const val GRID = 0xFF111111.toInt()
 
-    /** Single-piece scope surface: one rounded box, no inner/outer split. */
-    const val CORNER_RADIUS_DP = 16f
-    const val BORDER = 0x30FFFFFF
+    /** Single-piece scope surface: same 20dp radius + stroke as the top/bottom islands. */
+    const val CORNER_RADIUS_DP = 20f
+    const val BORDER = 0x26FFFFFF
     const val BORDER_WIDTH_DP = 1f
 
     const val RED = 0xFFED1E14.toInt()

@@ -48,7 +48,7 @@ class WaveletDenoiseTest {
         assertFalse(idle.wavelet)
     }
 
-    @Test fun forceYFollowsRawrDetailGate() {
+    @Test fun forceYFollowsDetailGate() {
         assertEquals(0.25f, WaveletSettings(enabled = true).forceY, 0f)
         assertEquals(0f, waveletOn.copy(detail = 0.5f).forceY, 0f)
         assertEquals(0.4f, waveletOn.copy(luma = 0.4f).forceY, 0f)
@@ -67,8 +67,8 @@ class WaveletDenoiseTest {
         assertEquals(0f, b.forceUv, 0f)
     }
 
-    @Test fun greenNoiseNormalizationMatchesRawr() {
-        // Rawr GreenNoiseToNormalized: a = S/range, b = O/range^2.
+    @Test fun greenNoiseNormalizationMatchesReference() {
+        // GreenNoiseToNormalized: a = S/range, b = O/range^2.
         val (a, b) = WaveletDenoiser.greenNoiseNormalized(0.5, 0.25, 1024.0)
         assertEquals((0.5 / 1024.0).toFloat(), a, 0f)
         assertEquals((0.25 / (1024.0 * 1024.0)).toFloat(), b, 0f)

@@ -62,7 +62,7 @@ not in scratch scripts.
   threshold comparison and change a merge decision.
 - Float-domain stages (merged pixels), if a Halide fallback merge is
   ever built: PSNR >= 80 dB vs the Vulkan reference on fixed corpora
-  (the RAWR parity precedent) **plus** bitwise-identical integer
+  (the upstream parity precedent) **plus** bitwise-identical integer
   side-decisions. No such fallback exists today; Vulkan stays primary.
 - Bitwise method that works: flat SERIAL RDom reductions (one index,
   ascending). Unrolled Expr chains do NOT work — Halide's simplifier

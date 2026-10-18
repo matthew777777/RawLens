@@ -151,6 +151,19 @@ internal class RawZslBuffer(private val capacity: Int) {
     }
 
     /**
+     * Single-tap BURST dump: transfers the whole current ring to the caller
+     * in capture order. Unfiltered by age or score — offline merge decides
+     * reference and keepers later from the stored container.
+     */
+    @Synchronized
+    fun takeAll(): List<BufferedRawFrame> {
+        if (frames.isEmpty()) return emptyList()
+        val all = frames.sortedBy { it.timestampNanos }
+        frames.clear()
+        return all
+    }
+
+    /**
      * Frees exactly one gralloc slot under ImageReader back-pressure by closing
      * the oldest buffered frame. Returns true when a frame was evicted. The
      * ZSL overflow path must free a held slot before draining: with the queue

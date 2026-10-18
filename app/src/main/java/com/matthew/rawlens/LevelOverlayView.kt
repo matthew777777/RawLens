@@ -185,7 +185,7 @@ class LevelOverlayView @JvmOverloads constructor(
     }
 
     private companion object {
-        const val LEVEL_COLOR = 0xFFC9A227.toInt()
+        const val LEVEL_COLOR = 0xFFDDC08D.toInt()
         const val TILT_COLOR = 0xE6FFFFFF.toInt()
     }
 }

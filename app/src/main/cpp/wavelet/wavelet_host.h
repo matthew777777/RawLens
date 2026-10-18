@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// C host for the vendored RAWR raw_denoise library (see ../assets UPSTREAM.md).
+// C host for the vendored upstream raw_denoise library (see ../assets UPSTREAM.md).
 // Owns a private Vulkan compute device; a single blocking process() call
 // uploads one pre-WB camera-linear RGBA16F frame, runs the tiled profiled
 // wavelet pipeline, and downloads the result. Follows the galosh JNI shape
@@ -18,15 +18,15 @@ extern "C" {
 typedef struct WaveletContext WaveletContext;
 
 typedef struct WaveletParams {
-    float strength;    // rawr validated 1..2, up to 8; <=0 bypasses (caller skips)
-    float shadows;     // shadow-preservation fulcrum, rawr default 1
+    float strength;    // validated 1..2, up to 8; <=0 bypasses (caller skips)
+    float shadows;     // shadow-preservation fulcrum, default 1
     float noiseA;      // normalized green variance slope
     float noiseB;      // normalized green variance offset
     float wb[3];       // camera WB multipliers, green == 1
-    int maxScale;      // 1..7, rawr default 7
-    float forceY;      // luma force, rawr default 0.25
-    float forceUv;     // chroma force, rawr default 0.75
-    uint32_t tileSize;  // inner tile extent, rawr default 1536
+    int maxScale;      // 1..7, default 7
+    float forceY;      // luma force, default 0.25
+    float forceUv;     // chroma force, default 0.75
+    uint32_t tileSize;  // inner tile extent, default 1536
 } WaveletParams;
 
 struct AAssetManager;

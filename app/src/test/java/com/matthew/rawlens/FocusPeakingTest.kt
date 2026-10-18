@@ -37,8 +37,8 @@ class FocusPeakingTest {
 
     @Test
     fun rowsHoldCellsSquareAndClamp() {
-        assertEquals(72, RawFocusPeakingSampler.rowsFor(4000, 3000))
-        assertEquals(54, RawFocusPeakingSampler.rowsFor(4000, 2250))
+        assertEquals(96, RawFocusPeakingSampler.rowsFor(4000, 3000))
+        assertEquals(72, RawFocusPeakingSampler.rowsFor(4000, 2250))
         assertEquals(RawFocusPeakingSampler.MIN_ROWS, RawFocusPeakingSampler.rowsFor(4000, 100))
         assertEquals(RawFocusPeakingSampler.MAX_ROWS, RawFocusPeakingSampler.rowsFor(1000, 4000))
     }
@@ -65,6 +65,54 @@ class FocusPeakingTest {
         // Vertical step of height a: every interior gx is ±a, gy is 0.
         val step = FloatArray(16) { i -> if (i % 4 < 2) 0f else 0.5f }
         assertEquals(0.25f, RawFocusPeakingSampler.tenengrad(step), 1e-6f)
+    }
+
+    @Test
+    fun laplacianFlatIsZero() {
+        assertEquals(0f, RawFocusPeakingSampler.laplacian(FloatArray(16) { 0.5f }), 0f)
+    }
+
+    @Test
+    fun laplacianStepEdgeEqualsStepSquared() {
+        // Sharp steps match Tenengrad, so the min-combiner keeps full recall.
+        val step = FloatArray(16) { i -> if (i % 4 < 2) 0f else 0.5f }
+        assertEquals(0.25f, RawFocusPeakingSampler.laplacian(step), 1e-6f)
+    }
+
+    @Test
+    fun combinedEnergyKeepsSharpAtAnyContrastRetiresBlur() {
+        // Sharp steps have ratio ~1.0 whatever the contrast: full recall.
+        assertEquals(0.25f, RawFocusPeakingSampler.combinedEnergy(0.25f, 0.25f), 0f)
+        assertEquals(0.01f, RawFocusPeakingSampler.combinedEnergy(0.01f, 0.01f), 0f)
+        // Mild blur of a strong edge (ten 0.13, lap 0.0176, ratio ~0.135):
+        // retired even though both clear the absolute floor.
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.13f, 0.0176f), 0f)
+        // Moderate blur (ratio ~0.39): retired.
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.1764f, 0.069f), 0f)
+        // Bright mild blur at ratio ~0.54 (the laptop-screen case): retired.
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.13f, 0.07f), 0f)
+        // Boundary ratio exactly 0.65: kept; just below: retired.
+        assertEquals(0.065f, RawFocusPeakingSampler.combinedEnergy(0.1f, 0.065f), 0f)
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.1f, 0.06f), 0f)
+        // Flat cells short-circuit to zero, never NaN.
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0f, 0f), 0f)
+        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0f, 0.02f), 0f)
+    }
+
+    @Test
+    fun laplacianIgnoresLinearRampTenengradDotsIt() {
+        // Smooth gradient (defocus hallmark, binary-exact 0.25 steps):
+        // Tenengrad answers 0.25 and the old metric would dot it; the
+        // Laplacian scores exactly 0, so the minimum retires the cell.
+        val ramp = FloatArray(16) { i -> (i % 4) * 0.25f }
+        assertEquals(0.25f, RawFocusPeakingSampler.tenengrad(ramp), 0f)
+        assertEquals(0f, RawFocusPeakingSampler.laplacian(ramp), 0f)
+        assertTrue(
+            minOf(
+                RawFocusPeakingSampler.tenengrad(ramp),
+                RawFocusPeakingSampler.laplacian(ramp)
+            ) < RawFocusPeakingSampler.EDGE_THRESHOLD
+        )
     }
 
     @Test
@@ -96,6 +144,102 @@ class FocusPeakingTest {
         expected[6] = true
         assertArrayEquals(expected, mask)
     }
+
+    @Test
+    fun laptopSceneDotsSharpNotBlurAndKeepsDimSharp() {
+        // Full pipeline (ten/lap pairs through the ratio combiner into the
+        // mask): a sharp bright pair dots, bright mild-blur background
+        // (ratio ~0.54) does not, and a dim-but-sharp pair (ratio ~1.0)
+        // dots EVEN NEXT TO the bright plane. The old peak-relative gate
+        // inverted the last two: the dim pair fell below 25% of the peak
+        // while the bright blur cleared it.
+        val cols = 8
+        val rows = 8
+        val ten = FloatArray(cols * rows)
+        val lap = FloatArray(cols * rows)
+        // Sharp bright pair (adjacent: survives despeckle).
+        ten[27] = 0.25f; lap[27] = 0.25f
+        ten[28] = 0.25f; lap[28] = 0.25f
+        // Bright mild-blur background (adjacent: would survive despeckle).
+        for (i in intArrayOf(40, 41, 42, 43)) { ten[i] = 0.13f; lap[i] = 0.07f }
+        // Dim-but-sharp pair (adjacent: survives despeckle).
+        ten[50] = 0.015f; lap[50] = 0.015f
+        ten[51] = 0.015f; lap[51] = 0.015f
+        val energy = FloatArray(cols * rows) { i ->
+            RawFocusPeakingSampler.combinedEnergy(ten[i], lap[i])
+        }
+        val mean = FloatArray(cols * rows) { 0.5f }
+        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        assertTrue(mask[27])
+        assertTrue(mask[28])
+        assertTrue(mask[50])
+        assertTrue(mask[51])
+        for (i in intArrayOf(40, 41, 42, 43)) {
+            assertFalse("mild-blur background cell $i must not dot", mask[i])
+        }
+        assertEquals(4, mask.count { it })
+    }
+
+    @Test
+    fun lowContrastSharpShowsWhileRackingWithoutBrightPeak() {
+        // No bright plane anywhere: the absolute floor still governs, so dim
+        // but sharp texture is not hidden by a peak that is not there.
+        val cols = 8
+        val rows = 8
+        val energy = FloatArray(cols * rows)
+        val mean = FloatArray(cols * rows) { 0.5f }
+        energy[27] = 0.015f
+        energy[28] = 0.015f
+        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        assertTrue(mask[27])
+        assertTrue(mask[28])
+        assertEquals(2, mask.count { it })
+    }
+
+    @Test
+    fun loneHotPixelDotsNothing() {
+        // A single spiking cell clears any threshold but has no passing
+        // 8-neighbor, so the despeckle still retires it.
+        val cols = 8
+        val rows = 8
+        val energy = FloatArray(cols * rows)
+        val mean = FloatArray(cols * rows) { 0.5f }
+        energy[30] = 1f
+        assertTrue(maskOfNone(energy, mean, cols, rows))
+    }
+
+    @Test
+    fun fullFrameSharpWallStillDots() {
+        // Uniformly sharp (e.g. a focused wall): the wash guard doubles once
+        // but the wall still clears it, so coverage is not blanked.
+        val energy = FloatArray(16) { 0.05f }
+        val mean = FloatArray(16) { 0.5f }
+        assertEquals(16, RawFocusPeakingSampler.maskOf(energy, mean, 4, 4).count { it })
+    }
+
+    @Test
+    fun dimSharpDotsNextToBrightPeakWithoutRelativeGate() {
+        // The laptop-scene inversion at mask level: with the peak-relative
+        // gate gone, a fixed noise floor keeps dim-but-sharp texture dotted
+        // next to a bright plane (ratio already decided sharpness upstream).
+        val cols = 8
+        val rows = 8
+        val energy = FloatArray(cols * rows)
+        val mean = FloatArray(cols * rows) { 0.5f }
+        energy[27] = 0.25f
+        energy[28] = 0.25f
+        energy[50] = 0.015f
+        energy[51] = 0.015f
+        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        assertTrue(mask[27])
+        assertTrue(mask[28])
+        assertTrue(mask[50])
+        assertTrue(mask[51])
+        assertEquals(4, mask.count { it })
+    }
+
+    private fun maskOfNone(energy: FloatArray, mean: FloatArray, cols: Int, rows: Int): Boolean =
+        RawFocusPeakingSampler.maskOf(energy, mean, cols, rows).none { it }
 
     @Test
     fun washGuardRetiresholdsBusyFrames() {

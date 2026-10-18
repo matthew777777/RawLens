@@ -9,9 +9,9 @@ import java.nio.ByteBuffer
 
 /**
  * Post-demosaic profiled-wavelet denoise (luma + chroma) via the vendored
- * RAWR core. Input/output are pre-WB camera-linear RGBA16F direct buffers
+ * wavelet core. Input/output are pre-WB camera-linear RGBA16F direct buffers
  * (W*H*8 bytes). Noise comes from SENSOR_NOISE_PROFILE's green plane,
- * normalized exactly like rawr's GreenNoiseToNormalized; WB gains derive
+ * normalized exactly like GreenNoiseToNormalized; WB gains derive
  * from SENSOR_NEUTRAL_COLOR_POINT with green == 1.
  */
 class WaveletDenoiser(context: Context) {
@@ -100,7 +100,7 @@ class WaveletDenoiser(context: Context) {
         private const val TAG = "WaveletDenoiser"
 
         /**
-         * Rawr GreenNoiseToNormalized: green-plane (slope, offset) from
+         * GreenNoiseToNormalized: green-plane (slope, offset) from
          * SENSOR_NOISE_PROFILE into the normalized variance line
          * var(x) = a*x + b over black-subtracted, white-normalized data.
          */
@@ -130,7 +130,7 @@ class WaveletDenoiser(context: Context) {
 }
 
 /**
- * Wavelet stage settings. Defaults mirror rawr's validated WaveletDenoise
+ * Wavelet stage settings. Defaults mirror the validated WaveletDenoise
  * (strength/detail 1, luma 0.25, shadows 1, 7 scales, chroma 0.75);
  * [enabled] stays false until the user opts in.
  */
@@ -143,7 +143,7 @@ data class WaveletSettings(
     val maxScale: Int = 7,
     val forceUv: Float = 0.75f
 ) {
-    /** Rawr forceY mapping: detail gate × luma. */
+    /** forceY mapping: detail gate × luma. */
     val forceY: Float get() = if (detail >= 1.0f) luma else 0.0f
 
     fun bounded(): WaveletSettings = copy(

@@ -31,7 +31,7 @@
 //     f32, with the same coerceAtLeast(1) denominator. The filter
 //     multiplies by these opaque params; it must never divide by the
 //     range itself (see the reciprocal note on the declarations).
-//   Focus grid: caller allocates 96 x rowsFor(W, H); cells center over the
+//   Focus grid: caller allocates 128 x rowsFor(W, H); cells center over the
 //     allocated extent, so any extent gets correctly-centered cells.
 //
 // Outputs (bitwise gate: integer bins are order-free; every float sum is a
@@ -44,7 +44,8 @@
 //   ettr_green:  f64 4 {weightedGreenSum, weightedGreenWeight, spotGreenSum,
 //     (double)spotGreenCount} (count < 2^53, exactly representable)
 //   guard_bins:  i32 256 x 4 (guard-scan bins for the highlight guard)
-//   focus_energy/focus_mean: f32 96 x R per-cell Tenengrad energy + green mean
+//   focus_energy/focus_mean: f32 128 x R per-cell ratio-gated
+//     min(Tenengrad, Laplacian) energy + green mean
 //
 // Fusion note (honest): one invocation, one input mapping, shared
 // materialized per-pixel Funcs; per-consumer reductions are separate serial
@@ -55,10 +56,12 @@
 // do NOT work for multi-term float sums (the simplifier re-nests left-deep
 // sums right-deep, observed 1-ULP drift). Single-op float exprs (one add,
 // one divide-by-2, one widening mult) are safe; every multi-term sum
-// (luminance 3-term, green/spot sums, patch mean, Tenengrad) is a flat
-// SERIAL RDom, one index, ascending, adding ONE term per iteration, in
-// Kotlin visit order. Multi-term updates (ten += a+b) hand the simplifier
-// a 3-operand tree it re-nests; worse, LLVM forms FMA for any bare
+// (luminance 3-term, green/spot sums, patch mean, Tenengrad, Laplacian
+// second differences) is a flat SERIAL RDom, one index, ascending, adding
+// ONE term per iteration, in Kotlin visit order. Multi-term updates
+// (ten += a+b, or an unrolled Laplacian chain the simplifier may re-nest
+// into a multiply) hand the simplifier a tree it re-nests; worse, LLVM
+// forms FMA for any bare
 // fadd(fmul, .) even in pure Funcs (proven: FMA(gy,gy,gx^2) vs separate
 // roundings). So every float add must provably see no multiply operand:
 // precompute products in materialized Funcs (memory barriers LLVM cannot
@@ -75,7 +78,7 @@ constexpr int kHistBins = 64;
 constexpr int kWaveCols = 96;
 constexpr int kWaveLevels = 48;
 constexpr int kEttrBins = 256;
-constexpr int kFocusCols = 96;
+constexpr int kFocusCols = 128;
 constexpr int kLutSize = 1024;
 
 }  // namespace
@@ -377,16 +380,29 @@ public:
             guard_bins_(b, c) = select(do_guard_ == 1, gb(b, c), 0);
         }
 
-        // --- focus grid: per-cell 4x4 green patch, Tenengrad + mean ---
-        // Cells are independent (parallel over rows); within a cell the
-        // 16-term patch mean is a serial RDom in Kotlin (ky outer, kx
-        // inner) order and Tenengrad adds one combined (gx^2+gy^2) term
-        // per serial iteration (a single add cannot re-nest).
+        // --- focus grid: per-cell 4x4 green patch, ratio-gated min(Ten, Lap) ---
+        // Tenengrad (first differences) keeps the noise floor and recall;
+        // the Laplacian (second differences, ~14x weaker at 1.5px blur than
+        // in focus) retires defocused edges and smooth ramps Tenengrad still
+        // answers. The minimum is exact (no rounding), and the sharpness
+        // ratio (Laplacian/Tenengrad via one IEEE division: sharp ~1.0 at
+        // any contrast, mild blur ~0.13) retires bright-but-blurred edges
+        // no absolute threshold can separate from dim-but-sharp texture.
+        // Cells are independent (parallel over rows); within a
+        // cell the 16-term patch mean is a serial RDom in Kotlin (ky outer,
+        // kx inner) order and Tenengrad adds one combined (gx^2+gy^2) term
+        // per serial iteration (a single add cannot re-nest). The Laplacian
+        // L = (pR-c)-(c-pL) + (pD-c)-(c-pU) accumulates one select-wrapped
+        // term per serial iteration in exact Kotlin order (+pR -c -c +pL
+        // +pD -c -c +pU): a direct Expr chain would hand the simplifier a
+        // tree it may re-nest into a multiply (2*c), and every float add
+        // must provably see no multiply operand, so the per-cell L is a
+        // compute_root barrier exactly like the squares below.
         Var fc("fc"), fr("fr");
         {
             Expr rows = focus_energy_.dim(1).extent();
             Expr cxf = (cast<float>(fc) + Expr(0.5f)) * cast<float>(W) /
-                       Expr(96.0f);
+                       Expr(128.0f);
             Expr cyf = (cast<float>(fr) + Expr(0.5f)) * cast<float>(H) /
                        cast<float>(rows);
             Expr qx = clamp(cast<int>(cxf) / 2 * 2, 0, W - 8);
@@ -431,7 +447,42 @@ public:
             Func ten("ten");
             ten(fc, fr) = kZeroF;
             ten(fc, fr) += tterm(fc, fr, rtg.x);
-            focus_energy_(fc, fr) = ten(fc, fr) / Expr(4.0f);
+            Var li("li");
+            Func lacc("lacc");
+            lacc(fc, fr, li) = kZeroF;
+            {
+                RDom rdl(0, 8);
+                Expr ty = li / 2 + 1, tx = li % 2 + 1;
+                Expr idx = ty * 4 + tx;
+                Expr c = pv(fc, fr, idx);
+                Expr term = select(rdl.x == 0, pv(fc, fr, idx + 1),
+                                   rdl.x == 1, -c,
+                                   rdl.x == 2, -c,
+                                   rdl.x == 3, pv(fc, fr, idx - 1),
+                                   rdl.x == 4, pv(fc, fr, idx + 4),
+                                   rdl.x == 5, -c,
+                                   rdl.x == 6, -c,
+                                   pv(fc, fr, idx - 4));
+                lacc(fc, fr, li) += term;
+            }
+            lacc.compute_root();
+            Func llsq("llsq");
+            llsq(fc, fr, li) = lacc(fc, fr, li) * lacc(fc, fr, li);
+            llsq.compute_root();
+            RDom rtl(0, 4);
+            Func lsum("lsum");
+            lsum(fc, fr) = kZeroF;
+            lsum(fc, fr) += llsq(fc, fr, rtl.x);
+            // Per-cell energy mirrors Kotlin's combinedEnergy bit-for-bit:
+            // exact power-of-two means, then an IEEE division for the
+            // sharpness ratio (exact on both sides, never fused) gated by
+            // exact selects. Sharp steps have ratio ~1.0 at any contrast;
+            // mild blur scores ~0.13 and retires to zero here.
+            Expr tenM = ten(fc, fr) / Expr(4.0f);
+            Expr lapM = lsum(fc, fr) / Expr(4.0f);
+            Expr ratio = select(tenM > kZeroF, lapM / tenM, kZeroF);
+            focus_energy_(fc, fr) =
+                select(ratio >= Expr(0.5f), min(tenM, lapM), kZeroF);
             focus_mean_(fc, fr) = pmean(fc, fr) / Expr(16.0f);
         }
 

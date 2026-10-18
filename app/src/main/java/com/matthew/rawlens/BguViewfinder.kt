@@ -4,6 +4,7 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.HardwareBuffer
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
@@ -57,9 +58,20 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var evStrength = 1f
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
+    @Volatile private var previewShoulder = 1f
+    @Volatile private var previewCenterWeight = 0f
+    @Volatile private var previewFocusX: Float? = null
+    @Volatile private var previewFocusY: Float? = null
     @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f)
     @Volatile private var frameIntervalNs = 1_000_000_000L / 30
     override var onStarvation: (() -> Unit)? = null
+    /**
+     * WYSIWYG content rect (surface pixels: aspect-fill cover, overflowing
+     * symmetrically on the cropped axis), same contract as the legacy
+     * engine: fired on the render worker only when the rect moves.
+     */
+    var onContentRectChanged: ((VfContentGeometry) -> Unit)? = null
+    private var lastContentRect = Rect()
 
     override fun setTargetLongEdge(longEdge: Int) {
         targetLongEdge = longEdge.coerceIn(240, 2160)
@@ -118,9 +130,18 @@ class BguViewfinder @JvmOverloads constructor(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
             r.agxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder
         )
-        // The VF meter runs the save's tuning, so VF EV == save EV.
+        // The VF meter runs the save's tuning, so VF EV == save EV: same
+        // derived broad guard and shoulder as AdaptiveExposureTuning.
         previewHeadroom = r.highlightHeadroom
-        previewSoftHeadroom = r.highlightSoftHeadroom
+        val meterTuning = AdaptiveExposureTuning.fromOutputSettings(settings)
+        previewSoftHeadroom = meterTuning.highlightSoftHeadroom.toFloat()
+        previewShoulder = meterTuning.highlightShoulder
+        previewCenterWeight = meterTuning.centerWeight
+    }
+
+    override fun setMeteringFocus(x: Float?, y: Float?) {
+        previewFocusX = x
+        previewFocusY = y
     }
 
     override fun setEngineMode(mode: VfEngineMode) {
@@ -1154,7 +1175,11 @@ class BguViewfinder @JvmOverloads constructor(
                     model, evWorkspace,
                     AdaptiveExposureTuning(
                         highlightHeadroom = previewHeadroom.toDouble(),
-                        highlightSoftHeadroom = previewSoftHeadroom.toDouble()
+                        highlightSoftHeadroom = previewSoftHeadroom.toDouble(),
+                        highlightShoulder = previewShoulder,
+                        centerWeight = previewCenterWeight,
+                        focusX = previewFocusX,
+                        focusY = previewFocusY
                     ).bounded(),
                     null
                 ).correctionEv
@@ -1565,10 +1590,24 @@ class BguViewfinder @JvmOverloads constructor(
             return
         }
         val t0 = SystemClock.elapsedRealtimeNanos()
+        // WYSIWYG aspect-fill shared with every other present path; the
+        // cover rect doubles as the overlay-alignment contract below.
+        val fit = VfAspectFit.fill(width, height, job.geo.width, job.geo.height, job.rotation)
+        val contentRect = Rect(fit[0], fit[1], fit[0] + fit[2], fit[1] + fit[3])
+        if (contentRect != lastContentRect) {
+            lastContentRect.set(contentRect)
+            try {
+                onContentRectChanged?.invoke(
+                    VfContentGeometry(Rect(contentRect), job.geo.width, job.geo.height, job.rotation)
+                )
+            } catch (_: Exception) {
+                // A failing listener must never break the present path.
+            }
+        }
         val ok = try {
             val drew = slice.draw(
                 eglImage, cpuBuf, job.geo, job.lowW, job.lowH,
-                job.rotation, job.mirrored, width, height
+                job.rotation, job.mirrored, width, height, fit
             )
             val t1 = SystemClock.elapsedRealtimeNanos()
             val drawMs = (t1 - t0) / 1e6f
@@ -1901,7 +1940,7 @@ class BguViewfinder @JvmOverloads constructor(
 
         fun draw(
             eglImage: Long, cpuGuide: ByteBuffer?, geo: BguGuideGeo, lowW: Int, lowH: Int,
-            rotation: Int, mirrored: Boolean, viewW: Int, viewH: Int
+            rotation: Int, mirrored: Boolean, viewW: Int, viewH: Int, fit: IntArray
         ): Boolean {
             if (viewW <= 0 || viewH <= 0) return true
             val guideTex = if (cpuGuide != null) {
@@ -1923,9 +1962,13 @@ class BguViewfinder @JvmOverloads constructor(
                 )
                 GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
             }
+            // WYSIWYG aspect-fit: the frame keeps its display aspect centered
+            // in the surface; the full surface clears first so the bars stay
+            // black (glClear is viewport-scissored).
             GLES30.glViewport(0, 0, viewW, viewH)
             GLES30.glClearColor(0f, 0f, 0f, 1f)
             GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            GLES30.glViewport(fit[0], fit[1], fit[2], fit[3])
             GLES30.glUseProgram(program)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, guideTex)

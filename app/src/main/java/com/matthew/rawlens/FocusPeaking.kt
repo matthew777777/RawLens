@@ -93,18 +93,39 @@ object FocusPeakingGeometry {
  *
  * Each grid cell measures HIGH-frequency energy at native pixel resolution: a
  * 4×4 green lattice (stride-2 inside one 8×8 Bayer patch at the cell center)
- * scored with mean Tenengrad energy (gx²+gy² from central differences).
- * Gradients between downsampled cells cannot work — at ~42 px spacing any
- * texture passes whether in focus or not — so the metric never leaves native
- * resolution. Green-only matches what the eye focuses on.
+ * scored with the minimum of mean Tenengrad energy (gx²+gy² from central
+ * differences) and mean squared Laplacian (second differences), gated on
+ * their ratio ([combinedEnergy]). Tenengrad alone still answers at several
+ * px of blur and dots smooth gradients, while the Laplacian answers ~14×
+ * weaker at 1.5 px blur than in focus; the minimum keeps Tenengrad's noise
+ * floor and recall but retires defocused edges and smooth ramps, and the
+ * ratio retires mild blur the minimum still passes (sharp is ~1.0 at any
+ * contrast, mild blur ~0.13). Gradients between downsampled cells cannot
+ * work — at ~31 px
+ * spacing any texture passes whether in focus or not — so the metric never
+ * leaves native resolution. Green-only matches what the eye focuses on.
  *
  * Noise discipline: a black-mean floor gates pure-black cells, the threshold
- * sits ~2× above bright-area shot-noise energy, a one-step wash guard doubles
- * the threshold past [WASH_FRACTION], and [despeckle] drops isolated singles
- * (sensor noise spikes; real edges are contiguous).
+ * sits ~2× above bright-area shot-noise energy, a one-step wash guard
+ * doubles the threshold past [WASH_FRACTION], and [despeckle] drops isolated
+ * singles (sensor noise spikes; real edges are contiguous).
+ *
+ * Sharpness is decided per cell by the Laplacian/Tenengrad ratio
+ * ([combinedEnergy]), which is contrast-invariant: a sharp step scores ~1.0
+ * at any contrast, so dim-but-sharp texture dots without needing a bright
+ * plane anywhere. An earlier design additionally lifted the threshold to a
+ * fraction of the frame's robust peak so a sharp plane would suppress its
+ * softer background — but that re-introduces the contrast-confounding the
+ * ratio exists to remove: with a bright plane present, dim-but-sharp
+ * texture fell below the lifted gate while bright mild-blur still cleared
+ * it (dots on the blur, none on the sharp texture — the laptop-scene
+ * inversion). The gross-blur background the peak gate was built for
+ * already scores ratio ~0.1 and dies in [combinedEnergy], so the peak gate
+ * only ever acted on mild blur, where the ratio decides more fairly.
  */
 object RawFocusPeakingSampler {
-    const val COLS = 96
+    /** Grid columns: dense enough that sharp areas read as sand, not sparse dots. */
+    const val COLS = 128
     const val MIN_ROWS = 24
     const val MAX_ROWS = 96
 
@@ -119,6 +140,18 @@ object RawFocusPeakingSampler {
 
     /** Pass fraction above which the threshold doubles once (wash guard). */
     const val WASH_FRACTION = 0.45f
+
+    /**
+     * Minimum Laplacian/Tenengrad ratio for a cell to count as sharp (see
+     * [combinedEnergy]): a sharp step scores ~1.0 at any contrast, moderate
+     * blur (~1.5 px) only ~0.13–0.39, so the ratio separates bright-but-blurred
+     * edges from dim-but-sharp texture where no absolute threshold can —
+     * contrast and blur are confounded in either energy alone. The bar sits
+     * well above moderate-blur scores with margin, and well below the sharp
+     * ~1.0 so dim texture keeps full recall. White noise scores ~10 but
+     * dies on the absolute floor, so the ratio never sees it.
+     */
+    const val MIN_SHARPNESS_RATIO = 0.65f
 
     /** Grid rows holding cells ~square on any sensor aspect. */
     fun rowsFor(width: Int, height: Int, cols: Int = COLS): Int =
@@ -151,6 +184,53 @@ object RawFocusPeakingSampler {
     }
 
     /**
+     * Mean squared Laplacian over the interior 2×2 of a 4×4 normalized green
+     * grid (row-major): second differences fall much faster with blur than
+     * first differences, so defocused edges and smooth ramps score near zero
+     * while sharp steps match Tenengrad. Pure so the focus metric stays
+     * unit-tested. Evaluation order (sequential single-term updates) mirrors
+     * the Halide serial RDom bit-for-bit: any reordering or fused multiply
+     * would break the native parity gate.
+     */
+    internal fun laplacian(green4: FloatArray): Float {
+        require(green4.size == 16) { "Laplacian needs a 4×4 grid, got ${green4.size}" }
+        var sum = 0f
+        for (t in 0..3) {
+            val ty = t / 2 + 1
+            val tx = t % 2 + 1
+            val idx = ty * 4 + tx
+            val c = green4[idx]
+            var l = 0f
+            l += green4[idx + 1]
+            l -= c
+            l -= c
+            l += green4[idx - 1]
+            l += green4[idx + 4]
+            l -= c
+            l -= c
+            l += green4[idx - 4]
+            sum += l * l
+        }
+        return sum / 4f
+    }
+
+    /**
+     * Per-cell focus energy from a Tenengrad/Laplacian pair: the minimum
+     * keeps Tenengrad's noise floor and recall while the Laplacian retires
+     * gross blur and smooth gradients — and the sharpness ratio
+     * ([MIN_SHARPNESS_RATIO]) retires what the minimum cannot: mild blur
+     * and bright defocused edges whose absolute energies still clear the
+     * floor. A sharp step has ratio ~1.0 at any contrast, so dim texture
+     * survives; flat cells short-circuit to zero (never NaN). Pure so the
+     * gate stays unit-tested; evaluation order mirrors the Halide filter
+     * bit-for-bit (IEEE division is exact on both sides, no fusion).
+     */
+    internal fun combinedEnergy(ten: Float, lap: Float): Float {
+        val ratio = if (ten > 0f) lap / ten else 0f
+        return if (ratio >= MIN_SHARPNESS_RATIO) minOf(ten, lap) else 0f
+    }
+
+    /**
      * Drops isolated single cells: a passing cell survives only with a passing
      * 8-neighbor. Photon-noise spikes are isolated; focused edges span cells.
      */
@@ -173,6 +253,15 @@ object RawFocusPeakingSampler {
         return out
     }
 
+    /**
+     * Fixed-gate mask: cells clearing [threshold] with a non-black mean
+     * pass, then the wash guard and [despeckle] retire floods and singles.
+     * The gate is deliberately NOT lifted to a share of the frame peak
+     * (see the class KDoc): [energy] already carries the contrast-invariant
+     * ratio verdict from [combinedEnergy], so a fixed noise floor keeps
+     * dim-but-sharp texture dotted next to a bright plane instead of
+     * inverting the two.
+     */
     internal fun maskOf(
         energy: FloatArray,
         mean: FloatArray,
@@ -197,7 +286,8 @@ object RawFocusPeakingSampler {
 
     fun sample(image: Image, characteristics: CameraCharacteristics): FocusPeakingFrame? {
         val plane = image.planes.singleOrNull() ?: return null
-        if (plane.pixelStride < 2 || image.width < PATCH || image.height < PATCH) return null
+        if (image.width < PATCH || image.height < PATCH) return null
+        if (plane.pixelStride < 2 && PackedRawFormat.ofInt(image.format) == null) return null
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
@@ -206,9 +296,22 @@ object RawFocusPeakingSampler {
             ?.coerceAtLeast(1) ?: return null
         // One bulk copy per sampled row (same discipline as the histogram):
         // each band needs 4 green rows, then every cell indexes the arrays.
-        // ~300 bulk copies + ~110k indexed reads per sample at 4 Hz.
+        // ~400 bulk copies + ~200k indexed reads per sample at 4 Hz.
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val limit = buffer.limit()
+        // Packed sessions sample native codes through a row-cached reader;
+        // coordinates below stay in-bounds by construction, and bad geometry
+        // refuses the frame like before.
+        val packedSampler = if (plane.pixelStride < 2) {
+            val packed = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(
+                    buffer, image.width, image.height, plane.rowStride, 0, packed
+                )
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
         val shortView = buffer.asShortBuffer()
         val shortCapacity = shortView.capacity()
         val bulkRows = plane.pixelStride == 2 && plane.rowStride % 2 == 0
@@ -250,6 +353,8 @@ object RawFocusPeakingSampler {
                         val phase = ((y and 1) shl 1) or (x and 1)
                         val value: Int? = if (bandOk && bandRows != null) {
                             bandRows[ky][x].toInt() and 0xffff
+                        } else if (packedSampler != null) {
+                            packedSampler.codeAt(x, y)
                         } else {
                             val offset = y * rowStride + x * pixelStride
                             if (offset < 0 || offset + 1 >= limit) null
@@ -262,7 +367,10 @@ object RawFocusPeakingSampler {
                         patchMean += normalized
                     }
                 }
-                energy[row * cols + col] = tenengrad(patch)
+                // The ratio keeps dim-but-sharp texture (ratio ~1 at any
+                // contrast) while retiring bright-but-blurred edges; the
+                // division is IEEE-exact on both JVM and native sides.
+                energy[row * cols + col] = combinedEnergy(tenengrad(patch), laplacian(patch))
                 mean[row * cols + col] = patchMean / 16f
             }
         }
@@ -279,7 +387,7 @@ object RawFocusPeakingSampler {
                 "RawLensCamera",
                 "Focus peaking first sample: grid=${cols}x$rows passes=${mask.count { it }} " +
                     "meanEnergy=${"%.5f".format(sum / energy.size)} peakEnergy=${"%.4f".format(peak)} " +
-                    "threshold=$EDGE_THRESHOLD cfa=$cfa"
+                    "gate=$EDGE_THRESHOLD ratio=$MIN_SHARPNESS_RATIO cfa=$cfa"
             )
         }
         val rotation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0

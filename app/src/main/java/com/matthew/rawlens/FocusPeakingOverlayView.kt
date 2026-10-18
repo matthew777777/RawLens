@@ -6,6 +6,7 @@ package com.matthew.rawlens
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
@@ -26,6 +27,17 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
             field = value
             paint.color = value.argb
             contentDescription = "Focus peaking ${value.label.lowercase()}"
+            invalidate()
+        }
+
+    /**
+     * Aspect-fill frame→view transform in view pixels: the cover rect in
+     * this view's own coordinates (negative origin on the cropped axis).
+     * Null = identity (the view spans the frame exactly).
+     */
+    var contentTransform: RectF? = null
+        set(value) {
+            field = value
             invalidate()
         }
 
@@ -66,8 +78,11 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
                 )
                 // Small centered dot, never a filled block: peaking must read as
                 // points of sharpness over the image, not sand.
-                val cx = (cell[0] + cell[2]) / 2f * viewWidth
-                val cy = (cell[1] + cell[3]) / 2f * viewHeight
+                val t = contentTransform
+                val cx = if (t == null) (cell[0] + cell[2]) / 2f * viewWidth
+                    else (cell[0] + cell[2]) / 2f * t.width() + t.left
+                val cy = if (t == null) (cell[1] + cell[3]) / 2f * viewHeight
+                    else (cell[1] + cell[3]) / 2f * t.height() + t.top
                 val radius = minOf(cell[2] - cell[0], cell[3] - cell[1]) *
                     minOf(viewWidth, viewHeight) * DOT_RADIUS_FRACTION
                 if (radius > 0f) canvas.drawCircle(cx, cy, radius, paint)
@@ -79,6 +94,6 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
         const val PEAKING_ALPHA = 220
 
         /** Dot radius as a fraction of the smaller cell dimension. */
-        const val DOT_RADIUS_FRACTION = 0.22f
+        const val DOT_RADIUS_FRACTION = 0.35f
     }
 }

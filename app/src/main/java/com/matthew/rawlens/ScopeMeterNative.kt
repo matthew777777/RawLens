@@ -58,7 +58,7 @@ internal object ScopeMeterNative {
     const val HIST_BINS = 64
     const val WAVE_LEVELS = 48
     const val ETTR_BINS = 256
-    const val FOCUS_COLS = 96
+    const val FOCUS_COLS = RawFocusPeakingSampler.COLS
     const val LUT_SIZE = 1024
 
     val available: Boolean = try {

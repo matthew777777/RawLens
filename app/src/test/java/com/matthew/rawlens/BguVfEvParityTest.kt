@@ -63,7 +63,8 @@ class BguVfEvParityTest {
             buf, size * 2, 2, 0, 0, size / 2, size / 2, 2,
             FloatArray(4) { black }, white,
             FloatArray(VfGpuImport.MAX_PREVIEW_SAMPLES),
-            model, BayerPattern.RGGB, 0, 0, tuning
+            lens = model, pattern = BayerPattern.RGGB, sensorOriginX = 0, sensorOriginY = 0,
+            tuning = tuning
         )
         assertTrue("vf=$vf legacy=$legacy", vf.isFinite() && legacy.isFinite())
         assertTrue("VF/save meter gap ${kotlin.math.abs(vf - legacy)} over gate", kotlin.math.abs(vf - legacy) < 0.15)
@@ -75,12 +76,19 @@ class BguVfEvParityTest {
             highlightSoftHeadroom = 0.9f
         )
         val r = settings.resolvedForPlatform()
-        // What BguViewfinder.setAgx stores for the VF meter...
+        // What BguViewfinder.setAgx stores for the VF meter (spike direct,
+        // broad guard re-solved under these AgX settings, shoulder carried
+        // over — mirroring the current setAgx body)...
         val preview = AdaptiveExposureTuning(
             highlightHeadroom = r.highlightHeadroom.toDouble(),
-            highlightSoftHeadroom = r.highlightSoftHeadroom.toDouble()
+            highlightSoftHeadroom = AdaptiveExposureTuning.fromOutputSettings(settings).highlightSoftHeadroom,
+            highlightShoulder = r.highlightShoulder
         ).bounded()
-        // ...must equal what the save path derives for its meter.
+        // ...must equal what the save path derives for its meter, and the
+        // non-default soft slider must survive the round trip at defaults.
         assertEquals(AdaptiveExposureTuning.fromOutputSettings(settings), preview)
+        assertEquals(1.2, preview.highlightHeadroom, 1e-6)
+        assertEquals(0.9, preview.highlightSoftHeadroom, 1e-4)
+        assertEquals(1f, preview.highlightShoulder, 0f)
     }
 }

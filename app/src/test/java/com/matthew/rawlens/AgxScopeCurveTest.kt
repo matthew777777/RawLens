@@ -77,4 +77,59 @@ class AgxScopeCurveTest {
             previous = value
         }
     }
+
+    @Test
+    fun invertScopeCurveRoundTripsAcrossSettings() {
+        // The meter states its broad-mass guard once in encoded terms and
+        // re-solves it per AgX settings: the inversion must round-trip at
+        // defaults and at every range/contrast/shoulder extreme, staying
+        // monotonic so bisection lands on the graded branch (never a clip).
+        val settingsCases = listOf(
+            JpegOutputSettings(),
+            JpegOutputSettings(agxContrast = 0.5f),
+            JpegOutputSettings(agxContrast = 1.5f),
+            JpegOutputSettings(agxShadowEv = 4f, agxHighlightEv = 3f),
+            JpegOutputSettings(agxShadowEv = 14f, agxHighlightEv = 10f),
+            JpegOutputSettings(highlightShoulder = 0f),
+            JpegOutputSettings(agxContrast = 1.5f, agxShadowEv = 4f, agxHighlightEv = 3f)
+        )
+        for (settings in settingsCases) {
+            var previous = -1f
+            var linear = 0f
+            while (linear <= 16f) {
+                val encoded = AgxDisplayTransform.scopeCurve(linear, settings)
+                // Tolerance for float32 rounding near the shoulder asymptote,
+                // where adjacent scene levels differ by ~1e-6 in encoding
+                // (the strict form is already pinned at defaults above; the
+                // roundtrips below carry the bisection-validity weight).
+                assertTrue("regressed at $linear ($settings)", encoded + 1e-5f >= previous)
+                previous = encoded
+                linear = if (linear < 1f) linear + 0.05f else linear * 1.25f
+            }
+            for (anchor in listOf(0.1f, 0.35f, 0.85f, 2f)) {
+                val encoded = AgxDisplayTransform.scopeCurve(anchor, settings)
+                val solved = AgxDisplayTransform.invertScopeCurve(encoded, settings)
+                // Inverter contract, plateau-safe: the solution re-encodes to
+                // the target level, and it never overshoots the anchor (on a
+                // clip plateau it lands on the knee, not past it).
+                assertTrue(
+                    "anchor $anchor ($settings): re-encode ${AgxDisplayTransform.scopeCurve(solved, settings)}",
+                    AgxDisplayTransform.scopeCurve(solved, settings) + 1e-3f >= encoded
+                )
+                assertTrue("anchor $anchor ($settings): overshoot $solved", solved <= anchor + 1e-3f)
+                // Off-plateau anchors additionally round-trip near-exactly.
+                if (encoded < 0.999f && AgxDisplayTransform.scopeCurve(anchor * 1.01f, settings) > encoded) {
+                    assertEquals("anchor $anchor ($settings)", anchor, solved, 1e-2f)
+                }
+            }
+        }
+        // Edges: at/below black returns 0; display white is above the
+        // sigmoid ceiling (~0.98 encoded), so it saturates at the scene cap.
+        assertEquals(0f, AgxDisplayTransform.invertScopeCurve(0f), 0f)
+        assertEquals(
+            AgxDisplayTransform.SCOPE_INVERT_CAP,
+            AgxDisplayTransform.invertScopeCurve(1f),
+            0f
+        )
+    }
 }

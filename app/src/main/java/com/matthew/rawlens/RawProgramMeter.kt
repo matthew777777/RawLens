@@ -15,7 +15,7 @@ import kotlin.math.pow
  * returns an EV shift that the solver turns directly into sensor ISO + shutter —
  * never digital gain.
  *
- * Stock Android AE + spektra development both run dark in many scenes; [evBias]
+ * Stock Android AE and film-emulation development both run dark in many scenes; [evBias]
  * (default +0.5 EV) bakes a brighter-than-stock target into [targetLevel].
  */
 internal object RawProgramMeter {

@@ -27,7 +27,7 @@ constexpr int kHistBins = 64;
 constexpr int kWaveLevels = 48;
 constexpr int kWaveCols = 96;
 constexpr int kEttrBins = 256;
-constexpr int kFocusCols = 96;
+constexpr int kFocusCols = 128;
 constexpr int kLutSize = 1024;
 
 void *directBytes(JNIEnv *env, jobject buf, jlong need) {

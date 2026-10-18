@@ -163,6 +163,46 @@ object AgxDisplayTransform {
         return lut[index]
     }
 
+    /**
+     * Scene-referred exposure for scopes: the linear gain applies BEFORE the
+     * AgX curve LUT, exactly where develop applies exposureEv (pre-tonemap —
+     * the darktable/ACES/Filament rule). Over-driven values clip to the LUT
+     * ends, mirroring the saved JPEG's highlight clip. A null LUT is the
+     * linear-RAW path: the gain is ignored, keeping DNG scopes bit-exact.
+     */
+    fun scopeEncode(linear: Double, lut: FloatArray?, exposureGain: Double = 1.0): Double {
+        if (lut == null) return linear
+        val exposed = if (exposureGain != 1.0) linear * exposureGain else linear
+        return scopeLutLookup(lut, exposed).toDouble()
+    }
+
+    /**
+     * Smallest scene-linear level whose [scopeCurve] encoding reaches [encoded]
+     * under [settings]. Lets thresholds (like the meter's broad-mass guard)
+     * be stated once in display-encoded terms and re-solved whenever
+     * AgX range/contrast/shoulder settings move them in scene-linear space.
+     * Bisection over the monotonic [scopeCurve]; targets at/below black return
+     * 0, targets above what AgX can render return the scene cap.
+     */
+    fun invertScopeCurve(encoded: Float, settings: JpegOutputSettings = JpegOutputSettings()): Float {
+        require(encoded.isFinite() && encoded in 0f..1f)
+        if (encoded <= scopeCurve(0f, settings)) return 0f
+        var lo = 0f
+        var hi = 1f
+        while (hi < SCOPE_INVERT_CAP && scopeCurve(hi, settings) < encoded) {
+            lo = hi
+            hi *= 2f
+        }
+        repeat(64) {
+            val mid = (lo + hi) / 2f
+            if (scopeCurve(mid, settings) < encoded) lo = mid else hi = mid
+        }
+        return hi
+    }
+
+    /** Scene-linear cap for [invertScopeCurve]: far past AgX's range top (~16.3). */
+    const val SCOPE_INVERT_CAP = 64f
+
     const val SCOPE_LUT_SIZE = 1024
 
     /** Exactly one final display-gamut operation: hard clip in output-linear sRGB. */
