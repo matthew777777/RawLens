@@ -48,6 +48,10 @@ object LogVideoProbe {
         val supportsMain10: Boolean,
         val supportsSizeRate: Boolean,
         val supportsSurface: Boolean,
+        /** COLOR_FormatYUVP010 ByteBuffer input (direct path; Surface path needs only [supportsSurface]). */
+        val supportsP010: Boolean = false,
+        /** HEVC Main (8-bit) profile advertised. */
+        val supportsMain: Boolean = false,
     )
 
     data class ProbeReport(
@@ -514,13 +518,301 @@ object LogVideoProbe {
         }
     }
 
-    /** First HW HEVC encoder with 4K30+Surface size support, or null. Device-only. */
-    fun preferredHwEncoder(): String? = try {
-        queryHevcEncoders(Target())
-            .firstOrNull { it.isHardware && it.supportsSizeRate && it.supportsSurface }?.name
+    /** Encode-size ladder for direct-log takes, largest first. */
+    data class EncodeSize(val width: Int, val height: Int)
+
+    val ENCODE_LADDER =
+        listOf(EncodeSize(3840, 2160), EncodeSize(2560, 1440), EncodeSize(1920, 1080))
+
+    const val MIN_BITRATE = 1_000_000
+
+    /**
+     * Pure encode-size candidates: the requested size first, then ladder
+     * rungs at or below its pixel count. JVM-testable; device code passes
+     * [supportsMain10At] as the gate (RAWR's per-(w,h,fps) supportsMain10).
+     */
+    fun encodeCandidates(requestedWidth: Int, requestedHeight: Int): List<EncodeSize> {
+        val reqPixels = requestedWidth * requestedHeight
+        return (listOf(EncodeSize(requestedWidth, requestedHeight)) + ENCODE_LADDER)
+            .distinct()
+            .filter { it.width * it.height <= reqPixels }
+    }
+
+    /**
+     * Pure encode-size negotiation: first candidate the device accepts.
+     * Null = no HW HEVC Main10 encoder at any size up to the request.
+     */
+    fun selectEncodeSize(
+        requestedWidth: Int,
+        requestedHeight: Int,
+        fps: Int,
+        supports: (width: Int, height: Int, fps: Int) -> Boolean,
+    ): EncodeSize? =
+        encodeCandidates(requestedWidth, requestedHeight)
+            .firstOrNull { supports(it.width, it.height, fps) }
+
+    /** Pure bitrate clamp (RAWR: minOf(requested, advertised max), floor 1 Mbps). */
+    fun clampedBitrate(requested: Int, maxMbps: Int): Int =
+        requested.coerceIn(MIN_BITRATE, maxMbps * 1_000_000)
+
+    /**
+     * Pure default bitrate for an encode size: high-quality fixed targets
+     * per ladder rung (4K 75 Mbps, 1440p 45 Mbps, 1080p 30 Mbps CBR HEVC),
+     * pixel-proportional fallback below 1080p. JVM-testable. Callers still
+     * pass the result through [clampedBitrate] against the advertised max.
+     */
+    fun defaultBitrateFor(width: Int, height: Int): Int = when {
+        width >= WIDTH && height >= HEIGHT -> BITRATE
+        width >= 2560 && height >= 1440 -> 45_000_000
+        width >= 1920 && height >= 1080 -> 30_000_000
+        else ->
+            (BITRATE.toLong() * width * height / (WIDTH.toLong() * HEIGHT)).toInt()
+                .coerceAtLeast(8_000_000)
+    }
+
+    /**
+     * Pure persisted-resolution parse: "UHD4K" selects 4K, "QHD1440"
+     * selects 1440p, anything else heals to 1080p.
+     */
+    fun encodeSizeForRes(name: String?): EncodeSize = when (name) {
+        "UHD4K" -> EncodeSize(WIDTH, HEIGHT)
+        "QHD1440" -> EncodeSize(2560, 1440)
+        else -> EncodeSize(1920, 1080)
+    }
+
+    /**
+     * Pure AE fps-range pick: exact fixed [requestedFps] when offered, else
+     * the narrowest available range containing it, else null. [available]
+     * is (lower, upper) pairs from CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES.
+     * JVM-testable; the recorder fails fast naming the available ranges.
+     */
+    fun fixedFpsRange(requestedFps: Int, available: List<Pair<Int, Int>>): Pair<Int, Int>? {
+        if (available.any { it.first == requestedFps && it.second == requestedFps }) {
+            return requestedFps to requestedFps
+        }
+        return available
+            .filter { it.first <= requestedFps && requestedFps <= it.second }
+            .minByOrNull { it.second - it.first }
+    }
+
+    /** Highest bitrate (Mbps) the first HW HEVC encoder advertises; 100 if unknown. */
+    val maxBitrateMbps: Int by lazy {
+        runCatching {
+            val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            val info = list.codecInfos.firstOrNull {
+                it.isEncoder && isHardware(it) && MIME in it.supportedTypes
+            } ?: return@runCatching FALLBACK_MAX_MBPS
+            val upper = info.getCapabilitiesForType(MIME).videoCapabilities
+                ?.bitrateRange?.upper ?: return@runCatching FALLBACK_MAX_MBPS
+            (upper / 1_000_000).coerceIn(FALLBACK_MAX_MBPS, 400)
+        }.getOrDefault(FALLBACK_MAX_MBPS)
+    }
+
+    /** KEY_BITRATE_MODE values the first HW HEVC encoder accepts; CBR if unknown. */
+    val supportedBitrateModes: Set<Int> by lazy {
+        runCatching {
+            val list = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            val info = list.codecInfos.firstOrNull {
+                it.isEncoder && isHardware(it) && MIME in it.supportedTypes
+            } ?: return@runCatching setOf(
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            )
+            val encoder = info.getCapabilitiesForType(MIME).encoderCapabilities
+                ?: return@runCatching setOf(
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                )
+            listOf(
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ,
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR,
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR,
+            ).filter { encoder.isBitrateModeSupported(it) }.toSet()
+        }.getOrDefault(setOf(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR))
+    }
+
+    /**
+     * True when a HW HEVC encoder advertises Main10 + [width]x[height]@[fps]
+     * with Surface input. Device-only; configure remains the final gate.
+     */
+    fun supportsMain10At(width: Int, height: Int, fps: Int): Boolean = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .any { it.isHardware && it.supportsMain10 && it.supportsSizeRate && it.supportsSurface }
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * True when a HW HEVC encoder advertises Main10 + [width]x[height]@[fps]
+     * with P010 ByteBuffer input (the direct record path). Surface-only
+     * encoders return false here and take the ImageWriter path instead.
+     * Device-only; configure remains the final gate.
+     */
+    fun supportsP010At(width: Int, height: Int, fps: Int): Boolean = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .any {
+                it.isHardware && it.supportsMain10 && it.supportsSizeRate &&
+                    it.supportsSurface && it.supportsP010
+            }
+    } catch (_: Exception) {
+        false
+    }
+
+    /** First HW HEVC Main10 encoder for [width]x[height]@[fps], or null. Device-only. */
+    fun preferredHwEncoderAt(width: Int, height: Int, fps: Int): String? = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .firstOrNull {
+                it.isHardware && it.supportsMain10 && it.supportsSizeRate && it.supportsSurface
+            }?.name
     } catch (_: Exception) {
         null
     }
+
+    /** First HW HEVC Main10 encoder with P010 input for [width]x[height]@[fps], or null. */
+    fun preferredP010EncoderAt(width: Int, height: Int, fps: Int): String? = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .firstOrNull {
+                it.isHardware && it.supportsMain10 && it.supportsSizeRate &&
+                    it.supportsSurface && it.supportsP010
+            }?.name
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * First HW HEVC encoder covering [width]x[height]@[fps] with Surface
+     * input, regardless of advertised profile (force-10-bit attempt).
+     * Device-only; MediaCodec.configure is the final gate (proven: MTK
+     * advertises [Main] yet configures Main10 and emits Main10 output).
+     */
+    fun preferredForce10EncoderAt(width: Int, height: Int, fps: Int): String? = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .firstOrNull {
+                it.isHardware && it.supportsSizeRate && it.supportsSurface
+            }?.name
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * 8-bit SDR diagnosis (no 8-bit record feed exists yet: P010 staging
+     * has no validated 8-bit conversion stage — see vf_p010preview.comp,
+     * whose box math needs box >= 2). True when a HW HEVC Main-profile
+     * encoder covers [width]x[height]@[fps], so the failure message can
+     * say 8-bit SDR is possible instead of claiming nothing records.
+     */
+    fun supportsMain8At(width: Int, height: Int, fps: Int): Boolean = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .any {
+                it.isHardware && it.supportsMain && it.supportsSizeRate &&
+                    (it.supportsSurface || it.supportsP010)
+            }
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * First HW HEVC Main-profile encoder with Surface input for
+     * [width]x[height]@[fps] (the SDR/EGL fallback feed), or null.
+     */
+    fun preferredMain8EncoderAt(width: Int, height: Int, fps: Int): String? = try {
+        queryHevcEncoders(Target().copy(width = width, height = height, fps = fps))
+            .firstOrNull {
+                it.isHardware && it.supportsMain && it.supportsSizeRate && it.supportsSurface
+            }?.name
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Pure SDR fallback negotiation over the ladder: first rung with a
+     * Main-profile Surface encoder. Null when [sdrAllowed] is false
+     * (non-BT709 LOG profiles need 10-bit) or nothing covers a rung.
+     * JVM-testable; configure remains the final gate device-side.
+     */
+    fun selectSdrPlan(
+        requestedWidth: Int,
+        requestedHeight: Int,
+        fps: Int,
+        sdrAllowed: Boolean,
+        main8Codec: (width: Int, height: Int, fps: Int) -> String?,
+    ): EncodePlan? {
+        if (!sdrAllowed) return null
+        for (candidate in encodeCandidates(requestedWidth, requestedHeight)) {
+            val name = main8Codec(candidate.width, candidate.height, fps)
+            if (name != null) {
+                return EncodePlan(candidate.width, candidate.height, name, EncoderInputMode.SDR_EGL)
+            }
+        }
+        return null
+    }
+
+    /** Encoder input mode: direct P010 images, P010 via ImageWriter, or 8-bit SDR via EGL. */
+    enum class EncoderInputMode { DIRECT_P010, IMAGE_WRITER, SDR_EGL }
+
+    data class EncodePlan(
+        val width: Int,
+        val height: Int,
+        val codecName: String,
+        val mode: EncoderInputMode,
+    )
+
+    /**
+     * ImageWriter P010-over-Surface needs ImageWriter.Builder (API 33+).
+     * [sdkInt] is injectable for JVM tests; device code uses the default.
+     */
+    fun writerPathAvailable(sdkInt: Int = Build.VERSION.SDK_INT): Boolean = sdkInt >= 33
+
+    /** P010 ImageWriter pool depth (RAWR A/B probe uses 11; 8 bounds 4K memory). */
+    const val WRITER_MAX_IMAGES = 8
+
+    /** P010 ImageWriter buffer usage (RAWR's set plus CPU-write for the staging copy). */
+    val WRITER_P010_USAGE: Long =
+        android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+            android.hardware.HardwareBuffer.USAGE_VIDEO_ENCODE or
+            android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+            android.hardware.HardwareBuffer.USAGE_CPU_WRITE_OFTEN
+
+    /**
+     * Pure per-rung input-mode rule (shared by [selectEncodePlan] and the
+     * record start loop): direct P010 wins, else the ImageWriter path,
+     * else nothing on this rung. JVM-testable.
+     */
+    fun rungMode(directName: String?, surfaceName: String?): EncoderInputMode? = when {
+        directName != null -> EncoderInputMode.DIRECT_P010
+        surfaceName != null -> EncoderInputMode.IMAGE_WRITER
+        else -> null
+    }
+
+    /**
+     * Pure input-mode negotiation: per ladder rung, prefer a direct-P010
+     * encoder, else a Surface encoder for the ImageWriter path. Null = no
+     * 10-bit input at any size up to the request. JVM-testable.
+     */
+    fun selectEncodePlan(
+        requestedWidth: Int,
+        requestedHeight: Int,
+        fps: Int,
+        directCodec: (width: Int, height: Int, fps: Int) -> String?,
+        surfaceCodec: (width: Int, height: Int, fps: Int) -> String?,
+    ): EncodePlan? {
+        for (candidate in encodeCandidates(requestedWidth, requestedHeight)) {
+            val direct = directCodec(candidate.width, candidate.height, fps)
+            val surface = surfaceCodec(candidate.width, candidate.height, fps)
+            when (rungMode(direct, surface)) {
+                EncoderInputMode.DIRECT_P010 ->
+                    return EncodePlan(candidate.width, candidate.height, requireNotNull(direct), EncoderInputMode.DIRECT_P010)
+                EncoderInputMode.IMAGE_WRITER ->
+                    return EncodePlan(candidate.width, candidate.height, requireNotNull(surface), EncoderInputMode.IMAGE_WRITER)
+                // SDR_EGL is negotiated separately (BT709-only fallback
+                // loop); rungMode never returns it.
+                EncoderInputMode.SDR_EGL -> error("SDR_EGL is not a 10-bit rung mode")
+                null -> Unit
+            }
+        }
+        return null
+    }
+
+    /** First HW HEVC Main10 encoder with 4K30+Surface size support, or null. Device-only. */
+    fun preferredHwEncoder(): String? = preferredHwEncoderAt(WIDTH, HEIGHT, FPS)
 
     data class DecoderCandidate(
         val name: String,
@@ -588,13 +880,24 @@ object LogVideoProbe {
             val surface = caps.colorFormats?.contains(
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
             ) == true
+            val p010 = caps.colorFormats?.contains(
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
+            ) == true
             val hw = if (Build.VERSION.SDK_INT >= 29) {
                 try { info.isHardwareAccelerated } catch (_: Exception) { true }
             } else true
-            out.add(EncoderCandidate(info.name, hw, main10, sizeRate, surface))
+            val main8 = profileLevels.any { it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain }
+            out.add(EncoderCandidate(info.name, hw, main10, sizeRate, surface, p010, main8))
         }
         return out.sortedWith(compareBy({ !it.isHardware }, { it.name }))
     }
+
+    private fun isHardware(info: MediaCodecInfo): Boolean =
+        if (Build.VERSION.SDK_INT >= 29) {
+            try { info.isHardwareAccelerated } catch (_: Exception) { true }
+        } else true
+
+    private const val FALLBACK_MAX_MBPS = 100
 
     private const val TAG = "LogVideoProbe"
 }

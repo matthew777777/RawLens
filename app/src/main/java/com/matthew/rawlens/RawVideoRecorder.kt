@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicLongArray
  *   crop args with no session reconfiguration. Safe to change
  *   mid-recording (fps locks at record start).
  * - [binning] bins each 2x2 block to one binned-Bayer sample at half
- *   resolution (R/B 4-tap box, diamond-averaged green) inside the
+ *   resolution (inward R/B 4-tap box, diamond-averaged green) inside the
  *   encoder; the viewfinder fan-out still sees full-res frames. Take-const
  *   (a mid-take resolution change would break players): read once at
  *   [start] into [binActive], which also gates the frame-JSON dimensions

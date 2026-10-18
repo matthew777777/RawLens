@@ -424,23 +424,10 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
          * [surfW]x[surfH] surface, accounting for the sensor-orientation
          * rotation (90/270 swap the displayed axes). Letterboxes with
          * caller-cleared bars; exact-fit returns the full surface.
+         * Shared with every viewfinder present path via [VfAspectFit].
          */
         fun fitViewport(
             surfW: Int, surfH: Int, imgW: Int, imgH: Int, rotation: Int,
-        ): IntArray {
-            require(surfW > 0 && surfH > 0 && imgW > 0 && imgH > 0) {
-                "viewport needs positive dims"
-            }
-            val (dw, dh) = if (rotation == 90 || rotation == 270) imgH to imgW else imgW to imgH
-            // Compare surfW/surfH vs dw/dh without floats: surface wider
-            // than the image -> pillarbox (fit height), else letterbox.
-            return if (surfW.toLong() * dh > surfH.toLong() * dw) {
-                val w = (surfH.toLong() * dw / dh).toInt().coerceAtLeast(1)
-                intArrayOf((surfW - w) / 2, 0, w, surfH)
-            } else {
-                val h = (surfW.toLong() * dh / dw).toInt().coerceAtLeast(1)
-                intArrayOf(0, (surfH - h) / 2, surfW, h)
-            }
-        }
+        ): IntArray = VfAspectFit.fit(surfW, surfH, imgW, imgH, rotation)
     }
 }

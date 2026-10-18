@@ -16,6 +16,7 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
+import android.media.ImageWriter
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -27,6 +28,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.util.Size
+import android.view.Surface
 import java.io.File
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
@@ -38,9 +40,12 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Direct-video demosaic backend. MHC (fused MHC+grade, one dispatch)
- * is the record path; RCD runs the 4-mode split path (RCD + grade-YUV)
- * and cannot hold 24/30fps at 4K (~233ms/frame) — it drops to a few
- * fps effective and exists for A/B comparison, not realtime takes.
+ * is the record path; RCD runs modes 0-2 plus the fused finalize +
+ * grade dispatch (split mode 3 + grade-YUV fallback intact) and cannot
+ * hold 24/30fps at 4K (~250ms/frame measured: 236ms modes + ~18ms
+ * grade; fused measures the same within noise, minus one dispatch and
+ * ~187MB DRAM traffic) — it drops to a few fps effective and exists
+ * for A/B comparison, not realtime takes.
  */
 enum class VideoDemosaic(val label: String) {
     MHC("MHC"),
@@ -241,6 +246,20 @@ class DirectLogRecorder(
     private var channels: IntArray = intArrayOf(0, 1, 2, 3)
 
     private var codec: MediaCodec? = null
+    /** True when this take feeds the encoder through a P010 ImageWriter (Surface-only encoders). */
+    private var writerMode = false
+    private var imageWriter: ImageWriter? = null
+    private var writerSurface: Surface? = null
+    /** True on the 8-bit SDR fallback (Main profile + EGL present of converted RGBA8). */
+    private var eightBitMode = false
+    private var sdrEgl: EglPusher? = null
+    private var sdrSurface: Surface? = null
+    private var sdrProgram = 0
+    private var sdrTexture = 0
+    private var sdrQuad: java.nio.FloatBuffer? = null
+    @Volatile private var sdrEglCurrent = false
+    @Volatile private var sdrEglThread = -1L
+    @Volatile private var sdrConvertFailed = false
     private var muxer: MediaMuxer? = null
     private var videoTrack: Int = -1
     private var audioTrack: Int = -1
@@ -315,6 +334,8 @@ class DirectLogRecorder(
         var export: HardwareBufferRef? = null,
         var p010: HardwareBufferRef? = null,
         var preview: HardwareBufferRef? = null,
+        /** Full-res RGBA8 convert target (8-bit SDR fallback takes only). */
+        var rgb8: HardwareBufferRef? = null,
         var fd: Int = -1,
         var ptsUs: Long = 0L,
         // Copy-worker handoff: the camera thread awaits the previous
@@ -338,6 +359,13 @@ class DirectLogRecorder(
     private var yPxStrideB: Int = 0
     private var uvPxStrideB: Int = 0
     private var vPxStrideB: Int = 0
+    // ImageWriter input layout (writer path only; discovered from the first writer image).
+    private var wyStrideB: Int = 0
+    private var wuvStrideB: Int = 0
+    private var wvStrideB: Int = 0
+    private var wyPxStrideB: Int = 0
+    private var wuvPxStrideB: Int = 0
+    private var wvPxStrideB: Int = 0
     private var p010Size: Int = 0
     private var frameCounter: Long = 0L
     private var lastQueuedPts: Long = Long.MIN_VALUE
@@ -362,6 +390,8 @@ class DirectLogRecorder(
     private var useFused = false
     /** RCD split path (decided in start; needs RCD init + [VideoDemosaic.RCD]). */
     private var useRcd = false
+    /** Fused RCD finalize + grade (one dispatch replaces mode 3 + grade). */
+    private var useRcdFused = false
     /**
      * RCD split-path working buffers (crop-sized RGBA_FP16, single shared
      * pair): GPU-only with same-queue FIFO submit order, so no per-slot
@@ -433,6 +463,7 @@ class DirectLogRecorder(
         DirectLogBreadcrumb.mark(appContext, "start")
         MemoryLeakDiagnostics.sampleAsync("directlog-start")
         check(device == null) { "Already started" }
+        require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
         outputFile = output
@@ -444,8 +475,14 @@ class DirectLogRecorder(
         shadedCount.set(0)
         shadeKey = 0L; shadeDims = null; shadeGains = null; shadeLogged = false
         true10Bit = false
+        writerMode = false; imageWriter = null; writerSurface = null
+        eightBitMode = false; sdrEgl = null; sdrSurface = null
+        sdrProgram = 0; sdrTexture = 0; sdrQuad = null
+        sdrEglCurrent = false; sdrConvertFailed = false
         yStrideB = 0; uvStrideB = 0; vStrideB = 0
         yPxStrideB = 0; uvPxStrideB = 0; vPxStrideB = 0
+        wyStrideB = 0; wuvStrideB = 0; wvStrideB = 0
+        wyPxStrideB = 0; wuvPxStrideB = 0; wvPxStrideB = 0
         ourYStrideB = 0; ourUvStrideB = 0
         p010Size = 0; frameCounter = 0L
         lastQueuedPts = Long.MIN_VALUE; queues = 0
@@ -570,6 +607,7 @@ class DirectLogRecorder(
         // to the superpixel path below.
         useFused = false
         useRcd = false
+        useRcdFused = false
         fusedCount.set(0)
         rcdCount.set(0)
         fun tryInitFused(): Boolean {
@@ -592,10 +630,15 @@ class DirectLogRecorder(
         if (!effPreferMhc) {
             Log.i(TAG, "superpixel forced (preferMhc=$preferMhc heatDegraded=$heatDegraded)")
         } else if (videoDemosaic == VideoDemosaic.RCD) {
-            // RCD split path (4 RCD modes + grade-YUV): A/B lever only,
-            // never realtime at 4K. Init failure falls back to fused MHC.
+            // RCD path (fused finalize when available, else 4 RCD modes
+            // + grade-YUV): A/B lever only until the optimization lands.
+            // Init failure falls back to fused MHC.
             try {
-                val rcdspv = appContext.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
+                // f32 RCD always: the f16 variants measured only ~6% on
+                // this latency-bound path while opening Nyquist-content
+                // fidelity questions at RGB level (see RcdParityDeviceTest
+                // f16 run), so they stay test-only until proven.
+                val rcdspv = appContext.assets.open(VfRcd.rcdAsset(false)).use { it.readBytes() }
                 if (VfRcd.initRcdNative(rcdspv) != VfVulkan.OK) {
                     Log.w(TAG, "rcd init failed; fused fallback")
                     tryInitFused()
@@ -604,6 +647,17 @@ class DirectLogRecorder(
                         rcdRgb = HardwareBufferRef.create(crop.width, crop.height)
                         rcdScratch = HardwareBufferRef.create(crop.width, crop.height)
                         useRcd = true
+                        // Fused finalize (mode 3 + grade in one dispatch).
+                        // Failure is never fatal: the take keeps the split
+                        // path (mode 3 + grade-YUV) below.
+                        try {
+                            val rcdYuvSpv = appContext.assets.open(VfRcd.rcdYuvAsset(false)).use { it.readBytes() }
+                            useRcdFused = VfRcd.initRcdYuvNative(rcdYuvSpv) == VfVulkan.OK
+                            if (!useRcdFused) Log.w(TAG, "rcd-yuv init failed; split fallback")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "rcd-yuv unavailable (${e.message}); split fallback")
+                            useRcdFused = false
+                        }
                     } catch (e: Exception) {
                         Log.w(TAG, "rcd buffers failed (${e.message}); fused fallback")
                         try { rcdRgb?.close() } catch (_: Exception) {}
@@ -622,6 +676,7 @@ class DirectLogRecorder(
         }
         Log.i(
             TAG, "demosaic path=" + when {
+                useRcd && useRcdFused -> "rcd-fused"
                 useRcd -> "rcd-split"
                 useFused -> "fused-mhcyuv"
                 else -> "superpixel-fallback"
@@ -639,16 +694,12 @@ class DirectLogRecorder(
         }
         // Record-preview stage (take monitor): P010 staging -> small RGBA8.
         // Best-effort like the monitor itself — any failure here only
-        // disables the monitor, the encode is unaffected.
+        // disables the monitor, the encode is unaffected. Preview dims are
+        // derived after encode-size negotiation below.
         try {
-            val dims = VfRecordPreview.previewDims(width, height)
-            previewWidth = dims[0]
-            previewHeight = dims[1]
-            previewBox = VfRecordPreview.previewBox(width, height, previewWidth, previewHeight)
             val pvspv = appContext.assets.open("shaders/vf/vf_p010preview.spv").use { it.readBytes() }
             if (VfRecordPreview.initPreviewNative(pvspv) == VfVulkan.OK) {
                 previewEnabled = true
-                Log.i(TAG, "preview ${width}x$height -> ${previewWidth}x$previewHeight box=$previewBox")
             } else {
                 Log.w(TAG, "preview init failed; monitor off")
             }
@@ -657,31 +708,207 @@ class DirectLogRecorder(
             previewEnabled = false
         }
 
-        // True-10-bit encoder: P010 ByteBuffer input (no EGL surface — the
-        // recordable configs top out at 8-bit). Grade writes the codec's
-        // own input images; queueInputBuffer carries completion.
-        val codecName = LogVideoProbe.preferredHwEncoder()
-            ?: error("no HW HEVC 4K30 encoder")
+        // True-10-bit encoder, two input modes (RAWR parity):
+        // DIRECT_P010 writes the codec's own P010 input images, and
+        // IMAGE_WRITER feeds P010 through an ImageWriter over the codec
+        // Surface for Surface-only encoders (no EGL surface — the
+        // recordable configs top out at 8-bit). Per ladder rung, prefer
+        // direct; MediaCodec.configure (plus the writer build) is the
+        // final gate.
+        bitrate = LogVideoProbe.clampedBitrate(bitrate, LogVideoProbe.maxBitrateMbps)
+        val writerAllowed = LogVideoProbe.writerPathAvailable()
+        val tried = ArrayList<String>()
+        var mc: MediaCodec? = null
+        var codecName = ""
+        var inputMode = LogVideoProbe.EncoderInputMode.DIRECT_P010
+        for (candidate in LogVideoProbe.encodeCandidates(width, height)) {
+            val cw = candidate.width
+            val ch = candidate.height
+            val colors = sessionProfile.targetColors()
+                .copy(width = cw, height = ch, fps = fps, bitrate = bitrate)
+            // Advertised picks first; the force pick (any HW encoder covering
+            // the rung, regardless of advertised profile) follows because
+            // drivers under-report: MTK advertises [Main] yet configures
+            // Main10 and emits Main10 output. Configure is the final gate.
+            val forceName = LogVideoProbe.preferredForce10EncoderAt(cw, ch, fps)
+            val directTry = LogVideoProbe.preferredP010EncoderAt(cw, ch, fps)
+                ?: forceName
+            val surfaceTry =
+                if (writerAllowed) {
+                    LogVideoProbe.preferredHwEncoderAt(cw, ch, fps) ?: forceName
+                } else null
+            var attempt: MediaCodec? = null
+            if (directTry != null) {
+                val configured = MediaCodec.createByCodecName(directTry)
+                var directOk = false
+                try {
+                    configured.configure(
+                        LogVideoProbe.toMediaFormat(
+                            colors, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
+                        ),
+                        null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                    )
+                    directOk = true
+                } catch (e: Exception) {
+                    tried += "$directTry@${cw}x$ch direct-P010: ${e.message}"
+                    runCatching { configured.release() }
+                }
+                if (directOk) {
+                    attempt = configured
+                    codecName = directTry
+                } else {
+                    // Direct P010 refused: try the Surface/ImageWriter path
+                    // on the same rung before dropping to the next rung.
+                    attempt = null
+                }
+            }
+            if (attempt == null && surfaceTry != null) {
+                val configured = MediaCodec.createByCodecName(surfaceTry)
+                var surface: Surface? = null
+                try {
+                    configured.configure(
+                        LogVideoProbe.toMediaFormat(
+                            colors, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                        ),
+                        null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                    )
+                    // Lint-visible API-33 guard (ImageWriter.Builder is
+                    // API 33+): writerAllowed above already excludes
+                    // older releases, so this never fires.
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                        throw IllegalStateException("ImageWriter P010 needs API 33+")
+                    }
+                    surface = configured.createInputSurface()
+                    imageWriter = ImageWriter.Builder(surface)
+                        .setImageFormat(ImageFormat.YCBCR_P010)
+                        .setMaxImages(LogVideoProbe.WRITER_MAX_IMAGES)
+                        .setUsage(LogVideoProbe.WRITER_P010_USAGE)
+                        .build()
+                    writerSurface = surface
+                } catch (e: Exception) {
+                    tried += "$surfaceTry@${cw}x$ch writer: ${e.message}"
+                    runCatching { imageWriter?.close() }
+                    imageWriter = null
+                    runCatching { surface?.release() }
+                    writerSurface = null
+                    runCatching { configured.release() }
+                    continue
+                }
+                attempt = configured
+                codecName = surfaceTry
+                inputMode = LogVideoProbe.EncoderInputMode.IMAGE_WRITER
+            }
+            if (attempt == null) {
+                if (directTry == null && surfaceTry == null) {
+                    tried += if (!writerAllowed)
+                        "${cw}x$ch@${fps}fps: no P010 encoder (ImageWriter needs API 33+)"
+                    else
+                        "${cw}x$ch@${fps}fps: no HW HEVC encoder"
+                }
+                continue
+            }
+            if (cw != width || ch != height) {
+                Log.w(TAG, "encode fallback ${width}x$height -> ${cw}x$ch (${tried.joinToString("; ")})")
+            }
+            width = cw
+            height = ch
+            mc = attempt
+            break
+        }
+        // 8-bit SDR fallback (BT709 takes only: S-Log3/HLG need 10-bit):
+        // Main-profile Surface encoder + P010->RGBA8 convert + EGL
+        // present, walked over the same ladder after the 10-bit rungs.
+        if (mc == null && sessionProfile == DirectLogProfile.BT709) {
+            for (candidate in LogVideoProbe.encodeCandidates(width, height)) {
+                val cw = candidate.width
+                val ch = candidate.height
+                val name = LogVideoProbe.preferredMain8EncoderAt(cw, ch, fps)
+                if (name == null) {
+                    tried += "${cw}x$ch@${fps}fps: no HW Main encoder"
+                    continue
+                }
+                val colors = sessionProfile.targetColors()
+                    .copy(
+                        width = cw, height = ch, fps = fps, bitrate = bitrate,
+                        profile = MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+                    )
+                val configured = MediaCodec.createByCodecName(name)
+                var surface: Surface? = null
+                var pusher: EglPusher? = null
+                try {
+                    configured.configure(
+                        LogVideoProbe.toMediaFormat(
+                            colors, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                        ),
+                        null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                    )
+                    surface = configured.createInputSurface()
+                    pusher = EglPusher(surface)
+                    if (!pusher.makeCurrent()) error("egl makeCurrent failed")
+                    sdrProgram = GlBlit.buildProgram()
+                    sdrTexture = GlBlit.genTexture()
+                    sdrQuad = GlBlit.quadBuffer()
+                    pusher.unbind()
+                    for (s in slots) {
+                        s.rgb8 = HardwareBufferRef.createRgba8(cw, ch)
+                    }
+                    val rgb8spv = appContext.assets.open("shaders/vf/vf_p010torgb8.spv")
+                        .use { it.readBytes() }
+                    check(VfRgb8Convert.initRgb8Native(rgb8spv) == VfVulkan.OK) {
+                        "rgb8 convert init failed"
+                    }
+                    sdrEgl = pusher
+                    sdrSurface = surface
+                } catch (e: Exception) {
+                    tried += "$name@${cw}x$ch sdr: ${e.message}"
+                    for (s in slots) {
+                        try { s.rgb8?.close() } catch (_: Exception) {}
+                        s.rgb8 = null
+                    }
+                    sdrProgram = 0; sdrTexture = 0; sdrQuad = null
+                    runCatching { pusher?.release() }
+                    runCatching { surface?.release() }
+                    runCatching { configured.release() }
+                    continue
+                }
+                if (cw != width || ch != height) {
+                    Log.w(TAG, "encode fallback ${width}x$height -> ${cw}x$ch SDR (${tried.joinToString("; ")})")
+                }
+                width = cw
+                height = ch
+                codecName = name
+                eightBitMode = true
+                mc = configured
+                break
+            }
+        }
+        val encoder = mc ?: error(
+            "no HEVC Main10 encoder for ${width}x${height}@${fps}fps " +
+                "(tried ${tried.joinToString("; ")})" +
+                if (LogVideoProbe.supportsMain8At(width, height, fps))
+                    "; 8-bit SDR encoder present but this take needs 10-bit (${sessionProfile.name})"
+                else ""
+        )
+        writerMode = inputMode == LogVideoProbe.EncoderInputMode.IMAGE_WRITER
+        codec = encoder
         val target = sessionProfile.targetColors()
             .copy(width = width, height = height, fps = fps, bitrate = bitrate)
-        Log.i(TAG, "output profile=${sessionProfile.name} " +
-            "cs=${target.colorStandard} xfer=${target.colorTransfer} range=${target.colorRange}")
-        val mc = MediaCodec.createByCodecName(codecName)
-        codec = mc
-        try {
-            mc.configure(
-                LogVideoProbe.toMediaFormat(
-                    target, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
-                ),
-                null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
-            )
-        } catch (e: Exception) {
-            codec = null
-            throw e
+        val inputLabel = when {
+            eightBitMode -> LogVideoProbe.EncoderInputMode.SDR_EGL
+            else -> inputMode
         }
-        mc.start()
+        Log.i(TAG, "output profile=${sessionProfile.name} codec=$codecName input=$inputLabel " +
+            "cs=${target.colorStandard} xfer=${target.colorTransfer} range=${target.colorRange}")
+        encoder.start()
+        if (previewEnabled) {
+            val dims = VfRecordPreview.previewDims(width, height)
+            previewWidth = dims[0]
+            previewHeight = dims[1]
+            previewBox = VfRecordPreview.previewBox(width, height, previewWidth, previewHeight)
+            Log.i(TAG, "preview ${width}x$height -> ${previewWidth}x$previewHeight box=$previewBox")
+        }
         DirectLogBreadcrumb.mark(appContext, "codec-started")
-        true10Bit = true
+        true10Bit = !eightBitMode
         // App-owned P010 staging (GPU-written, CPU-readable): 3 ping-pong
         // buffers at encode res. Strides come from the allocator and are
         // re-validated natively per submit (loud -20 on mismatch).
@@ -978,7 +1205,20 @@ class DirectLogRecorder(
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         val frameFps = fps.takeIf { it > 0 } ?: 30
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(frameFps, frameFps))
+        // Fail fast when the sensor offers no AE range covering the take
+        // rate (fixed (fps,fps) is illegal there and breaks the session).
+        val availableRanges =
+            c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.map { it.lower to it.upper } ?: emptyList()
+        val picked = LogVideoProbe.fixedFpsRange(frameFps, availableRanges)
+            ?: error(
+                "no AE fps range covers ${frameFps}fps " +
+                    "(available ${availableRanges.joinToString { "${it.first}-${it.second}" }})"
+            )
+        builder.set(
+            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+            android.util.Range(picked.first, picked.second)
+        )
         val manualFocus = videoManual.focusDiopters
         val lockedFocus = VideoManualPolicy.resolveFocusLock(manualFocus, videoLocks.lockFocus)
         val afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
@@ -1284,9 +1524,14 @@ class DirectLogRecorder(
         val mcEOS = codec
         if (mcEOS != null) {
             try {
-                val eosIdx = mcEOS.dequeueInputBuffer(5000)
-                if (eosIdx >= 0) {
-                    mcEOS.queueInputBuffer(eosIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                if (writerMode || eightBitMode) {
+                    // Surface input has no ByteBuffer pool: EOS is signaled.
+                    mcEOS.signalEndOfInputStream()
+                } else {
+                    val eosIdx = mcEOS.dequeueInputBuffer(5000)
+                    if (eosIdx >= 0) {
+                        mcEOS.queueInputBuffer(eosIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -1564,11 +1809,12 @@ class DirectLogRecorder(
             }
             fusedCount.incrementAndGet()
         } else if (useRcd) {
-            // RCD split path (A/B only): 4 RCD modes (same-queue FIFO
-            // ordered, so no CPU wait between modes) then grade-YUV
-            // fullRgb=1 over the crop-sized RGB. Intermediate sync fds
-            // close immediately; only the grade fd gates the copy.
-            // ~233ms/frame at 4K: the take drops to a few fps effective.
+            // RCD path (A/B only): modes 0-2 (same-queue FIFO ordered,
+            // so no CPU wait between modes) then the fused finalize +
+            // grade, or mode 3 + grade-YUV fullRgb=1 when the fused
+            // init failed. Intermediate sync fds close immediately;
+            // only the final fd gates the copy. ~250ms/frame at 4K: the
+            // take drops to a few fps effective.
             val rgbBuf = rcdRgb?.buffer
             val scratchBuf = rcdScratch?.buffer
             if (rgbBuf == null || scratchBuf == null) {
@@ -1577,7 +1823,9 @@ class DirectLogRecorder(
                 return false
             }
             var rcdOk = true
-            for (mode in 0..3) {
+            // Modes 0-2 always run split; the fused finalize below
+            // replaces mode 3 (+ grade) when available.
+            for (mode in 0..2) {
                 val (riparams, rfparams) = VfRcd.packRcd(
                     crop.width, crop.height, crop.left, crop.top,
                     channels, pitch, mode, levels, white
@@ -1596,16 +1844,48 @@ class DirectLogRecorder(
                 intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
                 profile = sessionProfile
             )
-            fd = VfLogGrade.gradeYuvSubmitNative(
-                rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
-            )
-            if (fd == -20) {
-                error("P010 staging layout mismatch (see logcat); aborting take")
-            }
-            if (fd < 0) {
-                Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
-                dropped.incrementAndGet()
-                return false
+            if (useRcdFused) {
+                // Fused finalize (mode 3 + grade in one dispatch, no
+                // RGBA16F round trip). The fused fd gates the copy.
+                val (riparams, rfparams) = VfRcd.packRcd(
+                    crop.width, crop.height, crop.left, crop.top,
+                    channels, pitch, 3, levels, white
+                )
+                fd = VfRcd.rcdFusedYuvSubmitNative(
+                    hb, rgbBuf, scratchBuf, p010Buf, riparams, rfparams,
+                    gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex
+                )
+                if (fd == -20) {
+                    error("P010 staging layout mismatch (see logcat); aborting take")
+                }
+                if (fd < 0) {
+                    Log.w(TAG, "rcd fused submit failed ($fd); dropping frame")
+                    dropped.incrementAndGet()
+                    return false
+                }
+            } else {
+                val (m3iparams, m3fparams) = VfRcd.packRcd(
+                    crop.width, crop.height, crop.left, crop.top,
+                    channels, pitch, 3, levels, white
+                )
+                val m3fd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, m3iparams, m3fparams, slotIndex)
+                if (m3fd < 0) {
+                    Log.w(TAG, "rcd mode 3 submit failed ($m3fd); dropping frame")
+                    dropped.incrementAndGet()
+                    return false
+                }
+                try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {}
+                fd = VfLogGrade.gradeYuvSubmitNative(
+                    rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
+                )
+                if (fd == -20) {
+                    error("P010 staging layout mismatch (see logcat); aborting take")
+                }
+                if (fd < 0) {
+                    Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
+                    dropped.incrementAndGet()
+                    return false
+                }
             }
             rcdCount.incrementAndGet()
         } else {
@@ -1668,7 +1948,12 @@ class DirectLogRecorder(
         s.jobDone = latch
         // frameCounter already incremented above: jobs are 0-based contiguous.
         val seq = frameCounter - 1
-        copyQueue.put(CopyJob(s.p010!!, fd, cfrUs, latch, seq, ts, lease))
+        copyQueue.put(
+            CopyJob(
+                s.p010!!, fd, cfrUs, latch, seq, ts, lease,
+                if (eightBitMode) s.rgb8 else null, slotIndex
+            )
+        )
         // Submit-only pair + fd handoff: zero CPU stall by construction
         // (no blocking twin exists on the P010 path, so fallbackWaits
         // stays 0 — any reclaim-valve stall would be a GPU wedge).
@@ -1799,6 +2084,9 @@ class DirectLogRecorder(
         val sensorTsNs: Long,
         /** RAW Image lease: close on GPU completion (idempotent). */
         val rawLease: AutoCloseable,
+        /** Convert target + twin slot for the 8-bit path (null otherwise). */
+        val rgb8: HardwareBufferRef? = null,
+        val slot: Int = 0,
     )
 
     /** A filled codec input awaiting its ordered turn at queueInputBuffer. */
@@ -1806,6 +2094,8 @@ class DirectLogRecorder(
         val inIdx: Int,
         val image: android.media.Image?,
         val size: Int,
+        /** Set on the ImageWriter path (inIdx is -1 there). Ownership transfers on queue. */
+        val writerImage: android.media.Image? = null,
     )
 
     private val copyQueue = LinkedBlockingQueue<CopyJob>()
@@ -1883,18 +2173,22 @@ class DirectLogRecorder(
             // silently discards out-of-order works). The slot releases as
             // soon as its copy lands — the queue may lag behind without
             // pinning the slot (it only touches the codec buffer).
-            val ready = try {
-                processCopyJob(job)
+            // Exception: the 8-bit path presents the slot's RGBA8 on the
+            // gate thread, so the slot stays alive until the gate retires
+            // the job (a reused slot would corrupt the present).
+            var ready: ReadyQueue? = null
+            try {
+                ready = processCopyJob(job)
             } catch (e: Exception) {
                 Log.w(TAG, "copy job failed", e)
                 frameErrors.incrementAndGet()
-                null
+                ready = null
             } finally {
                 try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
                 // Backstop: normally already released right after the
                 // fence wait in processCopyJob (idempotent).
                 try { job.rawLease.close() } catch (_: Exception) {}
-                job.done.countDown()
+                if (!eightBitMode || ready == null) job.done.countDown()
             }
             synchronized(queueGate) {
                 while (job.seq != nextQueueSeq) queueGate.wait()
@@ -1903,6 +2197,7 @@ class DirectLogRecorder(
                 } finally {
                     nextQueueSeq++
                     queueGate.notifyAll()
+                    if (eightBitMode && ready != null) job.done.countDown()
                 }
             }
         }
@@ -1916,12 +2211,11 @@ class DirectLogRecorder(
      * Starved pool drops the JOB's frame (already graded — counted in
      * framesDropped like any other loss).
      */
-    private fun processCopyJob(job: CopyJob): ReadyQueue? {
-        val mc = codec
-        if (mc == null) {
-            dropped.incrementAndGet()
-            return null
-        }
+    /**
+     * GPU fence wait shared by both input modes. False = wedge (counted
+     * by the caller like any other loss).
+     */
+    private fun awaitGpuFence(job: CopyJob): Boolean {
         // Fence wait = GPU queue time still outstanding when the worker
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
@@ -1940,9 +2234,7 @@ class DirectLogRecorder(
             }
             if (!ready) {
                 Log.w(TAG, "copy job: GPU wedge")
-                frameErrors.incrementAndGet()
-                dropped.incrementAndGet()
-                return null
+                return false
             }
         }
         val fenceWaitMs = (android.os.SystemClock.elapsedRealtimeNanos() - fenceStartNs) / 1e6f
@@ -1953,6 +2245,22 @@ class DirectLogRecorder(
         // pool NOW — before the 50ms dequeue grace and the ~25ms copy
         // widen pool pressure. Idempotent with the job-finally backstop.
         try { job.rawLease.close() } catch (_: Exception) {}
+        return true
+    }
+
+    private fun processCopyJob(job: CopyJob): ReadyQueue? {
+        if (!awaitGpuFence(job)) {
+            frameErrors.incrementAndGet()
+            dropped.incrementAndGet()
+            return null
+        }
+        if (writerMode) return processWriterCopyJob(job)
+        if (eightBitMode) return processSdrCopyJob(job)
+        val mc = codec
+        if (mc == null) {
+            dropped.incrementAndGet()
+            return null
+        }
         // Cold-start priming: C2 answers TRY_AGAIN while its input pool
         // comes up (~ms at take start), so the first jobs may wait; once
         // primed, dequeue is instant again. A 50ms grace past priming
@@ -2026,18 +2334,179 @@ class DirectLogRecorder(
         return ReadyQueue(inIdx, inImage, p010Size)
     }
 
+    /** Poll-valve wait on a convert/export fd (true = signaled). No counting; caller owns it. */
+    private fun waitSyncFd(fd: Int): Boolean {
+        if (VfEglImport.pollSyncFd(fd)) return true
+        val deadline = System.currentTimeMillis() + 100
+        while (System.currentTimeMillis() < deadline) {
+            if (VfEglImport.pollSyncFd(fd)) return true
+            Thread.sleep(2)
+        }
+        return false
+    }
+
+    /**
+     * Copy phase for the 8-bit SDR path: convert P010 staging to the
+     * slot's full-res RGBA8 (same-queue FIFO ordered behind the grade),
+     * then wait the convert fence. The EGL present happens on the gate
+     * thread, which holds the slot until it is done (see copyLoop).
+     */
+    private fun processSdrCopyJob(job: CopyJob): ReadyQueue? {
+        val rgb8 = job.rgb8
+        if (rgb8 == null) {
+            dropped.incrementAndGet()
+            return null
+        }
+        val cfd = VfRgb8Convert.rgb8SubmitNative(
+            job.p010.buffer, rgb8.buffer,
+            intArrayOf(width, height), intArrayOf(width, height),
+            intArrayOf(ourYStrideB, ourUvStrideB, width, height),
+            job.slot
+        )
+        if (cfd < 0) {
+            if (!sdrConvertFailed) {
+                sdrConvertFailed = true
+                Log.w(TAG, "rgb8 convert failed ($cfd); degrading frames")
+            }
+            degradedFrames.incrementAndGet()
+            return null
+        }
+        if (!waitSyncFd(cfd)) {
+            Log.w(TAG, "rgb8 convert wedge (seq=${job.seq}); starving frame")
+            try { VfEglImport.closeSyncFd(cfd) } catch (_: Exception) {}
+            inputStarved.incrementAndGet()
+            dropped.incrementAndGet()
+            return null
+        }
+        try { VfEglImport.closeSyncFd(cfd) } catch (_: Exception) {}
+        return ReadyQueue(-1, null, 0)
+    }
+
+    /**
+     * EGL present of one converted RGBA8 frame into the encoder Surface.
+     * Gate thread only (the EGL context lives here after setup unbinds
+     * it). False = degraded frame, take continues.
+     */
+    private fun presentSdrFrame(rgb8: HardwareBufferRef, ptsNs: Long): Boolean {
+        val e = sdrEgl ?: return false
+        return try {
+            // The gate rides whichever copy worker holds the in-order
+            // job, so the presenting thread changes frame to frame.
+            // Android EGL has no implicit context migration: a context
+            // still current on the previous worker fails the next
+            // makeCurrent with EGL_BAD_ACCESS, so bind around every
+            // present and release immediately after.
+            if (!e.makeCurrent()) return false
+            sdrEglCurrent = true
+            sdrEglThread = Thread.currentThread().id
+            try {
+                val image = VfEglImport.createEGLImage(rgb8.buffer)
+                if (image == 0L) return false
+                try {
+                    if (VfEglImport.bindEGLImageToTexture2D(image, sdrTexture) !=
+                        android.opengl.GLES20.GL_NO_ERROR
+                    ) {
+                        return false
+                    }
+                    android.opengl.GLES20.glViewport(0, 0, width, height)
+                    android.opengl.GLES20.glUseProgram(sdrProgram)
+                    android.opengl.GLES20.glActiveTexture(android.opengl.GLES20.GL_TEXTURE0)
+                    android.opengl.GLES20.glBindTexture(android.opengl.GLES20.GL_TEXTURE_2D, sdrTexture)
+                    android.opengl.GLES20.glUniform1i(
+                        android.opengl.GLES20.glGetUniformLocation(sdrProgram, "uTex"), 0
+                    )
+                    sdrQuad?.let { GlBlit.drawQuad(sdrProgram, it) }
+                    android.opengl.GLES20.glFinish()
+                } finally {
+                    VfEglImport.destroyEGLImage(image)
+                }
+                e.setPresentationTime(ptsNs)
+                e.swap()
+                true
+            } finally {
+                // Release the context so the next gate holder (possibly
+                // the other worker) can bind cleanly.
+                try { e.unbind() } catch (_: Exception) {}
+                sdrEglCurrent = false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun discoverWriterStrides(image: Image) {
+        val planes = image.planes
+        require(planes.size >= 3) { "writer input is not P010" }
+        wyStrideB = planes[0].rowStride
+        wuvStrideB = planes[1].rowStride
+        wvStrideB = planes[2].rowStride
+        wyPxStrideB = planes[0].pixelStride
+        wuvPxStrideB = planes[1].pixelStride
+        wvPxStrideB = planes[2].pixelStride
+        require(wyStrideB > 0 && wuvStrideB > 0 && wvStrideB > 0) { "bad writer strides" }
+        val uRem = planes[1].buffer.remaining()
+        val vRem = planes[2].buffer.remaining()
+        Log.i(TAG, "writer P010 yStride=$wyStrideB(${wyPxStrideB}Bpx) " +
+            "uStride=$wuvStrideB(${wuvPxStrideB}Bpx) vStride=$wvStrideB(${wvPxStrideB}Bpx) " +
+            "nplanes=${planes.size} uRem=$uRem vRem=$vRem")
+    }
+
+    /**
+     * Copy phase for the ImageWriter path (Surface-only encoders): dequeue
+     * a P010 writer image, copy P010 staging into its planes, hand it to
+     * the ordered gate. A dry writer pool starves the frame exactly like a
+     * dry codec pool on the direct path. Close (not queue) returns a
+     * failed image to the pool.
+     */
+    private fun processWriterCopyJob(job: CopyJob): ReadyQueue? {
+        val writer = imageWriter
+        if (writer == null) {
+            dropped.incrementAndGet()
+            return null
+        }
+        val wImage = try {
+            writer.dequeueInputImage()
+        } catch (_: Exception) {
+            Log.w(TAG, "writer pool dry (seq=${job.seq}); starving frame")
+            inputStarved.incrementAndGet()
+            dropped.incrementAndGet()
+            return null
+        }
+        if (wyStrideB == 0) {
+            try {
+                discoverWriterStrides(wImage)
+            } catch (e: Exception) {
+                degradedFrames.incrementAndGet()
+                try { wImage.close() } catch (_: Exception) {}
+                return null
+            }
+        }
+        val t0 = android.os.SystemClock.elapsedRealtimeNanos()
+        val rc = VfEglImport.copyP010ToCodec(
+            job.p010.buffer,
+            wImage.planes[0].buffer, wyStrideB,
+            wImage.planes[1].buffer, wuvStrideB, wuvPxStrideB,
+            wImage.planes[2].buffer, wvStrideB, wvPxStrideB,
+            width, height, ourYStrideB, ourUvStrideB
+        )
+        val copyMs = (android.os.SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
+        copyMsAvg = if (copyMsAvg == 0f) copyMs else copyMsAvg * 0.9f + copyMs * 0.1f
+        if (copyMs > copyMsMax) copyMsMax = copyMs
+        if (rc != 0) {
+            Log.w(TAG, "writer P010 copy rc=$rc; recycling image")
+            degradedFrames.incrementAndGet()
+            try { wImage.close() } catch (_: Exception) {}
+            return null
+        }
+        return ReadyQueue(-1, null, 0, wImage)
+    }
+
     /**
      * Ordered retire of one filled input (inside the queue gate: strictly
      * in submit order). Owns the monotonic guard, the queue call and the
      * image close. Gate thread only (either worker, serialized).
      */
     private fun queueReady(job: CopyJob, ready: ReadyQueue) {
-        val mc = codec
-        if (mc == null) {
-            degradedFrames.incrementAndGet()
-            try { ready.image?.close() } catch (_: Exception) {}
-            return
-        }
         // Monotonicity guard: C2 silently discards late works, so a
         // backward step here wedges the take — never let one pass quiet.
         if (job.ptsUs <= lastQueuedPts && queues > 0) {
@@ -2045,6 +2514,49 @@ class DirectLogRecorder(
         }
         lastQueuedPts = job.ptsUs
         queues++
+        // 8-bit SDR path: present the converted RGBA8 to the encoder
+        // Surface (frames enter the encoder via swap, PTS via present
+        // time). Gate thread only; the slot stays alive until here.
+        if (eightBitMode) {
+            var queuedOk = false
+            try {
+                val rgb8 = job.rgb8 ?: error("rgb8 gone")
+                queuedOk = presentSdrFrame(rgb8, job.ptsUs * 1_000L)
+                if (!queuedOk) {
+                    Log.w(TAG, "sdr present failed (seq=${job.seq})")
+                    degradedFrames.incrementAndGet()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "sdr present failed: ${e.message}")
+                degradedFrames.incrementAndGet()
+            }
+            noteQueuedOk(job, queuedOk)
+            return
+        }
+        // ImageWriter path: timestamp + queue transfers ownership to the
+        // writer (never close after a successful queue); close returns a
+        // failed image to the pool.
+        val wImage = ready.writerImage
+        if (wImage != null) {
+            var queuedOk = false
+            try {
+                wImage.timestamp = job.ptsUs * 1_000L
+                (imageWriter ?: error("writer gone")).queueInputImage(wImage)
+                queuedOk = true
+            } catch (e: Exception) {
+                Log.w(TAG, "writer queue failed: ${e.message}")
+                try { wImage.close() } catch (_: Exception) {}
+                degradedFrames.incrementAndGet()
+            }
+            noteQueuedOk(job, queuedOk)
+            return
+        }
+        val mc = codec
+        if (mc == null) {
+            degradedFrames.incrementAndGet()
+            try { ready.image?.close() } catch (_: Exception) {}
+            return
+        }
         var queuedOk = false
         try {
             mc.queueInputBuffer(ready.inIdx, 0, ready.size, job.ptsUs, 0)
@@ -2062,10 +2574,17 @@ class DirectLogRecorder(
         } finally {
             try { ready.image?.close() } catch (_: Exception) {}
         }
-        // Stab frame table: exactly the queued frames, in mux order (the
-        // gate serializes this, so the plain list append is race-free).
+        noteQueuedOk(job, queuedOk)
+    }
+
+    /**
+     * Shared gate bookkeeping for every input mode: stab frame table
+     * (exactly the queued frames, in mux order — the gate serializes
+     * this, so the plain list append is race-free) and the
+     * encode-latency arm (the drain matches outputs by PTS).
+     */
+    private fun noteQueuedOk(job: CopyJob, queuedOk: Boolean) {
         if (queuedOk && stabTableArmed) stabFrameTs.add(job.sensorTsNs)
-        // Encode-latency arm: the drain matches outputs by PTS.
         if (queuedOk) {
             synchronized(queuedPtsLock) {
                 queuedPtsNs[job.ptsUs] = android.os.SystemClock.elapsedRealtimeNanos()
@@ -2420,6 +2939,8 @@ class DirectLogRecorder(
             s.export = null
             try { s.p010?.close() } catch (_: Exception) {}
             s.p010 = null
+            try { s.rgb8?.close() } catch (_: Exception) {}
+            s.rgb8 = null
             try { s.preview?.close() } catch (_: Exception) {}
             s.preview = null
         }
@@ -2432,6 +2953,32 @@ class DirectLogRecorder(
         codec = null
         try { mc?.stop() } catch (_: Exception) {}
         try { mc?.release() } catch (_: Exception) {}
+        writerMode = false
+        try { imageWriter?.close() } catch (_: Exception) {}
+        imageWriter = null
+        try { writerSurface?.release() } catch (_: Exception) {}
+        writerSurface = null
+        // 8-bit EGL teardown: GL deletes need a current context, and no
+        // worker holds it anymore (copy threads are joined before this).
+        try {
+            if (sdrEgl != null && sdrEglCurrent && sdrEgl?.makeCurrent() == true) {
+                try {
+                    if (sdrTexture != 0) android.opengl.GLES20.glDeleteTextures(
+                        1, intArrayOf(sdrTexture), 0
+                    )
+                } catch (_: Exception) {}
+                try {
+                    if (sdrProgram != 0) android.opengl.GLES20.glDeleteProgram(sdrProgram)
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        eightBitMode = false
+        sdrEglCurrent = false
+        sdrProgram = 0; sdrTexture = 0; sdrQuad = null
+        try { sdrEgl?.release() } catch (_: Exception) {}
+        sdrEgl = null
+        try { sdrSurface?.release() } catch (_: Exception) {}
+        sdrSurface = null
     }
 
     companion object {
@@ -2614,21 +3161,32 @@ class DirectLogRecorder(
 }
 
 /** Small RAII holder so Slot fields stay null-safe across teardown. */
-private class HardwareBufferRef(val buffer: android.hardware.HardwareBuffer) {
+internal class HardwareBufferRef(val buffer: android.hardware.HardwareBuffer) {
     fun close() {
         try { buffer.close() } catch (_: Exception) {}
     }
 
     companion object {
         /** RGBA16F export: >8-bit precision end to end for the 10-bit encode. */
-        fun create(w: Int, h: Int): HardwareBufferRef = HardwareBufferRef(
-            android.hardware.HardwareBuffer.create(
-                w, h, android.hardware.HardwareBuffer.RGBA_FP16, 1,
-                android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                    android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
-                    android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+        fun create(w: Int, h: Int): HardwareBufferRef {
+            // Half-float buffers need Android 13: fail here with a message
+            // the callers' fallbacks (fused path, LOG FAILED status) report,
+            // instead of a bare native allocation failure on Android 11/12.
+            if (!VulkanSupport.isFp16BufferSupported()) {
+                throw UnsupportedOperationException(
+                    "RGBA16F record buffers need Android 13+ " +
+                        "(API ${VulkanSupport.FP16_MIN_SDK}+)"
+                )
+            }
+            return HardwareBufferRef(
+                android.hardware.HardwareBuffer.create(
+                    w, h, android.hardware.HardwareBuffer.RGBA_FP16, 1,
+                    android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+                        android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
+                        android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+                )
             )
-        )
+        }
 
         /**
          * RGBA8 record-preview: Vulkan STORAGE_IMAGE target, EGL-sampled

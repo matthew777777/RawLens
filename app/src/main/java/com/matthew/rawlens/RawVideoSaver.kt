@@ -31,7 +31,8 @@ internal object RawVideoSaver {
         val activePath = active?.absolutePath
         return files.filter { file ->
             file.isFile && file.extension == "crs" && file.length() > 0 &&
-                file.absolutePath != activePath && hasValidFooter(file)
+                file.absolutePath != activePath && hasValidFooter(file) &&
+                !BurstCrsStore.isBurstFile(file)
         }.sortedBy { it.lastModified() }
     }
 

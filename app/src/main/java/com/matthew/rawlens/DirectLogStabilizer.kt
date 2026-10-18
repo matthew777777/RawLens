@@ -2,12 +2,16 @@
 package com.matthew.rawlens
 
 import android.content.Context
+import android.graphics.ImageFormat
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.ImageWriter
+import android.os.Build
 import android.util.Log
+import android.view.Surface
 import java.io.File
 import java.nio.ByteBuffer
 
@@ -94,6 +98,13 @@ class DirectLogStabilizer(private val appContext: Context) {
         var extractor: MediaExtractor? = null
         var decoder: MediaCodec? = null
         var encoder: MediaCodec? = null
+        var writer: ImageWriter? = null
+        var writerSurface: Surface? = null
+        var sdrEgl: EglPusher? = null
+        var sdrRgb8: HardwareBufferRef? = null
+        var sdrProgram = 0
+        var sdrTexture = 0
+        var sdrQuad: java.nio.FloatBuffer? = null
         var muxer: MediaMuxer? = null
         try {
             extractor = MediaExtractor()
@@ -113,24 +124,127 @@ class DirectLogStabilizer(private val appContext: Context) {
             decoder.configure(videoFormat, null, null, 0)
             decoder.start()
 
-            val encoderName = LogVideoProbe.preferredHwEncoder() ?: error("no HW HEVC encoder")
-            val target = profile.targetColors()
-                .copy(width = w, height = h, fps = fps, bitrate = LogVideoProbe.BITRATE)
-            encoder = MediaCodec.createByCodecName(encoderName)
-            encoder.configure(
-                LogVideoProbe.toMediaFormat(
-                    target, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
-                ),
-                null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+            // Warp re-encode mirrors the take's input modes: direct P010
+            // images where advertised, else P010 through an ImageWriter
+            // over the codec Surface (API 33+).
+            val bitrate = LogVideoProbe.clampedBitrate(
+                LogVideoProbe.BITRATE, LogVideoProbe.maxBitrateMbps
             )
+            val target = profile.targetColors()
+                .copy(width = w, height = h, fps = fps, bitrate = bitrate)
+            val directName = LogVideoProbe.preferredP010EncoderAt(w, h, fps)
+            val surfaceName =
+                if (LogVideoProbe.writerPathAvailable()) LogVideoProbe.preferredHwEncoderAt(w, h, fps)
+                else null
+            val tenBitMode = LogVideoProbe.rungMode(directName, surfaceName)
+            // 8-bit SDR fallback (BT709 sources only): Main-profile
+            // Surface encoder + convert + EGL present, after the 10-bit
+            // modes. The warp is single-threaded, so one convert buffer
+            // and one EGL context serve the whole pass.
+            val sdrMode = if (profile == DirectLogProfile.BT709 &&
+                LogVideoProbe.preferredMain8EncoderAt(w, h, fps) != null
+            ) {
+                LogVideoProbe.EncoderInputMode.SDR_EGL
+            } else {
+                null
+            }
+            val mode = tenBitMode ?: sdrMode ?: error(
+                "no HW HEVC Main10 encoder for ${w}x${h}@${fps}fps" +
+                    if (LogVideoProbe.supportsMain8At(w, h, fps))
+                        "; 8-bit SDR encoder present but this warp needs 10-bit (${profile.name})"
+                    else ""
+            )
+            val encoderName = when (mode) {
+                LogVideoProbe.EncoderInputMode.DIRECT_P010 -> requireNotNull(directName)
+                LogVideoProbe.EncoderInputMode.IMAGE_WRITER -> requireNotNull(surfaceName)
+                LogVideoProbe.EncoderInputMode.SDR_EGL ->
+                    requireNotNull(LogVideoProbe.preferredMain8EncoderAt(w, h, fps))
+            }
+            encoder = MediaCodec.createByCodecName(encoderName)
+            if (mode == LogVideoProbe.EncoderInputMode.DIRECT_P010) {
+                encoder.configure(
+                    LogVideoProbe.toMediaFormat(
+                        target, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010
+                    ),
+                    null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                )
+            } else if (mode == LogVideoProbe.EncoderInputMode.IMAGE_WRITER) {
+                encoder.configure(
+                    LogVideoProbe.toMediaFormat(
+                        target, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    ),
+                    null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                )
+                // Lint-visible API-33 guard: writerPathAvailable above
+                // already excludes older releases, so this never fires.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    throw IllegalStateException("ImageWriter P010 needs API 33+")
+                }
+                val surface = encoder.createInputSurface()
+                writer = ImageWriter.Builder(surface)
+                    .setImageFormat(ImageFormat.YCBCR_P010)
+                    .setMaxImages(LogVideoProbe.WRITER_MAX_IMAGES)
+                    .setUsage(LogVideoProbe.WRITER_P010_USAGE)
+                    .build()
+                writerSurface = surface
+            } else {
+                encoder.configure(
+                    LogVideoProbe.toMediaFormat(
+                        target.copy(
+                            profile = MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+                        ),
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    ),
+                    null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                )
+                val surface = encoder.createInputSurface()
+                try {
+                    sdrEgl = EglPusher(surface)
+                    if (sdrEgl?.makeCurrent() != true) error("egl makeCurrent failed")
+                    sdrProgram = GlBlit.buildProgram()
+                    sdrTexture = GlBlit.genTexture()
+                    sdrQuad = GlBlit.quadBuffer()
+                    sdrRgb8 = HardwareBufferRef.createRgba8(w, h)
+                    // Grade chain first (idempotent): the twin/set
+                    // allocator below draws from the grade layouts, same
+                    // order as the record path.
+                    val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv")
+                        .use { it.readBytes() }
+                    check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) {
+                        "grade init failed"
+                    }
+                    val yuvspv = appContext.assets.open("shaders/vf/vf_gradeyuv.spv")
+                        .use { it.readBytes() }
+                    check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) {
+                        "grade-yuv init failed"
+                    }
+                    val rgb8spv = appContext.assets.open("shaders/vf/vf_p010torgb8.spv")
+                        .use { it.readBytes() }
+                    check(VfRgb8Convert.initRgb8Native(rgb8spv) == VfVulkan.OK) {
+                        "rgb8 convert init failed"
+                    }
+                    writerSurface = surface
+                } catch (e: Exception) {
+                    try { sdrRgb8?.close() } catch (_: Exception) {}
+                    sdrRgb8 = null
+                    sdrProgram = 0; sdrTexture = 0; sdrQuad = null
+                    try { sdrEgl?.release() } catch (_: Exception) {}
+                    sdrEgl = null
+                    try { surface.release() } catch (_: Exception) {}
+                    try { encoder.release() } catch (_: Exception) {}
+                    throw e
+                }
+            }
             encoder.start()
+            Log.i(TAG, "stab encoder=$encoderName input=$mode")
 
             if (output.exists()) output.delete()
             muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
             val pass = VideoPass(
                 extractor, decoder, encoder, muxer, staging, plan, w, h, fps,
-                srcYStrideB, srcUvStrideB, videoTrack, audioFormat, onProgress
+                srcYStrideB, srcUvStrideB, videoTrack, audioFormat, onProgress,
+                writer, sdrEgl, sdrRgb8?.buffer, sdrProgram, sdrTexture, sdrQuad
             )
             val warped = pass.run()
             val audioCopied = copyAudioTrack(source, audioTrack, audioFormat, muxer, pass)
@@ -151,6 +265,29 @@ class DirectLogStabilizer(private val appContext: Context) {
             try { decoder?.release() } catch (_: Exception) {}
             try { encoder?.stop() } catch (_: Exception) {}
             try { encoder?.release() } catch (_: Exception) {}
+            try { writer?.close() } catch (_: Exception) {}
+            writer = null
+            // 8-bit EGL teardown on this (single GL) thread: deletes under
+            // the still-current context, then release the context+surface.
+            try {
+                if (sdrEgl != null) {
+                    try {
+                        if (sdrTexture != 0) android.opengl.GLES20.glDeleteTextures(
+                            1, intArrayOf(sdrTexture), 0
+                        )
+                    } catch (_: Exception) {}
+                    try {
+                        if (sdrProgram != 0) android.opengl.GLES20.glDeleteProgram(sdrProgram)
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+            sdrProgram = 0; sdrTexture = 0; sdrQuad = null
+            try { sdrRgb8?.close() } catch (_: Exception) {}
+            sdrRgb8 = null
+            try { sdrEgl?.release() } catch (_: Exception) {}
+            sdrEgl = null
+            try { writerSurface?.release() } catch (_: Exception) {}
+            writerSurface = null
             try { muxer?.release() } catch (_: Exception) {}
             try { staging.close() } catch (_: Exception) {}
             try { VfStab.resetStabNative() } catch (_: Exception) {}
@@ -180,6 +317,14 @@ class DirectLogStabilizer(private val appContext: Context) {
         val videoTrack: Int,
         val audioFormat: MediaFormat?,
         val onProgress: (done: Int, total: Int) -> Unit,
+        /** Non-null on the ImageWriter path (Surface-only encoders). */
+        val writer: ImageWriter? = null,
+        /** Non-null on the 8-bit SDR path (single convert buffer + EGL). */
+        val sdrEgl: EglPusher? = null,
+        val sdrRgb8: android.hardware.HardwareBuffer? = null,
+        val sdrProgram: Int = 0,
+        val sdrTexture: Int = 0,
+        val sdrQuad: java.nio.FloatBuffer? = null,
     ) {
         var videoMuxTrack = -1
         var audioMuxTrack = -1
@@ -195,6 +340,12 @@ class DirectLogStabilizer(private val appContext: Context) {
         var vStrideB = 0
         var uvPxB = 0
         var vPxB = 0
+        // Writer-path input layout (discovered from the first writer image).
+        var wyStrideB = 0
+        var wuvStrideB = 0
+        var wvStrideB = 0
+        var wuvPxB = 0
+        var wvPxB = 0
 
         private var decEosIn = false
         private var decEosOut = false
@@ -346,6 +497,98 @@ class DirectLogStabilizer(private val appContext: Context) {
         }
 
         private fun queueWarpedToEncoder(ptsUs: Long): Boolean {
+            val se = sdrEgl
+            if (se != null) {
+                val dst = sdrRgb8 ?: return false
+                val cfd = VfRgb8Convert.rgb8SubmitNative(
+                    staging, dst,
+                    intArrayOf(w, h), intArrayOf(w, h),
+                    intArrayOf(srcYStrideB, srcUvStrideB, w, h),
+                    (warped % 3 + 3) % 3
+                )
+                if (cfd < 0) return false
+                try {
+                    if (!waitSyncFd(cfd)) return false
+                    val image = VfEglImport.createEGLImage(dst)
+                    if (image == 0L) return false
+                    try {
+                        if (VfEglImport.bindEGLImageToTexture2D(image, sdrTexture) !=
+                            android.opengl.GLES20.GL_NO_ERROR
+                        ) {
+                            return false
+                        }
+                        android.opengl.GLES20.glViewport(0, 0, w, h)
+                        android.opengl.GLES20.glUseProgram(sdrProgram)
+                        android.opengl.GLES20.glActiveTexture(android.opengl.GLES20.GL_TEXTURE0)
+                        android.opengl.GLES20.glBindTexture(
+                            android.opengl.GLES20.GL_TEXTURE_2D, sdrTexture
+                        )
+                        android.opengl.GLES20.glUniform1i(
+                            android.opengl.GLES20.glGetUniformLocation(sdrProgram, "uTex"), 0
+                        )
+                        sdrQuad?.let { GlBlit.drawQuad(sdrProgram, it) }
+                        android.opengl.GLES20.glFinish()
+                    } finally {
+                        VfEglImport.destroyEGLImage(image)
+                    }
+                    se.setPresentationTime(ptsUs * 1_000L)
+                    se.swap()
+                    return true
+                } catch (_: Exception) {
+                    return false
+                } finally {
+                    try { VfEglImport.closeSyncFd(cfd) } catch (_: Exception) {}
+                }
+            }
+            val wr = writer
+            if (wr != null) {
+                val img = try {
+                    wr.dequeueInputImage()
+                } catch (_: Exception) {
+                    return false
+                }
+                try {
+                    if (wyStrideB == 0) {
+                        val planes = img.planes
+                        if (planes.size < 3) {
+                            try { img.close() } catch (_: Exception) {}
+                            return false
+                        }
+                        wyStrideB = planes[0].rowStride
+                        wuvStrideB = planes[1].rowStride
+                        wvStrideB = planes[2].rowStride
+                        wuvPxB = planes[1].pixelStride
+                        wvPxB = planes[2].pixelStride
+                        if (wyStrideB <= 0 || wuvStrideB <= 0 || wvStrideB <= 0) {
+                            wyStrideB = 0
+                            try { img.close() } catch (_: Exception) {}
+                            return false
+                        }
+                    }
+                    val rc = VfEglImport.copyP010ToCodec(
+                        staging,
+                        img.planes[0].buffer, wyStrideB,
+                        img.planes[1].buffer, wuvStrideB, wuvPxB,
+                        img.planes[2].buffer, wvStrideB, wvPxB,
+                        w, h, srcYStrideB, srcUvStrideB
+                    )
+                    if (rc != 0) {
+                        try { img.close() } catch (_: Exception) {}
+                        return false
+                    }
+                    img.timestamp = ptsUs * 1_000L
+                    try {
+                        wr.queueInputImage(img)
+                    } catch (_: Exception) {
+                        try { img.close() } catch (_: Exception) {}
+                        return false
+                    }
+                    return true
+                } catch (_: Exception) {
+                    try { img.close() } catch (_: Exception) {}
+                    return false
+                }
+            }
             val inIdx = try {
                 encoder.dequeueInputBuffer(50_000)
             } catch (_: Exception) {
@@ -395,7 +638,25 @@ class DirectLogStabilizer(private val appContext: Context) {
             }
         }
 
+        private fun waitSyncFd(fd: Int): Boolean {
+            if (VfEglImport.pollSyncFd(fd)) return true
+            val deadline = System.currentTimeMillis() + 100
+            while (System.currentTimeMillis() < deadline) {
+                if (VfEglImport.pollSyncFd(fd)) return true
+                Thread.sleep(2)
+            }
+            return false
+        }
+
         private fun queueEncoderEos(): Boolean {
+            if (writer != null || sdrEgl != null) {
+                return try {
+                    encoder.signalEndOfInputStream()
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
             val inIdx = try {
                 encoder.dequeueInputBuffer(50_000)
             } catch (_: Exception) {
