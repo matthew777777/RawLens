@@ -46,7 +46,14 @@ android {
 
     defaultConfig {
         applicationId = "com.matthew.rawlens"
-        minSdk = 29
+        // Floor is Android 11: the viewfinder (RGBA8) and stills
+        // (GLES/CPU) pipelines run there, and the startup VulkanSupport
+        // gate informs users whose device fails it instead of failing
+        // silently. The GPU record/RCD path additionally needs RGBA_FP16
+        // HardwareBuffers (Android 13+); those call sites guard with
+        // VulkanSupport.isFp16BufferSupported and fall back with a
+        // user-visible status. Do not raise without re-checking.
+        minSdk = 30
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
@@ -75,6 +82,11 @@ android {
     }
 
     sourceSets {
+        getByName("main") {
+            // Generated dir with the desktop-proven stage SPVs (synced by
+            // :app:syncSrpSpv, never committed).
+            assets.srcDir(layout.buildDirectory.dir("generated/srpspv"))
+        }
         getByName("release") {
             // F-Droid builds strip the updater-only permissions via the
             // overlay manifest (merged over src/main/AndroidManifest.xml).
@@ -85,23 +97,28 @@ android {
     }
 
     signingConfigs {
-        // Local performance/release testing signs with the debug key so no
-        // secret is needed. CI/Play builds override via environment:
+        // CI/Play builds sign with a real key via environment:
         // RAWLENS_KEYSTORE, RAWLENS_KEY_ALIAS, RAWLENS_KEYSTORE_PASSWORD,
-        // RAWLENS_KEY_PASSWORD.
-        create("releaseLocal") {
-            val keystoreFile = System.getenv("RAWLENS_KEYSTORE")?.let { file(it) }
-            if (keystoreFile != null && keystoreFile.exists()) {
+        // RAWLENS_KEY_PASSWORD. A RAWLENS_KEYSTORE path that does not exist
+        // fails fast here instead of silently shipping a wrongly-signed
+        // artifact. Everyone else falls back to the standard debug key
+        // (see the release build type below), which the Android Gradle
+        // plugin generates on demand, so a fresh checkout builds and
+        // installs with no secret needed. (Pointing a custom signing config
+        // at ~/.android/debug.keystore by hand broke fresh clones: that
+        // file only exists after a debug build, so the very first
+        // assembleRelease failed with "Keystore file ... not found".)
+        val keystorePath = System.getenv("RAWLENS_KEYSTORE")
+        if (!keystorePath.isNullOrBlank()) {
+            create("releaseEnv") {
+                val keystoreFile = file(keystorePath)
+                if (!keystoreFile.exists()) {
+                    error("RAWLENS_KEYSTORE points at a missing file: $keystorePath")
+                }
                 storeFile = keystoreFile
                 storePassword = System.getenv("RAWLENS_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("RAWLENS_KEY_ALIAS")
                 keyPassword = System.getenv("RAWLENS_KEY_PASSWORD")
-            } else {
-                val debugKey = file("${System.getProperty("user.home")}/.android/debug.keystore")
-                storeFile = debugKey
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
             }
         }
     }
@@ -120,7 +137,11 @@ android {
             isShrinkResources = false
             isDebuggable = false
             isJniDebuggable = false
-            signingConfig = signingConfigs.getByName("releaseLocal")
+            // Signed with RAWLENS_KEYSTORE when provided, otherwise with the
+            // auto-generated debug key: release stays installable straight
+            // from a fresh clone (see signingConfigs above).
+            signingConfig = signingConfigs.findByName("releaseEnv")
+                ?: signingConfigs.getByName("debug")
             // Full ART optimization at install (vs quicken+JIT for debuggable)
             // plus CMake Release (-O3) native code. Force complete AOT on the
             // device after install with:
@@ -150,8 +171,19 @@ android {
         // lib (same C sources as the Android rawLensDng target); on-device
         // code loads the APK's .so via System.loadLibrary instead.
         unitTests.all {
-            it.systemProperty("rawlens.dnglib",
-                System.getProperty("rawlens.dnglib") ?: dngTestLibFile.get().asFile.absolutePath)
+            // An explicit -Drawlens.dnglib=<path> is honored verbatim (a
+            // missing file then fails loudly at System.load). Otherwise the
+            // just-built host lib is passed only when it exists: on machines
+            // without a C compiler the build step is skipped, and handing
+            // tests a nonexistent path would only produce a confusing load
+            // error (native-serialization tests skip themselves instead).
+            val explicitLib = System.getProperty("rawlens.dnglib")
+            val builtLib = dngTestLibFile.get().asFile
+            if (explicitLib != null) {
+                it.systemProperty("rawlens.dnglib", explicitLib)
+            } else if (builtLib.isFile) {
+                it.systemProperty("rawlens.dnglib", builtLib.absolutePath)
+            }
         }
     }
     // On-device tests always run against release (CMake -O3): debug native
@@ -200,6 +232,10 @@ if (isFdroidBuild) {
 }
 
 dependencies {
+    // Unified SR pipeline (Kotlin stages + SrpBridge JNI facade, single
+    // truth with tools/sr-pipeline; its native half builds as
+    // libsrpipeline.so from the same sources via app CMake).
+    implementation(project(":tools:sr-pipeline"))
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("androidx.core:core-ktx:1.19.1")
     testImplementation("junit:junit:4.13.2")
@@ -207,6 +243,20 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
 }
+
+// Syncs the desktop-proven stage SPVs (tools/sr-pipeline/host/build,
+// bit-identity-gated on desktop) into the generated assets dir as
+// sr_spv/*.spv. Runs before asset merging; nothing generated is
+// committed. Refresh the source SPVs with the desktop shader build
+// (shaders/build.sh) before release packaging.
+val syncSrpSpv by tasks.registering(Copy::class) {
+    from("${rootDir}/tools/sr-pipeline/host/build") { include("*.spv") }
+    into(layout.buildDirectory.dir("generated/srpspv/sr_spv"))
+}
+tasks.matching {
+    (it.name.startsWith("merge") && it.name.contains("Assets")) ||
+        it.name.contains("LintVital", ignoreCase = true)
+}.configureEach { dependsOn(syncSrpSpv) }
 
 configurations.all {
     resolutionStrategy.eachDependency {
@@ -217,20 +267,38 @@ configurations.all {
     }
 }
 
-// Host librawLensDng for JVM unit tests (see also :tools:sr-vulkan,
-// which stages the same lib for the desktop CLI). The script compiles
-// the pinned TinyDNG sources plus the JNI bridge for the host.
-val dngTestLibName = if ("mac" in System.getProperty("os.name").lowercase()) {
-    "librawLensDng.dylib"
-} else {
-    "librawLensDng.so"
+// Host librawLensDng for JVM unit tests (built by :app:buildDngNativeHost
+// via tools/build_dng_native.sh; tests receive it through the
+// rawlens.dnglib system property above when the file exists). The script
+// compiles the pinned TinyDNG sources plus the JNI bridge for the host.
+val hostOsName = System.getProperty("os.name").lowercase()
+val isWindowsHost = "win" in hostOsName
+val dngTestLibName = when {
+    "mac" in hostOsName -> "librawLensDng.dylib"
+    isWindowsHost -> "rawLensDng.dll"
+    else -> "librawLensDng.so"
 }
 val dngTestLibDir = layout.buildDirectory.dir("dng-native")
 val dngTestLibFile = dngTestLibDir.map { it.file(dngTestLibName) }
+fun hasHostTool(name: String): Boolean {
+    // File.pathSeparator, not a hardcoded ':', so PATH splits on Windows
+    // (';') as well as Unix (':').
+    val dirs = (System.getenv("PATH") ?: "").split(File.pathSeparator)
+    return dirs.any { dir ->
+        File(dir, name).canExecute() ||
+            (isWindowsHost && File(dir, "$name.exe").canExecute())
+    }
+}
 tasks.register<Exec>("buildDngNativeHost") {
-    onlyIf { System.getenv("PATH").split(":").any { File(it, "cc").canExecute() } }
+    // Skipped (not failed) where no toolchain exists: the native
+    // serialization tests skip themselves, and everything else stays green.
+    onlyIf { hasHostTool("cc") && hasHostTool("bash") }
     val javaHome = System.getProperty("java.home")
-    val plat = if ("mac" in System.getProperty("os.name").lowercase()) "darwin" else "linux"
+    val plat = when {
+        "mac" in hostOsName -> "darwin"
+        isWindowsHost -> "win32"
+        else -> "linux"
+    }
     commandLine(
         "bash", rootDir.resolve("tools/build_dng_native.sh").absolutePath,
         dngTestLibFile.get().asFile.absolutePath,
@@ -239,4 +307,46 @@ tasks.register<Exec>("buildDngNativeHost") {
 }
 tasks.matching { it.name.startsWith("test") && it.name.contains("UnitTest") }.configureEach {
     dependsOn("buildDngNativeHost")
+}
+
+// Fresh-clone regression guard: release signing must work on a machine that
+// has never built before (no ~/.android/debug.keystore). Runs a nested,
+// daemonless :app:validateSigningRelease with user.home redirected to a
+// blank directory, so the only keystore AGP can use is one it generates
+// itself. Portable: runs anywhere Gradle runs (Linux, macOS, Windows) via
+// the wrapper script for the host OS. Not wired into check (it spawns a
+// full nested configuration), so run it explicitly:
+//   ./gradlew :app:verifyFreshCloneSigning
+tasks.register<Exec>("verifyFreshCloneSigning") {
+    description = "Fails if release signing needs a pre-existing keystore (fresh-clone regression)."
+    group = "verification"
+    val freshHome = layout.buildDirectory.dir("fresh-home-check").get().asFile
+    doFirst {
+        freshHome.deleteRecursively()
+        freshHome.mkdirs()
+    }
+    workingDir(rootDir)
+    // Blank the home dir at BOTH layers: the JVM property and the process
+    // environment. Different dev envs resolve "home" through different
+    // mechanisms (user.home property vs $HOME on Unix vs %USERPROFILE% on
+    // Windows, in the JVM as well as in native tooling), so overriding only
+    // one could leave the nested build staring at the real ~/.android with
+    // its pre-existing debug.keystore, passing vacuously. With both blank,
+    // whatever the platform consults, it finds an empty home.
+    environment("HOME", freshHome.absolutePath)
+    environment("USERPROFILE", freshHome.absolutePath)
+    val nestedArgs = listOf(
+        ":app:validateSigningRelease",
+        "--no-daemon", // isolate: neither layer must leak into this build's daemon
+        "--console=plain",
+        "-Duser.home=${freshHome.absolutePath}",
+        "--gradle-user-home", gradle.gradleUserHomeDir.absolutePath
+    )
+    if (isWindowsHost) {
+        // ProcessBuilder cannot launch .bat directly; go through cmd.
+        commandLine("cmd", "/c", (listOf(rootDir.resolve("gradlew.bat").absolutePath) + nestedArgs)
+            .joinToString(" ") { "\"$it\"" })
+    } else {
+        commandLine(listOf(rootDir.resolve("gradlew").absolutePath) + nestedArgs)
+    }
 }

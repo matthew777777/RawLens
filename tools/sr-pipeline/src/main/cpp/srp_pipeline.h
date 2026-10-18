@@ -204,6 +204,14 @@ Status SrpCorrelatePinnedGpu(Context* ctx, uint32_t tile_count, uint32_t s,
 // Returns kOk / kInitFailed / kNoDevice / kDispatchFailed.
 Status SrpGreyFftGpu(Context* ctx, uint32_t w, uint32_t h, const float* in,
                      float* out, VkShaderModule shader_module);
+// SrpGreyFftHaveGpu: resident-input grey. `real_buffer` is a borrowed
+// resident holding w*h reals; `out` receives w*h host floats. Same
+// passes as SrpGreyFftGpu (bit-identical); needs both the fft module
+// and the corr module (on-device interleave).
+Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
+                         VkBuffer real_buffer, float* out,
+                         VkShaderModule fft_module,
+                         VkShaderModule corr_module);
 
 // Real GPU paths for align-L2 patch extraction + argmin (shaders/corr.comp
 // ops 0-1; the FFT correlation between them arrives in a later pass).

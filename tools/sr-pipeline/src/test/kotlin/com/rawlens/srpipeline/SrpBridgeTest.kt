@@ -837,6 +837,406 @@ class SrpBridgeTest {
     }
 
     @Test
+    fun `frame chain residents match staged entries bit-exact`() {
+        // Perf slice (a): upload-once frame residents reused across
+        // grey/gat/grad/cov/robust/merge. Each Res entry runs the same
+        // shader on the same input bytes as its staged twin, so on a
+        // deterministic device every leg must agree bit for bit. This
+        // gates the run() swap to the resident chains.
+        val fftSpv = System.getProperty("srpipeline.spv_fft", "")
+        val corrSpv = System.getProperty("srpipeline.spv_corr", "")
+        val gatSpv = System.getProperty("srpipeline.spv_gat", "")
+        val gradSpv = System.getProperty("srpipeline.spv_grad", "")
+        val kernSpv = System.getProperty("srpipeline.spv_kernels", "")
+        val robSpv = System.getProperty("srpipeline.spv_robust", "")
+        val splatSpv = System.getProperty("srpipeline.spv_merge_splat", "")
+        assumeTrue("native proof needs -Dsrpipeline.lib", lib.isNotEmpty() && File(lib).exists())
+        for ((name, p) in arrayOf("fft" to fftSpv, "corr" to corrSpv, "gat" to gatSpv,
+            "grad" to gradSpv, "kernels" to kernSpv, "robust" to robSpv, "merge" to splatSpv)) {
+            assumeTrue("native proof needs -Dsrpipeline.spv_$name", p.isNotEmpty() && File(p).exists())
+        }
+        SrpBridge.loadPath(lib)
+        val handle = SrpBridge.nativeCreate()
+        assumeTrue("no Vulkan compute device", handle != 0L)
+        try {
+            val fixDir = File(System.getProperty("srpipeline.fixtures", "parity/fixtures"))
+            fun packFlat(data: FloatArray): java.nio.ByteBuffer {
+                val b = SrpBridge.directFloats(data.size)
+                b.asFloatBuffer().put(data)
+                b.rewind()
+                return b
+            }
+            fun stagedVsRes(name: String, want: FloatArray, gotBuf: java.nio.ByteBuffer) {
+                gotBuf.rewind()
+                val got = FloatArray(want.size)
+                gotBuf.asFloatBuffer().get(got)
+                var lanes = 0
+                var maxAbs = 0f
+                for (i in want.indices) {
+                    if (got[i] != want[i]) lanes++
+                    maxAbs = maxOf(maxAbs, kotlin.math.abs(got[i] - want[i]))
+                }
+                println("jni reschain $name lanes_differ=$lanes/${want.size} maxabs=$maxAbs")
+                assertEquals("$name resident must be bit-identical", 0, lanes)
+            }
+            fun readBuf(b: java.nio.ByteBuffer, n: Int): FloatArray {
+                b.rewind()
+                val a = FloatArray(n)
+                b.asFloatBuffer().get(a)
+                return a
+            }
+            // 1. grey: crop fixture through staged greyFft vs resident frame.
+            run {
+                val fft = File(fftSpv).readBytes()
+                val corr = File(corrSpv).readBytes()
+                val raw = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "grey_fft_crop_in_raw.npy"))
+                val w = raw.shape[1]
+                val h = raw.shape[0]
+                val stagedOut = SrpBridge.directFloats(w * h)
+                assertEquals("grey staged status", 0,
+                    SrpBridge.greyFft(handle, packFlat(raw.data), stagedOut, fft, w, h))
+                val frameRes = SrpBridge.createResident(handle, (w * h).toLong())
+                assertTrue("grey frame resident alloc failed", frameRes != 0L)
+                try {
+                    assertEquals("grey upload status", 0,
+                        SrpBridge.uploadResident(handle, frameRes, packFlat(raw.data), (w * h).toLong()))
+                    val resOut = SrpBridge.directFloats(w * h)
+                    assertEquals("grey res status", 0,
+                        SrpBridge.nativeGreyFftRes(handle, frameRes, resOut, fft, corr, w, h))
+                    stagedVsRes("grey", readBuf(stagedOut, w * h), resOut)
+                } finally {
+                    SrpBridge.freeResident(handle, frameRes)
+                }
+            }
+            // 2. gat op 0 + decimate op 1 over resident scratch.
+            run {
+                val spirv = File(gatSpv).readBytes()
+                val raw = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "gat_in_raw.npy"))
+                val w = raw.shape[1]
+                val h = raw.shape[0]
+                val ab = SrpBridge.directFloats(8)
+                val abFb = ab.asFloatBuffer()
+                repeat(4) { abFb.put(1e-4f) }
+                repeat(4) { abFb.put(1e-6f) }
+                ab.rewind()
+                val stagedOut = SrpBridge.directFloats(w * h)
+                assertEquals("gat staged status", 0,
+                    SrpBridge.gat(handle, packFlat(raw.data), stagedOut, ab, spirv, w, h, w * h, 0))
+                val inRes = SrpBridge.createResident(handle, (w * h).toLong())
+                val outRes = SrpBridge.createResident(handle, (w * h).toLong())
+                assertTrue("gat residents alloc failed", inRes != 0L && outRes != 0L)
+                try {
+                    assertEquals("gat upload status", 0,
+                        SrpBridge.uploadResident(handle, inRes, packFlat(raw.data), (w * h).toLong()))
+                    ab.rewind()
+                    assertEquals("gat res status", 0,
+                        SrpBridge.nativeGatRes(handle, inRes, outRes, ab, spirv, w, h, w * h, 0))
+                    val gotBuf = SrpBridge.directFloats(w * h)
+                    assertEquals("gat download status", 0,
+                        SrpBridge.downloadResident(handle, outRes, gotBuf, (w * h).toLong()))
+                    stagedVsRes("gat", readBuf(stagedOut, w * h), gotBuf)
+                } finally {
+                    SrpBridge.freeResident(handle, inRes)
+                    SrpBridge.freeResident(handle, outRes)
+                }
+                val din = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "decimate_in_raw.npy"))
+                val dw = din.shape[1]
+                val dh = din.shape[0]
+                val dc = (dw / 2) * (dh / 2)
+                val stagedDec = SrpBridge.directFloats(dc)
+                assertEquals("decimate staged status", 0,
+                    SrpBridge.gat(handle, packFlat(din.data), stagedDec,
+                        SrpBridge.directFloats(8), spirv, dw, dh, dc, 1))
+                val dinRes = SrpBridge.createResident(handle, (dw * dh).toLong())
+                val doutRes = SrpBridge.createResident(handle, dc.toLong())
+                assertTrue("decimate residents alloc failed", dinRes != 0L && doutRes != 0L)
+                try {
+                    assertEquals("decimate upload status", 0,
+                        SrpBridge.uploadResident(handle, dinRes, packFlat(din.data), (dw * dh).toLong()))
+                    assertEquals("decimate res status", 0,
+                        SrpBridge.nativeGatRes(handle, dinRes, doutRes,
+                            SrpBridge.directFloats(8), spirv, dw, dh, dc, 1))
+                    val gotBuf = SrpBridge.directFloats(dc)
+                    assertEquals("decimate download status", 0,
+                        SrpBridge.downloadResident(handle, doutRes, gotBuf, dc.toLong()))
+                    stagedVsRes("decimate", readBuf(stagedDec, dc), gotBuf)
+                } finally {
+                    SrpBridge.freeResident(handle, dinRes)
+                    SrpBridge.freeResident(handle, doutRes)
+                }
+            }
+            // 3. grad ops 0..3 over resident scratch.
+            run {
+                val spirv = File(gradSpv).readBytes()
+                val grey = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "grad_in_grey.npy"))
+                val w = grey.shape[1]
+                val h = grey.shape[0]
+                val cases = arrayOf(
+                    Triple(0, (w - 1) * (h - 1), 0),
+                    Triple(1, w * h, 0),
+                    Triple(2, w * h, 0),
+                    Triple(3, w * h, java.lang.Float.floatToIntBits((1.0 / 2.2).toFloat())),
+                )
+                for ((op, count, expBits) in cases) {
+                    val outSize = if (op <= 1) count * 2 else count
+                    val stagedOut = SrpBridge.directFloats(outSize)
+                    assertEquals("grad op $op staged status", 0,
+                        SrpBridge.grad(handle, packFlat(grey.data), stagedOut,
+                            spirv, w, h, count, op, expBits))
+                    val inRes = SrpBridge.createResident(handle, (w * h).toLong())
+                    val outRes = SrpBridge.createResident(handle, outSize.toLong())
+                    assertTrue("grad op $op residents alloc failed", inRes != 0L && outRes != 0L)
+                    try {
+                        assertEquals("grad op $op upload status", 0,
+                            SrpBridge.uploadResident(handle, inRes,
+                                packFlat(grey.data), (w * h).toLong()))
+                        assertEquals("grad op $op res status", 0,
+                            SrpBridge.nativeGradRes(handle, inRes, outRes,
+                                spirv, w, h, count, op, expBits))
+                        val gotBuf = SrpBridge.directFloats(outSize)
+                        assertEquals("grad op $op download status", 0,
+                            SrpBridge.downloadResident(handle, outRes, gotBuf, outSize.toLong()))
+                        stagedVsRes("grad-op$op", readBuf(stagedOut, outSize), gotBuf)
+                    } finally {
+                        SrpBridge.freeResident(handle, inRes)
+                        SrpBridge.freeResident(handle, outRes)
+                    }
+                }
+            }
+            // 4. kernelsCov: one shared grads buffer feeds staged + resident.
+            run {
+                val spirv = File(kernSpv).readBytes()
+                val raw = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "kernels_in_raw.npy"))
+                val alpha = FloatArray(4) { 1e-4f }
+                val beta = FloatArray(4) { 1e-6f }
+                val vst = com.rawlens.srpipeline.stages.Gat.gat(raw.toImage2D(), alpha, beta)
+                val grey = com.rawlens.srpipeline.stages.Decimate.decimateToGrey(vst)
+                val gw = grey[0].size
+                val gh = grey.size
+                val grads = com.rawlens.srpipeline.stages.Grad.kernelGradients(grey)
+                val kw = grads[0].size
+                val kh = grads.size
+                val gradsFlat = FloatArray(kw * kh * 2)
+                for (y in 0 until kh) for (x in 0 until kw) {
+                    gradsFlat[(y * kw + x) * 2] = grads[y][x][0]
+                    gradsFlat[(y * kw + x) * 2 + 1] = grads[y][x][1]
+                }
+                fun freshKp(): java.nio.ByteBuffer {
+                    val b = SrpBridge.directFloats(8)
+                    val f = b.asFloatBuffer()
+                    f.put(0.3f).put(4.0f).put(0.75f).put(1.1f).put(4.0f).put(2.0f)
+                    f.put(java.lang.Float.intBitsToFloat(1))
+                    f.put(java.lang.Float.intBitsToFloat(0))
+                    b.rewind()
+                    return b
+                }
+                val stagedOut = SrpBridge.directFloats(gw * gh * 4)
+                assertEquals("kernels staged status", 0,
+                    SrpBridge.kernelsCov(handle, packFlat(gradsFlat), freshKp(),
+                        stagedOut, spirv, kw, kh, gw, gh))
+                val gradsRes = SrpBridge.createResident(handle, (kw * kh * 2).toLong())
+                val covRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+                assertTrue("kernels residents alloc failed", gradsRes != 0L && covRes != 0L)
+                try {
+                    assertEquals("kernels upload status", 0,
+                        SrpBridge.uploadResident(handle, gradsRes,
+                            packFlat(gradsFlat), (kw * kh * 2).toLong()))
+                    assertEquals("kernels res status", 0,
+                        SrpBridge.nativeKernelsCovRes(handle, gradsRes, freshKp(),
+                            covRes, spirv, kw, kh, gw, gh))
+                    val gotBuf = SrpBridge.directFloats(gw * gh * 4)
+                    assertEquals("kernels download status", 0,
+                        SrpBridge.downloadResident(handle, covRes, gotBuf, (gw * gh * 4).toLong()))
+                    stagedVsRes("kernels", readBuf(stagedOut, gw * gh * 4), gotBuf)
+                } finally {
+                    SrpBridge.freeResident(handle, gradsRes)
+                    SrpBridge.freeResident(handle, covRes)
+                }
+            }
+            // 5. smap over a resident spread map.
+            run {
+                val spirv = File(robSpv).readBytes()
+                val flow = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "smap_in_flow.npy"))
+                val ntx = flow.shape[1]
+                val nty = flow.shape[0]
+                val stagedOut = SrpBridge.directFloats(ntx * nty)
+                assertEquals("smap staged status", 0,
+                    SrpBridge.smap(handle, packFlat(flow.data), stagedOut, spirv, ntx, nty))
+                val sRes = SrpBridge.createResident(handle, (ntx * nty).toLong())
+                assertTrue("smap resident alloc failed", sRes != 0L)
+                try {
+                    assertEquals("smap res status", 0,
+                        SrpBridge.nativeSmapRes(handle, packFlat(flow.data), sRes, spirv,
+                            ntx, nty,
+                            java.lang.Float.floatToIntBits(0.8f),
+                            java.lang.Float.floatToIntBits(2f),
+                            java.lang.Float.floatToIntBits(12f)))
+                    val gotBuf = SrpBridge.directFloats(ntx * nty)
+                    assertEquals("smap download status", 0,
+                        SrpBridge.downloadResident(handle, sRes, gotBuf, (ntx * nty).toLong()))
+                    stagedVsRes("smap", readBuf(stagedOut, ntx * nty), gotBuf)
+                } finally {
+                    SrpBridge.freeResident(handle, sRes)
+                }
+            }
+            // 6. robust frame chain: init residents proven, s bytes shared,
+            // comp uploaded once; the compute leg is isolated bit-exact.
+            run {
+                val spirv = File(robSpv).readBytes()
+                val ref128 = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "robustness_in_ref_raw.npy"))
+                val comp128 = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "robustness_in_comp_raw.npy"))
+                val flow128 = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "robustness_in_flow.npy"))
+                val w128 = ref128.shape[1]
+                val h128 = ref128.shape[0]
+                val gw128 = w128 / 2
+                val gh128 = h128 / 2
+                val ftx128 = flow128.shape[1]
+                val fty128 = flow128.shape[0]
+                val meansBuf = SrpBridge.directFloats(3 * gw128 * gh128)
+                val varsBuf = SrpBridge.directFloats(3 * gw128 * gh128)
+                assertEquals("robust staged init status", 0,
+                    SrpBridge.robustInit(handle, packFlat(ref128.data),
+                        meansBuf, varsBuf, spirv, w128, h128))
+                val sBuf = SrpBridge.directFloats(ftx128 * fty128)
+                assertEquals("robust staged smap status", 0,
+                    SrpBridge.smap(handle, packFlat(flow128.data), sBuf,
+                        spirv, ftx128, fty128))
+                val lutBuf = packFlat(floatArrayOf(0f, 0f, 0f, 0f))
+                val stagedOut = SrpBridge.directFloats(gw128 * gh128)
+                assertEquals("robust staged compute status", 0,
+                    SrpBridge.robustCompute(handle, packFlat(comp128.data),
+                        meansBuf, varsBuf, packFlat(flow128.data), lutBuf,
+                        sBuf, stagedOut, spirv, w128, h128, 16, 2, false,
+                        0.12f, ftx128, fty128))
+                val meansRes = SrpBridge.createResident(handle, (3 * gw128 * gh128).toLong())
+                val varsRes = SrpBridge.createResident(handle, (3 * gw128 * gh128).toLong())
+                val compRes = SrpBridge.createResident(handle, (w128 * h128).toLong())
+                val sRes = SrpBridge.createResident(handle, (ftx128 * fty128).toLong())
+                assertTrue("robust residents alloc failed",
+                    meansRes != 0L && varsRes != 0L && compRes != 0L && sRes != 0L)
+                try {
+                    assertEquals("robust res init status", 0,
+                        SrpBridge.robustInitRes(handle, packFlat(ref128.data),
+                            meansRes, varsRes, spirv, w128, h128))
+                    // Init leg in isolation first.
+                    val gotMeans = SrpBridge.directFloats(3 * gw128 * gh128)
+                    val gotVars = SrpBridge.directFloats(3 * gw128 * gh128)
+                    assertEquals("robust means download status", 0,
+                        SrpBridge.downloadResident(handle, meansRes, gotMeans,
+                            (3 * gw128 * gh128).toLong()))
+                    assertEquals("robust vars download status", 0,
+                        SrpBridge.downloadResident(handle, varsRes, gotVars,
+                            (3 * gw128 * gh128).toLong()))
+                    stagedVsRes("robust-init-means",
+                        readBuf(meansBuf, 3 * gw128 * gh128), gotMeans)
+                    stagedVsRes("robust-init-vars",
+                        readBuf(varsBuf, 3 * gw128 * gh128), gotVars)
+                    // Shared s bytes + uploaded comp isolate the compute leg.
+                    assertEquals("robust comp upload status", 0,
+                        SrpBridge.uploadResident(handle, compRes,
+                            packFlat(comp128.data), (w128 * h128).toLong()))
+                    sBuf.rewind()
+                    assertEquals("robust s upload status", 0,
+                        SrpBridge.uploadResident(handle, sRes, sBuf,
+                            (ftx128 * fty128).toLong()))
+                    val resOut = SrpBridge.directFloats(gw128 * gh128)
+                    lutBuf.rewind()
+                    assertEquals("robust frame res status", 0,
+                        SrpBridge.nativeRobustComputeFrameRes(handle, compRes,
+                            meansRes, varsRes, packFlat(flow128.data), lutBuf,
+                            sRes, resOut, spirv, w128, h128, 16, 2, 0,
+                            java.lang.Float.floatToIntBits(0.12f), ftx128, fty128))
+                    stagedVsRes("robust-compute", readBuf(stagedOut, gw128 * gh128), resOut)
+                } finally {
+                    SrpBridge.freeResident(handle, meansRes)
+                    SrpBridge.freeResident(handle, varsRes)
+                    SrpBridge.freeResident(handle, compRes)
+                    SrpBridge.freeResident(handle, sRes)
+                }
+            }
+            // 7. merge frame chain: resident frame + covs into zeroed
+            // device accumulators; single frame suffices for bit-exactness.
+            run {
+                val spirv = File(splatSpv).readBytes()
+                val comp = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "merge_in_comp_raw.npy"))
+                val flow = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "merge_in_flow.npy"))
+                val covs = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "merge_in_covs.npy"))
+                val r = com.rawlens.srpipeline.parity.NpyReader
+                    .load(File(fixDir, "merge_in_r.npy"))
+                val lrW = comp.shape[1]
+                val lrH = comp.shape[0]
+                val ftx = flow.shape[1]
+                val fty = flow.shape[0]
+                val gw = covs.shape[1]
+                val gh = covs.shape[0]
+                val covFlat = FloatArray(gw * gh * 4)
+                for (p in 0 until gw * gh) {
+                    covFlat[4 * p] = covs.data[4 * p]
+                    covFlat[4 * p + 1] = covs.data[4 * p + 1]
+                    covFlat[4 * p + 2] = covs.data[4 * p + 3]
+                    covFlat[4 * p + 3] = 0f
+                }
+                val hrW = lrW * 2
+                val hrH = lrH * 2
+                val total = hrW * hrH * 3
+                val numBuf = SrpBridge.directFloats(total)
+                val denBuf = SrpBridge.directFloats(total)
+                assertEquals("merge staged status", 0,
+                    SrpBridge.mergeSplat(handle, packFlat(comp.data),
+                        packFlat(flow.data), packFlat(covFlat), packFlat(r.data),
+                        numBuf, denBuf, spirv, lrW, lrH, hrW, hrH, 16, 2f,
+                        true, ftx, fty))
+                val inRes = SrpBridge.createResident(handle, (lrW * lrH).toLong())
+                val covRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+                val numRes = SrpBridge.createResident(handle, total.toLong())
+                val denRes = SrpBridge.createResident(handle, total.toLong())
+                assertTrue("merge residents alloc failed",
+                    inRes != 0L && covRes != 0L && numRes != 0L && denRes != 0L)
+                try {
+                    assertEquals("merge frame upload status", 0,
+                        SrpBridge.uploadResident(handle, inRes,
+                            packFlat(comp.data), (lrW * lrH).toLong()))
+                    assertEquals("merge cov upload status", 0,
+                        SrpBridge.uploadResident(handle, covRes,
+                            packFlat(covFlat), (gw * gh * 4).toLong()))
+                    assertEquals("merge frame res status", 0,
+                        SrpBridge.nativeMergeSplatFrameRes(handle, inRes,
+                            packFlat(flow.data), covRes, packFlat(r.data),
+                            numRes, denRes, spirv, lrW, lrH, hrW, hrH,
+                            gw * gh * 4, gw * gh, 16, 2f, 0, ftx, fty))
+                    val gotNum = SrpBridge.directFloats(total)
+                    val gotDen = SrpBridge.directFloats(total)
+                    assertEquals("merge num download status", 0,
+                        SrpBridge.downloadResident(handle, numRes, gotNum, total.toLong()))
+                    assertEquals("merge den download status", 0,
+                        SrpBridge.downloadResident(handle, denRes, gotDen, total.toLong()))
+                    stagedVsRes("merge-num", readBuf(numBuf, total), gotNum)
+                    stagedVsRes("merge-den", readBuf(denBuf, total), gotDen)
+                } finally {
+                    SrpBridge.freeResident(handle, inRes)
+                    SrpBridge.freeResident(handle, covRes)
+                    SrpBridge.freeResident(handle, numRes)
+                    SrpBridge.freeResident(handle, denRes)
+                }
+            }
+        } finally {
+            SrpBridge.nativeDestroy(handle)
+        }
+    }
+
+    @Test
     fun `greyFft matches recorded lowpass through jni`() {
         val fftSpv = System.getProperty("srpipeline.spv_fft", "")
         assumeTrue("native proof needs -Dsrpipeline.lib", lib.isNotEmpty() && File(lib).exists())

@@ -152,7 +152,7 @@ class SrpPipelineFullresDeviceTest {
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft),
+                    fft = fft, corr = assetBytes("corr")),
             )
             val outH = h
             val outW = w

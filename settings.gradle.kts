@@ -7,5 +7,6 @@ dependencyResolutionManagement {
 }
 rootProject.name = "RawLens"
 include(":app")
+include(":tools:sr-pipeline")
 // Future SR hook: re-add :tools:mosaic-desktop, :tools:sr-vulkan,
 // :tools:linear-sr-desktop here when SR returns.

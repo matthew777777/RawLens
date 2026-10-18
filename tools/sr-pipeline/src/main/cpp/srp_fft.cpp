@@ -1034,6 +1034,68 @@ Status SrpGreyFftGpu(Context* ctx, uint32_t w, uint32_t h,
   return Status::kOk;
 }
 
+std::vector<float> FftChain::greyHave(const FftBuf& real, uint32_t h,
+                                      uint32_t w, VkShaderModule corr_mod) {
+  // Resident-input grey: same passes as grey() with the host upload +
+  // interleave swapped for on-device real2pairs (bit-exact vs ToComplex,
+  // pure interleave). `real` is borrowed (caller-owned resident, never
+  // released here).
+  std::vector<float> empty;
+  const size_t n = static_cast<size_t>(h) * w;
+  if (!ok() || !real.valid() || real.nfloats != n || h < 4 || w < 4 ||
+      n > 0xFFFFFFFFu || corr_mod == VK_NULL_HANDLE) {
+    return empty;
+  }
+  FftBuf pairs = alloc(2 * n);
+  if (!pairs.valid()) return empty;
+  if (SrpReal2PairsGpu(ctx_, static_cast<uint32_t>(n), real.buf, pairs.buf,
+                       corr_mod) != Status::kOk) {
+    release(pairs);
+    return empty;
+  }
+  FftBuf spec = fwd2Have(pairs, 1, h, w);
+  if (!spec.valid()) {
+    release(pairs);
+    return empty;
+  }
+  FftBuf lp = greyLowpass(spec, h, w);
+  if (!lp.valid()) return empty;
+  FftBuf back = inv2Res(lp, 1, h, w);
+  std::vector<float> back_h;
+  if (!back.valid() || !downloadVec(back, &back_h)) return empty;
+  std::vector<float> out = RealPart(back_h);
+  // pairs consumed by the forward, spec by the lowpass, lp by the
+  // inverse, back by the download: return the dead handles like
+  // correlatePinned does (no-ops when already released).
+  release(pairs);
+  release(spec);
+  release(lp);
+  release(back);
+  if (out.size() != n || !FiniteVec(out)) return empty;
+  return out;
+}
+
+Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
+                         VkBuffer real_buffer, float* out,
+                         VkShaderModule fft_module,
+                         VkShaderModule corr_module) {
+  if (ctx == nullptr || w < 4 || h < 4 ||
+      real_buffer == VK_NULL_HANDLE || out == nullptr ||
+      fft_module == VK_NULL_HANDLE || corr_module == VK_NULL_HANDLE) {
+    return Status::kInitFailed;
+  }
+  auto* device = static_cast<VkDevice>(NativeDevice(ctx));
+  if (device == VK_NULL_HANDLE) return Status::kNoDevice;
+  const size_t n = static_cast<size_t>(w) * h;
+  FftChain chain(ctx, fft_module);
+  if (!chain.ok()) return Status::kNoDevice;
+  const FftBuf real{real_buffer, VK_NULL_HANDLE, n};
+  const std::vector<float> grey = chain.greyHave(real, h, w, corr_module);
+  if (grey.size() != n) return Status::kDispatchFailed;
+  std::memcpy(out, grey.data(), n * 4);
+  return Status::kOk;
+}
+
 Status SrpCorrelateGpu(Context* ctx, uint32_t tile_count, uint32_t s,
                        const float* ref, const float* mov, float* corrs,
                        VkShaderModule shader_module) {

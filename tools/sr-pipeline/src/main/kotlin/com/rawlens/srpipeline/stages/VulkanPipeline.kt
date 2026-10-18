@@ -8,11 +8,16 @@ import java.nio.ByteBuffer
  * every proven stage dispatched on-device and Kotlin doing only packing,
  * buffering, and orchestration (the [AlignGpu] precedent).
  *
- * Per frame the sequence is: grey (CPU, FFT lowpass has no entry) ->
- * [AlignGpu] loop -> [SrpBridge.smap] + [SrpBridge.robustCompute] ->
- * GAT/decimate/kerngrad/[SrpBridge.kernelsCov] -> [SrpBridge.mergeSplat]
- * into the resident host num/den pair -> [SrpBridge.divide]. Reference
- * stats ([SrpBridge.robustInit]) and kernels are built once up front.
+ * Per frame the sequence is: upload-once frame resident -> grey FFT
+ * ([SrpBridge.nativeGreyFftRes]) -> [AlignGpu] loop ->
+ * [SrpBridge.nativeSmapRes] + [SrpBridge.nativeRobustComputeFrameRes] ->
+ * GAT/decimate/kerngrad/[SrpBridge.nativeKernelsCovRes] over resident
+ * chain scratch -> [SrpBridge.nativeMergeSplatFrameRes] into the
+ * resident num/den pair -> [SrpBridge.divide]. Reference stats
+ * ([SrpBridge.robustInit]) and kernels are built once up front. Same
+ * shaders, same bytes as the staged path — see the `frame chain
+ * residents match staged entries bit-exact` proof. The non-bayer
+ * configuration keeps the staged entries verbatim.
  * Covariance border semantics are the port's (OOB-skipped reads on the
  * grey grid), which can differ from [EndToEnd.frameKernels]' partial
  * windows on the outermost rim; the end-to-end gate is interior-quantile.
@@ -52,6 +57,8 @@ object VulkanPipeline {
         val mergeSplat: ByteArray,
         /** fft.comp for on-device FFT lowpass grey (cf. [SrpBridge.greyFft]). */
         val fft: ByteArray,
+        /** corr.comp for the resident grey interleave (cf. [SrpBridge.nativeGreyFftRes]). */
+        val corr: ByteArray,
     )
 
     private fun pack(data: FloatArray): ByteBuffer {
@@ -235,6 +242,24 @@ object VulkanPipeline {
         require(numRes != 0L) { "VulkanPipeline: resident num alloc failed" }
         val denRes = SrpBridge.createResident(handle, total.toLong())
         require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
+        // Perf slice (a): upload-once frame + kernels chain scratch,
+        // device-resident across entries and reused across frames
+        // (sequential fence-waited dispatches: aliasing-safe). Same
+        // shaders, same bytes as the staged path (see the `frame chain
+        // residents match staged entries bit-exact` proof). Freed in
+        // the run finally below. Bayer-only: the non-bayer leg keeps
+        // the staged entries (it aliases a larger buffer into
+        // kerngrad, which exact-size residents cannot express).
+        val frameRes = SrpBridge.createResident(handle, (w * h).toLong())
+        require(frameRes != 0L) { "VulkanPipeline: resident frame alloc failed" }
+        val kernPreRes = SrpBridge.createResident(handle, (w * h).toLong())
+        require(kernPreRes != 0L) { "VulkanPipeline: resident kernPre alloc failed" }
+        val kernGreyRes = SrpBridge.createResident(handle, (gw * gh).toLong())
+        require(kernGreyRes != 0L) { "VulkanPipeline: resident kernGrey alloc failed" }
+        val kernGradsRes = SrpBridge.createResident(handle, ((gw - 1) * (gh - 1) * 2).toLong())
+        require(kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
+        val kernCovRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+        require(kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
         // 1. Ref phase (own scope): grey rows, init host temporaries
         // and the decoded frame all die here, before the loop. The ref
         // grey packs through a temp (dies with the block): the shared
@@ -264,6 +289,14 @@ object VulkanPipeline {
             pinned
         }
 
+        // Resident spread map on the finest flow grid (s stays
+        // on-device between the smap and robust legs; same expression
+        // as the work block's ftx0/fty0 below). Freed in the run
+        // finally below.
+        val finestGrid = pinnedInit.levels.last()
+        val sRes = SrpBridge.createResident(handle, (finestGrid.nTx * finestGrid.nTy).toLong())
+        require(sRes != 0L) { "VulkanPipeline: resident s alloc failed" }
+
         // Shared pack/upload staging, allocated only now (post-pin):
         // keeping it out of the init window above saves 50 MB live
         // there. Fully rewritten per use from here on.
@@ -285,14 +318,12 @@ object VulkanPipeline {
 
         // 3. Merge-work scratch (own scope: the `run` block opened
         // here closes before the download below, so the work vectors die
-        // first). `kernPre` doubles as the loop grey output (grey bytes
-        // are consumed into rows before kernels overwrite it) and as the
-        // kernel preprocess output — disjoint lifetimes, same values.
-        // The decimate/kerngrad/cov chain buffers are per-call
-        // transients (dead before the next align): caching them would
-        // pin ~90 MB across the align window. `frameBuf` lives outside
-        // (allocated post-pin, surviving into the finish); the loop rows
-        // are loop-scoped below.
+        // first). `kernPre` is the loop grey output (grey bytes are
+        // consumed into rows before the kernels legs run). The staged
+        // non-bayer leg additionally uses it as the kernel preprocess
+        // output; the bayer legs run on the run-scope residents above.
+        // `frameBuf` lives outside (allocated post-pin, surviving into
+        // the finish); the loop rows are loop-scoped below.
         run {
         val finest0 = pinnedInit.levels.last()
         val ftx0 = finest0.nTx
@@ -315,7 +346,8 @@ object VulkanPipeline {
 
         // 3a. Per-frame kernels via entries (GAT -> decimate -> kerngrad ->
         // cov on the grey grid), cf. `EndToEnd.frameKernels` + `estimate_kernels`.
-        fun frameKernelsGpu(frame: Array<FloatArray>): ByteBuffer {
+        // Staged leg (non-bayer only): host scratch exactly as before.
+        fun frameKernelsGpuStaged(frame: Array<FloatArray>): ByteBuffer {
             val kernGrey = SrpBridge.directFloats((w / 2) * (h / 2))
             val kernGrads = SrpBridge.directFloats((w / 2 - 1) * (h / 2 - 1) * 2)
             val kernCov = SrpBridge.directFloats((w / 2) * (h / 2) * 4)
@@ -354,11 +386,65 @@ object VulkanPipeline {
             return kernCov.apply { rewind() }
         }
 
+        // Resident leg (bayer): the same chain over the run-scope
+        // residents. `frameRes` must hold the current frame (established
+        // by the grey leg, or the explicit ref upload below). Returns
+        // the cov resident handle. Same shaders, same bytes.
+        fun frameKernelsGpuRes(): Long {
+            val kgw = w / 2
+            val kgh = h / 2
+            val kw = kgw - 1
+            val kh = kgh - 1
+            val pre: Long = run {
+                when (config.kernelPreprocessing) {
+                    null -> return@run frameRes
+                    "gat" -> {
+                        timed("kernels gat") { checkRc("kernels gat", SrpBridge.nativeGatRes(handle, frameRes, kernPreRes,
+                            abBuf.apply { rewind() }, spirvs.gat, w, h, w * h, 0)) }
+                        kernPreRes
+                    }
+                    "sqrt", "gamma" -> {
+                        val op = if (config.kernelPreprocessing == "sqrt") 2 else 3
+                        val expBits = if (op == 3) java.lang.Float.floatToIntBits((1.0 / 2.2).toFloat()) else 0
+                        timed("kernels grad") { checkRc("kernels grad", SrpBridge.nativeGradRes(handle, frameRes, kernPreRes,
+                            spirvs.grad, w, h, w * h, op, expBits)) }
+                        kernPreRes
+                    }
+                    else -> throw IllegalArgumentException("Unknown kernel preprocessing")
+                }
+            }
+            timed("kernels decimate") { checkRc("kernels decimate", SrpBridge.nativeGatRes(handle, pre, kernGreyRes,
+                abBuf.apply { rewind() }, spirvs.gat, w, h, kgw * kgh, 1)) }
+            timed("kernels kerngrad") { checkRc("kernels kerngrad", SrpBridge.nativeGradRes(handle, kernGreyRes, kernGradsRes,
+                spirvs.grad, kgw, kgh, kw * kh, 0, 0)) }
+            timed("kernels cov") { checkRc("kernels cov", SrpBridge.nativeKernelsCovRes(handle, kernGradsRes,
+                kpBuf.apply { rewind() }, kernCovRes, spirvs.kernels, kw, kh, kgw, kgh)) }
+            return kernCovRes
+        }
+
+        // Resident grey leg (bayer): uploads the frame once, then grey
+        // runs on-device with the align rows filled from the download —
+        // same bytes as the staged greyOfInto above. The upload also
+        // establishes the frameRes invariant for the kernels, robust
+        // and merge legs that follow in frameStep.
+        fun greyOfIntoRes(frame: Array<FloatArray>, rows: Array<FloatArray>): Array<FloatArray> {
+            timed("frameUpload") { checkRc("frameUpload", SrpBridge.uploadResident(handle, frameRes,
+                packImageInto(frame, frameBuf), (w * h).toLong())) }
+            if (!config.bayer || config.greyMethod != "FFT") {
+                return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
+            }
+            timed("greyFft") { checkRc("greyFft", SrpBridge.nativeGreyFftRes(handle, frameRes, kernPre,
+                spirvs.fft, spirvs.corr, w, h)) }
+            kernPre.rewind()
+            val fb = kernPre.asFloatBuffer()
+            for (y in 0 until h) fb.get(rows[y])
+            return rows
+        }
+
         // 3b. Splat one frame's samples into the resident accumulators.
         // `rBuf` already holds the guide-grid robustness map (written
         // by robust-compute, or filled with ones): no host round-trip.
         fun mergeFrame(frame: Array<FloatArray>, flow: Array<Array<FloatArray>>, rBuf: ByteBuffer) {
-            val cov = frameKernelsGpu(frame)
             val ftx = flow[0].size
             val fty = flow.size
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }
@@ -367,17 +453,32 @@ object VulkanPipeline {
                 mergeFlowFlat[(y * ftx + x) * 2 + 1] = flow[y][x][1]
             }
             rBuf.rewind()
-            timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.mergeSplatRes(handle, packImageInto(frame, frameBuf),
-                packInto(mergeFlowFlat, mergeFlow), cov, rBuf, numRes, denRes,
-                spirvs.mergeSplat, w, h, outW, outH, tile,
-                config.scale, config.bayer, ftx, fty)) }
+            if (!config.bayer) {
+                val cov = frameKernelsGpuStaged(frame)
+                timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.mergeSplatRes(handle, packImageInto(frame, frameBuf),
+                    packInto(mergeFlowFlat, mergeFlow), cov, rBuf, numRes, denRes,
+                    spirvs.mergeSplat, w, h, outW, outH, tile,
+                    config.scale, config.bayer, ftx, fty)) }
+            } else {
+                val covRes = frameKernelsGpuRes()
+                timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
+                    packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
+                    spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
+                    config.scale, 0, ftx, fty)) }
+            }
         }
 
         // 4. Reference merge (zero flow on the finest tile grid, r = 1
         // over the guide grid), then release the decoded frame: it is
-        // dead before the comparison loop below.
+        // dead before the comparison loop below. The bayer legs read
+        // the frame from its resident, so upload it once here (the
+        // loop frames upload in the grey leg instead).
         val finest = pinnedInit.levels.last()
         val zeroFlow = Array(finest.nTy) { Array(finest.nTx) { floatArrayOf(0f, 0f) } }
+        if (config.bayer) {
+            timed("refUpload") { checkRc("refUpload", SrpBridge.uploadResident(handle, frameRes,
+                packImageInto(refBox!!, frameBuf), (w * h).toLong())) }
+        }
         mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect))
         refBox = null
 
@@ -398,7 +499,11 @@ object VulkanPipeline {
             val frame = frameThunk(frameBuf)
             heapLog("frame-$frameNo-decoded")
             frameNo++
-            val frameGrey = greyOfInto(frame, frameBuf, kernPre, loopRows)
+            // Resident grey leg on bayer (uploads frameRes as a side
+            // effect); the staged greyOfInto serves the ref phase and
+            // the non-bayer configuration.
+            val frameGrey = if (config.bayer) greyOfIntoRes(frame, loopRows)
+                else greyOfInto(frame, frameBuf, kernPre, loopRows)
             val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
             val ftx = flow[0].size
             val fty = flow.size
@@ -411,15 +516,29 @@ object VulkanPipeline {
                     mergeFlowFlat[(y * ftx + x) * 2 + 1] = flow[y][x][1]
                 }
                 val rp = config.robustnessParams
-                timed("smap") { checkRc("smap", SrpBridge.smap(handle, packInto(mergeFlowFlat, mergeFlow), smapOut.apply { rewind() },
-                    spirvs.robust, ftx, fty, rp.mt, rp.s1, rp.s2)) }
-                smapOut.rewind()
-                timed("robustCompute") { checkRc("robustCompute", SrpBridge.robustComputeRes(handle, packImageInto(frame, frameBuf),
-                    meansRes, varsRes,
-                    packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, smapOut, mergeRDirect.apply { rewind() },
-                    spirvs.robust, w, h, tile, lutN,
-                    config.robustnessParams.noiseCorrection,
-                    config.robustnessParams.t, ftx, fty)) }
+                if (!config.bayer) {
+                    timed("smap") { checkRc("smap", SrpBridge.smap(handle, packInto(mergeFlowFlat, mergeFlow), smapOut.apply { rewind() },
+                        spirvs.robust, ftx, fty, rp.mt, rp.s1, rp.s2)) }
+                    smapOut.rewind()
+                    timed("robustCompute") { checkRc("robustCompute", SrpBridge.robustComputeRes(handle, packImageInto(frame, frameBuf),
+                        meansRes, varsRes,
+                        packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, smapOut, mergeRDirect.apply { rewind() },
+                        spirvs.robust, w, h, tile, lutN,
+                        config.robustnessParams.noiseCorrection,
+                        config.robustnessParams.t, ftx, fty)) }
+                } else {
+                    timed("smap") { checkRc("smap", SrpBridge.nativeSmapRes(handle, packInto(mergeFlowFlat, mergeFlow), sRes,
+                        spirvs.robust, ftx, fty,
+                        java.lang.Float.floatToIntBits(rp.mt),
+                        java.lang.Float.floatToIntBits(rp.s1),
+                        java.lang.Float.floatToIntBits(rp.s2))) }
+                    timed("robustCompute") { checkRc("robustCompute", SrpBridge.nativeRobustComputeFrameRes(handle, frameRes,
+                        meansRes, varsRes,
+                        packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, sRes, mergeRDirect.apply { rewind() },
+                        spirvs.robust, w, h, tile, lutN,
+                        if (config.robustnessParams.noiseCorrection) 1 else 0,
+                        java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty)) }
+                }
                 mergeRDirect
             } else {
                 packInto(onesR, mergeRDirect)
@@ -459,6 +578,12 @@ object VulkanPipeline {
             SrpBridge.freeResident(handle, varsRes)
             SrpBridge.freeResident(handle, numRes)
             SrpBridge.freeResident(handle, denRes)
+            SrpBridge.freeResident(handle, frameRes)
+            SrpBridge.freeResident(handle, kernPreRes)
+            SrpBridge.freeResident(handle, kernGreyRes)
+            SrpBridge.freeResident(handle, kernGradsRes)
+            SrpBridge.freeResident(handle, kernCovRes)
+            SrpBridge.freeResident(handle, sRes)
         }
     }
 }

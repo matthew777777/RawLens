@@ -1894,6 +1894,484 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustCompute
   return static_cast<jint>(status);
 }
 
+// Real GPU path: FFT lowpass grey with a device-resident frame.
+// `frame_res` is a resident holding width*height reals (uploaded once
+// per frame, reused across entries); `out_buffer` receives width*height
+// host floats (the align loop needs rows on the host). Same passes as
+// nativeGreyFft (bit-identical); saves the per-entry input upload.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGreyFftRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong frame_res,
+    jobject out_buffer, jbyteArray fft_spirv, jbyteArray corr_spirv,
+    jint width, jint height) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || out_buffer == nullptr || fft_spirv == nullptr ||
+      corr_spirv == nullptr || width < 4 || height < 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t n = static_cast<int64_t>(width) * height;
+  VkBuffer frame_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, frame_res, static_cast<size_t>(n),
+                             &frame_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* out_ptr = static_cast<float*>(env->GetDirectBufferAddress(out_buffer));
+  if (out_ptr == nullptr ||
+      env->GetDirectBufferCapacity(out_buffer) < n * 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize fft_len = env->GetArrayLength(fft_spirv);
+  const jsize corr_len = env->GetArrayLength(corr_spirv);
+  if (fft_len <= 0 || fft_len % 4 != 0 || corr_len <= 0 ||
+      corr_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> fft_bytes(static_cast<size_t>(fft_len));
+  env->GetByteArrayRegion(fft_spirv, 0, fft_len,
+                          reinterpret_cast<jbyte*>(fft_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> corr_bytes(static_cast<size_t>(corr_len));
+  env->GetByteArrayRegion(corr_spirv, 0, corr_len,
+                          reinterpret_cast<jbyte*>(corr_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule fft_module =
+      srp::SrpInternModule(ctx, fft_bytes.data(), fft_bytes.size());
+  VkShaderModule corr_module =
+      srp::SrpInternModule(ctx, corr_bytes.data(), corr_bytes.size());
+  if (fft_module == VK_NULL_HANDLE || corr_module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  const srp::Status status = srp::SrpGreyFftHaveGpu(
+      ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+      frame_vk, out_ptr, fft_module, corr_module);
+  // (modules stay alive in the Context cache; the resident stays on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: gat/decimate with resident frame scratch. `in_res`
+// holds width*height floats, `out_res` holds `count`; `ab_buffer` is the
+// tiny staged profile. Same shader, same bytes: bit-identical to
+// nativeGat, minus the per-entry upload/download round-trip.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGatRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong in_res, jlong out_res,
+    jobject ab_buffer, jbyteArray spirv, jint width, jint height, jint count,
+    jint op) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || ab_buffer == nullptr || spirv == nullptr ||
+      width <= 0 || height <= 0 || count <= 0 || (op != 0 && op != 1)) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkBuffer in_vk = VK_NULL_HANDLE, out_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, in_res,
+                             static_cast<size_t>(width) * height,
+                             &in_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, out_res, static_cast<size_t>(count),
+                             &out_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* ab_ptr = static_cast<float*>(env->GetDirectBufferAddress(ab_buffer));
+  if (ab_ptr == nullptr ||
+      env->GetDirectBufferCapacity(ab_buffer) < 32) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer ab_vk = VK_NULL_HANDLE;
+  VkDeviceMemory ab_mem = VK_NULL_HANDLE;
+  srp::Status status = srp::Status::kDispatchFailed;
+  if (MakeStagingBuffer(device, physical, 32, ab_ptr, &ab_vk, &ab_mem)) {
+    status = srp::SrpGatGpu(ctx, static_cast<uint32_t>(width),
+                            static_cast<uint32_t>(height),
+                            static_cast<uint32_t>(count),
+                            static_cast<uint32_t>(op), in_vk, out_vk, ab_vk,
+                            module);
+  }
+  if (ab_vk != VK_NULL_HANDLE) vkDestroyBuffer(device, ab_vk, nullptr);
+  if (ab_mem != VK_NULL_HANDLE) vkFreeMemory(device, ab_mem, nullptr);
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: kerngrad/sobel/sqrt/gamma with resident scratch.
+// `in_res` holds width*height floats, `out_res` holds count (op<=1) or
+// count*2 floats. Same shader, same bytes: bit-identical to nativeGrad.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGradRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong in_res, jlong out_res,
+    jbyteArray spirv, jint width, jint height, jint count, jint op,
+    jint exp_bits) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || spirv == nullptr || width <= 0 || height <= 0 ||
+      count <= 0 || op < 0 || op > 3) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t out_count =
+      (op <= 1) ? static_cast<int64_t>(count) * 2 : count;
+  VkBuffer in_vk = VK_NULL_HANDLE, out_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, in_res,
+                             static_cast<size_t>(width) * height,
+                             &in_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, out_res, static_cast<size_t>(out_count),
+                             &out_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  const srp::Status status = srp::SrpGradGpu(
+      ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+      static_cast<uint32_t>(count), static_cast<uint32_t>(op),
+      static_cast<uint32_t>(exp_bits), in_vk, out_vk, module);
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: kernel-covariance build with resident scratch.
+// `grads_res` holds gradW*gradH*2 floats, `cov_res` receives
+// covW*covH*4; `kp_buffer` is the tiny staged profile. Bit-identical to
+// nativeKernelsCov.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelsCovRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong grads_res,
+    jobject kp_buffer, jlong cov_res, jbyteArray spirv, jint grad_w,
+    jint grad_h, jint cov_w, jint cov_h) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || kp_buffer == nullptr || spirv == nullptr ||
+      grad_w <= 0 || grad_h <= 0 || cov_w <= 0 || cov_h <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkBuffer grads_vk = VK_NULL_HANDLE, cov_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(
+          ctx, grads_res,
+          static_cast<size_t>(grad_w) * grad_h * 2,
+          &grads_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, cov_res,
+                             static_cast<size_t>(cov_w) * cov_h * 4,
+                             &cov_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* kp_ptr = static_cast<float*>(env->GetDirectBufferAddress(kp_buffer));
+  if (kp_ptr == nullptr ||
+      env->GetDirectBufferCapacity(kp_buffer) < 32) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer kp_vk = VK_NULL_HANDLE;
+  VkDeviceMemory kp_mem = VK_NULL_HANDLE;
+  srp::Status status = srp::Status::kDispatchFailed;
+  if (MakeStagingBuffer(device, physical, 32, kp_ptr, &kp_vk, &kp_mem)) {
+    status = srp::SrpKernelsCovGpu(
+        ctx, static_cast<uint32_t>(grad_w), static_cast<uint32_t>(grad_h),
+        static_cast<uint32_t>(cov_w), static_cast<uint32_t>(cov_h), grads_vk,
+        cov_vk, kp_vk, module);
+  }
+  if (kp_vk != VK_NULL_HANDLE) vkDestroyBuffer(device, kp_vk, nullptr);
+  if (kp_mem != VK_NULL_HANDLE) vkFreeMemory(device, kp_mem, nullptr);
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: compute_s with a resident spread map. `flow_buffer`
+// holds ntx*nty*2 staged floats; `s_res` receives ntx*nty floats and
+// stays on-device for the robust-compute leg. Bit-identical to
+// nativeSmap.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeSmapRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jobject flow_buffer,
+    jlong s_res, jbyteArray spirv, jint ntx, jint nty, jint mt_bits,
+    jint s1_bits, jint s2_bits) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || flow_buffer == nullptr || spirv == nullptr ||
+      ntx <= 0 || nty <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t n = static_cast<int64_t>(ntx) * nty;
+  VkBuffer s_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, s_res, static_cast<size_t>(n),
+                             &s_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* flow_ptr =
+      static_cast<float*>(env->GetDirectBufferAddress(flow_buffer));
+  if (flow_ptr == nullptr ||
+      env->GetDirectBufferCapacity(flow_buffer) < n * 2 * 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer flow_vk = VK_NULL_HANDLE;
+  VkDeviceMemory flow_mem = VK_NULL_HANDLE;
+  srp::Status status = srp::Status::kDispatchFailed;
+  if (MakeStagingBuffer(device, physical,
+                        static_cast<VkDeviceSize>(n) * 2 * 4, flow_ptr,
+                        &flow_vk, &flow_mem)) {
+    status = srp::SrpSmapGpu(ctx, static_cast<uint32_t>(ntx),
+                             static_cast<uint32_t>(nty), flow_vk, s_vk,
+                             static_cast<uint32_t>(mt_bits),
+                             static_cast<uint32_t>(s1_bits),
+                             static_cast<uint32_t>(s2_bits), module);
+  }
+  if (flow_vk != VK_NULL_HANDLE) vkDestroyBuffer(device, flow_vk, nullptr);
+  if (flow_mem != VK_NULL_HANDLE) vkFreeMemory(device, flow_mem, nullptr);
+  // (module stays alive in the Context cache; the s resident stays on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: compute_robustness with a resident frame and resident s
+// map. `comp_res` holds width*height raw floats (uploaded once per
+// frame); `means_res`/`vars_res` are the init residents; `s_res` is the
+// smap resident; flow/lut stage as before; `out_buffer` receives the
+// gh*gw map (staged: the merge leg re-uploads it today). Bit-identical
+// to nativeRobustCompute.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustComputeFrameRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong comp_res,
+    jlong means_res, jlong vars_res, jobject flow_buffer,
+    jobject lut_buffer, jlong s_res, jobject out_buffer, jbyteArray spirv,
+    jint width, jint height, jint tile_size, jint lut_n, jint noise_correction,
+    jint t_bits, jint ftx, jint fty) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || flow_buffer == nullptr || lut_buffer == nullptr ||
+      out_buffer == nullptr || spirv == nullptr || width < 2 || height < 2 ||
+      tile_size < 2 || lut_n <= 0 || ftx <= 0 || fty <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t n = static_cast<int64_t>(width) / 2 * (height / 2);
+  const int64_t nf = static_cast<int64_t>(ftx) * fty;
+  VkBuffer comp_vk = VK_NULL_HANDLE, means_vk = VK_NULL_HANDLE,
+           vars_vk = VK_NULL_HANDLE, s_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, comp_res,
+                             static_cast<size_t>(width) * height,
+                             &comp_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, means_res, static_cast<size_t>(3 * n),
+                             &means_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, vars_res, static_cast<size_t>(3 * n),
+                             &vars_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, s_res, static_cast<size_t>(nf),
+                             &s_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* flow_ptr =
+      static_cast<float*>(env->GetDirectBufferAddress(flow_buffer));
+  float* lut_ptr = static_cast<float*>(env->GetDirectBufferAddress(lut_buffer));
+  float* out_ptr = static_cast<float*>(env->GetDirectBufferAddress(out_buffer));
+  if (flow_ptr == nullptr || lut_ptr == nullptr || out_ptr == nullptr ||
+      env->GetDirectBufferCapacity(flow_buffer) < nf * 2 * 4 ||
+      env->GetDirectBufferCapacity(lut_buffer) <
+          static_cast<int64_t>(lut_n) * 2 * 4 ||
+      env->GetDirectBufferCapacity(out_buffer) < n * 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer vks[3] = {};
+  VkDeviceMemory mems[3] = {};
+  float* ins[3] = {flow_ptr, lut_ptr, nullptr};
+  const int64_t in_counts[3] = {nf * 2,
+                                static_cast<int64_t>(lut_n) * 2, n};
+  srp::Status status = srp::Status::kDispatchFailed;
+  bool staged = true;
+  for (int i = 0; i < 3; ++i) {
+    if (!MakeStagingBuffer(device, physical,
+                           static_cast<VkDeviceSize>(in_counts[i]) * 4, ins[i],
+                           &vks[i], &mems[i])) {
+      staged = false;
+      break;
+    }
+  }
+  if (staged) {
+    status = srp::SrpRobustComputeGpu(
+        ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+        comp_vk, means_vk, vars_vk, vks[0], vks[1], s_vk, vks[2],
+        static_cast<uint32_t>(tile_size), static_cast<uint32_t>(lut_n),
+        static_cast<uint32_t>(noise_correction),
+        static_cast<uint32_t>(t_bits), static_cast<uint32_t>(ftx),
+        static_cast<uint32_t>(fty), module);
+    if (status == srp::Status::kOk) {
+      void* mapped = nullptr;
+      if (vkMapMemory(device, mems[2], 0, static_cast<VkDeviceSize>(n) * 4, 0,
+                      &mapped) == VK_SUCCESS) {
+        std::memcpy(out_ptr, mapped, static_cast<size_t>(n) * 4);
+        vkUnmapMemory(device, mems[2]);
+      } else {
+        status = srp::Status::kDispatchFailed;
+      }
+    }
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);
+    if (mems[i] != VK_NULL_HANDLE) vkFreeMemory(device, mems[i], nullptr);
+  }
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
+// Real GPU path: merge-splat with a resident frame and resident covs.
+// `in_res` holds width*height raw floats, `cov_res` the guide covs;
+// flow/r stage as before (tiny + guide-grid). Bit-identical to
+// nativeMergeSplatRes.
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFrameRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong in_res,
+    jobject flow_buffer, jlong cov_res, jobject r_buffer, jlong num_res,
+    jlong den_res, jbyteArray spirv, jint lr_w, jint lr_h, jint hr_w,
+    jint hr_h, jint cov_count, jint r_count, jint tile_size, jfloat scale,
+    jint mode, jint ftx, jint fty) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || flow_buffer == nullptr || r_buffer == nullptr ||
+      spirv == nullptr || lr_w <= 0 || lr_h <= 0 || hr_w <= 0 || hr_h <= 0 ||
+      cov_count <= 0 || r_count <= 0 || tile_size <= 0 || scale <= 0 ||
+      mode < 0 || mode > 1 || ftx <= 0 || fty <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t n_hr3 = static_cast<int64_t>(hr_w) * hr_h * 3;
+  VkBuffer in_vk = VK_NULL_HANDLE, cov_vk = VK_NULL_HANDLE,
+           num_vk = VK_NULL_HANDLE, den_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, in_res,
+                             static_cast<size_t>(lr_w) * lr_h,
+                             &in_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, cov_res, static_cast<size_t>(cov_count),
+                             &cov_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, num_res, static_cast<size_t>(n_hr3),
+                             &num_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, den_res, static_cast<size_t>(n_hr3),
+                             &den_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* flow_ptr =
+      static_cast<float*>(env->GetDirectBufferAddress(flow_buffer));
+  float* r_ptr = static_cast<float*>(env->GetDirectBufferAddress(r_buffer));
+  if (flow_ptr == nullptr || r_ptr == nullptr ||
+      env->GetDirectBufferCapacity(flow_buffer) <
+          static_cast<int64_t>(ftx) * fty * 2 * 4 ||
+      env->GetDirectBufferCapacity(r_buffer) <
+          static_cast<int64_t>(r_count) * 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len,
+                          reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module =
+      srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer vks[2] = {};
+  VkDeviceMemory mems[2] = {};
+  float* ins[2] = {flow_ptr, r_ptr};
+  const int64_t in_counts[2] = {static_cast<int64_t>(ftx) * fty * 2,
+                                static_cast<int64_t>(r_count)};
+  srp::Status status = srp::Status::kDispatchFailed;
+  bool staged = true;
+  for (int i = 0; i < 2; ++i) {
+    if (!MakeStagingBuffer(device, physical,
+                           static_cast<VkDeviceSize>(in_counts[i]) * 4, ins[i],
+                           &vks[i], &mems[i])) {
+      staged = false;
+      break;
+    }
+  }
+  if (staged) {
+    status = srp::SrpMergeSplatGpu(
+        ctx, static_cast<uint32_t>(lr_w), static_cast<uint32_t>(lr_h),
+        static_cast<uint32_t>(hr_w), static_cast<uint32_t>(hr_h), in_vk,
+        vks[0], cov_vk, vks[1], num_vk, den_vk,
+        static_cast<uint32_t>(tile_size), scale,
+        static_cast<uint32_t>(mode), static_cast<uint32_t>(ftx),
+        static_cast<uint32_t>(fty), module);
+  }
+  for (int i = 0; i < 2; ++i) {
+    if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);
+    if (mems[i] != VK_NULL_HANDLE) vkFreeMemory(device, mems[i], nullptr);
+  }
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
 // Real GPU path: compute_s (op 6) over caller-owned direct buffers.
 // `flow_buffer` holds ntx*nty*2 interleaved-pair floats (finite only);
 // `s_buffer` receives ntx*nty floats. Mt/s1/s2 ride by bit pattern.

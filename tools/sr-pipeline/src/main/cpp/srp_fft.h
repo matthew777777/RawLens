@@ -119,6 +119,12 @@ class FftChain {
   // Full on-device FFT lowpass grey: real (h,w) in → real (h,w) out.
   std::vector<float> grey(const std::vector<float>& real, uint32_t h,
                           uint32_t w);
+  // Resident-input grey: borrowed resident real (h,w) → host real (h,w).
+  // Same passes as grey() with the host upload + interleave swapped for
+  // on-device real2pairs (bit-exact vs ToComplex, pure interleave).
+  // Needs the corr module (real2pairs); `real` is never released here.
+  std::vector<float> greyHave(const FftBuf& real, uint32_t h, uint32_t w,
+                              VkShaderModule corr_mod);
 
   // Full circular correlation: real (n,s,s) in → fftshifted real (n,s,s).
   // Mirrors device_correlate minus its ref-spectra cache (no cross-call

@@ -66,6 +66,9 @@ class SrpPipelineCropDeviceTest {
             assumeTrue("libsrpipeline.so unavailable: ${e.message}", false)
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        // Stage clock + phase heap (perf-slice diagnosis; set before
+        // first VulkanPipeline use).
+        System.setProperty("srpipeline.profile", "true")
         // Inputs live in /data/local/tmp (world-readable, survives app
         // reinstalls which wipe the external files dir); output goes to
         // the app's own external dir (app-writable, pulled via adb).
@@ -139,7 +142,7 @@ class SrpPipelineCropDeviceTest {
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft),
+                    fft = fft, corr = assetBytes("corr")),
             )
             val outH = h
             val outW = w

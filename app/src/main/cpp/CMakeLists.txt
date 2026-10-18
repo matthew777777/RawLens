@@ -290,6 +290,13 @@ add_library(rawLensDng SHARED tinydng_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
 
+# sr-pipeline native backend (tools/sr-pipeline): Vulkan compute context +
+# merge-accumulate dispatch + unified TinyDNG v3 DNG writer, exposed to
+# Kotlin through SrpBridge. The module builds its own srp_tinydng_v3 static
+# lib from these same vendored sources, so desktop and Android emit
+# identical DNG files.
+add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
+
 # CRS type-7 encoder (vendored, GPL-3.0-only; see NOTICE.md).
 # C++17 like ncnnMl; the P0 spike JNI rides in the same library so pack and
 # encode stages can be timed separately on device (CPU vs Vulkan verdict).

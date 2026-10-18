@@ -351,6 +351,155 @@ object SrpBridge {
     ): Int
 
     /**
+     * Grey-FFT lowpass over a resident frame. `frameRes` must hold
+     * `width*height` reals (uploaded once per frame); `outBuffer`
+     * receives `width*height` floats. Bit-identical to the staged
+     * greyHave path; saves one full-frame upload per call.
+     */
+    @JvmStatic
+    external fun nativeGreyFftRes(
+        handle: Long,
+        frameRes: Long,
+        outBuffer: ByteBuffer,
+        fftSpirv: ByteArray,
+        corrSpirv: ByteArray,
+        width: Int,
+        height: Int,
+    ): Int
+
+    /**
+     * gat/decimate (gat.comp, op 0/1) over resident scratch. `inRes`
+     * holds `width*height` floats; `outRes` holds `count`; `ab` is the
+     * 8-float profile staged as a direct buffer. Bit-identical to
+     * nativeGat.
+     */
+    @JvmStatic
+    external fun nativeGatRes(
+        handle: Long,
+        inRes: Long,
+        outRes: Long,
+        ab: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        count: Int,
+        op: Int,
+    ): Int
+
+    /**
+     * kerngrad/sobel/sqrt/gamma (grad.comp, op 0..3) over resident
+     * scratch. `inRes` holds `width*height` floats; `outRes` holds
+     * `count` (op 0/1) or `count*2` floats. Bit-identical to nativeGrad.
+     */
+    @JvmStatic
+    external fun nativeGradRes(
+        handle: Long,
+        inRes: Long,
+        outRes: Long,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        count: Int,
+        op: Int,
+        expBits: Int,
+    ): Int
+
+    /**
+     * Kernel-covariance build (kernels.comp) over resident scratch.
+     * `gradsRes` holds `gradW*gradH*2` floats; `covRes` receives
+     * `covW*covH*4`; `kp` is the 8-float profile staged as a direct
+     * buffer. Bit-identical to nativeKernelsCov.
+     */
+    @JvmStatic
+    external fun nativeKernelsCovRes(
+        handle: Long,
+        gradsRes: Long,
+        kp: ByteBuffer,
+        covRes: Long,
+        spirv: ByteArray,
+        gradW: Int,
+        gradH: Int,
+        covW: Int,
+        covH: Int,
+    ): Int
+
+    /**
+     * compute_s (op 6) writing a resident spread map. `flowBuffer`
+     * stages `ntx*nty*2` floats; `sRes` receives `ntx*nty` floats and
+     * stays on-device for the robust leg. Bit-identical to nativeSmap.
+     */
+    @JvmStatic
+    external fun nativeSmapRes(
+        handle: Long,
+        flowBuffer: ByteBuffer,
+        sRes: Long,
+        spirv: ByteArray,
+        ntx: Int,
+        nty: Int,
+        mtBits: Int,
+        s1Bits: Int,
+        s2Bits: Int,
+    ): Int
+
+    /**
+     * compute_robustness with a resident frame and resident s map.
+     * `compRes` holds `width*height` raw floats; `meansRes`/`varsRes`
+     * hold `3*(width/2)*(height/2)` each; `sRes` holds `ftx*fty`;
+     * flow/lut stage as direct buffers; `outBuffer` receives the map.
+     * Bit-identical to nativeRobustCompute.
+     */
+    @JvmStatic
+    external fun nativeRobustComputeFrameRes(
+        handle: Long,
+        compRes: Long,
+        meansRes: Long,
+        varsRes: Long,
+        flowBuffer: ByteBuffer,
+        lutBuffer: ByteBuffer,
+        sRes: Long,
+        outBuffer: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        tileSize: Int,
+        lutN: Int,
+        noiseCorrection: Int,
+        tBits: Int,
+        ftx: Int,
+        fty: Int,
+    ): Int
+
+    /**
+     * Merge splat (merge_splat.comp) with a resident frame and resident
+     * covs. `inRes` holds `lrW*lrH` raw floats; `covRes` holds
+     * `covCount` merge-ready vec4s; flow/r stage; `numRes`/`denRes`
+     * accumulate `hrW*hrH*3` each in place. Bit-identical to
+     * nativeMergeSplatRes.
+     */
+    @JvmStatic
+    external fun nativeMergeSplatFrameRes(
+        handle: Long,
+        inRes: Long,
+        flowBuffer: ByteBuffer,
+        covRes: Long,
+        rBuffer: ByteBuffer,
+        numRes: Long,
+        denRes: Long,
+        spirv: ByteArray,
+        lrW: Int,
+        lrH: Int,
+        hrW: Int,
+        hrH: Int,
+        covCount: Int,
+        rCount: Int,
+        tileSize: Int,
+        scale: Float,
+        mode: Int,
+        ftx: Int,
+        fty: Int,
+    ): Int
+
+    /**
      * Merge splat (merge_splat.comp, Alg.4) over direct buffers. Returns
      * the `srp::Status` ordinal (0 = ok). `compBuffer` holds `lrW*lrH`
      * raw floats; `flowBuffer` holds `ftx*fty*2` pairs; `covBuffer` holds

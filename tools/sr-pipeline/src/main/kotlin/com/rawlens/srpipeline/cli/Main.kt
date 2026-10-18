@@ -299,6 +299,7 @@ private fun merge(plan: Plan) {
                         robust = spv(dir, "robustness"),
                         mergeSplat = spv(dir, "merge_splat"),
                         fft = fft,
+                        corr = spv(dir, "corr"),
                     ),
                 )
                 buf
