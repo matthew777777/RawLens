@@ -128,6 +128,22 @@ object VulkanPipeline {
 
     /** Stage clock, enabled with `-Dsrpipeline.profile=true`. */
     private val profile = System.getProperty("srpipeline.profile", "false") == "true"
+
+    /**
+     * Device heap diagnosis: JVM live-set in MB. Printed at phase
+     * boundaries when profiling (the 512 MB on-device ceiling makes
+     * the live curve load-bearing; desktop pool peaks overcount).
+     * `println` keeps it working on JVM and Android alike.
+     */
+    private fun heapMb(): Long {
+        val rt = Runtime.getRuntime()
+        return (rt.totalMemory() - rt.freeMemory()) / 1048576L
+    }
+
+    private fun heapLog(what: String) {
+        if (!profile) return
+        println("sr-pipeline heap: ${heapMb()} MB @ $what")
+    }
     private val clock = java.util.LinkedHashMap<String, Long>()
     private val clockN = java.util.LinkedHashMap<String, Long>()
 
@@ -168,6 +184,7 @@ object VulkanPipeline {
         // 50 MB frame dies before the comparison loop on callers that
         // release their own copy in the thunk.
         var refBox: Array<FloatArray>? = reference()
+        heapLog("ref-decoded")
         val h = refBox!!.size
         val w = refBox!![0].size
         val tile = config.tileSizes.first()
@@ -252,6 +269,7 @@ object VulkanPipeline {
         // there. Fully rewritten per use from here on.
         val frameBuf = SrpBridge.directFloats(w * h)
 
+        heapLog("post-pin")
         // 2. Reference local stats straight into the residents.
         if (config.robustnessEnabled) {
             timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
@@ -363,8 +381,11 @@ object VulkanPipeline {
         // and broke -Xmx512m survival with its extra live frame).
         // Loop rows are scoped here: they die with the work block.
         val loopRows = Array(h) { FloatArray(w) }
+        var frameNo = 0
         for (frameThunk in comparisons) {
             val frame = frameThunk()
+            heapLog("frame-$frameNo-decoded")
+            frameNo++
             val frameGrey = greyOfInto(frame, frameBuf, greyOut, loopRows)
             val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
             val ftx = flow[0].size
@@ -400,6 +421,7 @@ object VulkanPipeline {
         // 6. Normalise in place (on-device), download once. Only the
         // pack staging, pinned residents and tiny profile buffers are
         // still alive on the host.
+        heapLog("pre-download")
         timed("divide") { checkRc("divide", SrpBridge.divideRes(handle, numRes, denRes, spirvs.divide, total)) }
         val outBuf = SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }

@@ -56,6 +56,9 @@ class SrpPipelineFullresDeviceTest {
             assumeTrue("libsrpipeline.so unavailable: ${e.message}", false)
         }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        // Phase heap + stage clock: the live-set curve is load-bearing
+        // under the 512 MB ceiling (set before first VulkanPipeline use).
+        System.setProperty("srpipeline.profile", "true")
         val burstDir = File("/data/local/tmp/sr-burst")
         val listing = burstDir.list() ?: emptyArray()
         Log.i("SrpFullresDevice", "burst dir ${burstDir.absolutePath} lists ${listing.size}: " +

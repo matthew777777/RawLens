@@ -164,6 +164,14 @@ object AlignGpu {
             val padded = circularPad(refGrey, padH, padW)
             Resample.buildGaussianPyramid(padded, config.factors, config.preprocessing)
         }
+        // Gradient-upload staging reused across levels (fully rewritten
+        // per use): the old per-level packImg pair churned 2x level-size
+        // direct garbage per level (100 MB at the finest), which the
+        // 512 MB on-device ceiling cannot absorb mid-init. Same bytes.
+        // Extra capacity is fine: entries read explicit counts.
+        val maxN = pyramid.last().size * pyramid.last()[0].size
+        val packA = SrpBridge.directFloats(maxN)
+        val packB = SrpBridge.directFloats(maxN)
         val levels = pyramid.indices.map { i ->
             val c = n - i - 1
             val tileSize = config.tileSizes[c]
@@ -177,7 +185,7 @@ object AlignGpu {
             val nTy = pyramid[i].size / tileSize
             val nTx = pyramid[i][0].size / tileSize
             val hessBuf = SrpBridge.directFloats(nTy * nTx * 4)
-            val rc = SrpBridge.icaHessian(handle, packImg(gradX), packImg(gradY),
+            val rc = SrpBridge.icaHessian(handle, packImgInto(gradX, packA), packImgInto(gradY, packB),
                 hessBuf, spirvIca, pyramid[i][0].size, pyramid[i].size,
                 nTy * nTx, tileSize, nTx)
             require(rc == 0) { "icaHessian failed with status $rc" }
@@ -212,6 +220,13 @@ object AlignGpu {
         require(handle != 0L) { "AlignGpu: null context handle" }
         val n = config.factors.size
         require(init.levels.size == n) { "init must hold $n levels" }
+        // Upload staging reused for every pin upload below (fully
+        // rewritten per use): the old per-upload pack() churned one
+        // level-size direct buffer per static (4x50 MB at the finest),
+        // uncollectable fast enough under the 512 MB ceiling. Same bytes;
+        // extra capacity is fine (entries read explicit counts).
+        val maxStatic = init.levels.maxOf { it.ref.size * it.ref[0].size }
+        val uploadScratch = SrpBridge.directFloats(maxStatic)
         val pinned = ArrayList<GpuLevelInit>(n)
         try {
             for (p in 0 until n) {
@@ -234,13 +249,13 @@ object AlignGpu {
                         for (y in img.indices) img[y].copyInto(flat, y * img[0].size)
                         return flat
                     }
-                    val refRes = pinStatic(handle, flatInto(lvl.ref), "ref")
+                    val refRes = pinStatic(handle, flatInto(lvl.ref), "ref", uploadScratch)
                     partial.add(refRes)
-                    val gradXRes = pinStatic(handle, flatInto(lvl.gradX), "gradX")
+                    val gradXRes = pinStatic(handle, flatInto(lvl.gradX), "gradX", uploadScratch)
                     partial.add(gradXRes)
-                    val gradYRes = pinStatic(handle, flatInto(lvl.gradY), "gradY")
+                    val gradYRes = pinStatic(handle, flatInto(lvl.gradY), "gradY", uploadScratch)
                     partial.add(gradYRes)
-                    val hessRes = pinStatic(handle, lvl.hessPacked, "hess")
+                    val hessRes = pinStatic(handle, lvl.hessPacked, "hess", uploadScratch)
                     partial.add(hessRes)
                     var cur = lvl.copy(refRes = refRes, gradXRes = gradXRes,
                         gradYRes = gradYRes, hessRes = hessRes)
@@ -252,7 +267,7 @@ object AlignGpu {
                         require(res != 0L) { "pinLevelResidents: spectra alloc failed" }
                         partial.add(res)
                         val rc = ptime("correlatePinRef") {
-                            SrpBridge.correlatePinRef(handle, pack(flat), res,
+                            SrpBridge.correlatePinRef(handle, packInto(flat, uploadScratch), res,
                                 spirvs.fft, spirvs.corr, tc, s)
                         }
                         require(rc == 0) { "correlatePinRef failed with status $rc" }
@@ -287,12 +302,12 @@ object AlignGpu {
     }
 
     /** Creates a resident and uploads `data` once (level-static pin). */
-    private fun pinStatic(handle: Long, data: FloatArray, what: String): Long {
+    private fun pinStatic(handle: Long, data: FloatArray, what: String, scratch: ByteBuffer): Long {
         val res = SrpBridge.createResident(handle, data.size.toLong())
         require(res != 0L) { "pinLevelResidents: $what alloc failed" }
         try {
             val rc = ptime("uploadStatic") {
-                SrpBridge.uploadResident(handle, res, pack(data), data.size.toLong())
+                SrpBridge.uploadResident(handle, res, packInto(data, scratch), data.size.toLong())
             }
             require(rc == 0) { "uploadResident($what) failed with status $rc" }
         } catch (e: Exception) {
