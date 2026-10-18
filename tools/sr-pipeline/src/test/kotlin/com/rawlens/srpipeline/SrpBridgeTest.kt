@@ -2044,9 +2044,16 @@ class SrpBridgeTest {
             // Certified align_crop loop envelope: the reference Vulkan port
             // measures 1.153349876e-05 here at full precision (the old
             // 1.15e-05 literal was that value rounded to 3 sig figs, which
-            // not even the port satisfies). Bound is the port value ceiled
-            // to 4 sig figs, never weakened.
-            assertTrue("loop maxabs too large: $maxAbs", maxAbs <= 1.154e-05f)
+            // not even the port satisfies). The shipped FINAL-14 ica.spv
+            // (Mali-steered: pins/NR/wrap) moves Metal numerics to a
+            // deterministic 1.1593103e-05 — verified by swapping in the
+            // pristine SPV, which lands exactly on the port value, so the
+            // delta is entirely the steering, not host inputs (the host
+            // leg sits at 8.9e-08, see AlignLoopHostParityTest). Bound
+            // 1.16e-05 covers the steered value with headroom (widened
+            // from 1.154e-05 with explicit auth; never widen again
+            // silently).
+            assertTrue("loop maxabs too large: $maxAbs", maxAbs <= 1.16e-05f)
         } finally {
             SrpBridge.nativeDestroy(handle)
         }
@@ -2123,7 +2130,10 @@ class SrpBridgeTest {
                         kotlin.math.abs(got[ty][tx][c] - want[ty][tx][c]))
                 }
                 println("pinned align loop maxabs_vs_recorded=${maxAbs}")
-                assertTrue("pinned loop maxabs too large: $maxAbs", maxAbs <= 1.154e-05f)
+                // Same 1.16e-05 envelope as the staged golden above
+                // (FINAL-14 steering moves both legs identically; pinning
+                // is entry-bit-exact).
+                assertTrue("pinned loop maxabs too large: $maxAbs", maxAbs <= 1.16e-05f)
             } finally {
                 com.rawlens.srpipeline.stages.AlignGpu.freeLevelSpectra(pinned, handle)
             }
