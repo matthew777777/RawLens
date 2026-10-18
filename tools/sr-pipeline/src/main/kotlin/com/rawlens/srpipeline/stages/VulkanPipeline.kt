@@ -228,17 +228,21 @@ object VulkanPipeline {
         // pack staging is only allocated after the pin below, so it is
         // not live during the ~300 MB init window.
         val pinnedInit = run {
-            val rows = Array(h) { FloatArray(w) }
-            val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h), greyOut, rows)
+            // 1a. Init (own scope): the 50 MB grey rows die here, so
+            // they are not live during the pin uploads below (the pin
+            // needs the level arrays, never the rows).
+            val unpinned = run {
+                val rows = Array(h) { FloatArray(w) }
+                val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h), greyOut, rows)
+                timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) }
+            }
             // 1b. Pin level residents on-device (L2 spectra + statics,
             // one upload per run, reused across frames); freed in the
             // run finally below. The unpinned init's ~320MB of host
             // copies die with the pin call; the pinned copy carries
             // stripped arrays, see pinLevelResidents.
             val pinned = timed("alignPin") {
-                AlignGpu.pinLevelResidents(
-                    timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) },
-                    loop, handle, alignSpirvs)
+                AlignGpu.pinLevelResidents(unpinned, loop, handle, alignSpirvs)
             }
             pinned
         }
