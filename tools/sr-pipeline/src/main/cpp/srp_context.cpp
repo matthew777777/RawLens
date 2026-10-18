@@ -9,6 +9,9 @@
 #include <map>
 #include <mutex>
 #include <vector>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 #include "srp_pipeline.h"
 
@@ -379,6 +382,22 @@ uint64_t PoolCapBytes() {
     const unsigned long v = std::strtoul(env, &end, 10);
     if (end != env) cap_mb = v;
   }
+#ifdef __ANDROID__
+  // Android has no process env passthrough for instrumented runs, so the
+  // same knob is also readable as a debug system property
+  // (`adb shell setprop debug.srp.pool_cap_mb 64`). Bounds
+  // between-uses device retention on RAM-shared Mali parts, where the
+  // 512MB desktop default plus ~400MB pinned residents trips LMK.
+  // Values-identical either way (pooled buffers are fully overwritten).
+  else {
+    char prop[32] = {};
+    if (__system_property_get("debug.srp.pool_cap_mb", prop) > 0) {
+      char* end = nullptr;
+      const unsigned long v = std::strtoul(prop, &end, 10);
+      if (end != prop) cap_mb = v;
+    }
+  }
+#endif
   if (cap_mb == 0) return UINT64_MAX;
   return cap_mb * 1024ull * 1024ull;
 }
