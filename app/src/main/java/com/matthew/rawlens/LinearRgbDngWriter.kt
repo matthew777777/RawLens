@@ -99,9 +99,9 @@ data class MergeProvenance(
  * Quantization policy (documented, parser-tested): each sample is clamped to
  * [0, 1], multiplied by [QUANTIZATION_SCALE], and rounded half up to an
  * unsigned 16-bit code. merged values above 1.0 (unclipped highlight energy)
- * saturate at white; WhiteLevel 65535 and BlackLevel 0 therefore describe the
- * file exactly. Merged data is already black-subtracted, so BlackLevel 0 is
- * truthful, not a default.
+ * saturate at white; WhiteLevel 65535 on all three channels and BlackLevel 0
+ * therefore describe the file exactly. Merged data is already black-subtracted,
+ * so BlackLevel 0 is truthful, not a default.
  *
  * Metadata policy: only reference-frame facts are copied (capture, exposure,
  * ISO, camera identity, white point, calibration, colour transforms,
@@ -246,7 +246,11 @@ object LinearRgbDngWriter {
             ascii(50708, cameraName)
             shorts(50713, 1, 1)
             rationals(50714, doubleArrayOf(0.0, 0.0, 0.0))
-            longs(50717, 65535)
+            // One WhiteLevel per sample channel: the DNG spec fixes this
+            // tag's count to SamplesPerPixel. A single value leaves
+            // LibRaw-based readers with zero per-channel whites, which
+            // crashes channel-normalizing consumers.
+            longs(50717, 65535, 65535, 65535)
             srationals(50721, matrix)
             rationals(50728, neutral)
             shorts(50778, metadata.referenceIlluminant1 ?: 21)

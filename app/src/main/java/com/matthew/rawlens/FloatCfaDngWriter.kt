@@ -23,13 +23,16 @@ object FloatCfaDngWriter {
      *   (plus the reference ExposureTime/ISO below) to place brightness
      *   correctly. Null (default) writes no exposure tags — legacy behavior
      *   for uniform merges, which are already at native brightness.
+     * @param description per-flavor ImageDescription (AI/Galosh/HDR merge
+     *   provenance); null (default) omits it, preserving legacy bytes.
      */
     fun write(
         output: OutputStream,
         cfa: UnpackedRawCfa,
         metadata: RawFrameMetadata,
         gps: GpsLocation? = null,
-        baselineExposureEv: Double? = null
+        baselineExposureEv: Double? = null,
+        description: String? = null
     ) {
         cfa.requireAmazeCompatible()
         require(cfa.values.size == cfa.width * cfa.height)
@@ -42,6 +45,7 @@ object FloatCfaDngWriter {
         val cameraName = "${oem(Build.MANUFACTURER)} ${oem(Build.MODEL)} (${metadata.cameraId})"
         require(metadata.exifOrientation in 1..8)
         val fields = TiffFields().apply {
+            if (description != null) ascii(270, description)
             ascii(271, oem(Build.MANUFACTURER))
             ascii(272, oem(Build.MODEL))
             shorts(274, metadata.exifOrientation)

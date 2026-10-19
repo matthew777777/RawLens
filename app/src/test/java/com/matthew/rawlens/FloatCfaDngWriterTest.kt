@@ -188,4 +188,46 @@ class FloatCfaDngWriterTest {
         assertEquals(0f, buffer.getFloat(stripOffset), 0f)
         assertEquals(3.5f, buffer.getFloat(stripOffset + 15 * 4), 0f)
     }
+
+    @Test fun writesFlavorDescriptionWhenProvided() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB,
+            FloatArray(16) { it / 16f }, RawCrop(0, 0, 4, 4))
+        val flavor = "Captured with RawLens\nAI-denoised CFA DNG test flavor"
+        val bytes = ByteArrayOutputStream().also {
+            FloatCfaDngWriter.write(it, cfa, metadata, description = flavor)
+        }.toByteArray()
+        assertEquals(flavor, asciiTag(bytes, 270))
+    }
+
+    @Test fun omitsDescriptionByDefault() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        val cfa = UnpackedRawCfa(4, 4, BayerPattern.RGGB,
+            FloatArray(16) { it / 16f }, RawCrop(0, 0, 4, 4))
+        val bytes = ByteArrayOutputStream().also {
+            FloatCfaDngWriter.write(it, cfa, metadata)
+        }.toByteArray()
+        assertEquals("", asciiTag(bytes, 270))
+    }
+
+    private fun asciiTag(bytes: ByteArray, wanted: Int): String {
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val count = buffer.getShort(8).toInt() and 0xffff
+        for (i in 0 until count) {
+            val p = 10 + i * 12
+            if ((buffer.getShort(p).toInt() and 0xffff) == wanted) {
+                val n = buffer.getInt(p + 4)
+                val off = buffer.getInt(p + 8)
+                val raw = ByteArray(n) { buffer.get(off + it) }
+                return String(raw, Charsets.US_ASCII).trimEnd('\u0000')
+            }
+        }
+        return ""
+    }
 }

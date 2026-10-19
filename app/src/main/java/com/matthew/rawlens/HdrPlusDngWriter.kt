@@ -82,23 +82,16 @@ data class HdrPlusProvenance(
  */
 object HdrPlusDngWriter {
     /**
-     * @param captureTimeMillis wall-clock save time for the EXIF date tags
-     *   (the savers' captureId); null omits all date tags.
-     * @param provenance merge facts for the ImageDescription block; null
-     *   omits it.
+     * IFD0 tag assembly shared by the uncompressed and JXL paths (the only
+     * difference is the DNG version pair). Pure: unit-tested without the
+     * native writer.
      */
-    fun write(
-        output: OutputStream,
-        cfa: UnpackedRawCfa,
+    internal fun buildFields(
+        pattern: BayerPattern,
         metadata: RawFrameMetadata,
-        gps: GpsLocation? = null,
-        captureTimeMillis: Long? = null,
-        provenance: HdrPlusProvenance? = null
-    ) {
-        cfa.requireAmazeCompatible()
-        require(cfa.values.size == cfa.width * cfa.height)
-        require(cfa.values.all(Float::isFinite)) { "HDR+ DNG cannot contain NaN or infinity" }
-
+        provenance: HdrPlusProvenance?,
+        compression: DngCompression
+    ): TiffFields {
         val neutral = metadata.neutralColorPoint?.toDoubleArray()
             ?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
         val matrix = metadata.colorMatrix1?.let(::dngMatrix)
@@ -118,9 +111,16 @@ object HdrPlusDngWriter {
             shorts(284, 1)
             ascii(305, "RawLens")
             shorts(33421, 2, 2)
-            bytes(33422, cfaPattern(cfa.pattern))
-            bytes(50706, byteArrayOf(1, 4, 0, 0))
-            bytes(50707, byteArrayOf(1, 4, 0, 0))
+            bytes(33422, cfaPattern(pattern))
+            // JXL strips require DNG 1.7 (same pair the single-frame JXL
+            // path writes); uncompressed keeps the legacy 1.4/1.3 pair.
+            if (compression == DngCompression.JXL) {
+                bytes(50706, byteArrayOf(1, 7, 0, 0))
+                bytes(50707, byteArrayOf(1, 7, 0, 0))
+            } else {
+                bytes(50706, byteArrayOf(1, 4, 0, 0))
+                bytes(50707, byteArrayOf(1, 3, 0, 0))
+            }
             ascii(50708, cameraName)
             shorts(50713, 2, 2)
             // BlackLevel count must cover the 2x2 repeat grid (one level per
@@ -155,22 +155,52 @@ object HdrPlusDngWriter {
             matrixTag(50965, metadata.forwardMatrix2)
             fields.shorts(50779, metadata.referenceIlluminant2)
         }
+        return fields
+    }
+
+    /**
+     * @param captureTimeMillis wall-clock save time for the EXIF date tags
+     *   (the savers' captureId); null omits all date tags.
+     * @param provenance merge facts for the ImageDescription block; null
+     *   omits it.
+     * @param compression JXL stores the mosaic losslessly (DNG 1.7,
+     *   Compression 52546) with the same tags; uncompressed keeps the
+     *   legacy streaming layout. Float paths never reach this writer.
+     */
+    fun write(
+        output: OutputStream,
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        gps: GpsLocation? = null,
+        captureTimeMillis: Long? = null,
+        provenance: HdrPlusProvenance? = null,
+        compression: DngCompression = DngCompression.UNCOMPRESSED
+    ) {
+        cfa.requireAmazeCompatible()
+        require(cfa.values.size == cfa.width * cfa.height)
+        require(cfa.values.all(Float::isFinite)) { "HDR+ DNG cannot contain NaN or infinity" }
+
+        val fields = buildFields(cfa.pattern, metadata, provenance, compression)
         val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
+        val gpsFields = gps?.let { GpsTiffDirectory.fields(it) }
+        val mosaic = ByteArray(Math.multiplyExact(cfa.width * cfa.height, 2))
+        var o = 0
+        for (v in cfa.values) {
+            val q = LinearRgbDngWriter.quantize(v)
+            mosaic[o] = q.toByte()
+            mosaic[o + 1] = (q shr 8).toByte()
+            o += 2
+        }
+        if (compression == DngCompression.JXL) {
+            TinyDngImageWriter.writeCompressed(output, cfa.width, cfa.height, mosaic,
+                fields = fields, exif = exif, gps = gpsFields)
+            return
+        }
         TinyDngImageWriter.write(output, cfa.width, cfa.height,
             samplesPerPixel = 1, bitsPerSample = 16, sampleFormat = 1,
             photometric = 32803, rowsPerStrip = cfa.height,
             fields = fields, exif = exif,
-            gps = gps?.let { GpsTiffDirectory.fields(it) }, stripCount = 1) {
-            val bytes = ByteArray(Math.multiplyExact(cfa.width * cfa.height, 2))
-            var o = 0
-            for (v in cfa.values) {
-                val q = LinearRgbDngWriter.quantize(v)
-                bytes[o] = q.toByte()
-                bytes[o + 1] = (q shr 8).toByte()
-                o += 2
-            }
-            bytes
-        }
+            gps = gpsFields, stripCount = 1) { mosaic }
     }
 
     /**

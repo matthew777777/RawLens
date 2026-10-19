@@ -105,6 +105,32 @@ object TinyDngImageWriter {
         nativeAppend(handle, stripIndex, strip)
     }
 
+    /**
+     * One-shot lossless-JXL write for merged 16-bit CFA mosaics (DNG 1.7,
+     * Compression 52546). [mosaic] is the full-frame little-endian u16
+     * raster; [fields] must carry DNG 1.7 version tags (the native side only
+     * stores the caller's tags). EXIF/GPS sub-IFDs ride along, so merged
+     * JXL files keep location. Uncompressed merges keep using [write].
+     */
+    fun writeCompressed(
+        output: OutputStream,
+        width: Int,
+        height: Int,
+        mosaic: ByteArray,
+        fields: TiffFields,
+        exif: TiffFields?,
+        gps: TiffFields?
+    ) {
+        load()
+        nativeWriteCompressed(mosaic, width, height,
+            fields.descriptors.toIntArray(), fields.payloads.toTypedArray(),
+            exif?.takeUnless { it.isEmpty }?.descriptors?.toIntArray(),
+            exif?.takeUnless { it.isEmpty }?.payloads?.toTypedArray(),
+            gps?.takeUnless { it.isEmpty }?.descriptors?.toIntArray(),
+            gps?.takeUnless { it.isEmpty }?.payloads?.toTypedArray(),
+            output)
+    }
+
     /** Verifies every strip arrived and releases the native handle. */
     fun close(handle: Long) {
         nativeClose(handle)
@@ -156,4 +182,12 @@ object TinyDngImageWriter {
 
     private external fun nativeAppend(handle: Long, stripIndex: Int, strip: ByteArray)
     private external fun nativeClose(handle: Long)
+
+    private external fun nativeWriteCompressed(
+        mosaic: ByteArray, width: Int, height: Int,
+        descriptors: IntArray, payloads: Array<ByteArray>,
+        exifDescriptors: IntArray?, exifPayloads: Array<ByteArray>?,
+        gpsDescriptors: IntArray?, gpsPayloads: Array<ByteArray>?,
+        output: OutputStream
+    )
 }

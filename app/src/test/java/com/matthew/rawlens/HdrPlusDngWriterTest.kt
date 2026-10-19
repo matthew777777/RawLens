@@ -65,6 +65,62 @@ class HdrPlusDngWriterTest {
         assertEquals(65535, sample(15)) // clamped, not wrapped
     }
 
+    @Test fun buildFieldsWritesDng17PairForJxlAndLegacyPairOtherwise() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        fun versionOf(compression: DngCompression): Pair<ByteArray, ByteArray> {
+            val fields = HdrPlusDngWriter.buildFields(
+                BayerPattern.RGGB, metadata, null, compression)
+            fun payload(tag: Int): ByteArray {
+                var found = -1
+                var i = 0
+                while (i + 2 < fields.descriptors.size) {
+                    if (fields.descriptors[i] == tag) { found = i / 3; break }
+                    i += 3
+                }
+                assertTrue("tag $tag present", found >= 0)
+                return fields.payloads[found]
+            }
+            return payload(50706) to payload(50707)
+        }
+        val (jxlVersion, jxlBackward) = versionOf(DngCompression.JXL)
+        assertTrue(jxlVersion.contentEquals(byteArrayOf(1, 7, 0, 0)))
+        assertTrue(jxlBackward.contentEquals(byteArrayOf(1, 7, 0, 0)))
+        val (legacyVersion, legacyBackward) = versionOf(DngCompression.UNCOMPRESSED)
+        assertTrue(legacyVersion.contentEquals(byteArrayOf(1, 4, 0, 0)))
+        assertTrue(legacyBackward.contentEquals(byteArrayOf(1, 3, 0, 0)))
+    }
+
+    @Test fun buildFieldsKeepsFlavorTagsOnBothPaths() {
+        val metadata = mock(RawFrameMetadata::class.java)
+        `when`(metadata.cameraId).thenReturn("0")
+        `when`(metadata.exifOrientation).thenReturn(1)
+        `when`(metadata.referenceIlluminant1).thenReturn(21)
+        val provenance = HdrPlusProvenance(
+            mergedFrames = 2, selectedFrames = 2, rejectedFrames = 0,
+            highQuality = true, strength = 13f, tileSize = 32, searchDistance = 64,
+            referenceIndex = 0, referenceTimestampNs = 1L, referenceFrameNumber = 2L,
+            sourceWidth = 64, sourceHeight = 48, sourceCameraId = "0",
+            mergeMs = 3, packMs = 1, gpuMs = 2.0, unpackMs = 1,
+            frames = listOf(HdrPlusFrameInfo(10_000_000L, 100), HdrPlusFrameInfo(10_000_000L, 100)))
+        for (compression in DngCompression.entries) {
+            val fields = HdrPlusDngWriter.buildFields(
+                BayerPattern.RGGB, metadata, provenance, compression)
+            val tags = HashSet<Int>()
+            var i = 0
+            while (i + 2 < fields.descriptors.size) {
+                tags.add(fields.descriptors[i])
+                i += 3
+            }
+            assertTrue(tags.contains(270))
+            assertTrue(tags.contains(33422))
+            assertTrue(tags.contains(50714))
+            assertTrue(tags.contains(50717))
+        }
+    }
+
     @Test fun writesExifBlockExposureIsoAndProvenance() {
         val metadata = mock(RawFrameMetadata::class.java)
         `when`(metadata.cameraId).thenReturn("0")

@@ -164,7 +164,10 @@ class LinearRgbDngWriterTest {
         val byteCount = parsed.entry(279).value
         assertEquals(4 * 2 * 3 * 2, byteCount)
         assertEquals(stripOffset + byteCount, parsed.bytes.size)
-        assertEquals(65535, parsed.entry(50717).value) // WhiteLevel
+        // WhiteLevel count is SamplesPerPixel: one level per RGB channel.
+        // A single value leaves LibRaw consumers with zero per-channel
+        // whites, which crashes channel-normalizing readers.
+        assertEquals(listOf(65535, 65535, 65535), parsed.longs(50717))
         assertEquals(listOf(1, 1), parsed.shorts(50713)) // 1x1 RGB tile: three black levels
         assertEquals(listOf(0.0, 0.0, 0.0), parsed.rationals(50714)) // BlackLevel
         for (cfaTag in listOf(33421, 33422)) assertFalse("CFA tag $cfaTag", parsed.has(cfaTag))

@@ -37,17 +37,27 @@ internal class TinyDngMetadata {
 
     companion object {
         private fun buffer(size: Int) = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
+        /**
+         * @param dng17 JPEG XL strips (Compression 52546) require DNG 1.7:
+         * the spec mandates DNGVersion and DNGBackwardVersion >= 1.7.0.0
+         * when the main IFD uses 52546.
+         */
         fun create(metadata: RawFrameMetadata, overrides: DngMetadataOverrides,
                    pattern: BayerPattern, black: DoubleArray, white: Int,
-                   active: RawCrop): TinyDngMetadata = TinyDngMetadata().apply {
+                   active: RawCrop, dng17: Boolean = false): TinyDngMetadata = TinyDngMetadata().apply {
             longs(254, 0)
             shorts(274, metadata.exifOrientation)
             ascii(271, Build.MANUFACTURER ?: "Unknown")
             ascii(272, Build.MODEL ?: "Unknown")
             ascii(305, "RawLens TinyDNG v3")
             ascii(50708, "${Build.MANUFACTURER} ${Build.MODEL} (${metadata.cameraId})")
-            tag(50706, 1, byteArrayOf(1, 4, 0, 0))
-            tag(50707, 1, byteArrayOf(1, 3, 0, 0))
+            if (dng17) {
+                tag(50706, 1, byteArrayOf(1, 7, 0, 0))
+                tag(50707, 1, byteArrayOf(1, 7, 0, 0))
+            } else {
+                tag(50706, 1, byteArrayOf(1, 4, 0, 0))
+                tag(50707, 1, byteArrayOf(1, 3, 0, 0))
+            }
             shorts(33421, 2, 2)
             tag(33422, 1, ByteArray(4) { pattern.colorAt(it and 1, it shr 1).ordinal.toByte() })
             tag(50710, 1, byteArrayOf(0, 1, 2))

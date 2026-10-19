@@ -52,8 +52,10 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create AI DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata, gps) }
-                ?: throw IOException("Could not open AI DNG output stream")
+            resolver.openOutputStream(uri, "w")?.use {
+                FloatCfaDngWriter.write(it, cfa, metadata, gps,
+                    description = "Captured with RawLens\nAI-denoised CFA DNG (32-bit float, normalized, zero black level)")
+            } ?: throw IOException("Could not open AI DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish AI DNG")
             return displayName
@@ -84,8 +86,10 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create GALOSH DNG media entry")
         try {
-            resolver.openOutputStream(uri, "w")?.use { FloatCfaDngWriter.write(it, cfa, metadata, gps) }
-                ?: throw IOException("Could not open GALOSH DNG output stream")
+            resolver.openOutputStream(uri, "w")?.use {
+                FloatCfaDngWriter.write(it, cfa, metadata, gps,
+                    description = "Captured with RawLens\nGALOSH-denoised CFA DNG (32-bit float, normalized, zero black level)")
+            } ?: throw IOException("Could not open GALOSH DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish GALOSH DNG")
             return displayName
@@ -102,6 +106,8 @@ class DngSaver(private val context: Context) {
      *   32-bit float.
      * @param hdrPlusProvenance merge facts for the 16-bit path's
      *   ImageDescription block; ignored by the 32-bit path.
+     * @param description ImageDescription for the 32-bit path; null omits
+     *   it. Ignored by the 16-bit path (provenance owns that block).
      */
     fun saveMerged(cfa: UnpackedRawCfa, metadata: RawFrameMetadata,
                    captureId: Long = System.currentTimeMillis(),
@@ -109,7 +115,9 @@ class DngSaver(private val context: Context) {
                    displayName: String? = null,
                    sixteenBit: Boolean = false,
                    hdrPlusProvenance: HdrPlusProvenance? = null,
-                   baselineExposureEv: Double? = null): String {
+                   baselineExposureEv: Double? = null,
+                   description: String? = null,
+                   dngCompression: DngCompression = DngCompression.UNCOMPRESSED): String {
         val resolvedName = displayName ?: CaptureFileNames.hdrDng(captureId)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -121,11 +129,22 @@ class DngSaver(private val context: Context) {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IOException("Could not create HDR DNG media entry")
         try {
+            // JXL only covers the 16-bit CFA path (the JNI encode is
+            // uint16-grayscale): float merges stay uncompressed, and unlike
+            // the single-frame fallback there is no platform writer for
+            // merges, so merged JXL files carry GPS in their own GPS IFD.
+            if (!sixteenBit && dngCompression == DngCompression.JXL) {
+                Log.w(LOG_TAG, "JXL DNG compression needs the 16-bit merged path; " +
+                    "$resolvedName stays uncompressed")
+            }
+            val mergedCompression =
+                if (sixteenBit) dngCompression else DngCompression.UNCOMPRESSED
             resolver.openOutputStream(uri, "w")?.use {
                 if (sixteenBit) HdrPlusDngWriter.write(it, cfa, metadata, gps,
-                    captureTimeMillis = captureId, provenance = hdrPlusProvenance)
+                    captureTimeMillis = captureId, provenance = hdrPlusProvenance,
+                    compression = mergedCompression)
                 else FloatCfaDngWriter.write(it, cfa, metadata, gps,
-                    baselineExposureEv = baselineExposureEv)
+                    baselineExposureEv = baselineExposureEv, description = description)
             } ?: throw IOException("Could not open HDR DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish HDR DNG")
@@ -136,6 +155,15 @@ class DngSaver(private val context: Context) {
         }
     }
 
+    /**
+     * @param dngCompression JXL stores the single-frame mosaic losslessly as
+     * a JPEG XL codestream (DNG 1.7, Compression 52546 — the iPhone ProRAW
+     * flavor). Applies to the single-frame path only: packed frames and
+     * merged DNGs stay uncompressed. JXL forces the TinyDNG backend (the
+     * platform writer cannot emit 52546); when a GPS fix is present the
+     * save stays uncompressed instead, because TinyDNG cannot carry the
+     * GPS sub-IFD and silently dropping location is worse than a bigger file.
+     */
     @Throws(IOException::class)
     fun save(
         image: Image,
@@ -151,7 +179,8 @@ class DngSaver(private val context: Context) {
         // Burst folder grouping: null keeps the legacy flat DCIM/RawLens
         // layout; non-null must pass BurstSidecar.requireSubfolder and
         // places this frame under DCIM/RawLens/<subfolder>/.
-        subfolder: String? = null
+        subfolder: String? = null,
+        dngCompression: DngCompression = DngCompression.UNCOMPRESSED
     ): String {
         check(orientation == metadata.exifOrientation) { "DNG orientation snapshot mismatch" }
         overrides.validate()
@@ -194,11 +223,28 @@ class DngSaver(private val context: Context) {
         // White/black levels stay format-independent Camera2 sensor
         // properties, so the same metadata normalizes both containers.
         val packedFormat = PackedRawFormat.ofInt(image.format)
+        if (dngCompression == DngCompression.JXL && packedFormat != null) {
+            Log.w(LOG_TAG, "JXL DNG compression needs the single-frame path; " +
+                "packed frame $displayName stays uncompressed")
+        }
+        // JXL rides TinyDNG (the platform writer has no 52546); a present
+        // GPS fix keeps the uncompressed platform file instead of losing
+        // location through TinyDNG's flat IFD.
+        val wantJxl = dngCompression == DngCompression.JXL && packedFormat == null
+        if (wantJxl && gps != null) {
+            Log.w(LOG_TAG, "JXL DNG compression skipped for $displayName: " +
+                "GPS fix preserved via uncompressed DNG (TinyDNG has no GPS sub-IFD)")
+        }
+        val useJxl = wantJxl && gps == null
+        val compressionBackend = if (useJxl && effectiveBackend != DngWriterBackend.TINY_DNG) {
+            Log.i(LOG_TAG, "JXL DNG compression forces TinyDNG backend for $displayName")
+            DngWriterBackend.TINY_DNG
+        } else effectiveBackend
         try {
             val actualBackend = if (packedFormat != null) {
                 savePackedCfa(uri, image, metadata, gps, overrides, displayName)
                 DngWriterBackend.TINY_DNG
-            } else when (effectiveBackend) {
+            } else when (compressionBackend) {
                 DngWriterBackend.ANDROID -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
                         writeAndroid(output, image, characteristics, result, orientation, gps)
@@ -208,7 +254,7 @@ class DngSaver(private val context: Context) {
 
                 DngWriterBackend.TINY_DNG -> {
                     resolver.openOutputStream(uri, "w")?.use { output ->
-                        NativeDngWriter.write(output, image, metadata, result, overrides)
+                        NativeDngWriter.write(output, image, metadata, result, overrides, jxl = useJxl)
                     } ?: throw IOException("Could not open DNG output stream")
                     DngWriterBackend.TINY_DNG
                 }
@@ -254,7 +300,8 @@ class DngSaver(private val context: Context) {
                 throw IOException("Could not publish pending DNG media entry")
             }
             Log.i(LOG_TAG, "DNG requestedBackend=$backend actualBackend=$actualBackend" +
-                (packedFormat?.let { " packed=${it.name}" } ?: "") + " saved=$displayName")
+                (packedFormat?.let { " packed=${it.name}" } ?: "") +
+                (if (useJxl) " compression=jxl" else "") + " saved=$displayName")
             return displayName
         } catch (failure: Exception) {
             resolver.delete(uri, null, null)

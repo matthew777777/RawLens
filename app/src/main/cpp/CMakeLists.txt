@@ -378,6 +378,12 @@ target_compile_definitions(tinydng_v3 PRIVATE TINYDNG_NO_ZIP
 add_library(rawLensDng SHARED tinydng_jni.cpp)
 target_link_libraries(rawLensDng PRIVATE tinydng_v3)
 target_link_options(rawLensDng PRIVATE "-Wl,-z,max-page-size=16384")
+# JXL-compressed DNG strips reuse the libjxl wired above for the still
+# encoder; without it the JXL DNG path reports "needs a libjxl build".
+if(TARGET jxl)
+    target_compile_definitions(rawLensDng PRIVATE RAWLENS_HAVE_LIBJXL)
+    target_link_libraries(rawLensDng PRIVATE jxl jxl_threads)
+endif()
 
 # sr-pipeline native backend (tools/sr-pipeline): Vulkan compute context +
 # merge-accumulate dispatch + unified TinyDNG v3 DNG writer, exposed to

@@ -24,12 +24,17 @@ internal fun isContiguousUnpackedRaw(
 /** Camera2 metadata/stride bridge into the pinned TinyDNG v3 writer. */
 object NativeDngWriter {
     @Synchronized
+    /**
+     * @param jxl store the mosaic as a lossless JPEG XL codestream (DNG 1.7,
+     * Compression 52546) instead of raw bytes; implies DNG 1.7 version tags.
+     */
     fun write(
         outputStream: OutputStream,
         image: Image,
         metadata: RawFrameMetadata,
         result: CaptureResult,
-        overrides: DngMetadataOverrides
+        overrides: DngMetadataOverrides,
+        jxl: Boolean = false
     ) {
         overrides.validate()
         val plane = image.planes.singleOrNull()
@@ -63,7 +68,7 @@ object NativeDngWriter {
                 "black=${black.joinToString(",")} white=$white")
         }
         val tags = TinyDngMetadata.create(metadata, overrides, outputPattern,
-            black, white, active)
+            black, white, active, dng17 = jxl)
         result.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
             tags.reals(37386, doubleArrayOf(it.toDouble()), 5)
         }
@@ -71,11 +76,11 @@ object NativeDngWriter {
             tags.reals(33437, doubleArrayOf(it.toDouble()), 5)
         }
         writeNative(contiguousRawBuffer(image, plane), image.width, image.height,
-            tags.descriptors.toIntArray(), tags.payloads.toTypedArray(), outputStream)
+            tags.descriptors.toIntArray(), tags.payloads.toTypedArray(), outputStream, jxl)
     }
 
     private external fun writeNative(raw: ByteBuffer, width: Int, height: Int,
-        descriptors: IntArray, payloads: Array<ByteArray>, output: OutputStream)
+        descriptors: IntArray, payloads: Array<ByteArray>, output: OutputStream, jxl: Boolean)
 
     init { System.loadLibrary("rawLensDng") }
 

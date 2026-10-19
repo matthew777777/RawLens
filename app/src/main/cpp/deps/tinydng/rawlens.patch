@@ -50,3 +50,224 @@
    }
  
    if (w->w.failed) {
+--- a/tinydng.h
++++ b/tinydng.h
+@@ -150,7 +150,11 @@ typedef enum tinydng_compression {
+   TINYDNG_COMPRESSION_NEW_JPEG = 7,
+   TINYDNG_COMPRESSION_ZIP = 8,
+   TINYDNG_COMPRESSION_PACKBITS = 32773,
+-  TINYDNG_COMPRESSION_LOSSY_JPEG = 34892
++  TINYDNG_COMPRESSION_LOSSY_JPEG = 34892,
++  /* RawLens: JPEG XL (DNG 1.7, Compression 52546). Copy-through only: the
++     caller compresses (e.g. libjxl) and hands already-compressed bytes to
++     tinydng_writer_write_compressed_strip. No encoder lives here. */
++  TINYDNG_COMPRESSION_JPEG_XL = 52546
+ } tinydng_compression;
+ 
+ typedef enum tinydng_sample_format {
+@@ -687,12 +691,18 @@ typedef struct tinydng_write_options {
+   uint8_t ljpeg_arithmetic; /* compression=7: SOF11 instead of SOF3   */
+   uint8_t ljpeg_predictor;  /* 0 => 1; otherwise Annex H selector 1..7 */
+   uint16_t ljpeg_restart_interval_mcus; /* 0 => none; whole MCU rows   */
+-  uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits */
++  uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits,
++                           52546 precompressed JPEG XL (RawLens) */
+   /* RawLens: header-first streaming for uncompressed output to non-seekable
+      sinks. The header, IFD and extras are emitted at create (offsets
+      precomputed — valid only for uncompressed striped layouts), and strips
+      must arrive in index order. Classic TIFF only. */
+   uint8_t header_first;
++  /* RawLens: the image data arrives already compressed (JPEG XL codestream).
++     writer_create requires compression == 52546 with 16-bit single-channel
++     input; tinydng_write_memory skips the raster-size check and stores the
++     bytes verbatim via tinydng_writer_write_compressed_strip. */
++  uint8_t precompressed;
+ } tinydng_write_options;
+ 
+ typedef struct tinydng_write_image {
+@@ -811,6 +821,17 @@ tinydng_status tinydng_writer_write_strip(tinydng_writer *w,
+                                           const void *pixels,
+                                           tinydng_error *err);
+ 
++/* RawLens: write one already-compressed strip (JPEG XL codestream bytes).
++   Requires a writer created with compression == 52546 + precompressed, a
++   non-header-first sink, and strip_index 0..seg_count (one-shot writes use
++   strip 0 with len == img->data_size). Bytes are stored verbatim; no
++   byte-swap, no re-encode. */
++tinydng_status tinydng_writer_write_compressed_strip(tinydng_writer *w,
++                                                     uint32_t strip_index,
++                                                     const void *data,
++                                                     size_t len,
++                                                     tinydng_error *err);
++
+ /* Write the IFD + extras, patch the header, and release the writer.
+    The handle is invalid after this call. */
+ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err);
+--- a/tinydng_write.c
++++ b/tinydng_write.c
+@@ -693,7 +693,8 @@ struct tinydng_writer {
+   int bigtiff;
+   uint32_t width, height;
+   uint16_t spp, bps, sfmt, photo;
+-  uint16_t compression; /* effective: NONE / LZW / NEW_JPEG */
++  uint16_t compression; /* effective: NONE / LZW / NEW_JPEG / JPEG_XL(52546) */
++  uint8_t precompressed; /* RawLens: image data arrives compressed, store verbatim */
+   uint8_t ljpeg_arithmetic;
+   uint8_t ljpeg_predictor;
+   uint16_t ljpeg_restart_interval;
+@@ -1458,6 +1459,16 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
+       return TINYDNG_E_UNSUPPORTED;
+     }
+     comp = TINYDNG_COMPRESSION_NEW_JPEG;
++  } else if (comp == TINYDNG_COMPRESSION_JPEG_XL) {
++    /* RawLens: copy-through for caller-compressed (libjxl) strips. The
++       codestream carries 16-bit single-channel mosaic data; geometry tags
++       still describe the decoded raster (DNG 1.7, Compression 52546). */
++    if (bps != 16u || spp != 1u) {
++      td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "JPEG XL writer requires 16-bit single-channel input");
++      return TINYDNG_E_UNSUPPORTED;
++    }
++    comp = TINYDNG_COMPRESSION_JPEG_XL;
+   } else {
+     td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                  "unsupported writer compression %u", (unsigned)comp);
+@@ -1492,6 +1503,19 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
+   w->photo = photo;
+   w->compression = comp;
+   w->header_first = opts && opts->header_first;
++  w->precompressed = opts && opts->precompressed;
++  if (w->precompressed && comp != TINYDNG_COMPRESSION_JPEG_XL) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "precompressed input requires JPEG XL compression (52546)");
++    td_ctx_free(ctx, w);
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (comp == TINYDNG_COMPRESSION_JPEG_XL && !w->precompressed) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "JPEG XL compression needs precompressed input (no encoder here)");
++    td_ctx_free(ctx, w);
++    return TINYDNG_E_INVALID_ARG;
++  }
+   w->ljpeg_arithmetic = opts ? (opts->ljpeg_arithmetic != 0) : 0;
+   w->ljpeg_predictor =
+       (opts && opts->ljpeg_predictor) ? opts->ljpeg_predictor : 1u;
+@@ -2065,6 +2089,82 @@ tinydng_status tinydng_writer_write_strip(tinydng_writer *w,
+   return td_writer_put_segment(w, strip_index, pixels, w->width, ph, err);
+ }
+ 
++/* RawLens: store one already-compressed strip verbatim (JPEG XL
++   codestream). Mirrors the non-header-first tail of td_writer_put_segment,
++   minus geometry-derived sizing: the caller owns the byte count. */
++tinydng_status tinydng_writer_write_compressed_strip(tinydng_writer *w,
++                                                     uint32_t strip_index,
++                                                     const void *data,
++                                                     size_t len,
++                                                     tinydng_error *err) {
++  uint64_t at;
++  if (!w || !data) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "null argument to compressed strip write");
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (w->tiled) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "writer is tiled (compressed strips need striped layout)");
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (!w->precompressed || w->compression != TINYDNG_COMPRESSION_JPEG_XL) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "compressed strips need a precompressed JPEG XL writer");
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (w->finished) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "writer already finished");
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (w->header_first) {
++    td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "header-first offsets are precomputed from raster geometry");
++    return TINYDNG_E_UNSUPPORTED;
++  }
++  if (strip_index >= w->seg_count) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "segment index %u out of range (count %u)", strip_index,
++                 w->seg_count);
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (len == 0u || len > (size_t)UINT32_MAX) {
++    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "compressed strip size out of classic TIFF range");
++    return TINYDNG_E_BOUNDS;
++  }
++  at = w->data_pos;
++  if (w->segs[strip_index].offset != 0u) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, at,
++                 "segment %u written twice", strip_index);
++    return TINYDNG_E_INVALID_ARG;
++  }
++  if (!w->bigtiff && at > (uint64_t)UINT32_MAX) {
++    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, at,
++                 "payload exceeds classic TIFF offset limits");
++    return TINYDNG_E_BOUNDS;
++  }
++  if (w->sink.write(&w->sink, at, data, len) != len) {
++    return td_wio_err(&w->sink, at, err);
++  }
++  w->segs[strip_index].offset = at;
++  w->segs[strip_index].byte_count = (uint64_t)len;
++  if (!td_safe_add_u64(at, (uint64_t)len, &w->data_pos)) {
++    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, at,
++                 "payload position overflow");
++    return TINYDNG_E_BOUNDS;
++  }
++  if (w->data_pos & 1u) {
++    uint8_t zero = 0;
++    if (w->sink.write(&w->sink, w->data_pos, &zero, 1) != 1u) {
++      return td_wio_err(&w->sink, w->data_pos, err);
++    }
++    w->data_pos++;
++  }
++  return TINYDNG_OK;
++}
++
+ /* The extras buffer is laid out in entry-ADD order, but the IFD's running
+    offsets walk the SORTED entries. After patching, rebuild the buffer in
+    sorted-entry order (and fix the entry pointers) so the two agree. */
+@@ -2236,9 +2336,19 @@ tinydng_status tinydng_write_memory(tinydng_context *ctx,
+   }
+   *out_data = NULL;
+   *out_size = 0;
+-  st = td_write_check_data(img, err);
+-  if (st != TINYDNG_OK) {
+-    return st;
++  /* RawLens: precompressed input is a codestream, not a raster — the
++     geometry-size check cannot apply; non-empty is the only invariant. */
++  if (opts && opts->precompressed) {
++    if (img->data_size == 0u) {
++      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "precompressed input is empty");
++      return TINYDNG_E_INVALID_ARG;
++    }
++  } else {
++    st = td_write_check_data(img, err);
++    if (st != TINYDNG_OK) {
++      return st;
++    }
+   }
+   st = tinydng_write_io_open_memory(ctx, &io, err);
+   if (st != TINYDNG_OK) {
+@@ -2249,7 +2359,11 @@ tinydng_status tinydng_write_memory(tinydng_context *ctx,
+     io.close(&io);
+     return st;
+   }
+-  st = tinydng_writer_write_strip(w, 0, img->data, err);
++  if (opts && opts->precompressed) {
++    st = tinydng_writer_write_compressed_strip(w, 0, img->data, img->data_size, err);
++  } else {
++    st = tinydng_writer_write_strip(w, 0, img->data, err);
++  }
+   if (st != TINYDNG_OK) {
+     /* Cleanup finish() clears `err`; use a scratch error so the original
+        failure message survives. */
