@@ -3,12 +3,7 @@
 
 package com.matthew.rawlens
 
-import android.graphics.Bitmap
-import android.os.Build
-import android.annotation.TargetApi
-
-/** Keeps Android 14-only Bitmap gainmap calls out of the normal JPEG path. */
-@TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-fun recycleUltraHdrGainmapContents(bitmap: Bitmap) {
-    bitmap.gainmap?.gainmapContents?.recycle()
+/** Recycles the transient Ultra HDR gain-map bitmap after the file writer is done with it. */
+fun recycleUltraHdrGainmapContents(developed: DevelopedJpeg) {
+    developed.gainmap?.recycle()
 }
