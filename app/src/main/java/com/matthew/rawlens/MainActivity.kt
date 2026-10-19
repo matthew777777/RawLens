@@ -114,6 +114,7 @@ class MainActivity : Activity() {
     private lateinit var rawBadge: TextView
     private lateinit var rawStatusGroup: View
     private var captureFormat = CaptureFormat.DNG_ONLY
+    private var developedFormat = DevelopedFormat.JPEG
     private var vfPreviewMode = VfPreviewMode.FOLLOW
     private var vfResolution = VfResolution.MAX
     private var vfPreviewButton: TextView? = null
@@ -291,6 +292,9 @@ class MainActivity : Activity() {
             .apply()
         captureFormat = CaptureFormat.fromPreference(
             lensPreferences().getString(KEY_CAPTURE_FORMAT, null)
+        )
+        developedFormat = DevelopedFormat.fromPreference(
+            lensPreferences().getString(KEY_DEVELOPED_FORMAT, null)
         )
         vfPreviewMode = VfPreviewMode.fromPreference(
             lensPreferences().getString(KEY_VF_PREVIEW_MODE, null)
@@ -497,6 +501,7 @@ class MainActivity : Activity() {
             scopeAgxApplied(),
             programProfile(),
             { dngWriterBackend() },
+            { dngCompression() },
             { cameraId -> dngMetadataOverrideStore.get(cameraId) },
             { zslStatus ->
                 rawZslStatus = zslStatus
@@ -614,6 +619,8 @@ class MainActivity : Activity() {
         controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
+        controller.setJxlOutputSettings(jxlOutputSettings())
+        controller.setDevelopedFormat(developedFormat)
         controller.setDenoiseSettings(denoiseSettings())
         controller.setGaloshSettings(galoshSettings())
         controller.setVfPreviewMode(vfPreviewMode)
@@ -866,6 +873,13 @@ class MainActivity : Activity() {
             if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                 syncMeteringOverlayToViewfinder(view)
                 syncGuideOverlayToViewfinder(view)
+            }
+        }
+        // Photo 3:4 box seats between the islands: a top-bar size change
+        // (first layout, font scale) re-seats the box below it.
+        findViewById<View>(R.id.topBar).addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
+            if (!isVideoMode && (r - l != orr - ol || b - t != ob - ot)) {
+                positionViewfinderOverlays()
             }
         }
         findViewById<View>(R.id.controlPanel).post {
@@ -1442,6 +1456,7 @@ class MainActivity : Activity() {
     private fun positionViewfinderOverlays() {
         val panel = findViewById<LinearLayout>(R.id.controlPanel)
         val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
+        val topBar = findViewById<View>(R.id.topBar)
         val root = panel.parent as View
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         // System preview is a stream target only: keep it attached and flowing for the HAL
@@ -1450,8 +1465,8 @@ class MainActivity : Activity() {
         viewfinder.alpha = 0f
         // Fill the exact viewport: letterboxing (fillViewport=false + 3:4) leaves a
         // black strip between the preview and the bottom panel on tall screens.
-        // The panel is flush/square-topped and tucks 2dp over the preview so the
-        // joint never shows a hairline, on any aspect ratio.
+        // Both islands tuck over the preview by exactly their corner radius so
+        // the joints never show a hairline, on any aspect ratio.
         viewfinder.fillViewport = true
         // The camera UI is portrait-locked. Establish the 3:4 viewbox before the camera session
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
@@ -1462,20 +1477,41 @@ class MainActivity : Activity() {
         // only in the remaining viewport, so neither the image nor the thirds grid continues
         // behind ISO/shutter controls.
         val panelHeight = panel.height.takeIf { it > 0 } ?: dp(232)
-        // The island overlaps the preview by exactly its corner radius (16dp,
-        // shared with the top pill): the minimum that fills the curves with
-        // picture instead of root black.
+        // Both islands overlap the preview by exactly their corner radius
+        // (16dp, shared top and bottom): the minimum that fills the curves
+        // with picture instead of root black.
         val sealOverlap = dp(16)
-        // Edge-to-edge phase one: the slim pill floats OVER the preview, so
-        // the viewfinder runs full height and only the bottom island reserves
-        // space. The 3:4 portrait viewbox is unchanged (see setAspectRatio).
-        val availablePreviewHeight =
-            (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
+        val videoFullBleed = isVideoMode || topBar.visibility != View.VISIBLE
         val viewfinderParams = (viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
-            width = ViewGroup.LayoutParams.MATCH_PARENT
-            height = availablePreviewHeight
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = 0
+            if (videoFullBleed) {
+                // RAW video / Direct-Log: unchanged full-bleed viewport, only
+                // the bottom island reserves space.
+                width = ViewGroup.LayoutParams.MATCH_PARENT
+                height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = 0
+            } else {
+                // Photo modes: exact 3:4 letterbox between the islands so the
+                // preview matches the saved frame (cover == fit, no side
+                // crop). Full-width on tall portrait screens with the spare
+                // black below the picture; height-constrained otherwise.
+                // Missing measurements keep full-bleed until layout settles.
+                val topBarHeight = topBar.height.takeIf { it > 0 } ?: dp(72)
+                val box = PhotoViewfinderBox.compute(
+                    root.width, root.height, topBarHeight, panelHeight, sealOverlap
+                )
+                if (box != null) {
+                    width = box.width
+                    height = box.height
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                    topMargin = box.topMargin
+                } else {
+                    width = ViewGroup.LayoutParams.MATCH_PARENT
+                    height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                    topMargin = 0
+                }
+            }
         }
         viewfinder.layoutParams = viewfinderParams
         viewfinder.translationX = 0f
@@ -1924,6 +1960,10 @@ class MainActivity : Activity() {
             "Shutter mode=${captureModeLabel(useHdr, useBurst)} forceBurst=$forceBurst"
         )
         when {
+            useHdr && seqTrioEnabled() -> controller.captureSeqTrio(
+                saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
+                saveDebugFrames = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
+            )
             useHdr -> controller.captureHdrBracket(
                 saveEachBracket = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false),
                 bracketStops = hdrBracketStops(),
@@ -2076,6 +2116,7 @@ class MainActivity : Activity() {
         // transport and mode exit keep working. Exposure chips (SS/ISO/WB/
         // focus/EV) stay visible with the same live photo-tile settings.
         findViewById<View>(R.id.topBar)?.visibility = View.GONE
+        findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
         findViewById<View>(R.id.videoSettingsButton)?.visibility = View.VISIBLE
@@ -2121,6 +2162,7 @@ class MainActivity : Activity() {
         videoDebugRunnable = null
         videoAudioPeak = 0f
         findViewById<View>(R.id.topBar)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         findViewById<View>(R.id.lensSwitcher)?.visibility = View.VISIBLE
         repositionScopeForVideo()
@@ -3360,11 +3402,19 @@ class MainActivity : Activity() {
         // FOLLOW tonemap follows the format inside the controller (setCaptureFormat pushes
         // the render state); just refresh the badge label here.
         refreshVfPreviewButton()
-        setStatus(when (selected) {
-            CaptureFormat.JPEG -> "JPG"
-            CaptureFormat.JPEG_DNG -> "JPG+DNG"
-            CaptureFormat.DNG_ONLY -> "DNG ONLY"
-        })
+        setStatus(captureStatusLabel())
+    }
+
+    /** Badge-style pairing label: developed container plus DNG when paired. */
+    private fun captureBadgeLabel(): String =
+        if (captureFormat.includesJpeg) developedFormat.badgeLabel(captureFormat.includesDng)
+        else "DNG"
+
+    /** Short status tokens for the format switch; JPEG default matches legacy. */
+    private fun captureStatusLabel(): String = when {
+        !captureFormat.includesJpeg -> "DNG ONLY"
+        captureFormat.includesDng -> "${developedFormat.token}+DNG"
+        else -> developedFormat.token
     }
 
     /** Shutter-side WYSIWYG switch: FOLLOW -> RAW -> JPEG -> FOLLOW. */
@@ -3445,7 +3495,7 @@ class MainActivity : Activity() {
             rawBadge.setTextColor(getColor(R.color.danger))
             return
         }
-        rawBadge.text = captureFormat.badgeLabel
+        rawBadge.text = captureBadgeLabel()
         rawBadge.setTextColor(getColor(R.color.accent))
         val zslLabel = when (rawZslStatus.state) {
             RawZslState.OFF -> "ZSL off"
@@ -3454,7 +3504,7 @@ class MainActivity : Activity() {
             RawZslState.FALLBACK -> "ZSL unavailable"
         }
         val description =
-            "Capture format ${captureFormat.badgeLabel}. $zslLabel. Tap to change format. ${rawZslStatus.detail}"
+            "Capture format ${captureBadgeLabel()}. $zslLabel. Tap to change format. ${rawZslStatus.detail}"
         rawBadge.contentDescription = description
         rawStatusGroup.contentDescription = description
     }
@@ -4729,6 +4779,17 @@ class MainActivity : Activity() {
         hlReconstruction = lensPreferences().getBoolean(KEY_JPEG_HL_RECONSTRUCTION, true)
     ).resolvedForPlatform()
 
+    /** JPEG XL container options (darktable parity); defaults resolve to 16-bit lossless. */
+    private fun jxlOutputSettings(): JxlOutputSettings = JxlOutputSettings.fromPreferences(
+        bitDepthName = lensPreferences().getString(KEY_JXL_BIT_DEPTH, null),
+        pixelTypeName = lensPreferences().getString(KEY_JXL_PIXEL_TYPE, null),
+        quality = lensPreferences().getInt(KEY_JXL_QUALITY, 100),
+        effort = lensPreferences().getInt(KEY_JXL_EFFORT, 7),
+        decodingSpeed = lensPreferences().getInt(KEY_JXL_DECODING_SPEED, 0),
+        displayP3 = lensPreferences().getBoolean(KEY_JXL_DISPLAY_P3, false),
+        hdrTransferName = lensPreferences().getString(KEY_JXL_HDR_TRANSFER, null)
+    )
+
     private fun denoiseSettings(): DenoiseSettings {
         val prefs = lensPreferences()
         return DenoiseSettings(
@@ -4973,7 +5034,7 @@ class MainActivity : Activity() {
             tabRow.addView(button, params)
         }
         val generalTab = chipTab("General")
-        val jpegTab = chipTab("JPEG")
+        val jpegTab = chipTab("Photo")
         val videoTab = chipTab("Video")
         val exposureTab = chipTab("Exposure")
         val burstTab = chipTab("Burst")
@@ -5079,6 +5140,39 @@ class MainActivity : Activity() {
                 setTextColor(getColor(R.color.text_secondary))
                 textSize = 11f
             })
+            content.addView(TextView(this).apply {
+                text = "DNG compression"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 13f
+                setPadding(0, dp(12), 0, 0)
+            })
+            content.addView(Button(this).apply {
+                fun refresh() { text = dngCompression().label }
+                refresh()
+                setOnClickListener {
+                    val entries = DngCompression.entries.toTypedArray()
+                    val current = dngCompression()
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("DNG compression")
+                        .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), current.ordinal) { dialog, which ->
+                            val selected = entries[which]
+                            lensPreferences().edit().putString(KEY_DNG_COMPRESSION, selected.preferenceValue).apply()
+                            setStatus("DNG • ${selected.name}")
+                            refresh()
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "JXL stores the mosaic losslessly (DNG 1.7, like iPhone ProRAW) at roughly half the size. " +
+                    "Needs Lightroom / Adobe DNG Converter 16+ or Apple Photos — darktable and most LibRaw tools cannot read JXL DNGs yet. " +
+                    "Single-frame and HDR+ merged DNGs; packed and float/linear merges stay uncompressed. " +
+                    "Single-frame GPS files stay uncompressed to preserve location; merged JXL keeps GPS."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
+            })
             content.addView(sectionTitle("Location"))
             var suppressGpsToggle = false
             content.addView(CheckBox(this).apply {
@@ -5177,8 +5271,208 @@ class MainActivity : Activity() {
             rawZslSettingsStatus = null
             sidecarSettingsStatus = null
             content.removeAllViews()
-            content.addView(sectionTitle("JPEG output"))
-            content.addView(sectionDesc("Ultra HDR and Display P3 targets, quality, chroma, AgX look, adaptive exposure and highlight handling."))
+            // JPEG XL container options, mirroring darktable's export panel:
+            // bit depth, 16-bit pixel type, quality, encoding effort, and
+            // decoding-speed tier. The develop look (AgX) is shared with JPEG.
+            content.addView(sectionTitle("Photo format & JPEG XL quality"))
+            content.addView(sectionDesc("Up to 16-bit integer (plus 16/32-bit float), like darktable. Quality 100 is lossless on integer depths. Higher effort compresses better but encodes slower."))
+            content.addView(Button(this).apply {
+                fun refresh() {
+                    text = "Developed format: ${developedFormat.label}"
+                }
+                refresh()
+                setOnClickListener {
+                    val next = developedFormat.next()
+                    if (!controller.setDevelopedFormat(next)) {
+                        setStatus("SETTINGS AFTER SAVES")
+                        return@setOnClickListener
+                    }
+                    developedFormat = next
+                    lensPreferences().edit().putString(KEY_DEVELOPED_FORMAT, next.name).apply()
+                    refresh()
+                    refreshCaptureFormatControl()
+                    setStatus("DEVELOPED • ${next.label}")
+                }
+            })
+            content.addView(sectionDesc("JPEG writes .jpg (8-bit); JXL writes .jxl at the bit depth below. Applies to new captures and offline merges."))
+            var currentJxlSettings = jxlOutputSettings()
+            fun applyJxlOutputSettings(settings: JxlOutputSettings): Boolean {
+                val resolved = settings.resolved()
+                if (!controller.setJxlOutputSettings(resolved)) {
+                    setStatus("SETTINGS AFTER SAVES")
+                    return false
+                }
+                currentJxlSettings = resolved
+                lensPreferences().edit()
+                    .putString(KEY_JXL_BIT_DEPTH, resolved.bitDepth.name)
+                    .putString(KEY_JXL_PIXEL_TYPE, resolved.pixelType.name)
+                    .putInt(KEY_JXL_QUALITY, resolved.quality)
+                    .putInt(KEY_JXL_EFFORT, resolved.effort)
+                    .putInt(KEY_JXL_DECODING_SPEED, resolved.decodingSpeed)
+                    .putBoolean(KEY_JXL_DISPLAY_P3, resolved.displayP3)
+                    .putString(KEY_JXL_HDR_TRANSFER, resolved.hdrTransfer.name)
+                    .apply()
+                return true
+            }
+            if (!NativeJxlEncoder.isAvailable()) {
+                content.addView(sectionDesc("The JXL encoder library is not bundled in this build (offline or source-only build): developed-format JXL saves fail with an explanatory error. A networked build bundles libjxl automatically; see app/src/main/cpp/CMakeLists.txt."))
+            }
+            content.addView(Button(this).apply {
+                fun refresh() {
+                    text = "HDR transfer: ${currentJxlSettings.hdrTransfer.label}"
+                }
+                refresh()
+                setOnClickListener {
+                    if (applyJxlOutputSettings(
+                        currentJxlSettings.copy(hdrTransfer = currentJxlSettings.hdrTransfer.next())
+                    )) {
+                        refresh()
+                        setStatus("JXL TRANSFER • ${currentJxlSettings.hdrTransfer.label}")
+                    }
+                }
+            })
+            content.addView(sectionDesc("SDR is the classic still. HDR PQ keeps scene highlights above SDR white as true HDR (ST2084, 10+ bit, needs an HDR display); the AgX look stays shared."))
+            content.addView(sectionDesc("Stills carry EXIF/XMP: Ultra HDR gainmaps apply to JPEG output only, and the AgX photo look below is shared."))
+            // Declared pixel-type-first: the depth cycler below toggles its
+            // visibility (darktable shows it for 16-bit only).
+            val pixelTypeButton = Button(this).apply {
+                fun refresh() {
+                    text = "JXL pixel type: ${currentJxlSettings.pixelType.label}"
+                }
+                refresh()
+                visibility =
+                    if (currentJxlSettings.bitDepth == JxlBitDepth.BIT_16) Button.VISIBLE
+                    else Button.GONE
+                setOnClickListener {
+                    if (applyJxlOutputSettings(
+                        currentJxlSettings.copy(pixelType = currentJxlSettings.pixelType.next())
+                    )) {
+                        refresh()
+                        setStatus("JXL PIXEL TYPE • ${currentJxlSettings.pixelType.label}")
+                    }
+                }
+            }
+            val depthButton = Button(this).apply {
+                fun refresh() {
+                    text = "JXL bit depth: ${currentJxlSettings.bitDepth.label}"
+                }
+                refresh()
+                setOnClickListener {
+                    if (applyJxlOutputSettings(
+                        currentJxlSettings.copy(bitDepth = currentJxlSettings.bitDepth.next())
+                    )) {
+                        refresh()
+                        pixelTypeButton.visibility =
+                            if (currentJxlSettings.bitDepth == JxlBitDepth.BIT_16) Button.VISIBLE
+                            else Button.GONE
+                        setStatus("JXL DEPTH • ${currentJxlSettings.bitDepth.label}")
+                    }
+                }
+            }
+            content.addView(depthButton)
+            content.addView(pixelTypeButton)
+            content.addView(sectionDesc("Pixel type applies to 16-bit only (darktable parity): unsigned integer, or half-precision float. 32-bit is always float."))
+            fun jxlQualityLabel(quality: Int): String =
+                if (quality >= 100) "JXL quality: lossless" else "JXL quality: $quality%"
+            var jxlQuality = currentJxlSettings.quality.coerceIn(
+                JxlOutputSettings.MIN_QUALITY, JxlOutputSettings.MAX_QUALITY
+            )
+            val jxlQualityLabel = TextView(this).apply {
+                text = jxlQualityLabel(jxlQuality)
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            content.addView(jxlQualityLabel)
+            content.addView(SeekBar(this).apply {
+                max = JxlOutputSettings.MAX_QUALITY - JxlOutputSettings.MIN_QUALITY
+                progress = jxlQuality - JxlOutputSettings.MIN_QUALITY
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        jxlQuality = progress + JxlOutputSettings.MIN_QUALITY
+                        jxlQualityLabel.text = jxlQualityLabel(jxlQuality)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        if (applyJxlOutputSettings(currentJxlSettings.copy(quality = jxlQuality))) {
+                            setStatus(
+                                if (jxlQuality >= 100) "JXL QUALITY • LOSSLESS"
+                                else "JXL QUALITY • $jxlQuality%"
+                            )
+                        } else {
+                            jxlQuality = currentJxlSettings.quality
+                            seekBar.progress = jxlQuality - JxlOutputSettings.MIN_QUALITY
+                        }
+                    }
+                })
+            })
+            fun addJxlSlider(
+                title: String,
+                maximum: Int,
+                initial: Int,
+                format: (Int) -> String,
+                update: (JxlOutputSettings, Int) -> JxlOutputSettings,
+                status: (Int) -> String
+            ) {
+                var selected = initial.coerceIn(0, maximum)
+                val label = TextView(this).apply {
+                    text = "$title: ${format(selected)}"
+                    setTextColor(getColor(R.color.text_primary))
+                    textSize = 14f
+                    setPadding(dp(12), dp(8), dp(12), 0)
+                }
+                content.addView(label)
+                content.addView(SeekBar(this).apply {
+                    max = maximum
+                    progress = selected
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar,
+                            progress: Int,
+                            fromUser: Boolean
+                        ) {
+                            selected = progress
+                            label.text = "$title: ${format(selected)}"
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar) {
+                            if (applyJxlOutputSettings(update(currentJxlSettings, selected))) {
+                                setStatus(status(selected))
+                            } else {
+                                selected = initial.coerceIn(0, maximum)
+                                seekBar.progress = selected
+                            }
+                        }
+                    })
+                })
+            }
+            addJxlSlider(
+                "JXL encoding effort", 8, currentJxlSettings.effort - 1,
+                { "${it + 1}" },
+                { settings, value -> settings.copy(effort = value + 1) },
+                { "JXL EFFORT • ${it + 1}" }
+            )
+            addJxlSlider(
+                "JXL decoding speed", 4, currentJxlSettings.decodingSpeed,
+                { "$it" },
+                { settings, value -> settings.copy(decodingSpeed = value) },
+                { "JXL DECODING SPEED • $it" }
+            )
+            content.addView(CheckBox(this).apply {
+                text = "Display P3 JXL"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = currentJxlSettings.displayP3
+                setOnCheckedChangeListener { button, enabled ->
+                    if (enabled == currentJxlSettings.displayP3) return@setOnCheckedChangeListener
+                    if (!applyJxlOutputSettings(currentJxlSettings.copy(displayP3 = enabled))) {
+                        button.isChecked = currentJxlSettings.displayP3
+                    }
+                }
+            })
+            content.addView(sectionTitle("Photo look & JPEG quality"))
+            content.addView(sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, AgX look, adaptive exposure and highlight handling."))
             var currentJpegSettings = jpegOutputSettings()
             fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
                 val resolved = settings.resolvedForPlatform()
@@ -5695,6 +5989,23 @@ class MainActivity : Activity() {
                     setStatus("HDR ±${stops} EV")
                     updateQuickControls()
                 }
+            })
+            content.addView(CheckBox(this).apply {
+                text = "Sequential trio 0 / −2 / 0 EV (shadow averaging + highlights)"
+                setTextColor(getColor(R.color.text_primary))
+                isChecked = seqTrioEnabled()
+                setOnCheckedChangeListener { _, enabled ->
+                    lensPreferences().edit().putBoolean(KEY_SEQ_TRIO_ENABLED, enabled).apply()
+                    setStatus(if (enabled) "SEQ TRIO 0/−2/0 ON" else "SEQ TRIO OFF")
+                    updateQuickControls()
+                }
+            })
+            content.addView(TextView(this).apply {
+                text = "Two 0 EV frames average shadows (~3 dB); the −2 EV frame " +
+                    "rescues highlights. Same ISO, lightweight local alignment. " +
+                    "Needs the HDR toggle on; overrides the ±2/±4 bracket range."
+                setTextColor(getColor(R.color.text_secondary))
+                textSize = 11f
             })
             content.addView(sectionTitle("Face priority"))
             content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (sand box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
@@ -8038,6 +8349,10 @@ class MainActivity : Activity() {
         lensPreferences().getString(KEY_DNG_WRITER_BACKEND, DngWriterBackend.ANDROID.preferenceValue)
     )
 
+    private fun dngCompression(): DngCompression = DngCompression.fromPreference(
+        lensPreferences().getString(KEY_DNG_COMPRESSION, DngCompression.UNCOMPRESSED.preferenceValue)
+    )
+
     private fun gpsEnabled(): Boolean =
         lensPreferences().getBoolean(KEY_SAVE_LOCATION, false)
 
@@ -8064,6 +8379,9 @@ class MainActivity : Activity() {
 
     private fun hdrBracketStops(): Int =
         if (lensPreferences().getInt(KEY_HDR_BRACKET_STOPS, 2) == 4) 4 else 2
+
+    private fun seqTrioEnabled(): Boolean =
+        lensPreferences().getBoolean(KEY_SEQ_TRIO_ENABLED, false)
 
     private fun selectedLensIds(): Set<String> =
         lensPreferences().getStringSet(KEY_SELECTED_LENSES, emptySet())?.toSet().orEmpty()
@@ -8154,6 +8472,7 @@ class MainActivity : Activity() {
         const val KEY_VF_RESOLUTION = "vf_resolution"
         const val KEY_RAW_STREAM_COMPAT_MODE = "raw_stream_compat_mode"
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
+        const val KEY_DNG_COMPRESSION = "dng_compression"
         const val KEY_BURST_RELEASE = "burst_release"
         const val KEY_BURST_CRS_ENABLED = "burst_crs_enabled"
         const val KEY_RELEASE_MODE = "release_mode"
@@ -8161,6 +8480,7 @@ class MainActivity : Activity() {
         const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"
         const val KEY_HDR_SAVE_DEBUG_FRAMES = "hdr_save_debug_frames"
         const val KEY_HDR_BRACKET_STOPS = "hdr_bracket_stops"
+        const val KEY_SEQ_TRIO_ENABLED = "seq_trio_enabled"
         const val KEY_JPEG_ULTRA_HDR = "jpeg_ultra_hdr"
         const val KEY_JPEG_DISPLAY_P3 = "jpeg_display_p3"
         const val KEY_JPEG_QUALITY = "jpeg_quality"
@@ -8179,6 +8499,14 @@ class MainActivity : Activity() {
         const val KEY_JPEG_SKY_PROTECTION = "jpeg_sky_protection"
         const val KEY_JPEG_HIGHLIGHT_SHOULDER = "jpeg_highlight_shoulder"
         const val KEY_JPEG_HL_RECONSTRUCTION = "jpeg_hl_reconstruction"
+        const val KEY_JXL_BIT_DEPTH = "jxl_bit_depth"
+        const val KEY_JXL_PIXEL_TYPE = "jxl_pixel_type"
+        const val KEY_JXL_QUALITY = "jxl_quality"
+        const val KEY_JXL_EFFORT = "jxl_effort"
+        const val KEY_JXL_DECODING_SPEED = "jxl_decoding_speed"
+        const val KEY_JXL_DISPLAY_P3 = "jxl_display_p3"
+        const val KEY_JXL_HDR_TRANSFER = "jxl_hdr_transfer"
+        const val KEY_DEVELOPED_FORMAT = "developed_format"
         const val LEGACY_KEY_JPEG_ADAPTIVE_PHOTO = "jpeg_adaptive_photo"
         const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"

@@ -166,6 +166,7 @@ class RawCameraController(
     initialScopeAgxApplied: Boolean,
     initialProgramAeProfile: ProgramAeProfile = ProgramAeProfile(),
     private val dngWriterBackend: () -> DngWriterBackend,
+    private val dngCompression: () -> DngCompression = { DngCompression.UNCOMPRESSED },
     private val dngMetadataOverrides: (cameraId: String?) -> DngMetadataOverrides,
     private val onRawZslStatus: (RawZslStatus) -> Unit,
     private val onDebugState: (String) -> Unit,
@@ -543,6 +544,10 @@ class RawCameraController(
     private var activeAdaptiveExposure = SharedAdaptiveExposure()
     @Volatile private var jpegOutputSettings = JpegOutputSettings()
     private var activeJpegOutputSettings = JpegOutputSettings()
+    @Volatile private var jxlOutputSettings = JxlOutputSettings()
+    private var activeJxlOutputSettings = JxlOutputSettings()
+    @Volatile private var developedFormat = DevelopedFormat.JPEG
+    private var activeDevelopedFormat = DevelopedFormat.JPEG
     @Volatile private var denoiseSettings = DenoiseSettings()
 
     private var activeDenoiseSettings = DenoiseSettings()
@@ -2216,6 +2221,17 @@ class RawCameraController(
     }
 
     /**
+     * Captures the sequential-DCG trio (0, -2, 0 at fixed ISO) around the
+     * latest metered pair: two 0 EV frames for shadow averaging plus one
+     * -2 EV frame for highlight headroom. Merges through [HdrSeqMerge]
+     * (lightweight local alignment + noise-aware rejection), never the
+     * FlowNet/deghost path.
+     */
+    fun captureSeqTrio(saveEachBracket: Boolean = false, saveDebugFrames: Boolean = false) {
+        captureBracket(HdrBracketConfig.seqZeroMinusTwoZero(), saveEachBracket, saveDebugFrames)
+    }
+
+    /**
      * Captures an explicit-stop bracket (e.g. [-3,-2,-1,0,+1]) with one frame
      * per stop around the latest metered pair. See [HdrBracketConfig].
      */
@@ -2292,6 +2308,36 @@ class RawCameraController(
         // Live-link AgX sliders + adaptive strength to the JPEG preview: the next
         // sampled frame carries them.
         pushVfRenderState()
+        return true
+    }
+
+    /**
+     * JPEG XL output choices are frozen with the shutter press, just like the
+     * JPEG ones. No viewfinder push: the VF previews the JPEG look contract,
+     * never the JXL container options.
+     */
+    fun setJxlOutputSettings(settings: JxlOutputSettings): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setJxlOutputSettings(settings) }
+            return true
+        }
+        jxlOutputSettings = settings.resolved()
+        return true
+    }
+
+    /**
+     * Developed-still container (JPEG vs JXL) frozen with the shutter press,
+     * exactly like capture format. Selects the encoder at every developed
+     * save site; the AgX look stays shared.
+     */
+    fun setDevelopedFormat(format: DevelopedFormat): Boolean {
+        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
+        if (!isOnCameraThread()) {
+            cameraHandler.post { setDevelopedFormat(format) }
+            return true
+        }
+        developedFormat = format
         return true
     }
 
@@ -2612,6 +2658,8 @@ class RawCameraController(
         activeCaptureExposureMode = captureExposureMode
         activeAdaptiveExposure = SharedAdaptiveExposure()
         activeJpegOutputSettings = jpegOutputSettings
+        activeJxlOutputSettings = jxlOutputSettings
+        activeDevelopedFormat = developedFormat
         activeDenoiseSettings = denoiseSettings
         activeGaloshSettings = galoshSettings
         activeHdrPlusSettings = hdrPlusSettings
@@ -2870,7 +2918,9 @@ class RawCameraController(
         outputSettings: JpegOutputSettings,
         denoise: DenoiseSettings,
         captureTimeMillis: Long,
-        captureGps: GpsLocation?
+        captureGps: GpsLocation?,
+        developedFormat: DevelopedFormat = activeDevelopedFormat,
+        jxlSettings: JxlOutputSettings = activeJxlOutputSettings
     ) {
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
@@ -2892,7 +2942,8 @@ class RawCameraController(
                         frame.image, c, frame.result, orientation, overrides, metadata, backend,
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
-                        gps = captureGps
+                        gps = captureGps,
+                        dngCompression = dngCompression()
                     )
                 } finally {
                     buffer.limit(limit)
@@ -3010,37 +3061,55 @@ class RawCameraController(
             referenceDng = DngSaver(context).saveMerged(
                 effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
                 displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
-                sixteenBit = true, hdrPlusProvenance = provenance
+                sixteenBit = true, hdrPlusProvenance = provenance,
+                dngCompression = dngCompression()
             )
         }
         if (outputFormat.includesJpeg) {
             // The HDR+ average lives in the single-frame normalized domain, so the
-            // merged JPEG meters through the LDR adaptive path on the merged CFA
+            // merged develop meters through the LDR adaptive path on the merged CFA
             // itself (same highlight guards as single-frame). The DNG above stays
-            // linear and dark; only this JPEG develop lifts. ZSL bursts never use
+            // linear and dark; only this developed still lifts. ZSL bursts never use
             // ETTR, so no residual headroom cap applies.
-            val developed = developer.developMergedJpeg(effectiveMerged, refMetadata,
-                RawDevelopmentSettings(
-                    denoise = denoise,
-                    exposureEv = 0.0,
-                    adaptiveExposureStrength = adaptivePreviewStrength(
-                        activeCaptureExposureMode, outputSettings
-                    ),
-                    adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
-                        outputSettings, developFocusView
-                    )
-                ), outputSettings)
-            try {
-                JpegSaver(context).save(developed, refMetadata,
-                    refResult, captureTimeMillis = captureTimeMillis,
+            if (developedFormat == DevelopedFormat.JXL) {
+                val developed = developer.developMergedJxl(effectiveMerged, refMetadata,
+                    RawDevelopmentSettings(
+                        denoise = denoise,
+                        exposureEv = 0.0,
+                        adaptiveExposureStrength = adaptivePreviewStrength(
+                            activeCaptureExposureMode, outputSettings
+                        ),
+                        adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
+                            outputSettings, developFocusView
+                        )
+                    ), look = outputSettings, jxl = jxlSettings)
+                JxlSaver(context).save(developed, refMetadata, refResult,
+                    captureTimeMillis = captureTimeMillis,
                     typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps)
-                publishDevelopedScope(developed.bitmap)
-                reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG" else "HDR+ MERGED")
-            } finally {
-                if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    recycleUltraHdrGainmapContents(developed.bitmap)
+                publishDevelopedJxlScope(developed)
+                reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG • JXL" else "HDR+ MERGED • JXL")
+            } else {
+                val developed = developer.developMergedJpeg(effectiveMerged, refMetadata,
+                    RawDevelopmentSettings(
+                        denoise = denoise,
+                        exposureEv = 0.0,
+                        adaptiveExposureStrength = adaptivePreviewStrength(
+                            activeCaptureExposureMode, outputSettings
+                        ),
+                        adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
+                            outputSettings, developFocusView
+                        )
+                    ), outputSettings)
+                try {
+                    JpegSaver(context).save(developed, refMetadata,
+                        refResult, captureTimeMillis = captureTimeMillis,
+                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = captureGps)
+                    publishDevelopedScope(developed.bitmap)
+                    reportSaveState(if (referenceDng != null) "HDR+ MERGED+DNG" else "HDR+ MERGED")
+                } finally {
+                    recycleUltraHdrGainmapContents(developed)
+                    developed.bitmap.recycle()
                 }
-                developed.bitmap.recycle()
             }
         } else {
             reportSaveState("HDR+ DNG SAVED")
@@ -3119,7 +3188,9 @@ class RawCameraController(
         outputSettings: JpegOutputSettings,
         denoise: DenoiseSettings,
         captureTimeMillis: Long,
-        captureGps: GpsLocation?
+        captureGps: GpsLocation?,
+        developedFormat: DevelopedFormat = activeDevelopedFormat,
+        jxlSettings: JxlOutputSettings = activeJxlOutputSettings
     ) {
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
@@ -3141,7 +3212,8 @@ class RawCameraController(
                         frame.image, c, frame.result, orientation, overrides, metadata, backend,
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
-                        gps = captureGps
+                        gps = captureGps,
+                        dngCompression = dngCompression()
                     )
                 } finally {
                     buffer.limit(limit)
@@ -3186,19 +3258,28 @@ class RawCameraController(
             // reference exposure (adaptive metering has no RGB leg yet).
             // ZSL bursts never use ETTR, so no residual headroom cap.
             val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
-            val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                merged.refMetadata, RawDevelopmentSettings(denoise = denoise), outputSettings)
-            try {
-                JpegSaver(context).save(developed, merged.refMetadata,
-                    merged.refResult, captureTimeMillis = captureTimeMillis,
+            if (developedFormat == DevelopedFormat.JXL) {
+                val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
+                    merged.refMetadata, RawDevelopmentSettings(denoise = denoise),
+                    look = outputSettings, jxl = jxlSettings)
+                JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
+                    captureTimeMillis = captureTimeMillis,
                     typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
-                publishDevelopedScope(developed.bitmap)
-                reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG" else "MFSR MERGED")
-            } finally {
-                if (developed.settings.ultraHdr && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    recycleUltraHdrGainmapContents(developed.bitmap)
+                publishDevelopedJxlScope(developed)
+                reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG • JXL" else "MFSR MERGED • JXL")
+            } else {
+                val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
+                    merged.refMetadata, RawDevelopmentSettings(denoise = denoise), outputSettings)
+                try {
+                    JpegSaver(context).save(developed, merged.refMetadata,
+                        merged.refResult, captureTimeMillis = captureTimeMillis,
+                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
+                    publishDevelopedScope(developed.bitmap)
+                    reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG" else "MFSR MERGED")
+                } finally {
+                    recycleUltraHdrGainmapContents(developed)
+                    developed.bitmap.recycle()
                 }
-                developed.bitmap.recycle()
             }
         } else {
             reportSaveState("MFSR DNG SAVED")
@@ -6829,6 +6910,33 @@ class RawCameraController(
         }
     }
 
+    /**
+     * Saved-frame JXL scope: the half-float developed frame downsampled to
+     * 8-bit for the overlay only (the saved JXL keeps full precision), so
+     * the scope matches the saved still the way the bitmap scope matches
+     * the saved JPEG. Skipped entirely unless the scope overlay is enabled,
+     * mirroring [publishDevelopedScope].
+     */
+    private fun publishDevelopedJxlScope(developed: DevelopedJxl) {
+        if (!rawHistogramEnabled) return
+        sampleSafely("developed-jxl-scope") {
+            val rgba8 = JxlPixelPack.halfRgbaToScopeRgba8(
+                developed.halfRgba, developed.width, developed.height
+            )
+            val bitmap = Bitmap.createBitmap(
+                developed.width, developed.height, Bitmap.Config.ARGB_8888
+            )
+            try {
+                bitmap.copyPixelsFromBuffer(rgba8)
+                val scope = DevelopedScopeSampler.sampleBitmap(bitmap) ?: return@sampleSafely
+                onRawHistogram(scope.histogram)
+                onRawWaveform(scope.waveform)
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    }
+
     private fun pairAndSave(timestamp: Long) {
         if (!running) return
         val result = pendingResults[timestamp] ?: return
@@ -6900,7 +7008,8 @@ class RawCameraController(
         val job = OwnedCaptureJob(released) {
             try {
                 DualRawSaver.save(context,c,ordered[0].image,ordered[0].result,
-                    ordered[1].image,ordered[1].result,orientation,captureTime,gps)
+                    ordered[1].image,ordered[1].result,orientation,captureTime,gps,
+                    selectedCameraId ?: "unknown")
                 cameraHandler.post { if (isCurrent(generation)) onState("RAW HDR TEST DNG SAVED") }
             } catch (failure: Exception) {
                 Log.e("RawLensDualRaw","Merge/save failed",failure)
@@ -6964,7 +7073,8 @@ class RawCameraController(
                                 frame.image, c, frame.result, orientation, overrides, metadata, backend,
                                 fileNameSuffix = hdrBracketSuffix(index),
                                 captureId = captureId,
-                                gps = captureGps
+                                gps = captureGps,
+                                dngCompression = dngCompression()
                             )
                         } finally {
                             buffer.limit(limit)
@@ -7007,9 +7117,36 @@ class RawCameraController(
                 val exposures = snapshots.map {
                     it.third.exposureTimeNanos.toDouble() * it.third.sensitivityIso
                 }
-                val referenceIndex = HdrBracketConfig.referenceIndex(exposures)
-                val evRelative = HdrBracketConfig.evRelativeToReference(
+                // Sequential-DCG trio (0, -2, 0 at fixed ISO) takes the
+                // lightweight local-alignment path; every other bracket keeps
+                // the legacy translation + FlowNet + Wiener route below.
+                val seqFrames = snapshots.map { it.third }
+                val seqTrio = HdrSeqMerge.isTrio(seqFrames)
+                var referenceIndex = HdrBracketConfig.referenceIndex(exposures)
+                var evRelative = HdrBracketConfig.evRelativeToReference(
                     exposures.map { it as Double? }, referenceIndex)
+                val mergedRaw: UnpackedRawCfa
+                val dropped = ArrayList<Pair<Int, Double>>()
+                if (seqTrio) {
+                    val seq = HdrSeqMerge.mergeTrio(seqFrames)
+                    referenceIndex = seq.refIndex
+                    evRelative = HdrBracketConfig.evRelativeToReference(
+                        exposures.map { it as Double? }, referenceIndex)
+                    mergedRaw = seq.cfa
+                    for (i in seqFrames.indices) {
+                        val ev = evRelative.getOrNull(i)
+                        val evTag = if (ev == null) "?" else "%+.1f".format(ev)
+                        val verdict = if (i == referenceIndex) "Reference(sharpest 0EV)" else "Accepted"
+                        Log.i(LOG_TAG, "SEQ " + HdrBracketConfig.frameLogLine(
+                            i, ev?.let { kotlin.math.round(it).toInt() } ?: 0, verdict,
+                            "ev=$evTag", isReference = i == referenceIndex))
+                    }
+                    Log.i(LOG_TAG, "SEQ timing align=${seq.timings.alignMs}ms " +
+                        "merge=${seq.timings.mergeMs}ms rescue=${seq.timings.rescueMs}ms " +
+                        "kept=${"%.1f".format(seq.keptFraction * 100)}% " +
+                        "rescued=${"%.1f".format(seq.rescuedFraction * 100)}% " +
+                        "${mergedRaw.width}x${mergedRaw.height}")
+                } else {
                 val aligner = HdrFlowNetAligner(context)
                 val reference = snapshots[referenceIndex].third
                 // Reference model input rendered once (raw); per-frame exposure
@@ -7056,12 +7193,11 @@ class RawCameraController(
                     }
                 }
                 val tMerge0 = SystemClock.elapsedRealtime()
-                val dropped = ArrayList<Pair<Int, Double>>()
                 // The legacy frequency-domain merge is the production path.
                 val legacyOptions = HdrRawMerge.Options(alternateDropDcRejectFrac = 0.9)
                 val onDropped: (Int, HdrTileDeghost.TileStats) -> Unit =
                     { index, stats -> dropped.add(index to stats.dcRejectFrac) }
-                val mergedRaw = HdrRawMerge.merge(aligned, referenceIndex, legacyOptions, onDropped)
+                mergedRaw = HdrRawMerge.merge(aligned, referenceIndex, legacyOptions, onDropped)
                 // Raymerge-style F-list: one line per frame with its EV,
                 // reference anchor, and merge verdict (dropped = fully ghosted
                 // alternate collapsed to the reference during deghost).
@@ -7080,6 +7216,7 @@ class RawCameraController(
                     "merge=${SystemClock.elapsedRealtime() - tMerge0}ms " +
                     "frames=${aligned.size} dropped=${dropped.size} " +
                     "${reference.cfa.width}x${reference.cfa.height}")
+                }
                 // Bake reference lens correction once, after saturation weighting. Float DNG
                 // carries these corrected pixels and must not carry a second gain-map opcode.
                 val merged = requireNotNull(RawPreDemosaicPipeline.process(
@@ -7110,33 +7247,50 @@ class RawCameraController(
                     }
                     referenceDng = DngSaver(context).saveMerged(
                         effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps,
-                        baselineExposureEv = displayEv
+                        baselineExposureEv = displayEv, dngCompression = dngCompression()
                     )
                 }
                 if (outputFormat.includesJpeg) {
                     // The HDR develop caps the shoulder (see developMergedJpeg):
                     // the meter must use the capped value so it sees what AgX sees.
-                    val developed = developer.developMergedJpeg(effectiveMerged, snapshots[referenceIndex].first,
-                        RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv,
-                            hdrAdaptiveTuning = HdrAdaptiveTuning(
-                                highlightShoulder = minOf(
-                                    outputSettings.highlightShoulder,
-                                    RawDevelopmentCoordinator.HDR_HIGHLIGHT_SHOULDER
-                                ),
-                                focusX = developFocusView?.first,
-                                focusY = developFocusView?.second
-                            )), outputSettings)
-                    try {
-                        val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
-                            snapshots[referenceIndex].second, captureTimeMillis = captureId,
+                    if (activeDevelopedFormat == DevelopedFormat.JXL) {
+                        val developed = developer.developMergedJxl(effectiveMerged, snapshots[referenceIndex].first,
+                            RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv,
+                                hdrAdaptiveTuning = HdrAdaptiveTuning(
+                                    highlightShoulder = minOf(
+                                        outputSettings.highlightShoulder,
+                                        RawDevelopmentCoordinator.HDR_HIGHLIGHT_SHOULDER
+                                    ),
+                                    focusX = developFocusView?.first,
+                                    focusY = developFocusView?.second
+                                )), look = outputSettings, jxl = activeJxlOutputSettings)
+                        val name = JxlSaver(context).save(developed,
+                            snapshots[referenceIndex].first, snapshots[referenceIndex].second,
+                            captureTimeMillis = captureId,
                             typeSuffix = CaptureFileNames.TYPE_HDR, gps = captureGps)
-                        publishDevelopedScope(developed.bitmap)
-                        reportSaveState(if (referenceDng != null) "HDR MERGED+DNG" else "HDR MERGED")
-                    } finally {
-                        if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            recycleUltraHdrGainmapContents(developed.bitmap)
+                        publishDevelopedJxlScope(developed)
+                        reportSaveState(if (referenceDng != null) "HDR MERGED+DNG • JXL" else "HDR MERGED • JXL")
+                    } else {
+                        val developed = developer.developMergedJpeg(effectiveMerged, snapshots[referenceIndex].first,
+                            RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv,
+                                hdrAdaptiveTuning = HdrAdaptiveTuning(
+                                    highlightShoulder = minOf(
+                                        outputSettings.highlightShoulder,
+                                        RawDevelopmentCoordinator.HDR_HIGHLIGHT_SHOULDER
+                                    ),
+                                    focusX = developFocusView?.first,
+                                    focusY = developFocusView?.second
+                                )), outputSettings)
+                        try {
+                            val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
+                                snapshots[referenceIndex].second, captureTimeMillis = captureId,
+                                typeSuffix = CaptureFileNames.TYPE_HDR, gps = captureGps)
+                            publishDevelopedScope(developed.bitmap)
+                            reportSaveState(if (referenceDng != null) "HDR MERGED+DNG" else "HDR MERGED")
+                        } finally {
+                            recycleUltraHdrGainmapContents(developed)
+                            developed.bitmap.recycle()
                         }
-                        developed.bitmap.recycle()
                     }
                 } else {
                     reportSaveState("HDR DNG SAVED")
@@ -7276,7 +7430,7 @@ class RawCameraController(
                             image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
                             frameMetadata, dngWriterBackend(), captureId = captureTimeMillis,
                             gps = captureGps, fileNameSuffix = fileNameSuffix,
-                            subfolder = subfolder
+                            subfolder = subfolder, dngCompression = dngCompression()
                         ).also {
                             Log.i(
                                 LOG_TAG,
@@ -7343,44 +7497,75 @@ class RawCameraController(
                                     if (galoshCfa != null) " galoshDenoised"
                                     else if (aiCfa != null) " aiDenoised" else ""
                             )
-                            val developed = if (denCfa != null) {
-                                developer.developCfaJpeg(
-                                    denCfa, frameMetadata,
-                                    settings = devSettings,
-                                    outputSettings = outputSettings
-                                )
-                            } else {
-                                val rawPlane = image.planes.singleOrNull()?.buffer
-                                    ?: throw UnsupportedOperationException("RAW image must have one plane")
-                                developer.developJpeg(
-                                    rawPlane, frameMetadata,
-                                    settings = devSettings,
-                                    outputSettings = outputSettings
-                                )
-                            }
-                            try {
-                                jpegName = JpegSaver(context).save(
+                            if (activeDevelopedFormat == DevelopedFormat.JXL) {
+                                val developed = if (denCfa != null) {
+                                    developer.developCfaJxl(
+                                        denCfa, frameMetadata,
+                                        settings = devSettings,
+                                        look = outputSettings,
+                                        jxl = activeJxlOutputSettings
+                                    )
+                                } else {
+                                    val rawPlane = image.planes.singleOrNull()?.buffer
+                                        ?: throw UnsupportedOperationException("RAW image must have one plane")
+                                    developer.developJxl(
+                                        rawPlane, frameMetadata,
+                                        settings = devSettings,
+                                        look = outputSettings,
+                                        jxl = activeJxlOutputSettings
+                                    )
+                                }
+                                jpegName = JxlSaver(context).save(
                                     developed, frameMetadata, result,
                                     captureTimeMillis = captureTimeMillis,
                                     typeSuffix = fileNameSuffix,
                                     gps = captureGps,
                                     subfolder = subfolder
                                 )
-                                publishDevelopedScope(developed.bitmap)
+                                publishDevelopedJxlScope(developed)
                                 Log.i(
                                     LOG_TAG,
-                                    "Developed JPEG saved name=$jpegName " +
+                                    "Developed JXL saved name=$jpegName " +
                                         "pendingSaves=${pendingSaveCount.get()}"
                                 )
-                            } finally {
-                                if (developed.settings.ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                                    recycleUltraHdrGainmapContents(developed.bitmap)
+                            } else {
+                                val developed = if (denCfa != null) {
+                                    developer.developCfaJpeg(
+                                        denCfa, frameMetadata,
+                                        settings = devSettings,
+                                        outputSettings = outputSettings
+                                    )
+                                } else {
+                                    val rawPlane = image.planes.singleOrNull()?.buffer
+                                        ?: throw UnsupportedOperationException("RAW image must have one plane")
+                                    developer.developJpeg(
+                                        rawPlane, frameMetadata,
+                                        settings = devSettings,
+                                        outputSettings = outputSettings
+                                    )
                                 }
-                                developed.bitmap.recycle()
+                                try {
+                                    jpegName = JpegSaver(context).save(
+                                        developed, frameMetadata, result,
+                                        captureTimeMillis = captureTimeMillis,
+                                        typeSuffix = fileNameSuffix,
+                                        gps = captureGps,
+                                        subfolder = subfolder
+                                    )
+                                    publishDevelopedScope(developed.bitmap)
+                                    Log.i(
+                                        LOG_TAG,
+                                        "Developed JPEG saved name=$jpegName " +
+                                            "pendingSaves=${pendingSaveCount.get()}"
+                                    )
+                                } finally {
+                                    recycleUltraHdrGainmapContents(developed)
+                                    developed.bitmap.recycle()
+                                }
                             }
                         } catch (failure: Exception) {
                             jpegFailure = failure
-                            Log.e(LOG_TAG, "RAW JPEG development/save failed", failure)
+                            Log.e(LOG_TAG, "RAW developed still development/save failed", failure)
                         }
                     }
                     val label = captureLabel?.let { " • $it" }.orEmpty() +
@@ -7454,17 +7639,19 @@ class RawCameraController(
     ): String {
         // UI status shows the short type only; full file names stay in Log.
         val failed = jpegFailure != null || dngFailure != null
+        val developedToken = activeDevelopedFormat.token
         val outcome = StatusText.saveOutcome(
             dngSaved = dngName != null,
             jpegSaved = jpegName != null,
-            failed = failed
+            failed = failed,
+            developed = developedToken
         )
         if (failed && jpegName == null && dngName == null) return outcome
         // Keep at most the first short label segment (e.g. "ZSL 1/3"); drop the rest.
         val shortLabel = label.split("•").getOrNull(1)?.trim()?.take(12)?.let { " • $it" }.orEmpty()
         val failedSuffix = when {
-            jpegFailure != null && dngFailure != null -> " • JPG+DNG ERR"
-            jpegFailure != null -> " • JPG ERR"
+            jpegFailure != null && dngFailure != null -> " • $developedToken+DNG ERR"
+            jpegFailure != null -> " • $developedToken ERR"
             dngFailure != null -> " • DNG ERR"
             else -> ""
         }

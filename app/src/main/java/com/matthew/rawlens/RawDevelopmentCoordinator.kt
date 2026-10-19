@@ -129,6 +129,7 @@ class RawDevelopmentCoordinator(context: Context) {
     private val appContext = context.applicationContext
     private val amaze = Gles31AmazeProcessor(context)
     private val jpegOutput = Gles31JpegOutputProcessor(context)
+    private val jxlOutput = Gles31JxlOutputProcessor(context)
     // SR merge path: separate instances for the retained develop EGL context.
     // GL program and texture names are context-local, so the AMaZE-context
     // instances above must never touch merged-frame work even on the same
@@ -1128,6 +1129,255 @@ class RawDevelopmentCoordinator(context: Context) {
     fun developJpegBitmap(rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings = RawDevelopmentSettings()): Bitmap =
         developJpeg(rawPlane, metadata, settings).bitmap
 
+    /**
+     * Single-frame JPEG XL develop: same RAW validation, demosaic, and AgX
+     * path as [developJpeg], but the output stage renders to RGBA16F and
+     * reads back half-float pixels, so [JxlSaver] can encode up to 16-bit
+     * (plus 16/32-bit float) instead of 8-bit. Fusion is disabled (null):
+     * the fused RGBA8 texture cannot feed a >8-bit encoder.
+     *
+     * @param look shared AgX look/metering contract (demosaic backend, HL
+     * reconstruction, adaptive tuning); @param jxl owns only the container
+     * options.
+     */
+    fun developJxl(
+        rawPlane: ByteBuffer,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        look: JpegOutputSettings = JpegOutputSettings(),
+        jxl: JxlOutputSettings = JxlOutputSettings()
+    ): DevelopedJxl = developJxlWithTileDropRetry(
+        "single-frame JXL ${metadata.imageWidth}x${metadata.imageHeight}"
+    ) {
+        develop(rawPlane, metadata, settings) { frame ->
+            finishJxl(frame.texture, look, jxl)
+        }
+    }
+
+    /**
+     * Denoised-CFA JPEG XL twin of [developCfaJpeg]: identical adaptive
+     * metering, HL/wavelet camera-linear tail, and AMaZE path, finishing
+     * through the half-float JXL output stage (fusion disabled) instead of
+     * the 8-bit JPEG one.
+     */
+    fun developCfaJxl(
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        look: JpegOutputSettings = JpegOutputSettings(),
+        jxl: JxlOutputSettings = JxlOutputSettings()
+    ): DevelopedJxl {
+        MemoryLeakDiagnostics.stillCapture()
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        cfa.requireAmazeCompatible()
+        val adaptive = if (settings.adaptiveExposureStrength > 0f) {
+            (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
+                AdaptiveDevelopmentExposure.analyze(
+                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
+                    settings.ettrHeadroomEv
+                )
+            }
+        } else null
+        val resolvedExposureEv = settings.exposureEv +
+            (adaptive?.correctionEv ?: 0.0) * settings.adaptiveExposureStrength.coerceIn(0f, 1f)
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), resolvedExposureEv
+        )
+        val waveletPlan = resolveDenoise(settings.denoise, settings.galosh, mergedPath = false).wavelet &&
+            !metadata.quadBayer
+        val hlPlan = look.hlReconstruction && !metadata.quadBayer
+        val cameraLinearPlan = waveletPlan || hlPlan
+        // Same blend-free tap contract as develop(): the HL stage must see
+        // true channel values (see the tapWhiteWindow note there).
+        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        )
+        return developJxlWithTileDropRetry("cfa-frame JXL ${cfa.width}x${cfa.height}") {
+            amaze.process(
+                cfa,
+                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                fusedOutputSettings = null,
+                whiteWindow = tapWhiteWindow,
+                cameraLinear = cameraLinearPlan
+            ) { output ->
+                if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
+                    output.internalFormat == AmazeTextureFormat.RGBA16F
+                ) {
+                    val normalization = metadata.normalizationOrNull()
+                    if (normalization == null) {
+                        Log.w(LOG_TAG, "Camera-linear tap skipped: CFA normalization metadata is invalid")
+                        amaze.transformCameraTexture(
+                            output, transform.glslColumnMajorMatrix()
+                        ) { aces -> finishJxl(aces, look, jxl) }
+                    } else if (waveletPlan) {
+                        consumeWaveletDenoised(
+                            output, metadata, normalization, transform,
+                            PreDemosaicResult(
+                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
+                            ),
+                            settings.denoise.wavelet,
+                            look.hlReconstruction,
+                            { hlGpuContext() }
+                        ) { frame -> finishJxl(frame.texture, look, jxl) }
+                    } else {
+                        consumeHlReconstructed(
+                            output, metadata, normalization, transform,
+                            PreDemosaicResult(
+                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
+                            ),
+                            look.hlReconstruction,
+                            { hlGpuContext() }
+                        ) { frame -> finishJxl(frame.texture, look, jxl) }
+                    }
+                } else {
+                    finishJxl(output, look, jxl)
+                }
+            }
+        }
+    }
+
+    /**
+     * Merged-CFA JPEG XL twin of [developMergedJpeg]: identical merged
+     * adaptive metering (including the HDR-bracket shoulder cap, applied to
+     * the shared look) and white-window contract, finishing through the
+     * half-float JXL output stage instead of the 8-bit JPEG one.
+     */
+    fun developMergedJxl(
+        cfa: UnpackedRawCfa,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        look: JpegOutputSettings = JpegOutputSettings(),
+        jxl: JxlOutputSettings = JxlOutputSettings()
+    ): DevelopedJxl {
+        MemoryLeakDiagnostics.stillCapture()
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        cfa.requireAmazeCompatible()
+        // Callers AI-denoise the merged CFA first (denoiseCfa) and share it
+        // between the merged-DNG write and this develop; no internal hook here
+        // so inference never runs twice for one capture.
+        val mergedAdaptive = resolveMergedAdaptive(cfa, settings, adaptiveWorkspace)
+        val resolvedExposureEv = settings.exposureEv +
+            (mergedAdaptive?.correctionEv ?: 0.0) *
+            if (settings.hdrAdaptiveTuning != null) 1.0
+            else settings.adaptiveExposureStrength.coerceIn(0f, 1f).toDouble()
+        if (mergedAdaptive != null) {
+            Log.i(LOG_TAG, "Merged JXL develop displayEV=${"%.2f".format(settings.exposureEv)} " +
+                "adaptiveEV=${"%.2f".format(mergedAdaptive.correctionEv)} " +
+                "appliedEV=${"%.2f".format(resolvedExposureEv)} " +
+                "lowKey=${mergedAdaptive.lowKey}")
+        }
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), resolvedExposureEv
+        )
+        // Same softer HDR shoulder as the JPEG twin so rescued short-frame
+        // highlights keep gradation; uniform merges keep the user's shoulder.
+        val lookCapped = if (settings.hdrAdaptiveTuning != null) {
+            look.copy(
+                highlightShoulder = minOf(look.highlightShoulder, HDR_HIGHLIGHT_SHOULDER)
+            )
+        } else look
+        val whiteWindow = if (settings.hdrAdaptiveTuning != null) floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_HDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_HDR_END
+        ) else floatArrayOf(
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
+        )
+        return developJxlWithTileDropRetry("merged-frame JXL ${cfa.width}x${cfa.height}") {
+            amaze.process(
+                cfa,
+                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
+                cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
+                fusedOutputSettings = null,
+                whiteWindow = whiteWindow
+            ) { output ->
+                finishJxl(output, lookCapped, jxl)
+            }
+        }
+    }
+
+    /**
+     * MFSR-RGB JPEG XL twin of [developMfsrJpeg]: Amaze stays bypassed (the
+     * frame is already RGB) under the identical color contract, finishing
+     * through the half-float JXL output stage. No tile-drop retry, like the
+     * JPEG twin: one full-frame dispatch, not AMaZE tiling.
+     */
+    fun developMfsrJxl(
+        rgb: java.nio.ByteBuffer,
+        width: Int,
+        height: Int,
+        metadata: RawFrameMetadata,
+        settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        look: JpegOutputSettings = JpegOutputSettings(),
+        jxl: JxlOutputSettings = JxlOutputSettings()
+    ): DevelopedJxl {
+        MemoryLeakDiagnostics.stillCapture()
+        metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
+        val transform = SceneLinearColorProcessor.resolve(
+            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+        )
+        return amaze.processMfsrRgb(
+            rgb, width, height,
+            transform.glslColumnMajorMatrix(),
+            transform.glslCameraWhiteNormalized()
+        ) { output ->
+            finishJxl(output, look, jxl)
+        }
+    }
+
+    private fun finishJxl(
+        output: AmazeGpuOutput,
+        look: JpegOutputSettings,
+        jxl: JxlOutputSettings
+    ): DevelopedJxl {
+        require(output.internalFormat == AmazeTextureFormat.RGBA16F) {
+            "JXL develop needs the scene-linear RGBA16F frame, not fused RGBA8"
+        }
+        require(output.colorDomain == AmazeColorDomain.ACESCG) {
+            "JXL develop needs scene-linear ACEScg, not camera-linear (wavelet tail missing?)"
+        }
+        return jxlOutput.process(output, look, jxl)
+    }
+
+    /**
+     * Tile-drop retry for the half-float JXL path, mirroring
+     * [developWithTileDropRetry]: a dropped (unwritten, all-zero) GPU tile
+     * is retried once, and a persistent drop fails loudly. Samples RGB
+     * only; alpha is ignored.
+     */
+    private fun developJxlWithTileDropRetry(tag: String, once: () -> DevelopedJxl): DevelopedJxl {
+        val first = once()
+        if (findJxlZeroTiles(first).isEmpty()) return first
+        Log.w(LOG_TAG, "Dropped GPU tile(s) in $tag; retrying develop once")
+        val second = once()
+        val redrops = findJxlZeroTiles(second)
+        if (redrops.isEmpty()) {
+            Log.i(LOG_TAG, "Tile-drop retry recovered $tag")
+            return second
+        }
+        throw IllegalStateException("GPU tile drop persisted after retry in $tag: retry=$redrops")
+    }
+
+    private fun findJxlZeroTiles(frame: DevelopedJxl): List<DevelopTile> {
+        val view = frame.halfRgba.duplicate().order(java.nio.ByteOrder.nativeOrder())
+        val rowShorts = frame.width * 4
+        return DevelopTileDropDetector.findZeroTiles(frame.width, frame.height) { x, y ->
+            // Any nonzero half sample keeps the tile alive: OR the full
+            // 16-bit patterns (no truncation) so near-black subnormals in a
+            // single channel cannot masquerade as a dropped tile.
+            val base = (y * rowShorts + x * 4) * 2
+            val r = view.getShort(base).toInt() and 0xffff
+            val g = view.getShort(base + 2).toInt() and 0xffff
+            val b = view.getShort(base + 4).toInt() and 0xffff
+            r or g or b
+        }
+    }
+
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {
         // The merged pair runs on the retained develop context (created on
@@ -1138,6 +1388,7 @@ class RawDevelopmentCoordinator(context: Context) {
         mergedDevelop.close()
         mergedEgl?.close()
         mergedEgl = null
+        jxlOutput.close()
         jpegOutput.close()
         amaze.close()
         MemoryLeakDiagnostics.sample(
