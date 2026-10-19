@@ -7,9 +7,9 @@ import android.content.SharedPreferences
 
 /**
  * Merges-screen settings builders. Mirrors MainActivity's private
- * [jpegOutputSettings][denoiseSettings] builders key-for-key so offline
- * merges develop with the same JPEG and denoise tuning as immediate
- * merges; if those builders gain a knob, mirror it here.
+ * [jpegOutputSettings][jxlOutputSettings][denoiseSettings] builders
+ * key-for-key so offline merges develop with the same JPEG/JXL and denoise
+ * tuning as immediate merges; if those builders gain a knob, mirror it here.
  */
 internal object MergeScreenSettings {
     fun jpeg(prefs: SharedPreferences): JpegOutputSettings = JpegOutputSettings(
@@ -42,6 +42,21 @@ internal object MergeScreenSettings {
         highlightShoulder = prefs.getFloat(MainActivity.KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
         hlReconstruction = prefs.getBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, true)
     ).resolvedForPlatform()
+
+    /** JPEG XL container options (darktable parity); same defaults as MainActivity. */
+    fun jxl(prefs: SharedPreferences): JxlOutputSettings = JxlOutputSettings.fromPreferences(
+        bitDepthName = prefs.getString(MainActivity.KEY_JXL_BIT_DEPTH, null),
+        pixelTypeName = prefs.getString(MainActivity.KEY_JXL_PIXEL_TYPE, null),
+        quality = prefs.getInt(MainActivity.KEY_JXL_QUALITY, 100),
+        effort = prefs.getInt(MainActivity.KEY_JXL_EFFORT, 7),
+        decodingSpeed = prefs.getInt(MainActivity.KEY_JXL_DECODING_SPEED, 0),
+        displayP3 = prefs.getBoolean(MainActivity.KEY_JXL_DISPLAY_P3, false),
+        hdrTransferName = prefs.getString(MainActivity.KEY_JXL_HDR_TRANSFER, null)
+    )
+
+    /** Developed-still container shared with shutter captures. */
+    fun developedFormat(prefs: SharedPreferences): DevelopedFormat =
+        DevelopedFormat.fromPreference(prefs.getString(MainActivity.KEY_DEVELOPED_FORMAT, null))
 
     fun denoise(prefs: SharedPreferences): DenoiseSettings = DenoiseSettings(
         aiEnabled = prefs.getBoolean(MainActivity.KEY_AI_DENOISE_ENABLED, false),

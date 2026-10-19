@@ -21,8 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Offline burst-merge screen: staged `_BURST.crs` takes only, never
  * RAW video. Pick a take, pick MFSR or HDR+, pick the output panel
- * (DNG / JPEG / JPEG+DNG), run with a stats progress line (stage,
- * frames, elapsed, ETA, input and estimated output sizes).
+ * (DNG / developed / developed+DNG) and the developed container
+ * (JPEG / JXL, shared with shutter captures), run with a stats progress
+ * line (stage, frames, elapsed, ETA, input and estimated output sizes).
  *
  * Entry points: long-press the bottom-panel burst switch, or OPEN
  * MERGES in Settings → Burst.
@@ -37,6 +38,8 @@ class MergesActivity : Activity() {
     private lateinit var outDng: Button
     private lateinit var outJpeg: Button
     private lateinit var outBoth: Button
+    private lateinit var developedJpeg: Button
+    private lateinit var developedJxl: Button
     private lateinit var runButton: Button
 
     private var rows: List<BurstTakeRow> = emptyList()
@@ -45,6 +48,7 @@ class MergesActivity : Activity() {
     private var selectedPublished: PublishedTake? = null
     private var method = BurstMergeRunner.Method.MFSR
     private var format = CaptureFormat.DNG_ONLY
+    private var developedFormat = DevelopedFormat.JPEG
     private val mergeRunning = AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,6 +63,8 @@ class MergesActivity : Activity() {
             )
         }.getOrDefault(BurstMergeRunner.Method.MFSR)
         format = CaptureFormat.fromPreference(prefs.getString(KEY_MERGE_OUTPUT_FORMAT, null))
+        developedFormat =
+            DevelopedFormat.fromPreference(prefs.getString(MainActivity.KEY_DEVELOPED_FORMAT, null))
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -98,6 +104,17 @@ class MergesActivity : Activity() {
             outRow.addView(button, rowParams())
         }
         root.addView(outRow)
+        root.addView(title("DEVELOPED"))
+        val developedRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        developedJpeg = optionButton("JPEG").also { button ->
+            button.setOnClickListener { setDevelopedFormat(DevelopedFormat.JPEG) }
+            developedRow.addView(button, rowParams())
+        }
+        developedJxl = optionButton("JXL").also { button ->
+            button.setOnClickListener { setDevelopedFormat(DevelopedFormat.JXL) }
+            developedRow.addView(button, rowParams())
+        }
+        root.addView(developedRow)
         runButton = Button(this).apply {
             text = "RUN MERGE"
             setOnClickListener { runSelected() }
@@ -218,6 +235,12 @@ class MergesActivity : Activity() {
         refreshOptions()
     }
 
+    private fun setDevelopedFormat(next: DevelopedFormat) {
+        developedFormat = next
+        prefs().edit().putString(MainActivity.KEY_DEVELOPED_FORMAT, next.name).apply()
+        refreshOptions()
+    }
+
     private fun refreshOptions() {
         if (!::methodMfsr.isInitialized) return
         stylePick(methodMfsr, method == BurstMergeRunner.Method.MFSR)
@@ -225,6 +248,8 @@ class MergesActivity : Activity() {
         stylePick(outDng, format == CaptureFormat.DNG_ONLY)
         stylePick(outJpeg, format == CaptureFormat.JPEG)
         stylePick(outBoth, format == CaptureFormat.JPEG_DNG)
+        stylePick(developedJpeg, developedFormat == DevelopedFormat.JPEG)
+        stylePick(developedJxl, developedFormat == DevelopedFormat.JXL)
     }
 
     private fun runSelected() {
@@ -240,7 +265,9 @@ class MergesActivity : Activity() {
             mfsr = MfsrSettings.fromPreferences(prefs.all),
             hdrPlus = HdrPlusSettings.fromPreferences(prefs.all),
             jpeg = MergeScreenSettings.jpeg(prefs),
-            denoise = MergeScreenSettings.denoise(prefs)
+            denoise = MergeScreenSettings.denoise(prefs),
+            jxl = MergeScreenSettings.jxl(prefs),
+            developedFormat = developedFormat
         )
         Thread({
             try {

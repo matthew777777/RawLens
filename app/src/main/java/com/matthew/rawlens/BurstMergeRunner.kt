@@ -50,7 +50,10 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val mfsr: MfsrSettings = MfsrSettings(),
         val hdrPlus: HdrPlusSettings = HdrPlusSettings(),
         val jpeg: JpegOutputSettings = JpegOutputSettings(),
-        val denoise: DenoiseSettings = DenoiseSettings()
+        val denoise: DenoiseSettings = DenoiseSettings(),
+        /** Shared AgX look lives in [jpeg]; this owns only the JXL container options. */
+        val jxl: JxlOutputSettings = JxlOutputSettings(),
+        val developedFormat: DevelopedFormat = DevelopedFormat.JPEG
     )
 
     fun interface Listener {
@@ -164,14 +167,23 @@ internal class BurstMergeRunner(private val appContext: Context) {
         }
         if (format.includesJpeg) {
             val developer = RawDevelopmentCoordinator(appContext)
-            val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
-            try {
-                outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
+            if (inputs.developedFormat == DevelopedFormat.JXL) {
+                val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
+                    merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
+                    look = inputs.jpeg, jxl = inputs.jxl)
+                outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
                     captureTimeMillis = captureId,
-                    typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
-            } finally {
-                developed.bitmap.recycle()
+                    typeSuffix = CaptureFileNames.TYPE_MFSR)
+            } else {
+                val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
+                    merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
+                try {
+                    outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
+                        captureTimeMillis = captureId,
+                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
+                } finally {
+                    developed.bitmap.recycle()
+                }
             }
         }
         return Completed(outputs, merged.keptCount, ordered.size, mergeMs,
@@ -235,10 +247,17 @@ internal class BurstMergeRunner(private val appContext: Context) {
             val motion = processor.lastMotion
             val frameStrengths = if (decision.strengthMaps != null) null
             else decision.frameStrengths?.takeIf { it.toSet().size > 1 }
+            // Same store MainActivity's DNG toggle writes (single shared
+            // preferences file): offline merges honor the user's choice.
+            val dngCompression = DngCompression.fromPreference(
+                appContext.getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
+                    .getString(MainActivity.KEY_DNG_COMPRESSION, null)
+            )
             outputs += DngSaver(appContext).saveMerged(
                 effective, refMeta, captureId, gps = null,
                 displayName = CaptureFileNames.hdrPlusDng(captureId),
                 sixteenBit = true,
+                dngCompression = dngCompression,
                 hdrPlusProvenance = HdrPlusProvenance(
                     mergedFrames = keptFrames.size, selectedFrames = frames.size,
                     rejectedFrames = decision.droppedIndices.size,
@@ -270,14 +289,23 @@ internal class BurstMergeRunner(private val appContext: Context) {
         }
         if (format.includesJpeg) {
             val developer = RawDevelopmentCoordinator(appContext)
-            val developed = developer.developMergedJpeg(effective, refMeta,
-                RawDevelopmentSettings(denoise = inputs.denoise, exposureEv = 0.0), inputs.jpeg)
-            try {
-                outputs += JpegSaver(appContext).save(developed, refMeta, null,
+            if (inputs.developedFormat == DevelopedFormat.JXL) {
+                val developed = developer.developMergedJxl(effective, refMeta,
+                    RawDevelopmentSettings(denoise = inputs.denoise, exposureEv = 0.0),
+                    look = inputs.jpeg, jxl = inputs.jxl)
+                outputs += JxlSaver(appContext).save(developed, refMeta, null,
                     captureTimeMillis = captureId,
-                    typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = null)
-            } finally {
-                developed.bitmap.recycle()
+                    typeSuffix = CaptureFileNames.TYPE_HDRPLUS)
+            } else {
+                val developed = developer.developMergedJpeg(effective, refMeta,
+                    RawDevelopmentSettings(denoise = inputs.denoise, exposureEv = 0.0), inputs.jpeg)
+                try {
+                    outputs += JpegSaver(appContext).save(developed, refMeta, null,
+                        captureTimeMillis = captureId,
+                        typeSuffix = CaptureFileNames.TYPE_HDRPLUS, gps = null)
+                } finally {
+                    developed.bitmap.recycle()
+                }
             }
         }
         return Completed(outputs, keptFrames.size, frames.size, mergeMs,

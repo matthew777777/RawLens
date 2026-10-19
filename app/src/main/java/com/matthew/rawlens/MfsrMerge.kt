@@ -153,8 +153,17 @@ internal object MfsrMerge {
         val w = cfa.width
         val h = cfa.height
         require(w % 2 == 0 && h % 2 == 0) { "sharp merge needs even dimensions, got ${w}x$h" }
-        val flipped = flipFloatsToRggb(cfa.values, w, h, dngCodesFor(cfa.pattern))
-        return Array(h) { y -> FloatArray(w) { x -> flipped[y * w + x] } }
+        // Single-alloc rows straight from the unpacked raster (same
+        // index map as flipFloatsToRggb): the old flat-flip-then-wrap
+        // held three full-frame float arrays per decode (150 MB at
+        // full-res), which OOM'd the on-device merge inside the very
+        // first frame decode. Values-identical by construction.
+        val pixels = cfa.values
+        require(pixels.size == w * h) { "sharp merge: raster size mismatch" }
+        val codes = dngCodesFor(cfa.pattern)
+        return Array(h) { y ->
+            FloatArray(w) { x -> pixels[flipSrcIndex(y * w + x, w, h, codes)] }
+        }
     }
 
     /**
@@ -175,21 +184,31 @@ internal object MfsrMerge {
         }
     }
 
+    /**
+     * Flat destination index → source index for the RGGB flip (same
+     * index maps as DngRead.flipToRggb; values already normalised).
+     * Shared by [flipFloatsToRggb] and the single-alloc [decodeRows].
+     */
+    private fun flipSrcIndex(i: Int, w: Int, h: Int, cfa: IntArray): Int {
+        // Identity RGGB.
+        if (cfa[0] == 0 && cfa[1] == 1 && cfa[2] == 1 && cfa[3] == 2) return i
+        // BGGR: flip both axes. GBRG: flip horizontal. GRBG: flip vertical.
+        if (cfa[0] == 2 && cfa[1] == 1 && cfa[2] == 1 && cfa[3] == 0) {
+            return (h - 1 - i / w) * w + (w - 1 - i % w)
+        }
+        if (cfa[0] == 1 && cfa[1] == 0 && cfa[2] == 2 && cfa[3] == 1) {
+            return (i / w) * w + (w - 1 - i % w)
+        }
+        if (cfa[0] == 1 && cfa[1] == 2 && cfa[2] == 0 && cfa[3] == 1) {
+            return (h - 1 - i / w) * w + (i % w)
+        }
+        throw IllegalArgumentException("sharp merge: unsupported CFA pattern ${cfa.toList()}")
+    }
+
     private fun flipFloatsToRggb(pixels: FloatArray, w: Int, h: Int, cfa: IntArray): FloatArray {
         require(pixels.size == w * h) { "sharp merge: raster size mismatch" }
         if (cfa[0] == 0 && cfa[1] == 1 && cfa[2] == 1 && cfa[3] == 2) return pixels
-        // BGGR: flip both axes. GBRG: flip horizontal. GRBG: flip vertical.
-        // Same index maps as DngRead.flipToRggb (values already normalised).
-        if (cfa[0] == 2 && cfa[1] == 1 && cfa[2] == 1 && cfa[3] == 0) {
-            return FloatArray(w * h) { i -> pixels[(h - 1 - i / w) * w + (w - 1 - i % w)] }
-        }
-        if (cfa[0] == 1 && cfa[1] == 0 && cfa[2] == 2 && cfa[3] == 1) {
-            return FloatArray(w * h) { i -> pixels[(i / w) * w + (w - 1 - i % w)] }
-        }
-        if (cfa[0] == 1 && cfa[1] == 2 && cfa[2] == 0 && cfa[3] == 1) {
-            return FloatArray(w * h) { i -> pixels[(h - 1 - i / w) * w + (i % w)] }
-        }
-        throw IllegalArgumentException("sharp merge: unsupported CFA pattern ${cfa.toList()}")
+        return FloatArray(w * h) { i -> pixels[flipSrcIndex(i, w, h, cfa)] }
     }
 
     /**
@@ -214,9 +233,33 @@ internal object MfsrMerge {
         }
         // Just-in-time unpack inside the engine thunks (one live CFA at
         // a time): retaining all unpacked CFAs OOMs the 512 MB heap at
-        // full-res before the engine allocates.
+        // full-res before the engine allocates. Each thunk also releases
+        // its source image and (via decodeSharp) applies that frame's
+        // lens-shading map; post-merge reads need no Image.
+        val shadingMaps = kept.count {
+            it.metadata.lensShadingMap != null && !it.metadata.lensShadingAlreadyApplied
+        }
+        Log.i(LOG_TAG, "sharp merge lens shading: $shadingMaps/${kept.size} frames carry an unapplied map")
+        //
+        // Each source image is released right after its bytes are
+        // unpacked: keeping all 8 RAW16 Images open pins ~200 MB of
+        // registered native allocation against the same 512 MB ART
+        // ceiling the engine allocates from, which OOM'd the on-device
+        // merge inside the align loop. Registry-safe: release() marks
+        // camera-released (the native close defers while a borrower
+        // still holds the frame) and late duplicates no-op via the
+        // completed set, so the job-finally release stays safe.
+        // Post-merge code reads only merged.rgb + metadata/result, and
+        // the kept source burst (when enabled) is already on disk
+        // before merge runs — no post-merge Image reads exist.
         val engine = runEngine(
-            context, kept.map { sharp -> { decodeSharp(sharp) } }, w, h,
+            context, kept.map { sharp ->
+                {
+                    decodeSharp(sharp).also {
+                        RawImageOwnership.release(sharp.frame.image)
+                    }
+                }
+            }, w, h,
             kept[0].metadata.noiseProfile?.toDoubleArray(), settings
         ) ?: return null
         return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
@@ -269,7 +312,16 @@ internal object MfsrMerge {
         }
         if (unpacked.size < MfsrSettings.MIN_MERGE_FRAMES) return null
         val refOrder = selectSharpestDecoded(unpacked) ?: return null
-        return refOrder.map { unpacked[it] }
+        val ordered = refOrder.map { unpacked[it] }
+        // Lens-shading correction after selection (same model as the
+        // live decodeSharp path): selection ranks uncorrected frames on
+        // both paths, the merge sees corrected ones. In-place, no extra
+        // allocation; identity when a take carries no map.
+        for (frame in ordered) {
+            LensShadingCorrector.applyOwnedInPlace(
+                frame.cfa, RawPreDemosaicPipeline.lensShadingModel(frame.source.metadata))
+        }
+        return ordered
     }
 
     private fun selectSharpestDecoded(frames: List<MfsrDecodedFrame>): List<Int>? {
@@ -320,6 +372,14 @@ internal object MfsrMerge {
             plane.rowStride, plane.pixelStride, 0, 0
         )
         val cfa = RawSensorUnpacker.unpackNormalized(plane.buffer.duplicate(), layout, sharp.norm)
+        // Lens-shading correction (same model the still path applies via
+        // RawPreDemosaicPipeline): live ZSL buffers are uncorrected while
+        // saved DNGs carry the GainMap opcode for the reader — without
+        // this the merge bakes the lens vignetting into both outputs
+        // (linear DNG + RGB JPEG). In-place, no extra allocation;
+        // identity when the map is missing or already applied.
+        LensShadingCorrector.applyOwnedInPlace(
+            cfa, RawPreDemosaicPipeline.lensShadingModel(sharp.metadata))
         return decodeRows(cfa)
     }
 

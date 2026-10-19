@@ -52,6 +52,7 @@ internal object OfflineBurstMetadata {
             DoubleArray(array.length()) { array.getDouble(it) }
         }
         val timestamp = frame.getString("timestamp").toLong()
+        val shadingMap = lensShadingSnapshot(frame)
         return RawFrameMetadata(
             cameraId = cameraId,
             timestampNanos = timestamp,
@@ -85,7 +86,7 @@ internal object OfflineBurstMetadata {
                 provenance = "crs-offline"
             ),
             lensShadingAlreadyApplied = false,
-            lensShadingMap = null,
+            lensShadingMap = shadingMap,
             hotPixels = emptyList(),
             wbGains = null,
             neutralColorPoint = neutral?.let(::ImmutableDoubleValues),
@@ -103,6 +104,61 @@ internal object OfflineBurstMetadata {
             rawBinningFactorUsed = false,
             activePhysicalCameraId = null
         )
+    }
+
+    /**
+     * Parses the optional per-frame `lensShadingMapWidth` /
+     * `lensShadingMapHeight` / `lensShadingMap` triplet (four nested
+     * R, G-even, G-odd, B planes, cf. `CrsLensShading.toFrameJson`)
+     * into Camera2 map order. Strictly validated (extents, plane
+     * counts, finite gains >= 1.0 as `LensShadingModel` requires);
+     * any defect nulls the map (no android Log here: this path runs in
+     * plain JVM unit tests), leaving the frame to merge uncorrected
+     * exactly as before.
+     */
+    fun lensShadingSnapshot(frame: JSONObject): LensShadingSnapshot? {
+        if (!frame.has("lensShadingMapWidth") || !frame.has("lensShadingMapHeight")
+            || !frame.has("lensShadingMap")
+        ) return null
+        // Any defect nulls the map, leaving the frame to merge
+        // uncorrected exactly as before.
+        return try {
+            val columns = frame.getInt("lensShadingMapWidth")
+            val rows = frame.getInt("lensShadingMapHeight")
+            val planes = frame.getJSONArray("lensShadingMap")
+            buildSnapshot(columns, rows, List(planes.length()) { ch ->
+                val plane = planes.getJSONArray(ch)
+                List(plane.length()) { i -> plane.getDouble(i) }
+            })
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Pure core of [lensShadingSnapshot] (plain-JVM testable; the JSON
+     * shell above stays a trivial projection because android stubs
+     * return defaults under unit tests). Interleaves the four nested
+     * R, G-even, G-odd, B planes into Camera2 map order; throws on any
+     * shape/value defect.
+     */
+    fun buildSnapshot(columns: Int, rows: Int, planes: List<List<Double>>): LensShadingSnapshot {
+        require(rows in 1..CrsLensShading.MAX_EXTENT
+            && columns in 1..CrsLensShading.MAX_EXTENT) {
+            "lens-shading grid extents out of range ($columns x $rows)"
+        }
+        require(planes.size == 4) { "lens-shading map needs 4 planes" }
+        val points = Math.multiplyExact(rows, columns)
+        val gains = FloatArray(Math.multiplyExact(points, 4))
+        for (ch in 0 until 4) {
+            val plane = planes[ch]
+            require(plane.size == points) { "lens-shading plane $ch size mismatch" }
+            for (i in 0 until points) gains[i * 4 + ch] = plane[i].toFloat()
+        }
+        require(gains.all { it.isFinite() && it >= 1f }) {
+            "lens-shading gains must be finite and at least 1.0"
+        }
+        return LensShadingSnapshot(rows, columns, ImmutableFloatValues(gains))
     }
 
     fun cfaFrom(sensorArrangement: String): BayerPattern = when (sensorArrangement.lowercase()) {
