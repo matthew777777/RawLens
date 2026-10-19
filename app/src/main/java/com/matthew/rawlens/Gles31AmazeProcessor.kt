@@ -1117,6 +1117,17 @@ class Gles31AmazeProcessor(
                 finalProgram.float("u_agx_highlight_ev", settings.agxHighlightEv)
                 finalProgram.float("u_agx_gamut_compression", settings.agxGamutCompression)
                 finalProgram.float("u_highlight_shoulder", settings.resolvedForPlatform().highlightShoulder)
+                // RAWR-parity gain-map encode (declarations arrive via the
+                // agx_output import slice of agx_srgb8.glsl).
+                val resolvedFused = settings.resolvedForPlatform()
+                finalProgram.float("u_hdr_exposure", resolvedFused.hdrExposure)
+                finalProgram.float("u_gainmap_min_log2", resolvedFused.gainMapMinLog2)
+                finalProgram.float("u_gainmap_max_log2", resolvedFused.gainMapMaxLog2)
+                finalProgram.float("u_gainmap_gamma", resolvedFused.gainmapGamma)
+                finalProgram.float("u_gainmap_offset_sdr", resolvedFused.gainmapOffsetSdr)
+                finalProgram.float("u_gainmap_offset_hdr", resolvedFused.gainmapOffsetHdr)
+                finalProgram.float("u_sat_protect", resolvedFused.satProtect)
+                finalProgram.integer("u_multi_channel", if (resolvedFused.multiChannelMap) 1 else 0)
                 finalProgram.integer("u_write_gainmap", if (gainmapOutput != null) 1 else 0)
                 finalProgram.image(0, requireNotNull(encodedOutput), GLES30.GL_RGBA8)
                 gainmapOutput?.let { finalProgram.image(1, it, GLES30.GL_RGBA8) }

@@ -88,13 +88,41 @@ void main() {
     ) - 0.5;
     imageStore(img_out, outputPixel, vec4(encoded + dither / 255.0, 1.0));
 
+    // RAWR-parity Ultra HDR gain map: scene-linear HDR to SDR-base ratio.
+    // The HDR tap is the pre-tonemap demosaiced camera RGB in display-linear
+    // space (camera -> ACEScg -> Rec.2020 -> display, without AgX); the SDR
+    // tap is the clamped display-linear base. Same encode as agx_srgb8.glsl.
     if (u_write_gainmap != 0) {
         ivec2 gainPixel = outputPixel / 4;
         ivec2 samplePixel = min(gainPixel * 4 + ivec2(2), u_output_size - ivec2(1));
         if (all(equal(outputPixel, samplePixel))) {
-            highp float displayLuma = dot(baseLinear, vec3(0.2126, 0.7152, 0.0722));
-            highp float gain = smoothstep(0.30, 0.72, displayLuma);
-            imageStore(img_gainmap, gainPixel, vec4(vec3(gain), 1.0));
+            highp vec3 hdrScene = outputMatrix * (ACESCG_TO_REC2020_D65 * (u_camera_to_acescg * cameraRgb));
+            highp vec3 hdrLin = max(hdrScene * max(u_hdr_exposure, 1e-6), vec3(0.0));
+            highp vec3 sdrLin = max(baseLinear, vec3(0.0));
+            highp float sdrMaxChan = max(sdrLin.x, max(sdrLin.y, sdrLin.z));
+            highp float sdrMinChan = min(sdrLin.x, min(sdrLin.y, sdrLin.z));
+            highp float sdrSat = (sdrMaxChan - sdrMinChan) / max(sdrMaxChan, 1e-3);
+            highp float satW = u_sat_protect * smoothstep(0.5, 0.9, sdrMaxChan) * clamp(sdrSat, 0.0, 1.0);
+            highp vec3 logGain3 =
+                log2(max((hdrLin + max(u_gainmap_offset_hdr, 1e-6)) / (sdrLin + max(u_gainmap_offset_sdr, 1e-6)), vec3(1e-9)));
+            highp float lumaHdr = dot(hdrLin, vec3(0.2126, 0.7152, 0.0722));
+            highp float lumaSdr = dot(sdrLin, vec3(0.2126, 0.7152, 0.0722));
+            highp float logGainLuma =
+                log2(max((lumaHdr + max(u_gainmap_offset_hdr, 1e-6)) / (lumaSdr + max(u_gainmap_offset_sdr, 1e-6)), 1e-9));
+            highp float toneScale = smoothstep(0.03, 0.50, lumaSdr) * (1.0 - satW);
+            highp float hdrMaxChan = max(hdrLin.x, max(hdrLin.y, hdrLin.z));
+            highp float hdrMinChan = min(hdrLin.x, min(hdrLin.y, hdrLin.z));
+            highp float hdrSat = (hdrMaxChan - hdrMinChan) / max(hdrMaxChan, 1e-3);
+            highp float hdrWhiteW = (1.0 - smoothstep(0.05, 0.15, hdrSat)) * smoothstep(0.5, 0.9, lumaHdr);
+            highp float mcOn = (u_multi_channel != 0) ? 1.0 : 0.0;
+            highp float useLuma = max(1.0 - mcOn, hdrWhiteW * mcOn);
+            highp vec3 logFinal = mix(logGain3 * toneScale, vec3(logGainLuma * toneScale), useLuma);
+            highp vec3 norm3 = clamp(
+                (logFinal - vec3(u_gainmap_min_log2)) / max(u_gainmap_max_log2 - u_gainmap_min_log2, 1e-6), 0.0, 1.0);
+            highp vec3 recovery3 = pow(norm3, vec3(u_gainmap_gamma));
+            highp vec3 dithered3 = recovery3 + (dither / 255.0);
+            highp vec3 stored3 = clamp(floor(dithered3 * 255.0 + 0.5) / 255.0, 0.0, 1.0);
+            imageStore(img_gainmap, gainPixel, vec4(stored3, 1.0));
         }
     }
 }

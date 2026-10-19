@@ -34,14 +34,23 @@ class SceneLinearColorGpuInstrumentedTest {
         )
         val settings = JpegOutputSettings(ultraHdr = true)
         val output = Gles31JpegOutputProcessor(context)
-        val bitmap = Gles31AmazeProcessor(context).process(
+        val developed = Gles31AmazeProcessor(context).process(
             input,
             fusedOutputSettings = settings
-        ) { output.processEncoded(it, settings).bitmap }
+        ) { output.processEncoded(it, settings) }
         try {
-            assertTrue("fused output did not attach its Ultra HDR gain map", bitmap.hasGainmap())
+            val resolved = settings.resolvedForPlatform()
+            assertEquals(resolved, developed.settings)
+            if (resolved.ultraHdr) {
+                val gainmap = developed.gainmap
+                assertTrue("fused output did not produce its Ultra HDR gain map", gainmap != null)
+                requireNotNull(gainmap)
+                assertEquals((IDENTITY_WIDTH + 3) / 4, gainmap.width)
+                assertEquals((IDENTITY_HEIGHT + 3) / 4, gainmap.height)
+            }
         } finally {
-            bitmap.recycle()
+            developed.gainmap?.recycle()
+            developed.bitmap.recycle()
         }
     }
 
