@@ -22,6 +22,14 @@ RawLens is a photography-first, open-source Android camera built around a scene-
 - Per-camera DNG calibration overrides for black/white levels, noise profile, and color/calibration/forward matrices
 - RAW JPEG development with AgX Base, Golden, and Punchy looks; contrast, saturation, purity, hue preservation,
   highlight/shadow range, and gamut-compression controls
+- Optional JPEG XL output (Settings → JPEG → JPEG XL output): the same AgX develop saved as `.jxl` up to
+  16-bit integer (plus 16/32-bit float) with darktable-style bit depth, quality, effort, and decoding-speed
+  options and embedded EXIF/XMP; requires a libjxl-enabled build (bundled automatically when the build
+  machine has network, otherwise JPEG/DNG only)
+- Optional JXL-compressed DNG (Settings → General → DNG compression): single-frame mosaics stored losslessly
+  as JPEG XL codestreams (DNG 1.7, like iPhone ProRAW) at roughly half the file size; needs a libjxl-enabled
+  build and a reader with DNG 1.7 support (Lightroom / Apple Photos — darktable cannot read them yet), off by
+  default, GPS-tagged and merged frames stay uncompressed
 - Optional AI RAW denoise (RawNIND-tiny): writes a denoised DNG and develops the JPEG from it, with an option to keep the original sensor DNG
 - Portrait viewfinder layout
 
