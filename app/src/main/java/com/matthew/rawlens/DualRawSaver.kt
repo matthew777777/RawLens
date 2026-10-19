@@ -4,13 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
-import android.hardware.camera2.DngCreator
+import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
-import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Duration
@@ -20,8 +18,8 @@ import kotlin.math.abs
 internal object DualRawSaver {
     @Synchronized
     fun save(context: Context, c: CameraCharacteristics,
-             high: Image, highResult: CaptureResult, low: Image, lowResult: CaptureResult,
-             orientation: Int, captureTime: Long, gps: GpsLocation?): String {
+             high: Image, highResult: TotalCaptureResult, low: Image, lowResult: TotalCaptureResult,
+             orientation: Int, captureTime: Long, gps: GpsLocation?, cameraId: String): String {
         check(DualRawVulkan.available) { "Vulkan dual RAW library unavailable" }
         require(high.width == low.width && high.height == low.height && low.width % 2 == 0)
         for ((image, result) in listOf(high to highResult, low to lowResult)) {
@@ -48,8 +46,8 @@ internal object DualRawSaver {
                 ?: c[CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL])?.toFloat()
         // Unusable pairs (Vivo X300 Ultra default mode: white=0 or white <=
         // black) fail the merge require below; sample each frame's own bytes
-        // instead. The merged DNG's tags are forced by
-        // DualRawDngMetadata.patch, so only the merge math needs these.
+        // instead. The merged DNG's tags are forced by DualRawDngWriter, so
+        // only the merge math needs these.
         fun repaired(image: Image, r: CaptureResult): Pair<FloatArray, Float>? {
             val b = reportedBlack(r)
             val w = reportedWhite(r)
@@ -74,6 +72,11 @@ internal object DualRawSaver {
         // Both streams use long-frame DN units. Dividing each by its own white
         // range would introduce a channel-dependent exposure mismatch.
         val headroom = maxOf(1f, (0..3).maxOf { scale * (hw-hb[it])/(lw-lb[it]) })
+        // Single Camera2 source of truth for the DNG tags, shared with every
+        // other TinyDNG writer. Built before the merge so a non-Bayer sensor
+        // fails fast instead of after the Vulkan work. Exposure/ISO describe
+        // the low (short) frame, as the old platform-writer files did.
+        val frameMetadata = RawFrameMetadataFactory.capture(cameraId, low, c, lowResult, orientation)
         val params = lb + hb + floatArrayOf(lw,hw,scale,headroom)
         val output = ByteBuffer.allocateDirect(Math.multiplyExact(Math.multiplyExact(low.width,low.height),2))
             .order(ByteOrder.LITTLE_ENDIAN)
@@ -94,33 +97,29 @@ internal object DualRawSaver {
             "midpointGapMs=${abs(low.timestamp+le/2-high.timestamp-he/2)/1e6} " +
             "setupMs=${timing[0]} submitFenceMs=${timing[1]} readbackMs=${timing[2]} scale=$scale headroom=$headroom")
         val name = CaptureFileNames.fileName(captureTime,"DUAL","dng")
-        val temporary = File.createTempFile("dual-raw-", ".dng",context.cacheDir)
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME,name)
+            put(MediaStore.Images.Media.MIME_TYPE,"image/x-adobe-dng")
+            put(MediaStore.Images.Media.RELATIVE_PATH,"DCIM/RawLens")
+            put(MediaStore.Images.Media.IS_PENDING,1)
+        }
+        val resolver = context.contentResolver
+        val uri = checkNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values))
         try {
-            DngCreator(c,lowResult).use { creator ->
-                creator.setOrientation(orientation)
-                creator.setDescription("RawLens experimental dual-exposure RAW; simple Vulkan Bayer merge; unclipped long samples preserved; short replaces clipped samples only")
-                gps?.let { creator.setLocation(it.toAndroidLocation()) }
+            // TinyDNG streams straight into MediaStore: no temp file, no
+            // post-hoc patch. GPS rides the GPS IFD (the old
+            // DngCreator.setLocation equivalent).
+            checkNotNull(resolver.openOutputStream(uri,"w")).use { out ->
                 output.position(0)
-                temporary.outputStream().use { creator.writeByteBuffer(it,Size(low.width,low.height),output,0L) }
+                DualRawDngWriter.write(out, output, low.width, low.height, frameMetadata,
+                    headroom.toDouble(), orientation, gps, captureTime)
             }
-            DualRawDngMetadata.patch(temporary, headroom.toDouble())
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME,name)
-                put(MediaStore.Images.Media.MIME_TYPE,"image/x-adobe-dng")
-                put(MediaStore.Images.Media.RELATIVE_PATH,"DCIM/RawLens")
-                put(MediaStore.Images.Media.IS_PENDING,1)
-            }
-            val resolver = context.contentResolver
-            val uri = checkNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values))
-            try {
-                checkNotNull(resolver.openOutputStream(uri,"w")).use { out -> temporary.inputStream().use { it.copyTo(out) } }
-                values.clear(); values.put(MediaStore.Images.Media.IS_PENDING,0)
-                check(resolver.update(uri,values,null,null) == 1) { "Could not publish dual RAW DNG" }
-            } catch (failure: Throwable) {
-                resolver.delete(uri,null,null); throw failure
-            }
-            Log.i("RawLensDualRaw","Saved $name bytes=${temporary.length()}")
-            return name
-        } finally { temporary.delete() }
+            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING,0)
+            check(resolver.update(uri,values,null,null) == 1) { "Could not publish dual RAW DNG" }
+        } catch (failure: Throwable) {
+            resolver.delete(uri,null,null); throw failure
+        }
+        Log.i("RawLensDualRaw","Saved $name")
+        return name
     }
 }

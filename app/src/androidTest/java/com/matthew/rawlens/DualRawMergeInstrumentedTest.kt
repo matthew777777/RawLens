@@ -185,13 +185,13 @@ class DualRawMergeInstrumentedTest {
                 check(protected>0)
                 log("INVARIANCE protectedLongPixels=$protected shortBlackPerturbation=100DN exact=true")
                 val file=File(outDir,"RawLens_Vulkan_adjacent_pair$pairIndex.dng")
-                DngCreator(c,lr).use { creator ->
-                    creator.setOrientation(1)
-                    creator.setDescription("RawLens production merge validation; pair 1 uses a synthetic long clipping threshold")
-                    output.position(0)
-                    file.outputStream().use { creator.writeByteBuffer(it,size,output,0) }
+                val frame=RawFrameMetadataFactory.capture("0",low,c,lr,1)
+                output.position(0)
+                file.outputStream().use { out ->
+                    DualRawDngWriter.write(out,output,size.width,size.height,frame,
+                        ratio.toDouble(),1,null,System.currentTimeMillis(),
+                        "RawLens production merge validation; pair 1 uses a synthetic long clipping threshold")
                 }
-                DualRawDngMetadata.patch(file,ratio.toDouble())
                 log("SAVED ${file.name} bytes=${file.length()}")
                 if(pairIndex==0) {
                     for((name,item) in listOf("low" to captured[lowIndex],"high" to captured[highIndex])) {
