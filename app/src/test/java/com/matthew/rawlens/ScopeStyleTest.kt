@@ -10,24 +10,15 @@ import kotlin.math.abs
 
 class ScopeStyleTest {
     @Test
-    fun paletteMatchesDarktableTheme() {
-        assertEquals(0xFF262626.toInt(), ScopeStyle.BACKGROUND)
-        assertEquals(0xFF111111.toInt(), ScopeStyle.GRID)
-        assertEquals(0xFFED1E14.toInt(), ScopeStyle.RED)
-        assertEquals(0xFF1CEB1A.toInt(), ScopeStyle.GREEN)
-        assertEquals(0xFF0E0EE9.toInt(), ScopeStyle.BLUE)
-    }
-
-    @Test
-    fun primariesSumToNeutralOverlap() {
-        // The theme's own invariant: every channel sums to the same 279 so ADD
-        // overlaps clip to neutral instead of tinting.
-        val channels = listOf(
-            Triple(237, 30, 20), Triple(28, 235, 26), Triple(14, 14, 233)
-        )
-        assertEquals(279, channels.sumOf { it.first })
-        assertEquals(279, channels.sumOf { it.second })
-        assertEquals(279, channels.sumOf { it.third })
+    fun paletteIsSunlightLegibleDarkPill() {
+        // No grid: the scope sits on a near-opaque scrim (not sheer glass, so
+        // the bright preview cannot wash the traces out) with a hairline
+        // baseline and modern primaries tuned for dark glass.
+        assertEquals(0xE6000000.toInt(), ScopeStyle.SCRIM)
+        assertEquals(0x33FFFFFF, ScopeStyle.BASELINE)
+        assertEquals(0xFFFF6B62.toInt(), ScopeStyle.RED)
+        assertEquals(0xFF3DDC84.toInt(), ScopeStyle.GREEN)
+        assertEquals(0xFF5AA9FF.toInt(), ScopeStyle.BLUE)
     }
 
     @Test
@@ -62,17 +53,30 @@ class ScopeStyleTest {
     }
 
     @Test
-    fun emptyPixelIsBackgroundAndFullOverlapIsNeutralWhite() {
-        assertEquals(ScopeStyle.BACKGROUND, ScopeStyle.compositeWaveformPixel(0f, 0f, 0f))
+    fun emptyPixelIsTransparentAndFullOverlapIsBright() {
+        assertEquals(0, ScopeStyle.compositeWaveformPixel(0f, 0f, 0f))
         val white = ScopeStyle.compositeWaveformPixel(1f, 1f, 1f)
+        val a = white ushr 24 and 0xFF
         val r = white shr 16 and 0xFF
         val g = white shr 8 and 0xFF
         val b = white and 0xFF
+        assertEquals(255, a)
         assertTrue("overlap $r,$g,$b should be bright", r > 200 && g > 200 && b > 200)
-        // Sequential per-channel passes leave a few LSB of asymmetry (the last
-        // channel ends brightest), identical to darktable's own loop order.
+        // Sequential per-channel passes leave some asymmetry (the last channel
+        // ends brightest), same loop-order character as darktable's own code.
         assertTrue("overlap $r,$g,$b should be near-neutral",
-            abs(r - g) <= 12 && abs(g - b) <= 12 && abs(r - b) <= 12)
+            abs(r - g) <= 32 && abs(g - b) <= 32 && abs(r - b) <= 32)
+    }
+
+    @Test
+    fun faintPixelStaysVisibleAboveAlphaFloor() {
+        // The ~30% alpha floor keeps faint traces alive in glare: visible, but
+        // still clearly dimmer than a fully lit cell.
+        val faint = ScopeStyle.compositeWaveformPixel(0.2f, 0f, 0f)
+        val a = faint ushr 24 and 0xFF
+        assertTrue("faint alpha $a should stay above the floor", a >= 70)
+        val full = ScopeStyle.compositeWaveformPixel(1f, 0f, 0f)
+        assertTrue("faint $a should stay dimmer than full", a < (full ushr 24 and 0xFF))
     }
 
     @Test

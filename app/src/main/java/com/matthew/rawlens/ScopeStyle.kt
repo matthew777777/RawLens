@@ -4,38 +4,40 @@
 package com.matthew.rawlens
 
 /**
- * Shared histogram/waveform scope rendering, following darktable's scopes module
- * (GPL-3.0-or-later, darktable-org/darktable `src/libs/scopes/histogram.c`,
- * `src/libs/scopes/waveform.c`, theme `data/themes/darktable.css`):
+ * Shared histogram/waveform scope rendering.
  *
- * - Plot background `graph_bg` #262626, grid `graph_grid` #111111.
- * - Primaries `graph_red/green/blue`: rgb(237,30,20), rgb(28,235,26),
- *   rgb(14,14,233). Each channel sums to 279, so ADD-blended overlaps clip to a
- *   neutral white instead of tinting (per the theme's own comment). The histogram
- *   uses these; the waveform ADD pass uses pure primaries, exactly like darktable.
- * - Waveform density is area-normalized (`brightness / samplesPerColumn`, with
- *   `brightness = tones / 40`), never peak-normalized, so a thin trace stays
- *   visible no matter how hot the densest cell is. Density is then perceptually
- *   lifted with the HLG OETF (darktable borrows the HLG Rec.2020 LUT) and
- *   composited in two passes: ADD pure primaries at 0.75, then HARD_LIGHT
- *   near-white channel tints at 0.35.
+ * The data pipeline follows darktable's scopes module (GPL-3.0-or-later,
+ * darktable-org/darktable `src/libs/scopes/histogram.c`,
+ * `src/libs/scopes/waveform.c`): area-normalized waveform density
+ * (`brightness / samplesPerColumn`, with `brightness = tones / 40`) lifted
+ * perceptually with the HLG OETF, composited in two passes (ADD pure
+ * primaries, then HARD_LIGHT near-white channel tints).
  *
- * Deviations are deliberate and documented at the use site: darktable maps 1.0 to
- * 8/9 height for HDR headroom, but scope data here never exceeds 1.0, so 1.0 is
- * the top; the histogram keeps a white luminance trace darktable does not draw.
+ * The presentation is RawLens' own modern treatment, not darktable's theme
+ * (`graph_bg` #262626, `graph_grid` #111111): the scope is a near-opaque
+ * dark pill floating over the viewfinder, with no grid graticule — just a
+ * hairline baseline anchoring the bottom edge. The scrim stays near-opaque
+ * deliberately so traces stay legible in direct sunlight; a sheer glass
+ * bleeds the bright preview through and washes out. Traces use SRC_OVER
+ * primaries at full stroke strength tuned for dark glass, so overlaps mix
+ * naturally instead of relying on saturating ADD to clip to neutral white.
  */
 object ScopeStyle {
-    const val BACKGROUND = 0xFF262626.toInt()
-    const val GRID = 0xFF111111.toInt()
+    /** Near-opaque scrim (black at ~90%): sunlight-legible, still borderless. */
+    const val SCRIM = 0xE6000000.toInt()
+
+    /** Hairline baseline anchoring the bottom edge (white at ~20%). */
+    const val BASELINE = 0x33FFFFFF
 
     /** Single-piece scope surface: same 20dp radius + stroke as the top/bottom islands. */
     const val CORNER_RADIUS_DP = 20f
-    const val BORDER = 0x26FFFFFF
+    const val BORDER = 0x4DFFFFFF
     const val BORDER_WIDTH_DP = 1f
 
-    const val RED = 0xFFED1E14.toInt()
-    const val GREEN = 0xFF1CEB1A.toInt()
-    const val BLUE = 0xFF0E0EE9.toInt()
+    /** Modern primaries tuned for dark glass (sRGB). */
+    const val RED = 0xFFFF6B62.toInt()
+    const val GREEN = 0xFF3DDC84.toInt()
+    const val BLUE = 0xFF5AA9FF.toInt()
 
     /** Waveform ADD pass alpha (`alpha_chroma`). */
     const val WAVEFORM_CHROMA_ALPHA = 0.75f
@@ -46,8 +48,11 @@ object ScopeStyle {
     /** HARD_LIGHT tint for the two off-channels (`desat_over`). */
     const val WAVEFORM_DESAT_OVER = 0.75f
 
-    /** Histogram group alpha: darktable paints the ADD group at 0.5. */
-    const val HISTOGRAM_GROUP_ALPHA = 128
+    /** Histogram area-fill alpha (SRC_OVER, per channel). */
+    const val HISTOGRAM_FILL_ALPHA = 90
+
+    /** Histogram trace-line alpha (SRC_OVER, per channel). */
+    const val HISTOGRAM_LINE_ALPHA = 255
 
     /** Area-bias divisor shared with darktable (`num_tones / 40`). */
     const val BRIGHTNESS_DIVISOR = 40f
@@ -79,13 +84,14 @@ object ScopeStyle {
     }
 
     /**
-     * One darktable-style waveform pixel. [masks] holds the three HLG-encoded
-     * densities 0..1; returns opaque sRGB over [BACKGROUND].
+     * One waveform pixel composited over transparency. [masks] holds the three
+     * HLG-encoded densities 0..1; empty cells are fully transparent so the
+     * scrim shows through, lit cells fade in with density. Returns ARGB.
      */
     fun compositeWaveformPixel(redMask: Float, greenMask: Float, blueMask: Float): Int {
-        var r = BG_LINEAR
-        var g = BG_LINEAR
-        var b = BG_LINEAR
+        var r = 0f
+        var g = 0f
+        var b = 0f
         val masks = floatArrayOf(redMask, greenMask, blueMask)
         for (channel in 0..2) {
             val mask = masks[channel].coerceIn(0f, 1f)
@@ -102,16 +108,21 @@ object ScopeStyle {
             g += (hardLightUp(g, tint[1]) - g) * mix
             b += (hardLightUp(b, tint[2]) - b) * mix
         }
+        val peak = maxOf(masks[0], masks[1], masks[2])
+        if (peak <= 0f) return 0
+        // Alpha floor: any nonzero density starts at ~30% so faint traces
+        // survive glare instead of dissolving into single-digit alphas.
+        val alpha = 0.30f + 0.70f * peak.coerceIn(0f, 1f)
         // Manual ARGB packing keeps this object pure JVM (unit-testable without Robolectric).
+        val aq = (alpha * 255f + 0.5f).toInt().coerceIn(0, 255)
         val rq = (r.coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255)
         val gq = (g.coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255)
         val bq = (b.coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255)
-        return (0xFF shl 24) or (rq shl 16) or (gq shl 8) or bq
+        return (aq shl 24) or (rq shl 16) or (gq shl 8) or bq
     }
 
     private fun hardLightUp(dst: Float, src: Float): Float = 1f - 2f * (1f - src) * (1f - dst)
 
-    private const val BG_LINEAR = 0x26 / 255f
     private const val HLG_A = 0.17883277
     private const val HLG_B = 0.28466892
     private const val HLG_C = 0.55991073

@@ -14,7 +14,7 @@ object StatusText {
     const val MAX_LEN = 28
 
     private val fileStem = Regex("""IMG_[A-Za-z0-9_.\-]*""")
-    private val fileExtension = Regex("""\S*?\.(dng|jpg|jpeg)\b""", RegexOption.IGNORE_CASE)
+    private val fileExtension = Regex("""\S*?\.(dng|jpg|jpeg|jxl)\b""", RegexOption.IGNORE_CASE)
     private val whitespace = Regex("\\s+")
     private val straySeparators = Regex("""([•+])(\s*[•+]\s*)+""")
 
@@ -33,18 +33,20 @@ object StatusText {
         return if (cut >= 8) s.take(cut) else s.take(maxLen - 1) + "…"
     }
 
-    /** Short save outcome: type only (DNG/JPG), never file names. */
+    /** Short save outcome: type only (DNG/developed), never file names. */
     fun saveOutcome(
         dngSaved: Boolean,
         jpegSaved: Boolean,
         failed: Boolean,
+        /** Developed-still token: JPG for the legacy path, JXL for JPEG XL. */
+        developed: String = "JPG",
     ): String = when {
-        dngSaved && jpegSaved && failed -> "PARTIAL DNG+JPG"
-        dngSaved && jpegSaved -> "SAVED DNG+JPG"
+        dngSaved && jpegSaved && failed -> "PARTIAL DNG+$developed"
+        dngSaved && jpegSaved -> "SAVED DNG+$developed"
         dngSaved && failed -> "PARTIAL DNG"
-        jpegSaved && failed -> "PARTIAL JPG"
+        jpegSaved && failed -> "PARTIAL $developed"
         dngSaved -> "SAVED DNG"
-        jpegSaved -> "SAVED JPG"
+        jpegSaved -> "SAVED $developed"
         else -> "SAVE ERROR"
     }
 }

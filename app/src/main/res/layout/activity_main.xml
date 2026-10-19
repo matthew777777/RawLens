@@ -145,8 +145,11 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
-    <!-- Top bar: 48dp targets, 12dp rhythm, status readable at 10sp. -->
-    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:layout_marginStart="12dp" android:layout_marginTop="16dp" android:layout_marginEnd="12dp" android:background="@drawable/slim_top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="8dp" android:paddingTop="6dp" android:paddingEnd="8dp" android:paddingBottom="6dp">
+    <!-- Top bar: opaque black island, edge-to-edge with rounded bottom corners
+         mirroring the bottom panel. Reserves real layout space: the photo
+         viewfinder is letterboxed to 3:4 between this bar and the control
+         panel so the preview is WYSIWYG (no side crop). Hidden in video. -->
+    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@drawable/top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="16dp" android:paddingTop="16dp" android:paddingEnd="16dp" android:paddingBottom="10dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" style="@style/TopBarButton" android:layout_marginStart="8dp" android:contentDescription="Toggle light" android:src="@drawable/ic_flash" />
         <FrameLayout android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="8dp">
@@ -428,6 +431,7 @@
             <FrameLayout
                 android:layout_width="88dp"
                 android:layout_height="88dp"
+                android:layout_marginBottom="12dp"
                 android:background="@drawable/shutter_ring"
                 android:padding="8dp">
 

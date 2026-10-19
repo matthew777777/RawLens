@@ -1,0 +1,30 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Top island: edge-to-edge, rounded bottom only, kept opaque.
+         Mirrors the bottom control panel (rounded top): the viewfinder
+         tucks 16dp underneath so the curves fill with picture instead
+         of root black. The base solid runs full-bleed (no stroke) so the
+         side edges reach the screen glass with zero dark hairline; the
+         1dp light hairline is a second, fully-inside layer so none of it
+         clips off-screen. Photo modes only; video hides this bar. -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/surface" />
+            <corners
+                android:topLeftRadius="0dp"
+                android:topRightRadius="0dp"
+                android:bottomLeftRadius="16dp"
+                android:bottomRightRadius="16dp" />
+        </shape>
+    </item>
+    <item android:left="1dp" android:right="1dp" android:bottom="1dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+            <stroke android:width="1dp" android:color="#26FFFFFF" />
+            <corners
+                android:topLeftRadius="0dp"
+                android:topRightRadius="0dp"
+                android:bottomLeftRadius="15dp"
+                android:bottomRightRadius="15dp" />
+        </shape>
+    </item>
+</layer-list>

@@ -16,8 +16,9 @@ import android.view.View
 /** Live RGB waveform parade, always sampled from the sensor mosaic: horizontal position
  * follows the frame columns, vertical position is level (black bottom, white top).
  * Linear RAW matches the DNG data; the AgX-curved variant predicts the developed JPEG
- * and is selected automatically with a JPEG capture format. Tapping is handled by
- * the host. */
+ * and is selected automatically with a JPEG capture format. The density raster
+ * sits on a near-opaque dark scrim with no graticule — just a hairline
+ * black-level baseline. Tapping is handled by the host. */
 class WaveformView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -26,26 +27,15 @@ class WaveformView @JvmOverloads constructor(
     private var raster = Bitmap.createBitmap(COLUMNS, LEVELS, Bitmap.Config.ARGB_8888)
     private val pixels = IntArray(COLUMNS * LEVELS)
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    // darktable waveform graticule (dt_draw_waveform_lines): subdivisions under the
-    // data with emphasized middle and near-white lines, dashed. darktable uses ninths
-    // with white at 8/9 height for HDR headroom; scope data here caps at 1.0 (the top
-    // edge), so eighths hit 0.5 exactly and the near-white line sits at 0.875.
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val scrimPaint = Paint().apply {
+        style = Paint.Style.FILL
+        color = ScopeStyle.SCRIM
+    }
+    // Hairline black-level anchor; the only chrome besides the border.
+    private val baselinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f
-        color = ScopeStyle.GRID
-    }
-    private val gridMidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-        color = ScopeStyle.GRID
-        pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f, 4f), 0f)
-    }
-    private val gridWhitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-        color = ScopeStyle.GRID
-        pathEffect = android.graphics.DashPathEffect(floatArrayOf(4f, 4f), 0f)
+        color = ScopeStyle.BASELINE
     }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -54,6 +44,7 @@ class WaveformView @JvmOverloads constructor(
     }
     private val clipPath = Path()
     private val bounds = RectF()
+    private val plotRect = RectF()
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
     private var agxSelected = false
 
@@ -76,8 +67,9 @@ class WaveformView @JvmOverloads constructor(
     }
 
     private fun composeRaster() {
-        // darktable area normalization: each channel scales against its expected
-        // per-column samples, so thin traces survive hot peaks elsewhere.
+        // Area normalization: each channel scales against its expected per-column
+        // samples, so thin traces survive hot peaks elsewhere. Empty cells stay
+        // transparent; the scrim beneath shows through.
         val totals = IntArray(3) { channel -> density[channel].sum() }
         val scales = FloatArray(3) { channel ->
             ScopeStyle.areaScale(LEVELS, COLUMNS, totals[channel])
@@ -99,31 +91,30 @@ class WaveformView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // One piece: same rounded full-bleed surface as the histogram so the two
+        // One piece: same rounded full-bleed scrim as the histogram so the two
         // scopes swap seamlessly with no inner sharp box inside an outer shell.
         if (width <= 0 || height <= 0) return
         val left = 0f
         val top = 0f
         val right = width.toFloat()
         val bottom = height.toFloat()
+        val densityScale = resources.displayMetrics.density
         bounds.set(left, top, right, bottom)
         clipPath.reset()
         clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         canvas.save()
         canvas.clipPath(clipPath)
-        // The raster carries the darktable background, composited in software. The
-        // opaque raster covers an under-grid, so the graticule draws over it (1px
-        // dark lines read the same at this size).
-        canvas.drawBitmap(raster, null, android.graphics.RectF(left, top, right, bottom), bitmapPaint)
-        for (k in 1..7) {
-            val y = bottom - k * (bottom - top) / 8
-            val paint = when (k) {
-                4 -> gridMidPaint
-                7 -> gridWhitePaint
-                else -> gridPaint
-            }
-            canvas.drawLine(left, y, right, y, paint)
-        }
+        canvas.drawRect(left, top, right, bottom, scrimPaint)
+        plotRect.set(
+            left + 4f * densityScale,
+            top + 5f * densityScale,
+            right - 4f * densityScale,
+            bottom - 3f * densityScale
+        )
+        canvas.drawBitmap(raster, null, plotRect, bitmapPaint)
+        canvas.drawLine(
+            plotRect.left, plotRect.bottom, plotRect.right, plotRect.bottom, baselinePaint
+        )
         canvas.restore()
         val halfStroke = borderPaint.strokeWidth / 2f
         bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)

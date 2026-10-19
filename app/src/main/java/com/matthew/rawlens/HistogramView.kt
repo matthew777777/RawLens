@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.content.Context
-import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -15,41 +14,42 @@ import android.view.View
 
 /** Live RGB + luminance histogram, always sampled from the sensor mosaic. Linear RAW
  * matches the DNG data; the AgX-curved variant predicts the developed JPEG and is
- * selected automatically with a JPEG capture format. Channels are ADD-blended
- * darktable primaries; the white trace is Rec.709 luminance drawn on top (kept from
- * the original design, darktable draws no luma trace). Tapping is handled by the
- * host. */
+ * selected automatically with a JPEG capture format. The scope sits on a
+ * near-opaque dark scrim with no grid — softly filled SRC_OVER curves under
+ * full-strength rounded traces, plus a white Rec.709 luminance outline.
+ * Tapping is handled by the host. */
 class HistogramView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
     private val bins = Array(4) { IntArray(BIN_COUNT) }
-    private val paths = Array(4) { Path() }
-    private val bgPaint = Paint().apply {
+    private val heights = FloatArray(BIN_COUNT)
+    private val fillPaths = Array(4) { Path() }
+    private val linePaths = Array(4) { Path() }
+    private val scrimPaint = Paint().apply {
         style = Paint.Style.FILL
-        color = ScopeStyle.BACKGROUND
+        color = ScopeStyle.SCRIM
     }
-    // darktable paints the ADD-blended channel group at 0.5 alpha (BlendMode.PLUS
-    // is Android's saturating add). ADD is linear, so per-channel half alpha is
-    // identical and order-independent.
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        blendMode = BlendMode.PLUS
     }
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = resources.displayMetrics.density
-        blendMode = BlendMode.PLUS
+        strokeWidth = 1.75f * resources.displayMetrics.density
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
     }
     private val lumaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = resources.displayMetrics.density
+        strokeWidth = 1.5f * resources.displayMetrics.density
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
     }
-    // darktable histogram grid: dt_draw_grid(num=4) quarters under the data.
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    // Hairline anchoring the data floor; the only chrome besides the border.
+    private val baselinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f
-        color = ScopeStyle.GRID
+        color = ScopeStyle.BASELINE
     }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -59,6 +59,9 @@ class HistogramView @JvmOverloads constructor(
     private val clipPath = Path()
     private val bounds = RectF()
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
+    private val insetH = 4f * resources.displayMetrics.density
+    private val insetTop = 5f * resources.displayMetrics.density
+    private val insetBottom = 3f * resources.displayMetrics.density
     private var agxSelected = false
 
     /** Source selection follows the capture format; stale queued frames are rejected. */
@@ -80,8 +83,8 @@ class HistogramView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        // One piece: the view draws its own rounded surface full-bleed and clips
-        // the graph to it, so there is no inner sharp box inside an outer shell.
+        // One piece: the view draws its own rounded scrim full-bleed and clips
+        // the curves to it, so there is no inner sharp box inside an outer shell.
         if (width <= 0 || height <= 0) return
         val left = 0f
         val top = 0f
@@ -91,35 +94,39 @@ class HistogramView @JvmOverloads constructor(
         clipPath.reset()
         clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         val max = bins.maxOf { channel -> channel.maxOrNull() ?: 0 }.coerceAtLeast(1)
-        val plotHeight = bottom - top
-        val plotWidth = right - left
+        val plotLeft = left + insetH
+        val plotRight = right - insetH
+        val plotTop = top + insetTop
+        val plotBottom = bottom - insetBottom
+        val plotWidth = (plotRight - plotLeft).coerceAtLeast(0f)
+        val plotHeight = (plotBottom - plotTop).coerceAtLeast(0f)
         canvas.save()
         canvas.clipPath(clipPath)
-        canvas.drawRect(left, top, right, bottom, bgPaint)
-        for (quarter in 1..3) {
-            val x = left + quarter * plotWidth / 4
-            canvas.drawLine(x, top, x, bottom, gridPaint)
-            val y = bottom - quarter * plotHeight / 4
-            canvas.drawLine(left, y, right, y, gridPaint)
-        }
+        canvas.drawRect(left, top, right, bottom, scrimPaint)
         for (channel in 0..2) {
-            buildPath(channel, left, bottom, plotWidth, plotHeight, max)
+            buildSmoothPaths(channel, plotLeft, plotBottom, plotWidth, plotHeight, max)
             fillPaint.color = FILL_COLORS[channel]
             linePaint.color = LINE_COLORS[channel]
-            canvas.drawPath(paths[channel], fillPaint)
-            canvas.drawPath(paths[channel], linePaint)
+            canvas.drawPath(fillPaths[channel], fillPaint)
+            canvas.drawPath(linePaths[channel], linePaint)
         }
-        buildPath(LUMINANCE, left, bottom, plotWidth, plotHeight, max)
+        buildSmoothPaths(LUMINANCE, plotLeft, plotBottom, plotWidth, plotHeight, max)
         lumaPaint.color = LUMA_COLOR
         // Luminance redraws as an outline only: the RGB fills already carry the mass.
-        canvas.drawPath(paths[LUMINANCE], lumaPaint)
+        canvas.drawPath(linePaths[LUMINANCE], lumaPaint)
+        canvas.drawLine(plotLeft, plotBottom, plotRight, plotBottom, baselinePaint)
         canvas.restore()
         val halfStroke = borderPaint.strokeWidth / 2f
         bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)
         canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, borderPaint)
     }
 
-    private fun buildPath(
+    /**
+     * Builds a closed soft-fill path and an open smoothly-curved trace path.
+     * Bin mass is sqrt-normalized, lightly smoothed to kill single-bin spikes,
+     * and joined with midpoint quadratics so the trace reads as a curve.
+     */
+    private fun buildSmoothPaths(
         channel: Int,
         left: Float,
         bottom: Float,
@@ -127,16 +134,38 @@ class HistogramView @JvmOverloads constructor(
         plotHeight: Float,
         max: Int
     ) {
-        val path = paths[channel]
-        path.reset()
-        path.moveTo(left, bottom)
-        bins[channel].forEachIndexed { index, count ->
-            val x = left + index * plotWidth / (BIN_COUNT - 1)
-            val normalized = kotlin.math.sqrt(count.toFloat() / max)
-            path.lineTo(x, bottom - normalized * plotHeight)
+        val counts = bins[channel]
+        for (index in counts.indices) {
+            val raw = kotlin.math.sqrt(counts[index].toFloat() / max)
+            val previous = if (index > 0) {
+                kotlin.math.sqrt(counts[index - 1].toFloat() / max)
+            } else {
+                raw
+            }
+            val next = if (index < counts.size - 1) {
+                kotlin.math.sqrt(counts[index + 1].toFloat() / max)
+            } else {
+                raw
+            }
+            heights[index] = bottom - (0.25f * previous + 0.5f * raw + 0.25f * next) * plotHeight
         }
-        path.lineTo(left + plotWidth, bottom)
-        path.close()
+        val fill = fillPaths[channel]
+        val line = linePaths[channel]
+        fill.reset()
+        line.reset()
+        val last = counts.size - 1
+        fun xAt(index: Int): Float = left + index * plotWidth / last.coerceAtLeast(1)
+        line.moveTo(xAt(0), heights[0])
+        for (index in 1..last) {
+            val midX = (xAt(index - 1) + xAt(index)) / 2f
+            val midY = (heights[index - 1] + heights[index]) / 2f
+            line.quadTo(xAt(index - 1), heights[index - 1], midX, midY)
+        }
+        line.lineTo(xAt(last), heights[last])
+        fill.set(line)
+        fill.lineTo(xAt(last), bottom)
+        fill.lineTo(xAt(0), bottom)
+        fill.close()
     }
 
     private fun copyResampled(source: IntArray, target: IntArray) {
@@ -148,30 +177,25 @@ class HistogramView @JvmOverloads constructor(
     }
 
     private companion object {
-        const val BIN_COUNT = 48
+        const val BIN_COUNT = 64
         const val RED = 0
         const val GREEN = 1
         const val BLUE = 2
         const val LUMINANCE = 3
         val FILL_COLORS = intArrayOf(
-            ScopeStyle.RED.withGroupAlpha(),
-            ScopeStyle.GREEN.withGroupAlpha(),
-            ScopeStyle.BLUE.withGroupAlpha()
+            ScopeStyle.RED.withAlpha(ScopeStyle.HISTOGRAM_FILL_ALPHA),
+            ScopeStyle.GREEN.withAlpha(ScopeStyle.HISTOGRAM_FILL_ALPHA),
+            ScopeStyle.BLUE.withAlpha(ScopeStyle.HISTOGRAM_FILL_ALPHA)
         )
         val LINE_COLORS = intArrayOf(
-            ScopeStyle.RED.withLineAlpha(),
-            ScopeStyle.GREEN.withLineAlpha(),
-            ScopeStyle.BLUE.withLineAlpha()
+            ScopeStyle.RED.withAlpha(ScopeStyle.HISTOGRAM_LINE_ALPHA),
+            ScopeStyle.GREEN.withAlpha(ScopeStyle.HISTOGRAM_LINE_ALPHA),
+            ScopeStyle.BLUE.withAlpha(ScopeStyle.HISTOGRAM_LINE_ALPHA)
         )
-        const val LUMA_COLOR = 0xFFE8E8E8.toInt()
+        const val LUMA_COLOR = 0xFFF5F5F5.toInt()
 
-        private fun Int.withGroupAlpha(): Int = Color.argb(
-            ScopeStyle.HISTOGRAM_GROUP_ALPHA,
-            Color.red(this), Color.green(this), Color.blue(this)
-        )
-
-        private fun Int.withLineAlpha(): Int = Color.argb(
-            217, Color.red(this), Color.green(this), Color.blue(this)
+        private fun Int.withAlpha(alpha: Int): Int = Color.argb(
+            alpha, Color.red(this), Color.green(this), Color.blue(this)
         )
     }
 }
