@@ -51,11 +51,28 @@ class JpegSaver(private val context: Context) {
         val insertedAt = SystemClock.elapsedRealtime()
         try {
             if (developed.settings.ultraHdr) {
-                resolver.openOutputStream(uri, "w")?.use { stream ->
-                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, developed.settings.jpegQuality, stream)) {
-                        throw IOException("Android Ultra HDR JPEG encoder rejected the developed bitmap")
+                // RAWR-parity Full Ultra HDR: native dual-encode (SDR base +
+                // fitted gain map) + JPEG_R mux. A null map or any native
+                // failure falls back to the SDR encode so a shot is never lost
+                // to the HDR path (RAWR writeUltraHdrFallback parity).
+                val gainmap = developed.gainmap
+                if (gainmap == null) {
+                    Log.w(LOG_TAG, "Ultra HDR develop produced no gain map; writing SDR fallback")
+                    resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
+                        NativeJpegEncoder.encode(bitmap, descriptor, developed.settings)
+                    } ?: throw IOException("Could not open native JPEG output descriptor")
+                } else {
+                    try {
+                        resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
+                            NativeUltraHdrWriter.encode(bitmap, gainmap, descriptor, developed.settings)
+                        } ?: throw IOException("Could not open Ultra HDR JPEG output descriptor")
+                    } catch (failure: IOException) {
+                        Log.w(LOG_TAG, "Native Ultra HDR encode failed; writing SDR fallback", failure)
+                        resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
+                            NativeJpegEncoder.encode(bitmap, descriptor, developed.settings)
+                        } ?: throw IOException("Could not open native JPEG output descriptor")
                     }
-                } ?: throw IOException("Could not open Ultra HDR JPEG output stream")
+                }
             } else {
                 resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
                     NativeJpegEncoder.encode(bitmap, descriptor, developed.settings)
@@ -121,7 +138,7 @@ class JpegSaver(private val context: Context) {
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
                         "RAW_SENSOR -> AMaZE -> ACEScg -> AgX Base -> " +
                             (if (developed.settings.displayP3) "Display P3" else "sRGB") +
-                            if (developed.settings.ultraHdr) " -> Android Ultra HDR gainmap" else ""
+                            if (developed.settings.ultraHdr) " -> Ultra HDR gainmap (JPEG_R)" else ""
                     )
                     // A missing fix writes no GPS tags at all: an absent geotag
                     // is truthful, a stale or zeroed one is not.

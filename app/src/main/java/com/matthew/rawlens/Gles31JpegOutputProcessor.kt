@@ -6,18 +6,21 @@ package com.matthew.rawlens
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ColorSpace
-import android.graphics.Gainmap
-import android.os.Build
 import android.os.SystemClock
 import android.util.Log
-import android.annotation.TargetApi
 import android.opengl.GLES20
 import android.opengl.GLES30
 import android.opengl.GLES31
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings)
+/**
+ * Developed SDR base plus, when [settings.ultraHdr] resolved on, the RAWR-style
+ * wide-range gain-map bitmap (quarter resolution, RGB codes normalized by the
+ * resolved gainMapMin/MaxLog2). The file writer dual-encodes both and assembles
+ * the JPEG_R container natively; no platform Gainmap object is involved.
+ */
+data class DevelopedJpeg(val bitmap: Bitmap, val settings: JpegOutputSettings, val gainmap: Bitmap? = null)
 
 /** Converts an unclamped scene-linear ACEScg texture into a color-tagged JPEG Bitmap. */
 class Gles31JpegOutputProcessor(context: Context) {
@@ -45,19 +48,16 @@ class Gles31JpegOutputProcessor(context: Context) {
         )
         val base = readBitmap(encoded.textureId, encoded.width, encoded.height, colorSpace)
         val baseReadyAt = SystemClock.elapsedRealtime()
-        if (resolved.ultraHdr) {
+        val gainmap = if (resolved.ultraHdr) {
             check(encoded.gainmapTextureId != 0) { "Fused Ultra HDR output has no gain-map texture" }
-            attachUltraHdrGainmap(
-                base.bitmap,
-                readBitmap(
-                    encoded.gainmapTextureId,
-                    ceilDiv(encoded.width, GAINMAP_DOWNSCALE),
-                    ceilDiv(encoded.height, GAINMAP_DOWNSCALE),
-                    colorSpace,
-                    gainmap = true
-                ).bitmap
-            )
-        }
+            readBitmap(
+                encoded.gainmapTextureId,
+                ceilDiv(encoded.width, GAINMAP_DOWNSCALE),
+                ceilDiv(encoded.height, GAINMAP_DOWNSCALE),
+                colorSpace,
+                gainmap = true
+            ).bitmap
+        } else null
         val completedAt = SystemClock.elapsedRealtime()
         Log.i(
             LOG_TAG,
@@ -66,7 +66,7 @@ class Gles31JpegOutputProcessor(context: Context) {
                 "gain+attach=${completedAt - baseReadyAt}ms total=${completedAt - startedAt}ms"
         )
         MemoryLeakDiagnostics.sample("jpeg-frame-complete")
-        return DevelopedJpeg(base.bitmap, resolved)
+        return DevelopedJpeg(base.bitmap, resolved, gainmap)
     }
 
     fun process(scene: AmazeGpuOutput, settings: JpegOutputSettings = JpegOutputSettings()): DevelopedJpeg {
@@ -143,6 +143,7 @@ class Gles31JpegOutputProcessor(context: Context) {
             GLES31.glUniform1ui(location(outputProgram, "u_grain_seed"), System.nanoTime().toInt())
             GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 0)
             GLES31.glUniform1i(location(outputProgram, "u_gainmap_only"), 0)
+            bindUltraHdrParams(outputProgram, resolved)
             GLES31.glDispatchCompute(ceilDiv(scene.width, 8), ceilDiv(scene.height, 8), 1)
             if (resolved.ultraHdr) {
                 GLES31.glUniform1i(location(outputProgram, "u_write_gainmap"), 1)
@@ -162,15 +163,12 @@ class Gles31JpegOutputProcessor(context: Context) {
             )
             val base = readBitmap(encodedTexture[0], scene.width, scene.height, colorSpace)
             val baseReadyAt = SystemClock.elapsedRealtime()
-            if (resolved.ultraHdr) {
-                attachUltraHdrGainmap(
-                    base.bitmap,
-                    readBitmap(
-                        gainTexture[0], ceilDiv(scene.width, GAINMAP_DOWNSCALE),
-                        ceilDiv(scene.height, GAINMAP_DOWNSCALE), colorSpace, gainmap = true
-                    ).bitmap
-                )
-            }
+            val gainmap = if (resolved.ultraHdr) {
+                readBitmap(
+                    gainTexture[0], ceilDiv(scene.width, GAINMAP_DOWNSCALE),
+                    ceilDiv(scene.height, GAINMAP_DOWNSCALE), colorSpace, gainmap = true
+                ).bitmap
+            } else null
             val completedAt = SystemClock.elapsedRealtime()
             Log.i(
                 LOG_TAG,
@@ -180,7 +178,7 @@ class Gles31JpegOutputProcessor(context: Context) {
                     "gain+attach=${completedAt - baseReadyAt}ms total=${completedAt - startedAt}ms"
             )
             MemoryLeakDiagnostics.sample("jpeg-frame-complete")
-            return DevelopedJpeg(base.bitmap, resolved)
+            return DevelopedJpeg(base.bitmap, resolved, gainmap)
         } finally {
             GLES31.glDeleteTextures(1, encodedTexture, 0)
             if (encodedTracked) MemoryLeakDiagnostics.glTextureReleased(encodedBytes)
@@ -271,19 +269,23 @@ class Gles31JpegOutputProcessor(context: Context) {
         val bitmapCopyMs: Long
     )
 
-    @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private fun attachUltraHdrGainmap(base: Bitmap, contents: Bitmap) {
-        val gainmap = Gainmap(contents).apply {
-            // D = B * exp(mix(log(1), log(16), G)); see android.graphics.Gainmap.
-            setRatioMin(1f, 1f, 1f)
-            setRatioMax(16f, 16f, 16f)
-            setGamma(1f, 1f, 1f)
-            setEpsilonSdr(0f, 0f, 0f)
-            setEpsilonHdr(0f, 0f, 0f)
-            setMinDisplayRatioForHdrTransition(1f)
-            setDisplayRatioForFullHdr(16f)
-        }
-        base.setGainmap(gainmap)
+    /**
+     * Binds the RAWR-parity gain-map encode parameters for both dispatches.
+     * Must stay in sync with agx_srgb8.glsl's u_gainmap_* / u_hdr_exposure /
+     * u_sat_protect / u_multi_channel declarations.
+     */
+    private fun bindUltraHdrParams(program: Int, resolved: JpegOutputSettings) {
+        GLES31.glUniform1f(location(program, "u_hdr_exposure"), resolved.hdrExposure)
+        GLES31.glUniform1f(location(program, "u_gainmap_min_log2"), resolved.gainMapMinLog2)
+        GLES31.glUniform1f(location(program, "u_gainmap_max_log2"), resolved.gainMapMaxLog2)
+        GLES31.glUniform1f(location(program, "u_gainmap_gamma"), resolved.gainmapGamma)
+        GLES31.glUniform1f(location(program, "u_gainmap_offset_sdr"), resolved.gainmapOffsetSdr)
+        GLES31.glUniform1f(location(program, "u_gainmap_offset_hdr"), resolved.gainmapOffsetHdr)
+        GLES31.glUniform1f(location(program, "u_sat_protect"), resolved.satProtect)
+        GLES31.glUniform1i(
+            location(program, "u_multi_channel"),
+            if (resolved.multiChannelMap) 1 else 0
+        )
     }
 
     private fun compile(body: String): Int {

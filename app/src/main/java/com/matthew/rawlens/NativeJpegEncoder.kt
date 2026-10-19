@@ -66,8 +66,9 @@ enum class JpegDemosaic(val label: String) {
 }
 
 /** Extracts Android's own ICC payload from a tiny color-tagged JPEG, so native files keep the
- * same sRGB / Display-P3 interpretation as the previous Bitmap.compress path. */
-private object JpegIccProfileProvider {
+ * same sRGB / Display-P3 interpretation as the previous Bitmap.compress path.
+ * Shared with [NativeUltraHdrWriter], which embeds the same profile in the Ultra HDR base. */
+internal object JpegIccProfileProvider {
     private val cache = HashMap<Boolean, ByteArray>()
 
     @Synchronized

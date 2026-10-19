@@ -194,15 +194,9 @@ class MergedJpegDevelopInstrumentedTest {
                 try {
                     val resolved = JpegOutputSettings(ultraHdr = true).resolvedForPlatform()
                     assertEquals(resolved, uhdr.settings)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        assertEquals(resolved.ultraHdr, uhdr.bitmap.hasGainmap())
-                    }
+                    assertEquals(resolved.ultraHdr, uhdr.gainmap != null)
                 } finally {
-                    if (uhdr.settings.ultraHdr &&
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
-                    ) {
-                        uhdr.bitmap.setGainmap(null)
-                    }
+                    recycleUltraHdrGainmapContents(uhdr)
                     uhdr.bitmap.recycle()
                 }
             } finally {

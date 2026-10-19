@@ -48,6 +48,36 @@ data class JpegOutputSettings(
     val centerWeight: Float = 0f,
     /** Still-JPEG demosaic backend (AMaZE default; RCD via the Vulkan bridge). */
     val demosaic: JpegDemosaic = JpegDemosaic.AMAZE,
+    // RAWR-parity Full Ultra HDR encode parameters. The gain map is the
+    // scene-linear HDR to SDR-base ratio (log2, normalized by
+    // gainMapMin/MaxLog2), dual-encoded with the SDR base and assembled by
+    // the native UltrahdrMux (MPF + GContainer XMP + hdrgm + ISO 21496-1).
+    // Defaults mirror RAWR's UltraHdrParams verdicts.
+    val gainmapQuality: Int = 92,
+    /** Linear gain matching the SDR base's exposure domain. 1 = scene tap already exposed. */
+    val hdrExposure: Float = 1f,
+    /** Identity floor (1x): the file must never darken the base rendition. */
+    val gainMapMinLog2: Float = 0f,
+    val gainMapMaxLog2: Float = 4.7090998f,
+    val gainmapGamma: Float = 1f,
+    val gainmapOffsetSdr: Float = 0.015625f,
+    val gainmapOffsetHdr: Float = 0.015625f,
+    /** Chroma protection for saturated brights. 0 = off. */
+    val satProtect: Float = 0.6f,
+    /** Per-channel RGB map (hue survives a white SDR base). */
+    val multiChannelMap: Boolean = true,
+    /** Adaptive ceiling: p99.9 + margin, stepped, clamped to [fitFloor, displayCap]. */
+    val gainMapFitMargin: Float = 0.25f,
+    val gainMapFitStep: Float = 0.25f,
+    val gainMapFitFloor: Float = 1f,
+    val gainMapDisplayCap: Float = 1.45f,
+    val shoulderWidth: Float = 0.5f,
+    val shoulderKneeBelowMax: Float = 0.5f,
+    /** Luma baseline floor share (0 disables). */
+    val baseShare: Float = 0.75f,
+    val baseExponent: Float = 0.4f,
+    /** Soft-knee chroma compression around the per-pixel channel mean. */
+    val chromaKnee: Float = 0.05f,
     /**
      * RT "Color propagation" highlight reconstruction on the demosaiced
      * camera-linear frame (pre-WB). Repairs clipped-channel color before
@@ -59,6 +89,11 @@ data class JpegOutputSettings(
     fun resolvedForPlatform(): JpegOutputSettings {
         fun bounded(value: Float, minimum: Float, maximum: Float, fallback: Float): Float =
             value.takeIf(Float::isFinite)?.coerceIn(minimum, maximum) ?: fallback
+        // Bound the map floor before the ceiling so a wild floor can never
+        // invert the coerceIn range below (which would throw). The floor
+        // stops 0.25 EV under the 8 EV ceiling so the ceiling range stays valid.
+        val boundedMinLog2 = bounded(gainMapMinLog2, -8f, 7.75f, 0f)
+        val boundedFitFloor = bounded(gainMapFitFloor, 0f, 4f, 1f)
         return copy(
             ultraHdr = ultraHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
             jpegQuality = jpegQuality.coerceIn(1, 100),
@@ -73,7 +108,24 @@ data class JpegOutputSettings(
             highlightHeadroom = bounded(highlightHeadroom, 0.5f, 1.5f, 1f),
             highlightSoftHeadroom = bounded(highlightSoftHeadroom, 0.6f, 1f, 0.85f),
             highlightShoulder = bounded(highlightShoulder, 0f, 1f, 1f),
-            centerWeight = bounded(centerWeight, 0f, 3f, 0f)
+            centerWeight = bounded(centerWeight, 0f, 3f, 0f),
+            gainmapQuality = gainmapQuality.coerceIn(1, 100),
+            hdrExposure = bounded(hdrExposure, 1e-6f, 1024f, 1f),
+            gainMapMinLog2 = boundedMinLog2,
+            gainMapMaxLog2 = bounded(gainMapMaxLog2, boundedMinLog2 + 0.25f, 8f, 4.7090998f),
+            gainmapGamma = bounded(gainmapGamma, 0.1f, 4f, 1f),
+            gainmapOffsetSdr = bounded(gainmapOffsetSdr, 0f, 1f, 0.015625f),
+            gainmapOffsetHdr = bounded(gainmapOffsetHdr, 0f, 1f, 0.015625f),
+            satProtect = bounded(satProtect, 0f, 1f, 0.6f),
+            gainMapFitMargin = bounded(gainMapFitMargin, 0f, 2f, 0.25f),
+            gainMapFitStep = bounded(gainMapFitStep, 0.05f, 2f, 0.25f),
+            gainMapFitFloor = boundedFitFloor,
+            gainMapDisplayCap = bounded(gainMapDisplayCap, boundedFitFloor, 8f, 1.45f),
+            shoulderWidth = bounded(shoulderWidth, 0f, 4f, 0.5f),
+            shoulderKneeBelowMax = bounded(shoulderKneeBelowMax, 0f, 4f, 0.5f),
+            baseShare = bounded(baseShare, 0f, 2f, 0.75f),
+            baseExponent = bounded(baseExponent, 0.05f, 4f, 0.4f),
+            chromaKnee = bounded(chromaKnee, 0.001f, 1f, 0.05f)
         )
     }
 }

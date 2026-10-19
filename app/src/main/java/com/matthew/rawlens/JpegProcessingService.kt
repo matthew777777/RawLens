@@ -17,8 +17,9 @@ import android.os.PowerManager
 import android.util.Log
 
 /**
- * Keeps full-resolution RAW-to-JPEG work in Android's foreground scheduling group after the
- * camera Activity is backgrounded. The controller starts it only while JPEG work is outstanding.
+ * Keeps full-resolution RAW develop work in Android's foreground scheduling group after the
+ * camera Activity is backgrounded. The controller starts it only while developed-still
+ * (JPEG or JXL) work is outstanding.
  */
 class JpegProcessingService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
@@ -97,7 +98,7 @@ class JpegProcessingService : Service() {
             "Photo processing",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Shown while RawLens develops a captured JPEG"
+            description = "Shown while RawLens develops a captured photo"
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -116,7 +117,7 @@ class JpegProcessingService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tune)
             .setContentTitle("Developing photo")
-            .setContentText("RAW-to-JPEG processing is in progress")
+            .setContentText("RAW photo processing is in progress")
             .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
