@@ -73,6 +73,15 @@ android {
                 if (isFdroidBuild) {
                     arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
                 }
+                // JXL overrides: -PjxlSourceDir=<libjxl checkout> reuses a
+                // local clone instead of fetching; -PdisableJxl builds the
+                // "not bundled" stub (offline builds).
+                if (project.hasProperty("jxlSourceDir")) {
+                    arguments("-DLIBJXL_SOURCE_DIR=${project.property("jxlSourceDir")}")
+                }
+                if (project.hasProperty("disableJxl")) {
+                    arguments("-DRAWLENS_ENABLE_JXL=OFF")
+                }
             }
         }
     }

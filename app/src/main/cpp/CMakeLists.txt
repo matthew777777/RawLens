@@ -92,14 +92,103 @@ set_target_properties(jpeg_turbo_static PROPERTIES
 add_dependencies(jpeg_turbo_static libjpeg_turbo_external)
 
 # JPEG JNI keeps its existing library name; RAW DNG uses rawLensDng below.
-add_library(dngCreator SHARED "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp")
+# ultra_hdr_writer.cpp is the RAWR-parity Ultra HDR file writer: dual
+# libjpeg-turbo encode (SDR base + fitted gain map) + UltrahdrMux assembly
+# (MPF + GContainer XMP + hdrgm + ISO 21496-1). gainmap/UltrahdrMux.cpp is the
+# container mux (byte logic via RAWR from google/libultrahdr); color/ and
+# encoding/ headers are header-only (UltraHdrParams, UltraHdrMapFit).
+add_library(dngCreator SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/native_jpeg_encoder.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ultra_hdr_writer.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gainmap/UltrahdrMux.cpp")
 add_dependencies(dngCreator libjpeg_turbo_external)
 target_include_directories(dngCreator PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}"
     "${LIBJPEG_TURBO_INCLUDE_DIR}"
     "${LIBJPEG_TURBO_BINARY_DIR}")
+target_compile_features(dngCreator PRIVATE cxx_std_17)
 target_link_libraries(dngCreator log dl m jnigraphics jpeg_turbo_static)
 target_link_options(dngCreator PRIVATE "-Wl,-z,max-page-size=16384")
+
+# JPEG XL encoder (libjxl, BSD-3-Clause; GPL-3.0 compatible, see NOTICE.md).
+# Bundled by default: unless LIBJXL_SOURCE_DIR points at an existing full
+# checkout (clone with --recurse-submodules; submodules carry
+# highway/brotli/skcms), configure clones the pinned release below into
+# the build tree (same network-at-configure discipline as the
+# libjpeg-turbo FetchContent above). Encoder-only flags keep the per-ABI
+# cost minimal; tools, tests, viewers, and plugins stay off.
+#   cmake -DLIBJXL_SOURCE_DIR=<path to libjxl> ...   (reuse a checkout)
+#   cmake -DRAWLENS_ENABLE_JXL=OFF ...                (offline builds)
+# Source-only builds (-DRAWLENS_PREBUILT_NATIVE=OFF, e.g. F-Droid) skip
+# the fetch like the Halide filters above unless LIBJXL_SOURCE_DIR is set.
+# Without libjxl the jxlEncoder bridge still builds, but every encode call
+# returns a "not bundled" error string that NativeJxlEncoder surfaces as
+# an IOException (never a crash).
+add_library(jxlEncoder SHARED "${CMAKE_CURRENT_SOURCE_DIR}/native_jxl_encoder.cpp")
+target_link_libraries(jxlEncoder PRIVATE log)
+target_link_options(jxlEncoder PRIVATE "-Wl,-z,max-page-size=16384")
+option(RAWLENS_ENABLE_JXL "Bundle the libjxl JPEG XL encoder" ON)
+set(LIBJXL_SOURCE_DIR "" CACHE PATH "Path to a libjxl checkout (with submodules) for JXL encoding")
+set(LIBJXL_VERSION "v0.11.1" CACHE STRING "Pinned libjxl release auto-fetched when LIBJXL_SOURCE_DIR is unset")
+if(NOT RAWLENS_PREBUILT_NATIVE AND LIBJXL_SOURCE_DIR STREQUAL "")
+    message(STATUS "RawLens: source-only build, JXL encoder not bundled (set LIBJXL_SOURCE_DIR to override)")
+    set(RAWLENS_ENABLE_JXL OFF)
+endif()
+if(RAWLENS_ENABLE_JXL AND LIBJXL_SOURCE_DIR STREQUAL "")
+    set(_jxl_fetch_dir "${CMAKE_BINARY_DIR}/libjxl-src")
+    if(NOT EXISTS "${_jxl_fetch_dir}/CMakeLists.txt")
+        find_package(Git QUIET)
+        if(GIT_FOUND)
+            message(STATUS "RawLens: fetching libjxl ${LIBJXL_VERSION} with submodules")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} clone --branch ${LIBJXL_VERSION} --depth 1
+                    --recurse-submodules --shallow-submodules
+                    https://github.com/libjxl/libjxl.git ${_jxl_fetch_dir}
+                RESULT_VARIABLE _jxl_clone_result
+                OUTPUT_QUIET ERROR_QUIET)
+            if(NOT _jxl_clone_result EQUAL 0)
+                message(WARNING "RawLens: libjxl fetch failed (offline?); JXL saves report not-bundled. "
+                    "Set LIBJXL_SOURCE_DIR or -DRAWLENS_ENABLE_JXL=OFF to silence.")
+                set(RAWLENS_ENABLE_JXL OFF)
+            endif()
+        else()
+            message(WARNING "RawLens: git not found, JXL encoder not bundled. "
+                "Set LIBJXL_SOURCE_DIR or -DRAWLENS_ENABLE_JXL=OFF to silence.")
+            set(RAWLENS_ENABLE_JXL OFF)
+        endif()
+    endif()
+    if(RAWLENS_ENABLE_JXL)
+        set(LIBJXL_SOURCE_DIR ${_jxl_fetch_dir})
+    endif()
+endif()
+if(RAWLENS_ENABLE_JXL AND NOT LIBJXL_SOURCE_DIR STREQUAL "")
+    if(NOT EXISTS "${LIBJXL_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "LIBJXL_SOURCE_DIR has no CMakeLists.txt: ${LIBJXL_SOURCE_DIR}")
+    endif()
+    # Tests stay off with the rest: googletest discovery executes the
+    # test binaries at build time, which cannot run under an Android
+    # cross-compile (host exec of arm64 objects fails the build).
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_BENCHMARK OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_FUZZERS OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_DOXYGEN OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_MANPAGES OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_VIEWERS OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_PLUGINS OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_DEVTOOLS OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_SKCMS ON CACHE BOOL "" FORCE)
+    # sjpeg's vendored CMake references NDK cpufeatures sources that no
+    # longer exist (NDK r27); jpegli is a JPEG codec we never call. Both
+    # are tools-only codecs, unused by the still encoder.
+    set(JPEGXL_ENABLE_SJPEG OFF CACHE BOOL "" FORCE)
+    set(JPEGXL_ENABLE_JPEGLI OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${LIBJXL_SOURCE_DIR}" libjxl)
+    target_compile_definitions(jxlEncoder PRIVATE RAWLENS_HAVE_LIBJXL)
+    target_link_libraries(jxlEncoder PRIVATE jxl jxl_threads)
+endif()
 
 # PhotonCamera FlowNet-v2/ncnn port: model runtime + custom correlation layers.
 # Prebuilt mode links the ABI-specific ncnn static libraries; source-only

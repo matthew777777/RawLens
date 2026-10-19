@@ -119,6 +119,32 @@ desktop OpenCV alignment. `FloatCfaDngWriter` adapts `src/imageio/imageio_dng.c`
 `dt_imageio_dng_write_float()` layout: uncompressed little-endian TIFF/DNG, one 32-bit IEEE-float
 CFA sample per pixel, `SampleFormat=3`, normalized black level zero, and white level one.
 
+## JPEG XL encoder (libjxl, optional) and darktable JXL mapping
+
+JPEG XL output is encoded by the JPEG XL reference implementation:
+
+- Project: libjxl
+- Repository: https://github.com/libjxl/libjxl
+- License: BSD 3-Clause (GPL-3.0 compatible)
+- Integration: `app/src/main/cpp/native_jxl_encoder.cpp` via the `jxlEncoder`
+  JNI bridge; `app/src/main/cpp/CMakeLists.txt` (`LIBJXL_SOURCE_DIR`).
+
+libjxl auto-fetches at configure time (pinned `LIBJXL_VERSION`, currently
+v0.11.1, verified at `794a5dcf0d54f9f0b20d288a12e87afb91d20dfc` with encoder-only
+flags plus `JPEGXL_ENABLE_SJPEG/JPEGLI=OFF` for NDK r27) unless
+`LIBJXL_SOURCE_DIR` points at an existing checkout or `-DRAWLENS_ENABLE_JXL=OFF`
+(source-only/F-Droid builds) is set; `./gradlew` accepts `-PjxlSourceDir=` and
+`-PdisableJxl`. Without libjxl the bridge still builds but every encode call
+reports "not bundled" instead of writing. The encoder option mapping
+(bit depth 8/10/12/16/32, 16-bit uint vs half float, quality with lossless
+at 100 except 16-bit float, effort 1..9, decoding-speed tier 0..4, native
+color encoding with ICC fallback, BMFF container with Exif/`xml ` boxes)
+follows darktable's `src/imageio/format/jxl.c` (GPL-3.0-or-later, darktable
+developers), which remains a mapping reference; no darktable code is copied.
+Integer depths below 16-bit are fed as float (like darktable): libjxl reads a
+`UINT16` input as full-range 16-bit and would rescale depth-native integers
+(verified: 1023 arrived as 16 for 10-bit output).
+
 ## Sea real-RAW test fixture
 
 `app/src/androidTest/assets/rawsr/sea/` contains lossless Bayer-region extracts and
