@@ -898,19 +898,21 @@ srp::Status StageAndRun2(JNIEnv* env, srp::Context* ctx, VkDevice device, VkPhys
 JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCorrExtract(
     JNIEnv* env, jclass /*cls*/, jlong handle, jobject mov_buffer,
     jobject flow_buffer, jobject patch_buffer, jbyteArray spirv, jint height,
-    jint width, jint tile_count, jint tile_size, jint radius, jint ntx) {
+    jint width, jint tile_count, jint tile_size, jint radius, jint ntx,
+    jint tile_offset, jint chunk_tiles) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
   if (ctx == nullptr || mov_buffer == nullptr || flow_buffer == nullptr ||
       patch_buffer == nullptr || spirv == nullptr || height <= 0 ||
-      width <= 0 || tile_count <= 0 || tile_size <= 0 || ntx <= 0) {
+      width <= 0 || tile_count <= 0 || tile_size <= 0 || ntx <= 0 ||
+      tile_offset < 0 || chunk_tiles <= 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
   const int64_t s = static_cast<int64_t>(tile_size) + 2 * radius;
   const int64_t a_count = static_cast<int64_t>(height) * width;
   const int64_t b_count = static_cast<int64_t>(tile_count) * 2;
-  const int64_t c_count = static_cast<int64_t>(tile_count) * s * s;
+  const int64_t c_count = static_cast<int64_t>(chunk_tiles) * s * s;
   const srp::Status status = StageAndRunCorr(
       env, ctx, device, physical, mov_buffer, flow_buffer, patch_buffer, a_count,
       b_count, c_count, spirv,
@@ -918,8 +920,9 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCorrExtract(
         return srp::SrpCorrExtractGpu(
             ctx, static_cast<uint32_t>(height), static_cast<uint32_t>(width),
             static_cast<uint32_t>(tile_count), static_cast<uint32_t>(tile_size),
-            static_cast<uint32_t>(radius), static_cast<uint32_t>(ntx), a, b, c,
-            module);
+            static_cast<uint32_t>(radius), static_cast<uint32_t>(ntx),
+            static_cast<uint32_t>(tile_offset),
+            static_cast<uint32_t>(chunk_tiles), a, b, c, module);
       });
   return static_cast<jint>(status);
 }
@@ -932,16 +935,17 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCorrArgmin(
     JNIEnv* env, jclass /*cls*/, jlong handle, jobject patch_buffer,
     jobject corr_buffer, jobject dflow_buffer, jbyteArray spirv,
     jint tile_count, jint tile_size, jint radius, jint ntx, jint patch_count,
-    jint corr_count) {
+    jint corr_count, jint tile_offset, jint chunk_tiles) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
   if (ctx == nullptr || patch_buffer == nullptr || corr_buffer == nullptr ||
       dflow_buffer == nullptr || spirv == nullptr || tile_count <= 0 ||
-      tile_size <= 0 || ntx <= 0 || patch_count <= 0 || corr_count <= 0) {
+      tile_size <= 0 || ntx <= 0 || patch_count <= 0 || corr_count <= 0 ||
+      tile_offset < 0 || chunk_tiles <= 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
-  const int64_t c_count = static_cast<int64_t>(tile_count) * 2;
+  const int64_t c_count = static_cast<int64_t>(chunk_tiles) * 2;
   const srp::Status status = StageAndRunCorr(
       env, ctx, device, physical, patch_buffer, corr_buffer, dflow_buffer,
       patch_count, corr_count, c_count, spirv,
@@ -949,7 +953,9 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCorrArgmin(
         return srp::SrpCorrArgminGpu(
             ctx, static_cast<uint32_t>(tile_count),
             static_cast<uint32_t>(tile_size), static_cast<uint32_t>(radius),
-            static_cast<uint32_t>(ntx), static_cast<uint32_t>(patch_count),
+            static_cast<uint32_t>(ntx), static_cast<uint32_t>(tile_offset),
+            static_cast<uint32_t>(chunk_tiles),
+            static_cast<uint32_t>(patch_count),
             static_cast<uint32_t>(corr_count), a, b, c, module);
       });
   return static_cast<jint>(status);

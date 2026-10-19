@@ -236,19 +236,24 @@ Status SrpAlignL1Gpu(Context* ctx, uint32_t width, uint32_t height,
 
 Status SrpCorrExtractGpu(Context* ctx, uint32_t height, uint32_t width,
                          uint32_t tile_count, uint32_t tile_size,
-                         uint32_t radius, uint32_t ntx, VkBuffer mov_buffer,
+                         uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                         uint32_t chunk_tiles, VkBuffer mov_buffer,
                          VkBuffer flow_buffer, VkBuffer patch_buffer,
                          VkShaderModule shader_module) {
   if (height == 0 || width == 0 || tile_count == 0 || tile_size == 0 ||
-      ntx == 0 || tile_count % ntx != 0) {
+      ntx == 0 || tile_count % ntx != 0 || chunk_tiles == 0 ||
+      tile_offset >= tile_count ||
+      static_cast<uint64_t>(tile_offset) + chunk_tiles > tile_count) {
     return Status::kInitFailed;
   }
   const uint32_t s = tile_size + 2 * radius;
   const uint64_t out_n =
-      static_cast<uint64_t>(tile_count) * s * s;
+      static_cast<uint64_t>(chunk_tiles) * s * s;
   if (out_n > static_cast<uint64_t>(UINT32_MAX)) return Status::kInitFailed;
   // Push overlay mirrors make_push(0, 0, n*S*S, tile_count=n, tile_size,
-  // pad_extra={0:0, 1:H, 2:W, 3:ntx, 4:S, 5:radius}).
+  // pad_extra={0:0, 1:H, 2:W, 3:ntx, 4:S, 5:radius, 6:tile_offset}).
+  // tile_count stays FULL (the shader's whole-row guard); the grid
+  // covers only the chunk window.
   SrpHmsrPush push{};
   push.pixel_count = static_cast<uint32_t>(out_n);
   push.tile_count = tile_count;
@@ -259,6 +264,7 @@ Status SrpCorrExtractGpu(Context* ctx, uint32_t height, uint32_t width,
   push.pad[3] = ntx;
   push.pad[4] = s;
   push.pad[5] = radius;
+  push.pad[6] = tile_offset;
   VkBuffer buffers[3] = {mov_buffer, flow_buffer, patch_buffer};
   return DispatchStorageCompute(ctx, buffers, 3, &push, sizeof(push),
                                 kCorrLocalSize, static_cast<uint32_t>(out_n),
@@ -266,34 +272,40 @@ Status SrpCorrExtractGpu(Context* ctx, uint32_t height, uint32_t width,
 }
 
 Status SrpCorrArgminGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
-                        uint32_t radius, uint32_t ntx, uint32_t patch_count,
+                        uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                        uint32_t chunk_tiles, uint32_t patch_count,
                         uint32_t corr_count, VkBuffer patch_buffer,
                         VkBuffer corr_buffer, VkBuffer dflow_buffer,
                         VkShaderModule shader_module) {
   if (tile_count == 0 || tile_size == 0 || ntx == 0 ||
-      tile_count % ntx != 0) {
+      tile_count % ntx != 0 || chunk_tiles == 0 ||
+      tile_offset >= tile_count ||
+      static_cast<uint64_t>(tile_offset) + chunk_tiles > tile_count) {
     return Status::kInitFailed;
   }
   const uint32_t s = tile_size + 2 * radius;
   const uint32_t c = 2 * radius + 1;
-  if (patch_count != tile_count * s * s ||
-      corr_count != tile_count * c * c) {
+  if (patch_count != chunk_tiles * s * s ||
+      corr_count != chunk_tiles * c * c) {
     return Status::kInitFailed;
   }
   // Push overlay mirrors make_push(0, 0, n*2, tile_count=n, tile_size,
-  // pad_extra={0:1, 1:0, 2:0, 3:ntx, 4:S, 5:radius}).
+  // pad_extra={0:1, 1:0, 2:0, 3:ntx, 4:S, 5:radius, 6:tile_offset}).
+  // tile_count here is the CHUNK (the shader's per-tile bound);
+  // the window selects the global tiles, cf. op 0.
   SrpHmsrPush push{};
-  push.pixel_count = tile_count * 2;
-  push.tile_count = tile_count;
+  push.pixel_count = chunk_tiles * 2;
+  push.tile_count = chunk_tiles;
   push.tile_size = tile_size;
   push.scale = 1.0f;
   push.pad[0] = 1;
   push.pad[3] = ntx;
   push.pad[4] = s;
   push.pad[5] = radius;
+  push.pad[6] = tile_offset;
   VkBuffer buffers[3] = {patch_buffer, corr_buffer, dflow_buffer};
   return DispatchStorageCompute(ctx, buffers, 3, &push, sizeof(push),
-                                kCorrLocalSize, tile_count, shader_module);
+                                kCorrLocalSize, chunk_tiles, shader_module);
 }
 
 Status SrpCorrCropGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,

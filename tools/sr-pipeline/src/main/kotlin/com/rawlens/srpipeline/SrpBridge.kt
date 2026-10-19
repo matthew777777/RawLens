@@ -1317,9 +1317,10 @@ object SrpBridge {
      * Align-L2 patch extraction (corr.comp op 0) over direct buffers.
      * Returns the `srp::Status` ordinal (0 = ok). `movBuffer` holds
      * `height*width` floats, `flowBuffer` holds `tileCount*2` floats,
-     * `patchBuffer` receives `tileCount*S*S` floats (S = tileSize+2*radius).
-     * `spirv` holds the compiled corr.comp module. All buffers direct,
-     * native-order, position 0.
+     * `patchBuffer` receives `chunkTiles*S*S` floats (S = tileSize+2*radius):
+     * the `[tileOffset, tileOffset+chunkTiles)` window of the full
+     * `tileCount` grid. `spirv` holds the compiled corr.comp module.
+     * All buffers direct, native-order, position 0.
      */
     @JvmStatic
     external fun nativeCorrExtract(
@@ -1334,13 +1335,16 @@ object SrpBridge {
         tileSize: Int,
         radius: Int,
         ntx: Int,
+        tileOffset: Int,
+        chunkTiles: Int,
     ): Int
 
     /**
      * Align-L2 box-energy argmin (corr.comp op 1) over direct buffers.
      * Returns the `srp::Status` ordinal (0 = ok). `patchBuffer` holds
      * `patchCount` floats, `corrBuffer` holds `corrCount` floats,
-     * `dflowBuffer` receives `tileCount*2` winning integer shifts.
+     * `dflowBuffer` receives `chunkTiles*2` winning integer shifts, same
+     * window as [nativeCorrExtract] (`tileCount` stays the full grid).
      */
     @JvmStatic
     external fun nativeCorrArgmin(
@@ -1355,6 +1359,8 @@ object SrpBridge {
         ntx: Int,
         patchCount: Int,
         corrCount: Int,
+        tileOffset: Int,
+        chunkTiles: Int,
     ): Int
 
     /**
@@ -1413,6 +1419,9 @@ object SrpBridge {
     /**
      * Validated wrapper for [nativeCorrExtract]: throws
      * IllegalArgumentException before crossing JNI on bad arguments.
+     * `tileCount` is the FULL grid (whole-row guard); the dispatch
+     * covers the `[tileOffset, tileOffset+chunkTiles)` window into a
+     * chunk-sized `patchBuffer`.
      */
     @JvmStatic
     fun corrExtract(
@@ -1427,26 +1436,34 @@ object SrpBridge {
         tileSize: Int,
         radius: Int,
         ntx: Int,
+        tileOffset: Int,
+        chunkTiles: Int,
     ): Int {
         require(handle != 0L) { "SrpBridge: null context handle" }
         require(height > 0 && width > 0 && tileCount > 0 && tileSize > 0 && ntx > 0) {
             "SrpBridge: bad dimensions"
         }
         require(tileCount % ntx == 0) { "SrpBridge: tileCount must be a multiple of ntx" }
+        require(chunkTiles > 0 && tileOffset >= 0 && tileOffset + chunkTiles <= tileCount) {
+            "SrpBridge: chunk window out of range"
+        }
         val s = tileSize + 2 * radius
         checkDirect(movBuffer, height * width, "movBuffer")
         checkDirect(flowBuffer, tileCount * 2, "flowBuffer")
-        checkDirect(patchBuffer, tileCount * s * s, "patchBuffer")
+        checkDirect(patchBuffer, chunkTiles * s * s, "patchBuffer")
         require(spirv.isNotEmpty() && spirv.size % 4 == 0) {
             "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
         }
         return nativeCorrExtract(handle, movBuffer, flowBuffer, patchBuffer,
-            spirv, height, width, tileCount, tileSize, radius, ntx)
+            spirv, height, width, tileCount, tileSize, radius, ntx, tileOffset, chunkTiles)
     }
 
     /**
      * Validated wrapper for [nativeCorrArgmin]: throws
      * IllegalArgumentException before crossing JNI on bad arguments.
+     * Same window convention as [corrExtract]: `tileCount` is the FULL
+     * grid, the dispatch covers `[tileOffset, tileOffset+chunkTiles)`
+     * into chunk-sized buffers.
      */
     @JvmStatic
     fun corrArgmin(
@@ -1461,28 +1478,33 @@ object SrpBridge {
         ntx: Int,
         patchCount: Int,
         corrCount: Int,
+        tileOffset: Int,
+        chunkTiles: Int,
     ): Int {
         require(handle != 0L) { "SrpBridge: null context handle" }
         require(tileCount > 0 && tileSize > 0 && ntx > 0 && patchCount > 0 && corrCount > 0) {
             "SrpBridge: bad dimensions"
         }
         require(tileCount % ntx == 0) { "SrpBridge: tileCount must be a multiple of ntx" }
+        require(chunkTiles > 0 && tileOffset >= 0 && tileOffset + chunkTiles <= tileCount) {
+            "SrpBridge: chunk window out of range"
+        }
         val s = tileSize + 2 * radius
         val c = 2 * radius + 1
-        require(patchCount == tileCount * s * s) {
-            "SrpBridge: patchCount must equal tileCount*S*S"
+        require(patchCount == chunkTiles * s * s) {
+            "SrpBridge: patchCount must equal chunkTiles*S*S"
         }
-        require(corrCount == tileCount * c * c) {
-            "SrpBridge: corrCount must equal tileCount*C*C"
+        require(corrCount == chunkTiles * c * c) {
+            "SrpBridge: corrCount must equal chunkTiles*C*C"
         }
         checkDirect(patchBuffer, patchCount, "patchBuffer")
         checkDirect(corrBuffer, corrCount, "corrBuffer")
-        checkDirect(dflowBuffer, tileCount * 2, "dflowBuffer")
+        checkDirect(dflowBuffer, chunkTiles * 2, "dflowBuffer")
         require(spirv.isNotEmpty() && spirv.size % 4 == 0) {
             "SrpBridge: spirv must be a non-empty multiple of 4 bytes"
         }
         return nativeCorrArgmin(handle, patchBuffer, corrBuffer, dflowBuffer,
-            spirv, tileCount, tileSize, radius, ntx, patchCount, corrCount)
+            spirv, tileCount, tileSize, radius, ntx, patchCount, corrCount, tileOffset, chunkTiles)
     }
 
     /**

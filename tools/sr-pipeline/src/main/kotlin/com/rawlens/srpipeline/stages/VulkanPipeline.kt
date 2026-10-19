@@ -481,6 +481,12 @@ object VulkanPipeline {
         }
         mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect))
         refBox = null
+        // Memory-tight: the ref phase's garbage (ref CFA, init pack
+        // staging, pin upload scratch — ~200 MB at full-res) is dead
+        // here; collect BEFORE the comparison loop so frame-0's decode
+        // and align cannot OOM on uncollected garbage at the 512 MB
+        // ceiling. Same discipline as the per-frame gc below.
+        if (config.memoryTight) System.gc()
 
         // 5. Per comparison frame (decoded just in time, released after
         // merging — only one comparison is ever live; a prefetch worker
@@ -488,6 +494,12 @@ object VulkanPipeline {
         // and broke -Xmx512m survival with its extra live frame).
         // Loop rows are scoped here: they die with the work block.
         val loopRows = Array(h) { FloatArray(w) }
+        // Retained moving-pyramid holder (run geometry fixed): kills
+        // ~140 MB of pad+pyramid garbage per frame with identical
+        // values (every element overwritten per build; the blur
+        // streams row by row and the pad is fused into the reads, so
+        // only the ~37 MB levels are retained).
+        val pyramidReuse = AlignGpu.PyramidReuse()
         var frameNo = 0
         // One frame end to end (own scope): the decoded frame, pyramid,
         // per-call transients and flow all die here, so a memory-tight
@@ -504,7 +516,7 @@ object VulkanPipeline {
             // the non-bayer configuration.
             val frameGrey = if (config.bayer) greyOfIntoRes(frame, loopRows)
                 else greyOfInto(frame, frameBuf, kernPre, loopRows)
-            val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs) }
+            val flow = timed("alignLoop") { AlignGpu.alignLevelsGpu(pinnedInit, frameGrey, loop, handle, alignSpirvs, pyramidReuse) }
             val ftx = flow[0].size
             val fty = flow.size
             require(ftx == ftx0 && fty == fty0) { "flow grid changed mid-run" }

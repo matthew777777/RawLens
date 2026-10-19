@@ -51,33 +51,97 @@ object Resample {
     fun downsample(image: Array<FloatArray>, factor: Int): Array<FloatArray> {
         requireRectImage(image, "image")
         require(factor >= 1) { "factor must be >= 1 (got $factor)" }
-        if (factor == 1) return Array(image.size) { y -> image[y].copyOf() }
+        val h = image.size
+        val w = image[0].size
+        if (factor == 1) return Array(h) { y -> image[y].copyOf() }
         val sigma = factor * 0.5
         val radius = (4 * factor * 0.5 + 0.5).toInt()
         val kernel = gaussianKernel1d(sigma, radius)
         val k = kernel.size
-        val h = image.size
-        val w = image[0].size
         require(h >= k && w >= k) {
             "image ${h}x$w is smaller than the gaussian kernel $k (factor $factor)"
         }
-        val tmp = Array(h - k + 1) { y ->
-            FloatArray(w) { x ->
+        val h2 = (h - k + 1) / factor
+        val w2 = (w - k + 1) / factor
+        val out = Array(h2) { FloatArray(w2) }
+        downsampleInto(image, factor, out)
+        return out
+    }
+
+    /**
+     * [downsample] into caller-owned `out` (same values, no
+     * allocation): `out` must be exactly h2×w2. The separable blur
+     * streams row by row (one `w`-float row transient, no full-frame
+     * tmp/blurred intermediates): a retained full-frame scratch pair
+     * was tried first and reverted — 100 MB of live heap on ART, which
+     * counts direct-adjacent Java arrays against the same 512 MB
+     * ceiling that OOM'd the on-device merge. Per-element accumulation
+     * order matches [downsample] exactly, so output is bit-identical.
+     *
+     * `padH`/`padW` fold the [circularPad] input padding into the reads
+     * (cf. `buildGaussianPyramidInto`): element (y, x) of the virtual
+     * padded image is `image[y % h][x % w]`, so no 50 MB pad array is
+     * retained or allocated. Requires the pads to be smaller than the
+     * image (true for tile padding); the wrap is a single predictable
+     * branch per tap.
+     */
+    fun downsampleInto(
+        image: Array<FloatArray>,
+        factor: Int,
+        out: Array<FloatArray>,
+        padH: Int = 0,
+        padW: Int = 0,
+    ) {
+        requireRectImage(image, "image")
+        require(factor >= 1) { "factor must be >= 1 (got $factor)" }
+        require(padH >= 0 && padW >= 0) { "padding must be >= 0" }
+        val h = image.size
+        val w = image[0].size
+        require(padH < h && padW < w) { "padding must be smaller than the image" }
+        val H = h + padH
+        val W = w + padW
+        if (factor == 1) {
+            require(out.size == H && out[0].size == W) { "downsampleInto factor-1 out shape mismatch" }
+            for (y in 0 until H) {
+                val orow = out[y]
+                val irow = image[y % h]
+                for (x in 0 until W) orow[x] = irow[x % w]
+            }
+            return
+        }
+        val sigma = factor * 0.5
+        val radius = (4 * factor * 0.5 + 0.5).toInt()
+        val kernel = gaussianKernel1d(sigma, radius)
+        val k = kernel.size
+        require(H >= k && W >= k) {
+            "padded image ${H}x$W is smaller than the gaussian kernel $k (factor $factor)"
+        }
+        val h2 = (H - k + 1) / factor
+        val w2 = (W - k + 1) / factor
+        require(out.size == h2 && out[0].size == w2) { "downsampleInto out shape mismatch" }
+        // (h2-1)*factor+k-1 <= H-1 (and likewise for width): h2 is the
+        // floored quotient, so every tap below stays in bounds; taps at
+        // row >= h (col >= w) wrap once by construction of the branch.
+        val tmpRow = FloatArray(W)
+        for (y2 in 0 until h2) {
+            val r = y2 * factor
+            for (x in 0 until W) {
+                val xx = if (x < w) x else x - w
                 var acc = 0f
-                for (i in 0 until k) acc += kernel[i] * image[y + i][x]
-                acc
+                for (i in 0 until k) {
+                    val yy = r + i
+                    acc += kernel[i] * image[if (yy < h) yy else yy - h][xx]
+                }
+                tmpRow[x] = acc
+            }
+            val orow = out[y2]
+            for (x2 in 0 until w2) {
+                var acc = 0f
+                val base = x2 * factor
+                for (j in 0 until k) acc += kernel[j] * tmpRow[base + j]
+                orow[x2] = acc
             }
         }
-        val blurred = Array(tmp.size) { y ->
-            FloatArray(w - k + 1) { x ->
-                var acc = 0f
-                for (j in 0 until k) acc += kernel[j] * tmp[y][x + j]
-                acc
-            }
-        }
-        val h2 = blurred.size / factor
-        val w2 = blurred[0].size / factor
-        return Array(h2) { y -> FloatArray(w2) { x -> blurred[y * factor][x * factor] } }
     }
 
     /**
@@ -99,6 +163,86 @@ object Resample {
             fineToCoarse.add(level)
         }
         return fineToCoarse.reversed()
+    }
+
+    /**
+     * [buildGaussianPyramid] into caller-owned `levels` (same layout and
+     * values, no allocation): `levels[i]` must match the i-th returned
+     * level's shape for this run geometry. Every element is overwritten
+     * per build, so one holder serves all frames (pad + levels ≈ 87 MB
+     * retained at full-res; the blur itself streams row by row, cf.
+     * [downsampleInto]). Preprocessing (when non-null) still allocates
+     * per call — production configs leave it null (Python mirror),
+     * keeping the hot path garbage-free.
+     */
+    fun pyramidShapes(h: Int, w: Int, factors: List<Int>): List<Pair<Int, Int>> {
+        require(factors.isNotEmpty()) { "factors must be non-empty" }
+        // Coarse-first level shapes, mirroring buildGaussianPyramid's
+        // dim math exactly (factor 1 keeps dims; otherwise (d-k+1)/f
+        // floored with the factor's gaussian kernel). Sizes the reuse
+        // holder without materializing the 50 MB pad image.
+        val fineToCoarse = ArrayList<Pair<Int, Int>>(factors.size)
+        var (ch, cw) = h to w
+        for (f in factors) {
+            if (f != 1) {
+                val radius = (4 * f * 0.5 + 0.5).toInt()
+                val k = gaussianKernel1d(f * 0.5, radius).size
+                ch = (ch - k + 1) / f
+                cw = (cw - k + 1) / f
+            }
+            fineToCoarse.add(ch to cw)
+        }
+        return fineToCoarse.reversed()
+    }
+
+    /**
+     * [buildGaussianPyramid] into caller-owned `levels` (same layout and
+     * values, no allocation): `levels[i]` must match the i-th returned
+     * level's shape for this run geometry (cf. [pyramidShapes]).
+     * `padH`/`padW` fold the input [circularPad] into the first level's
+     * reads (see [downsampleInto]); deeper levels read full slots.
+     * Every element is overwritten per build, so one holder serves all
+     * frames (~37 MB of levels retained at full-res, no pad array).
+     * Preprocessing (when non-null) still allocates per call —
+     * production configs leave it null (Python mirror), keeping the
+     * hot path garbage-free.
+     */
+    fun buildGaussianPyramidInto(
+        image: Array<FloatArray>,
+        padH: Int,
+        padW: Int,
+        factors: List<Int>,
+        preprocessing: String?,
+        levels: MutableList<Array<FloatArray>>,
+    ) {
+        requireRectImage(image, "image")
+        require(factors.isNotEmpty()) { "factors must be non-empty" }
+        require(levels.size == factors.size) { "pyramid holder size mismatch" }
+        // Preprocessing sees the padded image in the fresh path; with
+        // pads the exotic preprocessed combo materializes one transient
+        // pad (never the production null-preprocessing path).
+        var ph = padH
+        var pw = padW
+        var level = if (preprocessing != null) {
+            if (ph == 0 && pw == 0) Grad.preprocess(image, preprocessing)
+            else {
+                ph = 0
+                pw = 0
+                Grad.preprocess(circularPad(image, padH, padW), preprocessing)
+            }
+        } else image
+        val fineToCoarse = ArrayList<Array<FloatArray>>(factors.size)
+        for ((i, factor) in factors.withIndex()) {
+            // Pyramid levels shrink monotonically, so the holder slot for
+            // this depth (addressed coarse-first below) always fits.
+            val slot = levels[levels.size - 1 - i]
+            downsampleInto(level, factor, slot, ph, pw)
+            ph = 0
+            pw = 0
+            fineToCoarse.add(slot)
+            level = slot
+        }
+        for (i in fineToCoarse.indices) levels[i] = fineToCoarse[fineToCoarse.size - 1 - i]
     }
 
     /**

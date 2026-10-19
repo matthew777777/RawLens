@@ -1755,7 +1755,7 @@ class SrpBridgeTest {
             val flowBuf = SrpBridge.directFloats(tc * 2) // zero init
             val patchBuf = SrpBridge.directFloats(tc * s * s)
             val rc0 = SrpBridge.corrExtract(handle, movBuf, flowBuf, patchBuf,
-                spirv, h, w, tc, tile, radius, ntx)
+                spirv, h, w, tc, tile, radius, ntx, 0, tc)
             assertEquals("extract dispatch status", 0, rc0)
             patchBuf.rewind()
             val gotPatches = FloatArray(tc * s * s)
@@ -1780,7 +1780,8 @@ class SrpBridgeTest {
             }
             val dflowBuf = SrpBridge.directFloats(tc * 2)
             val rc1 = SrpBridge.corrArgmin(handle, packFloats(FloatArray(patchCount)),
-                packFloats(corrs), dflowBuf, spirv, tc, tile, radius, ntx, patchCount, corrCount)
+                packFloats(corrs), dflowBuf, spirv, tc, tile, radius, ntx, patchCount, corrCount,
+                0, tc)
             assertEquals("argmin dispatch status", 0, rc1)
             dflowBuf.rewind()
             val gotFlow = FloatArray(tc * 2)
@@ -1790,6 +1791,91 @@ class SrpBridgeTest {
                 assertEquals("tile $t dy", -1f, gotFlow[t * 2 + 1], 0f)
             }
             println("jni corrArgmin peak recovery exact on $tc tiles")
+        } finally {
+            SrpBridge.nativeDestroy(handle)
+        }
+    }
+
+    @Test
+    fun `corr extract and argmin chunked windows match oracle`() {
+        // Offset windows (deliberately row-splitting: 25 tiles in
+        // chunks of 7) must equal the one-shot oracle per tile: this
+        // is the entry-level proof for the loop chunking that keeps
+        // the full-grid patch buffers off the 512 MB heap.
+        val corrSpv = System.getProperty("srpipeline.spv_corr", "")
+        assumeTrue("native proof needs -Dsrpipeline.lib", lib.isNotEmpty() && File(lib).exists())
+        assumeTrue("native proof needs -Dsrpipeline.spv_corr", corrSpv.isNotEmpty() && File(corrSpv).exists())
+        SrpBridge.loadPath(lib)
+        val handle = SrpBridge.nativeCreate()
+        assumeTrue("no Vulkan compute device", handle != 0L)
+        try {
+            val spirv = File(corrSpv).readBytes()
+            val w = 20
+            val h = 20
+            val tile = 4
+            val radius = 2
+            val ntx = w / tile
+            val nty = h / tile
+            val tc = ntx * nty
+            val s = tile + 2 * radius
+            val c = 2 * radius + 1
+            val mov = Array(h) { y -> FloatArray(w) { x -> ((x * 13 + y * 29) % 37).toFloat() / 37f } }
+            val movBuf = SrpBridge.directFloats(w * h)
+            val movFb = movBuf.asFloatBuffer()
+            for (y in 0 until h) movFb.put(mov[y])
+            movBuf.rewind()
+            val flowBuf = SrpBridge.directFloats(tc * 2) // zero init
+            val zeroFlow = Array(nty) { Array(ntx) { FloatArray(2) } }
+            val wantPatches = com.rawlens.srpipeline.stages.extractFlowPatches(mov, zeroFlow, tile, radius)
+            var t0 = 0
+            while (t0 < tc) {
+                val ct = minOf(7, tc - t0)
+                val patchChunk = SrpBridge.directFloats(ct * s * s)
+                val rc = SrpBridge.corrExtract(handle, movBuf, flowBuf, patchChunk,
+                    spirv, h, w, tc, tile, radius, ntx, t0, ct)
+                assertEquals("chunk extract status at $t0", 0, rc)
+                patchChunk.rewind()
+                val got = FloatArray(ct * s * s)
+                patchChunk.asFloatBuffer().get(got)
+                for (l in 0 until ct) for (oy in 0 until s) for (ox in 0 until s) {
+                    val t = t0 + l
+                    val ty = t / ntx
+                    val tx = t % ntx
+                    assertEquals("tile $t", wantPatches[ty][tx][oy][ox], got[l * s * s + oy * s + ox], 0f)
+                }
+                t0 += ct
+            }
+            // Argmin over chunked windows with a peak planted in every
+            // tile: winners must be exact regardless of window.
+            t0 = 0
+            while (t0 < tc) {
+                val ct = minOf(7, tc - t0)
+                val corrs = FloatArray(ct * c * c) { i ->
+                    val local = i % (c * c)
+                    if (local == 1 * c + 3) 10f else 0f
+                }
+                val patchChunk = SrpBridge.directFloats(ct * s * s)
+                val dflowChunk = SrpBridge.directFloats(ct * 2)
+                fun packFloats(data: FloatArray): java.nio.ByteBuffer {
+                    val buf = SrpBridge.directFloats(data.size)
+                    buf.asFloatBuffer().put(data)
+                    buf.rewind()
+                    return buf
+                }
+                val rc = SrpBridge.corrArgmin(handle, patchChunk,
+                    packFloats(corrs), dflowChunk, spirv, tc, tile, radius, ntx,
+                    ct * s * s, ct * c * c, t0, ct)
+                assertEquals("chunk argmin status at $t0", 0, rc)
+                dflowChunk.rewind()
+                val gotFlow = FloatArray(ct * 2)
+                dflowChunk.asFloatBuffer().get(gotFlow)
+                for (l in 0 until ct) {
+                    assertEquals("tile ${t0 + l} dx", 1f, gotFlow[l * 2], 0f)
+                    assertEquals("tile ${t0 + l} dy", -1f, gotFlow[l * 2 + 1], 0f)
+                }
+                t0 += ct
+            }
+            println("jni chunked extract+argmin exact on $tc tiles in row-splitting windows")
         } finally {
             SrpBridge.nativeDestroy(handle)
         }

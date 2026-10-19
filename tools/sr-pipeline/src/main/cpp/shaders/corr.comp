@@ -69,7 +69,11 @@ void main() {
     uint r = p.pad[5];
     uint ts = p.tileSize;
     uint ss = S * S;
-    uint t = i / ss;
+    // Chunked loop support: pad[6] carries the first global tile of
+    // this dispatch. Reads use the global tile t, writes the
+    // chunk-local index i. tile_count stays the FULL grid (the nty
+    // guard below must see whole rows); the dispatch size bounds i.
+    uint t = i / ss + p.pad[6];
     uint rem = i % ss;
     uint py = rem / S;
     uint px = rem % S;
@@ -89,6 +93,11 @@ void main() {
     uint Csz = 2u * p.pad[5] + 1u;
     uint S = p.pad[4];
     uint ts = p.tileSize;
+    // Chunked loop support: this op's inputs (patches, corrs) arrive
+    // chunk-sized, so every access is chunk-local (unlike op 0, whose
+    // mov/flow inputs stay full-grid and need pad[6]). pad[6] still
+    // carries the window's first global tile for host-side validation,
+    // but the shader ignores it; ntx is unused by this op.
     uint t = i;
     float best = 3.402823466e+38; // +inf
     int bdx = 0;

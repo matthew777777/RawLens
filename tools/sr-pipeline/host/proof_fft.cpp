@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
         } else {
           const uint32_t pc = tc * s * s;
           const uint32_t cc = tc * c * c;
-          if (srp::SrpCorrArgminGpu(ctx, tc, 16, 4, 15, pc, cc, p2b, cb, db,
+          if (srp::SrpCorrArgminGpu(ctx, tc, 16, 4, 15, 0, tc, pc, cc, p2b, cb, db,
                                     corr_mod) != srp::Status::kOk) {
             std::fprintf(stderr, "FAIL: downstream argmin dispatch\n");
             ++failures;

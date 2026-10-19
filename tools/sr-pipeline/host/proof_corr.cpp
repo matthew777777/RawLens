@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
     return Run3(ctx,
                 [&](VkBuffer a, VkBuffer b, VkBuffer cc) {
                   return srp::SrpCorrExtractGpu(ctx, h, w, tc, tile_size,
-                                               radius, ntx, a, b, cc, module);
+                                               radius, ntx, 0, tc, a, b, cc, module);
                 },
                 mov.data, fl, static_cast<size_t>(tc) * s * s, out);
   };
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
     return Run3(ctx,
                 [&](VkBuffer a, VkBuffer b, VkBuffer cc) {
                   return srp::SrpCorrArgminGpu(
-                      ctx, tc, tile_size, radius, ntx,
+                      ctx, tc, tile_size, radius, ntx, 0, tc,
                       static_cast<uint32_t>(pa.size()),
                       static_cast<uint32_t>(co.size()), a, b, cc, module);
                 },

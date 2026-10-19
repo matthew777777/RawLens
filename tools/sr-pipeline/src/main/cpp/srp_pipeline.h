@@ -218,27 +218,34 @@ Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
 //
 // SrpCorrExtractGpu: `mov_buffer` holds height*width floats, `flow_buffer`
 // holds tile_count*2 floats ((nty,ntx,2) flattened), `patch_buffer`
-// receives tile_count*S*S floats with S = tile_size + 2*radius.
-// Grid covers ceil(tile_count*S*S / kCorrLocalSize) groups.
+// receives chunk_tiles*S*S floats with S = tile_size + 2*radius: the
+// [tile_offset, tile_offset+chunk_tiles) tile window of the full grid
+// (reads use global tiles, writes chunk-local; shader op 0). Grid covers
+// ceil(chunk_tiles*S*S / kCorrLocalSize) groups.
 //
 // SrpCorrArgminGpu: `patch_buffer` holds patch_count floats (must equal
-// tile_count*S*S), `corr_buffer` holds corr_count floats (must equal
-// tile_count*C*C with C = 2*radius+1), `dflow_buffer` receives
-// tile_count*2 winning integer shifts. Grid covers ceil(tile_count /
+// chunk_tiles*S*S), `corr_buffer` holds corr_count floats (must equal
+// chunk_tiles*C*C with C = 2*radius+1), `dflow_buffer` receives
+// chunk_tiles*2 winning integer shifts, same window (shader op 1; the
+// push carries chunk_tiles for the per-tile bound while tile_count
+// stays the FULL grid for validation). Grid covers ceil(chunk_tiles /
 // kCorrLocalSize) groups.
 //
 // Both fence-wait; transient objects are call-scoped, context/buffers/module
 // stay caller-owned. Certified envelopes (gpu_l2_levels): extract bit-exact
 // vs extract_flow_patches; argmin winning (dx,dy) integers agree exactly
-// (energies are summation-order-dependent by design). Returns kOk /
+// (energies are summation-order-dependent by design). Per-tile
+// independence makes chunking bit-identical to one shot. Returns kOk /
 // kInitFailed / kNoDevice / kDispatchFailed.
 Status SrpCorrExtractGpu(Context* ctx, uint32_t height, uint32_t width,
                          uint32_t tile_count, uint32_t tile_size,
-                         uint32_t radius, uint32_t ntx, VkBuffer mov_buffer,
+                         uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                         uint32_t chunk_tiles, VkBuffer mov_buffer,
                          VkBuffer flow_buffer, VkBuffer patch_buffer,
                          VkShaderModule shader_module);
 Status SrpCorrArgminGpu(Context* ctx, uint32_t tile_count, uint32_t tile_size,
-                        uint32_t radius, uint32_t ntx, uint32_t patch_count,
+                        uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                        uint32_t chunk_tiles, uint32_t patch_count,
                         uint32_t corr_count, VkBuffer patch_buffer,
                         VkBuffer corr_buffer, VkBuffer dflow_buffer,
                         VkShaderModule shader_module);

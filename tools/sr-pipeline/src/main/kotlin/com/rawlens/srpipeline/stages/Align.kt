@@ -317,6 +317,34 @@ fun circularPad(image: Array<FloatArray>, padBottom: Int, padRight: Int): Array<
 }
 
 /**
+ * [circularPad] into caller-owned `out` (same values, no allocation):
+ * must be exactly (h+padBottom)×(w+padRight). Every element is
+ * overwritten, so one buffer serves all frames at fixed run geometry
+ * (pad dims derive from frame dims, constant per run).
+ */
+fun circularPadInto(
+    image: Array<FloatArray>,
+    padBottom: Int,
+    padRight: Int,
+    out: Array<FloatArray>,
+) {
+    requireRectImage(image, "image")
+    require(padBottom >= 0 && padRight >= 0) {
+        "padding must be >= 0 (got bottom=$padBottom right=$padRight)"
+    }
+    val h = image.size
+    val w = image[0].size
+    require(out.size == h + padBottom && out[0].size == w + padRight) {
+        "circularPadInto out shape mismatch"
+    }
+    for (y in 0 until h + padBottom) {
+        val orow = out[y]
+        val irow = image[y % h]
+        for (x in 0 until w + padRight) orow[x] = irow[x % w]
+    }
+}
+
+/**
  * Per-tile reference spectra for one pyramid level: each `tileSize` tile
  * centred in a `(tileSize + 2*radius)` zero window, cf. `unfold` +
  * constant-0 `pad` + `rfft2` in `init_alignment`.

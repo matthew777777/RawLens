@@ -82,6 +82,136 @@ class ResampleTest {
     }
 
     @Test
+    fun `downsampleInto is bit-identical to downsample`() {
+        // Odd, non-square dims exercise the kernel-edge truncation
+        // paths (h-k+1 / w-k+1 not divisible by the factor).
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val tall = Array(61) { y -> FloatArray(45) { x -> grey[(y * 64 / 61) % 64][(x * 64 / 45) % 64] } }
+        for ((img, factor) in listOf(grey to 2, tall to 2, tall to 4, grey to 1)) {
+            val fresh = Resample.downsample(img, factor)
+            val out = Array(fresh.size) { FloatArray(fresh[0].size) { -99f } }
+            Resample.downsampleInto(img, factor, out)
+            assertEquals(0.0, maxAbsDiff(flat2D(out), flat2D(fresh)), 0.0)
+        }
+    }
+
+    @Test
+    fun `downsampleInto folded pads match pad-then-blur`() {
+        // The pad-fused reads must equal materializing circularPad
+        // first (this is what lets the loop drop the 50 MB pad array).
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val tall = Array(61) { y -> FloatArray(45) { x -> grey[(y * 64 / 61) % 64][(x * 64 / 45) % 64] } }
+        data class Case(val img: Array<FloatArray>, val factor: Int, val padH: Int, val padW: Int)
+        for ((img, factor, padH, padW) in listOf(
+            Case(grey, 2, 3, 5), Case(tall, 2, 3, 3),
+            Case(tall, 4, 5, 7), Case(tall, 1, 3, 3),
+        )) {
+            val fresh = Resample.downsample(circularPad(img, padH, padW), factor)
+            val out = Array(fresh.size) { FloatArray(fresh[0].size) { Float.NaN } }
+            Resample.downsampleInto(img, factor, out, padH, padW)
+            assertEquals(fresh.size, out.size)
+            assertEquals(fresh[0].size, out[0].size)
+            assertEquals(0.0, maxAbsDiff(flat2D(out), flat2D(fresh)), 0.0)
+        }
+    }
+
+    @Test
+    fun `downsampleInto reuse survives hostile overwrite`() {
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val fresh = Resample.downsample(grey, 2)
+        val out = Array(fresh.size) { FloatArray(fresh[0].size) }
+        // Poison the holder, then rebuild twice: both must be exact
+        // (no stale element survives the full overwrite; the blur
+        // streams with only a row transient, so there is no scratch
+        // to go stale).
+        for (round in 0 until 2) {
+            for (row in out) row.fill(Float.NaN)
+            Resample.downsampleInto(grey, 2, out)
+            assertEquals(0.0, maxAbsDiff(flat2D(out), flat2D(fresh)), 0.0)
+        }
+    }
+
+    @Test
+    fun `pyramidInto matches fresh pyramid and survives reuse`() {
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val factors = listOf(1, 2, 2)
+        val fresh = Resample.buildGaussianPyramid(grey, factors, null)
+        val holder = fresh.map { lvl ->
+            Array(lvl.size) { FloatArray(lvl[0].size) { Float.NaN } }
+        }.toMutableList()
+        val other = load2D("resample_in_grey.npy", 64, 64)
+            .map { row -> row.map { it * 0.5f + 3f }.toFloatArray() }.toTypedArray()
+        for (img in listOf(other, grey, other)) {
+            Resample.buildGaussianPyramidInto(img, 0, 0, factors, null, holder)
+            val expect = Resample.buildGaussianPyramid(img, factors, null)
+            for ((got, want) in holder.zip(expect)) {
+                assertEquals(want.size, got.size)
+                assertEquals(want[0].size, got[0].size)
+                assertEquals(0.0, maxAbsDiff(flat2D(got), flat2D(want)), 0.0)
+            }
+        }
+    }
+
+    @Test
+    fun `pyramidInto folded pads match fresh pyramid from pad`() {
+        // Padded Into must equal the fresh pad-then-build path at
+        // every level (the loop's production shape).
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val tall = Array(61) { y -> FloatArray(45) { x -> grey[(y * 64 / 61) % 64][(x * 64 / 45) % 64] } }
+        val factors = listOf(1, 2, 2)
+        val padH = 3
+        val padW = 3
+        val shapes = Resample.pyramidShapes(tall.size + padH, tall[0].size + padW, factors)
+        val holder = shapes.map { (lh, lw) ->
+            Array(lh) { FloatArray(lw) { Float.NaN } }
+        }.toMutableList()
+        Resample.buildGaussianPyramidInto(tall, padH, padW, factors, null, holder)
+        val expect = Resample.buildGaussianPyramid(circularPad(tall, padH, padW), factors, null)
+        assertEquals(expect.size, holder.size)
+        for ((got, want) in holder.zip(expect)) {
+            assertEquals(want.size, got.size)
+            assertEquals(want[0].size, got[0].size)
+            assertEquals(0.0, maxAbsDiff(flat2D(got), flat2D(want)), 0.0)
+        }
+    }
+
+    @Test
+    fun `circularPadInto is bit-identical to circularPad`() {
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        for ((pb, pr) in listOf(0 to 0, 3 to 5, 17 to 1)) {
+            val fresh = circularPad(grey, pb, pr)
+            val out = Array(fresh.size) { FloatArray(fresh[0].size) { Float.NaN } }
+            circularPadInto(grey, pb, pr, out)
+            assertEquals(0.0, maxAbsDiff(flat2D(out), flat2D(fresh)), 0.0)
+        }
+    }
+
+    @Test
+    fun `pyramidReuse matches fresh builds across frames`() {
+        // Odd-sized images with the production tileSize pad formula
+        // (cf. AlignGpu.alignLevelsGpu): pads are non-degenerate here.
+        val grey = load2D("resample_in_grey.npy", 64, 64)
+        val tall = Array(61) { y -> FloatArray(45) { x -> grey[(y * 64 / 61) % 64][(x * 64 / 45) % 64] } }
+        val other = tall.map { row -> row.map { it * 0.5f + 3f }.toFloatArray() }.toTypedArray()
+        val factors = listOf(1, 2, 2)
+        val tileSize = 16
+        val reuse = AlignGpu.PyramidReuse()
+        for (img in listOf(other, tall, other)) {
+            val h = img.size
+            val w = img[0].size
+            val padH = if (h % tileSize == 0) 0 else tileSize - h % tileSize
+            val padW = if (w % tileSize == 0) 0 else tileSize - w % tileSize
+            val g2 = Resample.buildGaussianPyramid(circularPad(img, padH, padW), factors)
+            val got = reuse.moving(img, padH, padW, factors)
+            assertEquals(g2.size, got.size)
+            for ((a, b) in got.zip(g2)) {
+                assertEquals(b.size, a.size)
+                assertEquals(0.0, maxAbsDiff(flat2D(a), flat2D(b)), 0.0)
+            }
+        }
+    }
+
+    @Test
     fun `upscaleLvl bilinear pins align-corners-false mapping`() {
         // 1x2 flow, repeat 2, no magnitude scaling: src = (dst + .5)/2 - .5
         // gives [0, 2.5, 7.5, 10] with clamped border taps.

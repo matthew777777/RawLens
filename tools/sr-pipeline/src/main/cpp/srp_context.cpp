@@ -395,6 +395,12 @@ uint64_t PoolCapBytes() {
       char* end = nullptr;
       const unsigned long v = std::strtoul(prop, &end, 10);
       if (end != prop) cap_mb = v;
+    } else {
+      // No prop (e.g. after a reboot clears it): RAM-shared Mali parts
+      // cannot take the 512MB desktop default next to the ~400MB pinned
+      // residents plus the live set (observed device OOM). 64MB is the
+      // proven full-res operating point (desktop keeps 512MB).
+      cap_mb = 64;
     }
   }
 #endif

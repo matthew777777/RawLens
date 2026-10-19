@@ -99,6 +99,45 @@ object AlignGpu {
      * buffer is fully rewritten per use (no stale reads). Entries still
      * fence-wait per dispatch, so sequential reuse is aliasing-safe.
      */
+    /**
+     * Retained moving-pyramid buffers for [alignLevelsGpu]: one level
+     * holder per run geometry (the 50 MB pad image is fused into the
+     * downsample reads, cf. `Resample.downsampleInto`). Kills ~140 MB
+     * of pad+pyramid garbage per full-res frame with ~37 MB retained;
+     * values-identical (every element overwritten per build, shapes
+     * fixed per run — a geometry change rebuilds the holder). The
+     * moving leg never preprocesses (cf. the call below), so no
+     * preprocessing path is offered here: pass null configs only.
+     */
+    class PyramidReuse {
+        private var keyH = -1
+        private var keyW = -1
+        private var keyFactors: List<Int>? = null
+        private var levels: MutableList<Array<FloatArray>>? = null
+
+        fun moving(
+            image: Array<FloatArray>,
+            padH: Int,
+            padW: Int,
+            factors: List<Int>,
+        ): List<Array<FloatArray>> {
+            val h = image.size + padH
+            val w = image[0].size + padW
+            var l = levels
+            if (l == null || keyH != h || keyW != w || keyFactors != factors) {
+                l = Resample.pyramidShapes(h, w, factors)
+                    .map { (lh, lw) -> Array(lh) { FloatArray(lw) } }
+                    .toMutableList()
+                levels = l
+                keyH = h
+                keyW = w
+                keyFactors = factors.toList()
+            }
+            Resample.buildGaussianPyramidInto(image, padH, padW, factors, null, l)
+            return l
+        }
+    }
+
     class LevelScratch {
         private val floats = HashMap<String, FloatArray>()
         private val directs = HashMap<String, ByteBuffer>()
@@ -317,19 +356,21 @@ object AlignGpu {
                         cur = cur.copy(refSpecChunks = chunks)
                     }
                     // Host copies are dead once residents hold the bytes:
-                    // drop them (frees ~320MB retained heap at full-res).
-                    // Unpinned levels keep theirs for the staged fallback;
-                    // the staged branches select on the resident handles,
-                    // so empty arrays on a pinned level are unreachable
-                    // (and fail loudly, not silently, if ever read).
-                    val stripped = if (cur.refSpecChunks.isNotEmpty()) {
+                    // drop them (frees ~320MB retained heap at full-res,
+                    // plus the L1 tiles below: ~110MB at tile-32 full-res,
+                    // the margin a 512MB heap OOM was missing). Unpinned
+                    // (unit-test path, refRes == 0) levels keep theirs for
+                    // the staged fallback; the staged branches select on
+                    // the resident handles, so empty arrays on a pinned
+                    // level are unreachable (and fail loudly, not silently,
+                    // if ever read). No pinned path reads tiles post-pin:
+                    // L1 uses the ref image, L2 the spectra residents.
+                    val stripped = if (cur.refRes != 0L) {
                         cur.copy(ref = emptyArray(), tiles = emptyArray(),
                             gradX = emptyArray(), gradY = emptyArray(),
                             hessPacked = FloatArray(0))
                     } else {
-                        cur.copy(ref = emptyArray(),
-                            gradX = emptyArray(), gradY = emptyArray(),
-                            hessPacked = FloatArray(0))
+                        cur
                     }
                     pinned.add(stripped)
                 } catch (e: Exception) {
@@ -383,6 +424,7 @@ object AlignGpu {
         config: AlignLoopConfig,
         handle: Long,
         spirvs: Spirvs,
+        pyramidReuse: PyramidReuse? = null,
     ): Array<Array<FloatArray>> {
         requireRectImage(movingGrey, "movingGrey")
         val n = config.factors.size
@@ -400,8 +442,12 @@ object AlignGpu {
         val mw = movingGrey[0].size
         val padH = if (mh % config.tileSize == 0) 0 else config.tileSize - mh % config.tileSize
         val padW = if (mw % config.tileSize == 0) 0 else config.tileSize - mw % config.tileSize
-        val movingPyramid = Resample.buildGaussianPyramid(
-            circularPad(movingGrey, padH, padW), config.factors)
+        // Retained-holder path (production loop): same values, no
+        // pad/pyramid/tmp garbage per frame. Null keeps the fresh-build
+        // path (unit tests, one-shot callers).
+        val movingPyramid = pyramidReuse?.moving(movingGrey, padH, padW, config.factors)
+            ?: Resample.buildGaussianPyramid(
+                circularPad(movingGrey, padH, padW), config.factors)
         require(movingPyramid.size == n) { "moving pyramid must hold $n levels" }
         var flow: Array<Array<FloatArray>>? = null
         for (p in 0 until n) {
@@ -439,9 +485,12 @@ object AlignGpu {
         val tc = lvl.nTy * lvl.nTx
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
-        // Moving upload is a per-call transient (dies at return): caching
-        // it would pin a full-frame 50 MB buffer across all frames.
-        val movBuf = packImgInto(moving, SrpBridge.directFloats(w * h))
+        // Moving upload packs into the level scratch (one retained 50 MB
+        // direct per level): the old per-call direct churned 96×50 MB of
+        // native allocations per full-res run, freed only by GC phantom
+        // processing that cannot keep up (observed nativeAlloc 424→982 MB
+        // with 83 thrashing GCs and the ART OOM that follows). Same bytes.
+        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
         // Pinned levels skip the ref upload; unpinned levels stage both.
         val rc = if (lvl.refRes != 0L) {
             ptime("alignL1Res") { SrpBridge.alignL1Res(handle, lvl.refRes, movBuf,
@@ -471,46 +520,63 @@ object AlignGpu {
         val s = lvl.tileSize + 2 * lvl.radius
         val c = 2 * lvl.radius + 1
         val sc = lvl.scratch
-        // Moving upload is a per-call transient (dies at return): caching
-        // it would pin a full-level 50 MB buffer across all frames.
-        val movBuf = packImgInto(moving, SrpBridge.directFloats(moving.size * moving[0].size))
+        // Same level-scratch moving buffer as gpuL1 (one retained direct
+        // per level, not per-call churn): see the note above.
+        val movBuf = packImgInto(moving, sc.direct("mov", moving.size * moving[0].size))
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
-        // Extract moving patches around the current flow. patchBuf
-        // doubles as the correlate/argmin patches input (sequential
-        // fence-waited dispatches, same bytes, no download or re-pack).
-        val patchBuf = sc.direct("patches", tc * s * s)
-        var rc = ptime("corrExtract") { SrpBridge.corrExtract(handle, movBuf,
-            flowBuf, patchBuf, spirvs.corr,
-            moving.size, moving[0].size, tc, lvl.tileSize, lvl.radius, lvl.nTx) }
-        require(rc == 0) { "corrExtract failed with status $rc" }
-        patchBuf.rewind()
-        // Correlate against the reference tiles, crop to ±R, argmin.
-        // Pinned levels walk the spectra chunk residents (no ref upload,
-        // no ref forward), correlating chunk by chunk into chunk-sized
-        // scratch: same per-tile math as one shot (the native chain
-        // chunks internally the same way). Unpinned levels stage both
-        // sides in one shot (unit-test path, small fixtures).
-        val cropped = sc.floats("cropped", tc * c * c)
+        // Extract moving patches around the current flow, correlate
+        // against the reference tiles, crop to ±R, argmin. Pinned levels
+        // run the whole chain chunk by chunk (~4096 tiles per window,
+        // same stride as the spectra residents): per-tile independence
+        // makes it bit-identical to one shot, and the full-grid
+        // patch/corr buffers (112 MB at full-res tile 16 — the margin
+        // the on-device merge OOM'd for lack of) never exist. Chunk
+        // scratch is retained per level at max-chunk size (entries read
+        // explicit counts). Unpinned levels stage everything in one shot
+        // (unit-test path, small fixtures). Sequential fence-waited
+        // dispatches throughout: same bytes, no download or re-pack
+        // between stages.
+        val delta = sc.floats("delta", tc * 2)
         if (lvl.refSpecChunks.isNotEmpty()) {
+            val maxChunk = minOf(CorrelateChunkTiles, tc)
+            val patchChunk = sc.direct("patchesChunk", maxChunk * s * s)
+            val cropChunk = sc.direct("cropChunk", maxChunk * c * c)
+            val dflowChunk = sc.direct("dflowChunk", maxChunk * 2)
             var t0 = 0
             var ci = 0
             while (t0 < tc) {
                 val ct = minOf(CorrelateChunkTiles, tc - t0)
+                var rc = ptime("corrExtract") { SrpBridge.corrExtract(handle, movBuf,
+                    flowBuf, patchChunk, spirvs.corr,
+                    moving.size, moving[0].size, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                    t0, ct) }
+                require(rc == 0) { "corrExtract failed with status $rc" }
+                patchChunk.rewind()
                 val spec = lvl.refSpecChunks.getOrNull(ci)
                     ?: throw IllegalStateException("spectra chunk missing for tile $t0")
                 val corrChunk = sc.direct("corr$ct", ct * s * s)
                 rc = ptime("correlatePinned") { SrpBridge.correlatePinned(handle,
-                    sliceFloats(patchBuf, t0 * s * s, ct * s * s),
-                    spec, corrChunk, spirvs.fft, spirvs.corr, ct, s) }
+                    patchChunk, spec, corrChunk, spirvs.fft, spirvs.corr, ct, s) }
                 require(rc == 0) { "correlate failed with status $rc" }
                 corrChunk.rewind()
-                val fullChunk = sc.floats("full$ct", ct * s * s)
-                corrChunk.asFloatBuffer().get(fullChunk)
+                // Crop in place from the download buffer (absolute gets):
+                // the full-map FloatArray copy (~76 MB at full-res tile
+                // 64) does not fit the 512 MB heap next to the retained
+                // level scratch. Values-identical (same indices).
                 val croppedChunk = ptime("cropCorrsHost") {
-                    cropCorrs(fullChunk, ct, s, c, sc.floats("cropped$ct", ct * c * c))
+                    cropCorrs(corrChunk.asFloatBuffer(), ct, s, c,
+                        sc.floats("cropped$ct", ct * c * c))
                 }
-                croppedChunk.copyInto(cropped, t0 * c * c)
+                packInto(croppedChunk, cropChunk)
+                rc = ptime("corrArgmin") { SrpBridge.corrArgmin(handle, patchChunk, cropChunk,
+                    dflowChunk, spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                    ct * s * s, ct * c * c, t0, ct) }
+                require(rc == 0) { "corrArgmin failed with status $rc" }
+                dflowChunk.rewind()
+                val dflowSmall = FloatArray(ct * 2)
+                dflowChunk.asFloatBuffer().get(dflowSmall)
+                dflowSmall.copyInto(delta, t0 * 2)
                 t0 += ct
                 ci++
             }
@@ -518,27 +584,35 @@ object AlignGpu {
                 "spectra chunk count ${lvl.refSpecChunks.size} != $ci loop chunks"
             }
         } else {
+            // Extract moving patches around the current flow. patchBuf
+            // doubles as the correlate/argmin patches input (sequential
+            // fence-waited dispatches, same bytes, no download or re-pack).
+            val patchBuf = sc.direct("patches", tc * s * s)
+            var rc = ptime("corrExtract") { SrpBridge.corrExtract(handle, movBuf,
+                flowBuf, patchBuf, spirvs.corr,
+                moving.size, moving[0].size, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                0, tc) }
+            require(rc == 0) { "corrExtract failed with status $rc" }
+            patchBuf.rewind()
+            val cropped = sc.floats("cropped", tc * c * c)
             val corrBuf = sc.direct("corr", tc * s * s)
             val refFlat = FloatArray(tc * s * s) { i -> lvl.tiles[i / (s * s)][i % (s * s)] }
             rc = ptime("correlate") { SrpBridge.correlate(handle, pack(refFlat), patchBuf,
                 corrBuf, spirvs.fft, tc, s) }
             require(rc == 0) { "correlate failed with status $rc" }
             corrBuf.rewind()
-            val full = sc.floats("full", tc * s * s)
-            corrBuf.asFloatBuffer().get(full)
             ptime("cropCorrsHost") {
-                cropCorrs(full, tc, s, c, cropped)
+                cropCorrs(corrBuf.asFloatBuffer(), tc, s, c, cropped)
             }
+            val cropBuf = packInto(cropped, sc.direct("crop", tc * c * c))
+            val dflowBuf = sc.direct("dflow", tc * 2)
+            rc = ptime("corrArgmin") { SrpBridge.corrArgmin(handle, patchBuf, cropBuf,
+                dflowBuf, spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
+                tc * s * s, tc * c * c, 0, tc) }
+            require(rc == 0) { "corrArgmin failed with status $rc" }
+            dflowBuf.rewind()
+            dflowBuf.asFloatBuffer().get(delta)
         }
-        val cropBuf = packInto(cropped, sc.direct("crop", tc * c * c))
-        val dflowBuf = sc.direct("dflow", tc * 2)
-        rc = ptime("corrArgmin") { SrpBridge.corrArgmin(handle, patchBuf, cropBuf,
-            dflowBuf, spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
-            tc * s * s, tc * c * c) }
-        require(rc == 0) { "corrArgmin failed with status $rc" }
-        dflowBuf.rewind()
-        val delta = sc.floats("delta", tc * 2)
-        dflowBuf.asFloatBuffer().get(delta)
         // `align_lvl_block_matching_L2` adds the winning integer shift to
         // the full float flow, keeping the subpixel part.
         for (ty in 0 until lvl.nTy) {
@@ -572,10 +646,10 @@ object AlignGpu {
         val h = moving.size
         val flowBuf = packInto(flowToFlatInto(flow, sc.floats("flowFlat", tc * 2)),
             sc.direct("flow", tc * 2))
-        // Moving upload is a per-call transient (dies at return): caching
-        // it would pin a full-frame 50 MB buffer across all frames.
+        // Same level-scratch moving buffer as gpuL1 (one retained direct
+        // per level, not per-call churn): see the note above.
         // (Shares nothing with gpuL1's: sequential fence-waited calls.)
-        val movBuf = packImgInto(moving, SrpBridge.directFloats(w * h))
+        val movBuf = packImgInto(moving, sc.direct("mov", w * h))
         // Pinned levels skip the four static uploads; unpinned stage all.
         val statics = lvl.refRes != 0L && lvl.gradXRes != 0L &&
             lvl.gradYRes != 0L && lvl.hessRes != 0L
@@ -605,7 +679,32 @@ object AlignGpu {
     /**
      * Centre C×C crop of each S×S correlation map, cf. the crop in
      * `gpu_align_lvl_l2` (`crop = (pre - 1 - C) // 2`, `+1` offset).
+     *
+     * The [java.nio.FloatBuffer] overload reads the same indices via
+     * absolute gets (position untouched), so device-download buffers
+     * crop in place: no `FloatArray` copy of the full maps (76+ MB at
+     * full-res tile 64), values-identical by construction. The
+     * FloatArray overload stays as the committed test oracle.
      */
+    fun cropCorrs(
+        full: java.nio.FloatBuffer,
+        tileCount: Int,
+        s: Int,
+        c: Int,
+        out: FloatArray? = null,
+    ): FloatArray {
+        val crop = (s - 1 - c) / 2
+        val dst = out ?: FloatArray(tileCount * c * c)
+        require(dst.size == tileCount * c * c) { "cropCorrs out has wrong size" }
+        for (i in dst.indices) {
+            val t = i / (c * c)
+            val y = (i / c) % c
+            val x = i % c
+            dst[i] = full.get((t * s + (crop + 1 + y)) * s + (crop + 1 + x))
+        }
+        return dst
+    }
+
     fun cropCorrs(
         full: FloatArray,
         tileCount: Int,
