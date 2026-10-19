@@ -34,6 +34,18 @@ object HdrBracketConfig {
     val DENSE_STOPS = intArrayOf(-3, -2, -1, 0, 1)
     val DENSE_FRAMES_PER_STOP = intArrayOf(5, 3, 8, 2, 6)
 
+    /**
+     * Sequential-DCG trio: two 0 EV frames for ~3 dB shadow averaging plus
+     * one -2 EV frame for ~2 stops of highlight headroom, all at the same
+     * ISO (shutter-only, DSLR rule). Capture order is 0, -2, 0 so the
+     * short frame sits between the two longs; the merge picks the sharper
+     * 0 EV frame as the geometric reference.
+     */
+    val SEQ_TRIO_STOPS = intArrayOf(-2, 0)
+    val SEQ_TRIO_FRAMES_PER_STOP = intArrayOf(1, 2)
+    /** Capture order for the trio: 0 EV, -2 EV, 0 EV. */
+    val SEQ_TRIO_CAPTURE_ORDER = intArrayOf(0, -2, 0)
+
     const val MIN_STOPS = 2
     const val MAX_STOPS = 7
     const val MAX_EV_ABS = 4
@@ -46,7 +58,7 @@ object HdrBracketConfig {
     data class Frame(val sequenceIndex: Int, val evStops: Int)
 
     data class Plan(
-        /** Stops in capture order (ascending EV: darkest first, like darktable input order). */
+        /** Distinct stops, ascending (darkest first, like darktable input order). */
         val stops: IntArray,
         /** Frames captured at each stop (parallel to [stops]). */
         val framesPerStop: IntArray,
@@ -117,6 +129,47 @@ object HdrBracketConfig {
         }
         return Plan(sortedStops, sortedCounts, frames)
     }
+
+    /**
+     * Plans the sequential-DCG trio (0, -2, 0 at fixed ISO). Unlike [plan],
+     * the capture sequence keeps the requested shutter order instead of
+     * darkest-first: the short frame between the two longs minimizes the
+     * worst-case motion gap for handheld use. [stops] stays sorted for
+     * coverage bookkeeping; only [Plan.frames] follows [captureOrder].
+     */
+    fun sequence(stops: IntArray, framesPerStop: IntArray, captureOrder: IntArray): Plan {
+        require(stops.size in MIN_STOPS..MAX_STOPS) {
+            "Bracket needs $MIN_STOPS..$MAX_STOPS stops, got ${stops.size}"
+        }
+        require(stops.all { it in -MAX_EV_ABS..MAX_EV_ABS }) {
+            "Bracket stops must lie in ±$MAX_EV_ABS EV"
+        }
+        require(stops.toSet().size == stops.size) { "Bracket stops must be distinct" }
+        require(framesPerStop.size == stops.size) { "framesPerStop must parallel stops" }
+        require(framesPerStop.all { it in 1..MAX_TOTAL_FRAMES }) { "framesPerStop out of range" }
+        val total = framesPerStop.sum()
+        require(total in MIN_STOPS..MAX_TOTAL_FRAMES) {
+            "Bracket needs $MIN_STOPS..$MAX_TOTAL_FRAMES total frames, got $total"
+        }
+        require(captureOrder.size == total) { "captureOrder must hold one EV per shutter" }
+        val remaining = framesPerStop.toMutableList()
+        val indexOf = stops.withIndex().associate { it.value to it.index }
+        for (ev in captureOrder) {
+            val slot = indexOf[ev] ?: throw IllegalArgumentException("captureOrder EV $ev not in stops")
+            require(remaining[slot] > 0) { "captureOrder overuses EV $ev" }
+            remaining[slot]--
+        }
+        val order = stops.indices.sortedBy { stops[it] }
+        val sortedStops = IntArray(stops.size) { stops[order[it]] }
+        val sortedCounts = IntArray(stops.size) { framesPerStop[order[it]] }
+        val frames = ArrayList<Frame>(total)
+        for (ev in captureOrder) frames.add(Frame(frames.size, ev))
+        return Plan(sortedStops, sortedCounts, frames)
+    }
+
+    /** The 0, -2, 0 sequential-DCG trio at fixed ISO. */
+    fun seqZeroMinusTwoZero(): Plan =
+        sequence(SEQ_TRIO_STOPS, SEQ_TRIO_FRAMES_PER_STOP, SEQ_TRIO_CAPTURE_ORDER)
 
     /** Classic ±[stops] EV bracket (3 frames) for back-compat callers. */
     fun classic(stops: Int): Plan {
