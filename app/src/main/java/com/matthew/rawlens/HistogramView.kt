@@ -147,7 +147,10 @@ class HistogramView @JvmOverloads constructor(
             } else {
                 raw
             }
-            heights[index] = bottom - (0.25f * previous + 0.5f * raw + 0.25f * next) * plotHeight
+            // Rounded edges: land the curve on the baseline before the pill
+            // wall so no sharp clipped spike survives at either end.
+            val smoothed = 0.25f * previous + 0.5f * raw + 0.25f * next
+            heights[index] = bottom - smoothed * ScopeStyle.edgeTaper(index, counts.size) * plotHeight
         }
         val fill = fillPaths[channel]
         val line = linePaths[channel]

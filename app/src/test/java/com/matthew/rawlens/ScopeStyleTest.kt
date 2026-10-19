@@ -80,6 +80,34 @@ class ScopeStyleTest {
     }
 
     @Test
+    fun edgeTaperRoundsBothEnds() {
+        val size = 64
+        assertEquals(0f, ScopeStyle.edgeTaper(0, size), 0f)
+        assertEquals(0f, ScopeStyle.edgeTaper(size - 1, size), 0f)
+        assertEquals(1f, ScopeStyle.edgeTaper(size / 2, size), 0f)
+        // Smooth ramp up, never overshooting.
+        var previous = 0f
+        for (index in 0..8) {
+            val taper = ScopeStyle.edgeTaper(index, size)
+            assertTrue("taper $taper out of range", taper in 0f..1f)
+            assertTrue("taper should rise", taper >= previous)
+            previous = taper
+        }
+    }
+
+    @Test
+    fun rasterEdgeFadeDissolvesBordersKeepsCenter() {
+        assertEquals(0f, ScopeStyle.rasterEdgeFade(0, 24, 96, 48), 0f)
+        assertEquals(0f, ScopeStyle.rasterEdgeFade(95, 24, 96, 48), 0f)
+        assertEquals(0f, ScopeStyle.rasterEdgeFade(48, 0, 96, 48), 0f)
+        assertEquals(0f, ScopeStyle.rasterEdgeFade(48, 47, 96, 48), 0f)
+        assertEquals(1f, ScopeStyle.rasterEdgeFade(48, 24, 96, 48), 0f)
+        val faded = ScopeStyle.applyEdgeFade(0xFF808080.toInt(), 0f)
+        assertEquals(0, faded ushr 24 and 0xFF)
+        assertEquals(0xFF808080.toInt(), ScopeStyle.applyEdgeFade(0xFF808080.toInt(), 1f))
+    }
+
+    @Test
     fun singleChannelMaskStaysInItsHue() {
         val red = ScopeStyle.compositeWaveformPixel(1f, 0f, 0f)
         val r = red shr 16 and 0xFF

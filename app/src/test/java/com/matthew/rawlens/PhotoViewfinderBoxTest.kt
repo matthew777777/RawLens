@@ -15,10 +15,10 @@ class PhotoViewfinderBoxTest {
         assertEquals(1440, box.height)
         // Exact 3:4 with no side crop: cover == fit on this surface.
         assertEquals(0, box.width * 4 - box.height * 3)
-        // Tucked under the island by exactly the corner radius.
-        assertEquals(184, box.topMargin)
-        // Leaves a black letterbox above the panel, never overlapping it.
-        assertTrue(box.topMargin + box.height <= 2400 - 700 + 16)
+        // Bottom-aligned: spare 92px sits below the top island, and the
+        // picture tucks under the bottom panel by the corner radius.
+        assertEquals(276, box.topMargin)
+        assertEquals(2400 - 700 + 16, box.topMargin + box.height)
     }
 
     @Test fun shortScreenFallsBackToHeightConstrained() {
@@ -42,7 +42,8 @@ class PhotoViewfinderBoxTest {
         val box = PhotoViewfinderBox.compute(
             rootW = 1080, rootH = 2400, topBarH = 0, panelH = 700, sealOverlap = 16
         )!!
-        assertEquals(0, box.topMargin)
+        // Spare room absorbs the missing island: still bottom-aligned.
+        assertEquals(276, box.topMargin)
         assertEquals(0, box.width * 4 - box.height * 3)
     }
 }

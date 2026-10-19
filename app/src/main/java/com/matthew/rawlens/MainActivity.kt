@@ -1491,11 +1491,12 @@ class MainActivity : Activity() {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 topMargin = 0
             } else {
-                // Photo modes: exact 3:4 letterbox between the islands so the
+                // Photo modes: exact 3:4 viewport between the islands so the
                 // preview matches the saved frame (cover == fit, no side
-                // crop). Full-width on tall portrait screens with the spare
-                // black below the picture; height-constrained otherwise.
-                // Missing measurements keep full-bleed until layout settles.
+                // crop). Full-width on tall portrait screens, bottom-aligned
+                // so the panel overlaps the picture; height-constrained
+                // otherwise. Missing measurements keep full-bleed until
+                // layout settles.
                 val topBarHeight = topBar.height.takeIf { it > 0 } ?: dp(72)
                 val box = PhotoViewfinderBox.compute(
                     root.width, root.height, topBarHeight, panelHeight, sealOverlap

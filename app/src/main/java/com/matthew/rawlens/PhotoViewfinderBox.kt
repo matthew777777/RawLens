@@ -3,9 +3,10 @@
 package com.matthew.rawlens
 
 /**
- * Photo-mode viewfinder box: the 3:4 portrait viewport letterboxed between
- * the opaque top island and the bottom control panel. Pure integer math so
- * the geometry is unit-testable; the activity falls back to full-bleed when
+ * Photo-mode viewfinder box: the 3:4 portrait viewport seated between the
+ * opaque top island and the bottom control panel, bottom-aligned so the
+ * panel's rounded top corners fill with picture. Pure integer math so the
+ * geometry is unit-testable; the activity falls back to full-bleed when
  * measurements are missing (null). RAW video / Direct-Log keep their own
  * full-bleed viewport and never use this.
  */
@@ -32,14 +33,17 @@ object PhotoViewfinderBox {
         val availH = rootH - topBarH - panelH + 2 * sealOverlap
         if (availH <= 0) return null
         // Full-width 3:4 when it fits the available height (the portrait
-        // norm: picture as large as possible, top-aligned under the island);
-        // otherwise height-constrained, centered horizontally by gravity.
+        // norm: picture as large as possible); otherwise height-constrained,
+        // centered horizontally by gravity.
         val (boxW, boxH) = if (rootW.toLong() * 4 <= availH.toLong() * 3) {
             rootW to (rootW.toLong() * 4 / 3).toInt()
         } else {
             ((availH.toLong() * 3 / 4).toInt() to availH)
         }
         if (boxW <= 0 || boxH <= 0) return null
-        return Box(boxW, boxH, (topBarH - sealOverlap).coerceAtLeast(0))
+        // Bottom-aligned: the picture tucks under the bottom island by the
+        // seal overlap (its rounded top corners fill with picture, never
+        // root black); spare black, if any, sits below the top island.
+        return Box(boxW, boxH, (topBarH - sealOverlap + (availH - boxH)).coerceAtLeast(0))
     }
 }

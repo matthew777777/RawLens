@@ -79,10 +79,15 @@ class WaveformView @JvmOverloads constructor(
                 val cell = column * LEVELS + level
                 // Bitmap row 0 is the top: level 0 (black) sits at the bottom.
                 val pixel = column + (LEVELS - 1 - level) * COLUMNS
-                pixels[pixel] = ScopeStyle.compositeWaveformPixel(
+                // Rounded edges: dissolve border cells so dense edge data never
+                // draws a hard frame against the pill wall.
+                val lit = ScopeStyle.compositeWaveformPixel(
                     ScopeStyle.hlgOetf((density[RED][cell] * scales[RED]).coerceAtMost(1f)),
                     ScopeStyle.hlgOetf((density[GREEN][cell] * scales[GREEN]).coerceAtMost(1f)),
                     ScopeStyle.hlgOetf((density[BLUE][cell] * scales[BLUE]).coerceAtMost(1f))
+                )
+                pixels[pixel] = ScopeStyle.applyEdgeFade(
+                    lit, ScopeStyle.rasterEdgeFade(column, level, COLUMNS, LEVELS)
                 )
             }
         }

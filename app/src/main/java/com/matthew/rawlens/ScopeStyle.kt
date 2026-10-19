@@ -57,6 +57,57 @@ object ScopeStyle {
     /** Area-bias divisor shared with darktable (`num_tones / 40`). */
     const val BRIGHTNESS_DIVISOR = 40f
 
+    /**
+     * Edge taper width for scope traces, in bins/columns. Curves and rasters
+     * fade to nothing over this many samples at every edge so data never hits
+     * the pill wall as a hard clipped line.
+     */
+    const val HISTOGRAM_EDGE_BINS = 4
+    const val WAVEFORM_EDGE_FADE = 3
+
+    /**
+     * Smooth 0..1 window for sample [index] of [size]: 0 at both extreme
+     * samples, ramping to 1 over [edgeBins] via smoothstep. Multiplied into
+     * trace heights so curves land on the baseline before the view edge.
+     */
+    fun edgeTaper(index: Int, size: Int, edgeBins: Int = HISTOGRAM_EDGE_BINS): Float {
+        if (size <= 0) return 0f
+        if (edgeBins <= 0) return 1f
+        val distance = minOf(index, size - 1 - index).coerceAtLeast(0).toFloat() / edgeBins
+        val t = distance.coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    /**
+     * 2D edge fade for a waveform raster cell: smooth 0..1 over [fade] cells
+     * at all four raster borders, 1 inside. Applied to pixel alpha so dense
+     * edge columns/levels dissolve instead of drawing a hard frame.
+     */
+    fun rasterEdgeFade(
+        column: Int,
+        level: Int,
+        columns: Int,
+        levels: Int,
+        fade: Int = WAVEFORM_EDGE_FADE
+    ): Float {
+        if (columns <= 0 || levels <= 0) return 0f
+        if (fade <= 0) return 1f
+        fun axisTaper(at: Int, extent: Int): Float {
+            val distance = minOf(at, extent - 1 - at).coerceAtLeast(0).toFloat() / fade
+            val t = distance.coerceIn(0f, 1f)
+            return t * t * (3f - 2f * t)
+        }
+        return axisTaper(column, columns) * axisTaper(level, levels)
+    }
+
+    /** Scales only the alpha channel of an ARGB [pixel] by [fade] 0..1. */
+    fun applyEdgeFade(pixel: Int, fade: Float): Int {
+        val t = fade.coerceIn(0f, 1f)
+        if (t >= 1f) return pixel
+        val alpha = ((pixel ushr 24 and 0xFF) * t + 0.5f).toInt().coerceIn(0, 255)
+        return (alpha shl 24) or (pixel and 0x00FFFFFF)
+    }
+
     val PRIMARIES = intArrayOf(RED, GREEN, BLUE)
 
     /**
