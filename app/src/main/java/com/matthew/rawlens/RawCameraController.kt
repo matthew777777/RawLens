@@ -2654,49 +2654,11 @@ class RawCameraController(
         // + JPEG out). Mutual exclusivity with HDR+ is enforced at the
         // settings layer; this branch wins when both somehow engage.
         if (activeMfsrSettings.enabled) {
-            if (!hasProcessingCapacity(1, activeCaptureFormat)) {
-                onState("ZSL QUEUED")
-                lastZslTakeSize = -1
-                return false
-            }
-            val sharpSelected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps,
-                activeMfsrSettings.activeFrameCount()).orEmpty()
-            lastZslTakeSize = sharpSelected.size
-            if (sharpSelected.isEmpty()) return false
-            if (sharpSelected.size < activeMfsrSettings.activeFrameCount()) return false
-            if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + sharpSelected.size,
-                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
-                updateRepeatingRequest(allowRawZsl = false)
-            }
-            activeFramesRemaining.set(0)
-            onState("MFSR ×${sharpSelected.size} • PREPARING")
-            saveMfsrMerge(sharpSelected)
-            finishCapture()
-            publishRawZslStatus()
-            return true
+            return takeFullRingForMerge(cutoff, activeMfsrSettings.activeFrameCount(), "MFSR", ::saveMfsrMerge)
         }
         // HDR+ merges to one artifact: same full-ring discipline as SR.
         if (activeHdrPlusSettings.enabled) {
-            if (!hasProcessingCapacity(1, activeCaptureFormat)) {
-                onState("ZSL QUEUED")
-                lastZslTakeSize = -1
-                return false
-            }
-            val hdrPlusSelected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps,
-                selectedFrameCount).orEmpty()
-            lastZslTakeSize = hdrPlusSelected.size
-            if (hdrPlusSelected.isEmpty()) return false
-            if (hdrPlusSelected.size < selectedFrameCount) return false
-            if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + hdrPlusSelected.size,
-                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
-                updateRepeatingRequest(allowRawZsl = false)
-            }
-            activeFramesRemaining.set(0)
-            onState("HDR+ ×${hdrPlusSelected.size} • PREPARING")
-            saveHdrPlusMerge(hdrPlusSelected)
-            finishCapture()
-            publishRawZslStatus()
-            return true
+            return takeFullRingForMerge(cutoff, selectedFrameCount, "HDR+", ::saveHdrPlusMerge)
         }
         // A ZSL request saves the configured selection as one logical capture. Do not remove
         // frames from the ring unless all of them fit in the bounded development queue.
@@ -2741,6 +2703,39 @@ class RawCameraController(
         activeFramesRemaining.set(0)
 
         saveSelectedZslBurst(selected)
+        finishCapture()
+        publishRawZslStatus()
+        return true
+    }
+
+    /**
+     * Multi-frame merge take (HDR+, MFSR): one output artifact, so one save
+     * slot; the ring must hold the full [count] eligible frames (no partial
+     * take, no top-up). Pauses the ring stream when the held frames plus a
+     * refill would not fit the reader.
+     */
+    private fun takeFullRingForMerge(
+        cutoff: Long,
+        count: Int,
+        label: String,
+        save: (List<BufferedRawFrame>) -> Unit
+    ): Boolean {
+        if (!hasProcessingCapacity(1, activeCaptureFormat)) {
+            onState("ZSL QUEUED")
+            lastZslTakeSize = -1
+            return false
+        }
+        val selected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps, count).orEmpty()
+        lastZslTakeSize = selected.size
+        if (selected.isEmpty()) return false
+        if (selected.size < count) return false
+        if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + selected.size,
+                rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+            updateRepeatingRequest(allowRawZsl = false)
+        }
+        activeFramesRemaining.set(0)
+        onState("$label ×${selected.size} • PREPARING")
+        save(selected)
         finishCapture()
         publishRawZslStatus()
         return true
