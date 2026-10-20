@@ -121,12 +121,15 @@ def main():
         if orient == 6:
             pix = rotate90_ccw(pix, w, h, ch)
         check(pix == expected, f"{name}: lossless pixels equal input")
-        transfer = re.search(r"^Color space: .*?, (\w+) transfer function", text, re.M)
+        # jxlinfo <= 0.11: "Color space: RGB, D65, sRGB primaries, PQ transfer function, ...";
+        # jxlinfo >= 0.12 (C++ rewrite): separate "Transfer function: PQ" line.
+        transfer = (re.search(r"^Color space: .*?, (\w+) transfer function", text, re.M) or
+                    re.search(r"^Transfer function: (\w+)", text, re.M))
         want = "PQ" if "pq" in name else "sRGB"
         check(transfer is not None and transfer.group(1) == want,
               f"{name}: {want} transfer (jxlinfo: {transfer.group(1) if transfer else None})")
         if "pq" in name:
-            it = re.search(r"^intensity_target: ([\d.]+)", text, re.M)
+            it = re.search(r"^(?:intensity_target|Intensity target): ([\d.]+)", text, re.M)
             check(it is not None and float(it.group(1)) > 0, f"{name}: intensity target {it.group(1) if it else None}")
         print(f"     jxlinfo({name}): " + " | ".join(l.strip() for l in text.splitlines()[:6]))
     for name in ("dng_jxl_small.dng", "dng_jxl_12mp.dng"):

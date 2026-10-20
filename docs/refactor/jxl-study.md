@@ -30,3 +30,31 @@ Scope: `native_jxl_encoder.cpp` (developed stills), `tinydng_jni.cpp`
 | J1 | `JxlColorEncoding` filled field by field, never zeroed (both encoders); the DNG SDK `memset`s it first | Zeroed. Proven byte-identical on device (all four proof files) |
 | J2 | No JXL decode/round-trip verification existed (host test lib builds without libjxl) | `JxlProofDeviceTest` + `tools/jxl_proof/verify.py` (libjxl djxl/jxlinfo): lossless pixels, orientation, transfer, intensity target, DNG 52546 / 1.7 / bit-identical mosaic; negative control catches a single flipped bit |
 | J3 | DNG writer does not emit the optional `JXLDistance` (52553), `JXLEffort` (52554), `JXLDecodeSpeed` (52555) tags (DNG SDK `dng_tag_codes.h`) | Recorded; optional metadata, not needed by readers |
+| J4 | **Pin bumps silently did not apply.** (a) `LIBJXL_VERSION` was a `CACHE STRING`, so an existing build tree kept `v0.11.1` (all 10 caches did); (b) the fetch reused a version-less `libjxl-src` dir; (c) the resolved path was written back into `LIBJXL_SOURCE_DIR`, which an old cache then supplied. A "bumped" build rebuilt 0.11.1 | Pin is a normal variable (explicit `RAWLENS_LIBJXL_VERSION_OVERRIDE` remains); version-specific clone dir; private `_rawlens_jxl_src`; configure logs the source dir. Verified: fresh clones report `git describe` = v0.12.0 for both ABIs |
+
+## libjxl 0.11.1 → 0.12.0 (2026-10-20)
+
+Relevant 0.12.0 changelog items: better lossless effort density/speed, fixed
+"Density regression with Predictor Zero since v0.11", fixed "Images could be
+corrupted when encoding effort 1 lossless" (RawLens allows effort 1), "Float16
+values roundtrip more accurately"; no removed API that RawLens calls (jpegli
+removal is irrelevant: already disabled). `jxlinfo` output format changed (C++
+rewrite); `verify.py` accepts both.
+
+Device proof (Xiaomi 25080RABDG), verified with libjxl djxl/jxlinfo:
+
+| Check | 0.11.1 files, 0.11.1 tools | 0.11.1 files, 0.12.0 tools | 0.12.0 files, 0.12.0 tools | 0.12.0 files, 0.11.1 tools |
+|---|---|---|---|---|
+| 16 checks (lossless pixels, orientation 6/1, sRGB/PQ transfer, intensity target, 52546, DNG 1.7, bit-identical mosaic) | all pass | all pass | all pass | all pass |
+
+Sizes / encode time:
+
+| Output | 0.11.1 | 0.12.0 |
+|---|---|---|
+| Still SDR lossless 257×193 | 242,399 B, 143 ms | 238,487 B (−1.6 %), 131 ms |
+| DNG JXL 1024×768 | 852,352 B | 853,758 B (+0.16 %) |
+| DNG JXL 12 MP (ratio) | 13,550,484 B (1.843×) | 13,549,774 B (1.843×) |
+| DNG JXL 12 MP encode, 7 reps × 3 alternating runs, min/median ms | 523/530, 510/536, 460/469 | 546/559, 476/494, 473/485 |
+
+12 MP DNG encode time is indistinguishable within run-to-run (thermal)
+variation; DNG size identical; stills ~1.6 % smaller.

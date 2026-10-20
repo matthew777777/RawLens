@@ -66,7 +66,10 @@ class JxlProofDeviceTest {
         report.append("pq_peak_nits=${JxlPixelPack.peakNits(rgb.duplicate(), JxlOutputSettings(hdrTransfer = JxlHdrTransfer.PQ))}\n")
 
         // DNG 1.7 JXL: deterministic 12-bit RGGB mosaic, small and full 12 MP.
-        fun dng(name: String, mw: Int, mh: Int, keepInput: Boolean) {
+        // Encode timing is noisy on phones (scheduling, thermals): repeat the
+        // 12 MP encode and report min/median. -e reps <n>, default 1.
+        val reps = (InstrumentationRegistry.getArguments().getString("reps") ?: "1").toInt().coerceAtLeast(1)
+        fun dng(name: String, mw: Int, mh: Int, keepInput: Boolean, repeats: Int = 1) {
             val mosaic = ByteArray(mw * mh * 2)
             var s = 0x1234567
             for (i in 0 until mw * mh) {
@@ -88,14 +91,17 @@ class JxlProofDeviceTest {
                 longs(50717, 4095)                               // WhiteLevel
             }
             val out = File(dir, name)
-            val t0 = SystemClock.elapsedRealtimeNanos()
-            FileOutputStream(out).use { TinyDngImageWriter.writeCompressed(it, mw, mh, mosaic, fields, null, null) }
-            val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6
+            val times = (1..repeats).map {
+                val t0 = SystemClock.elapsedRealtimeNanos()
+                FileOutputStream(out).use { TinyDngImageWriter.writeCompressed(it, mw, mh, mosaic, fields, null, null) }
+                (SystemClock.elapsedRealtimeNanos() - t0) / 1e6
+            }.sorted()
             report.append("$name bytes=${out.length()} raw_bytes=${mosaic.size} ratio=" +
-                "%.3f".format(mosaic.size.toDouble() / out.length()) + " ms=${"%.1f".format(ms)}\n")
+                "%.3f".format(mosaic.size.toDouble() / out.length()) + " ms=${"%.1f".format(times.first())}" +
+                " median_ms=${"%.1f".format(times[times.size / 2])} reps=$repeats\n")
         }
         dng("dng_jxl_small.dng", 1024, 768, keepInput = true)
-        dng("dng_jxl_12mp.dng", 4080, 3060, keepInput = false)
+        dng("dng_jxl_12mp.dng", 4080, 3060, keepInput = false, repeats = reps)
 
         File(dir, "report.txt").writeText(report.toString())
         Log.i(TAG, "wrote ${dir.absolutePath}\n$report")

@@ -130,13 +130,27 @@ target_link_libraries(jxlEncoder PRIVATE log)
 target_link_options(jxlEncoder PRIVATE "-Wl,-z,max-page-size=16384")
 option(RAWLENS_ENABLE_JXL "Bundle the libjxl JPEG XL encoder" ON)
 set(LIBJXL_SOURCE_DIR "" CACHE PATH "Path to a libjxl checkout (with submodules) for JXL encoding")
-set(LIBJXL_VERSION "v0.11.1" CACHE STRING "Pinned libjxl release auto-fetched when LIBJXL_SOURCE_DIR is unset")
+# Resolved source: the user's explicit checkout, else the pinned fetch below.
+# Kept in a private variable so a path derived in one configure can never be
+# read back from the cache as if the user had chosen it.
+set(_rawlens_jxl_src "${LIBJXL_SOURCE_DIR}")
+# The pin is a normal variable on purpose: a CACHE STRING keeps whatever an
+# existing build tree cached, so bumping it here would silently rebuild the old
+# release. -DRAWLENS_LIBJXL_VERSION_OVERRIDE=<tag> selects another one.
+set(RAWLENS_LIBJXL_VERSION_OVERRIDE "" CACHE STRING "Optional libjxl tag instead of the pinned release")
+set(LIBJXL_VERSION "v0.12.0")
+if(NOT RAWLENS_LIBJXL_VERSION_OVERRIDE STREQUAL "")
+    set(LIBJXL_VERSION "${RAWLENS_LIBJXL_VERSION_OVERRIDE}")
+endif()
 if(NOT RAWLENS_PREBUILT_NATIVE AND LIBJXL_SOURCE_DIR STREQUAL "")
     message(STATUS "RawLens: source-only build, JXL encoder not bundled (set LIBJXL_SOURCE_DIR to override)")
     set(RAWLENS_ENABLE_JXL OFF)
 endif()
 if(RAWLENS_ENABLE_JXL AND LIBJXL_SOURCE_DIR STREQUAL "")
-    set(_jxl_fetch_dir "${CMAKE_BINARY_DIR}/libjxl-src")
+    # Version-specific checkout: an existing clone is reused only for the same
+    # pin, so bumping LIBJXL_VERSION always fetches the new release instead of
+    # silently rebuilding the old one from a cached build directory.
+    set(_jxl_fetch_dir "${CMAKE_BINARY_DIR}/libjxl-src-${LIBJXL_VERSION}")
     if(NOT EXISTS "${_jxl_fetch_dir}/CMakeLists.txt")
         find_package(Git QUIET)
         if(GIT_FOUND)
@@ -159,12 +173,12 @@ if(RAWLENS_ENABLE_JXL AND LIBJXL_SOURCE_DIR STREQUAL "")
         endif()
     endif()
     if(RAWLENS_ENABLE_JXL)
-        set(LIBJXL_SOURCE_DIR ${_jxl_fetch_dir})
+        set(_rawlens_jxl_src ${_jxl_fetch_dir})
     endif()
 endif()
-if(RAWLENS_ENABLE_JXL AND NOT LIBJXL_SOURCE_DIR STREQUAL "")
-    if(NOT EXISTS "${LIBJXL_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR "LIBJXL_SOURCE_DIR has no CMakeLists.txt: ${LIBJXL_SOURCE_DIR}")
+if(RAWLENS_ENABLE_JXL AND NOT _rawlens_jxl_src STREQUAL "")
+    if(NOT EXISTS "${_rawlens_jxl_src}/CMakeLists.txt")
+        message(FATAL_ERROR "libjxl source has no CMakeLists.txt: ${_rawlens_jxl_src}")
     endif()
     # Tests stay off with the rest: googletest discovery executes the
     # test binaries at build time, which cannot run under an Android
@@ -185,7 +199,8 @@ if(RAWLENS_ENABLE_JXL AND NOT LIBJXL_SOURCE_DIR STREQUAL "")
     # are tools-only codecs, unused by the still encoder.
     set(JPEGXL_ENABLE_SJPEG OFF CACHE BOOL "" FORCE)
     set(JPEGXL_ENABLE_JPEGLI OFF CACHE BOOL "" FORCE)
-    add_subdirectory("${LIBJXL_SOURCE_DIR}" libjxl)
+    message(STATUS "RawLens: building libjxl from ${_rawlens_jxl_src}")
+    add_subdirectory("${_rawlens_jxl_src}" libjxl)
     target_compile_definitions(jxlEncoder PRIVATE RAWLENS_HAVE_LIBJXL)
     target_link_libraries(jxlEncoder PRIVATE jxl jxl_threads)
 endif()
