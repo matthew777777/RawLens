@@ -4398,7 +4398,9 @@ class RawCameraController(
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
         val profile = programAeProfile
-        val limits = resolveProgramLimits(profile, isoRange, shutterRange) ?: return
+        val limits = ProgramAeSolver.resolveLimits(
+            profile, isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper
+        ) { resolveDynamicShutterLimit(DynamicExposureSettings(enabled = true), shutterRange.upper) } ?: return
         val baselineIso = dynamicIso ?: lastIso
         val baselineShutter = dynamicShutterNanos ?: lastExposureNanos
         if (baselineIso <= 0 || baselineShutter <= 0L) return
@@ -4424,8 +4426,8 @@ class RawCameraController(
         // Small capped steps only (PROGRAM_MAX_STEP_EV): the ramp below owns
         // smoothness, so the full measured nudge becomes the glide target.
         val targetEnergy = baselineEnergy * 2.0.pow(shift)
-        val (lockedIsoEff, lockedShutterEff) = resolveProgramLockedValues(
-            profile, limits, baselineIso, baselineShutter
+        val (lockedIsoEff, lockedShutterEff) = ProgramAeSolver.resolveLockedValues(
+            profile, limits, baselineIso, baselineShutter, lastIso, lastExposureNanos
         )
         val result = AutoExposureBalance.applyProgramEnergy(
             targetEnergy.coerceAtLeast(1.0),
@@ -4488,35 +4490,10 @@ class RawCameraController(
         val limits = programTargetLimits ?: return
         val curIso = dynamicIso ?: targetIso
         val curShutter = dynamicShutterNanos ?: targetShutter
-        val steppedEnergy = AutoExposureBalance.rampStepEnergyAdaptive(
-            curIso.toDouble() * curShutter,
-            targetIso.toDouble() * targetShutter,
-            PROGRAM_RAMP_PROPORTION,
-            PROGRAM_RAMP_MAX_STEP_EV,
-            PROGRAM_RAMP_SNAP_EV
+        val (iso, shutter, snapped) = ProgramAeSolver.rampStep(
+            curIso, curShutter, targetIso, targetShutter, limits,
+            programTargetLockMode, programTargetLockedIso, programTargetLockedShutterNanos
         )
-        val targetEnergy = targetIso.toDouble() * targetShutter
-        val (iso, shutter) = if (steppedEnergy == targetEnergy) {
-            targetIso to targetShutter
-        } else when (programTargetLockMode) {
-            ProgramLockMode.ISO_LOCK -> {
-                val fixedIso = programTargetLockedIso.coerceIn(limits.isoMin, limits.isoMax)
-                val glidingShutter = (steppedEnergy / fixedIso)
-                    .coerceIn(limits.shutterMinNanos.toDouble(), limits.shutterMaxNanos.toDouble())
-                fixedIso to glidingShutter.toLong().coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
-            }
-            ProgramLockMode.SHUTTER_LOCK -> {
-                val fixedShutter = programTargetLockedShutterNanos
-                    .coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
-                val glidingIso = (steppedEnergy / fixedShutter)
-                    .coerceIn(limits.isoMin.toDouble(), limits.isoMax.toDouble())
-                glidingIso.roundToInt().coerceIn(limits.isoMin, limits.isoMax) to fixedShutter
-            }
-            ProgramLockMode.NONE -> AutoExposureBalance.splitEnergyRatio(
-                steppedEnergy, targetIso, targetShutter, limits
-            )
-        }
-        val snapped = steppedEnergy == targetEnergy
         if (dynamicIso != iso || dynamicShutterNanos != shutter) {
             dynamicIso = iso
             dynamicShutterNanos = shutter
@@ -4550,62 +4527,6 @@ class RawCameraController(
             programTargetIso?.let { dynamicIso = it }
             programTargetShutterNanos?.let { dynamicShutterNanos = it }
         }
-    }
-
-    private fun resolveProgramLimits(
-        profile: ProgramAeProfile,
-        isoRange: android.util.Range<Int>,
-        shutterRange: android.util.Range<Long>
-    ): ExposureBalanceLimits? {
-        val isoMinEff = (profile.isoMin.takeIf { it > 0 } ?: isoRange.lower)
-            .coerceIn(isoRange.lower, isoRange.upper)
-        val isoMaxEff = (profile.isoMax.takeIf { it > 0 } ?: isoRange.upper)
-            .coerceIn(isoRange.lower, isoRange.upper)
-        if (isoMinEff > isoMaxEff) return null
-        val shutterMinEff = (profile.shutterMinNanos.takeIf { it > 0L } ?: shutterRange.lower)
-            .coerceIn(shutterRange.lower, shutterRange.upper)
-        val shutterMaxEff = when {
-            profile.shutterMaxNanos > 0L -> profile.shutterMaxNanos.coerceIn(shutterRange.lower, shutterRange.upper)
-            profile.useAutoSafeShutter -> resolveDynamicShutterLimit(
-                DynamicExposureSettings(enabled = true), shutterRange.upper
-            )
-            else -> shutterRange.upper
-        }.coerceIn(shutterRange.lower, shutterRange.upper)
-        if (shutterMinEff > shutterMaxEff) return null
-        val startEff = minOf(PROGRAM_SHUTTER_START_NANOS, shutterMaxEff).coerceIn(shutterMinEff, shutterMaxEff)
-        return ExposureBalanceLimits(
-            isoMin = isoMinEff,
-            isoMax = isoMaxEff,
-            shutterMinNanos = shutterMinEff,
-            shutterMaxNanos = shutterMaxEff,
-            shutterStartNanos = startEff
-        )
-    }
-
-    /**
-     * Effective locked values for the solver. An explicitly stored locked value
-     * always wins; otherwise the actual sensor exposure seeds the lock (a stable
-     * reference, unlike the moving live pair, which would let a "locked" axis
-     * drift with the scene). UI lock engagement is expected to store explicit
-     * values via [programProfile]; this fallback only covers legacy profiles.
-     */
-    private fun resolveProgramLockedValues(
-        profile: ProgramAeProfile,
-        limits: ExposureBalanceLimits,
-        fallbackIso: Int,
-        fallbackShutter: Long
-    ): Pair<Int, Long> {
-        val lockedIsoEff = when (profile.lockMode) {
-            ProgramLockMode.ISO_LOCK -> profile.lockedIso.takeIf { it > 0 }
-                ?: lastIso.coerceIn(limits.isoMin, limits.isoMax)
-            else -> fallbackIso.coerceIn(limits.isoMin, limits.isoMax)
-        }.coerceIn(limits.isoMin, limits.isoMax)
-        val lockedShutterEff = when (profile.lockMode) {
-            ProgramLockMode.SHUTTER_LOCK -> profile.lockedShutterNanos.takeIf { it > 0L }
-                ?: lastExposureNanos.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
-            else -> fallbackShutter.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
-        }.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
-        return lockedIsoEff to lockedShutterEff
     }
 
     /**
@@ -5789,17 +5710,20 @@ class RawCameraController(
         val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
         val profile = programAeProfile
-        val limits = resolveProgramLimits(profile, isoRange, shutterRange)
+        val limits = ProgramAeSolver.resolveLimits(
+            profile, isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper
+        ) { resolveDynamicShutterLimit(DynamicExposureSettings(enabled = true), shutterRange.upper) }
             ?: ExposureBalanceLimits(
                 isoRange.lower,
                 settings.isoLimit.takeIf { it > 0 }?.coerceIn(isoRange.lower, isoRange.upper) ?: isoRange.upper,
                 shutterRange.lower,
                 resolveDynamicShutterLimit(settings, shutterRange.upper),
-                minOf(PROGRAM_SHUTTER_START_NANOS, resolveDynamicShutterLimit(settings, shutterRange.upper))
+                minOf(ProgramAeSolver.SHUTTER_START_NANOS, resolveDynamicShutterLimit(settings, shutterRange.upper))
             )
-        val (lockedIsoEff, lockedShutterEff) = resolveProgramLockedValues(
+        val (lockedIsoEff, lockedShutterEff) = ProgramAeSolver.resolveLockedValues(
             profile, limits, meteredIso.coerceIn(limits.isoMin, limits.isoMax),
-            meteredShutter.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos)
+            meteredShutter.coerceIn(limits.shutterMinNanos, limits.shutterMaxNanos),
+            lastIso, lastExposureNanos
         )
         val result = AutoExposureBalance.applyProgram(
             meteredIso,
@@ -8432,15 +8356,8 @@ class RawCameraController(
         private const val ETTR_CONVERGED_INTERVAL_MS = 1000L
         /** Glide tick cadence: fine gradient steps at ~1 stop/s catch-up. */
         private const val PROGRAM_RAMP_INTERVAL_MS = 100L
-        /** Glide step is proportional to remaining distance (fast far, gentle near). */
-        private const val PROGRAM_RAMP_PROPORTION = 0.4
-        /** Maximum glide per tick: small enough to read as a gradient, not layers. */
-        private const val PROGRAM_RAMP_MAX_STEP_EV = 1.0 / 8.0
-        /** Remaining distance that snaps straight to target. */
-        private const val PROGRAM_RAMP_SNAP_EV = 1.0 / 24.0
         /** EMA weight for sampled brightness; halves single-sample noise. */
         private const val PROGRAM_EMA_ALPHA = 0.5
-        private const val PROGRAM_SHUTTER_START_NANOS = 1_000_000_000L / 30
         private const val PROGRAM_SHUTTER_END_NANOS = 1_000_000_000L / 15
         private const val MIN_WB_KELVIN = 2000
         private const val MAX_WB_KELVIN = 10000

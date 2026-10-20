@@ -70,7 +70,8 @@ No frame failed or lost a buffer in these runs, so the new C3/C4 branches did no
 | 90e7973 | **R1 (owner-approved, default on after phone soak):** multi-frame forward captures submitted with `captureBurst`; any lost frame / abort / timeout / submit failure in a pipelined burst falls back to the serialized chain and persists the verdict (`still_burst/pipelined_refused`). **W4 (owner-approved):** seven save settings frozen at shutter time | AOSP `CameraCaptureSession.captureBurst`; PhotonCamera `captureBurst`; MotionCam multi-request capture | phone: 20/20 pipelined bursts, frame gap 33.3 ms (was 166.6), 6-frame span 167 ms (was ~833), no fallback; 6 burst DNGs distinct (MD5) and valid; ZSL 5/5, hybrid top-up ×8 5/5, AUTO 5/5, refactor checks 4/4; JVM 1540/0 | **behaviour change**: bursts ~5× faster on this device |
 | 938f762 | W3: single-frame save job moved from `saveRawFrame` into `RawFrameSaveJob` + `RawFrameSaveInput` (shutter-time snapshot) behind `RawFrameSaveJob.Host`; `formatSaveOutcome` now uses the shutter-time developed format (W4) | — | body identical to the old lambda after mapping substitutions (only addition: format argument); JVM 1540/0; phone DNG, JPEG, JPEG+DNG, ZSL, burst, refactor checks all pass | device JPEG ~10.5 s/frame, **not baseline-compared** (development code unchanged) |
 | 09cc8ad | Device settings snapshot test (9 tabs, accessibility tree) | — | baseline 314 controls; two runs identical except live logcat line | test-only |
-| (next) | MainActivity: `SettingsKit` (shared settings helpers, verbatim) + Settings → Photo tab moved to `PhotoSettingsTab` (522 lines) behind a Host. MainActivity paused here at owner request | AndroidX Preference is Google's settings guidance (PhotonCamera uses it); not adopted: UI rewrite, not parity | JVM 1540/0; phone snapshot identical to baseline (314 lines). Snapshot proves rendering, not control interaction | none expected |
+| bfb2c69 | MainActivity: `SettingsKit` (shared settings helpers, verbatim) + Settings → Photo tab moved to `PhotoSettingsTab` (522 lines) behind a Host. MainActivity paused here at owner request | AndroidX Preference is Google's settings guidance (PhotonCamera uses it); not adopted: UI rewrite, not parity | JVM 1540/0; phone snapshot identical to baseline (314 lines). Snapshot proves rendering, not control interaction | none expected |
+| (next) | `ProgramAeSolver`: PROGRAM limits, locked values and glide step out of the controller (verbatim; Range args → numbers). Exposure study: PhotonCamera 1/30 s & 1/15 s claims verified; ETTR checked against Magic Lantern (E1/E2 owner decisions) | PhotonCamera `IsoExpoSelector`; Magic Lantern `modules/ettr/ettr.c` | limits/locked bodies identical; JVM 1545/0, no baseline class lost tests; phone PROGRAM 5/5 with `PROGRAM fast-start ISO 2166 EXP 1/15` | none |
 
 ## Full on-device suite (refactored 1.0.397 vs original 1.0.374, same phone)
 
@@ -98,6 +99,8 @@ No frame failed or lost a buffer in these runs, so the new C3/C4 branches did no
 
 ## Open decisions for the owner
 
+- **E1/E2** (ETTR): 0.3 EV default headroom vs Magic Lantern's ≥0.5 EV; slow recovery from clipped frames. See `exposure-study.md`.
+
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
@@ -105,6 +108,11 @@ No frame failed or lost a buffer in these runs, so the new C3/C4 branches did no
 - Read only fresh test results: delete `app/build/test-results/testDebugUnitTest`
   before a run. A run that fails at task selection leaves old XML behind
   (this happened once; caught before commit).
+- **Never create files with shell redirection without checking the path
+  first.** `cat >` overwrote the existing `ProgramAeSolverTest.kt` (19 tests)
+  once; caught because the total fell from 1540 to 1526, restored from git
+  before any commit. Every test run now also compares per-class counts
+  against the archived baseline results.
 - `testBuildType = "release"`: on-device tests compile via
   `:app:compileReleaseAndroidTestKotlin`.
 
