@@ -64,6 +64,8 @@ evidence. "Device-unverified" means no on-device run yet.
 | 932d7ce (R3/R4) | 5/5 | 5/5 | 3/3 | PSS 193–210 MB; RAW VF 25–30 fps; pairs=0 |
 
 No frame failed or lost a buffer in these runs, so the new C3/C4 branches did not execute on device.
+| 59e579e | Remove obsolete DCG probe tests/artifacts (owner-requested); live opmode feature kept | — | release + androidTest build | test-only |
+| (next) | Gradle runs on **JDK 27** via `gradle/gradle-daemon-jvm.properties` (`toolchainVersion=27`, found through macOS java_home); compile target stays Java 21 | [Gradle compatibility](https://docs.gradle.org/current/userguide/compatibility.html): 9.8 runs on JVM 17–27 | JDK 27: app 1540/0, sr-pipeline 196/0/38; phone ZSL 5/5, AUTO 5/5, burst 3/3, refactor checks 4/4 (PSS 202–217 MB vs 193–210 before, watch) | build machine only |
 
 ## Full on-device suite (refactored 1.0.397 vs original 1.0.374, same phone)
 
