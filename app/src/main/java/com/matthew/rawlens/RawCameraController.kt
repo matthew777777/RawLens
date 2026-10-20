@@ -962,38 +962,18 @@ class RawCameraController(
             try {
                 createPerformanceSession(device, surface, reader.surface, generation)
             } catch (failure: CameraAccessException) {
-                rawReader = null
-                rawReaderMaxImages = 0
-                previewSurface = null
-                reader.setOnImageAvailableListener(null, null)
-                reader.close()
-                surface?.release()
+                discardSessionOutputs(reader, surface)
                 handleSessionSetupFailed(generation, "session creation failed: ${cameraAccessReason(failure)}")
             } catch (failure: IllegalArgumentException) {
                 Log.w(LOG_TAG, "Session surfaces rejected by HAL", failure)
-                rawReader = null
-                rawReaderMaxImages = 0
-                previewSurface = null
-                reader.setOnImageAvailableListener(null, null)
-                reader.close()
-                surface?.release()
+                discardSessionOutputs(reader, surface)
                 handleSessionSetupFailed(generation, "session surfaces rejected by HAL")
             } catch (failure: UnsupportedOperationException) {
                 Log.w(LOG_TAG, "Session creation unsupported by HAL", failure)
-                rawReader = null
-                rawReaderMaxImages = 0
-                previewSurface = null
-                reader.setOnImageAvailableListener(null, null)
-                reader.close()
-                surface?.release()
+                discardSessionOutputs(reader, surface)
                 handleSessionSetupFailed(generation, "session creation unsupported by HAL")
             } catch (_: IllegalStateException) {
-                rawReader = null
-                rawReaderMaxImages = 0
-                previewSurface = null
-                reader.setOnImageAvailableListener(null, null)
-                reader.close()
-                surface?.release()
+                discardSessionOutputs(reader, surface)
                 if (camera === device) camera = null
                 if (isCurrent(generation)) onState("CAMERA CLOSED")
             }
@@ -1200,6 +1180,16 @@ class RawCameraController(
                 noteChainDeadAndMaybeRecover()
             }
         }
+    }
+
+    /** Releases the RAW reader and preview surface of a session that failed to configure. */
+    private fun discardSessionOutputs(reader: ImageReader, surface: Surface?) {
+        rawReader = null
+        rawReaderMaxImages = 0
+        previewSurface = null
+        reader.setOnImageAvailableListener(null, null)
+        reader.close()
+        surface?.release()
     }
 
     /**
@@ -1518,13 +1508,7 @@ class RawCameraController(
     private fun advanceSessionLadder(reason: String): Boolean {
         check(isOnCameraThread())
         val id = selectedCameraId
-        val alt = sessionAltRoute
-        if (!sessionRouteAltActive && alt != null && alt.openCameraId !in sessionFailedOpenIds) {
-            sessionRouteAltActive = true
-            sessionComboIndex = 0
-            Log.w(LOG_TAG, "$reason; retrying $id via direct physical ${alt.openCameraId}")
-            onState("RECOVERING PREVIEW")
-            restartCameraForConfigurationChange()
+        if (switchToAltRoute { alt -> "$reason; retrying $id via direct physical ${alt.openCameraId}" }) {
             return true
         }
         val primary = sessionPrimaryRoute
@@ -1551,16 +1535,25 @@ class RawCameraController(
      */
     private fun advancePastFailedOpen(failedOpenId: String): Boolean {
         sessionFailedOpenIds += failedOpenId
-        val alt = sessionAltRoute
-        if (!sessionRouteAltActive && alt != null && alt.openCameraId !in sessionFailedOpenIds) {
-            sessionRouteAltActive = true
-            sessionComboIndex = 0
-            Log.w(LOG_TAG, "Camera open failed on $failedOpenId; retrying via direct physical ${alt.openCameraId}")
-            onState("RECOVERING PREVIEW")
-            restartCameraForConfigurationChange()
-            return true
+        return switchToAltRoute { alt ->
+            "Camera open failed on $failedOpenId; retrying via direct physical ${alt.openCameraId}"
         }
-        return false
+    }
+
+    /**
+     * First ladder rung for vendor composites: restart once on the
+     * direct-physical route unless it is already active or has failed.
+     * Returns true when a restart was issued.
+     */
+    private fun switchToAltRoute(logMessage: (CameraRoute) -> String): Boolean {
+        val alt = sessionAltRoute
+        if (sessionRouteAltActive || alt == null || alt.openCameraId in sessionFailedOpenIds) return false
+        sessionRouteAltActive = true
+        sessionComboIndex = 0
+        Log.w(LOG_TAG, logMessage(alt))
+        onState("RECOVERING PREVIEW")
+        restartCameraForConfigurationChange()
+        return true
     }
 
     /** Combo count for the given route, rebuilt cheaply to bound the ladder. */
