@@ -190,8 +190,6 @@ android {
     // numbers never represent shipping performance.
     testBuildType = "release"
 
-    // Optional on-device DCG probe library, built by tools/build_dcg_vulkan_probe.sh.
-    sourceSets.getByName("androidTest").jniLibs.srcDir("build/dcg-probe/jniLibs")
 
     // Name APKs after the app instead of the generic module name, e.g.
     // RawLens-1.0.0-release.apk instead of app-release.apk.

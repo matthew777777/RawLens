@@ -35,6 +35,5 @@ error envelopes in `sr-pipeline/PARITY.md`.
 | `generate_amaze_fixtures.py` | Host-upstream oracle fixtures (never derive expected values on Android). |
 | `generate_amaze_gles_reference.py` | Experimental ordered GLES oracle from the pinned scalar body. |
 | `verify_amaze_scalar.py` | Execute production GLSL scalar snippets as C++ (no GPU). |
-| `build_dcg_vulkan_probe.sh`, `merge_dcg_probe.py` | Dual-camera-gain Vulkan probe build + linear CFA fusion. |
 | `import_rawsr_forest.py`, `import_rawsr_sea.py` | Lossless DNG Bayer fixture importers (numpy/tifffile/exiftool). |
 | `fp_sweep.py` | Mali-G615 float rounding vs correctly-rounded host. |
