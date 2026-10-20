@@ -47,54 +47,6 @@ class LinearRgbDngSaver(private val context: Context) {
         }
     }
 
-    /**
-     * Memory-bounded publication for full-resolution merges: identical
-     * MediaStore discipline to [saveLinearRgb] (pending insert, publish on
-     * success, delete the incomplete entry on every failure), but pixels
-     * stream band by band through [LinearRgbDngWriter.writeStriped] instead
-     * of arriving as one retained [MergedLinearRgb].
-     */
-    fun saveLinearRgbStriped(
-        width: Int,
-        height: Int,
-        metadata: RawFrameMetadata,
-        provenance: MergeProvenance,
-        captureId: Long = System.currentTimeMillis(),
-        gps: GpsLocation? = null,
-        stripRows: Int = LinearRgbDngWriter.DEFAULT_STRIP_ROWS,
-        noiseProfileOverride: DoubleArray? = null,
-        fillRgbStrip: (startY: Int, rows: Int, rgb: FloatArray) -> Unit
-    ): String {
-        val displayName = CaptureFileNames.linearRgbDng(captureId)
-        val resolver = context.contentResolver
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/x-adobe-dng")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/RawLens")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Could not create Linear RGB DNG media entry")
-        try {
-            resolver.openOutputStream(uri, "w")?.use {
-                LinearRgbDngWriter.writeStriped(
-                    it, width, height, metadata, provenance, gps, stripRows,
-                    noiseProfileOverride, captureId, fillRgbStrip
-                )
-            } ?: throw IOException("Could not open Linear RGB DNG output stream")
-            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish Linear RGB DNG")
-            Log.i(LOG_TAG, "Linear RGB prime DNG saved=$displayName")
-            return displayName
-        } catch (failure: Exception) {
-            resolver.delete(uri, null, null)
-            throw failure
-        } catch (oom: OutOfMemoryError) {
-            resolver.delete(uri, null, null)
-            throw oom
-        }
-    }
-
     private companion object {
         const val LOG_TAG = "RawLensDng"
     }

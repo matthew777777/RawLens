@@ -809,13 +809,6 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         Log.i("RawViewfinder", "VF engine override: ${mode.name}")
     }
 
-    /** Overlay-tap cycle (see [VfEngineMode.next]). Returns the new mode. */
-    fun cycleEngineMode(): VfEngineMode {
-        val next = engineMode.next()
-        setEngineMode(next)
-        return next
-    }
-
     /** Adaptive preview-EV strength pushed by the controller (same rule as saves). */
     override fun setPreviewExposureStrength(strength: Float) {
         previewExposureStrength = strength.coerceIn(0f, 1f)
@@ -845,14 +838,6 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         previewShoulder = meterTuning.highlightShoulder
         previewCenterWeight = meterTuning.centerWeight
         previewP3 = resolved.displayP3
-    }
-
-    fun setPreviewTuning(tuning: AdaptiveExposureTuning) {
-        val bounded = tuning.bounded()
-        previewHeadroom = bounded.highlightHeadroom.toFloat()
-        previewSoftHeadroom = bounded.highlightSoftHeadroom.toFloat()
-        previewShoulder = bounded.highlightShoulder
-        previewCenterWeight = bounded.centerWeight
     }
 
     override fun setMeteringFocus(x: Float?, y: Float?) {

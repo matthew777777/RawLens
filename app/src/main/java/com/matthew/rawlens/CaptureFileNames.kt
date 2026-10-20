@@ -74,8 +74,6 @@ object CaptureFileNames {
     /** HDR+ merged outputs: `IMG_<ts>_HDRPLUS.dng/jpg`. */
     fun hdrPlusDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "dng")
 
-    fun hdrPlusJpeg(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_HDRPLUS, "jpg")
-
     /** Linear RGB prime DNG from burst merge: `IMG_<ts>_LINEAR.dng`. */
     fun linearRgbDng(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_LINEAR, "dng")
 

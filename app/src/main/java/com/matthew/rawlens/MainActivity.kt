@@ -3436,17 +3436,6 @@ class MainActivity : Activity() {
             "${programEvBiasText(profile.evBias)} • ISO/S edits")
     }
 
-    private fun saveDynamicExposureSettings(settings: DynamicExposureSettings) {
-        lensPreferences().edit()
-            .putBoolean(KEY_DYNAMIC_EXPOSURE, settings.enabled)
-            .putFloat(KEY_DYNAMIC_EXPOSURE_BALANCE, settings.balance)
-            .putInt(KEY_DYNAMIC_EXPOSURE_ISO_LIMIT, settings.isoLimit)
-            .putLong(KEY_DYNAMIC_EXPOSURE_SHUTTER_LIMIT, settings.shutterLimitNanos)
-            .putBoolean(KEY_DYNAMIC_EXPOSURE_AUTO_SHUTTER, settings.useAutoSafeShutter)
-            .apply()
-        controller.setDynamicExposureSettings(settings)
-    }
-
     private fun programBalanceText(balance: Float): String = when {
         balance > 0.55f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • faster shutter"
         balance < 0.45f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • lower ISO"
@@ -4684,13 +4673,6 @@ class MainActivity : Activity() {
                 isChecked = checked
                 setPadding(0, dp(2), 0, dp(2))
             }
-        fun sliderLabel(text: String): TextView = TextView(this).apply {
-            this.text = text
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(4), dp(8), dp(4), 0)
-        }
         val tabRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             showDividers = LinearLayout.SHOW_DIVIDER_NONE
@@ -7451,12 +7433,6 @@ class MainActivity : Activity() {
 
     private fun vfPreviewModeText(): String =
         "VF preview: ${vfPreviewMode.name} (${vfPreviewMode.label(captureFormat)})"
-
-    private fun dynamicExposureBalanceText(balance: Float): String = when {
-        balance > 1.01f -> "Exposure balance: ${String.format(Locale.US, "%.2f", balance)}× • faster shutter"
-        balance < 0.99f -> "Exposure balance: ${String.format(Locale.US, "%.2f", balance)}× • lower ISO"
-        else -> "Exposure balance: 1.00× • neutral"
-    }
 
     private fun showLensDiscovery(firstRun: Boolean) {
         // First launch covers the whole camera UI (including the top bar)

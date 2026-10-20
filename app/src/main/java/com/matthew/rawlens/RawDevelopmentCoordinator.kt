@@ -1125,10 +1125,6 @@ class RawDevelopmentCoordinator(context: Context) {
         }
     }
 
-    @Deprecated("Use developJpeg so output color/gainmap metadata is retained")
-    fun developJpegBitmap(rawPlane: ByteBuffer, metadata: RawFrameMetadata, settings: RawDevelopmentSettings = RawDevelopmentSettings()): Bitmap =
-        developJpeg(rawPlane, metadata, settings).bitmap
-
     /**
      * Single-frame JPEG XL develop: same RAW validation, demosaic, and AgX
      * path as [developJpeg], but the output stage renders to RGBA16F and

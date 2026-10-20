@@ -420,13 +420,10 @@ internal class VkArena(private val vk: VulkanHub.Handle) : Closeable {
 }
 
 /**
- * Download live GPU outputs by their Int handle inside `consume` (mirrors
- * reading GL textures by name on the phone). Only valid while the merge
- * arena holds the image.
+ * Download a live GPU output region by its Int handle inside `consume`
+ * (mirrors reading GL textures by name on the phone). Only valid while the
+ * merge arena holds the image.
  */
-fun vkDownloadRgba32f(id: Int): FloatArray = VkArena.lookup(id).downloadRgba32f()
-fun vkDownloadR32f(id: Int): FloatArray = VkArena.lookup(id).downloadR32f()
-fun vkDownloadR32ui(id: Int): IntArray = VkArena.lookup(id).downloadR32ui()
 fun vkDownloadRgba32fRegion(id: Int, x: Int, y: Int, w: Int, h: Int): FloatArray =
     VkArena.lookup(id).downloadRgba32fRegion(x, y, w, h)
 fun vkDownloadR32fRegion(id: Int, x: Int, y: Int, w: Int, h: Int): FloatArray =

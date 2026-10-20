@@ -348,7 +348,6 @@ class RawCameraController(
     private var dynamicShutterNanos: Long? = null
     private var dynamicIsoLimited = false
     private var dynamicShutterLimited = false
-    private var dynamicExposureProbe: Runnable? = null
     // PROGRAM custom-AE live state: RAW brightness drives sensor ISO + shutter directly
     // (AE_OFF repeating + still). ETTR is AUTO-only and never touches this pair.
     private var programStreaming = false
@@ -4363,8 +4362,6 @@ class RawCameraController(
         onState(if (oisEnabled) "OIS ON" else "OIS OFF")
     }
 
-    fun isRawZslEnabled(): Boolean = rawZslRequested
-
     /** Avoid full-resolution RAW histogram work while the histogram UI is hidden. */
     fun setRawHistogramEnabled(enabled: Boolean) {
         if (!isOnCameraThread()) {
@@ -4477,7 +4474,6 @@ class RawCameraController(
         dynamicShutterNanos = null
         dynamicIsoLimited = false
         dynamicShutterLimited = false
-        cancelDynamicExposureProbe()
         updateRepeatingRequest()
     }
 
@@ -4506,7 +4502,6 @@ class RawCameraController(
         programBrightnessEma = Float.NaN
         programFastStart = true
         lastProgramUpdateMs = Long.MIN_VALUE
-        cancelDynamicExposureProbe()
         updateRepeatingRequest()
     }
 
@@ -5030,7 +5025,6 @@ class RawCameraController(
         programConverged = false
         programFastStart = true
         lastProgramUpdateMs = Long.MIN_VALUE
-        cancelDynamicExposureProbe()
         lastEttrUpdateMs = Long.MIN_VALUE
         if (mode != CaptureExposureMode.AUTO) {
             // ETTR is AUTO-only: drop any settled pair so returning to AUTO
@@ -6124,34 +6118,6 @@ class RawCameraController(
             .coerceAtMost(sensorMax)
     }
 
-    private fun scheduleDynamicExposureProbe() {
-        cancelDynamicExposureProbe()
-        if (!dynamicExposureSettings.enabled || captureInProgress.get()) return
-        // Probes are one-shot captures; keep them out of the touch-AF scan window.
-        if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) return
-        dynamicExposureProbe = Runnable {
-            val device = camera ?: return@Runnable
-            val currentSession = session ?: return@Runnable
-            val surface = singleShotTarget() ?: return@Runnable
-            if (captureInProgress.get() || selectedIso != null || selectedExposureNanos != null) return@Runnable
-            try {
-                val probe = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(surface)
-                    applyCameraControls(this)
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                }
-                currentSession.capture(probe.build(), debugCaptureCallback, cameraHandler)
-            } catch (_: CameraAccessException) {
-                // The normal repeating stream remains valid; retry after its next result.
-            }
-        }.also { cameraHandler.postDelayed(it, DYNAMIC_EXPOSURE_PROBE_INTERVAL_MS) }
-    }
-
-    private fun cancelDynamicExposureProbe() {
-        dynamicExposureProbe?.let(cameraHandler::removeCallbacks)
-        dynamicExposureProbe = null
-    }
-
     private fun standardAeMeteringRegions(): Array<MeteringRectangle>? {
         val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             ?: return null
@@ -6547,12 +6513,6 @@ class RawCameraController(
             "AF caps modes=[${modes.joinToString(",") { Camera2Names.afModeName(it) }}] " +
                 "maxAfRegions=$maxAf idle=${Camera2Names.afModeName(continuousPictureAfMode())}"
         )
-    }
-
-    fun onDisplayRotationChanged() {
-        val size = previewSize ?: return
-        viewfinder.setAspectRatio(size.height, size.width)
-        viewfinder.post { configurePreviewTransform(viewfinder.width, viewfinder.height) }
     }
 
     fun onDeviceOrientationChanged(degrees: Int) {
@@ -7885,8 +7845,6 @@ class RawCameraController(
         zslHybridTopupEnabled = enabled
     }
 
-    fun isZslHybridTopupEnabled(): Boolean = zslHybridTopupEnabled
-
     /**
      * Push the WYSIWYG render state to the VF. Both tonemaps share one RAW stream, so a
      * mode switch is a uniform flip on the next sampled frame — no session rebuild, no
@@ -8099,10 +8057,6 @@ class RawCameraController(
             }
         }
     }
-
-    private fun supportsAppOperatedZslTemplate(): Boolean =
-        supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) ||
-            supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING)
 
     private fun publishRawZslStatus(
         state: RawZslState? = null,
@@ -9186,7 +9140,6 @@ class RawCameraController(
         private const val PROGRAM_RAMP_SNAP_EV = 1.0 / 24.0
         /** EMA weight for sampled brightness; halves single-sample noise. */
         private const val PROGRAM_EMA_ALPHA = 0.5
-        private const val DYNAMIC_EXPOSURE_PROBE_INTERVAL_MS = 750L
         private const val PROGRAM_SHUTTER_START_NANOS = 1_000_000_000L / 30
         private const val PROGRAM_SHUTTER_END_NANOS = 1_000_000_000L / 15
         private const val MIN_WB_KELVIN = 2000

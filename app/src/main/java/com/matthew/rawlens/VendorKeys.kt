@@ -521,25 +521,11 @@ data class DiscoveredVendorKey(
  * - `VendorTagUtils.isSupported(builder, key)` probes `builder.get(key)` and
  *   treats `IllegalArgumentException` as "not on this camera".
  * - `SettingsActivity.getCharacteristicsValue` enumerates
- *   `characteristics.getKeys()` by name, then falls back to constructing a
- *   hidden `CameraCharacteristics.Key` via its `(String, Class)` constructor.
+ *   `characteristics.getKeys()` by name. PhotonVidCam's further fallback
+ *   (constructing a hidden `CameraCharacteristics.Key` by reflection) is not
+ *   used here: discovery lists only keys the HAL advertises.
  */
 object VendorKeyAndroid {
-    fun characteristicKeyNames(characteristics: CameraCharacteristics): List<String> =
-        runCatching { characteristics.keys.map { it.name }.sorted() }.getOrDefault(emptyList())
-
-    fun availableRequestKeyNames(characteristics: CameraCharacteristics): List<String> =
-        runCatching { characteristics.availableCaptureRequestKeys.map { it.name }.sorted() }
-            .getOrDefault(emptyList())
-
-    fun availableSessionKeyNames(characteristics: CameraCharacteristics): List<String> =
-        runCatching { characteristics.availableSessionKeys.map { it.name }.sorted() }
-            .getOrDefault(emptyList())
-
-    fun availablePhysicalKeyNames(characteristics: CameraCharacteristics): List<String> =
-        runCatching { characteristics.availablePhysicalCameraRequestKeys.map { it.name }.sorted() }
-            .getOrDefault(emptyList())
-
     /** Enumerate everything this lens advertises, tagged with the scope that accepts it. */
     fun discover(characteristics: CameraCharacteristics): List<DiscoveredVendorKey> {
         val found = linkedMapOf<String, DiscoveredVendorKey>()
@@ -610,14 +596,4 @@ object VendorKeyAndroid {
             null
         }
 
-    /** Hidden characteristics keys via the `(String, Class)` constructor, as in PhotonVidCam. */
-    @Suppress("UNCHECKED_CAST")
-    fun hiddenCharacteristicsKey(name: String, clazz: Class<*>): CameraCharacteristics.Key<*>? =
-        try {
-            val ctor = CameraCharacteristics.Key::class.java.getDeclaredConstructor(String::class.java, Class::class.java)
-            ctor.isAccessible = true
-            ctor.newInstance(name, clazz) as CameraCharacteristics.Key<*>
-        } catch (_: Exception) {
-            null
-        }
 }

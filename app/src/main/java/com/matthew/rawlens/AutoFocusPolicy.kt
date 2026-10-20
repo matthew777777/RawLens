@@ -56,9 +56,6 @@ object AutoFocusPolicy {
         else -> CaptureRequest.CONTROL_AF_MODE_OFF
     }
 
-    fun supportsContinuousPicture(availableModes: IntArray): Boolean =
-        availableModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-
     /** Explicit AUTO trigger available for the tap scan/lock cycle. */
     fun supportsTouchTrigger(availableModes: IntArray): Boolean =
         availableModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO)

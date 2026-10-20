@@ -194,22 +194,6 @@ object SidecarTreeAccess {
             .apply()
     }
 
-    fun clearTreeUri(context: Context) {
-        val current = savedTreeUri(context)
-        if (current != null) {
-            try {
-                context.contentResolver.releasePersistableUriPermission(
-                    current,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (_: Exception) {
-            }
-        }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .remove(KEY_TREE_URI)
-            .apply()
-    }
-
     /**
      * Pure path mapping, host-testable. The tree root usually ends at
      * `DCIM/RawLens` (write `<stem>` directly) or `DCIM` (write

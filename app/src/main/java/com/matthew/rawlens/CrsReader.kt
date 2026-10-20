@@ -80,9 +80,6 @@ internal object CrsReader {
         return width to height
     }
 
-    fun allocatePixels(width: Int, height: Int): ByteBuffer =
-        ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.nativeOrder())
-
     /**
      * Visible dimensions of the take's first frame, or null when the
      * take cannot be opened. Listing helper; merge paths decode fully.

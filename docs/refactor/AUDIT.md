@@ -32,7 +32,16 @@ evidence. "Device-unverified" means no on-device run yet.
 | 922988c | `SettingsTransfer` extracted from `MainActivity` | [SAF](https://developer.android.com/training/data-storage/shared/documents-files) | 1489/0 | device-unverified (pickers) |
 | 0562fce | `Camera2Names` from `RawCameraController`; gap filled: AE modes 5 `ON_EXTERNAL_FLASH`, 6 `ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY` printed UNKNOWN | API 37 `android.jar` via `javap -constants`; [CameraMetadata](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata) | 1492/0 (+3 new) | debug text only |
 | 8e2bdb4 | Touch focus: remove dead `setAfPointOnly` (0 callers; KDoc claimed AE-only, code did AF-only), fix orphan KDoc, dedupe error reset into `abortTouchFocusOnError` | Open Camera `CameraController2.setFocusAndMeteringArea` (verified: no-AF-region path installs AE only) | 1492/0 | no behavior change |
-| (next) | Touch AF state: remove dead `cancelOpenCameraAutoFocusForNewTouch` (0 callers); merge duplicated sharp-lock publish into `publishSharpLock` (side-effect order unchanged) | — | 1492/0 | device-unverified (no JVM coverage of controller AF) |
+| abe8702 | Touch AF state: remove dead `cancelOpenCameraAutoFocusForNewTouch` (0 callers); merge duplicated sharp-lock publish into `publishSharpLock` (side-effect order unchanged) | — | 1492/0 | device-unverified (no JVM coverage of controller AF) |
+| (next) | Dead-code sweep: 28 unreferenced functions removed across 14 files (list in commit). `scheduleDynamicExposureProbe` was never called since the initial import (9fe6376), so its Runnable was always null and its 3 cancels were no-ops; wiring it would add captures (parity), so removed. Stale `VendorKeyAndroid` KDoc claimed a hidden-key fallback the app never ran; corrected. Skipped: excluded components, `VulkanHub.deviceInfo` (JNI wrapper) | grep sweep + manual check of each | fresh 1492/0; debug, release and androidTest compile | no behavior change |
+
+## Process note
+
+- Read only fresh test results: delete `app/build/test-results/testDebugUnitTest`
+  before a run. A run that fails at task selection leaves old XML behind
+  (this happened once; caught before commit).
+- `testBuildType = "release"`: on-device tests compile via
+  `:app:compileReleaseAndroidTestKotlin`.
 
 ## Open follow-ups
 

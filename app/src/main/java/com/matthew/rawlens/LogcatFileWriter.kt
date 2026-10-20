@@ -170,8 +170,6 @@ internal object LogcatFileWriter {
 
     fun isRunning(): Boolean = running
 
-    fun currentSessionPath(): String? = synchronized(lock) { currentFile?.absolutePath }
-
     /**
      * Installs the global uncaught-exception handler without starting logcat
      * streaming. Safe to call on every process start: idempotent and cheap.

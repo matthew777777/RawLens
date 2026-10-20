@@ -967,11 +967,6 @@ object HdrTileDeghost {
 
     // ---- tiny radix-2 complex FFT (N power of 2; 8 default, 16 fallback) ----
 
-    /** In-place 1D FFT of [re]/[im] ([off], length [TILE]); inverse if set. */
-    internal fun fft1D(re: FloatArray, im: FloatArray, off: Int, inverse: Boolean) {
-        fft1Dn(re, im, off, inverse, PASS)
-    }
-
     private fun fft1Dn(re: FloatArray, im: FloatArray, off: Int, inverse: Boolean, p: TilePass) {
         val n = p.t
         val bits = 31 - Integer.numberOfLeadingZeros(n)

@@ -71,22 +71,6 @@ object HdrBracketAligner {
         if (residual == null) shift?.asFlow()
         else chain(shift?.let { snapEven(it).asFlow() }, residual)
 
-    /** Warp [cfa] by [shift] with the merge's CFA-safe smooth sampler. */
-    fun warpTranslated(cfa: UnpackedRawCfa, shift: Shift): UnpackedRawCfa {
-        val flow = shift.asFlow()
-        val w = cfa.width
-        val h = cfa.height
-        val out = FloatArray(w * h)
-        // Same per-pixel values as the old single-threaded init lambda, striped
-        // over rows (nested loops also avoid per-pixel div/mod).
-        parRows(h) { y0, y1 ->
-            for (y in y0 until y1) for (x in 0 until w) {
-                out[y * w + x] = HdrRawMerge.sampleSmooth(cfa, flow, x, y)
-            }
-        }
-        return cfa.copy(values = out)
-    }
-
     /**
      * Even-integer part of [shift]. An even pixel offset is a pure reindex —
      * provably lossless and CFA-phase-preserving — so the FlowNet coarse stage
