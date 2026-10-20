@@ -7281,14 +7281,16 @@ class RawCameraController(
         updateRepeatingRequest(allowRawZsl = zslRestartFitsReader())
     }
 
-    private fun calculateRawZslCapacity(rawSize: Size): Int {
-        val estimatedFrameBytes = rawSize.width.toLong() * rawSize.height.toLong() * RAW_BYTES_PER_PIXEL
-        // The ring always holds the full configured selection (up to MAX_ZSL_FRAMES):
-        // shrinking it would silently drop requested ZSL coverage. The ImageReader
-        // is instead sized with headroom for in-flight pairing on top of the ring
-        // (see ZSL_PAIR_WINDOW_SLOTS), so a full 30-frame ring at 30 fps fits.
-        return if (estimatedFrameBytes > 0L) rawZslFrameCount else 0
-    }
+    /**
+     * Ring depth for a RAW size: the full configured selection (up to
+     * [MAX_ZSL_FRAMES]) for any non-empty size, never a memory-derived
+     * subset — shrinking it would silently drop requested ZSL coverage.
+     * The ImageReader is sized with pairing headroom on top of the ring
+     * (see [ZSL_PAIR_WINDOW_SLOTS]); [clampZslCapacityForReader] applies
+     * the reader limit.
+     */
+    private fun calculateRawZslCapacity(rawSize: Size): Int =
+        if (rawSize.width.toLong() * rawSize.height.toLong() > 0L) rawZslFrameCount else 0
 
     /**
      * Drive the repeating RAW ring at 30 fps when the HAL exposes such an AE range.
@@ -7315,7 +7317,7 @@ class RawCameraController(
 
         Log.i(
             LOG_TAG,
-            "RAW ZSL FPS target=$RAW_ZSL_TARGET_FPS requested=$RAW_ZSL_TARGET_FPS " +
+            "RAW ZSL FPS target=$RAW_ZSL_TARGET_FPS " +
                 "range=$selected raw=${rawSize.width}x${rawSize.height}"
         )
         return selected
@@ -8630,7 +8632,6 @@ class RawCameraController(
         /** Fallback preview stays usable as a viewfinder at or above this size. */
         private const val FALLBACK_PREVIEW_MIN_WIDTH = 640
         private const val FALLBACK_PREVIEW_MIN_HEIGHT = 480
-        private const val RAW_BYTES_PER_PIXEL = 2L
         // JPEG development retains large intermediate CPU/GPU buffers, so keep one serialized
         // development worker while allowing five additional retained RAW inputs. DNG-only writes
         // need no such intermediates
