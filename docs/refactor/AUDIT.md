@@ -51,7 +51,9 @@ evidence. "Device-unverified" means no on-device run yet.
 | 98ff888 | C2/C6: shutter comment; shared HDR-bracket reset | — | 1523/0 | none |
 | 2d263d3 | `FramePairing`: image↔result pairing (forward + ZSL), pair timeouts, repeating-RAW memory, reader-pressure relief order, unmatched/ZSL/teardown release; completed-pair routing stays in the controller (save paths untouched). `stop()`'s two teardown clears keep their exact release-failure behaviour via a flag. Controller 8594 → 8543 | Camera2 `sensor.timestamp` "identical on all the outputs"; MotionCam `RawImageConsumer` | moved bodies token-diffed vs pre-move file (relief differs only by moving the ring-eviction side effects into the host); 16 new JVM tests; fresh 1539/0; release + androidTest compile | device-unverified |
 | 66a51e3 | Device soak test: headless lens seed, `-e burst true`, FramePairing reflection, preview check only for preview sessions | — | phone baseline (below) | test-only |
-| (next) | **C3/C4 (owner-approved):** a failed frame (`onCaptureFailed`) or lost RAW buffer (`onCaptureBufferLost`, new) resolves only that frame; the capture continues and saves what arrives. All-lost keeps the old "CAPTURE FAILED" + dead-chain outcome. Aborted sequences unchanged | AOSP `CameraCaptureSession.CaptureCallback.onCaptureFailed` ("Other requests are unaffected"), `onCaptureBufferLost`, `CaptureFailure.wasImageCaptured` | JVM 1540/0 (+1); phone (below) | **behaviour change** for partial failures; failure paths not inducible on the test phone |
+| ce864e5 | **C3/C4 (owner-approved):** a failed frame (`onCaptureFailed`) or lost RAW buffer (`onCaptureBufferLost`, new) resolves only that frame; the capture continues and saves what arrives. All-lost keeps the old "CAPTURE FAILED" + dead-chain outcome. Aborted sequences unchanged | AOSP `CameraCaptureSession.CaptureCallback.onCaptureFailed` ("Other requests are unaffected"), `onCaptureBufferLost`, `CaptureFailure.wasImageCaptured` | JVM 1540/0 (+1); phone (below) | **behaviour change** for partial failures; failure paths not inducible on the test phone |
+| 553b90a | Still-chain study with on-device timing (R1 recorded) | AOSP `captureBurst`; PhotonCamera; MotionCam | device log | — |
+| 932d7ce | R3/R4: one forward-capture error tail | — | 1540/0; phone (below) | none |
 
 ## Device runs (Xiaomi 25080RABDG, MT6878 / Mali-G615, API 36; release build)
 
@@ -59,11 +61,13 @@ evidence. "Device-unverified" means no on-device run yet.
 |---|---|---|---|---|
 | 2d263d3 (all refactors to FramePairing) | 5/5 | 5/5 | 3/3 | pairs=0, saves=0 after each cycle; PSS 193–208 MB; RAW VF 24–30 fps |
 | C3/C4 | 5/5 | 5/5 | 3/3 | same ranges; ZSL pairs≤1 (live ring frame in flight, limit 12) |
+| 932d7ce (R3/R4) | 5/5 | 5/5 | 3/3 | PSS 193–210 MB; RAW VF 25–30 fps; pairs=0 |
 
 No frame failed or lost a buffer in these runs, so the new C3/C4 branches did not execute on device.
 
 ## Open decisions for the owner
 
+- **R1** (still chain): serialized forward bursts space frames 166.6 ms apart on MT6878 (RAW minFrameNs 50 ms); both references pipeline with `captureBurst`; the "log-proven on MediaTek" reason has no log in the repo. Proposal: flagged pipelined experiment soaked on this phone. See `still-chain-study.md`.
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
