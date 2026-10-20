@@ -65,6 +65,30 @@ evidence. "Device-unverified" means no on-device run yet.
 
 No frame failed or lost a buffer in these runs, so the new C3/C4 branches did not execute on device.
 
+## Full on-device suite (refactored 1.0.397 vs original 1.0.374, same phone)
+
+- Refactored, full suite: 118 tests, 74 pass, 33 skipped (opt-in flags), 11 fail.
+- 2 failures are environmental: `DcgVulkanBurstInstrumentedTest` (optional
+  `libdcg_probe.so` not built), `DevelopDngEndToEndInstrumentedTest` (fixture
+  DNG not pushed to /data/local/tmp).
+- The other 9 classes were re-run on the **original pre-refactor app**
+  (`ec68f222` + owner WIP, AGP 8.13.2 / Gradle 8.13, built in a clean
+  worktree) and on the refactored app in the same order: **all 20 test cases
+  give identical results** (8 fail on both, 12 pass on both). The
+  `VfVulkanInstrumentedTest.gradeInitAllocatesRecorderTwins` failure seen in
+  the full suite passes on both builds in isolation: order-dependent (shared
+  Vulkan device state), not a regression.
+- APK comparison: assets identical (plus generated `sr_spv/`, present only
+  where the desktop SPV build exists); all 25 native libraries have
+  byte-identical `.text` sections (differences are build paths/IDs only).
+- Pre-existing failures (owner's backlog, not refactor scope): Galosh shader
+  count 43 vs 44; FlowNet identity fallback; histogram AgX bins 48 vs 64;
+  Linear RGB DNG white level 65535 vs 912; MediaStore rejects
+  `video/x-crs`; scene-linear negative clipping; Ultra HDR Exif rewrite
+  drops Display P3; VfVulkan synthetic record P010 centre.
+- Targeted refactor checks (`RefactorDeviceChecksTest`): 4/4 (touch focus,
+  settings round trip, S1 opmode 37379 applied, update check).
+
 ## Open decisions for the owner
 
 - **R1** (still chain): serialized forward bursts space frames 166.6 ms apart on MT6878 (RAW minFrameNs 50 ms); both references pipeline with `captureBurst`; the "log-proven on MediaTek" reason has no log in the repo. Proposal: flagged pipelined experiment soaked on this phone. See `still-chain-study.md`.
