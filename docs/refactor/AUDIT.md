@@ -38,7 +38,13 @@ evidence. "Device-unverified" means no on-device run yet.
 | 84349e1 | ZSL study (no code) | see `docs/refactor/zsl-study.md` | — | — |
 | 5711982 | ZSL F4–F6: capacity condition, stale doc, duplicate log field | — | 1505/0 | none |
 | 84761c2 | ZSL F1–F3: unverifiable GCam citations replaced; PhotonCamera differences stated; `qualityScore` marked unsourced | Google Research HDR+ with Bracketing; PhotonCamera `b2eff82` | compile | comment-only |
-| (next) | ZSL F7: HDR+/MFSR full-ring takes share `takeFullRingForMerge` (merges untouched) | — | fresh 1505/0; `activeFrameCount()` pure, so the single call is equivalent | device-unverified |
+| 35e3826 | ZSL F7: HDR+/MFSR full-ring takes share `takeFullRingForMerge` (merges untouched) | — | fresh 1505/0; `activeFrameCount()` pure, so the single call is equivalent | device-unverified |
+| (next) | `ZslStreamHealth` extracted: watchdog windows, transient cooldown, burst-mode latch, overflow-storm escalation, fruitless-cooldown rebuild (decisions only; controller keeps actions). Inline copies of the blocked test in `updateRepeatingRequest`/`admitStaleZslFrame` now call `isRawZslBlocked()`. Controller 8706 → 8630 | AOSP ImageReader.java (maxImages / IllegalStateException) | 12 new JVM tests; fresh 1517/0; release + androidTest compile. `open()` reset order: cooldown reset moved below VF invalidation/`notifyVfRoute`, neither reads ZSL state | device-unverified |
+
+## Open decisions for the owner
+
+- **F9** (ZSL): status text "Full-resolution RAW frames exceed the safe memory budget" is shown when ring capacity is 0, but no memory budget exists (capacity is 0 only for an empty RAW size or a reader clamp to 0). Changing the text is user-visible; not changed.
+- ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
 

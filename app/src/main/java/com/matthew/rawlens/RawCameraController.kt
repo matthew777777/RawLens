@@ -303,14 +303,6 @@ class RawCameraController(
      */
     private var consecutiveDeadChains = 0
     private var chainPairedAny = false
-    /**
-     * Consecutive transient cooldowns with zero paired frames since. A single
-     * park is prudence (lag spike); a second consecutive fruitless one proves
-     * request-level recovery cannot fix this HAL state — only a session
-     * rebuild can (user-proven via manual frame-count changes). Reset on any
-     * pair, save-completion rearm, and session open.
-     */
-    private var fruitlessCooldowns = 0
     private val pendingSaveCount = AtomicInteger(0)
     // Acquired RAW inputs awaiting development; excludes sidecar-only jobs.
     private val pendingFrameSaveCount = AtomicInteger(0)
@@ -403,25 +395,8 @@ class RawCameraController(
     @Volatile private var rawZslFrameCount = initialRawZslFrameCount.coerceIn(1, MAX_ZSL_FRAMES)
     private var rawZslDisabledForSession = false
     private var rawZslFallbackDetail: String? = null
-    /**
-     * Transient ZSL outage (RawLens policy: failures are per-shot, never
-     * session-fatal). Overflow storms, watchdog misses and isolated repeating-
-     * request failures park the ring here instead of latching
-     * [rawZslDisabledForSession]; every later press re-attempts ZSL once this
-     * wall-clock deadline passes. Only a rejected stream combination (which can
-     * never succeed) still latches the session fallback.
-     */
-    private var rawZslCooldownUntilMs = 0L
-    /**
-     * Repeating-RAW-stream health latch (degrade to forward bursts). Set when
-     * a freshly started stream never becomes productive (overflow storm or
-     * watchdog trip with zero paired frames): this HAL cannot sustain the
-     * continuous RAW stream, so presses fire instant forward bursts under the
-     * ZSL stem instead of waiting on a ring that will never fill. A stream that
-     * filled and only later sickened is NOT marked — it keeps per-shot retry.
-     * Cleared on session open and on ZSL (re-)entry.
-     */
-    private var rawZslStreamBroken = false
+    /** Watchdog/cooldown/burst-mode policy for the repeating RAW stream. */
+    private val zslHealth = ZslStreamHealth()
     /** Hybrid top-up (ZSL + post-press frames, see [topupHoldout]): complete a thin ring with fresh forward
      * captures under one stem instead of refusing the shutter. User-toggled. */
     @Volatile private var zslHybridTopupEnabled = true
@@ -435,14 +410,7 @@ class RawCameraController(
     private var rawZslRealtimeTimestamps = false
     private var rawZslBuffer: RawZslBuffer? = null
     private var rawZslWatchdog: Runnable? = null
-    private var rawZslHasFrame = false
-    /** Ring admissions in the current watchdog window; the session-death latch
-     * fires only on a window with zero of them. Camera thread only. */
-    private var rawZslEpochPairs = 0
-    /** Consecutive slow-but-productive watchdog windows on this epoch. */
-    private var rawZslSlowWindows = 0
     private var rawZslReportedSize = 0
-    private val zslOverflowTracker = ZslOverflowTracker()
     private var lastRawZslStatus: RawZslStatus? = null
     @Volatile private var rawHistogramEnabled = initialRawHistogramEnabled
     /** AgX-curved (JPEG preview) vs linear-RAW scope data; follows the capture format. */
@@ -618,7 +586,6 @@ class RawCameraController(
         latestPreviewResult = null
         rawZslDisabledForSession = false
         rawZslFallbackDetail = null
-        rawZslCooldownUntilMs = 0L
         rawPreviewRetryUntilMs = 0L
         rawPreviewFailures = 0
         rawViewfinder?.invalidateSession()
@@ -629,11 +596,9 @@ class RawCameraController(
         bguDead = false
         notifyVfRoute()
         // A fresh session deserves a fresh verdict on the repeating stream.
-        rawZslStreamBroken = false
+        zslHealth.resetForSession()
         consecutiveDeadChains = 0
         chainPairedAny = false
-        fruitlessCooldowns = 0
-        rawZslHasFrame = false
         rawHistogramDisabledForSession = false
         rawHistogramStreaming = false
         maxFaceCount = characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
@@ -1076,21 +1041,18 @@ class RawCameraController(
                         // images alone frees nothing: drop one held slot first (oldest
                         // unmatched, else oldest ring frame) and then drain. Only a
                         // persistently sick stream falls back.
-                        if (zslOverflowTracker.onOverflow()) {
-                            // A storm on a stream that never filled means this HAL
-                            // cannot sustain repeating RAW right now: degrade to
-                            // burst-mode instead of parking a stream that will
-                            // only storm again. A filled-then-sickened stream
-                            // keeps transient per-shot retry.
-                            if (!rawZslHasFrame) {
-                                rawZslStreamBroken = true
-                                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                        when (zslHealth.onReaderOverflow()) {
+                            ZslStreamHealth.OverflowAction.DRAIN -> {
+                                Log.w(LOG_TAG, "RAW ImageReader overflowed during ZSL stream; draining")
+                                relieveZslReaderPressure()
+                                drainQueuedRawImages(rawReader)
                             }
-                            cooldownRawZslForRetry("RAW buffer limit reached")
-                        } else {
-                            Log.w(LOG_TAG, "RAW ImageReader overflowed during ZSL stream; draining")
-                            relieveZslReaderPressure()
-                            drainQueuedRawImages(rawReader)
+                            ZslStreamHealth.OverflowAction.LATCH_AND_COOLDOWN -> {
+                                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                                cooldownRawZslForRetry("RAW buffer limit reached")
+                            }
+                            ZslStreamHealth.OverflowAction.COOLDOWN ->
+                                cooldownRawZslForRetry("RAW buffer limit reached")
                         }
                     }
                     else if (rawHistogramStreaming || ettrStreaming || programStreaming) {
@@ -4770,8 +4732,7 @@ class RawCameraController(
         } else {
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
-            rawZslCooldownUntilMs = 0L
-            rawZslStreamBroken = false
+            zslHealth.clearLatches()
             if (rawZslCapacity == 0) {
                 publishRawZslStatus(
                     RawZslState.FALLBACK,
@@ -4840,8 +4801,7 @@ class RawCameraController(
         } else {
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
-            rawZslCooldownUntilMs = 0L
-            rawZslStreamBroken = false
+            zslHealth.clearLatches()
             updateRepeatingRequest()
         }
         publishControls()
@@ -5193,8 +5153,7 @@ class RawCameraController(
         val readerReady = rawZslCapacity > 0 && reader != null && rawRetryReady
         // A transient cooldown parks ZSL exactly like the latched fallback while
         // it runs; every later press retries from scratch instead (per-shot).
-        val zslBlocked = rawZslDisabledForSession || rawZslStreamBroken ||
-            SystemClock.elapsedRealtime() < rawZslCooldownUntilMs
+        val zslBlocked = isRawZslBlocked()
         val useRawZsl = allowRawZsl && zslRestartFitsReader() && shouldRunRawStream(
             rawZslRequested, zslBlocked, readerReady, captureActive && stillExecuting
         )
@@ -5332,11 +5291,9 @@ class RawCameraController(
                 )
             }
             if (useRawZsl) {
-                if (!preserveBuffer) rawZslHasFrame = false
+                if (!preserveBuffer) zslHealth.filled = false
                 if (!preserveBuffer) {
-                    rawZslEpochPairs = 0
-                    rawZslSlowWindows = 0
-                    zslOverflowTracker.reset()
+                    zslHealth.startStream()
                     scheduleRawZslWatchdog(generation, requestEpoch)
                     publishRawZslStatus(RawZslState.WARMING_UP, "Buffering full-resolution RAW frames")
                 } else {
@@ -5344,11 +5301,10 @@ class RawCameraController(
                     // (epoch guard), so re-arm for the resumed stream unless
                     // this is a light control push on the live stream (there
                     // the original watchdog is still ticking). Fresh window,
-                    // fresh counters; self-guards on rawZslHasFrame, so a
+                    // fresh counters; self-guards on zslHealth.filled, so a
                     // preserved full ring needs no window.
                     if (!light) {
-                        rawZslEpochPairs = 0
-                        rawZslSlowWindows = 0
+                        zslHealth.rearmWindow()
                         scheduleRawZslWatchdog(generation, requestEpoch)
                     }
                     publishRawZslStatus()
@@ -6176,7 +6132,7 @@ class RawCameraController(
         val image = pendingImages.remove(timestamp) ?: return
         pendingZslResults.remove(timestamp)
         pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
-        if (!rawZslStreaming || rawZslDisabledForSession || rawZslStreamBroken || !rawZslRequested ||
+        if (!rawZslStreaming || rawZslDisabledForSession || zslHealth.streamBroken || !rawZslRequested ||
             pending.requestEpoch != rawZslRequestEpoch
         ) {
             RawImageOwnership.release(image)
@@ -6214,9 +6170,7 @@ class RawCameraController(
             return false
         }
         buffer.add(image, result, motionRadiansPerSecond, timestampNanos, approximate)
-        rawZslEpochPairs++
-        zslOverflowTracker.onPaired()
-        fruitlessCooldowns = 0
+        zslHealth.onRingAdmission()
         publishRawZslBufferState()
         return true
     }
@@ -6236,7 +6190,7 @@ class RawCameraController(
         exactResult: TotalCaptureResult?
     ): Boolean {
         if (!running || !rawZslStreaming || !rawZslRequested ||
-            rawZslDisabledForSession || rawZslStreamBroken || isRawZslBlocked()
+            isRawZslBlocked()
         ) return false
         val result = exactResult ?: latestPreviewResult ?: return false
         val approximate = exactResult == null
@@ -6255,8 +6209,8 @@ class RawCameraController(
 
     private fun publishRawZslBufferState() {
         val bufferedCount = rawZslBuffer?.size ?: 0
-        if (!rawZslHasFrame && bufferedCount >= rawZslCapacity) {
-            rawZslHasFrame = true
+        if (!zslHealth.filled && bufferedCount >= rawZslCapacity) {
+            zslHealth.filled = true
             cancelRawZslWatchdog()
             onState("ZSL ACTIVE")
         }
@@ -6402,7 +6356,7 @@ class RawCameraController(
         // noteChainDeadAndMaybeRecover).
         chainPairedAny = true
         consecutiveDeadChains = 0
-        fruitlessCooldowns = 0
+        zslHealth.onForwardPair()
         if (remaining <= 0) cancelCaptureTimeout()
         if (activeDualRaw) pendingDualRawFrames += PendingHdrFrame(image,result)
         else if (topupActive) accumulateTopupFrame(image, result)
@@ -7241,9 +7195,9 @@ class RawCameraController(
         if (!running || session == null || captureInProgress.get()) return
         // Refill while prior images save only when the complete ring and preview
         // headroom still fit. JPEG admission remains bounded independently at six.
-        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !rawZslStreamBroken &&
+        val wantZsl = rawZslRequested && !rawZslDisabledForSession && !zslHealth.streamBroken &&
             rawZslCapacity > 0 &&
-            zslRestartFitsReader() && SystemClock.elapsedRealtime() >= rawZslCooldownUntilMs
+            zslRestartFitsReader() && zslHealth.cooldownExpired()
         // ZSL owns the RAW stream once saves have drained: preempt any
         // histogram/ETTR/PROGRAM metering stream started while saves were
         // pending. Without this, the first post-burst resume starts metering
@@ -7320,46 +7274,31 @@ class RawCameraController(
 
     private fun scheduleRawZslWatchdog(generation: Int, requestEpoch: Long) {
         cancelRawZslWatchdog()
-        val timeoutMs = maxOf(
-            ZSL_STARTUP_TIMEOUT_MS,
-            (lastExposureNanos / 1_000_000L).coerceAtMost(4_000L) * 2L + 1_500L,
-            rawZslFrameCount * ZSL_FRAME_FILL_ALLOWANCE_MS
-        )
+        val timeoutMs = ZslStreamHealth.watchdogTimeoutMs(lastExposureNanos, rawZslFrameCount)
         rawZslWatchdog = Runnable {
             rawZslWatchdog = null
             if (!isCurrent(generation) || requestEpoch != rawZslRequestEpoch ||
-                !rawZslStreaming || rawZslHasFrame
+                !rawZslStreaming || zslHealth.filled
             ) return@Runnable
-            if (rawZslEpochPairs <= 0) {
-                // Zero pairs in the whole startup window: same never-productive
-                // signature as a stillborn storm — burst-mode, not blind retry.
-                rawZslStreamBroken = true
-                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
-                cooldownRawZslForRetry("No paired RAW frame arrived within ${timeoutMs}ms")
-                return@Runnable
-            }
-            if (rawZslSlowWindows < ZSL_SLOW_WINDOW_EXTENSIONS) {
-                // Productive but too slow to fill (reader pressure, save drain):
-                // keep the stream and its partial ring and re-arm for another
-                // window. The counter resets, so a wedged stream (zero NEW
-                // pairs) still latches on the next window.
-                rawZslSlowWindows++
-                Log.w(
-                    LOG_TAG,
-                    "ZSL refill slow (${rawZslEpochPairs} pairs in ${timeoutMs}ms); " +
-                        "extending window ${rawZslSlowWindows}/$ZSL_SLOW_WINDOW_EXTENSIONS"
+            when (val verdict = zslHealth.onWatchdogWindowExpired()) {
+                ZslStreamHealth.WatchdogVerdict.LatchAndCooldown -> {
+                    Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                    cooldownRawZslForRetry("No paired RAW frame arrived within ${timeoutMs}ms")
+                }
+                is ZslStreamHealth.WatchdogVerdict.Extend -> {
+                    Log.w(
+                        LOG_TAG,
+                        "ZSL refill slow (${verdict.pairsInWindow} pairs in ${timeoutMs}ms); " +
+                            "extending window ${verdict.window}/${ZslStreamHealth.SLOW_WINDOW_EXTENSIONS}"
+                    )
+                    scheduleRawZslWatchdog(generation, requestEpoch)
+                }
+                // Repeatedly slow: transient cooldown (retryable, per-shot restart
+                // re-attempts), never the session-death latch.
+                ZslStreamHealth.WatchdogVerdict.Cooldown -> cooldownRawZslForRetry(
+                    "ZSL refill too slow (${timeoutMs}ms x ${ZslStreamHealth.SLOW_WINDOW_EXTENSIONS + 1} windows)"
                 )
-                rawZslEpochPairs = 0
-                scheduleRawZslWatchdog(generation, requestEpoch)
-                return@Runnable
             }
-            // Repeatedly slow: transient cooldown (retryable, per-shot restart
-            // re-attempts), never the session-death latch.
-            rawZslSlowWindows = 0
-            rawZslEpochPairs = 0
-            cooldownRawZslForRetry(
-                "ZSL refill too slow (${timeoutMs}ms x ${ZSL_SLOW_WINDOW_EXTENSIONS + 1} windows)"
-            )
         }.also { cameraHandler.postDelayed(it, timeoutMs) }
     }
 
@@ -7370,9 +7309,7 @@ class RawCameraController(
 
     /** True while the ZSL ring must not be attempted: latched session fallback,
      * burst-mode degradation, or a transient cooldown that has not expired yet. */
-    private fun isRawZslBlocked(): Boolean =
-        rawZslDisabledForSession || rawZslStreamBroken ||
-            SystemClock.elapsedRealtime() < rawZslCooldownUntilMs
+    private fun isRawZslBlocked(): Boolean = zslHealth.isBlocked(rawZslDisabledForSession)
 
     /**
      * Parks the ZSL ring for [cooldownMs] after a transient outage (overflow
@@ -7388,16 +7325,15 @@ class RawCameraController(
         cooldownMs: Long = ZSL_RETRY_COOLDOWN_MS
     ) {
         if (!rawZslRequested) return
-        fruitlessCooldowns++
-        if (fruitlessCooldowns >= FRUITLESS_COOLDOWN_REBUILDS && !captureInProgress.get()) {
+        if (zslHealth.onTransientOutage(cooldownMs, captureInProgress.get()) ==
+            ZslStreamHealth.OutageAction.REBUILD_SESSION
+        ) {
             Log.w(LOG_TAG, "ZSL cooldown fruitless twice in a row; rebuilding camera session")
             onState("RECOVERING CAMERA")
-            fruitlessCooldowns = 0
             restartCameraForConfigurationChange()
             return
         }
         Log.w(LOG_TAG, "ZSL transient outage ($reason); retrying in ${cooldownMs}ms, no session fallback")
-        rawZslCooldownUntilMs = SystemClock.elapsedRealtime() + cooldownMs
         rawZslStreaming = false
         clearRawZslBuffer()
         updateRepeatingRequest(allowRawZsl = false)
@@ -7507,7 +7443,7 @@ class RawCameraController(
 
     private fun clearRawZslBuffer() {
         rawZslBuffer?.clear()
-        rawZslHasFrame = false
+        zslHealth.filled = false
         rawZslReportedSize = 0
         val zslTimestamps = pendingZslResults.keys.toList()
         zslTimestamps.forEach { timestamp ->
@@ -7613,7 +7549,7 @@ class RawCameraController(
         // next press instead of forcing a refill from zero. Only teardown,
         // session rebuild, ZSL-off and outage paths clear it explicitly.
         val buffered = rawZslBuffer?.size ?: 0
-        rawZslHasFrame = rawZslCapacity > 0 && buffered >= rawZslCapacity
+        zslHealth.filled = rawZslCapacity > 0 && buffered >= rawZslCapacity
         rawZslReportedSize = buffered
     }
 
@@ -7644,11 +7580,11 @@ class RawCameraController(
                 RawZslState.FALLBACK,
                 "Full-resolution RAW frames exceed the safe memory budget"
             )
-            rawZslStreamBroken -> RawZslStatus(
+            zslHealth.streamBroken -> RawZslStatus(
                 RawZslState.WARMING_UP,
                 "ZSL burst mode: streaming unavailable on this HAL, captures fire instantly"
             )
-            rawZslStreaming && rawZslHasFrame -> RawZslStatus(
+            rawZslStreaming && zslHealth.filled -> RawZslStatus(
                 RawZslState.ACTIVE,
                 "${rawZslBuffer?.size ?: 0}/${rawZslCapacity} RAW frames buffered"
             )
@@ -8110,18 +8046,10 @@ class RawCameraController(
          * warming one.
          */
         private const val EMPTY_TOPUP_ESCALATION_TICKS = 8
-        /** Consecutive fruitless ZSL cooldowns before a session rebuild. */
-        private const val FRUITLESS_COOLDOWN_REBUILDS = 2
         /** Transient ZSL outage parking (overflow storm, watchdog miss, isolated
          * repeating failure): failures stay per-shot.
          * Only a rejected stream combination latches the session fallback. */
         private const val ZSL_RETRY_COOLDOWN_MS = 2_000L
-        private const val ZSL_STARTUP_TIMEOUT_MS = 4_000L
-        private const val ZSL_FRAME_FILL_ALLOWANCE_MS = 1_000L
-        /** Slow-but-productive watchdog windows tolerated per epoch before a
-         * transient (retryable, never latching) cooldown. Zero-pair windows
-         * still latch burst-mode immediately. */
-        private const val ZSL_SLOW_WINDOW_EXTENSIONS = 2
         // Configured ZSL ring ceiling. 59 is the deepest full-resolution RAW
         // ring verified on the reference HAL (Xiaomi 25080RABDG/MT6878 at
         // 30 fps, zero failures); the reader hard cap plus
