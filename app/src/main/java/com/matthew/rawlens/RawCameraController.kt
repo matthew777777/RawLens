@@ -6829,208 +6829,23 @@ class RawCameraController(
             }
         }
         val job = OwnedCaptureJob(releasedOwnership) {
-                try {
-                    var dngName: String? = null
-                    var jpegName: String? = null
-                    var dngFailure: Exception? = null
-                    var jpegFailure: Exception? = null
-                    val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also {
-                        rawDeveloper = it
-                    }
-                    val devSettings = RawDevelopmentSettings(
-                        denoise = captureDenoiseSettings,
-                        galosh = captureGaloshSettings,
-                        adaptiveExposureStrength = adaptiveExposureStrength,
-                        sharedAdaptiveExposure = sharedAdaptiveExposure,
-                        adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
-                            outputSettings, captureFocusView
-                        ),
-                        // ETTR frames are already optimally bright: develop caps the
-                        // adaptive lift at the residual to the ETTR target instead of
-                        // pushing bright skies past white.
-                        ettrHeadroomEv = captureEttrHeadroomEv
-                    )
-                    // Denoise-once: at most one stage runs per capture. Galosh
-                    // wins when enabled and AI is skipped for that capture;
-                    // otherwise AI runs as before. The winning CFA is shared
-                    // by the denoised-DNG write and the JPEG; null means the
-                    // legacy paths below run unchanged.
-                    val galoshCfa: UnpackedRawCfa? = if (captureGaloshSettings.enabled &&
-                        (outputFormat.includesDng || outputFormat.includesJpeg)
-                    ) {
-                        val galoshPlane = image.planes.singleOrNull()?.buffer
-                        if (galoshPlane != null) {
-                            developer.galoshCaptureCfa(galoshPlane, frameMetadata, devSettings)
-                        } else null
-                    } else null
-                    val aiCfa: UnpackedRawCfa? = if (!captureGaloshSettings.enabled &&
-                        captureDenoiseSettings.aiEnabled &&
-                        (outputFormat.includesDng || outputFormat.includesJpeg)
-                    ) {
-                        val aiPlane = image.planes.singleOrNull()?.buffer
-                        if (aiPlane != null) {
-                            developer.denoiseCaptureCfa(aiPlane, frameMetadata, devSettings)
-                        } else null
-                    } else null
-                    val denCfa: UnpackedRawCfa? = galoshCfa ?: aiCfa
-                    fun saveOriginalDng(): String? = try {
-                        DngSaver(context).save(
-                            image, c, result, orientation, captureDngOverrides,
-                            frameMetadata, captureDngBackend, captureId = captureTimeMillis,
-                            gps = captureGps, fileNameSuffix = fileNameSuffix,
-                            subfolder = subfolder, dngCompression = captureDngCompression
-                        ).also {
-                            Log.i(
-                                LOG_TAG,
-                                "DNG saved name=$it pendingSaves=${pendingSaveCount.get()}"
-                            )
-                        }
-                    } catch (failure: Exception) {
-                        dngFailure = failure
-                        Log.e(LOG_TAG, "DNG save failed", failure)
-                        null
-                    }
-                    if (galoshCfa != null) {
-                        if (outputFormat.includesDng) {
-                            try {
-                                dngName = DngSaver(context).saveGaloshDenoised(
-                                    galoshCfa, frameMetadata, captureId = captureTimeMillis,
-                                    fileNameSuffix = fileNameSuffix, gps = captureGps,
-                                    subfolder = subfolder
-                                )
-                                Log.i(
-                                    LOG_TAG,
-                                    "GALOSH DNG saved name=$dngName pendingSaves=${pendingSaveCount.get()}"
-                                )
-                            } catch (failure: Exception) {
-                                dngFailure = failure
-                                Log.e(LOG_TAG, "GALOSH DNG save failed", failure)
-                            }
-                            if (captureGaloshSettings.saveOriginalDng) {
-                                val ogName = saveOriginalDng()
-                                if (dngName == null) dngName = ogName
-                            }
-                        }
-                    } else if (aiCfa != null) {
-                        if (outputFormat.includesDng) {
-                            try {
-                                dngName = DngSaver(context).saveAiDenoised(
-                                    aiCfa, frameMetadata, captureId = captureTimeMillis,
-                                    fileNameSuffix = fileNameSuffix, gps = captureGps,
-                                    subfolder = subfolder
-                                )
-                                Log.i(
-                                    LOG_TAG,
-                                    "AI DNG saved name=$dngName pendingSaves=${pendingSaveCount.get()}"
-                                )
-                            } catch (failure: Exception) {
-                                dngFailure = failure
-                                Log.e(LOG_TAG, "AI DNG save failed", failure)
-                            }
-                            if (captureDenoiseSettings.saveOriginalDng) {
-                                val ogName = saveOriginalDng()
-                                if (dngName == null) dngName = ogName
-                            }
-                        }
-                    } else if (outputFormat.includesDng) {
-                        dngName = saveOriginalDng()
-                    }
-                    if (outputFormat.includesJpeg) {
-                        try {
-                            Log.i(
-                                LOG_TAG,
-                                "RAW development input timestamp=${frameMetadata.timestampNanos} " +
-                                    "frame=${frameMetadata.frameNumber} cfa=${frameMetadata.cfaPattern} " +
-                                    "geometry=${frameMetadata.bufferGeometry}" +
-                                    if (galoshCfa != null) " galoshDenoised"
-                                    else if (aiCfa != null) " aiDenoised" else ""
-                            )
-                            if (captureDevelopedFormat == DevelopedFormat.JXL) {
-                                val developed = if (denCfa != null) {
-                                    developer.developCfaJxl(
-                                        denCfa, frameMetadata,
-                                        settings = devSettings,
-                                        look = outputSettings,
-                                        jxl = captureJxlSettings
-                                    )
-                                } else {
-                                    val rawPlane = image.planes.singleOrNull()?.buffer
-                                        ?: throw UnsupportedOperationException("RAW image must have one plane")
-                                    developer.developJxl(
-                                        rawPlane, frameMetadata,
-                                        settings = devSettings,
-                                        look = outputSettings,
-                                        jxl = captureJxlSettings
-                                    )
-                                }
-                                jpegName = JxlSaver(context).save(
-                                    developed, frameMetadata, result,
-                                    captureTimeMillis = captureTimeMillis,
-                                    typeSuffix = fileNameSuffix,
-                                    gps = captureGps,
-                                    subfolder = subfolder
-                                )
-                                publishDevelopedJxlScope(developed)
-                                Log.i(
-                                    LOG_TAG,
-                                    "Developed JXL saved name=$jpegName " +
-                                        "pendingSaves=${pendingSaveCount.get()}"
-                                )
-                            } else {
-                                val developed = if (denCfa != null) {
-                                    developer.developCfaJpeg(
-                                        denCfa, frameMetadata,
-                                        settings = devSettings,
-                                        outputSettings = outputSettings
-                                    )
-                                } else {
-                                    val rawPlane = image.planes.singleOrNull()?.buffer
-                                        ?: throw UnsupportedOperationException("RAW image must have one plane")
-                                    developer.developJpeg(
-                                        rawPlane, frameMetadata,
-                                        settings = devSettings,
-                                        outputSettings = outputSettings
-                                    )
-                                }
-                                try {
-                                    jpegName = JpegSaver(context).save(
-                                        developed, frameMetadata, result,
-                                        captureTimeMillis = captureTimeMillis,
-                                        typeSuffix = fileNameSuffix,
-                                        gps = captureGps,
-                                        subfolder = subfolder
-                                    )
-                                    publishDevelopedScope(developed.bitmap)
-                                    Log.i(
-                                        LOG_TAG,
-                                        "Developed JPEG saved name=$jpegName " +
-                                            "pendingSaves=${pendingSaveCount.get()}"
-                                    )
-                                } finally {
-                                    recycleUltraHdrGainmapContents(developed)
-                                    developed.bitmap.recycle()
-                                }
-                            }
-                        } catch (failure: Exception) {
-                            jpegFailure = failure
-                            Log.e(LOG_TAG, "RAW developed still development/save failed", failure)
-                        }
-                    }
-                    val label = captureLabel?.let { " • $it" }.orEmpty() +
-                        if (aiCfa != null) " • AI" else ""
-                    val shadingNote = if (
-                        frameMetadata.lensShadingMap == null &&
-                        !frameMetadata.lensShadingAlreadyApplied
-                    ) " • NO LENS MAP" else ""
-                    reportSaveState(formatSaveOutcome(
-                        jpegName, dngName, jpegFailure, dngFailure, label, shadingNote
-                    ))
-                } catch (failure: Exception) {
-                    Log.e(LOG_TAG, "Capture artifact save failed", failure)
-                    reportSaveState("SAVE ERROR: ${failure.message ?: failure.javaClass.simpleName}")
-                } finally {
-                    if (outputFormat.includesJpeg) endJpegProcessing()
-                }
+            RawFrameSaveJob(
+                context, image, result,
+                RawFrameSaveInput(
+                    characteristics = c, orientation = orientation, frameMetadata = frameMetadata,
+                    outputFormat = outputFormat, outputSettings = outputSettings,
+                    denoise = captureDenoiseSettings, galosh = captureGaloshSettings,
+                    adaptiveExposureStrength = adaptiveExposureStrength,
+                    sharedAdaptiveExposure = sharedAdaptiveExposure,
+                    developedFormat = captureDevelopedFormat, jxl = captureJxlSettings,
+                    ettrHeadroomEv = captureEttrHeadroomEv, focusView = captureFocusView,
+                    dngOverrides = captureDngOverrides, dngBackend = captureDngBackend,
+                    dngCompression = captureDngCompression, gps = captureGps,
+                    captureTimeMillis = captureTimeMillis, fileNameSuffix = fileNameSuffix,
+                    subfolder = subfolder, captureLabel = captureLabel
+                ),
+                saveJobHost(::reportSaveState)
+            ).run()
         }
         // Plain DNG-only saves (no JPEG develop, no AI inference) run on the
         // parallel DNG worker so a burst drains concurrently and the next burst
@@ -7079,33 +6894,17 @@ class RawCameraController(
         }
     }
 
-    private fun formatSaveOutcome(
-        jpegName: String?,
-        dngName: String?,
-        jpegFailure: Exception?,
-        dngFailure: Exception?,
-        label: String,
-        shadingNote: String
-    ): String {
-        // UI status shows the short type only; full file names stay in Log.
-        val failed = jpegFailure != null || dngFailure != null
-        val developedToken = activeDevelopedFormat.token
-        val outcome = StatusText.saveOutcome(
-            dngSaved = dngName != null,
-            jpegSaved = jpegName != null,
-            failed = failed,
-            developed = developedToken
-        )
-        if (failed && jpegName == null && dngName == null) return outcome
-        // Keep at most the first short label segment (e.g. "ZSL 1/3"); drop the rest.
-        val shortLabel = label.split("•").getOrNull(1)?.trim()?.take(12)?.let { " • $it" }.orEmpty()
-        val failedSuffix = when {
-            jpegFailure != null && dngFailure != null -> " • $developedToken+DNG ERR"
-            jpegFailure != null -> " • $developedToken ERR"
-            dngFailure != null -> " • DNG ERR"
-            else -> ""
-        }
-        return StatusText.compact(outcome + shortLabel + failedSuffix)
+    /** Controller side of [RawFrameSaveJob]; [report] is the save's generation-gated status poster. */
+    private fun saveJobHost(report: (String) -> Unit) = object : RawFrameSaveJob.Host {
+        override fun developer(): RawDevelopmentCoordinator =
+            rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+        override fun pendingSaves(): Int = pendingSaveCount.get()
+        override fun reportSaveState(message: String) = report(message)
+        override fun publishDevelopedScope(bitmap: Bitmap) =
+            this@RawCameraController.publishDevelopedScope(bitmap)
+        override fun publishDevelopedJxlScope(developed: DevelopedJxl) =
+            this@RawCameraController.publishDevelopedJxlScope(developed)
+        override fun endJpegProcessing() = this@RawCameraController.endJpegProcessing()
     }
 
     private fun scheduleCaptureTimeout(captureId: Int, exposureDurationMs: Long = 0L) {
