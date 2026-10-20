@@ -29,7 +29,8 @@ evidence. "Device-unverified" means no on-device run yet.
 | 56edf98 | Gradle 9.8.2, AGP 9.4.0, compileSdk 37, JVM 21, KGP 2.4.21 | [AGP 9.0 notes](https://developer.android.com/build/releases/agp-9-0-0-release-notes), [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin), [AGP compat](https://developer.android.com/build/releases/gradle-plugin) | 1489/0/2 = baseline; sr-pipeline 196 pass | targetSdk 35, NDK 27.0.12077973, core 1.9.0 unchanged. KGP 2.4.21 officially tested to Gradle 9.7.0/AGP 9.3.1 ([table](https://kotlinlang.org/docs/gradle-configure-project.html)); newer allowed with possible warnings |
 | cce76b2 | Commit owner's pre-refactor WIP | — | in baseline | none |
 | d922b3b | `UpdateFlow` extracted from `MainActivity` | — | normalized diff identical; 1489/0 | device-unverified (UI dialog) |
-| (next) | `SettingsTransfer` extracted from `MainActivity` | [SAF](https://developer.android.com/training/data-storage/shared/documents-files) | 1489/0 | device-unverified (pickers) |
+| 922988c | `SettingsTransfer` extracted from `MainActivity` | [SAF](https://developer.android.com/training/data-storage/shared/documents-files) | 1489/0 | device-unverified (pickers) |
+| (next) | `Camera2Names` from `RawCameraController`; gap filled: AE modes 5 `ON_EXTERNAL_FLASH`, 6 `ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY` printed UNKNOWN | API 37 `android.jar` via `javap -constants`; [CameraMetadata](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata) | 1492/0 (+3 new) | debug text only |
 
 ## Open follow-ups
 
@@ -41,4 +42,12 @@ evidence. "Device-unverified" means no on-device run yet.
 
 ## Excluded components (untouched, parity already demonstrated)
 
-Filled in as the map is completed: HDR+, MFSR, AMaZE, HL, …
+| Group | Files | Parity evidence in repo |
+|---|---|---|
+| HDR+ | `HdrPlus*`, `HdrPools`, `cpp/hdrplus/`, `spirv/hdrplus/` | `cpp/hdrplus/PARITY.md`: ~80 dB vs Metal, bit-exact vs intermediate port |
+| MFSR / SR | `Mfsr*`, `BurstMerge*`, `BurstReferenceSelection`, `tools/sr-pipeline` | `docs/sr-paper-parity-traceability.md` (only rows with a named passing test) |
+| AMaZE | `*Amaze*`, `RawTherapeeAmaze`, `Rt*`, `shaders/amaze/` | **Excluded at owner's request, but parity is NOT established**: `docs/amaze-rawtherapee-audit.md` says "RawTherapee-identical output is not established" |
+| HL | `Hl*`, `RtHighlightMap` | excluded at owner's request |
+| Galosh | `Galosh*`, `cpp/galosh/`, `spirv/galosh/` | `docs/galosh-phase2-parity.md`: PASS ≥69 dB on Mali-G615 |
+| Wavelet | `Wavelet*`, `cpp/wavelet/`, `spirv/wavelet/` | `spirv/wavelet/UPSTREAM.md`: vendored bit-identical (rawr / darktable) |
+| ML (FlowNet, RawNIND) | `HdrFlowNetAligner`, `RawNind*`, `cpp/flownet/` | vendored PhotonCamera sources (`cpp/flownet/UPSTREAM.md`) |

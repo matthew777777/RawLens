@@ -6218,7 +6218,7 @@ class RawCameraController(
             lastLoggedTouchAfState = state
             val sinceStart = if (touchFocusStartSent)
                 " +${SystemClock.elapsedRealtime() - touchFocusStartElapsedMs}ms" else ""
-            Log.i(LOG_TAG, "Touch AF -> ${afStateName(state)}$sinceStart")
+            Log.i(LOG_TAG, "Touch AF -> ${Camera2Names.afStateName(state)}$sinceStart")
         }
         // Late lock after a declared failure (HAL slower than the grace):
         // upgrade to the sharp lock instead of showing FOCUSED_LOCKED with a
@@ -6452,7 +6452,7 @@ class RawCameraController(
             val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
             Log.i(
                 LOG_TAG,
-                "Idle AF ${afStateName(afState)} mode=${afModeName(afMode)}" +
+                "Idle AF ${Camera2Names.afStateName(afState)} mode=${Camera2Names.afModeName(afMode)}" +
                     (focusDistance?.let {
                         " fd=${String.format(java.util.Locale.US, "%.2f", it)}D"
                     } ?: "")
@@ -6465,15 +6465,15 @@ class RawCameraController(
         val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
         val oisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
         onDebugState(
-            "AF_MODE  ${afModeName(afMode)}\n" +
-                "AF_TRIGGER ${afTriggerName(afTrigger)}\n" +
-                "AF_STATE ${afStateName(afState)}\n" +
+            "AF_MODE  ${Camera2Names.afModeName(afMode)}\n" +
+                "AF_TRIGGER ${Camera2Names.afTriggerName(afTrigger)}\n" +
+                "AF_STATE ${Camera2Names.afStateName(afState)}\n" +
                 "AF_POLICY TOUCH_HOLD/CONT_PICTURE  CAMERA_SEQ ${if (cameraCaptureSequenceActive) "BUSY" else "IDLE"}\n" +
                 "SAVE_QUEUE ${pendingFrameSaveCount.get()}/${if (captureFormat.includesJpeg) MAX_IN_FLIGHT_JPEG_SAVES else MAX_IN_FLIGHT_DNG_SAVES}\n" +
-                "AE_MODE  ${aeModeName(aeMode)}\n" +
-                "AE_TRIGGER ${aeTriggerName(aeTrigger)}\n" +
-                "AE_STATE ${aeStateName(aeState)}\n" +
-                "OIS_MODE ${oisModeName(oisMode)}\n" +
+                "AE_MODE  ${Camera2Names.aeModeName(aeMode)}\n" +
+                "AE_TRIGGER ${Camera2Names.aeTriggerName(aeTrigger)}\n" +
+                "AE_STATE ${Camera2Names.aeStateName(aeState)}\n" +
+                "OIS_MODE ${Camera2Names.oisModeName(oisMode)}\n" +
                 "ISO $iso  EXP ${formatExposure(exposure.coerceAtLeast(1L))}\n" +
                 "P_AE ${if (dynamicExposureSettings.enabled) "ON" else "OFF"} " +
                 "B01 ${String.format(java.util.Locale.US, "%.2f", programAeProfile.balance)} " +
@@ -6551,12 +6551,6 @@ class RawCameraController(
         return "$fpsText$starveText $msText\n$vfText · $rawText\nEffects: $effects"
     }
 
-    private fun oisModeName(value: Int?): String = when (value) {
-        CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_OFF -> "OFF"
-        CaptureResult.LENS_OPTICAL_STABILIZATION_MODE_ON -> "ON"
-        else -> "UNAVAILABLE"
-    }
-
     /** One line per session so logcat shows the idle AF contract for diagnosis. */
     private fun logAfCapabilities() {
         val c = characteristics ?: return
@@ -6564,63 +6558,9 @@ class RawCameraController(
         val maxAf = c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
         Log.i(
             LOG_TAG,
-            "AF caps modes=[${modes.joinToString(",") { afModeName(it) }}] " +
-                "maxAfRegions=$maxAf idle=${afModeName(continuousPictureAfMode())}"
+            "AF caps modes=[${modes.joinToString(",") { Camera2Names.afModeName(it) }}] " +
+                "maxAfRegions=$maxAf idle=${Camera2Names.afModeName(continuousPictureAfMode())}"
         )
-    }
-
-    private fun afModeName(value: Int?): String = when (value) {
-        CaptureResult.CONTROL_AF_MODE_OFF -> "OFF"
-        CaptureResult.CONTROL_AF_MODE_AUTO -> "AUTO"
-        CaptureResult.CONTROL_AF_MODE_MACRO -> "MACRO"
-        CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO -> "CONT_VIDEO"
-        CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE -> "CONT_PICTURE"
-        CaptureResult.CONTROL_AF_MODE_EDOF -> "EDOF"
-        else -> "UNKNOWN($value)"
-    }
-
-    private fun afTriggerName(value: Int?): String = when (value) {
-        CaptureRequest.CONTROL_AF_TRIGGER_IDLE, null -> "IDLE"
-        CaptureRequest.CONTROL_AF_TRIGGER_START -> "START"
-        CaptureRequest.CONTROL_AF_TRIGGER_CANCEL -> "CANCEL"
-        else -> "UNKNOWN($value)"
-    }
-
-    private fun afStateName(value: Int?): String = when (value) {
-        CaptureResult.CONTROL_AF_STATE_INACTIVE -> "INACTIVE"
-        CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN -> "PASSIVE_SCAN"
-        CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> "PASSIVE_FOCUSED"
-        CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN -> "ACTIVE_SCAN"
-        CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> "FOCUSED_LOCKED"
-        CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> "NOT_FOCUSED_LOCKED"
-        CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> "PASSIVE_UNFOCUSED"
-        else -> "UNKNOWN($value)"
-    }
-
-    private fun aeModeName(value: Int?): String = when (value) {
-        CaptureResult.CONTROL_AE_MODE_OFF -> "OFF"
-        CaptureResult.CONTROL_AE_MODE_ON -> "ON"
-        CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH -> "AUTO_FLASH"
-        CaptureResult.CONTROL_AE_MODE_ON_ALWAYS_FLASH -> "ALWAYS_FLASH"
-        CaptureResult.CONTROL_AE_MODE_ON_AUTO_FLASH_REDEYE -> "AUTO_REDEYE"
-        else -> "UNKNOWN($value)"
-    }
-
-    private fun aeTriggerName(value: Int?): String = when (value) {
-        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE, null -> "IDLE"
-        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START -> "START"
-        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL -> "CANCEL"
-        else -> "UNKNOWN($value)"
-    }
-
-    private fun aeStateName(value: Int?): String = when (value) {
-        CaptureResult.CONTROL_AE_STATE_INACTIVE -> "INACTIVE"
-        CaptureResult.CONTROL_AE_STATE_SEARCHING -> "SEARCHING"
-        CaptureResult.CONTROL_AE_STATE_CONVERGED -> "CONVERGED"
-        CaptureResult.CONTROL_AE_STATE_LOCKED -> "LOCKED"
-        CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED -> "FLASH_REQUIRED"
-        CaptureResult.CONTROL_AE_STATE_PRECAPTURE -> "PRECAPTURE"
-        else -> "UNKNOWN($value)"
     }
 
     fun onDisplayRotationChanged() {
