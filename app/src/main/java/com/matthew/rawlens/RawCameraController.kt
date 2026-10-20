@@ -6339,13 +6339,9 @@ class RawCameraController(
                 saveDualRaw(pair)
             }
             if (activeHdrBracket) {
-                activeHdrBracket = false
                 val saveEachBracket = activeHdrSaveEachBracket
                 val saveDebugFrames = activeHdrSaveDebugFrames
-                activeHdrSaveEachBracket = false
-                activeHdrSaveDebugFrames = false
-                activeHdrStops = 2
-                activeHdrFrameEvs = intArrayOf(-2, 0, 2)
+                resetHdrBracketState()
                 saveHdrBracket(pendingHdrFrames.toList(), saveEachBracket, saveDebugFrames)
                 pendingHdrFrames.clear()
             }
@@ -7080,6 +7076,15 @@ class RawCameraController(
         )
     }
 
+    /** Back to the default (non-bracket) capture: ±2 EV around 0. */
+    private fun resetHdrBracketState() {
+        activeHdrBracket = false
+        activeHdrSaveEachBracket = false
+        activeHdrSaveDebugFrames = false
+        activeHdrStops = 2
+        activeHdrFrameEvs = intArrayOf(-2, 0, 2)
+    }
+
     private fun finishCapture(message: String? = null) {
         streamCapture = null
         cancelCaptureTimeout()
@@ -7095,11 +7100,7 @@ class RawCameraController(
         pendingDualRawFrames.forEach { RawImageOwnership.release(it.image) }
         pendingDualRawFrames.clear()
         if (activeHdrBracket) {
-            activeHdrBracket = false
-            activeHdrSaveEachBracket = false
-            activeHdrSaveDebugFrames = false
-            activeHdrStops = 2
-            activeHdrFrameEvs = intArrayOf(-2, 0, 2)
+            resetHdrBracketState()
             activeFramesRemaining.set(0)
             captureSequence.incrementAndGet()
             pendingHdrFrames.forEach { RawImageOwnership.release(it.image) }
@@ -7130,7 +7131,7 @@ class RawCameraController(
     }
 
     private fun refreshCaptureAvailability() {
-        // ZSL-aware shutter: a 30-frame burst needs 30 slots, so the 1-slot
+        // ZSL-aware shutter: an N-frame burst (up to MAX_ZSL_FRAMES) needs N slots, so the 1-slot
         // default would leave the shutter enabled through the whole save drain
         // and invite futile presses (QUEUE FULL). Gate on the full burst —
         // except merges, which save one artifact (one slot, like admission).
