@@ -207,9 +207,9 @@ class RawCameraController(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(MAX_QUEUED_SAVES)
     )
     // Parallel worker for plain DNG-only saves (no JPEG develop, no AI inference:
-    // each job owns an independent DngCreator + MediaStore entry). A 30-frame ZSL
-    // burst drains ~2x faster than serially, so the gap between back-to-back
-    // bursts is the short ring refill, not the whole queue. Kept at 2 threads:
+    // each job owns an independent DngCreator + MediaStore entry), so a ZSL
+    // burst's DNGs are written concurrently and the gap between back-to-back
+    // bursts is the ring refill, not the whole queue. Kept at 2 threads:
     // 3 concurrent full-res native writes spiked CPU/binder load enough to stall
     // capture results on MediaTek HALs (overflow storm -> session fallback).
     // JPEG/HDR/AI work stays on the serial writer above and never contends with
@@ -6979,9 +6979,11 @@ class RawCameraController(
                 }
         }
         // Plain DNG-only saves (no JPEG develop, no AI inference) run on the
-        // parallel DNG worker so a 30-frame burst drains ~3x faster and the next
-        // burst waits out the refill, not the whole queue. Everything touching
-        // the shared GPU developer stays serialized on [writer].
+        // parallel DNG worker so a burst drains concurrently and the next burst
+        // waits out the refill, not the whole queue. JPEG/JXL development and AI
+        // denoise stay serialized on [writer]. Galosh-denoised DNG-only saves do
+        // run here, but GaloshDenoiser.denoise is @Synchronized (one GPU run at a
+        // time), so they serialize inside the denoiser.
         val fastDngOnly = outputFormat.includesDng && !outputFormat.includesJpeg &&
             !captureDenoiseSettings.aiEnabled
         try {
