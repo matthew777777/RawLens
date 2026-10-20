@@ -499,38 +499,11 @@ class RawCameraController(
     private var lastFaceRegionPushMs: Long = 0L
     private var lastFacePublishMs: Long = 0L
 
-    // Open Camera continuous-picture autofocus port.
-    // Touch focus is held (AF_MODE_AUTO + regions) until an explicit release:
-    // retap elsewhere, double-tap/button reset, manual focus, lens switch, or stop().
-    private var openCameraTouchFocusActive = false
-    private var openCameraTouchFocusCompleted = false
-    private var openCameraTouchFocusTimeout: Runnable? = null
-    private var openCameraContinuousFocusReset: Runnable? = null
-    private var pendingTouchFocusStart: Runnable? = null
-    private var touchFocusStartElapsedMs = 0L
-    private var touchFocusStartSent = false
-    /** True once a scan state proves START reached the HAL (INACTIVE filter). */
-    private var touchFocusScanSeen = false
-    /** Last AF state logged while a tap scan/lock is in flight (transition-only trace). */
-    private var lastLoggedTouchAfState: Int? = null
-    private var lastLoggedTouchAfStateValid = false
+    // Tap / hold focus and metering (Open Camera continuous-picture AF port).
+    private val touchFocus = TouchFocus(TouchFocusHost())
     /** Last idle continuous-AF state/mode logged (transition-only trace). */
     private var lastLoggedIdleAfState: Int? = null
     private var lastLoggedIdleAfMode: Int? = null
-    /** Last accepted tap: accidental-tap gate (time + same-spot mid-scan). */
-    private var lastTouchTapElapsedMs = 0L
-    private var lastTouchTapX = 0f
-    private var lastTouchTapY = 0f
-    /** True once FOCUSED_LOCKED is held (badge-worthy); false while scanning or on failure. */
-    private var touchFocusLockedSharp = false
-    /** Set on tap-scan failure: the release drops the AF region (full-frame). */
-    private var dropAfRegionOnRelease = false
-    /** Long-press locks ignore the auto-release timer until double-tap. */
-    private var focusLockIndefinite = false
-    /** Long-press also freezes AE (CONTROL_AE_LOCK) until the same reset. */
-    private var aeLockIndefinite = false
-    /** Elapsed-realtime expiry of a timed lock; 0 when indefinite or unlocked. */
-    private var focusLockDeadlineMs = 0L
 
     private var lastDebugUpdateMs = 0L
     private var lastRawVfDebugMs = 0L
@@ -1510,7 +1483,7 @@ class RawCameraController(
             }
             Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             logAfCapabilities()
-            nudgeIdleAutofocusIfNeeded()
+            touchFocus.nudgeIdleIfNeeded()
             onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -1729,8 +1702,6 @@ class RawCameraController(
     private var openRetryCount = 0
     /** Consumed reopen attempts after open rejections (see [scheduleOpenRejectionRetry]). */
     private var openRejectionRetryCount = 0
-    /** Pending idle-AF nudge on AUTO-only lenses (see [nudgeIdleAutofocusIfNeeded]). */
-    private var pendingIdleAfNudge: Runnable? = null
 
     private fun resetSessionLadder() {
         sessionComboIndex = 0
@@ -3722,7 +3693,7 @@ class RawCameraController(
      * through [setFocusAndMeteringPoint] instead and moves both together.
      */
     fun setAfPoint(viewX: Float, viewY: Float) {
-        startTouchFocus(viewX, viewY, indefinite = false, updateAe = false)
+        touchFocus.start(viewX, viewY, indefinite = false, updateAe = false)
     }
 
     /**
@@ -3732,10 +3703,10 @@ class RawCameraController(
      * but 2-3 fewer HAL round-trips per tap. Every tap refocuses — including
      * a single tap while locked, which cancels the old scan/lock and starts
      * a new one at the new point; the sharp lock auto-releases after
-     * [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
+     * [AutoFocusPolicy.LOCK_HOLD_MS].
      */
     fun setFocusAndMeteringPoint(viewX: Float, viewY: Float) {
-        startTouchFocus(viewX, viewY, indefinite = false, updateAe = true)
+        touchFocus.start(viewX, viewY, indefinite = false, updateAe = true)
     }
 
     /**
@@ -3745,134 +3716,60 @@ class RawCameraController(
      * (CONTROL_AE_LOCK) freezes with it, so exposure holds too.
      */
     fun setFocusAndMeteringHold(viewX: Float, viewY: Float) {
-        startTouchFocus(viewX, viewY, indefinite = true, updateAe = true)
+        touchFocus.start(viewX, viewY, indefinite = true, updateAe = true)
     }
 
-    private fun startTouchFocus(
-        viewX: Float,
-        viewY: Float,
-        indefinite: Boolean,
-        updateAe: Boolean = true
-    ) {
-        if (!isOnCameraThread()) {
-            cameraHandler.post { startTouchFocus(viewX, viewY, indefinite, updateAe) }
-            return
-        }
-        if (camera == null || session == null || singleShotTarget() == null) return
-        if (captureInProgress.get() || cameraCaptureSequenceActive) {
-            // A tap landing mid-still would be ignored or fail: drop it instead
-            // of installing regions the scan can never use.
-            Log.i(LOG_TAG, "Touch focus ignored (capture in progress)")
-            return
-        }
-        val tapNow = SystemClock.elapsedRealtime()
-        if (!AutoFocusPolicy.shouldAcceptTap(
-                tapNow, lastTouchTapElapsedMs, lastTouchTapX, lastTouchTapY,
-                viewX, viewY, minOf(viewfinder.width, viewfinder.height).toFloat(),
-                openCameraTouchFocusActive && !openCameraTouchFocusCompleted
-            )
-        ) {
-            Log.i(LOG_TAG, "Touch focus ignored (accidental tap)")
-            return
-        }
-        lastTouchTapElapsedMs = tapNow
-        lastTouchTapX = viewX
-        lastTouchTapY = viewY
-        Log.i(
-            LOG_TAG,
-            "Touch focus tap @(${viewX.toInt()},${viewY.toInt()})" +
-                (if (indefinite) " hold" else "") + (if (!updateAe) " af-only" else "")
-        )
-        val hasAfRegions = (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
-        if (!hasAfRegions) {
-            // Matches Open Camera CameraController2.setFocusAndMeteringArea():
-            // https://sourceforge.net/p/opencamera/code/ci/master/tree/app/src/main/java/net/sourceforge/opencamera/cameracontroller/CameraController2.java
-            // AE metering may still have been installed even when the
-            // camera has no AF regions, and setFocusAndMeteringArea() reports no focus area.
-            // A hold still freezes AE indefinitely here (AF simply has nothing to lock).
-            if (isAeMeteringSupported()) {
-                aeRegion = meteringRegion(viewX, viewY)
-                syncDevelopFocus(viewX, viewY)
-                aeLockIndefinite = indefinite && updateAe && aeRegion != null
-                if (aeRegion != null) updateRepeatingRequest(preserveRawZslBuffer = true)
-                if (aeLockIndefinite) onState("AE LOCKED ∞") else onState("METERING EXPOSURE")
-            } else {
-                onState("FOCUS AREA NOT SUPPORTED")
+    /** Camera-side half of [TouchFocus]; every call runs on the camera thread. */
+    private inner class TouchFocusHost : TouchFocus.Host {
+        override val handler: Handler get() = cameraHandler
+        override fun isOnCameraThread() = this@RawCameraController.isOnCameraThread()
+        override fun canSendOneShot() =
+            camera != null && session != null && singleShotTarget() != null
+        override fun captureBusy() = captureInProgress.get() || cameraCaptureSequenceActive
+        override fun maxAfRegions() =
+            characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+        override fun afAvailableModes() =
+            characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        override fun isAeMeteringSupported() = this@RawCameraController.isAeMeteringSupported()
+        override fun meteringRegion(viewX: Float, viewY: Float) =
+            this@RawCameraController.meteringRegion(viewX, viewY)
+        override fun syncDevelopFocus(viewX: Float, viewY: Float) =
+            this@RawCameraController.syncDevelopFocus(viewX, viewY)
+        override var afRegion: MeteringRectangle?
+            get() = this@RawCameraController.afRegion
+            set(value) { this@RawCameraController.afRegion = value }
+        override var aeRegion: MeteringRectangle?
+            get() = this@RawCameraController.aeRegion
+            set(value) { this@RawCameraController.aeRegion = value }
+        override var selectedFocusDistanceDiopters: Float?
+            get() = this@RawCameraController.selectedFocusDistanceDiopters
+            set(value) { this@RawCameraController.selectedFocusDistanceDiopters = value }
+        override fun viewfinderMinSide() = minOf(viewfinder.width, viewfinder.height).toFloat()
+        override fun updateRepeatingRequest() =
+            this@RawCameraController.updateRepeatingRequest(preserveRawZslBuffer = true)
+        override fun sendAfTrigger(trigger: Int, aeOnForDynamic: Boolean) {
+            val device = camera ?: return
+            val currentSession = session ?: return
+            val surface = singleShotTarget() ?: return
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                applyCameraControls(this)
+                if (aeOnForDynamic && dynamicExposureSettings.enabled) {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                }
+                set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
             }
-            return
+            currentSession.capture(request.build(), debugCaptureCallback, cameraHandler)
         }
-
-        val wasTouchActive = openCameraTouchFocusActive
-        dropAfRegionOnRelease = false
-        removeOpenCameraContinuousFocusReset()
-        removeOpenCameraTouchFocusTimeout()
-        removePendingTouchFocusStart()
-        removeIdleAfNudge()
-        // A CANCEL is only needed to interrupt a previous touch scan/lock.
-        // First taps skip it entirely: one less capture + one less repeating
-        // rebuild on the critical path.
-        if (wasTouchActive) sendAfCancelCapture()
-        selectedFocusDistanceDiopters = null
-        val region = meteringRegion(viewX, viewY) ?: run {
-            publishPeakingActiveIfChanged()
-            return
-        }
-        afRegion = region
-        if (updateAe && isAeMeteringSupported()) {
-            aeRegion = region
-            syncDevelopFocus(viewX, viewY)
-        }
-        openCameraTouchFocusActive = true
-        openCameraTouchFocusCompleted = false
-        touchFocusStartSent = false
-        touchFocusScanSeen = false
-        lastLoggedTouchAfStateValid = false
-        touchFocusLockedSharp = false
-        focusLockIndefinite = indefinite
-        aeLockIndefinite = indefinite && updateAe
-        focusLockDeadlineMs = 0L
-        onFocusLock(false, false, 0L)
-        publishControls()
-
-        if (!supportsOpenCameraTouchFocus()) {
-            // Open Camera still applies the focus/metering rectangles in modes where an explicit
-            // AUTO trigger is unavailable; continuous AF then keeps running with the new region.
-            openCameraTouchFocusActive = false
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            onState("FOCUS AREA SET")
-            publishPeakingActiveIfChanged()
-            return
-        }
-
-        try {
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            // Let the AUTO-mode repeating commit before START is queued so the
-            // HAL cannot observe START while still in CONT_PICTURE.
-            onState("FOCUSING")
-            scheduleOpenCameraTouchFocusTimeout()
-            pendingTouchFocusStart = Runnable {
-                pendingTouchFocusStart = null
-                if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
-            }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_SETTLE_MS) }
-            publishPeakingActiveIfChanged()
-        } catch (_: CameraAccessException) {
-            abortTouchFocusOnError()
-        }
-    }
-
-    /** Clears every touch-focus/lock flag after a failed AF request and restores idle AF. */
-    private fun abortTouchFocusOnError() {
-        openCameraTouchFocusActive = false
-        touchFocusStartSent = false
-        touchFocusScanSeen = false
-        touchFocusLockedSharp = false
-        focusLockIndefinite = false
-        aeLockIndefinite = false
-        focusLockDeadlineMs = 0L
-        onFocusLock(false, false, 0L)
-        updateRepeatingRequest(preserveRawZslBuffer = true)
-        onState("FOCUS ERROR")
-        publishPeakingActiveIfChanged()
+        override fun cameraAccessReason(failure: CameraAccessException) =
+            this@RawCameraController.cameraAccessReason(failure)
+        override fun publishControls() = this@RawCameraController.publishControls()
+        override fun publishPeakingActiveIfChanged() =
+            this@RawCameraController.publishPeakingActiveIfChanged()
+        override fun onState(state: String) = this@RawCameraController.onState(state)
+        override fun onFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) =
+            this@RawCameraController.onFocusLock(locked, indefinite, deadlineMs)
+        override fun onMeteringReleased() = this@RawCameraController.onMeteringReleased()
     }
 
     /**
@@ -3883,105 +3780,6 @@ class RawCameraController(
      * is harmless.
      */
     private fun singleShotTarget(): Surface? = previewSurface ?: rawReader?.surface
-
-    private fun sendTouchFocusStart() {
-        val device = camera ?: return
-        val currentSession = session ?: return
-        val surface = singleShotTarget() ?: return
-        if (captureInProgress.get() || cameraCaptureSequenceActive) {
-            // START mid-still is ignored or fails: wait out the capture. The
-            // touch timeout bounds this; it aborts START once completed.
-            Log.i(LOG_TAG, "AF START deferred (capture in progress)")
-            removePendingTouchFocusStart()
-            pendingTouchFocusStart = Runnable {
-                pendingTouchFocusStart = null
-                if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
-            }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_RETRY_MS) }
-            return
-        }
-        try {
-            val start = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
-                applyCameraControls(this)
-                if (dynamicExposureSettings.enabled) {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                }
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
-            }
-            touchFocusStartSent = true
-            touchFocusStartElapsedMs = SystemClock.elapsedRealtime()
-            currentSession.capture(start.build(), debugCaptureCallback, cameraHandler)
-            Log.i(LOG_TAG, "AF START sent")
-        } catch (failure: CameraAccessException) {
-            Log.w(LOG_TAG, "AF START failed: ${cameraAccessReason(failure)}")
-            abortTouchFocusOnError()
-        }
-    }
-
-    /** Single CANCEL capture with no repeating rebuild; caller re-asserts state once. */
-    private fun sendAfCancelCapture() {
-        val device = camera ?: return
-        val currentSession = session ?: return
-        val surface = singleShotTarget() ?: return
-        try {
-            val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
-                applyCameraControls(this)
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
-            }
-            currentSession.capture(cancel.build(), debugCaptureCallback, cameraHandler)
-        } catch (_: CameraAccessException) {
-        }
-    }
-
-    private fun removePendingTouchFocusStart() {
-        pendingTouchFocusStart?.let(cameraHandler::removeCallbacks)
-        pendingTouchFocusStart = null
-    }
-
-    /**
-     * AUTO-only lenses (no continuous mode advertising): idle parks the focus
-     * at the last position forever, so one full-frame scan stands in for
-     * continuous AF at session start and after every touch release. The result
-     * is ignored (the touch handler is gated on touch state); the lens moves
-     * and holds. Never fires on continuous-capable lenses.
-     */
-    private fun nudgeIdleAutofocusIfNeeded() {
-        val modes = characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-        if (!AutoFocusPolicy.needsIdleScanNudge(modes)) return
-        removeIdleAfNudge()
-        pendingIdleAfNudge = Runnable {
-            pendingIdleAfNudge = null
-            if (openCameraTouchFocusActive || selectedFocusDistanceDiopters != null) return@Runnable
-            if (captureInProgress.get() || cameraCaptureSequenceActive) return@Runnable
-            sendIdleAfStart()
-        }.also { cameraHandler.postDelayed(it, IDLE_AF_NUDGE_DELAY_MS) }
-    }
-
-    private fun sendIdleAfStart() {
-        val device = camera ?: return
-        val currentSession = session ?: return
-        val surface = singleShotTarget() ?: return
-        try {
-            val start = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                addTarget(surface)
-                applyCameraControls(this)
-                if (dynamicExposureSettings.enabled) {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                }
-                set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
-            }
-            currentSession.capture(start.build(), debugCaptureCallback, cameraHandler)
-            Log.i(LOG_TAG, "Idle AF scan (AUTO-only lens)")
-        } catch (failure: CameraAccessException) {
-            Log.w(LOG_TAG, "Idle AF scan failed: ${cameraAccessReason(failure)}")
-        }
-    }
-
-    private fun removeIdleAfNudge() {
-        pendingIdleAfNudge?.let(cameraHandler::removeCallbacks)
-        pendingIdleAfNudge = null
-    }
 
     fun setAePoint(viewX: Float, viewY: Float) {
         if (!isOnCameraThread()) {
@@ -4006,11 +3804,6 @@ class RawCameraController(
             characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         )
 
-    private fun supportsOpenCameraTouchFocus(): Boolean =
-        AutoFocusPolicy.supportsTouchTrigger(
-            characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-        )
-
     fun getAeMeteringMode(): AeMeteringMode = aeMeteringMode
 
     fun setAeMeteringMode(mode: AeMeteringMode): Boolean {
@@ -4027,8 +3820,8 @@ class RawCameraController(
             return false
         }
         aeMeteringMode = mode
-        if (openCameraTouchFocusActive) {
-            continuousFocusResetOpenCamera()
+        if (touchFocus.active) {
+            touchFocus.releaseToContinuous()
         } else {
             aeRegion = null
             updateDevelopFocus(null)
@@ -4045,16 +3838,16 @@ class RawCameraController(
             return
         }
         // Manual release re-arms the tap gate: the next tap always refocuses.
-        lastTouchTapElapsedMs = 0L
-        if (openCameraTouchFocusActive) {
-            continuousFocusResetOpenCamera()
+        touchFocus.rearmTapGate()
+        if (touchFocus.active) {
+            touchFocus.releaseToContinuous()
             return
         }
-        val hadTargets = afRegion != null || aeRegion != null || aeLockIndefinite
+        val hadTargets = afRegion != null || aeRegion != null || touchFocus.aeLockIndefinite
         afRegion = null
         aeRegion = null
         updateDevelopFocus(null)
-        aeLockIndefinite = false
+        touchFocus.clearAeLock()
         if (hadTargets) updateRepeatingRequest(preserveRawZslBuffer = true)
         onMeteringReleased()
         onState("AE/AF RESET")
@@ -4410,7 +4203,7 @@ class RawCameraController(
         FocusPeakingPolicy.shouldShow(
             focusPeakingEnabled,
             selectedFocusDistanceDiopters != null,
-            openCameraTouchFocusActive
+            touchFocus.active
         )
 
     /**
@@ -4427,7 +4220,7 @@ class RawCameraController(
             LOG_TAG,
             "Focus peaking ${if (active) "SHOWN" else "HIDDEN"} " +
                 "(manual=${selectedFocusDistanceDiopters != null} " +
-                "touch=$openCameraTouchFocusActive enabled=$focusPeakingEnabled)"
+                "touch=${touchFocus.active} enabled=$focusPeakingEnabled)"
         )
         onFocusPeakingActive(active)
     }
@@ -4733,7 +4526,7 @@ class RawCameraController(
         if (!programCustomActive() || ettrCaptureActive() || captureInProgress.get() ||
             !running || destroyed
         ) return
-        if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) {
+        if (touchFocus.scanning) {
             // A ~10 Hz repeating rebuild mid-scan restarts the HAL AF sweep.
             // Defer the exposure glide until the touch lock settles or times out.
             scheduleProgramRampTick()
@@ -5314,22 +5107,8 @@ class RawCameraController(
                 selectedFocusDistanceDiopters = value?.let { raw ->
                     (raw.toFloat() / FOCUS_DISTANCE_SCALE).coerceIn(0f, minimumDistance)
                 }
-                if (value != null && openCameraTouchFocusActive) {
-                    // Manual focus takes over: drop the held touch lock silently
-                    // (no CANCEL needed, AF_MODE_OFF wins in applyCameraControls).
-                    removeOpenCameraContinuousFocusReset()
-                    removeOpenCameraTouchFocusTimeout()
-                    removePendingTouchFocusStart()
-                    touchFocusStartSent = false
-                    touchFocusScanSeen = false
-                    touchFocusLockedSharp = false
-                    focusLockIndefinite = false
-                    aeLockIndefinite = false
-                    focusLockDeadlineMs = 0L
-                    onFocusLock(false, false, 0L)
-                    openCameraTouchFocusActive = false
-                    openCameraTouchFocusCompleted = false
-                }
+                // Manual focus takes over the held touch lock (see TouchFocus).
+                if (value != null) touchFocus.dropForManualFocus()
             }
             ManualControl.EXPOSURE_COMPENSATION -> exposureCompensation = value?.toInt() ?: 0
         }
@@ -5705,7 +5484,7 @@ class RawCameraController(
                 }
                 publishPreviewMetadata(displayIso, displayShutter, wb)
                 publishDebugState(request, result)
-                handleOpenCameraTouchFocusState(result.get(CaptureResult.CONTROL_AF_STATE))
+                touchFocus.onAfState(result.get(CaptureResult.CONTROL_AF_STATE))
             }
 
             override fun onCaptureFailed(
@@ -5746,7 +5525,7 @@ class RawCameraController(
             coerceAfMode(
                 when {
                     manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
-                    openCameraTouchFocusActive -> CaptureRequest.CONTROL_AF_MODE_AUTO
+                    touchFocus.active -> CaptureRequest.CONTROL_AF_MODE_AUTO
                     else -> continuousPictureAfMode()
                 }
             )
@@ -5814,7 +5593,7 @@ class RawCameraController(
             // double-tap / reset-button / retap / manual / lens-switch / stop.
             // CONTROL_AE_LOCK is only meaningful with AE ON; manual/PROGRAM exposure
             // already drives the sensor directly so the lock stays off there.
-            builder.set(CaptureRequest.CONTROL_AE_LOCK, aeLockIndefinite)
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, touchFocus.aeLockIndefinite)
         }
         val kelvin = selectedWbKelvin
         if (kelvin == null) {
@@ -6165,216 +5944,8 @@ class RawCameraController(
                 )
             }
             publishDebugState(request, result, force = true)
-            handleOpenCameraTouchFocusState(result.get(CaptureResult.CONTROL_AF_STATE))
+            touchFocus.onAfState(result.get(CaptureResult.CONTROL_AF_STATE))
         }
-    }
-
-    private fun handleOpenCameraTouchFocusState(state: Int?) {
-        // Transition-only trace: a scan logs a few lines, never 30 fps.
-        if (openCameraTouchFocusActive &&
-            (!lastLoggedTouchAfStateValid || state != lastLoggedTouchAfState)
-        ) {
-            lastLoggedTouchAfStateValid = true
-            lastLoggedTouchAfState = state
-            val sinceStart = if (touchFocusStartSent)
-                " +${SystemClock.elapsedRealtime() - touchFocusStartElapsedMs}ms" else ""
-            Log.i(LOG_TAG, "Touch AF -> ${Camera2Names.afStateName(state)}$sinceStart")
-        }
-        // Late lock after a declared failure (HAL slower than the grace):
-        // upgrade to the sharp lock instead of showing FOCUSED_LOCKED with a
-        // FOCUS NOT LOCKED status.
-        if (openCameraTouchFocusActive && openCameraTouchFocusCompleted &&
-            !touchFocusLockedSharp && AutoFocusPolicy.isLockSuccess(state)
-        ) {
-            upgradeLateTouchFocusLock()
-            return
-        }
-        if (!openCameraTouchFocusActive || openCameraTouchFocusCompleted) return
-        if (AutoFocusPolicy.isScanState(state)) touchFocusScanSeen = true
-        when (state) {
-            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
-            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
-            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
-                if (!AutoFocusPolicy.verdictReady(
-                        touchFocusStartSent, touchFocusScanSeen,
-                        SystemClock.elapsedRealtime() - touchFocusStartElapsedMs
-                    )
-                ) {
-                    // Stale latch: the previous lock is still reported before
-                    // the new scan starts. Stay in FOCUSING; the persisting
-                    // lock completes on a later frame past the floor.
-                    return
-                }
-                openCameraTouchFocusCompleted = true
-                removeOpenCameraTouchFocusTimeout()
-                removePendingTouchFocusStart()
-                if (AutoFocusPolicy.isLockSuccess(state)) {
-                    touchFocusLockedSharp = true
-                    publishSharpLock()
-                    Log.i(LOG_TAG, "Touch focus locked" + if (focusLockIndefinite) " ∞" else "")
-                } else {
-                    completeTouchFocusUnlocked("FOCUS NOT LOCKED", "not-focused")
-                    return
-                }
-                // Re-assert the repeating request once so the HAL keeps
-                // IDLE/AUTO instead of drifting; circles stay until cleared.
-                updateRepeatingRequest(preserveRawZslBuffer = true)
-            }
-            CaptureResult.CONTROL_AF_STATE_INACTIVE -> {
-                // Some HALs return to INACTIVE after START without ever reporting
-                // a locked state. Treat that as a failed lock once START is known
-                // to have been sent, instead of hanging until the full timeout.
-                if (AutoFocusPolicy.inactiveMeansFailure(
-                        touchFocusStartSent, touchFocusScanSeen,
-                        SystemClock.elapsedRealtime() - touchFocusStartElapsedMs
-                    )
-                ) {
-                    completeTouchFocusUnlocked("FOCUS NOT LOCKED", "inactive")
-                }
-            }
-        }
-    }
-
-    /**
-     * FOCUSED_LOCKED that arrived after the failure verdict (slow HAL beaten by
-     * the INACTIVE grace or the scan timeout). Promotes the hold to a real
-     * lock with its full timer instead of leaving a contradictory status.
-     */
-    private fun upgradeLateTouchFocusLock() {
-        touchFocusLockedSharp = true
-        // The region did lock after all: keep it for the continuous tail.
-        dropAfRegionOnRelease = false
-        removeOpenCameraContinuousFocusReset()
-        publishSharpLock()
-        Log.i(LOG_TAG, "Touch focus late lock (upgraded)")
-        updateRepeatingRequest(preserveRawZslBuffer = true)
-    }
-
-    /**
-     * Sharp lock reached: an indefinite hold has no deadline; a tap lock
-     * arms the release back to continuous after [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
-     */
-    private fun publishSharpLock() {
-        if (focusLockIndefinite) {
-            focusLockDeadlineMs = 0L
-            onState(if (aeLockIndefinite) "AE/AF LOCKED ∞" else "FOCUS LOCKED ∞")
-        } else {
-            focusLockDeadlineMs =
-                SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
-            scheduleOpenCameraContinuousFocusReset()
-            onState("FOCUS LOCKED")
-        }
-        onFocusLock(true, focusLockIndefinite, focusLockDeadlineMs)
-    }
-
-    private fun removeOpenCameraContinuousFocusReset() {
-        openCameraContinuousFocusReset?.let(cameraHandler::removeCallbacks)
-        openCameraContinuousFocusReset = null
-    }
-
-    private fun removeOpenCameraTouchFocusTimeout() {
-        openCameraTouchFocusTimeout?.let(cameraHandler::removeCallbacks)
-        openCameraTouchFocusTimeout = null
-    }
-
-    /**
-     * Failed scan: brief hold so FOCUS NOT LOCKED reads, then fast release to
-     * continuous. A blurry miss must never pin AUTO for the full lock hold.
-     */
-    private fun completeTouchFocusUnlocked(status: String, reason: String) {
-        openCameraTouchFocusCompleted = true
-        touchFocusStartSent = false
-        touchFocusLockedSharp = false
-        removeOpenCameraTouchFocusTimeout()
-        removePendingTouchFocusStart()
-        onState(status)
-        Log.i(LOG_TAG, "Touch focus failed ($reason)")
-        // A failed indefinite hold keeps the held AE lock (no badge, no timer):
-        // the user asked to freeze exposure, AF just missed. Release stays manual
-        // (double-tap / reset / retap / manual / lens / stop).
-        if (focusLockIndefinite) {
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            return
-        }
-        focusLockDeadlineMs = SystemClock.elapsedRealtime() + TOUCH_FOCUS_FAILURE_HOLD_MS
-        // The point failed to lock: don't let continuous inherit the bias.
-        dropAfRegionOnRelease = true
-        scheduleOpenCameraContinuousFocusReset(TOUCH_FOCUS_FAILURE_HOLD_MS)
-        updateRepeatingRequest(preserveRawZslBuffer = true)
-    }
-
-    private fun scheduleOpenCameraTouchFocusTimeout() {
-        removeOpenCameraTouchFocusTimeout()
-        openCameraTouchFocusTimeout = Runnable {
-            openCameraTouchFocusTimeout = null
-            if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) {
-                completeTouchFocusUnlocked("FOCUS NOT LOCKED", "timeout")
-            }
-        }.also { cameraHandler.postDelayed(it, OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS) }
-    }
-
-    private fun scheduleOpenCameraContinuousFocusReset(
-        delayMs: Long = TOUCH_FOCUS_LOCK_TIMEOUT_MS
-    ) {
-        removeOpenCameraContinuousFocusReset()
-        openCameraContinuousFocusReset = Runnable {
-            openCameraContinuousFocusReset = null
-            continuousFocusResetOpenCamera()
-        }.also { cameraHandler.postDelayed(it, delayMs) }
-    }
-
-    private fun continuousFocusResetOpenCamera() {
-        if (!openCameraTouchFocusActive && !aeLockIndefinite) return
-        removeOpenCameraContinuousFocusReset()
-        removeOpenCameraTouchFocusTimeout()
-        removePendingTouchFocusStart()
-        touchFocusStartSent = false
-        touchFocusScanSeen = false
-        lastLoggedTouchAfStateValid = false
-        // Back to continuous: the next tap always refocuses.
-        lastTouchTapElapsedMs = 0L
-        // Clear before the CANCEL + repeating rebuild below so both carry
-        // AE_LOCK=false and the HAL actually releases a held exposure lock.
-        aeLockIndefinite = false
-        if (dropAfRegionOnRelease) {
-            // The tap point just failed to lock (corner/sky): resume
-            // full-frame continuous instead of biasing it there forever.
-            dropAfRegionOnRelease = false
-            afRegion = null
-            Log.i(LOG_TAG, "Failed tap region dropped; full-frame continuous")
-        }
-        val device = camera
-        val currentSession = session
-        val surface = singleShotTarget()
-        if (device != null && currentSession != null && surface != null) {
-            try {
-                val cancel = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(surface)
-                    applyCameraControls(this)
-                    if (dynamicExposureSettings.enabled) {
-                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    }
-                    set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL)
-                }
-                currentSession.capture(cancel.build(), debugCaptureCallback, cameraHandler)
-            } catch (failure: CameraAccessException) {
-                Log.w(LOG_TAG, "Open Camera AF cancel failed: ${cameraAccessReason(failure)}")
-            }
-        }
-        openCameraTouchFocusActive = false
-        openCameraTouchFocusCompleted = false
-        touchFocusLockedSharp = false
-        focusLockIndefinite = false
-        focusLockDeadlineMs = 0L
-        onFocusLock(false, false, 0L)
-        updateRepeatingRequest(preserveRawZslBuffer = true)
-        // UI-only notification: clear the AF/AE target circles when the explicit
-        // touch-focus release completes. This does not alter Camera2 AF behavior.
-        onMeteringReleased()
-        onState("CONTINUOUS AF")
-        Log.i(LOG_TAG, "AF back to continuous")
-        publishPeakingActiveIfChanged()
-        nudgeIdleAutofocusIfNeeded()
     }
 
     private fun clipPercent(fraction: Float): String =
@@ -6396,7 +5967,7 @@ class RawCameraController(
         // Idle continuous-AF trace (transitions only): without this, a
         // "blurry VF" report with no taps is undecidable — the tap trace
         // covers scans, but idle PASSIVE_* states were previously invisible.
-        if (!openCameraTouchFocusActive &&
+        if (!touchFocus.active &&
             (afState != lastLoggedIdleAfState || afMode != lastLoggedIdleAfMode)
         ) {
             lastLoggedIdleAfState = afState
@@ -8107,22 +7678,9 @@ class RawCameraController(
             running = false
             opening = false
             lifecycleGeneration++
-            openCameraTouchFocusActive = false
-            openCameraTouchFocusCompleted = false
-            dropAfRegionOnRelease = false
-            touchFocusStartSent = false
-            touchFocusScanSeen = false
-            lastLoggedTouchAfStateValid = false
-            lastTouchTapElapsedMs = 0L
-            touchFocusLockedSharp = false
-            focusLockIndefinite = false
-            aeLockIndefinite = false
-            focusLockDeadlineMs = 0L
+            touchFocus.resetForStop()
             publishPeakingActiveIfChanged()
-            removeOpenCameraTouchFocusTimeout()
-            removeOpenCameraContinuousFocusReset()
-            removePendingTouchFocusStart()
-            removeIdleAfNudge()
+            touchFocus.cancelTimers()
             cancelRawZslWatchdog()
             cancelProgramRampTick()
             motionTracker.stop()
@@ -9098,18 +8656,7 @@ class RawCameraController(
         /** Longer budget for open rejections: a wedged service needs seconds. */
         private const val OPEN_REJECTION_RETRY_MAX = 15
         private const val OPEN_REJECTION_RETRY_DELAY_MS = 2000L
-        /** Settle before the idle-AF nudge scan on AUTO-only lenses. */
-        private const val IDLE_AF_NUDGE_DELAY_MS = 500L
         private const val LOG_TAG = "RawLensCamera"
-        private const val OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS = AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS
-        /** Timed tap-lock hold before auto-return to continuous AF. */
-        private const val TOUCH_FOCUS_LOCK_TIMEOUT_MS = AutoFocusPolicy.LOCK_HOLD_MS
-        /** Failed-scan hold before auto-return to continuous AF (fast recovery). */
-        private const val TOUCH_FOCUS_FAILURE_HOLD_MS = AutoFocusPolicy.FAILURE_HOLD_MS
-        /** Settle between the AUTO repeating commit and the one-shot AF START. */
-        private const val TOUCH_FOCUS_START_SETTLE_MS = 60L
-        /** Retry delay when START is deferred because a still is executing. */
-        private const val TOUCH_FOCUS_START_RETRY_MS = 400L
         private const val DEBUG_UPDATE_INTERVAL_MS = 200L
         private const val RAW_VF_DEBUG_INTERVAL_MS = 500L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
