@@ -506,7 +506,7 @@ class RawCameraController(
         if (destroyed || running) return
         running = true
         lifecycleGeneration++
-        openRetryCount = 0
+        ladder.resetRouteRetries()
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
         viewfinder.addOnLayoutChangeListener(previewLayoutListener)
         viewfinder.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -546,7 +546,7 @@ class RawCameraController(
             val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
             rawCameraIds = candidates.filter { cameraId ->
                 val openId = resolveOpenCameraId(cameraId)
-                openId != null && openId !in unopenableOpenIds
+                openId != null && openId !in ladder.unopenableOpenIds
             }.sortedBy(::opticalMetric)
             val id = selectedCameraId?.takeIf(rawCameraIds::contains)
                 ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
@@ -561,10 +561,7 @@ class RawCameraController(
                 return
             }
             selectedCameraId = id
-            if (id != sessionLadderLensId) {
-                sessionLadderLensId = id
-                resetSessionLadder()
-            }
+            ladder.selectLens(id)
             val route = cachedCameraRoute(id)
             if (route == null) {
                 opening = false
@@ -575,7 +572,7 @@ class RawCameraController(
             }
             sessionPrimaryRoute = route
             sessionAltRoute = resolveDirectPhysicalFallback(route)
-            val effectiveRoute = if (sessionRouteAltActive) sessionAltRoute ?: route else route
+            val effectiveRoute = if (ladder.altRouteActive) sessionAltRoute ?: route else route
             val openCameraId = effectiveRoute.openCameraId
             activePhysicalCameraId = effectiveRoute.physicalCameraId
             characteristics = effectiveRoute.characteristics
@@ -620,8 +617,8 @@ class RawCameraController(
             onActiveCameraChanged(id)
         
             onState("OPENING RAW")
-            val ladderRoute = if (sessionRouteAltActive) "direct-physical" else "primary"
-            Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo $sessionComboIndex]")
+            val ladderRoute = if (ladder.altRouteActive) "direct-physical" else "primary"
+            Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo ${ladder.comboIndex}]")
             try {
                 cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
             } catch (failure: IllegalArgumentException) {
@@ -639,14 +636,13 @@ class RawCameraController(
                 // An ID that opened before reporting unknown-device is a camera
                 // service hiccup, not a bad lens: never denylist it, and stop the
                 // cascade (the next lens would fail the same way). Retry instead.
-                if (!shouldDenylistOnOpenRejected(openCameraId, openedOnceOpenIds) &&
+                if (!shouldDenylistOnOpenRejected(openCameraId, ladder.openedOnceOpenIds) &&
                     scheduleOpenRejectionRetry()
                 ) {
                     Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
                     return
                 }
-                unopenableOpenIds += openCameraId
-                unopenableOpenIds += sessionFailedOpenIds
+                ladder.denylist(openCameraId)
                 try {
                     // Record both keys: the open ID that refused and the route
                     // identity that failed, so discovery matches exact identities
@@ -656,9 +652,9 @@ class RawCameraController(
                 } catch (_: Exception) {
                     // Best effort: a verdict write must never break the fallback path.
                 }
-                val fallback = nextLensAfterOpenRejected(candidates, unopenableOpenIds, ::resolveOpenCameraId)
+                val fallback = nextLensAfterOpenRejected(candidates, ladder.unopenableOpenIds, ::resolveOpenCameraId)
                 if (fallback == null) {
-                    Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=$unopenableOpenIds)")
+                    Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=${ladder.unopenableOpenIds})")
                     if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
                     return
                 }
@@ -687,9 +683,7 @@ class RawCameraController(
                 }
                 opening = false
                 camera = device
-                openRetryCount = 0
-                openRejectionRetryCount = 0
-                openedOnceOpenIds += device.id
+                ladder.onOpened(device.id)
                 try {
                     lensVerdicts.markOpenable(device.id)
                     // Same exact-identity recording: under this generation
@@ -827,16 +821,16 @@ class RawCameraController(
             onState("RAW UNAVAILABLE")
             return
         }
-        sessionComboIndex = sessionComboIndex.coerceIn(0, combos.lastIndex)
+        ladder.comboIndex = ladder.comboIndex.coerceIn(0, combos.lastIndex)
         // ISP preview-request verdict: cameras proven to stall at ~20 fps
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
-        if (sessionComboIndex == 0 && ispPreviewRequestNeeded(selectedCameraId)) {
-            firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { sessionComboIndex = it }
+        if (ladder.comboIndex == 0 && ispPreviewRequestNeeded(selectedCameraId)) {
+            firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
         sessionOffersPreview = combos.any { it.preview != null }
-        val combo = combos[sessionComboIndex]
-        if (sessionComboIndex > 0 && combo.preview == null && ispPreviewRequestNeeded(selectedCameraId)) {
+        val combo = combos[ladder.comboIndex]
+        if (ladder.comboIndex > 0 && combo.preview == null && ispPreviewRequestNeeded(selectedCameraId)) {
             // The preview remedy failed on this camera: the stillborn ladder
             // fell through every preview step (some HALs crash with any
             // preview+RAW session), landing raw-only. Raw-only is the
@@ -936,7 +930,7 @@ class RawCameraController(
         fpsProbeCameraId = selectedCameraId
         fpsProbeFirstNs = 0L
         fpsProbeShot = captureSequence.get()
-        logRawStreamCombo(map, rawSize, previewSize, combo.label, sessionComboIndex, combos.size)
+        logRawStreamCombo(map, rawSize, previewSize, combo.label, ladder.comboIndex, combos.size)
         // RAW-only combos skip the preview surface entirely: the session runs
         // a single RAW stream and the RAW viewfinder is the only display.
         val surface: Surface? = combo.preview?.let { pv ->
@@ -1490,7 +1484,7 @@ class RawCameraController(
         if (lastSessionRawFormat == android.graphics.ImageFormat.RAW_SENSOR) return false
         rawFormatPreferenceStore.set(id, null)
         lastSessionRawFormat = android.graphics.ImageFormat.RAW_SENSOR
-        sessionComboIndex = 0
+        ladder.comboIndex = 0
         Log.w(LOG_TAG, "$reason; packed format refused, retrying $id as RAW_SENSOR")
         onState("RECOVERING PREVIEW")
         restartCameraForConfigurationChange()
@@ -1512,14 +1506,10 @@ class RawCameraController(
             return true
         }
         val primary = sessionPrimaryRoute
-        val primaryFailed = primary?.openCameraId?.let(sessionFailedOpenIds::contains) == true
         val comboCount = primary?.let { sessionComboCount(it.characteristics) } ?: 0
-        if (!primaryFailed && sessionComboIndex + 1 < comboCount) {
-            // A failed direct-physical full combo falls back to the primary
-            // route's degraded combos; the alternate never degrades sizes.
-            if (sessionRouteAltActive) sessionRouteAltActive = false
-            sessionComboIndex++
-            Log.w(LOG_TAG, "$reason; retrying $id with combo $sessionComboIndex/${comboCount - 1}")
+        if (ladder.canDegrade(primary?.openCameraId, comboCount)) {
+            val next = ladder.degrade()
+            Log.w(LOG_TAG, "$reason; retrying $id with combo $next/${comboCount - 1}")
             onState("RECOVERING PREVIEW")
             restartCameraForConfigurationChange()
             return true
@@ -1534,7 +1524,7 @@ class RawCameraController(
      * the camera handler (the openCamera callback thread).
      */
     private fun advancePastFailedOpen(failedOpenId: String): Boolean {
-        sessionFailedOpenIds += failedOpenId
+        ladder.recordFailedOpen(failedOpenId)
         return switchToAltRoute { alt ->
             "Camera open failed on $failedOpenId; retrying via direct physical ${alt.openCameraId}"
         }
@@ -1547,9 +1537,8 @@ class RawCameraController(
      */
     private fun switchToAltRoute(logMessage: (CameraRoute) -> String): Boolean {
         val alt = sessionAltRoute
-        if (sessionRouteAltActive || alt == null || alt.openCameraId in sessionFailedOpenIds) return false
-        sessionRouteAltActive = true
-        sessionComboIndex = 0
+        if (alt == null || !ladder.altRouteAvailable(alt.openCameraId)) return false
+        ladder.switchToAltRoute()
         Log.w(LOG_TAG, logMessage(alt))
         onState("RECOVERING PREVIEW")
         restartCameraForConfigurationChange()
@@ -1626,27 +1615,8 @@ class RawCameraController(
     private var vfGpuReaderTrialArmed = !vfGpuReaderStarvedPersisted()
     /** A disarmed trial awaits its control verdict (first delivered image persists it). */
     private var vfGpuTrialConvicted = false
-    /**
-     * Session fallback ladder: HALs that reject the full RAW+preview combo
-     * (Xiaomi 14 Ultra rejects it async on every route) retry with degraded
-     * combos and, for vendor composites, a direct-physical route instead of
-     * wedging on SESSION ERROR. Sticky per lens so a reopen goes straight to
-     * the winning combo; reset only when the user changes lens.
-     */
-    private var sessionComboIndex = 0
-    private var sessionRouteAltActive = false
-    private var sessionLadderLensId: String? = null
-    private val sessionFailedOpenIds = mutableSetOf<String>()
-    /**
-     * Open IDs the camera service rejected as unknown devices. Unlike
-     * [sessionFailedOpenIds] (cleared on every lens change), this denylist
-     * lives with the controller: rejection is deterministic per open ID, so a
-     * lens that resolves characteristics yet refuses [android.hardware.camera2.CameraManager.openCamera]
-     * stays excluded until the user re-runs lens discovery ([reloadLenses]).
-     */
-    private val unopenableOpenIds = mutableSetOf<String>()
-    /** Open IDs that opened successfully at least once (controller lifetime). */
-    private val openedOnceOpenIds = mutableSetOf<String>()
+    /** Combo/route fallback ladder, failed-open denylist and reopen budgets. */
+    private val ladder = SessionLadder()
     /** Passive stream-probe record: real open outcomes, surfaced by lens discovery. */
     private val lensVerdicts = LensVerdictStore(context)
     /** Per-lens RAW size preference, honored first in the combo ladder. */
@@ -1664,19 +1634,6 @@ class RawCameraController(
     @Volatile private var pendingVerifiedIdentity: String? = null
     private var sessionPrimaryRoute: CameraRoute? = null
     private var sessionAltRoute: CameraRoute? = null
-    /** Consumed reopen attempts for transient route resolution (see [retryOpenForTransientRoute]). */
-    private var openRetryCount = 0
-    /** Consumed reopen attempts after open rejections (see [scheduleOpenRejectionRetry]). */
-    private var openRejectionRetryCount = 0
-
-    private fun resetSessionLadder() {
-        sessionComboIndex = 0
-        sessionRouteAltActive = false
-        sessionFailedOpenIds.clear()
-        openRetryCount = 0
-        openRejectionRetryCount = 0
-    }
-
     /**
      * Bounded reopen after an open rejection that smells transient: an ID
      * that opened moments ago reporting unknown-device means the camera
@@ -1686,9 +1643,8 @@ class RawCameraController(
      * service recovers without user intervention.
      */
     private fun scheduleOpenRejectionRetry(): Boolean {
-        if (openRejectionRetryCount >= OPEN_REJECTION_RETRY_MAX) return false
-        openRejectionRetryCount++
-        Log.w(LOG_TAG, "Open rejected; retry $openRejectionRetryCount/$OPEN_REJECTION_RETRY_MAX")
+        val attempt = ladder.takeRejectionRetry(OPEN_REJECTION_RETRY_MAX) ?: return false
+        Log.w(LOG_TAG, "Open rejected; retry $attempt/$OPEN_REJECTION_RETRY_MAX")
         onState("OPENING RAW")
         val retryGeneration = lifecycleGeneration
         cameraHandler.postDelayed({
@@ -1706,9 +1662,8 @@ class RawCameraController(
      * or a lens change cancels the pending attempt.
      */
     private fun retryOpenForTransientRoute(reason: String): Boolean {
-        if (openRetryCount >= OPEN_RETRY_MAX) return false
-        openRetryCount++
-        Log.w(LOG_TAG, "$reason; retry $openRetryCount/$OPEN_RETRY_MAX")
+        val attempt = ladder.takeRouteRetry(OPEN_RETRY_MAX) ?: return false
+        Log.w(LOG_TAG, "$reason; retry $attempt/$OPEN_RETRY_MAX")
         onState("OPENING RAW")
         val retryGeneration = lifecycleGeneration
         cameraHandler.postDelayed({
@@ -1817,7 +1772,7 @@ class RawCameraController(
             vfGpuTrialConvicted = true
             // The usage axis changed: retry the full combo under it before
             // degrading sizes again (same as the compat escalation below).
-            sessionComboIndex = 0
+            ladder.comboIndex = 0
             Log.w(
                 LOG_TAG,
                 "RAW preview stillborn under GPU-reader trial (images=0 results=$rawStreamResults failures=$rawStreamFailures " +
@@ -1837,7 +1792,7 @@ class RawCameraController(
             // The plan axis changed (hinted -> DEFAULT): retry the full combo
             // under it before degrading sizes again. Runs on the camera thread
             // (all recoverRawPreview callers are camera-confined).
-            sessionComboIndex = 0
+            ladder.comboIndex = 0
             Log.w(
                 LOG_TAG,
                 "RAW preview stillborn (images=0 results=$rawStreamResults failures=$rawStreamFailures " +
@@ -1855,14 +1810,12 @@ class RawCameraController(
         // combo ladder instead of wedging on a black viewfinder. Flowing
         // buffers stay on request-level recovery: that is a viewfinder or
         // rendering problem, not a session problem.
-        val alt = sessionAltRoute
-        val altAvailable = !sessionRouteAltActive && alt != null &&
-            alt.openCameraId !in sessionFailedOpenIds
+        val altAvailable = ladder.altRouteAvailable(sessionAltRoute?.openCameraId)
         val comboCount = sessionPrimaryRoute
             ?.let { sessionComboCount(it.characteristics) } ?: 0
         if (session != null && shouldAdvanceStillbornSessionLadder(
                 rawPreviewFailures, rawStreamImages, rawStreamCompatMode,
-                altAvailable, sessionComboIndex, comboCount
+                altAvailable, ladder.comboIndex, comboCount
             ) && advanceSessionLadder(
                 "RAW stream stillborn (images=0 results=$rawStreamResults " +
                     "failures=$rawStreamFailures plan=$lastSessionPlanLabel)"
@@ -4827,7 +4780,7 @@ class RawCameraController(
         selectedCameraId = rawCameraIds[(current + 1) % rawCameraIds.size]
         afRegion = null; aeRegion = null
         updateDevelopFocus(null)
-        resetSessionLadder()
+        ladder.reset()
         restartCameraForConfigurationChange()
     }
 
@@ -4987,7 +4940,7 @@ class RawCameraController(
         selectedCameraId = cameraId
         afRegion = null; aeRegion = null
         updateDevelopFocus(null)
-        resetSessionLadder()
+        ladder.reset()
         restartCameraForConfigurationChange()
     }
 
@@ -5109,11 +5062,11 @@ class RawCameraController(
             return
         }
         selectedCameraId = null
-        resetSessionLadder()
+        ladder.reset()
         // Explicit re-discovery re-probes every saved lens, so a rejection
         // recorded earlier (possibly against a half-initialized camera
         // service) must not pin any lens out.
-        unopenableOpenIds.clear()
+        ladder.clearDenylist()
         restartCameraForConfigurationChange()
     }
 

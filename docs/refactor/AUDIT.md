@@ -40,10 +40,16 @@ evidence. "Device-unverified" means no on-device run yet.
 | 84761c2 | ZSL F1–F3: unverifiable GCam citations replaced; PhotonCamera differences stated; `qualityScore` marked unsourced | Google Research HDR+ with Bracketing; PhotonCamera `b2eff82` | compile | comment-only |
 | 35e3826 | ZSL F7: HDR+/MFSR full-ring takes share `takeFullRingForMerge` (merges untouched) | — | fresh 1505/0; `activeFrameCount()` pure, so the single call is equivalent | device-unverified |
 | ddf1f4d | `ZslStreamHealth` extracted: watchdog windows, transient cooldown, burst-mode latch, overflow-storm escalation, fruitless-cooldown rebuild (decisions only; controller keeps actions). Inline copies of the blocked test in `updateRepeatingRequest`/`admitStaleZslFrame` now call `isRawZslBlocked()`. Controller 8706 → 8630 | AOSP ImageReader.java (maxImages / IllegalStateException) | 12 new JVM tests; fresh 1517/0; release + androidTest compile. `open()` reset order: cooldown reset moved below VF invalidation/`notifyVfRoute`, neither reads ZSL state | device-unverified |
-| (next) | F9 (owner-approved): capacity-0 status text no longer claims a memory budget; one constant for both sites | `clampZslCapacityForReader` | fresh unit run | user-visible text only |
+| 6fa0aee | F9 (owner-approved): capacity-0 status text no longer claims a memory budget; one constant for both sites | `clampZslCapacityForReader` | fresh unit run | user-visible text only |
+| a623574 | Session study (no code); S1 bug recorded | AOSP CameraDevice/CameraDeviceImpl, metadata_definitions.xml | — | — |
+| 35fed6e | S2/S4/S5/S6: stale packed log, orphan KDoc, stream-use-case comments vs spec, `open()` re-indent | metadata_definitions.xml | `git diff -w` text only | none |
+| f54ae94 | S7: RAW image listener → `onRawImageAvailable` | — | body identical ignoring whitespace; 1517/0 | none |
+| 71e8a2f | S3/S8: `discardSessionOutputs`, `switchToAltRoute` | — | 1517/0 | none |
+| (next) | `SessionLadder`: combo index, alt route, failed/unopenable/opened-once IDs, retry budgets; `recoverRawPreview` alt check reuses it. Controller 8630 → 8594 | — | 6 new JVM tests; fresh 1523/0; release + androidTest compile | device-unverified |
 
 ## Open decisions for the owner
 
+- **S1** (session): vendor operating-mode session passes `List<Surface>` where AOSP `createCustomCaptureSession` takes `List<OutputConfiguration>`; it has never applied. Fixing enables an opt-in feature for the first time. See `session-study.md`.
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
