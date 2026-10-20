@@ -542,131 +542,131 @@ class RawCameraController(
         opening = true
         val generation = lifecycleGeneration
         try {
-        val configuredIds = enabledCameraIds()
-        val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
-        rawCameraIds = candidates.filter { cameraId ->
-            val openId = resolveOpenCameraId(cameraId)
-            openId != null && openId !in unopenableOpenIds
-        }.sortedBy(::opticalMetric)
-        val id = selectedCameraId?.takeIf(rawCameraIds::contains)
-            ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
-            ?: rawCameraIds.firstOrNull()
-        if (id == null) {
-            opening = false
-            if (candidates.isNotEmpty() &&
-                retryOpenForTransientRoute("No RAW camera route (candidates=$candidates)")
-            ) return
-            Log.w(LOG_TAG, "No RAW camera route (candidates=$candidates)")
-            onState("NO RAW CAMERA")
-            return
-        }
-        selectedCameraId = id
-        if (id != sessionLadderLensId) {
-            sessionLadderLensId = id
-            resetSessionLadder()
-        }
-        val route = cachedCameraRoute(id)
-        if (route == null) {
-            opening = false
-            if (retryOpenForTransientRoute("RAW camera $id route unavailable")) return
-            Log.w(LOG_TAG, "RAW camera $id route unavailable")
-            onState("RAW CAMERA $id UNAVAILABLE")
-            return
-        }
-        sessionPrimaryRoute = route
-        sessionAltRoute = resolveDirectPhysicalFallback(route)
-        val effectiveRoute = if (sessionRouteAltActive) sessionAltRoute ?: route else route
-        val openCameraId = effectiveRoute.openCameraId
-        activePhysicalCameraId = effectiveRoute.physicalCameraId
-        characteristics = effectiveRoute.characteristics
-        hasPreviewMetadata = false
-        lastPreviewMetadataPublishMs = 0L
-        lastWbKelvin = null
-        lastPreviewSensorTimestamp = Long.MIN_VALUE
-        latestPreviewResult = null
-        rawZslDisabledForSession = false
-        rawZslFallbackDetail = null
-        rawPreviewRetryUntilMs = 0L
-        rawPreviewFailures = 0
-        rawViewfinder?.invalidateSession()
-        bguViewfinder?.invalidateSession()
-        // A fresh session retries the full ladder from legacy (engines may
-        // have failed only transiently).
-        legacyDead = false
-        bguDead = false
-        notifyVfRoute()
-        // A fresh session deserves a fresh verdict on the repeating stream.
-        zslHealth.resetForSession()
-        consecutiveDeadChains = 0
-        chainPairedAny = false
-        rawHistogramDisabledForSession = false
-        rawHistogramStreaming = false
-        maxFaceCount = characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
-        faceDetectRejected = false
-        clearFaceState()
-        clampControlsToCamera()
+            val configuredIds = enabledCameraIds()
+            val candidates = if (configuredIds.isEmpty()) cameraManager.cameraIdList.toList() else configuredIds.toList()
+            rawCameraIds = candidates.filter { cameraId ->
+                val openId = resolveOpenCameraId(cameraId)
+                openId != null && openId !in unopenableOpenIds
+            }.sortedBy(::opticalMetric)
+            val id = selectedCameraId?.takeIf(rawCameraIds::contains)
+                ?: preferredCameraId()?.takeIf(rawCameraIds::contains)
+                ?: rawCameraIds.firstOrNull()
+            if (id == null) {
+                opening = false
+                if (candidates.isNotEmpty() &&
+                    retryOpenForTransientRoute("No RAW camera route (candidates=$candidates)")
+                ) return
+                Log.w(LOG_TAG, "No RAW camera route (candidates=$candidates)")
+                onState("NO RAW CAMERA")
+                return
+            }
+            selectedCameraId = id
+            if (id != sessionLadderLensId) {
+                sessionLadderLensId = id
+                resetSessionLadder()
+            }
+            val route = cachedCameraRoute(id)
+            if (route == null) {
+                opening = false
+                if (retryOpenForTransientRoute("RAW camera $id route unavailable")) return
+                Log.w(LOG_TAG, "RAW camera $id route unavailable")
+                onState("RAW CAMERA $id UNAVAILABLE")
+                return
+            }
+            sessionPrimaryRoute = route
+            sessionAltRoute = resolveDirectPhysicalFallback(route)
+            val effectiveRoute = if (sessionRouteAltActive) sessionAltRoute ?: route else route
+            val openCameraId = effectiveRoute.openCameraId
+            activePhysicalCameraId = effectiveRoute.physicalCameraId
+            characteristics = effectiveRoute.characteristics
+            hasPreviewMetadata = false
+            lastPreviewMetadataPublishMs = 0L
+            lastWbKelvin = null
+            lastPreviewSensorTimestamp = Long.MIN_VALUE
+            latestPreviewResult = null
+            rawZslDisabledForSession = false
+            rawZslFallbackDetail = null
+            rawPreviewRetryUntilMs = 0L
+            rawPreviewFailures = 0
+            rawViewfinder?.invalidateSession()
+            bguViewfinder?.invalidateSession()
+            // A fresh session retries the full ladder from legacy (engines may
+            // have failed only transiently).
+            legacyDead = false
+            bguDead = false
+            notifyVfRoute()
+            // A fresh session deserves a fresh verdict on the repeating stream.
+            zslHealth.resetForSession()
+            consecutiveDeadChains = 0
+            chainPairedAny = false
+            rawHistogramDisabledForSession = false
+            rawHistogramStreaming = false
+            maxFaceCount = characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
+            faceDetectRejected = false
+            clearFaceState()
+            clampControlsToCamera()
         
-        val pixelArraySize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-        val sensorInfo = String.format(java.util.Locale.US, "RAW\n%s", 
-            if (pixelArraySize != null) "${pixelArraySize.width}x${pixelArraySize.height}" else "SENSOR")
+            val pixelArraySize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+            val sensorInfo = String.format(java.util.Locale.US, "RAW\n%s", 
+                if (pixelArraySize != null) "${pixelArraySize.width}x${pixelArraySize.height}" else "SENSOR")
         
-        val maxDepth = characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
-        lastWhiteLevelBits = whiteLevelBitDepth(maxDepth)
-        lastSensorInfo = sensorInfo
-        val dngInfo = String.format(java.util.Locale.US, "DNG\n%d-bit RAW", lastWhiteLevelBits)
+            val maxDepth = characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+            lastWhiteLevelBits = whiteLevelBitDepth(maxDepth)
+            lastSensorInfo = sensorInfo
+            val dngInfo = String.format(java.util.Locale.US, "DNG\n%d-bit RAW", lastWhiteLevelBits)
 
-        onInfo(dngInfo, sensorInfo)
-        publishControls()
-        onActiveCameraChanged(id)
+            onInfo(dngInfo, sensorInfo)
+            publishControls()
+            onActiveCameraChanged(id)
         
-        onState("OPENING RAW")
-        val ladderRoute = if (sessionRouteAltActive) "direct-physical" else "primary"
-        Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo $sessionComboIndex]")
-        try {
-            cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
-        } catch (failure: IllegalArgumentException) {
-            // Queryable but not openable: hidden/vendor IDs answer
-            // getCameraCharacteristics yet the service reports them as unknown
-            // devices on open (vivo V2562). Must not escape: this runs on the
-            // camera thread, where it kills the process. The rejection is
-            // deterministic per open ID, so ladder to the direct-physical
-            // route first, then exclude the failed IDs and fall through to
-            // the next lens instead of wedging on a black viewfinder.
-            opening = false
-            Log.w(LOG_TAG, "openCamera rejected $openCameraId (selected $id)", failure)
-            if (!running) return
-            if (advancePastFailedOpen(openCameraId)) return
-            // An ID that opened before reporting unknown-device is a camera
-            // service hiccup, not a bad lens: never denylist it, and stop the
-            // cascade (the next lens would fail the same way). Retry instead.
-            if (!shouldDenylistOnOpenRejected(openCameraId, openedOnceOpenIds) &&
-                scheduleOpenRejectionRetry()
-            ) {
-                Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
-                return
-            }
-            unopenableOpenIds += openCameraId
-            unopenableOpenIds += sessionFailedOpenIds
+            onState("OPENING RAW")
+            val ladderRoute = if (sessionRouteAltActive) "direct-physical" else "primary"
+            Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo $sessionComboIndex]")
             try {
-                // Record both keys: the open ID that refused and the route
-                // identity that failed, so discovery matches exact identities
-                // instead of inferring from prefixes.
-                lensVerdicts.markDead(openCameraId)
-                if (id != openCameraId) lensVerdicts.markDead(id)
-            } catch (_: Exception) {
-                // Best effort: a verdict write must never break the fallback path.
-            }
-            val fallback = nextLensAfterOpenRejected(candidates, unopenableOpenIds, ::resolveOpenCameraId)
-            if (fallback == null) {
-                Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=$unopenableOpenIds)")
-                if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
+                cameraManager.openCamera(openCameraId, deviceCallback(generation), cameraHandler)
+            } catch (failure: IllegalArgumentException) {
+                // Queryable but not openable: hidden/vendor IDs answer
+                // getCameraCharacteristics yet the service reports them as unknown
+                // devices on open (vivo V2562). Must not escape: this runs on the
+                // camera thread, where it kills the process. The rejection is
+                // deterministic per open ID, so ladder to the direct-physical
+                // route first, then exclude the failed IDs and fall through to
+                // the next lens instead of wedging on a black viewfinder.
+                opening = false
+                Log.w(LOG_TAG, "openCamera rejected $openCameraId (selected $id)", failure)
+                if (!running) return
+                if (advancePastFailedOpen(openCameraId)) return
+                // An ID that opened before reporting unknown-device is a camera
+                // service hiccup, not a bad lens: never denylist it, and stop the
+                // cascade (the next lens would fail the same way). Retry instead.
+                if (!shouldDenylistOnOpenRejected(openCameraId, openedOnceOpenIds) &&
+                    scheduleOpenRejectionRetry()
+                ) {
+                    Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
+                    return
+                }
+                unopenableOpenIds += openCameraId
+                unopenableOpenIds += sessionFailedOpenIds
+                try {
+                    // Record both keys: the open ID that refused and the route
+                    // identity that failed, so discovery matches exact identities
+                    // instead of inferring from prefixes.
+                    lensVerdicts.markDead(openCameraId)
+                    if (id != openCameraId) lensVerdicts.markDead(id)
+                } catch (_: Exception) {
+                    // Best effort: a verdict write must never break the fallback path.
+                }
+                val fallback = nextLensAfterOpenRejected(candidates, unopenableOpenIds, ::resolveOpenCameraId)
+                if (fallback == null) {
+                    Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=$unopenableOpenIds)")
+                    if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
+                    return
+                }
+                Log.w(LOG_TAG, "Lens $id unopenable via $openCameraId; falling back to $fallback")
+                selectedCameraId = null
+                open()
                 return
             }
-            Log.w(LOG_TAG, "Lens $id unopenable via $openCameraId; falling back to $fallback")
-            selectedCameraId = null
-            open()
-            return
-        }
         } catch (failure: CameraAccessException) {
             opening = false
             Log.w(LOG_TAG, "openCamera failed: ${cameraAccessReason(failure)}")
@@ -800,7 +800,7 @@ class RawCameraController(
                 (map.getOutputSizes(android.graphics.ImageFormat.RAW12)?.size ?: 0) +
                 (map.getOutputSizes(IMAGE_FORMAT_RAW14)?.size ?: 0)
         if (packedRawSizes > 0) {
-            Log.i(LOG_TAG, "Packed RAW available ($packedRawSizes sizes); sessions stay RAW_SENSOR (no unpack path)")
+            Log.i(LOG_TAG, "Packed RAW available ($packedRawSizes sizes); session format follows the per-lens preference")
         }
         // The activity is deliberately portrait-locked. Match Photon's preview geometry: camera
         // stream sizes stay in their native landscape order while the view uses the swapped
@@ -1165,11 +1165,6 @@ class RawCameraController(
     }
 
     /**
-     * Camera2's modern session API lets the HAL see the intended stream roles before it allocates
-     * buffers.  We only attach stream-use-case hints when the exact configuration is reported as
-     * supported; otherwise the same modern session is submitted without hints.
-     */
-    /**
      * One-line stream inventory per session: the sizes, queue depth and HAL
      * timing the RAW repeating stream runs under. This is the field evidence
      * that separates a stillborn stream (unsatisfiable combo) from a dead
@@ -1199,6 +1194,11 @@ class RawCameraController(
     }
 
     @Suppress("DEPRECATION")
+    /**
+     * Camera2's modern session API lets the HAL see the intended stream roles before it allocates
+     * buffers. We only attach stream-use-case hints when the exact configuration is reported as
+     * supported; otherwise the same modern session is submitted without hints.
+     */
     private fun createPerformanceSession(
         device: CameraDevice,
         preview: Surface?,
@@ -1300,16 +1300,18 @@ class RawCameraController(
 
         if (preview == null) {
             // RAW-only last resort: a single stream with no use-case hints at
-            // all. A lone RAW output tagged STILL_CAPTURE risks still-only
-            // scheduling (the Samsung lesson); DEFAULT is the baseline.
+            // all. Per spec DEFAULT on a RAW output behaves like STILL_CAPTURE
+            // ("same behavior as the default JPEG and RAW related formats",
+            // metadata_definitions.xml); leaving the hint unset avoids the
+            // stall observed on Samsung HALs with an explicit tag.
             return SessionPerformancePlan(configuration(null, null), "RAW ONLY")
         }
 
         if (rawStreamCompatMode) {
             // Stillborn-stream fallback (Samsung): no stream-use-case hints at
-            // all. A RAW output tagged STILL_CAPTURE can stall repeating
-            // delivery on HALs that schedule it as a still-only stream; DEFAULT
-            // is the documented compatibility baseline.
+            // all. Per spec an untagged RAW output already behaves like
+            // STILL_CAPTURE; the difference is field-observed (an explicit
+            // tag stalled repeating delivery on Samsung), not documented.
             return SessionPerformancePlan(configuration(null, null), "DEFAULT (compat)")
         }
 
