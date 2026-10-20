@@ -5056,49 +5056,35 @@ class RawCameraController(
         // are pre-allocated and bounded, and a 6-frame JPEG burst would otherwise
         // leave the viewfinder without RAW (stale scope graph) for the
         // whole development queue. Only an active forward capture stops them.
-        val captureActive = captureInProgress.get()
-        // Split gate: a reserved capture slot (ZSL burst being assembled in the
-        // retry wait) must NOT block the ZSL ring itself — otherwise a per-shot
-        // restart during the wait rebuilds preview-only and the ring can never
-        // refill (observed as ZSL NOT READY with saves=0). Only a physically
-        // executing still sequence blocks it, since interleaved repeating RAW
-        // frames would steal reader slots from the in-flight still captures.
-        // Metering streams keep the strict gate: they must stay down across any
-        // held capture so forward captures keep full reader headroom.
-        val stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0
-        val rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs
-        val readerReady = rawZslCapacity > 0 && reader != null && rawRetryReady
-        // A transient cooldown parks ZSL exactly like the latched fallback while
-        // it runs; every later press retries from scratch instead (per-shot).
-        val zslBlocked = isRawZslBlocked()
-        val useRawZsl = allowRawZsl && zslRestartFitsReader() && shouldRunRawStream(
-            rawZslRequested, zslBlocked, readerReady, captureActive && stillExecuting
+        // A transient ZSL cooldown parks the ring exactly like the latched
+        // fallback while it runs (see [RawStreamPlan] for each stream's rule).
+        val plan = RawStreamPlan.plan(
+            RawStreamPlan.Inputs(
+                allowRawZsl = allowRawZsl,
+                zslRestartFitsReader = zslRestartFitsReader(),
+                zslRequested = rawZslRequested,
+                zslBlocked = isRawZslBlocked(),
+                zslCapacity = rawZslCapacity,
+                readerPresent = reader != null,
+                rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs,
+                captureInProgress = captureInProgress.get(),
+                stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0,
+                histogramEnabled = rawHistogramEnabled,
+                histogramDisabledForSession = rawHistogramDisabledForSession,
+                ettrEnabled = ettrSettings.enabled,
+                ettrModeAvailable = ettrModeAvailable(),
+                manualIsoOrShutter = selectedIso != null || selectedExposureNanos != null,
+                exposureModeManual = captureExposureMode == CaptureExposureMode.MANUAL,
+                programCustomActive = programCustomActive(),
+                hasRawViewfinder = rawViewfinder != null || bguViewfinder != null,
+            )
         )
-        // Live RAW scope for every capture mode. Never competes with the ZSL ring:
-        // scope-only frames are sampled and closed.
-        val useRawHistogram = !useRawZsl && shouldRunRawStream(
-            rawHistogramEnabled, rawHistogramDisabledForSession,
-            readerReady, captureActive
-        )
-        // RAW-based ETTR needs the same metering stream even when the histogram is off
-        // or showing YUV: sampled frames update the still-capture pair and are closed.
-        // ETTR is AUTO-only; PROGRAM drives exposure through its own RAW loop.
-        val useRawEttr = !useRawZsl && ettrSettings.enabled && ettrModeAvailable() && shouldRunRawStream(
-            true, false, readerReady, captureActive
-        ) &&
-            selectedIso == null && selectedExposureNanos == null &&
-            captureExposureMode != CaptureExposureMode.MANUAL
-        // PROGRAM custom AE needs the same metering stream: RAW brightness (center-weighted
-        // mean or median per profile) drives sensor ISO + shutter directly (AE_OFF live).
-        // Manual exposure wins, ZSL is mutually exclusive.
-        val useRawProgram = !useRawZsl && programCustomActive() && shouldRunRawStream(
-            true, false, readerReady, captureActive
-        )
-        // WYSIWYG preview: BOTH modes render our scene-referred pipeline from the RAW
-        // feed — raw-clean Reinhard for DNG_ONLY, cheap AgX for JPEG/JPEG_DNG. Never
-        // ISP YUV. The tonemap is a per-frame VF uniform, so the stream stays identical.
-        val useRawViewfinder = (rawViewfinder != null || bguViewfinder != null) && reader != null && rawRetryReady
-        val useRawStream = useRawViewfinder || useRawZsl || useRawHistogram || useRawEttr || useRawProgram
+        val useRawZsl = plan.zsl
+        val useRawHistogram = plan.histogram
+        val useRawEttr = plan.ettr
+        val useRawProgram = plan.program
+        val useRawViewfinder = plan.viewfinder
+        val useRawStream = plan.anyRaw
         try {
             val preserveBuffer = preserveRawZslBuffer && rawZslStreaming && useRawZsl
             // Keep existing paired candidates through benign control changes (tap focus and
@@ -5134,7 +5120,11 @@ class RawCameraController(
                 // Compat sessions omit the forced range: the HAL runs the
                 // RAW+preview combo at its own sustainable rate instead of a
                 // fixed 30 fps the full-resolution RAW readout may not meet.
-                if (includeRaw && !rawStreamCompatMode) rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                // RAW requests, and every request while the ZSL ring streams, ask for
+                // the best advertised 30 fps range the streams can sustain.
+                if ((includeRaw || useRawZsl) && !rawStreamCompatMode) {
+                    rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                }
                 if (useRawZsl) {
                     // App-operated RAW ZSL still uses TEMPLATE_PREVIEW so the TextureView never
                     // freezes, but tell 3A/HAL scheduling that this repeating request is serving
@@ -5146,9 +5136,6 @@ class RawCameraController(
                         if (includeRaw) CaptureRequest.CONTROL_CAPTURE_INTENT_ZERO_SHUTTER_LAG
                         else CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
                     )
-                    if (!rawStreamCompatMode) rawZslTargetFpsRange?.let { range ->
-                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
-                    }
                 }
                 // VF preview applies the same lens-shading correction as saves (zero-copy
                 // RGBA16F sidecar), so every repeating RAW request carries the map —
