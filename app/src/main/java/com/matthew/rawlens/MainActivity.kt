@@ -104,9 +104,9 @@ class MainActivity : Activity() {
     private lateinit var ettrQuick: TextView
     private var dualRawEnabled = false // Experimental, deliberately session-only.
     private var lastLensSwitcherSignature: String? = null
-    private lateinit var timerBadge: TextView
+    private lateinit var featureTags: TextView
+    private lateinit var lightQuick: TextView
     private lateinit var modeButton: TextView
-    private lateinit var flashButton: ImageButton
     private lateinit var rawBadge: TextView
     private lateinit var rawStatusGroup: View
     private var captureFormat = CaptureFormat.DNG_ONLY
@@ -365,9 +365,9 @@ class MainActivity : Activity() {
         hdrPlusQuick = findViewById(R.id.hdrPlusQuick)
         mfsrQuick = findViewById(R.id.mfsrQuick)
         ettrQuick = findViewById(R.id.ettrQuick)
-        timerBadge = findViewById(R.id.timerBadge)
+        featureTags = findViewById(R.id.featureTags)
+        lightQuick = findViewById(R.id.lightQuick)
         modeButton = findViewById(R.id.modeButton)
-        flashButton = findViewById(R.id.flashButton)
         rawBadge = findViewById(R.id.rawBadge)
         rawStatusGroup = findViewById(R.id.rawStatusGroup)
         refreshCaptureFormatControl()
@@ -478,9 +478,11 @@ class MainActivity : Activity() {
                     flashControl.text = flash
                     flashControl.isEnabled = flashEnabled
                     flashControl.alpha = if (flashEnabled) 1f else 0.4f
-                    flashButton.isEnabled = flashEnabled
-                    flashButton.alpha = if (!flashEnabled) 0.35f else if (flash.endsWith("ON")) 1f else 0.72f
-                    flashButton.setColorFilter(getColor(if (flash.endsWith("ON")) R.color.accent else R.color.text_primary))
+                    lightQuick.text = flash.replaceFirst(' ', '\n')
+                    lightQuick.isEnabled = flashEnabled
+                    lightQuick.alpha = if (flashEnabled) 1f else 0.4f
+                    setQuickTileState(lightQuick, flash.endsWith("ON"))
+                    refreshManualTileAccents()
                     refreshLensSwitcher()
                     updateQuickControls()
                 }
@@ -678,11 +680,8 @@ class MainActivity : Activity() {
             hideManualControl()
             controller.toggleTorch()
         }
-        flashButton.setOnClickListener {
-            closeFloatingPanels()
-            controller.toggleTorch()
-        }
-        findViewById<View>(R.id.timerButton).setOnClickListener { cycleTimer() }
+        lightQuick.setOnClickListener { controller.toggleTorch() }
+        featureTags.setOnClickListener { toggleQuickControls() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
         // Dedicated red dot below the quick-panel access: a MODE toggle, never
@@ -1420,8 +1419,7 @@ class MainActivity : Activity() {
     }
 
     private fun rotatingControls(): List<View> = listOfNotNull(
-        findViewById(R.id.settingsButton), findViewById(R.id.flashButton),
-        findViewById(R.id.timerButton), findViewById(R.id.timerBadge),
+        findViewById(R.id.settingsButton),
         findViewById(R.id.isoControl),
         findViewById(R.id.shutterControl), findViewById(R.id.wbControl),
         findViewById(R.id.focusControl), findViewById(R.id.evControl),
@@ -1438,6 +1436,7 @@ class MainActivity : Activity() {
         findViewById(R.id.aeMeteringQuick),
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
         findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
+        findViewById(R.id.lightQuick),
         findViewById(R.id.ettrQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
@@ -1603,12 +1602,9 @@ class MainActivity : Activity() {
 
     private fun startCountdown(seconds: Int, forceBurst: Boolean) {
         setStatus("TIMER • $seconds")
-        timerBadge.text = seconds.toString()
-        timerBadge.visibility = View.VISIBLE
         countdownRunnable = Runnable {
             if (seconds <= 1) {
                 countdownRunnable = null
-                updateTimerBadge()
                 captureNow(forceBurst)
             } else {
                 startCountdown(seconds - 1, forceBurst)
@@ -1788,11 +1784,8 @@ class MainActivity : Activity() {
         guideOverlay.videoCrop = videoCrop
         guideOverlay.videoActive = true
         // Same chrome as photo: the top island stays (its gear opens the
-        // Video tab) and the viewport keeps the photo 3:4 box. The timer
-        // hides: the shutter toggles recording and never counts down. The
-        // lens pill hides; exposure chips (SS/ISO/WB/focus/EV) stay visible
+        // Video tab) and the viewport keeps the photo 3:4 box. Exposure chips (SS/ISO/WB/focus/EV) stay visible
         // with the same live photo-tile settings.
-        (findViewById<View>(R.id.timerButton)?.parent as? View)?.visibility = View.GONE
         findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         videoDebugOverlay.visibility = View.VISIBLE
@@ -1835,7 +1828,6 @@ class MainActivity : Activity() {
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         videoAudioPeak = 0f
-        (findViewById<View>(R.id.timerButton)?.parent as? View)?.visibility = View.VISIBLE
         findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
         repositionScopeForVideo()
@@ -2809,7 +2801,7 @@ class MainActivity : Activity() {
             2 -> 5
             else -> 0
         }
-        findViewById<View>(R.id.timerButton).performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        timerQuick.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         setStatus(if (timerSeconds == 0) "TIMER OFF" else "TIMER • ${timerSeconds}S")
         updateQuickControls()
     }
@@ -3174,7 +3166,7 @@ class MainActivity : Activity() {
             return
         }
         rawBadge.text = captureBadgeLabel()
-        rawBadge.setTextColor(getColor(R.color.accent))
+        rawBadge.setTextColor(getColor(R.color.text_secondary))
         val zslLabel = when (rawZslStatus.state) {
             RawZslState.OFF -> "ZSL off"
             RawZslState.WARMING_UP -> "ZSL warming"
@@ -3895,7 +3887,7 @@ class MainActivity : Activity() {
         setQuickTileState(sharp, mfsrSettings.enabled)
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
-        updateTimerBadge()
+        refreshFeatureTags(ettrEnabled)
         // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
         // button itself stays photo-only (video is a separate red button).
         // LOG takes are full-sensor, so the tile shows the output profile.
@@ -3928,9 +3920,32 @@ class MainActivity : Activity() {
         tile.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
     }
 
-    private fun updateTimerBadge() {
-        timerBadge.text = timerSeconds.toString()
-        timerBadge.visibility = if (timerSeconds > 0) View.VISIBLE else View.GONE
+    /** Top-bar gold tags: only photo features that are on right now. */
+    private fun refreshFeatureTags(ettrEnabled: Boolean) {
+        val tags = if (isVideoMode) emptyList() else listOfNotNull(
+            "HDR+".takeIf { hdrPlusSettings.enabled },
+            "MFSR".takeIf { mfsrSettings.enabled },
+            "ETTR".takeIf { ettrEnabled },
+            "HDR".takeIf { hdrEnabled },
+            "BURST".takeIf { releaseMode == 1 },
+            "${timerSeconds}S".takeIf { timerSeconds > 0 },
+        )
+        featureTags.setTextIfChanged(tags.joinToString(" · "))
+        featureTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /** Exposure tiles: gold value when the user set it, primary when auto. */
+    private fun refreshManualTileAccents() {
+        fun tint(tile: TextView, manual: Boolean) =
+            tile.setTextColor(getColor(if (manual) R.color.accent else R.color.text_primary))
+        fun manual(control: ManualControl) =
+            runCatching { manualRangeFor(control)?.automatic == false }.getOrDefault(false)
+        tint(isoControl, manual(ManualControl.ISO))
+        tint(shutterControl, manual(ManualControl.SHUTTER))
+        tint(wbControl, manual(ManualControl.WHITE_BALANCE))
+        tint(focusControl, manual(ManualControl.FOCUS_DISTANCE))
+        val ev = evControl.text.lines().lastOrNull()?.trim()
+        tint(evControl, ev != null && ev != "+0.0" && ev != "0.0" && ev != "--")
     }
 
     /** Both scope views share one bottom slot; only the active mode is visible. */
@@ -4086,17 +4101,14 @@ class MainActivity : Activity() {
         options.forEachIndexed { index, option ->
             val button = RotatingTextView(this).apply {
                 text = option.label
-                setTextColor(getColor(if (option.selected) R.color.accent else R.color.text_primary))
+                setTextColor(getColor(if (option.selected) R.color.accent_dark else R.color.text_primary))
                 setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
-                // Strip segments are transparent; the selected lens gets the
-                // ticked active pill (backgrounds never rotate, so the tick
-                // always stays on top in screen space).
+                // Every lens is its own faint pill; the selected one is filled.
                 background = getDrawable(
-                    if (option.selected) R.drawable.focal_active else android.R.color.transparent
+                    if (option.selected) R.drawable.focal_active else R.drawable.focal_idle
                 )
-                alpha = if (option.selected) 1f else 0.78f
                 minimumHeight = dp(32)
                 setPadding(pillPad, dp(4), pillPad, dp(4))
                 maxLines = 1

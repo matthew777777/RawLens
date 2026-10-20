@@ -138,11 +138,6 @@
          Hidden in video for full-bleed framing. -->
     <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@drawable/top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="16dp" android:paddingTop="16dp" android:paddingEnd="16dp" android:paddingBottom="10dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
-        <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" style="@style/TopBarButton" android:layout_marginStart="8dp" android:contentDescription="Toggle light" android:src="@drawable/ic_flash" />
-        <FrameLayout android:layout_width="48dp" android:layout_height="48dp" android:layout_marginStart="8dp">
-            <com.matthew.rawlens.RotatingImageButton android:id="@+id/timerButton" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/glass_button" android:contentDescription="Capture timer" android:padding="12dp" android:src="@drawable/ic_timer" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/timerBadge" android:layout_width="20dp" android:layout_height="20dp" android:layout_gravity="top|end" android:background="@drawable/control_chip_active" android:gravity="center" android:text="2" android:textColor="@color/accent_dark" android:textSize="10sp" android:textStyle="bold" android:visibility="gone" />
-        </FrameLayout>
         <Space android:id="@+id/topSpacer" android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 
         <LinearLayout
@@ -204,16 +199,40 @@
                     android:background="@drawable/raw_badge"
                     android:letterSpacing="0.08"
                     android:text="DNG"
-                    android:textColor="@color/accent"
+                    android:textColor="@color/text_secondary"
                     android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
+
+            <!-- Active capture features (HDR+, MFSR, ETTR, HDR, BURST,
+                 timer) as gold tags; tap opens quick controls. Same line
+                 as the status so the top island never grows. -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/featureTags"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:ellipsize="end"
+                android:letterSpacing="0.06"
+                android:maxWidth="140dp"
+                android:singleLine="true"
+                android:textColor="@color/accent"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/status"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
                 android:ellipsize="end"
                 android:gravity="end"
                 android:letterSpacing="0.06"
@@ -223,6 +242,7 @@
                 android:text="READY"
                 android:textColor="@color/text_primary"
                 android:textSize="10sp" />
+            </LinearLayout>
 
         </LinearLayout>
     </LinearLayout>
@@ -282,6 +302,7 @@
             <!-- Future SR hook: rawSrQuick tile here. -->
             <com.matthew.rawlens.RotatingTextView android:id="@+id/ettrQuick" style="@style/QuickControlTile" android:text="ETTR\nOFF" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/resetTargetsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="AF / AE\nRESET" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/lightQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="LIGHT\nOFF" />
         </LinearLayout>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />
@@ -299,7 +320,7 @@
         android:minHeight="232dp"
         android:orientation="vertical"
         android:paddingStart="16dp"
-        android:paddingTop="10dp"
+        android:paddingTop="8dp"
         android:paddingEnd="16dp"
         android:paddingBottom="28dp">
 
@@ -347,7 +368,7 @@
                     android:paddingStart="10dp"
                     android:paddingEnd="10dp"
                     android:text="1×"
-                    android:textColor="@color/accent"
+                    android:textColor="@color/accent_dark"
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -398,7 +419,10 @@
                 android:text="LIGHT OFF" />
         </LinearLayout>
 
-        <!-- Shutter area: fixed two-row structure, no code sizing. Row A
+        <!-- Shutter area: fixed two-row structure, no code sizing. Every
+             vertical gap in the panel is 8dp (top pad, lens -> tiles,
+             tiles -> ring, ring -> row B) and every side control is 48dp
+             tall, so left and right columns line up. Row A
              (quick | shutter | mode) is 92dp tall with every child vertically
              centered, so the shutter, quick, and mode centers share one line
              by construction. Row B carries the video dot and preview format.
@@ -441,8 +465,8 @@
                          capture lands. -->
                     <ImageView
                         android:id="@+id/galleryThumb"
-                        android:layout_width="56dp"
-                        android:layout_height="56dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:layout_marginStart="8dp"
                         android:background="@drawable/glass_button"
                         android:contentDescription="Open last capture"
@@ -473,7 +497,7 @@
                     <com.matthew.rawlens.RotatingTextView
                         android:id="@+id/modeButton"
                         android:layout_width="72dp"
-                        android:layout_height="56dp"
+                        android:layout_height="48dp"
                         android:layout_gravity="end|center_vertical"
                         android:background="@drawable/control_chip"
                         android:gravity="center"
@@ -488,7 +512,7 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 

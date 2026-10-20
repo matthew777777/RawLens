@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Idle lens pill: faint fill, no stroke, so every lens reads as tappable
+     without competing with the filled selected pill (focal_active). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#14FFFFFF" />
+    <corners android:radius="16dp" />
+</shape>
