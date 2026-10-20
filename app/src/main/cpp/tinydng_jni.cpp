@@ -61,7 +61,10 @@ std::vector<uint8_t> encodeCfaJxl(const uint8_t* data, int width, int height) {
     basic.uses_original_profile = JXL_TRUE;
     if (JxlEncoderSetBasicInfo(encoder, &basic) != JXL_ENC_SUCCESS)
         fail("Could not set JXL basic info");
+    // Single-plane raw data: gray, linear, zeroed first, as the Adobe DNG SDK
+    // encodes one-plane raw (dng_jxl.cpp; it notes primaries are unused for gray).
     JxlColorEncoding color;
+    std::memset(&color, 0, sizeof(color));
     color.color_space = JXL_COLOR_SPACE_GRAY;
     color.white_point = JXL_WHITE_POINT_D65;
     color.primaries = JXL_PRIMARIES_SRGB;

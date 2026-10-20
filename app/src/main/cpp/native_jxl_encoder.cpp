@@ -141,9 +141,11 @@ jstring encodeWithLibjxl(JNIEnv* env, jobject rgb, jint width, jint height, jint
         return error(env, "Could not create JXL frame settings");
     }
 
-    // Basic info: darktable write_image mapping, including the 16-bit-float
-    // lossless exception (libjxl #17487): float16 at quality 100 keeps
-    // distance 0 without SetFrameLossless.
+    // Basic info: darktable write_image mapping (src/imageio/format/jxl.c),
+    // including its 16-bit-float lossless exception: float16 at quality 100
+    // keeps distance 0 without SetFrameLossless ("Do not enable libjxl
+    // lossless mode for float16, see #17487", a darktable issue:
+    // https://github.com/darktable-org/darktable/issues/17487).
     JxlBasicInfo basic;
     JxlEncoderInitBasicInfo(&basic);
     basic.xsize = (uint32_t)width;
@@ -180,6 +182,9 @@ jstring encodeWithLibjxl(JNIEnv* env, jobject rgb, jint width, jint height, jint
     // and swaps only the transfer function to ST2084.
     if (icc.empty()) {
         JxlColorEncoding color;
+        // Zero first, as the Adobe DNG SDK does (dng_jxl.cpp): only the enum
+        // fields are set below; the rest must not be indeterminate.
+        std::memset(&color, 0, sizeof(color));
         color.color_space = JXL_COLOR_SPACE_RGB;
         color.white_point = JXL_WHITE_POINT_D65;
         color.rendering_intent = JXL_RENDERING_INTENT_PERCEPTUAL;
