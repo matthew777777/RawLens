@@ -17,9 +17,10 @@ internal data class BufferedRawFrame(
     val rollingShutterSkewNanos: Long,
     val motionRadiansPerSecond: Float,
     /**
-     * PhotonCamera-style approximation flag: the paired result never arrived
-     * (capture-result stall) so this frame carries the latest preview result
-     * instead of its own. Pixels are exact; AE-dependent tags (ISO/exposure
+     * Approximate-metadata flag: the paired result never arrived (capture-result
+     * stall) so this frame carries the latest preview result instead of its own.
+     * PhotonCamera (CaptureController.triggerZslCapture) uses the preview result
+     * for every ZSL frame; RawLens pairs exactly and falls back only here. Pixels are exact; AE-dependent tags (ISO/exposure
      * derived) may be stale. Penalized in scoring, logged per burst, never
      * silent.
      */
@@ -99,7 +100,8 @@ internal class RawZslBuffer(private val capacity: Int) {
     }
 
     /**
-     * PhotonCamera-style partial take (GCam's available-capacity rung): returns the
+     * Partial take, as PhotonCamera (`take = min(ring, frameCount)` in
+     * CaptureController.triggerZslCapture): returns the
      * best up to [maxCount] eligible frames, or empty when the ring holds nothing
      * usable. Backs hybrid top-up, where a thin ring is completed with fresh
      * forward captures instead of refusing the shutter.
@@ -177,6 +179,15 @@ internal class RawZslBuffer(private val capacity: Int) {
         return true
     }
 
+    /**
+     * RawLens frame ranking (higher is better). Neither reference ranks: PhotonCamera
+     * takes the newest N ring frames, MotionCam (RawBufferManager::save) the frames
+     * nearest the reference timestamp. The terms follow Camera2 semantics (AE
+     * CONVERGED/LOCKED, LENS_STATE STATIONARY, angular travel over exposure +
+     * rolling-shutter readout), but the weights (2/1/-2, 0.15 per ISO stop, 120
+     * per radian, 1 per 100 ms of age, 1.5 for approximate metadata) are
+     * unsourced tuning, kept as-is for parity. See docs/refactor/zsl-study.md F3.
+     */
     private fun qualityScore(
         frame: BufferedRawFrame,
         cutoffNanos: Long,

@@ -268,7 +268,8 @@ class RawCameraController(
     private var activeHdrFrameEvs: IntArray = intArrayOf(-2, 0, 2)
     private val pendingHdrFrames = ArrayList<PendingHdrFrame>(3)
     /**
-     * Hybrid top-up (GCam ZSL+PSL style): ring frames held aside while fresh
+     * Hybrid top-up (ZSL frames before the press + forward frames after it, as
+     * in https://research.google/blog/hdr-with-bracketing-on-pixel-phones/): ring frames held aside while fresh
      * forward stills complete the burst under one stem. Empty unless a top-up
      * capture is in flight; guarded by [topupActive]. Fresh arrivals accumulate
      * in [topupFrames] via pairAndSave until the remainder is filled.
@@ -403,7 +404,7 @@ class RawCameraController(
     private var rawZslDisabledForSession = false
     private var rawZslFallbackDetail: String? = null
     /**
-     * Transient ZSL outage (PhotonCamera/GCam style: failures are per-shot, never
+     * Transient ZSL outage (RawLens policy: failures are per-shot, never
      * session-fatal). Overflow storms, watchdog misses and isolated repeating-
      * request failures park the ring here instead of latching
      * [rawZslDisabledForSession]; every later press re-attempts ZSL once this
@@ -412,7 +413,7 @@ class RawCameraController(
      */
     private var rawZslCooldownUntilMs = 0L
     /**
-     * Repeating-RAW-stream health latch (GCam non-ZSL style degradation). Set when
+     * Repeating-RAW-stream health latch (degrade to forward bursts). Set when
      * a freshly started stream never becomes productive (overflow storm or
      * watchdog trip with zero paired frames): this HAL cannot sustain the
      * continuous RAW stream, so presses fire instant forward bursts under the
@@ -421,7 +422,7 @@ class RawCameraController(
      * Cleared on session open and on ZSL (re-)entry.
      */
     private var rawZslStreamBroken = false
-    /** Hybrid top-up (GCam ZSL+PSL style): complete a thin ring with fresh forward
+    /** Hybrid top-up (ZSL + post-press frames, see [topupHoldout]): complete a thin ring with fresh forward
      * captures under one stem instead of refusing the shutter. User-toggled. */
     @Volatile private var zslHybridTopupEnabled = true
     @Volatile private var vfPreviewMode: VfPreviewMode = VfPreviewMode.FOLLOW
@@ -2505,7 +2506,7 @@ class RawCameraController(
      *
      * With hybrid top-up ON the loop always ends in a capture: ~1s of
      * consecutive empty takes escalates to a pure forward burst (empty
-     * holdout), the GCam bottom rung. NOT READY only survives with the toggle
+     * holdout). NOT READY only survives with the toggle
      * OFF. [emptyStreak] counts those consecutive empties.
      */
     private fun retryZslSelectionUntil(
@@ -2526,7 +2527,7 @@ class RawCameraController(
                 startTopupBurst(emptyList(), zslSelectedFrameCount(activeCaptureFormat))
                 return@postDelayed
             }
-            // Per-shot recovery (PhotonCamera/GCam style): the stream may be down
+            // Per-shot recovery: the stream may be down
             // from a transient outage whose cooldown has expired. Every press
             // re-attempts the ZSL stream once instead of wedging until reopen.
             // Restarting alongside save-held Images would re-wedge the gralloc
@@ -2708,8 +2709,7 @@ class RawCameraController(
         // PhotonCamera partial take: use whatever the ring holds instead of
         // all-or-nothing. A full ring saves immediately; a thin ring either tops
         // up with fresh captures (hybrid, below) or keeps waiting for refill.
-        // An empty ring with forceTopup fires a pure forward burst (GCam bottom
-        // rung): the wait loop escalates here after ~1s of empties so every
+        // An empty ring with forceTopup fires a pure forward burst: the wait loop escalates here after ~1s of empties so every
         // press ends in DNGs, never NOT READY, while the toggle is ON.
         val selected = rawZslBuffer?.takeForCapture(cutoff, rawZslRealtimeTimestamps,
             selectedFrameCount, zslHybridTopupEnabled).orEmpty()
@@ -3323,7 +3323,7 @@ class RawCameraController(
     }
 
     /**
-     * Hybrid top-up (GCam ZSL+PSL style): the ring held [holdout] of [need]
+     * Hybrid top-up (ZSL + post-press frames, https://research.google/blog/hdr-with-bracketing-on-pixel-phones/): the ring held [holdout] of [need]
      * frames, so capture the remainder as fresh forward stills and save the
      * mix under one stem. The holdout is already removed from the ring and is
      * owned here until the combined save (or an abort) releases it.
@@ -3381,8 +3381,8 @@ class RawCameraController(
 
     /**
      * Completes a hybrid top-up: ring holdout + arrived fresh frames, timestamp
-     * ordered, saved under one stem. Partial on timeout/failure (GCam's bottom
-     * rung is a picture, never a wedge); empty only when nothing arrived, which
+     * ordered, saved under one stem. Partial on timeout/failure (a press always
+     * ends in a picture, never a wedge); empty only when nothing arrived, which
      * releases the shutter with an error instead of hanging it.
      */
     private fun finishTopupBurst() {
@@ -6227,7 +6227,7 @@ class RawCameraController(
     }
 
     /**
-     * PhotonCamera-style grace admission for a ZSL image whose capture result
+     * Grace admission for a ZSL image whose capture result
      * never arrived before the pairing window expired. Admits it carrying the
      * latest preview result (flagged approximate) instead of dropping it, so a
      * capture-result stall starves neither the ring nor the reader budget. A
@@ -7486,7 +7486,7 @@ class RawCameraController(
      * Durable session fallback, reserved for a rejected stream combination that
      * can never succeed. Everything transient (overflow storms, watchdog misses,
      * isolated repeating failures) goes through [cooldownRawZslForRetry] so
-     * every later press re-attempts ZSL per-shot, PhotonCamera/GCam style.
+     * every later press re-attempts ZSL per-shot.
      */
     private fun disableRawZslForSession(reason: String) {
         if (!rawZslRequested) return
@@ -8118,7 +8118,7 @@ class RawCameraController(
         /** Consecutive fruitless ZSL cooldowns before a session rebuild. */
         private const val FRUITLESS_COOLDOWN_REBUILDS = 2
         /** Transient ZSL outage parking (overflow storm, watchdog miss, isolated
-         * repeating failure): failures stay per-shot, PhotonCamera/GCam style.
+         * repeating failure): failures stay per-shot.
          * Only a rejected stream combination latches the session fallback. */
         private const val ZSL_RETRY_COOLDOWN_MS = 2_000L
         private const val ZSL_STARTUP_TIMEOUT_MS = 4_000L
