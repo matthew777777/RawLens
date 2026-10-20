@@ -132,6 +132,18 @@ internal class FramePairing(
         handler.postDelayed(timeout, if (forward) forwardTimeoutMs else zslTimeoutMs)
     }
 
+    /**
+     * Forgets the forward result of HAL frame [frameNumber] and cancels its
+     * timeout (its RAW buffer was lost). True when such a result was waiting.
+     */
+    fun dropForwardResultForFrame(frameNumber: Long): Boolean {
+        val timestamp = forwardResults.entries.firstOrNull { it.value.frameNumber == frameNumber }?.key
+            ?: return false
+        forwardResults.remove(timestamp)
+        cancelTimeout(timestamp)
+        return true
+    }
+
     /** A repeating result's RAW frame: release its image, or remember the timestamp. */
     fun dropPreviewRaw(timestamp: Long) {
         val previewImage = images.remove(timestamp)

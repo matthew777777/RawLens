@@ -217,6 +217,22 @@ class FramePairingTest {
     }
 
     @Test
+    fun lostBufferDropsTheWaitingResultOfThatFrameOnly() {
+        val lost = result().also { org.mockito.Mockito.`when`(it.frameNumber).thenReturn(41L) }
+        val kept = result().also { org.mockito.Mockito.`when`(it.frameNumber).thenReturn(42L) }
+        pairing.putForwardResult(210L, lost)
+        schedule(210L, forward = true)
+        pairing.putForwardResult(220L, kept)
+        assertTrue(pairing.dropForwardResultForFrame(41L))
+        assertTrue("its timeout is cancelled", delayed.isEmpty())
+        assertFalse("already dropped", pairing.dropForwardResultForFrame(41L))
+        assertFalse("unknown frame", pairing.dropForwardResultForFrame(99L))
+        pairing.putImage(220L, image())
+        pairing.pairAvailable(220L)
+        assertEquals(1, host.forward.size)
+    }
+
+    @Test
     fun missingHalfNeverPairs() {
         pairing.pairAvailable(999L)
         assertTrue(host.forward.isEmpty() && host.zsl.isEmpty())

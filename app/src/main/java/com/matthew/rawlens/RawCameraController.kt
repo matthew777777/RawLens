@@ -245,6 +245,10 @@ class RawCameraController(
     private val mfsrMergeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     /** RAW image ↔ capture result matching for forward captures and the ZSL ring. */
     private val pairing = FramePairing(cameraHandler, PairingHost())
+    /** HAL frame numbers of the current forward capture already counted as lost. */
+    private val lostForwardFrames = HashSet<Long>()
+    /** Frames whose RAW buffer was lost before their result arrived (C4). */
+    private val lostRawBufferFrames = HashSet<Long>()
     private val captureInProgress = AtomicBoolean(false)
     // True only while Camera2 is physically executing a still sequence. Unlike captureInProgress,
     // this becomes false before RAW/JPEG pairing/development completes and is the correct guard
@@ -3440,6 +3444,8 @@ class RawCameraController(
         // Repeating RAW stays attached. Preview-result timestamps are discarded
         // independently from exact still-result pairing below.
         closeAllPendingPairs()
+        lostForwardFrames.clear()
+        lostRawBufferFrames.clear()
         activeFramesRemaining.set(frameCount)
         updateRepeatingRequest(allowRawZsl = false)
         val generation = lifecycleGeneration
@@ -6010,6 +6016,11 @@ class RawCameraController(
         override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
             if (!isCurrent(generation) || captureId != captureSequence.get()) return
             val tag = request.tag as? CaptureTag
+            if (lostRawBufferFrames.remove(result.frameNumber)) {
+                // C4: the RAW image for this result will never arrive.
+                onForwardFrameLost(result.frameNumber, "RAW buffer lost")
+                return
+            }
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: run {
                 if (activeFramesRemaining.decrementAndGet() <= 0) {
                     finishCapture("CAPTURE ERROR: sensor timestamp missing")
@@ -6043,15 +6054,28 @@ class RawCameraController(
                 "RAW capture failed id=$captureId reason=${failure.reason} frame=${failure.frameNumber}"
             )
             cameraCaptureSequenceActive = false
-            if (topupActive) {
-                Log.w(LOG_TAG, "Top-up capture failed; saving partial burst")
-                finishTopupBurst()
-                noteChainDeadAndMaybeRecover()
-                return
+            // C3: only this frame is lost; an image it may still push
+            // (wasImageCaptured) has no result and expires unpaired.
+            onForwardFrameLost(failure.frameNumber, "reason ${failure.reason}")
+        }
+
+        override fun onCaptureBufferLost(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            target: Surface,
+            frameNumber: Long
+        ) {
+            if (!isCurrent(generation) || captureId != captureSequence.get()) return
+            if (target != rawReader?.surface) return
+            Log.w(LOG_TAG, "RAW buffer lost id=$captureId frame=$frameNumber")
+            // C4: if the result already arrived it is waiting for an image
+            // that will never come; resolve now instead of waiting out
+            // PAIR_TIMEOUT_MS. Otherwise drop the result when it arrives.
+            if (pairing.dropForwardResultForFrame(frameNumber)) {
+                onForwardFrameLost(frameNumber, "RAW buffer lost")
+            } else {
+                lostRawBufferFrames += frameNumber
             }
-            finishCapture("CAPTURE FAILED: reason ${failure.reason}, frame ${failure.frameNumber}")
-            resumeRawZslIfIdle()
-            noteChainDeadAndMaybeRecover()
         }
 
         override fun onCaptureSequenceAborted(session: CameraCaptureSession, sequenceId: Int) {
@@ -6309,6 +6333,14 @@ class RawCameraController(
         }
         // The RAW Image and its exact TotalCaptureResult are now owned by the bounded writer.
         // Reopen the shutter immediately; do not make capture latency depend on development.
+        completeForwardCapture()
+    }
+
+    /**
+     * Every frame of the forward capture is resolved (paired or lost): hand the
+     * collected frames to their save path and reopen the shutter.
+     */
+    private fun completeForwardCapture() {
         if (topupActive) finishTopupBurst()
         else {
             if (activeDualRaw) {
@@ -6327,6 +6359,36 @@ class RawCameraController(
             finishCapture()
             resumeRawZslIfIdle()
         }
+    }
+
+    /**
+     * One frame of a forward capture will never pair: its capture failed
+     * (C3) or its RAW buffer was lost (C4). Camera2: "Other requests are
+     * unaffected" (CameraCaptureSession.CaptureCallback.onCaptureFailed), so
+     * the rest of the capture continues and the frames that do arrive are
+     * saved. Keyed by HAL frame number and idempotent: a lost buffer can be
+     * reported through both onCaptureBufferLost and onCaptureFailed
+     * (CaptureFailure.wasImageCaptured). See docs/refactor/capture-study.md.
+     */
+    private fun onForwardFrameLost(frameNumber: Long, reason: String) {
+        if (!lostForwardFrames.add(frameNumber)) return
+        val remaining = activeFramesRemaining.decrementAndGet()
+        Log.w(LOG_TAG, "Forward frame $frameNumber lost ($reason); remaining=$remaining")
+        if (remaining > 0) {
+            if (!activeDualRaw && streamCapture == null) submitNextStill()
+            return
+        }
+        cancelCaptureTimeout()
+        if (!chainPairedAny && !topupActive) {
+            // Nothing arrived at all: same outcome as before (C3/C4 only
+            // changed partial captures).
+            finishCapture("CAPTURE FAILED: $reason")
+            resumeRawZslIfIdle()
+            noteChainDeadAndMaybeRecover()
+            return
+        }
+        completeForwardCapture()
+        if (!chainPairedAny) noteChainDeadAndMaybeRecover()
     }
 
     private fun saveDualRaw(frames: List<PendingHdrFrame>) {
@@ -7110,6 +7172,8 @@ class RawCameraController(
         cameraCaptureSequenceActive = false
         captureSequence.incrementAndGet()
         closeAllPendingPairs()
+        lostForwardFrames.clear()
+        lostRawBufferFrames.clear()
         captureInProgress.getAndSet(false)
         resumeRawZslIfIdle()
         refreshCaptureAvailability()

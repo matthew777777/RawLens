@@ -49,11 +49,21 @@ evidence. "Device-unverified" means no on-device run yet.
 | 404efcb | **S1 fix (owner-approved):** vendor operating-mode session now passes `List<OutputConfiguration>` | AOSP `CameraDevice.createCustomCaptureSession`, `CameraDeviceImpl.java:824-830` | fresh unit run; no JVM path exercises it | **behaviour change** for users with a non-zero operating mode; hidden-API access may still be refused; device-unverified |
 | 2fe26be | Capture/pairing/save study (no code) | AOSP CameraCaptureSession/CaptureFailure, metadata_definitions.xml; MotionCam; PhotonCamera | — | — |
 | 98ff888 | C2/C6: shutter comment; shared HDR-bracket reset | — | 1523/0 | none |
-| (next) | `FramePairing`: image↔result pairing (forward + ZSL), pair timeouts, repeating-RAW memory, reader-pressure relief order, unmatched/ZSL/teardown release; completed-pair routing stays in the controller (save paths untouched). `stop()`'s two teardown clears keep their exact release-failure behaviour via a flag. Controller 8594 → 8543 | Camera2 `sensor.timestamp` "identical on all the outputs"; MotionCam `RawImageConsumer` | moved bodies token-diffed vs pre-move file (relief differs only by moving the ring-eviction side effects into the host); 16 new JVM tests; fresh 1539/0; release + androidTest compile | device-unverified |
+| 2d263d3 | `FramePairing`: image↔result pairing (forward + ZSL), pair timeouts, repeating-RAW memory, reader-pressure relief order, unmatched/ZSL/teardown release; completed-pair routing stays in the controller (save paths untouched). `stop()`'s two teardown clears keep their exact release-failure behaviour via a flag. Controller 8594 → 8543 | Camera2 `sensor.timestamp` "identical on all the outputs"; MotionCam `RawImageConsumer` | moved bodies token-diffed vs pre-move file (relief differs only by moving the ring-eviction side effects into the host); 16 new JVM tests; fresh 1539/0; release + androidTest compile | device-unverified |
+| 66a51e3 | Device soak test: headless lens seed, `-e burst true`, FramePairing reflection, preview check only for preview sessions | — | phone baseline (below) | test-only |
+| (next) | **C3/C4 (owner-approved):** a failed frame (`onCaptureFailed`) or lost RAW buffer (`onCaptureBufferLost`, new) resolves only that frame; the capture continues and saves what arrives. All-lost keeps the old "CAPTURE FAILED" + dead-chain outcome. Aborted sequences unchanged | AOSP `CameraCaptureSession.CaptureCallback.onCaptureFailed` ("Other requests are unaffected"), `onCaptureBufferLost`, `CaptureFailure.wasImageCaptured` | JVM 1540/0 (+1); phone (below) | **behaviour change** for partial failures; failure paths not inducible on the test phone |
+
+## Device runs (Xiaomi 25080RABDG, MT6878 / Mali-G615, API 36; release build)
+
+| Build | ZSL ×2, 5 cycles | AUTO single, 5 | AUTO burst ×6, 3 | Notes |
+|---|---|---|---|---|
+| 2d263d3 (all refactors to FramePairing) | 5/5 | 5/5 | 3/3 | pairs=0, saves=0 after each cycle; PSS 193–208 MB; RAW VF 24–30 fps |
+| C3/C4 | 5/5 | 5/5 | 3/3 | same ranges; ZSL pairs≤1 (live ring frame in flight, limit 12) |
+
+No frame failed or lost a buffer in these runs, so the new C3/C4 branches did not execute on device.
 
 ## Open decisions for the owner
 
-- **C3** (capture): one failed frame ends the whole forward capture; Camera2 says other requests are unaffected. **C4**: `onCaptureBufferLost` not handled (waits out the pair timeout). Neither reference implements either. See `capture-study.md`.
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
