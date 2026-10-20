@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.ClipData
@@ -194,10 +193,8 @@ class MainActivity : Activity() {
     private var folderPickerForVideo = false
     /** Settings JSON awaiting the export picker result; cleared once written or cancelled. */
     private var pendingSettingsJson: String? = null
-    /** Downloaded update APK awaiting the unknown-sources grant; installed on return. */
-    private var pendingInstallFile: File? = null
-    /** First-run update consent waits until lens discovery is off screen. */
-    private var pendingUpdateConsent = false
+    /** Update consent, release checks, download and install ([UpdateFlow]). */
+    private val updateFlow = UpdateFlow(this, UPDATE_INSTALL_SOURCES) { setStatus(it) }
     private var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
@@ -863,10 +860,10 @@ class MainActivity : Activity() {
             // keep-up-to-date ask waits until it is off screen instead of
             // layering over it (fired from showLensSelection's dismiss
             // paths and the no-lenses alert below).
-            pendingUpdateConsent = true
+            updateFlow.pendingConsent = true
             showLensDiscovery(firstRun = true)
         } else {
-            showUpdateConsent()
+            updateFlow.showConsent()
         }
         viewfinder.addOnLayoutChangeListener { view, left, top, right, bottom,
                                                oldLeft, oldTop, oldRight, oldBottom ->
@@ -896,224 +893,7 @@ class MainActivity : Activity() {
         // The startup check below stays fully offline until the user opts
         // in. Consent itself is asked either above (returning users) or
         // once first-run lens discovery leaves the screen.
-        maybeCheckForUpdatesOnStartup()
-    }
-
-    /** One-time update consent dialog. Enabling checks immediately instead of waiting. */
-    private fun showUpdateConsent() {
-        UpdateConsent.showIfNeeded(this) { enabled ->
-            if (enabled) maybeCheckForUpdatesOnStartup()
-        }
-    }
-
-    /** Fires the deferred first-run consent once discovery is off screen. */
-    private fun showPendingUpdateConsent() {
-        if (!pendingUpdateConsent) return
-        pendingUpdateConsent = false
-        showUpdateConsent()
-    }
-
-    /**
-     * Startup update check: at most once per 24h, off the main thread,
-     * silent unless a newer GitHub release exists. Never blocks camera
-     * startup and never shows anything on failure.
-     */
-    private fun maybeCheckForUpdatesOnStartup() {
-        // F-Droid builds leave updates to the store, and everyone else
-        // stays fully offline until the start-screen consent opts in.
-        if (!UpdateConsent.isAutoCheckAllowed(this)) return
-        if (!UpdateChecker.isAutoCheckDue(this)) return
-        Thread {
-            val result = UpdateChecker.check(this)
-            UpdateChecker.markChecked(this)
-            if (result is UpdateChecker.CheckResult.UpdateAvailable &&
-                !UpdateChecker.isSkipped(this, result.info.tag)
-            ) {
-                runOnUiThread { if (!isFinishing) showUpdateDialog(result.info) }
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
-    /** Manual check from Settings → About: always reports the outcome. */
-    private fun checkForUpdatesManually() {
-        if (!BuildConfig.ENABLE_UPDATE_CHECK) return
-        setStatus("CHECKING FOR UPDATES…")
-        Thread {
-            val result = UpdateChecker.check(this)
-            UpdateChecker.markChecked(this)
-            runOnUiThread {
-                if (isFinishing) return@runOnUiThread
-                when (result) {
-                    is UpdateChecker.CheckResult.UpdateAvailable ->
-                        showUpdateDialog(result.info)
-                    is UpdateChecker.CheckResult.UpToDate ->
-                        setStatus("RAWLENS IS UP TO DATE")
-                    is UpdateChecker.CheckResult.Failed ->
-                        setStatus("UPDATE CHECK FAILED • ${result.reason.uppercase()}")
-                }
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
-    private fun showUpdateDialog(info: UpdateChecker.UpdateInfo) {
-        val current = UpdateChecker.installedVersionName(this) ?: "?"
-        val size = if (info.apkSizeBytes > 0) {
-            "%.0f MB".format(Locale.US, info.apkSizeBytes / 1048576.0)
-        } else null
-        val notes = info.body.ifEmpty { "See the release page for details." }
-            .take(1200)
-        val message = StringBuilder("RawLens ${info.tag} is available " +
-            "(installed: $current)")
-        if (size != null) message.append(" • APK $size")
-        message.append("\n\n").append(notes)
-        // A download that finished before e.g. an app restart installs
-        // directly instead of downloading again.
-        val staged = UpdateInstaller.stagedApk(this, info.tag)
-        AlertDialog.Builder(this)
-            .setTitle("Update available")
-            .setMessage(message.toString())
-            .setPositiveButton(if (staged != null) "Install" else "Download") { _, _ ->
-                if (staged != null) attemptInstall(staged) else downloadAndInstallUpdate(info)
-            }
-            .setNeutralButton("Skip this version") { _, _ ->
-                UpdateChecker.skipTag(this, info.tag)
-            }
-            .setNegativeButton("Later", null)
-            .show()
-    }
-
-    /**
-     * Fully in-app update: downloads the release APK with the system
-     * DownloadManager (progress dialog here, system notification too)
-     * and fires the system installer on completion. Falls back to the
-     * browser only when the release carries no APK asset.
-     */
-    private fun downloadAndInstallUpdate(info: UpdateChecker.UpdateInfo) {
-        if (info.apkUrl.isNullOrEmpty()) {
-            openUpdateInBrowser(info.htmlUrl.ifEmpty { null })
-            return
-        }
-        val downloadId = try {
-            UpdateInstaller.startDownload(this, info)
-        } catch (e: Exception) {
-            setStatus("UPDATE DOWNLOAD FAILED")
-            return
-        }
-        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            isIndeterminate = true
-        }
-        val statusText = TextView(this).apply {
-            text = "Starting download…"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 12f
-            setPadding(0, dp(8), 0, 0)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(8), dp(24), 0)
-            addView(bar, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-            addView(statusText)
-        }
-        var cancelled = false
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Downloading RawLens ${info.tag}")
-            .setView(container)
-            .setCancelable(false)
-            .setNegativeButton("Cancel") { _, _ ->
-                cancelled = true
-                UpdateInstaller.cancel(this, downloadId)
-                setStatus("UPDATE DOWNLOAD CANCELLED")
-            }
-            .show()
-        Thread {
-            try {
-                while (!cancelled) {
-                    val progress = try {
-                        UpdateInstaller.query(this, downloadId)
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (progress == null) {
-                        Thread.sleep(500)
-                        continue
-                    }
-                    val doneMb = progress.downloadedBytes / 1048576.0
-                    val totalMb = progress.totalBytes / 1048576.0
-                    runOnUiThread {
-                        if (progress.totalBytes > 0) {
-                            bar.isIndeterminate = false
-                            bar.max = 100
-                            bar.progress = ((100L * progress.downloadedBytes) /
-                                progress.totalBytes).toInt().coerceIn(0, 100)
-                            statusText.text = "%.0f of %.0f MB".format(
-                                Locale.US, doneMb, totalMb
-                            )
-                        } else {
-                            statusText.text = "%.0f MB downloaded".format(Locale.US, doneMb)
-                        }
-                    }
-                    if (progress.isFinished) {
-                        val ok = progress.status == DownloadManager.STATUS_SUCCESSFUL
-                        val file = UpdateInstaller.apkFile(this, info.tag)
-                        runOnUiThread {
-                            dialog.dismiss()
-                            if (isFinishing || isDestroyed) return@runOnUiThread
-                            if (ok && file.exists() && file.length() > 0) {
-                                attemptInstall(file)
-                            } else {
-                                setStatus("UPDATE DOWNLOAD FAILED")
-                            }
-                        }
-                        return@Thread
-                    }
-                    Thread.sleep(500)
-                }
-            } catch (_: InterruptedException) {
-                // Cancel path; dialog already dismissed by the button.
-            }
-        }.apply { isDaemon = true }.start()
-    }
-
-    private fun attemptInstall(file: File) {
-        when (val outcome = UpdateInstaller.install(this, file)) {
-            is UpdateInstaller.InstallOutcome.Launched -> {
-                pendingInstallFile = null
-                setStatus("INSTALLING UPDATE…")
-            }
-            is UpdateInstaller.InstallOutcome.NeedsUnknownSources -> {
-                // First in-app update on this install: Android requires a
-                // per-app unknown-sources grant; install on return.
-                pendingInstallFile = file
-                try {
-                    @Suppress("DEPRECATION")
-                    startActivityForResult(
-                        UpdateInstaller.unknownSourcesIntent(this),
-                        UPDATE_INSTALL_SOURCES
-                    )
-                } catch (_: Exception) {
-                    pendingInstallFile = null
-                    setStatus("CANNOT OPEN INSTALL SETTINGS")
-                }
-            }
-            is UpdateInstaller.InstallOutcome.Failed ->
-                setStatus("UPDATE INSTALL FAILED • ${outcome.reason.uppercase()}")
-        }
-    }
-
-    /** Last resort when a release has no APK asset: open its page in the browser. */
-    private fun openUpdateInBrowser(url: String?) {
-        if (url.isNullOrEmpty()) {
-            setStatus("UPDATE LINK UNAVAILABLE")
-            return
-        }
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        } catch (_: Exception) {
-            setStatus("NO BROWSER TO OPEN UPDATE")
-        }
+        updateFlow.maybeCheckOnStartup()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -1186,10 +966,7 @@ class MainActivity : Activity() {
             return
         }
         if (requestCode == UPDATE_INSTALL_SOURCES) {
-            // The unknown-sources screen returns no reliable result; just
-            // retry — granted now, the installer fires, else we re-prompt.
-            val pending = pendingInstallFile
-            if (pending != null) attemptInstall(pending)
+            updateFlow.onInstallSourcesResult()
             return
         }
         if (requestCode == SIDECAR_TREE_REQUEST && resultCode == RESULT_OK) {
@@ -6858,7 +6635,7 @@ class MainActivity : Activity() {
             if (BuildConfig.ENABLE_UPDATE_CHECK) {
             content.addView(Button(this).apply {
                 text = "Check for updates"
-                setOnClickListener { checkForUpdatesManually() }
+                setOnClickListener { updateFlow.checkManually() }
             })
             content.addView(CheckBox(this).apply {
                 text = "Check for updates on startup"
@@ -7866,7 +7643,7 @@ class MainActivity : Activity() {
                         .setTitle("No RAW lenses found")
                         .setMessage("The camera service did not expose a RAW-capable camera ID.")
                         .setPositiveButton("OK", null)
-                        .setOnDismissListener { showPendingUpdateConsent() }
+                        .setOnDismissListener { updateFlow.showPendingConsent() }
                         .show()
                     return@runOnUiThread
                 }
@@ -8317,7 +8094,7 @@ class MainActivity : Activity() {
                 ImmersiveMode.apply(window)
                 // First run ends here: the deferred keep-up-to-date ask
                 // gets its own moment now that discovery is off screen.
-                showPendingUpdateConsent()
+                updateFlow.showPendingConsent()
             }
             saveButton.setOnClickListener {
                 val ids = checked.filterValues { it }.keys.toMutableSet()
