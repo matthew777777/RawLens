@@ -1391,7 +1391,10 @@ class RawCameraController(
         opmode: Int,
         callback: CameraCaptureSession.StateCallback
     ) {
-        val surfaces = config.outputConfigurations.map { it.surface }
+        // AOSP signature takes List<OutputConfiguration> (CameraDevice.java,
+        // CameraDeviceImpl.createCustomCaptureSession iterates it as such);
+        // reflection does not check generics, so passing Surfaces threw
+        // ClassCastException inside the framework on every call.
         val method = device.javaClass.getDeclaredMethod(
             "createCustomCaptureSession",
             InputConfiguration::class.java,
@@ -1401,7 +1404,7 @@ class RawCameraController(
             Handler::class.java
         )
         method.isAccessible = true
-        method.invoke(device, config.inputConfiguration, surfaces, opmode, callback, cameraHandler)
+        method.invoke(device, config.inputConfiguration, config.outputConfigurations, opmode, callback, cameraHandler)
     }
 
     private fun sessionCallback(device: CameraDevice, generation: Int) = object : CameraCaptureSession.StateCallback() {

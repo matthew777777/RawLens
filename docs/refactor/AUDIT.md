@@ -45,11 +45,11 @@ evidence. "Device-unverified" means no on-device run yet.
 | 35fed6e | S2/S4/S5/S6: stale packed log, orphan KDoc, stream-use-case comments vs spec, `open()` re-indent | metadata_definitions.xml | `git diff -w` text only | none |
 | f54ae94 | S7: RAW image listener → `onRawImageAvailable` | — | body identical ignoring whitespace; 1517/0 | none |
 | 71e8a2f | S3/S8: `discardSessionOutputs`, `switchToAltRoute` | — | 1517/0 | none |
-| (next) | `SessionLadder`: combo index, alt route, failed/unopenable/opened-once IDs, retry budgets; `recoverRawPreview` alt check reuses it. Controller 8630 → 8594 | — | 6 new JVM tests; fresh 1523/0; release + androidTest compile | device-unverified |
+| 9ece6d1 | `SessionLadder`: combo index, alt route, failed/unopenable/opened-once IDs, retry budgets; `recoverRawPreview` alt check reuses it. Controller 8630 → 8594 | — | 6 new JVM tests; fresh 1523/0; release + androidTest compile | device-unverified |
+| (next) | **S1 fix (owner-approved):** vendor operating-mode session now passes `List<OutputConfiguration>` | AOSP `CameraDevice.createCustomCaptureSession`, `CameraDeviceImpl.java:824-830` | fresh unit run; no JVM path exercises it | **behaviour change** for users with a non-zero operating mode; hidden-API access may still be refused; device-unverified |
 
 ## Open decisions for the owner
 
-- **S1** (session): vendor operating-mode session passes `List<Surface>` where AOSP `createCustomCaptureSession` takes `List<OutputConfiguration>`; it has never applied. Fixing enables an opt-in feature for the first time. See `session-study.md`.
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note
