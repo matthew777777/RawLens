@@ -3726,9 +3726,6 @@ class RawCameraController(
         startTouchFocus(viewX, viewY, indefinite = false, updateAe = false)
     }
 
-    /** AE-only drag: moves the metering square without touching the AF scan/lock. */
-    fun setAfPointOnly(viewX: Float, viewY: Float) = setAfPoint(viewX, viewY)
-
     /**
      * Coalesced tap-to-focus + tap-to-meter: installs the AF and AE regions
      * together, issues a single repeating update, then a single AF START.
@@ -3789,7 +3786,9 @@ class RawCameraController(
         )
         val hasAfRegions = (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
         if (!hasAfRegions) {
-            // Matches Open Camera: AE metering may still have been installed even when the
+            // Matches Open Camera CameraController2.setFocusAndMeteringArea():
+            // https://sourceforge.net/p/opencamera/code/ci/master/tree/app/src/main/java/net/sourceforge/opencamera/cameracontroller/CameraController2.java
+            // AE metering may still have been installed even when the
             // camera has no AF regions, and setFocusAndMeteringArea() reports no focus area.
             // A hold still freezes AE indefinitely here (AF simply has nothing to lock).
             if (isAeMeteringSupported()) {
@@ -3857,21 +3856,26 @@ class RawCameraController(
                 if (openCameraTouchFocusActive && !openCameraTouchFocusCompleted) sendTouchFocusStart()
             }.also { cameraHandler.postDelayed(it, TOUCH_FOCUS_START_SETTLE_MS) }
             publishPeakingActiveIfChanged()
-        } catch (failure: CameraAccessException) {
-            openCameraTouchFocusActive = false
-            touchFocusScanSeen = false
-            touchFocusLockedSharp = false
-            focusLockIndefinite = false
-            aeLockIndefinite = false
-            focusLockDeadlineMs = 0L
-            onFocusLock(false, false, 0L)
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            onState("FOCUS ERROR")
-            publishPeakingActiveIfChanged()
+        } catch (_: CameraAccessException) {
+            abortTouchFocusOnError()
         }
     }
 
-    /** One-shot AF START built from the current repeating state (AUTO + regions). */
+    /** Clears every touch-focus/lock flag after a failed AF request and restores idle AF. */
+    private fun abortTouchFocusOnError() {
+        openCameraTouchFocusActive = false
+        touchFocusStartSent = false
+        touchFocusScanSeen = false
+        touchFocusLockedSharp = false
+        focusLockIndefinite = false
+        aeLockIndefinite = false
+        focusLockDeadlineMs = 0L
+        onFocusLock(false, false, 0L)
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+        onState("FOCUS ERROR")
+        publishPeakingActiveIfChanged()
+    }
+
     /**
      * One-shot capture target (AF triggers, metering probes): the invisible
      * preview surface normally, the RAW reader in RAW-only sessions. A stray
@@ -3911,17 +3915,7 @@ class RawCameraController(
             Log.i(LOG_TAG, "AF START sent")
         } catch (failure: CameraAccessException) {
             Log.w(LOG_TAG, "AF START failed: ${cameraAccessReason(failure)}")
-            openCameraTouchFocusActive = false
-            touchFocusStartSent = false
-            touchFocusScanSeen = false
-            touchFocusLockedSharp = false
-            focusLockIndefinite = false
-            aeLockIndefinite = false
-            focusLockDeadlineMs = 0L
-            onFocusLock(false, false, 0L)
-            updateRepeatingRequest(preserveRawZslBuffer = true)
-            onState("FOCUS ERROR")
-            publishPeakingActiveIfChanged()
+            abortTouchFocusOnError()
         }
     }
 
