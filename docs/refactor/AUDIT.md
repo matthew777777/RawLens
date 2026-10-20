@@ -31,7 +31,8 @@ evidence. "Device-unverified" means no on-device run yet.
 | d922b3b | `UpdateFlow` extracted from `MainActivity` | — | normalized diff identical; 1489/0 | device-unverified (UI dialog) |
 | 922988c | `SettingsTransfer` extracted from `MainActivity` | [SAF](https://developer.android.com/training/data-storage/shared/documents-files) | 1489/0 | device-unverified (pickers) |
 | 0562fce | `Camera2Names` from `RawCameraController`; gap filled: AE modes 5 `ON_EXTERNAL_FLASH`, 6 `ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY` printed UNKNOWN | API 37 `android.jar` via `javap -constants`; [CameraMetadata](https://developer.android.com/reference/android/hardware/camera2/CameraMetadata) | 1492/0 (+3 new) | debug text only |
-| (next) | Touch focus: remove dead `setAfPointOnly` (0 callers; KDoc claimed AE-only, code did AF-only), fix orphan KDoc, dedupe error reset into `abortTouchFocusOnError` | Open Camera `CameraController2.setFocusAndMeteringArea` (verified: no-AF-region path installs AE only) | 1492/0 | no behavior change |
+| 8e2bdb4 | Touch focus: remove dead `setAfPointOnly` (0 callers; KDoc claimed AE-only, code did AF-only), fix orphan KDoc, dedupe error reset into `abortTouchFocusOnError` | Open Camera `CameraController2.setFocusAndMeteringArea` (verified: no-AF-region path installs AE only) | 1492/0 | no behavior change |
+| (next) | Touch AF state: remove dead `cancelOpenCameraAutoFocusForNewTouch` (0 callers); merge duplicated sharp-lock publish into `publishSharpLock` (side-effect order unchanged) | — | 1492/0 | device-unverified (no JVM coverage of controller AF) |
 
 ## Open follow-ups
 

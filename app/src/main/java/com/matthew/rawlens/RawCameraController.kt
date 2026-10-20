@@ -6244,16 +6244,7 @@ class RawCameraController(
                 removePendingTouchFocusStart()
                 if (AutoFocusPolicy.isLockSuccess(state)) {
                     touchFocusLockedSharp = true
-                    if (focusLockIndefinite) {
-                        focusLockDeadlineMs = 0L
-                        onState(if (aeLockIndefinite) "AE/AF LOCKED ∞" else "FOCUS LOCKED ∞")
-                    } else {
-                        focusLockDeadlineMs =
-                            SystemClock.elapsedRealtime() + TOUCH_FOCUS_LOCK_TIMEOUT_MS
-                        scheduleOpenCameraContinuousFocusReset()
-                        onState("FOCUS LOCKED")
-                    }
-                    onFocusLock(true, focusLockIndefinite, focusLockDeadlineMs)
+                    publishSharpLock()
                     Log.i(LOG_TAG, "Touch focus locked" + if (focusLockIndefinite) " ∞" else "")
                 } else {
                     completeTouchFocusUnlocked("FOCUS NOT LOCKED", "not-focused")
@@ -6288,6 +6279,16 @@ class RawCameraController(
         // The region did lock after all: keep it for the continuous tail.
         dropAfRegionOnRelease = false
         removeOpenCameraContinuousFocusReset()
+        publishSharpLock()
+        Log.i(LOG_TAG, "Touch focus late lock (upgraded)")
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+    }
+
+    /**
+     * Sharp lock reached: an indefinite hold has no deadline; a tap lock
+     * arms the release back to continuous after [TOUCH_FOCUS_LOCK_TIMEOUT_MS].
+     */
+    private fun publishSharpLock() {
         if (focusLockIndefinite) {
             focusLockDeadlineMs = 0L
             onState(if (aeLockIndefinite) "AE/AF LOCKED ∞" else "FOCUS LOCKED ∞")
@@ -6298,8 +6299,6 @@ class RawCameraController(
             onState("FOCUS LOCKED")
         }
         onFocusLock(true, focusLockIndefinite, focusLockDeadlineMs)
-        Log.i(LOG_TAG, "Touch focus late lock (upgraded)")
-        updateRepeatingRequest(preserveRawZslBuffer = true)
     }
 
     private fun removeOpenCameraContinuousFocusReset() {
@@ -6346,13 +6345,6 @@ class RawCameraController(
                 completeTouchFocusUnlocked("FOCUS NOT LOCKED", "timeout")
             }
         }.also { cameraHandler.postDelayed(it, OPEN_CAMERA_AUTOFOCUS_TIMEOUT_MS) }
-    }
-
-    private fun cancelOpenCameraAutoFocusForNewTouch() {
-        removeOpenCameraTouchFocusTimeout()
-        // Lightweight legacy path: single CANCEL, no repeating rebuild.
-        // New taps use sendAfCancelCapture() + one shared repeating update.
-        sendAfCancelCapture()
     }
 
     private fun scheduleOpenCameraContinuousFocusReset(
