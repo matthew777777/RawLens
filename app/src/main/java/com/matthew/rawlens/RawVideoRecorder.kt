@@ -574,8 +574,30 @@ internal class RawVideoRecorder(
                 }
             }, handler)
         } catch (e: Exception) {
+            abortPipelineThreads()
             teardown()
             throw e
+        }
+    }
+
+    /**
+     * Start-failure path (V2, docs/refactor/video-study.md): the encode and
+     * commit threads start before setRepeatingRequest, and [teardown] only
+     * forgets them. Without this the workers block in take() forever and the
+     * committer polls a writer that teardown closes underneath it. Both
+     * loops exit on interrupt; queued frames go back to the reader.
+     */
+    private fun abortPipelineThreads() {
+        accepting = false
+        for (t in encodeThreads) t?.interrupt()
+        for (t in encodeThreads) {
+            try { t?.join(2_000) } catch (_: InterruptedException) {}
+        }
+        commitThread?.interrupt()
+        try { commitThread?.join(2_000) } catch (_: InterruptedException) {}
+        while (true) {
+            val item = encodeQueue.poll() ?: break
+            if (item is EncodeTask) RawImageOwnership.release(item.image)
         }
     }
 
@@ -795,7 +817,16 @@ internal class RawVideoRecorder(
         chars: CameraCharacteristics,
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
+        // V3 (docs/refactor/video-study.md): same pick as DirectLogRecorder.
+        // Exact (FPS, FPS) whenever advertised, so every device that worked
+        // before gets the identical request; otherwise the narrowest range
+        // containing FPS instead of an unadvertised fixed range.
+        val picked = LogVideoProbe.fixedFpsRange(
+            FPS,
+            chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.map { it.lower to it.upper } ?: emptyList()
+        ) ?: (FPS to FPS)
+        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(picked.first, picked.second))
         // Focus: manual diopters or a focus lock freezes the lens; otherwise
         // continuous video AF when advertised.
         val manualFocus = videoManual.focusDiopters
