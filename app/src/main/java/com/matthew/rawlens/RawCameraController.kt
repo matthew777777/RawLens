@@ -921,171 +921,7 @@ class RawCameraController(
             )
         }.also {
             rawReaderMaxImages = readerMaxImages
-            it.setOnImageAvailableListener({ reader ->
-                if (!isCurrent(generation)) return@setOnImageAvailableListener
-                try {
-                    // Consume every queued RAW in timestamp order while ZSL is running.
-                    // acquireLatestImage() implicitly discards intermediate RAW buffers. At a
-                    // 30 fps repeating stream that can also discard the exact image whose
-                    // TotalCaptureResult is waiting in pendingZslResults, delaying both ring
-                    // fill and the first RAW histogram until a later capture. Keeping the loop
-                    // on this camera Handler drains the ImageReader quickly; RawZslBuffer owns
-                    // only the configured ring and closes its oldest frame on every overflow.
-                    // A continuously replenished reader must yield to result, shutter and
-                    // timeout messages. Sampling makes an unbounded drain loop self-starve.
-                    var drained = 0
-                    do {
-                        drained++
-                        val image = reader.acquireNextImage() ?: break
-                        lastRawImageReceivedMs = SystemClock.elapsedRealtime()
-                        if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
-                            Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
-                            // Frames flowing (not merely a configured session)
-                            // is the verification event. Idempotent, so a
-                            // stale frame attributing to the same identity is
-                            // harmless; generation-gated above.
-                            val verifiedIdentity = pendingVerifiedIdentity
-                            pendingVerifiedIdentity = null
-                            if (verifiedIdentity != null) {
-                                try {
-                                    lensVerdicts.markVerified(verifiedIdentity)
-                                } catch (_: Exception) {
-                                    // Best effort: verdicts never break streaming.
-                                }
-                            }
-                        }
-                        if (fpsProbeArmed) {
-                            if (rawStreamImages == 1) {
-                                fpsProbeFirstNs = image.timestamp
-                            } else if (rawStreamImages == ISP_PROBE_FRAMES) {
-                                fpsProbeArmed = false
-                                evaluateIspFpsProbe(image.timestamp)
-                            }
-                        }
-                        if (vfGpuTrialConvicted) {
-                            // Control verdict: the trial delivered zero, the
-                            // disarmed session delivers — GPU usage starves
-                            // this HAL. Persist so cold starts skip the trial.
-                            vfGpuTrialConvicted = false
-                            persistVfGpuReaderVerdict()
-                            Log.w(LOG_TAG, "GPU-reader trial convicted; CPU-only reader persisted")
-                        }
-                        RawImageOwnership.adopt(image, reader) {
-                            cameraHandler.post { closeRetiredRawReaders() }
-                        }
-                        // Histogram delivery follows RAW arrival, independent of ZSL pairing
-                        // and capture/save state. VF-only repeating frames are useful too.
-                        characteristics?.let { publishRawScopeIfDue(image, it) }
-                        // Focus peaking rides the same RAW VF stream at its own throttle,
-                        // gated by the manual/tap-focus auto-show policy.
-                        characteristics?.let { publishFocusPeakingIfDue(image, it) }
-                        // The dual-RAW worker owns these allocations through Vulkan completion;
-                        // don't concurrently hand the same AHB to the viewfinder GPU context.
-                        if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
-                        if (previewRawTimestamps.remove(image.timestamp)) {
-                            RawImageOwnership.release(image)
-                            continue
-                        }
-                        if (rawZslStreaming && activeFramesRemaining.get() <= 0) {
-                            // Bound outstanding gralloc buffers before they hit maxImages:
-                            // each unmatched image waits up to ZSL_PAIR_TIMEOUT_MS for its
-                            // result, so a lagging HAL can otherwise hold a full timeout
-                            // window on top of the ring and wedge Mali/Adreno
-                            // BufferQueues into unlock errors.
-                            relieveZslReaderPressureIfNeeded()
-                            val timestamp = image.timestamp
-                            pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
-                            if (pendingZslResults.containsKey(timestamp)) {
-                                pairAvailableFrame(timestamp)
-                            } else {
-                                schedulePairTimeout(timestamp, reportCaptureFailure = false)
-                            }
-                            continue
-                        }
-                        if ((rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0) {
-                            val cameraCharacteristics = characteristics
-                            if (cameraCharacteristics == null) {
-                                RawImageOwnership.release(image)
-                                continue
-                            }
-                            // Histogram sampling is small (~8k blocks) and stays inline.
-                            // AE metering (~32k blocks, hundreds of ms on some sensors)
-                            // runs on the metering executor: blocking the camera handler
-                            // here stalls RAW acquisition and the HAL backpressures the
-                            // whole preview pipeline down to ~1 fps.
-                            if (rawHistogramStreaming) publishRawScopeIfDue(image, cameraCharacteristics)
-                            dispatchMeteringSample(image, cameraCharacteristics)
-                            continue
-                        }
-                        if (activeFramesRemaining.get() <= 0) {
-                            RawImageOwnership.release(image)
-                            continue
-                        }
-                        val timestamp = image.timestamp
-                        if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
-                            Log.d(
-                                LOG_TAG,
-                                "RAW image timestamp=$timestamp remaining=${activeFramesRemaining.get()} " +
-                                    "zsl=$rawZslStreaming pending=${pendingImages.size}"
-                            )
-                        }
-                        pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
-                        schedulePairTimeout(timestamp, reportCaptureFailure = false)
-                        pairAvailableFrame(timestamp)
-                    } while (drained < 2 && (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0)
-                } catch (_: IllegalStateException) {
-                    if (rawZslStreaming) {
-                        // At 30 fps a brief handler stall (or lagging capture results) can
-                        // fill the small ImageReader queue once. maxImages are already
-                        // outstanding at this point, so acquiring-and-closing queued
-                        // images alone frees nothing: drop one held slot first (oldest
-                        // unmatched, else oldest ring frame) and then drain. Only a
-                        // persistently sick stream falls back.
-                        when (zslHealth.onReaderOverflow()) {
-                            ZslStreamHealth.OverflowAction.DRAIN -> {
-                                Log.w(LOG_TAG, "RAW ImageReader overflowed during ZSL stream; draining")
-                                relieveZslReaderPressure()
-                                drainQueuedRawImages(rawReader)
-                            }
-                            ZslStreamHealth.OverflowAction.LATCH_AND_COOLDOWN -> {
-                                Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
-                                cooldownRawZslForRetry("RAW buffer limit reached")
-                            }
-                            ZslStreamHealth.OverflowAction.COOLDOWN ->
-                                cooldownRawZslForRetry("RAW buffer limit reached")
-                        }
-                    }
-                    else if (rawHistogramStreaming || ettrStreaming || programStreaming) {
-                        Log.w(LOG_TAG, "RAW ImageReader overflowed during metering stream; draining")
-                        drainQueuedRawImages(rawReader)
-                    } else {
-                        Log.e(LOG_TAG, "RAW ImageReader reached maxImages during forward capture")
-                        activeFramesRemaining.set(0)
-                        cameraCaptureSequenceActive = false
-                        captureSequence.incrementAndGet()
-                        try {
-                            session?.abortCaptures()
-                        } catch (_: CameraAccessException) {
-                            // The normal capture error path below restores preview/ZSL if possible.
-                        }
-                        // Release HAL-queued frames too, so the next press does
-                        // not inherit a full reader from this aborted burst.
-                        drainQueuedRawImages(rawReader)
-                        closeAllPendingPairs()
-                        // Wedge recovery: free ring slots too (closeAllPendingPairs
-                        // preserves them; holdout transfers are unaffected).
-                        clearRawZslBuffer()
-                        // A top-up chain keeps its holdout plus arrivals as a
-                        // partial burst; anything else was already closed above.
-                        if (topupActive) finishTopupBurst()
-                        else {
-                            finishCapture("CAPTURE ERROR: RAW buffer limit reached")
-                            resumeRawZslIfIdle()
-                        }
-                        noteChainDeadAndMaybeRecover()
-                    }
-                }
-            }, cameraHandler)
+            it.setOnImageAvailableListener({ reader -> onRawImageAvailable(reader, generation) }, cameraHandler)
         }
         rawStreamImages = 0
         lastRawImageReceivedMs = 0L
@@ -1194,6 +1030,178 @@ class RawCameraController(
     }
 
     @Suppress("DEPRECATION")
+    /**
+     * RAW ImageReader listener body (camera handler). Routes each acquired
+     * image to the viewfinder, scopes, ZSL ring pairing, metering, or a
+     * forward capture; recovers from maxImages overflow. [generation] is the
+     * session that created [reader]; stale callbacks return immediately.
+     */
+    private fun onRawImageAvailable(reader: ImageReader, generation: Int) {
+        if (!isCurrent(generation)) return
+        try {
+            // Consume every queued RAW in timestamp order while ZSL is running.
+            // acquireLatestImage() implicitly discards intermediate RAW buffers. At a
+            // 30 fps repeating stream that can also discard the exact image whose
+            // TotalCaptureResult is waiting in pendingZslResults, delaying both ring
+            // fill and the first RAW histogram until a later capture. Keeping the loop
+            // on this camera Handler drains the ImageReader quickly; RawZslBuffer owns
+            // only the configured ring and closes its oldest frame on every overflow.
+            // A continuously replenished reader must yield to result, shutter and
+            // timeout messages. Sampling makes an unbounded drain loop self-starve.
+            var drained = 0
+            do {
+                drained++
+                val image = reader.acquireNextImage() ?: break
+                lastRawImageReceivedMs = SystemClock.elapsedRealtime()
+                if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
+                    Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
+                    // Frames flowing (not merely a configured session)
+                    // is the verification event. Idempotent, so a
+                    // stale frame attributing to the same identity is
+                    // harmless; generation-gated above.
+                    val verifiedIdentity = pendingVerifiedIdentity
+                    pendingVerifiedIdentity = null
+                    if (verifiedIdentity != null) {
+                        try {
+                            lensVerdicts.markVerified(verifiedIdentity)
+                        } catch (_: Exception) {
+                            // Best effort: verdicts never break streaming.
+                        }
+                    }
+                }
+                if (fpsProbeArmed) {
+                    if (rawStreamImages == 1) {
+                        fpsProbeFirstNs = image.timestamp
+                    } else if (rawStreamImages == ISP_PROBE_FRAMES) {
+                        fpsProbeArmed = false
+                        evaluateIspFpsProbe(image.timestamp)
+                    }
+                }
+                if (vfGpuTrialConvicted) {
+                    // Control verdict: the trial delivered zero, the
+                    // disarmed session delivers — GPU usage starves
+                    // this HAL. Persist so cold starts skip the trial.
+                    vfGpuTrialConvicted = false
+                    persistVfGpuReaderVerdict()
+                    Log.w(LOG_TAG, "GPU-reader trial convicted; CPU-only reader persisted")
+                }
+                RawImageOwnership.adopt(image, reader) {
+                    cameraHandler.post { closeRetiredRawReaders() }
+                }
+                // Histogram delivery follows RAW arrival, independent of ZSL pairing
+                // and capture/save state. VF-only repeating frames are useful too.
+                characteristics?.let { publishRawScopeIfDue(image, it) }
+                // Focus peaking rides the same RAW VF stream at its own throttle,
+                // gated by the manual/tap-focus auto-show policy.
+                characteristics?.let { publishFocusPeakingIfDue(image, it) }
+                // The dual-RAW worker owns these allocations through Vulkan completion;
+                // don't concurrently hand the same AHB to the viewfinder GPU context.
+                if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
+                if (previewRawTimestamps.remove(image.timestamp)) {
+                    RawImageOwnership.release(image)
+                    continue
+                }
+                if (rawZslStreaming && activeFramesRemaining.get() <= 0) {
+                    // Bound outstanding gralloc buffers before they hit maxImages:
+                    // each unmatched image waits up to ZSL_PAIR_TIMEOUT_MS for its
+                    // result, so a lagging HAL can otherwise hold a full timeout
+                    // window on top of the ring and wedge Mali/Adreno
+                    // BufferQueues into unlock errors.
+                    relieveZslReaderPressureIfNeeded()
+                    val timestamp = image.timestamp
+                    pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
+                    if (pendingZslResults.containsKey(timestamp)) {
+                        pairAvailableFrame(timestamp)
+                    } else {
+                        schedulePairTimeout(timestamp, reportCaptureFailure = false)
+                    }
+                    continue
+                }
+                if ((rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0) {
+                    val cameraCharacteristics = characteristics
+                    if (cameraCharacteristics == null) {
+                        RawImageOwnership.release(image)
+                        continue
+                    }
+                    // Histogram sampling is small (~8k blocks) and stays inline.
+                    // AE metering (~32k blocks, hundreds of ms on some sensors)
+                    // runs on the metering executor: blocking the camera handler
+                    // here stalls RAW acquisition and the HAL backpressures the
+                    // whole preview pipeline down to ~1 fps.
+                    if (rawHistogramStreaming) publishRawScopeIfDue(image, cameraCharacteristics)
+                    dispatchMeteringSample(image, cameraCharacteristics)
+                    continue
+                }
+                if (activeFramesRemaining.get() <= 0) {
+                    RawImageOwnership.release(image)
+                    continue
+                }
+                val timestamp = image.timestamp
+                if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                    Log.d(
+                        LOG_TAG,
+                        "RAW image timestamp=$timestamp remaining=${activeFramesRemaining.get()} " +
+                            "zsl=$rawZslStreaming pending=${pendingImages.size}"
+                    )
+                }
+                pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
+                schedulePairTimeout(timestamp, reportCaptureFailure = false)
+                pairAvailableFrame(timestamp)
+            } while (drained < 2 && (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0)
+        } catch (_: IllegalStateException) {
+            if (rawZslStreaming) {
+                // At 30 fps a brief handler stall (or lagging capture results) can
+                // fill the small ImageReader queue once. maxImages are already
+                // outstanding at this point, so acquiring-and-closing queued
+                // images alone frees nothing: drop one held slot first (oldest
+                // unmatched, else oldest ring frame) and then drain. Only a
+                // persistently sick stream falls back.
+                when (zslHealth.onReaderOverflow()) {
+                    ZslStreamHealth.OverflowAction.DRAIN -> {
+                        Log.w(LOG_TAG, "RAW ImageReader overflowed during ZSL stream; draining")
+                        relieveZslReaderPressure()
+                        drainQueuedRawImages(rawReader)
+                    }
+                    ZslStreamHealth.OverflowAction.LATCH_AND_COOLDOWN -> {
+                        Log.w(LOG_TAG, "ZSL repeating stream never productive; burst-mode on")
+                        cooldownRawZslForRetry("RAW buffer limit reached")
+                    }
+                    ZslStreamHealth.OverflowAction.COOLDOWN ->
+                        cooldownRawZslForRetry("RAW buffer limit reached")
+                }
+            }
+            else if (rawHistogramStreaming || ettrStreaming || programStreaming) {
+                Log.w(LOG_TAG, "RAW ImageReader overflowed during metering stream; draining")
+                drainQueuedRawImages(rawReader)
+            } else {
+                Log.e(LOG_TAG, "RAW ImageReader reached maxImages during forward capture")
+                activeFramesRemaining.set(0)
+                cameraCaptureSequenceActive = false
+                captureSequence.incrementAndGet()
+                try {
+                    session?.abortCaptures()
+                } catch (_: CameraAccessException) {
+                    // The normal capture error path below restores preview/ZSL if possible.
+                }
+                // Release HAL-queued frames too, so the next press does
+                // not inherit a full reader from this aborted burst.
+                drainQueuedRawImages(rawReader)
+                closeAllPendingPairs()
+                // Wedge recovery: free ring slots too (closeAllPendingPairs
+                // preserves them; holdout transfers are unaffected).
+                clearRawZslBuffer()
+                // A top-up chain keeps its holdout plus arrivals as a
+                // partial burst; anything else was already closed above.
+                if (topupActive) finishTopupBurst()
+                else {
+                    finishCapture("CAPTURE ERROR: RAW buffer limit reached")
+                    resumeRawZslIfIdle()
+                }
+                noteChainDeadAndMaybeRecover()
+            }
+        }
+    }
+
     /**
      * Camera2's modern session API lets the HAL see the intended stream roles before it allocates
      * buffers. We only attach stream-use-case hints when the exact configuration is reported as
