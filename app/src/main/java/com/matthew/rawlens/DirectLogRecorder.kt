@@ -505,6 +505,25 @@ class DirectLogRecorder(
         require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
+        resetTakeState(output)
+        val geometry = resolveGeometry()
+        initGpuStages(geometry.crop, geometry.preferMhc)
+        startEncoder()
+        allocateBuffers(geometry.export)
+        startStreams(output, geometry.chars, geometry.size)
+    }
+
+    /** Stage outputs [startTake] threads into the later stages. */
+    private class TakeGeometry(
+        val chars: CameraCharacteristics,
+        val size: Size,
+        val crop: LogVideoLadder.Crop,
+        val export: LogVideoLadder.RawSize,
+        val preferMhc: Boolean,
+    )
+
+    /** Stage 1: zero every per-take counter and buffer field. */
+    private fun resetTakeState(output: File) {
         outputFile = output
         if (output.exists()) output.delete()
         startRealtimeMs = SystemClock.elapsedRealtime()
@@ -554,7 +573,10 @@ class DirectLogRecorder(
         synchronized(resultLock) { captureResults.clear() }
         lastResult = null
         eosSeen = CountDownLatch(1)
+    }
 
+    /** Stage 2: characteristics, colour, thermal ladder, crop and export size. */
+    private fun resolveGeometry(): TakeGeometry {
         val c = cameraManager.getCameraCharacteristics(cameraId)
         chars = c
         // Static CCM floor: per-frame COLOR_CORRECTION results usually miss
@@ -627,7 +649,11 @@ class DirectLogRecorder(
         sessionStep = effStep
         Log.i(TAG, "compute step=$effStep crop=${crop.width}x${crop.height}@(${crop.left},${crop.top}) " +
             "export=${export.width}x${export.height}")
+        return TakeGeometry(c, size, crop, export, effPreferMhc)
+    }
 
+    /** Stage 3: Vulkan demosaic/grade pipelines and the take monitor. */
+    private fun initGpuStages(crop: LogVideoLadder.Crop, effPreferMhc: Boolean) {
         // Vulkan pipelines (idempotent; shared device with the viewfinder).
         val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val f16spv = appContext.assets.open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
@@ -746,7 +772,10 @@ class DirectLogRecorder(
             Log.w(TAG, "preview unavailable (${e.message}); monitor off")
             previewEnabled = false
         }
+    }
 
+    /** Stage 4: negotiate and start the HEVC encoder (10-bit, then 8-bit SDR). */
+    private fun startEncoder() {
         // True-10-bit encoder, two input modes (RAWR parity):
         // DIRECT_P010 writes the codec's own P010 input images, and
         // IMAGE_WRITER feeds P010 through an ImageWriter over the codec
@@ -948,6 +977,10 @@ class DirectLogRecorder(
         }
         DirectLogBreadcrumb.mark(appContext, "codec-started")
         true10Bit = !eightBitMode
+    }
+
+    /** Stage 5: P010 staging, demosaic working and monitor buffers. */
+    private fun allocateBuffers(export: LogVideoLadder.RawSize) {
         // App-owned P010 staging (GPU-written, CPU-readable): 3 ping-pong
         // buffers at encode res. Strides come from the allocator and are
         // re-validated natively per submit (loud -20 on mismatch).
@@ -999,7 +1032,10 @@ class DirectLogRecorder(
                 previewEnabled = false
             }
         }
+    }
 
+    /** Stage 6: muxer, drain thread, audio, then the camera session. */
+    private fun startStreams(output: File, c: CameraCharacteristics, size: Size) {
         muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         draining.set(true)
         drainThread = Thread(::drainLoop, "DirectLogDrain").apply { start() }

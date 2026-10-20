@@ -117,3 +117,15 @@ RawVideoRecordTest OK; the four takes decode with reference decoder at
 72 frames, 30.0 fps each. No "Missing capture result", head-skip or
 pool-exhausted line in the baseline, V2 or V3 runs, so the earlier 69-frame
 16:9 take was the capture window, not V7.
+
+## DirectLogRecorder.start split
+
+startTake() now calls six stages in order: resetTakeState, resolveGeometry
+(returns TakeGeometry: characteristics, sensor size, crop, export size,
+effective preferMhc), initGpuStages, startEncoder, allocateBuffers,
+startStreams. Moved verbatim: the stage bodies concatenated equal the old
+body token for token (5002 tokens), the rest of the file is unchanged.
+Device (same phone): DirectLogStartFailureDeviceTest OK,
+DirectLogMatrixDeviceTest OK, DirectLogRecordDeviceTest OK with the same
+paths as baseline (fused-mhcyuv / superpixel-fallback, DIRECT_P010) and
+acq/graded/drop 93/92/0 and 98/97/0.
