@@ -37,7 +37,6 @@ import android.view.TextureView
 import android.view.View
 import com.particlesdevs.photoncamera.processing.ml.FlowNetNcnnProcessor
 import java.nio.ByteOrder
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
@@ -135,7 +134,7 @@ data class DynamicExposureSettings(
     val useAutoSafeShutter: Boolean = true
 )
 
-private data class PendingZslResult(
+internal data class PendingZslResult(
     val result: TotalCaptureResult,
     val motionRadiansPerSecond: Float,
     val requestEpoch: Long
@@ -244,10 +243,8 @@ class RawCameraController(
     @Volatile private var mfsrSettings = initialMfsrSettings
     private var activeMfsrSettings = initialMfsrSettings
     private val mfsrMergeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
-    private val pendingImages = ConcurrentHashMap<Long, Image>()
-    private val pendingResults = ConcurrentHashMap<Long, TotalCaptureResult>()
-    private val pendingZslResults = ConcurrentHashMap<Long, PendingZslResult>()
-    private val pendingTimeouts = ConcurrentHashMap<Long, Runnable>()
+    /** RAW image ↔ capture result matching for forward captures and the ZSL ring. */
+    private val pairing = FramePairing(cameraHandler, PairingHost())
     private val captureInProgress = AtomicBoolean(false)
     // True only while Camera2 is physically executing a still sequence. Unlike captureInProgress,
     // this becomes false before RAW/JPEG pairing/development completes and is the correct guard
@@ -255,7 +252,6 @@ class RawCameraController(
     private var cameraCaptureSequenceActive = false
     private val captureSequence = AtomicInteger(0)
     private var streamCapture: ForwardRawSelection? = null
-    private val previewRawTimestamps = ConcurrentHashMap.newKeySet<Long>()
 
     private val activeFramesRemaining = AtomicInteger(0)
     private var activeHdrBracket = false
@@ -272,7 +268,7 @@ class RawCameraController(
      * in https://research.google/blog/hdr-with-bracketing-on-pixel-phones/): ring frames held aside while fresh
      * forward stills complete the burst under one stem. Empty unless a top-up
      * capture is in flight; guarded by [topupActive]. Fresh arrivals accumulate
-     * in [topupFrames] via pairAndSave until the remainder is filled.
+     * in [topupFrames] via onForwardPair until the remainder is filled.
      */
     private var topupActive = false
     private var topupHoldout: List<BufferedRawFrame> = emptyList()
@@ -1016,7 +1012,7 @@ class RawCameraController(
             // Consume every queued RAW in timestamp order while ZSL is running.
             // acquireLatestImage() implicitly discards intermediate RAW buffers. At a
             // 30 fps repeating stream that can also discard the exact image whose
-            // TotalCaptureResult is waiting in pendingZslResults, delaying both ring
+            // TotalCaptureResult is waiting in [pairing], delaying both ring
             // fill and the first RAW histogram until a later capture. Keeping the loop
             // on this camera Handler drains the ImageReader quickly; RawZslBuffer owns
             // only the configured ring and closes its oldest frame on every overflow.
@@ -1071,7 +1067,7 @@ class RawCameraController(
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
                 if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
-                if (previewRawTimestamps.remove(image.timestamp)) {
+                if (pairing.consumePreviewRaw(image.timestamp)) {
                     RawImageOwnership.release(image)
                     continue
                 }
@@ -1083,8 +1079,8 @@ class RawCameraController(
                     // BufferQueues into unlock errors.
                     relieveZslReaderPressureIfNeeded()
                     val timestamp = image.timestamp
-                    pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
-                    if (pendingZslResults.containsKey(timestamp)) {
+                    pairing.putImage(timestamp, image)
+                    if (pairing.hasZslResult(timestamp)) {
                         pairAvailableFrame(timestamp)
                     } else {
                         schedulePairTimeout(timestamp, reportCaptureFailure = false)
@@ -1115,10 +1111,10 @@ class RawCameraController(
                     Log.d(
                         LOG_TAG,
                         "RAW image timestamp=$timestamp remaining=${activeFramesRemaining.get()} " +
-                            "zsl=$rawZslStreaming pending=${pendingImages.size}"
+                            "zsl=$rawZslStreaming pending=${pairing.pendingImageCount}"
                     )
                 }
-                pendingImages.put(timestamp, image)?.let(RawImageOwnership::release)
+                pairing.putImage(timestamp, image)
                 schedulePairTimeout(timestamp, reportCaptureFailure = false)
                 pairAvailableFrame(timestamp)
             } while (drained < 2 && (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) && activeFramesRemaining.get() <= 0)
@@ -5337,18 +5333,12 @@ class RawCameraController(
                     val collecting = streamCapture
                     if (collecting != null && collecting.captureId == captureSequence.get() &&
                         collecting.accept(rawTimestamp)) {
-                        pendingResults[rawTimestamp] = result
+                        pairing.putForwardResult(rawTimestamp, result)
                         schedulePairTimeout(rawTimestamp, reportCaptureFailure = true)
                         pairAvailableFrame(rawTimestamp)
                     } else {
                         // A repeating result can never consume a still capture's slot.
-                        val previewImage = pendingImages.remove(rawTimestamp)
-                        pendingTimeouts.remove(rawTimestamp)?.let(cameraHandler::removeCallbacks)
-                        if (previewImage != null) RawImageOwnership.release(previewImage)
-                        else {
-                            previewRawTimestamps.add(rawTimestamp)
-                            if (previewRawTimestamps.size > 64) previewRawTimestamps.minOrNull()?.let(previewRawTimestamps::remove)
-                        }
+                        pairing.dropPreviewRaw(rawTimestamp)
                     }
                 } else if (includesRaw && rawZslStreaming && requestEpoch == rawZslRequestEpoch) {
                     result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
@@ -5358,11 +5348,11 @@ class RawCameraController(
                             result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L,
                             rawZslRealtimeTimestamps
                         )
-                        pendingZslResults[timestamp] = PendingZslResult(result, motion, requestEpoch)
+                        pairing.putZslResult(timestamp, PendingZslResult(result, motion, requestEpoch))
                         // Most HALs deliver image/result very close together. Pair immediately
                         // when the image is already present instead of posting then cancelling a
                         // timeout Runnable on every 30 fps ZSL frame.
-                        if (pendingImages.containsKey(timestamp)) {
+                        if (pairing.hasImage(timestamp)) {
                             pairAvailableFrame(timestamp)
                         } else {
                             schedulePairTimeout(timestamp, reportCaptureFailure = false)
@@ -6032,7 +6022,7 @@ class RawCameraController(
                 "RAW result id=$captureId frame=${tag?.frameNumber ?: "?"}/${tag?.frameCount ?: "?"} " +
                     "timestamp=$timestamp"
             )
-            pendingResults[timestamp] = result
+            pairing.putForwardResult(timestamp, result)
             schedulePairTimeout(timestamp, reportCaptureFailure = true)
             pairAvailableFrame(timestamp)
         }
@@ -6080,17 +6070,10 @@ class RawCameraController(
         }
     }
 
-    private fun pairAvailableFrame(timestamp: Long) {
-        if (pendingResults.containsKey(timestamp)) pairAndSave(timestamp)
-        else if (pendingZslResults.containsKey(timestamp)) pairRawZslFrame(timestamp)
-    }
+    private fun pairAvailableFrame(timestamp: Long) = pairing.pairAvailable(timestamp)
 
-    private fun pairRawZslFrame(timestamp: Long) {
-        if (!running) return
-        val pending = pendingZslResults[timestamp] ?: return
-        val image = pendingImages.remove(timestamp) ?: return
-        pendingZslResults.remove(timestamp)
-        pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
+    /** Completed ZSL pair: ring admission unless the stream or its epoch is gone. */
+    private fun onZslPair(timestamp: Long, image: Image, pending: PendingZslResult) {
         if (!rawZslStreaming || rawZslDisabledForSession || zslHealth.streamBroken || !rawZslRequested ||
             pending.requestEpoch != rawZslRequestEpoch
         ) {
@@ -6302,12 +6285,8 @@ class RawCameraController(
         }
     }
 
-    private fun pairAndSave(timestamp: Long) {
-        if (!running) return
-        val result = pendingResults[timestamp] ?: return
-        val image = pendingImages.remove(timestamp) ?: return
-        pendingResults.remove(timestamp)
-        pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
+    /** Completed forward pair: routes to save, top-up, bracket or dual-RAW. */
+    private fun onForwardPair(timestamp: Long, image: Image, result: TotalCaptureResult) {
         val remaining = activeFramesRemaining.decrementAndGet()
         Log.i(LOG_TAG, "RAW paired timestamp=$timestamp remaining=$remaining")
         // Any paired frame proves the HAL is producing: chains that pair then
@@ -7043,37 +7022,58 @@ class RawCameraController(
     }
 
     private fun schedulePairTimeout(timestamp: Long, reportCaptureFailure: Boolean) {
-        pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
-        val shot = captureSequence.get()
         val generation = lifecycleGeneration
-        val timeout = Runnable {
-            if (!isCurrent(generation)) return@Runnable
-            pendingTimeouts.remove(timestamp)
-            val image = pendingImages.remove(timestamp)
-            val result = pendingResults.remove(timestamp)
-            val zslPending = pendingZslResults.remove(timestamp)
-            // Grace admission (see admitStaleZslFrame): only for ZSL expiries
-            // carrying a live image. Forward-capture expiries keep exact
-            // pairing and close below, untouched.
-            val admitted = if (!reportCaptureFailure && image != null) {
-                admitStaleZslFrame(timestamp, image, zslPending?.result)
-            } else false
-            if (!admitted) image?.let(RawImageOwnership::release)
-            if (reportCaptureFailure && shot == captureSequence.get() && captureInProgress.get() && (image != null || result != null)) {
-                // A top-up chain loses one frame here; save the partial burst
-                // instead of dropping the holdout plus everything arrived.
-                if (topupActive) finishTopupBurst()
-                else {
-                    finishCapture("CAPTURE TIMEOUT")
-                    resumeRawZslIfIdle()
-                }
+        pairing.scheduleTimeout(
+            timestamp, forward = reportCaptureFailure, shot = captureSequence.get(),
+            isCurrent = { isCurrent(generation) },
+            forwardTimeoutMs = PAIR_TIMEOUT_MS, zslTimeoutMs = ZSL_PAIR_TIMEOUT_MS
+        )
+    }
+
+    /** A pairing window ran out (see [FramePairing.scheduleTimeout]). */
+    private fun onPairExpired(
+        timestamp: Long,
+        image: Image?,
+        result: TotalCaptureResult?,
+        zslPending: PendingZslResult?,
+        reportCaptureFailure: Boolean,
+        shot: Int
+    ) {
+        // Grace admission (see admitStaleZslFrame): only for ZSL expiries
+        // carrying a live image. Forward-capture expiries keep exact
+        // pairing and close below, untouched.
+        val admitted = if (!reportCaptureFailure && image != null) {
+            admitStaleZslFrame(timestamp, image, zslPending?.result)
+        } else false
+        if (!admitted) image?.let(RawImageOwnership::release)
+        if (reportCaptureFailure && shot == captureSequence.get() && captureInProgress.get() && (image != null || result != null)) {
+            // A top-up chain loses one frame here; save the partial burst
+            // instead of dropping the holdout plus everything arrived.
+            if (topupActive) finishTopupBurst()
+            else {
+                finishCapture("CAPTURE TIMEOUT")
+                resumeRawZslIfIdle()
             }
         }
-        pendingTimeouts[timestamp] = timeout
-        cameraHandler.postDelayed(
-            timeout,
-            if (reportCaptureFailure) PAIR_TIMEOUT_MS else ZSL_PAIR_TIMEOUT_MS
-        )
+    }
+
+    /** Camera-side half of [FramePairing]. */
+    private inner class PairingHost : FramePairing.Host {
+        override val running: Boolean get() = this@RawCameraController.running
+        override fun onForwardPair(timestamp: Long, image: Image, result: TotalCaptureResult) =
+            this@RawCameraController.onForwardPair(timestamp, image, result)
+        override fun onZslPair(timestamp: Long, image: Image, pending: PendingZslResult) =
+            this@RawCameraController.onZslPair(timestamp, image, pending)
+        override fun onPairExpired(
+            timestamp: Long, image: Image?, result: TotalCaptureResult?,
+            zslPending: PendingZslResult?, forward: Boolean, shot: Int
+        ) = this@RawCameraController.onPairExpired(timestamp, image, result, zslPending, forward, shot)
+        override fun evictOldestRingFrame(): Boolean {
+            if (rawZslBuffer?.evictOldest() != true) return false
+            rawZslReportedSize = rawZslBuffer?.size ?: 0
+            publishRawZslStatus()
+            return true
+        }
     }
 
     /** Back to the default (non-bracket) capture: ±2 EV around 0. */
@@ -7405,12 +7405,7 @@ class RawCameraController(
         rawZslBuffer?.clear()
         zslHealth.filled = false
         rawZslReportedSize = 0
-        val zslTimestamps = pendingZslResults.keys.toList()
-        zslTimestamps.forEach { timestamp ->
-            pendingZslResults.remove(timestamp)
-            pendingImages.remove(timestamp)?.let(RawImageOwnership::release)
-            pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
-        }
+        pairing.clearZsl()
     }
 
     /** PhotonCamera uses the same drain on request transitions so stale RAW never crosses modes. */
@@ -7426,38 +7421,8 @@ class RawCameraController(
         }
     }
 
-    /**
-     * Frees one held gralloc slot when the ImageReader reports maxImages
-     * outstanding. Prefers the oldest result-less image (it would time out
-     * unpaired anyway) over evicting a paired ring frame.
-     */
-    private fun relieveZslReaderPressure(): Boolean {
-        val unmatched = pendingImages.keys
-            .filter { !pendingResults.containsKey(it) && !pendingZslResults.containsKey(it) }
-            .minOrNull()
-        if (unmatched != null) {
-            pendingImages.remove(unmatched)?.let(RawImageOwnership::release)
-            pendingTimeouts.remove(unmatched)?.let(cameraHandler::removeCallbacks)
-            return true
-        }
-        if (rawZslBuffer?.evictOldest() == true) {
-            rawZslReportedSize = rawZslBuffer?.size ?: 0
-            publishRawZslStatus()
-            return true
-        }
-        // Last resort: every held image has a result waiting, but the HAL still
-        // needs a free slot. Drop the oldest pairing rather than wedging the
-        // queue into persistent Mali/Adreno unlock errors.
-        val oldest = pendingImages.keys.minOrNull()
-        if (oldest != null) {
-            pendingImages.remove(oldest)?.let(RawImageOwnership::release)
-            pendingResults.remove(oldest)
-            pendingZslResults.remove(oldest)
-            pendingTimeouts.remove(oldest)?.let(cameraHandler::removeCallbacks)
-            return true
-        }
-        return false
-    }
+    /** Frees one held gralloc slot under reader back-pressure ([FramePairing.relievePressure]). */
+    private fun relieveZslReaderPressure(): Boolean = pairing.relievePressure()
 
     /** Proactive guard: keep at least one free ImageReader slot for the HAL. */
     private fun relieveZslReaderPressureIfNeeded() {
@@ -7497,13 +7462,7 @@ class RawCameraController(
     }
 
     private fun closeAllPendingPairs() {
-        pendingImages.values.forEach(RawImageOwnership::release)
-        pendingImages.clear()
-        pendingResults.clear()
-        pendingZslResults.clear()
-        previewRawTimestamps.clear()
-        pendingTimeouts.values.forEach(cameraHandler::removeCallbacks)
-        pendingTimeouts.clear()
+        pairing.clearAll()
         // The ring survives capture end: remaining frames (partial takes,
         // untouched pre-roll around forward singles) stay eligible for the
         // next press instead of forcing a refill from zero. Only teardown,
@@ -7513,14 +7472,7 @@ class RawCameraController(
         rawZslReportedSize = buffered
     }
 
-    private fun closeUnmatchedRawImages() {
-        pendingImages.keys.toList().forEach { timestamp ->
-            if (!pendingResults.containsKey(timestamp) && !pendingZslResults.containsKey(timestamp)) {
-                pendingImages.remove(timestamp)?.let(RawImageOwnership::release)
-                pendingTimeouts.remove(timestamp)?.let(cameraHandler::removeCallbacks)
-            }
-        }
-    }
+    private fun closeUnmatchedRawImages() = pairing.closeUnmatched()
 
     private fun publishRawZslStatus(
         state: RawZslState? = null,
@@ -7586,12 +7538,7 @@ class RawCameraController(
             // Close outstanding Images before the ImageReader: closing the reader
             // with acquired gralloc buffers still held wedges Mali/Adreno queues
             // into "unlock() on a buffer locked with invalid write locks".
-            pendingImages.values.forEach { runCatching { RawImageOwnership.release(it) } }
-            pendingImages.clear()
-            pendingResults.clear()
-            pendingZslResults.clear()
-            pendingTimeouts.values.forEach(cameraHandler::removeCallbacks)
-            pendingTimeouts.clear()
+            pairing.clearForTeardown(ignoreReleaseFailures = true)
             rawReader?.setOnImageAvailableListener(null, null)
             session?.close(); camera?.close(); previewSurface?.release()
             rawReader?.let(retiredRawReaders::add)
@@ -7601,9 +7548,7 @@ class RawCameraController(
             activePhysicalCameraId = null
             characteristics = null
         }
-        pendingImages.values.forEach(RawImageOwnership::release); pendingImages.clear(); pendingResults.clear()
-        pendingZslResults.clear()
-        pendingTimeouts.values.forEach(cameraHandler::removeCallbacks); pendingTimeouts.clear()
+        pairing.clearForTeardown(ignoreReleaseFailures = false)
         rawZslBuffer = null
         rawZslCapacity = 0
         latestPreviewResult = null
