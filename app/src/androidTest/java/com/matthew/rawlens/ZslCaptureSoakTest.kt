@@ -29,6 +29,8 @@ class ZslCaptureSoakTest {
         val format = CaptureFormat.valueOf(args.getString("format", "DNG_ONLY"))
         // Forward burst (non-ZSL modes): fires captureBurst() instead of capture().
         val burst = args.getString("burst", "false").toBoolean()
+        // AgX (JPEG-look) scopes, as the UI selects for JPEG formats; default linear.
+        val agxScope = args.getString("agxScope", "false").toBoolean()
         instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
         // Headless runs skip the modal first-run lens discovery exactly like a
         // user tapping SAVE with defaults (keys mirror MainActivity.PREFS_NAME /
@@ -66,6 +68,11 @@ class ZslCaptureSoakTest {
             controller.setZslHybridTopup(hybrid)
             controller.setCaptureExposureMode(mode)
             assertTrue(controller.setCaptureFormat(format))
+            // Developed output is a user preference (JPEG or JXL); the artifact
+            // count below expects .jpg, so pin JPEG for this run (controller
+            // state only, the saved preference is untouched).
+            assertTrue(controller.setDevelopedFormat(DevelopedFormat.JPEG))
+            controller.setScopeAgxApplied(agxScope)
             if (exposureMs > 0) {
                 controller.setManualControl(ManualControl.ISO, 100L)
                 controller.setManualControl(ManualControl.SHUTTER, exposureMs * 1_000_000L)

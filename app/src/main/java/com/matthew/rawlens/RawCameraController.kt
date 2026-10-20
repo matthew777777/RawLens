@@ -426,6 +426,8 @@ class RawCameraController(
     @Volatile private var rawHistogramEnabled = initialRawHistogramEnabled
     /** AgX-curved (JPEG preview) vs linear-RAW scope data; follows the capture format. */
     @Volatile private var scopeAgxApplied = initialScopeAgxApplied
+    /** AgX scope LUT reused until the JPEG look changes (camera thread). */
+    private val scopeLutCache = ScopeLutCache()
     @Volatile private var scopeMode = initialScopeMode
     /** Live RAW scope-only repeating stream outside ZSL (AUTO/PROGRAM/MANUAL). Frames are
      * sampled for the histogram/waveform and closed; nothing is buffered and ZSL status
@@ -6165,7 +6167,7 @@ class RawCameraController(
         if (!RawHistogramThrottle.shouldSample(now, lastRawHistogramSampleMs, RAW_HISTOGRAM_INTERVAL_MS, force)) return
         lastRawHistogramSampleMs = now
         val lutStartNs = System.nanoTime()
-        val lut = if (scopeAgxApplied) AgxDisplayTransform.buildScopeLut(jpegOutputSettings) else null
+        val lut = if (scopeAgxApplied) scopeLutCache.get(jpegOutputSettings) else null
         // JPEG scope predicts the saved file: the same adaptive EV develop
         // applies pre-tonemap. DNG scopes stay unexposed linear (lut null
         // ignores the gain), matching the linear DNG.
