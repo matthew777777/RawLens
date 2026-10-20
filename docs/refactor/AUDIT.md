@@ -65,7 +65,9 @@ evidence. "Device-unverified" means no on-device run yet.
 
 No frame failed or lost a buffer in these runs, so the new C3/C4 branches did not execute on device.
 | 59e579e | Remove obsolete DCG probe tests/artifacts (owner-requested); live opmode feature kept | — | release + androidTest build | test-only |
-| (next) | Gradle runs on **JDK 27** via `gradle/gradle-daemon-jvm.properties` (`toolchainVersion=27`, found through macOS java_home); compile target stays Java 21 | [Gradle compatibility](https://docs.gradle.org/current/userguide/compatibility.html): 9.8 runs on JVM 17–27 | JDK 27: app 1540/0, sr-pipeline 196/0/38; phone ZSL 5/5, AUTO 5/5, burst 3/3, refactor checks 4/4 (PSS 202–217 MB vs 193–210 before, watch) | build machine only |
+| d4103eb | Gradle runs on **JDK 27** via `gradle/gradle-daemon-jvm.properties` (`toolchainVersion=27`, found through macOS java_home); compile target stays Java 21 | [Gradle compatibility](https://docs.gradle.org/current/userguide/compatibility.html): 9.8 runs on JVM 17–27 | JDK 27: app 1540/0, sr-pipeline 196/0/38; phone ZSL 5/5, AUTO 5/5, burst 3/3, refactor checks 4/4 (PSS 202–217 MB vs 193–210 before, watch) | build machine only |
+| 6bed719 | Save-writer study; W1/W2 comment corrections | GaloshDenoiser `@Synchronized` | compile | comment-only |
+| (next) | **R1 (owner-approved, default on after phone soak):** multi-frame forward captures submitted with `captureBurst`; any lost frame / abort / timeout / submit failure in a pipelined burst falls back to the serialized chain and persists the verdict (`still_burst/pipelined_refused`). **W4 (owner-approved):** seven save settings frozen at shutter time | AOSP `CameraCaptureSession.captureBurst`; PhotonCamera `captureBurst`; MotionCam multi-request capture | phone: 20/20 pipelined bursts, frame gap 33.3 ms (was 166.6), 6-frame span 167 ms (was ~833), no fallback; 6 burst DNGs distinct (MD5) and valid; ZSL 5/5, hybrid top-up ×8 5/5, AUTO 5/5, refactor checks 4/4; JVM 1540/0 | **behaviour change**: bursts ~5× faster on this device |
 
 ## Full on-device suite (refactored 1.0.397 vs original 1.0.374, same phone)
 
@@ -93,7 +95,6 @@ No frame failed or lost a buffer in these runs, so the new C3/C4 branches did no
 
 ## Open decisions for the owner
 
-- **R1** (still chain): serialized forward bursts space frames 166.6 ms apart on MT6878 (RAW minFrameNs 50 ms); both references pipeline with `captureBurst`; the "log-proven on MediaTek" reason has no log in the repo. Proposal: flagged pipelined experiment soaked on this phone. See `still-chain-study.md`.
 - ZSL copy-out pool (MotionCam design) — see `zsl-study.md`, needs device measurements.
 
 ## Process note

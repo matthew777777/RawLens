@@ -245,6 +245,17 @@ class RawCameraController(
     private val mfsrMergeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     /** RAW image ↔ capture result matching for forward captures and the ZSL ring. */
     private val pairing = FramePairing(cameraHandler, PairingHost())
+    /**
+     * R1: multi-frame forward captures go to the HAL as one captureBurst
+     * ("captured in the minimum amount of time possible, and will not be
+     * interleaved", AOSP CameraCaptureSession) like PhotonCamera and MotionCam,
+     * instead of one still per completed pair. A pipelined burst that loses a
+     * frame, aborts or times out falls back to the serialized chain on this
+     * device and the verdict persists (see [refusePipelinedBursts]).
+     */
+    private var stillBurstPipelined = !pipelinedBurstsRefusedPersisted()
+    /** The forward capture in flight was submitted as one captureBurst. */
+    private var activeBurstPipelined = false
     /** HAL frame numbers of the current forward capture already counted as lost. */
     private val lostForwardFrames = HashSet<Long>()
     /** Frames whose RAW buffer was lost before their result arrived (C4). */
@@ -1756,6 +1767,27 @@ class RawCameraController(
     }
 
     /** Persist the GPU-usage starvation verdict (device-local, never backed up). */
+    /** Persisted R1 verdict: true once a pipelined burst failed on this device. */
+    private fun pipelinedBurstsRefusedPersisted(): Boolean = try {
+        context.getSharedPreferences(STILL_BURST_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(STILL_BURST_PIPELINED_REFUSED_KEY, false)
+    } catch (_: Exception) {
+        false
+    }
+
+    /** A pipelined burst failed here: serialized chain from now on, persisted. */
+    private fun refusePipelinedBursts(reason: String) {
+        if (!stillBurstPipelined) return
+        stillBurstPipelined = false
+        Log.w(LOG_TAG, "Pipelined still burst failed ($reason); serialized chain persisted for this device")
+        try {
+            context.getSharedPreferences(STILL_BURST_PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(STILL_BURST_PIPELINED_REFUSED_KEY, true).apply()
+        } catch (_: Exception) {
+            // Best effort: without persistence the next launch tries pipelining again.
+        }
+    }
+
     private fun persistVfGpuReaderVerdict() {
         try {
             context.getSharedPreferences(VF_GPU_READER_PREFS, Context.MODE_PRIVATE)
@@ -3451,7 +3483,9 @@ class RawCameraController(
         val generation = lifecycleGeneration
         val captureId = captureSequence.incrementAndGet()
         chainPairedAny = false
-        Log.i(LOG_TAG, "Submitting RAW capture id=$captureId frames=$frameCount (serialized)")
+        val pipelined = stillBurstPipelined && frameCount > 1 && !activeDualRaw
+        Log.i(LOG_TAG, "Submitting RAW capture id=$captureId frames=$frameCount " +
+            if (pipelined) "(pipelined)" else "(serialized)")
         try {
             val requests = List(frameCount) { frameIndex ->
                 device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
@@ -3481,8 +3515,14 @@ class RawCameraController(
             val callback = captureCallback(generation, captureId)
             activeStillCallback = callback
             pendingStillRequests.clear()
-            pendingStillRequests.addAll(requests)
-            submitNextStill()
+            activeBurstPipelined = pipelined
+            if (pipelined) {
+                cameraCaptureSequenceActive = true
+                currentSession.captureBurst(requests, callback, cameraHandler)
+            } else {
+                pendingStillRequests.addAll(requests)
+                submitNextStill()
+            }
             Log.i(LOG_TAG, "RAW capture submitted id=$captureId frames=$frameCount")
 
         } catch (_: CameraAccessException) {
@@ -3502,6 +3542,7 @@ class RawCameraController(
      * Counts toward dead-chain recovery either way.
      */
     private fun endForwardCaptureOnError(message: String, resumeZsl: Boolean, saveTopupPartial: Boolean) {
+        if (activeBurstPipelined) refusePipelinedBursts("submit failed ($message)")
         cameraCaptureSequenceActive = false
         if (saveTopupPartial && topupActive) {
             finishTopupBurst()
@@ -6074,6 +6115,7 @@ class RawCameraController(
             if (!isCurrent(generation) || captureId != captureSequence.get()) return
             Log.e(LOG_TAG, "RAW capture aborted id=$captureId sequence=$sequenceId")
             cameraCaptureSequenceActive = false
+            if (activeBurstPipelined) refusePipelinedBursts("sequence aborted")
             if (topupActive) {
                 Log.w(LOG_TAG, "Top-up capture aborted; saving partial burst")
                 finishTopupBurst()
@@ -6316,9 +6358,10 @@ class RawCameraController(
         else if (topupActive) accumulateTopupFrame(image, result)
         else if (activeHdrBracket) pendingHdrFrames += PendingHdrFrame(image, result)
         else saveRawFrame(image, result, null)
-        // Serialized still chain: each pair completion submits the next prebuilt
-        // still, keeping a single frame in flight for HALs whose gralloc pool
-        // cannot survive a pipelined N-frame burst (log-proven on MediaTek).
+        // Serialized still chain (fallback when pipelined bursts failed on this
+        // device, see stillBurstPipelined): each pair completion submits the next
+        // prebuilt still, one frame in flight. A pipelined burst leaves the queue
+        // empty, so this is a no-op there.
         if (remaining > 0) {
             if (!activeDualRaw && streamCapture == null) submitNextStill()
             return
@@ -6364,6 +6407,7 @@ class RawCameraController(
      */
     private fun onForwardFrameLost(frameNumber: Long, reason: String) {
         if (!lostForwardFrames.add(frameNumber)) return
+        if (activeBurstPipelined) refusePipelinedBursts("frame $frameNumber lost ($reason)")
         val remaining = activeFramesRemaining.decrementAndGet()
         Log.w(LOG_TAG, "Forward frame $frameNumber lost ($reason); remaining=$remaining")
         if (remaining > 0) {
@@ -6757,6 +6801,16 @@ class RawCameraController(
         val captureDenoiseSettings = activeDenoiseSettings
         val captureGaloshSettings = activeGaloshSettings
         val adaptiveExposureStrength = adaptivePreviewStrength(activeCaptureExposureMode, outputSettings)
+        // W4: every user setting the job uses is frozen here, at shutter time,
+        // like the result itself; the job runs later on a writer thread, after
+        // the user may have changed format, lens, ETTR or the focus point.
+        val captureDevelopedFormat = activeDevelopedFormat
+        val captureJxlSettings = activeJxlOutputSettings
+        val captureEttrHeadroomEv = if (ettrCaptureActive()) ettrSettings.headroomEv else null
+        val captureFocusView = developFocusView
+        val captureDngOverrides = dngMetadataOverrides(selectedCameraId)
+        val captureDngBackend = dngWriterBackend()
+        val captureDngCompression = dngCompression()
         val sharedAdaptiveExposure = activeAdaptiveExposure
         // Burst callers pass one timestamp for every output of the capture
         // so DNGs, JPEGs, and sidecars share the IMG_YYYYMMDD_HHMMSS_mmm
@@ -6789,12 +6843,12 @@ class RawCameraController(
                         adaptiveExposureStrength = adaptiveExposureStrength,
                         sharedAdaptiveExposure = sharedAdaptiveExposure,
                         adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
-                            outputSettings, developFocusView
+                            outputSettings, captureFocusView
                         ),
                         // ETTR frames are already optimally bright: develop caps the
                         // adaptive lift at the residual to the ETTR target instead of
                         // pushing bright skies past white.
-                        ettrHeadroomEv = if (ettrCaptureActive()) ettrSettings.headroomEv else null
+                        ettrHeadroomEv = captureEttrHeadroomEv
                     )
                     // Denoise-once: at most one stage runs per capture. Galosh
                     // wins when enabled and AI is skipped for that capture;
@@ -6821,10 +6875,10 @@ class RawCameraController(
                     val denCfa: UnpackedRawCfa? = galoshCfa ?: aiCfa
                     fun saveOriginalDng(): String? = try {
                         DngSaver(context).save(
-                            image, c, result, orientation, dngMetadataOverrides(selectedCameraId),
-                            frameMetadata, dngWriterBackend(), captureId = captureTimeMillis,
+                            image, c, result, orientation, captureDngOverrides,
+                            frameMetadata, captureDngBackend, captureId = captureTimeMillis,
                             gps = captureGps, fileNameSuffix = fileNameSuffix,
-                            subfolder = subfolder, dngCompression = dngCompression()
+                            subfolder = subfolder, dngCompression = captureDngCompression
                         ).also {
                             Log.i(
                                 LOG_TAG,
@@ -6891,13 +6945,13 @@ class RawCameraController(
                                     if (galoshCfa != null) " galoshDenoised"
                                     else if (aiCfa != null) " aiDenoised" else ""
                             )
-                            if (activeDevelopedFormat == DevelopedFormat.JXL) {
+                            if (captureDevelopedFormat == DevelopedFormat.JXL) {
                                 val developed = if (denCfa != null) {
                                     developer.developCfaJxl(
                                         denCfa, frameMetadata,
                                         settings = devSettings,
                                         look = outputSettings,
-                                        jxl = activeJxlOutputSettings
+                                        jxl = captureJxlSettings
                                     )
                                 } else {
                                     val rawPlane = image.planes.singleOrNull()?.buffer
@@ -6906,7 +6960,7 @@ class RawCameraController(
                                         rawPlane, frameMetadata,
                                         settings = devSettings,
                                         look = outputSettings,
-                                        jxl = activeJxlOutputSettings
+                                        jxl = captureJxlSettings
                                     )
                                 }
                                 jpegName = JxlSaver(context).save(
@@ -7057,6 +7111,7 @@ class RawCameraController(
     private fun scheduleCaptureTimeout(captureId: Int, exposureDurationMs: Long = 0L) {
         val timeout = Runnable {
             if (captureId == captureSequence.get() && captureInProgress.get()) {
+                if (activeBurstPipelined) refusePipelinedBursts("capture timeout")
                 if (topupActive) {
                     Log.w(LOG_TAG, "Top-up capture timed out; saving partial burst")
                     finishTopupBurst()
@@ -7103,6 +7158,7 @@ class RawCameraController(
         } else false
         if (!admitted) image?.let(RawImageOwnership::release)
         if (reportCaptureFailure && shot == captureSequence.get() && captureInProgress.get() && (image != null || result != null)) {
+            if (activeBurstPipelined) refusePipelinedBursts("pair timeout")
             // A top-up chain loses one frame here; save the partial burst
             // instead of dropping the holdout plus everything arrived.
             if (topupActive) finishTopupBurst()
@@ -7168,6 +7224,7 @@ class RawCameraController(
         closeAllPendingPairs()
         lostForwardFrames.clear()
         lostRawBufferFrames.clear()
+        activeBurstPipelined = false
         captureInProgress.getAndSet(false)
         resumeRawZslIfIdle()
         refreshCaptureAvailability()
@@ -8497,6 +8554,8 @@ class RawCameraController(
          * another device via settings backup.
          */
         private const val VF_GPU_READER_PREFS = "vf_gpu_reader"
+        private const val STILL_BURST_PREFS = "still_burst"
+        private const val STILL_BURST_PIPELINED_REFUSED_KEY = "pipelined_refused"
         private const val VF_GPU_READER_STARVED_KEY = "starved"
         /**
          * Private ISP preview-request verdict store (deliberately outside
