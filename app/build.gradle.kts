@@ -3,7 +3,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 // Version source of truth is version.properties. Every real assemble/bundle
@@ -40,7 +39,7 @@ if (isPackagingBuild && !isFdroidBuild) {
 
 android {
     namespace = "com.matthew.rawlens"
-    compileSdk = 35
+    compileSdk = 37
     // Pinned so local, CI, and F-Droid builds use the same NDK.
     ndkVersion = "27.0.12077973"
 
@@ -91,11 +90,6 @@ android {
     }
 
     sourceSets {
-        getByName("main") {
-            // Generated dir with the desktop-proven stage SPVs (synced by
-            // :app:syncSrpSpv, never committed).
-            assets.srcDir(layout.buildDirectory.dir("generated/srpspv"))
-        }
         getByName("release") {
             // F-Droid builds strip the updater-only permissions via the
             // overlay manifest (merged over src/main/AndroidManifest.xml).
@@ -166,12 +160,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     testOptions {
@@ -253,6 +243,14 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
 }
 
+// Generated assets dir with the desktop-proven stage SPVs (filled by
+// syncSrpSpv below, never committed). AGP 9 rejects Provider-based
+// sourceSet dirs; the Variant API Sources interface is the replacement:
+// https://developer.android.com/build/releases/agp-9-0-0-release-notes
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addStaticSourceDirectory("build/generated/srpspv")
+}
+
 // Syncs the desktop-proven stage SPVs (tools/sr-pipeline/host/build,
 // bit-identity-gated on desktop) into the generated assets dir as
 // sr_spv/*.spv. Runs before asset merging; nothing generated is
@@ -271,7 +269,7 @@ configurations.all {
     resolutionStrategy.eachDependency {
         if (requested.group == "androidx.core" && (requested.name == "core" || requested.name == "core-ktx")) {
             useVersion("1.9.0")
-            because("pin for AGP 8.7.3 / compileSdk 35 (exifinterface 1.4.2 pulls core 1.18 which needs SDK36/AGP8.9)")
+            because("runtime parity with 1.x releases: every shipped build ran on core 1.9.0; raising it is a separate, device-tested change")
         }
     }
 }
