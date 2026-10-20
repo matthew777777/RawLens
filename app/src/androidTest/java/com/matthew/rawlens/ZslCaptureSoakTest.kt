@@ -10,7 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** Opt-in: writes real photographs. Configure lens access in the app before running. */
+/** Opt-in: writes real photographs. Seeds first-run lens setup with defaults. */
 class ZslCaptureSoakTest {
     @Test fun sequentialCaptureSaveRearmsAndKeepsBothPreviewsLive() {
         val args = InstrumentationRegistry.getArguments()
@@ -27,7 +27,14 @@ class ZslCaptureSoakTest {
         val exposureMs = args.getString("exposureMs", "0").toLong()
         val lifecycleEvery = args.getString("lifecycleEvery", "0").toInt()
         val format = CaptureFormat.valueOf(args.getString("format", "DNG_ONLY"))
+        // Forward burst (non-ZSL modes): fires captureBurst() instead of capture().
+        val burst = args.getString("burst", "false").toBoolean()
         instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
+        // Headless runs skip the modal first-run lens discovery exactly like a
+        // user tapping SAVE with defaults (keys mirror MainActivity.PREFS_NAME /
+        // KEY_LENS_SETUP_COMPLETE, as in VideoModeUiTest).
+        context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("lens_setup_complete", true).commit()
         android.util.Log.i("RawLensSoak", "Launching activity")
         val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -76,7 +83,14 @@ class ZslCaptureSoakTest {
                     activity.findViewById<View>(R.id.shutter).isEnabled }
             }
             android.util.Log.i("RawLensSoak", "Preview ready")
-            val expectedFrames = if (mode != CaptureExposureMode.ZSL) 1 else if (format.includesJpeg) minOf(frames, 6) else frames
+            val burstFrames = RawCameraController::class.java.getDeclaredField("BURST_FRAME_COUNT")
+                .apply { isAccessible = true }.getInt(null)
+            val expectedFrames = when {
+                burst -> burstFrames
+                mode != CaptureExposureMode.ZSL -> 1
+                format.includesJpeg -> minOf(frames, 6)
+                else -> frames
+            }
             val outputs = expectedFrames * (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
             repeat(cycles) { cycle ->
                 awaitCondition("Cycle $cycle did not rearm") {
@@ -91,7 +105,7 @@ class ZslCaptureSoakTest {
                 var previewTimestamp = 0L
                 instrumentation.runOnMainSync {
                     previewTimestamp = activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L
-                    controller.capture()
+                    if (burst) controller.captureBurst() else controller.capture()
                     // These presses must be rejected, including before the first handler dispatch.
                     repeat(3) { controller.capture() }
                 }
@@ -111,8 +125,15 @@ class ZslCaptureSoakTest {
                 awaitCondition("Cycle $cycle shutter remained disabled after save") {
                     uiBoolean { activity.findViewById<View>(R.id.shutter).isEnabled }
                 }
-                awaitCondition("Cycle $cycle Android preview froze", 15_000) {
-                    uiBoolean { (activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L) > previewTimestamp }
+                // RAW-only sessions (ladder combo 0) attach no preview stream, so the
+                // TextureView never advances there; the RAW viewfinder check below
+                // covers display recovery in every session.
+                val sessionHasPreview = RawCameraController::class.java.getDeclaredField("previewSize")
+                    .apply { isAccessible = true }.get(controller) != null
+                if (sessionHasPreview) {
+                    awaitCondition("Cycle $cycle Android preview froze", 15_000) {
+                        uiBoolean { (activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L) > previewTimestamp }
+                    }
                 }
                 awaitCondition("Cycle $cycle RAW viewfinder did not recover", 15_000) {
                     uiBoolean { activity.findViewById<RawViewfinder>(R.id.rawViewfinder).snapshot().glActive }
@@ -130,8 +151,8 @@ class ZslCaptureSoakTest {
                 var heldPairs = -1
                 var heldSaves = -1
                 handler.post {
-                    heldPairs = (RawCameraController::class.java.getDeclaredField("pendingImages")
-                        .apply { isAccessible = true }.get(controller) as Map<*, *>).size
+                    heldPairs = (RawCameraController::class.java.getDeclaredField("pairing")
+                        .apply { isAccessible = true }.get(controller) as FramePairing).pendingImageCount
                     heldSaves = (RawCameraController::class.java.getDeclaredField("pendingSaveCount")
                         .apply { isAccessible = true }.get(controller) as java.util.concurrent.atomic.AtomicInteger).get()
                     inspected.countDown()
