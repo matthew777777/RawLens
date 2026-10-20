@@ -102,26 +102,12 @@
         android:textSize="10sp"
         android:visibility="gone" />
 
-    <!-- RAW Video HUD (Blackmagic language): full-bleed image with a stats
-         strip, a photo-style settings button top-start (always opens
-         Settings at the Video tab), and bottom bar (crop chip | REC | audio
-         meter). Shown in VIDEO mode only, while the photo chrome (topBar,
-         controlPanel) hides. No top text: the record timecode lives as the
+    <!-- RAW Video HUD (Blackmagic language): a stats strip over the same
+         3:4 viewport and top island as photo (the top-bar gear opens
+         Settings at the Video tab). Shown in VIDEO mode only. No top text: the record timecode lives as the
          first line of the stats strip (red while rolling); fps/profile
          switches live in the Settings Video tab. Meter and REC stay fixed
          like reference hardware. -->
-    <!-- Video-mode settings access: same look and rotation behavior as the
-         photo top-bar button, but always opens Settings at the Video tab. -->
-    <com.matthew.rawlens.RotatingImageButton
-        android:id="@+id/videoSettingsButton"
-        style="@style/TopBarButton"
-        android:layout_gravity="top|start"
-        android:layout_marginStart="12dp"
-        android:layout_marginTop="12dp"
-        android:contentDescription="Video settings"
-        android:src="@drawable/ic_settings"
-        android:visibility="gone" />
-
     <!-- RAW Video stats strip: same mono contract as rawVfDebugOverlay
          (fps / encode ms / drops / queue / MB/s / audio+gyro rates) with the
          record timecode as its first line (red while rolling), laid out as
@@ -176,17 +162,52 @@
             android:paddingEnd="4dp"
             android:paddingBottom="4dp">
 
-            <TextView
-                android:id="@+id/rawBadge"
+            <!-- Capture format line: sensor + bit depth beside the format
+                 badge, one row so the top island never grows. -->
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end"
-                android:background="@drawable/raw_badge"
-                android:letterSpacing="0.08"
-                android:text="DNG"
-                android:textColor="@color/accent"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/sensorInfo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:letterSpacing="0.06"
+                    android:maxWidth="96dp"
+                    android:singleLine="true"
+                    android:text="RAW SENSOR"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="10sp" />
+
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/dngInfo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:ellipsize="end"
+                    android:letterSpacing="0.06"
+                    android:maxWidth="96dp"
+                    android:singleLine="true"
+                    android:text="12-BIT"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="10sp" />
+
+                <TextView
+                    android:id="@+id/rawBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/raw_badge"
+                    android:letterSpacing="0.08"
+                    android:text="DNG"
+                    android:textColor="@color/accent"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/status"
@@ -230,27 +251,6 @@
         android:focusable="true"
         android:contentDescription="Waveform"
         android:visibility="gone" />
-
-    <!-- Slim focal stack at the left edge under the histogram (populated at
-         runtime by refreshLensSwitcher; the static child is a first-frame
-         placeholder). -->
-    <LinearLayout android:id="@+id/lensSwitcher" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|bottom" android:layout_marginEnd="16dp" android:layout_marginBottom="248dp" android:background="@drawable/focal_strip" android:gravity="center" android:minHeight="40dp" android:orientation="vertical">
-
-        <com.matthew.rawlens.RotatingTextView
-            android:id="@+id/lensControl"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/focal_active"
-            android:gravity="center"
-            android:minWidth="48dp"
-            android:minHeight="34dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:text="1×"
-            android:textColor="@color/accent"
-            android:textSize="13sp"
-            android:textStyle="bold" />
-    </LinearLayout>
 
     <!-- Floating minimal ruler: transparent container, the strip itself is the pill. -->
     <LinearLayout android:id="@+id/manualControlPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="248dp" android:background="@android:color/transparent" android:orientation="vertical" android:visibility="gone">
@@ -303,6 +303,57 @@
         android:paddingEnd="16dp"
         android:paddingBottom="28dp">
 
+        <!-- Lens row: horizontal focal pills (populated at runtime by
+             refreshLensSwitcher; the static child is a first-frame
+             placeholder). Same row in photo and video (video records on the
+             selected lens) so the bottom panel keeps one exact structure
+             across the mode switch. No bed of its own: the pills sit
+             straight on the panel surface, one piece with the island. -->
+        <LinearLayout
+            android:id="@+id/captureInfoRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="40dp"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingBottom="8dp">
+
+            <!-- Pills shrink 48 -> 40dp to share the row; past that the
+                 row scrolls, edges fading, selected lens kept centered. -->
+            <HorizontalScrollView
+                android:id="@+id/lensScroll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fadingEdgeLength="24dp"
+                android:overScrollMode="never"
+                android:requiresFadingEdge="horizontal"
+                android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/lensSwitcher"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/lensControl"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/focal_active"
+                    android:gravity="center"
+                    android:minWidth="48dp"
+                    android:minHeight="32dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="1×"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+            </HorizontalScrollView>
+        </LinearLayout>
+
         <LinearLayout
             android:id="@+id/exposureControls"
             android:layout_width="match_parent"
@@ -347,48 +398,6 @@
                 android:text="LIGHT OFF" />
         </LinearLayout>
 
-        <!-- Capture info line: same host and height in photo and video so the
-             bottom panel keeps one exact structure across the mode switch
-             (no jump). Photo shows DNG/bit-depth + sensor size here; video
-             shows CRS/crop + encoded dims (see refreshVideoSensorInfo). -->
-        <LinearLayout
-            android:id="@+id/captureInfoRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="28dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="2dp">
-
-            <com.matthew.rawlens.RotatingTextView
-                android:id="@+id/dngInfo"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:letterSpacing="0.06"
-                android:singleLine="true"
-                android:text="DNG • 12-BIT"
-                android:textColor="@color/text_secondary"
-                android:textSize="10sp" />
-
-            <com.matthew.rawlens.RotatingTextView
-                android:id="@+id/sensorInfo"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:gravity="end"
-                android:letterSpacing="0.06"
-                android:singleLine="true"
-                android:text="RAW SENSOR"
-                android:textColor="@color/text_secondary"
-                android:textSize="10sp" />
-        </LinearLayout>
-
         <!-- Shutter area: fixed two-row structure, no code sizing. Row A
              (quick | shutter | mode) is 92dp tall with every child vertically
              centered, so the shutter, quick, and mode centers share one line
@@ -407,19 +416,38 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <com.matthew.rawlens.RotatingImageButton
-                    android:id="@+id/quickButton"
-                    android:layout_width="56dp"
-                    android:layout_height="56dp"
-                    android:background="@drawable/glass_button"
-                    android:contentDescription="Quick controls"
-                    android:padding="15dp"
-                    android:src="@drawable/ic_tune" />
-
-                <Space
+                <!-- Left and right groups take equal weight so the shutter
+                     stays centered whatever each side holds. -->
+                <LinearLayout
                     android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center_vertical|start"
+                    android:orientation="horizontal">
+
+                    <!-- Quick access first: same 48dp column as the red
+                         record dot below it. -->
+                    <com.matthew.rawlens.RotatingImageButton
+                        android:id="@+id/quickButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:background="@drawable/glass_button"
+                        android:contentDescription="Quick controls"
+                        android:padding="12dp"
+                        android:src="@drawable/ic_tune" />
+
+                    <!-- Newest capture (photo or video): tap opens the
+                         system viewer. Empty glass circle until the first
+                         capture lands. -->
+                    <ImageView
+                        android:id="@+id/galleryThumb"
+                        android:layout_width="56dp"
+                        android:layout_height="56dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/glass_button"
+                        android:contentDescription="Open last capture"
+                        android:scaleType="centerCrop" />
+                </LinearLayout>
 
                 <!-- 88dp ring centered in the 92dp row: 2dp clear top and
                      bottom, so the ring can never clip. -->
@@ -437,22 +465,24 @@
                         android:contentDescription="Capture RAW photo" />
                 </FrameLayout>
 
-                <Space
+                <FrameLayout
                     android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1">
 
-                <com.matthew.rawlens.RotatingTextView
-                    android:id="@+id/modeButton"
-                    android:layout_width="72dp"
-                    android:layout_height="56dp"
-                    android:background="@drawable/control_chip"
-                    android:gravity="center"
-                    android:minHeight="48dp"
-                    android:text="S\nSINGLE"
-                    android:textColor="@color/text_primary"
-                    android:textSize="10sp"
-                    android:textStyle="bold" />
+                    <com.matthew.rawlens.RotatingTextView
+                        android:id="@+id/modeButton"
+                        android:layout_width="72dp"
+                        android:layout_height="56dp"
+                        android:layout_gravity="end|center_vertical"
+                        android:background="@drawable/control_chip"
+                        android:gravity="center"
+                        android:minHeight="48dp"
+                        android:text="S\nSINGLE"
+                        android:textColor="@color/text_primary"
+                        android:textSize="10sp"
+                        android:textStyle="bold" />
+                </FrameLayout>
             </LinearLayout>
 
             <LinearLayout

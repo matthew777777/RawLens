@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private lateinit var focusControl: TextView
     private lateinit var evControl: TextView
     private lateinit var lensSwitcher: LinearLayout
+    private lateinit var lastCapture: LastCaptureThumbnail
     private lateinit var flashControl: TextView
     private lateinit var lensDiscovery: LensDiscovery
     private lateinit var lensVerdictStore: LensVerdictStore
@@ -443,8 +444,9 @@ class MainActivity : Activity() {
                         refreshVideoSensorInfo()
                         return@runOnUiThread
                     }
-                    dngInfo.text = dng.replace('\n', ' ').replace("-bit RAW", "-BIT")
-                    sensorInfo.text = sensor.replace('\n', ' ')
+                    // Top status line next to the DNG badge: details only.
+                    dngInfo.text = dng.substringAfter('\n').replace("-bit RAW", "-BIT")
+                    sensorInfo.text = sensor.substringAfter('\n')
                 }
             },
             { enabled ->
@@ -696,6 +698,16 @@ class MainActivity : Activity() {
             }
         }
         findViewById<View>(R.id.quickButton).setOnClickListener { toggleQuickControls() }
+        val galleryThumb = findViewById<android.widget.ImageView>(R.id.galleryThumb)
+        galleryThumb.clipToOutline = true
+        lastCapture = LastCaptureThumbnail(this) { _, _, thumb ->
+            galleryThumb.setImageBitmap(thumb)
+        }
+        galleryThumb.setOnClickListener {
+            if (videoRecording) return@setOnClickListener
+            closeFloatingPanels()
+            if (!lastCapture.open(this)) setStatus("NO CAPTURES YET")
+        }
         gridQuick.setOnClickListener {
             gridEnabled = !gridEnabled
             guideOverlay.gridEnabled = gridEnabled
@@ -756,13 +768,8 @@ class MainActivity : Activity() {
         }
         findViewById<View>(R.id.settingsButton).setOnClickListener {
             hideManualControl()
-            showSettings()
-        }
-        // Video-mode settings entry: identical dialog, but always lands on
-        // the Video tab. The photo entry above keeps the default tab.
-        findViewById<View>(R.id.videoSettingsButton).setOnClickListener {
-            closeFloatingPanels()
-            showSettings(SETTINGS_VIDEO_TAB)
+            // Video keeps the photo top island: its gear lands on the Video tab.
+            if (isVideoMode) showSettings(SETTINGS_VIDEO_TAB) else showSettings()
         }
         // Single tap (or joint drag) installs AF + AE together: one repeating
         // update + one AF START, retargeting instantly even while locked.
@@ -991,6 +998,7 @@ class MainActivity : Activity() {
         // time we come back so first install is fullscreen without a restart.
         ImmersiveMode.apply(window)
         activityResumed = true
+        if (::lastCapture.isInitialized) lastCapture.start()
         MemoryLeakDiagnostics.sampleAsync("activity-resumed")
         DeviceImpactProbe.setForeground(true)
         DeviceImpactProbe.startFrameTracking(window)
@@ -1055,6 +1063,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         activityResumed = false
+        if (::lastCapture.isInitialized) lastCapture.stop()
         DeviceImpactProbe.setForeground(false)
         DeviceImpactProbe.stopFrameTracking(window)
         runCatching { unregisterReceiver(powerSaveReceiver) }
@@ -1087,6 +1096,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         lensDiscovery.close()
+        if (::lastCapture.isInitialized) lastCapture.release()
         // Safety net only (onPause already stops cleanly): never leak the
         // container handle; the file stays valid, just shorter.
         try {
@@ -1142,21 +1152,19 @@ class MainActivity : Activity() {
         // (16dp, shared top and bottom): the minimum that fills the curves
         // with picture instead of root black.
         val sealOverlap = dp(16)
-        val videoFullBleed = isVideoMode || topBar.visibility != View.VISIBLE
+        // Photo, RAW video and Direct-Log share one 3:4 viewport between the
+        // same two islands, so the frame never moves on the mode switch.
+        val noTopIsland = topBar.visibility != View.VISIBLE
         val viewfinderParams = (viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
-            if (videoFullBleed) {
-                // RAW video / Direct-Log: full-bleed viewport, only the
-                // bottom island reserves space. The panel keeps its photo
-                // structure exactly (chips + info line + fixed shutter
-                // rows): minimumHeight is left at the grown photo value so
-                // the panel never changes size across the mode switch and
-                // no button jumps.
+            if (noTopIsland) {
+                // No top island to seat against: full-bleed viewport, only
+                // the bottom island reserves space.
                 width = ViewGroup.LayoutParams.MATCH_PARENT
                 height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 topMargin = 0
             } else {
-                // Photo modes: exact 3:4 viewport between the islands so the
+                // Exact 3:4 viewport between the islands so the
                 // preview matches the saved frame (cover == fit, no side
                 // crop). Full-width on tall portrait screens, bottom-aligned
                 // so the panel overlaps the picture; height-constrained
@@ -1192,14 +1200,6 @@ class MainActivity : Activity() {
         viewfinder.translationY = 0f
         syncMeteringOverlayToViewfinder(viewfinder)
         syncGuideOverlayToViewfinder(viewfinder)
-        // Slim focal stack: right edge opposite the histogram, riding the
-        // slider lift. Opposite sides never collide, so the scope seat stays
-        // untouched.
-        lensSwitcher.layoutParams = FrameLayout.LayoutParams(wrapContent(), wrapContent(),
-            Gravity.END or Gravity.BOTTOM).apply {
-            marginEnd = dp(16)
-            bottomMargin = panelHeight + dp(16) + floatingLiftPx()
-        }
         manualPanel.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             wrapContent(), Gravity.END or Gravity.BOTTOM
@@ -1425,10 +1425,11 @@ class MainActivity : Activity() {
         findViewById(R.id.isoControl),
         findViewById(R.id.shutterControl), findViewById(R.id.wbControl),
         findViewById(R.id.focusControl), findViewById(R.id.evControl),
-        // dngInfo/sensorInfo intentionally fixed: wide thin labels (0dp weight=1,
-        // singleLine) cannot fit 90-degree canvas-rotated text in their bounds and
-        // would clip to invisible. Keep horizontal so they stay visible above panel.
+        // dngInfo/sensorInfo intentionally fixed: wide thin singleLine labels
+        // cannot fit 90-degree canvas-rotated text in their bounds and would
+        // clip to invisible. Keep horizontal so they stay visible in the top bar.
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
+        findViewById(R.id.galleryThumb),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
         findViewById(R.id.vfPreviewButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
@@ -1440,8 +1441,7 @@ class MainActivity : Activity() {
         findViewById(R.id.ettrQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
-        findViewById(R.id.manualAutoButton),
-        findViewById(R.id.videoSettingsButton)
+        findViewById(R.id.manualAutoButton)
     )
 
     /** Debug overlays + scope rotate with the device; top/bottom status labels
@@ -1454,8 +1454,8 @@ class MainActivity : Activity() {
         findViewById(R.id.waveformView)
     )
 
-    /** Wide thin status labels stay fixed horizontal in their bars (topBar,
-     * info row) so rotated text can never clip them to invisible. */
+    /** Wide thin status labels stay fixed horizontal in the top bar so
+     * rotated text can never clip them to invisible. */
     private fun fixedOrientationViews(): List<View> = listOfNotNull(
         findViewById(R.id.rawBadge),
         findViewById(R.id.status),
@@ -1787,15 +1787,14 @@ class MainActivity : Activity() {
         closeFloatingPanels()
         guideOverlay.videoCrop = videoCrop
         guideOverlay.videoActive = true
-        // Cinema chrome: photo top bar and lens pill hide for full-bleed
-        // framing; the capture panel (red dot / shutter / switcher) stays so
-        // transport and mode exit keep working. Exposure chips (SS/ISO/WB/
-        // focus/EV) stay visible with the same live photo-tile settings.
-        findViewById<View>(R.id.topBar)?.visibility = View.GONE
+        // Same chrome as photo: the top island stays (its gear opens the
+        // Video tab) and the viewport keeps the photo 3:4 box. The timer
+        // hides: the shutter toggles recording and never counts down. The
+        // lens pill hides; exposure chips (SS/ISO/WB/focus/EV) stay visible
+        // with the same live photo-tile settings.
+        (findViewById<View>(R.id.timerButton)?.parent as? View)?.visibility = View.GONE
         findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
-        findViewById<View>(R.id.lensSwitcher)?.visibility = View.GONE
-        findViewById<View>(R.id.videoSettingsButton)?.visibility = View.VISIBLE
         videoDebugOverlay.visibility = View.VISIBLE
         repositionScopeForVideo()
         refreshVideoAudioDescription()
@@ -1832,15 +1831,13 @@ class MainActivity : Activity() {
         guideOverlay.videoActive = false
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.shutter_core)
         findViewById<View>(R.id.shutter).contentDescription = "Capture RAW photo"
-        findViewById<View>(R.id.videoSettingsButton)?.visibility = View.GONE
         videoDebugOverlay.visibility = View.GONE
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         videoAudioPeak = 0f
-        findViewById<View>(R.id.topBar)?.visibility = View.VISIBLE
+        (findViewById<View>(R.id.timerButton)?.parent as? View)?.visibility = View.VISIBLE
         findViewById<View>(R.id.controlPanel)?.post { positionViewfinderOverlays() }
         findViewById<View>(R.id.exposureControls)?.visibility = View.VISIBLE
-        findViewById<View>(R.id.lensSwitcher)?.visibility = View.VISIBLE
         repositionScopeForVideo()
         refreshVideoButton()
         applyCaptureExposureMode(lastPhotoExposureMode)
@@ -2767,7 +2764,12 @@ class MainActivity : Activity() {
     private fun videoCameraInfo(
         manager: android.hardware.camera2.CameraManager
     ): Pair<String, android.util.Size>? {
-        for (id in manager.cameraIdList) {
+        // Record on the lens the lens row selected (the one the idle preview
+        // shows); fall back to the first RAW-capable back camera.
+        val selected = runCatching { controller.lensOptions().firstOrNull { it.selected }?.cameraId }
+            .getOrNull()
+        val ids = listOfNotNull(selected) + manager.cameraIdList.filter { it != selected }
+        for (id in ids) {
             val chars = manager.getCameraCharacteristics(id)
             if (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) !=
                 android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
@@ -3367,7 +3369,6 @@ class MainActivity : Activity() {
         manualAuto.isEnabled = true
         refreshRuleSliderAccessibility()
         manualPanel.visibility = View.VISIBLE
-        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         updateOverlayStack()
         manualPanel.post { updateOverlayStack() }
         scheduleManualPanelHide()
@@ -3801,7 +3802,6 @@ class MainActivity : Activity() {
     private fun showQuickControls() {
         hideManualControl()
         updateQuickControls()
-        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         quickPanel.alpha = 0f
         quickPanel.translationY = dp(18).toFloat()
         quickPanel.visibility = View.VISIBLE
@@ -3815,7 +3815,6 @@ class MainActivity : Activity() {
         quickPanel.visibility = View.GONE
         quickPanel.alpha = 1f
         quickPanel.translationY = 0f
-        lensSwitcher.visibility = if (isVideoMode) View.GONE else View.VISIBLE
         updateOverlayStack()
     }
 
@@ -4075,6 +4074,15 @@ class MainActivity : Activity() {
         if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
         lastLensSwitcherSignature = signature
         lensSwitcher.removeAllViews()
+        // Pills share the panel row (screen width minus the panel's 16dp
+        // sides): 48dp each when they fit, shrinking to a 40dp floor; past
+        // that the row scrolls (lensScroll).
+        val gap = dp(4)
+        val rowWidth = resources.displayMetrics.widthPixels - dp(32)
+        val pillWidth = ((rowWidth - gap * (options.size - 1)) / options.size)
+            .coerceIn(dp(40), dp(48))
+        val pillPad = if (pillWidth < dp(48)) dp(4) else dp(10)
+        var selectedButton: View? = null
         options.forEachIndexed { index, option ->
             val button = RotatingTextView(this).apply {
                 text = option.label
@@ -4089,20 +4097,33 @@ class MainActivity : Activity() {
                     if (option.selected) R.drawable.focal_active else android.R.color.transparent
                 )
                 alpha = if (option.selected) 1f else 0.78f
-                minWidth = dp(48)
-                minimumHeight = dp(34)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
+                minimumHeight = dp(32)
+                setPadding(pillPad, dp(4), pillPad, dp(4))
+                maxLines = 1
                 contentDescription = "Switch to ${option.label} lens"
                 setOnClickListener {
+                    // The recorder owns the camera mid-take: lens is fixed until stop.
+                    if (videoRecording) {
+                        setStatus("STOP TO SWITCH LENS")
+                        return@setOnClickListener
+                    }
                     hideManualControl()
                     lensPreferences().edit().putString(KEY_LAST_CAMERA_ID, option.cameraId).apply()
                     controller.selectLens(option.cameraId)
                 }
             }
-            lensSwitcher.addView(button, LinearLayout.LayoutParams(wrapContent(), wrapContent()).apply {
-                if (index > 0) topMargin = dp(4)
+            lensSwitcher.addView(button, LinearLayout.LayoutParams(pillWidth, wrapContent()).apply {
+                if (index > 0) marginStart = gap
             })
             button.contentRotation = controlRotationDegrees
+            if (option.selected) selectedButton = button
+        }
+        // Keep the selected lens centered when the row scrolls.
+        val scroll = findViewById<android.widget.HorizontalScrollView>(R.id.lensScroll)
+        selectedButton?.let { selected ->
+            scroll.post {
+                scroll.smoothScrollTo(selected.left + selected.width / 2 - scroll.width / 2, 0)
+            }
         }
     }
 
@@ -4198,8 +4219,6 @@ class MainActivity : Activity() {
         manualAuto.isEnabled = !range.automatic
         refreshRuleSliderAccessibility()
         manualPanel.visibility = View.VISIBLE
-        // Video mode keeps the lens pill hidden; photo mode parks it.
-        if (!isVideoMode) lensSwitcher.visibility = View.INVISIBLE
         updateOverlayStack()
         manualPanel.post { updateOverlayStack() }
         scheduleManualPanelHide()
@@ -4262,10 +4281,6 @@ class MainActivity : Activity() {
         }
         pendingSliderUpdate = null
         manualPanel.visibility = View.GONE
-        // Video mode keeps the lens pill hidden; photo mode restores it.
-        if (::lensSwitcher.isInitialized) {
-            lensSwitcher.visibility = if (isVideoMode) View.GONE else View.VISIBLE
-        }
         activeManualControl = null
         activeProgramAxis = null
         updateOverlayStack()

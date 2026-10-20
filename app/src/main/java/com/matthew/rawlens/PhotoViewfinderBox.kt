@@ -3,12 +3,11 @@
 package com.matthew.rawlens
 
 /**
- * Photo-mode viewfinder box: the 3:4 portrait viewport seated between the
+ * Viewfinder box (photo, RAW video and Direct-Log): the 3:4 portrait viewport seated between the
  * opaque top island and the bottom control panel, bottom-aligned so the
  * panel's rounded top corners fill with picture. Pure integer math so the
  * geometry is unit-testable; the activity falls back to full-bleed when
- * measurements are missing (null). RAW video / Direct-Log keep their own
- * full-bleed viewport and never use this.
+ * measurements are missing (null).
  */
 object PhotoViewfinderBox {
     /**

@@ -87,7 +87,7 @@ class VideoModeUiTest {
             SystemClock.sleep(1500)
             var hudVisible = false
             instrumentation.runOnMainSync {
-                hudVisible = view(R.id.videoSettingsButton).visibility == View.VISIBLE
+                hudVisible = view(R.id.videoDebugOverlay).visibility == View.VISIBLE
             }
             assertTrue("Video HUD never appeared", hudVisible)
             screenshot("vui_video_idle")

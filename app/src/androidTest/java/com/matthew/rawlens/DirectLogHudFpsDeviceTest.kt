@@ -80,7 +80,7 @@ class DirectLogHudFpsDeviceTest {
             SystemClock.sleep(2000)
             var hudVisible = false
             instrumentation.runOnMainSync {
-                hudVisible = view(R.id.videoSettingsButton).visibility == View.VISIBLE
+                hudVisible = view(R.id.videoDebugOverlay).visibility == View.VISIBLE
             }
             assertTrue("Video HUD never appeared", hudVisible)
             // Roll past bring-up: ~5s of muxed output behind the readout.
