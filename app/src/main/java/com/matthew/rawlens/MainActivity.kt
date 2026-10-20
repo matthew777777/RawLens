@@ -875,9 +875,15 @@ class MainActivity : Activity() {
                 syncGuideOverlayToViewfinder(view)
             }
         }
-        // Photo 3:4 box seats between the islands: a top-bar size change
-        // (first layout, font scale) re-seats the box below it.
+        // Photo 3:4 box seats between the islands: an island or panel size
+        // change (first layout, font scale, panel growth) re-seats the box.
+        // Size-guarded, so settled layouts never recurse.
         findViewById<View>(R.id.topBar).addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
+            if (!isVideoMode && (r - l != orr - ol || b - t != ob - ot)) {
+                positionViewfinderOverlays()
+            }
+        }
+        findViewById<View>(R.id.controlPanel).addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
             if (!isVideoMode && (r - l != orr - ol || b - t != ob - ot)) {
                 positionViewfinderOverlays()
             }
@@ -1456,7 +1462,7 @@ class MainActivity : Activity() {
     private fun positionViewfinderOverlays() {
         val panel = findViewById<LinearLayout>(R.id.controlPanel)
         val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
-        val topBar = findViewById<View>(R.id.topBar)
+        val topBar = findViewById<ViewGroup>(R.id.topBar)
         val root = panel.parent as View
         findViewById<View>(R.id.captureInfoRow).visibility = View.VISIBLE
         // System preview is a stream target only: keep it attached and flowing for the HAL
@@ -1484,8 +1490,12 @@ class MainActivity : Activity() {
         val videoFullBleed = isVideoMode || topBar.visibility != View.VISIBLE
         val viewfinderParams = (viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
             if (videoFullBleed) {
-                // RAW video / Direct-Log: unchanged full-bleed viewport, only
-                // the bottom island reserves space.
+                // RAW video / Direct-Log: full-bleed viewport, only the
+                // bottom island reserves space. The panel keeps its photo
+                // structure exactly (chips + info line + fixed shutter
+                // rows): minimumHeight is left at the grown photo value so
+                // the panel never changes size across the mode switch and
+                // no button jumps.
                 width = ViewGroup.LayoutParams.MATCH_PARENT
                 height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -1506,6 +1516,14 @@ class MainActivity : Activity() {
                     height = box.height
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                     topMargin = box.topMargin
+                    // Balanced chrome: the bottom panel grows by exactly
+                    // the spare so the picture touches both islands with no
+                    // void anywhere. Idempotent: with no spare left the
+                    // next measure keeps every size and the size guards in
+                    // the island/panel listeners stop the loop. The info
+                    // line stays in the panel in both modes (1:1 structure,
+                    // no jump on switch).
+                    panel.minimumHeight = panelHeight + box.spare
                 } else {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
                     height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
@@ -1877,6 +1895,8 @@ class MainActivity : Activity() {
         return (((x - cover.left) * box.width / cover.width()) to
             ((y - cover.top) * box.height / cover.height()))
     }
+
+
 
     private fun syncMeteringOverlayToViewfinder(viewfinder: View) {
         syncOverlaysToBox(viewfinder)
@@ -5558,7 +5578,7 @@ class MainActivity : Activity() {
             content.addView(chromaButton)
             val demosaicButton = Button(this).apply {
                 fun refresh() {
-                    text = "JPEG demosaic: ${currentJpegSettings.demosaic.label}"
+                    text = "Demosaic: ${currentJpegSettings.demosaic.label}"
                 }
                 refresh()
                 setOnClickListener {

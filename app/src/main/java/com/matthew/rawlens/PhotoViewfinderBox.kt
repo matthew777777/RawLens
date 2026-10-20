@@ -11,7 +11,13 @@ package com.matthew.rawlens
  * full-bleed viewport and never use this.
  */
 object PhotoViewfinderBox {
-    data class Box(val width: Int, val height: Int, val topMargin: Int)
+    /**
+     * @param spare leftover pixels between the islands after seating the
+     *   box ([available height][compute] minus [Box.height], never negative):
+     *   the caller grows the bottom panel by it so the picture touches both
+     *   islands with no void anywhere.
+     */
+    data class Box(val width: Int, val height: Int, val topMargin: Int, val spare: Int)
 
     /**
      * @param rootW root width px (>0)
@@ -43,7 +49,9 @@ object PhotoViewfinderBox {
         if (boxW <= 0 || boxH <= 0) return null
         // Bottom-aligned: the picture tucks under the bottom island by the
         // seal overlap (its rounded top corners fill with picture, never
-        // root black); spare black, if any, sits below the top island.
-        return Box(boxW, boxH, (topBarH - sealOverlap + (availH - boxH)).coerceAtLeast(0))
+        // root black). The caller grows the bottom panel by [spare] so the
+        // top tucks too and no void remains anywhere.
+        val spare = (availH - boxH).coerceAtLeast(0)
+        return Box(boxW, boxH, (topBarH - sealOverlap + spare).coerceAtLeast(0), spare)
     }
 }

@@ -103,19 +103,17 @@ class WaveformView @JvmOverloads constructor(
         val top = 0f
         val right = width.toFloat()
         val bottom = height.toFloat()
-        val densityScale = resources.displayMetrics.density
         bounds.set(left, top, right, bottom)
         clipPath.reset()
         clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         canvas.save()
         canvas.clipPath(clipPath)
         canvas.drawRect(left, top, right, bottom, scrimPaint)
-        plotRect.set(
-            left + 4f * densityScale,
-            top + 5f * densityScale,
-            right - 4f * densityScale,
-            bottom - 3f * densityScale
-        )
+        // Data floor rides 1dp above the pill wall: no dead band under the
+        // raster, just enough clearance to keep the hairline from clipping.
+        // Full-bleed: the raster spans the whole pill and the rounded clip
+        // wraps it — no inner plot box, no margins inside the scope.
+        plotRect.set(left, top, right, bottom)
         canvas.drawBitmap(raster, null, plotRect, bitmapPaint)
         canvas.drawLine(
             plotRect.left, plotRect.bottom, plotRect.right, plotRect.bottom, baselinePaint

@@ -63,6 +63,26 @@ class ImmersiveModeTest {
         verify(decorView).systemUiVisibility = ImmersiveMode.legacySystemUiMask
     }
 
+    @Test fun `modern apply tolerates throwing insets controller`() {
+        // Pre-setContentView decor: PhoneWindow.getInsetsController throws
+        // NPE instead of returning null (MergesActivity launch crash).
+        val window = mock(Window::class.java)
+        `when`(window.insetsController).thenThrow(NullPointerException("decorView is null"))
+
+        mockStatic(WindowCompat::class.java).use { compat ->
+            ImmersiveMode.apply(window, Build.VERSION_CODES.R)
+
+            compat.verify { WindowCompat.setDecorFitsSystemWindows(window, false) }
+        }
+    }
+
+    @Test fun `legacy apply tolerates missing decor view`() {
+        val window = mock(Window::class.java)
+        `when`(window.decorView).thenReturn(null)
+
+        ImmersiveMode.apply(window, Build.VERSION_CODES.Q)
+    }
+
     @Test fun `legacy mask hides both bars and sticks`() {
         val mask = ImmersiveMode.legacySystemUiMask
         assertNotEquals(0, mask and View.SYSTEM_UI_FLAG_FULLSCREEN)

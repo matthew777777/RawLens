@@ -37,14 +37,23 @@ object ImmersiveMode {
     fun apply(window: Window, sdkInt: Int = Build.VERSION.SDK_INT) {
         if (sdkInt >= Build.VERSION_CODES.R) {
             WindowCompat.setDecorFitsSystemWindows(window, false)
-            window.insetsController?.let {
-                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior =
-                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            try {
+                window.insetsController?.let {
+                    it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                    it.systemBarsBehavior =
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } catch (_: RuntimeException) {
+                // Decor view not yet attached (apply before setContentView):
+                // onResume/onWindowFocusChanged re-apply once it exists.
             }
         } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = legacySystemUiMask
+            try {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = legacySystemUiMask
+            } catch (_: RuntimeException) {
+                // Same pre-attach case on the legacy path; re-applied later.
+            }
         }
     }
 }

@@ -146,9 +146,10 @@
         android:visibility="gone" />
 
     <!-- Top bar: opaque black island, edge-to-edge with rounded bottom corners
-         mirroring the bottom panel. Reserves real layout space: the photo
-         viewfinder is letterboxed to 3:4 between this bar and the control
-         panel so the preview is WYSIWYG (no side crop). Hidden in video. -->
+         mirroring the bottom panel. Single controls row in photo mode; the
+         capture info line lives in the bottom panel in both modes so the
+         panel keeps one exact structure photo/video (no jump on switch).
+         Hidden in video for full-bleed framing. -->
     <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@drawable/top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="16dp" android:paddingTop="16dp" android:paddingEnd="16dp" android:paddingBottom="10dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/flashButton" style="@style/TopBarButton" android:layout_marginStart="8dp" android:contentDescription="Toggle light" android:src="@drawable/ic_flash" />
@@ -203,7 +204,6 @@
                 android:textSize="10sp" />
 
         </LinearLayout>
-
     </LinearLayout>
 
     <!-- Floating scope (histogram / waveform share one slot): larger tap target,
@@ -347,6 +347,10 @@
                 android:text="LIGHT OFF" />
         </LinearLayout>
 
+        <!-- Capture info line: same host and height in photo and video so the
+             bottom panel keeps one exact structure across the mode switch
+             (no jump). Photo shows DNG/bit-depth + sensor size here; video
+             shows CRS/crop + encoded dims (see refreshVideoSensorInfo). -->
         <LinearLayout
             android:id="@+id/captureInfoRow"
             android:layout_width="match_parent"
@@ -385,20 +389,23 @@
                 android:textSize="10sp" />
         </LinearLayout>
 
+        <!-- Shutter area: fixed two-row structure, no code sizing. Row A
+             (quick | shutter | mode) is 92dp tall with every child vertically
+             centered, so the shutter, quick, and mode centers share one line
+             by construction. Row B carries the video dot and preview format.
+             Identical XML in photo and video: the mode switch cannot jump. -->
         <LinearLayout
             android:id="@+id/capturePanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="104dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
+            android:orientation="vertical"
             android:paddingTop="6dp">
 
             <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_horizontal"
-                android:orientation="vertical">
+                android:layout_width="match_parent"
+                android:layout_height="92dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
                 <com.matthew.rawlens.RotatingImageButton
                     android:id="@+id/quickButton"
@@ -409,50 +416,31 @@
                     android:padding="15dp"
                     android:src="@drawable/ic_tune" />
 
-                <!-- Dedicated RAW Video entry: red record dot below the quick
-                     panel access. Never part of the mode switcher. Tap = enter
-                     video / toggle recording, long-press in video = exit. -->
-                <View
-                    android:id="@+id/videoRecordButton"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/video_enter"
-                    android:contentDescription="Enter RAW video mode"
-                    android:clickable="true"
-                    android:focusable="true" />
-            </LinearLayout>
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
 
-            <Space
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
+                <!-- 88dp ring centered in the 92dp row: 2dp clear top and
+                     bottom, so the ring can never clip. -->
+                <FrameLayout
+                    android:layout_width="88dp"
+                    android:layout_height="88dp"
+                    android:background="@drawable/shutter_ring"
+                    android:padding="8dp">
 
-            <FrameLayout
-                android:layout_width="88dp"
-                android:layout_height="88dp"
-                android:layout_marginBottom="12dp"
-                android:background="@drawable/shutter_ring"
-                android:padding="8dp">
+                    <View
+                        android:id="@+id/shutter"
+                        android:layout_width="72dp"
+                        android:layout_height="72dp"
+                        android:background="@drawable/shutter_core"
+                        android:contentDescription="Capture RAW photo" />
+                </FrameLayout>
 
-                <View
-                    android:id="@+id/shutter"
-                    android:layout_width="72dp"
-                    android:layout_height="72dp"
-                    android:background="@drawable/shutter_core"
-                    android:contentDescription="Capture RAW photo" />
-            </FrameLayout>
-
-            <Space
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:orientation="vertical">
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
 
                 <com.matthew.rawlens.RotatingTextView
                     android:id="@+id/modeButton"
@@ -465,12 +453,36 @@
                     android:textColor="@color/text_primary"
                     android:textSize="10sp"
                     android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- Dedicated RAW Video entry: red record dot below the quick
+                     panel access. Never part of the mode switcher. Tap = enter
+                     video / toggle recording, long-press in video = exit. -->
+                <View
+                    android:id="@+id/videoRecordButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/video_enter"
+                    android:contentDescription="Enter RAW video mode"
+                    android:clickable="true"
+                    android:focusable="true" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
 
                 <com.matthew.rawlens.RotatingTextView
                     android:id="@+id/vfPreviewButton"
                     android:layout_width="72dp"
                     android:layout_height="48dp"
-                    android:layout_marginTop="8dp"
                     android:background="@drawable/control_chip"
                     android:gravity="center"
                     android:minHeight="48dp"
@@ -478,7 +490,6 @@
                     android:textColor="@color/text_primary"
                     android:textSize="10sp"
                     android:textStyle="bold" />
-
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>

@@ -54,7 +54,6 @@ class MergesActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        ImmersiveMode.apply(window)
         val prefs = getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
         method = runCatching {
             BurstMergeRunner.Method.valueOf(
@@ -130,6 +129,9 @@ class MergesActivity : Activity() {
         statusLine = desc("")
         root.addView(statusLine)
         setContentView(root)
+        // Decor view exists only after setContentView: applying earlier
+        // crashes on API 30+ (null WindowInsetsController).
+        ImmersiveMode.apply(window)
         refreshOptions()
     }
 

@@ -59,9 +59,7 @@ class HistogramView @JvmOverloads constructor(
     private val clipPath = Path()
     private val bounds = RectF()
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
-    private val insetH = 4f * resources.displayMetrics.density
-    private val insetTop = 5f * resources.displayMetrics.density
-    private val insetBottom = 3f * resources.displayMetrics.density
+    // Full-bleed: no insets — the plot spans the whole pill (see onDraw).
     private var agxSelected = false
 
     /** Source selection follows the capture format; stale queued frames are rejected. */
@@ -94,10 +92,12 @@ class HistogramView @JvmOverloads constructor(
         clipPath.reset()
         clipPath.addRoundRect(bounds, cornerRadius, cornerRadius, Path.Direction.CW)
         val max = bins.maxOf { channel -> channel.maxOrNull() ?: 0 }.coerceAtLeast(1)
-        val plotLeft = left + insetH
-        val plotRight = right - insetH
-        val plotTop = top + insetTop
-        val plotBottom = bottom - insetBottom
+        // Full-bleed: the data spans the whole pill and the rounded clip wraps
+        // it — no inner plot box, no margins inside the scope.
+        val plotLeft = left
+        val plotRight = right
+        val plotTop = top
+        val plotBottom = bottom
         val plotWidth = (plotRight - plotLeft).coerceAtLeast(0f)
         val plotHeight = (plotBottom - plotTop).coerceAtLeast(0f)
         canvas.save()
