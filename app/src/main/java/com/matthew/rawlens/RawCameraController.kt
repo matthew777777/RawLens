@@ -876,7 +876,7 @@ class RawCameraController(
         // capture result (~5 at 30 fps with ZSL_PAIR_TIMEOUT_MS) plus transition
         // slack, plus a small rearm overlap so the ring refills during the drain
         // tail of a burst (see resumeRawZslIfIdle). Without the pairing headroom
-        // a full 30-frame ring plus normal result lag exceeds maxImages and wedges
+        // a full ring (up to MAX_ZSL_FRAMES) plus normal result lag exceeds maxImages and wedges
         // the gralloc queue into overflow + Mali unlock errors. Degraded combos
         // carry a burst-minimum reader instead and run without a ZSL ring.
         val readerMaxImages = combo.readerMaxImages
@@ -4736,7 +4736,7 @@ class RawCameraController(
             if (rawZslCapacity == 0) {
                 publishRawZslStatus(
                     RawZslState.FALLBACK,
-                    "Full-resolution RAW frames exceed the safe memory budget"
+                    ZSL_NO_CAPACITY_DETAIL
                 )
                 onState("ZSL N/A • RAW")
             } else {
@@ -7578,7 +7578,7 @@ class RawCameraController(
             )
             rawZslCapacity == 0 -> RawZslStatus(
                 RawZslState.FALLBACK,
-                "Full-resolution RAW frames exceed the safe memory budget"
+                ZSL_NO_CAPACITY_DETAIL
             )
             zslHealth.streamBroken -> RawZslStatus(
                 RawZslState.WARMING_UP,
@@ -8471,6 +8471,14 @@ class RawCameraController(
             ),
             READER_MAXIMAGES_HARD_CAP
         )
+
+        /**
+         * Shown when the ring capacity is 0: an empty RAW size, or a session
+         * reader with too few buffers for a ring ([clampZslCapacityForReader]).
+         * There is no memory-budget check behind it.
+         */
+        private const val ZSL_NO_CAPACITY_DETAIL =
+            "RAW ZSL unavailable: not enough RAW buffers in this camera session"
 
         internal fun clampZslCapacityForReader(requestedFrameCount: Int, readerMaxImages: Int): Int {
             val roomForRing = readerMaxImages - RAW_PREVIEW_RESERVED_SLOTS - ZSL_REARM_OVERLAP_SLOTS
