@@ -3485,21 +3485,31 @@ class RawCameraController(
             submitNextStill()
             Log.i(LOG_TAG, "RAW capture submitted id=$captureId frames=$frameCount")
 
-        } catch (failure: CameraAccessException) {
-            cameraCaptureSequenceActive = false
-            finishCapture("CAPTURE ERROR")
-            resumeRawZslIfIdle()
-            noteChainDeadAndMaybeRecover()
-        } catch (failure: IllegalArgumentException) {
-            cameraCaptureSequenceActive = false
-            finishCapture("NOT SUPPORTED")
-            resumeRawZslIfIdle()
-            noteChainDeadAndMaybeRecover()
+        } catch (_: CameraAccessException) {
+            endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = true, saveTopupPartial = false)
+        } catch (_: IllegalArgumentException) {
+            endForwardCaptureOnError("NOT SUPPORTED", resumeZsl = true, saveTopupPartial = false)
         } catch (_: IllegalStateException) {
-            cameraCaptureSequenceActive = false
-            finishCapture("CAPTURE ERROR")
-            noteChainDeadAndMaybeRecover()
+            // Session closed underneath: no ZSL resume on a dead session.
+            endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = false, saveTopupPartial = false)
         }
+    }
+
+    /**
+     * A forward capture or still chain cannot continue (submit failed or the
+     * session is gone). With [saveTopupPartial] a running top-up saves what
+     * it has instead of failing; otherwise the capture ends with [message].
+     * Counts toward dead-chain recovery either way.
+     */
+    private fun endForwardCaptureOnError(message: String, resumeZsl: Boolean, saveTopupPartial: Boolean) {
+        cameraCaptureSequenceActive = false
+        if (saveTopupPartial && topupActive) {
+            finishTopupBurst()
+        } else {
+            finishCapture(message)
+            if (resumeZsl) resumeRawZslIfIdle()
+        }
+        noteChainDeadAndMaybeRecover()
     }
 
     /**
@@ -3529,14 +3539,8 @@ class RawCameraController(
         val currentSession = session
         val callback = activeStillCallback
         if (currentSession == null || callback == null) {
-            if (topupActive) {
-                Log.w(LOG_TAG, "Still chain lost its session; saving partial burst")
-                finishTopupBurst()
-            } else {
-                finishCapture("CAPTURE ERROR")
-                resumeRawZslIfIdle()
-            }
-            noteChainDeadAndMaybeRecover()
+            if (topupActive) Log.w(LOG_TAG, "Still chain lost its session; saving partial burst")
+            endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = true, saveTopupPartial = true)
             return
         }
         cameraCaptureSequenceActive = true
@@ -3546,24 +3550,12 @@ class RawCameraController(
                 val tag = next.tag as? CaptureTag
                 Log.d(LOG_TAG, "Chained still submitted frame=${tag?.frameNumber}/${tag?.frameCount}")
             }
-        } catch (failure: CameraAccessException) {
-            cameraCaptureSequenceActive = false
-            if (topupActive) finishTopupBurst() else {
-                finishCapture("CAPTURE ERROR")
-                resumeRawZslIfIdle()
-            }
-            noteChainDeadAndMaybeRecover()
+        } catch (_: CameraAccessException) {
+            endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = true, saveTopupPartial = true)
         } catch (_: IllegalArgumentException) {
-            cameraCaptureSequenceActive = false
-            if (topupActive) finishTopupBurst() else {
-                finishCapture("NOT SUPPORTED")
-                resumeRawZslIfIdle()
-            }
-            noteChainDeadAndMaybeRecover()
+            endForwardCaptureOnError("NOT SUPPORTED", resumeZsl = true, saveTopupPartial = true)
         } catch (_: IllegalStateException) {
-            cameraCaptureSequenceActive = false
-            if (topupActive) finishTopupBurst() else finishCapture("CAPTURE ERROR")
-            noteChainDeadAndMaybeRecover()
+            endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = false, saveTopupPartial = true)
         }
     }
 
