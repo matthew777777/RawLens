@@ -463,6 +463,45 @@ class DirectLogRecorder(
         DirectLogBreadcrumb.mark(appContext, "start")
         MemoryLeakDiagnostics.sampleAsync("directlog-start")
         check(device == null) { "Already started" }
+        try {
+            startTake(output)
+        } catch (e: Exception) {
+            abortStart()
+            throw e
+        }
+    }
+
+    /**
+     * Start-failure cleanup (V1, docs/refactor/video-study.md): a throw after
+     * the copy workers start (no 10-bit encoder, P010 allocation, Vulkan
+     * init) used to leave both copy threads polling forever plus the codec,
+     * muxer, drain thread and audio. Same order as [stop] without the EOS
+     * flush; every step tolerates state that was never created.
+     */
+    private fun abortStart() {
+        accepting = false
+        stopAudio()
+        stopCopyWorker()
+        for (s in slots) {
+            if (s.fd != -1) {
+                try { VfEglImport.closeSyncFd(s.fd) } catch (_: Exception) {}
+                s.fd = -1
+            }
+        }
+        draining.set(false)
+        try { drainThread?.join(10_000) } catch (_: InterruptedException) {}
+        drainThread = null
+        val mux = muxer
+        muxer = null
+        try { mux?.release() } catch (_: Exception) {}
+        muxerStarted = false
+        teardown()
+        outputFile?.let { if (it.exists() && it.length() == 0L) it.delete() }
+        // A refused start is not a crash: clear the stage like stop() does.
+        DirectLogBreadcrumb.clear(appContext)
+    }
+
+    private fun startTake(output: File) {
         require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
