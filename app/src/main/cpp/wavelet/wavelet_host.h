@@ -4,8 +4,8 @@
 // C host for the vendored upstream raw_denoise library (see ../assets UPSTREAM.md).
 // Owns a private Vulkan compute device; a single blocking process() call
 // uploads one pre-WB camera-linear RGBA16F frame, runs the tiled profiled
-// wavelet pipeline, and downloads the result. Follows the galosh JNI shape
-// (in/out ByteBuffers); single-threaded by contract.
+// wavelet pipeline, and downloads the result. JNI takes in/out
+// ByteBuffers; single-threaded by contract.
 #pragma once
 
 #include <stddef.h>

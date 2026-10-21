@@ -23,7 +23,7 @@ object FloatCfaDngWriter {
      *   (plus the reference ExposureTime/ISO below) to place brightness
      *   correctly. Null (default) writes no exposure tags — legacy behavior
      *   for uniform merges, which are already at native brightness.
-     * @param description per-flavor ImageDescription (AI/Galosh/HDR merge
+     * @param description per-flavor ImageDescription (AI/HDR merge
      *   provenance); null (default) omits it, preserving legacy bytes.
      */
     fun write(

@@ -27,7 +27,6 @@ object CaptureFileNames {
     const val TYPE_RAW = "RAW"
     const val TYPE_LINEAR = "LINEAR"
     const val TYPE_AI = "AI"
-    const val TYPE_GALOSH = "GALOSH"
     const val TYPE_HDRPLUS = "HDRPLUS"
     const val TYPE_MFSR = "MFSR"
     const val TYPE_BURST = "BURST"
@@ -89,14 +88,6 @@ object CaptureFileNames {
         return fileName(captureTimeMillis, suffix, "dng")
     }
 
-    /**
-     * GALOSH-denoised DNG sharing its capture's stem: `IMG_<ts>_GALOSH.dng`,
-     * or `IMG_<ts>_F00GALOSH.dng` with a burst/bracket frame tag.
-     */
-    fun galoshDng(captureTimeMillis: Long, frameSuffix: String? = null): String {
-        val suffix = if (frameSuffix.isNullOrBlank()) TYPE_GALOSH else "${frameSuffix.uppercase(Locale.US)}$TYPE_GALOSH"
-        return fileName(captureTimeMillis, suffix, "dng")
-    }
 
     /** Burst/bracket source frame: `IMG_<ts>_F00.dng`, `IMG_<ts>_F01.dng`, … */
     fun bracketDng(captureTimeMillis: Long, index: Int): String {

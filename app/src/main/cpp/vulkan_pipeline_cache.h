@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Persistent VkPipelineCache store shared by the first-party Vulkan hosts
-// (viewfinder, Galosh, HDR+). Each host owns its own VkDevice, so each keeps
+// (viewfinder, HDR+). Each host owns its own VkDevice, so each keeps
 // its own cache object; the sharing is on disk, one file per host under the
 // app cache dir (see VulkanPipelineCache.kt). Warming a cache from the
 // previous run's bytes lets the driver skip shader recompilation entirely.

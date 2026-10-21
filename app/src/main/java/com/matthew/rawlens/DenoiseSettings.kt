@@ -49,7 +49,7 @@ data class DenoiseSettings(
 }
 
 /** Pre-demosaic stage surviving arbitration for one capture. */
-enum class PreDemosaicStage { OFF, AI, GALOSH }
+enum class PreDemosaicStage { OFF, AI }
 
 /** Per-capture denoise plan. */
 data class ResolvedDenoise(
@@ -63,25 +63,16 @@ data class ResolvedDenoise(
  *
  * - Merged path ([mergedPath], HDR+/SR output): everything off — the
  *   merge output is pre-denoised, exactly like the multiframe rule.
- * - Galosh wins over AI (existing RawLens precedent: single denoise
- *   stage) and over wavelet (mutual exclusion: profiled wavelet
- *   and Galosh both denoise; stacking over-smooths and doubles GPU cost).
  * - AI and wavelet may stack (pre- + post-demosaic, as the old wavelet
  *   did on AI output).
  */
 fun resolveDenoise(
     denoise: DenoiseSettings,
-    galosh: GaloshSettings,
     mergedPath: Boolean
 ): ResolvedDenoise {
     if (mergedPath) return ResolvedDenoise(PreDemosaicStage.OFF, false)
-    val galoshOn = galosh.enabled && galosh.strength > 0f
-    val pre = when {
-        galoshOn -> PreDemosaicStage.GALOSH
-        denoise.aiEnabled -> PreDemosaicStage.AI
-        else -> PreDemosaicStage.OFF
-    }
-    val wave = denoise.wavelet.enabled && denoise.wavelet.strength > 0f && !galoshOn
+    val pre = if (denoise.aiEnabled) PreDemosaicStage.AI else PreDemosaicStage.OFF
+    val wave = denoise.wavelet.enabled && denoise.wavelet.strength > 0f
     return ResolvedDenoise(pre, wave)
 }
 

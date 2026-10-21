@@ -651,7 +651,6 @@ class MainActivity : Activity() {
         controller.setJxlOutputSettings(jxlOutputSettings())
         controller.setDevelopedFormat(developedFormat)
         controller.setDenoiseSettings(denoiseSettings())
-        controller.setGaloshSettings(galoshSettings())
         controller.setVfPreviewMode(vfPreviewMode)
         controller.setVfTargetLongEdge(vfResolution)
         controller.setVfEngineMode(
@@ -3483,36 +3482,6 @@ class MainActivity : Activity() {
         return true
     }
 
-    internal fun galoshSettings(): GaloshSettings {
-        val prefs = lensPreferences()
-        return GaloshSettings(
-            enabled = prefs.getBoolean(KEY_GALOSH_ENABLED, false),
-            saveOriginalDng = prefs.getBoolean(KEY_GALOSH_SAVE_ORIGINAL_DNG, true),
-            strength = prefs.getInt(KEY_GALOSH_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
-            luma = prefs.getInt(KEY_GALOSH_LUMA_PCT, 100).coerceIn(0, 200) / 100f,
-            chroma = prefs.getInt(KEY_GALOSH_CHROMA_PCT, 100).coerceIn(0, 200) / 100f,
-            fastUpsample = prefs.getBoolean(KEY_GALOSH_FAST_UPSAMPLE, false),
-            fastMode = prefs.getBoolean(KEY_GALOSH_FAST_MODE, false)
-        )
-    }
-
-    internal fun persistGaloshSettings(settings: GaloshSettings): Boolean {
-        if (!controller.setGaloshSettings(settings)) {
-            setStatus("DENOISE AFTER SAVES")
-            return false
-        }
-        lensPreferences().edit()
-            .putBoolean(KEY_GALOSH_ENABLED, settings.enabled)
-            .putBoolean(KEY_GALOSH_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
-            .putInt(KEY_GALOSH_STRENGTH_PCT, (settings.strength * 100 + 0.5f).toInt().coerceIn(0, 100))
-            .putInt(KEY_GALOSH_LUMA_PCT, (settings.luma * 100 + 0.5f).toInt().coerceIn(0, 200))
-            .putInt(KEY_GALOSH_CHROMA_PCT, (settings.chroma * 100 + 0.5f).toInt().coerceIn(0, 200))
-            .putBoolean(KEY_GALOSH_FAST_UPSAMPLE, settings.fastUpsample)
-            .putBoolean(KEY_GALOSH_FAST_MODE, settings.fastMode)
-            .apply()
-        return true
-    }
-
     /**
      * Warm-starts the available RawNIND models when AI denoise is enabled
      * (process-wide singleton, background init): model load plus Vulkan
@@ -4023,17 +3992,10 @@ class MainActivity : Activity() {
         const val KEY_AI_DENOISE_ENABLED = "ai_denoise_enabled"
         const val KEY_SAVE_ORIGINAL_DNG = "save_original_dng"
         const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
-        const val KEY_GALOSH_ENABLED = "galosh_enabled"
         const val KEY_WAVELET_ENABLED = "wavelet_enabled"
         const val KEY_WAVELET_STRENGTH_PCT = "wavelet_strength_pct"
         const val KEY_WAVELET_LUMA_PCT = "wavelet_luma_pct"
         const val KEY_WAVELET_SCALES = "wavelet_scales"
-        const val KEY_GALOSH_SAVE_ORIGINAL_DNG = "galosh_save_original_dng"
-        const val KEY_GALOSH_STRENGTH_PCT = "galosh_strength_pct"
-        const val KEY_GALOSH_LUMA_PCT = "galosh_luma_pct"
-        const val KEY_GALOSH_CHROMA_PCT = "galosh_chroma_pct"
-        const val KEY_GALOSH_FAST_UPSAMPLE = "galosh_fast_upsample"
-        const val KEY_GALOSH_FAST_MODE = "galosh_fast_mode"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L

@@ -22,7 +22,6 @@ internal data class RawFrameSaveInput(
     val outputFormat: CaptureFormat,
     val outputSettings: JpegOutputSettings,
     val denoise: DenoiseSettings,
-    val galosh: GaloshSettings,
     val adaptiveExposureStrength: Float,
     val sharedAdaptiveExposure: SharedAdaptiveExposure,
     val developedFormat: DevelopedFormat,
@@ -40,8 +39,8 @@ internal data class RawFrameSaveInput(
 )
 
 /**
- * One RAW frame's save, run on a writer thread: the DNG (original, Galosh- or
- * AI-denoised; at most one denoise stage per capture) and, when the capture
+ * One RAW frame's save, run on a writer thread: the DNG (original or
+ * AI-denoised) and, when the capture
  * format includes it, the developed JPEG or JXL. The camera Image stays owned
  * by the enclosing OwnedCaptureJob. Extracted verbatim from
  * RawCameraController.saveRawFrame (W3); algorithm stages are called, not
@@ -75,7 +74,6 @@ internal class RawFrameSaveJob(
                 val developer = host.developer()
                 val devSettings = RawDevelopmentSettings(
                     denoise = input.denoise,
-                    galosh = input.galosh,
                     adaptiveExposureStrength = input.adaptiveExposureStrength,
                     sharedAdaptiveExposure = input.sharedAdaptiveExposure,
                     adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
@@ -86,21 +84,10 @@ internal class RawFrameSaveJob(
                     // pushing bright skies past white.
                     ettrHeadroomEv = input.ettrHeadroomEv
                 )
-                // Denoise-once: at most one stage runs per capture. Galosh
-                // wins when enabled and AI is skipped for that capture;
-                // otherwise AI runs as before. The winning CFA is shared
-                // by the denoised-DNG write and the JPEG; null means the
-                // legacy paths below run unchanged.
-                val galoshCfa: UnpackedRawCfa? = if (input.galosh.enabled &&
-                    (input.outputFormat.includesDng || input.outputFormat.includesJpeg)
-                ) {
-                    val galoshPlane = image.planes.singleOrNull()?.buffer
-                    if (galoshPlane != null) {
-                        developer.galoshCaptureCfa(galoshPlane, input.frameMetadata, devSettings)
-                    } else null
-                } else null
-                val aiCfa: UnpackedRawCfa? = if (!input.galosh.enabled &&
-                    input.denoise.aiEnabled &&
+                // The AI-denoised CFA is shared by the denoised-DNG write
+                // and the JPEG; null means the legacy paths below run
+                // unchanged.
+                val aiCfa: UnpackedRawCfa? = if (input.denoise.aiEnabled &&
                     (input.outputFormat.includesDng || input.outputFormat.includesJpeg)
                 ) {
                     val aiPlane = image.planes.singleOrNull()?.buffer
@@ -108,7 +95,7 @@ internal class RawFrameSaveJob(
                         developer.denoiseCaptureCfa(aiPlane, input.frameMetadata, devSettings)
                     } else null
                 } else null
-                val denCfa: UnpackedRawCfa? = galoshCfa ?: aiCfa
+                val denCfa: UnpackedRawCfa? = aiCfa
                 fun saveOriginalDng(): String? = try {
                     DngSaver(context).save(
                         image, input.characteristics, result, input.orientation, input.dngOverrides,
@@ -126,28 +113,7 @@ internal class RawFrameSaveJob(
                     Log.e(LOG_TAG, "DNG save failed", failure)
                     null
                 }
-                if (galoshCfa != null) {
-                    if (input.outputFormat.includesDng) {
-                        try {
-                            dngName = DngSaver(context).saveGaloshDenoised(
-                                galoshCfa, input.frameMetadata, captureId = input.captureTimeMillis,
-                                fileNameSuffix = input.fileNameSuffix, gps = input.gps,
-                                subfolder = input.subfolder
-                            )
-                            Log.i(
-                                LOG_TAG,
-                                "GALOSH DNG saved name=$dngName pendingSaves=${host.pendingSaves()}"
-                            )
-                        } catch (failure: Exception) {
-                            dngFailure = failure
-                            Log.e(LOG_TAG, "GALOSH DNG save failed", failure)
-                        }
-                        if (input.galosh.saveOriginalDng) {
-                            val ogName = saveOriginalDng()
-                            if (dngName == null) dngName = ogName
-                        }
-                    }
-                } else if (aiCfa != null) {
+                if (aiCfa != null) {
                     if (input.outputFormat.includesDng) {
                         try {
                             dngName = DngSaver(context).saveAiDenoised(
@@ -178,8 +144,7 @@ internal class RawFrameSaveJob(
                             "RAW development input timestamp=${input.frameMetadata.timestampNanos} " +
                                 "frame=${input.frameMetadata.frameNumber} cfa=${input.frameMetadata.cfaPattern} " +
                                 "geometry=${input.frameMetadata.bufferGeometry}" +
-                                if (galoshCfa != null) " galoshDenoised"
-                                else if (aiCfa != null) " aiDenoised" else ""
+                                if (aiCfa != null) " aiDenoised" else ""
                         )
                         if (input.developedFormat == DevelopedFormat.JXL) {
                             val developed = if (denCfa != null) {

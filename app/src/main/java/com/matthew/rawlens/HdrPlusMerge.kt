@@ -11,8 +11,7 @@ import java.nio.ByteOrder
 
 /**
  * HDR+ merge bridge: ZSL [Image] frames in, merged [UnpackedRawCfa] out
- * over the HDR+ Vulkan pipeline ([HdrPlusVulkan]). Mirrors
- * [GaloshDenoiser] semantics: returns the merged CFA (same dims/pattern
+ * over the HDR+ Vulkan pipeline ([HdrPlusVulkan]). Returns the merged CFA (same dims/pattern
  * crop as the inputs) or null when the merge is unavailable — failure,
  * OOM, and unsupported geometry all fall back to the caller's error
  * path. Never throws for HDR+ reasons; callers map null to HDR+ ERROR.

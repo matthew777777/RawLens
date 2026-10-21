@@ -505,9 +505,6 @@ class RawCameraController(
     @Volatile private var denoiseSettings = DenoiseSettings()
 
     private var activeDenoiseSettings = DenoiseSettings()
-    @Volatile private var galoshSettings = GaloshSettings()
-
-    private var activeGaloshSettings = GaloshSettings()
     private val previewLayoutListener = View.OnLayoutChangeListener { _, left, top, right, bottom,
                                                                        oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -2309,17 +2306,6 @@ class RawCameraController(
         return true
     }
 
-    /** GALOSH controls freeze exactly like the AI denoise controls. */
-    fun setGaloshSettings(settings: GaloshSettings): Boolean {
-        if (captureInProgress.get() || pendingSaveCount.get() > 0) return false
-        if (!isOnCameraThread()) {
-            cameraHandler.post { setGaloshSettings(settings) }
-            return true
-        }
-        galoshSettings = settings
-        return true
-    }
-
     // Future SR hook: rawSuperResolutionSettings() / setRawSuperResolutionSettings()
     // / applyRawSuperResolutionCameraState() here (SR-gated ZSL enable + status).
 
@@ -2597,7 +2583,6 @@ class RawCameraController(
         activeJxlOutputSettings = jxlOutputSettings
         activeDevelopedFormat = developedFormat
         activeDenoiseSettings = denoiseSettings
-        activeGaloshSettings = galoshSettings
         activeHdrPlusSettings = hdrPlusSettings
         activeMfsrSettings = mfsrSettings
         return true
@@ -4835,12 +4820,6 @@ class RawCameraController(
         restartCameraForConfigurationChange()
     }
 
-    /** Enable-time GALOSH Vulkan preload, off the capture path. */
-    fun prewarmGalosh() {
-        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
-        developer.prewarmGalosh()
-    }
-
     fun prewarmWavelet() {
         val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
         developer.prewarmWavelet()
@@ -6725,7 +6704,6 @@ class RawCameraController(
         val outputFormat = activeCaptureFormat
         val outputSettings = activeJpegOutputSettings
         val captureDenoiseSettings = activeDenoiseSettings
-        val captureGaloshSettings = activeGaloshSettings
         val adaptiveExposureStrength = adaptivePreviewStrength(activeCaptureExposureMode, outputSettings)
         // W4: every user setting the job uses is frozen here, at shutter time,
         // like the result itself; the job runs later on a writer thread, after
@@ -6760,7 +6738,7 @@ class RawCameraController(
                 RawFrameSaveInput(
                     characteristics = c, orientation = orientation, frameMetadata = frameMetadata,
                     outputFormat = outputFormat, outputSettings = outputSettings,
-                    denoise = captureDenoiseSettings, galosh = captureGaloshSettings,
+                    denoise = captureDenoiseSettings,
                     adaptiveExposureStrength = adaptiveExposureStrength,
                     sharedAdaptiveExposure = sharedAdaptiveExposure,
                     developedFormat = captureDevelopedFormat, jxl = captureJxlSettings,
@@ -6776,9 +6754,7 @@ class RawCameraController(
         // Plain DNG-only saves (no JPEG develop, no AI inference) run on the
         // parallel DNG worker so a burst drains concurrently and the next burst
         // waits out the refill, not the whole queue. JPEG/JXL development and AI
-        // denoise stay serialized on [writer]. Galosh-denoised DNG-only saves do
-        // run here, but GaloshDenoiser.denoise is @Synchronized (one GPU run at a
-        // time), so they serialize inside the denoiser.
+        // denoise stay serialized on [writer].
         val fastDngOnly = outputFormat.includesDng && !outputFormat.includesJpeg &&
             !captureDenoiseSettings.aiEnabled
         try {

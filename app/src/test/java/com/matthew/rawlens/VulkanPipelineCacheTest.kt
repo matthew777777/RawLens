@@ -19,10 +19,6 @@ class VulkanPipelineCacheTest {
             VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_VF)
         )
         assertEquals(
-            File("/cache/vulkan_pipeline_cache/galosh.bin"),
-            VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_GALOSH)
-        )
-        assertEquals(
             File("/cache/vulkan_pipeline_cache/hdrplus.bin"),
             VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_HDRPLUS)
         )

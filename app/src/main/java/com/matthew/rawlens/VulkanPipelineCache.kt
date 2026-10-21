@@ -14,10 +14,9 @@ import java.io.File
 object VulkanPipelineCache {
     const val DIR_NAME = "vulkan_pipeline_cache"
     const val HOST_VF = "vf"
-    const val HOST_GALOSH = "galosh"
     const val HOST_HDRPLUS = "hdrplus"
 
-    private val HOSTS = setOf(HOST_VF, HOST_GALOSH, HOST_HDRPLUS)
+    private val HOSTS = setOf(HOST_VF, HOST_HDRPLUS)
 
     /** `<cacheDir>/vulkan_pipeline_cache` (not created). */
     fun dir(cacheDir: File): File = File(cacheDir, DIR_NAME)

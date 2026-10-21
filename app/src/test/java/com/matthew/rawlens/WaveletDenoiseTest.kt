@@ -14,25 +14,16 @@ class WaveletDenoiseTest {
     @Test fun resolveDisablesEverythingOnMergedPath() {
         val r = resolveDenoise(
             DenoiseSettings(aiEnabled = true, wavelet = waveletOn),
-            GaloshSettings(enabled = true), mergedPath = true
+            mergedPath = true
         )
         assertEquals(PreDemosaicStage.OFF, r.preDemosaic)
-        assertFalse(r.wavelet)
-    }
-
-    @Test fun resolveGaloshWinsOverAiAndWavelet() {
-        val r = resolveDenoise(
-            DenoiseSettings(aiEnabled = true, wavelet = waveletOn),
-            GaloshSettings(enabled = true), mergedPath = false
-        )
-        assertEquals(PreDemosaicStage.GALOSH, r.preDemosaic)
         assertFalse(r.wavelet)
     }
 
     @Test fun resolveAiStacksWithWavelet() {
         val r = resolveDenoise(
             DenoiseSettings(aiEnabled = true, wavelet = waveletOn),
-            GaloshSettings(), mergedPath = false
+            mergedPath = false
         )
         assertEquals(PreDemosaicStage.AI, r.preDemosaic)
         assertTrue(r.wavelet)
@@ -41,9 +32,9 @@ class WaveletDenoiseTest {
     @Test fun resolveZeroStrengthDisablesStage() {
         val idle = resolveDenoise(
             DenoiseSettings(aiEnabled = true, wavelet = waveletOn.copy(strength = 0f)),
-            GaloshSettings(enabled = true, strength = 0f), mergedPath = false
+            mergedPath = false
         )
-        // Zero-strength Galosh is off, so AI runs and wavelet stays off.
+        // Zero-strength wavelet is off; AI still runs.
         assertEquals(PreDemosaicStage.AI, idle.preDemosaic)
         assertFalse(idle.wavelet)
     }
