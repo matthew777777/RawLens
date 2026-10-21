@@ -10,7 +10,7 @@
 // round-half-away tile math, first-minimum-free threshold).
 //
 // Push overlay: pad[0]=op (0 guide,1 stats,2 warp,3 dsigma,4 thresh,5 min,
-//   6 smap, 7 accum) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
+//   6 smap, 7 accum, 9 S.3 hf map) pad[1]=W pad[2]=H (op grid), pad[3]=nc,
 //   pad[4]=tileHalf, pad[5]=lutN, pad[6..9]=t,Mt,s1,s2 bits,
 //   pad[10]=noiseCorrection, pad[11]=nTilesX (warp/thresh),
 //   pad[12]=fullW (guide op).
@@ -170,6 +170,11 @@ void main() {
     float Sv = S_[py * nTilesX + px];
     float Rv = Sv * exp(-A_[i] / B_[i]) - t;
     D_[i] = isnan(Rv) ? 0.0 : clamp(Rv, 0.0, 1.0);
+    // Supplement S.3 (pad[7] = 1): high-frequency-only reference regions
+    // (C = op 9 map) under local alignment variation (S == s1, the
+    // M > Mt strength of op 6) are fully rejected; the 5x5 minimum (op 5)
+    // then grows the rejection like the paper's morphology.
+    if (p.pad[7] != 0u && C_[i] > 0.5 && Sv == uintBitsToFloat(p.pad[8])) D_[i] = 0.0;
   } else if (op == 6u) {
     // --- cpu_compute_s: one invocation per flow tile ---
     // W=pad[1] is nTilesX, H=pad[2] is nTilesY here; A holds the flow
@@ -199,6 +204,43 @@ void main() {
     float d0 = maxi0 - mini0;
     float d1 = maxi1 - mini1;
     D_[i] = (d0 * d0 + d1 * d1 > Mt * Mt) ? s1 : s2;
+  } else if (op == 9u) {
+    // --- Supplement S.3 variance-loss map on the reference guide stats ---
+    // A = local means (3 planes), B = local variances (3 planes), D = 0/1.
+    // before = sum_c var3x3(guide); after = sum_c var3x3(mean3x3(guide))
+    // (the clamped-window variance of the op 1 means); a region is
+    // "high-frequency only" when after/before < rho and before exceeds K
+    // times the noise variance of the sqrt-domain guide at that
+    // brightness, var(sqrt x) ~ (a x + b) / (4 x) (delta method; the
+    // green guide is a 2-sample mean: a/2, b/2). pad[4..5] rho, K bits;
+    // pad[6..8] alpha R,G,B bits; pad[9..11] beta R,G,B bits.
+    uint plane = W * H;
+    uint y = i / W;
+    uint x = i % W;
+    float rho = uintBitsToFloat(p.pad[4]);
+    float K = uintBitsToFloat(p.pad[5]);
+    float before = 0.0, after = 0.0, noise = 0.0;
+    for (uint c = 0u; c < 3u; c++) {
+      before += B_[c * plane + i];
+      float m = 0.0, m2 = 0.0;
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          uint yy = uint(clampInt(int(y) + dy, 0, int(H) - 1));
+          uint xx = uint(clampInt(int(x) + dx, 0, int(W) - 1));
+          float v = A_[c * plane + yy * W + xx];
+          m += v;
+          m2 += v * v;
+        }
+      }
+      m /= 9.0;
+      after += m2 / 9.0 - m * m;
+      float lin = max(A_[c * plane + i], 1e-6);
+      lin *= lin;
+      float a = uintBitsToFloat(p.pad[6u + c]) * (c == 1u ? 0.5 : 1.0);
+      float b = uintBitsToFloat(p.pad[9u + c]) * (c == 1u ? 0.5 : 1.0);
+      noise += (a * lin + b) / (4.0 * lin);
+    }
+    D_[i] = (after / max(before, 1e-12) < rho && before > K * noise) ? 1.0 : 0.0;
   } else if (op == 7u) {
     // --- debug accumulated-robustness: D = A + B, one invocation per
     // pixel (replaces host utils.add). A single correctly-rounded add per

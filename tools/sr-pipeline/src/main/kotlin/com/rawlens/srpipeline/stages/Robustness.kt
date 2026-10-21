@@ -26,6 +26,18 @@ data class RobustnessParams(
     val s2: Float = 12f,
     val mt: Float = 0.8f,
     val noiseCorrection: Boolean = true,
+    /**
+     * Wronski 2019 supplement S.3 (high-frequency artefact rejection):
+     * reference regions that lose most local variance under the
+     * robustness low-pass (after/before < [s3Rho]) while carrying more than
+     * [s3K] x the noise variance are fully rejected wherever the alignment
+     * field varies (M > [mt]). Thresholds measured on a synthetic grating
+     * chart and two real bursts (docs/refactor/mfsr-s3.md). The IPOL
+     * reference has no S.3: disable for 1:1 parity with it.
+     */
+    val s3: Boolean = true,
+    val s3Rho: Float = 0.1f,
+    val s3K: Float = 16f,
 )
 
 /**

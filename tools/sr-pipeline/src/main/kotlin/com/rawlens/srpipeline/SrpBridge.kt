@@ -536,6 +536,31 @@ object SrpBridge {
         tBits: Int,
         ftx: Int,
         fty: Int,
+        /** S.3 map resident ([nativeRobustHfRes]); 0 = S.3 off. */
+        hfRes: Long,
+        /** Float bits of s1 (the M > Mt strength the S map holds there). */
+        s1Bits: Int,
+    ): Int
+
+    /**
+     * Supplement S.3 variance-loss map (robustness op 9) from the resident
+     * reference stats `meansRes`/`varsRes` (3 planes of (width/2)*(height/2))
+     * into `hfRes` (0/1 per guide pixel). `alpha`/`beta` are the R, G, B
+     * noise-model coefficients (normalized units).
+     */
+    @JvmStatic
+    external fun nativeRobustHfRes(
+        handle: Long,
+        meansRes: Long,
+        varsRes: Long,
+        hfRes: Long,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        rho: Float,
+        k: Float,
+        alpha: FloatArray,
+        beta: FloatArray,
     ): Int
 
     /**

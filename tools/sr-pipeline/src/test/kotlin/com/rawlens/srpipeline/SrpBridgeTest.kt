@@ -1154,7 +1154,7 @@ class SrpBridgeTest {
                         SrpBridge.nativeRobustComputeFrameRes(handle, compRes,
                             meansRes, varsRes, packFlat(flow128.data), lutBuf,
                             sRes, resOut, spirv, w128, h128, 16, 2, 0,
-                            java.lang.Float.floatToIntBits(0.12f), ftx128, fty128))
+                            java.lang.Float.floatToIntBits(0.12f), ftx128, fty128, 0L, 0))
                     stagedVsRes("robust-compute", readBuf(stagedOut, gw128 * gh128), resOut)
                 } finally {
                     SrpBridge.freeResident(handle, meansRes)

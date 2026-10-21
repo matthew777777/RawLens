@@ -2274,7 +2274,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustCompute
     jlong means_res, jlong vars_res, jobject flow_buffer,
     jobject lut_buffer, jlong s_res, jobject out_buffer, jbyteArray spirv,
     jint width, jint height, jint tile_size, jint lut_n, jint noise_correction,
-    jint t_bits, jint ftx, jint fty) {
+    jint t_bits, jint ftx, jint fty, jlong hf_res, jint s1_bits) {
   VkDevice device = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   srp::Context* ctx = CorrContext(handle, &device, &physical);
@@ -2340,13 +2340,19 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustCompute
     }
   }
   if (staged) {
+    VkBuffer hf_vk = VK_NULL_HANDLE;  // S.3 map (0 = off)
+    if (hf_res != 0 && srp::SrpResidentBuffer(ctx, hf_res,
+            static_cast<size_t>(width / 2) * (height / 2), &hf_vk) != srp::Status::kOk) {
+      hf_vk = VK_NULL_HANDLE;
+    }
     status = srp::SrpRobustComputeGpu(
         ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
         comp_vk, means_vk, vars_vk, vks[0], vks[1], s_vk, vks[2],
         static_cast<uint32_t>(tile_size), static_cast<uint32_t>(lut_n),
         static_cast<uint32_t>(noise_correction),
         static_cast<uint32_t>(t_bits), static_cast<uint32_t>(ftx),
-        static_cast<uint32_t>(fty), module);
+        static_cast<uint32_t>(fty), module,
+        hf_vk, static_cast<uint32_t>(s1_bits));
     if (status == srp::Status::kOk) {
       void* mapped = nullptr;
       if (vkMapMemory(device, mems[2], 0, static_cast<VkDeviceSize>(n) * 4, 0,
@@ -3093,4 +3099,33 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCo
             flip != 0 ? 1u : 0u, ref_vk, a, o, module);
       });
   return static_cast<jint>(status);
+}
+
+// Supplement S.3 variance-loss map (robustness op 9) from the resident
+// reference stats into `hf_res` ((width/2)*(height/2) floats, 0/1).
+extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRobustHfRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong means_res, jlong vars_res,
+    jlong hf_res, jbyteArray spirv, jint width, jint height, jfloat rho, jfloat k,
+    jfloatArray alpha, jfloatArray beta) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || spirv == nullptr || alpha == nullptr || beta == nullptr ||
+      width < 2 || height < 2 || env->GetArrayLength(alpha) < 3 || env->GetArrayLength(beta) < 3) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const size_t n = static_cast<size_t>(width / 2) * (height / 2);
+  VkBuffer m_vk = VK_NULL_HANDLE, v_vk = VK_NULL_HANDLE, h_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, means_res, 3 * n, &m_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, vars_res, 3 * n, &v_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, hf_res, n, &h_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module = VK_NULL_HANDLE;
+  if (!InternSpirv(env, ctx, spirv, &module)) return static_cast<jint>(srp::Status::kDispatchFailed);
+  float a[3], b[3];
+  env->GetFloatArrayRegion(alpha, 0, 3, a);
+  env->GetFloatArrayRegion(beta, 0, 3, b);
+  return static_cast<jint>(srp::SrpRobustHfGpu(ctx, static_cast<uint32_t>(width),
+      static_cast<uint32_t>(height), m_vk, v_vk, h_vk, rho, k, a, b, module));
 }

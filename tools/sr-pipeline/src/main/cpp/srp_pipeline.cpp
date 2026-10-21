@@ -998,7 +998,8 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
                            VkBuffer out_buffer, uint32_t tile_size,
                            uint32_t lut_n, uint32_t noise_correction,
                            uint32_t t_bits, uint32_t ftx, uint32_t fty,
-                           VkShaderModule shader_module) {
+                           VkShaderModule shader_module, VkBuffer hf_buffer,
+                           uint32_t s1_bits) {
   if (ctx == nullptr || width < 2 || height < 2 || tile_size < 2 ||
       lut_n == 0 || ftx == 0 || fty == 0 || comp_buffer == VK_NULL_HANDLE ||
       means_buffer == VK_NULL_HANDLE || vars_buffer == VK_NULL_HANDLE ||
@@ -1073,10 +1074,15 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
     ex[4] = tile_half;
     ex[5] = 0;
     ex[6] = t_bits;
+    ex[7] = hf_buffer != VK_NULL_HANDLE ? 1 : 0;   // S.3 rejection on
+    ex[8] = s1_bits;
     ex[10] = 0;
     ex[11] = ftx;
-    status = RobDispatch(ctx, ex, gw, gh, n, d, sg, dummy, r, dummy, s_buffer,
-                         dummy, shader_module);
+    status = RobDispatch(ctx, ex, gw, gh, n, d, sg,
+                         hf_buffer != VK_NULL_HANDLE ? hf_buffer : dummy, r,
+                         dummy, s_buffer, dummy, shader_module);
+    ex[7] = 0;
+    ex[8] = 0;
   }
   // op 5 local min into the caller buffer.
   if (status == Status::kOk) {
@@ -1089,6 +1095,29 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
   }
   arena.freeAll();
   return status;
+}
+
+Status SrpRobustHfGpu(Context* ctx, uint32_t width, uint32_t height,
+                      VkBuffer means_buffer, VkBuffer vars_buffer,
+                      VkBuffer hf_buffer, float rho, float k,
+                      const float alpha[3], const float beta[3],
+                      VkShaderModule shader_module) {
+  if (ctx == nullptr || width < 2 || height < 2 || means_buffer == VK_NULL_HANDLE ||
+      vars_buffer == VK_NULL_HANDLE || hf_buffer == VK_NULL_HANDLE ||
+      shader_module == VK_NULL_HANDLE) {
+    return Status::kInitFailed;
+  }
+  const uint32_t gw = width / 2, gh = height / 2;
+  const uint32_t n = gw * gh;
+  auto bits = [](float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; };
+  uint32_t ex[13] = {};
+  ex[0] = 9;
+  ex[3] = 3;
+  ex[4] = bits(rho);
+  ex[5] = bits(k);
+  for (int ch = 0; ch < 3; ++ch) { ex[6 + ch] = bits(alpha[ch]); ex[9 + ch] = bits(beta[ch]); }
+  return RobDispatch(ctx, ex, gw, gh, n, means_buffer, vars_buffer, hf_buffer,
+                     hf_buffer, hf_buffer, hf_buffer, hf_buffer, shader_module);
 }
 
 Status SrpSmapGpu(Context* ctx, uint32_t ntx, uint32_t nty,

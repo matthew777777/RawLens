@@ -270,6 +270,8 @@ object VulkanPipeline {
         require(numRes != 0L) { "VulkanPipeline: resident num alloc failed" }
         val denRes = SrpBridge.createResident(handle, total.toLong())
         require(denRes != 0L) { "VulkanPipeline: resident den alloc failed" }
+        // Supplement S.3 map (reference guide grid), 0 = off.
+        var hfRes = 0L
         // Perf slice (a): upload-once frame + kernels chain scratch,
         // device-resident across entries and reused across frames
         // (sequential fence-waited dispatches: aliasing-safe). Same
@@ -338,6 +340,17 @@ object VulkanPipeline {
             timed("robustInit") { checkRc("robustInit", SrpBridge.robustInitRes(
                 handle, packImageInto(refBox!!, frameBuf), meansRes, varsRes,
                 spirvs.robust, w, h)) }
+            // Supplement S.3: the reference's variance-loss map, once.
+            val rp0 = config.robustnessParams
+            if (rp0.s3) {
+                hfRes = SrpBridge.createResident(handle, (gw * gh).toLong())
+                require(hfRes != 0L) { "VulkanPipeline: S.3 map alloc failed" }
+                val a = config.kernelAlpha
+                val b = config.kernelBeta
+                timed("robustHf") { checkRc("robustHf", SrpBridge.nativeRobustHfRes(handle, meansRes, varsRes,
+                    hfRes, spirvs.robust, w, h, rp0.s3Rho, rp0.s3K,
+                    floatArrayOf(a[0], a[1], a[2]), floatArrayOf(b[0], b[1], b[2]))) }
+            }
         }
 
         try {
@@ -635,7 +648,8 @@ object VulkanPipeline {
                         packInto(mergeFlowFlat, mergeFlow), lutBuf.apply { rewind() }, sRes, mergeRDirect.apply { rewind() },
                         spirvs.robust, w, h, tile, lutN,
                         if (config.robustnessParams.noiseCorrection) 1 else 0,
-                        java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty)) }
+                        java.lang.Float.floatToIntBits(config.robustnessParams.t), ftx, fty,
+                        hfRes, java.lang.Float.floatToIntBits(rp.s1))) }
                 }
                 mergeRDirect
             } else {
@@ -682,6 +696,7 @@ object VulkanPipeline {
             SrpBridge.freeResident(handle, kernGradsRes)
             SrpBridge.freeResident(handle, kernCovRes)
             if (knCovRes != 0L) SrpBridge.freeResident(handle, knCovRes)
+            if (hfRes != 0L) SrpBridge.freeResident(handle, hfRes)
             SrpBridge.freeResident(handle, sRes)
         }
     }

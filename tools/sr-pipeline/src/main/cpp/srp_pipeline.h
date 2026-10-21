@@ -506,6 +506,16 @@ Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
 Status SrpRobustInitGpu(Context* ctx, uint32_t width, uint32_t height,
                         VkBuffer ref_buffer, VkBuffer means_buffer,
                         VkBuffer vars_buffer, VkShaderModule shader_module);
+// SrpRobustHfGpu: supplement S.3 variance-loss map (robustness op 9) on the
+// reference guide stats (`means_buffer`/`vars_buffer`, 3 planes of
+// (width/2)*(height/2)); writes 0/1 into `hf_buffer`. Passing it to
+// SrpRobustComputeGpu (with the s1 bits) fully rejects those pixels where
+// the alignment field varies (S == s1).
+Status SrpRobustHfGpu(Context* ctx, uint32_t width, uint32_t height,
+                      VkBuffer means_buffer, VkBuffer vars_buffer,
+                      VkBuffer hf_buffer, float rho, float k,
+                      const float alpha[3], const float beta[3],
+                      VkShaderModule shader_module);
 Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
                            VkBuffer comp_buffer, VkBuffer means_buffer,
                            VkBuffer vars_buffer, VkBuffer flow_buffer,
@@ -513,7 +523,9 @@ Status SrpRobustComputeGpu(Context* ctx, uint32_t width, uint32_t height,
                            VkBuffer out_buffer, uint32_t tile_size,
                            uint32_t lut_n, uint32_t noise_correction,
                            uint32_t t_bits, uint32_t ftx, uint32_t fty,
-                           VkShaderModule shader_module);
+                           VkShaderModule shader_module,
+                           VkBuffer hf_buffer = VK_NULL_HANDLE,
+                           uint32_t s1_bits = 0);
 Status SrpSmapGpu(Context* ctx, uint32_t ntx, uint32_t nty,
                   VkBuffer flow_buffer, VkBuffer s_buffer, uint32_t mt_bits,
                   uint32_t s1_bits, uint32_t s2_bits,
