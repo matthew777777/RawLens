@@ -5,6 +5,7 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.hardware.camera2.CaptureResult
+import android.os.SystemClock
 import android.util.Log
 import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
@@ -12,9 +13,11 @@ import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelNetConfig
+import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
+import java.io.File
 import java.nio.ByteBuffer
 
 /**
@@ -417,13 +420,28 @@ internal object MfsrMerge {
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
             BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
+            // Robustness noise correction (Wronski 2019 Sec. 5.2.1): the
+            // Monte Carlo noise LUT for this profile, simulated once per
+            // sensor/ISO and cached (NoiseLutGen). Only with a real tag
+            // profile; failure falls back to uncorrected robustness.
+            val curves = if (noise == null || noise.size != 8) null else try {
+                val t0 = SystemClock.elapsedRealtime()
+                NoiseLutGen.cached(File(context.cacheDir, "noise_lut"), alpha, beta).also {
+                    Log.i(LOG_TAG, "sharp merge: noise LUT ready in ${SystemClock.elapsedRealtime() - t0} ms")
+                }
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "sharp merge: noise LUT failed, correction off: ${e.message}")
+                null
+            }
             val config = PipelineConfig(
                 scale = 1f, bayer = true, factors = factors, tileSizes = fin.tileSizes,
                 kernelPreprocessing = "gat",
                 kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
                 kernelBeta = FloatArray(4) { beta[it].toFloat() },
-                robustnessParams = RobustnessParams(noiseCorrection = false),
+                robustnessParams = RobustnessParams(noiseCorrection = curves != null),
                 robustnessEnabled = true,
+                sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
+                dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
                 memoryTight = true,
                 icaIterations = 3,
                 // KernelNet (default): one kernel map from the reference

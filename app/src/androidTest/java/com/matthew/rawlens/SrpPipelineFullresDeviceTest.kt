@@ -13,6 +13,7 @@ import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
+import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
@@ -114,7 +115,14 @@ class SrpPipelineFullresDeviceTest {
             val h = refBox!!.size
             val w = refBox!![0].size
             val (alpha, beta) = DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
-            val curves = NoiseLut.load(lutFile.absolutePath, alpha, beta)
+            // -e rawlensSrpLut gen: the in-app generator (cached per
+            // profile, as MfsrMerge) instead of the pushed Python LUT.
+            val curves = if (args.getString("rawlensSrpLut") == "gen") {
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                NoiseLutGen.cached(java.io.File(context.cacheDir, "noise_lut"), alpha, beta).also {
+                    Log.i("SrpFullresDevice", "noise LUT gen ${android.os.SystemClock.elapsedRealtime() - t0} ms")
+                }
+            } else NoiseLut.load(lutFile.absolutePath, alpha, beta)
             val snr = BurstConfig.estimateSnr(refBox!!, alpha, beta)
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)

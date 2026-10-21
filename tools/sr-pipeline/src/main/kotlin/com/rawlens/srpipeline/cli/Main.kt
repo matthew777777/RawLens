@@ -9,6 +9,7 @@ import com.rawlens.srpipeline.stages.KernelNet
 import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
+import com.rawlens.srpipeline.stages.NoiseLutGen
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
@@ -51,7 +52,7 @@ private fun usage(): String = """
       --scale F      super-resolution factor, >= 1 (default 1, mirroring the Python default)
       --lib PATH     JNI library file to load (default: System.loadLibrary lookup)
       --spv-dir DIR  directory with the 10 stage .spv modules (required for --backend vulkan)
-      --lut PATH     noise LUT .npz; enables noise correction with its curves, validated
+      --lut PATH     noise LUT .npz (or "auto" to simulate it in-process); enables noise correction with its curves, validated
                      against the DNG noise profile (without it, noise correction is off)
       --heap-budget-mb N
                      peak JVM heap-pool gate in MB; fails the run when exceeded
@@ -261,7 +262,19 @@ private fun merge(plan: Plan) {
     // `load_noise_lut`, otherwise noise correction stays off (zero curves).
     val refMeta = DngRead.readMeta(refPath.toString())
     val (alpha, beta) = DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
-    val curves = plan.lut?.let { NoiseLut.load(it, alpha, beta) }
+    // `--lut auto`: simulate in-process (NoiseLutGen, same model as the
+    // Python monte_carlo; SRP_LUT_TRIALS overrides the trial count).
+    val curves = plan.lut?.let {
+        if (it == "auto") {
+            val t0 = System.nanoTime()
+            NoiseLutGen.generate(alpha, beta,
+                trials = System.getenv("SRP_LUT_TRIALS")?.toInt() ?: NoiseLutGen.DEFAULT_TRIALS).also {
+                System.err.println("noise LUT generated in ${(System.nanoTime() - t0) / 1_000_000} ms")
+                System.getenv("SRP_LUT_DUMP")?.let { d -> java.io.File(d).writeText(
+                    it.sigmaSq.joinToString(",") + "\n" + it.dSq.joinToString(",") + "\n") }
+            }
+        } else NoiseLut.load(it, alpha, beta)
+    }
     val noiseCorrection = curves != null
 
     // SNR-based tile size + kernel shaping (`update_snr_config`), then the
