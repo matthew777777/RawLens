@@ -51,3 +51,56 @@ shoulder applied to samples so the meter sees what AgX sees.
 - AE-2 (observation) the meter averages un-white-balanced per-CFA samples,
   not luminance: ~0.4 EV constant bias for a neutral under daylight gains
   (absorbed by tuning), ~0.07 EV daylight vs tungsten. Kept.
+
+## AMaZE: PASS (production verified against RawTherapee)
+
+references/RawTherapee/amaze_demosaic_RT.cc is byte-identical to upstream
+RawTherapee dev @b2ee504c. tools/build_amaze_reference.py strips includes
+and applies two patches; both fix real upstream undefined behaviour:
+the last-tile pad loops write up to 15 rows past rgbgreen into the next
+region of the same calloc block (rrmax can reach ts-1 while the loop writes
+16 rows; invisible to ASan, but the output changes at exactly those sizes:
+130x130, 278, 1030x774 differ, 150/290/406x306 do not), and a reused
+nyquist2 buffer read as flags without clearing.
+
+- AMZ-1 (open) The repo's AMaZE parity tests (RawTherapeeAmazeInstrumentedTest,
+  AmazeParityDebugTest) test amaze/ordered_reference.glsl, a serial
+  test-only shader production never loads. The production 12-pass tiled
+  pipeline had no parity test. Now measured: PhotoDemosaicKodakDeviceTest
+  output vs the host RT reference (rawData scaled 0..65535 as RT expects;
+  outputs /65535) on Kodak:
+  - half brightness (no clip, no white window): identical PSNR (+-0.02 dB),
+    mean |diff| 1e-4..4e-4, p99.9 0.007-0.025;
+  - full brightness (+ the final.glsl white-window tail applied to RT):
+    identical PSNR, mean 2e-4..1.5e-3, p99.9 <= 0.093.
+  Rare larger single-pixel differences are AMaZE's binary Nyquist/direction
+  decisions flipping on fp32 (GPU) vs CPU rounding and the RGBA16F store.
+  Should become a production parity test.
+
+## Quad Bayer: PASS (faithful to PhotonCamera, with a PhotonCamera bug fixed)
+
+shaders/quad vs PhotonCamera @b2eff82 demosaicp0quad / p12quad / p2quad,
+line by line: same green taps, inverse-sqrt gradient-energy weights
+(eps 1e-4), 5x5 Gaussian (sigma 1.5) H/V decision, same pixels
+interpolated; same colour taps (offsets -1-shift / 2-shift), green-ratio
+gate 0.01..0.99 with linear fallback. Generalised to every Bayer order and
+crop phase; same-colour border clamp checked.
+- Q-1 (doc) PhotonCamera's p12 energy loop reads neighbour gradients
+  without removing its +0.5 storage offset ((g+0.5)^2 instead of g^2);
+  RawLens uses centred gradients throughout. Correct, but the shader's
+  "adapted from" comment should say it deviates.
+
+## Highlight reconstruction (colour propagation): PASS
+
+references/RawTherapee/hilite_recon.cc is byte-identical to upstream @b2ee504c.
+The existing HL test goldens were "machine-generated" from an oracle kept
+in /tmp (not in the repo, unreproducible). New oracle: tools/hl_oracle
+builds the verbatim HLRecovery_inpaint body (blur 2 = HLBL_DEFAULT, with
+guided filter, box blur, LUT, sleef, rescale, array2D from RT at the
+pinned commit, SHA-256 checked) and a driver that converts/packs exactly
+like HlReconstructionStage. HlOracleHarnessTest runs the production stage
+(CPU path) on the same input. 4 clipped Kodak scenes (26-42 % clipped):
+max |RawLens - RT| 0.0005-0.0008 (half-float storage), same pixels
+changed, identical error vs the unclipped truth.
+RawLens chmax = white, clmax = white - black: RT's thresholds reduce to
+clmax * pct either way, so this matches RT's behaviour on clipped frames.
