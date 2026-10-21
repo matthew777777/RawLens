@@ -1,0 +1,141 @@
+#version 450
+// PhotonCamera KernelNet (eszdman/PhotonCamera @ b2eff82,
+// assets/models/kernelnet_aniso_v2_2_params.ncnn.{param,bin}) evaluated
+// in-engine, plus its conversion to Wronski merge covariances.
+//
+// Graph (ncnn .param): cat(in0 luma, in1 sigma) -> conv3x3 s2 16 relu ->
+// 4 x conv3x3 16 relu -> conv1x1 3 -> (2 sig, 2 sig, 2 sig - 1) = (s1, s2,
+// rho). ncnn Convolution: weights [out][in][ky][kx], zero padding (pad 1 on
+// the 3x3 layers), bias added before the activation. The sigma input is a
+// constant plane, so it is zero-padded like any other channel.
+//
+// p.mode selects the op (one dispatch per op, grid-stride over p.pixelCount):
+//   0 PREP  luma[y][x] = sqrt(clamp(mean(2x2 raw quad), 0, 1))
+//           (PhotonCamera upscalecrop/singleluma.glsl; black 0, white 1)
+//   1 CONV  out = act(conv(in)); pad[] carries the layer shape
+//   2 HEAD  conv1x1 16->3 then (2 sigmoid, 2 sigmoid, 2 sigmoid - 1),
+//           stored through fp16 like the app's RGBA16F parameter map
+//   3 COV   Omega on the merge's grey grid from the parameter map (see below)
+//
+// Buffers: 0 = A (input), 1 = B (output), 2 = W (all weights+biases, fp32).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float a_[]; };
+layout(set = 0, binding = 1) buffer B { float b_[]; };
+layout(set = 0, binding = 2) readonly buffer W { float w_[]; };
+
+// pad layout per mode:
+// The merge input is flipped to RGGB phase (DngRead.flipToRggb); the net
+// must see SENSOR orientation like PhotonCamera (a CNN is not flip-
+// invariant), so PREP reads quads through the flip and COV maps positions
+// back, negating rho when exactly one axis is flipped.
+// PREP: [0]=rawW [1]=rawH [2]=lumaW [3]=lumaH [4]=flipX [5]=flipY
+// CONV/HEAD: [0]=cin [1]=cout [2]=inW [3]=inH [4]=outW [5]=outH [6]=stride
+//            [7]=ksize [8]=relu [9]=wOff [10]=bOff [11]=layer0 (sigma plane)
+//            sigma rides p.alpha
+// COV: [0]=mapW [1]=mapH [2]=rawW [3]=rawH [4]=cropX [5]=cropY [6]=covW
+//      [7]=covH [8]=flipX [9]=flipY ; p.alpha = sigmaScale, p.beta = sigmaCap
+
+float inputAt(uint c, int x, int y, uint inW, uint inH, bool layer0, float sigma) {
+  if (x < 0 || y < 0 || x >= int(inW) || y >= int(inH)) return 0.0;  // zero pad
+  if (layer0 && c == 1u) return sigma;                                // in1 plane
+  return a_[c * inW * inH + uint(y) * inW + uint(x)];
+}
+
+float sigmoid(float v) { return 1.0 / (1.0 + exp(-v)); }
+float roundToFp16(float v) { return unpackHalf2x16(packHalf2x16(vec2(v, 0.0))).x; }
+
+void main() {
+  uint stride = gl_NumWorkGroups.x * 256u;
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += stride) {
+    if (p.mode == 0u) {
+      uint rawW = p.pad[0], lumaW = p.pad[2], lumaH = p.pad[3];
+      uint ly = id / lumaW, lx = id % lumaW;          // sensor-orientation quad
+      uint qx = (p.pad[4] != 0u) ? lumaW - 1u - lx : lx;  // pipeline quad
+      uint qy = (p.pad[5] != 0u) ? lumaH - 1u - ly : ly;
+      uint b = (2u * qy) * rawW + 2u * qx;
+      float m = 0.25 * (a_[b] + a_[b + 1u] + a_[b + rawW] + a_[b + rawW + 1u]);
+      b_[id] = sqrt(clamp(m, 0.0, 1.0));
+    } else if (p.mode == 1u || p.mode == 2u) {
+      uint cin = p.pad[0], inW = p.pad[2], inH = p.pad[3];
+      uint outW = p.pad[4], outH = p.pad[5], st = p.pad[6], k = p.pad[7];
+      bool layer0 = p.pad[11] != 0u;
+      uint plane = outW * outH;
+      uint oc = id / plane, rem = id % plane;
+      uint oy = rem / outW, ox = rem % outW;
+      int r = int(k) / 2;
+      float acc = w_[p.pad[10] + oc];
+      uint wBase = p.pad[9] + oc * cin * k * k;
+      for (uint ic = 0u; ic < cin; ic++) {
+        for (uint ky = 0u; ky < k; ky++) {
+          for (uint kx = 0u; kx < k; kx++) {
+            int ix = int(ox * st) + int(kx) - r;
+            int iy = int(oy * st) + int(ky) - r;
+            acc += w_[wBase + (ic * k + ky) * k + kx] *
+                   inputAt(ic, ix, iy, inW, inH, layer0, p.alpha);
+          }
+        }
+      }
+      if (p.mode == 1u) {
+        b_[id] = (p.pad[8] != 0u) ? max(acc, 0.0) : acc;
+      } else {
+        // out0 = cat(2 sig(c0), 2 sig(c1), 2 sig(c2) - 1), stored fp16.
+        float v = 2.0 * sigmoid(acc) - (oc == 2u ? 1.0 : 0.0);
+        b_[id] = roundToFp16(v);
+      }
+    } else {
+      // COV. Map texel (s1, s2, rho) sampled bilinearly at the grey cell's
+      // raw position (cell g centred at crop + 2g + 1), exactly as GL
+      // texture() samples it at that normalized coordinate. Then
+      // anisoupscale.glsl's shaping: sigmas *= raw/map texel ratio *
+      // sigmaScale, clamp [0.25, sigmaCap] px, elongation <= 7, rho clamp
+      // +-0.8, det >= 1e-2; its weight exp(-q) with q = c dx^2 + 2 b dx dy +
+      // a dy^2 (s2 = x width, s1 = y width; verified on the model) is
+      // Wronski's exp(-0.5 d^T Omega^-1 d) with
+      //   Omega = 0.5 [[s2^2, rho s1 s2], [rho s1 s2, s1^2]].
+      uint mapW = p.pad[0], mapH = p.pad[1];
+      float rawW = float(p.pad[2]), rawH = float(p.pad[3]);
+      uint covW = p.pad[6];
+      uint gy = id / covW, gx = id % covW;
+      float X = float(p.pad[4]) + 2.0 * float(gx) + 1.0;   // pipeline coords
+      float Y = float(p.pad[5]) + 2.0 * float(gy) + 1.0;
+      bool fx = p.pad[8] != 0u, fy = p.pad[9] != 0u;
+      if (fx) X = rawW - X;                                   // -> sensor coords
+      if (fy) Y = rawH - Y;
+      float u = X / rawW * float(mapW) - 0.5;
+      float v = Y / rawH * float(mapH) - 0.5;
+      int u0 = clamp(int(floor(u)), 0, int(mapW) - 1);
+      int v0 = clamp(int(floor(v)), 0, int(mapH) - 1);
+      int u1 = min(u0 + 1, int(mapW) - 1);
+      int v1 = min(v0 + 1, int(mapH) - 1);
+      float fu = clamp(u - float(u0), 0.0, 1.0);
+      float fv = clamp(v - float(v0), 0.0, 1.0);
+      uint mp = mapW * mapH;
+      vec3 t00 = vec3(a_[uint(v0) * mapW + uint(u0)], a_[mp + uint(v0) * mapW + uint(u0)], a_[2u * mp + uint(v0) * mapW + uint(u0)]);
+      vec3 t01 = vec3(a_[uint(v0) * mapW + uint(u1)], a_[mp + uint(v0) * mapW + uint(u1)], a_[2u * mp + uint(v0) * mapW + uint(u1)]);
+      vec3 t10 = vec3(a_[uint(v1) * mapW + uint(u0)], a_[mp + uint(v1) * mapW + uint(u0)], a_[2u * mp + uint(v1) * mapW + uint(u0)]);
+      vec3 t11 = vec3(a_[uint(v1) * mapW + uint(u1)], a_[mp + uint(v1) * mapW + uint(u1)], a_[2u * mp + uint(v1) * mapW + uint(u1)]);
+      vec3 s = mix(mix(t00, t01, fu), mix(t10, t11, fu), fv);
+      float s1 = max(s.x, 1e-4), s2 = max(s.y, 1e-4);
+      float rho = clamp(s.z, -0.8, 0.8);
+      s1 = clamp(s1 * (rawW / float(mapW)) * p.alpha, 0.25, p.beta);
+      s2 = clamp(s2 * (rawH / float(mapH)) * p.alpha, 0.25, p.beta);
+      if (s1 > s2 * 7.0) s1 = s2 * 7.0; else if (s2 > s1 * 7.0) s2 = s1 * 7.0;
+      float det = max(1.0 - rho * rho, 1e-2);
+      float rhoEff = sign(rho) * sqrt(max(1.0 - det, 0.0));
+      if (fx != fy) rhoEff = -rhoEff;                         // one-axis flip
+      b_[id * 4u + 0u] = 0.5 * s2 * s2;           // xx
+      b_[id * 4u + 1u] = 0.5 * rhoEff * s1 * s2;  // xy
+      b_[id * 4u + 2u] = 0.5 * s1 * s1;           // yy
+      b_[id * 4u + 3u] = 0.0;
+    }
+  }
+}

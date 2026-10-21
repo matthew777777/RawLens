@@ -25,7 +25,14 @@ data class MfsrSettings(
      */
     val frameCount: Int = DEFAULT_FRAMES,
     /** Also save every source frame as DNG alongside the merge. */
-    val keepSourceBurst: Boolean = false
+    val keepSourceBurst: Boolean = false,
+    /**
+     * Reconstruction kernel: PhotonCamera KernelNet from the reference
+     * frame (default), or Wronski's per-frame anisotropic kernels (paper
+     * supplement S.1, kept for parity with the reference implementation
+     * and as the fallback).
+     */
+    val kernel: MfsrKernel = MfsrKernel.KERNELNET
 ) {
     init {
         require(frameCount in MIN_MERGE_FRAMES..MAX_MERGE_FRAMES) {
@@ -38,7 +45,8 @@ data class MfsrSettings(
     fun toPreferences(): Map<String, Any> = mapOf(
         "mfsr_enabled" to enabled,
         "mfsr_frames" to frameCount,
-        "mfsr_keep_source_burst" to keepSourceBurst
+        "mfsr_keep_source_burst" to keepSourceBurst,
+        "mfsr_kernel" to kernel.name
     )
 
     fun quickText(buffered: Int, available: Boolean?, busy: Boolean): String = "MFSR\n" + when {
@@ -55,7 +63,9 @@ data class MfsrSettings(
             frameCount = (values["mfsr_frames"] as? Number)?.toInt()
                 ?.coerceIn(MIN_MERGE_FRAMES, MAX_MERGE_FRAMES)
                 ?: DEFAULT_FRAMES,
-            keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false
+            keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false,
+            kernel = MfsrKernel.entries.firstOrNull { it.name == values["mfsr_kernel"] }
+                ?: MfsrKernel.KERNELNET
         )
 
         const val MIN_MERGE_FRAMES = 2
@@ -63,3 +73,6 @@ data class MfsrSettings(
         const val DEFAULT_FRAMES = 8
     }
 }
+
+/** MFSR reconstruction kernel source (see [MfsrSettings.kernel]). */
+enum class MfsrKernel { KERNELNET, WRONSKI }

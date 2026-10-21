@@ -5,6 +5,8 @@ import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.EndToEnd
+import com.rawlens.srpipeline.stages.KernelNet
+import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -29,10 +31,14 @@ private data class Plan(
     val spvDir: Path?,
     val lut: String?,
     val heapBudgetMb: Int?,
+    /** "wronski" (paper S.1 kernels, IPOL parity) or "kernelnet" (PhotonCamera). */
+    val kernel: String = "wronski",
+    val knScale: Float = KernelNet.DEFAULT_SIGMA_SCALE,
+    val knCap: Float = KernelNet.DEFAULT_SIGMA_CAP,
 )
 
 private fun usage(): String = """
-    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N]
+    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N] [--kernel wronski|kernelnet] [--kn-scale F] [--kn-cap F]
       --in DIR       input frame directory with .dng burst frames (required)
       --out DIR      output directory, receives merged.dng (required)
       --ref N        reference frame index into the sorted frames, >= 0 (default 0)
@@ -78,6 +84,9 @@ private fun parseArgs(args: Array<String>): Plan {
     var lib: String? = null
     var spvDir: String? = null
     var lut: String? = null
+    var kernel = "wronski"
+    var knScale = KernelNet.DEFAULT_SIGMA_SCALE
+    var knCap = KernelNet.DEFAULT_SIGMA_CAP
 
     var i = 0
     while (i < args.size) {
@@ -126,6 +135,21 @@ private fun parseArgs(args: Array<String>): Plan {
                 spvDir = args.getOrNull(++i) ?: fail("--spv-dir requires a DIR value")
                 i++
             }
+            "--kernel" -> {
+                kernel = args.getOrNull(++i) ?: fail("--kernel requires wronski|kernelnet")
+                if (kernel != "wronski" && kernel != "kernelnet") fail("--kernel must be wronski|kernelnet (got \"$kernel\")")
+                i++
+            }
+            "--kn-scale" -> {
+                val raw = args.getOrNull(++i) ?: fail("--kn-scale requires an F value")
+                knScale = raw.toFloatOrNull()?.takeIf { it > 0f } ?: fail("--kn-scale must be > 0 (got \"$raw\")")
+                i++
+            }
+            "--kn-cap" -> {
+                val raw = args.getOrNull(++i) ?: fail("--kn-cap requires an F value")
+                knCap = raw.toFloatOrNull()?.takeIf { it >= 0.25f } ?: fail("--kn-cap must be >= 0.25 (got \"$raw\")")
+                i++
+            }
             "--lut" -> {
                 lut = args.getOrNull(++i) ?: fail("--lut requires a PATH value")
                 i++
@@ -163,6 +187,9 @@ private fun parseArgs(args: Array<String>): Plan {
         lib = lib,
         spvDir = if (spvDir == null) null else Paths.get(spvDir),
         lut = lut,
+        kernel = kernel,
+        knScale = knScale,
+        knCap = knCap,
     )
 }
 
@@ -231,7 +258,13 @@ private fun merge(plan: Plan) {
 
     // SNR-based tile size + kernel shaping (`update_snr_config`), then the
     // shape leg of `sanitize_config` with the Python 4-level pyramid.
-    val snr = BurstConfig.estimateSnr(refImg, alpha, beta)
+    // SNR of the WHOLE reference frame even when cropping: the paper tunes
+    // on "the SNR measured from a single frame" (Wronski et al. 2019,
+    // supplement S.2) and the IPOL reference measures the full reference
+    // in process() before any crop. A crop-local SNR (20.9 vs 29.5 dB on
+    // the parity burst) changed tile size and every kernel parameter.
+    val fullRef = if (plan.crop == null) refImg else readFrame(refPath, null)
+    val snr = BurstConfig.estimateSnr(fullRef, alpha, beta)
     val fin = BurstConfig.finalize(snr)
     val factors = listOf(1, 2, 4, 4)
     BurstConfig.sanitize(plan.scale, fin.tileSize, factors, fin.tileSizes, h, w)
@@ -253,9 +286,25 @@ private fun merge(plan: Plan) {
         robustnessEnabled = true,
         sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
         dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
+        kernelNet = if (plan.kernel != "kernelnet") null else {
+            val (fx, fy) = KernelNet.rggbFlips(refMeta.cfa)
+            KernelNetConfig(
+                weights = KernelNet.bundledWeights(),
+                sigma = KernelNet.sigma(
+                    FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
+                sigmaScale = plan.knScale,
+                sigmaCap = plan.knCap,
+                fullReference = if (plan.crop == null) null else fullRef,
+                cropX = plan.crop?.x ?: 0,
+                cropY = plan.crop?.y ?: 0,
+                flipX = fx,
+                flipY = fy,
+            )
+        },
     )
     println("sr-pipeline: ${w}x$h snr=${"%.2f".format(snr)} tile=${fin.tileSize} " +
-        "backend=${plan.backend} noiseCorrection=$noiseCorrection")
+        "backend=${plan.backend} noiseCorrection=$noiseCorrection kernel=${plan.kernel}" +
+        (if (plan.kernel == "kernelnet") " knScale=${plan.knScale} knCap=${plan.knCap}" else ""))
 
     // Flat floats end to end: the Vulkan path returns the downloaded
     // buffer directly (no row copy); the CPU oracle's `[H][W][3]`
@@ -300,12 +349,22 @@ private fun merge(plan: Plan) {
                         mergeSplat = spv(dir, "merge_splat"),
                         fft = fft,
                         corr = spv(dir, "corr"),
+                        kernelNet = if (plan.kernel == "kernelnet") spv(dir, "kernelnet") else null,
                     ),
                 )
                 buf
             } finally {
                 SrpBridge.nativeDestroy(handle)
             }
+        }
+    }
+    // Parity aid: SRP_KN_DUMP=<file> writes the KernelNet (s1, s2, rho)
+    // map (3 x mapH x mapW little-endian float32).
+    System.getenv("SRP_KN_DUMP")?.let { path ->
+        VulkanPipeline.lastKernelNetMap?.let { m ->
+            val bb = java.nio.ByteBuffer.allocate(m.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            bb.asFloatBuffer().put(m)
+            java.io.File(path).writeBytes(bb.array())
         }
     }
     VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), outH * outW * 3)

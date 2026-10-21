@@ -2304,7 +2304,7 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
   if (ctx == nullptr || flow_buffer == nullptr || r_buffer == nullptr ||
       spirv == nullptr || lr_w <= 0 || lr_h <= 0 || hr_w <= 0 || hr_h <= 0 ||
       cov_count <= 0 || r_count <= 0 || tile_size <= 0 || scale <= 0 ||
-      mode < 0 || mode > 1 || ftx <= 0 || fty <= 0) {
+      mode < 0 || mode > 3 || ftx <= 0 || fty <= 0) {
     return static_cast<jint>(srp::Status::kInitFailed);
   }
   const int64_t n_hr3 = static_cast<int64_t>(hr_w) * hr_h * 3;
@@ -2367,8 +2367,9 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeMergeSplatFra
         static_cast<uint32_t>(hr_w), static_cast<uint32_t>(hr_h), in_vk,
         vks[0], cov_vk, vks[1], num_vk, den_vk,
         static_cast<uint32_t>(tile_size), scale,
-        static_cast<uint32_t>(mode), static_cast<uint32_t>(ftx),
-        static_cast<uint32_t>(fty), module);
+        static_cast<uint32_t>(mode & 1), static_cast<uint32_t>(ftx),
+        static_cast<uint32_t>(fty), module,
+        static_cast<uint32_t>((mode >> 1) & 1));
   }
   for (int i = 0; i < 2; ++i) {
     if (vks[i] != VK_NULL_HANDLE) vkDestroyBuffer(device, vks[i], nullptr);
@@ -2888,3 +2889,60 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeDngNormalized
 }
 
 }  // extern "C"
+
+// KernelNet (PhotonCamera kernelnet_aniso_v2_2) -> Wronski covariances.
+// `raw_res` holds the FULL reference frame (raw_w*raw_h normalized floats),
+// `weights_res` the six layers' fp32 weights+biases in .param order,
+// `cov_res` receives cov_w*cov_h vec4 for the crop at (crop_x, crop_y);
+// `map_res` (3*map_w*map_h floats) keeps the parameter map for parity
+// dumps. Scratch is allocated and freed here.
+extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKernelNetCovRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong raw_res, jlong weights_res,
+    jint weight_count, jbyteArray spirv, jint raw_w, jint raw_h, jfloat sigma,
+    jfloat sigma_scale, jfloat sigma_cap, jint crop_x, jint crop_y, jint cov_w,
+    jint cov_h, jlong cov_res, jlong map_res, jint flip_x, jint flip_y) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || spirv == nullptr || raw_w < 4 || raw_h < 4 ||
+      cov_w <= 0 || cov_h <= 0 || weight_count <= 0 || crop_x < 0 || crop_y < 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const size_t lw = static_cast<size_t>(raw_w) / 2, lh = static_cast<size_t>(raw_h) / 2;
+  const size_t mw = (lw - 1) / 2 + 1, mh = (lh - 1) / 2 + 1;
+  VkBuffer raw_vk = VK_NULL_HANDLE, w_vk = VK_NULL_HANDLE, cov_vk = VK_NULL_HANDLE,
+           map_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, raw_res, static_cast<size_t>(raw_w) * raw_h, &raw_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, weights_res, static_cast<size_t>(weight_count), &w_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, cov_res, static_cast<size_t>(cov_w) * cov_h * 4, &cov_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, map_res, 3 * mw * mh, &map_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize spirv_len = env->GetArrayLength(spirv);
+  if (spirv_len <= 0 || spirv_len % 4 != 0) return static_cast<jint>(srp::Status::kInitFailed);
+  std::vector<uint8_t> spirv_bytes(static_cast<size_t>(spirv_len));
+  env->GetByteArrayRegion(spirv, 0, spirv_len, reinterpret_cast<jbyte*>(spirv_bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) return static_cast<jint>(srp::Status::kInitFailed);
+  VkShaderModule module = srp::SrpInternModule(ctx, spirv_bytes.data(), spirv_bytes.size());
+  if (module == VK_NULL_HANDLE) return static_cast<jint>(srp::Status::kDispatchFailed);
+  const int64_t luma = srp::SrpCreateResident(ctx, lw * lh);
+  const int64_t act0 = srp::SrpCreateResident(ctx, 16 * mw * mh);
+  const int64_t act1 = srp::SrpCreateResident(ctx, 16 * mw * mh);
+  srp::Status status = srp::Status::kInitFailed;
+  VkBuffer luma_vk = VK_NULL_HANDLE, a0_vk = VK_NULL_HANDLE, a1_vk = VK_NULL_HANDLE;
+  if (luma != 0 && act0 != 0 && act1 != 0 &&
+      srp::SrpResidentBuffer(ctx, luma, lw * lh, &luma_vk) == srp::Status::kOk &&
+      srp::SrpResidentBuffer(ctx, act0, 16 * mw * mh, &a0_vk) == srp::Status::kOk &&
+      srp::SrpResidentBuffer(ctx, act1, 16 * mw * mh, &a1_vk) == srp::Status::kOk) {
+    status = srp::SrpKernelNetCovGpu(
+        ctx, static_cast<uint32_t>(raw_w), static_cast<uint32_t>(raw_h), sigma,
+        sigma_scale, sigma_cap, static_cast<uint32_t>(crop_x),
+        static_cast<uint32_t>(crop_y), static_cast<uint32_t>(cov_w),
+        static_cast<uint32_t>(cov_h), raw_vk, w_vk, luma_vk, a0_vk, a1_vk,
+        map_vk, cov_vk, module, flip_x != 0 ? 1u : 0u, flip_y != 0 ? 1u : 0u);
+  }
+  if (luma != 0) srp::SrpFreeResident(ctx, luma);
+  if (act0 != 0) srp::SrpFreeResident(ctx, act0);
+  if (act1 != 0) srp::SrpFreeResident(ctx, act1);
+  return static_cast<jint>(status);
+}

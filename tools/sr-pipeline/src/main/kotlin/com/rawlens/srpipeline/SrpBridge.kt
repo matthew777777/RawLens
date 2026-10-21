@@ -424,6 +424,36 @@ object SrpBridge {
     ): Int
 
     /**
+     * PhotonCamera KernelNet (kernelnet.comp) on the FULL reference frame
+     * `rawRes` (`rawW*rawH` normalized floats) -> Wronski covariances for
+     * the crop at (`cropX`, `cropY`) into `covRes` (`covW*covH*4` floats).
+     * `weightsRes` holds [KernelNet.weights] (`weightCount` floats);
+     * `mapRes` receives the (s1, s2, rho) map, `3*mapW*mapH` floats with
+     * map = ((rawW/2 - 1)/2 + 1) x ((rawH/2 - 1)/2 + 1).
+     */
+    @JvmStatic
+    external fun nativeKernelNetCovRes(
+        handle: Long,
+        rawRes: Long,
+        weightsRes: Long,
+        weightCount: Int,
+        spirv: ByteArray,
+        rawW: Int,
+        rawH: Int,
+        sigma: Float,
+        sigmaScale: Float,
+        sigmaCap: Float,
+        cropX: Int,
+        cropY: Int,
+        covW: Int,
+        covH: Int,
+        covRes: Long,
+        mapRes: Long,
+        flipX: Int,
+        flipY: Int,
+    ): Int
+
+    /**
      * compute_s (op 6) writing a resident spread map. `flowBuffer`
      * stages `ntx*nty*2` floats; `sRes` receives `ntx*nty` floats and
      * stays on-device for the robust leg. Bit-identical to nativeSmap.

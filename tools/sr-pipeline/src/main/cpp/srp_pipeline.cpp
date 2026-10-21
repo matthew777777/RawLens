@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "srp_pipeline.h"
 
 #include "srp_dispatch.h"
@@ -756,7 +757,7 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         VkBuffer r_buffer, VkBuffer num_buffer,
                         VkBuffer den_buffer, uint32_t tile_size, float scale,
                         uint32_t mode, uint32_t ftx, uint32_t fty,
-                        VkShaderModule shader_module) {
+                        VkShaderModule shader_module, uint32_t ref_kernels) {
   if (ctx == nullptr || lr_w == 0 || lr_h == 0 || hr_w == 0 || hr_h == 0 ||
       tile_size == 0 || scale <= 0.0f || mode > 1 || ftx == 0 || fty == 0 ||
       comp_buffer == VK_NULL_HANDLE || flow_buffer == VK_NULL_HANDLE ||
@@ -784,10 +785,93 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
   push.mode = mode;
   push.pad[1] = ftx;
   push.pad[2] = hr_w;
+  push.pad[3] = ref_kernels;  // 1: covariances on the reference grid
   VkBuffer buffers[6] = {comp_buffer, flow_buffer, cov_buffer, r_buffer,
                          num_buffer, den_buffer};
   return DispatchStorageCompute(ctx, buffers, 6, &push, sizeof(push),
                                 kMergeSplatLocalSize, hr, shader_module);
+}
+
+namespace {
+// Grid-stride dispatch: kernelnet.comp loops over p.pixelCount, so the group
+// count can stay under the 65535 x-limit for any sensor size.
+Status KnDispatch(Context* ctx, VkBuffer a, VkBuffer b, VkBuffer w,
+                  SrpHmsrPush* push, VkShaderModule mod) {
+  VkBuffer buffers[3] = {a, b, w};
+  uint64_t groups = (static_cast<uint64_t>(push->pixel_count) + 255) / 256;
+  if (groups > 65535) groups = 65535;
+  return SrpDispatchGroups(ctx, buffers, 3, push, sizeof(*push), 256,
+                           static_cast<uint32_t>(groups), mod);
+}
+}  // namespace
+
+Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
+                          float sigma, float sigma_scale, float sigma_cap,
+                          uint32_t crop_x, uint32_t crop_y, uint32_t cov_w,
+                          uint32_t cov_h, VkBuffer raw_buffer,
+                          VkBuffer weights_buffer, VkBuffer luma_buffer,
+                          VkBuffer act0_buffer, VkBuffer act1_buffer,
+                          VkBuffer map_buffer, VkBuffer cov_buffer,
+                          VkShaderModule shader_module, uint32_t flip_x,
+                          uint32_t flip_y) {
+  if (ctx == nullptr || raw_w < 4 || raw_h < 4 || cov_w == 0 || cov_h == 0 ||
+      raw_buffer == VK_NULL_HANDLE || weights_buffer == VK_NULL_HANDLE ||
+      luma_buffer == VK_NULL_HANDLE || act0_buffer == VK_NULL_HANDLE ||
+      act1_buffer == VK_NULL_HANDLE || map_buffer == VK_NULL_HANDLE ||
+      cov_buffer == VK_NULL_HANDLE || shader_module == VK_NULL_HANDLE) {
+    return Status::kInitFailed;
+  }
+  const uint32_t lw = raw_w / 2, lh = raw_h / 2;           // luma grid
+  const uint32_t mw = (lw - 1) / 2 + 1, mh = (lh - 1) / 2 + 1;  // stride 2
+  SrpHmsrPush push{};
+  push.scale = 1.0f;
+  // 0 PREP
+  push.mode = 0;
+  push.pixel_count = lw * lh;
+  push.pad[0] = raw_w; push.pad[1] = raw_h; push.pad[2] = lw; push.pad[3] = lh;
+  push.pad[4] = flip_x; push.pad[5] = flip_y;
+  Status st = KnDispatch(ctx, raw_buffer, luma_buffer, weights_buffer, &push, shader_module);
+  if (st != Status::kOk) { fprintf(stderr, "kernelnet: prep failed %d\n", (int)st); return st; }
+  // Layer table from the .param: (cin, cout, k, stride, relu); weights
+  // packed [w0 b0 w1 b1 ... w5 b5] in that order.
+  struct L { uint32_t cin, cout, k, stride, relu; };
+  const L layers[6] = {{2, 16, 3, 2, 1}, {16, 16, 3, 1, 1}, {16, 16, 3, 1, 1},
+                       {16, 16, 3, 1, 1}, {16, 16, 3, 1, 1}, {16, 3, 1, 1, 0}};
+  uint32_t off = 0;
+  VkBuffer in = luma_buffer;
+  uint32_t inW = lw, inH = lh;
+  VkBuffer acts[2] = {act0_buffer, act1_buffer};
+  for (int i = 0; i < 6; ++i) {
+    const L& l = layers[i];
+    const uint32_t wOff = off;
+    off += l.cout * l.cin * l.k * l.k;
+    const uint32_t bOff = off;
+    off += l.cout;
+    SrpHmsrPush lp{};
+    lp.scale = 1.0f;
+    lp.mode = (i == 5) ? 2 : 1;
+    lp.alpha = sigma;
+    lp.pixel_count = l.cout * mw * mh;
+    lp.pad[0] = l.cin; lp.pad[1] = l.cout; lp.pad[2] = inW; lp.pad[3] = inH;
+    lp.pad[4] = mw; lp.pad[5] = mh; lp.pad[6] = l.stride; lp.pad[7] = l.k;
+    lp.pad[8] = l.relu; lp.pad[9] = wOff; lp.pad[10] = bOff;
+    lp.pad[11] = (i == 0) ? 1 : 0;
+    VkBuffer out = (i == 5) ? map_buffer : acts[i % 2];
+    st = KnDispatch(ctx, in, out, weights_buffer, &lp, shader_module);
+    if (st != Status::kOk) { fprintf(stderr, "kernelnet: layer %d failed %d\n", i, (int)st); return st; }
+    in = out; inW = mw; inH = mh;
+  }
+  // 3 COV
+  SrpHmsrPush cp{};
+  cp.scale = 1.0f;
+  cp.mode = 3;
+  cp.alpha = sigma_scale;
+  cp.beta = sigma_cap;
+  cp.pixel_count = cov_w * cov_h;
+  cp.pad[0] = mw; cp.pad[1] = mh; cp.pad[2] = raw_w; cp.pad[3] = raw_h;
+  cp.pad[4] = crop_x; cp.pad[5] = crop_y; cp.pad[6] = cov_w; cp.pad[7] = cov_h;
+  cp.pad[8] = flip_x; cp.pad[9] = flip_y;
+  return KnDispatch(ctx, map_buffer, cov_buffer, weights_buffer, &cp, shader_module);
 }
 
 namespace {

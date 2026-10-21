@@ -10,6 +10,8 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
+import com.rawlens.srpipeline.stages.KernelNet
+import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.PipelineConfig
 import com.rawlens.srpipeline.stages.RobustnessParams
 import com.rawlens.srpipeline.stages.VulkanPipeline
@@ -259,7 +261,8 @@ internal object MfsrMerge {
                     }
                 }
             }, w, h,
-            kept[0].metadata.noiseProfile?.toDoubleArray(), settings
+            kept[0].metadata.noiseProfile?.toDoubleArray(), settings,
+            kept[0].norm.sensorPattern
         ) ?: return null
         return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
             engine.mergeMs, 0.0, kept[0].metadata, kept[0].frame.result)
@@ -281,7 +284,8 @@ internal object MfsrMerge {
         val h = kept[0].cfa.height
         val engine = runEngine(
             context, kept.map { decoded -> { decodeRows(decoded.cfa) } }, w, h,
-            kept[0].source.metadata.noiseProfile?.toDoubleArray(), settings
+            kept[0].source.metadata.noiseProfile?.toDoubleArray(), settings,
+            kept[0].cfa.pattern
         ) ?: return null
         return MfsrResult(engine.rgb, engine.width, engine.height, count, 0,
             engine.mergeMs, 0.0, kept[0].source.metadata, null)
@@ -383,7 +387,8 @@ internal object MfsrMerge {
         w: Int,
         h: Int,
         noise: DoubleArray?,
-        settings: MfsrSettings
+        settings: MfsrSettings,
+        pattern: BayerPattern
     ): EngineOut? {
         val count = decoders.size
         try {
@@ -420,9 +425,23 @@ internal object MfsrMerge {
                 robustnessParams = RobustnessParams(noiseCorrection = false),
                 robustnessEnabled = true,
                 memoryTight = true,
-                icaIterations = 3
+                icaIterations = 3,
+                // KernelNet (default): one kernel map from the reference
+                // frame, which on the device IS the full frame, so no
+                // separate full-frame copy; the net runs in sensor
+                // orientation via the RGGB-normalization flips.
+                kernelNet = if (settings.kernel != MfsrKernel.KERNELNET) null else {
+                    val (fx, fy) = KernelNet.rggbFlips(dngCodesFor(pattern))
+                    KernelNetConfig(
+                        weights = KernelNet.bundledWeights(),
+                        sigma = KernelNet.sigma(
+                            FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
+                        flipX = fx,
+                        flipY = fy
+                    )
+                }
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d".format(snr, fin.tileSize))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s".format(snr, fin.tileSize, settings.kernel))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
@@ -442,7 +461,8 @@ internal object MfsrMerge {
                     kernels = asset("kernels"), divide = asset("divide"),
                     robust = asset("robustness"),
                     mergeSplat = asset("merge_splat"),
-                    fft = fft, corr = asset("corr")
+                    fft = fft, corr = asset("corr"),
+                    kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 )
             )
             val mergeMs = (System.nanoTime() - t0) / 1_000_000

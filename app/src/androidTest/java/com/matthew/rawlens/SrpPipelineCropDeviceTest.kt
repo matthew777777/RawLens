@@ -10,6 +10,8 @@ import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
 import com.rawlens.srpipeline.stages.EndToEnd
+import com.rawlens.srpipeline.stages.KernelNet
+import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -112,7 +114,11 @@ class SrpPipelineCropDeviceTest {
             val refMeta = DngRead.readMeta(refPath)
             val (alpha, beta) = DngRead.noiseAlphaBeta(refMeta.noise, refMeta.noiseCount)
             val curves = NoiseLut.load(lutFile.absolutePath, alpha, beta)
-            val snr = BurstConfig.estimateSnr(refImg, alpha, beta)
+            // Full-frame SNR, like the CLI and the paper (S.2).
+            val fullRef = DngRead.readNormalized(refPath, refMeta)
+            val snr = BurstConfig.estimateSnr(fullRef, alpha, beta)
+            // -e rawlensSrpKernel kernelnet|wronski (default wronski).
+            val kernel = args.getString("rawlensSrpKernel") ?: "wronski"
             val fin = BurstConfig.finalize(snr)
             val factors = listOf(1, 2, 4, 4)
             BurstConfig.sanitize(1f, fin.tileSize, factors, fin.tileSizes, h, w)
@@ -128,8 +134,16 @@ class SrpPipelineCropDeviceTest {
                 robustnessEnabled = true,
                 sigmaSqCurve = curves.sigmaSq, dSqCurve = curves.dSq,
                 icaIterations = 3,
+                kernelNet = if (kernel != "kernelnet") null else {
+                    val (fx, fy) = KernelNet.rggbFlips(refMeta.cfa)
+                    KernelNetConfig(
+                        weights = KernelNet.bundledWeights(),
+                        sigma = KernelNet.sigma(
+                            FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
+                        fullReference = fullRef, cropX = cx, cropY = cy, flipX = fx, flipY = fy)
+                },
             )
-            Log.i("SrpCropDevice", "crop ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
+            Log.i("SrpCropDevice", "crop ${w}x$h snr=%.2f tile=%d kernel=%s".format(snr, fin.tileSize, kernel))
             val fft = assetBytes("fft")
             val rgb = VulkanPipeline.run(
                 { refImg }, compImgs.map { t -> { _: java.nio.ByteBuffer -> t() } },
@@ -142,7 +156,8 @@ class SrpPipelineCropDeviceTest {
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft, corr = assetBytes("corr")),
+                    fft = fft, corr = assetBytes("corr"),
+                    kernelNet = if (kernel == "kernelnet") assetBytes("kernelnet") else null),
             )
             val outH = h
             val outW = w
@@ -151,8 +166,7 @@ class SrpPipelineCropDeviceTest {
             VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), outW, outH)
             val profile = SrpBridge.readDngColorProfile(refPath)
             val orientation = SrpBridge.readDngOrientation(refPath)
-            val outName = if (cw == 1024 && ch == 1024) "merged-device.dng"
-                else "merged-device-${cw}x${ch}.dng"
+            val outName = "merged-device-${kernel}-${cw}x${ch}.dng"
             val out = File(outDir, outName).absolutePath
             val rc = SrpBridge.writeDng(out, outW, outH, rgb, profile.make, profile.model,
                 profile.colorMatrix, profile.neutral, profile.illuminant, orientation)

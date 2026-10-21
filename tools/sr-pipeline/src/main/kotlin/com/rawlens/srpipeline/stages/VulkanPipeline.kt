@@ -59,7 +59,12 @@ object VulkanPipeline {
         val fft: ByteArray,
         /** corr.comp for the resident grey interleave (cf. [SrpBridge.nativeGreyFftRes]). */
         val corr: ByteArray,
+        /** kernelnet.comp, required when [PipelineConfig.kernelNet] is set. */
+        val kernelNet: ByteArray? = null,
     )
+
+    /** Last KernelNet (s1, s2, rho) map of this process, for parity dumps: 3 x mapH x mapW. */
+    @Volatile var lastKernelNetMap: FloatArray? = null
 
     private fun pack(data: FloatArray): ByteBuffer {
         val b = SrpBridge.directFloats(data.size)
@@ -260,6 +265,8 @@ object VulkanPipeline {
         require(kernGradsRes != 0L) { "VulkanPipeline: resident kernGrads alloc failed" }
         val kernCovRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
         require(kernCovRes != 0L) { "VulkanPipeline: resident kernCov alloc failed" }
+        // KernelNet covariances (one map for the whole burst), 0 = Wronski.
+        var knCovRes = 0L
         // 1. Ref phase (own scope): grey rows, init host temporaries
         // and the decoded frame all die here, before the loop. The ref
         // grey packs through a temp (dies with the block): the shared
@@ -460,11 +467,15 @@ object VulkanPipeline {
                     spirvs.mergeSplat, w, h, outW, outH, tile,
                     config.scale, config.bayer, ftx, fty)) }
             } else {
-                val covRes = frameKernelsGpuRes()
+                // KernelNet: the one reference map (computed below, before
+                // the ref merge) replaces the per-frame kernel chain; mode
+                // bit 1 makes the merge read it on the reference grid.
+                val covRes = if (knCovRes != 0L) knCovRes else frameKernelsGpuRes()
+                val mergeMode = if (knCovRes != 0L) 2 else 0
                 timed("mergeSplat") { checkRc("mergeSplat", SrpBridge.nativeMergeSplatFrameRes(handle, frameRes,
                     packInto(mergeFlowFlat, mergeFlow), covRes, rBuf, numRes, denRes,
                     spirvs.mergeSplat, w, h, outW, outH, gw * gh * 4, gw * gh, tile,
-                    config.scale, 0, ftx, fty)) }
+                    config.scale, mergeMode, ftx, fty)) }
             }
         }
 
@@ -478,6 +489,40 @@ object VulkanPipeline {
         if (config.bayer) {
             timed("refUpload") { checkRc("refUpload", SrpBridge.uploadResident(handle, frameRes,
                 packImageInto(refBox!!, frameBuf), (w * h).toLong())) }
+        }
+        config.kernelNet?.let { kn ->
+            require(config.bayer) { "KernelNet kernels need the bayer path" }
+            val knSpirv = requireNotNull(spirvs.kernelNet) { "KernelNet enabled without kernelnet.spv" }
+            val full = kn.fullReference
+            val rawW = full?.get(0)?.size ?: w
+            val rawH = full?.size ?: h
+            val (mw, mh) = KernelNet.mapSize(rawW, rawH)
+            val temps = ArrayList<Long>()
+            fun res(n: Int): Long = SrpBridge.createResident(handle, n.toLong()).also {
+                require(it != 0L) { "VulkanPipeline: KernelNet resident alloc failed" }
+                temps.add(it)
+            }
+            try {
+                val rawRes = if (full == null) frameRes else res(rawW * rawH).also { r ->
+                    val b = SrpBridge.directFloats(rawW * rawH)
+                    val fb = b.asFloatBuffer(); for (row in full) fb.put(row)
+                    checkRc("kernelNet upload", SrpBridge.uploadResident(handle, r, b.apply { rewind() }, (rawW * rawH).toLong()))
+                }
+                val wRes = res(kn.weights.size)
+                checkRc("kernelNet weights", SrpBridge.uploadResident(handle, wRes, pack(kn.weights), kn.weights.size.toLong()))
+                val mapRes = res(3 * mw * mh)
+                knCovRes = SrpBridge.createResident(handle, (gw * gh * 4).toLong())
+                require(knCovRes != 0L) { "VulkanPipeline: KernelNet cov alloc failed" }
+                timed("kernelNet") { checkRc("kernelNet", SrpBridge.nativeKernelNetCovRes(handle, rawRes, wRes,
+                    kn.weights.size, knSpirv, rawW, rawH, kn.sigma, kn.sigmaScale, kn.sigmaCap,
+                    kn.cropX, kn.cropY, gw, gh, knCovRes, mapRes,
+                    if (kn.flipX) 1 else 0, if (kn.flipY) 1 else 0)) }
+                val mapOut = SrpBridge.directFloats(3 * mw * mh)
+                checkRc("kernelNet map", SrpBridge.downloadResident(handle, mapRes, mapOut, (3 * mw * mh).toLong()))
+                lastKernelNetMap = FloatArray(3 * mw * mh).also { mapOut.asFloatBuffer().get(it) }
+            } finally {
+                for (t in temps) SrpBridge.freeResident(handle, t)
+            }
         }
         mergeFrame(refBox!!, zeroFlow, packInto(onesR, mergeRDirect))
         refBox = null
@@ -595,6 +640,7 @@ object VulkanPipeline {
             SrpBridge.freeResident(handle, kernGreyRes)
             SrpBridge.freeResident(handle, kernGradsRes)
             SrpBridge.freeResident(handle, kernCovRes)
+            if (knCovRes != 0L) SrpBridge.freeResident(handle, knCovRes)
             SrpBridge.freeResident(handle, sRes)
         }
     }

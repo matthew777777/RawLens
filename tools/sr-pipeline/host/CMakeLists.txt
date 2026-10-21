@@ -81,6 +81,7 @@ srp_spv(kernels)
 srp_spv(divide)
 srp_spv(robustness)
 srp_spv(merge_splat)
+srp_spv(kernelnet)
 
 add_executable(srp_proof_dispatch proof_dispatch.cpp)
 target_link_libraries(srp_proof_dispatch PRIVATE srp_core)

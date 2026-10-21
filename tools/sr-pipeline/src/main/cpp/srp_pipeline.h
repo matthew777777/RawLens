@@ -429,7 +429,26 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         VkBuffer r_buffer, VkBuffer num_buffer,
                         VkBuffer den_buffer, uint32_t tile_size, float scale,
                         uint32_t mode, uint32_t ftx, uint32_t fty,
-                        VkShaderModule shader_module);
+                        VkShaderModule shader_module,
+                        uint32_t ref_kernels = 0);
+
+// SrpKernelNetCovGpu: PhotonCamera KernelNet (kernelnet.comp) on the full
+// reference frame `raw_buffer` (raw_w*raw_h normalized floats), writing the
+// (s1, s2, rho) map to `map_buffer` (3*map_w*map_h) and Wronski covariances
+// for the crop at (crop_x, crop_y) to `cov_buffer` (cov_w*cov_h vec4).
+// `weights_buffer` holds the six layers' weights+biases as fp32 in .param
+// order (see SrpBridge.kernelNetWeights); `luma/act0/act1` are scratch of
+// luma_w*luma_h and 16*map_w*map_h floats.
+Status SrpKernelNetCovGpu(Context* ctx, uint32_t raw_w, uint32_t raw_h,
+                          float sigma, float sigma_scale, float sigma_cap,
+                          uint32_t crop_x, uint32_t crop_y, uint32_t cov_w,
+                          uint32_t cov_h, VkBuffer raw_buffer,
+                          VkBuffer weights_buffer, VkBuffer luma_buffer,
+                          VkBuffer act0_buffer, VkBuffer act1_buffer,
+                          VkBuffer map_buffer, VkBuffer cov_buffer,
+                          VkShaderModule shader_module, uint32_t flip_x,
+                          uint32_t flip_y);
+
 
 // Real GPU paths for robustness estimation (shaders/robustness.comp,
 // Alg.6-9), bayer 3-channel mode only, mirroring the port. Op 7

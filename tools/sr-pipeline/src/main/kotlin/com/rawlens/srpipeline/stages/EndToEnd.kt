@@ -72,6 +72,13 @@ data class PipelineConfig(
      * there, wall time is).
      */
     val memoryTight: Boolean = false,
+    /**
+     * Reconstruction kernel source. Null: Wronski's per-frame anisotropic
+     * kernels (supplement S.1, 1:1 with the IPOL reference). Non-null:
+     * PhotonCamera KernelNet from the reference frame ([KernelNetConfig]);
+     * Vulkan bayer path only.
+     */
+    val kernelNet: KernelNetConfig? = null,
 )
 
 object EndToEnd {

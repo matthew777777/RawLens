@@ -7,7 +7,7 @@
 // HR pixel; accumulation into the resident float32 num/den pair uses one
 // invocation per HR pixel (atomic-free by construction, as on CPU where each
 // HR pixel is owned by exactly one prange task).
-// Push overlay: pad[1] = nTilesX, pad[2] = hrW.
+// Push overlay: pad[1] = nTilesX, pad[2] = hrW, pad[3] = refKernels.
 // width/height = LR size; scale, tileSize, mode as usual.
 layout(local_size_x = 256) in;
 
@@ -67,8 +67,14 @@ void main() {
     return;
 
   // Covariance-grid coordinates (grey grid offset, half-rate in bayer mode).
-  float kmap_j = bayer ? mov_x / 2.0 - 0.5 : mov_x - 0.5;
-  float kmap_i = bayer ? mov_y / 2.0 - 0.5 : mov_y - 0.5;
+  // Wronski: each frame's own kernels, read at its aligned position.
+  // pad[3] == 1 (KernelNet): ONE kernel map from the reference frame, read
+  // at the output position on the reference grid it was computed on.
+  bool refKernels = (p.pad[3] == 1u);
+  float kx = refKernels ? lr_x : mov_x;
+  float ky = refKernels ? lr_y : mov_y;
+  float kmap_j = bayer ? kx / 2.0 - 0.5 : kx - 0.5;
+  float kmap_i = bayer ? ky / 2.0 - 0.5 : ky - 0.5;
   // frac from truncation (stays negative for negative inputs), as on CPU.
   float frac_x = kmap_j - float(int(kmap_j));
   float frac_y = kmap_i - float(int(kmap_i));
