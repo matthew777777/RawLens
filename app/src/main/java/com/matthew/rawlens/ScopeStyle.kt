@@ -13,18 +13,35 @@ package com.matthew.rawlens
  * perceptually with the HLG OETF, composited in two passes (ADD pure
  * primaries, then HARD_LIGHT near-white channel tints).
  *
- * The presentation is RawLens' own modern treatment, not darktable's theme
- * (`graph_bg` #262626, `graph_grid` #111111): the scope is a near-opaque
- * dark pill floating over the viewfinder, with no grid graticule — just a
- * hairline baseline anchoring the bottom edge. The scrim stays near-opaque
- * deliberately so traces stay legible in direct sunlight; a sheer glass
- * bleeds the bright preview through and washes out. Traces use SRC_OVER
- * primaries at full stroke strength tuned for dark glass, so overlaps mix
- * naturally instead of relying on saturating ADD to clip to neutral white.
+ * Presentation is tuned for direct sunlight on a phone: an opaque
+ * near-black plate (a sheer glass lets the bright preview wash the traces
+ * out), level lines on the waveform only, and data inset from the rounded wall so the
+ * 0 % and 100 % edges — where clipping lives — are never faded or clipped.
+ * The histogram follows darktable's look (overlapping RGB fills blended
+ * additively, so overlaps read yellow / cyan / magenta / white, linear
+ * vertical scale with log as the option, no grid); the waveform follows RawTherapee's (bright
+ * traces on black with 25 / 50 / 75 % level lines and a marked 100 % line).
  */
 object ScopeStyle {
-    /** Near-opaque scrim (black at ~90%): sunlight-legible, still borderless. */
-    const val SCRIM = 0xE6000000.toInt()
+    /** Opaque near-black plate shared by both scopes: identical in every scene, never washed out by the preview. */
+    const val SCRIM = 0xFF080808.toInt()
+
+    /** Waveform 25 / 50 / 75 % level lines (white at ~18%). */
+    const val GRID = 0x2EFFFFFF
+
+    /** Clip markers: highlights (white-hot red) and crushed blacks (cold blue). */
+    const val CLIP_HIGH = 0xFFFF4D4D.toInt()
+    const val CLIP_LOW = 0xFF4D8DFF.toInt()
+
+    /** Share of a channel's samples in its extreme bin that counts as clipped. */
+    const val CLIP_FRACTION = 0.005f
+
+    /** Data inset from the rounded wall so the 0 % / 100 % edges stay fully visible. */
+    const val PLOT_INSET_X_DP = 6f
+    const val PLOT_INSET_Y_DP = 4f
+
+    /** Waveform density gain over darktable's area scale: brighter traces for glare. */
+    const val WAVEFORM_GAIN = 2f
 
     /** Hairline baseline anchoring the bottom edge (white at ~20%). */
     const val BASELINE = 0x33FFFFFF
@@ -48,10 +65,10 @@ object ScopeStyle {
     /** HARD_LIGHT tint for the two off-channels (`desat_over`). */
     const val WAVEFORM_DESAT_OVER = 0.75f
 
-    /** Histogram area-fill alpha (SRC_OVER, per channel). */
-    const val HISTOGRAM_FILL_ALPHA = 90
+    /** Histogram fill alpha per channel, blended ADD (darktable-style overlap mixing). */
+    const val HISTOGRAM_FILL_ALPHA = 170
 
-    /** Histogram trace-line alpha (SRC_OVER, per channel). */
+    /** Histogram top-edge trace alpha (SRC_OVER, per channel): crisp outline in glare. */
     const val HISTOGRAM_LINE_ALPHA = 255
 
     /** Area-bias divisor shared with darktable (`num_tones / 40`). */
@@ -88,7 +105,8 @@ object ScopeStyle {
         level: Int,
         columns: Int,
         levels: Int,
-        fade: Int = WAVEFORM_EDGE_FADE
+        fade: Int = WAVEFORM_EDGE_FADE,
+        fadeLevels: Boolean = true,
     ): Float {
         if (columns <= 0 || levels <= 0) return 0f
         if (fade <= 0) return 1f
@@ -97,7 +115,7 @@ object ScopeStyle {
             val t = distance.coerceIn(0f, 1f)
             return t * t * (3f - 2f * t)
         }
-        return axisTaper(column, columns) * axisTaper(level, levels)
+        return axisTaper(column, columns) * (if (fadeLevels) axisTaper(level, levels) else 1f)
     }
 
     /** Scales only the alpha channel of an ARGB [pixel] by [fade] 0..1. */
@@ -161,9 +179,9 @@ object ScopeStyle {
         }
         val peak = maxOf(masks[0], masks[1], masks[2])
         if (peak <= 0f) return 0
-        // Alpha floor: any nonzero density starts at ~30% so faint traces
-        // survive glare instead of dissolving into single-digit alphas.
-        val alpha = 0.30f + 0.70f * peak.coerceIn(0f, 1f)
+        // Alpha floor: any nonzero density starts at ~45% so faint traces
+        // survive direct sunlight instead of dissolving into the plate.
+        val alpha = 0.45f + 0.55f * peak.coerceIn(0f, 1f)
         // Manual ARGB packing keeps this object pure JVM (unit-testable without Robolectric).
         val aq = (alpha * 255f + 0.5f).toInt().coerceIn(0, 255)
         val rq = (r.coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255)

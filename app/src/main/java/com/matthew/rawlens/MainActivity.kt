@@ -404,6 +404,15 @@ class MainActivity : Activity() {
         histogramView.isClickable = true
         histogramView.isFocusable = true
         histogramView.setOnClickListener { toggleScopeMode() }
+        // Long-press: linear (default) <-> logarithmic vertical scale.
+        histogramView.logScale = lensPreferences().getBoolean(KEY_HISTOGRAM_LOG, false)
+        histogramView.setOnLongClickListener { view ->
+            histogramView.logScale = !histogramView.logScale
+            lensPreferences().edit().putBoolean(KEY_HISTOGRAM_LOG, histogramView.logScale).apply()
+            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            setStatus(if (histogramView.logScale) "HISTO LOG" else "HISTO LINEAR")
+            true
+        }
         waveformView.isClickable = true
         waveformView.isFocusable = true
         waveformView.setOnClickListener { toggleScopeMode() }
@@ -884,8 +893,10 @@ class MainActivity : Activity() {
             }
         }
         findViewById<View>(R.id.controlPanel).addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
-            if (!isVideoMode && (r - l != orr - ol || b - t != ob - ot)) {
-                positionViewfinderOverlays()
+            if (r - l != orr - ol || b - t != ob - ot) {
+                // Video keeps its viewport, but the scope seat still follows
+                // the panel or it ends up behind it.
+                if (isVideoMode) seatScopeSlot() else positionViewfinderOverlays()
             }
         }
         findViewById<View>(R.id.controlPanel).post {
@@ -1241,28 +1252,10 @@ class MainActivity : Activity() {
         return if (floatingHeight > 0) floatingHeight + dp(12) else 0
     }
 
-    private fun updateOverlayStack() {
-        if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
-            !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
-        val panelHeight = findViewById<View>(R.id.controlPanel).height.takeIf { it > 0 } ?: dp(232)
-        val lift = floatingLiftPx()
-        scopeViews().forEach { scope ->
-            (scope.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-                // Video landscape: the stats strip owns the user-top edge, so
-                // the scope yields to the opposite edge (90° only — at 270°
-                // the strip is already opposite and the scope never sits
-                // under it). Photo mode always keeps START.
-                val yieldEnd = isVideoMode && deviceOrientationDegrees == 90
-                params.gravity = Gravity.BOTTOM or (if (yieldEnd) Gravity.END else Gravity.START)
-                params.marginStart = if (yieldEnd) 0 else dp(16)
-                params.marginEnd = if (yieldEnd) dp(16) else 0
-                params.bottomMargin = panelHeight + dp(16) + lift
-                scope.layoutParams = params
-            }
-        }
-        // The focal stack seat lives in positionViewfinderOverlays; the scope
-        // stacks above it via scopeBaseMargin.
-    }
+    // Every caller (panels, shutter, crop, rotation) seats through the one
+    // rotation-aware path: a separate margin writer here used to drop the
+    // quarter-turn lift and park the landscape scope behind the panel.
+    private fun updateOverlayStack() = seatScopeSlot()
 
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
         deviceOrientationDegrees = degrees
@@ -1287,8 +1280,13 @@ class MainActivity : Activity() {
         }
         wholeRotatingOverlays().forEach { view ->
             view.animate().cancel()
-            if (animate) view.animate().rotation(controlRotationDegrees).setDuration(180L).start()
-            else view.rotation = controlRotationDegrees
+            // Scopes snap: mid-turn their diagonal footprint outgrows the
+            // seat (portrait or quarter-turn lift) and dips behind the panel.
+            if (animate && view !in scopeViews()) {
+                view.animate().rotation(controlRotationDegrees).setDuration(180L).start()
+            } else {
+                view.rotation = controlRotationDegrees
+            }
         }
         // Fixed labels must never carry rotation from a previous state: pin to 0 so
         // topBar / info-row text always stays inside its bar and visible.
@@ -1388,7 +1386,8 @@ class MainActivity : Activity() {
      * single deferred pass corrects with real measurements after layout.
      */
     private fun seatScopeSlot(deferred: Boolean = false) {
-        updateOverlayStack()
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
+            !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
         val quarterTurn = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
         // One seat in every mode: above the measured panel (whose 232dp
         // minimum the old fixed video override never cleared — the scope hid
@@ -1403,8 +1402,15 @@ class MainActivity : Activity() {
         // Idempotent: recompute from the base every time instead of adding to
         // the previous margin, so repeated rotations never drift.
         val bottomMargin = ScopeSlot.bottomMarginPx(quarterTurn, widthPx, heightPx, baseBottomMargin)
+        // Video landscape: the stats strip owns the user-top edge, so the
+        // scope yields to the opposite edge (90° only — at 270° the strip is
+        // already opposite). Photo mode always keeps START.
+        val yieldEnd = isVideoMode && deviceOrientationDegrees == 90
         scopeViews().forEach { view ->
             (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.gravity = Gravity.BOTTOM or (if (yieldEnd) Gravity.END else Gravity.START)
+                params.marginStart = if (yieldEnd) 0 else dp(16)
+                params.marginEnd = if (yieldEnd) dp(16) else 0
                 params.bottomMargin = bottomMargin
                 view.layoutParams = params
             }
@@ -7610,6 +7616,7 @@ class MainActivity : Activity() {
         const val KEY_HISTOGRAM = "viewfinder_histogram"
         const val KEY_LEVEL = "viewfinder_level"
         const val KEY_SCOPE_MODE = "scope_mode"
+        const val KEY_HISTOGRAM_LOG = "histogram_log_scale"
         const val KEY_FOCUS_PEAKING = "focus_peaking"
         const val KEY_FOCUS_PEAKING_COLOR = "focus_peaking_color"
         const val KEY_OIS = "optical_image_stabilization"

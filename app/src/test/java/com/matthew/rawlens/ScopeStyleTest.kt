@@ -14,7 +14,7 @@ class ScopeStyleTest {
         // No grid: the scope sits on a near-opaque scrim (not sheer glass, so
         // the bright preview cannot wash the traces out) with a hairline
         // baseline and modern primaries tuned for dark glass.
-        assertEquals(0xE6000000.toInt(), ScopeStyle.SCRIM)
+        assertEquals(0xFF080808.toInt(), ScopeStyle.SCRIM)
         assertEquals(0x33FFFFFF, ScopeStyle.BASELINE)
         assertEquals(0xFFFF6B62.toInt(), ScopeStyle.RED)
         assertEquals(0xFF3DDC84.toInt(), ScopeStyle.GREEN)

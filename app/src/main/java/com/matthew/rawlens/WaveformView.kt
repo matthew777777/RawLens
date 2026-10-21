@@ -16,9 +16,11 @@ import android.view.View
 /** Live RGB waveform parade, always sampled from the sensor mosaic: horizontal position
  * follows the frame columns, vertical position is level (black bottom, white top).
  * Linear RAW matches the DNG data; the AgX-curved variant predicts the developed JPEG
- * and is selected automatically with a JPEG capture format. The density raster
- * sits on a near-opaque dark scrim with no graticule — just a hairline
- * black-level baseline. Tapping is handled by the host. */
+ * and is selected automatically with a JPEG capture format. RawTherapee look tuned
+ * for sunlight: bright, gained traces on an almost opaque plate with 25 / 50 / 75 %
+ * level lines, a black-level baseline and a red 100 % line, plotted inset from the
+ * rounded wall so the clip levels are never faded or cut. Tapping is handled by
+ * the host. */
 class WaveformView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -31,11 +33,23 @@ class WaveformView @JvmOverloads constructor(
         style = Paint.Style.FILL
         color = ScopeStyle.SCRIM
     }
-    // Hairline black-level anchor; the only chrome besides the border.
-    private val baselinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val dp = resources.displayMetrics.density
+    private val gridPaint = Paint().apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f
+        color = ScopeStyle.GRID
+    }
+    // Black level and the 100 % (clip) level get stronger lines than the grid.
+    private val baselinePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * dp
         color = ScopeStyle.BASELINE
+    }
+    private val clipLinePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * dp
+        color = ScopeStyle.CLIP_HIGH
+        alpha = 170
     }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -72,22 +86,22 @@ class WaveformView @JvmOverloads constructor(
         // transparent; the scrim beneath shows through.
         val totals = IntArray(3) { channel -> density[channel].sum() }
         val scales = FloatArray(3) { channel ->
-            ScopeStyle.areaScale(LEVELS, COLUMNS, totals[channel])
+            ScopeStyle.areaScale(LEVELS, COLUMNS, totals[channel]) * ScopeStyle.WAVEFORM_GAIN
         }
         for (column in 0 until COLUMNS) {
             for (level in 0 until LEVELS) {
                 val cell = column * LEVELS + level
                 // Bitmap row 0 is the top: level 0 (black) sits at the bottom.
                 val pixel = column + (LEVELS - 1 - level) * COLUMNS
-                // Rounded edges: dissolve border cells so dense edge data never
-                // draws a hard frame against the pill wall.
+                // Only the side columns dissolve; the black and 100 % levels
+                // stay at full strength so clipping is never hidden.
                 val lit = ScopeStyle.compositeWaveformPixel(
                     ScopeStyle.hlgOetf((density[RED][cell] * scales[RED]).coerceAtMost(1f)),
                     ScopeStyle.hlgOetf((density[GREEN][cell] * scales[GREEN]).coerceAtMost(1f)),
                     ScopeStyle.hlgOetf((density[BLUE][cell] * scales[BLUE]).coerceAtMost(1f))
                 )
                 pixels[pixel] = ScopeStyle.applyEdgeFade(
-                    lit, ScopeStyle.rasterEdgeFade(column, level, COLUMNS, LEVELS)
+                    lit, ScopeStyle.rasterEdgeFade(column, level, COLUMNS, LEVELS, fadeLevels = false)
                 )
             }
         }
@@ -109,15 +123,17 @@ class WaveformView @JvmOverloads constructor(
         canvas.save()
         canvas.clipPath(clipPath)
         canvas.drawRect(left, top, right, bottom, scrimPaint)
-        // Data floor rides 1dp above the pill wall: no dead band under the
-        // raster, just enough clearance to keep the hairline from clipping.
-        // Full-bleed: the raster spans the whole pill and the rounded clip
-        // wraps it — no inner plot box, no margins inside the scope.
-        plotRect.set(left, top, right, bottom)
+        // Inset plot: the rounded wall never cuts the 0 % / 100 % levels.
+        val insetX = ScopeStyle.PLOT_INSET_X_DP * dp
+        val insetY = ScopeStyle.PLOT_INSET_Y_DP * dp
+        plotRect.set(left + insetX, top + insetY, right - insetX, bottom - insetY)
+        for (step in 1..3) {
+            val y = plotRect.bottom - plotRect.height() * step / 4f
+            canvas.drawLine(plotRect.left, y, plotRect.right, y, gridPaint)
+        }
         canvas.drawBitmap(raster, null, plotRect, bitmapPaint)
-        canvas.drawLine(
-            plotRect.left, plotRect.bottom, plotRect.right, plotRect.bottom, baselinePaint
-        )
+        canvas.drawLine(plotRect.left, plotRect.bottom, plotRect.right, plotRect.bottom, baselinePaint)
+        canvas.drawLine(plotRect.left, plotRect.top, plotRect.right, plotRect.top, clipLinePaint)
         canvas.restore()
         val halfStroke = borderPaint.strokeWidth / 2f
         bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)
