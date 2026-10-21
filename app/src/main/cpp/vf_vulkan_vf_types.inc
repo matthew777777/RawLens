@@ -20,6 +20,8 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <memory>
+#include <unordered_map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -447,9 +449,29 @@ struct Context {
     struct RcdInflight {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
+        // A5/A4: the exported-fd semaphore and the per-slot descriptor
+        // set stay owned by the submission until its fence signals.
+        VkSemaphore sem = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
     };
     std::vector<VkCommandBuffer> rcdFreeCbs;
     std::vector<RcdInflight> rcdPending;
+    // Slot gate (A3-A5, docs/refactor/vf-native-study.md): every per-slot
+    // resource a wait-free submit touches (twin command buffer, per-slot
+    // descriptor set) maps to the fence + exported-fd semaphore of the last
+    // submit that used it. A submit first checks those fences without
+    // blocking and returns VFVK_BUSY while any is pending, instead of
+    // resetting/rewriting objects the GPU still executes (the caller's
+    // 100 ms fd valve can release a slot whose work is still queued).
+    struct SlotInFlight {
+        VkFence fence = VK_NULL_HANDLE;
+        VkSemaphore sem = VK_NULL_HANDLE;
+    };
+    std::unordered_map<uint64_t, std::shared_ptr<SlotInFlight>> slotGate;
+    std::vector<VkFence> gateFencePool;
+    // A1: stabFence has a submit that has not been observed complete (a
+    // timed-out wait must not reset it: VUID-vkResetFences-pFences-01123).
+    bool stabPending = false;
     // Malvar-He-Cutler fast demosaic (Direct-Log record path): single
     // dispatch, CFA in + write-only rgb out. Own set layout + per-slot
     // sets and twins; rgb imports share the rgbOuts map.

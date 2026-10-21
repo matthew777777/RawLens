@@ -716,3 +716,78 @@ void destroyImagePipeline(Context* ctx) {
     ctx->imgLutBound = false;
 }
 
+// ---- Slot gate helpers (see Context::slotGate) ----
+// Bounded grace for a fence whose batch already signalled its sync fd.
+constexpr uint64_t SLOT_GATE_GRACE_NS = 2000000ull;  // 2 ms
+template <class H>
+uint64_t gateKey(H handle) {
+    return (uint64_t)(uintptr_t)handle;
+}
+
+void retireSlot(Context* ctx, const std::shared_ptr<Context::SlotInFlight>& f) {
+    if (f->sem != VK_NULL_HANDLE) vkDestroySemaphore(ctx->device, f->sem, nullptr);
+    f->sem = VK_NULL_HANDLE;
+    if (f->fence != VK_NULL_HANDLE) {
+        vkResetFences(ctx->device, 1, &f->fence);
+        ctx->gateFencePool.push_back(f->fence);
+    }
+    f->fence = VK_NULL_HANDLE;
+}
+
+// Non-blocking. True when no listed resource is still referenced by a
+// pending submit; retires (semaphore destroyed, fence pooled) every
+// submission that has completed.
+bool slotIdle(Context* ctx, std::initializer_list<uint64_t> keys) {
+    for (uint64_t k : keys) {
+        auto it = ctx->slotGate.find(k);
+        if (it == ctx->slotGate.end()) continue;
+        std::shared_ptr<Context::SlotInFlight> f = it->second;
+        // The caller usually reuses a slot only after its exported sync
+        // fd fired; the fence and the fd signal at the end of the same
+        // batch but are not ordered, so give the fence a short grace
+        // (SLOT_GATE_GRACE_NS) before calling the slot busy.
+        if (f->fence != VK_NULL_HANDLE &&
+            vkWaitForFences(ctx->device, 1, &f->fence, VK_TRUE, SLOT_GATE_GRACE_NS) == VK_TIMEOUT) {
+            return false;
+        }
+        retireSlot(ctx, f);
+        ctx->slotGate.erase(it);
+    }
+    return true;
+}
+
+VkFence gateFence(Context* ctx) {
+    if (!ctx->gateFencePool.empty()) {
+        VkFence f = ctx->gateFencePool.back();
+        ctx->gateFencePool.pop_back();
+        return f;
+    }
+    VkFenceCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence f = VK_NULL_HANDLE;
+    if (vkCreateFence(ctx->device, &info, nullptr, &f) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return f;
+}
+
+// After a successful submit signalling [fence] (+ [sem] when an fd was
+// exported): the listed resources stay owned until the fence signals.
+void slotSubmitted(Context* ctx, std::initializer_list<uint64_t> keys, VkFence fence, VkSemaphore sem) {
+    auto f = std::make_shared<Context::SlotInFlight>();
+    f->fence = fence;
+    f->sem = sem;
+    for (uint64_t k : keys) ctx->slotGate[k] = f;
+}
+
+// Teardown only (queue idle): drop every gate entry and pooled fence.
+void drainSlotGate(Context* ctx) {
+    for (auto& kv : ctx->slotGate) {
+        if (kv.second->sem != VK_NULL_HANDLE) vkDestroySemaphore(ctx->device, kv.second->sem, nullptr);
+        if (kv.second->fence != VK_NULL_HANDLE) vkDestroyFence(ctx->device, kv.second->fence, nullptr);
+        kv.second->sem = VK_NULL_HANDLE;
+        kv.second->fence = VK_NULL_HANDLE;
+    }
+    ctx->slotGate.clear();
+    for (VkFence f : ctx->gateFencePool) vkDestroyFence(ctx->device, f, nullptr);
+    ctx->gateFencePool.clear();
+}
+

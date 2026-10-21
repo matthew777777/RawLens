@@ -685,11 +685,24 @@ bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
 // the caller drops the frame (VfVulkan.BUSY precedent) — it never
 // blocks the camera thread and never resets a pending CB.
 #define RCD_INFLIGHT_CAP 16
+// A4: true while a pending RCD submit still references [set] (the
+// per-slot descriptor set must not be rewritten under it).
+static bool rcdSetInUse(Context* ctx, VkDescriptorSet set) {
+    for (const auto& p : ctx->rcdPending) {
+        // Same short grace as slotIdle (fd and fence are not ordered).
+        if (p.set == set &&
+            vkWaitForFences(ctx->device, 1, &p.fence, VK_TRUE, 2000000ull) == VK_TIMEOUT) return true;
+    }
+    return false;
+}
+
 static int acquireRcdCmd(Context* ctx, VkCommandBuffer* cmd, VkFence* fence) {
     for (size_t i = 0; i < ctx->rcdPending.size();) {
         VkResult st = vkGetFenceStatus(ctx->device, ctx->rcdPending[i].fence);
         if (st == VK_SUCCESS) {
             vkDestroyFence(ctx->device, ctx->rcdPending[i].fence, nullptr);
+            if (ctx->rcdPending[i].sem != VK_NULL_HANDLE)
+                vkDestroySemaphore(ctx->device, ctx->rcdPending[i].sem, nullptr);
             ctx->rcdFreeCbs.push_back(ctx->rcdPending[i].cmd);
             ctx->rcdPending.erase(ctx->rcdPending.begin() + i);
         } else {

@@ -73,6 +73,8 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinGradeCmd[slot]), gateKey(g->yuvSets[slot])})) return -VFVK_BUSY;
     if (fullRgb != 0 && fullRgb != 1) return -VFVK_BAD_ARGUMENT;
     if (g->yuvPipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
@@ -260,8 +262,14 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
@@ -271,7 +279,8 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinGradeCmd[slot]), gateKey(g->yuvSets[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -292,6 +301,8 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinGradeCmd[slot]), gateKey(g->yuvSets[slot])})) return VFVK_BUSY;
     if (fullRgb != 0 && fullRgb != 1) return VFVK_BAD_ARGUMENT;
     if (g->yuvPipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
     if (!expBuffer || !codecBuffer || !idims || !isrc || !fparams || !istrides) {
@@ -500,6 +511,8 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinPreviewCmd[slot]), gateKey(g->previewSets[slot])})) return -VFVK_BUSY;
     if (g->previewPipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
     if (!p010Buffer || !previewBuffer || !idims || !isrc || !istrides) {
@@ -668,8 +681,14 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
@@ -679,7 +698,8 @@ Java_com_matthew_rawlens_VfRecordPreview_previewSubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinPreviewCmd[slot]), gateKey(g->previewSets[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -714,6 +734,8 @@ Java_com_matthew_rawlens_VfRgb8Convert_rgb8SubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinRgb8Cmd[slot]), gateKey(g->rgb8Sets[slot])})) return -VFVK_BUSY;
     if (g->rgb8Pipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
     if (!p010Buffer || !rgb8Buffer || !idims || !isrc || !istrides) {
@@ -879,8 +901,14 @@ Java_com_matthew_rawlens_VfRgb8Convert_rgb8SubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
@@ -890,7 +918,8 @@ Java_com_matthew_rawlens_VfRgb8Convert_rgb8SubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinRgb8Cmd[slot]), gateKey(g->rgb8Sets[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -910,6 +939,8 @@ Java_com_matthew_rawlens_VfRecordPreview_previewBlockingNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinPreviewCmd[slot]), gateKey(g->previewSets[slot])})) return VFVK_BUSY;
     if (g->previewPipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
     if (!p010Buffer || !previewBuffer || !idims || !isrc || !istrides) {
         return VFVK_BAD_ARGUMENT;

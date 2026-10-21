@@ -49,6 +49,8 @@ class PhotoDemosaicKodakDeviceTest {
                     val bytes = ByteBuffer.allocate(px.size * 4).order(ByteOrder.LITTLE_ENDIAN)
                     px.forEach { bytes.putFloat(it) }
                     File(out, "$name.$algo.f32").writeBytes(bytes.array())
+                    // B5 regression check: graphics memory after each photo-sized develop.
+                    MemoryLeakDiagnostics.sample("photo-demosaic-$name-$algo")
                 }
             }
         } finally {

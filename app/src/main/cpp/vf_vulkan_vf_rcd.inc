@@ -95,6 +95,8 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence submitFence = VK_NULL_HANDLE;
     {
+        // A4: the slot's set (and fused params) may still be in flight.
+        if (rcdSetInUse(g, g->rcdSets[slot])) return -VFVK_BUSY;
         int cr = acquireRcdCmd(g, &cmd, &submitFence);
         if (cr != VFVK_OK) return -cr;
     }
@@ -243,14 +245,14 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
         g->rcdFreeCbs.push_back(cmd);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
-    g->rcdPending.push_back({cmd, submitFence});
     VkSemaphoreGetFdInfoKHR fdInfo{};
     fdInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
     fdInfo.semaphore = sem;
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: semaphore and set stay owned by the submission until its fence signals.
+    g->rcdPending.push_back({cmd, submitFence, sem, g->rcdSets[slot]});
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -409,6 +411,8 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
         int rr = importP010Out(g, p010Buf, yStrideB, uvStrideB, fw, fh, &dstImg);
         if (rr != VFVK_OK) return (rr == -20) ? -20 : -rr;
     }
+    // A4: the slot's set and params buffer may still be in flight.
+    if (rcdSetInUse(g, g->rcdYuvSets[slot])) return -VFVK_BUSY;
     memcpy(g->rcdYuvParamMaps[slot], &params, sizeof(params));
 
     // Dynamic per-submit CB (see acquireRcdCmd): never a twin reset.
@@ -588,14 +592,14 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
         g->rcdFreeCbs.push_back(cmd);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
-    g->rcdPending.push_back({cmd, submitFence});
     VkSemaphoreGetFdInfoKHR fdInfo{};
     fdInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
     fdInfo.semaphore = sem;
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: semaphore and set stay owned by the submission until its fence signals.
+    g->rcdPending.push_back({cmd, submitFence, sem, g->rcdYuvSets[slot]});
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }

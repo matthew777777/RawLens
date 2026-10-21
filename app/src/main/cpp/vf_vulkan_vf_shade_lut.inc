@@ -361,8 +361,13 @@ void destroyGrade(Context* ctx) {
     for (size_t i = 0; i < ctx->rcdPending.size(); ++i) {
         if (ctx->rcdPending[i].fence != VK_NULL_HANDLE)
             vkDestroyFence(ctx->device, ctx->rcdPending[i].fence, nullptr);
+        if (ctx->rcdPending[i].sem != VK_NULL_HANDLE)
+            vkDestroySemaphore(ctx->device, ctx->rcdPending[i].sem, nullptr);
+        // A6: still-pending CBs used to leak here (fence destroyed, CB never freed).
+        if (ctx->rcdPending[i].cmd != VK_NULL_HANDLE) ctx->rcdFreeCbs.push_back(ctx->rcdPending[i].cmd);
     }
     ctx->rcdPending.clear();
+    drainSlotGate(ctx);
     if (!ctx->rcdFreeCbs.empty()) {
         vkFreeCommandBuffers(ctx->device, ctx->commandPool,
                              (uint32_t)ctx->rcdFreeCbs.size(), ctx->rcdFreeCbs.data());
@@ -519,6 +524,7 @@ void destroyGrade(Context* ctx) {
 // staging upload buffer, descriptor pool, pipeline. The P010 output
 // imports stay cached in yuvOuts (shared with the record stages).
 void destroyStab(Context* ctx) {
+    ctx->stabPending = false;  // A1: queue is idle at every destroyStab call site
     if (ctx->stabFence != VK_NULL_HANDLE)
         vkDestroyFence(ctx->device, ctx->stabFence, nullptr);
     ctx->stabFence = VK_NULL_HANDLE;

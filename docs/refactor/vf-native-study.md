@@ -96,3 +96,57 @@ via DemosaicBenchHarnessTest ($RAWLENS_DEMOSAIC_BENCH).
   neutral, washing out bright saturated colours: kodim23 RCD 38.4 dB raw
   -> 19.5 dB after the tail (AMaZE 19.5 too). Highlight handling is on the
   excluded list (HL); recorded for its own study.
+
+## Line audit of the native module (2026-10-21)
+
+Method: (1) Khronos validation layers 1.4.363.0 on the phone (debuggable
+throwaway build, never committed) over MHC/RCD parity, photo Kodak,
+start-failure, Direct-Log record and a ZSL soak; (2) static scans
+(ignored VkResults, queue-submit locking, fence/semaphore lifetimes,
+32-bit size math, unbalanced AHardwareBuffer refs); (3) mechanical
+checks: every C++ param struct vs its shader's SPIR-V member offsets
+(exact, all 15 shaders), every shipped .spv vs a fresh glslangValidator
+11:16.6.0 compile of its source (all 15 byte-identical), spirv-val (all
+valid), every dispatch vs its shader local_size (all match).
+
+Fixed:
+- A3 twin command buffers reset/re-recorded/resubmitted while pending
+  (VUID-vkResetCommandBuffer-commandBuffer-00045, vkBeginCommandBuffer
+  -00049, vkQueueSubmit-pCommandBuffers-00071) and A4 per-slot descriptor
+  sets / fused param buffers rewritten while in use
+  (VUID-vkUpdateDescriptorSets-None-03047): native code trusted the
+  caller's 100 ms fd valve, which releases a slot whose work is still
+  queued. New slot gate (Context::slotGate): each per-slot resource maps
+  to its last submit's fence + semaphore; a submit waits at most 2 ms for
+  that fence (fd and fence are unordered) and otherwise returns
+  VFVK_BUSY (the frame is dropped exactly as before). RCD keeps its own
+  pool and now records sem + set per pending submit.
+- A5 exported-fd semaphores destroyed while their batch was pending
+  (VUID-vkDestroySemaphore-semaphore-05149): now destroyed when the fence
+  signals.
+- A1 stabSubmitNative reset its fence after a timed-out wait
+  (VUID-vkResetFences-pFences-01123): stabPending flag, BUSY until done.
+- A6 pending RCD command buffers leaked at teardown.
+- B4/B5 photo RCD leaked ~215 MB of graphics memory per photo: the native
+  import caches acquire every buffer (the output cache never evicts) and
+  the photo path allocated a fresh CFA BLOB + RGBA16F pair per photo. One
+  set per size is now reused. 6 x 12 MP photos: PSS 975 -> 2048 MB before,
+  flat 972-975 MB after.
+
+Validation after the fix: zero A3/A4/A5 VUIDs; MHC parity and the ZSL soak
+pass under validation (both failed before). V9 Direct-Log wedges, 5 runs
+each, same phone: original 10/9/0/5/0, gate 1/0/0/0/0.
+
+Open (logged, not changed):
+- A2 camera RAW AHBs (format 57, usage 0x33, no GPU usage bits) imported
+  as storage buffers, the plain path without VkExternalMemoryBufferCreateInfo
+  (VUID-VkMemoryAllocateInfo-pNext-02384, VkImportAndroidHardwareBufferInfo
+  ANDROID-buffer-01881, vkGetAndroidHardwareBufferPropertiesANDROID-buffer-
+  01884, vkBindBufferMemory-memory-02986). Deliberate driver workaround
+  ("not spec-shaped"); undefined on untested GPUs. Needs the sampled-image
+  or copy tier as the spec-legal default per device.
+- B1 teardown proceeds after a 2 s join while a VF worker may still be in
+  vkWaitForFences on the fence/device being destroyed.
+- B3 evictOldestInput destroys an import without checking pending use.
+- A7 orphan asset shaders/vf/comp.spv (no source, never loaded).
+- Perf: vf_mhcyuv dispatches every x and returns on odd x (half idle).

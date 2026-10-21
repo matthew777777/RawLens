@@ -32,6 +32,8 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinMhcCmd[slot]), gateKey(g->mhcSets[slot])})) return -VFVK_BUSY;
     if (g->mhcPipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
     if (!cfaBuffer || !rgbBuffer || !iparams || !fparams) return -VFVK_BAD_ARGUMENT;
@@ -176,8 +178,14 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
@@ -187,7 +195,8 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinMhcCmd[slot]), gateKey(g->mhcSets[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -250,6 +259,8 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinFusedCmd[slot]), gateKey(g->fusedSets[slot]), gateKey(g->fusedParamBufs[slot])})) return -VFVK_BUSY;
     if (g->fusedPipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
     if (!cfaBuffer || !p010Buffer || !mhcIparams || !mhcFparams ||
@@ -497,8 +508,14 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     submit.pCommandBuffers = &cmd;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
     }
@@ -508,7 +525,8 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinFusedCmd[slot]), gateKey(g->fusedSets[slot]), gateKey(g->fusedParamBufs[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -798,6 +816,13 @@ Java_com_matthew_rawlens_VfStab_stabSubmitNative(
         g->stabFence == VK_NULL_HANDLE || g->stabStaging == VK_NULL_HANDLE) {
         return VFVK_PIPELINE_FAILED;
     }
+    if (g->stabPending) {
+        // A1: the previous warp outlived its bounded wait; never reset or
+        // re-record under it.
+        if (vkGetFenceStatus(g->device, g->stabFence) == VK_NOT_READY) return VFVK_BUSY;
+        vkResetFences(g->device, 1, &g->stabFence);
+        g->stabPending = false;
+    }
     if (!p010Buffer || !iparams || !fparams) return VFVK_BAD_ARGUMENT;
     if (env->GetArrayLength(iparams) < 4 || env->GetArrayLength(fparams) < 9) {
         return VFVK_BAD_ARGUMENT;
@@ -939,8 +964,12 @@ Java_com_matthew_rawlens_VfStab_stabSubmitNative(
     if (vr != VK_SUCCESS) {
         return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
     }
+    g->stabPending = true;
     vr = vkWaitForFences(g->device, 1, &g->stabFence, VK_TRUE, 5000000000ULL);
-    vkResetFences(g->device, 1, &g->stabFence);
+    if (vr == VK_SUCCESS) {
+        vkResetFences(g->device, 1, &g->stabFence);
+        g->stabPending = false;
+    }
     if (vr != VK_SUCCESS) {
         return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
     }

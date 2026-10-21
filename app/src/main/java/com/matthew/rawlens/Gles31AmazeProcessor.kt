@@ -57,6 +57,9 @@ class Gles31AmazeProcessor(
 
     /** Must be called from the same serial worker that owns [process]. */
     fun close() {
+        try { rcdCfa?.close() } catch (_: Exception) {}
+        rcdCfa = null
+        releaseRcdOutputs()
         val session = processingSession ?: return
         check(processingThreadId == Thread.currentThread().id) {
             "AMaZE processing session must be closed by its owning worker thread"
@@ -254,21 +257,21 @@ class Gles31AmazeProcessor(
         require(byteCount % 2 == 0 && byteCount > 0) { "RCD CFA bytes must be positive uint16" }
         // BLOB holds exactly the caller's bytes (full-plane at sensor
         // pitch for raw, tight crop for unpacked CFA): 1D width in bytes.
-        val cfa = VfEglImport.createBlobBayerInput(byteCount / 2, 1)
-            ?: throw UnsupportedOperationException("RCD CFA buffer allocate failed")
+        // B4 (docs/refactor/vf-native-study.md): one reusable BLOB per size.
+        // The native import cache acquires every buffer it sees, so a fresh
+        // BLOB per photo stayed pinned (~24 MB each, up to the 24-entry cap)
+        // after close(); reusing it keeps one import alive and makes every
+        // later photo a cache hit. Modes are waited below, so the previous
+        // photo's GPU reads are done before the next blit overwrites it.
+        val cfa = rcdCfaFor(byteCount)
         try {
             if (VfEglImport.blitBytesToBlob(cfa, codes, byteCount) != 0) {
                 throw UnsupportedOperationException("RCD CFA upload failed")
             }
-            val usage = android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
-                android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
-            val rgb = android.hardware.HardwareBuffer.create(
-                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
-            )
-            val scratch = android.hardware.HardwareBuffer.create(
-                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
-            )
+            // B5: the native output cache acquires every RGB/scratch buffer and
+            // has no eviction, so a fresh RGBA16F pair per photo (~192 MB at
+            // 12 MP) stayed pinned for the session. One pair per size, reused.
+            val (rgb, scratch) = rcdOutputsFor(width, height)
             try {
                 for (mode in 0..3) {
                     val (ip, fp) = VfRcd.packRcd(
@@ -289,12 +292,70 @@ class Gles31AmazeProcessor(
                     cameraLinear, consume
                 )
             } finally {
-                try { rgb.close() } catch (_: Exception) {}
-                try { scratch.close() } catch (_: Exception) {}
+                // rgb/scratch are reused across photos (rcdOutputsFor).
             }
         } finally {
-            try { cfa.close() } catch (_: Exception) {}
+            // cfa is reused across photos (rcdCfaFor) and released in close().
         }
+    }
+
+    private var rcdRgb: android.hardware.HardwareBuffer? = null
+    private var rcdScratch: android.hardware.HardwareBuffer? = null
+    private var rcdOutW = 0
+    private var rcdOutH = 0
+
+    private fun rcdOutputsFor(
+        width: Int,
+        height: Int,
+    ): Pair<android.hardware.HardwareBuffer, android.hardware.HardwareBuffer> {
+        val rgb = rcdRgb
+        val scratch = rcdScratch
+        if (rgb != null && scratch != null && !rgb.isClosed && !scratch.isClosed &&
+            rcdOutW == width && rcdOutH == height
+        ) {
+            return rgb to scratch
+        }
+        releaseRcdOutputs()
+        val usage = android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
+            android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
+            android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+        val freshRgb = android.hardware.HardwareBuffer.create(
+            width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
+        )
+        val freshScratch = try {
+            android.hardware.HardwareBuffer.create(
+                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage
+            )
+        } catch (e: Exception) {
+            freshRgb.close()
+            throw e
+        }
+        rcdRgb = freshRgb
+        rcdScratch = freshScratch
+        rcdOutW = width
+        rcdOutH = height
+        return freshRgb to freshScratch
+    }
+
+    private fun releaseRcdOutputs() {
+        try { rcdRgb?.close() } catch (_: Exception) {}
+        try { rcdScratch?.close() } catch (_: Exception) {}
+        rcdRgb = null
+        rcdScratch = null
+    }
+
+    private var rcdCfa: android.hardware.HardwareBuffer? = null
+    private var rcdCfaBytes = 0
+
+    private fun rcdCfaFor(byteCount: Int): android.hardware.HardwareBuffer {
+        rcdCfa?.let { if (rcdCfaBytes == byteCount && !it.isClosed) return it }
+        try { rcdCfa?.close() } catch (_: Exception) {}
+        rcdCfa = null
+        val fresh = VfEglImport.createBlobBayerInput(byteCount / 2, 1)
+            ?: throw UnsupportedOperationException("RCD CFA buffer allocate failed")
+        rcdCfa = fresh
+        rcdCfaBytes = byteCount
+        return fresh
     }
 
     /**

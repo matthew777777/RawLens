@@ -363,6 +363,8 @@ Java_com_matthew_rawlens_VfVulkan_computeSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinComputeCmd[slot]), gateKey(g->recComputeSets[slot])})) return VFVK_BUSY;
     if (!inputBuffer || !expBuffer || !iparams || !fparams) return VFVK_BAD_ARGUMENT;
     if (g->twinComputeCmd[slot] == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
     if (g->recComputeSets[slot] == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
@@ -518,11 +520,17 @@ Java_com_matthew_rawlens_VfVulkan_computeSubmitNative(
     submit.pCommandBuffers = &g->commandBuffer;
     // No fence, no wait: the grade submit below is ordered after this one on
     // the same queue, and the fd handoff carries completion to GL.
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         LOGW("vf-vk: submit-twin submit failed %d", vr);
         return vr == VK_ERROR_DEVICE_LOST ? VFVK_DEVICE_LOST : VFVK_SUBMIT_FAILED;
     }
+    slotSubmitted(g, {gateKey(g->twinComputeCmd[slot]), gateKey(g->recComputeSets[slot])}, gateF, VK_NULL_HANDLE);
     return VFVK_OK;
 }
 
@@ -538,6 +546,8 @@ Java_com_matthew_rawlens_VfLogGrade_gradeSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    // A3/A4: never rewrite or reset slot state the GPU still executes.
+    if (!slotIdle(g, {gateKey(g->twinGradeCmd[slot]), gateKey(g->recGradeSets[slot])})) return -VFVK_BUSY;
     Context::CmdSwap cmdSwap(g, g->twinGradeCmd[slot]);
     if (g->recGradeSets[slot] == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     Context::SetSwap setSwap(&g->gradeSet, g->recGradeSets[slot]);
@@ -656,8 +666,14 @@ Java_com_matthew_rawlens_VfLogGrade_gradeSubmitNative(
     submit.pCommandBuffers = &g->commandBuffer;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &sem;
-    vr = vkQueueSubmit(g->queue, 1, &submit, VK_NULL_HANDLE);
+    VkFence gateF = gateFence(g);
+    if (gateF == VK_NULL_HANDLE) {
+        vkDestroySemaphore(g->device, sem, nullptr);
+        return -VFVK_SUBMIT_FAILED;
+    }
+    vr = vkQueueSubmit(g->queue, 1, &submit, gateF);
     if (vr != VK_SUCCESS) {
+        g->gateFencePool.push_back(gateF);
         vkDestroySemaphore(g->device, sem, nullptr);
         LOGW("vf-vk: grade-submit submit failed %d", vr);
         return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_SUBMIT_FAILED;
@@ -668,7 +684,8 @@ Java_com_matthew_rawlens_VfLogGrade_gradeSubmitNative(
     fdInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
-    vkDestroySemaphore(g->device, sem, nullptr);
+    // A5: the semaphore lives until the submit's fence signals.
+    slotSubmitted(g, {gateKey(g->twinGradeCmd[slot]), gateKey(g->recGradeSets[slot])}, gateF, sem);
     if (vr != VK_SUCCESS || fd < 0) {
         LOGW("vf-vk: grade-submit fd export failed %d", vr);
         return -VFVK_SUBMIT_FAILED;
