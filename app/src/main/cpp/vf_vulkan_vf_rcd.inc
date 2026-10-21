@@ -170,22 +170,26 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     const bool rgbWrite = mode >= 1;
     const bool rgbRead = mode >= 2;
     const bool scrRead = mode >= 1;
+    // A8 (sync validation, SYNC-HAZARD-WRITE-AFTER-WRITE): each mode's
+    // acquire waits on prior compute writes. TOP_OF_PIPE ordered nothing,
+    // and the Direct-Log path submits modes 0-2 back to back with no CPU
+    // wait, so mode N could read (or re-layout) mode N-1's images mid-write.
     if (scrWrite) {
         layoutBarrier(cmd, scrImg.image,
-                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                       VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     } else if (scrRead) {
         layoutBarrier(cmd, scrImg.image,
-                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
                       VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                       VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     }
     if (rgbWrite) {
         layoutBarrier(cmd, rgbImg.image,
-                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                       rgbRead ? (VkAccessFlags)(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)
                               : (VkAccessFlags)VK_ACCESS_SHADER_WRITE_BIT,
@@ -517,12 +521,12 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
     // rgb + scratch arrive GENERAL from the mode submits (same-queue
     // FIFO ordered ahead of this dispatch); re-assert read access.
     layoutBarrier(cmd, rgbImg.image,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,  // A8: after modes 0-2
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
                   VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                   VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     layoutBarrier(cmd, scrImg.image,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, (VkAccessFlags)0,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,  // A8: after modes 0-2
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
                   VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                   VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);

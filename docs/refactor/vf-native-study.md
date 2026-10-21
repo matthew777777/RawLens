@@ -150,3 +150,12 @@ Open (logged, not changed):
 - B3 evictOldestInput destroys an import without checking pending use.
 - A7 orphan asset shaders/vf/comp.spv (no source, never loaded).
 - Perf: vf_mhcyuv dispatches every x and returns on odd x (half idle).
+- A8 (fixed, synchronization validation) RCD mode acquire barriers used
+  srcStage TOP_OF_PIPE with no access, which orders nothing: mode N could
+  read or re-layout mode N-1's rgb/scratch while still being written
+  (SYNC-HAZARD-WRITE-AFTER-WRITE; the matching read-after-write has the
+  same cause). Harmless on the photo path (CPU waits each mode's fd) but
+  real on Direct-Log, which submits modes 0-2 back to back. All RCD mode
+  and fused-finalize acquires now wait on COMPUTE_SHADER/SHADER_WRITE.
+  Sync validation rerun: zero SYNC-HAZARD; release: RCD/MHC parity, photo
+  RCD scores identical (kodim01n 31.73 dB), Direct-Log record pass.
