@@ -35,7 +35,10 @@ class HlDeviceParityDeviceTest {
             System.setProperty("hub.sliceBudget", it)
         }
         val handle = VulkanHub.open()
-        val workers = Executors.newFixedThreadPool(4)
+        // -e hlWorkers <n>: measurement only (production pool is 4).
+        val workers = Executors.newFixedThreadPool(
+            InstrumentationRegistry.getArguments().getString("hlWorkers")?.toInt() ?: 4
+        )
         try {
             for (f in files.sortedBy { it.name }) {
                 val (name, w, h) = re.matchEntire(f.name)!!.destructured

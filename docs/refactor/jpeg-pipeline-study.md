@@ -122,3 +122,10 @@ RawTherapee oracle on the Kodak scenes: max 0.0005-0.0008 (half floats).
 - Profile of the CPU pre-stage (host, JFR): computeVariation 39 %
   (inclusive, mostly boxBlur2; computed twice per tile: reduce and gate),
   reduceOne loop 18 %, convertTap 9 %, accumulateRgb 9 %.
+- H2 (done) pre-stage variation computed once per tile: pass 1 parks each
+  tile's variation in a direct buffer (off the Java heap, ~65 MB at 12 MP,
+  released tile by tile in pass 2) instead of pass 2 recomputing it.
+  Byte-identical on all 5 scenes; gate pass 1.13-1.33 s -> 0.69-0.82 s,
+  pre-stage 2.4-2.9 s -> 1.8-2.2 s. Worker pool 4/6/8 measured: no gain
+  (kept 4). VkBound slice budget measured: 4x larger -0.04 s, unsliced
+  -0.4 s but hangs; slicing kept for the viewfinder.

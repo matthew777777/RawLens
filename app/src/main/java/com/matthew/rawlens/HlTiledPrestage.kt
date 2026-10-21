@@ -50,16 +50,27 @@ internal object HlTiledPrestage {
         workers: java.util.concurrent.ExecutorService? = null
     ): HlMaps {
         val tileList = tiles(roi)
+        val t0 = android.os.SystemClock.elapsedRealtime()
         // Pass 1: global hipass reduce. Tile windows overlap at the halos,
         // so each window's accumulation would double-count the overlap —
         // instead re-evaluate the hipass predicate (mirrors
         // accumulateRgb exactly) only for interior pixels, which partition
         // the ROI: every ROI pixel counts once. The reduce runs in tile
         // order, so parallel execution stays bit-identical to sequential.
-        fun reduceOne(window: HlRoi, interior: HlRoi): Pair<Double, Int> {
+        // Variation is a pure function of the window, so pass 1 keeps each
+        // tile's copy for pass 2 instead of recomputing it (boxBlur2 x3 was
+        // ~20 % of the pre-stage). Parked off the Java heap (direct
+        // buffers, ~65 MB at 12 MP) so the cache adds no heap pressure;
+        // values round-trip exactly.
+        val variationCache = arrayOfNulls<java.nio.FloatBuffer>(tileList.size)
+        fun reduceOne(index: Int, window: HlRoi, interior: HlRoi): Pair<Double, Int> {
             var sum = 0.0
             var norm = 0
             val variation = RtHighlightMap.computeVariation(red, green, blue, window)
+            val parked = java.nio.ByteBuffer.allocateDirect(window.width * window.height * 4)
+                .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+            for (row in variation) parked.put(row)
+            variationCache[index] = parked
             for (i in 0 until window.height) {
                 val gy = window.minY + i
                 if (gy < interior.minY || gy > interior.maxY) continue
@@ -82,14 +93,14 @@ internal object HlTiledPrestage {
         var sum = 0.0
         var norm = 0
         if (workers == null) {
-            for ((window, interior) in tileList) {
-                val (s, n) = reduceOne(window, interior)
+            for ((index, tile) in tileList.withIndex()) {
+                val (s, n) = reduceOne(index, tile.first, tile.second)
                 sum += s
                 norm += n
             }
         } else {
-            val futures = tileList.map { (window, interior) ->
-                workers.submit<Pair<Double, Int>> { reduceOne(window, interior) }
+            val futures = tileList.mapIndexed { index, (window, interior) ->
+                workers.submit<Pair<Double, Int>> { reduceOne(index, window, interior) }
             }
             for (f in futures) {
                 val (s, n) = f.get()
@@ -98,13 +109,16 @@ internal object HlTiledPrestage {
             }
         }
         val ave = (2.0 * sum / (norm + RtHighlightMap.EPSILON.toDouble())).toFloat()
+        val t1 = android.os.SystemClock.elapsedRealtime()
         // Pass 2: gate + downsample per tile, stitch by global grid.
         // Tiles write disjoint hil cells — no synchronization needed.
         val hfw = (roi.width - roi.width % 4) / 4
         val hfh = (roi.height - roi.height % 4) / 4
         val hil = Array(4) { Array(hfh + 1) { FloatArray(hfw + 1) } }
-        fun gateOne(window: HlRoi, interior: HlRoi) {
-            val variation = RtHighlightMap.computeVariation(red, green, blue, window)
+        fun gateOne(index: Int, window: HlRoi, interior: HlRoi) {
+            val parked = checkNotNull(variationCache[index]).also { it.rewind() }
+            variationCache[index] = null
+            val variation = Array(window.height) { FloatArray(window.width).also { row -> parked.get(row) } }
             val acc = RtHighlightMap.accumulateRgb(red, green, blue, variation, thresh, maxF, window)
             val ww = window.width
             val wh = window.height
@@ -114,14 +128,21 @@ internal object HlTiledPrestage {
             stitch(small, window, interior, hil)
         }
         if (workers == null) {
-            for ((window, interior) in tileList) gateOne(window, interior)
+            for ((index, tile) in tileList.withIndex()) gateOne(index, tile.first, tile.second)
         } else {
-            val futures = tileList.map { (window, interior) ->
-                workers.submit { gateOne(window, interior) }
+            val futures = tileList.mapIndexed { index, (window, interior) ->
+                workers.submit { gateOne(index, window, interior) }
             }
             for (f in futures) f.get()
         }
-        return RtHighlightMap.directionalExtend(hil, hfw, hfh)
+        val t2 = android.os.SystemClock.elapsedRealtime()
+        val maps = RtHighlightMap.directionalExtend(hil, hfw, hfh)
+        android.util.Log.i(
+            HlReconstructionStage.LOG_TAG,
+            "hlprestage tiles=${tileList.size} reduce=${t1 - t0}ms gate=${t2 - t1}ms " +
+                "scans=${android.os.SystemClock.elapsedRealtime() - t2}ms"
+        )
+        return maps
     }
 
     /**
