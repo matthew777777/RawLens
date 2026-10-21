@@ -202,6 +202,36 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoreLaunchState()
+        
+        // Full-screen immersive mode (re-applied on resume/focus: permission
+        // dialogs and pickers clear it, which used to leave the status bar
+        // over the camera until the app was restarted).
+        ImmersiveMode.apply(window)
+
+        status = findViewById(R.id.status)
+        isoControl = findViewById(R.id.isoControl)
+        shutterControl = findViewById(R.id.shutterControl)
+        wbControl = findViewById(R.id.wbControl)
+        focusControl = findViewById(R.id.focusControl)
+        evControl = findViewById(R.id.evControl)
+        lensSwitcher = findViewById(R.id.lensSwitcher)
+        flashControl = findViewById(R.id.flashControl)
+        val dngInfo = findViewById<TextView>(R.id.dngInfo)
+        val sensorInfo = findViewById<TextView>(R.id.sensorInfo)
+
+        val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
+        val shutter = findViewById<View>(R.id.shutter)
+        bindViewsAndOverlays()
+        createController(dngInfo, sensorInfo, viewfinder, shutter)
+        applyControllerSettings(shutter)
+        wireModeAndQuickControls(shutter)
+        wireTouchAndManualControls(viewfinder)
+        finishStartup()
+    }
+
+    /** onCreate stage: Logcat, crash/Vulkan notices, wake lock, and the saved capture/merge mode migration. */
+    private fun restoreLaunchState() {
         // App logcat streams to a session file from the first line of every
         // launch (no permission needed); the crash handler below flushes the
         // fatal trace before the process dies, so the file survives crashes.
@@ -297,25 +327,10 @@ class MainActivity : Activity() {
         vfResolution = VfResolution.validated(
             lensPreferences().getInt(KEY_VF_RESOLUTION, VfResolution.MAX)
         )
-        
-        // Full-screen immersive mode (re-applied on resume/focus: permission
-        // dialogs and pickers clear it, which used to leave the status bar
-        // over the camera until the app was restarted).
-        ImmersiveMode.apply(window)
+    }
 
-        status = findViewById(R.id.status)
-        isoControl = findViewById(R.id.isoControl)
-        shutterControl = findViewById(R.id.shutterControl)
-        wbControl = findViewById(R.id.wbControl)
-        focusControl = findViewById(R.id.focusControl)
-        evControl = findViewById(R.id.evControl)
-        lensSwitcher = findViewById(R.id.lensSwitcher)
-        flashControl = findViewById(R.id.flashControl)
-        val dngInfo = findViewById<TextView>(R.id.dngInfo)
-        val sensorInfo = findViewById<TextView>(R.id.sensorInfo)
-
-        val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
-        val shutter = findViewById<View>(R.id.shutter)
+    /** onCreate stage: Stores, panels, overlays, scope gestures and the orientation listener. */
+    private fun bindViewsAndOverlays() {
         lensDiscovery = LensDiscovery(this)
         lensVerdictStore = LensVerdictStore(this)
         rawSizePreferenceStore = RawSizePreferenceStore(this)
@@ -425,7 +440,10 @@ class MainActivity : Activity() {
                 if (degrees != deviceOrientationDegrees) applyDeviceOrientation(degrees, animate = true)
             }
         }
+    }
 
+    /** onCreate stage: The camera controller and its UI callbacks (status, scopes, focus, route). */
+    private fun createController(dngInfo: TextView, sensorInfo: TextView, viewfinder: AutoFitTextureView, shutter: View) {
         controller = RawCameraController(this, viewfinder, 
             { message -> runOnUiThread { setStatus(message) } },
             { iso, shutterSpeed, wb ->
@@ -620,6 +638,10 @@ class MainActivity : Activity() {
                 videoRecorder?.attachViewfinder(recorderViewfinder(isBgu))
             }
         }
+    }
+
+    /** onCreate stage: Saved settings pushed into the controller, plus the debug/stats overlays. */
+    private fun applyControllerSettings(shutter: View) {
         if (gpsEnabled()) gpsProvider?.start()
         // The mode switcher owns the practical capture intent; Settings remain advanced defaults.
         controller.setCaptureExposureMode(captureExposureMode)
@@ -693,6 +715,10 @@ class MainActivity : Activity() {
         featureTags.setOnClickListener { toggleQuickControls() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
+    }
+
+    /** onCreate stage: Photo/video mode toggle, gallery thumbnail and the quick panel. */
+    private fun wireModeAndQuickControls(shutter: View) {
         // Dedicated red dot below the quick-panel access: a MODE toggle, never
         // part of the switcher. Tap = photo <-> video, long-press in video =
         // exit back to photo too. Recording itself lives on the shutter ring.
@@ -779,6 +805,10 @@ class MainActivity : Activity() {
             // Video keeps the photo top island: its gear lands on the Video tab.
             if (isVideoMode) showSettings(SETTINGS_VIDEO_TAB) else showSettings()
         }
+    }
+
+    /** onCreate stage: Tap-to-focus/meter and the manual slider row. */
+    private fun wireTouchAndManualControls(viewfinder: AutoFitTextureView) {
         // Single tap (or joint drag) installs AF + AE together: one repeating
         // update + one AF START, retargeting instantly even while locked.
         // Dragging one square moves only that subsystem (AF rescans, AE re-meters).
@@ -884,6 +914,10 @@ class MainActivity : Activity() {
                 syncGuideOverlayToViewfinder(view)
             }
         }
+    }
+
+    /** onCreate stage: Photo box seating, update consent and the startup check. */
+    private fun finishStartup() {
         // Photo 3:4 box seats between the islands: an island or panel size
         // change (first layout, font scale, panel growth) re-seats the box.
         // Size-guarded, so settled layouts never recurse.
