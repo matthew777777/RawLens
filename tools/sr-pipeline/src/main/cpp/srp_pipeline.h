@@ -140,6 +140,13 @@ Status SrpIcaHessianGpu(Context* ctx, uint32_t width, uint32_t height,
                         uint32_t tile_count, uint32_t tile_size, uint32_t ntx,
                         VkBuffer gradx_buffer, VkBuffer grady_buffer,
                         VkBuffer hess_buffer, VkShaderModule shader_module);
+// SrpIcaRefineWgGpu: SrpIcaRefineGpu with ica_wg.comp (workgroup per tile).
+Status SrpIcaRefineWgGpu(Context* ctx, uint32_t width, uint32_t height,
+                         uint32_t tile_count, uint32_t tile_size, uint32_t niter,
+                         float clip_radius, uint32_t ntx, VkBuffer ref_buffer,
+                         VkBuffer mov_buffer, VkBuffer gradx_buffer,
+                         VkBuffer grady_buffer, VkBuffer hess_buffer,
+                         VkBuffer flow_buffer, VkShaderModule shader_module);
 Status SrpIcaRefineGpu(Context* ctx, uint32_t width, uint32_t height,
                        uint32_t tile_count, uint32_t tile_size, uint32_t niter,
                        float clip_radius, uint32_t ntx, VkBuffer ref_buffer,
@@ -208,6 +215,12 @@ Status SrpGreyFftGpu(Context* ctx, uint32_t w, uint32_t h, const float* in,
 // resident holding w*h reals; `out` receives w*h host floats. Same
 // passes as SrpGreyFftGpu (bit-identical); needs both the fft module
 // and the corr module (on-device interleave).
+// SrpGreyFftMixedGpu: the same grey via mixed-radix Stockham passes
+// (grey_fft.comp) at the true lengths; kInitFailed when an axis has a prime
+// factor > 32 (fall back to SrpGreyFftHaveGpu).
+Status SrpGreyFftMixedGpu(Context* ctx, uint32_t w, uint32_t h,
+                          VkBuffer real_buffer, float* out,
+                          VkShaderModule grey_module);
 Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
                          VkBuffer real_buffer, float* out,
                          VkShaderModule fft_module,
@@ -431,6 +444,16 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                         uint32_t mode, uint32_t ftx, uint32_t fty,
                         VkShaderModule shader_module,
                         uint32_t ref_kernels = 0);
+
+// SrpCorrDirectGpu: L2 block-matching cross term (corr_direct.comp) for
+// `chunk_tiles` tiles from `tile_offset`: `ref_buffer` = pinned reference
+// level (ref_w stride), `patch_buffer` = extracted moving patches
+// (chunk_tiles*S*S), `out_buffer` = central (2r+1)^2 correlations per tile.
+Status SrpCorrDirectGpu(Context* ctx, uint32_t ref_w, uint32_t tile_size,
+                        uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                        uint32_t chunk_tiles, uint32_t flip, VkBuffer ref_buffer,
+                        VkBuffer patch_buffer, VkBuffer out_buffer,
+                        VkShaderModule shader_module);
 
 // SrpKernelNetCovGpu: PhotonCamera KernelNet (kernelnet.comp) on the full
 // reference frame `raw_buffer` (raw_w*raw_h normalized floats), writing the

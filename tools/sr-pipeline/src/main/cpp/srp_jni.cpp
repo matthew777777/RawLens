@@ -1342,6 +1342,84 @@ JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeIcaRefineRes(
   return static_cast<jint>(status);
 }
 
+// Same as nativeIcaRefineRes with ica_wg.comp (workgroup per tile).
+JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeIcaRefineWgRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong ref_res,
+    jobject mov_buffer, jlong gradx_res, jlong grady_res, jlong hess_res,
+    jobject flow_buffer, jbyteArray spirv, jint width, jint height,
+    jint tile_count, jint tile_size, jint niter, jfloat clip_radius,
+    jint ntx) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || mov_buffer == nullptr || flow_buffer == nullptr ||
+      spirv == nullptr || width <= 0 || height <= 0 || tile_count <= 0 ||
+      tile_size <= 0 || niter <= 0 || ntx <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  float* mov_ptr = static_cast<float*>(env->GetDirectBufferAddress(mov_buffer));
+  float* flow_ptr = static_cast<float*>(env->GetDirectBufferAddress(flow_buffer));
+  const int64_t img_count = static_cast<int64_t>(width) * height;
+  const int64_t hess_count = static_cast<int64_t>(tile_count) * 4;
+  const int64_t flow_count = static_cast<int64_t>(tile_count) * 2;
+  if (mov_ptr == nullptr || flow_ptr == nullptr ||
+      env->GetDirectBufferCapacity(mov_buffer) < img_count * 4 ||
+      env->GetDirectBufferCapacity(flow_buffer) < flow_count * 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkBuffer ref_vk = VK_NULL_HANDLE, gx_vk = VK_NULL_HANDLE,
+           gy_vk = VK_NULL_HANDLE, hess_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, ref_res, static_cast<size_t>(img_count),
+                             &ref_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, gradx_res, static_cast<size_t>(img_count),
+                             &gx_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, grady_res, static_cast<size_t>(img_count),
+                             &gy_vk) != srp::Status::kOk ||
+      srp::SrpResidentBuffer(ctx, hess_res, static_cast<size_t>(hess_count),
+                             &hess_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkShaderModule module = VK_NULL_HANDLE;
+  if (!InternSpirv(env, ctx, spirv, &module)) {
+    return static_cast<jint>(srp::Status::kDispatchFailed);
+  }
+  VkBuffer mov_vk = VK_NULL_HANDLE;
+  VkDeviceMemory mov_mem = VK_NULL_HANDLE;
+  VkBuffer flow_vk = VK_NULL_HANDLE;
+  VkDeviceMemory flow_mem = VK_NULL_HANDLE;
+  srp::Status status = srp::Status::kDispatchFailed;
+  if (MakeStagingBuffer(device, physical,
+                        static_cast<VkDeviceSize>(img_count) * 4, mov_ptr,
+                        &mov_vk, &mov_mem) &&
+      MakeStagingBuffer(device, physical,
+                        static_cast<VkDeviceSize>(flow_count) * 4, flow_ptr,
+                        &flow_vk, &flow_mem)) {
+    status = srp::SrpIcaRefineWgGpu(
+        ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+        static_cast<uint32_t>(tile_count), static_cast<uint32_t>(tile_size),
+        static_cast<uint32_t>(niter), static_cast<float>(clip_radius),
+        static_cast<uint32_t>(ntx), ref_vk, mov_vk, gx_vk, gy_vk, hess_vk,
+        flow_vk, module);
+    if (status == srp::Status::kOk) {
+      void* mapped = nullptr;
+      if (vkMapMemory(device, flow_mem,
+                      0, static_cast<VkDeviceSize>(flow_count) * 4, 0,
+                      &mapped) == VK_SUCCESS) {
+        std::memcpy(flow_ptr, mapped, static_cast<size_t>(flow_count) * 4);
+        vkUnmapMemory(device, flow_mem);
+      } else {
+        status = srp::Status::kDispatchFailed;
+      }
+    }
+  }
+  if (mov_vk != VK_NULL_HANDLE) vkDestroyBuffer(device, mov_vk, nullptr);
+  if (mov_mem != VK_NULL_HANDLE) vkFreeMemory(device, mov_mem, nullptr);
+  if (flow_vk != VK_NULL_HANDLE) vkDestroyBuffer(device, flow_vk, nullptr);
+  if (flow_mem != VK_NULL_HANDLE) vkFreeMemory(device, flow_mem, nullptr);
+  // (module stays alive in the Context cache; residents stay on-device)
+  return static_cast<jint>(status);
+}
+
 // Real GPU path: Menon2007 demosaic-grey (demosaic.comp ops 0-11, RGGB
 // only) over caller-owned direct buffers. `cfa_buffer` holds
 // width*height CFA floats, `grey_buffer` receives width*height grey
@@ -2944,5 +3022,75 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeKe
   if (luma != 0) srp::SrpFreeResident(ctx, luma);
   if (act0 != 0) srp::SrpFreeResident(ctx, act0);
   if (act1 != 0) srp::SrpFreeResident(ctx, act1);
+  return static_cast<jint>(status);
+}
+
+// Mixed-radix FFT grey (grey_fft.comp) from a resident frame into `out`
+// (w*h floats). Returns kInitFailed (3) when the size needs the Bluestein
+// fallback (an axis prime factor > 32).
+extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeGreyFftMixedRes(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong in_res, jobject out_buffer,
+    jbyteArray spirv, jint width, jint height) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || out_buffer == nullptr || spirv == nullptr || width < 4 || height < 4) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const size_t n = static_cast<size_t>(width) * height;
+  float* out = static_cast<float*>(env->GetDirectBufferAddress(out_buffer));
+  if (out == nullptr || env->GetDirectBufferCapacity(out_buffer) < static_cast<jlong>(n * 4)) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkBuffer in_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, in_res, n, &in_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const jsize len = env->GetArrayLength(spirv);
+  if (len <= 0 || len % 4 != 0) return static_cast<jint>(srp::Status::kInitFailed);
+  std::vector<uint8_t> bytes(static_cast<size_t>(len));
+  env->GetByteArrayRegion(spirv, 0, len, reinterpret_cast<jbyte*>(bytes.data()));
+  if (env->ExceptionCheck() == JNI_TRUE) return static_cast<jint>(srp::Status::kInitFailed);
+  VkShaderModule module = srp::SrpInternModule(ctx, bytes.data(), bytes.size());
+  if (module == VK_NULL_HANDLE) return static_cast<jint>(srp::Status::kDispatchFailed);
+  return static_cast<jint>(srp::SrpGreyFftMixedGpu(
+      ctx, static_cast<uint32_t>(width), static_cast<uint32_t>(height), in_vk, out, module));
+}
+
+// Direct L2 cross term (corr_direct.comp): `ref_res` = pinned reference
+// level (ref_w*ref_h floats), `patch_buffer` = chunk_tiles*S*S moving
+// patches, `out_buffer` receives chunk_tiles*C*C central correlations,
+// laid out like the cropped FFT path. `dummy_buffer` >= 1 float (unused
+// staging slot). `flip` selects the shift orientation.
+extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeCorrDirect(
+    JNIEnv* env, jclass /*cls*/, jlong handle, jlong ref_res, jobject patch_buffer,
+    jobject out_buffer, jobject dummy_buffer, jbyteArray spirv, jint ref_w, jint ref_h,
+    jint tile_size, jint radius, jint ntx, jint tile_offset, jint chunk_tiles, jint flip) {
+  VkDevice device = VK_NULL_HANDLE;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  srp::Context* ctx = CorrContext(handle, &device, &physical);
+  if (ctx == nullptr || patch_buffer == nullptr || out_buffer == nullptr ||
+      dummy_buffer == nullptr || spirv == nullptr || ref_w <= 0 || ref_h <= 0 ||
+      tile_size <= 0 || radius < 0 || ntx <= 0 || tile_offset < 0 || chunk_tiles <= 0) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  VkBuffer ref_vk = VK_NULL_HANDLE;
+  if (srp::SrpResidentBuffer(ctx, ref_res, static_cast<size_t>(ref_w) * ref_h, &ref_vk) != srp::Status::kOk) {
+    return static_cast<jint>(srp::Status::kInitFailed);
+  }
+  const int64_t s = static_cast<int64_t>(tile_size) + 2 * radius;
+  const int64_t c = 2 * static_cast<int64_t>(radius) + 1;
+  const srp::Status status = StageAndRunCorr(
+      env, ctx, device, physical, patch_buffer, dummy_buffer, out_buffer,
+      static_cast<int64_t>(chunk_tiles) * s * s, 1,
+      static_cast<int64_t>(chunk_tiles) * c * c, spirv,
+      [&](VkBuffer a, VkBuffer b, VkBuffer o, VkShaderModule module) {
+        (void)b;
+        return srp::SrpCorrDirectGpu(
+            ctx, static_cast<uint32_t>(ref_w), static_cast<uint32_t>(tile_size),
+            static_cast<uint32_t>(radius), static_cast<uint32_t>(ntx),
+            static_cast<uint32_t>(tile_offset), static_cast<uint32_t>(chunk_tiles),
+            flip != 0 ? 1u : 0u, ref_vk, a, o, module);
+      });
   return static_cast<jint>(status);
 }

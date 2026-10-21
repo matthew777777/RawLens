@@ -61,6 +61,11 @@ object VulkanPipeline {
         val corr: ByteArray,
         /** kernelnet.comp, required when [PipelineConfig.kernelNet] is set. */
         val kernelNet: ByteArray? = null,
+        /**
+         * grey_fft.comp: mixed-radix FFT grey (true lengths, no Bluestein
+         * padding or host staging). Null keeps the Bluestein chain.
+         */
+        val greyFft: ByteArray? = null,
     )
 
     /** Last KernelNet (s1, s2, rho) map of this process, for parity dumps: 3 x mapH x mapW. */
@@ -143,6 +148,7 @@ object VulkanPipeline {
 
     /** Stage clock, enabled with `-Dsrpipeline.profile=true`. */
     private val profile = System.getProperty("srpipeline.profile", "false") == "true"
+    private val greyCompare = System.getProperty("srpipeline.greyCompare", "false") == "true"
 
     /**
      * Device heap diagnosis: JVM live-set in MB. Printed at phase
@@ -221,8 +227,25 @@ object VulkanPipeline {
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }
-            timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, packBuf), out,
-                spirvs.fft, w, h)) }
+            // Mixed-radix grey when available (the reference used to stay on
+            // the Bluestein chain: ~13 s of a 43 s phone merge).
+            val g = spirvs.greyFft
+            var rc = 3
+            if (g != null) {
+                val tmp = SrpBridge.createResident(handle, (w * h).toLong())
+                require(tmp != 0L) { "VulkanPipeline: grey resident alloc failed" }
+                try {
+                    checkRc("greyUpload", SrpBridge.uploadResident(handle, tmp, packImageInto(frame, packBuf), (w * h).toLong()))
+                    rc = timed("greyFft") { SrpBridge.nativeGreyFftMixedRes(handle, tmp, out.apply { rewind() }, g, w, h) }
+                    if (rc != 3) checkRc("greyFft mixed", rc)
+                } finally {
+                    SrpBridge.freeResident(handle, tmp)
+                }
+            }
+            if (rc == 3) {
+                timed("greyFft") { checkRc("greyFft", SrpBridge.greyFft(handle, packImageInto(frame, packBuf), out.apply { rewind() },
+                    spirvs.fft, w, h)) }
+            }
             // Same device bytes straight into the rows: no flat
             // intermediate (50 MB at full-res).
             out.rewind()
@@ -440,8 +463,26 @@ object VulkanPipeline {
             if (!config.bayer || config.greyMethod != "FFT") {
                 return if (config.bayer) Grey.computeGreyImages(frame, config.greyMethod) else frame
             }
-            timed("greyFft") { checkRc("greyFft", SrpBridge.nativeGreyFftRes(handle, frameRes, kernPre,
-                spirvs.fft, spirvs.corr, w, h)) }
+            val mixed = spirvs.greyFft?.let { g ->
+                timed("greyFft") { SrpBridge.nativeGreyFftMixedRes(handle, frameRes, kernPre.apply { rewind() }, g, w, h) }
+            }
+            if (mixed != 0) {
+                // No mixed module, or an axis needs Bluestein (rc 3).
+                if (mixed != null && mixed != 3) checkRc("greyFft mixed", mixed)
+                timed("greyFft") { checkRc("greyFft", SrpBridge.nativeGreyFftRes(handle, frameRes, kernPre.apply { rewind() },
+                    spirvs.fft, spirvs.corr, w, h)) }
+            } else if (greyCompare) {
+                // Parity aid (-Dsrpipeline.greyCompare=true): the Bluestein
+                // chain on the same frame, max |difference| to stdout.
+                val mixedOut = FloatArray(w * h).also { kernPre.rewind(); kernPre.asFloatBuffer().get(it) }
+                checkRc("greyFft ref", SrpBridge.nativeGreyFftRes(handle, frameRes, kernPre.apply { rewind() },
+                    spirvs.fft, spirvs.corr, w, h))
+                val ref = FloatArray(w * h).also { kernPre.rewind(); kernPre.asFloatBuffer().get(it) }
+                var maxD = 0f; var maxV = 0f
+                for (i in ref.indices) { maxD = maxOf(maxD, kotlin.math.abs(ref[i] - mixedOut[i])); maxV = maxOf(maxV, kotlin.math.abs(ref[i])) }
+                println("sr-pipeline greyCompare ${w}x$h: max|mixed - bluestein| = $maxD (max |grey| $maxV)")
+                kernPre.rewind(); kernPre.asFloatBuffer().put(mixedOut)
+            }
             kernPre.rewind()
             val fb = kernPre.asFloatBuffer()
             for (y in 0 until h) fb.get(rows[y])

@@ -339,6 +339,9 @@ private fun merge(plan: Plan) {
                         corr = spv(dir, "corr"),
                         fft = fft,
                         ica = spv(dir, "ica"),
+                        // SRP_LEGACY_FFT=1: the Bluestein FFT paths (A/B checks).
+                        corrDirect = if (System.getenv("SRP_LEGACY_FFT") == "1") null else spv(dir, "corr_direct"),
+                        icaWg = if (System.getenv("SRP_LEGACY_ICA") == "1") null else spv(dir, "ica_wg"),
                     ),
                     VulkanPipeline.Spirvs(
                         gat = spv(dir, "gat"),
@@ -350,6 +353,7 @@ private fun merge(plan: Plan) {
                         fft = fft,
                         corr = spv(dir, "corr"),
                         kernelNet = if (plan.kernel == "kernelnet") spv(dir, "kernelnet") else null,
+                        greyFft = if (System.getenv("SRP_LEGACY_FFT") == "1") null else spv(dir, "grey_fft"),
                     ),
                 )
                 buf

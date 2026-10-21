@@ -424,6 +424,45 @@ object SrpBridge {
     ): Int
 
     /**
+     * Direct L2 block-matching cross term (corr_direct.comp): the central
+     * (2r+1)^2 correlations of `chunkTiles` tiles from `tileOffset`, same
+     * layout as the cropped FFT correlation. `refRes` is the pinned
+     * reference level (`refW*refH`), `patches` the extracted moving patches.
+     */
+    @JvmStatic
+    external fun nativeCorrDirect(
+        handle: Long,
+        refRes: Long,
+        patches: ByteBuffer,
+        out: ByteBuffer,
+        dummy: ByteBuffer,
+        spirv: ByteArray,
+        refW: Int,
+        refH: Int,
+        tileSize: Int,
+        radius: Int,
+        nTx: Int,
+        tileOffset: Int,
+        chunkTiles: Int,
+        flip: Int,
+    ): Int
+
+    /**
+     * FFT grey via mixed-radix Stockham passes (grey_fft.comp) from resident
+     * `inRes` into `out` (`width*height` floats). Returns 3 (kInitFailed)
+     * when an axis has a prime factor > 32: use [nativeGreyFftRes] instead.
+     */
+    @JvmStatic
+    external fun nativeGreyFftMixedRes(
+        handle: Long,
+        inRes: Long,
+        out: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+    ): Int
+
+    /**
      * PhotonCamera KernelNet (kernelnet.comp) on the FULL reference frame
      * `rawRes` (`rawW*rawH` normalized floats) -> Wronski covariances for
      * the crop at (`cropX`, `cropY`) into `covRes` (`covW*covH*4` floats).
@@ -1852,6 +1891,26 @@ object SrpBridge {
      */
     @JvmStatic
     external fun nativeIcaRefineRes(
+        handle: Long,
+        refRes: Long,
+        movBuffer: ByteBuffer,
+        gradxRes: Long,
+        gradyRes: Long,
+        hessRes: Long,
+        flowBuffer: ByteBuffer,
+        spirv: ByteArray,
+        width: Int,
+        height: Int,
+        tileCount: Int,
+        tileSize: Int,
+        niter: Int,
+        clipRadius: Float,
+        ntx: Int,
+    ): Int
+
+    /** [nativeIcaRefineRes] with ica_wg.comp (one workgroup per tile). */
+    @JvmStatic
+    external fun nativeIcaRefineWgRes(
         handle: Long,
         refRes: Long,
         movBuffer: ByteBuffer,

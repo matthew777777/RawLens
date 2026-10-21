@@ -1,0 +1,79 @@
+#version 450
+// ICA refinement (IPOL ICA.py, Alg. 2, generic tile path: zero outside the
+// image, clipped update), one 256-thread workgroup per tile with a parallel
+// shared-memory reduction, as the official CUDA kernels do (ica_kernel_*),
+// instead of one thread looping over the whole tile (ica.comp): a 16-64 px
+// tile is 256-4096 samples x 3 iterations per thread there, which leaves
+// the GPU mostly idle at ~10^4 tiles. Summation order differs from the
+// serial loop at float rounding (the official CUDA order is parallel too).
+// The 8x8 level (per-addend clipped tree) stays on ica.comp.
+// Push: same overlay as ica.comp (pad[1] = nTilesX, pad[2] = clip bits,
+// pad[3] = niter); tiles grid-stride over gl_NumWorkGroups.x.
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) readonly buffer RefImg { float refImg[]; };
+layout(set = 0, binding = 1) readonly buffer MovImg { float movImg[]; };
+layout(set = 0, binding = 2) readonly buffer GradX { float gradx[]; };
+layout(set = 0, binding = 3) readonly buffer GradY { float grady[]; };
+layout(set = 0, binding = 4) buffer Hess { vec4 hess[]; };
+layout(set = 0, binding = 5) buffer Flow { vec2 flow[]; };
+
+shared vec2 red[256];
+shared vec2 cur;
+
+float movAt(int x, int y, uint W, uint H) {
+  return (y >= 0 && y < int(H) && x >= 0 && x < int(W)) ? movImg[uint(y) * W + uint(x)] : 0.0;
+}
+
+void main() {
+  uint lid = gl_LocalInvocationIndex;
+  uint nTilesX = p.pad[1];
+  float clip_radius = uintBitsToFloat(p.pad[2]);
+  uint niter = p.pad[3];
+  uint T = p.tileSize, W = p.width, H = p.height;
+  for (uint t = gl_WorkGroupID.x; t < p.tileCount; t += gl_NumWorkGroups.x) {
+    uint tile_y = t / nTilesX, tile_x = t % nTilesX;
+    float A00 = hess[t].x, A01 = hess[t].y, A10 = hess[t].y, A11 = hess[t].z;
+    float det = A00 * A11 - A01 * A10;
+    bool solvable = abs(det) >= 1e-10;          // uniform across the group
+    float det_inv = solvable ? 1.0 / det : 0.0;
+    if (lid == 0u) cur = flow[t];
+    barrier();
+    for (uint it = 0u; solvable && it < niter; it++) {
+      vec2 a = cur;
+      vec2 b = vec2(0.0);
+      for (uint q = lid; q < T * T; q += 256u) {
+        uint x = tile_x * T + q % T, y = tile_y * T + q / T;
+        float fx = float(x) + a.x, fy = float(y) + a.y;
+        int fx0 = int(floor(fx)), fy0 = int(floor(fy));
+        float frx = fx - float(fx0), fry = fy - float(fy0);
+        float m00 = movAt(fx0, fy0, W, H), m01 = movAt(fx0 + 1, fy0, W, H);
+        float m10 = movAt(fx0, fy0 + 1, W, H), m11 = movAt(fx0 + 1, fy0 + 1, W, H);
+        float top = m00 + (m01 - m00) * frx;
+        float bot = m10 + (m11 - m10) * frx;
+        float gradt = (top + (bot - top) * fry) - refImg[y * W + x];
+        b += vec2(-gradx[y * W + x] * gradt, -grady[y * W + x] * gradt);
+      }
+      red[lid] = b;
+      barrier();
+      for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (lid < s) red[lid] += red[lid + s];
+        barrier();
+      }
+      if (lid == 0u) {
+        vec2 B = red[0];
+        cur = a + vec2(clamp(det_inv * (A11 * B.x - A01 * B.y), -clip_radius, clip_radius),
+                       clamp(det_inv * (-A10 * B.x + A00 * B.y), -clip_radius, clip_radius));
+      }
+      barrier();
+    }
+    if (lid == 0u) flow[t] = cur;
+    barrier();
+  }
+}

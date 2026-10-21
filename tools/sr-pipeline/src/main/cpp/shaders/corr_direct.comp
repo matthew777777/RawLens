@@ -1,0 +1,50 @@
+#version 450
+// L2 block-matching cross term, computed directly instead of by FFT.
+//
+// IPOL align_lvl_block_matching_L2 correlates each reference tile T x T,
+// zero-padded by the search radius r to S = T + 2r, against the S x S moving
+// patch with FFTs, fftshifts, and keeps the central C x C = (2r+1)^2 shifts.
+// Because the reference is zero outside its T x T core, no shift |d| <= r
+// wraps around, so those C x C values are exactly the linear sums
+//   crop[y][x] = sum_{u,v < T} ref[u][v] * patch[u + y'][v + x']
+// with (y', x') = (y, x) or (2r - y, 2r - x) depending on the conjugation
+// side (p.mode, verified against the FFT path). T*T*C*C multiply-adds per
+// tile, no transforms, no host fftshift/crop.
+//
+// Bindings: 0 = reference level (refW stride), 1 = patches (ct * S * S),
+// 2 = crops out (ct * C * C). pad: [0]=refW [1]=T [2]=r [3]=nTx [4]=t0.
+layout(local_size_x = 256) in;
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+layout(set = 0, binding = 0) readonly buffer Ref { float ref_[]; };
+layout(set = 0, binding = 1) readonly buffer Patch { float patch_[]; };
+layout(set = 0, binding = 2) buffer Out { float out_[]; };
+
+void main() {
+  uint refW = p.pad[0], T = p.pad[1], r = p.pad[2], nTx = p.pad[3], t0 = p.pad[4];
+  uint S = T + 2u * r, C = 2u * r + 1u;
+  uint stride = gl_NumWorkGroups.x * 256u;
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += stride) {
+    uint tl = id / (C * C), rem = id % (C * C);
+    uint y = rem / C, x = rem % C;
+    uint yy = (p.mode == 1u) ? 2u * r - y : y;
+    uint xx = (p.mode == 1u) ? 2u * r - x : x;
+    uint t = t0 + tl;
+    uint ox = (t % nTx) * T, oy = (t / nTx) * T;
+    uint pb = tl * S * S;
+    float acc = 0.0;
+    for (uint u = 0u; u < T; u++) {
+      uint rr = (oy + u) * refW + ox;
+      uint pr = pb + (u + yy) * S + xx;
+      for (uint v = 0u; v < T; v++) {
+        acc += ref_[rr + v] * patch_[pr + v];
+      }
+    }
+    out_[id] = acc;
+  }
+}

@@ -9,6 +9,8 @@ import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig
 import com.rawlens.srpipeline.stages.DngRead
+import com.rawlens.srpipeline.stages.KernelNet
+import com.rawlens.srpipeline.stages.KernelNetConfig
 import com.rawlens.srpipeline.stages.KernelParams
 import com.rawlens.srpipeline.stages.NoiseLut
 import com.rawlens.srpipeline.stages.PipelineConfig
@@ -132,6 +134,16 @@ class SrpPipelineFullresDeviceTest {
                 // Collect after every frame: GC timing must not decide
                 // survival at the 512 MB ceiling (values-identical).
                 memoryTight = true,
+                // -e rawlensSrpKernel kernelnet|wronski (default wronski);
+                // the merge input IS the full frame here.
+                kernelNet = if (args.getString("rawlensSrpKernel") != "kernelnet") null else {
+                    val (fx, fy) = KernelNet.rggbFlips(refMeta.cfa)
+                    KernelNetConfig(
+                        weights = KernelNet.bundledWeights(),
+                        sigma = KernelNet.sigma(
+                            FloatArray(4) { alpha[it].toFloat() }, FloatArray(4) { beta[it].toFloat() }),
+                        flipX = fx, flipY = fy)
+                },
             )
             Log.i("SrpFullresDevice", "fullres ${w}x$h snr=%.2f tile=%d".format(snr, fin.tileSize))
             val fft = assetBytes("fft")
@@ -146,13 +158,14 @@ class SrpPipelineFullresDeviceTest {
                 refThunk, compImgs, config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
-                    fft = fft, ica = assetBytes("ica")),
+                    fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg")),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft, corr = assetBytes("corr")),
+                    fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"),
+                    kernelNet = if (args.getString("rawlensSrpKernel") == "kernelnet") assetBytes("kernelnet") else null),
             )
             val outH = h
             val outW = w

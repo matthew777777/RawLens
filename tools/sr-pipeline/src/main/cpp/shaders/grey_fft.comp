@@ -1,0 +1,107 @@
+#version 450
+// FFT grey image (IPOL utils_image.compute_grey_images, method "FFT"):
+//   G = Re(ifft2(M . fft2(J)))
+// with M zeroing the shifted spectrum outside [N//4, N - N//4) on both axes,
+// computed with a mixed-radix Stockham FFT at the TRUE lengths (no Bluestein
+// padding, no host transposes): rows are batched along x with stride 1,
+// columns along y with stride W. Exact up to float rounding.
+//
+// Stockham autosort radix-p pass (out-of-place, ping-pong), for each batch
+// line and j in [0, N/p):
+//   v[r] = x[j + r*N/p] * w^(r*(j mod Ns)),  w = exp(sign*2*pi*i/(Ns*p))
+//   V    = DFT_p(v)
+//   y[(j/Ns)*Ns*p + (j mod Ns) + r*Ns] = V[r]
+// with Ns the product of the radices already applied (starts at 1).
+//
+// p.mode: 0 PACK  real input -> complex (im 0)
+//         1 PASS  one radix-p pass along an axis
+//         2 MASK  zero frequencies outside the kept band (unshifted domain)
+//         3 REAL  out = Re(x) * scale
+// Buffers: 0 = A (in), 1 = B (out).
+layout(local_size_x = 256) in;
+
+struct HmsrPush {
+  uint width; uint height; uint pixelCount; uint tileCount;
+  uint level; uint tileSize; float scale;
+  float alpha; float beta; float robustness; uint mode;
+  uint pad[21];
+};
+layout(push_constant) uniform Push { HmsrPush p; };
+
+layout(set = 0, binding = 0) readonly buffer A { float a_[]; };
+layout(set = 0, binding = 1) buffer B { float b_[]; };
+
+// pad (PASS): [0]=N (axis length) [1]=radix [2]=Ns [3]=axis (0 rows, 1 cols)
+//             [4]=sign (0 forward -1, 1 inverse +1)
+const float TWO_PI = 6.283185307179586;
+const int MAXP = 32;
+
+// DFT_p roots exp(sign*2*pi*i*t/p), t < p: identical for every butterfly of
+// a pass, so computed once per workgroup instead of p^2 sincos per thread.
+shared vec2 roots[MAXP];
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec2 cis(float t) { return vec2(cos(t), sin(t)); }
+
+void main() {
+  uint W = p.width, H = p.height;
+  uint stride = gl_NumWorkGroups.x * 256u;
+  if (p.mode == 1u) {
+    uint R0 = p.pad[1];
+    float sgn0 = (p.pad[4] == 1u) ? 1.0 : -1.0;
+    if (gl_LocalInvocationIndex < R0) {
+      roots[gl_LocalInvocationIndex] = cis(sgn0 * TWO_PI * float(gl_LocalInvocationIndex) / float(R0));
+    }
+    barrier();
+  }
+  for (uint id = gl_GlobalInvocationID.x; id < p.pixelCount; id += stride) {
+    if (p.mode == 0u) {
+      b_[2u * id] = a_[id];
+      b_[2u * id + 1u] = 0.0;
+    } else if (p.mode == 1u) {
+      uint N = p.pad[0], R = p.pad[1], Ns = p.pad[2];
+      bool cols = p.pad[3] == 1u;
+      float sgn = (p.pad[4] == 1u) ? 1.0 : -1.0;
+      uint M = N / R;                       // butterflies per line
+      // Rows: j varies fastest (adjacent threads -> adjacent x). Columns:
+      // the column index varies fastest, so adjacent threads read adjacent
+      // addresses too (a column-major walk strides W floats per thread:
+      // uncoalesced, ~10x slower on Mali). Same values either way.
+      uint lines = p.pixelCount / M;
+      uint line = cols ? id % lines : id / M;
+      uint j = cols ? id / lines : id % M;
+      uint base = cols ? line : line * W;   // first element of the line
+      uint es = cols ? W : 1u;              // element stride along the axis
+      uint k = j % Ns;
+      float ang = sgn * TWO_PI * float(k) / float(Ns * R);
+      vec2 v[MAXP];
+      for (uint r = 0u; r < R; r++) {
+        uint e = base + (j + r * M) * es;
+        vec2 x = vec2(a_[2u * e], a_[2u * e + 1u]);
+        v[r] = (r == 0u) ? x : cmul(x, cis(ang * float(r)));
+      }
+      uint outBase = (j / Ns) * Ns * R + k;
+      for (uint q = 0u; q < R; q++) {
+        vec2 acc = vec2(0.0);
+        for (uint r = 0u; r < R; r++) {
+          uint t = (q * r) % R;
+          acc += (t == 0u) ? v[r] : cmul(v[r], roots[t]);
+        }
+        uint e = base + (outBase + q * Ns) * es;
+        b_[2u * e] = acc.x;
+        b_[2u * e + 1u] = acc.y;
+      }
+    } else if (p.mode == 2u) {
+      // Kept iff the shifted index s = (k + N/2) mod N lies in
+      // [N/4, N - N/4) (integer division) on BOTH axes, exactly the
+      // official zeroing of [:N//4] and [-N//4:] after fftshift.
+      uint y = id / W, x = id % W;
+      uint sx = (x + W / 2u) % W, sy = (y + H / 2u) % H;
+      bool keep = sx >= W / 4u && sx < W - W / 4u && sy >= H / 4u && sy < H - H / 4u;
+      b_[2u * id] = keep ? a_[2u * id] : 0.0;
+      b_[2u * id + 1u] = keep ? a_[2u * id + 1u] : 0.0;
+    } else {
+      b_[id] = a_[2u * id] * p.scale;
+    }
+  }
+}

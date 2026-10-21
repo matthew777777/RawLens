@@ -23,6 +23,9 @@ import java.nio.ByteBuffer
 object AlignGpu {
 
     private val prof = System.getProperty("srpipeline.profile", "false") == "true"
+    private val corrCompare = System.getProperty("srpipeline.corrCompare", "false") == "true"
+    /** Shift orientation of corr_direct.comp matching the FFT path (verified by corrCompare). */
+    private const val CORR_DIRECT_FLIP = 0
 
     /** Timing-only split; never changes values or order. */
     private inline fun <T> ptime(what: String, block: () -> T): T {
@@ -46,6 +49,14 @@ object AlignGpu {
         val corr: ByteArray,
         val fft: ByteArray,
         val ica: ByteArray,
+        /**
+         * corr_direct.comp: the L2 cross term as direct tile sums (exact for
+         * the kept shifts: the reference halo is zero). Null keeps the FFT
+         * correlation (Bluestein at non-power-of-2 S, host fftshift/crop).
+         */
+        val corrDirect: ByteArray? = null,
+        /** ica_wg.comp: ICA refinement with a workgroup per tile (non-8 tiles). */
+        val icaWg: ByteArray? = null,
     )
 
     /** One coarse-to-fine row, cf. `AlignmentInit` (spectra replaced). */
@@ -327,7 +338,9 @@ object AlignGpu {
                     partial.add(hessRes)
                     var cur = lvl.copy(refRes = refRes, gradXRes = gradXRes,
                         gradYRes = gradYRes, hessRes = hessRes)
-                    if (config.metrics[c] == BlockMetric.L2) {
+                    // The direct correlation reads the pinned ref level, never
+                    // spectra: skip the FFT pinning (time and memory).
+                    if (config.metrics[c] == BlockMetric.L2 && (spirvs.corrDirect == null || corrCompare)) {
                         // Spectra pinned per 4096-tile chunk (same
                         // forward FFT per tile as one shot; the native
                         // chain chunks internally the same way). One
@@ -445,9 +458,11 @@ object AlignGpu {
         // Retained-holder path (production loop): same values, no
         // pad/pyramid/tmp garbage per frame. Null keeps the fresh-build
         // path (unit tests, one-shot callers).
-        val movingPyramid = pyramidReuse?.moving(movingGrey, padH, padW, config.factors)
-            ?: Resample.buildGaussianPyramid(
-                circularPad(movingGrey, padH, padW), config.factors)
+        val movingPyramid = ptime("movingPyramid") {
+            pyramidReuse?.moving(movingGrey, padH, padW, config.factors)
+                ?: Resample.buildGaussianPyramid(
+                    circularPad(movingGrey, padH, padW), config.factors)
+        }
         require(movingPyramid.size == n) { "moving pyramid must hold $n levels" }
         var flow: Array<Array<FloatArray>>? = null
         for (p in 0 until n) {
@@ -457,14 +472,14 @@ object AlignGpu {
             flow = if (flow == null) {
                 Array(lvl.nTy) { Array(lvl.nTx) { floatArrayOf(0f, 0f) } }
             } else {
-                upscaleLvl(flow, intArrayOf(lvl.nTy, lvl.nTx), c, config)
+                ptime("upscaleFlow") { upscaleLvl(flow, intArrayOf(lvl.nTy, lvl.nTx), c, config) }
             }
             val current = flow
             when (config.metrics[c]) {
                 BlockMetric.L1 -> gpuL1(lvl, moving, current, handle, spirvs.align)
                 BlockMetric.L2 -> gpuL2(lvl, moving, current, handle, spirvs)
             }
-            gpuIca(lvl, moving, current, config, c, handle, spirvs.ica)
+            ptime("ica") { gpuIca(lvl, moving, current, config, c, handle, spirvs.ica, spirvs.icaWg) }
             flow = current
         }
         return flow ?: error("empty loop")
@@ -538,7 +553,8 @@ object AlignGpu {
         // dispatches throughout: same bytes, no download or re-pack
         // between stages.
         val delta = sc.floats("delta", tc * 2)
-        if (lvl.refSpecChunks.isNotEmpty()) {
+        val directCorr = spirvs.corrDirect != null && lvl.refRes != 0L
+        if (lvl.refSpecChunks.isNotEmpty() || directCorr) {
             val maxChunk = minOf(CorrelateChunkTiles, tc)
             val patchChunk = sc.direct("patchesChunk", maxChunk * s * s)
             val cropChunk = sc.direct("cropChunk", maxChunk * c * c)
@@ -553,22 +569,56 @@ object AlignGpu {
                     t0, ct) }
                 require(rc == 0) { "corrExtract failed with status $rc" }
                 patchChunk.rewind()
-                val spec = lvl.refSpecChunks.getOrNull(ci)
+                val direct = spirvs.corrDirect
+                val spec = if (directCorr && !corrCompare) 0L else lvl.refSpecChunks.getOrNull(ci)
                     ?: throw IllegalStateException("spectra chunk missing for tile $t0")
-                val corrChunk = sc.direct("corr$ct", ct * s * s)
-                rc = ptime("correlatePinned") { SrpBridge.correlatePinned(handle,
-                    patchChunk, spec, corrChunk, spirvs.fft, spirvs.corr, ct, s) }
-                require(rc == 0) { "correlate failed with status $rc" }
-                corrChunk.rewind()
-                // Crop in place from the download buffer (absolute gets):
-                // the full-map FloatArray copy (~76 MB at full-res tile
-                // 64) does not fit the 512 MB heap next to the retained
-                // level scratch. Values-identical (same indices).
-                val croppedChunk = ptime("cropCorrsHost") {
-                    cropCorrs(corrChunk.asFloatBuffer(), ct, s, c,
-                        sc.floats("cropped$ct", ct * c * c))
+                if (direct != null && directCorr) {
+                    // Direct tile sums straight into the argmin's crop input.
+                    rc = ptime("corrDirect") { SrpBridge.nativeCorrDirect(handle, lvl.refRes,
+                        patchChunk, cropChunk.apply { rewind() }, dflowChunk, direct,
+                        moving[0].size, moving.size, lvl.tileSize, lvl.radius, lvl.nTx,
+                        t0, ct, CORR_DIRECT_FLIP) }
+                    require(rc == 0) { "corrDirect failed with status $rc" }
+                    patchChunk.rewind()
+                    if (corrCompare) {
+                        val corrChunk = sc.direct("corr$ct", ct * s * s)
+                        require(SrpBridge.correlatePinned(handle, patchChunk, spec, corrChunk,
+                            spirvs.fft, spirvs.corr, ct, s) == 0)
+                        corrChunk.rewind(); patchChunk.rewind()
+                        val fftCrop = cropCorrs(corrChunk.asFloatBuffer(), ct, s, c, FloatArray(ct * c * c))
+                        val other = sc.direct("corrOther$ct", ct * c * c)
+                        require(SrpBridge.nativeCorrDirect(handle, lvl.refRes, patchChunk, other.apply { rewind() },
+                            dflowChunk, direct, moving[0].size, moving.size, lvl.tileSize, lvl.radius,
+                            lvl.nTx, t0, ct, 1 - CORR_DIRECT_FLIP) == 0)
+                        patchChunk.rewind()
+                        val mine = FloatArray(ct * c * c).also { cropChunk.rewind(); cropChunk.asFloatBuffer().get(it) }
+                        val alt = FloatArray(ct * c * c).also { other.rewind(); other.asFloatBuffer().get(it) }
+                        var dm = 0f; var da = 0f; var mx = 0f
+                        for (i in fftCrop.indices) {
+                            dm = maxOf(dm, kotlin.math.abs(mine[i] - fftCrop[i]))
+                            da = maxOf(da, kotlin.math.abs(alt[i] - fftCrop[i]))
+                            mx = maxOf(mx, kotlin.math.abs(fftCrop[i]))
+                        }
+                        println("sr-pipeline corrCompare T=${lvl.tileSize} r=${lvl.radius} tiles=$ct: " +
+                            "max|direct-fft| flip$CORR_DIRECT_FLIP=$dm flip${1 - CORR_DIRECT_FLIP}=$da (max |corr| $mx)")
+                    }
+                    cropChunk.rewind()
+                } else {
+                    val corrChunk = sc.direct("corr$ct", ct * s * s)
+                    rc = ptime("correlatePinned") { SrpBridge.correlatePinned(handle,
+                        patchChunk, spec, corrChunk, spirvs.fft, spirvs.corr, ct, s) }
+                    require(rc == 0) { "correlate failed with status $rc" }
+                    corrChunk.rewind()
+                    // Crop in place from the download buffer (absolute gets):
+                    // the full-map FloatArray copy (~76 MB at full-res tile
+                    // 64) does not fit the 512 MB heap next to the retained
+                    // level scratch. Values-identical (same indices).
+                    val croppedChunk = ptime("cropCorrsHost") {
+                        cropCorrs(corrChunk.asFloatBuffer(), ct, s, c,
+                            sc.floats("cropped$ct", ct * c * c))
+                    }
+                    packInto(croppedChunk, cropChunk)
                 }
-                packInto(croppedChunk, cropChunk)
                 rc = ptime("corrArgmin") { SrpBridge.corrArgmin(handle, patchChunk, cropChunk,
                     dflowChunk, spirvs.corr, tc, lvl.tileSize, lvl.radius, lvl.nTx,
                     ct * s * s, ct * c * c, t0, ct) }
@@ -580,7 +630,7 @@ object AlignGpu {
                 t0 += ct
                 ci++
             }
-            require(ci == lvl.refSpecChunks.size) {
+            require(directCorr || ci == lvl.refSpecChunks.size) {
                 "spectra chunk count ${lvl.refSpecChunks.size} != $ci loop chunks"
             }
         } else {
@@ -632,6 +682,7 @@ object AlignGpu {
         c: Int,
         handle: Long,
         spirv: ByteArray,
+        icaWg: ByteArray? = null,
     ) {
         val radius = when {
             lvl.tileSize == 64 -> 32767
@@ -654,11 +705,19 @@ object AlignGpu {
         val statics = lvl.refRes != 0L && lvl.gradXRes != 0L &&
             lvl.gradYRes != 0L && lvl.hessRes != 0L
         val rc = if (statics) {
-            ptime("icaRefineRes") { SrpBridge.icaRefineRes(handle, lvl.refRes, movBuf,
-                lvl.gradXRes, lvl.gradYRes, lvl.hessRes,
-                flowBuf, spirv, w, h,
-                tc, lvl.tileSize, config.nIter, radius.toFloat(),
-                lvl.nTx) }
+            if (icaWg != null && lvl.tileSize != 8) {
+                ptime("icaRefineWg") { SrpBridge.nativeIcaRefineWgRes(handle, lvl.refRes, movBuf,
+                    lvl.gradXRes, lvl.gradYRes, lvl.hessRes,
+                    flowBuf, icaWg, w, h,
+                    tc, lvl.tileSize, config.nIter, radius.toFloat(),
+                    lvl.nTx) }
+            } else {
+                ptime("icaRefineRes") { SrpBridge.icaRefineRes(handle, lvl.refRes, movBuf,
+                    lvl.gradXRes, lvl.gradYRes, lvl.hessRes,
+                    flowBuf, spirv, w, h,
+                    tc, lvl.tileSize, config.nIter, radius.toFloat(),
+                    lvl.nTx) }
+            }
         } else {
             ptime("icaRefine") { SrpBridge.icaRefine(handle,
                 packImgInto(lvl.ref, sc.direct("ref", w * h)), movBuf,

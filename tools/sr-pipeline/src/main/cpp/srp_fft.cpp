@@ -1075,6 +1075,97 @@ std::vector<float> FftChain::greyHave(const FftBuf& real, uint32_t h,
   return out;
 }
 
+namespace {
+// Radices <= 32 whose product is n (largest-first 4s, then 2, then odd
+// primes); empty when n has a prime factor > 32 (Bluestein fallback).
+std::vector<uint32_t> MixedRadices(uint32_t n) {
+  std::vector<uint32_t> out;
+  while (n % 4 == 0) { out.push_back(4); n /= 4; }
+  while (n % 2 == 0) { out.push_back(2); n /= 2; }
+  for (uint32_t p = 3; p <= 31 && n > 1; p += 2) {
+    while (n % p == 0) { out.push_back(p); n /= p; }
+  }
+  if (n != 1) out.clear();
+  return out;
+}
+
+Status GreyDispatch(Context* ctx, VkBuffer a, VkBuffer b, SrpHmsrPush* push,
+                    VkShaderModule mod) {
+  VkBuffer buffers[2] = {a, b};
+  uint64_t groups = (static_cast<uint64_t>(push->pixel_count) + 255) / 256;
+  if (groups > 65535) groups = 65535;
+  return SrpDispatchGroups(ctx, buffers, 2, push, sizeof(*push), 256,
+                           static_cast<uint32_t>(groups), mod);
+}
+}  // namespace
+
+// Mixed-radix Stockham grey (grey_fft.comp): true-length transforms, no
+// Bluestein padding, no host staging. Returns kInitFailed when an axis has
+// a prime factor > 32 (callers fall back to the Bluestein chain).
+Status SrpGreyFftMixedGpu(Context* ctx, uint32_t w, uint32_t h,
+                          VkBuffer real_buffer, float* out,
+                          VkShaderModule grey_module) {
+  if (ctx == nullptr || w < 4 || h < 4 || (w & 1u) || (h & 1u) ||
+      real_buffer == VK_NULL_HANDLE || out == nullptr ||
+      grey_module == VK_NULL_HANDLE) {
+    return Status::kInitFailed;
+  }
+  const std::vector<uint32_t> rx = MixedRadices(w), ry = MixedRadices(h);
+  if (rx.empty() || ry.empty()) return Status::kInitFailed;
+  const size_t n = static_cast<size_t>(w) * h;
+  if (n > 0x0FFFFFFFu) return Status::kInitFailed;
+  const int64_t ca = SrpCreateResident(ctx, 2 * n);
+  const int64_t cb = SrpCreateResident(ctx, 2 * n);
+  const int64_t ro = SrpCreateResident(ctx, n);
+  Status st = Status::kInitFailed;
+  VkBuffer A = VK_NULL_HANDLE, B = VK_NULL_HANDLE, R = VK_NULL_HANDLE;
+  if (ca != 0 && cb != 0 && ro != 0 &&
+      SrpResidentBuffer(ctx, ca, 2 * n, &A) == Status::kOk &&
+      SrpResidentBuffer(ctx, cb, 2 * n, &B) == Status::kOk &&
+      SrpResidentBuffer(ctx, ro, n, &R) == Status::kOk) {
+    auto base = [&](uint32_t mode, uint32_t count) {
+      SrpHmsrPush p{};
+      p.width = w; p.height = h; p.mode = mode; p.pixel_count = count; p.scale = 1.0f;
+      return p;
+    };
+    VkBuffer cur = A, nxt = B;
+    SrpHmsrPush pk = base(0, static_cast<uint32_t>(n));
+    st = GreyDispatch(ctx, real_buffer, cur, &pk, grey_module);
+    auto axis = [&](const std::vector<uint32_t>& radices, uint32_t len,
+                    uint32_t lines, uint32_t is_cols, uint32_t inverse) {
+      uint32_t ns = 1;
+      for (uint32_t r : radices) {
+        if (st != Status::kOk) return;
+        SrpHmsrPush pp = base(1, lines * (len / r));
+        pp.pad[0] = len; pp.pad[1] = r; pp.pad[2] = ns; pp.pad[3] = is_cols;
+        pp.pad[4] = inverse;
+        st = GreyDispatch(ctx, cur, nxt, &pp, grey_module);
+        std::swap(cur, nxt);
+        ns *= r;
+      }
+    };
+    axis(rx, w, h, 0, 0);   // forward rows
+    axis(ry, h, w, 1, 0);   // forward cols
+    if (st == Status::kOk) {
+      SrpHmsrPush pm = base(2, static_cast<uint32_t>(n));
+      st = GreyDispatch(ctx, cur, nxt, &pm, grey_module);
+      std::swap(cur, nxt);
+    }
+    axis(rx, w, h, 0, 1);   // inverse rows
+    axis(ry, h, w, 1, 1);   // inverse cols
+    if (st == Status::kOk) {
+      SrpHmsrPush pr = base(3, static_cast<uint32_t>(n));
+      pr.scale = 1.0f / static_cast<float>(n);   // ifft2 normalization
+      st = GreyDispatch(ctx, cur, R, &pr, grey_module);
+    }
+    if (st == Status::kOk) st = SrpDownloadResident(ctx, ro, out, n);
+  }
+  if (ca != 0) SrpFreeResident(ctx, ca);
+  if (cb != 0) SrpFreeResident(ctx, cb);
+  if (ro != 0) SrpFreeResident(ctx, ro);
+  return st;
+}
+
 Status SrpGreyFftHaveGpu(Context* ctx, uint32_t w, uint32_t h,
                          VkBuffer real_buffer, float* out,
                          VkShaderModule fft_module,

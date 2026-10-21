@@ -454,14 +454,14 @@ internal object MfsrMerge {
                 config, handle,
                 AlignGpu.Spirvs(
                     align = asset("align"), corr = asset("corr"),
-                    fft = fft, ica = asset("ica")
+                    fft = fft, ica = asset("ica"), corrDirect = asset("corr_direct"), icaWg = asset("ica_wg")
                 ),
                 VulkanPipeline.Spirvs(
                     gat = asset("gat"), grad = asset("grad"),
                     kernels = asset("kernels"), divide = asset("divide"),
                     robust = asset("robustness"),
                     mergeSplat = asset("merge_splat"),
-                    fft = fft, corr = asset("corr"),
+                    fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"),
                     kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
                 )
             )

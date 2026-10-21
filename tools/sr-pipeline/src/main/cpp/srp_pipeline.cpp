@@ -418,6 +418,29 @@ Status SrpIcaRefineGpu(Context* ctx, uint32_t width, uint32_t height,
                                 kIcaLocalSize, tile_count, shader_module);
 }
 
+// ica_wg.comp: one workgroup per tile (generic tile sizes).
+Status SrpIcaRefineWgGpu(Context* ctx, uint32_t width, uint32_t height,
+                         uint32_t tile_count, uint32_t tile_size, uint32_t niter,
+                         float clip_radius, uint32_t ntx, VkBuffer ref_buffer,
+                         VkBuffer mov_buffer, VkBuffer gradx_buffer,
+                         VkBuffer grady_buffer, VkBuffer hess_buffer,
+                         VkBuffer flow_buffer, VkShaderModule shader_module) {
+  if (width == 0 || height == 0 || tile_count == 0 || tile_size == 0 ||
+      niter == 0 || ntx == 0 || tile_count % ntx != 0) {
+    return Status::kInitFailed;
+  }
+  uint32_t clipbits = 0;
+  std::memcpy(&clipbits, &clip_radius, sizeof(clipbits));
+  SrpHmsrPush push{};
+  push.width = width; push.height = height; push.pixel_count = tile_count;
+  push.tile_count = tile_count; push.tile_size = tile_size; push.scale = 1.0f;
+  push.pad[0] = 1; push.pad[1] = ntx; push.pad[2] = clipbits; push.pad[3] = niter;
+  VkBuffer buffers[6] = {ref_buffer, mov_buffer, gradx_buffer, grady_buffer,
+                         hess_buffer, flow_buffer};
+  return SrpDispatchGroups(ctx, buffers, 6, &push, sizeof(push), 256,
+                           tile_count > 65535 ? 65535 : tile_count, shader_module);
+}
+
 Status SrpGatGpu(Context* ctx, uint32_t width, uint32_t height,
                  uint32_t count, uint32_t op, VkBuffer in_buffer,
                  VkBuffer out_buffer, VkBuffer ab_buffer,
@@ -790,6 +813,31 @@ Status SrpMergeSplatGpu(Context* ctx, uint32_t lr_w, uint32_t lr_h,
                          num_buffer, den_buffer};
   return DispatchStorageCompute(ctx, buffers, 6, &push, sizeof(push),
                                 kMergeSplatLocalSize, hr, shader_module);
+}
+
+Status SrpCorrDirectGpu(Context* ctx, uint32_t ref_w, uint32_t tile_size,
+                        uint32_t radius, uint32_t ntx, uint32_t tile_offset,
+                        uint32_t chunk_tiles, uint32_t flip, VkBuffer ref_buffer,
+                        VkBuffer patch_buffer, VkBuffer out_buffer,
+                        VkShaderModule shader_module) {
+  if (ctx == nullptr || ref_w == 0 || tile_size == 0 || ntx == 0 ||
+      chunk_tiles == 0 || ref_buffer == VK_NULL_HANDLE ||
+      patch_buffer == VK_NULL_HANDLE || out_buffer == VK_NULL_HANDLE ||
+      shader_module == VK_NULL_HANDLE) {
+    return Status::kInitFailed;
+  }
+  const uint32_t c = 2 * radius + 1;
+  SrpHmsrPush push{};
+  push.scale = 1.0f;
+  push.mode = flip;
+  push.pixel_count = chunk_tiles * c * c;
+  push.pad[0] = ref_w; push.pad[1] = tile_size; push.pad[2] = radius;
+  push.pad[3] = ntx; push.pad[4] = tile_offset;
+  VkBuffer buffers[3] = {ref_buffer, patch_buffer, out_buffer};
+  uint64_t groups = (static_cast<uint64_t>(push.pixel_count) + 255) / 256;
+  if (groups > 65535) groups = 65535;
+  return SrpDispatchGroups(ctx, buffers, 3, &push, sizeof(push), 256,
+                           static_cast<uint32_t>(groups), shader_module);
 }
 
 namespace {

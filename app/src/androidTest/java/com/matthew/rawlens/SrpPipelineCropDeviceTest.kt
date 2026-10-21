@@ -150,13 +150,13 @@ class SrpPipelineCropDeviceTest {
                 config, handle,
                 AlignGpu.Spirvs(
                     align = assetBytes("align"), corr = assetBytes("corr"),
-                    fft = fft, ica = assetBytes("ica")),
+                    fft = fft, ica = assetBytes("ica"), corrDirect = assetBytes("corr_direct"), icaWg = assetBytes("ica_wg")),
                 VulkanPipeline.Spirvs(
                     gat = assetBytes("gat"), grad = assetBytes("grad"),
                     kernels = assetBytes("kernels"), divide = assetBytes("divide"),
                     robust = assetBytes("robustness"),
                     mergeSplat = assetBytes("merge_splat"),
-                    fft = fft, corr = assetBytes("corr"),
+                    fft = fft, corr = assetBytes("corr"), greyFft = assetBytes("grey_fft"),
                     kernelNet = if (kernel == "kernelnet") assetBytes("kernelnet") else null),
             )
             val outH = h
