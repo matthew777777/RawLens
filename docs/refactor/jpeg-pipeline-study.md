@@ -142,3 +142,22 @@ RawTherapee oracle on the Kodak scenes: max 0.0005-0.0008 (half floats).
 | JPEG save | 400-635 |
 
 The colour/AgX output chain is not a target; HL, wavelet and AMaZE are.
+
+## Direct-Log MHC (real frame IMG_20261019_142925_030_VID_frame0.dng)
+
+Display error vs RawTherapee AMaZE on the frame (camera WB + matrix + sRGB):
+ours (heuristic MHC) 0.0225, textbook MHC 0.0237, RCD 0.0161.
+- Water "cyan" is demosaic aliasing on 1-3 px unclipped glints (0.09 %
+  photosites clipped; 94 % of the error away from clip), not highlights.
+- MHC heuristics KEPT: on the glints they clearly beat textbook MHC (which
+  rims every glint blue/orange); worst-case regression (sand) is invisible.
+  They cost ~5.5 ms/4K frame (33.2 vs 27.6 ms fp32).
+- 3x3 chroma median (dcraw median_filter / RT false colour suppression,
+  pre-WB) removes most dots (0.0225 -> 0.0206) but costs +20-28 ms/frame
+  on Mali in every fused form tried (shared tile + barrier); a separate
+  pass needs the full RGB round trip. Parked on branch
+  future/mhc-false-color (CPU twin, both shaders, real-frame device test).
+- Fused record shader: fp32 selected even where f16 math exists (measured
+  slower on the Mali test phone: 35.0 vs 33.2 ms; MHC-only 31.5 vs 26.4).
+  fullResFusedProof still misses its 30 ms margin (32.9-33.2 ms vs the
+  33.3 ms frame): MHC itself (~26 ms) is the remaining lever.

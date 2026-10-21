@@ -677,7 +677,11 @@ class DirectLogRecorder(
         rcdCount.set(0)
         fun tryInitFused(): Boolean {
             return try {
-                val asset = VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())
+                // fp32 even where f16 math is supported: measured on the
+                // Mali test phone (MT6878) the f16 twin is SLOWER, 4K fused
+                // 34.9-35.0 ms vs 33.1-34.1 ms (and MHC-only 31.5 vs 26.4).
+                // Re-enable per GPU only with a measurement that wins.
+                val asset = VfLogGrade.fusedAsset(f16Math = false)
                 Log.i(TAG, "fused asset $asset")
                 val fusedspv = appContext.assets.open(asset).use { it.readBytes() }
                 if (VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) {

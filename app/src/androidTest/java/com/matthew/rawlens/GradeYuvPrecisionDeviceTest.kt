@@ -346,7 +346,10 @@ class GradeYuvPrecisionDeviceTest {
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
-        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
+        // -e fusedSpv <path>: measurement only (time a candidate SPIR-V).
+        val fusedspv = args.getString("fusedSpv")?.let { java.io.File(it).readBytes() }
+            ?: context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
+        Log.i(TAG, "SPIKE fused f16=${VfVulkan.supportsF16MathNative()} spv=${args.getString("fusedSpv") ?: "asset"}")
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
@@ -391,7 +394,6 @@ class GradeYuvPrecisionDeviceTest {
             VfEglImport.closeSyncFd(fd)
             val ms = (System.nanoTime() - t0) / 1e6f
             Log.i(TAG, "SPIKE yuvchain-fused ms=${"%.1f".format(ms)} (gate $FUSED_GATE_MS)")
-            assertTrue("fused full-res ${ms}ms exceeds ${FUSED_GATE_MS}ms", ms < FUSED_GATE_MS)
 
             val words = VfEglImport.sampleP010Center(p010, layout[0], layout[1], ow, oh, ow / 2, oh / 2)
             assumeTrue("P010 readback failed", words != null && words.size == 3)
@@ -401,6 +403,8 @@ class GradeYuvPrecisionDeviceTest {
             Log.i(TAG, "SPIKE yuvproof-fused Y=${words!![0]} U=${words[1]} V=${words[2]} " +
                 "(ref ${expected.toList()})")
             assertGradeWords("yuvproof-fused", words, expected)
+            // Timing last, so a slow run still reports precision.
+            assertTrue("fused full-res ${ms}ms exceeds ${FUSED_GATE_MS}ms", ms < FUSED_GATE_MS)
         } finally {
             try { raw.close() } catch (_: Exception) {}
             try { p010?.close() } catch (_: Exception) {}
@@ -430,7 +434,7 @@ class GradeYuvPrecisionDeviceTest {
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
-        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
+        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
@@ -520,7 +524,7 @@ class GradeYuvPrecisionDeviceTest {
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
-        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(VfVulkan.supportsF16MathNative())).use { it.readBytes() }
+        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
