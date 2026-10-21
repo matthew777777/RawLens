@@ -1960,11 +1960,22 @@ class MainActivity : Activity() {
             // encode thread encodes.
             attachViewfinder(recorderViewfinder(controller.isBguActive()))
         }
+        // V4: storage below the reserve mid-take stops it the normal way, so
+        // the footer and index land and the take stays readable.
+        recorder.onStorageLow = {
+            runOnUiThread {
+                if (videoRecording && videoRecorder === recorder) {
+                    Log.w(LOG_TAG, "video stop: storage low")
+                    stopVideoRecording()
+                    setStatus("STORAGE FULL • STOPPED")
+                }
+            }
+        }
         try {
             recorder.start(file, videoContainerMeta(manager, cameraId, size))
         } catch (e: Exception) {
             Log.w(LOG_TAG, "video start failed: ${e.message}")
-            setStatus("REC FAILED")
+            setStatus(if (e is RawVideoRecorder.StorageFullException) "STORAGE FULL" else "REC FAILED")
             controller.start()
             return
         }

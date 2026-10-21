@@ -138,6 +138,28 @@ internal class RawVideoRecorder(
     /** Switchable any time, including mid-recording; no session reconfig. */
     @Volatile var crop: VideoCrop = VideoCrop.OPEN_GATE
 
+    /**
+     * V4 (docs/refactor/video-study.md): free-space floor on the output
+     * volume. Below it [start] refuses and a rolling take stops admitting
+     * frames and calls [onStorageLow] once, so the caller stops the take
+     * while the footer and index still fit (a full disk used to lose the
+     * whole take). RawRec stops at the same 500 MB. Settable for tests.
+     */
+    @Volatile var storageReserveBytes: Long = STORAGE_RESERVE_BYTES
+
+    /** Committer thread, at most once per take: free space fell below the reserve. */
+    @Volatile var onStorageLow: (() -> Unit)? = null
+
+    /** The take stopped admitting frames because storage ran low. */
+    @Volatile var storageLow: Boolean = false
+        private set
+    private var lastSpaceCheckMs = 0L
+
+    /** [start] refused: the output volume is already below [storageReserveBytes]. */
+    class StorageFullException(val freeBytes: Long, reserveBytes: Long) : IllegalStateException(
+        "storage full: ${freeBytes shr 20} MB free, ${reserveBytes shr 20} MB reserve"
+    )
+
     /** 2x binning request, set before [start]. Take-const: see [binActive]. */
     var binning: Boolean = false
 
@@ -303,6 +325,11 @@ internal class RawVideoRecorder(
         MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
         check(device == null) { "Already started" }
         require(CrsWriter.available) { "crs native library unavailable" }
+        val reserve = storageReserveBytes
+        val free = freeBytes(output)
+        if (free < reserve) throw StorageFullException(free, reserve)
+        storageLow = false
+        lastSpaceCheckMs = 0L
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
         encodeWorkers = workers
         outputFile = output
@@ -574,8 +601,30 @@ internal class RawVideoRecorder(
                 }
             }, handler)
         } catch (e: Exception) {
+            abortPipelineThreads()
             teardown()
             throw e
+        }
+    }
+
+    /**
+     * Start-failure path (V2, docs/refactor/video-study.md): the encode and
+     * commit threads start before setRepeatingRequest, and [teardown] only
+     * forgets them. Without this the workers block in take() forever and the
+     * committer polls a writer that teardown closes underneath it. Both
+     * loops exit on interrupt; queued frames go back to the reader.
+     */
+    private fun abortPipelineThreads() {
+        accepting = false
+        for (t in encodeThreads) t?.interrupt()
+        for (t in encodeThreads) {
+            try { t?.join(2_000) } catch (_: InterruptedException) {}
+        }
+        commitThread?.interrupt()
+        try { commitThread?.join(2_000) } catch (_: InterruptedException) {}
+        while (true) {
+            val item = encodeQueue.poll() ?: break
+            if (item is EncodeTask) RawImageOwnership.release(item.image)
         }
     }
 
@@ -684,63 +733,10 @@ internal class RawVideoRecorder(
         } catch (_: Exception) {
             return null
         }
-        return when (control) {
-            ManualControl.ISO -> {
-                if (!hasManualSensor(chars)) return null
-                val range = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-                    ?: return null
-                val current = (videoManual.iso ?: videoMeteredIso).coerceIn(range.lower, range.upper)
-                ManualControlRange(
-                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
-                    videoManual.iso == null && !videoLocks.lockExposure,
-                )
-            }
-            ManualControl.SHUTTER -> {
-                if (!hasManualSensor(chars)) return null
-                val range = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-                    ?: return null
-                val cappedMax = minOf(range.upper, 1_000_000_000L / FPS).coerceAtLeast(range.lower)
-                val current = (videoManual.shutterNanos ?: videoMeteredShutterNanos)
-                    .coerceIn(range.lower, cappedMax)
-                ManualControlRange(
-                    range.lower, cappedMax, current,
-                    videoManual.shutterNanos == null && !videoLocks.lockExposure,
-                )
-            }
-            ManualControl.WHITE_BALANCE -> {
-                val caps = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                    ?: intArrayOf()
-                if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) {
-                    return null
-                }
-                ManualControlRange(
-                    VideoManualPolicy.MIN_WB_KELVIN.toLong(),
-                    VideoManualPolicy.MAX_WB_KELVIN.toLong(),
-                    (videoManual.wbKelvin ?: 5500).toLong(),
-                    videoManual.wbKelvin == null,
-                )
-            }
-            ManualControl.FOCUS_DISTANCE -> {
-                val minDist = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
-                    ?.takeIf { it > 0f } ?: return null
-                val scale = 1_000f
-                val current = ((videoManual.focusDiopters ?: videoMeteredFocus ?: 0f) * scale).toLong()
-                    .coerceIn(0L, (minDist * scale).toLong())
-                ManualControlRange(
-                    0L, (minDist * scale).toLong(), current,
-                    videoManual.focusDiopters == null,
-                )
-            }
-            ManualControl.EXPOSURE_COMPENSATION -> {
-                val range = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-                    ?: return null
-                val current = (videoManual.evIndex ?: 0).coerceIn(range.lower, range.upper)
-                ManualControlRange(
-                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
-                    (videoManual.evIndex ?: 0) == 0,
-                )
-            }
-        }
+        return VideoManualControls.controlRange(
+            control, chars, FPS, videoManual, videoLocks,
+            videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
+        )
     }
 
     /** Live mid-take tweak from the photo-tile slider; rebuilds the request. */
@@ -758,10 +754,6 @@ internal class RawVideoRecorder(
         }
         refreshVideoRequest()
     }
-
-    private fun hasManualSensor(chars: CameraCharacteristics): Boolean =
-        (chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf())
-            .contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
 
     private fun refreshVideoRequest() {
         val handler = camHandler ?: return
@@ -794,115 +786,19 @@ internal class RawVideoRecorder(
         builder: CaptureRequest.Builder,
         chars: CameraCharacteristics,
     ) {
-        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
-        // Focus: manual diopters or a focus lock freezes the lens; otherwise
-        // continuous video AF when advertised.
-        val manualFocus = videoManual.focusDiopters
-        val lockedFocus = VideoManualPolicy.resolveFocusLock(manualFocus, videoLocks.lockFocus)
-        val afModes = chars.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-        fun coerceAf(mode: Int): Int {
-            if (afModes.contains(mode)) return mode
-            if (afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)) {
-                return CaptureRequest.CONTROL_AF_MODE_OFF
-            }
-            return afModes.firstOrNull() ?: mode
-        }
-        val frozenFocus = manualFocus ?: if (lockedFocus) videoMeteredFocus else null
-        if (frozenFocus != null) {
-            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(CaptureRequest.CONTROL_AF_MODE_OFF))
-            try {
-                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, frozenFocus)
-            } catch (_: IllegalArgumentException) {
-                // Fixed-focus hardware rejects the key; AF OFF alone still holds.
-            }
-        } else {
-            val continuous = when {
-                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) ->
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                else -> CaptureRequest.CONTROL_AF_MODE_AUTO
-            }
-            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(continuous))
-        }
-        // Exposure: explicit manual or a locked take drives the sensor (AE OFF);
-        // otherwise hardware AE with EV offset.
-        val resolvedIso = VideoManualPolicy.resolveIso(
-            videoManual.iso, videoMeteredIso, videoLocks.lockExposure,
+        // V3 (docs/refactor/video-study.md): same pick as DirectLogRecorder.
+        // Exact (FPS, FPS) whenever advertised, so every device that worked
+        // before gets the identical request; otherwise the narrowest range
+        // containing FPS instead of an unadvertised fixed range.
+        val picked = LogVideoProbe.fixedFpsRange(
+            FPS,
+            chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.map { it.lower to it.upper } ?: emptyList()
+        ) ?: (FPS to FPS)
+        VideoManualControls.applyToRequest(
+            builder, chars, FPS, picked, videoManual, videoLocks,
+            videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
         )
-        val resolvedShutter = VideoManualPolicy.resolveShutter(
-            videoManual.shutterNanos, videoMeteredShutterNanos, videoLocks.lockExposure,
-        )
-        val manualSensor = hasManualSensor(chars) && (resolvedIso != null || resolvedShutter != null)
-        if (manualSensor) {
-            val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            val timeRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            val iso = VideoManualPolicy.clampIso(
-                resolvedIso ?: videoMeteredIso,
-                isoRange?.lower ?: (resolvedIso ?: videoMeteredIso),
-                isoRange?.upper ?: (resolvedIso ?: videoMeteredIso),
-            )
-            val shutter = VideoManualPolicy.clampShutter(
-                resolvedShutter ?: videoMeteredShutterNanos,
-                timeRange?.lower ?: (resolvedShutter ?: videoMeteredShutterNanos),
-                timeRange?.upper ?: (resolvedShutter ?: videoMeteredShutterNanos),
-                FPS,
-            )
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
-        } else {
-            val aeModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
-            val aeMode = if (aeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
-                CaptureRequest.CONTROL_AE_MODE_ON
-            } else {
-                aeModes.firstOrNull() ?: CaptureRequest.CONTROL_AE_MODE_ON
-            }
-            builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
-            val evRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-            val ev = (videoManual.evIndex ?: 0).coerceIn(
-                evRange?.lower ?: 0, evRange?.upper ?: 0,
-            )
-            try {
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev)
-            } catch (_: IllegalArgumentException) {
-            }
-        }
-        // WB: manual Kelvin drives OFF + gains; a WB lock freezes auto.
-        val manualWb = videoManual.wbKelvin
-        val awbModes = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
-        fun coerceAwb(mode: Int): Int {
-            if (awbModes.contains(mode)) return mode
-            if (awbModes.contains(CaptureRequest.CONTROL_AWB_MODE_AUTO)) {
-                return CaptureRequest.CONTROL_AWB_MODE_AUTO
-            }
-            return awbModes.firstOrNull() ?: mode
-        }
-        if (manualWb != null) {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_OFF))
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_MODE,
-                CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
-            )
-            val gains = VideoManualPolicy.wbGainsForKelvin(manualWb)
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_GAINS,
-                android.hardware.camera2.params.RggbChannelVector(
-                    gains[0], gains[1], gains[2], gains[3],
-                ),
-            )
-        } else {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_AUTO))
-            if (VideoManualPolicy.resolveAwbLock(null, videoLocks.lockWb) &&
-                chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
-            ) {
-                try {
-                    builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                } catch (_: IllegalArgumentException) {
-                }
-            }
-        }
     }
 
     fun snapshot(): VideoStats = VideoStats(
@@ -1062,6 +958,7 @@ internal class RawVideoRecorder(
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
         var headWaitStart = -1L
         while (true) {
+            checkStorage()
             commitReadyHeads()
             drainAudioQueue()
             drainMotion()
@@ -1315,6 +1212,30 @@ internal class RawVideoRecorder(
         return MotionRecorder.Chunk(ts, ax, n)
     }
 
+    /** Committer thread: V4 free-space check, every [STORAGE_CHECK_MS]. */
+    private fun checkStorage() {
+        if (storageLow) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastSpaceCheckMs < STORAGE_CHECK_MS) return
+        lastSpaceCheckMs = now
+        val file = outputFile ?: return
+        val free = freeBytes(file)
+        if (free >= storageReserveBytes) return
+        storageLow = true
+        // Stop admitting: queued and in-flight frames still commit, and
+        // stop() writes the footer and index into the reserve.
+        accepting = false
+        Log.w(TAG, "storage low: ${free shr 20} MB free, stopping take")
+        try {
+            onStorageLow?.invoke()
+        } catch (e: Exception) {
+            Log.w(TAG, "storage-low callback failed: ${e.message}")
+        }
+    }
+
+    private fun freeBytes(output: File): Long =
+        output.absoluteFile.parentFile?.usableSpace ?: Long.MAX_VALUE
+
     private fun shutdownStreams() {
         try {
             audio?.stop()
@@ -1450,6 +1371,8 @@ internal class RawVideoRecorder(
             pref && cfa != null && cfa in 0..3 && VideoCrop.supportsBinning(sensorW)
 
         const val FPS = 30
+        const val STORAGE_RESERVE_BYTES = 500L shl 20
+        private const val STORAGE_CHECK_MS = 500L
         // Outstanding Images must stay <= QUEUE_CAP + workers in hand with
         // margin: the acquire loop drops (never wedges) when encode
         // backpressures. GPU-borrowed frames pin one extra buffer each.
