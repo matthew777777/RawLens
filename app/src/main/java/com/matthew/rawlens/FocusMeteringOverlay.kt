@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.util.Log
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -65,6 +66,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private val afCornerRadius = 12f * density
     private val aeCornerRadius = 10f * density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    /** Finger wobble a hold tolerates before it becomes a drag (thumbs drift). */
+    private val holdSlop = touchSlop * 2f
     private val afPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(230, 255, 255, 255)
         style = Paint.Style.STROKE
@@ -282,20 +285,20 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 multiTouch = false
                 dragMode = hitTest(event.x, event.y)
                 longPressPending?.let(::removeCallbacks)
-                // Pressing an existing handle starts a potential drag, never a
-                // hold-to-lock: arming the long-press there would fire a lock
-                // mid-drag. Empty-area presses keep the hold behavior.
-                if (dragMode == DragNone) {
-                    val downX = event.x
-                    val downY = event.y
-                    longPressPending = Runnable {
-                        longPressPending = null
-                        longPressFired = true
-                        dragMode = DragNone
-                        showReticleAt(downX, downY)
-                        onAfLockHold?.invoke(afPoint.x, afPoint.y)
-                    }.also { postDelayed(it, ViewConfiguration.getLongPressTimeout().toLong()) }
-                }
+                // Hold-to-lock is armed everywhere, also on the reticle the
+                // last tap left behind (where people naturally press again).
+                // Starting a drag cancels it, so a lock never fires mid-drag.
+                val downX = event.x
+                val downY = event.y
+                longPressPending = Runnable {
+                    longPressPending = null
+                    longPressFired = true
+                    dragMode = DragNone
+                    dragging = false
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    showReticleAt(downX, downY)
+                    onAfLockHold?.invoke(afPoint.x, afPoint.y)
+                }.also { postDelayed(it, HOLD_LOCK_MS) }
                 return true
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -312,9 +315,12 @@ class FocusMeteringOverlay @JvmOverloads constructor(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (multiTouch) return true
+                if (longPressFired) return true
                 if (dragMode != DragNone) {
+                    // Drag starts past the hold slop so a still finger on the
+                    // reticle reaches the lock instead of nudging the square.
                     if (!dragging &&
-                        hypot(event.x - touchDownX, event.y - touchDownY) > touchSlop
+                        hypot(event.x - touchDownX, event.y - touchDownY) > holdSlop
                     ) {
                         dragging = true
                         longPressPending?.let(::removeCallbacks)
@@ -326,7 +332,7 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                     }
                     return true
                 }
-                if (hypot(event.x - touchDownX, event.y - touchDownY) > touchSlop) {
+                if (hypot(event.x - touchDownX, event.y - touchDownY) > holdSlop) {
                     longPressPending?.let(::removeCallbacks)
                     longPressPending = null
                 }
@@ -514,6 +520,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
         // Shared camera tag so one grep follows a tap from overlay to HAL verdict.
         private const val LOG_TAG = "RawLensCamera"
         private const val LOCK_TICK_MS = 500L
+        /** Press-and-hold time to lock: a bit faster than the system long-press. */
+        private const val HOLD_LOCK_MS = 450L
         // Long enough to peel a square out after the tap that revealed it:
         // covers the AF scan timeout, while locks hold indefinitely anyway.
         private const val FADE_DELAY_MS = 4_000L

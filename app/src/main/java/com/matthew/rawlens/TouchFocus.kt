@@ -488,6 +488,9 @@ internal class TouchFocus(private val host: Host) {
         // the user asked to freeze exposure, AF just missed. Release stays manual
         // (double-tap / reset / retap / manual / lens / stop).
         if (lockIndefinite) {
+            // The hold is still in force (AE frozen, AF parked): show the ∞
+            // badge so the user sees the lock took even when AF missed.
+            host.onFocusLock(true, true, 0L)
             host.updateRepeatingRequest()
             return
         }
