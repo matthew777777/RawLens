@@ -180,3 +180,17 @@ Reference: RawTherapee AMaZE box-downscaled to the binned grid.
 - Not fixed (measured negligible here): the binning grade has no
   sensor-white desaturation (no WB gains in vf_gradeyuv); fully clipped
   glints still render white after the CCM clip.
+
+## RAW video binning (CRS type-7 2x), same real frame
+
+Binned -> RawTherapee AMaZE vs full-res AMaZE box-downscaled 2x:
+old inward box + diamond green 0.0423 (sky noise 5.7-6.2e-4); centred
+(R/B 1-5-3 triangle on the same-colour grid, green 2 in-block + ring)
+0.0344 (4.7-5.3e-4). The old samples zig-zagged +-0.5 px (R/B) and sat
+0.25-0.5 px off (G): an irregular Bayer grid for every downstream
+demosaic. Encoder cost kept flat by unpacking each band's source rows
+once and binning the band in tight per-parity loops (byte-identical to
+the per-tap helper on the real frame, all CFAs). Device, open gate binned,
+cooled and interleaved: old 37.7-38.5 ms, new 37.8-38.5 ms per frame,
+0 drops. Gates: tools/crs binning_quality (flat, centring, MTF) and
+parallel_parity (independent centred spec, re-pinned golden).
