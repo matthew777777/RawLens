@@ -159,3 +159,9 @@ Open (logged, not changed):
   and fused-finalize acquires now wait on COMPUTE_SHADER/SHADER_WRITE.
   Sync validation rerun: zero SYNC-HAZARD; release: RCD/MHC parity, photo
   RCD scores identical (kodim01n 31.73 dB), Direct-Log record pass.
+- B3 (fixed) evictOldestInput/Output now vkQueueWaitIdle before destroying
+  an evicted import (rare path; the caps cover the live pools).
+- A7 (fixed) orphan shaders/vf/comp.spv removed.
+- A2 deferred by owner decision (2026-10-21): future work.
+- Still open: B1 (teardown vs a VF worker stuck in vkWaitForFences) and
+  the manual read of pipeline creation, lens-shading upload and stab warp.

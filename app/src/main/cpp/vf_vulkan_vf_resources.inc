@@ -270,6 +270,9 @@ void evictOldestInput(Context* ctx) {
     ctx->inputOrder.erase(ctx->inputOrder.begin());
     auto oit = ctx->inputs.find(oldest);
     if (oit != ctx->inputs.end()) {
+        // B3: a pending submit may still read this import; eviction is rare
+        // (the cap covers the live pools), so idle the queue first.
+        vkQueueWaitIdle(ctx->queue);
         destroyImportedBuffer(ctx, &oit->second);
         ctx->inputs.erase(oit);
     }
@@ -293,6 +296,7 @@ void evictOldestOutput(Context* ctx) {
         ctx->outputOrder.erase(oit);
         auto mit = ctx->outputs.find(oldest);
         if (mit != ctx->outputs.end()) {
+            vkQueueWaitIdle(ctx->queue);  // B3: never destroy an import in flight
             destroyImported(ctx, &mit->second);
             ctx->outputs.erase(mit);
         }
