@@ -113,7 +113,6 @@ class MainActivity : Activity() {
     internal var developedFormat = DevelopedFormat.JPEG
     private var vfPreviewMode = VfPreviewMode.FOLLOW
     internal var vfResolution = VfResolution.MAX
-    private var vfPreviewButton: TextView? = null
     private var vfEngineButton: TextView? = null
     internal var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     internal var rawZslSettingsStatus: TextView? = null
@@ -658,10 +657,6 @@ class MainActivity : Activity() {
         controller.setVfEngineMode(
             VfEngineMode.fromPreference(lensPreferences().getString(KEY_VF_ENGINE_MODE, null))
         )
-        vfPreviewButton = findViewById<TextView?>(R.id.vfPreviewButton)?.apply {
-            setOnClickListener { cycleVfPreviewMode() }
-        }
-        refreshVfPreviewButton()
         // The RAW VF debug overlay is the engine switch: tap to cycle AUTO/BGU/BGU_CPU/GPU/CPU.
         rawVfDebugOverlay.isClickable = true
         rawVfDebugOverlay.isFocusable = true
@@ -1474,7 +1469,6 @@ class MainActivity : Activity() {
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.galleryThumb),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
-        findViewById(R.id.vfPreviewButton),
         findViewById(R.id.vfEngineButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
         findViewById(R.id.gridQuick),
@@ -3129,7 +3123,6 @@ class MainActivity : Activity() {
         refreshCaptureFormatControl()
         // FOLLOW tonemap follows the format inside the controller (setCaptureFormat pushes
         // the render state); just refresh the badge label here.
-        refreshVfPreviewButton()
         setStatus(captureStatusLabel())
     }
 
@@ -3154,21 +3147,7 @@ class MainActivity : Activity() {
         }
         lensPreferences().edit().putString(KEY_VF_PREVIEW_MODE, vfPreviewMode.name).apply()
         controller.setVfPreviewMode(vfPreviewMode)
-        vfPreviewButton?.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        refreshVfPreviewButton()
-        setStatus("VF • ${vfPreviewButton?.text ?: vfPreviewMode.name}")
-    }
-
-    private fun refreshVfPreviewButton() {
-        vfPreviewButton?.apply {
-            text = when (vfPreviewMode) {
-                VfPreviewMode.FOLLOW -> if (vfPreviewMode.resolve(captureFormat)) "RAW•A" else "JPG•A"
-                VfPreviewMode.RAW -> "RAW"
-                VfPreviewMode.JPEG -> "JPG"
-            }
-            contentDescription = "Viewfinder preview ${vfPreviewMode.name}. Tap to change. " +
-                "RAW shows the raw-clean render, JPG shows the cheap AgX preview matching the saved JPEG."
-        }
+        setStatus("VF • ${vfPreviewMode.name}")
     }
 
     /** RAW VF debug-overlay tap: cycle the engine AUTO -> GPU -> CPU -> BGU -> BGU_CPU. */
