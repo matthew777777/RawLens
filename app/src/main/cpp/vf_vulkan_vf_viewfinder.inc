@@ -8,7 +8,9 @@ static int initContext(JNIEnv* env, jbyteArray spv);
 // capped at 500ms, so expiry needs a driver ignoring timeouts —
 // teardown then proceeds loudly (the worker re-validates g after its
 // wait and bails). Requires vkMutex (released while spinning).
-static void joinVfCompute(std::unique_lock<std::mutex>& lock) {
+// Returns false when the worker is still inside its fence wait (B1:
+// callers must then not destroy the fence/device it is waiting on).
+static bool joinVfCompute(std::unique_lock<std::mutex>& lock) {
     int spins = 0;
     while (vfComputeInFlight.load() > 0 && spins < 400) {
         lock.unlock();
@@ -18,14 +20,46 @@ static void joinVfCompute(std::unique_lock<std::mutex>& lock) {
     }
     if (vfComputeInFlight.load() > 0) {
         LOGW("vf-vk: teardown with VF compute in flight (wedged worker?)");
+        return false;
+    }
+    return true;
+}
+
+static void destroyContext(Context* ctx);
+
+// B1: a context retired while a viewfinder worker was still inside its
+// unlocked vkWaitForFences on ctx->fence/ctx->device. Destroying it then
+// would free the objects under the wait; the worker destroys it instead
+// once it returns (reapOrphanContext, under vkMutex).
+static Context* orphanCtx = nullptr;
+
+static void reapOrphanContext() {
+    if (orphanCtx != nullptr && vfComputeInFlight.load() == 0) {
+        Context* o = orphanCtx;
+        orphanCtx = nullptr;
+        LOGI("vf-vk: destroying context retired during a stuck VF wait");
+        destroyContext(o);
     }
 }
 
-static void teardownContext() {
+// [joined] = joinVfCompute's result: false parks the context as the orphan.
+static void teardownContext(bool joined = true) {
     if (g == nullptr) return;
     Context* ctx = g;
     g = nullptr;
     vkGeneration.fetch_add(1);
+    if (!joined) {
+        if (orphanCtx == nullptr) {
+            orphanCtx = ctx;
+        } else {
+            LOGW("vf-vk: second stuck teardown; leaking a context rather than freeing it under a wait");
+        }
+        return;
+    }
+    destroyContext(ctx);
+}
+
+static void destroyContext(Context* ctx) {
     // Best-effort idle first: returns promptly (with an error) on a lost device.
     vkDeviceWaitIdle(ctx->device);
     destroyGrade(ctx);
@@ -98,8 +132,7 @@ Java_com_matthew_rawlens_VfVulkan_reinitNative(
     std::unique_lock<std::mutex> vkGuard(vkMutex);
     if (!spv || env->GetArrayLength(spv) % 4 != 0) return VFVK_BAD_ARGUMENT;
     LOGW("vf-vk: reinitializing device after submit failures");
-    joinVfCompute(vkGuard);
-    teardownContext();
+    teardownContext(joinVfCompute(vkGuard));
     int r = initContext(env, spv);
     if (r == VFVK_OK) {
         LOGI("vf-vk: device reinit ok");
@@ -485,7 +518,10 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     vr = vkWaitForFences(device, 1, &fence, VK_TRUE, VFVK_VF_WAIT_NS);
     vkGuard.lock();
     vfComputeInFlight.fetch_sub(1);
-    if (g == nullptr || vkGeneration.load() != gen) return VFVK_NOT_INITIALIZED;
+    if (g == nullptr || vkGeneration.load() != gen) {
+        reapOrphanContext();  // B1: free a context retired during this wait
+        return VFVK_NOT_INITIALIZED;
+    }
     // Timeout: NO retire (a WaitIdle here would reintroduce the convoy
     // on the failure path). The dispatch may still be reading its input
     // when the caller releases the Image lease, but its output is never
@@ -631,7 +667,10 @@ static int dispatchSuperpixelImage(std::unique_lock<std::mutex>& vkGuard,
     vr = vkWaitForFences(device, 1, &fence, VK_TRUE, VFVK_VF_WAIT_NS);
     vkGuard.lock();
     vfComputeInFlight.fetch_sub(1);
-    if (g == nullptr || vkGeneration.load() != gen) return VFVK_NOT_INITIALIZED;
+    if (g == nullptr || vkGeneration.load() != gen) {
+        reapOrphanContext();  // B1: free a context retired during this wait
+        return VFVK_NOT_INITIALIZED;
+    }
     if (vr == VK_TIMEOUT) return VFVK_BUSY;
     if (vr != VK_SUCCESS) {
         LOGW("vf-vk: image fence wait failed %d; retiring before release", vr);
@@ -796,7 +835,10 @@ static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
     vr = vkWaitForFences(device, 1, &fence, VK_TRUE, VFVK_VF_WAIT_NS);
     vkGuard.lock();
     vfComputeInFlight.fetch_sub(1);
-    if (g == nullptr || vkGeneration.load() != gen) return VFVK_NOT_INITIALIZED;
+    if (g == nullptr || vkGeneration.load() != gen) {
+        reapOrphanContext();  // B1: free a context retired during this wait
+        return VFVK_NOT_INITIALIZED;
+    }
     if (vr == VK_TIMEOUT) return VFVK_BUSY;
     if (vr != VK_SUCCESS) {
         LOGW("vf-vk: bridge fence wait failed %d; retiring before release", vr);
@@ -1225,7 +1267,12 @@ Java_com_matthew_rawlens_VfVulkan_resetNative(JNIEnv*, jobject) {
     if (g == nullptr) return;
     // Called from non-worker threads (recorder stop): join an in-flight
     // viewfinder wait before destroying the imports/output it uses.
-    joinVfCompute(vkGuard);
+    if (!joinVfCompute(vkGuard)) {
+        // B1: the worker still waits on this context; resetting now would
+        // free its imports/output under it. The next reset does the work.
+        LOGW("vf-vk: reset skipped, VF wait still in flight");
+        return;
+    }
     if (g == nullptr) return;
     vkDeviceWaitIdle(g->device);
     destroyGrade(g);

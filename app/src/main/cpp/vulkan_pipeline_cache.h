@@ -27,6 +27,12 @@ namespace vpc {
 // receives the warmed byte count, 0 when nothing was loaded.
 VkPipelineCache load(VkDevice device, const char* path, size_t* bytes_read);
 
+// Same, but first checks the file's VkPipelineCacheHeaderVersionOne against
+// [gpu] (header version, vendorID, deviceID, pipelineCacheUUID) and starts
+// empty on any mismatch, instead of relying on every driver to reject a
+// stale blob after an OTA driver update (P2, docs/refactor/vf-native-study.md).
+VkPipelineCache load(VkPhysicalDevice gpu, VkDevice device, const char* path, size_t* bytes_read);
+
 // Serializes [cache] to [path] atomically (write tmp + rename), creating
 // parent directories as needed. Returns false (and writes nothing
 // observable) on any failure, including a null cache or path.

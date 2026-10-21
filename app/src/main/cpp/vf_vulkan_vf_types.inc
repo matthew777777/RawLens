@@ -618,7 +618,7 @@ static VkPipelineCache pipelineCacheFor(Context* ctx) {
     if (ctx->pipelineCache != VK_NULL_HANDLE) return ctx->pipelineCache;
     const char* path = ctx->pipelineCachePath.empty() ? nullptr : ctx->pipelineCachePath.c_str();
     size_t warmed = 0;
-    ctx->pipelineCache = rawlens::vpc::load(ctx->device, path, &warmed);
+    ctx->pipelineCache = rawlens::vpc::load(ctx->gpu, ctx->device, path, &warmed);
     if (ctx->pipelineCache == VK_NULL_HANDLE) {
         LOGW("vf-vk: pipeline cache unavailable; compiling without it");
     } else if (path != nullptr) {

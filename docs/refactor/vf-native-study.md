@@ -165,3 +165,37 @@ Open (logged, not changed):
 - A2 deferred by owner decision (2026-10-21): future work.
 - Still open: B1 (teardown vs a VF worker stuck in vkWaitForFences) and
   the manual read of pipeline creation, lens-shading upload and stab warp.
+- B1 (fixed) reinit after a failed VF join no longer destroys the context
+  a worker is still waiting on: it is parked (orphanCtx) and destroyed by
+  that worker when its wait returns (reapOrphanContext, under vkMutex);
+  resetNative skips its destructive part in that case.
+- Manual read of the tool-only parts:
+  - lens-shading upload: correct (bounds, length, gainAt normalisation;
+    per-slot staging writes now behind the slot gate).
+  - stabilization warp: S1 (fixed) stabUploadNative overwrote the staging
+    a timed-out warp may still read -> same stabPending gate as the submit;
+    S3 (fixed) 10-bit path accepted a 1-byte chroma pixel stride and read
+    one byte past the plane; S2 not a bug (staging is HOST_COHERENT).
+  - pipeline creation: P1 (fixed) createPipeline destroyed ctx->setLayout
+    without nulling it (teardown would destroy it twice); every other
+    creator already nulls. P2 (fixed) the VF pipeline cache file is now
+    checked against VkPipelineCacheHeaderVersionOne (version, vendorID,
+    deviceID, pipelineCacheUUID) before use; stale files are deleted.
+    galosh_host / hdrplus_host keep the old loader (excluded components).
+- Device (build 418): RCD/MHC parity, photo RCD scores identical, RAW
+  video, start-failure, ZSL soak, Direct-Log 3 runs (wedges 0/0/1), cache
+  warms (83155 bytes). MHC perf gate 27-28 ms right after the soak,
+  22.5-24.1 ms on 4 cool reruns (thermal, not a regression).
+
+## Future: Direct-Log stabilization rewrite (owner, 2026-10-21)
+
+Owner reports the stabilization does not work and wants a sourced
+rewrite, deferred. Starting references: Karpenko, Jacobs, Baek, Levoy,
+"Digital Video Stabilization and Rolling Shutter Correction using
+Gyroscopes" (Stanford CSTR 2011-03); Gyroflow (github.com/gyroflow/
+gyroflow: gyro/frame sync, lens profiles, smoothing); Android
+SensorManager/Camera2 timestamp bases (SENSOR_INFO_TIMESTAMP_SOURCE),
+LENS_INTRINSIC_CALIBRATION, SENSOR_ROLLING_SHUTTER_SKEW. Current code:
+DirectLogStabilizer, StabTrajectory, StabSidecar, MotionRecorder,
+GyroCameraFrameMapper, vf_stabwarp.comp (affine homography only, no
+rolling-shutter term).

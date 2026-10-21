@@ -199,6 +199,7 @@ bool createPipeline(Context* ctx, const uint32_t* code, size_t words) {    VkSha
     pipeLayoutInfo.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->pipelineLayout) != VK_SUCCESS) {
         vkDestroyDescriptorSetLayout(ctx->device, ctx->setLayout, nullptr);
+        ctx->setLayout = VK_NULL_HANDLE;  // P1: teardown must not destroy it twice
         vkDestroyShaderModule(ctx->device, module, nullptr);
         return false;
     }

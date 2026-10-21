@@ -740,13 +740,22 @@ Java_com_matthew_rawlens_VfStab_stabUploadNative(
     if (g->stabStagingMap == nullptr || g->stabW != width || g->stabH != height) {
         return VFVK_BAD_ARGUMENT;
     }
+    // S1: the staging buffer is the previous warp's input; never overwrite
+    // it while that warp may still be reading (see A1 / stabPending).
+    if (g->stabPending) {
+        if (vkGetFenceStatus(g->device, g->stabFence) == VK_NOT_READY) return VFVK_BUSY;
+        vkResetFences(g->device, 1, &g->stabFence);
+        g->stabPending = false;
+    }
     if (!yBuf || !uBuf || !vBuf) return VFVK_BAD_ARGUMENT;
     if (width <= 0 || height <= 0 || (width % 2) != 0 || (height % 2) != 0) {
         return VFVK_BAD_ARGUMENT;
     }
     const int pxB = is10Bit ? 2 : 1;
+    // S3: the 10-bit path loads 2 bytes per chroma sample, so a 1-byte pixel
+    // stride would read one byte past the plane the capacity check allows.
     if (yStrideB < width * pxB || uStrideB < (width / 2) * uPxB ||
-        vStrideB < (width / 2) * vPxB || uPxB <= 0 || vPxB <= 0) {
+        vStrideB < (width / 2) * vPxB || uPxB < pxB || vPxB < pxB) {
         LOGW("vf-vk: stab upload strides implausible");
         return VFVK_BAD_ARGUMENT;
     }

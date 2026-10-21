@@ -93,6 +93,34 @@ VkPipelineCache load(VkDevice device, const char* path, size_t* bytes_read) {
     return create_empty(device);
 }
 
+VkPipelineCache load(VkPhysicalDevice gpu, VkDevice device, const char* path, size_t* bytes_read) {
+    if (bytes_read != nullptr) *bytes_read = 0;
+    if (gpu == VK_NULL_HANDLE || path == nullptr || path[0] == '\0') {
+        return load(device, path, bytes_read);
+    }
+    FILE* f = std::fopen(path, "rb");
+    if (f == nullptr) return load(device, path, bytes_read);
+    unsigned char header[32] = {};
+    const size_t got = std::fread(header, 1, sizeof(header), f);
+    std::fclose(f);
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(gpu, &props);
+    uint32_t headerSize = 0, headerVersion = 0, vendorId = 0, deviceId = 0;
+    std::memcpy(&headerSize, header + 0, 4);
+    std::memcpy(&headerVersion, header + 4, 4);
+    std::memcpy(&vendorId, header + 8, 4);
+    std::memcpy(&deviceId, header + 12, 4);
+    const bool match = got == sizeof(header) && headerSize >= 32 &&
+        headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+        vendorId == props.vendorID && deviceId == props.deviceID &&
+        std::memcmp(header + 16, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+    if (!match) {
+        std::remove(path);  // stale (other driver/device) or truncated: start fresh
+        return create_empty(device);
+    }
+    return load(device, path, bytes_read);
+}
+
 bool save(VkDevice device, VkPipelineCache cache, const char* path) {
     if (device == VK_NULL_HANDLE || cache == VK_NULL_HANDLE || path == nullptr || path[0] == '\0') {
         return false;
