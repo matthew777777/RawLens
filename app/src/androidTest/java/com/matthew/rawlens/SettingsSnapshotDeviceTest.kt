@@ -42,13 +42,11 @@ class SettingsSnapshotDeviceTest {
         val activity = instrumentation.startActivitySync(
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ) as MainActivity
-        val showSettings = MainActivity::class.java.getDeclaredMethod("showSettings", Int::class.javaPrimitiveType)
-            .apply { isAccessible = true }
         SystemClock.sleep(3000) // camera open settles; status lines in tabs read live state
         val lines = mutableListOf<String>()
         try {
             for (tab in 0 until TAB_COUNT) {
-                instrumentation.runOnMainSync { showSettings.invoke(activity, tab) }
+                instrumentation.runOnMainSync { activity.showSettings(tab) }
                 instrumentation.waitForIdleSync()
                 SystemClock.sleep(800)
                 val root = automation.rootInActiveWindow

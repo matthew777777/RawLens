@@ -59,99 +59,99 @@ class MainActivity : Activity() {
     internal lateinit var controller: RawCameraController
     private lateinit var status: TextView
 
-    private lateinit var isoControl: TextView
-    private lateinit var shutterControl: TextView
-    private lateinit var wbControl: TextView
-    private lateinit var focusControl: TextView
-    private lateinit var evControl: TextView
-    private lateinit var lensSwitcher: LinearLayout
+    internal lateinit var isoControl: TextView
+    internal lateinit var shutterControl: TextView
+    internal lateinit var wbControl: TextView
+    internal lateinit var focusControl: TextView
+    internal lateinit var evControl: TextView
+    internal lateinit var lensSwitcher: LinearLayout
     private lateinit var lastCapture: LastCaptureThumbnail
     private lateinit var flashControl: TextView
-    private lateinit var lensDiscovery: LensDiscovery
-    private lateinit var lensVerdictStore: LensVerdictStore
-    private lateinit var rawSizePreferenceStore: RawSizePreferenceStore
-    private lateinit var rawFormatPreferenceStore: RawFormatPreferenceStore
-    private lateinit var dngMetadataOverrideStore: DngMetadataOverrideStore
-    private lateinit var programAeProfileStore: ProgramAeProfileStore
-    private lateinit var vendorKeyStore: VendorKeyStore
+    internal lateinit var lensDiscovery: LensDiscovery
+    internal lateinit var lensVerdictStore: LensVerdictStore
+    internal lateinit var rawSizePreferenceStore: RawSizePreferenceStore
+    internal lateinit var rawFormatPreferenceStore: RawFormatPreferenceStore
+    internal lateinit var dngMetadataOverrideStore: DngMetadataOverrideStore
+    internal lateinit var programAeProfileStore: ProgramAeProfileStore
+    internal lateinit var vendorKeyStore: VendorKeyStore
     internal var gpsProvider: GpsLocationProvider? = null
-    private lateinit var manualPanel: LinearLayout
-    private lateinit var manualSlider: RuleSliderView
-    private lateinit var manualAuto: Button
-    private lateinit var manualLimits: Button
-    private var activeManualControl: ManualControl? = null
+    internal lateinit var manualPanel: LinearLayout
+    internal lateinit var manualSlider: RuleSliderView
+    internal lateinit var manualAuto: Button
+    internal lateinit var manualLimits: Button
+    internal var activeManualControl: ManualControl? = null
     /** PROGRAM axis lock slider reuses the bottom ruler; null when the ruler drives MANUAL. */
-    private var activeProgramAxis: ManualControl? = null
-    private var pendingSliderUpdate: Runnable? = null
-    private var manualPanelHide: Runnable? = null
+    internal var activeProgramAxis: ManualControl? = null
+    internal var pendingSliderUpdate: Runnable? = null
+    internal var manualPanelHide: Runnable? = null
     internal lateinit var debugOverlay: TextView
     internal lateinit var rawVfDebugOverlay: TextView
     private lateinit var guideOverlay: CameraGuideOverlay
-    private lateinit var histogramView: HistogramView
-    private lateinit var waveformView: WaveformView
+    internal lateinit var histogramView: HistogramView
+    internal lateinit var waveformView: WaveformView
     private lateinit var meteringOverlay: FocusMeteringOverlay
     internal lateinit var focusPeakingOverlay: FocusPeakingOverlayView
-    private lateinit var quickPanel: LinearLayout
-    private lateinit var gridQuick: TextView
-    private lateinit var histogramQuick: TextView
-    private lateinit var levelQuick: TextView
-    private lateinit var aeMeteringQuick: TextView
-    private lateinit var hdrQuick: TextView
-    private lateinit var timerQuick: TextView
-    private lateinit var releaseQuick: TextView
+    internal lateinit var quickPanel: LinearLayout
+    internal lateinit var gridQuick: TextView
+    internal lateinit var histogramQuick: TextView
+    internal lateinit var levelQuick: TextView
+    internal lateinit var aeMeteringQuick: TextView
+    internal lateinit var hdrQuick: TextView
+    internal lateinit var timerQuick: TextView
+    internal lateinit var releaseQuick: TextView
     // Future SR hook: rawSrQuick tile field here.
-    private lateinit var hdrPlusQuick: TextView
-    private lateinit var ettrQuick: TextView
+    internal lateinit var hdrPlusQuick: TextView
+    internal lateinit var ettrQuick: TextView
     internal var dualRawEnabled = false // Experimental, deliberately session-only.
-    private var lastLensSwitcherSignature: String? = null
-    private lateinit var featureTags: TextView
+    internal var lastLensSwitcherSignature: String? = null
+    internal lateinit var featureTags: TextView
     private lateinit var lightQuick: TextView
-    private lateinit var modeButton: TextView
+    internal lateinit var modeButton: TextView
     internal lateinit var rawBadge: TextView
     private lateinit var rawStatusGroup: View
     private var captureFormat = CaptureFormat.DNG_ONLY
-    private var developedFormat = DevelopedFormat.JPEG
+    internal var developedFormat = DevelopedFormat.JPEG
     private var vfPreviewMode = VfPreviewMode.FOLLOW
     internal var vfResolution = VfResolution.MAX
     private var vfPreviewButton: TextView? = null
     internal var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     internal var rawZslSettingsStatus: TextView? = null
-    private var gridEnabled = true
-    private var histogramEnabled = true
-    private var levelEnabled = false
-    private lateinit var levelOverlay: LevelOverlayView
-    private var levelTracker: LevelTracker? = null
+    internal var gridEnabled = true
+    internal var histogramEnabled = true
+    internal var levelEnabled = false
+    internal lateinit var levelOverlay: LevelOverlayView
+    internal var levelTracker: LevelTracker? = null
     /** Focus-peaking master switch (default on); the overlay auto-shows on manual/tap focus. */
     internal var focusPeakingEnabled = true
     internal var focusPeakingColor = FocusPeakingColor.GREEN
     /** Histogram vs waveform parade, persisted. Tapping the scope toggles it. */
-    private var scopeMode = ScopeMode.HISTOGRAM
+    internal var scopeMode = ScopeMode.HISTOGRAM
     // True once a RAW_SENSOR scope frame arrived. Freshness is reported separately.
-    private var rawScopeLive = false
-    private var lastRawScopeMs = Long.MIN_VALUE
+    internal var rawScopeLive = false
+    internal var lastRawScopeMs = Long.MIN_VALUE
     /** Scope data source is automatic: AgX-curved JPEG preview with a JPEG format,
      * linear RAW with DNG only. */
-    private fun scopeAgxApplied(): Boolean = captureFormat.includesJpeg
-    private var aeMeteringMode = AeMeteringMode.AUTO
-    private var timerSeconds = 0
-    private var releaseMode = 0 // 0 single, 1 burst
-    private var hdrEnabled = false
+    internal fun scopeAgxApplied(): Boolean = captureFormat.includesJpeg
+    internal var aeMeteringMode = AeMeteringMode.AUTO
+    internal var timerSeconds = 0
+    internal var releaseMode = 0 // 0 single, 1 burst
+    internal var hdrEnabled = false
     internal var captureExposureMode = CaptureExposureMode.AUTO
     internal var hdrPlusSettings = HdrPlusSettings()
-    private var mfsrSettings = MfsrSettings()
-    private lateinit var mfsrQuick: TextView
+    internal var mfsrSettings = MfsrSettings()
+    internal lateinit var mfsrQuick: TextView
     private var modeBeforeMfsr: CaptureExposureMode? = null
     /** Offline-merge switch (Settings → Burst): when on, the shutter dumps the ZSL ring to _BURST.crs. */
     internal var burstCrsEnabled = false
     private var modeBeforeBurst: CaptureExposureMode? = null
     private val burstDumpInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
-    private var programHintShown = false
+    internal var programHintShown = false
     internal var sidecarSettingsStatus: TextView? = null
     private var countdownRunnable: Runnable? = null
-    private var scopeRunnable: Runnable? = null
-    private val quickTileStates = java.util.IdentityHashMap<TextView, Boolean>()
+    internal var scopeRunnable: Runnable? = null
+    internal val quickTileStates = java.util.IdentityHashMap<TextView, Boolean>()
     private lateinit var orientationListener: OrientationEventListener
-    private var activityResumed = false
+    internal var activityResumed = false
     /** Camera stream sizing must use the final viewport, not the full-screen XML placeholder. */
     private var cameraViewportReady = false
     /**
@@ -165,7 +165,7 @@ class MainActivity : Activity() {
     private var vfFrameH = 0
     private var vfFrameRot = 0
     private var deviceOrientationDegrees = 0
-    private var controlRotationDegrees = 0f
+    internal var controlRotationDegrees = 0f
     // RAW Video mode (orthogonal to the stills CaptureExposureMode enums so no
     // stills state machine is touched): the stills controller keeps framing
     // until REC, when the standalone RawVideoRecorder takes the camera.
@@ -173,7 +173,7 @@ class MainActivity : Activity() {
     private var lastPhotoExposureMode = CaptureExposureMode.AUTO
     /** Photo mode before HDR+ pulled the camera into ZSL; restored on toggle-off. */
     private var modeBeforeHdrPlus: CaptureExposureMode? = null
-    private var videoRecorder: RawVideoRecorder? = null
+    internal var videoRecorder: RawVideoRecorder? = null
     internal var videoRecording = false
     private var videoOutputFile: File? = null
     /** Direct-Log take state. Only one of [videoRecorder]/[logRecorder] is ever active. */
@@ -193,7 +193,7 @@ class MainActivity : Activity() {
         SettingsTransfer(this, SETTINGS_EXPORT_REQUEST, SETTINGS_IMPORT_REQUEST) { setStatus(it) }
     /** Update consent, release checks, download and install ([UpdateFlow]). */
     internal val updateFlow = UpdateFlow(this, UPDATE_INSTALL_SOURCES) { setStatus(it) }
-    private var videoCrop = VideoCrop.OPEN_GATE
+    internal var videoCrop = VideoCrop.OPEN_GATE
     private var videoStartPending = false
     private var videoDebugRunnable: Runnable? = null
     private lateinit var videoDebugOverlay: TextView
@@ -1289,7 +1289,7 @@ class MainActivity : Activity() {
     // Every caller (panels, shutter, crop, rotation) seats through the one
     // rotation-aware path: a separate margin writer here used to drop the
     // quarter-turn lift and park the landscape scope behind the panel.
-    private fun updateOverlayStack() = seatScopeSlot()
+    internal fun updateOverlayStack() = seatScopeSlot()
 
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
         deviceOrientationDegrees = degrees
@@ -1419,7 +1419,7 @@ class MainActivity : Activity() {
      * rotation. Pre-layout passes fall back to the fixed layout slot, and a
      * single deferred pass corrects with real measurements after layout.
      */
-    private fun seatScopeSlot(deferred: Boolean = false) {
+    internal fun seatScopeSlot(deferred: Boolean = false) {
         if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
             !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
         val quarterTurn = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
@@ -2805,7 +2805,7 @@ class MainActivity : Activity() {
         return "${size.width / 2}x${r.height / 2} BIN"
     }
 
-    private fun videoCameraInfo(
+    internal fun videoCameraInfo(
         manager: android.hardware.camera2.CameraManager
     ): Pair<String, android.util.Size>? {
         // Record on the lens the lens row selected (the one the idle preview
@@ -3075,7 +3075,7 @@ class MainActivity : Activity() {
         return true
     }
 
-    private fun hdrPlusQuickText(): String {
+    internal fun hdrPlusQuickText(): String {
         val available = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
         return hdrPlusSettings.quickText(
             lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
@@ -3209,7 +3209,7 @@ class MainActivity : Activity() {
         setStatus("VF • ${next}PX")
     }
 
-    private fun refreshCaptureFormatControl() {
+    internal fun refreshCaptureFormatControl() {
         // Same authority rule as the info labels: in VIDEO mode the badge
         // stays CRS/●REC no matter what the stills state machine reports.
         if (isVideoMode) {
@@ -3362,1078 +3362,6 @@ class MainActivity : Activity() {
         updateProgramChipStates()
     }
 
-    /**
-     * Spec chip contract: tap ISO/SHUTTER for that axis's slider. Moving the slider
-     * engages the axis lock; the slider's Auto button releases both locks.
-     * Uses the same bottom transparent ruler as MANUAL (tick-only; values in chips).
-     */
-    private fun showProgramAxisSlider(isIso: Boolean) {
-        hideQuickControls()
-        // While rolling the take request owns the sensor: PROGRAM editor needs preview.
-        if (videoRecording) {
-            showManualControl(if (isIso) ManualControl.ISO else ManualControl.SHUTTER)
-            return
-        }
-        if (!controller.hasManualSensorControl()) {
-            setStatus("ANDROID AE • NO MANUAL SENSOR")
-            return
-        }
-        val axis = if (isIso) ManualControl.ISO else ManualControl.SHUTTER
-        val range = manualRangeFor(axis)
-        if (range == null) {
-            setStatus("${if (isIso) "ISO" else "S"} N/A")
-            return
-        }
-        if (activeProgramAxis == axis && manualPanel.visibility == View.VISIBLE) {
-            hideManualControl()
-            return
-        }
-        val profile = programProfile()
-        val current = if (isIso) {
-            (profile.lockedIso.takeIf { it > 0 }?.toLong() ?: range.current)
-                .coerceIn(range.minimum, range.maximum)
-        } else {
-            (profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current)
-                .coerceIn(range.minimum, range.maximum)
-        }
-        activeManualControl = null
-        activeProgramAxis = axis
-        // No text label under the histogram: the ruler tick code (ISO/S) plus the
-        // exposure chips carry the values. LIMITS opens the full PROGRAM editor.
-        manualLimits.visibility = View.VISIBLE
-        manualLimits.contentDescription = if (isIso) {
-            "ISO lock limits and metering editor."
-        } else {
-            "Shutter lock limits and metering editor."
-        }
-        manualSlider.label = shortControlName(axis)
-        manualSlider.max = SLIDER_STEPS
-        manualSlider.setProgressFromUser(sliderProgress(axis, range.copy(current = current)), fromUser = false)
-        manualAuto.text = "AUTO"
-        manualAuto.isEnabled = true
-        refreshRuleSliderAccessibility()
-        manualPanel.visibility = View.VISIBLE
-        updateOverlayStack()
-        manualPanel.post { updateOverlayStack() }
-        scheduleManualPanelHide()
-    }
-
-    /** Live-scrub a PROGRAM axis lock: engage the lock immediately, persist on release. */
-    private fun onProgramAxisScrubbed(axis: ManualControl, progress: Int) {
-        val range = manualRangeFor(axis) ?: return
-        val value = sliderValue(axis, range, progress)
-        val current = programProfile()
-        val next = when (axis) {
-            ManualControl.ISO -> current.copy(
-                lockMode = ProgramLockMode.ISO_LOCK, lockedIso = value.toInt()
-            )
-            else -> current.copy(
-                lockMode = ProgramLockMode.SHUTTER_LOCK, lockedShutterNanos = value
-            )
-        }
-        saveProgramProfile(next)
-        manualAuto.isEnabled = true
-    }
-
-    private fun commitProgramAxis(axis: ManualControl, progress: Int) {
-        onProgramAxisScrubbed(axis, progress)
-        updateProgramChipStates()
-        setStatus(
-            if (axis == ManualControl.ISO) "ISO LOCK • SHUTTER AUTO"
-            else "SHUTTER LOCK • ISO AUTO"
-        )
-    }
-
-    private fun updateProgramChipStates() {
-        if (!::isoControl.isInitialized) return
-        val lock = runCatching { controller.getProgramAeProfile().lockMode }
-            .getOrDefault(ProgramLockMode.NONE)
-        val inProgram = captureExposureMode == CaptureExposureMode.PROGRAM
-        isoControl.contentDescription = when {
-            !inProgram -> "ISO control"
-            lock == ProgramLockMode.ISO_LOCK -> "ISO locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "ISO auto. Tap for slider, hold to lock ISO and let shutter adjust."
-        }
-        shutterControl.contentDescription = when {
-            !inProgram -> "Shutter control"
-            lock == ProgramLockMode.SHUTTER_LOCK -> "Shutter locked. Tap for slider, hold to release. Auto in slider releases both locks."
-            else -> "Shutter auto. Tap for slider, hold to lock shutter and let ISO adjust."
-        }
-    }
-
-    private fun openManualModeThen(control: ManualControl) {
-        // While rolling the stills mode switch would only affect the next preview;
-        // the take request already owns the sensor, so open the tile directly.
-        if (videoRecording) {
-            isoControl.post { showManualControl(control) }
-            return
-        }
-        if (captureExposureMode != CaptureExposureMode.MANUAL) applyCaptureExposureMode(CaptureExposureMode.MANUAL)
-        isoControl.post { showManualControl(control) }
-    }
-
-    private fun showProgramPanelHintOnce() {
-        if (programHintShown) return
-        programHintShown = true
-        val profile = programProfile()
-        setStatus("P ${programLockText(profile.lockMode).substringAfter("Lock: ")} " +
-            "${String.format(Locale.US, "%.2f", profile.balance)} " +
-            "${programEvBiasText(profile.evBias)} • ISO/S edits")
-    }
-
-    internal fun programBalanceText(balance: Float): String = when {
-        balance > 0.55f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • faster shutter"
-        balance < 0.45f -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • lower ISO"
-        else -> "Priority: ${String.format(Locale.US, "%.2f", balance)} • balanced"
-    }
-
-    internal fun programIsoBoundText(value: Int, isMin: Boolean): String =
-        (if (isMin) "ISO min: " else "ISO max: ") +
-            (value.takeIf { it > 0 }?.toString() ?: if (isMin) "SENSOR MIN" else "SENSOR MAX")
-
-    internal fun programShutterBoundText(value: Long, isMin: Boolean, autoSafe: Boolean): String =
-        (if (isMin) "Shutter min: " else "Shutter max: ") + when {
-            value > 0L -> formatShutter(value)
-            !isMin && autoSafe -> "AUTO HANDHELD"
-            isMin -> "SENSOR MIN"
-            else -> "SENSOR MAX"
-        }
-
-    internal fun programLockText(mode: ProgramLockMode): String = when (mode) {
-        ProgramLockMode.NONE -> "Lock: NONE (both auto)"
-        ProgramLockMode.ISO_LOCK -> "Lock: ISO (shutter auto)"
-        ProgramLockMode.SHUTTER_LOCK -> "Lock: SHUTTER (ISO auto)"
-    }
-
-    /**
-     * Seeds a freshly engaged lock from the live sensor values so it holds a real
-     * exposure instead of 0 (which would make the "locked" axis follow the scene).
-     */
-    internal fun seedLockedValuesFor(profile: ProgramAeProfile): ProgramAeProfile {
-        var seeded = profile
-        if (profile.lockMode == ProgramLockMode.ISO_LOCK && profile.lockedIso <= 0) {
-            val range = controller.manualControlRange(ManualControl.ISO)
-            seeded = seeded.copy(lockedIso = (range?.current?.toInt() ?: 0))
-        }
-        if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK && profile.lockedShutterNanos <= 0L) {
-            val range = controller.manualControlRange(ManualControl.SHUTTER)
-            seeded = seeded.copy(lockedShutterNanos = range?.current ?: 0L)
-        }
-        return seeded
-    }
-
-    internal fun programMeteringLabel(metering: ProgramMetering): String = when (metering) {
-        ProgramMetering.CENTER_WEIGHTED -> "CENTER"
-        ProgramMetering.AVERAGE -> "AVERAGE"
-        ProgramMetering.SPOT -> "SPOT"
-    }
-
-    internal fun nextProgramMetering(metering: ProgramMetering): ProgramMetering = when (metering) {
-        ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.AVERAGE
-        ProgramMetering.AVERAGE -> ProgramMetering.SPOT
-        ProgramMetering.SPOT -> ProgramMetering.CENTER_WEIGHTED
-    }
-
-    internal fun programEvBiasText(bias: Float): String =
-        String.format(Locale.US, "Brightness bias: %+.1f EV", bias)
-
-    /** Viewfinder PROGRAM editor: priority slider, locks, per-lens min/max, brightness bias. */
-    private fun showProgramPanel() {
-        closeFloatingPanels()
-        var profile = programProfile()
-        fun apply() = saveProgramProfile(profile)
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        val lensLabel = TextView(this).apply {
-            text = "PROGRAM • per-lens ${activeProfileLensId() ?: "default"} • RAW-driven (sensor ISO + shutter)"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        }
-        container.addView(lensLabel)
-        if (!controller.hasManualSensorControl()) {
-            container.addView(TextView(this).apply {
-                text = "Android AE • this camera has no manual sensor control; " +
-                    "locks and limits are unavailable."
-                setTextColor(getColor(R.color.text_secondary))
-                textSize = 12f
-                setPadding(0, dp(8), 0, 0)
-            })
-        }
-        container.addView(TextView(this).apply {
-            text = "Hold ISO / SHUTTER chips to lock • tap for slider • Auto releases both • " +
-                "lock both for manual"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-            setPadding(0, dp(4), 0, 0)
-        })
-        fun styleDialogButton(button: Button, active: Boolean = false) {
-            button.background = getDrawable(
-                if (active) R.drawable.control_chip_active else R.drawable.control_chip
-            )
-            button.setTextColor(
-                getColor(if (active) R.color.accent_dark else R.color.text_primary)
-            )
-            button.textSize = 12f
-            button.setPadding(dp(16), dp(12), dp(16), dp(12))
-        }
-        val balanceLabel = TextView(this).apply {
-            text = programBalanceText(profile.balance)
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(0, dp(12), 0, 0)
-        }
-        container.addView(balanceLabel)
-        container.addView(TextView(this).apply {
-            text = "← ISO priority   |   balanced   |   shutter priority →"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
-        val balanceSlider = RuleSliderView(this).apply {
-            label = "BAL"
-            contentRotation = controlRotationDegrees
-            max = 100
-            setProgressFromUser((profile.balance * 100).toInt().coerceIn(0, max), fromUser = false)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
-            )
-        }
-        container.addView(balanceSlider)
-        balanceSlider.onProgressChanged = { progress, fromUser ->
-            if (fromUser) {
-                profile = profile.copy(balance = progress / 100f)
-                balanceLabel.text = programBalanceText(profile.balance)
-            }
-        }
-        balanceSlider.onStopTracking = { apply() }
-        val lockButton = Button(this).also { styleDialogButton(it) }
-        val lockedIsoButton = Button(this).also { styleDialogButton(it) }
-        val lockedShutterButton = Button(this).also { styleDialogButton(it) }
-        fun refreshLock() {
-            lockButton.text = programLockText(profile.lockMode) + " • tap to cycle"
-            styleDialogButton(lockButton, active = profile.lockMode != ProgramLockMode.NONE)
-        }
-        fun refreshLockedButtons() {
-            val isoRange = controller.manualControlRange(ManualControl.ISO)
-            val shutterRange = controller.manualControlRange(ManualControl.SHUTTER)
-            lockedIsoButton.text = "Locked ISO: " + when {
-                profile.lockMode != ProgramLockMode.ISO_LOCK -> "-- (ISO lock off)"
-                profile.lockedIso > 0 -> "ISO ${profile.lockedIso}"
-                isoRange != null -> "ISO ${isoRange.current} (live)"
-                else -> "--"
-            }
-            lockedIsoButton.isEnabled = profile.lockMode == ProgramLockMode.ISO_LOCK
-            styleDialogButton(lockedIsoButton, active = profile.lockMode == ProgramLockMode.ISO_LOCK)
-            lockedIsoButton.alpha = if (profile.lockMode == ProgramLockMode.ISO_LOCK) 1f else 0.6f
-            lockedShutterButton.text = "Locked shutter: " + when {
-                profile.lockMode != ProgramLockMode.SHUTTER_LOCK -> "-- (shutter lock off)"
-                profile.lockedShutterNanos > 0L -> formatShutter(profile.lockedShutterNanos)
-                shutterRange != null -> "${formatShutter(shutterRange.current)} (live)"
-                else -> "--"
-            }
-            lockedShutterButton.isEnabled = profile.lockMode == ProgramLockMode.SHUTTER_LOCK
-            styleDialogButton(lockedShutterButton, active = profile.lockMode == ProgramLockMode.SHUTTER_LOCK)
-            lockedShutterButton.alpha = if (profile.lockMode == ProgramLockMode.SHUTTER_LOCK) 1f else 0.6f
-        }
-        refreshLock()
-        refreshLockedButtons()
-        lockButton.setOnClickListener {
-            profile = seedLockedValuesFor(profile.copy(lockMode = when (profile.lockMode) {
-                ProgramLockMode.NONE -> ProgramLockMode.ISO_LOCK
-                ProgramLockMode.ISO_LOCK -> ProgramLockMode.SHUTTER_LOCK
-                ProgramLockMode.SHUTTER_LOCK -> ProgramLockMode.NONE
-            }))
-            refreshLock(); refreshLockedButtons(); apply()
-            setStatus("PROGRAM ${profile.lockMode.name}")
-        }
-        container.addView(lockButton)
-        lockedIsoButton.setOnClickListener {
-            val range = controller.manualControlRange(ManualControl.ISO) ?: return@setOnClickListener
-            val steps = listOf(100, 200, 400, 800, 1600, 3200, 6400)
-                .filter { it in range.minimum..range.maximum }
-            if (steps.isEmpty()) return@setOnClickListener
-            val current = profile.lockedIso.takeIf { it > 0 } ?: range.current.toInt()
-            val next = steps[(steps.indexOfClosest(current) + 1) % steps.size]
-            profile = profile.copy(lockedIso = next)
-            refreshLockedButtons(); apply()
-        }
-        lockedShutterButton.setOnClickListener {
-            val range = controller.manualControlRange(ManualControl.SHUTTER) ?: return@setOnClickListener
-            val steps = listOf(
-                1_000_000_000L / 1000, 1_000_000_000L / 500, 1_000_000_000L / 250,
-                1_000_000_000L / 125, 1_000_000_000L / 60, 1_000_000_000L / 30,
-                1_000_000_000L / 15, 1_000_000_000L / 8, 1_000_000_000L / 4
-            ).filter { it in range.minimum..range.maximum }
-            if (steps.isEmpty()) return@setOnClickListener
-            val current = profile.lockedShutterNanos.takeIf { it > 0L } ?: range.current
-            val next = steps[(steps.indexOfClosest(current) + 1) % steps.size]
-            profile = profile.copy(lockedShutterNanos = next)
-            refreshLockedButtons(); apply()
-        }
-        refreshLockedButtons()
-        container.addView(lockedIsoButton)
-        container.addView(lockedShutterButton)
-        val isoMinButton = Button(this).also { styleDialogButton(it) }
-        val isoMaxButton = Button(this).also { styleDialogButton(it) }
-        val shutterMinButton = Button(this).also { styleDialogButton(it) }
-        val shutterMaxButton = Button(this).also { styleDialogButton(it) }
-        fun refreshBounds() {
-            isoMinButton.text = programIsoBoundText(profile.isoMin, isMin = true)
-            isoMaxButton.text = programIsoBoundText(profile.isoMax, isMin = false)
-            shutterMinButton.text = programShutterBoundText(profile.shutterMinNanos, isMin = true, autoSafe = false)
-            shutterMaxButton.text = programShutterBoundText(
-                profile.shutterMaxNanos, isMin = false, autoSafe = profile.useAutoSafeShutter
-            )
-            styleDialogButton(isoMinButton, active = profile.isoMin > 0)
-            styleDialogButton(isoMaxButton, active = profile.isoMax > 0)
-            styleDialogButton(shutterMinButton, active = profile.shutterMinNanos > 0L)
-            styleDialogButton(
-                shutterMaxButton,
-                active = profile.shutterMaxNanos > 0L || profile.useAutoSafeShutter
-            )
-        }
-        isoMinButton.setOnClickListener {
-            val range = controller.manualControlRange(ManualControl.ISO)
-            val sensorMin = range?.minimum?.toInt() ?: 100
-            val values = listOf(0, sensorMin, 100, 200, 400, 800).distinct()
-            profile = profile.copy(isoMin = values[(values.indexOf(profile.isoMin).takeIf { it >= 0 } ?: 0)
-                .let { (it + 1) % values.size }])
-            if (profile.isoMax > 0 && profile.isoMin > profile.isoMax) profile = profile.copy(isoMax = 0)
-            refreshBounds(); apply()
-        }
-        isoMaxButton.setOnClickListener {
-            val values = listOf(0, 400, 800, 1600, 3200, 6400)
-            profile = profile.copy(isoMax = values[(values.indexOf(profile.isoMax).takeIf { it >= 0 } ?: 0)
-                .let { (it + 1) % values.size }])
-            if (profile.isoMin > 0 && profile.isoMax > 0 && profile.isoMin > profile.isoMax) {
-                profile = profile.copy(isoMin = 0)
-            }
-            refreshBounds(); apply()
-        }
-        shutterMinButton.setOnClickListener {
-            val values = listOf(0L, 1_000_000_000L / 1000, 1_000_000_000L / 500,
-                1_000_000_000L / 250, 1_000_000_000L / 125, 1_000_000_000L / 60)
-            profile = profile.copy(shutterMinNanos = values[
-                (values.indexOf(profile.shutterMinNanos).takeIf { it >= 0 } ?: 0).let { (it + 1) % values.size }])
-            refreshBounds(); apply()
-        }
-        shutterMaxButton.setOnClickListener {
-            val values = listOf(0L, 1_000_000_000L / 15, 1_000_000_000L / 30,
-                1_000_000_000L / 60, 1_000_000_000L / 125, 1_000_000_000L / 250)
-            if (profile.useAutoSafeShutter) {
-                profile = profile.copy(useAutoSafeShutter = false, shutterMaxNanos = 0L)
-            } else {
-                val next = values[(values.indexOf(profile.shutterMaxNanos).takeIf { it >= 0 } ?: 0)
-                    .let { (it + 1) % values.size }]
-                profile = profile.copy(
-                    shutterMaxNanos = next,
-                    useAutoSafeShutter = next == 0L
-                )
-            }
-            refreshBounds(); apply()
-        }
-        refreshBounds()
-        container.addView(isoMinButton)
-        container.addView(isoMaxButton)
-        container.addView(shutterMinButton)
-        container.addView(shutterMaxButton)
-        val biasLabel = TextView(this).apply {
-            text = programEvBiasText(profile.evBias)
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 13f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(0, dp(12), 0, 0)
-        }
-        container.addView(biasLabel)
-        val biasSlider = RuleSliderView(this).apply {
-            label = "EV"
-            max = 60
-            setProgressFromUser(
-                ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max),
-                fromUser = false
-            )
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
-            )
-        }
-        container.addView(biasSlider)
-        biasSlider.onProgressChanged = { progress, fromUser ->
-            if (fromUser) {
-                profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
-                biasLabel.text = programEvBiasText(profile.evBias)
-            }
-        }
-        biasSlider.onStopTracking = { apply() }
-        container.addView(TextView(this).apply {
-            text = "ETTR overrides PROGRAM still exposure when converged."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-            setPadding(0, dp(8), 0, 0)
-        })
-        val meteringButton = Button(this).also { styleDialogButton(it) }
-        fun refreshMetering() {
-            meteringButton.text = "Metering: ${programMeteringLabel(profile.metering)} • tap to switch"
-        }
-        refreshMetering()
-        meteringButton.setOnClickListener {
-            profile = profile.copy(metering = nextProgramMetering(profile.metering))
-            refreshMetering(); apply()
-            setStatus("PROGRAM METER ${profile.metering.name}")
-        }
-        container.addView(meteringButton)
-        container.addView(Button(this).also { styleDialogButton(it) }.apply {
-            text = "Reset per-lens defaults"
-            setOnClickListener {
-                profile = ProgramAeProfile()
-                balanceSlider.setProgressFromUser((profile.balance * 100).toInt(), fromUser = false)
-                biasSlider.setProgressFromUser(
-                    ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, 60),
-                    fromUser = false
-                )
-                balanceLabel.text = programBalanceText(profile.balance)
-                biasLabel.text = programEvBiasText(profile.evBias)
-                refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); apply()
-            }
-        })
-        AlertDialog.Builder(this)
-            .setTitle("PROGRAM AE • custom")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setPositiveButton("Done", null)
-            .show()
-    }
-
-    private fun List<Int>.indexOfClosest(value: Int): Int {
-        if (isEmpty()) return 0
-        return indices.minByOrNull { kotlin.math.abs(this[it] - value) } ?: 0
-    }
-
-    private fun List<Long>.indexOfClosest(value: Long): Int {
-        if (isEmpty()) return 0
-        return indices.minByOrNull { kotlin.math.abs(this[it] - value) } ?: 0
-    }
-
-    /**
-     * Dual-function AE metering button: in PROGRAM it cycles the RAW exposure
-     * metering (center → average → spot); in every other mode it cycles the
-     * hardware AE metering exactly as before.
-     */
-    private fun cycleAeMeteringMode() {
-        if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            if (!controller.hasManualSensorControl()) {
-                setStatus("ANDROID AE • NO MANUAL SENSOR")
-                return
-            }
-            val next = nextProgramMetering(programProfile().metering)
-            saveProgramProfile(programProfile().copy(metering = next))
-            setStatus("PROGRAM METER ${next.name}")
-            updateQuickControls()
-            return
-        }
-        val modes = AeMeteringMode.entries
-        val next = modes[(modes.indexOf(aeMeteringMode) + 1) % modes.size]
-        if (!controller.setAeMeteringMode(next)) return
-        aeMeteringMode = next
-        lensPreferences().edit().putInt(KEY_AE_METERING_MODE, next.preferenceValue).apply()
-        updateQuickControls()
-    }
-
-    private fun toggleQuickControls() {
-        if (quickPanel.visibility == View.VISIBLE) hideQuickControls() else showQuickControls()
-    }
-
-    private fun showQuickControls() {
-        hideManualControl()
-        updateQuickControls()
-        quickPanel.alpha = 0f
-        quickPanel.translationY = dp(18).toFloat()
-        quickPanel.visibility = View.VISIBLE
-        quickPanel.animate().alpha(1f).translationY(0f).setDuration(180L).start()
-        quickPanel.post { updateOverlayStack() }
-    }
-
-    private fun hideQuickControls() {
-        if (!::quickPanel.isInitialized || quickPanel.visibility != View.VISIBLE) return
-        quickPanel.animate().cancel()
-        quickPanel.visibility = View.GONE
-        quickPanel.alpha = 1f
-        quickPanel.translationY = 0f
-        updateOverlayStack()
-    }
-
-    private fun closeFloatingPanels() {
-        hideManualControl()
-        hideQuickControls()
-    }
-
-    internal fun updateQuickControls() {
-        if (!::gridQuick.isInitialized || !::levelQuick.isInitialized) return
-        val grid = gridQuick
-        val histogram = histogramQuick
-        val level = levelQuick
-        val aeMetering = aeMeteringQuick
-        val hdr = hdrQuick
-        val timer = timerQuick
-        val release = releaseQuick
-        val sharp = mfsrQuick
-        val hdrPlus = hdrPlusQuick
-        val ettr = ettrQuick
-        if (dualRawEnabled && controller.activeCameraId() != "0") dualRawEnabled = false
-        release.isEnabled = !dualRawEnabled
-        release.alpha = if (dualRawEnabled) .4f else 1f
-        grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
-        histogram.text = "SCOPE\n${scopeTileLabel()}"
-        val graph = if (scopeMode == ScopeMode.WAVEFORM) "waveform" else "histogram"
-        val power = if (histogramEnabled) "on" else "off"
-        histogram.contentDescription =
-            "Exposure scope, $graph, $power. Tap to turn ${if (histogramEnabled) "off" else "on"}, long-press to switch graphs."
-        level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
-        level.contentDescription =
-            "Virtual horizon ${if (levelEnabled) "on" else "off"}. Tap to turn ${if (levelEnabled) "off" else "on"}."
-        aeMeteringMode = controller.getAeMeteringMode()
-        if (captureExposureMode == CaptureExposureMode.PROGRAM) {
-            val rawMetering = runCatching { controller.getProgramAeProfile().metering }
-                .getOrDefault(ProgramMetering.CENTER_WEIGHTED)
-            aeMetering.text = "AE METER\n${programMeteringLabel(rawMetering)}"
-            val manualSensor = controller.hasManualSensorControl()
-            aeMetering.isEnabled = manualSensor
-            aeMetering.alpha = if (manualSensor) 1f else 0.4f
-            aeMetering.contentDescription =
-                "RAW exposure metering ${programMeteringLabel(rawMetering)}. Tap to switch center, average, spot."
-            setQuickTileState(aeMetering, rawMetering != ProgramMetering.CENTER_WEIGHTED)
-        } else {
-            aeMetering.text = "AE METER\n${aeMeteringMode.label}"
-            val aeMeteringSupported = controller.isAeMeteringSupported()
-            aeMetering.isEnabled = aeMeteringSupported
-            aeMetering.alpha = if (aeMeteringSupported) 1f else 0.4f
-            aeMetering.contentDescription =
-                "Hardware AE metering ${aeMeteringMode.label}. Tap to switch."
-            setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
-        }
-        hdr.text = "HDR\n${if (hdrEnabled) "ON" else "OFF"}"
-        hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
-        timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
-        release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
-        val sharpAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
-        sharp.text = mfsrSettings.quickText(
-            rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy)
-        sharp.isEnabled = sharpAvailable
-        sharp.alpha = if (sharpAvailable) 1f else 0.4f
-        hdrPlus.text = hdrPlusQuickText()
-        val hdrPlusAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
-        hdrPlus.isEnabled = hdrPlusAvailable
-        hdrPlus.alpha = if (hdrPlusAvailable) 1f else 0.4f
-        val ettrMode = controller.getEttrSettings()
-        val ettrAvailable = captureExposureMode == CaptureExposureMode.AUTO
-        val ettrEnabled = ettrMode.enabled && ettrAvailable
-        ettr.text = "ETTR\n" + if (ettrEnabled) "ON" else "OFF"
-        ettr.isEnabled = ettrAvailable
-        ettr.alpha = if (ettrAvailable) 1f else 0.4f
-        setQuickTileState(grid, gridEnabled)
-        setQuickTileState(histogram, histogramEnabled)
-        setQuickTileState(level, levelEnabled)
-        setQuickTileState(hdr, hdrEnabled)
-        setQuickTileState(timer, timerSeconds > 0)
-        setQuickTileState(release, releaseMode != 0)
-        setQuickTileState(sharp, mfsrSettings.enabled)
-        setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
-        setQuickTileState(ettr, ettrEnabled)
-        refreshFeatureTags(ettrEnabled)
-        // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
-        // button itself stays photo-only (video is a separate red button).
-        // LOG takes are full-sensor, so the tile shows the output profile.
-        release.contentDescription = null // else the LOG text lingers after mode switches
-        if (isVideoMode) {
-            if (directLogEnabled) {
-                val profile = directLogProfile()
-                release.text = "LOG\n${profile.hudLabel}"
-                release.contentDescription =
-                    "Direct Log output profile ${profile.hudLabel}. Tap to switch."
-                setQuickTileState(release, profile != DirectLogProfile.BT709)
-            } else {
-                release.text = "CROP\n${videoCropShort()}"
-                setQuickTileState(release, videoCrop != VideoCrop.OPEN_GATE)
-            }
-        }
-        modeButton.text = when (captureExposureMode) {
-            CaptureExposureMode.AUTO -> "A\nAUTO"
-            CaptureExposureMode.PROGRAM -> "P\nPROGRAM"
-            CaptureExposureMode.ZSL -> "Z\nZSL"
-            CaptureExposureMode.MANUAL -> "M\nMANUAL"
-        }
-        val exposureModeActive = captureExposureMode != CaptureExposureMode.AUTO
-        setQuickTileState(modeButton, exposureModeActive)
-    }
-
-    private fun setQuickTileState(tile: TextView, active: Boolean) {
-        if (quickTileStates.put(tile, active) == active) return
-        tile.background = getDrawable(if (active) R.drawable.control_chip_active else R.drawable.control_chip)
-        tile.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
-    }
-
-    /** Top-bar gold tags: only photo features that are on right now. */
-    private fun refreshFeatureTags(ettrEnabled: Boolean) {
-        val tags = if (isVideoMode) emptyList() else listOfNotNull(
-            "HDR+".takeIf { hdrPlusSettings.enabled },
-            "MFSR".takeIf { mfsrSettings.enabled },
-            "ETTR".takeIf { ettrEnabled },
-            "HDR".takeIf { hdrEnabled },
-            "BURST".takeIf { releaseMode == 1 },
-            "${timerSeconds}S".takeIf { timerSeconds > 0 },
-        )
-        featureTags.setTextIfChanged(tags.joinToString(" · "))
-        featureTags.visibility = if (tags.isEmpty()) View.GONE else View.VISIBLE
-    }
-
-    /** Exposure tiles: gold value when the user set it, primary when auto. */
-    private fun refreshManualTileAccents() {
-        fun tint(tile: TextView, manual: Boolean) =
-            tile.setTextColor(getColor(if (manual) R.color.accent else R.color.text_primary))
-        fun manual(control: ManualControl) =
-            runCatching { manualRangeFor(control)?.automatic == false }.getOrDefault(false)
-        tint(isoControl, manual(ManualControl.ISO))
-        tint(shutterControl, manual(ManualControl.SHUTTER))
-        tint(wbControl, manual(ManualControl.WHITE_BALANCE))
-        tint(focusControl, manual(ManualControl.FOCUS_DISTANCE))
-        val ev = evControl.text.lines().lastOrNull()?.trim()
-        tint(evControl, ev != null && ev != "+0.0" && ev != "0.0" && ev != "--")
-    }
-
-    /** Both scope views share one bottom slot; only the active mode is visible. */
-    private fun scopeViews(): List<View> = listOf(histogramView, waveformView)
-
-    private fun activeScopeView(): View =
-        if (scopeMode == ScopeMode.WAVEFORM) waveformView else histogramView
-
-    private fun syncScopeVisibility() {
-        histogramView.visibility =
-            if (histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
-        waveformView.visibility =
-            if (histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
-        // A GONE -> VISIBLE scope has no measured size yet: seat it now from
-        // the fixed slot (plus a deferred measured correction) so showing it
-        // in landscape never parks it behind the panel until next rotation.
-        if (activeScopeView().visibility == View.VISIBLE) seatScopeSlot()
-    }
-
-    private fun toggleLevel() {
-        levelEnabled = !levelEnabled
-        lensPreferences().edit().putBoolean(KEY_LEVEL, levelEnabled).apply()
-        syncLevelVisibility()
-        updateQuickControls()
-        setStatus(if (levelEnabled) "LEVEL ON" else "LEVEL OFF")
-    }
-
-    private fun syncLevelVisibility() {
-        if (!::levelOverlay.isInitialized) return
-        levelOverlay.visibility = if (levelEnabled) View.VISIBLE else View.GONE
-        if (levelEnabled) {
-            if (activityResumed) levelTracker?.start()
-        } else {
-            levelTracker?.stop()
-            levelOverlay.setFlat()
-            levelOverlay.contentDescription = "Virtual horizon off"
-        }
-    }
-
-    /** Edge-triggered by the controller's manual/tap-focus auto-show policy. */
-    private fun setFocusPeakingVisible(visible: Boolean) {
-        if (!::focusPeakingOverlay.isInitialized) return
-        focusPeakingOverlay.visibility = if (visible) View.VISIBLE else View.GONE
-        if (!visible) focusPeakingOverlay.clear()
-    }
-
-    private fun scopeTileLabel(): String = when {
-        !histogramEnabled -> "OFF"
-        scopeMode == ScopeMode.WAVEFORM -> "WAVE"
-        else -> "HISTO"
-    }
-
-    private fun persistScopeSelection() {
-        lensPreferences().edit()
-            .putBoolean(KEY_HISTOGRAM, histogramEnabled)
-            .putString(KEY_SCOPE_MODE, scopeMode.name)
-            .apply()
-    }
-
-    /** Tap the scope to switch between histogram and waveform. The mode is applied
-     * immediately and remembered across restarts. */
-    private fun toggleScopeMode() {
-        if (!histogramEnabled || !::histogramView.isInitialized || !::waveformView.isInitialized) return
-        scopeMode = scopeMode.next()
-        persistScopeSelection()
-        controller.setScopeMode(scopeMode)
-        activeScopeView().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        rawScopeLive = false
-        lastRawScopeMs = Long.MIN_VALUE
-        syncScopeVisibility()
-        refreshScopeContentDescription()
-        updateQuickControls()
-        setStatus(scopeStatusLabel())
-    }
-
-    /** Scope source follows the capture format: AgX-curved JPEG preview with a JPEG
-     * format, linear RAW with DNG only. */
-    private fun applyScopeSource() {
-        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
-        val agx = scopeAgxApplied()
-        histogramView.setAgxApplied(agx)
-        waveformView.setAgxApplied(agx)
-        if (::controller.isInitialized) controller.setScopeAgxApplied(agx)
-        rawScopeLive = false
-        lastRawScopeMs = Long.MIN_VALUE
-        refreshScopeContentDescription()
-    }
-
-    private fun scopeStatusLabel(): String {
-        val mode = if (scopeMode == ScopeMode.WAVEFORM) "WAVE" else "HISTO"
-        val source = if (scopeAgxApplied()) "JPEG" else "RAW"
-        return "$mode $source"
-    }
-
-    private fun refreshScopeContentDescription() {
-        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
-        val source = if (scopeAgxApplied()) "AgX JPEG preview" else "linear RAW sensor"
-        val live = rawScopeLive && !rawScopeStalled()
-        val freshness = if (live) "live" else "waiting for a fresh RAW frame"
-        histogramView.contentDescription =
-            "Histogram, $source, $freshness. Tap to switch to waveform."
-        waveformView.contentDescription =
-            "Waveform, $source, $freshness. Tap to switch to histogram."
-    }
-
-    /** Freshness changes the accessibility status, never the selected mode or source. */
-    private fun rawScopeStalled(): Boolean =
-        RawHistogramThrottle.isStalled(SystemClock.elapsedRealtime(), lastRawScopeMs, HISTOGRAM_RAW_HOLD_MS)
-
-    /** RAW frames arrive push-driven; this only refreshes the stall status. */
-    private fun scheduleScope() {
-        if (!::histogramView.isInitialized) return
-        scopeRunnable?.let(histogramView::removeCallbacks)
-        scopeRunnable = null
-        if (!histogramEnabled) return
-        scopeRunnable = object : Runnable {
-            override fun run() {
-                if (!isFinishing && !isDestroyed && histogramEnabled) {
-                    refreshScopeContentDescription()
-                    histogramView.postDelayed(this, HISTOGRAM_INTERVAL_MS)
-                }
-            }
-        }.also { histogramView.post(it) }
-    }
-
-    private fun controlText(label: String, rawValue: String): String {
-        val value = rawValue.removePrefix(label).trim().ifEmpty { "--" }
-        return "$label\n$value"
-    }
-
-    private fun TextView.setTextIfChanged(value: String) {
-        if (!android.text.TextUtils.equals(text, value)) text = value
-    }
-
-    private fun refreshLensSwitcher() {
-        val options = controller.lensOptions()
-        if (options.isEmpty()) return
-        // Rebuilding the switcher view hierarchy on every controls publication is
-        // wasted layout work; only rebuild when the lens set or selection changed.
-        val signature = options.joinToString("|") { "${it.cameraId}:${it.selected}" }
-        if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
-        lastLensSwitcherSignature = signature
-        lensSwitcher.removeAllViews()
-        // Pills share the panel row (screen width minus the panel's 16dp
-        // sides): 48dp each when they fit, shrinking to a 40dp floor; past
-        // that the row scrolls (lensScroll).
-        val gap = dp(4)
-        val rowWidth = resources.displayMetrics.widthPixels - dp(32)
-        val pillWidth = ((rowWidth - gap * (options.size - 1)) / options.size)
-            .coerceIn(dp(40), dp(48))
-        val pillPad = if (pillWidth < dp(48)) dp(4) else dp(10)
-        var selectedButton: View? = null
-        options.forEachIndexed { index, option ->
-            val button = RotatingTextView(this).apply {
-                text = option.label
-                setTextColor(getColor(if (option.selected) R.color.accent_dark else R.color.text_primary))
-                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                gravity = Gravity.CENTER
-                // Every lens is its own faint pill; the selected one is filled.
-                background = getDrawable(
-                    if (option.selected) R.drawable.focal_active else R.drawable.focal_idle
-                )
-                minimumHeight = dp(32)
-                setPadding(pillPad, dp(4), pillPad, dp(4))
-                maxLines = 1
-                contentDescription = "Switch to ${option.label} lens"
-                setOnClickListener {
-                    // The recorder owns the camera mid-take: lens is fixed until stop.
-                    if (videoRecording) {
-                        setStatus("STOP TO SWITCH LENS")
-                        return@setOnClickListener
-                    }
-                    hideManualControl()
-                    lensPreferences().edit().putString(KEY_LAST_CAMERA_ID, option.cameraId).apply()
-                    controller.selectLens(option.cameraId)
-                }
-            }
-            lensSwitcher.addView(button, LinearLayout.LayoutParams(pillWidth, wrapContent()).apply {
-                if (index > 0) marginStart = gap
-            })
-            button.contentRotation = controlRotationDegrees
-            if (option.selected) selectedButton = button
-        }
-        // Keep the selected lens centered when the row scrolls.
-        val scroll = findViewById<android.widget.HorizontalScrollView>(R.id.lensScroll)
-        selectedButton?.let { selected ->
-            scroll.post {
-                scroll.smoothScrollTo(selected.left + selected.width / 2 - scroll.width / 2, 0)
-            }
-        }
-    }
-
-    /** Video lock-on-record switches (default off: continuous AE/AWB/AF). */
-    private fun videoRecordLocks(): VideoRecordLocks =
-        VideoRecordLocks.load { key -> lensPreferences().getBoolean(key, false) }
-
-    /** Range source follows the camera owner: recorder while rolling, controller otherwise. */
-    private fun manualRangeFor(control: ManualControl): ManualControlRange? {
-        if (videoRecording) {
-            runCatching { videoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
-            runCatching { logRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
-            return null
-        }
-        return runCatching { controller.manualControlRange(control) }.getOrNull()
-    }
-
-    private fun setManualValueFor(control: ManualControl, value: Long?) {
-        if (videoRecording) {
-            if (videoRecorder != null) {
-                videoRecorder?.setVideoManualControl(control, value)
-                refreshVideoChip(control)
-                return
-            }
-            if (logRecorder != null) {
-                logRecorder?.setVideoManualControl(control, value)
-                refreshVideoChip(control)
-                return
-            }
-        }
-        controller.setManualControl(control, value)
-    }
-
-    /** Optimistic chip refresh while rolling (the stills controller is stopped). */
-    private fun refreshVideoChip(control: ManualControl) {
-        val range = manualRangeFor(control) ?: return
-        when (control) {
-            ManualControl.ISO -> isoControl.text = controlText("ISO", range.current.toString())
-            ManualControl.SHUTTER -> shutterControl.text =
-                controlText("S", formatShutter(range.current))
-            ManualControl.WHITE_BALANCE -> wbControl.text =
-                controlText("WB", "${range.current}K")
-            ManualControl.FOCUS_DISTANCE -> focusControl.text =
-                controlText("AF", if (range.automatic) "AF" else formatFocusDistance(range.current))
-            ManualControl.EXPOSURE_COMPENSATION -> {
-                val isManualExposure = runCatching {
-                    (videoRecorder?.videoManual ?: logRecorder?.videoManual)?.let {
-                        VideoManualPolicy.wantsManualExposure(it)
-                    } ?: false
-                }.getOrDefault(false)
-                evControl.text = if (isManualExposure) {
-                    controlText("EV", "EV --")
-                } else {
-                    controlText("EV", formatVideoEvStops(range.current))
-                }
-            }
-        }
-    }
-
-    private fun formatVideoEvStops(index: Long): String {
-        val step = runCatching {
-            val manager = getSystemService(CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-            val cameraId = videoCameraInfo(manager)?.first ?: return@runCatching null
-            manager.getCameraCharacteristics(cameraId)
-                .get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
-                ?.toFloat()
-        }.getOrNull() ?: return "EV $index"
-        if (step <= 0f) return "EV $index"
-        return String.format(Locale.US, "EV %+.1f", index * step)
-    }
-
-    private fun showManualControl(control: ManualControl, allowToggle: Boolean = true) {
-        hideQuickControls()
-        if (allowToggle && activeManualControl == control && manualPanel.visibility == View.VISIBLE) {
-            hideManualControl()
-            return
-        }
-        val range = manualRangeFor(control)
-        if (range == null) {
-            setStatus("${shortControlName(control)} N/A")
-            return
-        }
-        activeManualControl = control
-        activeProgramAxis = null
-        // Tick-only ruler with no text label: values live in the exposure chips, never
-        // in the slider strip, so landscape stays compact. Full values remain in
-        // accessibility descriptions.
-        manualLimits.visibility = View.GONE
-        manualSlider.label = shortControlName(control)
-        manualSlider.max = SLIDER_STEPS
-        manualSlider.setProgressFromUser(sliderProgress(control, range), fromUser = false)
-        manualAuto.text = if (control == ManualControl.EXPOSURE_COMPENSATION) "RESET" else "AUTO"
-        manualAuto.isEnabled = !range.automatic
-        refreshRuleSliderAccessibility()
-        manualPanel.visibility = View.VISIBLE
-        updateOverlayStack()
-        manualPanel.post { updateOverlayStack() }
-        scheduleManualPanelHide()
-    }
-
-    /** Full value stays available to accessibility even though the ruler draws ticks only. */
-    private fun refreshRuleSliderAccessibility() {
-        activeProgramAxis?.let { axis ->
-            val range = manualRangeFor(axis) ?: return
-            val value = sliderValue(axis, range, manualSlider.progress)
-            val valueText = formatManualValue(axis, value)
-            manualSlider.valueText = rulerValueText(axis, value)
-            manualSlider.minText = rulerValueText(axis, range.minimum)
-            manualSlider.maxText = rulerValueText(axis, range.maximum)
-            manualSlider.contentDescription =
-                "${controlName(axis)} lock slider, $valueText. Current value also shown in the ${shortControlName(axis)} chip."
-            return
-        }
-        val control = activeManualControl ?: return
-        val range = manualRangeFor(control) ?: return
-        val value = sliderValue(control, range, manualSlider.progress)
-        val valueText = formatManualValue(control, value)
-        manualSlider.valueText = rulerValueText(control, value)
-        manualSlider.minText = rulerValueText(control, range.minimum)
-        manualSlider.maxText = rulerValueText(control, range.maximum)
-        manualSlider.contentDescription =
-            "${controlName(control)} slider, $valueText. Current value also shown in the ${shortControlName(control)} chip."
-    }
-
-    /**
-     * Compact value for the floating ruler: the axis code already sits above it,
-     * so "ISO 7964" becomes "7964" and "+0.2 EV" becomes "+0.2".
-     */
-    private fun rulerValueText(control: ManualControl, value: Long): String {
-        val full = formatManualValue(control, value)
-        return when (control) {
-            ManualControl.ISO -> full.removePrefix("ISO ").trim()
-            ManualControl.EXPOSURE_COMPENSATION -> full.removeSuffix(" EV").trim()
-            else -> full
-        }.ifEmpty { "--" }
-    }
-
-    private fun scheduleManualPanelHide() {
-        cancelManualPanelHide()
-        manualPanelHide = Runnable { hideManualControl() }.also {
-            manualPanel.postDelayed(it, MANUAL_PANEL_TIMEOUT_MS)
-        }
-    }
-
-    private fun cancelManualPanelHide() {
-        manualPanelHide?.let(manualPanel::removeCallbacks)
-        manualPanelHide = null
-    }
-
-    private fun hideManualControl() {
-        if (!::manualPanel.isInitialized) return
-        cancelManualPanelHide()
-        if (::manualSlider.isInitialized) {
-            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
-        }
-        pendingSliderUpdate = null
-        manualPanel.visibility = View.GONE
-        activeManualControl = null
-        activeProgramAxis = null
-        updateOverlayStack()
-    }
-
-    private fun sliderProgress(control: ManualControl, range: ManualControlRange): Int {
-        if (range.maximum <= range.minimum) return 0
-        val fraction = if (control == ManualControl.SHUTTER) {
-            val minLog = kotlin.math.ln(range.minimum.toDouble())
-            (kotlin.math.ln(range.current.toDouble()) - minLog) /
-                (kotlin.math.ln(range.maximum.toDouble()) - minLog)
-        } else {
-            (range.current - range.minimum).toDouble() / (range.maximum - range.minimum)
-        }
-        return (fraction.coerceIn(0.0, 1.0) * SLIDER_STEPS).toInt()
-    }
-
-    private fun sliderValue(
-        control: ManualControl,
-        range: ManualControlRange,
-        progress: Int
-    ): Long {
-        val fraction = progress.toDouble() / SLIDER_STEPS
-        return if (control == ManualControl.SHUTTER) {
-            kotlin.math.exp(
-                kotlin.math.ln(range.minimum.toDouble()) + fraction *
-                    (kotlin.math.ln(range.maximum.toDouble()) - kotlin.math.ln(range.minimum.toDouble()))
-            ).toLong().coerceIn(range.minimum, range.maximum)
-        } else {
-            (range.minimum + fraction * (range.maximum - range.minimum)).toLong()
-                .coerceIn(range.minimum, range.maximum)
-        }
-    }
-
-    private fun updateAutomaticPanelValue(iso: Int, shutter: Long, wb: Int) {
-        val control = activeManualControl ?: return
-        if (manualPanel.visibility != View.VISIBLE) return
-        val range = manualRangeFor(control) ?: return
-        if (!range.automatic) return
-        val value = when (control) {
-            ManualControl.ISO -> iso.toLong()
-            ManualControl.SHUTTER -> shutter
-            ManualControl.WHITE_BALANCE -> wb.toLong()
-            ManualControl.FOCUS_DISTANCE -> range.current
-            ManualControl.EXPOSURE_COMPENSATION -> range.current
-        }
-        if (value > 0 || control == ManualControl.EXPOSURE_COMPENSATION) {
-            manualSlider.setProgressFromUser(
-                sliderProgress(control, range.copy(current = value.coerceIn(range.minimum, range.maximum))),
-                fromUser = false
-            )
-            refreshRuleSliderAccessibility()
-        }
-    }
-
-    private fun controlName(control: ManualControl): String = when (control) {
-        ManualControl.ISO -> "ISO sensitivity"
-        ManualControl.SHUTTER -> "Shutter speed"
-        ManualControl.WHITE_BALANCE -> "White balance"
-        ManualControl.FOCUS_DISTANCE -> "Manual focus"
-        ManualControl.EXPOSURE_COMPENSATION -> "Exposure compensation"
-    }
-
-    /** Abbreviated chip label for the top-right status line. */
-    private fun shortControlName(control: ManualControl): String = when (control) {
-        ManualControl.ISO -> "ISO"
-        ManualControl.SHUTTER -> "S"
-        ManualControl.WHITE_BALANCE -> "WB"
-        ManualControl.FOCUS_DISTANCE -> "MF"
-        ManualControl.EXPOSURE_COMPENSATION -> "EV"
-    }
-
-    private fun formatManualValue(control: ManualControl, value: Long): String = when (control) {
-        ManualControl.ISO -> "ISO $value"
-        ManualControl.SHUTTER -> formatShutter(value)
-        ManualControl.WHITE_BALANCE -> "${value}K"
-        ManualControl.FOCUS_DISTANCE -> formatFocusDistance(value)
-        ManualControl.EXPOSURE_COMPENSATION -> String.format(
-            Locale.US, "%+.1f EV", controller.exposureCompensationStops(value)
-        )
-    }
-
-    private fun formatFocusDistance(scaledDiopters: Long): String {
-        if (scaledDiopters <= 1L) return "∞"
-        val meters = 1_000.0 / scaledDiopters
-        return if (meters >= 10.0) String.format(Locale.US, "%.0f m", meters)
-        else String.format(Locale.US, "%.1f m", meters)
-    }
-
     internal fun ettrSettings(): EttrSettings {
         val prefs = lensPreferences()
         return EttrSettings(
@@ -4454,7 +3382,7 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun activeProfileLensId(): String? =
+    internal fun activeProfileLensId(): String? =
         controllerIfReady?.activeCameraId()
             ?: lensPreferences().getString(KEY_LAST_CAMERA_ID, null)
 
@@ -4492,7 +3420,7 @@ class MainActivity : Activity() {
         updateQuickControls()
     }
 
-    private fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
+    internal fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
         ultraHdr = lensPreferences().getBoolean(KEY_JPEG_ULTRA_HDR, false),
         displayP3 = lensPreferences().getBoolean(KEY_JPEG_DISPLAY_P3, false),
         jpegQuality = lensPreferences().getInt(KEY_JPEG_QUALITY, 100),
@@ -4524,7 +3452,7 @@ class MainActivity : Activity() {
     ).resolvedForPlatform()
 
     /** JPEG XL container options (darktable parity); defaults resolve to 16-bit lossless. */
-    private fun jxlOutputSettings(): JxlOutputSettings = JxlOutputSettings.fromPreferences(
+    internal fun jxlOutputSettings(): JxlOutputSettings = JxlOutputSettings.fromPreferences(
         bitDepthName = lensPreferences().getString(KEY_JXL_BIT_DEPTH, null),
         pixelTypeName = lensPreferences().getString(KEY_JXL_PIXEL_TYPE, null),
         quality = lensPreferences().getInt(KEY_JXL_QUALITY, 100),
@@ -4714,1013 +3642,6 @@ class MainActivity : Activity() {
         shareLogUri(uri)
     }
 
-    /**
-     * Settings sheet. [initialTab] selects the opening page (see
-     * [SETTINGS_VIDEO_TAB]); every entry point except the video-mode
-     * settings button uses the default General tab.
-     */
-    private fun showSettings(initialTab: Int = 0) {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        // Modern chip tab row (mirrors PROGRAM AE panel styling): scrollable so
-        // seven tabs fit without squeezing. Active tab uses the accent chip.
-        val tabRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            showDividers = LinearLayout.SHOW_DIVIDER_NONE
-        }
-        val tabScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(tabRow, ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        fun chipTab(label: String): Button = Button(this).apply {
-            text = label
-            styleSettingsButton(this, active = false)
-        }.also { button ->
-            val params = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            params.marginEnd = dp(8)
-            tabRow.addView(button, params)
-        }
-        val generalTab = chipTab("General")
-        val jpegTab = chipTab("Photo")
-        val videoTab = chipTab("Video")
-        val exposureTab = chipTab("Exposure")
-        val burstTab = chipTab("Burst")
-        val denoiseTab = chipTab("Denoise")
-        val lensesTab = chipTab("Lenses")
-        val debugTab = chipTab("Debug")
-        val aboutTab = chipTab("About")
-        val allTabs = listOf(generalTab, jpegTab, videoTab, exposureTab, burstTab, denoiseTab, lensesTab, debugTab, aboutTab)
-        fun markActive(active: Button) {
-            allTabs.forEach { styleSettingsButton(it, active = it === active) }
-        }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, dp(8))
-        }
-        val kit = SettingsKit(this, content) { button, active -> styleSettingsButton(button, active) }
-        fun sectionTitle(text: String): TextView = kit.sectionTitle(text)
-        fun sectionDesc(text: String): TextView = kit.sectionDesc(text)
-        fun settingsButton(label: String, active: Boolean = false): Button = kit.settingsButton(label, active)
-        fun settingsCheck(label: String, checked: Boolean): CheckBox = kit.settingsCheck(label, checked)
-        fun polish() = kit.polish()
-        // MATCH_PARENT so the full chip row scrolls inside the dialog instead of
-        // stretching the window beyond the screen edges.
-        container.addView(tabScroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        container.addView(TextView(this).apply {
-            text = "PROGRAM • per-lens editor lives under Lenses; RAW DNG calibration under General; overlays, logs, and HDR debug frames under Debug"
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-            setPadding(0, dp(6), 0, 0)
-        })
-        val settingsScroll = ScrollView(this).apply {
-            isFillViewport = true
-            addView(content)
-        }
-        container.addView(settingsScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        lateinit var dialog: AlertDialog
-        var currentTab = 0
-        val page = SettingsPage(content, kit, ::markActive, allTabs)
-        fun showGeneralTab() = showGeneralSettings(page)
-        lateinit var photoTab: PhotoSettingsTab
-        fun showJpegTab() {
-            photoTab.show()
-            markActive(jpegTab)
-            polish()
-        }
-        photoTab = PhotoSettingsTab(kit, object : PhotoSettingsTab.Host {
-            override val controller: RawCameraController get() = this@MainActivity.controller
-            override var developedFormat: DevelopedFormat
-                get() = this@MainActivity.developedFormat
-                set(value) { this@MainActivity.developedFormat = value }
-            override fun jpegOutputSettings() = this@MainActivity.jpegOutputSettings()
-            override fun jxlOutputSettings() = this@MainActivity.jxlOutputSettings()
-            override fun lensPreferences() = this@MainActivity.lensPreferences()
-            override fun setStatus(message: String) = this@MainActivity.setStatus(message)
-            override fun refreshCaptureFormatControl() = this@MainActivity.refreshCaptureFormatControl()
-            override fun clearTabStatusViews() {
-                rawZslSettingsStatus = null
-                sidecarSettingsStatus = null
-            }
-            override fun reshow() {
-                currentTab = 1
-                showJpegTab()
-            }
-        })
-        fun showVideoTab() = showVideoSettings(page)
-        fun showExposureTab() = showExposureSettings(page)
-        fun showBurstTab() = showBurstSettings(page)
-        fun showDenoiseTab() = showDenoiseSettings(page)
-        fun showLensesTab() = showLensesSettings(page)
-        fun showDebugTab() = showDebugSettings(page)
-        fun showAboutTab() = showAboutSettings(page)
-        val tabPages: List<() -> Unit> = listOf(
-            { showGeneralTab() },
-            { showJpegTab() },
-            { showVideoTab() },
-            { showExposureTab() },
-            { showBurstTab() },
-            { showDenoiseTab() },
-            { showLensesTab() },
-            { showDebugTab() },
-            { showAboutTab() }
-        )
-        fun goTab(index: Int) {
-            val clamped = index.coerceIn(tabPages.indices)
-            val changed = clamped != currentTab
-            currentTab = clamped
-            tabPages[clamped]()
-            if (changed) content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            // Keep the top tab strip following the page (taps and swipes alike)
-            // so the active tab is always visible, centered when possible.
-            tabRow.post {
-                val active = allTabs[clamped]
-                val centered = active.left - (tabScroll.width - active.width) / 2
-                tabScroll.smoothScrollTo(centered.coerceAtLeast(0), 0)
-            }
-        }
-        generalTab.setOnClickListener { goTab(0) }
-        jpegTab.setOnClickListener { goTab(1) }
-        videoTab.setOnClickListener { goTab(2) }
-        exposureTab.setOnClickListener { goTab(3) }
-        burstTab.setOnClickListener { goTab(4) }
-        denoiseTab.setOnClickListener { goTab(5) }
-        lensesTab.setOnClickListener { goTab(6) }
-        debugTab.setOnClickListener { goTab(7) }
-        aboutTab.setOnClickListener { goTab(8) }
-        // Swipe left/right anywhere on background space (tab strip, labels, gaps,
-        // dialog padding) flips tabs like book pages: left goes forward, right
-        // goes back. Touches that start on buttons, sliders, or checkboxes are
-        // consumed by those controls, so they never reach this detector. Both
-        // fast flings and slow drags count (DOWN/UP distance check), and the
-        // listeners always return false so scrolling is unaffected.
-        val swipeDistance = dp(64).toFloat()
-        var swipeDownX = 0f
-        var swipeDownY = 0f
-        var swipeTracking = false
-        val swipeTouch = View.OnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    swipeDownX = event.x
-                    swipeDownY = event.y
-                    swipeTracking = true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (swipeTracking) {
-                        swipeTracking = false
-                        val dx = event.x - swipeDownX
-                        val dy = event.y - swipeDownY
-                        if (kotlin.math.abs(dx) >= swipeDistance &&
-                            kotlin.math.abs(dx) >= kotlin.math.abs(dy) * 1.5f
-                        ) {
-                            if (dx < 0f && currentTab < tabPages.lastIndex) goTab(currentTab + 1)
-                            else if (dx > 0f && currentTab > 0) goTab(currentTab - 1)
-                        }
-                    }
-                }
-                MotionEvent.ACTION_CANCEL -> swipeTracking = false
-            }
-            false
-        }
-        settingsScroll.setOnTouchListener(swipeTouch)
-        content.setOnTouchListener(swipeTouch)
-        tabScroll.setOnTouchListener(swipeTouch)
-        tabRow.setOnTouchListener(swipeTouch)
-        container.setOnTouchListener(swipeTouch)
-        tabScroll.contentDescription = "Settings tabs. Swipe left or right anywhere to flip tabs."
-        goTab(initialTab)
-        dialog = AlertDialog.Builder(this)
-            .setTitle("Settings")
-            .setView(container)
-            .setNegativeButton("Close", null)
-            .create()
-        page.dialog = dialog
-        dialog.setOnDismissListener { rawZslSettingsStatus = null }
-        dialog.show()
-        // Match the island design language: same 16dp panel + stroke as the
-        // photo chrome instead of the default dialog frame.
-        dialog.window?.setBackgroundDrawableResource(R.drawable.quick_panel)
-        // Keep the sheet compact and floating: fixed width with side margins
-        // and capped height instead of stretching edge to edge.
-        dialog.window?.let { window ->
-            val metrics = resources.displayMetrics
-            val targetWidth = (metrics.widthPixels - dp(48)).coerceAtLeast(dp(280))
-            val targetHeight = (metrics.heightPixels * 0.85f).toInt()
-            window.setLayout(targetWidth, targetHeight)
-        }
-    }
-
-    internal fun rawZslSettingsText(status: RawZslStatus): String {
-        val state = when (status.state) {
-            RawZslState.OFF -> "OFF"
-            RawZslState.WARMING_UP -> "WARMING UP"
-            RawZslState.ACTIVE -> "ACTIVE"
-            RawZslState.FALLBACK -> "UNAVAILABLE — NORMAL RAW FALLBACK"
-        }
-        return "Status: $state\n${status.detail}\n" +
-            "Keeps the selected number of full-resolution RAW frames in camera memory. " +
-            "Unsupported devices automatically use normal RAW capture."
-    }
-
-    internal fun showDngMetadataOverrideEditor() {
-        val cameraId = controller.activeCameraId()
-        if (cameraId == null) {
-            setStatus("WAIT FOR CAMERA")
-            return
-        }
-        val current = dngMetadataOverrideStore.get(cameraId)
-        val defaults = controller.dngMetadataDefaults()
-        val configured = listOf(
-            current.blackLevels != null || current.whiteLevel != null,
-            current.noiseProfile != null,
-            current.colorMatrix1 != null || current.colorMatrix2 != null,
-            current.cameraCalibration1 != null || current.cameraCalibration2 != null,
-            current.forwardMatrix1 != null || current.forwardMatrix2 != null
-        ).count { it }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Camera $cameraId • $configured override group${if (configured == 1) "" else "s"} active\n" +
-                    "Device default preserves the DNG tags reported by this sensor. Custom replaces only the selected tag."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                setPadding(0, 0, 0, dp(8))
-            })
-        }
-        fun row(title: String, detail: String, active: Boolean, action: () -> Unit) =
-            content.addView(twoLineChipButton(title, detail, active, action))
-        row("Sensor levels", "Black RGGB and white level",
-            current.blackLevels != null || current.whiteLevel != null) { showDngLevelsEditor(cameraId, defaults) }
-        row("Noise model", "R, G and B scale / offset pairs", current.noiseProfile != null) { showDngNoiseEditor(cameraId, defaults) }
-        row("Color matrices", "ColorMatrix 1 and 2",
-            current.colorMatrix1 != null || current.colorMatrix2 != null) {
-            showDngMatrixEditor(cameraId, "Color matrices", "ColorMatrix", defaults.colorMatrix1, defaults.colorMatrix2,
-                { it.colorMatrix1 }, { it.colorMatrix2 }, { profile, first, second -> profile.copy(colorMatrix1 = first, colorMatrix2 = second) })
-        }
-        row("Camera calibration", "CalibrationMatrix 1 and 2",
-            current.cameraCalibration1 != null || current.cameraCalibration2 != null) {
-            showDngMatrixEditor(cameraId, "Camera calibration", "CameraCalibration", defaults.cameraCalibration1, defaults.cameraCalibration2,
-                { it.cameraCalibration1 }, { it.cameraCalibration2 }, { profile, first, second -> profile.copy(cameraCalibration1 = first, cameraCalibration2 = second) })
-        }
-        row("Forward matrices", "ForwardMatrix 1 and 2",
-            current.forwardMatrix1 != null || current.forwardMatrix2 != null) {
-            showDngMatrixEditor(cameraId, "Forward matrices", "ForwardMatrix", defaults.forwardMatrix1, defaults.forwardMatrix2,
-                { it.forwardMatrix1 }, { it.forwardMatrix2 }, { profile, first, second -> profile.copy(forwardMatrix1 = first, forwardMatrix2 = second) })
-        }
-        row("PROGRAM AE limits", "ISO/shutter bounds for this lens",
-            programAeProfileStore.hasProfile(cameraId)) { showProgramPanel() }
-        row("Vendor keys", "Session + request tags for this lens",
-            vendorKeyStore.get(cameraId).activeEntries().isNotEmpty()) { showVendorKeysEditor() }
-        AlertDialog.Builder(this).setTitle("RAW DNG calibration")
-            .setView(ScrollView(this).apply { addView(content) })
-            .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
-            .show().also { dialog ->
-                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                    dngMetadataOverrideStore.clear(cameraId)
-                    dialog.dismiss()
-                    setStatus("CALIB RESET")
-                }
-            }
-    }
-
-    private fun showDngLevelsEditor(cameraId: String, defaults: DngMetadataDefaults) {
-        val current = dngMetadataOverrideStore.get(cameraId)
-        val black = current.blackLevels ?: defaults.blackLevels
-        val white = current.whiteLevel ?: defaults.whiteLevel
-        val available = black != null && white != null
-        val inputs = listOf("Black R", "Black G1", "Black G2", "Black B").mapIndexed { index, label ->
-            metadataField(label, black?.get(index) ?: 0.0)
-        } + metadataField("White level", white ?: 0.0)
-        showDngGroupDialog(
-            "Sensor levels", cameraId, "Uses the camera's declared black RGGB pattern and white level. " +
-                "Custom levels affect how RAW editors decode the file.", available,
-            current.blackLevels != null || current.whiteLevel != null, inputs
-        ) { custom ->
-            if (custom) {
-                val values = metadataValues(inputs) ?: return@showDngGroupDialog false
-                val updated = current.copy(blackLevels = values.take(4), whiteLevel = values[4])
-                saveDngMetadata(cameraId, updated)
-            } else saveDngMetadata(cameraId, current.copy(blackLevels = null, whiteLevel = null))
-        }
-    }
-
-    private fun showDngNoiseEditor(cameraId: String, defaults: DngMetadataDefaults) {
-        val current = dngMetadataOverrideStore.get(cameraId)
-        val values = current.noiseProfile ?: defaults.noiseProfile
-        val available = values != null && values.size in listOf(6, 8)
-        val labels = if (values?.size == 8) listOf("R scale", "R offset", "G1 scale", "G1 offset", "G2 scale", "G2 offset", "B scale", "B offset")
-            else listOf("R scale", "R offset", "G scale", "G offset", "B scale", "B offset")
-        val inputs = labels.mapIndexed { index, label -> metadataField(label, values?.get(index) ?: 0.0) }
-        showDngGroupDialog(
-            "Noise profile", cameraId, "Every channel has a scale and offset. Keep Device default unless you have a measured sensor noise profile.",
-            available, current.noiseProfile != null, inputs
-        ) { custom ->
-            if (custom) saveDngMetadata(cameraId, current.copy(noiseProfile = metadataValues(inputs) ?: return@showDngGroupDialog false))
-            else saveDngMetadata(cameraId, current.copy(noiseProfile = null))
-        }
-    }
-
-    private fun showDngMatrixEditor(
-        cameraId: String, title: String, tagName: String, defaultFirst: List<Double>?, defaultSecond: List<Double>?,
-        firstOverride: (DngMetadataOverrides) -> List<Double>?, secondOverride: (DngMetadataOverrides) -> List<Double>?,
-        update: (DngMetadataOverrides, List<Double>?, List<Double>?) -> DngMetadataOverrides
-    ) {
-        val current = dngMetadataOverrideStore.get(cameraId)
-        val first = firstOverride(current) ?: defaultFirst
-        val second = secondOverride(current) ?: defaultSecond
-        val available = first?.size == 9 && second?.size == 9
-        val inputs = (first ?: List(9) { 0.0 }).mapIndexed { index, value -> metadataField("$tagName 1 • ${index / 3 + 1},${index % 3 + 1}", value) } +
-            (second ?: List(9) { 0.0 }).mapIndexed { index, value -> metadataField("$tagName 2 • ${index / 3 + 1},${index % 3 + 1}", value) }
-        showDngGroupDialog(
-            title, cameraId, "Two 3×3 matrices. Values are shown row by row, directly matching DNG $tagName tags.", available,
-            firstOverride(current) != null || secondOverride(current) != null, inputs
-        ) { custom ->
-            if (custom) {
-                val values = metadataValues(inputs) ?: return@showDngGroupDialog false
-                saveDngMetadata(cameraId, update(current, values.take(9), values.drop(9)))
-            } else saveDngMetadata(cameraId, update(current, null, null))
-        }
-    }
-
-    private fun showDngGroupDialog(
-        title: String, cameraId: String, description: String, available: Boolean, customInitially: Boolean,
-        inputs: List<EditText>, save: (Boolean) -> Boolean
-    ) {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = if (available) description else "This camera does not currently declare this DNG tag, so it cannot be overridden safely."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            })
-        }
-        val toggle = CheckBox(this).apply {
-            text = "Use custom $title"
-            isChecked = customInitially
-            isEnabled = available
-            setTextColor(getColor(R.color.text_primary))
-        }
-        container.addView(toggle)
-        inputs.forEach { input ->
-            container.addView(TextView(this).apply {
-                text = input.hint
-                setTextColor(getColor(R.color.text_secondary)); textSize = 11f
-                setPadding(0, dp(8), 0, 0)
-            })
-            input.hint = ""
-            container.addView(input)
-        }
-        fun updateEnabled() = inputs.forEach { it.isEnabled = toggle.isChecked && available }
-        toggle.setOnCheckedChangeListener { _, _ -> updateEnabled() }
-        updateEnabled()
-        val dialog = AlertDialog.Builder(this).setTitle(title)
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNegativeButton("Cancel", null).setPositiveButton("Save", null).show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (save(toggle.isChecked)) dialog.dismiss()
-        }
-    }
-
-    private fun metadataField(label: String, value: Double): EditText = EditText(this).apply {
-        hint = label
-        setText(formatMetadataNumber(value))
-        inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
-        setSelectAllOnFocus(true)
-    }
-
-    private fun metadataValues(inputs: List<EditText>): List<Double>? {
-        val values = inputs.map { input -> input.text.toString().trim().toDoubleOrNull()?.takeIf(Double::isFinite) }
-        if (values.any { it == null }) {
-            inputs.zip(values).firstOrNull { it.second == null }?.first?.error = "Enter a finite number"
-            return null
-        }
-        return values.filterNotNull()
-    }
-
-    private fun formatMetadataNumber(value: Double): String = String.format(Locale.US, "%.8f", value)
-        .trimEnd('0').trimEnd('.').ifEmpty { "0" }
-
-    private fun saveDngMetadata(cameraId: String, overrides: DngMetadataOverrides): Boolean {
-        try {
-            dngMetadataOverrideStore.save(cameraId, overrides)
-            setStatus(if (overrides.isEmpty()) "CALIB DEFAULT" else "CALIB SAVED")
-            return true
-        } catch (failure: Exception) {
-            setStatus("CALIB NOT SAVED")
-            return false
-        }
-    }
-
-    /** Settings chip style shared by the panel and the vendor dialogs. */
-    private fun styleSettingsButton(button: Button, active: Boolean = false) {
-        button.background = getDrawable(
-            if (active) R.drawable.control_chip_active else R.drawable.control_chip
-        )
-        button.setTextColor(
-            getColor(if (active) R.color.accent_dark else R.color.text_primary)
-        )
-        button.textSize = 12f
-        button.isAllCaps = false
-        button.setPadding(dp(14), dp(10), dp(14), dp(10))
-    }
-
-    /** Accent section header matching the lens-picker groups. */
-    private fun vendorSectionHeader(text: String): TextView = TextView(this).apply {
-        this.text = text.uppercase(Locale.US)
-        setTextColor(getColor(R.color.accent))
-        textSize = 12f
-        typeface = Typeface.DEFAULT_BOLD
-        letterSpacing = 0.1f
-        setPadding(0, dp(12), 0, dp(4))
-    }
-
-    /** Full-width chip action button. */
-    private fun vendorActionButton(label: String, action: () -> Unit): Button =
-        Button(this).apply {
-            text = label
-            styleSettingsButton(this)
-            setOnClickListener { action() }
-        }
-
-    /** Two-line chip row: bold title on top, secondary detail below, left-aligned. */
-    private fun twoLineChipButton(title: String, detail: String, active: Boolean, action: () -> Unit): Button =
-        Button(this).apply {
-            val full = "$title\n$detail"
-            text = SpannableString(full).apply {
-                setSpan(StyleSpan(Typeface.BOLD), 0, title.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-            styleSettingsButton(this, active)
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            minHeight = dp(56)
-            setOnClickListener { action() }
-        }
-
-    /** Key row: bold name on top, type • scope • value below. */
-    private fun vendorEntryButton(entry: VendorKeyEntry, action: () -> Unit): Button =
-        twoLineChipButton(
-            entry.name.trim(),
-            "${entry.type.label} • ${entry.scope.id} • " +
-                entry.value.trim().ifEmpty { "—" } +
-                if (entry.enabled) "" else " • off",
-            entry.enabled,
-            action
-        )
-
-    /** Per-lens vendor key/tag editor: session-early keys plus per-request keys. */
-    internal fun showVendorKeysEditor() {
-        val cameraId = controller.activeCameraId()
-        if (cameraId == null) {
-            setStatus("WAIT FOR CAMERA")
-            return
-        }
-        val profile = vendorKeyStore.get(cameraId)
-        val onCount = profile.activeEntries().size
-        var editor: AlertDialog? = null
-        fun edit(entry: VendorKeyEntry?) {
-            editor?.dismiss()
-            showVendorKeyEditDialog(cameraId, entry) { showVendorKeysEditor() }
-        }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Camera $cameraId • ${profile.entries.size} keys ($onCount on)\n" +
-                    "Session keys load before the session opens (Vivo DCG needs this). " +
-                    "Request keys ride every capture. Black/white levels are not camera " +
-                    "keys — set them under Sensor levels."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                setPadding(0, 0, 0, dp(8))
-            })
-            fun reportLine(name: String, report: VendorKeyApplyReport?): String? =
-                report?.takeIf { it.applied.isNotEmpty() || it.skipped.isNotEmpty() }?.let {
-                    "$name ${it.applied.size} on / ${it.skipped.size} off" +
-                        if (it.skipped.isNotEmpty()) " (${it.skipped.take(2).joinToString()})" else ""
-                }
-            val (lastSession, lastRequest) = controller.vendorLastApply()
-            val applySummary = listOfNotNull(
-                reportLine("Session", lastSession), reportLine("Request", lastRequest)
-            ).joinToString("\n")
-            if (applySummary.isNotEmpty()) {
-                addView(TextView(this@MainActivity).apply {
-                    text = "Last apply\n$applySummary"
-                    setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                    setPadding(0, 0, 0, dp(8))
-                })
-            }
-            if (controller.vendorSessionNeedsReopen()) {
-                addView(TextView(this@MainActivity).apply {
-                    text = "Session keys changed — reopen the camera."
-                    setTextColor(getColor(R.color.danger)); textSize = 12f
-                    setTypeface(typeface, Typeface.BOLD)
-                    setPadding(0, 0, 0, dp(8))
-                })
-            }
-        }
-        if (profile.entries.isNotEmpty()) {
-            content.addView(vendorSectionHeader("Your keys"))
-        }
-        profile.entries.sortedBy { it.name }.forEach { entry ->
-            content.addView(vendorEntryButton(entry) { edit(entry) })
-        }
-        content.addView(vendorSectionHeader("Add"))
-        content.addView(vendorActionButton("Add key") { edit(null) })
-        if (profile.entries.isNotEmpty()) {
-            content.addView(vendorActionButton("Save current as preset") {
-                showPresetNameDialog { name ->
-                    try {
-                        vendorKeyStore.savePreset(name, profile)
-                        setStatus("PRESET SAVED")
-                    } catch (failure: Exception) {
-                        setStatus("PRESET NOT SAVED")
-                    }
-                }
-            })
-        }
-        val presets = vendorKeyStore.listPresets()
-        if (presets.isNotEmpty()) {
-            content.addView(vendorActionButton("Apply preset") {
-                showPresetPicker(presets, "Apply preset") { name ->
-                    val merged = profile.mergedWith(vendorKeyStore.getPreset(name))
-                    if (saveVendorKeys(cameraId, merged)) {
-                        editor?.dismiss()
-                        showVendorKeysEditor()
-                    }
-                }
-            })
-            content.addView(vendorActionButton("Delete preset") {
-                showPresetPicker(presets, "Delete preset") { name ->
-                    vendorKeyStore.deletePreset(name)
-                    setStatus("PRESET DELETED")
-                    editor?.dismiss()
-                    showVendorKeysEditor()
-                }
-            })
-        }
-        if (VendorKeyProfile.presets().entries.none { preset -> profile.entries.any { it.name == preset.name } }) {
-            content.addView(vendorActionButton("Add Vivo DCG preset (off)") {
-                val missing = VendorKeyProfile.presets().entries
-                    .filter { preset -> profile.entries.none { it.name == preset.name } }
-                if (saveVendorKeys(cameraId, VendorKeyProfile(profile.entries + missing))) {
-                    editor?.dismiss()
-                    showVendorKeysEditor()
-                }
-            })
-        }
-        content.addView(vendorSectionHeader("Lens"))
-        content.addView(vendorActionButton("Keys advertised on this lens") {
-            editor?.dismiss()
-            showVendorDiscoveryDialog(cameraId)
-        })
-        content.addView(vendorActionButton("Reopen camera (applies session keys)") {
-            controller.reopenCamera()
-            setStatus("REOPENING")
-        })
-        val opmodeDetail = if (profile.operatingMode == 0) "Default (0)" else "${profile.operatingMode} — custom"
-        content.addView(twoLineChipButton("Session operating mode", opmodeDetail, profile.operatingMode != 0) {
-            showOperatingModeDialog(cameraId, profile) {
-                editor?.dismiss()
-                showVendorKeysEditor()
-            }
-        })
-        content.addView(vendorSectionHeader("Share"))
-        content.addView(vendorActionButton("Export keys (copy text)") {
-            showVendorExportDialog(profile)
-        })
-        content.addView(vendorActionButton("Import keys") {
-            editor?.dismiss()
-            showVendorImportDialog(cameraId)
-        })
-        editor = AlertDialog.Builder(this).setTitle("Vendor keys • $cameraId")
-            .setView(ScrollView(this).apply { addView(content) })
-            .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
-            .show().also { dialog ->
-                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                    vendorKeyStore.clear(cameraId)
-                    controller.refreshVendorKeys()
-                    dialog.dismiss()
-                    setStatus("VENDOR RESET")
-                }
-            }
-    }
-
-    private fun showVendorKeyEditDialog(
-        cameraId: String,
-        existing: VendorKeyEntry?,
-        prefillName: String? = null,
-        prefillScope: VendorKeyScope? = null,
-        onSaved: () -> Unit
-    ) {
-        var type = existing?.type ?: VendorKeyType.INT
-        var scope = existing?.scope ?: prefillScope ?: VendorKeyScope.REQUEST
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Names (section.key) or numeric tags (0x…). Scalars take one " +
-                    "number or true/false; arrays take comma-separated values."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            })
-        }
-        container.addView(vendorSectionHeader("Name"))
-        val nameInput = EditText(this).apply {
-            hint = "section.key or 0x tag"
-            setText(existing?.name ?: prefillName ?: "")
-            setSelectAllOnFocus(true)
-        }
-        container.addView(nameInput)
-        val suggestionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        container.addView(suggestionsBox)
-        container.addView(vendorSectionHeader("Type"))
-        val typeButton = Button(this).apply { isAllCaps = false }
-        fun refreshType() {
-            typeButton.text = type.label
-            styleSettingsButton(typeButton, active = true)
-        }
-        refreshType()
-        typeButton.setOnClickListener {
-            val labels = VendorKeyType.entries.map { it.label }.toTypedArray()
-            AlertDialog.Builder(this).setTitle("Value type")
-                .setSingleChoiceItems(labels, type.ordinal) { choice, which ->
-                    type = VendorKeyType.entries[which]
-                    refreshType()
-                    choice.dismiss()
-                }
-                .setNegativeButton("Cancel", null).show()
-        }
-        container.addView(typeButton)
-        container.addView(vendorSectionHeader("Scope"))
-        val scopeButton = Button(this).apply { isAllCaps = false }
-        fun refreshScope() {
-            scopeButton.text = if (scope == VendorKeyScope.SESSION) "Session (before open)" else "Request (every capture)"
-            styleSettingsButton(scopeButton, active = true)
-        }
-        refreshScope()
-        scopeButton.setOnClickListener {
-            val options = VendorKeyScope.entries.toTypedArray()
-            val labels = options.map {
-                if (it == VendorKeyScope.SESSION) "Session (before open)" else "Request (every capture)"
-            }.toTypedArray()
-            AlertDialog.Builder(this).setTitle("Scope")
-                .setSingleChoiceItems(labels, scope.ordinal) { choice, which ->
-                    scope = options[which]
-                    refreshScope()
-                    choice.dismiss()
-                }
-                .setNegativeButton("Cancel", null).show()
-        }
-        container.addView(scopeButton)
-        // Autocomplete: suggests advertised keys matching what is typed so far.
-        val advertisedKeys = controller.vendorKeyDiscovery()
-        fun refreshSuggestions() {
-            suggestionsBox.removeAllViews()
-            val query = nameInput.text.toString().trim().lowercase()
-            if (query.length < 2) return
-            advertisedKeys
-                .filter { it.name.lowercase().contains(query) && it.name.trim().lowercase() != query }
-                .take(5)
-                .forEach { found ->
-                    suggestionsBox.addView(
-                        twoLineChipButton(
-                            found.name,
-                            "${found.scopeHint.id}" +
-                                found.tagHex?.let { " • $it" }.orEmpty() +
-                                " • tap to use",
-                            false
-                        ) {
-                            nameInput.setText(found.name)
-                            scope = found.scopeHint
-                            refreshScope()
-                            suggestionsBox.removeAllViews()
-                        }
-                    )
-                }
-        }
-        nameInput.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: android.text.Editable?) = refreshSuggestions()
-        })
-        container.addView(vendorSectionHeader("Value"))
-        val valueInput = EditText(this).apply {
-            hint = "1, or 64, 64, 64, 64"
-            setText(existing?.value ?: "")
-            setSelectAllOnFocus(true)
-        }
-        container.addView(valueInput)
-        val enabledBox = CheckBox(this).apply {
-            text = "Enabled"
-            isChecked = existing?.enabled ?: true
-            setTextColor(getColor(R.color.text_primary))
-        }
-        container.addView(enabledBox)
-        val probeLine = TextView(this).apply {
-            setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            setPadding(0, dp(4), 0, 0)
-        }
-        container.addView(vendorActionButton("Test on this lens") {
-            val candidate = try {
-                VendorKeyEntry(
-                    nameInput.text.toString().trim(), type, scope,
-                    valueInput.text.toString(), enabledBox.isChecked
-                ).also(VendorKeyEntry::validate)
-            } catch (failure: IllegalArgumentException) {
-                probeLine.text = "Fix the fields first (${failure.message})"
-                probeLine.setTextColor(getColor(R.color.danger))
-                return@vendorActionButton
-            }
-            probeLine.text = "Testing…"
-            probeLine.setTextColor(getColor(R.color.text_secondary))
-            controller.probeVendorKey(candidate) { result ->
-                runOnUiThread {
-                    probeLine.text = (if (result.supported) "Accepted: " else "Not accepted: ") + result.detail
-                    probeLine.setTextColor(getColor(if (result.supported) R.color.accent else R.color.danger))
-                }
-            }
-        })
-        container.addView(probeLine)
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "Add vendor key" else "Edit vendor key")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
-            .apply { if (existing != null) setNeutralButton("Delete", null) }
-            .show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val name = nameInput.text.toString().trim()
-            if (VendorKeyApply.isLevelTag(name)) {
-                nameInput.error = "Not a camera key — set levels under Sensor levels"
-                return@setOnClickListener
-            }
-            val candidate = try {
-                VendorKeyEntry(name, type, scope, valueInput.text.toString(), enabledBox.isChecked)
-                    .also(VendorKeyEntry::validate)
-            } catch (failure: IllegalArgumentException) {
-                val message = failure.message ?: "Invalid key"
-                if ("name" in message.lowercase()) nameInput.error = message
-                else valueInput.error = message
-                return@setOnClickListener
-            }
-            val current = vendorKeyStore.get(cameraId)
-            val merged = (current.entries.filter { it.name.trim() != candidate.name.trim() } + candidate)
-                .sortedBy { it.name }
-            try {
-                VendorKeyProfile(merged).validate()
-            } catch (failure: IllegalArgumentException) {
-                valueInput.error = failure.message
-                return@setOnClickListener
-            }
-            if (saveVendorKeys(cameraId, VendorKeyProfile(merged))) {
-                dialog.dismiss()
-                onSaved()
-            }
-        }
-        if (existing != null) {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val current = vendorKeyStore.get(cameraId)
-                val kept = current.entries.filter { it.name.trim() != existing.name.trim() }
-                if (saveVendorKeys(cameraId, VendorKeyProfile(kept))) {
-                    dialog.dismiss()
-                    onSaved()
-                }
-            }
-        }
-    }
-
-    /** Advertised keys for the open lens; tapping one starts an add prefilled with it. */
-    private fun showVendorDiscoveryDialog(cameraId: String) {
-        val keys = controller.vendorKeyDiscovery()
-        val added = vendorKeyStore.get(cameraId).entries.map { it.name.trim() }.toSet()
-        var list: AlertDialog? = null
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-        }
-        val countLine = TextView(this).apply {
-            setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            setPadding(0, 0, 0, dp(8))
-        }
-        body.addView(countLine)
-        val queryInput = EditText(this).apply {
-            hint = "Search (e.g. com.mediatek, bpp)"
-            setSelectAllOnFocus(true)
-            setSingleLine()
-        }
-        body.addView(queryInput)
-        val rowsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        body.addView(rowsBox)
-        fun refreshRows() {
-            val query = queryInput.text.toString().trim().lowercase()
-            val matches = if (query.isEmpty()) keys else keys.filter {
-                it.name.lowercase().contains(query) ||
-                    it.scopeHint.id.contains(query) ||
-                    it.source.lowercase().contains(query)
-            }
-            countLine.text = when {
-                keys.isEmpty() -> "Nothing advertised yet — wait for the camera."
-                query.isEmpty() -> "${keys.size} keys advertised on $cameraId. Tap one to add it."
-                else -> "${matches.size} of ${keys.size} keys match."
-            }
-            rowsBox.removeAllViews()
-            // Cap the rows so a tag-heavy HAL cannot blow up the dialog.
-            matches.take(MAX_VENDOR_DISCOVERY_ROWS).forEach { found ->
-                rowsBox.addView(
-                    twoLineChipButton(
-                        found.name,
-                        "${found.scopeHint.id} • ${found.source}" +
-                            found.tagHex?.let { " • $it" }.orEmpty() +
-                            if (found.name in added) " • added" else "",
-                        found.name in added
-                    ) {
-                        list?.dismiss()
-                        showVendorKeyEditDialog(cameraId, null, found.name, found.scopeHint) {
-                            showVendorKeysEditor()
-                        }
-                    }
-                )
-            }
-            if (matches.size > MAX_VENDOR_DISCOVERY_ROWS) {
-                rowsBox.addView(TextView(this).apply {
-                    text = "…and ${matches.size - MAX_VENDOR_DISCOVERY_ROWS} more — narrow the search."
-                    setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-                })
-            }
-        }
-        queryInput.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(s: android.text.Editable?) = refreshRows()
-        })
-        refreshRows()
-        list = AlertDialog.Builder(this).setTitle("Advertised keys • $cameraId")
-            .setView(ScrollView(this).apply { addView(body) })
-            .setNegativeButton("Close", null).show()
-    }
-
-    private fun showOperatingModeDialog(cameraId: String, profile: VendorKeyProfile, onSaved: () -> Unit) {
-        val opmodeInput = EditText(this).apply {
-            hint = "0 = default (e.g. 37379 for Xiaomi DCG)"
-            setText(profile.operatingMode.toString())
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setSelectAllOnFocus(true)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Non-zero opens the session through the vendor operating-mode " +
-                    "path (PhotonVidCam recipe). A wrong value only falls back to " +
-                    "the standard session. Takes effect after reopen."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            })
-            addView(opmodeInput)
-        }
-        val dialog = AlertDialog.Builder(this).setTitle("Session operating mode")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null).show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val opmode = try {
-                VendorKeyProfile.parseOperatingMode(opmodeInput.text.toString())
-            } catch (failure: IllegalArgumentException) {
-                opmodeInput.error = failure.message
-                return@setOnClickListener
-            }
-            if (saveVendorKeys(cameraId, profile.copy(operatingMode = opmode))) {
-                dialog.dismiss()
-                onSaved()
-            }
-        }
-    }
-
-    private fun showPresetNameDialog(onName: (String) -> Unit) {
-        val nameInput = EditText(this).apply {
-            hint = "Preset name (e.g. 14-bit MediaTek)"
-            setSelectAllOnFocus(true)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(nameInput)
-        }
-        val dialog = AlertDialog.Builder(this).setTitle("Save preset")
-            .setView(container)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null).show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            try {
-                VendorKeyStore.cleanPresetName(nameInput.text.toString())
-            } catch (failure: IllegalArgumentException) {
-                nameInput.error = failure.message
-                return@setOnClickListener
-            }
-            dialog.dismiss()
-            onName(nameInput.text.toString())
-        }
-    }
-
-    private fun showPresetPicker(presets: List<String>, title: String, onPick: (String) -> Unit) {
-        AlertDialog.Builder(this).setTitle(title)
-            .setSingleChoiceItems(presets.toTypedArray(), -1) { choice, which ->
-                choice.dismiss()
-                onPick(presets[which])
-            }
-            .setNegativeButton("Cancel", null).show()
-    }
-
-    private fun showVendorExportDialog(profile: VendorKeyProfile) {
-        if (profile.isEmpty()) {
-            setStatus("NOTHING TO EXPORT")
-            return
-        }
-        val payload = profile.toJson()
-        val pasteBox = EditText(this).apply {
-            setText(payload)
-            setSelectAllOnFocus(true)
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Copy this text to share the key set with another phone."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            })
-            addView(pasteBox)
-        }
-        val dialog = AlertDialog.Builder(this).setTitle("Export keys")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNegativeButton("Close", null)
-            .setPositiveButton("Copy", null).show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboard.setPrimaryClip(
-                android.content.ClipData.newPlainText("rawlens-vendor-keys", payload)
-            )
-            dialog.dismiss()
-            setStatus("KEYS COPIED")
-        }
-    }
-
-    private fun showVendorImportDialog(cameraId: String) {
-        val resultLine = TextView(this).apply {
-            setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-        }
-        val pasteBox = EditText(this).apply {
-            hint = "Paste an exported key set here"
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "Adds keys this lens does not already have. Nothing is deleted."
-                setTextColor(getColor(R.color.text_secondary)); textSize = 12f
-            })
-            addView(pasteBox)
-            addView(resultLine)
-        }
-        val dialog = AlertDialog.Builder(this).setTitle("Import keys")
-            .setView(ScrollView(this).apply { addView(container) })
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Import", null).show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val incoming = try {
-                VendorKeyProfile.fromJson(pasteBox.text.toString()).also(VendorKeyProfile::validate)
-            } catch (failure: IllegalArgumentException) {
-                resultLine.text = "Not a key set (${failure.message})"
-                resultLine.setTextColor(getColor(R.color.danger))
-                return@setOnClickListener
-            }
-            if (incoming.isEmpty()) {
-                resultLine.text = "The pasted text holds no valid keys."
-                resultLine.setTextColor(getColor(R.color.danger))
-                return@setOnClickListener
-            }
-            val current = vendorKeyStore.get(cameraId)
-            if (saveVendorKeys(cameraId, current.mergedWith(incoming))) {
-                dialog.dismiss()
-                showVendorKeysEditor()
-            }
-        }
-    }
-
-    private fun saveVendorKeys(cameraId: String, profile: VendorKeyProfile): Boolean {
-        try {
-            vendorKeyStore.save(cameraId, profile)
-        } catch (failure: Exception) {
-            setStatus("VENDOR NOT SAVED")
-            return false
-        }
-        // Request keys take effect on the live repeating request; session keys
-        // wait for the next open (see "Reopen camera" above).
-        controller.refreshVendorKeys()
-        setStatus(if (profile.activeEntries().isEmpty()) "VENDOR OFF" else "VENDOR SAVED")
-        return true
-    }
-
     internal fun rawZslFrameCountText(frameCount: Int): String =
         "ZSL frames saved: $frameCount\n" +
             "Approx. ${frameCount * 25} MB at 4080×3060; higher values need more camera memory."
@@ -5734,569 +3655,6 @@ class MainActivity : Activity() {
 
     internal fun vfPreviewModeText(): String =
         "VF preview: ${vfPreviewMode.name} (${vfPreviewMode.label(captureFormat)})"
-
-    internal fun showLensDiscovery(firstRun: Boolean) {
-        // First launch covers the whole camera UI (including the top bar)
-        // with an opaque black overlay — a dialog window can't reliably do
-        // that — while later invocations keep the floating progress dialog.
-        var progressDialog: AlertDialog? = null
-        var progressOverlay: View? = null
-        if (firstRun) {
-            // Already immersive from onCreate; the overlay just covers the UI.
-            progressOverlay = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setBackgroundColor(Color.BLACK)
-                elevation = 32f
-                isClickable = true
-                isFocusableInTouchMode = true
-                setPadding(dp(32), 0, dp(32), 0)
-                addView(ProgressBar(this@MainActivity).apply { isIndeterminate = true })
-                addView(TextView(this@MainActivity).apply {
-                    text = "Finding RAW lenses"
-                    setTextColor(getColor(R.color.text_primary))
-                    textSize = 18f
-                    typeface = Typeface.DEFAULT_BOLD
-                    gravity = Gravity.CENTER
-                    setPadding(0, dp(16), 0, dp(8))
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = "Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…"
-                    setTextColor(getColor(R.color.text_secondary))
-                    textSize = 13f
-                    gravity = Gravity.CENTER
-                })
-            }.also { overlay ->
-                blockBackKey(overlay)
-                findViewById<ViewGroup>(android.R.id.content)
-                    .addView(overlay, ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    ))
-                overlay.requestFocus()
-            }
-        } else {
-            progressDialog = AlertDialog.Builder(this)
-                .setTitle("Finding RAW lenses")
-                .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
-                .setCancelable(true)
-                .show()
-        }
-        val verdicts = runCatching { lensVerdictStore.snapshot() }.getOrDefault(LensVerdicts.EMPTY)
-        lensDiscovery.discover(verdicts) { lenses ->
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                progressDialog?.dismiss()
-                progressOverlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
-                progressOverlay = null
-                if (lenses.isEmpty()) {
-                    // No selection page follows; stay fullscreen (the dialog
-                    // re-hides the bars via onWindowFocusChanged on dismiss).
-                    // The deferred first-run consent fires as this alert
-                    // leaves, so it never stacks over discovery either.
-                    AlertDialog.Builder(this)
-                        .setTitle("No RAW lenses found")
-                        .setMessage("The camera service did not expose a RAW-capable camera ID.")
-                        .setPositiveButton("OK", null)
-                        .setOnDismissListener { updateFlow.showPendingConsent() }
-                        .show()
-                    return@runOnUiThread
-                }
-                val missingSaved = selectedLensIds()
-                    .filterNot { savedId -> lenses.any { it.id == savedId } }
-                    .map { unavailableLens(it) }
-                // First run stays fullscreen throughout: dismissing the
-                // selection page re-applies immersive mode, never shows bars.
-                showLensSelection(lenses + missingSaved, firstRun)
-            }
-        }
-    }
-
-    /** Overlay pages are modal: the back key must not escape onboarding. */
-    private fun blockBackKey(view: View) {
-        view.setOnKeyListener { _, keyCode, event ->
-            keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP
-        }
-    }
-
-    private fun showLensSelection(lenses: List<DiscoveredLens>, firstRun: Boolean) {
-        val selected = selectedLensIds()
-        val groups = groupByOptic(lenses)
-        val opticCount = groups.count { it.key != "unavailable" }
-        val routeCount = groups.sumOf { it.lenses.size }
-        // Nothing is pre-checked, including on first launch: the user
-        // explicitly picks what they want. The Recommended button checks
-        // the suggested set in one tap.
-        val recommended = recommendedLensIds(lenses)
-        val checked = lenses.associate { lens ->
-            lens.id to (lens.id in selected)
-        }.toMutableMap()
-        val checkBoxes = mutableListOf<CheckBox>()
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-        }
-        container.addView(TextView(this).apply {
-            text = "$opticCount lens${if (opticCount == 1) "" else "es"} · $routeCount route${if (routeCount == 1) "" else "s"}"
-            setTextColor(getColor(R.color.text_primary))
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        container.addView(TextView(this).apply {
-            text = "One card per lens. Checked lenses appear in the viewfinder switcher, widest first."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 12f
-            setPadding(0, dp(4), 0, dp(8))
-        })
-
-        val quickRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, dp(8))
-        }
-        fun styleQuickButton(button: Button) {
-            button.background = getDrawable(R.drawable.control_chip)
-            button.setTextColor(getColor(R.color.text_primary))
-            button.textSize = 12f
-            button.isAllCaps = false
-            button.setTypeface(button.typeface, Typeface.BOLD)
-            button.letterSpacing = 0.02f
-            // Compact pill: single-line 12sp stays readable while the
-            // slimmer padding keeps secondary actions visually secondary.
-            button.setPadding(dp(12), dp(6), dp(12), dp(6))
-            button.minHeight = dp(36)
-            // One line everywhere: a wrapped label grows its button and the
-            // row next to it looks misaligned on narrow screens.
-            button.maxLines = 1
-            button.ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        val useRecommended = Button(this).apply {
-            text = "Best"
-            styleQuickButton(this)
-        }
-        val selectAll = Button(this).apply {
-            text = "All"
-            styleQuickButton(this)
-        }
-        val clear = Button(this).apply {
-            text = "Clear"
-            styleQuickButton(this)
-        }
-        val recommendedParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
-        val selectParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
-        val clearParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
-        quickRow.addView(useRecommended, recommendedParams)
-        quickRow.addView(selectAll, selectParams)
-        quickRow.addView(clear, clearParams)
-        container.addView(quickRow)
-        // Secondary action as a plain text link: a third full-width chip
-        // made the preset block dominate the screen.
-        val copyReport = TextView(this).apply {
-            text = "Copy lens report"
-            setTextColor(getColor(R.color.accent))
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(0, dp(2), 0, dp(10))
-        }
-        container.addView(copyReport, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, wrapContent()
-        ))
-        copyReport.setOnClickListener {
-            val report = lensReport(
-                lenses,
-                chosenSize = { rawSizePreferenceStore.get(it) },
-                chosenFormat = { rawFormatPreferenceStore.get(it) }
-            )
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            if (clipboard == null) {
-                setStatus("COPY FAILED")
-            } else {
-                clipboard.setPrimaryClip(ClipData.newPlainText("RawLens lens report", report))
-                setStatus("LENS REPORT COPIED")
-            }
-        }
-
-        val listScroll = ScrollView(this).apply {
-            layoutParams = if (firstRun) {
-                // Full-screen onboarding: fill everything between the header
-                // and the bottom action bar so actions pin to the bottom.
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-                )
-            } else {
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    (resources.displayMetrics.heightPixels * 0.52).toInt()
-                )
-            }
-            isFillViewport = true
-            isVerticalScrollBarEnabled = false
-        }
-        val listBody = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(8))
-        }
-        listScroll.addView(listBody)
-
-        fun refreshQuickState() {
-            val values = checked.values
-            selectAll.isEnabled = values.any { !it }
-            clear.isEnabled = values.any { it }
-            useRecommended.isEnabled = checked.any { (it.value != (it.key in recommended)) }
-            selectAll.alpha = if (selectAll.isEnabled) 1f else 0.5f
-            clear.alpha = if (clear.isEnabled) 1f else 0.5f
-            useRecommended.alpha = if (useRecommended.isEnabled) 1f else 0.5f
-        }
-
-        fun lensCard(lens: DiscoveredLens, recommendedId: String?): LinearLayout {
-            val dead = lens.verdict == LensVerdict.DEAD
-            val dimmed = lens.kind == LensRouteKind.UNAVAILABLE || dead
-            val chip = when {
-                dead -> "⚠ OPEN FAILED BEFORE"
-                lens.id == recommendedId -> "★ RECOMMENDED"
-                else -> null
-            }
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setBackgroundResource(R.drawable.control_chip)
-                setPadding(dp(8), dp(10), dp(12), dp(10))
-                val cardParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(8) }
-                layoutParams = cardParams
-                alpha = if (dimmed) 0.72f else 1f
-            }
-            val box = CheckBox(this).apply {
-                tag = lens.id
-                isChecked = checked[lens.id] == true
-                contentDescription = lens.label
-            }
-            checkBoxes += box
-            val textCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
-            }
-            val topRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            topRow.addView(TextView(this).apply {
-                text = lens.title
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
-                layoutParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
-            })
-            topRow.addView(TextView(this).apply {
-                text = "ID ${lens.id}"
-                setTextColor(getColor(R.color.text_muted))
-                textSize = 11f
-                typeface = Typeface.MONOSPACE
-                setPadding(dp(8), 0, 0, 0)
-            })
-            textCol.addView(topRow)
-            textCol.addView(TextView(this).apply {
-                text = lens.details.ifEmpty { lens.label }
-                setTextColor(getColor(R.color.text_secondary))
-                textSize = 12f
-                setPadding(0, dp(2), 0, 0)
-            })
-            // One muted line: the route text already says direct/logical,
-            // so the kind chip only appears for the special states.
-            val routeText = lens.route.ifEmpty { lens.kind.sectionTitle }
-            textCol.addView(TextView(this).apply {
-                text = if (chip != null) "$chip · $routeText" else routeText
-                setTextColor(getColor(R.color.text_muted))
-                textSize = 11f
-                setPadding(0, dp(4), 0, 0)
-            })
-            card.addView(box)
-            card.addView(textCol)
-            box.setOnCheckedChangeListener { _, enabled -> checked[lens.id] = enabled; refreshQuickState() }
-            card.setOnClickListener { box.toggle() }
-            return card
-        }
-
-        fun showRawFormatChoice(lens: DiscoveredLens, formatRow: TextView) {
-            val formats = lens.packedFormats
-            val items = (listOf("Auto (RAW_SENSOR)") + formats).toTypedArray()
-            val stored = rawFormatPreferenceStore.get(lens.id)
-            val checked = stored?.let { formats.indexOf(it) + 1 }?.takeIf { it > 0 } ?: 0
-            AlertDialog.Builder(this)
-                .setTitle("RAW format · ID ${lens.id}")
-                .setSingleChoiceItems(items, checked) { dialog, which ->
-                    val picked = if (which == 0) null else formats[which - 1]
-                    rawFormatPreferenceStore.set(lens.id, picked)
-                    setStatus(if (picked == null) "RAW FORMAT AUTO" else "RAW FORMAT $picked")
-                    formatRow.text = "RAW format: ${picked ?: "Auto"} ▾"
-                    controller.reopenCamera()
-                    dialog.dismiss()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        fun showRawSizeChoice(lens: DiscoveredLens, sizeRow: TextView) {
-            val sizes = lens.rawSizes
-            val items = (listOf("Auto (largest)") + sizes).toTypedArray()
-            val stored = rawSizePreferenceStore.get(lens.id)
-            val checked = stored?.let { sizes.indexOf(it) + 1 }?.takeIf { it > 0 } ?: 0
-            AlertDialog.Builder(this)
-                .setTitle("RAW size · ID ${lens.id}")
-                .setSingleChoiceItems(items, checked) { dialog, which ->
-                    val picked = if (which == 0) null else sizes[which - 1]
-                    rawSizePreferenceStore.set(lens.id, picked)
-                    setStatus(if (picked == null) "RAW SIZE AUTO" else "RAW SIZE $picked")
-                    sizeRow.text = "RAW size: ${picked ?: "Auto"} ▾"
-                    controller.reopenCamera()
-                    dialog.dismiss()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        var firstGroup = true
-        groups.forEach { group ->
-            // ---- One card per physical lens ----
-            // No big header: the card title already names the lens, so the
-            // section only gets a small muted line. Same sizes everywhere.
-            listBody.addView(TextView(this).apply {
-                text = group.subtitle
-                setTextColor(getColor(R.color.text_muted))
-                textSize = 12f
-                setPadding(0, if (firstGroup) dp(4) else dp(12), 0, dp(6))
-            })
-            firstGroup = false
-            if (group.key == "unavailable") {
-                group.lenses.forEach { lens ->
-                    listBody.addView(lensCard(lens, null))
-                }
-            } else {
-                val head = group.recommended
-                listBody.addView(lensCard(head, head.id))
-                if (group.lenses.any { it.sensorModeSwitch }) {
-                    listBody.addView(TextView(this).apply {
-                        text = "Sensor-mode switch advertised here — special modes need a per-lens vendor key in Settings."
-                        setTextColor(getColor(R.color.text_muted))
-                        textSize = 11f
-                        setPadding(0, 0, 0, dp(8))
-                    })
-                }
-                if (head.packedFormats.isNotEmpty()) {
-                    listBody.addView(TextView(this).apply {
-                        text = "Lists packed ${head.packedFormats.joinToString(" + ")} (info only — capture stays RAW_SENSOR)."
-                        setTextColor(getColor(R.color.text_muted))
-                        textSize = 11f
-                        setPadding(0, 0, 0, dp(8))
-                    })
-                }
-                if (head.rawSizes.size > 1) {
-                    val stored = rawSizePreferenceStore.get(head.id)
-                    val sizeRow = TextView(this).apply {
-                        text = "RAW size: ${stored ?: "Auto"} ▾"
-                        setTextColor(getColor(R.color.accent))
-                        textSize = 12f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setPadding(0, 0, 0, dp(8))
-                    }
-                    sizeRow.setOnClickListener { showRawSizeChoice(head, sizeRow) }
-                    listBody.addView(sizeRow)
-                }
-                // Packed capture is strictly opt-in: the row appears only
-                // where the map lists packed formats, defaulting to Auto
-                // (RAW_SENSOR) like every fresh install.
-                if (head.packedFormats.isNotEmpty()) {
-                    val stored = rawFormatPreferenceStore.get(head.id)
-                    val formatRow = TextView(this).apply {
-                        text = "RAW format: ${stored ?: "Auto"} ▾"
-                        setTextColor(getColor(R.color.accent))
-                        textSize = 12f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setPadding(0, 0, 0, dp(8))
-                    }
-                    formatRow.setOnClickListener { showRawFormatChoice(head, formatRow) }
-                    listBody.addView(formatRow)
-                }
-                if (group.alternates.isNotEmpty()) {
-                    val alternateBody = LinearLayout(this).apply {
-                        orientation = LinearLayout.VERTICAL
-                        visibility = View.GONE
-                    }
-                    group.alternates.forEach { lens ->
-                        alternateBody.addView(lensCard(lens, head.id))
-                    }
-                    val toggle = TextView(this).apply {
-                        text = "＋ ${group.alternates.size} more route${if (group.alternates.size == 1) "" else "s"} (same lens)"
-                        setTextColor(getColor(R.color.accent))
-                        textSize = 12f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setPadding(0, 0, 0, dp(8))
-                    }
-                    toggle.setOnClickListener {
-                        val open = alternateBody.visibility != View.VISIBLE
-                        alternateBody.visibility = if (open) View.VISIBLE else View.GONE
-                        toggle.text = if (open) "－ hide extra routes"
-                            else "＋ ${group.alternates.size} more route${if (group.alternates.size == 1) "" else "s"} (same lens)"
-                    }
-                    listBody.addView(toggle)
-                    listBody.addView(alternateBody)
-                }
-            }
-        }
-        container.addView(listScroll)
-        container.addView(TextView(this).apply {
-            text = "Tip: Recommended is the daily driver. Extra routes are fallbacks for missing lenses or special sensor modes."
-            setTextColor(getColor(R.color.text_muted))
-            textSize = 11f
-            setPadding(0, dp(8), 0, dp(4))
-        })
-
-        useRecommended.setOnClickListener {
-            checkBoxes.forEach { it.isChecked = it.tag in recommended }
-            refreshQuickState()
-        }
-        selectAll.setOnClickListener {
-            checked.keys.forEach { checked[it] = true }
-            checkBoxes.forEach { it.isChecked = true }
-            refreshQuickState()
-        }
-        clear.setOnClickListener {
-            checked.keys.forEach { checked[it] = false }
-            checkBoxes.forEach { it.isChecked = false }
-            refreshQuickState()
-        }
-        refreshQuickState()
-
-        // First initial setup: dedicated full-screen black page (welcome
-        // continuity) that scales to the bottom — the list fills the window
-        // and Save / Use default pin to the bottom. Gone on either tap.
-        // Later opens keep the floating panel below.
-        if (firstRun) {
-            container.setPadding(0, 0, 0, 0)
-            fun bottomAction(label: String, primary: Boolean): Button = Button(this).apply {
-                text = label
-                background = getDrawable(
-                    if (primary) R.drawable.control_chip_active else R.drawable.control_chip
-                )
-                setTextColor(
-                    getColor(if (primary) R.color.accent_dark else R.color.text_primary)
-                )
-                textSize = 13f
-                isAllCaps = false
-                setTypeface(typeface, Typeface.BOLD)
-                letterSpacing = 0.04f
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                minHeight = dp(48)
-            }
-            val saveButton = bottomAction("Save", primary = true)
-            val defaultButton = bottomAction("Use default", primary = false)
-            val bottomBar = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, dp(12), 0, 0)
-            }
-            bottomBar.addView(
-                defaultButton,
-                LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
-            )
-            bottomBar.addView(saveButton, LinearLayout.LayoutParams(0, wrapContent(), 1f))
-            val root = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(Color.BLACK)
-                elevation = 32f
-                isClickable = true
-                isFocusableInTouchMode = true
-                setPadding(dp(20), dp(16), dp(20), dp(20))
-            }
-            root.addView(TextView(this).apply {
-                text = "Add RAW lenses"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 22f
-                typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, 0, 0, dp(8))
-            })
-            root.addView(
-                container,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-                )
-            )
-            val saveHint = TextView(this).apply {
-                text = "Select at least one lens to continue"
-                setTextColor(getColor(R.color.danger))
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setPadding(0, dp(8), 0, 0)
-                visibility = View.GONE
-            }
-            root.addView(saveHint)
-            root.addView(bottomBar)
-            blockBackKey(root)
-            findViewById<ViewGroup>(android.R.id.content).addView(
-                root,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            root.requestFocus()
-            fun dismissPage() {
-                (root.parent as? ViewGroup)?.removeView(root)
-                // Used to showStatusBar() here: first install kept the
-                // notification bar until relaunch. Stay fullscreen instead.
-                ImmersiveMode.apply(window)
-                // First run ends here: the deferred keep-up-to-date ask
-                // gets its own moment now that discovery is off screen.
-                updateFlow.showPendingConsent()
-            }
-            saveButton.setOnClickListener {
-                val ids = checked.filterValues { it }.keys.toMutableSet()
-                if (ids.isEmpty()) {
-                    saveHint.visibility = View.VISIBLE
-                    return@setOnClickListener
-                }
-                lensPreferences().edit()
-                    .putStringSet(KEY_SELECTED_LENSES, ids)
-                    .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
-                    .apply()
-                controller.reloadLenses()
-                setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
-                dismissPage()
-            }
-            defaultButton.setOnClickListener {
-                lensPreferences().edit().putBoolean(KEY_LENS_SETUP_COMPLETE, true).apply()
-                dismissPage()
-            }
-            return
-        }
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Lens discovery")
-            .setView(container)
-            .setPositiveButton("Save", null)
-            .setNegativeButton("Cancel", null)
-            .create()
-        dialog.show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val ids = checked.filterValues { it }.keys.toMutableSet()
-            if (ids.isEmpty()) {
-                setStatus("PICK A RAW LENS")
-                return@setOnClickListener
-            }
-            lensPreferences().edit()
-                .putStringSet(KEY_SELECTED_LENSES, ids)
-                .putBoolean(KEY_LENS_SETUP_COMPLETE, true)
-                .apply()
-            controller.reloadLenses()
-            setStatus("${ids.size} RAW LENS${if (ids.size == 1) "" else "ES"} ADDED")
-            dialog.dismiss()
-        }
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
-            dialog.dismiss()
-        }
-    }
 
     internal fun dngWriterBackend(): DngWriterBackend = DngWriterBackend.fromPreference(
         lensPreferences().getString(KEY_DNG_WRITER_BACKEND, DngWriterBackend.ANDROID.preferenceValue)
@@ -6341,9 +3699,9 @@ class MainActivity : Activity() {
 
     internal fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun wrapContent(): Int = ViewGroup.LayoutParams.WRAP_CONTENT
+    internal fun wrapContent(): Int = ViewGroup.LayoutParams.WRAP_CONTENT
 
-    private fun formatShutter(nanos: Long): String {
+    internal fun formatShutter(nanos: Long): String {
         if (nanos <= 0L) return "--"
         val seconds = nanos / 1_000_000_000.0
         return if (seconds >= 1.0) {
@@ -6352,6 +3710,219 @@ class MainActivity : Activity() {
             val reciprocal = 1.0 / seconds
             String.format(Locale.US, "1/%d", reciprocal.toInt())
         }
+    }
+
+    internal fun updateProgramChipStates() {
+        if (!::isoControl.isInitialized) return
+        val lock = runCatching { controller.getProgramAeProfile().lockMode }
+            .getOrDefault(ProgramLockMode.NONE)
+        val inProgram = captureExposureMode == CaptureExposureMode.PROGRAM
+        isoControl.contentDescription = when {
+            !inProgram -> "ISO control"
+            lock == ProgramLockMode.ISO_LOCK -> "ISO locked. Tap for slider, hold to release. Auto in slider releases both locks."
+            else -> "ISO auto. Tap for slider, hold to lock ISO and let shutter adjust."
+        }
+        shutterControl.contentDescription = when {
+            !inProgram -> "Shutter control"
+            lock == ProgramLockMode.SHUTTER_LOCK -> "Shutter locked. Tap for slider, hold to release. Auto in slider releases both locks."
+            else -> "Shutter auto. Tap for slider, hold to lock shutter and let ISO adjust."
+        }
+    }
+
+    /** Scope source follows the capture format: AgX-curved JPEG preview with a JPEG
+     * format, linear RAW with DNG only. */
+    internal fun applyScopeSource() {
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
+        val agx = scopeAgxApplied()
+        histogramView.setAgxApplied(agx)
+        waveformView.setAgxApplied(agx)
+        if (::controller.isInitialized) controller.setScopeAgxApplied(agx)
+        rawScopeLive = false
+        lastRawScopeMs = Long.MIN_VALUE
+        refreshScopeContentDescription()
+    }
+
+    internal fun hideManualControl() {
+        if (!::manualPanel.isInitialized) return
+        cancelManualPanelHide()
+        if (::manualSlider.isInitialized) {
+            pendingSliderUpdate?.let(manualSlider::removeCallbacks)
+        }
+        pendingSliderUpdate = null
+        manualPanel.visibility = View.GONE
+        activeManualControl = null
+        activeProgramAxis = null
+        updateOverlayStack()
+    }
+
+    internal fun hideQuickControls() {
+        if (!::quickPanel.isInitialized || quickPanel.visibility != View.VISIBLE) return
+        quickPanel.animate().cancel()
+        quickPanel.visibility = View.GONE
+        quickPanel.alpha = 1f
+        quickPanel.translationY = 0f
+        updateOverlayStack()
+    }
+
+    internal fun refreshScopeContentDescription() {
+        if (!::histogramView.isInitialized || !::waveformView.isInitialized) return
+        val source = if (scopeAgxApplied()) "AgX JPEG preview" else "linear RAW sensor"
+        val live = rawScopeLive && !rawScopeStalled()
+        val freshness = if (live) "live" else "waiting for a fresh RAW frame"
+        histogramView.contentDescription =
+            "Histogram, $source, $freshness. Tap to switch to waveform."
+        waveformView.contentDescription =
+            "Waveform, $source, $freshness. Tap to switch to histogram."
+    }
+
+    /** RAW frames arrive push-driven; this only refreshes the stall status. */
+    internal fun scheduleScope() {
+        if (!::histogramView.isInitialized) return
+        scopeRunnable?.let(histogramView::removeCallbacks)
+        scopeRunnable = null
+        if (!histogramEnabled) return
+        scopeRunnable = object : Runnable {
+            override fun run() {
+                if (!isFinishing && !isDestroyed && histogramEnabled) {
+                    refreshScopeContentDescription()
+                    histogramView.postDelayed(this, HISTOGRAM_INTERVAL_MS)
+                }
+            }
+        }.also { histogramView.post(it) }
+    }
+
+    /** Edge-triggered by the controller's manual/tap-focus auto-show policy. */
+    internal fun setFocusPeakingVisible(visible: Boolean) {
+        if (!::focusPeakingOverlay.isInitialized) return
+        focusPeakingOverlay.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) focusPeakingOverlay.clear()
+    }
+
+    internal fun syncLevelVisibility() {
+        if (!::levelOverlay.isInitialized) return
+        levelOverlay.visibility = if (levelEnabled) View.VISIBLE else View.GONE
+        if (levelEnabled) {
+            if (activityResumed) levelTracker?.start()
+        } else {
+            levelTracker?.stop()
+            levelOverlay.setFlat()
+            levelOverlay.contentDescription = "Virtual horizon off"
+        }
+    }
+
+    /** Tap the scope to switch between histogram and waveform. The mode is applied
+     * immediately and remembered across restarts. */
+    internal fun toggleScopeMode() {
+        if (!histogramEnabled || !::histogramView.isInitialized || !::waveformView.isInitialized) return
+        scopeMode = scopeMode.next()
+        persistScopeSelection()
+        controller.setScopeMode(scopeMode)
+        activeScopeView().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        rawScopeLive = false
+        lastRawScopeMs = Long.MIN_VALUE
+        syncScopeVisibility()
+        refreshScopeContentDescription()
+        updateQuickControls()
+        setStatus(scopeStatusLabel())
+    }
+
+    internal fun updateQuickControls() {
+        if (!::gridQuick.isInitialized || !::levelQuick.isInitialized) return
+        val grid = gridQuick
+        val histogram = histogramQuick
+        val level = levelQuick
+        val aeMetering = aeMeteringQuick
+        val hdr = hdrQuick
+        val timer = timerQuick
+        val release = releaseQuick
+        val sharp = mfsrQuick
+        val hdrPlus = hdrPlusQuick
+        val ettr = ettrQuick
+        if (dualRawEnabled && controller.activeCameraId() != "0") dualRawEnabled = false
+        release.isEnabled = !dualRawEnabled
+        release.alpha = if (dualRawEnabled) .4f else 1f
+        grid.text = "GRID\n${if (gridEnabled) "THIRDS" else "OFF"}"
+        histogram.text = "SCOPE\n${scopeTileLabel()}"
+        val graph = if (scopeMode == ScopeMode.WAVEFORM) "waveform" else "histogram"
+        val power = if (histogramEnabled) "on" else "off"
+        histogram.contentDescription =
+            "Exposure scope, $graph, $power. Tap to turn ${if (histogramEnabled) "off" else "on"}, long-press to switch graphs."
+        level.text = "LEVEL\n${if (levelEnabled) "ON" else "OFF"}"
+        level.contentDescription =
+            "Virtual horizon ${if (levelEnabled) "on" else "off"}. Tap to turn ${if (levelEnabled) "off" else "on"}."
+        aeMeteringMode = controller.getAeMeteringMode()
+        if (captureExposureMode == CaptureExposureMode.PROGRAM) {
+            val rawMetering = runCatching { controller.getProgramAeProfile().metering }
+                .getOrDefault(ProgramMetering.CENTER_WEIGHTED)
+            aeMetering.text = "AE METER\n${programMeteringLabel(rawMetering)}"
+            val manualSensor = controller.hasManualSensorControl()
+            aeMetering.isEnabled = manualSensor
+            aeMetering.alpha = if (manualSensor) 1f else 0.4f
+            aeMetering.contentDescription =
+                "RAW exposure metering ${programMeteringLabel(rawMetering)}. Tap to switch center, average, spot."
+            setQuickTileState(aeMetering, rawMetering != ProgramMetering.CENTER_WEIGHTED)
+        } else {
+            aeMetering.text = "AE METER\n${aeMeteringMode.label}"
+            val aeMeteringSupported = controller.isAeMeteringSupported()
+            aeMetering.isEnabled = aeMeteringSupported
+            aeMetering.alpha = if (aeMeteringSupported) 1f else 0.4f
+            aeMetering.contentDescription =
+                "Hardware AE metering ${aeMeteringMode.label}. Tap to switch."
+            setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
+        }
+        hdr.text = "HDR\n${if (hdrEnabled) "ON" else "OFF"}"
+        hdr.contentDescription = "HDR bracket ${if (hdrEnabled) "on" else "off"}. Tap to toggle."
+        timer.text = "TIMER\n${if (timerSeconds == 0) "OFF" else "${timerSeconds}S"}"
+        release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
+        val sharpAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
+        sharp.text = mfsrSettings.quickText(
+            rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy)
+        sharp.isEnabled = sharpAvailable
+        sharp.alpha = if (sharpAvailable) 1f else 0.4f
+        hdrPlus.text = hdrPlusQuickText()
+        val hdrPlusAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
+        hdrPlus.isEnabled = hdrPlusAvailable
+        hdrPlus.alpha = if (hdrPlusAvailable) 1f else 0.4f
+        val ettrMode = controller.getEttrSettings()
+        val ettrAvailable = captureExposureMode == CaptureExposureMode.AUTO
+        val ettrEnabled = ettrMode.enabled && ettrAvailable
+        ettr.text = "ETTR\n" + if (ettrEnabled) "ON" else "OFF"
+        ettr.isEnabled = ettrAvailable
+        ettr.alpha = if (ettrAvailable) 1f else 0.4f
+        setQuickTileState(grid, gridEnabled)
+        setQuickTileState(histogram, histogramEnabled)
+        setQuickTileState(level, levelEnabled)
+        setQuickTileState(hdr, hdrEnabled)
+        setQuickTileState(timer, timerSeconds > 0)
+        setQuickTileState(release, releaseMode != 0)
+        setQuickTileState(sharp, mfsrSettings.enabled)
+        setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
+        setQuickTileState(ettr, ettrEnabled)
+        refreshFeatureTags(ettrEnabled)
+        // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
+        // button itself stays photo-only (video is a separate red button).
+        // LOG takes are full-sensor, so the tile shows the output profile.
+        release.contentDescription = null // else the LOG text lingers after mode switches
+        if (isVideoMode) {
+            if (directLogEnabled) {
+                val profile = directLogProfile()
+                release.text = "LOG\n${profile.hudLabel}"
+                release.contentDescription =
+                    "Direct Log output profile ${profile.hudLabel}. Tap to switch."
+                setQuickTileState(release, profile != DirectLogProfile.BT709)
+            } else {
+                release.text = "CROP\n${videoCropShort()}"
+                setQuickTileState(release, videoCrop != VideoCrop.OPEN_GATE)
+            }
+        }
+        modeButton.text = when (captureExposureMode) {
+            CaptureExposureMode.AUTO -> "A\nAUTO"
+            CaptureExposureMode.PROGRAM -> "P\nPROGRAM"
+            CaptureExposureMode.ZSL -> "Z\nZSL"
+            CaptureExposureMode.MANUAL -> "M\nMANUAL"
+        }
+        val exposureModeActive = captureExposureMode != CaptureExposureMode.AUTO
+        setQuickTileState(modeButton, exposureModeActive)
     }
 
     companion object {
