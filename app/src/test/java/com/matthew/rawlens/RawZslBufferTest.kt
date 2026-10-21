@@ -206,9 +206,9 @@ class RawZslBufferTest {
     }
 
     @Test fun `approximate penalty stays below genuine defect penalties`() {
-        // Sanity on the -1.5 design point: an approximate converged frame must
-        // still beat a hunting-AE exact frame (-2.0), so stalls degrade
-        // gracefully instead of promoting motion-blurred alternatives.
+        // An approximate converged frame must still beat a hunting-AE exact
+        // frame, so stalls degrade gracefully instead of promoting defective
+        // alternatives (approximate frames rank before defective ones).
         val approxGood = frame(1_000L)
         Mockito.`when`(approxGood.result.get(CaptureResult.CONTROL_AE_STATE))
             .thenReturn(CaptureResult.CONTROL_AE_STATE_CONVERGED)
@@ -223,6 +223,45 @@ class RawZslBufferTest {
         val selected = buffer.takeBest(3_000L, realtimeTimestamps = false, count = 1)
 
         assertEquals(listOf(1_000L), selected.map { it.timestampNanos })
+    }
+
+    @Test fun `HDR+ take is the newest frames before the shutter`() {
+        val buffer = RawZslBuffer(8)
+        val all = (1..6).map { frame(it * 100_000_000L) }
+        all.forEachIndexed { i, f -> buffer.addTestFrame(f, (i + 1) * 100_000_000L) }
+        val selected = buffer.takeBest(700_000_000L, realtimeTimestamps = false, count = 3)
+        assertEquals(listOf(400_000_000L, 500_000_000L, 600_000_000L), selected.map { it.timestampNanos })
+        buffer.clear()
+    }
+
+    @Test fun `stale frame never beats a fresh one`() {
+        // Old ranking: age penalty saturated at 1 s, so a 20 s old frame tied a
+        // 1 s old one. Newest-first makes recency decisive.
+        val buffer = RawZslBuffer(8)
+        val stale = frame(1L)
+        val fresh = frame(2L)
+        buffer.addTestFrame(stale, 1_000_000_000L)
+        buffer.addTestFrame(fresh, 20_000_000_000L)
+        val selected = buffer.takeBest(21_000_000_000L, realtimeTimestamps = false, count = 1)
+        assertEquals(listOf(20_000_000_000L), selected.map { it.timestampNanos })
+        buffer.clear()
+    }
+
+    @Test fun `gyro blurred frame is skipped while clean frames exist and used only as last resort`() {
+        val buffer = RawZslBuffer(8)
+        // Limit 1.5 px at focal 3000 px = 5e-4 rad. 30 ms exposure at 0.1 rad/s
+        // = 3e-3 rad (9 px): blurred. Still 0.001 rad/s: clean.
+        buffer.blurLimitRadians = RawZslBuffer.blurLimitRadians(3000.0)
+        val clean = frame(1L)
+        val blurred = frame(2L)
+        buffer.addSnapshot(clean.image, clean.result, 100L, 30_000_000L, 0L, 0.001f)
+        buffer.addSnapshot(blurred.image, blurred.result, 200L, 30_000_000L, 0L, 0.1f)
+        val one = buffer.takeBest(1_000L, realtimeTimestamps = false, count = 1)
+        assertEquals(listOf(100L), one.map { it.timestampNanos })
+        assertTrue(buffer.lastTakeReport.any { "blur" in it && "skip" in it })
+        // Only the blurred frame left: a take still succeeds with it.
+        val last = buffer.takeBest(1_000L, realtimeTimestamps = false, count = 1)
+        assertEquals(listOf(200L), last.map { it.timestampNanos })
     }
 
     private fun frame(timestamp: Long): TestFrame {

@@ -77,11 +77,10 @@ internal object MfsrMerge {
     )
 
     /**
-     * Unpacks + normalises every frame (sensor order) and picks the
-     * sharpest as reference via [BurstReferenceSelection] (green-gradient
-     * sharpness; ties resolve temporal-central, same as the still path).
-     * Returns the frames with the sharpest first, or null when no frame
-     * is usable.
+     * Unpacks + normalises every frame (capture order) and plans the merge
+     * via [BurstSharpness] (HDR+: reference = sharpest of the newest three
+     * at full resolution; blurred frames dropped). Returns the frames in
+     * merge order, reference first, or null when no frame is usable.
      */
     fun prepare(frames: List<BufferedRawFrame>, metadataOf: (BufferedRawFrame) -> RawFrameMetadata): List<MfsrFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
@@ -101,46 +100,46 @@ internal object MfsrMerge {
         return refOrder.map { usable[it] }
     }
 
+    /**
+     * HDR+ reference + blur rejection ([BurstSharpness]) over frames in
+     * capture order: full-resolution green-gradient sharpness straight
+     * from each RAW16 plane (black-subtracted), reference = sharpest of
+     * the newest three, blurred frames dropped. Returns merge order.
+     */
     private fun selectSharpest(frames: List<MfsrFrame>): List<Int>? {
         return try {
-            val candidates = frames.mapIndexed { index, sharp ->
-                val image = sharp.frame.image
-                val w = sharp.metadata.imageWidth
-                val h = sharp.metadata.imageHeight
-                val thumb = GreenThumbnailSampler.sample(
-                    image, w, h,
-                    0, 0, w, h,
-                    image.planes[0].rowStride, image.planes[0].pixelStride,
-                    sharp.norm.sensorPattern, 0, 0,
-                    sharp.norm.blackLevels, sharp.norm.whiteLevel
-                )
-                val result = sharp.frame.result
-                ReferenceCandidateInput(
-                    index = index,
-                    timestampNanos = sharp.frame.timestampNanos,
-                    thumbnail = thumb,
-                    exposureNanos = sharp.frame.exposureNanos,
-                    sensitivityIso = result.get(CaptureResult.SENSOR_SENSITIVITY),
-                    noiseProfile = sharp.metadata.noiseProfile?.toDoubleArray(),
-                    blackLevel = sharp.norm.blackLevels[1],
-                    whiteLevel = sharp.norm.whiteLevel,
-                    gyroSamples = emptyList(),
-                    rollingShutterSkewNanos = sharp.frame.rollingShutterSkewNanos,
-                    afState = result.get(CaptureResult.CONTROL_AF_STATE),
-                    aeState = result.get(CaptureResult.CONTROL_AE_STATE),
-                    lensState = result.get(CaptureResult.LENS_STATE)
-                )
+            val sharpness = frames.map { sharp ->
+                val plane = sharp.frame.image.planes[0]
+                val shorts = plane.buffer.duplicate().order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+                val rowShorts = plane.rowStride / 2
+                val colShorts = plane.pixelStride / 2
+                val pattern = sharp.norm.sensorPattern
+                val norm = sharp.norm
+                BurstSharpness.measure(
+                    sharp.metadata.imageWidth, sharp.metadata.imageHeight,
+                    { x, y -> pattern.colorAt(x, y) == CfaColor.GREEN }
+                ) { x, y ->
+                    (shorts.get(y * rowShorts + x * colShorts).toInt() and 0xffff) - norm.blackAt(x, y)
+                }
             }
-            val selection = BurstReferenceSelection.select(candidates)
-            Log.i(LOG_TAG, "sharp reference: frame ${selection.selectedIndex}/${frames.size} " +
-                candidates.indices.joinToString(",") {
-                    "$it=${"%.2f".format(selection.records[it].total)}"
-                })
-            listOf(selection.selectedIndex) + candidates.indices.filter { it != selection.selectedIndex }
+            val plan = BurstSharpness.plan(sharpness, MfsrSettings.MIN_MERGE_FRAMES)
+            logPlan("ZSL", frames.map { it.frame.timestampNanos }, sharpness, plan)
+            plan.order
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "sharp selection failed, keeping capture order", failure)
             frames.indices.toList()
         }
+    }
+
+    private fun logPlan(label: String, timestamps: List<Long>, sharpness: List<Double>, plan: BurstSharpness.Plan) {
+        val newest = timestamps.maxOrNull() ?: 0L
+        val ref = plan.order.first()
+        Log.i(LOG_TAG, "$label MFSR plan: ref=F$ref merge=${plan.order.size}/${sharpness.size} " +
+            "rejected=${plan.rejected.map { "F$it" }} | " +
+            sharpness.indices.joinToString(" ") { i ->
+                "F$i(${(newest - timestamps[i]) / 1_000_000}ms)=${"%.4f".format(sharpness[i])}" +
+                    when (i) { ref -> "*"; in plan.rejected -> "x"; else -> "" }
+            })
     }
 
     /**
@@ -289,10 +288,8 @@ internal object MfsrMerge {
     }
 
     /**
-     * Offline prepare: unpacks decoded frames and orders sharpest-first
-     * via [BurstReferenceSelection] (same green-thumbnail scoring as the
-     * live path; AE/AF/lens states and gyro are unknown offline and read
-     * as absent, motion skew as zero).
+     * Offline prepare: unpacks decoded frames and plans the merge with the
+     * same [BurstSharpness] rule as the live path.
      */
     fun prepareDecoded(frames: List<OfflineBurstFrame>): List<MfsrDecodedFrame>? {
         if (frames.size < MfsrSettings.MIN_MERGE_FRAMES) return null
@@ -324,29 +321,20 @@ internal object MfsrMerge {
         return ordered
     }
 
+    /** Offline twin of [selectSharpest] on unpacked (normalized) CFAs. */
     private fun selectSharpestDecoded(frames: List<MfsrDecodedFrame>): List<Int>? {
         return try {
-            val candidates = frames.mapIndexed { index, decoded ->
-                val thumb = GreenThumbnailSampler.fromCfa(decoded.cfa)
-                ReferenceCandidateInput(
-                    index = index,
-                    timestampNanos = decoded.source.timestampNanos,
-                    thumbnail = thumb,
-                    exposureNanos = decoded.source.exposureNanos,
-                    sensitivityIso = decoded.source.sensitivityIso,
-                    noiseProfile = decoded.source.metadata.noiseProfile?.toDoubleArray(),
-                    blackLevel = decoded.source.normalization.blackLevels[1],
-                    whiteLevel = decoded.source.normalization.whiteLevel,
-                    gyroSamples = emptyList(),
-                    rollingShutterSkewNanos = 0L,
-                    afState = null,
-                    aeState = null,
-                    lensState = null
-                )
+            val inTime = frames.indices.sortedBy { frames[it].source.timestampNanos }
+            val sharpness = inTime.map { i ->
+                val cfa = frames[i].cfa
+                BurstSharpness.measure(
+                    cfa.width, cfa.height,
+                    { x, y -> cfa.pattern.colorAt(x + cfa.sensorCropLeft, y + cfa.sensorCropTop) == CfaColor.GREEN }
+                ) { x, y -> cfa.values[y * cfa.width + x] }
             }
-            val selection = BurstReferenceSelection.select(candidates)
-            Log.i(LOG_TAG, "sharp offline reference: frame ${selection.selectedIndex}/${frames.size}")
-            listOf(selection.selectedIndex) + candidates.indices.filter { it != selection.selectedIndex }
+            val plan = BurstSharpness.plan(sharpness, MfsrSettings.MIN_MERGE_FRAMES)
+            logPlan("offline", inTime.map { frames[it].source.timestampNanos }, sharpness, plan)
+            plan.order.map { inTime[it] }
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "sharp offline selection failed, keeping take order", failure)
             frames.indices.toList()

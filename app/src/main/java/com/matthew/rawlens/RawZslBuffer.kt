@@ -6,8 +6,6 @@ package com.matthew.rawlens
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
-import kotlin.math.ln
-import kotlin.math.min
 
 internal data class BufferedRawFrame(
     val image: Image,
@@ -33,6 +31,18 @@ internal data class BufferedRawFrame(
  * from zero. */
 internal class RawZslBuffer(private val capacity: Int) {
     private val frames = ArrayDeque<BufferedRawFrame>(capacity)
+
+    /**
+     * Angular travel (radians, over exposure + rolling-shutter readout) at
+     * which a frame counts as motion-blurred: [BLUR_LIMIT_PX] divided by
+     * the lens focal length in pixels (set by the controller per camera,
+     * see [blurLimitRadians]). Infinite = gyro blur never rejects.
+     */
+    @Volatile var blurLimitRadians: Double = Double.POSITIVE_INFINITY
+
+    /** Last take's per-frame decisions, newest first (logging/tests). */
+    @Volatile var lastTakeReport: List<String> = emptyList()
+        private set
 
     @get:Synchronized
     val size: Int get() = frames.size
@@ -129,22 +139,61 @@ internal class RawZslBuffer(private val capacity: Int) {
         }
     }
 
+    /**
+     * HDR+ ZSL selection (Hasinoff et al. 2016, "Burst photography for high
+     * dynamic range and low-light imaging on mobile cameras", sec. 2-3: the
+     * merge uses the frames captured just BEFORE the shutter; PhotonCamera
+     * CaptureController.triggerZslCapture likewise takes the newest ring
+     * frames). Newest first, skipping frames that cannot be sharp: lens
+     * moving, AE still searching, or gyro travel over [blurLimitRadians]
+     * (> [BLUR_LIMIT_PX] of motion blur). Short of clean frames, approximate-
+     * metadata frames come next, then the least-blurred defective ones, so a
+     * full ring never refuses the shutter. The earlier weighted ranking
+     * (unsourced weights) let a frame up to 30 s old win: its age penalty
+     * saturated at 1 s.
+     */
     private fun takeRanked(
         eligible: List<BufferedRawFrame>,
         cutoffNanos: Long,
         realtimeTimestamps: Boolean,
         count: Int
     ): List<BufferedRawFrame> {
-        val selected = eligible
-            .sortedByDescending { qualityScore(it, cutoffNanos, realtimeTimestamps) }
-            .take(count)
-            .sortedBy { it.timestampNanos }
+        val newestFirst = eligible.sortedByDescending { it.timestampNanos }
+        fun travel(frame: BufferedRawFrame): Double {
+            val readoutNanos = saturatingAdd(frame.exposureNanos, frame.rollingShutterSkewNanos)
+            return frame.motionRadiansPerSecond * readoutNanos.coerceAtLeast(0L) / 1_000_000_000.0
+        }
+        fun defect(frame: BufferedRawFrame): String? {
+            val ae = frame.result.get(CaptureResult.CONTROL_AE_STATE)
+            return when {
+                frame.result.get(CaptureResult.LENS_STATE) == CaptureResult.LENS_STATE_MOVING -> "lens-moving"
+                ae == CaptureResult.CONTROL_AE_STATE_SEARCHING ||
+                    ae == CaptureResult.CONTROL_AE_STATE_PRECAPTURE -> "ae-searching"
+                travel(frame) > blurLimitRadians -> "blur"
+                else -> null
+            }
+        }
+        val clean = newestFirst.filter { defect(it) == null && !it.metadataApproximate }
+        val approximate = newestFirst.filter { defect(it) == null && it.metadataApproximate }
+        val defective = newestFirst.filter { defect(it) != null }.sortedBy { travel(it) }
+        val selected = (clean + approximate + defective).take(count)
+        val picked = selected.toHashSet()
+        val limit = blurLimitRadians
+        lastTakeReport = newestFirst.map { frame ->
+            val ageMs = (cutoffNanos - completedAt(frame, realtimeTimestamps)) / 1_000_000
+            val blurPx = if (limit.isFinite() && limit > 0) travel(frame) / limit * BLUR_LIMIT_PX else Double.NaN
+            "age=${ageMs}ms blur=${"%.2f".format(blurPx)}px" +
+                (defect(frame)?.let { " $it" } ?: "") +
+                (if (frame.metadataApproximate) " approx" else "") +
+                (if (frame in picked) " KEPT" else " skip")
+        }
+        val ordered = selected.sortedBy { it.timestampNanos }
         // Non-destructive take: only selected frames transfer to the caller.
-        // Unselected frames (lower-scored eligible plus ineligible) stay in
-        // the ring as pre-roll — the next press reuses them instead of
-        // refilling from zero. Age and capacity eviction bound staleness.
-        selected.forEach(frames::remove)
-        return selected
+        // Unselected frames stay in the ring as pre-roll — the next press
+        // reuses them instead of refilling from zero. Age and capacity
+        // eviction bound staleness.
+        ordered.forEach(frames::remove)
+        return ordered
     }
 
     @Synchronized
@@ -179,48 +228,6 @@ internal class RawZslBuffer(private val capacity: Int) {
         return true
     }
 
-    /**
-     * RawLens frame ranking (higher is better). Neither reference ranks: PhotonCamera
-     * takes the newest N ring frames, MotionCam (RawBufferManager::save) the frames
-     * nearest the reference timestamp. The terms follow Camera2 semantics (AE
-     * CONVERGED/LOCKED, LENS_STATE STATIONARY, angular travel over exposure +
-     * rolling-shutter readout), but the weights (2/1/-2, 0.15 per ISO stop, 120
-     * per radian, 1 per 100 ms of age, 1.5 for approximate metadata) are
-     * unsourced tuning, kept as-is for parity. See docs/refactor/zsl-study.md F3.
-     */
-    private fun qualityScore(
-        frame: BufferedRawFrame,
-        cutoffNanos: Long,
-        realtimeTimestamps: Boolean
-    ): Double {
-        val aeScore = when (frame.result.get(CaptureResult.CONTROL_AE_STATE)) {
-            CaptureResult.CONTROL_AE_STATE_CONVERGED,
-            CaptureResult.CONTROL_AE_STATE_LOCKED -> 2.0
-            CaptureResult.CONTROL_AE_STATE_SEARCHING,
-            CaptureResult.CONTROL_AE_STATE_PRECAPTURE -> -2.0
-            CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED -> -1.0
-            else -> 0.0
-        }
-        val lensScore = when (frame.result.get(CaptureResult.LENS_STATE)) {
-            CaptureResult.LENS_STATE_STATIONARY -> 1.0
-            CaptureResult.LENS_STATE_MOVING -> -2.0
-            else -> 0.0
-        }
-        val iso = (frame.result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100).coerceAtLeast(100)
-        val isoPenalty = ln(iso / 100.0) / ln(2.0) * 0.15
-        val readoutNanos = saturatingAdd(frame.exposureNanos, frame.rollingShutterSkewNanos)
-        val angularTravel = frame.motionRadiansPerSecond * readoutNanos.coerceAtLeast(0L) / 1_000_000_000.0
-        val motionPenalty = min(8.0, angularTravel * 120.0)
-        val completedAt = completedAt(frame, realtimeTimestamps)
-        val agePenalty = min(10.0, (cutoffNanos - completedAt).coerceAtLeast(0L) / 100_000_000.0)
-        // Approximate metadata (paired result never arrived; carrying the latest
-        // preview result) sorts below clean equals but above genuinely bad frames
-        // (hunting AF/AE at -2, moving lens at -2): pixels are exact, only the
-        // AE-dependent tags may be stale.
-        val approxPenalty = if (frame.metadataApproximate) 1.5 else 0.0
-        return aeScore + lensScore - isoPenalty - motionPenalty - agePenalty - approxPenalty
-    }
-
     private fun completedAt(frame: BufferedRawFrame, realtimeTimestamps: Boolean): Long {
         if (!realtimeTimestamps) return frame.timestampNanos
         return saturatingAdd(
@@ -232,8 +239,22 @@ internal class RawZslBuffer(private val capacity: Int) {
     private fun saturatingAdd(left: Long, right: Long): Long =
         if (right > 0L && left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
 
-    private companion object {
+    companion object {
         // A 30-frame full-resolution RAW ring can take much longer to fill at slow exposures.
-        const val MAX_FRAME_AGE_NANOS = 30_000_000_000L
+        private const val MAX_FRAME_AGE_NANOS = 30_000_000_000L
+
+        /**
+         * Motion blur (full-resolution pixels) above which a frame is not
+         * merged when cleaner frames exist: past ~1.5 px the blur exceeds
+         * the half-pixel alignment precision the merge relies on (Wronski
+         * et al. 2019 align to sub-pixel; blur wider than the kernel
+         * footprint cannot be undone by the merge).
+         */
+        const val BLUR_LIMIT_PX = 1.5
+
+        /** [BLUR_LIMIT_PX] as angular travel for a lens of [focalLengthPx]. */
+        fun blurLimitRadians(focalLengthPx: Double): Double =
+            if (focalLengthPx.isFinite() && focalLengthPx > 0) BLUR_LIMIT_PX / focalLengthPx
+            else Double.POSITIVE_INFINITY
     }
 }

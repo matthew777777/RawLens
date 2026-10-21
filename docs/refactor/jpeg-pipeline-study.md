@@ -194,3 +194,19 @@ the per-tap helper on the real frame, all CFAs). Device, open gate binned,
 cooled and interleaved: old 37.7-38.5 ms, new 37.8-38.5 ms per frame,
 0 drops. Gates: tools/crs binning_quality (flat, centring, MTF) and
 parallel_parity (independent centred spec, re-pinned golden).
+
+## ZSL MFSR frame selection (HDR+ behaviour)
+
+Before: the ring ranked every frame up to 30 s old by an unsourced
+metadata score whose age penalty saturated at 1 s (a 29 s old frame tied
+a 1 s old one); the reference came from a 7-term weighted formula on a
+<=192-quad thumbnail (blur invisible); no frame was ever rejected.
+Now (Hasinoff et al. 2016 sec. 2-4; PhotonCamera triggerZslCapture):
+newest frames before the shutter, skipping lens-moving / AE-searching /
+gyro-blurred (> 1.5 px: travel x focal px) frames with least-blurred
+backfill; reference = sharpest of the newest three by full-resolution
+green-gradient energy; frames under 80 % of the reference's sharpness
+dropped (min 2 kept). Device, handheld, 8-frame take: ages 0-299 ms,
+gyro blur 0.59-1.57 px, sharpness 126.5-155.8, ref = newest (sharpest),
+8/8 merged. Merge RSS reached 2.1 GB (process later swiped away by the
+user mid-merge; not a crash).

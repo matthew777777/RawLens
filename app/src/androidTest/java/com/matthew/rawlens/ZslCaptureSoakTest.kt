@@ -64,6 +64,11 @@ class ZslCaptureSoakTest {
             "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.IS_PENDING}=0 AND (${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?)",
             arrayOf("DCIM/RawLens/%", "%.dng", "%.jpg"), null)?.use { it.count } ?: 0
         try {
+            // -e mfsr <n>: ZSL MFSR merge of n frames (one artifact per press).
+            args.getString("mfsr")?.toInt()?.let { n ->
+                assertTrue(controller.setMfsrSettings(
+                    controller.mfsrSettings().copy(enabled = true, frameCount = n, keepSourceBurst = false)))
+            }
             controller.setRawZslFrameCount(frames)
             controller.setZslHybridTopup(hybrid)
             controller.setCaptureExposureMode(mode)

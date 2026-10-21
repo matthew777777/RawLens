@@ -865,7 +865,17 @@ class RawCameraController(
         rawZslRealtimeTimestamps = c.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
         rawZslBuffer?.clear()
-        rawZslBuffer = rawZslCapacity.takeIf { it > 0 }?.let(::RawZslBuffer)
+        rawZslBuffer = rawZslCapacity.takeIf { it > 0 }?.let(::RawZslBuffer)?.also { ring ->
+            // Focal length in sensor pixels: f(mm) * pixelArrayWidth / physicalWidth(mm).
+            val focalMm = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+            val physical = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val pixels = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+            val focalPx = if (focalMm != null && physical != null && pixels != null && physical.width > 0f)
+                focalMm.toDouble() * pixels.width / physical.width else Double.NaN
+            ring.blurLimitRadians = RawZslBuffer.blurLimitRadians(focalPx)
+            Log.i(LOG_TAG, "ZSL blur limit ${RawZslBuffer.BLUR_LIMIT_PX}px focal=${"%.0f".format(focalPx)}px " +
+                "-> ${"%.2e".format(ring.blurLimitRadians)} rad")
+        }
         publishRawZslStatus()
 
         val previewSize = combo.preview?.let { Size(it.width, it.height) }
@@ -2682,6 +2692,9 @@ class RawCameraController(
         }
         val selected = rawZslBuffer?.takeBest(cutoff, rawZslRealtimeTimestamps, count).orEmpty()
         lastZslTakeSize = selected.size
+        rawZslBuffer?.lastTakeReport?.let { report ->
+            Log.i(LOG_TAG, "$label ZSL take ${selected.size}/$count (newest first): " + report.joinToString(" | "))
+        }
         if (selected.isEmpty()) return false
         if (selected.size < count) return false
         if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + selected.size,
