@@ -335,7 +335,7 @@
             android:id="@+id/captureInfoRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="40dp"
+            android:minHeight="44dp"
             android:gravity="center"
             android:orientation="horizontal"
             android:paddingBottom="8dp">
@@ -346,7 +346,7 @@
                 android:id="@+id/lensScroll"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:fadingEdgeLength="24dp"
+                android:fadingEdgeLength="32dp"
                 android:overScrollMode="never"
                 android:requiresFadingEdge="horizontal"
                 android:scrollbars="none">
@@ -355,6 +355,8 @@
                 android:id="@+id/lensSwitcher"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:background="@drawable/lens_track"
+                android:padding="4dp"
                 android:gravity="center"
                 android:orientation="horizontal">
 

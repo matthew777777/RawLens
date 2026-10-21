@@ -36,15 +36,21 @@ object ScopeStyle {
     /** Share of a channel's samples in its extreme bin that counts as clipped. */
     const val CLIP_FRACTION = 0.005f
 
-    /** Data inset from the rounded wall so the 0 % / 100 % edges stay fully visible. */
-    const val PLOT_INSET_X_DP = 3f
-    const val PLOT_INSET_Y_DP = 3f
+    /**
+     * Data floats in an inner rounded window this far from the wall, so the
+     * 0 % / 100 % edges stay fully visible and no trace meets a square edge.
+     */
+    const val PLOT_INSET_X_DP = 5f
+    const val PLOT_INSET_Y_DP = 5f
+
+    /** Inner window radius: concentric with the outer wall, never sharp. */
+    fun plotCornerRadiusDp(): Float = (CORNER_RADIUS_DP - PLOT_INSET_X_DP).coerceAtLeast(4f) + 1f
 
     /** Gap kept between the scope and the first vertical thirds line. */
-    const val GRID_CLEARANCE_DP = 8f
+    const val GRID_CLEARANCE_DP = 4f
 
     /** Scope height as a share of its width. */
-    const val ASPECT = 0.56f
+    const val ASPECT = 0.66f
 
     /**
      * Scope width that fits the bottom-left thirds cell of a [parentPx]-wide

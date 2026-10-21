@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Selected lens pill: solid accent (dark text), same radius as the idle
-     pill (focal_idle) so the row stays one shape language. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/accent" />
-    <corners android:radius="16dp" />
+<!-- Selected lens disc: tinted glass with an accent ring and accent label,
+     the camera-dial look; idle discs (focal_idle) stay neutral. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#2EDDC08D" />
+    <stroke android:width="1.5dp" android:color="@color/accent" />
 </shape>

@@ -226,29 +226,36 @@ internal fun MainActivity.refreshLensSwitcher() {
     if (signature == lastLensSwitcherSignature && lensSwitcher.childCount > 0) return
     lastLensSwitcherSignature = signature
     lensSwitcher.removeAllViews()
-    // Pills share the panel row (screen width minus the panel's 16dp
-    // sides): 48dp each when they fit, shrinking to a 40dp floor; past
-    // that the row scrolls (lensScroll).
-    val gap = dp(4)
-    val rowWidth = resources.displayMetrics.widthPixels - dp(32)
-    val pillWidth = ((rowWidth - gap * (options.size - 1)) / options.size)
-        .coerceIn(dp(40), dp(48))
-    val pillPad = if (pillWidth < dp(48)) dp(4) else dp(10)
+    // Round discs share the panel row (screen width minus the panel's 16dp
+    // sides): 44dp each when they fit, shrinking to a 36dp floor; past
+    // that the row scrolls (lensScroll). Idle discs sit slightly smaller
+    // so the selected lens reads as the one in front.
+    val gap = dp(6)
+    // Panel row minus the track's 4dp padding on each side.
+    val rowWidth = resources.displayMetrics.widthPixels - dp(32) - dp(8)
+    val discSize = ((rowWidth - gap * (options.size - 1)) / options.size)
+        .coerceIn(dp(36), dp(44))
     var selectedButton: View? = null
     options.forEachIndexed { index, option ->
         val button = RotatingTextView(this).apply {
             text = option.label
-            setTextColor(getColor(if (option.selected) R.color.accent_dark else R.color.text_primary))
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextColor(getColor(if (option.selected) R.color.accent else R.color.text_secondary))
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, if (option.selected) 13f else 12f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.02f
             gravity = Gravity.CENTER
-            // Every lens is its own faint pill; the selected one is filled.
-            background = getDrawable(
-                if (option.selected) R.drawable.focal_active else R.drawable.focal_idle
-            )
-            minimumHeight = dp(32)
-            setPadding(pillPad, dp(4), pillPad, dp(4))
+            includeFontPadding = false
+            background = lensDisc(option.selected, discSize)
+            minWidth = 0
+            minHeight = 0
+            minimumWidth = discSize
+            minimumHeight = discSize
+            setPadding(0, 0, 0, 0)
             maxLines = 1
+            if (!option.selected) {
+                scaleX = 0.88f
+                scaleY = 0.88f
+            }
             contentDescription = "Switch to ${option.label} lens"
             setOnClickListener {
                 // The recorder owns the camera mid-take: lens is fixed until stop.
@@ -256,16 +263,24 @@ internal fun MainActivity.refreshLensSwitcher() {
                     setStatus("STOP TO SWITCH LENS")
                     return@setOnClickListener
                 }
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 hideManualControl()
                 lensPreferences().edit().putString(KEY_LAST_CAMERA_ID, option.cameraId).apply()
                 controller.selectLens(option.cameraId)
             }
         }
-        lensSwitcher.addView(button, LinearLayout.LayoutParams(pillWidth, wrapContent()).apply {
+        lensSwitcher.addView(button, LinearLayout.LayoutParams(discSize, discSize).apply {
             if (index > 0) marginStart = gap
         })
         button.contentRotation = controlRotationDegrees
-        if (option.selected) selectedButton = button
+        if (option.selected) {
+            selectedButton = button
+            // Settle-in: the newly selected disc grows from idle size.
+            button.scaleX = 0.88f
+            button.scaleY = 0.88f
+            button.animate().scaleX(1f).scaleY(1f).setDuration(180L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(2f)).start()
+        }
     }
     // Keep the selected lens centered when the row scrolls.
     val scroll = findViewById<android.widget.HorizontalScrollView>(R.id.lensScroll)
@@ -275,6 +290,24 @@ internal fun MainActivity.refreshLensSwitcher() {
         }
     }
 }
+
+/**
+ * Lens disc drawn as a true circle: a rounded rectangle whose radius is half
+ * the exact square [size], so it can never stretch into an ellipse. The
+ * selected disc is top-lit accent glass with an accent rim; idle discs are
+ * faint top-lit glass with a hairline rim.
+ */
+private fun MainActivity.lensDisc(selected: Boolean, size: Int): android.graphics.drawable.Drawable =
+    android.graphics.drawable.GradientDrawable(
+        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+        if (selected) intArrayOf(0x47DDC08D, 0x1FDDC08D) else intArrayOf(0x1FFFFFFF, 0x0AFFFFFF),
+    ).apply {
+        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+        cornerRadius = size / 2f
+        setSize(size, size)
+        if (selected) setStroke(dp(1) * 3 / 2, getColor(R.color.accent))
+        else setStroke(dp(1), 0x24FFFFFF)
+    }
 
 /** Video lock-on-record switches (default off: continuous AE/AWB/AF). */
 internal fun MainActivity.videoRecordLocks(): VideoRecordLocks =

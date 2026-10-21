@@ -56,6 +56,9 @@ class HistogramView @JvmOverloads constructor(
         color = ScopeStyle.BORDER.toInt()
     }
     private val clipPath = Path()
+    private val plotClip = Path()
+    private val plotRect = RectF()
+    private val plotRadius = ScopeStyle.plotCornerRadiusDp() * dp
     private val bounds = RectF()
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * dp
     private var agxSelected = false
@@ -112,6 +115,11 @@ class HistogramView @JvmOverloads constructor(
         canvas.save()
         canvas.clipPath(clipPath)
         canvas.drawRect(0f, 0f, right, bottom, scrimPaint)
+        // Data lives in a concentric rounded window: soft corners, no cut edges.
+        plotClip.reset()
+        plotRect.set(plotLeft, plotTop, plotRight, plotBottom)
+        plotClip.addRoundRect(plotRect, plotRadius, plotRadius, Path.Direction.CW)
+        canvas.clipPath(plotClip)
         for (channel in 0..2) {
             buildPaths(channel, plotLeft, plotBottom, plotWidth, plotHeight, max)
             fillPaint.color = FILL_COLORS[channel]

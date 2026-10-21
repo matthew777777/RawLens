@@ -46,6 +46,8 @@ class WaveformView @JvmOverloads constructor(
         color = ScopeStyle.BORDER.toInt()
     }
     private val clipPath = Path()
+    private val plotClip = Path()
+    private val plotRadius = ScopeStyle.plotCornerRadiusDp() * resources.displayMetrics.density
     private val bounds = RectF()
     private val plotRect = RectF()
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * resources.displayMetrics.density
@@ -128,6 +130,10 @@ class WaveformView @JvmOverloads constructor(
         val insetX = ScopeStyle.PLOT_INSET_X_DP * dp
         val insetY = ScopeStyle.PLOT_INSET_Y_DP * dp
         plotRect.set(left + insetX, top + insetY, right - insetX, bottom - insetY)
+        // Data lives in a concentric rounded window: soft corners, no cut edges.
+        plotClip.reset()
+        plotClip.addRoundRect(plotRect, plotRadius, plotRadius, Path.Direction.CW)
+        canvas.clipPath(plotClip)
         for (step in 1..3) {
             val y = plotRect.bottom - plotRect.height() * step / 4f
             canvas.drawLine(plotRect.left, y, plotRect.right, y, gridPaint)
