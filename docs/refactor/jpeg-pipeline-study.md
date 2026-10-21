@@ -129,3 +129,16 @@ RawTherapee oracle on the Kodak scenes: max 0.0005-0.0008 (half floats).
   pre-stage 2.4-2.9 s -> 1.8-2.2 s. Worker pool 4/6/8 measured: no gain
   (kept 4). VkBound slice budget measured: 4x larger -0.04 s, unsliced
   -0.4 s but hangs; slicing kept for the viewfinder.
+
+## Capture -> file breakdown (after H1/H2, build 426, AUTO JPEG, AMaZE + HL + wavelet on, 12 MP)
+
+| stage | ms |
+|---|---|
+| AMaZE (queued ~230 ms, finishes inside the readback wait) + readback | 2840-2980 |
+| HL reconstruction (scene: most of frame clipped) | 5260-6070 |
+| Wavelet denoise (CPU) | 3630-4350 |
+| upload + camera->ACEScg | 255-665 |
+| output chain (colour, AgX, JPEG base) | 290-360 |
+| JPEG save | 400-635 |
+
+The colour/AgX output chain is not a target; HL, wavelet and AMaZE are.

@@ -301,6 +301,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val cameraLinearPlan = waveletPlan || hlPlan
         val effectiveFused = if (cameraLinearPlan) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
+            Log.i(LOG_TAG, "Demosaic done: ${SystemClock.elapsedRealtime() - transformAt}ms")
             if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                 output.internalFormat == AmazeTextureFormat.RGBA16F
             ) {
@@ -427,12 +428,14 @@ class RawDevelopmentCoordinator(context: Context) {
         gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
+        val t0 = SystemClock.elapsedRealtime()
         val camera = try {
             amaze.readbackHalfFloat(output)
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet readback failed, developing without denoise", failure)
             return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
         }
+        val t1 = SystemClock.elapsedRealtime()
         val blackAvg = normalization.blackLevels.average()
         val (noiseA, noiseB) = WaveletDenoiser.noiseAB(
             metadata.noiseProfile?.toDoubleArray(),
@@ -451,6 +454,7 @@ class RawDevelopmentCoordinator(context: Context) {
             camera, output.width, output.height, hlReconstruct,
             hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
         )
+        val t2 = SystemClock.elapsedRealtime()
         val denoised = ByteBuffer.allocateDirect(reconstructed.remaining()).order(ByteOrder.nativeOrder())
         val ok = try {
             waveletDenoiser.process(
@@ -462,10 +466,22 @@ class RawDevelopmentCoordinator(context: Context) {
             false
         }
         val upload = if (ok) denoised else reconstructed
-        return amaze.transformCameraLinear(
+        val t3 = SystemClock.elapsedRealtime()
+        var t4 = 0L
+        val result = amaze.transformCameraLinear(
             upload, output.width, output.height,
             transform.glslColumnMajorMatrix()
-        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
+        ) { aces ->
+            t4 = SystemClock.elapsedRealtime()
+            consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
+        }
+        val t5 = SystemClock.elapsedRealtime()
+        Log.i(
+            LOG_TAG,
+            "Wavelet tap stages: readback=${t1 - t0}ms hl=${t2 - t1}ms wavelet=${t3 - t2}ms " +
+                "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
+        )
+        return result
     }
 
     /** Levels for the highlight stage from capture metadata (sRGB luminance
@@ -496,6 +512,7 @@ class RawDevelopmentCoordinator(context: Context) {
         gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
+        val t0 = SystemClock.elapsedRealtime()
         val camera = try {
             amaze.readbackHalfFloat(output)
         } catch (failure: Exception) {
@@ -506,10 +523,21 @@ class RawDevelopmentCoordinator(context: Context) {
             camera, output.width, output.height, hlReconstruct,
             hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
         )
-        return amaze.transformCameraLinear(
+        val t2 = SystemClock.elapsedRealtime()
+        var t3 = 0L
+        val result = amaze.transformCameraLinear(
             reconstructed, output.width, output.height,
             transform.glslColumnMajorMatrix()
-        ) { aces -> consume(SceneLinearGpuFrame(aces, preDemosaic, transform)) }
+        ) { aces ->
+            t3 = SystemClock.elapsedRealtime()
+            consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
+        }
+        val t4 = SystemClock.elapsedRealtime()
+        Log.i(
+            LOG_TAG,
+            "HL tap stages: readback+hl=${t2 - t0}ms upload+toAces=${t3 - t2}ms output=${t4 - t3}ms"
+        )
+        return result
     }
 
     /**
