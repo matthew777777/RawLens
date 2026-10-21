@@ -395,8 +395,10 @@ class VfVulkanInstrumentedTest {
                             "preview sample implausible: ${rgba.toList()}"
                         }
                         if (words[0] != 0 || words[1] != 0 || words[2] != 0) {
-                            check(words[0] in 100..950 && words[1] in 64..960 && words[2] in 64..960) {
-                                "P010 center implausible: ${words.toList()}"
+                            // Words are P010 (10-bit code << 6); gate the codes.
+                            val codes = words.map { it ushr 6 }
+                            check(codes[0] in 100..950 && codes[1] in 64..960 && codes[2] in 64..960) {
+                                "P010 center implausible: codes $codes (words ${words.toList()})"
                             }
                         } else {
                             Log.i(TAG, "SYNTH p010-cpu-stale (preview proves GPU-side content)")

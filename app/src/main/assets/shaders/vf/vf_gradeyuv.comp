@@ -176,11 +176,16 @@ void main() {
             // so the mean of converts equals the convert of the mean.
             muv = (yuv0 + yuv1) * 0.5;
         } else {
-            // UV pair: average this 2x2 quad (recompute neighbours' grade).
-            vec3 g1 = pixelLog(ij + ivec2(2, 0));
-            vec3 g2 = pixelLog(ij + ivec2(0, 2));
-            vec3 g3 = pixelLog(ij + ivec2(2, 2));
-            vec3 mean = (lg0 + g1 + g2 + g3) * 0.25;
+            // UV pair: average this 2x2 output quad (the 4:2:0 cell):
+            // (x, y), (x+1, y) — already graded as lg0/lg1 — and the row
+            // below. The old taps at +2 skipped the cell's own
+            // neighbours and read the NEXT cell (chroma shifted ~1 texel
+            // and aliased; at the right/bottom edge they read past the
+            // image as zeros). Same 2 extra grades as before.
+            ivec2 below = ivec2(ij.x, min(ij.y + 1, p.u_dims.y - 1));
+            vec3 g2 = pixelLog(below);
+            vec3 g3 = (ij.x + 1 < p.u_dims.x) ? pixelLog(below + ivec2(1, 0)) : g2;
+            vec3 mean = (lg0 + lg1 + g2 + g3) * 0.25;
             muv = rgbToYuv(mean, outMode);
         }
         uint uCode = pack10(muv.g, 64.0, 960.0);

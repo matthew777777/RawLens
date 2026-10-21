@@ -161,3 +161,22 @@ ours (heuristic MHC) 0.0225, textbook MHC 0.0237, RCD 0.0161.
   slower on the Mali test phone: 35.0 vs 33.2 ms; MHC-only 31.5 vs 26.4).
   fullResFusedProof still misses its 30 ms margin (32.9-33.2 ms vs the
   33.3 ms frame): MHC itself (~26 ms) is the remaining lever.
+
+## Direct-Log binning (superpixel record path), same real frame
+
+Reference: RawTherapee AMaZE box-downscaled to the binned grid.
+- Step 2 plain quad put R and B half a pixel apart (opposite quad
+  corners): cyan/yellow fringes on every edge and glint. Now
+  centre-aligned (R/B bilinear to the quad centre, 9/3/3/1): display
+  error 0.0433 -> 0.0332. Chain 6.3-6.6 -> 7.8-8.2 ms (2040x1020).
+- Step 4 point-sampled one quad per 4x4 block (3/4 of the sensor
+  skipped): now the block mean of every quad, 0.0554 -> 0.0234, same cost.
+- vf_gradeyuv superpixel-mode chroma averaged texels at +2 (the NEXT
+  4:2:0 cell; past the image at the edges) instead of its own 2x2 cell:
+  fixed, same cost.
+- GPU == CPU twin (RecordSuperpixel) on every Y/U/V code of the real
+  frame, worst 1 code (RecordSuperpixelDeviceTest). The RAW viewfinder's
+  RGBA8 LUT superpixel (vf_superpixel) is unchanged.
+- Not fixed (measured negligible here): the binning grade has no
+  sensor-white desaturation (no WB gains in vf_gradeyuv); fully clipped
+  glints still render white after the CCM clip.

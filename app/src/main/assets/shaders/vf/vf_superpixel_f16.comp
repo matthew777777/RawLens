@@ -82,12 +82,56 @@ vec4 shadeQuad(ivec2 q, ivec4 ch) {
     return vec4(g.x, gr, gb, g.w);
 }
 
+// Canonical R/Gr/Gb/B of quad k (quad units from u_quadBase), clamped
+// into the crop so edges replicate.
+vec4 quadN(ivec2 k) {
+    ivec2 quads = p.u_frameSize * (p.u_step / 2);
+    ivec2 q = p.u_quadBase + 2 * clamp(k, ivec2(0), quads - 1);
+    return vec4(fetchN(q, p.u_chans.x), fetchN(q, p.u_chans.y),
+                fetchN(q, p.u_chans.z), fetchN(q, p.u_chans.w));
+}
+
+// Step 2: CENTRE-ALIGNED superpixel. A plain 2x2 quad puts R and B half
+// a pixel apart (opposite quad corners), which reads as cyan/yellow
+// fringes on every edge and highlight. R and B are instead bilinearly
+// resampled to the quad centre from their 4 nearest same-colour sites
+// (9/16, 3/16, 3/16, 1/16 on the 2 px colour grid); green is the Gr/Gb
+// mean, already centred. Measured on a real Direct-Log frame vs
+// RawTherapee AMaZE box-downscaled 2x: display error 0.0433 -> 0.0332.
+// Steps > 2: BLOCK MEAN of every quad in the step x step block (the
+// point sample skipped 3/4 of the sensor at step 4: aliasing and noise;
+// 0.0554 -> 0.0234 vs AMaZE/4). CPU twin: RecordSuperpixel.
+//
+// Which neighbour direction holds the next R/B site depends on the CFA
+// phase: canonical slot (ch) sits at quad offset (ch & 1, ch >> 1); R
+// at offset 0 needs +1 quads, at offset 1 needs -1 quads (per axis).
+vec4 superpixel(ivec2 ij) {
+    int hq = p.u_step / 2;
+    ivec2 k0 = ij * hq;
+    if (hq == 1) {
+        vec4 c = quadN(k0);
+        ivec2 dr = ivec2(1 - 2 * (p.u_chans.x & 1), 1 - 2 * ((p.u_chans.x >> 1) & 1));
+        ivec2 db = ivec2(1 - 2 * (p.u_chans.w & 1), 1 - 2 * ((p.u_chans.w >> 1) & 1));
+        float r = (9.0 * c.x + 3.0 * quadN(k0 + ivec2(dr.x, 0)).x
+                   + 3.0 * quadN(k0 + ivec2(0, dr.y)).x + quadN(k0 + dr).x) * (1.0 / 16.0);
+        float b = (9.0 * c.w + 3.0 * quadN(k0 + ivec2(db.x, 0)).w
+                   + 3.0 * quadN(k0 + ivec2(0, db.y)).w + quadN(k0 + db).w) * (1.0 / 16.0);
+        return vec4(r, c.y, c.z, b);
+    }
+    vec4 sum = vec4(0.0);
+    for (int y = 0; y < hq; ++y) {
+        for (int x = 0; x < hq; ++x) {
+            sum += quadN(k0 + ivec2(x, y));
+        }
+    }
+    return sum / float(hq * hq);
+}
+
 void main() {
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(ij, p.u_frameSize))) return;
     ivec2 q = p.u_quadBase + ij * p.u_step;
-    vec4 b = vec4(fetchN(q, p.u_chans.x), fetchN(q, p.u_chans.y),
-                  fetchN(q, p.u_chans.z), fetchN(q, p.u_chans.w));
+    vec4 b = superpixel(ij);
     if (p.u_shadeDims.z != 0) {
         b *= shadeQuad(q, p.u_chans);
     }
