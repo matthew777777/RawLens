@@ -100,6 +100,8 @@ class DirectLogRecordDeviceTest {
             if (file.exists()) file.delete()
             val rec = DirectLogRecorder(manager, cameraId, context)
             rec.rung = rung
+            // -e fps 24|30 (default: the recorder default).
+            args.getString("fps")?.let { rec.fps = it.toInt() }
             rec.computeStep = step
             rec.preferMhc = fused
             rec.allowThermalDegrade = false
@@ -109,7 +111,7 @@ class DirectLogRecordDeviceTest {
             }
             val stats = rec.stop()
             Log.i(
-                TAG, "SPIKE directlog label=$label rung=${rung.label} step=$step sensor=${stats.sensorSize} " +
+                TAG, "SPIKE directlog fps=${rec.fps} label=$label rung=${rung.label} step=$step sensor=${stats.sensorSize} " +
                     "crop=${stats.cropRect} export=${stats.exportSize} " +
                     "acq=${stats.framesAcquired} graded=${stats.framesGraded} " +
                     "drop=${stats.framesDropped} miss=${stats.resultMiss} stale=${stats.staleResults} " +
