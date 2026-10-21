@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.database.ContentObserver
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -31,6 +32,7 @@ class LastCaptureThumbnail(
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private var lastUri: Uri? = null
+    private var lastHadThumb = false
 
     var uri: Uri? = null
         private set
@@ -59,21 +61,45 @@ class LastCaptureThumbnail(
     fun refresh() {
         if (io.isShutdown) return
         io.execute {
-            val newest = listOfNotNull(
-                newest(MediaStore.Images.Media.EXTERNAL_CONTENT_URI),
-                newest(MediaStore.Video.Media.EXTERNAL_CONTENT_URI),
-            ).maxByOrNull { it.added }
-            if (newest?.uri == lastUri) return@execute
-            val thumb = newest?.let {
-                runCatching { resolver.loadThumbnail(it.uri, Size(THUMB_PX, THUMB_PX), null) }.getOrNull()
+            // Newest first across photos and videos; show the first one that
+            // actually yields a picture. A capture with no thumbnail (a DNG the
+            // platform thumbnailer skips, an CRS) never turns the seat grey.
+            val candidates = (recent(MediaStore.Images.Media.EXTERNAL_CONTENT_URI) +
+                recent(MediaStore.Video.Media.EXTERNAL_CONTENT_URI))
+                .sortedByDescending { it.added }
+            if (candidates.firstOrNull()?.uri == lastUri && lastHadThumb) return@execute
+            var shown: Item? = null
+            var thumb: Bitmap? = null
+            for (item in candidates) {
+                thumb = loadPreview(item)
+                if (thumb != null) {
+                    shown = item
+                    break
+                }
             }
-            lastUri = newest?.uri
+            if (shown == null) shown = candidates.firstOrNull()
+            lastUri = candidates.firstOrNull()?.uri
+            lastHadThumb = thumb != null
             main.post {
-                uri = newest?.uri
-                mime = newest?.mime
-                onChanged(newest?.uri, newest?.mime, thumb)
+                uri = shown?.uri
+                mime = shown?.mime
+                onChanged(shown?.uri, shown?.mime, thumb)
             }
         }
+    }
+
+    /** Platform thumbnail, falling back to a downscaled full decode (DNG via ImageDecoder). */
+    private fun loadPreview(item: Item): Bitmap? {
+        runCatching { resolver.loadThumbnail(item.uri, Size(THUMB_PX, THUMB_PX), null) }
+            .getOrNull()?.let { return it }
+        if (item.mime?.startsWith("image/") != true) return null
+        return runCatching {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, item.uri)) { decoder, info, _ ->
+                val scale = maxOf(1, minOf(info.size.width, info.size.height) / THUMB_PX)
+                decoder.setTargetSize(info.size.width / scale, info.size.height / scale)
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }.getOrNull()
     }
 
     /** Opens the newest capture in the system viewer; false when none or no app handles it. */
@@ -87,20 +113,25 @@ class LastCaptureThumbnail(
 
     private data class Item(val uri: Uri, val mime: String?, val added: Long)
 
-    private fun newest(collection: Uri): Item? = runCatching {
+    private fun recent(collection: Uri): List<Item> = runCatching {
         resolver.query(
             collection,
             arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_ADDED),
             "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.MediaColumns.IS_PENDING} = 0",
-            arrayOf("DCIM/RawLens/%"),
+            arrayOf("DCIM/RawLens%"),
             "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns._ID} DESC",
         )?.use { c ->
-            if (!c.moveToFirst()) return@use null
-            Item(ContentUris.withAppendedId(collection, c.getLong(0)), c.getString(1), c.getLong(2))
+            val items = ArrayList<Item>()
+            while (items.size < CANDIDATES && c.moveToNext()) {
+                items += Item(ContentUris.withAppendedId(collection, c.getLong(0)), c.getString(1), c.getLong(2))
+            }
+            items
         }
-    }.getOrNull()
+    }.getOrNull().orEmpty()
 
     private companion object {
         const val THUMB_PX = 192
+        /** Newest items per collection tried before giving up on a preview. */
+        const val CANDIDATES = 8
     }
 }
