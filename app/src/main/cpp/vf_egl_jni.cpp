@@ -279,23 +279,23 @@ Java_com_matthew_rawlens_VfEglImport_blitBytesToBlob(
     void* srcPtr = env->GetDirectBufferAddress(src);
     if (!srcPtr) return -2;
     if (env->GetDirectBufferCapacity(src) < byteCount) return -3;
+    // fromHardwareBuffer does not acquire a reference (NDK hardware_buffer_jni.h),
+    // so this function must not release one: the old unbalanced releases freed
+    // the caller's CFA buffer before the RCD photo path imported it (D4).
     AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, dst);
     if (!buf) return -4;
     AHardwareBuffer_Desc desc{};
     AHardwareBuffer_describe(buf, &desc);
     if (desc.width < (uint32_t)byteCount) {
-        AHardwareBuffer_release(buf);
         return -5;
     }
     void* dstPtr = nullptr;
     if (AHardwareBuffer_lock(buf, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &dstPtr) != 0 ||
         !dstPtr) {
-        AHardwareBuffer_release(buf);
         return -6;
     }
     memcpy(dstPtr, srcPtr, (size_t)byteCount);
     AHardwareBuffer_unlock(buf, nullptr);
-    AHardwareBuffer_release(buf);
     return 0;
 }
 

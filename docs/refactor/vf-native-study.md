@@ -79,3 +79,20 @@ via DemosaicBenchHarnessTest ($RAWLENS_DEMOSAIC_BENCH).
   stage (initRcdNative requires it) and needs /data/local/tmp/dng_win.bin:
   test bug, not app bug. The photo path (ensureRcdVulkan) inits in order.
 - Photo RCD (JpegDemosaic.RCD) not yet exercised on device.
+- D4 (fixed) Photo RCD (JpegDemosaic.RCD) produced structure-free striped
+  garbage (4-9 dB on Kodak; most pixels 0, max 0.46). Cause:
+  VfEglImport.blitBytesToBlob released the AHardwareBuffer it got from
+  AHardwareBuffer_fromHardwareBuffer, which per the NDK docs "does not
+  acquire any additional reference": the unbalanced release freed the CFA
+  BLOB before RCD imported it (use-after-free). The release calls are
+  removed; a scan of every native file found no other unbalanced
+  fromHardwareBuffer/release pair. Proof (PhotoDemosaicKodakDeviceTest,
+  8 Kodak mosaics through Gles31AmazeProcessor.processRcdCfa): photo RCD
+  now equals CPU RcdReference + the rcd_final desaturation tail to a mean
+  abs difference of 1e-4 (kodim01n 31.73 dB vs CPU 31.74).
+- D5 (open, HL: excluded from this refactor) The shared still tail's
+  sensor-white desaturation (DESAT_LO 0.70 .. 0.99, AMaZE and RCD alike)
+  pulls any pixel with one channel above 70 % of sensor white toward
+  neutral, washing out bright saturated colours: kodim23 RCD 38.4 dB raw
+  -> 19.5 dB after the tail (AMaZE 19.5 too). Highlight handling is on the
+  excluded list (HL); recorded for its own study.
