@@ -1167,64 +1167,11 @@ class DirectLogRecorder(
         } catch (_: Exception) {
             return null
         }
-        return when (control) {
-            ManualControl.ISO -> {
-                if (!hasManualSensor(c)) return null
-                val range = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-                    ?: return null
-                val current = (videoManual.iso ?: videoMeteredIso).coerceIn(range.lower, range.upper)
-                ManualControlRange(
-                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
-                    videoManual.iso == null && !videoLocks.lockExposure,
-                )
-            }
-            ManualControl.SHUTTER -> {
-                if (!hasManualSensor(c)) return null
-                val range = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-                    ?: return null
-                val frameFps = fps.takeIf { it > 0 } ?: 30
-                val cappedMax = minOf(range.upper, 1_000_000_000L / frameFps).coerceAtLeast(range.lower)
-                val current = (videoManual.shutterNanos ?: videoMeteredShutterNanos)
-                    .coerceIn(range.lower, cappedMax)
-                ManualControlRange(
-                    range.lower, cappedMax, current,
-                    videoManual.shutterNanos == null && !videoLocks.lockExposure,
-                )
-            }
-            ManualControl.WHITE_BALANCE -> {
-                val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                    ?: intArrayOf()
-                if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) {
-                    return null
-                }
-                ManualControlRange(
-                    VideoManualPolicy.MIN_WB_KELVIN.toLong(),
-                    VideoManualPolicy.MAX_WB_KELVIN.toLong(),
-                    (videoManual.wbKelvin ?: 5500).toLong(),
-                    videoManual.wbKelvin == null,
-                )
-            }
-            ManualControl.FOCUS_DISTANCE -> {
-                val minDist = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
-                    ?.takeIf { it > 0f } ?: return null
-                val scale = 1_000f
-                val current = ((videoManual.focusDiopters ?: videoMeteredFocus ?: 0f) * scale).toLong()
-                    .coerceIn(0L, (minDist * scale).toLong())
-                ManualControlRange(
-                    0L, (minDist * scale).toLong(), current,
-                    videoManual.focusDiopters == null,
-                )
-            }
-            ManualControl.EXPOSURE_COMPENSATION -> {
-                val range = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-                    ?: return null
-                val current = (videoManual.evIndex ?: 0).coerceIn(range.lower, range.upper)
-                ManualControlRange(
-                    range.lower.toLong(), range.upper.toLong(), current.toLong(),
-                    (videoManual.evIndex ?: 0) == 0,
-                )
-            }
-        }
+        val frameFps = fps.takeIf { it > 0 } ?: 30
+        return VideoManualControls.controlRange(
+            control, c, frameFps, videoManual, videoLocks,
+            videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
+        )
     }
 
     /** Live mid-take tweak from the photo-tile slider; rebuilds the request. */
@@ -1242,10 +1189,6 @@ class DirectLogRecorder(
         }
         refreshVideoRequest()
     }
-
-    private fun hasManualSensor(c: CameraCharacteristics): Boolean =
-        (c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf())
-            .contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
 
     private fun refreshVideoRequest() {
         val handler = camHandler ?: return
@@ -1278,7 +1221,6 @@ class DirectLogRecorder(
         builder: CaptureRequest.Builder,
         c: CameraCharacteristics,
     ) {
-        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         val frameFps = fps.takeIf { it > 0 } ?: 30
         // Fail fast when the sensor offers no AE range covering the take
         // rate (fixed (fps,fps) is illegal there and breaks the session).
@@ -1290,111 +1232,10 @@ class DirectLogRecorder(
                 "no AE fps range covers ${frameFps}fps " +
                     "(available ${availableRanges.joinToString { "${it.first}-${it.second}" }})"
             )
-        builder.set(
-            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-            android.util.Range(picked.first, picked.second)
+        VideoManualControls.applyToRequest(
+            builder, c, frameFps, picked, videoManual, videoLocks,
+            videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
         )
-        val manualFocus = videoManual.focusDiopters
-        val lockedFocus = VideoManualPolicy.resolveFocusLock(manualFocus, videoLocks.lockFocus)
-        val afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-        fun coerceAf(mode: Int): Int {
-            if (afModes.contains(mode)) return mode
-            if (afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)) {
-                return CaptureRequest.CONTROL_AF_MODE_OFF
-            }
-            return afModes.firstOrNull() ?: mode
-        }
-        val frozenFocus = manualFocus ?: if (lockedFocus) videoMeteredFocus else null
-        if (frozenFocus != null) {
-            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(CaptureRequest.CONTROL_AF_MODE_OFF))
-            try {
-                builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, frozenFocus)
-            } catch (_: IllegalArgumentException) {
-            }
-        } else {
-            val continuous = when {
-                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) ->
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-                afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                else -> CaptureRequest.CONTROL_AF_MODE_AUTO
-            }
-            builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(continuous))
-        }
-        val resolvedIso = VideoManualPolicy.resolveIso(
-            videoManual.iso, videoMeteredIso, videoLocks.lockExposure,
-        )
-        val resolvedShutter = VideoManualPolicy.resolveShutter(
-            videoManual.shutterNanos, videoMeteredShutterNanos, videoLocks.lockExposure,
-        )
-        val manualSensor = hasManualSensor(c) && (resolvedIso != null || resolvedShutter != null)
-        if (manualSensor) {
-            val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            val timeRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            val iso = VideoManualPolicy.clampIso(
-                resolvedIso ?: videoMeteredIso,
-                isoRange?.lower ?: (resolvedIso ?: videoMeteredIso),
-                isoRange?.upper ?: (resolvedIso ?: videoMeteredIso),
-            )
-            val shutter = VideoManualPolicy.clampShutter(
-                resolvedShutter ?: videoMeteredShutterNanos,
-                timeRange?.lower ?: (resolvedShutter ?: videoMeteredShutterNanos),
-                timeRange?.upper ?: (resolvedShutter ?: videoMeteredShutterNanos),
-                frameFps,
-            )
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
-        } else {
-            val aeModes = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
-            val aeMode = if (aeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
-                CaptureRequest.CONTROL_AE_MODE_ON
-            } else {
-                aeModes.firstOrNull() ?: CaptureRequest.CONTROL_AE_MODE_ON
-            }
-            builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
-            val evRange = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-            val ev = (videoManual.evIndex ?: 0).coerceIn(
-                evRange?.lower ?: 0, evRange?.upper ?: 0,
-            )
-            try {
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev)
-            } catch (_: IllegalArgumentException) {
-            }
-        }
-        val manualWb = videoManual.wbKelvin
-        val awbModes = c.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
-        fun coerceAwb(mode: Int): Int {
-            if (awbModes.contains(mode)) return mode
-            if (awbModes.contains(CaptureRequest.CONTROL_AWB_MODE_AUTO)) {
-                return CaptureRequest.CONTROL_AWB_MODE_AUTO
-            }
-            return awbModes.firstOrNull() ?: mode
-        }
-        if (manualWb != null) {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_OFF))
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_MODE,
-                CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
-            )
-            val gains = VideoManualPolicy.wbGainsForKelvin(manualWb)
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_GAINS,
-                android.hardware.camera2.params.RggbChannelVector(
-                    gains[0], gains[1], gains[2], gains[3],
-                ),
-            )
-        } else {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_AUTO))
-            if (VideoManualPolicy.resolveAwbLock(null, videoLocks.lockWb) &&
-                c.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
-            ) {
-                try {
-                    builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                } catch (_: IllegalArgumentException) {
-                }
-            }
-        }
         // Lens-shading map (LOG needs it; mirrors the stills path).
         try {
             val shadingModes = c.get(
@@ -1863,138 +1704,15 @@ class DirectLogRecorder(
         val mc = codec ?: return false
         val strides = intArrayOf(ourYStrideB, ourUvStrideB, width, height)
         val p010Buf = s.p010!!.buffer
-        val fd: Int
-        if (useFused) {
-            val (miparams, mfparams) = VfMhc.packMhc(
-                crop.width, crop.height, crop.left, crop.top, channels, pitch, levels, white
-            )
-            val (gidims, gfparams) = VfLogGrade.packGrade(
-                intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-                profile = sessionProfile
-            )
-            fd = VfLogGrade.fusedYuvSubmitNative(
-                hb, p010Buf, miparams, mfparams, gidims, gfparams, strides, slotIndex,
-                shadeD, shadeG
-            )
-            if (fd < 0) {
-                if (fd == -20) error("P010 staging layout mismatch (see logcat); aborting take")
-                Log.w(TAG, "fused submit failed ($fd); dropping frame")
-                dropped.incrementAndGet()
-                return false
-            }
-            fusedCount.incrementAndGet()
-        } else if (useRcd) {
-            // RCD path (A/B only): modes 0-2 (same-queue FIFO ordered,
-            // so no CPU wait between modes) then the fused finalize +
-            // grade, or mode 3 + grade-YUV fullRgb=1 when the fused
-            // init failed. Intermediate sync fds close immediately;
-            // only the final fd gates the copy. ~250ms/frame at 4K: the
-            // take drops to a few fps effective.
-            val rgbBuf = rcdRgb?.buffer
-            val scratchBuf = rcdScratch?.buffer
-            if (rgbBuf == null || scratchBuf == null) {
-                Log.w(TAG, "rcd buffers missing; dropping frame")
-                dropped.incrementAndGet()
-                return false
-            }
-            var rcdOk = true
-            // Modes 0-2 always run split; the fused finalize below
-            // replaces mode 3 (+ grade) when available.
-            for (mode in 0..2) {
-                val (riparams, rfparams) = VfRcd.packRcd(
-                    crop.width, crop.height, crop.left, crop.top,
-                    channels, pitch, mode, levels, white
-                )
-                val rfd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, riparams, rfparams, slotIndex)
-                if (rfd < 0) {
-                    Log.w(TAG, "rcd mode $mode submit failed ($rfd); dropping frame")
-                    dropped.incrementAndGet()
-                    rcdOk = false
-                    break
-                }
-                try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {}
-            }
-            if (!rcdOk) return false
-            val (gidims, gfparams) = VfLogGrade.packGrade(
-                intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-                profile = sessionProfile
-            )
-            if (useRcdFused) {
-                // Fused finalize (mode 3 + grade in one dispatch, no
-                // RGBA16F round trip). The fused fd gates the copy.
-                val (riparams, rfparams) = VfRcd.packRcd(
-                    crop.width, crop.height, crop.left, crop.top,
-                    channels, pitch, 3, levels, white
-                )
-                fd = VfRcd.rcdFusedYuvSubmitNative(
-                    hb, rgbBuf, scratchBuf, p010Buf, riparams, rfparams,
-                    gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex
-                )
-                if (fd == -20) {
-                    error("P010 staging layout mismatch (see logcat); aborting take")
-                }
-                if (fd < 0) {
-                    Log.w(TAG, "rcd fused submit failed ($fd); dropping frame")
-                    dropped.incrementAndGet()
-                    return false
-                }
-            } else {
-                val (m3iparams, m3fparams) = VfRcd.packRcd(
-                    crop.width, crop.height, crop.left, crop.top,
-                    channels, pitch, 3, levels, white
-                )
-                val m3fd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, m3iparams, m3fparams, slotIndex)
-                if (m3fd < 0) {
-                    Log.w(TAG, "rcd mode 3 submit failed ($m3fd); dropping frame")
-                    dropped.incrementAndGet()
-                    return false
-                }
-                try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {}
-                fd = VfLogGrade.gradeYuvSubmitNative(
-                    rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
-                )
-                if (fd == -20) {
-                    error("P010 staging layout mismatch (see logcat); aborting take")
-                }
-                if (fd < 0) {
-                    Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
-                    dropped.incrementAndGet()
-                    return false
-                }
-            }
-            rcdCount.incrementAndGet()
-        } else {
-            val expBuf = s.export?.buffer
-            if (expBuf == null) {
-                Log.w(TAG, "export slot missing; dropping frame")
-                dropped.incrementAndGet()
-                return false
-            }
-            val (iparams, fparams) = VfVulkan.packParams(
-                channels, crop.left, crop.top, expW, expH, sessionStep, pitch, levels, white
-            )
-            val computeRc = VfVulkan.computeSubmitNative(hb, expBuf, iparams, fparams, slotIndex, shadeD, shadeG)
-            if (computeRc != VfVulkan.OK) {
-                Log.w(TAG, "compute submit failed (rc=$computeRc); dropping frame")
-                dropped.incrementAndGet()
-                return false
-            }
-            val (gidims, gfparams) = VfLogGrade.packGrade(
-                intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-                profile = sessionProfile
-            )
-            fd = VfLogGrade.gradeYuvSubmitNative(
-                expBuf, p010Buf, gidims, intArrayOf(expW, expH), gfparams, strides, slotIndex, 0
-            )
-            if (fd == -20) {
-                error("P010 staging layout mismatch (see logcat); aborting take")
-            }
-            if (fd < 0) {
-                Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
-                dropped.incrementAndGet()
-                return false
-            }
-        }
+        val f = FrameSubmit(
+            hb, p010Buf, crop, pitch, levels, white, result, strides, slotIndex,
+            shadeD, shadeG, s, expW, expH,
+        )
+        val fd: Int = when {
+            useFused -> submitFused(f)
+            useRcd -> submitRcd(f)
+            else -> submitSuperpixel(f)
+        } ?: return false
         if (fd == -20) {
             error("P010 staging layout mismatch (see logcat); aborting take")
         }
@@ -2038,6 +1756,179 @@ class DirectLogRecorder(
         if (chainMs > cpuChainMsMax) cpuChainMsMax = chainMs
         if (chainMs > 1000f / 30f) overBudget.incrementAndGet()
         return true
+    }
+
+    /** Per-frame inputs [processFrame] hands to its demosaic branch. */
+    private class FrameSubmit(
+        val hb: android.hardware.HardwareBuffer,
+        val p010Buf: android.hardware.HardwareBuffer,
+        val crop: LogVideoLadder.Crop,
+        val pitch: Int,
+        val levels: FloatArray,
+        val white: Float,
+        val result: TotalCaptureResult?,
+        val strides: IntArray,
+        val slotIndex: Int,
+        val shadeD: IntArray?,
+        val shadeG: ShortArray?,
+        val s: Slot,
+        val expW: Int,
+        val expH: Int,
+    )
+
+    /** processFrame branch: fused MHC+grade, one dispatch (the record path). Returns the final sync fd, or null on a counted drop. */
+    private fun submitFused(f: FrameSubmit): Int? {
+        val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
+        val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
+        val slotIndex = f.slotIndex; val shadeD = f.shadeD; val shadeG = f.shadeG; val s = f.s
+        val expW = f.expW; val expH = f.expH
+        val (miparams, mfparams) = VfMhc.packMhc(
+            crop.width, crop.height, crop.left, crop.top, channels, pitch, levels, white
+        )
+        val (gidims, gfparams) = VfLogGrade.packGrade(
+            intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
+            profile = sessionProfile
+        )
+        val fd = VfLogGrade.fusedYuvSubmitNative(
+            hb, p010Buf, miparams, mfparams, gidims, gfparams, strides, slotIndex,
+            shadeD, shadeG
+        )
+        if (fd < 0) {
+            if (fd == -20) error("P010 staging layout mismatch (see logcat); aborting take")
+            Log.w(TAG, "fused submit failed ($fd); dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        fusedCount.incrementAndGet()
+        return fd
+    }
+
+    /** processFrame branch: RCD modes 0-2 then fused finalize or mode 3 + grade-YUV (A/B only). Returns the final sync fd, or null on a counted drop. */
+    private fun submitRcd(f: FrameSubmit): Int? {
+        val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
+        val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
+        val slotIndex = f.slotIndex; val shadeD = f.shadeD; val shadeG = f.shadeG; val s = f.s
+        val expW = f.expW; val expH = f.expH
+        val fd: Int
+        // RCD path (A/B only): modes 0-2 (same-queue FIFO ordered,
+        // so no CPU wait between modes) then the fused finalize +
+        // grade, or mode 3 + grade-YUV fullRgb=1 when the fused
+        // init failed. Intermediate sync fds close immediately;
+        // only the final fd gates the copy. ~250ms/frame at 4K: the
+        // take drops to a few fps effective.
+        val rgbBuf = rcdRgb?.buffer
+        val scratchBuf = rcdScratch?.buffer
+        if (rgbBuf == null || scratchBuf == null) {
+            Log.w(TAG, "rcd buffers missing; dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        var rcdOk = true
+        // Modes 0-2 always run split; the fused finalize below
+        // replaces mode 3 (+ grade) when available.
+        for (mode in 0..2) {
+            val (riparams, rfparams) = VfRcd.packRcd(
+                crop.width, crop.height, crop.left, crop.top,
+                channels, pitch, mode, levels, white
+            )
+            val rfd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, riparams, rfparams, slotIndex)
+            if (rfd < 0) {
+                Log.w(TAG, "rcd mode $mode submit failed ($rfd); dropping frame")
+                dropped.incrementAndGet()
+                rcdOk = false
+                break
+            }
+            try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {}
+        }
+        if (!rcdOk) return null
+        val (gidims, gfparams) = VfLogGrade.packGrade(
+            intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
+            profile = sessionProfile
+        )
+        if (useRcdFused) {
+            // Fused finalize (mode 3 + grade in one dispatch, no
+            // RGBA16F round trip). The fused fd gates the copy.
+            val (riparams, rfparams) = VfRcd.packRcd(
+                crop.width, crop.height, crop.left, crop.top,
+                channels, pitch, 3, levels, white
+            )
+            fd = VfRcd.rcdFusedYuvSubmitNative(
+                hb, rgbBuf, scratchBuf, p010Buf, riparams, rfparams,
+                gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex
+            )
+            if (fd == -20) {
+                error("P010 staging layout mismatch (see logcat); aborting take")
+            }
+            if (fd < 0) {
+                Log.w(TAG, "rcd fused submit failed ($fd); dropping frame")
+                dropped.incrementAndGet()
+                return null
+            }
+        } else {
+            val (m3iparams, m3fparams) = VfRcd.packRcd(
+                crop.width, crop.height, crop.left, crop.top,
+                channels, pitch, 3, levels, white
+            )
+            val m3fd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, m3iparams, m3fparams, slotIndex)
+            if (m3fd < 0) {
+                Log.w(TAG, "rcd mode 3 submit failed ($m3fd); dropping frame")
+                dropped.incrementAndGet()
+                return null
+            }
+            try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {}
+            fd = VfLogGrade.gradeYuvSubmitNative(
+                rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
+            )
+            if (fd == -20) {
+                error("P010 staging layout mismatch (see logcat); aborting take")
+            }
+            if (fd < 0) {
+                Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
+                dropped.incrementAndGet()
+                return null
+            }
+        }
+        rcdCount.incrementAndGet()
+        return fd
+    }
+
+    /** processFrame branch: superpixel export + grade-YUV (session fallback). Returns the final sync fd, or null on a counted drop. */
+    private fun submitSuperpixel(f: FrameSubmit): Int? {
+        val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
+        val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
+        val slotIndex = f.slotIndex; val shadeD = f.shadeD; val shadeG = f.shadeG; val s = f.s
+        val expW = f.expW; val expH = f.expH
+        val expBuf = s.export?.buffer
+        if (expBuf == null) {
+            Log.w(TAG, "export slot missing; dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        val (iparams, fparams) = VfVulkan.packParams(
+            channels, crop.left, crop.top, expW, expH, sessionStep, pitch, levels, white
+        )
+        val computeRc = VfVulkan.computeSubmitNative(hb, expBuf, iparams, fparams, slotIndex, shadeD, shadeG)
+        if (computeRc != VfVulkan.OK) {
+            Log.w(TAG, "compute submit failed (rc=$computeRc); dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        val (gidims, gfparams) = VfLogGrade.packGrade(
+            intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
+            profile = sessionProfile
+        )
+        val fd = VfLogGrade.gradeYuvSubmitNative(
+            expBuf, p010Buf, gidims, intArrayOf(expW, expH), gfparams, strides, slotIndex, 0
+        )
+        if (fd == -20) {
+            error("P010 staging layout mismatch (see logcat); aborting take")
+        }
+        if (fd < 0) {
+            Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        return fd
     }
 
     /**
@@ -2967,6 +2858,15 @@ class DirectLogRecorder(
     }
 
     private fun teardown() {
+        stopCameraAndAudio()
+        detachMonitor()
+        releaseGpuBuffers()
+        releaseEncoder()
+        releaseSdrEgl()
+    }
+
+    /** teardown step 1: Motion, audio, then the camera thread (joined so no onFrame races the GPU teardown). */
+    private fun stopCameraAndAudio() {
         accepting = false
         // Motion listener off (start-failure path lands here with the
         // recorder mid-take; the stop path already stopped it — idempotent).
@@ -2987,6 +2887,10 @@ class DirectLogRecorder(
         try { camThread?.join(5_000) } catch (_: InterruptedException) {}
         camThread = null
         camHandler = null
+    }
+
+    /** teardown step 2: Monitor off and in-flight presents joined before its buffers close. */
+    private fun detachMonitor() {
         // Monitor off first: detaching flushes any queued preview (its
         // latch releases), then join in-flight presents (bounded) before
         // the preview buffers below are closed — the view samples them
@@ -3004,6 +2908,10 @@ class DirectLogRecorder(
             } catch (_: InterruptedException) {
             }
         }
+    }
+
+    /** teardown step 3: Held fences, slot buffers, RCD buffers, then the shared Vulkan state. */
+    private fun releaseGpuBuffers() {
         // Release any still-held fds (stop-flush failures).
         for (s in slots) {
             if (s.fd != -1) {
@@ -3024,6 +2932,10 @@ class DirectLogRecorder(
         try { rcdScratch?.close() } catch (_: Exception) {}
         rcdScratch = null
         try { VfVulkan.resetNative() } catch (_: Exception) {}
+    }
+
+    /** teardown step 4: Codec, then the ImageWriter input path. */
+    private fun releaseEncoder() {
         val mc = codec
         codec = null
         try { mc?.stop() } catch (_: Exception) {}
@@ -3033,6 +2945,10 @@ class DirectLogRecorder(
         imageWriter = null
         try { writerSurface?.release() } catch (_: Exception) {}
         writerSurface = null
+    }
+
+    /** teardown step 5: 8-bit EGL present path (GL deletes need its context current). */
+    private fun releaseSdrEgl() {
         // 8-bit EGL teardown: GL deletes need a current context, and no
         // worker holds it anymore (copy threads are joined before this).
         try {

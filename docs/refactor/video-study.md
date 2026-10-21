@@ -129,3 +129,48 @@ Device (same phone): DirectLogStartFailureDeviceTest OK,
 DirectLogMatrixDeviceTest OK, DirectLogRecordDeviceTest OK with the same
 paths as baseline (fused-mhcyuv / superpixel-fallback, DIRECT_P010) and
 acq/graded/drop 93/92/0 and 98/97/0.
+
+## V8, processFrame/teardown split, V4
+
+- V8 (done): VideoManualControls.applyToRequest / controlRange hold the one
+  copy; each recorder keeps its AE fps-range pick (and Direct-Log its
+  lens-shading request). The removed RawVideoRecorder copy was
+  token-identical after renames (752 + 449 tokens). Proof on device:
+  VideoRequestSnapshotDeviceTest dumps every key/value of both recorders'
+  TEMPLATE_RECORD requests plus all slider ranges for 10 manual/lock cases;
+  old build vs new build: 1340 lines, identical, no throws.
+- processFrame: the three demosaic branches are submitFused / submitRcd /
+  submitSuperpixel (FrameSubmit carries the per-frame inputs; null = the
+  branch's existing counted drop). Branch bodies token-identical (162 / 721
+  / 260 tokens), the surrounding processFrame text identical.
+- teardown: stopCameraAndAudio, detachMonitor, releaseGpuBuffers,
+  releaseEncoder, releaseSdrEgl; token-identical (816 tokens). (Earlier
+  "271 lines" counted into the companion object; teardown was ~95 lines.)
+- V4 (done): RawVideoRecorder.storageReserveBytes (500 MB, RawRec's figure).
+  start() throws StorageFullException below it (status "STORAGE FULL");
+  the committer checks usableSpace every 500 ms, stops admitting frames
+  and calls onStorageLow once; MainActivity stops the take through
+  stopVideoRecording ("STORAGE FULL • STOPPED"). RawVideoStorageGuardDeviceTest:
+  refusal leaves no thread or file; a mid-take trip admits no further
+  frames and the stopped take decodes with reference decoder (28 frames,
+  index and footer present).
+
+Device (new build 401/403): V8 requests identical; DirectLogStartFailure,
+DirectLogMatrix, RawVideoStorageGuard (2), RawVideoRecordTest OK; four
+RAW takes decode at 73-74 frames, ~30 fps; DCIM untouched.
+
+### V9 (open, watch): Direct-Log "copy job: GPU wedge"
+
+On 2026-10-21 morning DirectLogRecordDeviceTest failed intermittently with
+"frame exceptions" from awaitGpuFence (GPU > 100 ms behind a frame), on
+the ORIGINAL build as much as the new one, back to back, thermal status 0:
+
+| Build | Runs | Failed | Wedged frames per run |
+|---|---|---|---|
+| original 4f7eeb6 (402) | 5 | 3 | 10, 9, 0, 5, 0 |
+| refactor (403) | 5 | 4 | 2, 0, 11, 1, 2 |
+
+Every run the night before (both builds) was clean, so this is device
+state (GPU clocks or contention), not the refactor. Not a parity change;
+investigate separately (GPU frequency/contention during the take, and
+whether 100 ms is the right valve).
