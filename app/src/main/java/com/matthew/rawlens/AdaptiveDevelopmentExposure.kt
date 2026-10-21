@@ -328,6 +328,11 @@ object AdaptiveDevelopmentExposure {
         tuning: HdrAdaptiveTuning = HdrAdaptiveTuning(),
         weights: FloatArray? = null
     ): AdaptiveExposureResult {
+        // AE-1: the log-average takes log2 of every sample between p5 and p95,
+        // so a zero there made it -inf (max lift, HDR-scene ceiling) and a
+        // negative made it NaN. Callers already pass only > SHADOW_FLOOR;
+        // enforce the contract here (no-op for them).
+        val count = keepMeterable(samples, weights, count)
         if (count < MIN_SAMPLES) {
             return AdaptiveExposureResult(0.0, 0.0, 0.0, false)
         }
@@ -395,6 +400,11 @@ object AdaptiveDevelopmentExposure {
         ettrHeadroomEv: Float? = null,
         weights: FloatArray? = null
     ): AdaptiveExposureResult {
+        // AE-1: the log-average takes log2 of every sample between p5 and p95,
+        // so a zero there made it -inf (max lift, HDR-scene ceiling) and a
+        // negative made it NaN. Callers already pass only > SHADOW_FLOOR;
+        // enforce the contract here (no-op for them).
+        val count = keepMeterable(samples, weights, count)
         if (count < MIN_SAMPLES) {
             return AdaptiveExposureResult(0.0, 0.0, 0.0, false)
         }
@@ -496,6 +506,20 @@ object AdaptiveDevelopmentExposure {
      * identity = pinned Filament AgX). Below-knee values pass through
      * untouched, so dim/night content meters bit-exactly with or without it.
      */
+    /** Compacts samples (and weights) to finite, positive values; returns the new count. */
+    private fun keepMeterable(samples: FloatArray, weights: FloatArray?, count: Int): Int {
+        var kept = 0
+        for (index in 0 until count) {
+            val value = samples[index]
+            if (value.isFinite() && value > 0f) {
+                samples[kept] = value
+                if (weights != null) weights[kept] = weights[index]
+                kept++
+            }
+        }
+        return kept
+    }
+
     private fun applyShoulder(samples: FloatArray, count: Int, shoulder: Float) {
         val strength = shoulder.coerceIn(0f, 1f)
         if (strength <= 0f) return

@@ -1215,7 +1215,15 @@ class Gles31AmazeProcessor(
                     AmazePipelineContract.balancedClipPoint(clipPoint, demosaicBalance)
                 )
             }
-            bound.block()
+            if (AmazeProfiler.enabled) {
+                GLES31.glFinish()
+                val t0 = System.nanoTime()
+                bound.block()
+                GLES31.glFinish()
+                AmazeProfiler.add(asset, (System.nanoTime() - t0) / 1e6)
+            } else {
+                bound.block()
+            }
         }
 
         private fun scalar() = texture(window, window, GLES30.GL_R32F)
@@ -1599,3 +1607,29 @@ class Gles31AmazeProcessor(
         val uploads: UploadBuffers
     )
 }
+
+/**
+ * Opt-in per-pass AMaZE timing for device profiling tests: when [enabled],
+ * every pass is bracketed by glFinish and its wall time is summed per shader
+ * asset. Off in the app (no extra GPU syncs).
+ */
+internal object AmazeProfiler {
+    @Volatile var enabled = false
+    private val totals = LinkedHashMap<String, Double>()
+    private val counts = LinkedHashMap<String, Int>()
+
+    @Synchronized fun add(asset: String, ms: Double) {
+        totals[asset] = (totals[asset] ?: 0.0) + ms
+        counts[asset] = (counts[asset] ?: 0) + 1
+    }
+
+    @Synchronized fun reset() {
+        totals.clear()
+        counts.clear()
+    }
+
+    @Synchronized fun report(): String = totals.entries
+        .sortedByDescending { it.value }
+        .joinToString("; ") { "${it.key} ${"%.0f".format(it.value)}ms x${counts[it.key]}" }
+}
+

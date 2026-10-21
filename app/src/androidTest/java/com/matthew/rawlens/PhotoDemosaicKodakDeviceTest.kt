@@ -43,9 +43,14 @@ class PhotoDemosaicKodakDeviceTest {
                     "amaze" to { consume -> processor.process(cfa, cameraLinear = true, consume = consume) },
                     "rcd" to { consume -> processor.processRcdCfa(cfa, cameraLinear = true, consume = consume) },
                 )) {
+                    // -e rawlensAmazeProfile true: per-pass GPU timing (glFinish per pass).
+                    AmazeProfiler.enabled =
+                        InstrumentationRegistry.getArguments().getString("rawlensAmazeProfile") == "true"
+                    AmazeProfiler.reset()
                     val t0 = System.nanoTime()
                     val px = run { o -> read(o) }
                     Log.i(TAG, "PHOTO $name $algo ${(System.nanoTime() - t0) / 1_000_000} ms")
+                    if (AmazeProfiler.enabled) Log.i(TAG, "PROFILE $name $algo ${AmazeProfiler.report()}")
                     val bytes = ByteBuffer.allocate(px.size * 4).order(ByteOrder.LITTLE_ENDIAN)
                     px.forEach { bytes.putFloat(it) }
                     File(out, "$name.$algo.f32").writeBytes(bytes.array())
