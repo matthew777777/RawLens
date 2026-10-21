@@ -114,6 +114,7 @@ class MainActivity : Activity() {
     private var vfPreviewMode = VfPreviewMode.FOLLOW
     internal var vfResolution = VfResolution.MAX
     private var vfPreviewButton: TextView? = null
+    private var vfEngineButton: TextView? = null
     internal var rawZslStatus = RawZslStatus(RawZslState.OFF, "Disabled in settings")
     internal var rawZslSettingsStatus: TextView? = null
     internal var gridEnabled = true
@@ -665,6 +666,10 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.isClickable = true
         rawVfDebugOverlay.isFocusable = true
         rawVfDebugOverlay.setOnClickListener { cycleVfEngineMode() }
+        vfEngineButton = findViewById<TextView?>(R.id.vfEngineButton)?.apply {
+            setOnClickListener { cycleVfEngineMode() }
+        }
+        refreshVfEngineContentDescription()
         refreshVfEngineContentDescription()
         applyVfRoute(controller.isBguActive())
         videoDebugOverlay = findViewById(R.id.videoDebugOverlay)
@@ -1470,6 +1475,7 @@ class MainActivity : Activity() {
         findViewById(R.id.galleryThumb),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
         findViewById(R.id.vfPreviewButton),
+        findViewById(R.id.vfEngineButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
         findViewById(R.id.gridQuick),
         findViewById(R.id.histogramQuick), findViewById(R.id.levelQuick),
@@ -3178,6 +3184,10 @@ class MainActivity : Activity() {
         val mode = runCatching { controller.vfEngineMode() }.getOrDefault(VfEngineMode.AUTO)
         rawVfDebugOverlay.contentDescription =
             "RAW viewfinder engine ${mode.name}. Tap to switch the GPU / CPU / BGU / BGU-CPU engine."
+        vfEngineButton?.apply {
+            text = if (mode == VfEngineMode.BGU_CPU) "BGU\nCPU" else mode.name
+            contentDescription = rawVfDebugOverlay.contentDescription
+        }
     }
 
     /** Shows exactly one VF surface: BGU or legacy, per the controller route. */

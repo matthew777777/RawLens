@@ -534,6 +534,22 @@
                     android:layout_height="1dp"
                     android:layout_weight="1" />
 
+                <!-- RAW VF engine: shows the current engine, tap cycles it
+                     (same as tapping the RAW VF debug overlay). -->
+                <com.matthew.rawlens.RotatingTextView
+                    android:id="@+id/vfEngineButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/control_chip_round"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:lineSpacingMultiplier="0.9"
+                    android:text="AUTO"
+                    android:textColor="@color/text_primary"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
+
                 <com.matthew.rawlens.RotatingTextView
                     android:id="@+id/vfPreviewButton"
                     android:layout_width="72dp"
