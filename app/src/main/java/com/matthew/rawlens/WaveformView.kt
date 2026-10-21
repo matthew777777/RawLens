@@ -17,10 +17,10 @@ import android.view.View
  * follows the frame columns, vertical position is level (black bottom, white top).
  * Linear RAW matches the DNG data; the AgX-curved variant predicts the developed JPEG
  * and is selected automatically with a JPEG capture format. RawTherapee look tuned
- * for sunlight: bright, gained traces on an almost opaque plate with 25 / 50 / 75 %
- * level lines, a black-level baseline and a red 100 % line, plotted inset from the
- * rounded wall so the clip levels are never faded or cut. Tapping is handled by
- * the host. */
+ * for sunlight: bright, gained traces on an opaque plate with faint 25 / 50 / 75 %
+ * level lines, plotted inset from the rounded wall. No frame-like edge lines:
+ * clipping shows only when it happens, as red cells on the 100 % row. Tapping
+ * is handled by the host. */
 class WaveformView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -39,18 +39,7 @@ class WaveformView @JvmOverloads constructor(
         strokeWidth = 1f
         color = ScopeStyle.GRID
     }
-    // Black level and the 100 % (clip) level get stronger lines than the grid.
-    private val baselinePaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1f * dp
-        color = ScopeStyle.BASELINE
-    }
-    private val clipLinePaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1f * dp
-        color = ScopeStyle.CLIP_HIGH
-        alpha = 170
-    }
+
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = ScopeStyle.BORDER_WIDTH_DP * resources.displayMetrics.density
@@ -100,12 +89,24 @@ class WaveformView @JvmOverloads constructor(
                     ScopeStyle.hlgOetf((density[GREEN][cell] * scales[GREEN]).coerceAtMost(1f)),
                     ScopeStyle.hlgOetf((density[BLUE][cell] * scales[BLUE]).coerceAtMost(1f))
                 )
+                // Any data on the top level is clipped: paint it solid red.
+                val clipped = level == LEVELS - 1 && lit != 0
                 pixels[pixel] = ScopeStyle.applyEdgeFade(
-                    lit, ScopeStyle.rasterEdgeFade(column, level, COLUMNS, LEVELS, fadeLevels = false)
+                    if (clipped) ScopeStyle.CLIP_HIGH else lit,
+                    ScopeStyle.rasterEdgeFade(column, level, COLUMNS, LEVELS, fadeLevels = false)
                 )
             }
         }
         raster.setPixels(pixels, 0, COLUMNS, 0, 0, COLUMNS, LEVELS)
+    }
+
+    // Sized to the bottom-left thirds cell (wrap_content in the layout hands
+    // the root width down as AT_MOST), so the scope never covers a grid line.
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val parentWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val marginStart = (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.marginStart ?: 0
+        val w = ScopeStyle.slotWidthPx(parentWidth, marginStart, resources.displayMetrics.density)
+        setMeasuredDimension(w, (w * ScopeStyle.ASPECT).toInt())
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -132,8 +133,6 @@ class WaveformView @JvmOverloads constructor(
             canvas.drawLine(plotRect.left, y, plotRect.right, y, gridPaint)
         }
         canvas.drawBitmap(raster, null, plotRect, bitmapPaint)
-        canvas.drawLine(plotRect.left, plotRect.bottom, plotRect.right, plotRect.bottom, baselinePaint)
-        canvas.drawLine(plotRect.left, plotRect.top, plotRect.right, plotRect.top, clipLinePaint)
         canvas.restore()
         val halfStroke = borderPaint.strokeWidth / 2f
         bounds.set(left + halfStroke, top + halfStroke, right - halfStroke, bottom - halfStroke)

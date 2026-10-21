@@ -20,8 +20,10 @@ import android.view.View
  * three channel fills blend ADD on an almost opaque plate, so overlaps read
  * yellow / cyan / magenta / white, with no grid (clutter at this size). Vertical scale is linear
  * by default with logarithmic as the second option, like darktable's toggle.
- * Each channel's top edge gets a crisp outline, and a channel piling up in its
- * extreme bin lights a clip bar on that wall (blue = crushed, red = blown).
+ * Each channel's top edge gets a crisp outline where it has data (empty bins
+ * draw nothing, so no coloured line runs along the floor). Blown highlights —
+ * any channel piling up in its top bin — light a small red marker in the top
+ * right corner; crushed RAW blacks are normal sensor noise and get none.
  * Tapping is handled by the host. */
 class HistogramView @JvmOverloads constructor(
     context: Context,
@@ -47,7 +49,7 @@ class HistogramView @JvmOverloads constructor(
         strokeJoin = Paint.Join.ROUND
         strokeCap = Paint.Cap.ROUND
     }
-    private val clipPaint = Paint().apply { style = Paint.Style.FILL }
+    private val clipPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = ScopeStyle.BORDER_WIDTH_DP * dp
@@ -82,6 +84,15 @@ class HistogramView @JvmOverloads constructor(
         invalidate()
     }
 
+    // Sized to the bottom-left thirds cell (wrap_content in the layout hands
+    // the root width down as AT_MOST), so the scope never covers a grid line.
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val parentWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val marginStart = (layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.marginStart ?: 0
+        val w = ScopeStyle.slotWidthPx(parentWidth, marginStart, resources.displayMetrics.density)
+        setMeasuredDimension(w, (w * ScopeStyle.ASPECT).toInt())
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (width <= 0 || height <= 0) return
@@ -110,24 +121,19 @@ class HistogramView @JvmOverloads constructor(
             linePaint.color = LINE_COLORS[channel]
             canvas.drawPath(linePaths[channel], linePaint)
         }
-        drawClipBars(canvas, plotTop, plotBottom, right)
+        drawClipMarker(canvas, plotTop, plotRight)
         canvas.restore()
         val halfStroke = borderPaint.strokeWidth / 2f
         bounds.set(halfStroke, halfStroke, right - halfStroke, bottom - halfStroke)
         canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, borderPaint)
     }
 
-    /** Full-height bar on a wall when any channel piles up in that extreme bin. */
-    private fun drawClipBars(canvas: Canvas, top: Float, bottom: Float, right: Float) {
-        val barWidth = 3f * dp
-        if (bins.any { clipped(it, 0) }) {
-            clipPaint.color = ScopeStyle.CLIP_LOW
-            canvas.drawRect(0f, top, barWidth, bottom, clipPaint)
-        }
-        if (bins.any { clipped(it, BIN_COUNT - 1) }) {
-            clipPaint.color = ScopeStyle.CLIP_HIGH
-            canvas.drawRect(right - barWidth, top, right, bottom, clipPaint)
-        }
+    /** Small red dot inside the top-right corner while highlights clip. */
+    private fun drawClipMarker(canvas: Canvas, top: Float, right: Float) {
+        if (bins.none { clipped(it, BIN_COUNT - 1) }) return
+        val radius = 3f * dp
+        clipPaint.color = ScopeStyle.CLIP_HIGH
+        canvas.drawCircle(right - radius - 4f * dp, top + radius + 2f * dp, radius, clipPaint)
     }
 
     private fun clipped(channel: IntArray, bin: Int): Boolean {
@@ -164,12 +170,24 @@ class HistogramView @JvmOverloads constructor(
         fill.reset()
         line.reset()
         fun xAt(index: Int): Float = left + index * plotWidth / last.coerceAtLeast(1)
-        line.moveTo(xAt(0), heights[0])
-        for (index in 1..last) line.lineTo(xAt(index), heights[index])
-        fill.set(line)
+        fill.moveTo(xAt(0), bottom)
+        for (index in 0..last) fill.lineTo(xAt(index), heights[index])
         fill.lineTo(xAt(last), bottom)
-        fill.lineTo(xAt(0), bottom)
         fill.close()
+        // Outline only where the channel has data: runs along the floor stay
+        // undrawn instead of stacking into a coloured baseline.
+        var drawing = false
+        for (index in 0..last) {
+            val empty = heights[index] >= bottom - 0.5f
+            val neighbourHasData = (index > 0 && heights[index - 1] < bottom - 0.5f) ||
+                (index < last && heights[index + 1] < bottom - 0.5f)
+            if (empty && !neighbourHasData) {
+                drawing = false
+                continue
+            }
+            if (drawing) line.lineTo(xAt(index), heights[index]) else line.moveTo(xAt(index), heights[index])
+            drawing = true
+        }
     }
 
     private fun copyResampled(source: IntArray, target: IntArray) {

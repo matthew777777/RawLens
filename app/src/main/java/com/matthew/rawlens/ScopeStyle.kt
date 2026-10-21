@@ -20,7 +20,8 @@ package com.matthew.rawlens
  * The histogram follows darktable's look (overlapping RGB fills blended
  * additively, so overlaps read yellow / cyan / magenta / white, linear
  * vertical scale with log as the option, no grid); the waveform follows RawTherapee's (bright
- * traces on black with 25 / 50 / 75 % level lines and a marked 100 % line).
+ * traces on black with faint 25 / 50 / 75 % level lines; clipping only as red
+ * cells on the 100 % row).
  */
 object ScopeStyle {
     /** Opaque near-black plate shared by both scopes: identical in every scene, never washed out by the preview. */
@@ -29,16 +30,29 @@ object ScopeStyle {
     /** Waveform 25 / 50 / 75 % level lines (white at ~18%). */
     const val GRID = 0x2EFFFFFF
 
-    /** Clip markers: highlights (white-hot red) and crushed blacks (cold blue). */
+    /** Highlight clip marker (histogram dot, waveform 100 % cells). */
     const val CLIP_HIGH = 0xFFFF4D4D.toInt()
-    const val CLIP_LOW = 0xFF4D8DFF.toInt()
 
     /** Share of a channel's samples in its extreme bin that counts as clipped. */
     const val CLIP_FRACTION = 0.005f
 
     /** Data inset from the rounded wall so the 0 % / 100 % edges stay fully visible. */
-    const val PLOT_INSET_X_DP = 6f
-    const val PLOT_INSET_Y_DP = 4f
+    const val PLOT_INSET_X_DP = 3f
+    const val PLOT_INSET_Y_DP = 3f
+
+    /** Gap kept between the scope and the first vertical thirds line. */
+    const val GRID_CLEARANCE_DP = 8f
+
+    /** Scope height as a share of its width. */
+    const val ASPECT = 0.56f
+
+    /**
+     * Scope width that fits the bottom-left thirds cell of a [parentPx]-wide
+     * viewfinder: a third of the width minus the start margin and
+     * [GRID_CLEARANCE_DP], so the scope never covers a grid line.
+     */
+    fun slotWidthPx(parentPx: Int, marginStartPx: Int, density: Float): Int =
+        (parentPx / 3 - marginStartPx - (GRID_CLEARANCE_DP * density).toInt()).coerceAtLeast(0)
 
     /** Waveform density gain over darktable's area scale: brighter traces for glare. */
     const val WAVEFORM_GAIN = 2f
@@ -46,8 +60,8 @@ object ScopeStyle {
     /** Hairline baseline anchoring the bottom edge (white at ~20%). */
     const val BASELINE = 0x33FFFFFF
 
-    /** Single-piece scope surface: same 20dp radius + stroke as the top/bottom islands. */
-    const val CORNER_RADIUS_DP = 20f
+    /** Single-piece scope surface: small radius so data can run close to the edge. */
+    const val CORNER_RADIUS_DP = 10f
     const val BORDER = 0x4DFFFFFF
     const val BORDER_WIDTH_DP = 1f
 
