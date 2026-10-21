@@ -261,6 +261,42 @@ internal class VkImage(
         vk.writeImage(handle, uploads.directBytes())
     }
 
+    /**
+     * Writes width*height*4 floats through [fill] straight into the pooled
+     * staging: no intermediate full-image FloatArray (the HL tiles used to
+     * allocate ~39 MB per upload). [fill] must put exactly that many floats.
+     */
+    fun uploadRgba32f(uploads: UploadBuffers, fill: (java.nio.FloatBuffer) -> Unit) {
+        require(internalFormat == GLES30.GL_RGBA32F)
+        val count = width * height * 4
+        val buffer = uploads.floats(count)
+        fill(buffer)
+        check(buffer.position() == count) { "upload filled ${buffer.position()} of $count floats" }
+        vk.writeImage(handle, uploads.directBytes())
+    }
+
+    /** Single-channel twin of the streaming [uploadRgba32f]. */
+    fun uploadR32f(uploads: UploadBuffers, fill: (java.nio.FloatBuffer) -> Unit) {
+        require(internalFormat == GLES30.GL_R32F)
+        val count = width * height
+        val buffer = uploads.floats(count)
+        fill(buffer)
+        check(buffer.position() == count) { "upload filled ${buffer.position()} of $count floats" }
+        vk.writeImage(handle, uploads.directBytes())
+    }
+
+    /**
+     * Reads the image into the pooled staging and returns a float view of it
+     * (valid until the staging is next used). Replaces a fresh direct buffer
+     * plus a full FloatArray copy per download.
+     */
+    fun downloadRgba32f(uploads: UploadBuffers): java.nio.FloatBuffer {
+        require(internalFormat == GLES30.GL_RGBA32F)
+        val view = uploads.floats(width * height * 4)
+        vk.readImage(handle, uploads.directBytes())
+        return view
+    }
+
     fun uploadRaw16(source: ByteBuffer, layout: RawPlaneLayout, crop: RawCrop, uploads: UploadBuffers) {
         require(internalFormat == GLES30.GL_R16UI && width == crop.width && height == crop.height)
         val input = source.duplicate().order(ByteOrder.nativeOrder())

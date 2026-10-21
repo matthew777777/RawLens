@@ -36,7 +36,11 @@ class HlOracleHarnessTest {
             val out = HlReconstructionStage.applyIfEnabled(
                 camera, width, height, true,
                 HlReconstructionStage.Inputs(1023f, floatArrayOf(64f, 64f, 64f, 64f), floatArrayOf(0.2126f, 0.7152f, 0.0722f)),
-                gpuProvider = null
+                gpuProvider = null,
+                // RAWLENS_HL_WORKERS=n: same pool shape as the develop (bit-identical by design).
+                workers = System.getenv("RAWLENS_HL_WORKERS")?.toInt()?.let {
+                    java.util.concurrent.Executors.newFixedThreadPool(it)
+                }
             )
             val shorts = out.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
             val rgb = ByteBuffer.allocate(width * height * 12).order(ByteOrder.LITTLE_ENDIAN)

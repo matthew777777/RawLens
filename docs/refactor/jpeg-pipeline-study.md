@@ -104,3 +104,21 @@ max |RawLens - RT| 0.0005-0.0008 (half-float storage), same pixels
 changed, identical error vs the unclipped truth.
 RawLens chmax = white, clmax = white - black: RT's thresholds reduce to
 clmax * pct either way, so this matches RT's behaviour on clipped frames.
+
+## Speed: HL (step 2)
+
+Baseline (build 420, HlDeviceParityDeviceTest, production Vulkan path,
+4-worker pool, 12 MP fully clipped scene): 8.76-9.41 s
+(convert 0.3, stage 2.7, GPU tiles 5.4, pack 0.2 s). GPU output vs the
+RawTherapee oracle on the Kodak scenes: max 0.0005-0.0008 (half floats).
+
+- H1 (done) GPU tile upload/download streamed through the pooled staging,
+  one row at a time, instead of building full-image FloatArrays per tile
+  (interleaveRoi/interleaveMaps ~39 MB each, flat() copies, a fresh direct
+  buffer + FloatArray per download). Output byte-identical to the baseline
+  on all 5 scenes; 12 MP: 7.13-7.49 s (-20 %); per 1568^2 tile up
+  333->109-236 ms, down 210->66-122 ms. Dispatch now dominates (340-710
+  ms/tile).
+- Profile of the CPU pre-stage (host, JFR): computeVariation 39 %
+  (inclusive, mostly boxBlur2; computed twice per tile: reduce and gate),
+  reduceOne loop 18 %, convertTap 9 %, accumulateRgb 9 %.

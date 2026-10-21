@@ -771,23 +771,22 @@ object HlVulkanRecon {
         try {
             val tUp0 = SystemClock.elapsedRealtime()
             val rgbIn = own("rgbIn", w, h, rgba32f)
-            rgbIn.uploadRgba32f(interleaveRoi(red, green, blue, roi, w, h), pass.uploads)
-            own("dirs0", hfw, hfh, rgba32f).uploadRgba32f(
-                interleaveMaps(maps.dir0[0], maps.dir0[1], maps.dir0[2], maps.dir0[3], true),
-                pass.uploads
-            )
-            own("dirsA", hfw, hfh, rgba32f).uploadRgba32f(
-                interleaveMaps(maps.dir[0], maps.dir[1], maps.dir[2], maps.dir[3], false),
-                pass.uploads
-            )
-            own("dirsB", hfw, hfh, rgba32f).uploadRgba32f(
-                interleaveMaps(maps.dir[4], maps.dir[5], maps.dir[6], maps.dir[7], false),
-                pass.uploads
-            )
-            own("dirs4", hfw, hfh, rgba32f).uploadRgba32f(
-                interleaveMaps(maps.dir4[0], maps.dir4[1], maps.dir4[2], maps.dir4[3], true),
-                pass.uploads
-            )
+            // Streamed straight into the pooled staging, one row at a time:
+            // same floats in the same order as interleaveRoi/interleaveMaps,
+            // without their full-image arrays (GC churn on every tile).
+            rgbIn.uploadRgba32f(pass.uploads) { putInterleavedRoi(it, red, green, blue, roi, w, h) }
+            own("dirs0", hfw, hfh, rgba32f).uploadRgba32f(pass.uploads) {
+                putInterleavedMaps(it, maps.dir0[0], maps.dir0[1], maps.dir0[2], maps.dir0[3], true)
+            }
+            own("dirsA", hfw, hfh, rgba32f).uploadRgba32f(pass.uploads) {
+                putInterleavedMaps(it, maps.dir[0], maps.dir[1], maps.dir[2], maps.dir[3], false)
+            }
+            own("dirsB", hfw, hfh, rgba32f).uploadRgba32f(pass.uploads) {
+                putInterleavedMaps(it, maps.dir[4], maps.dir[5], maps.dir[6], maps.dir[7], false)
+            }
+            own("dirs4", hfw, hfh, rgba32f).uploadRgba32f(pass.uploads) {
+                putInterleavedMaps(it, maps.dir4[0], maps.dir4[1], maps.dir4[2], maps.dir4[3], true)
+            }
             own("rgbBuf", w, h, rgba32f)
             own("maskBuf", w, h, r32f)
             val hR = own("hR", w2, h2, r32f)
@@ -799,9 +798,9 @@ object HlVulkanRecon {
             RtGuidedFilter.rescaleNearestInto(red, roi.minX, roi.minY, w, h, tmpR)
             RtGuidedFilter.rescaleNearestInto(green, roi.minX, roi.minY, w, h, tmpG)
             RtGuidedFilter.rescaleNearestInto(blue, roi.minX, roi.minY, w, h, tmpB)
-            hR.uploadR32f(tmpR.flat(), pass.uploads)
-            hG.uploadR32f(tmpG.flat(), pass.uploads)
-            hB.uploadR32f(tmpB.flat(), pass.uploads)
+            hR.uploadR32f(pass.uploads) { b -> for (row in tmpR) b.put(row) }
+            hG.uploadR32f(pass.uploads) { b -> for (row in tmpG) b.put(row) }
+            hB.uploadR32f(pass.uploads) { b -> for (row in tmpB) b.put(row) }
             val hMask = own("hM", w2, h2, r32f)
             val guide = own("g", w2, h2, r32f)
             own("gamma", 256, 256, r32f).uploadR32f(gamma, pass.uploads)
@@ -857,13 +856,23 @@ object HlVulkanRecon {
             val wx1 = minOf(w, (commitRoi?.maxX ?: (roi.minX + w - 1)) - roi.minX + 1)
             val tDisp = SystemClock.elapsedRealtime() - tDisp0
             val tDown0 = SystemClock.elapsedRealtime()
-            val flat = merged.downloadRgba32f()
+            // Pooled-staging readback, bulk row gets: no fresh direct buffer
+            // or full FloatArray per tile; same values land in the planes.
+            val flat = merged.downloadRgba32f(pass.uploads)
+            val span = wx1 - wx0
+            val line = FloatArray(maxOf(span, 0) * 4)
             for (y in wy0 until wy1) {
+                flat.position((y * w + wx0) * 4)
+                flat.get(line, 0, span * 4)
+                val rRow = red[y + roi.minY]
+                val gRow = green[y + roi.minY]
+                val bRow = blue[y + roi.minY]
+                var b = 0
                 for (x in wx0 until wx1) {
-                    val b = (y * w + x) * 4
-                    red[y + roi.minY][x + roi.minX] = flat[b]
-                    green[y + roi.minY][x + roi.minX] = flat[b + 1]
-                    blue[y + roi.minY][x + roi.minX] = flat[b + 2]
+                    rRow[x + roi.minX] = line[b]
+                    gRow[x + roi.minX] = line[b + 1]
+                    bRow[x + roi.minX] = line[b + 2]
+                    b += 4
                 }
             }
             Log.i(
@@ -904,6 +913,55 @@ object HlVulkanRecon {
             gpu, red, green, blue, t, maps, roi, xyzRow, gamma, guided,
             downloadIntermediates, commitRoi
         )
+
+    /** Streaming twin of [interleaveRoi]: identical floats, row by row. */
+    private fun putInterleavedRoi(
+        out: java.nio.FloatBuffer,
+        red: Array<FloatArray>, green: Array<FloatArray>, blue: Array<FloatArray>,
+        roi: HlRoi, w: Int, h: Int
+    ) {
+        val line = FloatArray(w * 4)
+        for (y in 0 until h) {
+            val rRow = red[y + roi.minY]
+            val gRow = green[y + roi.minY]
+            val bRow = blue[y + roi.minY]
+            var b = 0
+            for (x in 0 until w) {
+                line[b] = rRow[x + roi.minX]
+                line[b + 1] = gRow[x + roi.minX]
+                line[b + 2] = bRow[x + roi.minX]
+                line[b + 3] = 1f
+                b += 4
+            }
+            out.put(line)
+        }
+    }
+
+    /** Streaming twin of [interleaveMaps]: identical floats, row by row. */
+    internal fun putInterleavedMaps(
+        out: java.nio.FloatBuffer,
+        ch0: Array<FloatArray>,
+        ch1: Array<FloatArray>,
+        ch2: Array<FloatArray>,
+        ch3: Array<FloatArray>,
+        xMajor: Boolean
+    ) {
+        val w = if (xMajor) ch0.size else ch0[0].size
+        val h = if (xMajor) ch0[0].size else ch0.size
+        val line = FloatArray(w * 4)
+        for (y in 0 until h) {
+            var b = 0
+            for (x in 0 until w) {
+                if (xMajor) {
+                    line[b] = ch0[x][y]; line[b + 1] = ch1[x][y]; line[b + 2] = ch2[x][y]; line[b + 3] = ch3[x][y]
+                } else {
+                    line[b] = ch0[y][x]; line[b + 1] = ch1[y][x]; line[b + 2] = ch2[y][x]; line[b + 3] = ch3[y][x]
+                }
+                b += 4
+            }
+            out.put(line)
+        }
+    }
 
     private fun interleaveRoi(
         red: Array<FloatArray>, green: Array<FloatArray>, blue: Array<FloatArray>,
