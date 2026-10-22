@@ -29,17 +29,25 @@ not only match it. Starting point: the softness investigation below.
 Images: ~/Desktop/mfsr_soft. Debug: SRP_R_DUMP=<dir> dumps per-frame
 robustness maps and prints mean / rejected share.
 
-## Candidate work (to plan)
-1. Capture sharpening after the merge: port RawTherapee capture sharpening
-   (rtengine/capturesharpening.cc: RL deconvolution on luminance with a
-   contrast mask), GPU in the app, CPU on desktop; target >= AHD sharpness
-   without visible noise on all bursts.
-2. Adaptive exposure in the MFSR JPEG path (parity with the other paths).
-3. Why the multi-frame merge adds so little resolution despite real
-   sub-pixel motion and ~98 % acceptance: alignment precision (ICA
-   residual), kernel shape vs sample density, accumulation normalization,
-   per-frame weights; study beyond the paper (e.g. Lecouat et al. 2021
-   joint demosaic/SR, kernel learned per sample density).
-4. Motion blur cases from the app (frame selection, AE-searching frames).
+## Direction (owner, 2026-10-22)
+Fix the MFSR core itself. Post-processing is NOT the answer: no capture
+sharpening, no exposure or tone changes to hide the softness. (The RL
+deconvolution test above only measured how much detail the core leaves
+on the table.) The merged result must be sharp on its own.
+
+## Core work (to plan)
+1. Why the multi-frame merge adds so little resolution despite real
+   sub-pixel motion and ~98 % acceptance: measure alignment precision
+   (ICA residual vs true shift), sample density per output pixel, kernel
+   shape vs that density, accumulation / normalization, robustness
+   smoothing of the weights.
+2. Why a single frame through the reconstruction is softer than a plain
+   demosaic (0.91-0.96x AHD): kernel law, gather footprint, guide/grey.
+3. Go beyond the paper where it is weak ("fix Wronski itself"): e.g.
+   density-adaptive kernels, joint demosaic/SR (Lecouat et al. 2021),
+   better sub-pixel alignment; each change measured against AHD and the
+   burst set, no AI-only shortcuts without a reference.
+4. Motion-blur cases from the app (frame selection, AE-searching frames):
+   needs one app shot showing it + its log.
 5. Plus mfsr-paper-gaps.md items (dim-burst divergence, scale > 1 for zoom,
    S.3 thresholds, failed-tile alignment).

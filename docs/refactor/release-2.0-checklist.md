@@ -42,8 +42,9 @@ can follow. Owner may move items.
 - [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
 
 - [ ] C13 [2.0] MFSR "Wronski 2.0" (owner goal: improve beyond the paper):
-      softness/haze findings, capture sharpening, MFSR adaptive exposure,
-      merge resolution gain, motion-blur cases (mfsr-wronski-2.md).
+      fix the core (merge resolution gain, single-frame reconstruction,
+      alignment precision, motion-blur cases); no sharpening/exposure
+      post-fixes (mfsr-wronski-2.md).
 
 ## D. Other open items [2.0.x]
 - [ ] D13 ZSL copy-out pool (MotionCam; needs measurements).
