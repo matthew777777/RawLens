@@ -75,6 +75,35 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
 Not applicable: AFMA (afma.c), mirror lockup, dual ISO (needs per-line sensor gain, not exposed on
 Android), silent pictures, FPS override, crop_rec (sensor register hacks).
 
+## G. From libcamera (owner 2026-10-22; gitlab.freedesktop.org/camera/libcamera @ 7278a59)
+Port each against its libcamera source (cite file + commit), same as A1 PROGRAM.
+- [ ] G1 [2.0] Green equalisation (src/ipa/rpi/controller/rpi/geq.cpp):
+      even out Gr/Gb mismatch, strength from analogue gain and lux. Check
+      first as a cause of the MFSR linear DNG zipper (Z1).
+- [ ] G2 [2.0.x] Lux estimate (rpi/lux.cpp, libipa/lux.cpp): scene
+      brightness from exposure, gain and image level; feeds G1, G4, G6.
+- [ ] G3 [2.0.x] Wide dynamic range reference (src/ipa/rkisp1/algorithms/
+      wdr.cpp): AE capped at ~2 % near-clipped pixels + global tone curve
+      that restores the lost brightness (linear/power/exp/hist-eq). Use as
+      the reference check for our ETTR + adaptive exposure pairing.
+- [ ] G4 [2.0.x] Adaptive lens shading (rpi/alsc.cpp): refine the Camera2
+      shading map from the image so corners stop tinting or darkening.
+- [ ] G5 [2.0.x] Bayesian AWB (rpi/awb.cpp, libipa/awb_bayes.cpp): search
+      along the colour-temperature curve with lux-dependent priors.
+- [ ] G6 [2.0.x] Noise-model-driven denoise (rkisp1/dpf.cpp,
+      rpi/denoise.cpp): one noise model drives every denoise stage
+      (strength per channel from gain; spatial vs temporal).
+- [ ] G7 [2.0.x] Lateral chromatic aberration correction (rpi/cac.cpp):
+      shift R/B planes pre-demosaic to remove colour fringes.
+- [ ] G8 [2.0.x] Multi-frame HDR / night reference (rpi/hdr.cpp): exposure
+      cadence, stitch, tonemap; second reference for B5-B8 next to HDR+.
+- [ ] G9 [2.0.x] Software ISP as a parity reference (src/libcamera/
+      software_isp/, src/ipa/softisp/): compact BLC/AGC/AWB/CCM/LSC/debayer.
+- [ ] G10 [2.0.x] Adaptive contrast (rpi/contrast.cpp): optional JPEG look.
+Already covered: CCM interpolation by colour temperature, defect pixels.
+Not applicable: hybrid PDAF/CDAF AF (rpi/af.cpp; HAL owns AF), ISP
+register tuning (sharpen, gamma tables).
+
 ## E. Build and release
 - [ ] E19 [2.0] Owner's uncommitted UI files (MainActivity, manifest,
       activity_main, ScopeStyle, ic_gallery).
