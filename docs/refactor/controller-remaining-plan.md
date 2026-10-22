@@ -34,3 +34,8 @@ behaviour surface last; A3/A6 need a study first).
   Known flake, pre-existing: the soak's "3 extra presses rejected" check
   races against an HDR-bracket press (1 of 3 runs on the moved build, the
   baseline build passed its single run); shutter admission is untouched.
+- A9 done: the dual-RAW save job already delegates to DualRawSaver (no
+  extraction needed); its camera id is now frozen at shutter time (W4).
+  `captureDualRaw` is request building and moves with A3. Finding, record
+  only: its submit-failure catch calls `finishCapture` alone, without the
+  shared R3/R4 error tail (no ZSL resume, no dead-chain count).

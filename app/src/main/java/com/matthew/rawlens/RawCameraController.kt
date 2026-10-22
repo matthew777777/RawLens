@@ -6340,6 +6340,8 @@ class RawCameraController(
         val orientation = activeOutputOrientation
         val captureTime = System.currentTimeMillis()
         val gps = gpsLocation()
+        // Frozen at shutter time like every other save (W4).
+        val cameraId = selectedCameraId ?: "unknown"
         val generation = lifecycleGeneration
         val ordered = frames.sortedBy { (it.result.request.tag as? CaptureTag)?.frameNumber ?: Int.MAX_VALUE }
         pendingSaveCount.incrementAndGet()
@@ -6350,7 +6352,7 @@ class RawCameraController(
             try {
                 DualRawSaver.save(context,c,ordered[0].image,ordered[0].result,
                     ordered[1].image,ordered[1].result,orientation,captureTime,gps,
-                    selectedCameraId ?: "unknown")
+                    cameraId)
                 cameraHandler.post { if (isCurrent(generation)) onState("RAW HDR TEST DNG SAVED") }
             } catch (failure: Exception) {
                 Log.e("RawLensDualRaw","Merge/save failed",failure)
