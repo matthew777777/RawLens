@@ -29,6 +29,8 @@ class ZslCaptureSoakTest {
         val format = CaptureFormat.valueOf(args.getString("format", "DNG_ONLY"))
         // Forward burst (non-ZSL modes): fires captureBurst() instead of capture().
         val burst = args.getString("burst", "false").toBoolean()
+        // HDR bracket (-2/0/+2 EV): one merged DNG and/or JPEG per press.
+        val hdrBracket = args.getString("hdrBracket", "false").toBoolean()
         // AgX (JPEG-look) scopes, as the UI selects for JPEG formats; default linear.
         val agxScope = args.getString("agxScope", "false").toBoolean()
         instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
@@ -103,7 +105,8 @@ class ZslCaptureSoakTest {
                 format.includesJpeg -> minOf(frames, 6)
                 else -> frames
             }
-            val outputs = expectedFrames * (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
+            val outputs = if (hdrBracket) (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
+                else expectedFrames * (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
             repeat(cycles) { cycle ->
                 awaitCondition("Cycle $cycle did not rearm") {
                     uiBoolean { activity.findViewById<View>(R.id.shutter).isEnabled }
@@ -117,7 +120,11 @@ class ZslCaptureSoakTest {
                 var previewTimestamp = 0L
                 instrumentation.runOnMainSync {
                     previewTimestamp = activity.findViewById<AutoFitTextureView>(R.id.viewfinder).surfaceTexture?.timestamp ?: 0L
-                    if (burst) controller.captureBurst() else controller.capture()
+                    when {
+                        hdrBracket -> controller.captureHdrBracket()
+                        burst -> controller.captureBurst()
+                        else -> controller.capture()
+                    }
                     // These presses must be rejected, including before the first handler dispatch.
                     repeat(3) { controller.capture() }
                 }
