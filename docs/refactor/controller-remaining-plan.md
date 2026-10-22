@@ -75,3 +75,6 @@ behaviour surface last; A3/A6 need a study first).
   and the dispatch. Moved body identical apart from return values. 3 JVM
   tests. Phone: PROGRAM soak 3/3, fast-start logged (ISO 2891, 1/15 s).
   Behaviour rewrites (exposure-audit.md) follow after all moves (owner).
+- A6 studied (`flash-study.md`): policy already in FlashStillPolicy; F1/F2
+  (precapture fires on a possibly stale AE state; Open Camera two-phase
+  wait) go to the rewrite batch together with the exposure audit.
