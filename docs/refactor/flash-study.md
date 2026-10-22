@@ -19,3 +19,10 @@ states STATE_WAITING_PRECAPTURE_START / _DONE (lines ~7250, ~8211).
 No verbatim extraction now: the remaining code is capture/session
 orchestration; the precapture wait is extracted in its corrected form in
 the rewrite batch (owner: rewrites after the remaining moves).
+
+## Done (A3, 2026-10-22)
+`FlashPrecapture` is Open Camera's two-phase wait (enter PRECAPTURE <= 2 s,
+leave it <= 3 s; null AE state passes both), fed with every preview
+result's AE state plus a 100 ms timeout tick; an IDLE trigger precedes
+START (F2). A pre-trigger CONVERGED / FLASH_REQUIRED can no longer fire
+the still (F1). 4 JVM tests. Device verification pending.

@@ -357,7 +357,9 @@ class RawCameraController(
     private var flashStillMode = FlashStillMode.OFF
     /** Flash AE mode pushed to the repeating request while a precapture converges. */
     private var flashRepeatingAeModeOverride: Int? = null
-    private var flashPrecaptureInFlight = false
+    /** Running flash precapture wait (Open Camera two-phase), null when idle. */
+    private var flashPrecapture: FlashPrecapture? = null
+    private var flashPrecaptureTick: Runnable? = null
     /** Latest repeating AE state; the flash precapture waiter polls this. */
     @Volatile private var lastAeState: Int? = null
     private var oisEnabled = initialOisEnabled
@@ -4675,8 +4677,12 @@ class RawCameraController(
                     }
                 }
                 latestPreviewResult = result
-                // P0: feed the flash precapture waiter (polled on camera thread).
-                result.get(CaptureResult.CONTROL_AE_STATE)?.let { lastAeState = it }
+                // P0: feed the flash precapture wait with every result's AE state.
+                val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
+                aeState?.let { lastAeState = it }
+                flashPrecapture?.let { wait ->
+                    if (wait.onAeState(aeState, SystemClock.elapsedRealtime())) finishFlashPrecapture()
+                }
                 handlePreviewFaces(result)
                 val includesRaw = rawSurface != null && request.tag == true
                 if (includesRaw) rawStreamResults++
@@ -4991,10 +4997,11 @@ class RawCameraController(
     }
 
     /**
-     * Official precapture flow for AE-driven flash: push the flash AE mode to
-     * the repeating request, fire one AE_PRECAPTURE_TRIGGER START, wait for
-     * convergence (or timeout), then fire the forward still. Best-effort: any
-     * failure degrades to an immediate still instead of wedging the shutter.
+     * Precapture flow for AE-driven flash (Open Camera CameraController2):
+     * push the flash AE mode to the repeating request, send an IDLE then a
+     * START precapture trigger, wait for AE to enter and leave PRECAPTURE
+     * ([FlashPrecapture], 2 s / 3 s), then fire the forward still.
+     * Best-effort: any failure degrades to an immediate still.
      */
     private fun runFlashPrecaptureThenCapture() {
         val device = camera
@@ -5015,47 +5022,53 @@ class RawCameraController(
         val shot = captureSequence.get()
         val generation = lifecycleGeneration
         flashRepeatingAeModeOverride = wantAe
-        flashPrecaptureInFlight = true
         updateRepeatingRequest(allowRawZsl = false)
         try {
-            device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            fun precaptureRequest(trigger: Int) = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 applyCameraControls(this)
                 set(CaptureRequest.CONTROL_AE_MODE, coerceAeMode(wantAe))
-                set(
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                    CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_START
-                )
-            }.let { currentSession.capture(it.build(), debugCaptureCallback, cameraHandler) }
+                set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, trigger)
+            }.build()
+            // Open Camera: an IDLE trigger first, else a precapture that already
+            // ran (e.g. during AF) is not run again and the wait never starts.
+            currentSession.capture(precaptureRequest(CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE),
+                debugCaptureCallback, cameraHandler)
+            currentSession.capture(precaptureRequest(CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_START),
+                debugCaptureCallback, cameraHandler)
         } catch (_: Exception) {
             flashRepeatingAeModeOverride = null
-            flashPrecaptureInFlight = false
             captureFrames(1, captureAlreadyStarted = true)
             return
         }
         onState("FLASH METERING")
-        val deadlineMs = SystemClock.elapsedRealtime() + FLASH_PRECAPTURE_TIMEOUT_MS
-        val waiter = object : Runnable {
+        flashPrecapture = FlashPrecapture(SystemClock.elapsedRealtime())
+        val tick = object : Runnable {
             override fun run() {
+                if (flashPrecapture == null) return
                 if (!isCurrent(generation) || shot != captureSequence.get() || !captureInProgress.get()) {
                     flashRepeatingAeModeOverride = null
-                    flashPrecaptureInFlight = false
+                    flashPrecapture = null
+                    flashPrecaptureTick = null
                     return
                 }
-                val converged = lastAeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
-                    lastAeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED ||
-                    lastAeState == CaptureResult.CONTROL_AE_STATE_LOCKED
-                if (converged || SystemClock.elapsedRealtime() >= deadlineMs) {
-                    flashRepeatingAeModeOverride = null
-                    flashPrecaptureInFlight = false
-                    if (!converged) Log.w(LOG_TAG, "Flash precapture timed out; firing best-effort still")
-                    captureFrames(1, captureAlreadyStarted = true)
-                } else {
-                    cameraHandler.postDelayed(this, FLASH_PRECAPTURE_POLL_MS)
-                }
+                if (flashPrecapture?.onTick(SystemClock.elapsedRealtime()) == true) finishFlashPrecapture()
+                else cameraHandler.postDelayed(this, FLASH_PRECAPTURE_POLL_MS)
             }
         }
-        cameraHandler.postDelayed(waiter, FLASH_PRECAPTURE_POLL_MS)
+        flashPrecaptureTick = tick
+        cameraHandler.postDelayed(tick, FLASH_PRECAPTURE_POLL_MS)
+    }
+
+    /** Precapture finished (sequence done or timed out): fire the forward still once. */
+    private fun finishFlashPrecapture() {
+        val wait = flashPrecapture ?: return
+        flashPrecapture = null
+        flashPrecaptureTick?.let(cameraHandler::removeCallbacks)
+        flashPrecaptureTick = null
+        flashRepeatingAeModeOverride = null
+        if (wait.timedOut) Log.w(LOG_TAG, "Flash precapture timed out; firing best-effort still")
+        captureFrames(1, captureAlreadyStarted = true)
     }
 
     /**
@@ -6734,7 +6747,6 @@ class RawCameraController(
         private const val CAPTURE_TIMEOUT_MS = 8_000L
         private const val PAIR_TIMEOUT_MS = 5_000L
         /** P0 flash precapture: convergence wait ceiling and poll cadence. */
-        private const val FLASH_PRECAPTURE_TIMEOUT_MS = 2_000L
         private const val FLASH_PRECAPTURE_POLL_MS = 100L
         /** Bounds result-waiting RAW images to ~5 at 30 fps so a lagging HAL
          * cannot fill the small ImageReader queue faster than pairing drains it.
