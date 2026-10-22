@@ -55,3 +55,11 @@ the open retries (`scheduleOpenRejectionRetry`, `retryOpenForTransientRoute`).
    opened-once IDs, retry budgets) as a pure policy with JVM tests, like
    `ZslStreamHealth`; the controller keeps every restart and status action.
 5. S1 only after the owner decides.
+
+## Done
+
+- S9: ladder, stream-health, ISP-probe, VF-route and vendor-report fields
+  moved, unchanged, to the end of the controller's field block (every
+  initializer reads only `context`, constructor arguments or constants, so
+  moving them earlier cannot change values). Line-multiset diff: only three
+  section comments added.

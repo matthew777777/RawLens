@@ -54,3 +54,11 @@ dispatch that `pairAndSave` routes into.
    so HDR+/MFSR/bracket/dual-RAW save paths are untouched. JVM tests for
    pairing order, duplicates, timeouts and relief priority.
 3. C3/C4 only after an owner decision.
+
+## C5 status
+
+Resolved by `FramePairing` (`2d263d3`): all three clears in `stop()` go
+through the pairing component, in-lock teardown clear first. Remaining,
+record only: the first clear (`finishCapture` → `clearAll`) releases images
+without the teardown failure guard, so a throwing release would leave
+`stop()` before the reader closes. Pre-existing; unchanged.

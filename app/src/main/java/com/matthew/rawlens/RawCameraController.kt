@@ -294,16 +294,8 @@ class RawCameraController(
      * escalation counter; -1 pauses it so queue-full waits don't force bursts.
      */
     private var lastZslTakeSize: Int = -1
-    /**
-     * Serialized still-burst chain (MediaTek HAL hardening). A pipelined
-     * N-frame captureBurst overruns this HAL's gralloc pool (reader full with
-     * ~2 frames paired, 5 frames aborted in flight, log-proven), so stills are
-     * submitted one at a time: each pair completion submits the next. In flight
-     * stays at ~2 buffers instead of N+. Prebuilt requests wait here; cleared
-     * in finishCapture (the choke point of every chain end).
-     */
-    private val pendingStillRequests = ArrayDeque<CaptureRequest>()
-    private var activeStillCallback: CameraCaptureSession.CaptureCallback? = null
+    /** Serialized still-burst chain (fallback for pipelined bursts). */
+    private val stillChain = StillChain<CaptureRequest, CameraCaptureSession.CaptureCallback>()
     /**
      * Consecutive forward chains that paired zero frames before dying
      * (failed/aborted/timed-out/overflowed with nothing arrived). Any paired
@@ -505,6 +497,92 @@ class RawCameraController(
     @Volatile private var denoiseSettings = DenoiseSettings()
 
     private var activeDenoiseSettings = DenoiseSettings()
+
+    // Session ladder, stream health and ISP probe state (camera thread).
+    private var rawPreviewRetryUntilMs = 0L
+    private var rawPreviewFailures = 0
+    /**
+     * Stillborn-stream detection: repeating-RAW health for the current session.
+     * [rawStreamImages] counts repeating-path buffers only — an in-flight
+     * forward capture proves nothing about the repeating stream the VF needs.
+     * All three reset in [createSession]; all are camera-thread only.
+     */
+    private var lastRawImageReceivedMs = 0L
+    private var rawStreamImages = 0
+    private var rawStreamResults = 0
+    private var rawStreamFailures = 0
+    private var lastSessionPlanLabel = "?"
+    /**
+     * ISP frame-rate probe: armed while a raw-only default session streams
+     * with no persisted verdict for this camera. Measures the sensor-
+     * timestamp rate over [ISP_PROBE_FRAMES] frames; a ~20 fps stall
+     * rebuilds with the smallest preview target and persists the verdict.
+     * Camera-thread only; disarmed by any session rebuild.
+     */
+    private var fpsProbeArmed = false
+    private var fpsProbeCameraId: String? = null
+    private var fpsProbeFirstNs = 0L
+    /** Still-capture sequence at probe arm: any capture inside the window aborts it. */
+    private var fpsProbeShot = 0
+    /** Whether the current ladder offers any preview step to jump to. */
+    private var sessionOffersPreview = false
+    /**
+     * Session-level compat: DEFAULT plan without stream-use-case hints and a
+     * HAL-default frame rate (no forced 30 fps). Engaged once a repeating RAW
+     * stream proves stillborn; sticky afterwards and persisted by the host so
+     * the next cold start skips the stillborn attempt entirely.
+     */
+    private var rawStreamCompatMode = initialRawStreamCompatMode
+    /**
+     * GPU-sampled reader trial: armed unless a persisted verdict convicted
+     * GPU usage on this device. The trial reader allocates CPU_READ plus
+     * GPU_SAMPLED_IMAGE, so gralloc hands the sampled-image tier a
+     * GPU-shareable allocation (drivers that need one reject CPU-only
+     * buffers); every plane consumer (ZSL, histogram, peaking, NEON,
+     * upload tiers) keeps working through CPU_READ. A stillborn trial
+     * disarms via [recoverRawPreview] and rebuilds with the default
+     * CPU-only reader. Camera-thread only.
+     */
+    private var vfGpuReaderTrialArmed = !vfGpuReaderStarvedPersisted()
+    /** A disarmed trial awaits its control verdict (first delivered image persists it). */
+    private var vfGpuTrialConvicted = false
+    /** Combo/route fallback ladder, failed-open denylist and reopen budgets. */
+    private val ladder = SessionLadder()
+    /** Passive stream-probe record: real open outcomes, surfaced by lens discovery. */
+    private val lensVerdicts = LensVerdictStore(context)
+    /** Per-lens RAW size preference, honored first in the combo ladder. */
+    private val rawSizePreferenceStore = RawSizePreferenceStore(context)
+    /** Per-lens packed format preference; auto (`RAW_SENSOR`) unless opted in. */
+    private val rawFormatPreferenceStore = RawFormatPreferenceStore(context)
+    /** Stream format of the session being built; drives the packed fallback. */
+    private var lastSessionRawFormat: Int = android.graphics.ImageFormat.RAW_SENSOR
+    /**
+     * Route identity captured at session-configure time (camera thread) and
+     * consumed when its first RAW frame arrives (image thread): a session
+     * that configures yet delivers zero buffers must never count as
+     * verified. Volatile because the two sites run on different threads.
+     */
+    @Volatile private var pendingVerifiedIdentity: String? = null
+    private var sessionPrimaryRoute: CameraRoute? = null
+    private var sessionAltRoute: CameraRoute? = null
+
+    // Viewfinder engine routing (see the routing section below).
+    private var vfGlobalMode: VfEngineMode = VfEngineMode.AUTO
+    private var legacyDead = false
+    private var bguDead = false
+    private var lastVfRouteIsBgu = false
+
+    /** Fired on the camera thread when the active engine flips (true = BGU). */
+    var onVfRouteChanged: ((Boolean) -> Unit)? = null
+
+    private val shutterDispatchPending = AtomicBoolean(false)
+
+    // Vendor key apply reports for the per-lens editor.
+    @Volatile private var lastVendorSessionReport: VendorKeyApplyReport? = null
+    @Volatile private var lastVendorRequestReport: VendorKeyApplyReport? = null
+    @Volatile private var vendorSessionFingerprint: String? = null
+    @Volatile private var vendorSessionOpmode: Int? = null
+    @Volatile private var vendorSessionRoute: String? = null
     private val previewLayoutListener = View.OnLayoutChangeListener { _, left, top, right, bottom,
                                                                        oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -1591,72 +1669,6 @@ class RawCameraController(
      */
     private fun fullReaderMaxImages(): Int = fullReaderMaxImagesFor(rawZslFrameCount)
 
-    private var rawPreviewRetryUntilMs = 0L
-    private var rawPreviewFailures = 0
-    /**
-     * Stillborn-stream detection: repeating-RAW health for the current session.
-     * [rawStreamImages] counts repeating-path buffers only — an in-flight
-     * forward capture proves nothing about the repeating stream the VF needs.
-     * All three reset in [createSession]; all are camera-thread only.
-     */
-    private var lastRawImageReceivedMs = 0L
-    private var rawStreamImages = 0
-    private var rawStreamResults = 0
-    private var rawStreamFailures = 0
-    private var lastSessionPlanLabel = "?"
-    /**
-     * ISP frame-rate probe: armed while a raw-only default session streams
-     * with no persisted verdict for this camera. Measures the sensor-
-     * timestamp rate over [ISP_PROBE_FRAMES] frames; a ~20 fps stall
-     * rebuilds with the smallest preview target and persists the verdict.
-     * Camera-thread only; disarmed by any session rebuild.
-     */
-    private var fpsProbeArmed = false
-    private var fpsProbeCameraId: String? = null
-    private var fpsProbeFirstNs = 0L
-    /** Still-capture sequence at probe arm: any capture inside the window aborts it. */
-    private var fpsProbeShot = 0
-    /** Whether the current ladder offers any preview step to jump to. */
-    private var sessionOffersPreview = false
-    /**
-     * Session-level compat: DEFAULT plan without stream-use-case hints and a
-     * HAL-default frame rate (no forced 30 fps). Engaged once a repeating RAW
-     * stream proves stillborn; sticky afterwards and persisted by the host so
-     * the next cold start skips the stillborn attempt entirely.
-     */
-    private var rawStreamCompatMode = initialRawStreamCompatMode
-    /**
-     * GPU-sampled reader trial: armed unless a persisted verdict convicted
-     * GPU usage on this device. The trial reader allocates CPU_READ plus
-     * GPU_SAMPLED_IMAGE, so gralloc hands the sampled-image tier a
-     * GPU-shareable allocation (drivers that need one reject CPU-only
-     * buffers); every plane consumer (ZSL, histogram, peaking, NEON,
-     * upload tiers) keeps working through CPU_READ. A stillborn trial
-     * disarms via [recoverRawPreview] and rebuilds with the default
-     * CPU-only reader. Camera-thread only.
-     */
-    private var vfGpuReaderTrialArmed = !vfGpuReaderStarvedPersisted()
-    /** A disarmed trial awaits its control verdict (first delivered image persists it). */
-    private var vfGpuTrialConvicted = false
-    /** Combo/route fallback ladder, failed-open denylist and reopen budgets. */
-    private val ladder = SessionLadder()
-    /** Passive stream-probe record: real open outcomes, surfaced by lens discovery. */
-    private val lensVerdicts = LensVerdictStore(context)
-    /** Per-lens RAW size preference, honored first in the combo ladder. */
-    private val rawSizePreferenceStore = RawSizePreferenceStore(context)
-    /** Per-lens packed format preference; auto (`RAW_SENSOR`) unless opted in. */
-    private val rawFormatPreferenceStore = RawFormatPreferenceStore(context)
-    /** Stream format of the session being built; drives the packed fallback. */
-    private var lastSessionRawFormat: Int = android.graphics.ImageFormat.RAW_SENSOR
-    /**
-     * Route identity captured at session-configure time (camera thread) and
-     * consumed when its first RAW frame arrives (image thread): a session
-     * that configures yet delivers zero buffers must never count as
-     * verified. Volatile because the two sites run on different threads.
-     */
-    @Volatile private var pendingVerifiedIdentity: String? = null
-    private var sessionPrimaryRoute: CameraRoute? = null
-    private var sessionAltRoute: CameraRoute? = null
     /**
      * Bounded reopen after an open rejection that smells transient: an ID
      * that opened moments ago reporting unknown-device means the camera
@@ -1933,13 +1945,6 @@ class RawCameraController(
     // CPU (NEON), BGU GPU, BGU CPU; the overlay tap cycles AUTO -> GPU ->
     // CPU -> BGU -> BGU_CPU for manual override.
 
-    private var vfGlobalMode: VfEngineMode = VfEngineMode.AUTO
-    private var legacyDead = false
-    private var bguDead = false
-    private var lastVfRouteIsBgu = false
-
-    /** Fired on the camera thread when the active engine flips (true = BGU). */
-    var onVfRouteChanged: ((Boolean) -> Unit)? = null
 
     private fun activeVf(): VfEngine? =
         if (resolveVfRoute(
@@ -1985,7 +1990,6 @@ class RawCameraController(
         return active != null && active === bguViewfinder
     }
 
-    private val shutterDispatchPending = AtomicBoolean(false)
 
     private fun postShutter(action: () -> Unit) {
         if (!running || captureInProgress.get() ||
@@ -3513,14 +3517,13 @@ class RawCameraController(
             scheduleCaptureTimeout(
                 captureId, maxOf(bracketDurationMs, chainMs - CAPTURE_TIMEOUT_MS).coerceAtLeast(0L))
             val callback = captureCallback(generation, captureId)
-            activeStillCallback = callback
-            pendingStillRequests.clear()
+            stillChain.begin(callback)
             activeBurstPipelined = pipelined
             if (pipelined) {
                 cameraCaptureSequenceActive = true
                 currentSession.captureBurst(requests, callback, cameraHandler)
             } else {
-                pendingStillRequests.addAll(requests)
+                stillChain.enqueue(requests)
                 submitNextStill()
             }
             Log.i(LOG_TAG, "RAW capture submitted id=$captureId frames=$frameCount")
@@ -3576,9 +3579,9 @@ class RawCameraController(
     /** Submits the next prebuilt still of the serialized chain, if any remain. */
     private fun submitNextStill() {
         if (!running) return
-        val next = pendingStillRequests.removeFirstOrNull() ?: return
+        val next = stillChain.takeNext() ?: return
         val currentSession = session
-        val callback = activeStillCallback
+        val callback = stillChain.callback
         if (currentSession == null || callback == null) {
             if (topupActive) Log.w(LOG_TAG, "Still chain lost its session; saving partial burst")
             endForwardCaptureOnError("CAPTURE ERROR", resumeZsl = true, saveTopupPartial = true)
@@ -4755,11 +4758,6 @@ class RawCameraController(
         return VendorKeyAndroid.discover(chars)
     }
 
-    @Volatile private var lastVendorSessionReport: VendorKeyApplyReport? = null
-    @Volatile private var lastVendorRequestReport: VendorKeyApplyReport? = null
-    @Volatile private var vendorSessionFingerprint: String? = null
-    @Volatile private var vendorSessionOpmode: Int? = null
-    @Volatile private var vendorSessionRoute: String? = null
 
     /** Last session/request apply outcome for the editor readout. */
     fun vendorLastApply(): Pair<VendorKeyApplyReport?, VendorKeyApplyReport?> =
@@ -6903,8 +6901,7 @@ class RawCameraController(
         cancelCaptureTimeout()
         // End of any serialized still chain (normal, timeout, or error): no
         // further chained submits may run after this point.
-        pendingStillRequests.clear()
-        activeStillCallback = null
+        stillChain.clear()
         // Never leak top-up holdout frames: normal completion clears the state
         // inside finishTopupBurst first, so this is a no-op there and a release
         // everywhere else (errors, teardown).

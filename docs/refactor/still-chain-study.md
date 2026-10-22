@@ -56,3 +56,11 @@ MT6878 survives it is the open question the chain was written for.
 
 R3/R4 helpers, then R2 `StillChain` with JVM tests (queue order, submit on
 pair/loss, error outcome). R1 only with owner approval, as a flagged experiment.
+
+## Done
+
+- R3/R4: `932d7ce`. R1: pipelined bursts by default with a persisted
+  fallback (`90e7973`).
+- R2: `StillChain` (queue, active callback, take-next, clear) extracted with
+  4 JVM tests; the controller keeps every submit and error action. Phone:
+  4 forward 6-frame bursts, pipelined path, 24/24 saved.
