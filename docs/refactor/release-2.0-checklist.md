@@ -30,11 +30,14 @@ can follow. Owner may move items.
 - [ ] B8 [2.0] 3-bracket HDR merge on B5/B6, delete deghost/FlowNet route
       (hdr-bracket-merge-study.md). Owner: bracket DNGs with moving cars.
 
-## C. Zipper / dot / square artefacts (NEXT, owner 2026-10-22)
-- [ ] Z1 [2.0] Find and fix the root cause of the zipper pattern: dots and
-      small squares alternating one dark, the next brighter, along edges
-      and in fine detail. Root cause only (demosaic, green imbalance,
-      CFA phase, black level, etc. - to be found), no masking filter.
+## C. Zipper / dot / square artefacts in the MFSR linear DNG (NEXT, owner 2026-10-22)
+- [ ] Z1 [2.0] The MFSR linear (demosaiced RGB) DNG output shows a zipper
+      pattern: dots and small squares alternating one dark, the next
+      brighter, along edges and in fine detail. Find and fix the root
+      cause in the MFSR merge / linear DNG path (CFA phase, per-channel
+      accumulation or normalisation, green split, DNG writer layout, etc.
+      - to be found), no masking filter. Only this MFSR item comes first;
+      the rest of MFSR stays last (section M).
 
 ## D. Other open items [2.0.x]
 - [ ] D13 ZSL copy-out pool (MotionCam; needs measurements).
