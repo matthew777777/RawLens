@@ -40,6 +40,24 @@ can follow. Owner may move items.
       thread; dual-RAW submit error skips the R3/R4 tail; unguarded first
       pairing clear in stop() (C5); soak extra-press race on HDR brackets.
 
+## F. From Magic Lantern (owner 2026-10-22; ML source: reticulatedpines/magiclantern_simplified)
+Port each against its ML source (cite file + commit), same as A2 ETTR.
+- [ ] F1 [2.0] Raw zebras + false colour on the viewfinder, from raw
+      values (src/zebra.c): over/under-exposure marks relative to the
+      raw white/black level, not the processed preview. Pairs with ETTR.
+- [ ] F2 [2.0] Raw spot meter in EV relative to clipping (src/zebra.c
+      spotmeter): extend the current spot meter.
+- [ ] F3 [2.0.x] Intervalometer with raw deflicker (modules/adv_int,
+      modules/deflick): steady exposure across timelapse frames from raw
+      metering; bulb ramping for sunset-to-night.
+- [ ] F4 [2.0.x] Trap focus and motion / lightning trigger (src/focus.c,
+      motion detect): fire when the subject is in focus or the scene
+      changes; reuse our focus-peaking and motion data.
+- [ ] F5 [2.0.x] Focus stacking (src/focus.c focus stack): automatic
+      focus-distance bracketing via Camera2; merge later.
+Not applicable: dual ISO (needs per-line sensor gain, not exposed on
+Android), silent pictures, FPS override, crop_rec (sensor register hacks).
+
 ## E. Build and release
 - [ ] E19 [2.0] Owner's uncommitted UI files (MainActivity, manifest,
       activity_main, ScopeStyle, ic_gallery).
