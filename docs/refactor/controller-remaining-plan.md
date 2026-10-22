@@ -48,3 +48,10 @@ behaviour surface last; A3/A6 need a study first).
   keeps Camera2 reads, the face-detect key and the region -> MeteringRectangle
   step. `Rect.intersect` became the identical integer test; the two
   always-equal AF/AE regions became one. 8 JVM tests (first coverage).
+- A5 done: `LiveScopes` (scope/peaking switches, throttles, AgX LUT cache,
+  cost telemetry, saved-frame JPEG/JXL scopes) and `SamplerGuard`
+  (throttled sampler-failure guard, shared with metering) behind a Host;
+  the stream plan (`rawHistogramStreaming`, disabled-for-session) stays in
+  the controller. All 8 moved bodies identical after renames; 4 JVM tests.
+  Phone (A5/A7/A8 together): 3 forward-burst JPEG+DNG cycles, live scope
+  sampling throughout, no sampler failures or crashes; 36 test files deleted.

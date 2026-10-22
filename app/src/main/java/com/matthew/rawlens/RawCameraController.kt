@@ -415,29 +415,17 @@ class RawCameraController(
     private var rawZslWatchdog: Runnable? = null
     private var rawZslReportedSize = 0
     private var lastRawZslStatus: RawZslStatus? = null
-    @Volatile private var rawHistogramEnabled = initialRawHistogramEnabled
-    /** AgX-curved (JPEG preview) vs linear-RAW scope data; follows the capture format. */
-    @Volatile private var scopeAgxApplied = initialScopeAgxApplied
-    /** AgX scope LUT reused until the JPEG look changes (camera thread). */
-    private val scopeLutCache = ScopeLutCache()
-    @Volatile private var scopeMode = initialScopeMode
+    private val samplerGuard = SamplerGuard()
+    /** Live scope + focus peaking (switches, throttles, LUT, saved-frame scopes). */
+    private val scopes = LiveScopes(
+        LiveScopesHost(), samplerGuard, initialRawHistogramEnabled, initialScopeAgxApplied,
+        initialScopeMode, initialFocusPeakingEnabled
+    )
     /** Live RAW scope-only repeating stream outside ZSL (AUTO/PROGRAM/MANUAL). Frames are
      * sampled for the histogram/waveform and closed; nothing is buffered and ZSL status
      * is unaffected. */
     private var rawHistogramStreaming = false
     private var rawHistogramDisabledForSession = false
-    private var lastRawHistogramSampleMs = Long.MIN_VALUE
-    /** Scope cost telemetry accumulators (see noteScopeSample); camera thread only. */
-    private var scopeLutAccumNs = 0L
-    private var scopeScanAccumNs = 0L
-    private var scopeSamples = 0
-    private var lastScopeLogMs = 0L
-    /** Last sampler-failure log; camera thread + metering executor share it. */
-    @Volatile private var lastSamplerErrorLogMs = Long.MIN_VALUE
-    /** Focus-peaking master switch (default on); the auto-show policy gates delivery. */
-    @Volatile private var focusPeakingEnabled = initialFocusPeakingEnabled
-    private var lastFocusPeakingSampleMs = Long.MIN_VALUE
-    private var lastPeakingActivePublished = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
     private var latestPreviewResult: TotalCaptureResult? = null
     private val motionTracker = CameraMotionTracker(context)
@@ -4044,8 +4032,7 @@ class RawCameraController(
             cameraHandler.post { setRawHistogramEnabled(enabled) }
             return
         }
-        rawHistogramEnabled = enabled
-        if (enabled) lastRawHistogramSampleMs = Long.MIN_VALUE
+        scopes.setHistogramEnabled(enabled)
         updateRepeatingRequest(preserveRawZslBuffer = true)
     }
 
@@ -4056,8 +4043,7 @@ class RawCameraController(
             cameraHandler.post { setScopeAgxApplied(applied) }
             return
         }
-        scopeAgxApplied = applied
-        lastRawHistogramSampleMs = Long.MIN_VALUE
+        scopes.setAgxApplied(applied)
     }
 
     /** Histogram vs waveform parade. Both sample the same RAW stream; no session rebuild. */
@@ -4066,8 +4052,7 @@ class RawCameraController(
             cameraHandler.post { setScopeMode(mode) }
             return
         }
-        scopeMode = mode
-        lastRawHistogramSampleMs = Long.MIN_VALUE
+        scopes.setMode(mode)
     }
 
     /** Focus-peaking master switch. Peaking samples the running RAW VF stream, so no session rebuild. */
@@ -4076,68 +4061,30 @@ class RawCameraController(
             cameraHandler.post { setFocusPeakingEnabled(enabled) }
             return
         }
-        focusPeakingEnabled = enabled
-        if (enabled) lastFocusPeakingSampleMs = Long.MIN_VALUE
-        publishPeakingActiveIfChanged()
-    }
-
-    /** True while the user is focusing: manual distance set or a tap scan/lock in flight. */
-    private fun focusPeakingActive(): Boolean =
-        FocusPeakingPolicy.shouldShow(
-            focusPeakingEnabled,
-            selectedFocusDistanceDiopters != null,
-            touchFocus.active
-        )
-
-    /**
-     * Edge-triggered overlay visibility. Call on the camera thread after any
-     * mutation of the policy inputs (master switch, manual focus, touch-focus
-     * state) so the overlay never sticks on a stale verdict.
-     */
-    private fun publishPeakingActiveIfChanged() {
-        val active = focusPeakingActive()
-        if (active == lastPeakingActivePublished) return
-        lastPeakingActivePublished = active
-        if (active) lastFocusPeakingSampleMs = Long.MIN_VALUE
-        Log.i(
-            LOG_TAG,
-            "Focus peaking ${if (active) "SHOWN" else "HIDDEN"} " +
-                "(manual=${selectedFocusDistanceDiopters != null} " +
-                "touch=${touchFocus.active} enabled=$focusPeakingEnabled)"
-        )
-        onFocusPeakingActive(active)
-    }
-
-    private fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics) {
-        if (!focusPeakingActive()) return
-        val now = SystemClock.elapsedRealtime()
-        // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
-        if (!RawHistogramThrottle.shouldSample(now, lastFocusPeakingSampleMs, FOCUS_PEAKING_INTERVAL_MS)) return
-        lastFocusPeakingSampleMs = now
-        sampleSafely("focus-peaking") {
-            RawFocusPeakingSampler.sample(image, cameraCharacteristics)?.let(onFocusPeaking)
-        }
+        scopes.setPeakingEnabled(enabled)
     }
 
     /**
-     * Live RAW samplers (scope, peaking, metering) are best-effort per-frame work
-     * on camera/metering threads, where an uncaught throwable kills the app — a
-     * NoSuchMethodError in the histogram sampler did exactly that on API 30.
-     * Never let one bad frame take down the session; skip it and log (throttled).
+     * Edge-triggered peaking overlay visibility; call on the camera thread after
+     * any change to manual focus or touch-focus state (see LiveScopes).
      */
-    private inline fun <T> sampleSafely(tag: String, block: () -> T?): T? {
-        return try {
-            block()
-        } catch (t: Throwable) {
-            val now = SystemClock.elapsedRealtime()
-            if (lastSamplerErrorLogMs == Long.MIN_VALUE ||
-                now - lastSamplerErrorLogMs >= SAMPLER_ERROR_LOG_INTERVAL_MS
-            ) {
-                lastSamplerErrorLogMs = now
-                Log.e(LOG_TAG, "RAW $tag sample failed; frame skipped", t)
-            }
-            null
-        }
+    private fun publishPeakingActiveIfChanged() = scopes.publishPeakingActiveIfChanged()
+
+    private fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics) =
+        scopes.publishFocusPeakingIfDue(image, cameraCharacteristics)
+
+    /** See [SamplerGuard]: one bad frame must never take down the session. */
+    private inline fun <T> sampleSafely(tag: String, block: () -> T?): T? = samplerGuard.run(tag, block)
+
+    private inner class LiveScopesHost : LiveScopes.Host {
+        override fun jpegOutputSettings(): JpegOutputSettings = this@RawCameraController.jpegOutputSettings
+        override fun vfStats(): RawVfStats? = activeVf()?.snapshot()
+        override fun manualFocusSet(): Boolean = selectedFocusDistanceDiopters != null
+        override fun touchFocusActive(): Boolean = touchFocus.active
+        override fun onRawHistogram(histogram: RgbHistogram) = this@RawCameraController.onRawHistogram(histogram)
+        override fun onRawWaveform(waveform: RgbWaveform) = this@RawCameraController.onRawWaveform(waveform)
+        override fun onFocusPeaking(frame: FocusPeakingFrame) = this@RawCameraController.onFocusPeaking(frame)
+        override fun onFocusPeakingActive(active: Boolean) = this@RawCameraController.onFocusPeakingActive(active)
     }
 
     fun setDynamicExposureSettings(settings: DynamicExposureSettings) {
@@ -4569,7 +4516,7 @@ class RawCameraController(
         val wasRawZslRequested = rawZslRequested
         rawZslRequested = enabled
         if (enabled && !wasRawZslRequested) {
-            lastRawHistogramSampleMs = Long.MIN_VALUE
+            scopes.requestImmediateSample()
         }
         if (!enabled) {
             rawZslStreaming = false
@@ -4605,7 +4552,7 @@ class RawCameraController(
         if (rawZslRequested && !wasRawZslRequested) {
             // The first paired RAW frame should immediately replace the processed-preview
             // histogram when entering ZSL, rather than waiting for the periodic throttle.
-            lastRawHistogramSampleMs = Long.MIN_VALUE
+            scopes.requestImmediateSample()
         }
         dynamicExposureSettings = dynamicExposureSettings.copy(enabled = mode == CaptureExposureMode.PROGRAM)
         dynamicIso = null
@@ -4988,7 +4935,7 @@ class RawCameraController(
                 rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs,
                 captureInProgress = captureInProgress.get(),
                 stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0,
-                histogramEnabled = rawHistogramEnabled,
+                histogramEnabled = scopes.histogramEnabled,
                 histogramDisabledForSession = rawHistogramDisabledForSession,
                 ettrEnabled = ettrSettings.enabled,
                 ettrModeAvailable = ettrModeAvailable(),
@@ -6011,125 +5958,15 @@ class RawCameraController(
         }
     }
 
-    /**
-     * Sampling a full-resolution Bayer buffer is CPU work.  A live scope only needs a few
-     * updates per second, so never perform it for hidden UI and never let it run at RAW-stream
-     * frame rate on the camera callback thread.  A saved frame is sampled immediately.
-     * The AgX curve LUT tracks the live JPEG sliders; a 1024-entry rebuild per sample is
-     * negligible next to the full-resolution Bayer scan.
-     */
     private fun publishRawScopeIfDue(
         image: Image,
         cameraCharacteristics: CameraCharacteristics,
         force: Boolean = false
-    ) {
-        if (!rawHistogramEnabled) return
-        val now = SystemClock.elapsedRealtime()
-        // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
-        if (!RawHistogramThrottle.shouldSample(now, lastRawHistogramSampleMs, RAW_HISTOGRAM_INTERVAL_MS, force)) return
-        lastRawHistogramSampleMs = now
-        val lutStartNs = System.nanoTime()
-        val lut = if (scopeAgxApplied) scopeLutCache.get(jpegOutputSettings) else null
-        // JPEG scope predicts the saved file: the same adaptive EV develop
-        // applies pre-tonemap. DNG scopes stay unexposed linear (lut null
-        // ignores the gain), matching the linear DNG.
-        val scopeEv = if (scopeAgxApplied) liveScopeExposureEv() else 0.0
-        val scanStartNs = System.nanoTime()
-        sampleSafely("scope") {
-            if (scopeMode == ScopeMode.WAVEFORM) {
-                RawWaveformSampler.sample(image, cameraCharacteristics, lut, scopeEv)?.let(onRawWaveform)
-            } else {
-                RawHistogramSampler.sample(image, cameraCharacteristics, lut, scopeEv)?.let(onRawHistogram)
-            }
-        }
-        noteScopeSample(now, scanStartNs - lutStartNs, System.nanoTime() - scanStartNs)
-    }
+    ) = scopes.publishRawScopeIfDue(image, cameraCharacteristics, force)
 
-    /**
-     * Scope cost telemetry, same 5 s average discipline as the NEON sampler
-     * line: LUT build vs Bayer scan split per scope mode, so a slow scope
-     * (waveform vs histogram, AgX LUT on/off) is attributable in field logs.
-     * Camera thread only.
-     */
-    private fun noteScopeSample(nowMs: Long, lutNs: Long, scanNs: Long) {
-        scopeLutAccumNs += lutNs
-        scopeScanAccumNs += scanNs
-        scopeSamples++
-        if (nowMs - lastScopeLogMs < SCOPE_LOG_INTERVAL_MS || scopeSamples == 0) return
-        lastScopeLogMs = nowMs
-        val lutMs = scopeLutAccumNs / 1_000_000f / scopeSamples
-        val scanMs = scopeScanAccumNs / 1_000_000f / scopeSamples
-        Log.i(LOG_TAG, String.format(java.util.Locale.US,
-            "Scope sample: avg lut=%.1fms scan=%.1fms over %d frames (%s)",
-            lutMs, scanMs, scopeSamples, scopeMode.name.lowercase()))
-        scopeLutAccumNs = 0L
-        scopeScanAccumNs = 0L
-        scopeSamples = 0
-    }
+    private fun publishDevelopedScope(bitmap: Bitmap) = scopes.publishDevelopedScope(bitmap)
 
-    /**
-     * Live adaptive EV the VF is currently rendering with — the same
-     * scene-referred correction the save's own dense meter converges to (VF EV
-     * == save EV by construction), so the JPEG scope predicts the saved file
-     * instead of metering at 0 EV. Zero when the VF isn't rendering JPEG
-     * (user-forced RAW VF mode): the scope keeps the unexposed AgX
-     * approximation until the saved-frame snapshot lands exact. Snapshot is
-     * a volatile-field read, safe from the camera thread at 4 Hz.
-     */
-    private fun liveScopeExposureEv(): Double {
-        val stats = try {
-            activeVf()?.snapshot()
-        } catch (_: Exception) {
-            null
-        } ?: return 0.0
-        if (!stats.jpeg) return 0.0
-        val ev = stats.exposureEv
-        if (!ev.isFinite()) return 0.0
-        return ev.toDouble().coerceIn(-8.0, 8.0)
-    }
-
-    /**
-     * Saved-frame JPEG scope: samples the developed bitmap (the exact pixels
-     * the JPEG is encoded from), so the scope matches the saved JPEG the way
-     * the linear RAW scope matches the saved DNG. Runs on the saver thread
-     * after a successful encode, before the bitmap is recycled; delivery
-     * reuses the live scope callbacks (UI-thread downstream).
-     */
-    private fun publishDevelopedScope(bitmap: Bitmap) {
-        if (!rawHistogramEnabled) return
-        sampleSafely("developed-scope") {
-            val scope = DevelopedScopeSampler.sampleBitmap(bitmap) ?: return@sampleSafely
-            onRawHistogram(scope.histogram)
-            onRawWaveform(scope.waveform)
-        }
-    }
-
-    /**
-     * Saved-frame JXL scope: the half-float developed frame downsampled to
-     * 8-bit for the overlay only (the saved JXL keeps full precision), so
-     * the scope matches the saved still the way the bitmap scope matches
-     * the saved JPEG. Skipped entirely unless the scope overlay is enabled,
-     * mirroring [publishDevelopedScope].
-     */
-    private fun publishDevelopedJxlScope(developed: DevelopedJxl) {
-        if (!rawHistogramEnabled) return
-        sampleSafely("developed-jxl-scope") {
-            val rgba8 = JxlPixelPack.halfRgbaToScopeRgba8(
-                developed.halfRgba, developed.width, developed.height
-            )
-            val bitmap = Bitmap.createBitmap(
-                developed.width, developed.height, Bitmap.Config.ARGB_8888
-            )
-            try {
-                bitmap.copyPixelsFromBuffer(rgba8)
-                val scope = DevelopedScopeSampler.sampleBitmap(bitmap) ?: return@sampleSafely
-                onRawHistogram(scope.histogram)
-                onRawWaveform(scope.waveform)
-            } finally {
-                bitmap.recycle()
-            }
-        }
-    }
+    private fun publishDevelopedJxlScope(developed: DevelopedJxl) = scopes.publishDevelopedJxlScope(developed)
 
     /** Completed forward pair: routes to save, top-up, bracket or dual-RAW. */
     private fun onForwardPair(timestamp: Long, image: Image, result: TotalCaptureResult) {
@@ -6647,7 +6484,7 @@ class RawCameraController(
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
         // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
-        val wantHistogram = rawHistogramEnabled &&
+        val wantHistogram = scopes.histogramEnabled &&
             !rawHistogramDisabledForSession
         val wantEttr = ettrSettings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
@@ -7933,13 +7770,6 @@ class RawCameraController(
         private const val DEBUG_UPDATE_INTERVAL_MS = 200L
         private const val RAW_VF_DEBUG_INTERVAL_MS = 500L
         private const val PREVIEW_METADATA_INTERVAL_MS = 125L
-        private const val RAW_HISTOGRAM_INTERVAL_MS = 250L
-        /** Scope cost telemetry cadence: one LUT/scan average line per 5 s. */
-        private const val SCOPE_LOG_INTERVAL_MS = 5000L
-        /** Sampler-failure log cadence: a sick sampler must not flood logcat. */
-        private const val SAMPLER_ERROR_LOG_INTERVAL_MS = 5000L
-        /** Live peaking verdicts ride the same ~4 Hz cadence as the scope. */
-        private const val FOCUS_PEAKING_INTERVAL_MS = 250L
         /** RAW ETTR converges in a few damped steps; ~2 updates/s tracks scene changes. */
         private const val ETTR_UPDATE_INTERVAL_MS = 500L
         /** Metering samples slower than this are logged so sick streams show in logcat. */
