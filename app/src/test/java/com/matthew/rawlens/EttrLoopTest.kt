@@ -9,8 +9,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EttrLoopTest {
+    /** All quads at [hot] (max-RGB level), as the Magic Lantern projections see them. */
+    private fun quads(hot: Float) = EttrQuadStats(
+        IntArray(EttrQuadStats.BINS).also { it[EttrQuadStats.binOf(hot)] = 1000 }, 1000,
+        if (hot >= EttrQuadStats.OVEREXPOSED_LEVEL) 1000 else 0)
+
     private fun sample(hot: Float, saturated: IntArray, totals: IntArray = intArrayOf(100, 100, 100, 100)) =
-        EttrRawSample(EttrChannelLevels(hot, hot * 0.8f, hot * 0.8f, hot * 0.5f), emptyArray(), saturated, totals)
+        EttrRawSample(EttrChannelLevels(hot, hot * 0.8f, hot * 0.8f, hot * 0.5f), emptyArray(), saturated, totals,
+            quads = quads(hot))
 
     @Test fun clipStatePoolsGreensAndRanksHottestTwo() {
         val loop = EttrLoop(EttrSettings(enabled = true))

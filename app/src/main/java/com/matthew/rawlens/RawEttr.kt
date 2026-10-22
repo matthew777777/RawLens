@@ -19,8 +19,11 @@ import kotlin.math.pow
  */
 data class EttrSettings(
     val enabled: Boolean = false,
-    /** Safety margin below clipping, in EV, to absorb demosaic overshoot. */
-    val headroomEv: Float = 0.3f,
+    /**
+     * Target level below clipping, in EV: Magic Lantern's auto ETTR level
+     * (default -1 EV, never closer than -0.5 EV; [MIN_HEADROOM_EV]).
+     */
+    val headroomEv: Float = 1f,
     /**
      * Gain ceiling for ETTR brightening, mirroring the PROGRAM ISO ceiling.
      * Zero means the sensor maximum. When the ceiling binds, ETTR keeps the
@@ -28,7 +31,13 @@ data class EttrSettings(
      * trading noise for blur.
      */
     val isoLimit: Int = 0
-)
+) {
+    companion object {
+        /** Magic Lantern: target = MIN(level, -0.5). */
+        const val MIN_HEADROOM_EV = 0.5f
+        const val MAX_HEADROOM_EV = 2f
+    }
+}
 
 /** Per-channel mosaic levels, normalized to 0..1 after black subtraction. */
 data class EttrChannelLevels(
@@ -69,25 +78,11 @@ internal data class EttrExposure(
 internal object RawEttrMeter {
     /** Percentile of each channel's distribution treated as "meaningful" signal. */
     const val TARGET_PERCENTILE = 0.999
-    /** Per-update clamp so the closed loop cannot oscillate across frames. */
-    const val MAX_STEP_EV = 2.0
     /** Residual below this counts as converged (about 1/6 stop). */
     const val CONVERGED_TOLERANCE_EV = 0.15
 
     fun targetLevel(headroomEv: Float): Double =
         2.0.pow(-headroomEv.coerceIn(0f, 2f).toDouble())
-
-    /**
-     * EV shift needed to move [hottest] (normalized 0..1 percentile level) to the
-     * headroom target. Positive means brighten. Zero/negative hottest means no
-     * measurable signal: no shift.
-     */
-    fun correctionEv(hottest: Float, headroomEv: Float): Double {
-        if (!hottest.isFinite() || hottest <= 0f) return 0.0
-        val target = targetLevel(headroomEv)
-        return (ln(target / hottest.coerceAtLeast(1e-6f)) / ln(2.0))
-            .coerceIn(-MAX_STEP_EV, MAX_STEP_EV)
-    }
 
     fun solve(
         baselineIso: Int,
@@ -197,7 +192,9 @@ class EttrRawSample(
      * (SPOT/CENTER): the PROGRAM AGC's saturation model and histogram
      * constraints are full-frame, like libcamera's. Null: [bins] are full-frame.
      */
-    val frameBins: Array<IntArray>? = null
+    val frameBins: Array<IntArray>? = null,
+    /** Magic Lantern quad projections for ETTR (null on PROGRAM-only samples). */
+    val quads: EttrQuadStats? = null
 )
 
 /**
@@ -215,6 +212,8 @@ object RawEttrSampler {
     /** Center-spot scale for PROGRAM spot metering; mirrors the hardware SPOT region. */
     const val SPOT_SCALE = 0.158
     internal const val TARGET_BLOCKS = 32_000
+    /** ETTR quad grid (Magic Lantern meters LiveView at ~720x480 / 4 = 86k px). */
+    internal const val TARGET_QUADS = 21_600
     /** Sparse PROGRAM-only density; ETTR-grade tails keep full density. */
     internal const val TARGET_BLOCKS_PROGRAM = 4_000
     /**
@@ -223,8 +222,76 @@ object RawEttrSampler {
      */
     internal const val GUARD_PIXELS = 16_384
 
-    fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
-        sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
+    fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? {
+        val s = sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
+            ?: return null
+        return EttrRawSample(s.levels, s.bins, s.saturated, s.totals, s.centerWeightedGreen,
+            s.spotGreen, s.guardHottest, s.frameBins, sampleQuads(image, characteristics, TARGET_QUADS))
+    }
+
+    /**
+     * Magic Lantern projections over Bayer quads on a regular grid (ML meters
+     * LiveView at ~720x480 / 4): max(R, G, B) as a log-EV histogram and
+     * average-RGB clipping (see [EttrQuadStats]); G is the Gr/Gb mean.
+     */
+    internal fun sampleQuads(image: Image, characteristics: CameraCharacteristics, targetQuads: Int): EttrQuadStats? {
+        val plane = image.planes.singleOrNull() ?: return null
+        val width = image.width and 1.inv()
+        val height = image.height and 1.inv()
+        if (width < 2 || height < 2) return null
+        val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: return null
+        if (cfa !in 0..3) return null
+        val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+        val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.coerceAtLeast(1) ?: return null
+        val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
+        val packed = if (plane.pixelStride < 2) {
+            val format = PackedRawFormat.ofInt(image.format) ?: return null
+            try {
+                RawPackedUnpacker.PackedSampleReader(buffer, image.width, image.height, plane.rowStride, 0, format)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        } else null
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val limit = buffer.limit()
+        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
+        val invLut = FloatArray(4) { i -> invRange(white, blackLut[i]) }
+        val channelLut = phaseChannelLut(cfa)
+        val quadCount = (width / 2).toLong() * (height / 2)
+        val step = meterGridStep(quadCount, targetQuads)
+        val hist = IntArray(EttrQuadStats.BINS)
+        var total = 0
+        var over = 0
+        val level = FloatArray(4)
+        var qy = 0
+        while (qy < height / 2) {
+            var qx = 0
+            while (qx < width / 2) {
+                var ok = true
+                for (phase in 0..3) {
+                    val x = qx * 2 + (phase and 1)
+                    val y = qy * 2 + (phase shr 1)
+                    val value = if (packed != null) packed.codeAt(x, y) else {
+                        val offset = y * rowStride + x * pixelStride
+                        if (offset + 1 >= limit) { ok = false; break }
+                        buffer.getShort(offset).toInt() and 0xffff
+                    }
+                    level[channelLut[phase]] =
+                        ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase]).coerceIn(0f, 1f)
+                }
+                if (ok) {
+                    val g = 0.5f * (level[1] + level[2])
+                    hist[EttrQuadStats.binOf(maxOf(level[0], g, level[3]))]++
+                    if ((level[0] + g + level[3]) / 3f >= EttrQuadStats.OVEREXPOSED_LEVEL) over++
+                    total++
+                }
+                qx += step
+            }
+            qy += step
+        }
+        return if (total > 0) EttrQuadStats(hist, total, over) else null
+    }
 
     /**
      * Sparse metering for PROGRAM alone (~4k blocks): means need far fewer pixels

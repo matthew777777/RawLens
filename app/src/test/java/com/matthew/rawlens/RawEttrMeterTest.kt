@@ -18,37 +18,10 @@ class RawEttrMeterTest {
         safeShutterNanos = 66_000_000L
     )
 
-    @Test
-    fun underexposedSceneAsksForBrighterExposure() {
-        val shift = RawEttrMeter.correctionEv(hottest = 0.25f, headroomEv = 0.3f)
-        // Target is 2^-0.3 ≈ 0.81; log2(0.81/0.25) ≈ +1.7 EV.
-        assertTrue("expected positive shift, was $shift", shift > 1.0)
-        assertTrue("expected shift below clamp, was $shift", shift < 2.0)
-    }
 
-    @Test
-    fun nearClippingSceneAsksForDarkerExposure() {
-        val shift = RawEttrMeter.correctionEv(hottest = 0.95f, headroomEv = 0.3f)
-        assertTrue("expected negative shift, was $shift", shift < 0.0)
-        assertEquals(-0.23, shift, 0.05)
-    }
 
-    @Test
-    fun sceneAtTargetNeedsNoShift() {
-        val target = 2.0.pow(-0.3).toFloat()
-        assertEquals(0.0, RawEttrMeter.correctionEv(target, 0.3f), 0.02)
-    }
 
-    @Test
-    fun blackFrameAsksForNoShift() {
-        assertEquals(0.0, RawEttrMeter.correctionEv(0f, 0.3f), 0.0)
-    }
 
-    @Test
-    fun correctionStepIsClampedPerUpdate() {
-        assertEquals(2.0, RawEttrMeter.correctionEv(0.01f, 0.3f), 1e-9)
-        assertEquals(-2.0, RawEttrMeter.correctionEv(4f, 0.3f), 1e-9)
-    }
 
     @Test
     fun brighteningExtendsShutterBeforeRaisingIso() {

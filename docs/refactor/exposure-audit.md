@@ -66,3 +66,16 @@ Removed with no reference: brightness EMA, 2/1 EV step caps, glide
 shutter curve, profile balance/locks, metering zones. SPOT/CENTER samples
 now carry a 16k-sample full-frame histogram for the constraints.
 Device verification pending (phone disconnected at commit time).
+
+## Done: ETTR on Magic Lantern auto ETTR (A2, owner 2026-10-22)
+`MagicLanternEttr` ports auto_ettr_get_correction (single-ISO path):
+99.9 % percentile of per-pixel max(RGB) (new Bayer-quad sampler, 1/64 EV
+log histogram, ~21.6k quads), target min(level, -0.5 EV) with default
+level -1 EV (setting floor 0.5 EV, values 0.5/1/1.5/2), full correction
+(the +-2 EV clamp is gone), overexposed-frame extrapolation from the 12
+lower percentiles of the last good frame with ML's sanity checks and the
+-log2(1 + p^2) fallback (>= -10 EV), midtone 6 EV / shadow 2 EV SNR
+limits with DR = -1/2 log2(O) from the Camera2 noise profile (ML uses the
+DxO DR table). Closes E1 and E2. Kept, RawLens-specific: shutter-first /
+ISO split, gyro handheld ceiling, converged tolerance (cadence only).
+Device verification pending (phone disconnected at commit time).

@@ -3761,7 +3761,9 @@ class RawCameraController(
             cameraHandler.post { setEttrSettings(settings) }
             return
         }
-        ettr.settings = settings.copy(headroomEv = settings.headroomEv.coerceIn(0f, 1f))
+        ettr.settings = settings.copy(
+            headroomEv = settings.headroomEv.coerceIn(EttrSettings.MIN_HEADROOM_EV, EttrSettings.MAX_HEADROOM_EV)
+        )
         if (!ettr.settings.enabled) clearEttrLiveState()
         ettr.lastUpdateMs = Long.MIN_VALUE
         updateRepeatingRequest()
@@ -3992,8 +3994,20 @@ class RawCameraController(
         ettr.update(
             sample, baselineIso, baselineShutter,
             isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper,
-            ettrSafeShutterCeiling(shutterRange.upper)
+            ettrSafeShutterCeiling(shutterRange.upper),
+            sensorDynamicRangeEv()
         )
+    }
+
+    /**
+     * Engineering dynamic range at the current gain for Magic Lantern's SNR
+     * limits: white over the read-noise floor sqrt(O), O averaged over the
+     * Camera2 noise profile's channels (normalized units). NaN without one.
+     */
+    private fun sensorDynamicRangeEv(): Double {
+        val profile = latestPreviewResult?.get(CaptureResult.SENSOR_NOISE_PROFILE) ?: return Double.NaN
+        val offset = profile.map { it.second }.filter { it > 0.0 }.average()
+        return MagicLanternEttr.dynamicRangeEv(offset)
     }
 
     /** Auto handheld ceiling for ETTR, further clamped by live gyro motion. */

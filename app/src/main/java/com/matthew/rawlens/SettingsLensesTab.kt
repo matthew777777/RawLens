@@ -268,7 +268,8 @@ internal fun MainActivity.showLensesSettings(p: SettingsPage) {
             ettrIsoLimitButton.text = ettrIsoLimitText(ettr.isoLimit)
         }
         ettrHeadroomButton.setOnClickListener {
-            val values = floatArrayOf(0f, 0.3f, 0.5f, 1f)
+            // Magic Lantern auto-ETTR levels: never closer than -0.5 EV, default -1.
+            val values = floatArrayOf(0.5f, 1f, 1.5f, 2f)
             val next = (values.indexOfFirst { it == ettr.headroomEv }.takeIf { it >= 0 } ?: 0)
             ettr = ettr.copy(headroomEv = values[(next + 1) % values.size])
             applyEttr(); refreshEttrButtons()

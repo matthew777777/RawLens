@@ -3354,7 +3354,8 @@ class MainActivity : Activity() {
         val prefs = lensPreferences()
         return EttrSettings(
             enabled = prefs.getBoolean(KEY_ETTR_ENABLED, false),
-            headroomEv = prefs.getFloat(KEY_ETTR_HEADROOM_EV, 0.3f).coerceIn(0f, 1f),
+            headroomEv = prefs.getFloat(KEY_ETTR_HEADROOM_EV, 1f)
+                .coerceIn(EttrSettings.MIN_HEADROOM_EV, EttrSettings.MAX_HEADROOM_EV),
             isoLimit = prefs.getInt(KEY_ETTR_ISO_LIMIT, 0)
         )
     }

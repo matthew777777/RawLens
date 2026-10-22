@@ -9,9 +9,10 @@ package com.matthew.rawlens
  * next still capture (and HDR bracket base) uses instead of the Camera2
  * meter. Camera thread only, except [settings].
  *
- * Extracted from RawCameraController (A2, docs/refactor/controller-remaining-plan.md):
- * the state and the pure solve step; the controller keeps the mode/capture
- * gates, the camera ranges and the gyro-scaled shutter ceiling.
+ * The correction is Magic Lantern's auto ETTR ([MagicLanternEttr]); the
+ * shutter-first / ISO-second split and the gyro handheld ceiling are
+ * RawLens's ([RawEttrMeter.solve]). The controller keeps the mode/capture
+ * gates, the camera ranges, the gyro ceiling and the noise profile.
  */
 internal class EttrLoop(initialSettings: EttrSettings) {
     @Volatile var settings: EttrSettings = initialSettings
@@ -23,6 +24,8 @@ internal class EttrLoop(initialSettings: EttrSettings) {
     var clipHot = Float.NaN
     var clipSecond = Float.NaN
     var lastUpdateMs = Long.MIN_VALUE
+    /** Magic Lantern's per-percentile memory from the last non-clipped frame. */
+    private val memory = MagicLanternEttr.Memory()
 
     /** Drops the converged ETTR pair; the enabled preference is preserved. */
     fun clearLive() {
@@ -32,6 +35,7 @@ internal class EttrLoop(initialSettings: EttrSettings) {
         hottest = Float.NaN
         clipHot = Float.NaN
         clipSecond = Float.NaN
+        memory.diffFromLower.fill(0.0)
     }
 
     /** One sample against the metered baseline pair and the camera's ranges. */
@@ -44,10 +48,14 @@ internal class EttrLoop(initialSettings: EttrSettings) {
         shutterLower: Long,
         shutterUpper: Long,
         safeShutterNanos: Long,
+        dynamicRangeEv: Double = Double.NaN,
     ) {
         val levels = sample.levels
+        val quads = sample.quads ?: return
         updateClipState(sample)
-        val shift = RawEttrMeter.correctionEv(levels.hottest, settings.headroomEv)
+        val shift = MagicLanternEttr.correction(
+            quads, memory, -settings.headroomEv.toDouble(), dynamicRangeEv
+        ).correctionEv
         val result = RawEttrMeter.solve(
             baselineIso,
             baselineShutter,
