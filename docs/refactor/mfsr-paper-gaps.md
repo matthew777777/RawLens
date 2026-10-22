@@ -22,9 +22,26 @@ correction now also in the app (in-app Monte Carlo LUT, NoiseLutGen).
    independent of S.3. Find the low-light stage that differs.
 2. App merges at scale 1 only. The paper's resolution gain is at ~1.5-2x;
    consider scale > 1 for zoom captures.
-3. Settings that follow IPOL rather than the paper text, to A/B on real
-   bursts: swapped s1/s2 (motion regions get s = 2, not 12), and GAT
-   before kernel estimation.
+3. ~~Settings that follow IPOL rather than the paper text: s1/s2 and GAT
+   before kernel estimation~~ - closed 2026-10-22, keep IPOL (see below).
 4. S.3 thresholds (rho 0.1, K 16) are our measured choice; revisit with
    more bursts.
 5. Verify the handling of tiles whose alignment fails outright.
+
+## Decided: IPOL-vs-paper settings (2026-10-22, owner: keep IPOL, closed)
+Desktop A/B, full-frame 12 MP, 8 frames, CLI `--s1/--s2`, `--kernel-gat`
+(commit b065b46); files kept in ~/Desktop/mfsr_ab.
+- s1/s2 (s1 where the flow varies, s2 elsewhere). IPOL 2/12 vs paper S.2
+  table 12/2, KernelNet:
+  - IMG_20260927_134544_522 (wind in a tree): 67.8 dB, 0.32 % px > 1/255,
+    no visible winner.
+  - IMG_20260917_141353_404 (sea): 62.4 dB, 1.39 % px > 1/255, max 0.348 at
+    the wave splash; the difference map covers only the moving sea. IPOL
+    keeps the splash droplets and wave texture crisp; the paper assignment
+    merges moving water hard (softer, ghosted spray). **Keep IPOL 2/12**:
+    the printed table merges hardest exactly where frames disagree.
+- GAT before Wronski kernel estimation (IPOL; paper has none), burst
+  134544: 55.5 dB, 5.8 % px > 1/255; GAT on keeps thin edges crisper (red
+  car headlight lines, fender crease). **Keep GAT on.** (KernelNet, the
+  app default, does not use it.)
+Item 3 of "Still to do" is closed; defaults unchanged.

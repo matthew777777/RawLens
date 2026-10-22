@@ -32,8 +32,10 @@ can follow. Owner may move items.
 
 ## C. MFSR
 - [ ] C9 [2.0] Dim-burst divergence vs the Python reference (70.5 dB).
-- [ ] C10 [2.0.x] Scale > 1 for zoom; s1/s2 and GAT A/B; S.3 thresholds;
-      failed-tile alignment check (mfsr-paper-gaps.md).
+- [ ] C10 [2.0.x] Scale > 1 for zoom; S.3 thresholds; failed-tile
+      alignment check (mfsr-paper-gaps.md).
+- [x] C10a s1/s2 and kernel-GAT A/B: keep IPOL (closed 2026-10-22,
+      mfsr-paper-gaps.md).
 - [ ] C11 [2.0.x] UI toggles (kernel, S.3); duplicate KernelNet model in the
       APK; 150 MB FloatArray copy before the MFSR DNG; perf (CPU pyramid,
       KernelNet conv).
