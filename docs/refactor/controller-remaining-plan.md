@@ -78,3 +78,11 @@ behaviour surface last; A3/A6 need a study first).
 - A6 studied (`flash-study.md`): policy already in FlashStillPolicy; F1/F2
   (precapture fires on a possibly stale AE state; Open Camera two-phase
   wait) go to the rewrite batch together with the exposure audit.
+- A3 done: `RequestExposure` (exposure-source decision of
+  applyCameraControls: manual / ETTR still / PROGRAM live or glide / hardware
+  AE, with range clamp), verbatim, 6 JVM tests; the two repeating-request
+  catch blocks share `onRepeatingRequestFailed`. Session/epoch/watchdog
+  orchestration and previewCaptureCallback stay (stream decisions already
+  in RawStreamPlan). Phone: AUTO, MANUAL, ZSL soaks 2/2 each, no request
+  failures. Finding for the rewrite batch (R-A3-1): with only ISO manual,
+  the shutter is taken from a left-over PROGRAM pair when one exists.

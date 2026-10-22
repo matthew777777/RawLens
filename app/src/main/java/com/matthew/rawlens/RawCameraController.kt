@@ -4919,17 +4919,12 @@ class RawCameraController(
             }
         } catch (failure: CameraAccessException) {
             Log.w(LOG_TAG, "Repeating request failed: ${cameraAccessReason(failure)}")
-            if (useRawStream && !captureInProgress.get()) recoverRawPreview(cameraAccessReason(failure))
-            else if (useRawZsl) disableRawZslForSession(cameraAccessReason(failure))
-            else if (useRawHistogram) disableRawHistogramForSession(cameraAccessReason(failure))
-            else if (running) onState("CONTROL ERROR")
+            onRepeatingRequestFailed(useRawStream, useRawZsl, useRawHistogram,
+                cameraAccessReason(failure), if (running) "CONTROL ERROR" else null)
         } catch (failure: IllegalArgumentException) {
             Log.w(LOG_TAG, "Repeating request rejected: ${failure.message}", failure)
-            if (useRawStream && !captureInProgress.get()) recoverRawPreview(failure.message ?: "stream combination rejected")
-            else if (useRawZsl) disableRawZslForSession(failure.message ?: "stream combination rejected")
-            else if (useRawHistogram) {
-                disableRawHistogramForSession(failure.message ?: "stream combination rejected")
-            } else onState("NOT SUPPORTED")
+            onRepeatingRequestFailed(useRawStream, useRawZsl, useRawHistogram,
+                failure.message ?: "stream combination rejected", "NOT SUPPORTED")
         } catch (failure: IllegalStateException) {
             // stop()/lens replacement can close the device after our initial snapshot.
             if (isCurrent(generation)) {
@@ -4937,6 +4932,24 @@ class RawCameraController(
                 onState("CAMERA CLOSED")
             }
         }
+    }
+
+    /**
+     * A rejected repeating request degrades the most specific RAW consumer:
+     * recover the RAW preview when idle, else drop ZSL, else the histogram
+     * stream, else just report [status] (null: say nothing).
+     */
+    private fun onRepeatingRequestFailed(
+        useRawStream: Boolean,
+        useRawZsl: Boolean,
+        useRawHistogram: Boolean,
+        reason: String,
+        status: String?
+    ) {
+        if (useRawStream && !captureInProgress.get()) recoverRawPreview(reason)
+        else if (useRawZsl) disableRawZslForSession(reason)
+        else if (useRawHistogram) disableRawHistogramForSession(reason)
+        else if (status != null) onState(status)
     }
 
     private fun previewCaptureCallback(generation: Int, rawSurface: Surface?, requestEpoch: Long) =
@@ -5101,37 +5114,33 @@ class RawCameraController(
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, aeRegions)
         }
         applyFaceDetectMode(builder)
-        val manualExposure = selectedIso != null || selectedExposureNanos != null
-        val programLive = !manualExposure && programCustomActive() &&
-            program.iso != null && program.shutterNanos != null
-        val dynamicExposure = (applyDynamicCurve || programLive) && !manualExposure &&
-            dynamicExposureSettings.enabled && !rawZslRequested &&
-            program.iso != null && program.shutterNanos != null
-        // RAW-measured ETTR (AUTO mode only): the still request exposes so the
-        // hottest CFA channel lands just below clipping.
-        // While the glide is mid-flight the live (ramping) pair wins over both
-        // targets, so every repeating rebuild keeps moving smoothly instead of
-        // jumping straight to the endpoint.
-        val rampGliding = program.targetIso != null && program.targetShutterNanos != null &&
-            (program.iso != program.targetIso || program.shutterNanos != program.targetShutterNanos)
-        val ettrExposure = (applyDynamicCurve || programLive) && !manualExposure && ettrCaptureActive() &&
-            !rampGliding
-        if ((manualExposure || dynamicExposure || ettrExposure) &&
-            supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
-        ) {
-            val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            val exposureRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            val targetIso = selectedIso ?: (if (ettrExposure) ettr.iso else null) ?: program.iso ?: lastIso
-            val targetExposure = selectedExposureNanos ?: (if (ettrExposure) ettr.shutterNanos else null)
-                ?: program.shutterNanos ?: lastExposureNanos
-            val iso = targetIso.coerceIn(isoRange?.lower ?: targetIso, isoRange?.upper ?: targetIso)
-            val exposure = targetExposure.coerceIn(
-                exposureRange?.lower ?: lastExposureNanos,
-                exposureRange?.upper ?: lastExposureNanos
-            )
+        val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val exposureRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val sensorExposure = RequestExposure.resolve(RequestExposure.Inputs(
+            selectedIso = selectedIso,
+            selectedExposureNanos = selectedExposureNanos,
+            applyDynamicCurve = applyDynamicCurve,
+            programCustomActive = programCustomActive(),
+            dynamicExposureEnabled = dynamicExposureSettings.enabled,
+            rawZslRequested = rawZslRequested,
+            programIso = program.iso,
+            programShutterNanos = program.shutterNanos,
+            programTargetIso = program.targetIso,
+            programTargetShutterNanos = program.targetShutterNanos,
+            ettrCaptureActive = ettrCaptureActive(),
+            ettrIso = ettr.iso,
+            ettrShutterNanos = ettr.shutterNanos,
+            lastIso = lastIso,
+            lastExposureNanos = lastExposureNanos,
+            isoRange = isoRange?.let { it.lower..it.upper },
+            exposureRange = exposureRange?.let { it.lower..it.upper },
+            manualSensorSupported =
+                supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
+        ))
+        if (sensorExposure != null) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
-            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure)
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, sensorExposure.iso)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, sensorExposure.exposureNanos)
         } else {
             // P0: while a flash precapture converges the repeating request
             // meters under the flash AE mode; otherwise plain AE ON.
