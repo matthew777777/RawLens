@@ -229,50 +229,78 @@ object AlignGpu {
         config: AlignLoopConfig,
         handle: Long,
         spirvIca: ByteArray,
+    ): GpuInit = initGpuFrom({ refGrey }, config, handle, spirvIca)
+
+    /**
+     * [initGpu] taking the reference through [refGrey] so the caller holds
+     * no reference to it: the 50 MB grey dies with the pyramid build.
+     * [pinLevel], when set, pins each level as built (see [initAndPinGpu]).
+     */
+    private fun initGpuFrom(
+        refGrey: () -> Array<FloatArray>,
+        config: AlignLoopConfig,
+        handle: Long,
+        spirvIca: ByteArray,
+        pinLevel: ((c: Int, lvl: GpuLevelInit) -> GpuLevelInit)? = null,
+        l2Tiles: Boolean = true,
     ): GpuInit {
-        requireRectImage(refGrey, "refGrey")
         val n = config.factors.size
-        val h = refGrey.size
-        val w = refGrey[0].size
-        val padH = if (h % config.tileSize == 0) 0 else config.tileSize - h % config.tileSize
-        val padW = if (w % config.tileSize == 0) 0 else config.tileSize - w % config.tileSize
-        // The padded copy (50 MB at full-res) is only the pyramid
-        // input: scope it so it dies before the per-level builds below
-        // instead of living until `initGpu` returns.
-        val pyramid = run {
-            val padded = circularPad(refGrey, padH, padW)
-            Resample.buildGaussianPyramid(padded, config.factors, config.preprocessing)
+        // The grey and its padded copy (50 MB each at full-res) are only
+        // the pyramid input: scope them so they die before the per-level
+        // builds below instead of living until `initGpu` returns.
+        val pyramid: Array<Array<FloatArray>?> = run {
+            val grey = refGrey()
+            requireRectImage(grey, "refGrey")
+            val h = grey.size
+            val w = grey[0].size
+            val padH = if (h % config.tileSize == 0) 0 else config.tileSize - h % config.tileSize
+            val padW = if (w % config.tileSize == 0) 0 else config.tileSize - w % config.tileSize
+            val padded = circularPad(grey, padH, padW)
+            Resample.buildGaussianPyramid(padded, config.factors, config.preprocessing).toTypedArray()
         }
         // Gradient-upload staging reused across levels (fully rewritten
         // per use): the old per-level packImg pair churned 2x level-size
         // direct garbage per level (100 MB at the finest), which the
         // 512 MB on-device ceiling cannot absorb mid-init. Same bytes.
         // Extra capacity is fine: entries read explicit counts.
-        val maxN = pyramid.last().size * pyramid.last()[0].size
+        val maxN = pyramid.last()!!.size * pyramid.last()!![0].size
         val packA = SrpBridge.directFloats(maxN)
         val packB = SrpBridge.directFloats(maxN)
         val levels = pyramid.indices.map { i ->
             val c = n - i - 1
+            val img = pyramid[i]!!
             val tileSize = config.tileSizes[c]
             val radius = config.searchRadii[c]
-            val (gradX, gradY) = sobelGradients(pyramid[i])
+            val (gradX, gradY) = sobelGradients(img)
             // L1-metric levels never run the correlator, so their tiles
             // are dead weight (~63MB at full-res): skip the build. L2
             // levels keep tiles for the spectra pin (stripped after).
-            val tiles = if (config.metrics[c] == BlockMetric.L1) emptyArray()
-            else tileLevel(pyramid[i], tileSize, radius)
-            val nTy = pyramid[i].size / tileSize
-            val nTx = pyramid[i][0].size / tileSize
+            // [l2Tiles] false: the direct correlator reads the pinned ref
+            // level, never tiles (pinLevel skips the spectra too).
+            val tiles = if (config.metrics[c] == BlockMetric.L1 || !l2Tiles) emptyArray()
+            else tileLevel(img, tileSize, radius)
+            val nTy = img.size / tileSize
+            val nTx = img[0].size / tileSize
             val hessBuf = SrpBridge.directFloats(nTy * nTx * 4)
             val rc = SrpBridge.icaHessian(handle, packImgInto(gradX, packA), packImgInto(gradY, packB),
-                hessBuf, spirvIca, pyramid[i][0].size, pyramid[i].size,
+                hessBuf, spirvIca, img[0].size, img.size,
                 nTy * nTx, tileSize, nTx)
             require(rc == 0) { "icaHessian failed with status $rc" }
             hessBuf.rewind()
             val hessPacked = FloatArray(nTy * nTx * 4)
             hessBuf.asFloatBuffer().get(hessPacked)
-            GpuLevelInit(pyramid[i], tiles, gradX, gradY, hessPacked,
+            val built = GpuLevelInit(img, tiles, gradX, gradY, hessPacked,
                 nTy, nTx, tileSize, radius)
+            if (pinLevel == null) built
+            else {
+                // Pin-as-built: this level's host arrays (pyramid level,
+                // gradients, tiles) die before the next, finer level is
+                // built, instead of every level's living until a separate
+                // pin pass. The all-levels peak OOM'd the on-device merge
+                // (512 MB heap with ~190 MB already used by the app).
+                pyramid[i] = null
+                pinLevel(c, built)
+            }
         }
         return GpuInit(levels)
     }
@@ -311,91 +339,144 @@ object AlignGpu {
             for (p in 0 until n) {
                 val c = n - p - 1
                 val lvl = init.levels[p]
-                // Per-level partials: a mid-level failure must free pins
-                // that never reached `pinned` (pinStatic frees only its
-                // own handle on upload failure, not its siblings').
-                val partial = ArrayList<Long>()
-                try {
-                    // One flat scratch per level, reused for the three
-                    // same-shape uploads (ref, gradX, gradY): the old
-                    // per-array temporaries tripled the pin-phase Eden
-                    // spike (~200MB at full-res).
-                    val flat = FloatArray(lvl.ref.size * lvl.ref[0].size)
-                    fun flatInto(img: Array<FloatArray>): FloatArray {
-                        require(img.size * img[0].size == flat.size) {
-                            "pin scratch shape changed"
-                        }
-                        for (y in img.indices) img[y].copyInto(flat, y * img[0].size)
-                        return flat
-                    }
-                    val refRes = pinStatic(handle, flatInto(lvl.ref), "ref", uploadScratch)
-                    partial.add(refRes)
-                    val gradXRes = pinStatic(handle, flatInto(lvl.gradX), "gradX", uploadScratch)
-                    partial.add(gradXRes)
-                    val gradYRes = pinStatic(handle, flatInto(lvl.gradY), "gradY", uploadScratch)
-                    partial.add(gradYRes)
-                    val hessRes = pinStatic(handle, lvl.hessPacked, "hess", uploadScratch)
-                    partial.add(hessRes)
-                    var cur = lvl.copy(refRes = refRes, gradXRes = gradXRes,
-                        gradYRes = gradYRes, hessRes = hessRes)
-                    // The direct correlation reads the pinned ref level, never
-                    // spectra: skip the FFT pinning (time and memory).
-                    if (config.metrics[c] == BlockMetric.L2 && (spirvs.corrDirect == null || corrCompare)) {
-                        // Spectra pinned per 4096-tile chunk (same
-                        // forward FFT per tile as one shot; the native
-                        // chain chunks internally the same way). One
-                        // resident per level would force full-level host
-                        // corr pairs (56 MB) in the loop below.
-                        val tc = lvl.nTy * lvl.nTx
-                        val s = lvl.tileSize + 2 * lvl.radius
-                        val chunks = ArrayList<Long>()
-                        var t0 = 0
-                        while (t0 < tc) {
-                            val ct = minOf(CorrelateChunkTiles, tc - t0)
-                            val cflat = FloatArray(ct * s * s) { i ->
-                                lvl.tiles[t0 + i / (s * s)][i % (s * s)]
-                            }
-                            val res = SrpBridge.createResident(handle, 2L * ct * s * s)
-                            require(res != 0L) { "pinLevelResidents: spectra alloc failed" }
-                            partial.add(res)
-                            val rc = ptime("correlatePinRef") {
-                                SrpBridge.correlatePinRef(handle, packInto(cflat, uploadScratch), res,
-                                    spirvs.fft, spirvs.corr, ct, s)
-                            }
-                            require(rc == 0) { "correlatePinRef failed with status $rc" }
-                            chunks.add(res)
-                            t0 += ct
-                        }
-                        cur = cur.copy(refSpecChunks = chunks)
-                    }
-                    // Host copies are dead once residents hold the bytes:
-                    // drop them (frees ~320MB retained heap at full-res,
-                    // plus the L1 tiles below: ~110MB at tile-32 full-res,
-                    // the margin a 512MB heap OOM was missing). Unpinned
-                    // (unit-test path, refRes == 0) levels keep theirs for
-                    // the staged fallback; the staged branches select on
-                    // the resident handles, so empty arrays on a pinned
-                    // level are unreachable (and fail loudly, not silently,
-                    // if ever read). No pinned path reads tiles post-pin:
-                    // L1 uses the ref image, L2 the spectra residents.
-                    val stripped = if (cur.refRes != 0L) {
-                        cur.copy(ref = emptyArray(), tiles = emptyArray(),
-                            gradX = emptyArray(), gradY = emptyArray(),
-                            hessPacked = FloatArray(0))
-                    } else {
-                        cur
-                    }
-                    pinned.add(stripped)
-                } catch (e: Exception) {
-                    for (r in partial) SrpBridge.freeResident(handle, r)
-                    throw e
-                }
+                pinned.add(pinLevel(lvl, c, config, handle, spirvs, uploadScratch))
             }
         } catch (e: Exception) {
             freeLevelSpectra(GpuInit(pinned), handle)
             throw e
         }
         return GpuInit(pinned)
+    }
+
+    /**
+     * Pins one level (coarse-to-fine index [c]), cf. [pinLevelResidents];
+     * returns it with resident handles and stripped host arrays.
+     * [uploadScratch] must hold the level's element count.
+     */
+    fun pinLevel(
+        lvl: GpuLevelInit,
+        c: Int,
+        config: AlignLoopConfig,
+        handle: Long,
+        spirvs: Spirvs,
+        uploadScratch: ByteBuffer,
+    ): GpuLevelInit {
+        // Per-level partials: a mid-level failure must free pins
+        // that never reached the caller (pinStatic frees only its
+        // own handle on upload failure, not its siblings').
+        val partial = ArrayList<Long>()
+        try {
+            // Level images pack row by row straight into the shared
+            // direct staging (same bytes): no heap-side flat copy, which
+            // was a 50 MB spike at full-res on top of the level arrays.
+            val refRes = pinRows(handle, lvl.ref, "ref", uploadScratch)
+            partial.add(refRes)
+            val gradXRes = pinRows(handle, lvl.gradX, "gradX", uploadScratch)
+            partial.add(gradXRes)
+            val gradYRes = pinRows(handle, lvl.gradY, "gradY", uploadScratch)
+            partial.add(gradYRes)
+            val hessRes = pinStatic(handle, lvl.hessPacked, "hess", uploadScratch)
+            partial.add(hessRes)
+            var cur = lvl.copy(refRes = refRes, gradXRes = gradXRes,
+                gradYRes = gradYRes, hessRes = hessRes)
+            // The direct correlation reads the pinned ref level, never
+            // spectra: skip the FFT pinning (time and memory).
+            if (config.metrics[c] == BlockMetric.L2 && (spirvs.corrDirect == null || corrCompare)) {
+                // Spectra pinned per 4096-tile chunk (same
+                // forward FFT per tile as one shot; the native
+                // chain chunks internally the same way). One
+                // resident per level would force full-level host
+                // corr pairs (56 MB) in the loop below.
+                val tc = lvl.nTy * lvl.nTx
+                val s = lvl.tileSize + 2 * lvl.radius
+                val chunks = ArrayList<Long>()
+                var t0 = 0
+                while (t0 < tc) {
+                    val ct = minOf(CorrelateChunkTiles, tc - t0)
+                    val cflat = FloatArray(ct * s * s) { i ->
+                        lvl.tiles[t0 + i / (s * s)][i % (s * s)]
+                    }
+                    val res = SrpBridge.createResident(handle, 2L * ct * s * s)
+                    require(res != 0L) { "pinLevelResidents: spectra alloc failed" }
+                    partial.add(res)
+                    val rc = ptime("correlatePinRef") {
+                        SrpBridge.correlatePinRef(handle, packInto(cflat, uploadScratch), res,
+                            spirvs.fft, spirvs.corr, ct, s)
+                    }
+                    require(rc == 0) { "correlatePinRef failed with status $rc" }
+                    chunks.add(res)
+                    t0 += ct
+                }
+                cur = cur.copy(refSpecChunks = chunks)
+            }
+            // Host copies are dead once residents hold the bytes:
+            // drop them (frees ~320MB retained heap at full-res,
+            // plus the L1 tiles below: ~110MB at tile-32 full-res,
+            // the margin a 512MB heap OOM was missing). Unpinned
+            // (unit-test path, refRes == 0) levels keep theirs for
+            // the staged fallback; the staged branches select on
+            // the resident handles, so empty arrays on a pinned
+            // level are unreachable (and fail loudly, not silently,
+            // if ever read). No pinned path reads tiles post-pin:
+            // L1 uses the ref image, L2 the spectra residents.
+            val stripped = if (cur.refRes != 0L) {
+                cur.copy(ref = emptyArray(), tiles = emptyArray(),
+                    gradX = emptyArray(), gradY = emptyArray(),
+                    hessPacked = FloatArray(0))
+            } else {
+                cur
+            }
+            return stripped
+        } catch (e: Exception) {
+            for (r in partial) SrpBridge.freeResident(handle, r)
+            throw e
+        }
+    }
+
+    /**
+     * [initGpu] + [pinLevelResidents] in one pass, each level pinned as
+     * soon as it is built (same bytes on device; the host peak is one
+     * level instead of all). On failure every pin made so far is freed.
+     */
+    fun initAndPinGpu(
+        refGrey: () -> Array<FloatArray>,
+        config: AlignLoopConfig,
+        handle: Long,
+        spirvs: Spirvs,
+    ): GpuInit {
+        require(handle != 0L) { "AlignGpu: null context handle" }
+        // Levels arrive coarse to fine: the staging grows to each level.
+        var uploadScratch = SrpBridge.directFloats(0)
+        val done = ArrayList<GpuLevelInit>()
+        try {
+            return initGpuFrom(refGrey, config, handle, spirvs.ica,
+                pinLevel = { c, lvl ->
+                    val need = lvl.ref.size * lvl.ref[0].size
+                    if (uploadScratch.capacity() < need * 4) uploadScratch = SrpBridge.directFloats(need)
+                    pinLevel(lvl, c, config, handle, spirvs, uploadScratch).also { done.add(it) }
+                },
+                l2Tiles = spirvs.corrDirect == null || corrCompare)
+        } catch (e: Exception) {
+            freeLevelSpectra(GpuInit(done), handle)
+            throw e
+        }
+    }
+
+    /** [pinStatic] for a row-major image, packed without a flat copy. */
+    private fun pinRows(handle: Long, img: Array<FloatArray>, what: String, scratch: ByteBuffer): Long {
+        val n = img.size.toLong() * img[0].size
+        val res = SrpBridge.createResident(handle, n)
+        require(res != 0L) { "pinLevelResidents: $what alloc failed" }
+        try {
+            val rc = ptime("uploadStatic") {
+                SrpBridge.uploadResident(handle, res, packImgInto(img, scratch), n)
+            }
+            require(rc == 0) { "uploadResident($what) failed with status $rc" }
+        } catch (e: Exception) {
+            SrpBridge.freeResident(handle, res)
+            throw e
+        }
+        return res
     }
 
     /** Creates a resident and uploads `data` once (level-static pin). */

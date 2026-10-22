@@ -321,27 +321,18 @@ object VulkanPipeline {
         // pack staging is only allocated after the pin below, so it is
         // not live during the ~300 MB init window.
         val pinnedInit = run {
-            // 1a. Init (own scope): the 50 MB grey rows die here, so
-            // they are not live during the pin uploads below (the pin
-            // needs the level arrays, never the rows). Both grey
-            // staging buffers are one-shot temps (dead with the block):
-            // the shared pack staging is allocated post-pin, and the
-            // loop reuses the kernel scratch as grey output (see below).
-            val unpinned = run {
-                val rows = Array(h) { FloatArray(w) }
-                val refGrey = greyOfInto(refBox!!, scratch.floats(w * h),
-                    scratch.floats(w * h), rows)
-                timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) }
+            // 1. Init + pin in one pass: the 50 MB grey rows are built
+            // inside init and die with its pyramid build. Each level is pinned on-device as soon as it is
+            // built (L2 spectra + statics, one upload per run, reused
+            // across frames; freed in the run finally below), so only
+            // one level's host arrays are live at a time; the pinned
+            // copy carries stripped arrays, see pinLevelResidents.
+            timed("alignInit") {
+                AlignGpu.initAndPinGpu({
+                    greyOfInto(refBox!!, scratch.floats(w * h), scratch.floats(w * h),
+                        Array(h) { FloatArray(w) })
+                }, loop, handle, alignSpirvs)
             }
-            // 1b. Pin level residents on-device (L2 spectra + statics,
-            // one upload per run, reused across frames); freed in the
-            // run finally below. The unpinned init's ~320MB of host
-            // copies die with the pin call; the pinned copy carries
-            // stripped arrays, see pinLevelResidents.
-            val pinned = timed("alignPin") {
-                AlignGpu.pinLevelResidents(unpinned, loop, handle, alignSpirvs)
-            }
-            pinned
         }
 
         // Resident spread map on the finest flow grid (s stays
