@@ -11,7 +11,7 @@ can follow. Owner may move items.
       extrapolation (E2), single-shot correction, midtone/shadow SNR limits.
       Owner: yes, Magic Lantern rules.
 - [x] A3 [2.0] (done 78f5637; device check pending) Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
-- [x] A4 [2.0] (done next commit; device check pending) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
+- [x] A4 [2.0] (done 566f66f; device check pending) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
 - [ ] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
       `BguViewfinder`, `BguFit`, `BguSlice`, `BguSliceCpu`, `BguLook`,
       `BguSample`, `BguGeometry`, `BguSpike`, `bgu_slice_cpu.cpp`,
@@ -40,6 +40,10 @@ can follow. Owner may move items.
       APK; 150 MB FloatArray copy before the MFSR DNG; perf (CPU pyramid,
       KernelNet conv).
 - [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
+
+- [ ] C13 [2.0] MFSR "Wronski 2.0" (owner goal: improve beyond the paper):
+      softness/haze findings, capture sharpening, MFSR adaptive exposure,
+      merge resolution gain, motion-blur cases (mfsr-wronski-2.md).
 
 ## D. Other open items [2.0.x]
 - [ ] D13 ZSL copy-out pool (MotionCam; needs measurements).

@@ -678,6 +678,18 @@ object VulkanPipeline {
             } else {
                 packInto(onesR, mergeRDirect)
             }
+            // Debug: SRP_R_DUMP=<dir> writes each frame's robustness map
+            // (guide grid, float32) and prints its mean / rejected share.
+            System.getenv("SRP_R_DUMP")?.takeIf { it.isNotEmpty() }?.let { dir ->
+                val fb = rBuf.duplicate().order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+                val n = rSize0
+                val r = FloatArray(n).also { fb.position(0); fb.get(it) }
+                val idx = (java.io.File(dir).list()?.count { it.startsWith("r_") } ?: 0)
+                java.io.File(dir, "r_%02d_%dx%d.f32".format(idx, if (config.bayer) w / 2 else w, if (config.bayer) h / 2 else h))
+                    .writeBytes(java.nio.ByteBuffer.allocate(n * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .also { b -> r.forEach { b.putFloat(it) } }.array())
+                System.err.println("SRP_R frame $idx mean ${"%.3f".format(r.average())} rejected(<0.1) ${"%.1f".format(100.0 * r.count { it < 0.1f } / n)}%")
+            }
             mergeFrame(frame, flow, rBuf)
         }
         for (frameThunk in comparisons) {
