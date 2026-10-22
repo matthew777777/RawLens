@@ -69,3 +69,9 @@ behaviour surface last; A3/A6 need a study first).
 - A2 part 1 done: `EttrLoop` (state + solve). Part 2 (PROGRAM loop) waits on
   the reference audit in `exposure-audit.md` (owner request 2026-10-22: check
   ETTR/PROGRAM for unreferenced heuristics before moving more of them).
+- A2 part 2 done: `ProgramAeLoop` (applied pair, limit flags, EMA, targets,
+  fast start; one sample step returning FAST_START/GLIDE/HOLD and one glide
+  step). The controller keeps gates, ranges, the 10 Hz ramp timer, pushes
+  and the dispatch. Moved body identical apart from return values. 3 JVM
+  tests. Phone: PROGRAM soak 3/3, fast-start logged (ISO 2891, 1/15 s).
+  Behaviour rewrites (exposure-audit.md) follow after all moves (owner).
