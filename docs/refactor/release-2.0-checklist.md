@@ -4,14 +4,14 @@ Proposed cut: **[2.0]** must land before the 2.0.0 release; **[2.0.x]**
 can follow. Owner may move items.
 
 ## A. Rewrite batch (after the controller moves, owner 2026-10-22)
-- [ ] A1 [2.0] PROGRAM AE on libcamera RPi AGC: one total-exposure filter,
+- [x] A1 [2.0] (done 113a004; device check pending) PROGRAM AE on libcamera RPi AGC: one total-exposure filter,
       Y-target + q0.98-1.0 highlight constraint, flicker rounding
-      (exposure-audit.md). Owner: keep the +0.5 EV brighter default?
-- [ ] A2 [2.0] ETTR on Magic Lantern: target <= -0.5 EV, overshoot
+      (exposure-audit.md). Owner: no +0.5 EV default.
+- [x] A2 [2.0] (done 15dee6b; device check pending) ETTR on Magic Lantern: target <= -0.5 EV, overshoot
       extrapolation (E2), single-shot correction, midtone/shadow SNR limits.
-      Owner: OK to change ETTR behaviour?
-- [ ] A3 [2.0] Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
-- [ ] A4 [2.0] ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
+      Owner: yes, Magic Lantern rules.
+- [x] A3 [2.0] (done 78f5637; device check pending) Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
+- [x] A4 [2.0] (done next commit; device check pending) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
 - [ ] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
       `BguViewfinder`, `BguFit`, `BguSlice`, `BguSliceCpu`, `BguLook`,
       `BguSample`, `BguGeometry`, `BguSpike`, `bgu_slice_cpu.cpp`,

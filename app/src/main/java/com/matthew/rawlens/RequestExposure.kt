@@ -9,7 +9,7 @@ internal data class SensorExposure(val iso: Int, val exposureNanos: Long)
 /**
  * Which exposure source a capture request uses: the user's manual ISO /
  * shutter, the RAW-measured ETTR pair (AUTO stills), the PROGRAM live pair,
- * or hardware AE (null). Pure; extracted verbatim from
+ * or hardware AE (null). Pure; extracted from
  * RawCameraController.applyCameraControls (A3,
  * docs/refactor/controller-remaining-plan.md).
  */
@@ -53,9 +53,14 @@ internal object RequestExposure {
         val ettrExposure = (i.applyDynamicCurve || programLive) && !manualExposure && i.ettrCaptureActive &&
             !rampGliding
         if (!((manualExposure || dynamicExposure || ettrExposure) && i.manualSensorSupported)) return null
-        val targetIso = i.selectedIso ?: (if (ettrExposure) i.ettrIso else null) ?: i.programIso ?: i.lastIso
+        // The PROGRAM pair only while PROGRAM drives the exposure: with one axis
+        // manual, the other keeps the last metered value (latest result), not a
+        // left-over PROGRAM pair from an earlier mode (R-A3-1).
+        val programDriving = dynamicExposure
+        val targetIso = i.selectedIso ?: (if (ettrExposure) i.ettrIso else null)
+            ?: (if (programDriving) i.programIso else null) ?: i.lastIso
         val targetExposure = i.selectedExposureNanos ?: (if (ettrExposure) i.ettrShutterNanos else null)
-            ?: i.programShutterNanos ?: i.lastExposureNanos
+            ?: (if (programDriving) i.programShutterNanos else null) ?: i.lastExposureNanos
         val iso = targetIso.coerceIn(i.isoRange?.first ?: targetIso, i.isoRange?.last ?: targetIso)
         val exposure = targetExposure.coerceIn(
             i.exposureRange?.first ?: i.lastExposureNanos,

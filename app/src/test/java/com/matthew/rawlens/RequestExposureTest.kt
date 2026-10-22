@@ -22,9 +22,9 @@ class RequestExposureTest {
     @Test fun manualIsoWinsAndIsClamped() {
         assertEquals(SensorExposure(6400, 10_000_000L),
             RequestExposure.resolve(inputs(selectedIso = 99_999)))
-        // ISO-only manual: the shutter still comes from a live PROGRAM pair
-        // when one exists (clamped to the sensor range), as before the move.
-        assertEquals(SensorExposure(6400, 100_000L),
+        // ISO-only manual: the shutter is the last metered one, never a
+        // left-over PROGRAM pair (R-A3-1).
+        assertEquals(SensorExposure(6400, 10_000_000L),
             RequestExposure.resolve(inputs(selectedIso = 99_999, pIso = 800, pShutter = 1L)))
     }
 
