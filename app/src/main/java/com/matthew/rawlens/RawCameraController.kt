@@ -2714,6 +2714,7 @@ class RawCameraController(
         val captureDenoiseSettings = activeDenoiseSettings
         val captureTimeMillis = System.currentTimeMillis()
         val captureGps = gpsLocation()
+        val saveSettings = zslMergeSaveSettings(cameraId)
         pendingSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
@@ -2724,7 +2725,7 @@ class RawCameraController(
                 runHdrPlusJob(
                     selected, settings, c, orientation, cameraId,
                     outputFormat, outputSettings, captureDenoiseSettings,
-                    captureTimeMillis, captureGps = captureGps
+                    captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
                 )
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "HDR+ save failed", failure)
@@ -2756,6 +2757,30 @@ class RawCameraController(
         }
     }
 
+    /**
+     * Save settings a ZSL merge job reads, frozen at shutter time like every
+     * other save (W4): the job runs later on the writer thread.
+     */
+    private data class ZslMergeSaveSettings(
+        val dngBackend: DngWriterBackend,
+        val dngOverrides: DngMetadataOverrides,
+        val dngCompression: DngCompression,
+        val developedFormat: DevelopedFormat,
+        val jxl: JxlOutputSettings,
+        val exposureMode: CaptureExposureMode,
+        val focusView: Pair<Float, Float>?,
+    )
+
+    private fun zslMergeSaveSettings(cameraId: String) = ZslMergeSaveSettings(
+        dngBackend = dngWriterBackend(),
+        dngOverrides = dngMetadataOverrides(cameraId),
+        dngCompression = dngCompression(),
+        developedFormat = activeDevelopedFormat,
+        jxl = activeJxlOutputSettings,
+        exposureMode = activeCaptureExposureMode,
+        focusView = developFocusView,
+    )
+
     private data class HdrPlusFrameInput(
         val frame: BufferedRawFrame,
         val metadata: RawFrameMetadata,
@@ -2783,17 +2808,18 @@ class RawCameraController(
         denoise: DenoiseSettings,
         captureTimeMillis: Long,
         captureGps: GpsLocation?,
-        developedFormat: DevelopedFormat = activeDevelopedFormat,
-        jxlSettings: JxlOutputSettings = activeJxlOutputSettings
+        saveSettings: ZslMergeSaveSettings
     ) {
+        val developedFormat = saveSettings.developedFormat
+        val jxlSettings = saveSettings.jxl
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
             cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
         }
         if (settings.keepSourceBurst) {
             val saver = DngSaver(context)
-            val backend = dngWriterBackend()
-            val overrides = dngMetadataOverrides(cameraId)
+            val backend = saveSettings.dngBackend
+            val overrides = saveSettings.dngOverrides
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
                     cameraId, frame.image, c, frame.result, orientation
@@ -2807,7 +2833,7 @@ class RawCameraController(
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
                         gps = captureGps,
-                        dngCompression = dngCompression()
+                        dngCompression = saveSettings.dngCompression
                     )
                 } finally {
                     buffer.limit(limit)
@@ -2926,7 +2952,7 @@ class RawCameraController(
                 effectiveMerged, refMetadata, captureTimeMillis, gps = captureGps,
                 displayName = CaptureFileNames.hdrPlusDng(captureTimeMillis),
                 sixteenBit = true, hdrPlusProvenance = provenance,
-                dngCompression = dngCompression()
+                dngCompression = saveSettings.dngCompression
             )
         }
         if (outputFormat.includesJpeg) {
@@ -2941,10 +2967,10 @@ class RawCameraController(
                         denoise = denoise,
                         exposureEv = 0.0,
                         adaptiveExposureStrength = adaptivePreviewStrength(
-                            activeCaptureExposureMode, outputSettings
+                            saveSettings.exposureMode, outputSettings
                         ),
                         adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
-                            outputSettings, developFocusView
+                            outputSettings, saveSettings.focusView
                         )
                     ), look = outputSettings, jxl = jxlSettings)
                 JxlSaver(context).save(developed, refMetadata, refResult,
@@ -2958,10 +2984,10 @@ class RawCameraController(
                         denoise = denoise,
                         exposureEv = 0.0,
                         adaptiveExposureStrength = adaptivePreviewStrength(
-                            activeCaptureExposureMode, outputSettings
+                            saveSettings.exposureMode, outputSettings
                         ),
                         adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
-                            outputSettings, developFocusView
+                            outputSettings, saveSettings.focusView
                         )
                     ), outputSettings)
                 try {
@@ -2994,6 +3020,7 @@ class RawCameraController(
         val captureDenoiseSettings = activeDenoiseSettings
         val captureTimeMillis = System.currentTimeMillis()
         val captureGps = gpsLocation()
+        val saveSettings = zslMergeSaveSettings(cameraId)
         pendingSaveCount.incrementAndGet()
         if (outputFormat.includesJpeg) beginJpegProcessing()
         val releasedOwnership = AutoCloseable {
@@ -3004,7 +3031,7 @@ class RawCameraController(
                 runMfsrJob(
                     selected, settings, c, orientation, cameraId,
                     outputFormat, outputSettings, captureDenoiseSettings,
-                    captureTimeMillis, captureGps = captureGps
+                    captureTimeMillis, captureGps = captureGps, saveSettings = saveSettings
                 )
             } catch (failure: Exception) {
                 Log.e(LOG_TAG, "MFSR save failed", failure)
@@ -3053,17 +3080,18 @@ class RawCameraController(
         denoise: DenoiseSettings,
         captureTimeMillis: Long,
         captureGps: GpsLocation?,
-        developedFormat: DevelopedFormat = activeDevelopedFormat,
-        jxlSettings: JxlOutputSettings = activeJxlOutputSettings
+        saveSettings: ZslMergeSaveSettings
     ) {
+        val developedFormat = saveSettings.developedFormat
+        val jxlSettings = saveSettings.jxl
         val saveGeneration = lifecycleGeneration
         fun reportSaveState(message: String) {
             cameraHandler.post { if (isCurrent(saveGeneration)) onState(message) }
         }
         if (settings.keepSourceBurst) {
             val saver = DngSaver(context)
-            val backend = dngWriterBackend()
-            val overrides = dngMetadataOverrides(cameraId)
+            val backend = saveSettings.dngBackend
+            val overrides = saveSettings.dngOverrides
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
                     cameraId, frame.image, c, frame.result, orientation
@@ -3077,7 +3105,7 @@ class RawCameraController(
                         fileNameSuffix = "F%02d".format(index),
                         captureId = captureTimeMillis,
                         gps = captureGps,
-                        dngCompression = dngCompression()
+                        dngCompression = saveSettings.dngCompression
                     )
                 } finally {
                     buffer.limit(limit)
