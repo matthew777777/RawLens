@@ -6382,6 +6382,14 @@ class RawCameraController(
         val captureId = System.currentTimeMillis()
         // One fix for the whole set: every bracket shares the same geotag.
         val captureGps = gpsLocation()
+        // Every setting the job reads is frozen here, at shutter time, like
+        // the single-frame save (W4): the job runs later on the writer.
+        val captureDngBackend = dngWriterBackend()
+        val captureDngOverrides = dngMetadataOverrides(cameraId)
+        val captureDngCompression = dngCompression()
+        val captureDevelopedFormat = activeDevelopedFormat
+        val captureJxlSettings = activeJxlOutputSettings
+        val captureFocusView = developFocusView
         pendingSaveCount.incrementAndGet()
         pendingFrameSaveCount.addAndGet(pending.size)
         if (!saveEachBracket && outputFormat.includesJpeg) beginJpegProcessing()
@@ -6398,8 +6406,8 @@ class RawCameraController(
             try {
                 if (saveEachBracket || saveDebugFrames) {
                     val saver = DngSaver(context)
-                    val backend = dngWriterBackend()
-                    val overrides = dngMetadataOverrides(cameraId)
+                    val backend = captureDngBackend
+                    val overrides = captureDngOverrides
                     val names = pending.mapIndexed { index, frame ->
                         val metadata = RawFrameMetadataFactory.capture(
                             cameraId, frame.image, c, frame.result, orientation
@@ -6415,7 +6423,7 @@ class RawCameraController(
                                 fileNameSuffix = hdrBracketSuffix(index),
                                 captureId = captureId,
                                 gps = captureGps,
-                                dngCompression = dngCompression()
+                                dngCompression = captureDngCompression
                             )
                         } finally {
                             buffer.limit(limit)
@@ -6588,13 +6596,13 @@ class RawCameraController(
                     }
                     referenceDng = DngSaver(context).saveMerged(
                         effectiveMerged, snapshots[referenceIndex].first, captureId, gps = captureGps,
-                        baselineExposureEv = displayEv, dngCompression = dngCompression()
+                        baselineExposureEv = displayEv, dngCompression = captureDngCompression
                     )
                 }
                 if (outputFormat.includesJpeg) {
                     // The HDR develop caps the shoulder (see developMergedJpeg):
                     // the meter must use the capped value so it sees what AgX sees.
-                    if (activeDevelopedFormat == DevelopedFormat.JXL) {
+                    if (captureDevelopedFormat == DevelopedFormat.JXL) {
                         val developed = developer.developMergedJxl(effectiveMerged, snapshots[referenceIndex].first,
                             RawDevelopmentSettings(denoise = denoise, exposureEv = displayEv,
                                 hdrAdaptiveTuning = HdrAdaptiveTuning(
@@ -6602,9 +6610,9 @@ class RawCameraController(
                                         outputSettings.highlightShoulder,
                                         RawDevelopmentCoordinator.HDR_HIGHLIGHT_SHOULDER
                                     ),
-                                    focusX = developFocusView?.first,
-                                    focusY = developFocusView?.second
-                                )), look = outputSettings, jxl = activeJxlOutputSettings)
+                                    focusX = captureFocusView?.first,
+                                    focusY = captureFocusView?.second
+                                )), look = outputSettings, jxl = captureJxlSettings)
                         val name = JxlSaver(context).save(developed,
                             snapshots[referenceIndex].first, snapshots[referenceIndex].second,
                             captureTimeMillis = captureId,
@@ -6619,8 +6627,8 @@ class RawCameraController(
                                         outputSettings.highlightShoulder,
                                         RawDevelopmentCoordinator.HDR_HIGHLIGHT_SHOULDER
                                     ),
-                                    focusX = developFocusView?.first,
-                                    focusY = developFocusView?.second
+                                    focusX = captureFocusView?.first,
+                                    focusY = captureFocusView?.second
                                 )), outputSettings)
                         try {
                             val name = JpegSaver(context).save(developed, snapshots[referenceIndex].first,
