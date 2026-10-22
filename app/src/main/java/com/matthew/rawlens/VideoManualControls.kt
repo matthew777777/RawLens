@@ -31,6 +31,12 @@ internal object VideoManualControls {
         meteredFocus: Float?,
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        if (c.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
+            builder.set(
+                CaptureRequest.FLASH_MODE,
+                if (manual.torch) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+            )
+        }
         builder.set(
             CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
             android.util.Range(fpsRange.first, fpsRange.second)

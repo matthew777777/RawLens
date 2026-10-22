@@ -17,6 +17,8 @@ data class VideoManualSnapshot(
     val focusDiopters: Float? = null,
     /** Null = auto (AE compensation only applies with AE ON). */
     val evIndex: Int? = null,
+    /** Continuous torch (video light); ignored on lenses without a flash unit. */
+    val torch: Boolean = false,
 )
 
 /** Lock-on-record switches (all default off: continuous AE/AWB/AF). */

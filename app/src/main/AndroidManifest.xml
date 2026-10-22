@@ -19,6 +19,13 @@
         on first video-record press; stills never need the mic. No microphone
         uses-feature: mic-less devices record silent video instead. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Gallery seat: see RawLens captures from earlier installs or saved
+         through a picked folder (own new files need no permission). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Full-rate gyro/accel for video motion tracks (API 31+ install-time
         normal permission; game-rate fallback when unavailable). -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />

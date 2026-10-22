@@ -45,13 +45,21 @@ import java.util.concurrent.atomic.AtomicLong
  * hold 24/30fps at 4K (~250ms/frame measured: 236ms modes + ~18ms
  * grade; fused measures the same within noise, minus one dispatch and
  * ~187MB DRAM traffic) — it drops to a few fps effective and exists
- * for A/B comparison, not realtime takes.
+ * for A/B comparison, not realtime takes. SUPER (superpixel binning:
+ * each 2x2 Bayer quad becomes one RGB pixel, upscaled by the grade-YUV
+ * pass) is the cheapest path: no demosaic artifacts, half the detail.
  */
 enum class VideoDemosaic(val label: String) {
     MHC("MHC"),
-    RCD("RCD");
+    RCD("RCD"),
+    SUPER("Super pixel");
 
-    fun next(): VideoDemosaic = if (this == MHC) RCD else MHC
+    /** Settings cycle: MHC -> RCD -> Super pixel -> MHC. */
+    fun next(): VideoDemosaic = when (this) {
+        MHC -> RCD
+        RCD -> SUPER
+        SUPER -> MHC
+    }
 
     companion object {
         fun fromPreference(value: String?): VideoDemosaic =
@@ -698,6 +706,10 @@ class DirectLogRecorder(
         }
         if (!effPreferMhc) {
             Log.i(TAG, "superpixel forced (preferMhc=$preferMhc heatDegraded=$heatDegraded)")
+        } else if (videoDemosaic == VideoDemosaic.SUPER) {
+            // User-chosen binning: the base superpixel + grade-YUV pipelines
+            // above are the whole path, nothing more to init.
+            Log.i(TAG, "superpixel selected")
         } else if (videoDemosaic == VideoDemosaic.RCD) {
             // RCD path (fused finalize when available, else 4 RCD modes
             // + grade-YUV): A/B lever only until the optimization lands.
@@ -1191,6 +1203,12 @@ class DirectLogRecorder(
                 evIndex = value?.toInt(),
             )
         }
+        refreshVideoRequest()
+    }
+
+    /** Video light: rides the repeating request so it holds through the take. */
+    fun setTorch(on: Boolean) {
+        videoManual = videoManual.copy(torch = on)
         refreshVideoRequest()
     }
 

@@ -63,8 +63,8 @@ class HistogramView @JvmOverloads constructor(
     private val cornerRadius = ScopeStyle.CORNER_RADIUS_DP * dp
     private var agxSelected = false
 
-    /** Logarithmic vertical scale; linear (false) is the default. */
-    var logScale = false
+    /** Logarithmic vertical scale (default): small clipped or crushed areas stay visible; long-press for linear. */
+    var logScale = true
         set(value) {
             if (field == value) return
             field = value

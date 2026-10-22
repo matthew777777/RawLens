@@ -755,6 +755,12 @@ internal class RawVideoRecorder(
         refreshVideoRequest()
     }
 
+    /** Video light: rides the repeating request so it holds through the take. */
+    fun setTorch(on: Boolean) {
+        videoManual = videoManual.copy(torch = on)
+        refreshVideoRequest()
+    }
+
     private fun refreshVideoRequest() {
         val handler = camHandler ?: return
         val dev = device ?: return

@@ -18,8 +18,8 @@ package com.matthew.rawlens
  * out), level lines on the waveform only, and data inset from the rounded wall so the
  * 0 % and 100 % edges — where clipping lives — are never faded or clipped.
  * The histogram follows darktable's look (overlapping RGB fills blended
- * additively, so overlaps read yellow / cyan / magenta / white, linear
- * vertical scale with log as the option, no grid); the waveform follows RawTherapee's (bright
+ * additively, so overlaps read yellow / cyan / magenta / white, log
+ * vertical scale by default with linear as the option, no grid); the waveform follows RawTherapee's (bright
  * traces on black with faint 25 / 50 / 75 % level lines; clipping only as red
  * cells on the 100 % row).
  */
@@ -50,7 +50,7 @@ object ScopeStyle {
     const val GRID_CLEARANCE_DP = 4f
 
     /** Scope height as a share of its width. */
-    const val ASPECT = 0.66f
+    const val ASPECT = 0.5f
 
     /**
      * Scope width that fits the bottom-left thirds cell of a [parentPx]-wide

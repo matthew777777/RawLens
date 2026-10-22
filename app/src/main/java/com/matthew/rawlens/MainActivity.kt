@@ -170,6 +170,11 @@ class MainActivity : Activity() {
     // stills state machine is touched): the stills controller keeps framing
     // until REC, when the standalone RawVideoRecorder takes the camera.
     internal var isVideoMode = false
+    private val quickAutoHide = Runnable { hideQuickControls() }
+    /** True from a dismissing touch-down until its gesture ends. */
+    private var swallowQuickDismissGesture = false
+    /** Video light (quick-panel TORCH tile); off on every video exit. */
+    private var videoTorchOn = false
     private var lastPhotoExposureMode = CaptureExposureMode.AUTO
     /** Photo mode before HDR+ pulled the camera into ZSL; restored on toggle-off. */
     private var modeBeforeHdrPlus: CaptureExposureMode? = null
@@ -420,7 +425,7 @@ class MainActivity : Activity() {
         histogramView.isFocusable = true
         histogramView.setOnClickListener { toggleScopeMode() }
         // Long-press: linear (default) <-> logarithmic vertical scale.
-        histogramView.logScale = lensPreferences().getBoolean(KEY_HISTOGRAM_LOG, false)
+        histogramView.logScale = lensPreferences().getBoolean(KEY_HISTOGRAM_LOG, true)
         histogramView.setOnLongClickListener { view ->
             histogramView.logScale = !histogramView.logScale
             lensPreferences().edit().putBoolean(KEY_HISTOGRAM_LOG, histogramView.logScale).apply()
@@ -505,10 +510,12 @@ class MainActivity : Activity() {
                     flashControl.text = flash
                     flashControl.isEnabled = flashEnabled
                     flashControl.alpha = if (flashEnabled) 1f else 0.4f
-                    lightQuick.text = flash.replaceFirst(' ', '\n')
-                    lightQuick.isEnabled = flashEnabled
-                    lightQuick.alpha = if (flashEnabled) 1f else 0.4f
-                    setQuickTileState(lightQuick, flash.endsWith("ON"))
+                    if (!isVideoMode) {
+                        lightQuick.text = flash.replaceFirst(' ', '\n')
+                        lightQuick.isEnabled = flashEnabled
+                        lightQuick.alpha = if (flashEnabled) 1f else 0.4f
+                        setQuickTileState(lightQuick, flash.endsWith("ON"))
+                    }
                     refreshManualTileAccents()
                     refreshLensSwitcher()
                     updateQuickControls()
@@ -710,7 +717,9 @@ class MainActivity : Activity() {
             hideManualControl()
             controller.toggleTorch()
         }
-        lightQuick.setOnClickListener { controller.toggleTorch() }
+        lightQuick.setOnClickListener {
+            if (isVideoMode) toggleVideoTorch() else controller.toggleTorch()
+        }
         featureTags.setOnClickListener { toggleQuickControls() }
         rawStatusGroup.setOnClickListener { cycleCaptureFormat() }
         modeButton.setOnClickListener { cycleCaptureExposureMode() }
@@ -734,12 +743,34 @@ class MainActivity : Activity() {
         val galleryThumb = findViewById<android.widget.ImageView>(R.id.galleryThumb)
         galleryThumb.clipToOutline = true
         lastCapture = LastCaptureThumbnail(this) { _, _, thumb ->
-            galleryThumb.setImageBitmap(thumb)
+            // PhotonCamera-style seat: the capture fills the circle; with none
+            // visible a gallery glyph sits on the glass instead of flat grey.
+            if (thumb != null) {
+                galleryThumb.setPadding(0, 0, 0, 0)
+                galleryThumb.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                galleryThumb.setImageBitmap(thumb)
+            } else {
+                val pad = dp(13)
+                galleryThumb.setPadding(pad, pad, pad, pad)
+                galleryThumb.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                galleryThumb.setImageResource(R.drawable.ic_gallery)
+            }
         }
         galleryThumb.setOnClickListener {
             if (videoRecording) return@setOnClickListener
             closeFloatingPanels()
-            if (!lastCapture.open(this)) setStatus("NO CAPTURES YET")
+            if (lastCapture.open(this)) return@setOnClickListener
+            // Nothing visible: with partial ("Select photos") or no photo
+            // access, earlier captures are hidden, so re-offer full access.
+            val missing = mediaReadPermissions().filter {
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missing.isNotEmpty()) {
+                setStatus("ALLOW ALL PHOTOS TO SHOW CAPTURES")
+                requestPermissions(missing.toTypedArray(), MEDIA_PERMISSION)
+            } else {
+                setStatus("NO CAPTURES YET")
+            }
         }
         gridQuick.setOnClickListener {
             gridEnabled = !gridEnabled
@@ -890,8 +921,16 @@ class MainActivity : Activity() {
             if (activeProgramAxis != null) showProgramPanel()
         }
         updateQuickControls()
+        val missingMedia = mediaReadPermissions().filter {
+            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION)
+            // Camera first (grantResults[0]); photo access rides along so the
+            // gallery seat can show captures from earlier installs.
+            requestPermissions(arrayOf(Manifest.permission.CAMERA) + missingMedia, CAMERA_PERMISSION)
+        } else if (missingMedia.isNotEmpty() && !lensPreferences().getBoolean(KEY_MEDIA_ASKED, false)) {
+            lensPreferences().edit().putBoolean(KEY_MEDIA_ASKED, true).apply()
+            requestPermissions(missingMedia.toTypedArray(), MEDIA_PERMISSION)
         }
         if (WelcomeFlow.shouldDeferUpdateConsent(
                 lensPreferences().getBoolean(KEY_LENS_SETUP_COMPLETE, false)
@@ -943,6 +982,14 @@ class MainActivity : Activity() {
         updateFlow.maybeCheckOnStartup()
     }
 
+    /** Read access the gallery seat needs to see captures it did not create this install. */
+    private fun mediaReadPermissions(): List<String> =
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == AUDIO_PERMISSION) {
@@ -958,6 +1005,10 @@ class MainActivity : Activity() {
             }
             return
         }
+        if (permissions.any { it in mediaReadPermissions() } && ::lastCapture.isInitialized) {
+            lastCapture.refresh()
+        }
+        if (requestCode == MEDIA_PERMISSION) return
         if (requestCode == LOCATION_PERMISSION) {
             if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) {
                 setGpsEnabled(true)
@@ -1442,8 +1493,8 @@ class MainActivity : Activity() {
         scopeViews().forEach { view ->
             (view.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
                 params.gravity = Gravity.BOTTOM or (if (yieldEnd) Gravity.END else Gravity.START)
-                params.marginStart = if (yieldEnd) 0 else dp(16)
-                params.marginEnd = if (yieldEnd) dp(16) else 0
+                params.marginStart = if (yieldEnd) 0 else dp(SCOPE_EDGE_DP)
+                params.marginEnd = if (yieldEnd) dp(SCOPE_EDGE_DP) else 0
                 params.bottomMargin = bottomMargin
                 view.layoutParams = params
             }
@@ -1820,6 +1871,7 @@ class MainActivity : Activity() {
         lastPhotoExposureMode = captureExposureMode
         isVideoMode = true
         Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
+        updateQuickControls()
         closeFloatingPanels()
         guideOverlay.videoCrop = videoCrop
         guideOverlay.videoActive = true
@@ -1861,6 +1913,12 @@ class MainActivity : Activity() {
         }
         Log.i(LOG_TAG, "video exit to $lastPhotoExposureMode")
         isVideoMode = false
+        // The video light never follows the user back into photo.
+        if (videoTorchOn) {
+            videoTorchOn = false
+            controller.setTorchEnabled(false)
+        }
+        updateQuickControls()
         guideOverlay.videoActive = false
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.shutter_core)
         findViewById<View>(R.id.shutter).contentDescription = "Capture RAW photo"
@@ -3714,8 +3772,54 @@ class MainActivity : Activity() {
         updateOverlayStack()
     }
 
+    /** (Re)starts the quick panel's idle timer; any touch inside it calls this. */
+    internal fun armQuickAutoHide() {
+        quickPanel.removeCallbacks(quickAutoHide)
+        quickPanel.postDelayed(quickAutoHide, QUICK_AUTO_HIDE_MS)
+    }
+
+    private fun View.containsRaw(x: Float, y: Float): Boolean {
+        if (visibility != View.VISIBLE || !isShown) return false
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        return x >= loc[0] && x < loc[0] + width && y >= loc[1] && y < loc[1] + height
+    }
+
+    /**
+     * Quick panel focus: a touch outside it only closes it (the whole
+     * gesture is swallowed, so it never focuses, meters or presses a
+     * control); touches inside keep it open and restart the idle timer.
+     * Its own toggles (quick button, feature tags) pass through.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (swallowQuickDismissGesture) {
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                swallowQuickDismissGesture = false
+            }
+            return true
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::quickPanel.isInitialized &&
+            quickPanel.visibility == View.VISIBLE
+        ) {
+            val x = ev.rawX
+            val y = ev.rawY
+            when {
+                quickPanel.containsRaw(x, y) -> armQuickAutoHide()
+                findViewById<View>(R.id.quickButton).containsRaw(x, y) ||
+                    featureTags.containsRaw(x, y) -> Unit
+                else -> {
+                    hideQuickControls()
+                    swallowQuickDismissGesture = true
+                    return true
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     internal fun hideQuickControls() {
         if (!::quickPanel.isInitialized || quickPanel.visibility != View.VISIBLE) return
+        quickPanel.removeCallbacks(quickAutoHide)
         quickPanel.animate().cancel()
         quickPanel.visibility = View.GONE
         quickPanel.alpha = 1f
@@ -3783,6 +3887,20 @@ class MainActivity : Activity() {
         refreshScopeContentDescription()
         updateQuickControls()
         setStatus(scopeStatusLabel())
+    }
+
+    /** Quick-panel TORCH in video: preview now, and the live take if recording. */
+    private fun toggleVideoTorch() {
+        if (!controller.isFlashAvailable()) {
+            setStatus("TORCH N/A ON THIS LENS")
+            return
+        }
+        videoTorchOn = !videoTorchOn
+        controller.setTorchEnabled(videoTorchOn)
+        videoRecorder?.setTorch(videoTorchOn)
+        logRecorder?.setTorch(videoTorchOn)
+        setStatus(if (videoTorchOn) "TORCH ON" else "TORCH OFF")
+        updateQuickControls()
     }
 
     internal fun updateQuickControls() {
@@ -3857,6 +3975,34 @@ class MainActivity : Activity() {
         setQuickTileState(sharp, mfsrSettings.enabled)
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
+        // Video (RAW / Direct-Log) records continuous frames: still-only
+        // tiles (HDR, HDR+, MFSR, timer, release) go, and LIGHT becomes a
+        // torch. Rows left empty collapse so the grid stays tight.
+        val stillOnly = listOf(hdr, hdrPlus, sharp, timer, release)
+        stillOnly.forEach { it.visibility = if (isVideoMode) View.GONE else View.VISIBLE }
+        if (isVideoMode) {
+            val flash = runCatching { controller.isFlashAvailable() }.getOrDefault(false)
+            lightQuick.text = "TORCH\n${if (videoTorchOn) "ON" else "OFF"}"
+            lightQuick.isEnabled = flash
+            lightQuick.alpha = if (flash) 1f else 0.4f
+            lightQuick.contentDescription = "Video torch ${if (videoTorchOn) "on" else "off"}. Tap to toggle."
+            setQuickTileState(lightQuick, videoTorchOn)
+        }
+        (stillOnly + listOf(ettr, lightQuick)).map { it.parent as ViewGroup }.distinct().forEach { row ->
+            row.visibility = if ((0 until row.childCount).any { row.getChildAt(it).visibility == View.VISIBLE })
+                View.VISIBLE else View.GONE
+            // First visible tile in a row carries no leading gap.
+            var first = true
+            for (i in 0 until row.childCount) {
+                val tile = row.getChildAt(i)
+                if (tile.visibility != View.VISIBLE) continue
+                (tile.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
+                    val start = if (first) 0 else dp(8)
+                    if (it.marginStart != start) { it.marginStart = start; tile.layoutParams = it }
+                }
+                first = false
+            }
+        }
         refreshFeatureTags(ettrEnabled)
         // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
         // button itself stays photo-only (video is a separate red button).
@@ -3887,6 +4033,12 @@ class MainActivity : Activity() {
     companion object {
         const val LOG_TAG = "RawLensCamera"
         const val CAMERA_PERMISSION = 42
+        /** Quick panel closes itself after this long without a touch inside it. */
+        const val QUICK_AUTO_HIDE_MS = 5_000L
+        /** Scope gap to the screen edge (the thirds-line gap is ScopeStyle.GRID_CLEARANCE_DP). */
+        const val SCOPE_EDGE_DP = 8
+        const val MEDIA_PERMISSION = 48
+        const val KEY_MEDIA_ASKED = "media_permission_asked"
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
         const val SETTINGS_EXPORT_REQUEST = 45

@@ -34,7 +34,9 @@ class DemosaicBackendTest {
         assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference("RCD"))
         assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference("MHC"))
         assertEquals(VideoDemosaic.RCD, VideoDemosaic.MHC.next())
-        assertEquals(VideoDemosaic.MHC, VideoDemosaic.RCD.next())
+        assertEquals(VideoDemosaic.SUPER, VideoDemosaic.RCD.next())
+        assertEquals(VideoDemosaic.MHC, VideoDemosaic.SUPER.next())
+        assertEquals(VideoDemosaic.SUPER, VideoDemosaic.fromPreference("SUPER"))
     }
 
     @Test fun rcdChannelsMatchPatterns() {

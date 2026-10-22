@@ -255,7 +255,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start|bottom"
-        android:layout_marginStart="16dp"
+        android:layout_marginStart="8dp"
         android:layout_marginBottom="248dp"
         android:clickable="true"
         android:focusable="true"
@@ -266,7 +266,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start|bottom"
-        android:layout_marginStart="16dp"
+        android:layout_marginStart="8dp"
         android:layout_marginBottom="248dp"
         android:clickable="true"
         android:focusable="true"
@@ -285,7 +285,7 @@
     <LinearLayout android:id="@+id/quickSettingsPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="248dp" android:background="@drawable/quick_panel" android:orientation="vertical" android:visibility="gone">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:letterSpacing="0.08" android:text="QUICK CONTROL" android:textColor="@color/text_primary" android:textSize="9sp" android:textStyle="bold" />
-            <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tap live view to close" android:textColor="@color/text_muted" android:textSize="9sp" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tap outside to close" android:textColor="@color/text_muted" android:textSize="9sp" />
         </LinearLayout>
         <!-- Balanced 3 x 3 grid: every row same weight so tiles never stretch. -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
@@ -473,7 +473,9 @@
                         android:layout_marginStart="8dp"
                         android:background="@drawable/glass_button"
                         android:contentDescription="Open last capture"
-                        android:scaleType="centerCrop" />
+                        android:padding="13dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_gallery" />
                 </LinearLayout>
 
                 <!-- 88dp ring centered in the 92dp row: 2dp clear top and

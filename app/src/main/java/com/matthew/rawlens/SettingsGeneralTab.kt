@@ -75,31 +75,6 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
     val generalTab = p.tabs[0]
         content.removeAllViews()
         content.addView(sectionTitle("RAW capture"))
-        content.addView(CheckBox(this).apply {
-            text = "Experimental two-exposure RAW HDR"
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = dualRawEnabled
-            isEnabled = controller.supportsDualRaw() || dualRawEnabled
-            setOnCheckedChangeListener { button, enabled ->
-                if (enabled && !controller.supportsDualRaw()) {
-                    button.isChecked = false
-                    setStatus("RAW HDR TEST NEEDS CAMERA 0")
-                } else {
-                    dualRawEnabled = enabled
-                    setStatus(if (enabled) "TWO-EXPOSURE RAW HDR ON" else "TWO-EXPOSURE RAW HDR OFF")
-                    updateQuickControls()
-                }
-            }
-        })
-        content.addView(TextView(this).apply {
-            text = "Camera 0 only. Saves a 16-bit DNG from two sequential exposures, " +
-                "using the short exposure to recover clipped highlights. " +
-                "Does not reduce shadow noise. No alignment or motion correction; " +
-                "keep the phone and scene still. Overrides the release mode " +
-                "while enabled. Resets when the app restarts or you change cameras."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 11f
-        })
         content.addView(Button(this).apply {
             text = "DNG sensor calibration (levels • noise • color)"
             setOnClickListener { showDngMetadataOverrideEditor() }

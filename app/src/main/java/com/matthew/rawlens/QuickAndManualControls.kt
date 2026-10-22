@@ -111,6 +111,7 @@ internal fun MainActivity.showQuickControls() {
     quickPanel.visibility = View.VISIBLE
     quickPanel.animate().alpha(1f).translationY(0f).setDuration(180L).start()
     quickPanel.post { updateOverlayStack() }
+    armQuickAutoHide()
 }
 
 

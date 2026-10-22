@@ -9,11 +9,13 @@ import android.content.Intent
 import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Size
+import androidx.exifinterface.media.ExifInterface
 import java.util.concurrent.Executors
 
 /**
@@ -88,19 +90,44 @@ class LastCaptureThumbnail(
         }
     }
 
-    /** Platform thumbnail, falling back to a downscaled full decode (DNG via ImageDecoder). */
+    /**
+     * Platform thumbnail, falling back to a downscaled full decode (DNG via
+     * ImageDecoder), turned upright from the capture's EXIF orientation:
+     * DNG thumbnails come back in sensor (landscape) order.
+     */
     private fun loadPreview(item: Item): Bitmap? {
-        runCatching { resolver.loadThumbnail(item.uri, Size(THUMB_PX, THUMB_PX), null) }
-            .getOrNull()?.let { return it }
-        if (item.mime?.startsWith("image/") != true) return null
-        return runCatching {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, item.uri)) { decoder, info, _ ->
-                val scale = maxOf(1, minOf(info.size.width, info.size.height) / THUMB_PX)
-                decoder.setTargetSize(info.size.width / scale, info.size.height / scale)
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            }
-        }.getOrNull()
+        val isImage = item.mime?.startsWith("image/") == true
+        val platform = runCatching { resolver.loadThumbnail(item.uri, Size(THUMB_PX, THUMB_PX), null) }.getOrNull()
+        val bitmap = platform ?: if (isImage) {
+            runCatching {
+                ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, item.uri)) { decoder, info, _ ->
+                    val scale = maxOf(1, minOf(info.size.width, info.size.height) / THUMB_PX)
+                    decoder.setTargetSize(info.size.width / scale, info.size.height / scale)
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                }
+            }.getOrNull()
+        } else null
+        bitmap ?: return null
+        if (!isImage) return bitmap
+        val degrees = orientationDegrees(item.uri)
+        // A source already turned upright (JPEG thumbnails usually are) is
+        // left alone: 90/270 only rotate a still-landscape bitmap, 180 only
+        // applies to the formats the platform passes through raw (DNG).
+        val rotate = when (degrees) {
+            90, 270 -> bitmap.width > bitmap.height
+            180 -> item.mime != "image/jpeg"
+            else -> false
+        }
+        if (!rotate) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
+
+    private fun orientationDegrees(uri: Uri): Int = runCatching {
+        resolver.openInputStream(uri)?.use { stream ->
+            ExifInterface(stream).rotationDegrees
+        } ?: 0
+    }.getOrDefault(0)
 
     /** Opens the newest capture in the system viewer; false when none or no app handles it. */
     fun open(context: Context): Boolean {
