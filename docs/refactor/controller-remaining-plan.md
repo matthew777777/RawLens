@@ -39,3 +39,7 @@ behaviour surface last; A3/A6 need a study first).
   `captureDualRaw` is request building and moves with A3. Finding, record
   only: its submit-failure catch calls `finishCapture` alone, without the
   shared R3/R4 error tail (no ZSL resume, no dead-chain count).
+- A7 done: `ControllerDebugText` (debug overlay, RAW VF line, ZSL chip
+  decision, formatExposure/clipPercent) is pure; the controller keeps the
+  throttles, the idle-AF log and the callbacks and passes a
+  `DebugOverlaySnapshot`. Strings unchanged (normalized diff), 6 JVM tests.

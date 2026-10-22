@@ -4654,7 +4654,7 @@ class RawCameraController(
             if (rawZslCapacity == 0) {
                 publishRawZslStatus(
                     RawZslState.FALLBACK,
-                    ZSL_NO_CAPACITY_DETAIL
+                    ControllerDebugText.ZSL_NO_CAPACITY_DETAIL
                 )
                 onState("ZSL N/A • RAW")
             } else {
@@ -5790,11 +5790,6 @@ class RawCameraController(
         }
     }
 
-    private fun clipPercent(fraction: Float): String =
-        if (fraction.isFinite()) {
-            String.format(java.util.Locale.US, "%.3f%%", fraction * 100f)
-        } else "--"
-
     private fun publishDebugState(
         request: CaptureRequest,
         result: TotalCaptureResult,
@@ -5823,60 +5818,43 @@ class RawCameraController(
                     } ?: "")
             )
         }
-        val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
-        val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
-        val aeTrigger = request.get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER)
-        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
-        val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-        val oisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)
-        onDebugState(
-            "AF_MODE  ${Camera2Names.afModeName(afMode)}\n" +
-                "AF_TRIGGER ${Camera2Names.afTriggerName(afTrigger)}\n" +
-                "AF_STATE ${Camera2Names.afStateName(afState)}\n" +
-                "AF_POLICY TOUCH_HOLD/CONT_PICTURE  CAMERA_SEQ ${if (cameraCaptureSequenceActive) "BUSY" else "IDLE"}\n" +
-                "SAVE_QUEUE ${pendingFrameSaveCount.get()}/${if (captureFormat.includesJpeg) MAX_IN_FLIGHT_JPEG_SAVES else MAX_IN_FLIGHT_DNG_SAVES}\n" +
-                "AE_MODE  ${Camera2Names.aeModeName(aeMode)}\n" +
-                "AE_TRIGGER ${Camera2Names.aeTriggerName(aeTrigger)}\n" +
-                "AE_STATE ${Camera2Names.aeStateName(aeState)}\n" +
-                "OIS_MODE ${Camera2Names.oisModeName(oisMode)}\n" +
-                "ISO $iso  EXP ${formatExposure(exposure.coerceAtLeast(1L))}\n" +
-                "P_AE ${if (dynamicExposureSettings.enabled) "ON" else "OFF"} " +
-                "B01 ${String.format(java.util.Locale.US, "%.2f", programAeProfile.balance)} " +
-                "METER ${programAeProfile.metering.name} " +
-                "LOCK ${programAeProfile.lockMode.name} " +
-                "EV ${String.format(java.util.Locale.US, "%+.1f", programAeProfile.evBias)} " +
-                "ISO_CAP ${if (dynamicIsoLimited) "HIT" else "OK"} " +
-                "S_CAP ${if (dynamicShutterLimited) "HIT" else "OK"}\n" +
-                "P_TARGET " + (if (ettrCaptureActive()) "FROZEN>ETTR"
-                else programTargetIso?.let { targetIso ->
-                    programTargetShutterNanos?.let { targetShutter ->
-                        val live = dynamicIso?.let { liveIso ->
-                            dynamicShutterNanos?.let { liveShutter ->
-                                "LIVE ISO $liveIso EXP ${formatExposure(liveShutter)}"
-                            }
-                        } ?: "LIVE --"
-                        "TGT ISO $targetIso EXP ${formatExposure(targetShutter)} $live " +
-                            (if (programConverged) "LOCKED" else "TRACKING") +
-                            " BR ${if (programBrightness.isFinite()) String.format(java.util.Locale.US, "%.2f", programBrightness) else "--"}"
-                    }
-                } ?: "METERING") + "\n" +
-                "ETTR " + when {
-                    !ettrSettings.enabled -> "OFF"
-                    !ettrModeAvailable() -> "OFF (AUTO ONLY)"
-                    else -> "ON"
-                } + " " +
-                (ettrIso?.let { targetIso ->
-                    ettrShutterNanos?.let { targetShutter ->
-                        "ISO $targetIso EXP ${formatExposure(targetShutter)} " +
-                            (if (ettrConverged) "LOCKED" else "TRACKING") +
-                            " HOT ${if (ettrHottest.isFinite()) String.format(java.util.Locale.US, "%.2f", ettrHottest) else "--"}" +
-                            " CLIP ${clipPercent(ettrClipHot)}/${clipPercent(ettrClipSecond)}"
-                    }
-                } ?: "METERING") + "\n" +
-                "RAW_ZSL ${if (rawZslStreaming) "ON" else "OFF"} " +
-                "BUF ${rawZslBuffer?.size ?: 0}/$rawZslCapacity " +
-                String.format(java.util.Locale.US, "GYRO %.3f", motionTracker.currentMotion())
-        )
+        onDebugState(ControllerDebugText.debugOverlay(DebugOverlaySnapshot(
+            afMode = afMode,
+            afTrigger = afTrigger,
+            afState = afState,
+            cameraSequenceBusy = cameraCaptureSequenceActive,
+            saveQueue = pendingFrameSaveCount.get(),
+            saveQueueLimit = if (captureFormat.includesJpeg) MAX_IN_FLIGHT_JPEG_SAVES else MAX_IN_FLIGHT_DNG_SAVES,
+            aeMode = result.get(CaptureResult.CONTROL_AE_MODE),
+            aeTrigger = request.get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER),
+            aeState = result.get(CaptureResult.CONTROL_AE_STATE),
+            oisMode = result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE),
+            iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
+            exposureNanos = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L,
+            programEnabled = dynamicExposureSettings.enabled,
+            programProfile = programAeProfile,
+            isoCapHit = dynamicIsoLimited,
+            shutterCapHit = dynamicShutterLimited,
+            ettrCaptureActive = ettrCaptureActive(),
+            programTargetIso = programTargetIso,
+            programTargetShutterNanos = programTargetShutterNanos,
+            liveIso = dynamicIso,
+            liveShutterNanos = dynamicShutterNanos,
+            programConverged = programConverged,
+            programBrightness = programBrightness,
+            ettrEnabled = ettrSettings.enabled,
+            ettrModeAvailable = ettrModeAvailable(),
+            ettrIso = ettrIso,
+            ettrShutterNanos = ettrShutterNanos,
+            ettrConverged = ettrConverged,
+            ettrHottest = ettrHottest,
+            ettrClipHot = ettrClipHot,
+            ettrClipSecond = ettrClipSecond,
+            zslStreaming = rawZslStreaming,
+            zslBuffered = rawZslBuffer?.size ?: 0,
+            zslCapacity = rawZslCapacity,
+            gyroMotion = motionTracker.currentMotion(),
+        )))
         publishRawVfDebug(force = force)
     }
 
@@ -5888,33 +5866,8 @@ class RawCameraController(
         onRawVfDebug(formatRawVfDebug(vf.snapshot()))
     }
 
-    internal fun formatRawVfDebug(stats: RawVfStats): String {
-        val fpsText = if (stats.fps > 0f) {
-            String.format(java.util.Locale.US, "%.1f FPS", stats.fps)
-        } else "-- FPS"
-        val msText = if (stats.frameMs > 0f) {
-            String.format(java.util.Locale.US, "%.1f ms", stats.frameMs)
-        } else "-- ms"
-        val modeText = if (stats.jpeg) {
-            "JPG " + String.format(java.util.Locale.US, "%+.1fEV", stats.exposureEv)
-        } else "RAW"
-        val vfText = if (stats.vfWidth > 0 && stats.vfHeight > 0) {
-            val path = if (stats.gpu) "GPU" else "NEON"
-            "VF: ${stats.vfWidth}×${stats.vfHeight} $path ${stats.engine.shortLabel()} ⇄ $modeText"
-        } else "VF: --"
-        val rawText = if (stats.rawWidth > 0 && stats.rawHeight > 0) {
-            "RAW: ${stats.rawWidth}×${stats.rawHeight}"
-        } else "RAW: --"
-        val devBits = vfOverlayEffectBits(stats.jpeg, jpegOutputSettings, denoiseSettings.wavelet.enabled)
-        val glLabel = if (stats.glActive) "RAW" else "FALLBACK"
-        val effects = if (!stats.glActive || devBits.isNotEmpty()) {
-            "Yes ($glLabel${if (devBits.isNotEmpty()) " +" + devBits.joinToString("+") else ""})"
-        } else "No"
-        // A dead forced engine shows as starved (VfEngineMode contract), never
-        // as a silently black VF.
-        val starveText = if (stats.starved) " STARVED" else ""
-        return "$fpsText$starveText $msText\n$vfText · $rawText\nEffects: $effects"
-    }
+    internal fun formatRawVfDebug(stats: RawVfStats): String = ControllerDebugText.rawVfDebug(
+        stats, vfOverlayEffectBits(stats.jpeg, jpegOutputSettings, denoiseSettings.wavelet.enabled))
 
     /** One line per session so logcat shows the idle AF contract for diagnosis. */
     private fun logAfCapabilities() {
@@ -7062,26 +7015,16 @@ class RawCameraController(
         // rawsr shader listing -> rawSrCapability; re-add srAvailable/srBusy).
         val status = if (state != null && detail != null) {
             RawZslStatus(state, detail)
-        } else when {
-            !rawZslRequested -> RawZslStatus(RawZslState.OFF, "Disabled in settings")
-            rawZslDisabledForSession -> RawZslStatus(
-                RawZslState.FALLBACK,
-                "${rawZslFallbackDetail ?: "Unavailable"}; using normal RAW capture"
-            )
-            rawZslCapacity == 0 -> RawZslStatus(
-                RawZslState.FALLBACK,
-                ZSL_NO_CAPACITY_DETAIL
-            )
-            zslHealth.streamBroken -> RawZslStatus(
-                RawZslState.WARMING_UP,
-                "ZSL burst mode: streaming unavailable on this HAL, captures fire instantly"
-            )
-            rawZslStreaming && zslHealth.filled -> RawZslStatus(
-                RawZslState.ACTIVE,
-                "${rawZslBuffer?.size ?: 0}/${rawZslCapacity} RAW frames buffered"
-            )
-            else -> RawZslStatus(RawZslState.WARMING_UP, "Waiting for a paired RAW frame")
-        }
+        } else ControllerDebugText.rawZslStatus(
+            requested = rawZslRequested,
+            disabledForSession = rawZslDisabledForSession,
+            fallbackDetail = rawZslFallbackDetail,
+            capacity = rawZslCapacity,
+            streamBroken = zslHealth.streamBroken,
+            streaming = rawZslStreaming,
+            filled = zslHealth.filled,
+            buffered = rawZslBuffer?.size ?: 0,
+        )
         val enriched = status.copy(bufferedFrames = rawZslBuffer?.size ?: 0,
             hdrPlusBusy = activeHdrPlusSettings.enabled && pendingSaveCount.get() > 0,
             mfsrBusy = activeMfsrSettings.enabled && pendingSaveCount.get() > 0)
@@ -7263,12 +7206,7 @@ class RawCameraController(
         return (MIN_WB_KELVIN + normalized * (MAX_WB_KELVIN - MIN_WB_KELVIN)).toInt()
     }
 
-    private fun formatExposure(nanos: Long): String {
-        if (nanos >= 1_000_000_000L) return String.format(
-            java.util.Locale.US, "%.1fs", nanos / 1_000_000_000.0
-        )
-        return "1/${kotlin.math.round(1_000_000_000.0 / nanos).toInt()}"
-    }
+    private fun formatExposure(nanos: Long): String = ControllerDebugText.formatExposure(nanos)
 
     private data class CameraRoute(
         val identity: String,
@@ -7956,13 +7894,6 @@ class RawCameraController(
             READER_MAXIMAGES_HARD_CAP
         )
 
-        /**
-         * Shown when the ring capacity is 0: an empty RAW size, or a session
-         * reader with too few buffers for a ring ([clampZslCapacityForReader]).
-         * There is no memory-budget check behind it.
-         */
-        private const val ZSL_NO_CAPACITY_DETAIL =
-            "RAW ZSL unavailable: not enough RAW buffers in this camera session"
 
         internal fun clampZslCapacityForReader(requestedFrameCount: Int, readerMaxImages: Int): Int {
             val roomForRing = readerMaxImages - RAW_PREVIEW_RESERVED_SLOTS - ZSL_REARM_OVERLAP_SLOTS
