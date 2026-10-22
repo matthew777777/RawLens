@@ -13,7 +13,7 @@ class ZslSelectedFrameCountTest {
         hdrPlus: HdrPlusSettings = hdrOff,
         configured: Int,
         format: CaptureFormat
-    ): Int = RawCameraController.zslSelectedFrameCountFor(
+    ): Int = ZslPolicy.zslSelectedFrameCountFor(
         hdrPlus, configured, format
     )
 
@@ -21,7 +21,7 @@ class ZslSelectedFrameCountTest {
         hdrPlus: HdrPlusSettings = hdrOff,
         configured: Int,
         format: CaptureFormat
-    ): Int = RawCameraController.availabilitySlotCountFor(
+    ): Int = ZslPolicy.availabilitySlotCountFor(
         hdrPlus, configured, format
     )
 

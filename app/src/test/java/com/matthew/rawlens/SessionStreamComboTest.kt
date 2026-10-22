@@ -6,8 +6,8 @@ package com.matthew.rawlens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
-import com.matthew.rawlens.RawCameraController.Companion.SessionStreamCombo
-import com.matthew.rawlens.RawCameraController.Companion.SessionStreamSize
+import com.matthew.rawlens.SessionStreamCombo
+import com.matthew.rawlens.SessionStreamSize
 
 class SessionStreamComboTest {
     private fun size(width: Int, height: Int) = SessionStreamSize(width, height)
@@ -24,7 +24,7 @@ class SessionStreamComboTest {
         previews: List<SessionStreamSize> = previewSizes,
         fullMaxImages: Int = 20,
         reducedMaxImages: Int = 8
-    ): List<SessionStreamCombo> = RawCameraController.selectSessionStreamCombos(
+    ): List<SessionStreamCombo> = SessionStreamSelection.selectSessionStreamCombos(
         raw, previews, fullMaxImages, reducedMaxImages
     )
 
@@ -65,15 +65,15 @@ class SessionStreamComboTest {
     fun fpsProbeVerdict() {
         // 45 sensor-timestamped frames: 30 fps streams pass, ~20 fps MTK
         // stalls trip the preview remedy; the 25 fps gate itself passes.
-        val fullRate = RawCameraController.rawFpsForProbeWindow(44, 44_000_000_000L / 30)
+        val fullRate = SessionStreamSelection.rawFpsForProbeWindow(44, 44_000_000_000L / 30)
         assertEquals(30.0, fullRate, 0.01)
-        assertEquals(false, RawCameraController.previewRequestNeededForFps(fullRate))
-        val stalled = RawCameraController.rawFpsForProbeWindow(44, 44_000_000_000L / 20)
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(fullRate))
+        val stalled = SessionStreamSelection.rawFpsForProbeWindow(44, 44_000_000_000L / 20)
         assertEquals(20.0, stalled, 0.01)
-        assertEquals(true, RawCameraController.previewRequestNeededForFps(stalled))
-        assertEquals(false, RawCameraController.previewRequestNeededForFps(25.0))
-        assertEquals(false, RawCameraController.previewRequestNeededForFps(
-            RawCameraController.rawFpsForProbeWindow(44, 0L)
+        assertEquals(true, SessionStreamSelection.previewRequestNeededForFps(stalled))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(25.0))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(
+            SessionStreamSelection.rawFpsForProbeWindow(44, 0L)
         ))
     }
 
@@ -83,10 +83,10 @@ class SessionStreamComboTest {
         // never on a degraded tail step.
         val ladder = combos()
         val full = ladder.indexOfFirst { it.label == "FULL" }
-        assertEquals(full, RawCameraController.firstPreviewComboIndex(ladder))
+        assertEquals(full, SessionStreamSelection.firstPreviewComboIndex(ladder))
         assertEquals(
             -1,
-            RawCameraController.firstPreviewComboIndex(combos(previews = emptyList()))
+            SessionStreamSelection.firstPreviewComboIndex(combos(previews = emptyList()))
         )
     }
 
@@ -96,7 +96,7 @@ class SessionStreamComboTest {
         // sensor aspect nor any viewfinder size.
         assertEquals(
             size(176, 144),
-            RawCameraController.selectFullPreviewSize(
+            SessionStreamSelection.selectFullPreviewSize(
                 listOf(size(1920, 1080), size(640, 480), size(176, 144))
             )
         )
@@ -195,7 +195,7 @@ class SessionStreamComboTest {
         // The fallback preview minimizes bandwidth but must stay usable as a
         // viewfinder: postage-stamp streams below 640x480 are skipped when a
         // larger matching-aspect stream exists.
-        val fallback = RawCameraController.selectFallbackPreviewSize(
+        val fallback = SessionStreamSelection.selectFallbackPreviewSize(
             listOf(
                 size(1920, 1080), size(1440, 1080), size(640, 480),
                 size(320, 240), size(176, 144)
@@ -207,7 +207,7 @@ class SessionStreamComboTest {
 
     @Test
     fun fallbackPreviewFallsBackToSmallestOverallWithoutMatchingAspect() {
-        val fallback = RawCameraController.selectFallbackPreviewSize(
+        val fallback = SessionStreamSelection.selectFallbackPreviewSize(
             listOf(size(1920, 1080), size(1280, 720)),
             size(4096, 3072)
         )
@@ -218,7 +218,7 @@ class SessionStreamComboTest {
     fun smallerRawSizeHalvesSensorArea() {
         assertEquals(
             size(4096, 3072),
-            RawCameraController.selectSmallerRawSize(
+            SessionStreamSelection.selectSmallerRawSize(
                 listOf(size(8192, 6144), size(4096, 3072), size(1024, 768))
             )
         )
@@ -227,62 +227,62 @@ class SessionStreamComboTest {
     @Test
     fun smallerRawSizeAbsentWhenNoHalfStepExists() {
         assertNull(
-            RawCameraController.selectSmallerRawSize(
+            SessionStreamSelection.selectSmallerRawSize(
                 listOf(size(4000, 3000), size(3900, 2900))
             )
         )
-        assertNull(RawCameraController.selectSmallerRawSize(listOf(size(4096, 3072))))
+        assertNull(SessionStreamSelection.selectSmallerRawSize(listOf(size(4096, 3072))))
     }
 
     @Test
     fun clampKeepsFullCapacity() {
         // Inverse of the reader sizing: a reader built for the capacity must
         // clamp back to exactly that capacity.
-        assertEquals(30, RawCameraController.clampZslCapacityForReader(30, 44))
-        assertEquals(6, RawCameraController.clampZslCapacityForReader(6, 20))
-        assertEquals(1, RawCameraController.clampZslCapacityForReader(1, 20))
+        assertEquals(30, SessionStreamSelection.clampZslCapacityForReader(30, 44))
+        assertEquals(6, SessionStreamSelection.clampZslCapacityForReader(6, 20))
+        assertEquals(1, SessionStreamSelection.clampZslCapacityForReader(1, 20))
     }
 
     @Test
     fun clampDisablesRingForReducedReader() {
         // MIN_ACQUIRED_RAW_IMAGES (burst 6 + 2) cannot host a ZSL ring plus
         // pairing headroom: the reduced session is viewfinder-only.
-        assertEquals(0, RawCameraController.clampZslCapacityForReader(30, 8))
-        assertEquals(0, RawCameraController.clampZslCapacityForReader(6, 8))
+        assertEquals(0, SessionStreamSelection.clampZslCapacityForReader(30, 8))
+        assertEquals(0, SessionStreamSelection.clampZslCapacityForReader(6, 8))
         // Between the pairing headroom and the JPEG floor no ring fits either:
         // max(capacity, 6) + 14 must stay within the reader.
-        assertEquals(0, RawCameraController.clampZslCapacityForReader(30, 18))
+        assertEquals(0, SessionStreamSelection.clampZslCapacityForReader(30, 18))
     }
 
     @Test
     fun readerDepthKeepsHeadroomBelowCap() {
         // Ring plus pairing (6) + transition (2) + spare (2) + rearm (4).
-        assertEquals(44, RawCameraController.fullReaderMaxImagesFor(30))
-        assertEquals(22, RawCameraController.fullReaderMaxImagesFor(8))
+        assertEquals(44, SessionStreamSelection.fullReaderMaxImagesFor(30))
+        assertEquals(22, SessionStreamSelection.fullReaderMaxImagesFor(8))
         // JPEG floor: tiny rings still size for six in-flight JPEG saves.
-        assertEquals(20, RawCameraController.fullReaderMaxImagesFor(1))
+        assertEquals(20, SessionStreamSelection.fullReaderMaxImagesFor(1))
     }
 
     @Test
     fun readerDepthClampsToHardCap() {
         // 59 + 14 headroom would request 73 buffers; the HAL queue hard cap
         // (61: session configure limit, abort past 62) wins instead.
-        assertEquals(61, RawCameraController.fullReaderMaxImagesFor(59))
-        assertEquals(61, RawCameraController.fullReaderMaxImagesFor(100))
+        assertEquals(61, SessionStreamSelection.fullReaderMaxImagesFor(59))
+        assertEquals(61, SessionStreamSelection.fullReaderMaxImagesFor(100))
     }
 
     @Test
     fun clampShrinksDeepRingIntoCappedReader() {
         // A 59-frame request on the capped 61-buffer reader keeps a 47-frame
         // ring (61 - 14 headroom): deep but provably inside the queue.
-        assertEquals(47, RawCameraController.clampZslCapacityForReader(59, 61))
+        assertEquals(47, SessionStreamSelection.clampZslCapacityForReader(59, 61))
     }
 
     @Test
     fun preferredSizeMovesItsCombosFirstStably() {
         val ladder = combos()
         val preferred = size(2048, 1536)
-        val ordered = RawCameraController.orderCombosForPreferredSize(ladder, preferred)
+        val ordered = SessionStreamSelection.orderCombosForPreferredSize(ladder, preferred)
         // Every preferred-raw combo leads, in ladder order; the rest follow
         // untouched, so HAL rejection still degrades exactly as before.
         assertEquals(
@@ -296,19 +296,19 @@ class SessionStreamComboTest {
     @Test
     fun preferredSizeFallsBackToAuto() {
         val ladder = combos()
-        assertEquals(ladder, RawCameraController.orderCombosForPreferredSize(ladder, null))
+        assertEquals(ladder, SessionStreamSelection.orderCombosForPreferredSize(ladder, null))
         assertEquals(
             ladder,
-            RawCameraController.orderCombosForPreferredSize(ladder, size(1, 1))
+            SessionStreamSelection.orderCombosForPreferredSize(ladder, size(1, 1))
         )
     }
 
     @Test
     fun sizePreferenceParsing() {
-        assertEquals(size(4080, 3072), RawCameraController.parseRawSizePreference("4080x3072"))
-        assertNull(RawCameraController.parseRawSizePreference(null))
-        assertNull(RawCameraController.parseRawSizePreference("huge"))
-        assertNull(RawCameraController.parseRawSizePreference("0x3072"))
+        assertEquals(size(4080, 3072), SessionStreamSelection.parseRawSizePreference("4080x3072"))
+        assertNull(SessionStreamSelection.parseRawSizePreference(null))
+        assertNull(SessionStreamSelection.parseRawSizePreference("huge"))
+        assertNull(SessionStreamSelection.parseRawSizePreference("0x3072"))
     }
 
     @Test
@@ -317,12 +317,12 @@ class SessionStreamComboTest {
         val raw12 = android.graphics.ImageFormat.RAW12
         val both = setOf(sensor, raw12)
         // Auto and unknown names stay unpacked: packed is strictly opt-in.
-        assertEquals(sensor, RawCameraController.resolveRawFormatPreference(null, both))
-        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("YUV", both))
-        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW14", both))
+        assertEquals(sensor, SessionStreamSelection.resolveRawFormatPreference(null, both))
+        assertEquals(sensor, SessionStreamSelection.resolveRawFormatPreference("YUV", both))
+        assertEquals(sensor, SessionStreamSelection.resolveRawFormatPreference("RAW14", both))
         // An opted-in format wins only where the map lists it.
-        assertEquals(raw12, RawCameraController.resolveRawFormatPreference("RAW12", both))
-        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW12", setOf(sensor)))
-        assertEquals(sensor, RawCameraController.resolveRawFormatPreference("RAW10", both))
+        assertEquals(raw12, SessionStreamSelection.resolveRawFormatPreference("RAW12", both))
+        assertEquals(sensor, SessionStreamSelection.resolveRawFormatPreference("RAW12", setOf(sensor)))
+        assertEquals(sensor, SessionStreamSelection.resolveRawFormatPreference("RAW10", both))
     }
 }

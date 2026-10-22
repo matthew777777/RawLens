@@ -20,7 +20,7 @@ class OpenRejectedLensFallbackTest {
         val routes = mapOf("3" to "3", "0" to "0")
         assertEquals(
             "0",
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 listOf("3", "0"), setOf("3"), routes::get
             )
         )
@@ -32,7 +32,7 @@ class OpenRejectedLensFallbackTest {
         val routes = mapOf("3/2" to "3", "3/4" to "3", "0" to "0")
         assertEquals(
             "0",
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 listOf("3/2", "3/4", "0"), setOf("3"), routes::get
             )
         )
@@ -43,7 +43,7 @@ class OpenRejectedLensFallbackTest {
         val routes = mapOf("0" to "0")
         assertEquals(
             "0",
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 listOf("bogus", "0"), emptySet(), routes::get
             )
         )
@@ -53,7 +53,7 @@ class OpenRejectedLensFallbackTest {
     fun noSurvivorMeansTerminalState() {
         val routes = mapOf("3/2" to "3", "0" to "0")
         assertNull(
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 listOf("3/2", "0"), setOf("3", "0"), routes::get
             )
         )
@@ -62,7 +62,7 @@ class OpenRejectedLensFallbackTest {
     @Test
     fun emptyCandidatesMeansTerminalState() {
         assertNull(
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 emptyList(), setOf("3"), { "0" }
             )
         )
@@ -73,7 +73,7 @@ class OpenRejectedLensFallbackTest {
         val routes = mapOf("0" to "0", "2" to "2")
         assertEquals(
             "0",
-            RawCameraController.nextLensAfterOpenRejected(
+            SessionRecoveryPolicy.nextLensAfterOpenRejected(
                 listOf("0", "2"), emptySet(), routes::get
             )
         )
@@ -84,8 +84,8 @@ class OpenRejectedLensFallbackTest {
     // healthy lens that had opened seconds earlier and wedged the VF ~50 s.
     @Test
     fun previouslyOpenedIdIsNeverDenylisted() {
-        assertFalse(RawCameraController.shouldDenylistOnOpenRejected("0", setOf("0", "6")))
-        assertTrue(RawCameraController.shouldDenylistOnOpenRejected("3", setOf("0", "6")))
-        assertTrue(RawCameraController.shouldDenylistOnOpenRejected("3", emptySet()))
+        assertFalse(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("0", setOf("0", "6")))
+        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("3", setOf("0", "6")))
+        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("3", emptySet()))
     }
 }

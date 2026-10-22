@@ -32,7 +32,7 @@ class FlashStillPolicyTest {
     fun flashOffResolvesPlainAeOn() {
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON,
-            RawCameraController.resolveStillFlashAeMode(off, fullAeModes, true)
+            FlashStillPolicy.resolveStillFlashAeMode(off, fullAeModes, true)
         )
     }
 
@@ -40,7 +40,7 @@ class FlashStillPolicyTest {
     fun flashUnavailableResolvesPlainAeOn() {
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON,
-            RawCameraController.resolveStillFlashAeMode(on, fullAeModes, false)
+            FlashStillPolicy.resolveStillFlashAeMode(on, fullAeModes, false)
         )
     }
 
@@ -48,7 +48,7 @@ class FlashStillPolicyTest {
     fun flashOnUsesAlwaysFlashWhenAdvertised() {
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH,
-            RawCameraController.resolveStillFlashAeMode(on, fullAeModes, true)
+            FlashStillPolicy.resolveStillFlashAeMode(on, fullAeModes, true)
         )
     }
 
@@ -56,7 +56,7 @@ class FlashStillPolicyTest {
     fun flashAutoUsesAutoFlashWhenAdvertised() {
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH,
-            RawCameraController.resolveStillFlashAeMode(auto, fullAeModes, true)
+            FlashStillPolicy.resolveStillFlashAeMode(auto, fullAeModes, true)
         )
     }
 
@@ -64,11 +64,11 @@ class FlashStillPolicyTest {
     fun unsupportedFlashAeModeFallsBackToPlainOn() {
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON,
-            RawCameraController.resolveStillFlashAeMode(on, noFlashAeModes, true)
+            FlashStillPolicy.resolveStillFlashAeMode(on, noFlashAeModes, true)
         )
         assertEquals(
             CaptureRequest.CONTROL_AE_MODE_ON,
-            RawCameraController.resolveStillFlashAeMode(auto, noFlashAeModes, true)
+            FlashStillPolicy.resolveStillFlashAeMode(auto, noFlashAeModes, true)
         )
     }
 
@@ -79,11 +79,11 @@ class FlashStillPolicyTest {
     fun manualExposureFiresSingle() {
         assertEquals(
             CaptureRequest.FLASH_MODE_SINGLE,
-            RawCameraController.resolveStillFlashMode(on, true, true)
+            FlashStillPolicy.resolveStillFlashMode(on, true, true)
         )
         assertEquals(
             CaptureRequest.FLASH_MODE_SINGLE,
-            RawCameraController.resolveStillFlashMode(auto, true, true)
+            FlashStillPolicy.resolveStillFlashMode(auto, true, true)
         )
     }
 
@@ -91,11 +91,11 @@ class FlashStillPolicyTest {
     fun hardwareAeNeverSetsFlashMode() {
         assertEquals(
             CaptureRequest.FLASH_MODE_OFF,
-            RawCameraController.resolveStillFlashMode(on, false, true)
+            FlashStillPolicy.resolveStillFlashMode(on, false, true)
         )
         assertEquals(
             CaptureRequest.FLASH_MODE_OFF,
-            RawCameraController.resolveStillFlashMode(auto, false, true)
+            FlashStillPolicy.resolveStillFlashMode(auto, false, true)
         )
     }
 
@@ -104,7 +104,7 @@ class FlashStillPolicyTest {
         for (mode in intArrayOf(off, on, auto)) {
             for (manual in booleanArrayOf(false, true)) {
                 for (available in booleanArrayOf(false, true)) {
-                    val resolved = RawCameraController.resolveStillFlashMode(mode, manual, available)
+                    val resolved = FlashStillPolicy.resolveStillFlashMode(mode, manual, available)
                     assertTrue(
                         resolved == CaptureRequest.FLASH_MODE_OFF ||
                             resolved == CaptureRequest.FLASH_MODE_SINGLE
@@ -114,7 +114,7 @@ class FlashStillPolicyTest {
         }
         assertEquals(
             CaptureRequest.FLASH_MODE_OFF,
-            RawCameraController.resolveStillFlashMode(off, true, true)
+            FlashStillPolicy.resolveStillFlashMode(off, true, true)
         )
     }
 
@@ -123,25 +123,25 @@ class FlashStillPolicyTest {
 
     @Test
     fun precaptureOnlyForAeDrivenFlash() {
-        assertTrue(RawCameraController.needsFlashPrecapture(false, on, fullAeModes, true, false))
-        assertTrue(RawCameraController.needsFlashPrecapture(false, auto, fullAeModes, true, false))
+        assertTrue(FlashStillPolicy.needsFlashPrecapture(false, on, fullAeModes, true, false))
+        assertTrue(FlashStillPolicy.needsFlashPrecapture(false, auto, fullAeModes, true, false))
     }
 
     @Test
     fun noPrecaptureWhenOffOrUnavailable() {
-        assertFalse(RawCameraController.needsFlashPrecapture(false, off, fullAeModes, true, false))
-        assertFalse(RawCameraController.needsFlashPrecapture(false, on, fullAeModes, false, false))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(false, off, fullAeModes, true, false))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(false, on, fullAeModes, false, false))
     }
 
     @Test
     fun noPrecaptureForManualOrLegacy() {
-        assertFalse(RawCameraController.needsFlashPrecapture(true, on, fullAeModes, true, false))
-        assertFalse(RawCameraController.needsFlashPrecapture(false, on, fullAeModes, true, true))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(true, on, fullAeModes, true, false))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(false, on, fullAeModes, true, true))
     }
 
     @Test
     fun noPrecaptureWhenFlashAeModeUnsupported() {
-        assertFalse(RawCameraController.needsFlashPrecapture(false, on, noFlashAeModes, true, false))
-        assertFalse(RawCameraController.needsFlashPrecapture(false, auto, noFlashAeModes, true, false))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(false, on, noFlashAeModes, true, false))
+        assertFalse(FlashStillPolicy.needsFlashPrecapture(false, auto, noFlashAeModes, true, false))
     }
 }

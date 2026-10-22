@@ -16,7 +16,7 @@ class RawPreviewCompatRecoveryTest {
     // stream must escalate once to a compat session rebuild instead.
     @Test
     fun stillbornStreamEscalatesAfterOneRequestRecovery() {
-        assertTrue(RawCameraController.shouldEscalateRawPreviewToCompatSession(
+        assertTrue(SessionRecoveryPolicy.shouldEscalateRawPreviewToCompatSession(
             failures = 1, deliveredImages = 0, compatMode = false
         ))
     }
@@ -25,7 +25,7 @@ class RawPreviewCompatRecoveryTest {
     fun firstStarvationStaysRequestLevel() {
         // One request-level retry is cheap prudence against slow HAL startup
         // (long exposures legitimately delay the first buffer for seconds).
-        assertFalse(RawCameraController.shouldEscalateRawPreviewToCompatSession(
+        assertFalse(SessionRecoveryPolicy.shouldEscalateRawPreviewToCompatSession(
             failures = 0, deliveredImages = 0, compatMode = false
         ))
     }
@@ -34,14 +34,14 @@ class RawPreviewCompatRecoveryTest {
     fun flowingStreamNeverEscalates() {
         // Buffers arriving means the session is fine: starvation is a
         // viewfinder/rendering problem, not a session problem.
-        assertFalse(RawCameraController.shouldEscalateRawPreviewToCompatSession(
+        assertFalse(SessionRecoveryPolicy.shouldEscalateRawPreviewToCompatSession(
             failures = 4, deliveredImages = 12, compatMode = false
         ))
     }
 
     @Test
     fun escalationFiresAtMostOnce() {
-        assertFalse(RawCameraController.shouldEscalateRawPreviewToCompatSession(
+        assertFalse(SessionRecoveryPolicy.shouldEscalateRawPreviewToCompatSession(
             failures = 3, deliveredImages = 0, compatMode = true
         ))
     }
@@ -52,7 +52,7 @@ class RawPreviewCompatRecoveryTest {
     // combos instead of parking on a black viewfinder.
     @Test
     fun stillbornInCompatAdvancesLadder() {
-        assertTrue(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertTrue(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 1, deliveredImages = 0, compatMode = true,
             altRouteAvailable = false, comboIndex = 0, comboCount = 3
         ))
@@ -62,7 +62,7 @@ class RawPreviewCompatRecoveryTest {
     fun stillbornFirstStarvationStaysRequestLevel() {
         // Same cheap prudence as the compat escalation: one request-level
         // retry before paying for a session rebuild.
-        assertFalse(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertFalse(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 0, deliveredImages = 0, compatMode = true,
             altRouteAvailable = false, comboIndex = 0, comboCount = 3
         ))
@@ -72,7 +72,7 @@ class RawPreviewCompatRecoveryTest {
     fun stillbornFlowingStreamNeverAdvances() {
         // Buffers arriving means the session is fine: starvation is a
         // viewfinder/rendering problem, not a session problem.
-        assertFalse(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertFalse(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 4, deliveredImages = 12, compatMode = true,
             altRouteAvailable = false, comboIndex = 0, comboCount = 3
         ))
@@ -82,7 +82,7 @@ class RawPreviewCompatRecoveryTest {
     fun stillbornPreCompatEscalationOwnsRecovery() {
         // Before compat mode the compat rebuild owns stillborn recovery;
         // the ladder only runs once that rebuild also delivers nothing.
-        assertFalse(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertFalse(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 3, deliveredImages = 0, compatMode = false,
             altRouteAvailable = false, comboIndex = 0, comboCount = 3
         ))
@@ -90,7 +90,7 @@ class RawPreviewCompatRecoveryTest {
 
     @Test
     fun stillbornExhaustedLadderStaysTerminal() {
-        assertFalse(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertFalse(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 3, deliveredImages = 0, compatMode = true,
             altRouteAvailable = false, comboIndex = 2, comboCount = 3
         ))
@@ -100,7 +100,7 @@ class RawPreviewCompatRecoveryTest {
     fun stillbornAltRouteAvailableAdvancesPastLastCombo() {
         // The direct-physical route is a ladder step of its own: with no
         // combos left but an untried route, recovery still advances.
-        assertTrue(RawCameraController.shouldAdvanceStillbornSessionLadder(
+        assertTrue(SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
             failures = 2, deliveredImages = 0, compatMode = true,
             altRouteAvailable = true, comboIndex = 2, comboCount = 3
         ))
@@ -112,7 +112,7 @@ class RawPreviewCompatRecoveryTest {
     // escalation spends the plan axis on a usage problem.
     @Test
     fun stillbornGpuTrialDisarmsAfterOneRequestRecovery() {
-        assertTrue(RawCameraController.shouldDisarmVfGpuReaderTrial(
+        assertTrue(SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(
             failures = 1, deliveredImages = 0, trialArmed = true
         ))
     }
@@ -121,7 +121,7 @@ class RawPreviewCompatRecoveryTest {
     fun gpuTrialFirstStarvationStaysRequestLevel() {
         // Same cheap prudence as the other stillborn rungs: one
         // request-level retry before paying for a session rebuild.
-        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+        assertFalse(SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(
             failures = 0, deliveredImages = 0, trialArmed = true
         ))
     }
@@ -130,7 +130,7 @@ class RawPreviewCompatRecoveryTest {
     fun gpuTrialFlowingStreamNeverDisarms() {
         // Buffers arriving means the trial allocation works on this HAL:
         // starvation is a viewfinder/rendering problem, not a usage problem.
-        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+        assertFalse(SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(
             failures = 4, deliveredImages = 12, trialArmed = true
         ))
     }
@@ -139,7 +139,7 @@ class RawPreviewCompatRecoveryTest {
     fun gpuTrialDisarmFiresAtMostOnce() {
         // Once disarmed the rung is spent: a stillborn disarmed session is
         // the compat escalation's (then the ladder's), never a re-disarm.
-        assertFalse(RawCameraController.shouldDisarmVfGpuReaderTrial(
+        assertFalse(SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(
             failures = 3, deliveredImages = 0, trialArmed = false
         ))
     }
@@ -152,8 +152,8 @@ class RawPreviewCompatRecoveryTest {
         assertEquals(
             HardwareBuffer.USAGE_CPU_READ_OFTEN or
                 HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                RawCameraController.GRALLOC_USAGE_HW_CAMERA_WRITE,
-            RawCameraController.gpuReaderProbeUsage()
+                SessionRecoveryPolicy.GRALLOC_USAGE_HW_CAMERA_WRITE,
+            SessionRecoveryPolicy.gpuReaderProbeUsage()
         )
     }
 }

@@ -699,7 +699,7 @@ class RawCameraController(
                 // An ID that opened before reporting unknown-device is a camera
                 // service hiccup, not a bad lens: never denylist it, and stop the
                 // cascade (the next lens would fail the same way). Retry instead.
-                if (!shouldDenylistOnOpenRejected(openCameraId, ladder.openedOnceOpenIds) &&
+                if (!SessionRecoveryPolicy.shouldDenylistOnOpenRejected(openCameraId, ladder.openedOnceOpenIds) &&
                     scheduleOpenRejectionRetry()
                 ) {
                     Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
@@ -715,7 +715,7 @@ class RawCameraController(
                 } catch (_: Exception) {
                     // Best effort: a verdict write must never break the fallback path.
                 }
-                val fallback = nextLensAfterOpenRejected(candidates, ladder.unopenableOpenIds, ::resolveOpenCameraId)
+                val fallback = SessionRecoveryPolicy.nextLensAfterOpenRejected(candidates, ladder.unopenableOpenIds, ::resolveOpenCameraId)
                 if (fallback == null) {
                     Log.w(LOG_TAG, "No openable RAW lens remains (candidates=$candidates rejected=${ladder.unopenableOpenIds})")
                     if (!scheduleOpenRejectionRetry()) onState("CAMERA UNAVAILABLE")
@@ -870,12 +870,12 @@ class RawCameraController(
         // rebuilds the session with a degraded combo instead of wedging on
         // SESSION ERROR.
         val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
-        val combos = orderCombosForPreferredSize(
-            selectSessionStreamCombos(
+        val combos = SessionStreamSelection.orderCombosForPreferredSize(
+            SessionStreamSelection.selectSessionStreamCombos(
                 mapRawSizes,
                 previewChoices.map { SessionStreamSize(it.width, it.height) },
                 fullReaderMaxImages(),
-                MIN_ACQUIRED_RAW_IMAGES
+                SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
             ),
             preferredRawSize(selectedCameraId, mapRawSizes)
         )
@@ -889,7 +889,7 @@ class RawCameraController(
         // raw-only jump straight to the first preview combo; everyone else
         // starts raw-only (the probe below renders the verdict once).
         if (ladder.comboIndex == 0 && ispPreviewRequestNeeded(selectedCameraId)) {
-            firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
+            SessionStreamSelection.firstPreviewComboIndex(combos).takeIf { it > 0 }?.let { ladder.comboIndex = it }
         }
         sessionOffersPreview = combos.any { it.preview != null }
         val combo = combos[ladder.comboIndex]
@@ -903,7 +903,7 @@ class RawCameraController(
             Log.w(LOG_TAG, "Preview remedy refused by HAL; raw-only verdict persisted")
         }
         val rawSize = Size(combo.raw.width, combo.raw.height)
-        rawZslCapacity = clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
+        rawZslCapacity = SessionStreamSelection.clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
         if (rawZslRequested && rawZslCapacity == 0 && calculateRawZslCapacity(rawSize) > 0) {
             // Degraded combo: the reduced reader cannot host a ZSL ring, so this
             // session is viewfinder plus forward capture. Latched like any
@@ -998,7 +998,7 @@ class RawCameraController(
         // this camera has no persisted verdict. Any rebuild disarms via this
         // reset; degraded raw-only tail steps never arm (their preview steps
         // were already rejected — jumping back would loop the ladder).
-        fpsProbeArmed = combo.label == RAW_ONLY_FULL_LABEL &&
+        fpsProbeArmed = combo.label == SessionStreamSelection.RAW_ONLY_FULL_LABEL &&
             selectedCameraId != null && !ispPreviewVerdictKnown(selectedCameraId)
         fpsProbeCameraId = selectedCameraId
         fpsProbeFirstNs = 0L
@@ -1628,11 +1628,11 @@ class RawCameraController(
         val rawSizes = map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         if (rawSizes.isEmpty()) return 1
-        return selectSessionStreamCombos(
+        return SessionStreamSelection.selectSessionStreamCombos(
             rawSizes.map { SessionStreamSize(it.width, it.height) },
             previewSizes.map { SessionStreamSize(it.width, it.height) },
             fullReaderMaxImages(),
-            MIN_ACQUIRED_RAW_IMAGES
+            SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
         ).size.coerceAtLeast(1)
     }
 
@@ -1642,7 +1642,7 @@ class RawCameraController(
      * the HAL queue hard cap so deep rings degrade to a smaller effective
      * ring instead of a rejected session or a dead process.
      */
-    private fun fullReaderMaxImages(): Int = fullReaderMaxImagesFor(rawZslFrameCount)
+    private fun fullReaderMaxImages(): Int = SessionStreamSelection.fullReaderMaxImagesFor(rawZslFrameCount)
 
     /**
      * Bounded reopen after an open rejection that smells transient: an ID
@@ -1735,8 +1735,8 @@ class RawCameraController(
             Log.i(LOG_TAG, "ISP probe aborted (capture inside window); re-arms next session")
             return
         }
-        val fps = rawFpsForProbeWindow(ISP_PROBE_FRAMES - 1, endNs - fpsProbeFirstNs)
-        val needed = previewRequestNeededForFps(fps)
+        val fps = SessionStreamSelection.rawFpsForProbeWindow(ISP_PROBE_FRAMES - 1, endNs - fpsProbeFirstNs)
+        val needed = SessionStreamSelection.previewRequestNeededForFps(fps)
         persistIspPreviewVerdict(cameraId, needed)
         Log.i(
             LOG_TAG,
@@ -1757,12 +1757,11 @@ class RawCameraController(
      * Any framework failure refuses (safe direction: CPU-only reader).
      */
     private fun vfGpuReaderPreflightOk(width: Int, height: Int): Boolean = try {
-        HardwareBuffer.isSupported(width, height, HAL_PIXEL_FORMAT_RAW16, 1, gpuReaderProbeUsage())
+        HardwareBuffer.isSupported(width, height, HAL_PIXEL_FORMAT_RAW16, 1, SessionRecoveryPolicy.gpuReaderProbeUsage())
     } catch (_: Exception) {
         false
     }
 
-    /** Persist the GPU-usage starvation verdict (device-local, never backed up). */
     /** Persisted R1 verdict: true once a pipelined burst failed on this device. */
     private fun pipelinedBurstsRefusedPersisted(): Boolean = try {
         context.getSharedPreferences(STILL_BURST_PREFS, Context.MODE_PRIVATE)
@@ -1784,6 +1783,7 @@ class RawCameraController(
         }
     }
 
+    /** Persist the GPU-usage starvation verdict (device-local, never backed up). */
     private fun persistVfGpuReaderVerdict() {
         try {
             context.getSharedPreferences(VF_GPU_READER_PREFS, Context.MODE_PRIVATE)
@@ -1798,7 +1798,7 @@ class RawCameraController(
         // A stillborn GPU-usage trial resolves first: the usage axis, not
         // the plan axis, starved this session. Disarm and rebuild with the
         // default reader; the first delivered image persists the verdict.
-        if (shouldDisarmVfGpuReaderTrial(rawPreviewFailures, rawStreamImages, vfGpuReaderTrialArmed)) {
+        if (SessionRecoveryPolicy.shouldDisarmVfGpuReaderTrial(rawPreviewFailures, rawStreamImages, vfGpuReaderTrialArmed)) {
             vfGpuReaderTrialArmed = false
             vfGpuTrialConvicted = true
             // The usage axis changed: retry the full combo under it before
@@ -1818,7 +1818,7 @@ class RawCameraController(
         // itself (Samsung: request retries 1..4 change nothing while zero RAW
         // buffers arrive). Escalate once to a compat session, then let
         // request-level recovery run its course there.
-        if (shouldEscalateRawPreviewToCompatSession(rawPreviewFailures, rawStreamImages, rawStreamCompatMode)) {
+        if (SessionRecoveryPolicy.shouldEscalateRawPreviewToCompatSession(rawPreviewFailures, rawStreamImages, rawStreamCompatMode)) {
             rawStreamCompatMode = true
             // The plan axis changed (hinted -> DEFAULT): retry the full combo
             // under it before degrading sizes again. Runs on the camera thread
@@ -1844,7 +1844,7 @@ class RawCameraController(
         val altAvailable = ladder.altRouteAvailable(sessionAltRoute?.openCameraId)
         val comboCount = sessionPrimaryRoute
             ?.let { sessionComboCount(it.characteristics) } ?: 0
-        if (session != null && shouldAdvanceStillbornSessionLadder(
+        if (session != null && SessionRecoveryPolicy.shouldAdvanceStillbornSessionLadder(
                 rawPreviewFailures, rawStreamImages, rawStreamCompatMode,
                 altAvailable, ladder.comboIndex, comboCount
             ) && advanceSessionLadder(
@@ -2368,7 +2368,7 @@ class RawCameraController(
             val need = zslSelectedFrameCount(outputFormat)
             // HDR+ merges to one artifact: reserve one slot, not the burst.
             // Future SR hook: include SR in the merge-to-one slot accounting.
-            val needSlots = availabilitySlotCountFor(
+            val needSlots = ZslPolicy.availabilitySlotCountFor(
                 hdrPlusSettings,
                 rawZslFrameCount, outputFormat, mfsrSettings
             )
@@ -2520,11 +2520,11 @@ class RawCameraController(
      * storms that the cooldown just parked.
      */
     private fun zslRestartFitsReader(): Boolean = CaptureQueueCapacity.ringFits(
-        pendingFrameSaveCount.get(), rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS
+        pendingFrameSaveCount.get(), rawZslCapacity, rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS
     )
 
     private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int =
-        zslSelectedFrameCountFor(
+        ZslPolicy.zslSelectedFrameCountFor(
             hdrPlusSettings,
             rawZslFrameCount, outputFormat
         )
@@ -2626,7 +2626,7 @@ class RawCameraController(
         // Taking ownership from the ring does not change the sensor request.
         // Keep the stream and its epoch intact when refill and saves fit together.
         if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + selected.size,
-                rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                rawZslCapacity, rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)) {
             updateRepeatingRequest(allowRawZsl = false)
         }
         activeFramesRemaining.set(0)
@@ -2662,7 +2662,7 @@ class RawCameraController(
         if (selected.isEmpty()) return false
         if (selected.size < count) return false
         if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + selected.size,
-                rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                rawZslCapacity, rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)) {
             updateRepeatingRequest(allowRawZsl = false)
         }
         activeFramesRemaining.set(0)
@@ -3279,7 +3279,7 @@ class RawCameraController(
             // Callback routing already diverts forward frames from the ring. Replacing
             // the identical repeating request drains preview and discards its metadata.
             if (!CaptureQueueCapacity.ringFits(pendingFrameSaveCount.get() + need,
-                    rawZslCapacity, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)) {
+                    rawZslCapacity, rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)) {
                 updateRepeatingRequest(allowRawZsl = false)
             }
             scheduleCaptureTimeout(captureId, remainder * maxOf(lastExposureNanos / 1_000_000L, 100L))
@@ -5420,7 +5420,7 @@ class RawCameraController(
 
     private fun resolveStillAeMode(manualExposure: Boolean, aeModes: IntArray): Int {
         if (manualExposure) return CaptureRequest.CONTROL_AE_MODE_OFF
-        return resolveStillFlashAeMode(
+        return FlashStillPolicy.resolveStillFlashAeMode(
             flashStillMode.ordinal,
             aeModes,
             isFlashAvailable()
@@ -5428,7 +5428,7 @@ class RawCameraController(
     }
 
     private fun resolveStillFlashModeForRequest(manualExposure: Boolean): Int =
-        resolveStillFlashMode(flashStillMode.ordinal, manualExposure, isFlashAvailable())
+        FlashStillPolicy.resolveStillFlashMode(flashStillMode.ordinal, manualExposure, isFlashAvailable())
 
     /**
      * Flash still entry (P0). Flash bypasses the ZSL ring and merge queues:
@@ -5443,7 +5443,7 @@ class RawCameraController(
         if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
         val manualExposure = selectedIso != null || selectedExposureNanos != null
         val aeModes = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: IntArray(0)
-        if (needsFlashPrecapture(
+        if (FlashStillPolicy.needsFlashPrecapture(
                 manualExposure,
                 flashStillMode.ordinal,
                 aeModes,
@@ -6429,7 +6429,7 @@ class RawCameraController(
             MAX_IN_FLIGHT_DNG_SAVES
         }
         return CaptureQueueCapacity.accepts(pendingFrameSaveCount.get(), requiredSaveSlots,
-            limit, rawReaderMaxImages, RAW_PREVIEW_RESERVED_SLOTS)
+            limit, rawReaderMaxImages, SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS)
     }
 
     private fun refreshCaptureAvailability() {
@@ -6439,7 +6439,7 @@ class RawCameraController(
         // except merges, which save one artifact (one slot, like admission).
         val hasCapacity = if (rawZslRequested) {
             hasProcessingCapacity(
-                availabilitySlotCountFor(
+                ZslPolicy.availabilitySlotCountFor(
                     hdrPlusSettings,
                     rawZslFrameCount, captureFormat
                 ),
@@ -6497,7 +6497,7 @@ class RawCameraController(
      * [MAX_ZSL_FRAMES]) for any non-empty size, never a memory-derived
      * subset — shrinking it would silently drop requested ZSL coverage.
      * The ImageReader is sized with pairing headroom on top of the ring
-     * (see [ZSL_PAIR_WINDOW_SLOTS]); [clampZslCapacityForReader] applies
+     * (see [ZSL_PAIR_WINDOW_SLOTS]); [SessionStreamSelection.clampZslCapacityForReader] applies
      * the reader limit.
      */
     private fun calculateRawZslCapacity(rawSize: Size): Int =
@@ -6520,7 +6520,7 @@ class RawCameraController(
         ).orEmpty()
         // Camera2 only accepts advertised ranges, so map the fixed-rate match back
         // to the exact published Range object.
-        val selected = selectRawZslFpsRange(
+        val selected = ZslPolicy.selectRawZslFpsRange(
             ranges.map { it.lower..it.upper }, RAW_ZSL_TARGET_FPS
         )?.let { match ->
             ranges.firstOrNull { it.lower == match.first && it.upper == match.last }
@@ -7085,11 +7085,6 @@ class RawCameraController(
     }
 
     /**
-     * Validated size preference for this route: parsed, then checked
-     * against the live stream map so a stale choice degrades to auto
-     * instead of wedging the session.
-     */
-    /**
      * Session stream format for this route: the opted-in packed format when
      * the map lists it, else `RAW_SENSOR`. Stale choices log once and behave
      * exactly like auto.
@@ -7106,18 +7101,23 @@ class RawCameraController(
         ).filter { format ->
             runCatching { map.getOutputSizes(format)?.isNotEmpty() == true }.getOrDefault(false)
         }.toSet()
-        val resolved = resolveRawFormatPreference(cameraId?.let(rawFormatPreferenceStore::get), available)
+        val resolved = SessionStreamSelection.resolveRawFormatPreference(cameraId?.let(rawFormatPreferenceStore::get), available)
         if (resolved != android.graphics.ImageFormat.RAW_SENSOR) {
             Log.i(LOG_TAG, "Packed RAW session format $resolved for $cameraId")
         }
         return resolved
     }
 
+    /**
+     * Validated size preference for this route: parsed, then checked
+     * against the live stream map so a stale choice degrades to auto
+     * instead of wedging the session.
+     */
     private fun preferredRawSize(
         cameraId: String?,
         mapSizes: List<SessionStreamSize>
     ): SessionStreamSize? {
-        val parsed = parseRawSizePreference(cameraId?.let(rawSizePreferenceStore::get))
+        val parsed = SessionStreamSelection.parseRawSizePreference(cameraId?.let(rawSizePreferenceStore::get))
             ?: return null
         if (mapSizes.none { it == parsed }) {
             Log.i(LOG_TAG, "Ignoring stale RAW size ${parsed.width}x${parsed.height} for $cameraId")
@@ -7198,7 +7198,6 @@ class RawCameraController(
     )
 
     companion object {
-        private const val ASPECT_RATIO_TOLERANCE = 0.015
         private const val CAPTURE_TIMEOUT_MS = 8_000L
         private const val PAIR_TIMEOUT_MS = 5_000L
         /** P0 flash precapture: convergence wait ceiling and poll cadence. */
@@ -7212,15 +7211,7 @@ class RawCameraController(
         /** In-flight pairing headroom inside ImageReader maxImages: covers the
          * ZSL_PAIR_TIMEOUT_MS window (~5 frames at 30 fps) plus one spare slot,
          * so the ring itself can always fill to its configured capacity. */
-        private const val ZSL_PAIR_WINDOW_SLOTS = 6
-        /** Overlap/lag headroom inside ImageReader maxImages: absorbs result-lag
-         * spikes while the ZSL ring streams at full rate (plus the pairing
-         * window and transition slack), so transient HAL stalls degrade to
-         * dropped ring frames instead of overflow storms. Small enough (+4
-         * full-res buffers) to stay clear of gralloc/Mali pressure. The ring
-         * itself is only ever restarted with zero saves held (see
-         * resumeRawZslIfIdle), so these slots never cover save-held Images. */
-        private const val ZSL_REARM_OVERLAP_SLOTS = 4
+        internal const val ZSL_PAIR_WINDOW_SLOTS = 6
         private const val ZSL_SELECTION_WAIT_MS = 120L
         private const val ZSL_RECOVERY_WAIT_MS = 3_000L
         /**
@@ -7237,27 +7228,15 @@ class RawCameraController(
         // Configured ZSL ring ceiling. 59 is the deepest full-resolution RAW
         // ring verified on the reference HAL (Xiaomi 25080RABDG/MT6878 at
         // 30 fps, zero failures); the reader hard cap plus
-        // clampZslCapacityForReader shrink the effective ring to whatever the
+        // SessionStreamSelection.clampZslCapacityForReader shrink the effective ring to whatever the
         // HAL queue fits, so requesting 59 never over-allocates elsewhere.
         private const val MAX_ZSL_FRAMES = 59
-        // Hard ceiling for the RAW ImageReader queue. The reference HAL
-        // configures a session with at most 61 RAW buffers and aborts the
-        // process when ImageReader exceeds 62, so the computed depth
-        // (ring + pairing + transition + rearm headroom) clamps here.
-        private const val READER_MAXIMAGES_HARD_CAP = 61
         private const val RAW_ZSL_TARGET_FPS = 30
         /** RAW target on every repeating request (MotionCam RAW-viewfinder port): the
          * ZSL ring fills at the full requested 30 fps. Raise above 1 only to trade RAW
          * rate for preview smoothness on HALs whose full-resolution RAW readout is slow. */
         private const val RAW_ZSL_REQUEST_PERIOD = 1
 
-        /**
-         * Pure MotionCam-style fixed-rate selection: prefer the exact fixed
-         * [requestedFps, requestedFps] range, then the narrowest range containing it,
-         * then the fastest advertised range. Plain [IntRange] keeps this unit-testable
-         * without the Android framework; the caller maps the match back to the
-         * advertised Camera2 range.
-         */
         /**
          * Shared gate for the live RAW streams (ZSL ring, histogram-only, ETTR).
          * Queued DNG/JPEG saves deliberately do not appear here: their buffers are
@@ -7271,156 +7250,6 @@ class RawCameraController(
             captureActive: Boolean
         ): Boolean = requested && !disabledForSession && readerReady && !captureActive
 
-        internal fun selectRawZslFpsRange(
-            ranges: List<IntRange>,
-            requestedFps: Int
-        ): IntRange? {
-            if (ranges.isEmpty()) return null
-            return ranges
-                .filter { it.last >= requestedFps }
-                .minWithOrNull(
-                    compareBy<IntRange>(
-                        { if (it.first >= requestedFps) 0 else 1 },
-                        { it.last - requestedFps },
-                        { it.last - it.first },
-                        { -it.first }
-                    )
-                ) ?: ranges.maxWithOrNull(compareBy<IntRange> { it.last }.thenBy { it.first })
-        }
-
-        /**
-         * Stillborn-stream escalation: request-level RAW preview recovery already
-         * had its chance ([RAW_PREVIEW_COMPAT_ESCALATION_FAILURES] attempts) and
-         * zero repeating buffers arrived, so only a session rebuild can help.
-         * Fires at most once: compat mode sticks once engaged.
-         */
-        internal fun shouldEscalateRawPreviewToCompatSession(
-            failures: Int,
-            deliveredImages: Int,
-            compatMode: Boolean
-        ): Boolean = !compatMode && deliveredImages == 0 &&
-            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
-
-        /**
-         * GPU-reader trial disarm: the RAW reader trial with GPU-sampled
-         * usage delivered zero buffers after request-level recovery had its
-         * chance, so the allocation itself starves this HAL (MT6878: the
-         * session configures, zero images arrive). Disarm once and rebuild
-         * with the default CPU-only reader; the first delivered image of
-         * the disarmed session persists the verdict, so later cold starts
-         * skip the stillborn attempt entirely. Fires before the compat
-         * escalation: the usage axis resolves before the plan axis.
-         */
-        internal fun shouldDisarmVfGpuReaderTrial(
-            failures: Int,
-            deliveredImages: Int,
-            trialArmed: Boolean
-        ): Boolean = trialArmed && deliveredImages == 0 &&
-            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES
-
-        /**
-         * Still-flash AE resolution (P0/P3, pure for unit tests). Manual
-         * exposure keeps AE OFF (the flash fires via FLASH SINGLE, not the AE
-         * unit). Hardware AE uses the advertised flash AE mode matching the
-         * still-flash setting, falling back to plain AE ON when the HAL does
-         * not advertise it. Never returns TORCH: TORCH is preview-assist only.
-         *
-         * @param flashModeOrdinal [FlashStillMode] ordinal (OFF/ON/AUTO) so
-         * tests stay off the Android framework; only primitive args in/out.
-         */
-        internal fun resolveStillFlashAeMode(
-            flashModeOrdinal: Int,
-            availableAeModes: IntArray,
-            flashAvailable: Boolean
-        ): Int {
-            if (!flashAvailable || flashModeOrdinal == FlashStillMode.OFF.ordinal) {
-                return android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON
-            }
-            val want = if (flashModeOrdinal == FlashStillMode.ON.ordinal) {
-                android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-            } else {
-                android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH
-            }
-            return if (availableAeModes.contains(want)) {
-                want
-            } else {
-                android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON
-            }
-        }
-
-        /**
-         * Precapture gate (P0/P3, pure for unit tests). Metering precapture is
-         * only meaningful for AE-driven flash on a full-capability HAL: manual
-         * exposure fires an unmetered SINGLE, LEGACY HALs meter best-effort
-         * without a precapture round-trip, and an unadvertised flash AE mode
-         * means the HAL cannot meter flash at all.
-         */
-        /**
-         * Still FLASH_MODE resolution (P0, pure for unit tests): SINGLE only
-         * for manual exposure (AE OFF, unmetered fire); OFF everywhere else —
-         * under hardware AE the flash AE mode drives the unit. TORCH is never
-         * returned: TORCH is preview-assist only and would smear a still.
-         */
-        internal fun resolveStillFlashMode(
-            flashModeOrdinal: Int,
-            manualExposure: Boolean,
-            flashAvailable: Boolean
-        ): Int {
-            if (!flashAvailable || flashModeOrdinal == FlashStillMode.OFF.ordinal) {
-                return android.hardware.camera2.CaptureRequest.FLASH_MODE_OFF
-            }
-            if (manualExposure) return android.hardware.camera2.CaptureRequest.FLASH_MODE_SINGLE
-            return android.hardware.camera2.CaptureRequest.FLASH_MODE_OFF
-        }
-
-        internal fun needsFlashPrecapture(
-            manualExposure: Boolean,
-            flashModeOrdinal: Int,
-            availableAeModes: IntArray,
-            flashAvailable: Boolean,
-            hardwareLevelLegacy: Boolean
-        ): Boolean {
-            if (!flashAvailable || flashModeOrdinal == FlashStillMode.OFF.ordinal) return false
-            if (manualExposure || hardwareLevelLegacy) return false
-            val want = if (flashModeOrdinal == FlashStillMode.ON.ordinal) {
-                android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
-            } else {
-                android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH
-            }
-            return availableAeModes.contains(want)
-        }
-
-        /**
-         * Allocator probe usage for the GPU-reader trial: exactly the trial
-         * reader usage plus the camera-write producer bit, so a refusal
-         * means the trial allocation itself is unbackable (a looser
-         * superset would risk false refusals that wrongly disarm a working
-         * trial). No GPU_DATA_BUFFER: unproven need, extra refusal surface.
-         */
-        internal fun gpuReaderProbeUsage(): Long =
-            HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                GRALLOC_USAGE_HW_CAMERA_WRITE
-
-        /**
-         * Stillborn-in-compat escalation: the compat rebuild already proved
-         * request toggles cannot revive this session, so a RAW stream that
-         * still delivers zero buffers advances the session fallback ladder
-         * (direct-physical route, then degraded combos) instead of parking
-         * on a black viewfinder. Fires only after the same cheap
-         * request-level retry the compat escalation allows, and never while
-         * buffers flow (a rendering problem) or past the last combo.
-         */
-        internal fun shouldAdvanceStillbornSessionLadder(
-            failures: Int,
-            deliveredImages: Int,
-            compatMode: Boolean,
-            altRouteAvailable: Boolean,
-            comboIndex: Int,
-            comboCount: Int
-        ): Boolean = compatMode && deliveredImages == 0 &&
-            failures >= RAW_PREVIEW_COMPAT_ESCALATION_FAILURES &&
-            (altRouteAvailable || comboIndex + 1 < comboCount)
-
         /**
          * Bit depth implied by a white level (1023 -> 10, 4095 -> 12,
          * 16383 -> 14, 65535 -> 16); 10 when the key is missing. Shared by
@@ -7430,279 +7259,6 @@ class RawCameraController(
         internal fun whiteLevelBitDepth(whiteLevel: Int?): Int =
             whiteLevel?.let { 32 - Integer.numberOfLeadingZeros(it) } ?: 10
 
-        /**
-         * Next-lens fallback after [android.hardware.camera2.CameraManager.openCamera]
-         * rejects an open ID as an unknown device. Rejection is deterministic
-         * per open ID, so every candidate whose route opens through a rejected
-         * ID is skipped together (composite siblings sharing one logical
-         * camera die with it); unresolvable candidates are skipped as well.
-         * Null means no fallback remains and the open must surface a terminal
-         * state instead of retrying.
-         */
-        internal fun nextLensAfterOpenRejected(
-            candidates: List<String>,
-            rejectedOpenIds: Set<String>,
-            openIdOf: (String) -> String?
-        ): String? = candidates.firstOrNull { id ->
-            val openId = openIdOf(id)
-            openId != null && openId !in rejectedOpenIds
-        }
-
-        /**
-         * A rejection is only denylist-worthy when the ID never opened: an ID
-         * that opened before and now reports unknown-device means the camera
-         * service hiccuped (in the field log every lens failed within 2 ms),
-         * so the caller retries instead of excluding a healthy lens.
-         */
-        internal fun shouldDenylistOnOpenRejected(
-            openId: String,
-            openedOnceOpenIds: Set<String>
-        ): Boolean = openId !in openedOnceOpenIds
-
-        /**
-         * Plain width/height pair for session-combo selection. `android.util.Size`
-         * is a framework stub under JVM unit tests, so the ladder below runs on
-         * this type and the camera thread maps to/from `Size` at the boundary.
-         */
-        internal data class SessionStreamSize(val width: Int, val height: Int) {
-            val area: Long get() = width.toLong() * height
-        }
-
-        /**
-         * One session attempt: RAW size, preview size, and reader queue depth.
-         * A null preview is a RAW-only session (no preview stream at all) for
-         * HALs that do not support RAW+preview in any combination.
-         */
-        internal data class SessionStreamCombo(
-            val raw: SessionStreamSize,
-            val preview: SessionStreamSize?,
-            val readerMaxImages: Int,
-            val label: String
-        )
-
-        /**
-         * Session ladder, RAW-only first: taps, metering, and all overlays
-         * are wired to the RAW viewfinder and the fixed view rect (the
-         * system preview is an alpha-0 stream target only), so the default
-         * attempt carries no preview target at all — full RAW with a
-         * ZSL-capable reader. Some HALs (MediaTek) hold the RAW stream at
-         * ~20 fps until any preview target exists; the ISP frame-rate probe
-         * detects that stall and rebuilds at FULL, persisting the verdict
-         * per camera. HALs that reject the raw-only session outright fall
-         * through the same ladder via the stillborn path. Each later step
-         * degrades exactly one axis: the smallest preview retry, a larger
-         * preview retry, minimal buffers (viewfinder-only, the reader
-         * cannot host a ZSL ring), a half-area RAW size, then RAW-only
-         * sessions (largest RAW first for capture quality, smallest last for
-         * minimum bandwidth). Steps that would retry an identical session are
-         * deduped away. An empty preview list yields only the RAW-only steps.
-         */
-        internal fun selectSessionStreamCombos(
-            rawSizes: List<SessionStreamSize>,
-            previewSizes: List<SessionStreamSize>,
-            fullReaderMaxImages: Int,
-            reducedReaderMaxImages: Int
-        ): List<SessionStreamCombo> {
-            val fullRaw = rawSizes.maxByOrNull { it.area } ?: return emptyList()
-            val combos = mutableListOf<SessionStreamCombo>()
-            if (fullReaderMaxImages != reducedReaderMaxImages) {
-                combos += SessionStreamCombo(fullRaw, null, fullReaderMaxImages, RAW_ONLY_FULL_LABEL)
-            }
-            if (previewSizes.isNotEmpty()) {
-                val fullPreview = selectFullPreviewSize(previewSizes)
-                val fallbackPreview = selectFallbackPreviewSize(previewSizes, fullRaw)
-                combos += SessionStreamCombo(fullRaw, fullPreview, fullReaderMaxImages, "FULL")
-                combos += SessionStreamCombo(fullRaw, fallbackPreview, fullReaderMaxImages, "MIN PREVIEW")
-                combos += SessionStreamCombo(fullRaw, fallbackPreview, reducedReaderMaxImages, "MIN BUFFERS")
-                selectSmallerRawSize(rawSizes)?.let { smaller ->
-                    combos += SessionStreamCombo(smaller, fallbackPreview, reducedReaderMaxImages, "SMALL RAW")
-                }
-            }
-            combos += SessionStreamCombo(fullRaw, null, reducedReaderMaxImages, "RAW ONLY")
-            rawSizes.minByOrNull { it.area }?.let { smallest ->
-                combos += SessionStreamCombo(smallest, null, reducedReaderMaxImages, "RAW ONLY MIN")
-            }
-            val deduped = mutableListOf<SessionStreamCombo>()
-            for (combo in combos) {
-                val prev = deduped.lastOrNull()
-                if (prev == null || prev.raw != combo.raw || prev.preview != combo.preview ||
-                    prev.readerMaxImages != combo.readerMaxImages
-                ) {
-                    deduped += combo
-                }
-            }
-            return deduped
-        }
-
-        /**
-         * Invisible-stream choice: the smallest preview available, requested
-         * only so HALs that need a preview target sustain the 30 fps RAW
-         * stream. No aspect, coverage, or viewfinder requirement applies —
-         * the TextureView is alpha-0 and `fillViewport` ignores aspect.
-         */
-        internal fun selectFullPreviewSize(
-            previewSizes: List<SessionStreamSize>
-        ): SessionStreamSize = previewSizes.minByOrNull { it.area }!!
-
-        /**
-         * Fallback preview: the smallest matching-aspect stream that stays
-         * usable as a viewfinder, else the smallest matching-aspect stream,
-         * else the smallest stream overall.
-         */
-        internal fun selectFallbackPreviewSize(
-            previewSizes: List<SessionStreamSize>,
-            rawSize: SessionStreamSize
-        ): SessionStreamSize {
-            val matchingAspect = previewSizes.filter { size ->
-                kotlin.math.abs(
-                    size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
-                ) <= ASPECT_RATIO_TOLERANCE
-            }
-            return matchingAspect
-                .filter { it.width >= FALLBACK_PREVIEW_MIN_WIDTH && it.height >= FALLBACK_PREVIEW_MIN_HEIGHT }
-                .minByOrNull { it.area }
-                ?: matchingAspect.minByOrNull { it.area }
-                ?: previewSizes.minByOrNull { it.area }!!
-        }
-
-        /**
-         * Largest RAW size at most half the sensor area: one decisive bandwidth
-         * step instead of a slow walk through near-identical remosaic sizes.
-         * Null when no such step exists (single RAW size).
-         */
-        internal fun selectSmallerRawSize(rawSizes: List<SessionStreamSize>): SessionStreamSize? {
-            val largest = rawSizes.maxByOrNull { it.area } ?: return null
-            return rawSizes.filter { it.area * 2 <= largest.area }.maxByOrNull { it.area }
-        }
-
-        /**
-         * User size preference as a stable ladder reorder: combos carrying
-         * the preferred RAW size move first with their relative order kept,
-         * everything else follows untouched, so HAL rejection still degrades
-         * exactly as before. Null (auto) or a size with no combo returns the
-         * ladder unchanged.
-         */
-        internal fun orderCombosForPreferredSize(
-            combos: List<SessionStreamCombo>,
-            preferred: SessionStreamSize?
-        ): List<SessionStreamCombo> {
-            if (preferred == null || combos.none { it.raw == preferred }) return combos
-            val (matching, rest) = combos.partition { it.raw == preferred }
-            return matching + rest
-        }
-
-        /** Pure + host-tested: stored "WxH" into a combo size, else null. */
-        internal fun parseRawSizePreference(text: String?): SessionStreamSize? {
-            if (text == null || !RawSizePreferenceStore.isPlausibleSize(text)) return null
-            val (width, height) = text.trim().split('x').map(String::toInt)
-            return SessionStreamSize(width, height)
-        }
-
-        /**
-         * Pure + host-tested: stored format name into a session format int.
-         * Anything but an available packed format resolves to `RAW_SENSOR`,
-         * so packed capture stays strictly opt-in and stale choices degrade
-         * to today's behavior instead of wedging the session.
-         */
-        internal fun resolveRawFormatPreference(
-            wanted: String?,
-            availableFormats: Set<Int>
-        ): Int {
-            if (wanted == null) return android.graphics.ImageFormat.RAW_SENSOR
-            val packed = runCatching { PackedRawFormat.valueOf(wanted) }.getOrNull()
-                ?: return android.graphics.ImageFormat.RAW_SENSOR
-            val format = packed.toImageFormat()
-            return if (format in availableFormats) format else android.graphics.ImageFormat.RAW_SENSOR
-        }
-
-        /**
-         * Measured RAW rate over the probe window, from sensor timestamps
-         * (monotonic on any timestamp source — only differences matter).
-         */
-        internal fun rawFpsForProbeWindow(frames: Int, elapsedNs: Long): Double =
-            if (elapsedNs <= 0L) Double.POSITIVE_INFINITY else frames * 1e9 / elapsedNs
-
-        /** Below-threshold rate means the ISP holds the pipe: add the preview target. */
-        internal fun previewRequestNeededForFps(fps: Double): Boolean = fps < ISP_STALL_FPS
-
-        /**
-         * First ladder step carrying any preview target (the 20 fps remedy),
-         * or -1 when the ladder is raw-only throughout. The probe jumps here
-         * — never backwards past already-rejected preview steps, so a
-         * stillborn-degraded tail cannot loop back onto a refused combo.
-         */
-        internal fun firstPreviewComboIndex(combos: List<SessionStreamCombo>): Int =
-            combos.indexOfFirst { it.preview != null }
-
-        /**
-         * Inverse of the reader sizing in [createSession]: the forward formula
-         * keeps `max(capacity, MAX_IN_FLIGHT_JPEG_SAVES)` plus pairing,
-         * transition, and rearm headroom within the reader. A full-size reader
-         * clamps back to the requested count; a reader below that floor yields
-         * zero (viewfinder-only, no ZSL ring).
-         */
-        /**
-         * Pure reader sizing behind [fullReaderMaxImages]: ring plus pairing,
-         * transition, and rearm headroom, clamped to the HAL queue hard cap.
-         * Unit-testable without the Android framework.
-         */
-        internal fun fullReaderMaxImagesFor(frameCount: Int): Int = minOf(
-            maxOf(
-                MIN_ACQUIRED_RAW_IMAGES,
-                maxOf(frameCount, MAX_IN_FLIGHT_JPEG_SAVES) + RAW_PREVIEW_RESERVED_SLOTS +
-                    ZSL_REARM_OVERLAP_SLOTS
-            ),
-            READER_MAXIMAGES_HARD_CAP
-        )
-
-
-        internal fun clampZslCapacityForReader(requestedFrameCount: Int, readerMaxImages: Int): Int {
-            val roomForRing = readerMaxImages - RAW_PREVIEW_RESERVED_SLOTS - ZSL_REARM_OVERLAP_SLOTS
-            if (roomForRing < MAX_IN_FLIGHT_JPEG_SAVES) return 0
-            return minOf(requestedFrameCount, roomForRing)
-        }
-
-        /**
-         * Pure ZSL selection size behind [RawCameraController.zslSelectedFrameCount].
-         * Merge modes save one artifact (one save slot), so each uses its
-         * own 2..30 merge bounds and bypasses the per-frame JPEG queue cap;
-         * plain bursts keep the cap in JPEG modes (JPEG development holds
-         * large intermediates per frame). Unit-testable without the Android
-         * framework.
-         */
-        internal fun zslSelectedFrameCountFor(
-            hdrPlus: HdrPlusSettings,
-            configuredCount: Int,
-            outputFormat: CaptureFormat
-        ): Int {
-            // Future SR hook: `if (sr.enabled) return sr.activeFrameCount(...)` first.
-            if (hdrPlus.enabled) return hdrPlus.activeFrameCount(configuredCount)
-            return if (outputFormat.includesJpeg) {
-                minOf(configuredCount, MAX_IN_FLIGHT_JPEG_SAVES)
-            } else {
-                configuredCount
-            }
-        }
-
-        /**
-         * Pure save-slot reservation behind [RawCameraController.refreshCaptureAvailability]
-         * and the admission check in beginSingleCapture: merge modes save one
-         * artifact, so the shutter gates on one slot — otherwise a 12-frame
-         * HDR+ selection in a JPEG mode would grey out the shutter against
-         * the 6-slot per-frame JPEG budget. Plain bursts gate on the full
-         * selection. Unit-testable without the Android framework.
-         */
-        internal fun availabilitySlotCountFor(
-            hdrPlus: HdrPlusSettings,
-            configuredCount: Int,
-            outputFormat: CaptureFormat,
-            mfsr: MfsrSettings = MfsrSettings()
-        ): Int =
-            if (hdrPlus.enabled || mfsr.enabled) 1
-            else zslSelectedFrameCountFor(hdrPlus, configuredCount, outputFormat)
-
-        /** Request-level recoveries before a stillborn stream rebuilds the session. */
-        private const val RAW_PREVIEW_COMPAT_ESCALATION_FAILURES = 1
         /**
          * Private GPU-reader verdict store (deliberately outside
          * [SettingsBackup.KNOWN_STORES]): GPU-usage starvation is a property
@@ -7726,27 +7282,14 @@ class RawCameraController(
          * verdict (~1.5 s at full rate, ~2.25 s on a stalled 20 fps stream).
          */
         internal const val ISP_PROBE_FRAMES = 45
-        /**
-         * Below this measured RAW rate the ISP is considered stalled: the
-         * session rebuilds with the smallest preview target, which unlocks
-         * full rate on HALs that need any preview request (MediaTek).
-         */
-        internal const val ISP_STALL_FPS = 25.0
-        /** Label of the default raw-only step (full RAW, ZSL-capable reader). */
-        internal const val RAW_ONLY_FULL_LABEL = "RAW ONLY FULL"
         /** HAL pixel format for RAW16 sessions (gralloc allocator queries). */
         internal const val HAL_PIXEL_FORMAT_RAW16 = 0x20
-        /** Gralloc producer bit (GRALLOC_USAGE_HW_CAMERA_WRITE) the HAL adds at allocation. */
-        internal const val GRALLOC_USAGE_HW_CAMERA_WRITE = 0x20000L
-        /** Fallback preview stays usable as a viewfinder at or above this size. */
-        private const val FALLBACK_PREVIEW_MIN_WIDTH = 640
-        private const val FALLBACK_PREVIEW_MIN_HEIGHT = 480
         // JPEG development retains large intermediate CPU/GPU buffers, so keep one serialized
         // development worker while allowing five additional retained RAW inputs. DNG-only writes
         // need no such intermediates
         // and must accept the entire configured ZSL selection. The executor queue excludes its
         // running worker, hence MAX_ZSL_FRAMES - 1 queued slots.
-        private const val MAX_IN_FLIGHT_JPEG_SAVES = 6
+        internal const val MAX_IN_FLIGHT_JPEG_SAVES = 6
         private const val MAX_IN_FLIGHT_DNG_SAVES = MAX_ZSL_FRAMES
         private const val MAX_QUEUED_SAVES = MAX_IN_FLIGHT_DNG_SAVES - 1
         /** Parallel DNG-only save workers (see [dngWriter]): plain DNG writes are
@@ -7756,10 +7299,8 @@ class RawCameraController(
          * hasProcessingCapacity(). */
         private const val DNG_WRITER_THREADS = 2
         private const val DNG_WRITER_QUEUE_SLOTS = MAX_IN_FLIGHT_DNG_SAVES - DNG_WRITER_THREADS
-        private const val BURST_FRAME_COUNT = 6
-        private const val RAW_READER_TRANSITION_SLOTS = 2
-        private const val RAW_PREVIEW_RESERVED_SLOTS = ZSL_PAIR_WINDOW_SLOTS + RAW_READER_TRANSITION_SLOTS + 2
-        private const val MIN_ACQUIRED_RAW_IMAGES = BURST_FRAME_COUNT + 2
+        internal const val BURST_FRAME_COUNT = 6
+        internal const val RAW_READER_TRANSITION_SLOTS = 2
         /** Transient route-resolution reopen budget (Xiaomi characteristics settle late). */
         private const val OPEN_RETRY_MAX = 3
         private const val OPEN_RETRY_DELAY_MS = 1500L

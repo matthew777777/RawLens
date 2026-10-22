@@ -55,3 +55,14 @@ behaviour surface last; A3/A6 need a study first).
   the controller. All 8 moved bodies identical after renames; 4 JVM tests.
   Phone (A5/A7/A8 together): 3 forward-burst JPEG+DNG cycles, live scope
   sampling throughout, no sampler failures or crashes; 36 test files deleted.
+- A10 done: 24 companion helpers + their constants moved verbatim into
+  `SessionStreamSelection` (12, with SessionStreamSize/Combo),
+  `SessionRecoveryPolicy` (6), `FlashStillPolicy` (3), `ZslPolicy` (3);
+  shared limits (MAX_IN_FLIGHT_JPEG_SAVES, BURST_FRAME_COUNT, pairing and
+  transition slots) stay in the controller as `internal`. Line-multiset
+  check: nothing lost or added. Five pre-existing misplaced KDoc blocks
+  re-attached to the functions they describe (comment-only).
+  `shouldRunRawStream` and `whiteLevelBitDepth` stay (stream gate / info).
+- A4 re-scoped: real function sizes (brace-matched) show the reader code is
+  5-15-line helpers (retire/close, drain, GPU-reader trial verdict), not
+  ~329 lines; it stays with the session code, no separate class.
