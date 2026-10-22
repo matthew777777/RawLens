@@ -66,3 +66,6 @@ behaviour surface last; A3/A6 need a study first).
 - A4 re-scoped: real function sizes (brace-matched) show the reader code is
   5-15-line helpers (retire/close, drain, GPU-reader trial verdict), not
   ~329 lines; it stays with the session code, no separate class.
+- A2 part 1 done: `EttrLoop` (state + solve). Part 2 (PROGRAM loop) waits on
+  the reference audit in `exposure-audit.md` (owner request 2026-10-22: check
+  ETTR/PROGRAM for unreferenced heuristics before moving more of them).
