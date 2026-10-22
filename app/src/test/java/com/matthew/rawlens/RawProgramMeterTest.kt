@@ -8,67 +8,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RawProgramMeterTest {
-    @Test
-    fun darkSceneAsksForBrighterExposure() {
-        val shift = RawProgramMeter.correctionEv(measured = 0.05f, evBias = 0.5f)
-        assertTrue("expected positive shift, was $shift", shift > 1.0)
-    }
 
-    @Test
-    fun brightSceneAsksForDarkerExposure() {
-        val shift = RawProgramMeter.correctionEv(measured = 0.45f, evBias = 0.5f)
-        assertTrue("expected negative shift, was $shift", shift < 0.0)
-    }
 
-    @Test
-    fun sceneAtBiasedTargetNeedsNoShift() {
-        val target = RawProgramMeter.targetLevel(0.5f).toFloat()
-        assertEquals(0.0, RawProgramMeter.correctionEv(target, 0.5f), 1e-9)
-    }
 
-    @Test
-    fun biasBrightensTarget() {
-        assertTrue(RawProgramMeter.targetLevel(0.5f) > RawProgramMeter.targetLevel(0f))
-        assertTrue(RawProgramMeter.targetLevel(1f) > RawProgramMeter.targetLevel(0.5f))
-    }
 
-    @Test
-    fun blackFrameAsksForNoShift() {
-        assertEquals(0.0, RawProgramMeter.correctionEv(0f, 0.5f), 0.0)
-    }
 
-    @Test
-    fun correctionStepIsClampedPerUpdate() {
-        assertEquals(2.0, RawProgramMeter.correctionEv(0.001f, 0.5f), 1e-9)
-        assertEquals(-2.0, RawProgramMeter.correctionEv(1f, -1f), 1e-9)
-    }
 
-    @Test
-    fun programStepCapBoundsGlideAuthority() {
-        // The retune fixes the cap at a full stop; the ramp + EMA absorb it.
-        assertEquals(1.0, RawProgramMeter.PROGRAM_MAX_STEP_EV, 0.0)
-    }
 
-    @Test
-    fun programStepCapNudgesInsteadOfJumping() {
-        // Same dark scene: default clamp allows the full +2 EV jump…
-        assertEquals(2.0, RawProgramMeter.correctionEv(0.001f, 0.5f), 1e-9)
-        // …while the PROGRAM glide cap limits one measurement to half a stop.
-        assertEquals(
-            RawProgramMeter.PROGRAM_MAX_STEP_EV,
-            RawProgramMeter.correctionEv(
-                0.001f, 0.5f, RawProgramMeter.PROGRAM_MAX_STEP_EV
-            ),
-            1e-9
-        )
-        assertEquals(
-            -RawProgramMeter.PROGRAM_MAX_STEP_EV,
-            RawProgramMeter.correctionEv(
-                1f, -1f, RawProgramMeter.PROGRAM_MAX_STEP_EV
-            ),
-            1e-9
-        )
-    }
 
     @Test
     fun meanLevelWeightsBins() {
@@ -199,27 +145,8 @@ class RawProgramMeterTest {
     fun defaultsAreIsoPriorityAndNeutralEv() {
         assertEquals(0f, ProgramAeProfile().balance, 0f)
         assertEquals(0f, ProgramAeProfile().evBias, 0f)
-        assertEquals(0.18, RawProgramMeter.targetLevel(ProgramAeProfile().evBias), 1e-6)
     }
 
-    @Test
-    fun guardCapsBrighteningAgainstHotHighlights() {
-        // Daylight mids want +1 EV but the 99.9th percentile sits at 0.95:
-        // brightening must not push it past the 0.9 guard (slight darken instead).
-        val guarded = RawProgramMeter.guardShiftEv(1.0, hottest = 0.95f)
-        assertTrue("expected capped shift, was $guarded", guarded < 0.0)
-        assertEquals(Math.log((0.9 / 0.95)) / Math.log(2.0), guarded, 1e-6)
-    }
 
-    @Test
-    fun guardLeavesNormalScenesAlone() {
-        assertEquals(1.0, RawProgramMeter.guardShiftEv(1.0, hottest = 0.3f), 1e-9)
-        assertEquals(0.0, RawProgramMeter.guardShiftEv(1.0, hottest = 0.9f), 1e-9)
-    }
 
-    @Test
-    fun guardPassesDarkeningThrough() {
-        assertEquals(-1.0, RawProgramMeter.guardShiftEv(-1.0, hottest = 0.99f), 1e-9)
-        assertEquals(0.0, RawProgramMeter.guardShiftEv(0.0, hottest = 0.99f), 1e-9)
-    }
 }

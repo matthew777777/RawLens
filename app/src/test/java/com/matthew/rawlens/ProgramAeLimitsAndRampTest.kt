@@ -52,18 +52,4 @@ class ProgramAeLimitsAndRampTest {
         assertEquals(100 to sec / 60, unlocked)
     }
 
-    @Test
-    fun rampSnapsWhenCloseAndHoldsTheLockedAxis() {
-        val l = limits()
-        val near = ProgramAeSolver.rampStep(100, sec / 30, 101, sec / 30, l, ProgramLockMode.NONE, 0, 0L)
-        assertTrue(near.snapped)
-        assertEquals(101, near.iso)
-        val isoLocked = ProgramAeSolver.rampStep(100, sec / 120, 100, sec / 15, l, ProgramLockMode.ISO_LOCK, 100, 0L)
-        assertFalse("a 3-stop gap cannot close in one tick", isoLocked.snapped)
-        assertEquals(100, isoLocked.iso)
-        assertTrue(isoLocked.shutterNanos in (sec / 120 + 1) until sec / 15)
-        val shutterLocked = ProgramAeSolver.rampStep(100, sec / 60, 800, sec / 60, l, ProgramLockMode.SHUTTER_LOCK, 0, sec / 60)
-        assertEquals(sec / 60, shutterLocked.shutterNanos)
-        assertTrue(shutterLocked.iso in 101 until 800)
-    }
 }

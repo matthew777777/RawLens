@@ -180,67 +180,8 @@ class ProgramAeSolverTest {
         assertEquals(33_000_000L, migrated.shutterMaxNanos)
     }
 
-    @Test
-    fun rampStepMovesTowardTargetWithinCap() {
-        // +2 EV demand with a 1/6-stop cap: one tick moves exactly the cap.
-        val stepped = AutoExposureBalance.rampStepEnergy(1000.0, 4000.0, 1.0 / 6.0, 1.0 / 24.0)
-        assertEquals(1000.0 * Math.pow(2.0, 1.0 / 6.0), stepped, 1e-6)
-        // Darkening mirrors it.
-        val down = AutoExposureBalance.rampStepEnergy(4000.0, 1000.0, 1.0 / 6.0, 1.0 / 24.0)
-        assertEquals(4000.0 / Math.pow(2.0, 1.0 / 6.0), down, 1e-6)
-    }
 
-    @Test
-    fun rampStepSnapsInsideDeadband() {
-        assertEquals(
-            2000.0,
-            AutoExposureBalance.rampStepEnergy(2000.0 * Math.pow(2.0, 1.0 / 48.0), 2000.0, 1.0 / 6.0, 1.0 / 24.0),
-            1e-9
-        )
-        // Degenerate input cannot step, so it yields the target directly.
-        assertEquals(2000.0, AutoExposureBalance.rampStepEnergy(0.0, 2000.0, 1.0 / 6.0, 1.0 / 24.0), 0.0)
-    }
 
-    @Test
-    fun adaptiveRampIsFastFarAndGentleNear() {
-        // 3 stops away with proportion 0.5: capped at the 1/3-stop maximum.
-        assertEquals(
-            1000.0 * Math.pow(2.0, 1.0 / 3.0),
-            AutoExposureBalance.rampStepEnergyAdaptive(1000.0, 8000.0, 0.5, 1.0 / 3.0, 1.0 / 24.0),
-            1e-6
-        )
-        // 0.1 stop away: shrinks to the snap-floor multiple, well under the cap.
-        assertEquals(
-            1000.0 * Math.pow(2.0, 1.0 / 12.0),
-            AutoExposureBalance.rampStepEnergyAdaptive(
-                1000.0, 1000.0 * Math.pow(2.0, 0.1), 0.5, 1.0 / 3.0, 1.0 / 24.0
-            ),
-            1e-6
-        )
-        // Inside the snap band it lands exactly on target.
-        assertEquals(
-            2000.0 * Math.pow(2.0, 1.0 / 48.0),
-            AutoExposureBalance.rampStepEnergyAdaptive(2000.0, 2000.0 * Math.pow(2.0, 1.0 / 48.0), 0.5, 1.0 / 3.0, 1.0 / 24.0),
-            1e-9
-        )
-    }
 
-    @Test
-    fun rampSplitPreservesTargetRatioInsideLimits() {
-        // Target ISO 400 @ 10 ms; half energy must keep the 40 ISO/ms character.
-        val (iso, shutter) = AutoExposureBalance.splitEnergyRatio(
-            400.0 * 10_000_000L / 2, 400, 10_000_000L, limits
-        )
-        assertEquals(400.0 / 10_000_000L, iso.toDouble() / shutter, 0.05 * 400.0 / 10_000_000L)
-        assertEquals(400.0 * 10_000_000L / 2, iso.toDouble() * shutter, 0.05 * 400.0 * 10_000_000L)
-    }
 
-    @Test
-    fun rampSplitRespectsLimits() {
-        val (iso, shutter) = AutoExposureBalance.splitEnergyRatio(
-            6400.0 * 66_000_000L * 4, 6400, 66_000_000L, limits
-        )
-        assertEquals(6400, iso)
-        assertEquals(66_000_000L, shutter)
-    }
 }

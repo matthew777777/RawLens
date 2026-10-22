@@ -344,6 +344,7 @@ class RawCameraController(
     private val program = ProgramAeLoop()
     private var programStreaming = false
     private var programRampCallback: Runnable? = null
+    private var lastProgramTickNs = 0L
     /** RAW-based ETTR single-exposure state (see EttrLoop). */
     private val ettr = EttrLoop(initialEttrSettings)
     /** Wall time of the last metering sample; slow samplers back off (see dispatch). */
@@ -3631,6 +3632,8 @@ class RawCameraController(
         controlsChanged()
     }
 
+    fun isTorchEnabled(): Boolean = torchEnabled
+
     fun isFlashAvailable(): Boolean =
         characteristics?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
 
@@ -3891,26 +3894,33 @@ class RawCameraController(
         val limits = ProgramAeSolver.resolveLimits(
             profile, isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper
         ) { resolveDynamicShutterLimit(DynamicExposureSettings(enabled = true), shutterRange.upper) } ?: return
-        when (program.onSample(sample, profile, limits, lastIso, lastExposureNanos) ?: return) {
-            ProgramAeLoop.Step.FAST_START -> {
-                pushProgramPairLive()
-                cancelProgramRampTick()
-                Log.i(
-                    LOG_TAG,
-                    "PROGRAM fast-start ISO ${program.iso} EXP ${formatExposure(program.shutterNanos!!)} " +
-                        "(shift ${String.format(java.util.Locale.US, "%+.2f", program.lastShiftEv)} EV)"
-                )
-            }
-            ProgramAeLoop.Step.GLIDE -> scheduleProgramRampTick()
-            ProgramAeLoop.Step.HOLD -> cancelProgramRampTick()
+        // The sampled frame's own exposure (latest result), as libcamera's
+        // AGC measures against the device status of the frame it meters.
+        val step = program.onSample(
+            sample, profile, limits, lastIso, lastExposureNanos, sceneFlickerPeriodNanos()
+        ) ?: return
+        if (step == ProgramAeLoop.Step.START) {
+            lastProgramTickNs = SystemClock.elapsedRealtimeNanos()
+            programRampTick()
+            Log.i(LOG_TAG, "PROGRAM start ISO ${program.iso} EXP ${program.shutterNanos?.let(::formatExposure)}")
+        } else if (programRampCallback == null) {
+            scheduleProgramRampTick()
         }
     }
 
+    /** Camera2 scene flicker (50/60 Hz) period for the AGC, 0 when none or unknown. */
+    private fun sceneFlickerPeriodNanos(): Long =
+        when (latestPreviewResult?.get(CaptureResult.STATISTICS_SCENE_FLICKER)) {
+            CaptureResult.STATISTICS_SCENE_FLICKER_50HZ -> 10_000_000L
+            CaptureResult.STATISTICS_SCENE_FLICKER_60HZ -> 8_333_333L
+            else -> 0L
+        }
+
     /**
-     * One glide tick: ease the applied (live) pair toward the solver target with
-     * an adaptive step (fast far away, gentle up close), preserving the target's
-     * ISO/shutter ratio (or the locked axis), then push the live repeating
-     * request. Reschedules itself until the applied pair snaps to target.
+     * One AGC tick (~10 Hz): run libcamera's per-frame exposure filter for the
+     * sensor frames elapsed since the last tick, split, push the live request.
+     * Reschedules itself until the filtered exposure settles in the stable
+     * region; the next metering sample restarts it.
      */
     private fun programRampTick() {
         programRampCallback = null
@@ -3923,9 +3933,14 @@ class RawCameraController(
             scheduleProgramRampTick()
             return
         }
-        val (changed, snapped) = program.rampStep() ?: return
+        val now = SystemClock.elapsedRealtimeNanos()
+        val frameNs = (latestPreviewResult?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L)
+            .takeIf { it > 0L } ?: 33_333_333L
+        val frames = ((now - lastProgramTickNs) / frameNs).toInt().coerceIn(1, 30)
+        lastProgramTickNs = now
+        val (changed, settled) = program.tick(frames) ?: return
         if (changed) pushProgramPairLive()
-        if (!snapped) scheduleProgramRampTick()
+        if (!settled) scheduleProgramRampTick()
     }
 
     private fun scheduleProgramRampTick() {
@@ -4366,6 +4381,7 @@ class RawCameraController(
         wbKelvin = selectedWbKelvin,
         focusDiopters = selectedFocusDistanceDiopters,
         evIndex = exposureCompensation.takeIf { it != 0 },
+        torch = torchEnabled,
     )
 
     /** Metered preview fallback frozen when a lock-on-record switch is on. */

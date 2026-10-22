@@ -52,3 +52,17 @@ EttrLoop) checked against non-AI references.
    midtone/shadow SNR limits.
 4. Keep, documented as RawLens extensions: gyro handheld ceiling, sampling
    cadence back-off.
+
+## Done: PROGRAM on libcamera RPi AGC (A1, owner 2026-10-22)
+Owner: no +0.5 EV default (the profile default was already 0.0; only a
+stale doc said +0.5). `ProgramAgc` ports computeGain (Y target 0.16,
+8 iterations, x10 cap, saturation modelled on the frame green histogram),
+the constraint modes (NORMAL default: lower bound q0.98-1.0 >= 0.3;
+HIGHLIGHT adds the 0.8 upper bound), filterExposure (speed 0.2 per frame,
+sqrt near target, 2 % stable region, 10 startup frames at speed 1), the
+x0.4 desaturate step, and flicker rounding from Camera2 scene flicker.
+Removed with no reference: brightness EMA, 2/1 EV step caps, glide
+(0.4 / 1/8 EV / 1/24 EV), HIGHLIGHT_GUARD 0.9. Kept: PhotonCamera ISO /
+shutter curve, profile balance/locks, metering zones. SPOT/CENTER samples
+now carry a 16k-sample full-frame histogram for the constraints.
+Device verification pending (phone disconnected at commit time).

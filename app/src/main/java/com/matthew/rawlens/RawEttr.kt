@@ -188,11 +188,16 @@ class EttrRawSample(
     val centerWeightedGreen: Float = Float.NaN,
     val spotGreen: Float = Float.NaN,
     /**
-     * Full-frame highlight level backing the PROGRAM guard when the main scan is
-     * region-cropped (SPOT/CENTER): a dark center must not blind the loop to bright
-     * surroundings. NaN when the main scan already covers the full frame.
+     * Full-frame hottest channel level when the main scan is region-cropped
+     * (SPOT/CENTER); NaN when the main scan already covers the full frame.
      */
-    val guardHottest: Float = Float.NaN
+    val guardHottest: Float = Float.NaN,
+    /**
+     * Full-frame per-channel histograms when the main scan is region-cropped
+     * (SPOT/CENTER): the PROGRAM AGC's saturation model and histogram
+     * constraints are full-frame, like libcamera's. Null: [bins] are full-frame.
+     */
+    val frameBins: Array<IntArray>? = null
 )
 
 /**
@@ -212,8 +217,11 @@ object RawEttrSampler {
     internal const val TARGET_BLOCKS = 32_000
     /** Sparse PROGRAM-only density; ETTR-grade tails keep full density. */
     internal const val TARGET_BLOCKS_PROGRAM = 4_000
-    /** Full-frame guard density backing the highlight guard for cropped scans. */
-    internal const val GUARD_PIXELS = 4_096
+    /**
+     * Full-frame scan density for cropped (SPOT/CENTER) PROGRAM scans: backs
+     * the AGC histogram constraints (top 2 % inter-quantile mean, ~330 samples).
+     */
+    internal const val GUARD_PIXELS = 16_384
 
     fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? =
         sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
@@ -234,11 +242,11 @@ object RawEttrSampler {
         val sample = sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4, region)
             ?: return null
         if (metering == ProgramMetering.AVERAGE) return sample
-        val guardHottest = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height))
-            ?.levels?.hottest ?: Float.NaN
+        val frame = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height))
         return EttrRawSample(
             sample.levels, sample.bins, sample.saturated, sample.totals,
-            sample.centerWeightedGreen, sample.spotGreen, guardHottest
+            sample.centerWeightedGreen, sample.spotGreen,
+            frame?.levels?.hottest ?: Float.NaN, frame?.bins
         )
     }
 
