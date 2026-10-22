@@ -1,0 +1,68 @@
+# RawLens 2.0.0: remaining work (2026-10-22)
+
+Proposed cut: **[2.0]** must land before the 2.0.0 release; **[2.0.x]**
+can follow. Owner may move items.
+
+## A. Rewrite batch (after the controller moves, owner 2026-10-22)
+- [ ] A1 [2.0] PROGRAM AE on libcamera RPi AGC: one total-exposure filter,
+      Y-target + q0.98-1.0 highlight constraint, flicker rounding
+      (exposure-audit.md). Owner: keep the +0.5 EV brighter default?
+- [ ] A2 [2.0] ETTR on Magic Lantern: target <= -0.5 EV, overshoot
+      extrapolation (E2), single-shot correction, midtone/shadow SNR limits.
+      Owner: OK to change ETTR behaviour?
+- [ ] A3 [2.0] Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
+- [ ] A4 [2.0] ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
+- [ ] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
+      `BguViewfinder`, `BguFit`, `BguSlice`, `BguSliceCpu`, `BguLook`,
+      `BguSample`, `BguGeometry`, `BguSpike`, `bgu_slice_cpu.cpp`,
+      `halide_bgu_*_jni.cpp` and their Halide generators against the
+      references: Chen et al. 2016 "Bilateral Guided Upsampling" and the
+      google/bgu reference implementation, Halide `apps/bgu`, plus related
+      bilateral-grid work (HDRNet slicing, Halide `apps/bilateral_grid`).
+      Find AI-written mistakes (unreferenced constants, wrong grid/slice
+      maths, fit regularization, boundary handling), fix to the reference,
+      verify on device (vf-native-study.md is the template).
+
+## B. HDR+ and HDR bracket merge
+- [ ] B5 [2.0] HDR+ 1:1 with Burst Photo default mode (hdrplus-parity-todo.md 1-5).
+- [ ] B6 [2.0] Burst Photo bracketed path for AE-drift bursts (todo 6).
+- [ ] B7 [2.0] HDR+ Vulkan speed/memory pass.
+- [ ] B8 [2.0] 3-bracket HDR merge on B5/B6, delete deghost/FlowNet route
+      (hdr-bracket-merge-study.md). Owner: bracket DNGs with moving cars.
+
+## C. MFSR
+- [ ] C9 [2.0] Dim-burst divergence vs the Python reference (70.5 dB).
+- [ ] C10 [2.0.x] Scale > 1 for zoom; s1/s2 and GAT A/B; S.3 thresholds;
+      failed-tile alignment check (mfsr-paper-gaps.md).
+- [ ] C11 [2.0.x] UI toggles (kernel, S.3); duplicate KernelNet model in the
+      APK; 150 MB FloatArray copy before the MFSR DNG; perf (CPU pyramid,
+      KernelNet conv).
+- [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
+
+## D. Other open items [2.0.x]
+- [ ] D13 ZSL copy-out pool (MotionCam; needs measurements).
+- [ ] D14 Video V7: late-result frames dropped vs PhotonCamera request values.
+- [ ] D15 Wavelet Vulkan per-pass study; stabilization rewrite.
+- [ ] D16 AMaZE parity never established (excluded by owner).
+- [ ] D17 VF native A2 (deferred by owner).
+- [ ] D18 Record-only findings: ZSL job errors call onState on the writer
+      thread; dual-RAW submit error skips the R3/R4 tail; unguarded first
+      pairing clear in stop() (C5); soak extra-press race on HDR brackets.
+
+## E. Build and release
+- [ ] E19 [2.0] Owner's uncommitted UI files (MainActivity, manifest,
+      activity_main, ScopeStyle, ic_gallery).
+- [ ] E20 [2.0.x] androidx.core pin 1.9.0 vs declared 1.19.1 (device tests).
+- [ ] E21 [2.0.x] android.newDsl=false -> listenToArtifacts (before AGP 10).
+- [ ] E22 [2.0] Full on-device suite vs the original build (deviceTest), plus
+      a smoke run of the minified release APK.
+- [ ] E23 [2.0] NOTICE (drop GALOSH; add libcamera / Magic Lantern if ported),
+      CHANGELOG and 2.0 release notes.
+- [ ] E24 [2.0] Version 2.0.0, merge refactor/2.0 -> main, tag, attach the
+      R8 mapping (release-mappings/) to the GitHub release; F-Droid recipe
+      supplies libjxl source (else JXL is "not bundled").
+
+## Done today (for reference)
+Controller A1-A10 + ZSL merge jobs, MFSR back-to-back OOM fix, MFSR S.3 and
+noise LUT, GALOSH removal, R8 for all releases with mapping archive,
+F-Droid permission-check fix.
