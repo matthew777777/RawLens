@@ -191,6 +191,15 @@ object VulkanPipeline {
         println("  jvm heap used: ${"%.0f".format(usedMb)} MB")
     }
 
+    /**
+     * [output], when given, receives the merged image (capacity >= the
+     * output float count) and is returned; callers on Android pass a
+     * [SrpBridge.nativeFloats] buffer they free themselves. Without it the
+     * result is a Java-heap direct buffer, as before. The large per-run
+     * scratch (grey, staging, kernel input) lives in native memory freed
+     * when the run ends: ART counts allocateDirect against the Java heap,
+     * and back-to-back merges fragmented it until the output no longer fit.
+     */
     fun run(
         reference: () -> Array<FloatArray>,
         comparisons: List<(ByteBuffer) -> Array<FloatArray>>,
@@ -198,6 +207,20 @@ object VulkanPipeline {
         handle: Long,
         alignSpirvs: AlignGpu.Spirvs,
         spirvs: Spirvs,
+        output: ByteBuffer? = null,
+    ): ByteBuffer = SrpBridge.NativeFloats().use { scratch ->
+        runScoped(reference, comparisons, config, handle, alignSpirvs, spirvs, output, scratch)
+    }
+
+    private fun runScoped(
+        reference: () -> Array<FloatArray>,
+        comparisons: List<(ByteBuffer) -> Array<FloatArray>>,
+        config: PipelineConfig,
+        handle: Long,
+        alignSpirvs: AlignGpu.Spirvs,
+        spirvs: Spirvs,
+        output: ByteBuffer?,
+        scratch: SrpBridge.NativeFloats,
     ): ByteBuffer {
         require(handle != 0L) { "VulkanPipeline: null context handle" }
         // Decode the reference first: its shape sizes all run scratch.
@@ -306,8 +329,8 @@ object VulkanPipeline {
             // loop reuses the kernel scratch as grey output (see below).
             val unpinned = run {
                 val rows = Array(h) { FloatArray(w) }
-                val refGrey = greyOfInto(refBox!!, SrpBridge.directFloats(w * h),
-                    SrpBridge.directFloats(w * h), rows)
+                val refGrey = greyOfInto(refBox!!, scratch.floats(w * h),
+                    scratch.floats(w * h), rows)
                 timed("alignInit") { AlignGpu.initGpu(refGrey, loop, handle, alignSpirvs.ica) }
             }
             // 1b. Pin level residents on-device (L2 spectra + statics,
@@ -332,7 +355,7 @@ object VulkanPipeline {
         // Shared pack/upload staging, allocated only now (post-pin):
         // keeping it out of the init window above saves 50 MB live
         // there. Fully rewritten per use from here on.
-        val frameBuf = SrpBridge.directFloats(w * h)
+        val frameBuf = scratch.floats(w * h)
 
         heapLog("post-pin")
         // 2. Reference local stats straight into the residents.
@@ -372,7 +395,7 @@ object VulkanPipeline {
         val ftx0 = finest0.nTx
         val fty0 = finest0.nTy
         val rSize0 = if (config.bayer) gw * gh else w * h
-        val kernPre = SrpBridge.directFloats(w * h)
+        val kernPre = scratch.floats(w * h)
         val kp = config.kernelParams
         val kpBuf = pack(floatArrayOf(kp.kDetail, kp.kDenoise, kp.dTh, kp.dTr,
             kp.kStretch, kp.kShrink,
@@ -558,7 +581,7 @@ object VulkanPipeline {
             }
             try {
                 val rawRes = if (full == null) frameRes else res(rawW * rawH).also { r ->
-                    val b = SrpBridge.directFloats(rawW * rawH)
+                    val b = scratch.floats(rawW * rawH)
                     val fb = b.asFloatBuffer(); for (row in full) fb.put(row)
                     checkRc("kernelNet upload", SrpBridge.uploadResident(handle, r, b.apply { rewind() }, (rawW * rawH).toLong()))
                 }
@@ -679,7 +702,10 @@ object VulkanPipeline {
         AlignGpu.freeLevelScratch(pinnedInit)
         System.gc()
         timed("divide") { checkRc("divide", SrpBridge.divideRes(handle, numRes, denRes, spirvs.divide, total)) }
-        val outBuf = SrpBridge.directFloats(total)
+        val outBuf = output?.also {
+            require(it.capacity() >= total * java.lang.Float.BYTES) { "VulkanPipeline: output buffer too small" }
+            it.clear()
+        } ?: SrpBridge.directFloats(total)
         timed("downloadRes") { checkRc("downloadRes", SrpBridge.downloadResident(handle, numRes, outBuf, total.toLong())) }
         outBuf.rewind()
         dumpClock()

@@ -70,7 +70,17 @@ internal object MfsrMerge {
          * overload covers that tail).
          */
         val refResult: android.hardware.camera2.CaptureResult?
-    )
+    ) {
+        private val released = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /**
+         * Frees [rgb] (native memory, outside the Java heap). Call exactly
+         * when the DNG/JPEG tail is done with it; later calls are no-ops.
+         */
+        fun release() {
+            if (released.compareAndSet(false, true)) SrpBridge.nativeFreeDirect(rgb)
+        }
+    }
 
     /**
      * One offline input: a decoded `_BURST.crs` frame plus its unpacked
@@ -405,6 +415,7 @@ internal object MfsrMerge {
             Log.w(LOG_TAG, "sharp merge: no Vulkan compute device")
             return null
         }
+        var nativeOut: ByteBuffer? = null
         try {
             val (alpha, beta) = if (noise != null && noise.size == 8) {
                 DngRead.noiseAlphaBeta(noise, 8)
@@ -464,6 +475,9 @@ internal object MfsrMerge {
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")
             val t0 = System.nanoTime()
+            // Output in native memory (see VulkanPipeline.run): released by
+            // MfsrResult.release(), or below if the engine fails.
+            nativeOut = SrpBridge.nativeFloats(w * h * 3)
             val rgb = VulkanPipeline.run(
                 { first },
                 decoders.drop(1).map { decode ->
@@ -481,7 +495,8 @@ internal object MfsrMerge {
                     mergeSplat = asset("merge_splat"),
                     fft = fft, corr = asset("corr"), greyFft = asset("grey_fft"),
                     kernelNet = if (settings.kernel == MfsrKernel.KERNELNET) asset("kernelnet") else null
-                )
+                ),
+                output = nativeOut
             )
             val mergeMs = (System.nanoTime() - t0) / 1_000_000
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), w * h * 3)
@@ -494,9 +509,11 @@ internal object MfsrMerge {
             return EngineOut(rgb, w, h, mergeMs)
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "sharp merge failed", failure)
+            nativeOut?.let(SrpBridge::nativeFreeDirect)
             return null
         } catch (oom: OutOfMemoryError) {
             Log.w(LOG_TAG, "sharp merge OOM", oom)
+            nativeOut?.let(SrpBridge::nativeFreeDirect)
             return null
         } finally {
             SrpBridge.nativeDestroy(handle)

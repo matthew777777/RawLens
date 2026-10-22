@@ -333,44 +333,49 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
             host.reportSaveState("MFSR ERROR")
             return
         }
-        val mergeMs = android.os.SystemClock.elapsedRealtime() - tMerge0
-        Log.i(LOG_TAG, "MFSR timing merge=${mergeMs}ms frames=${merged.keptCount}/${selected.size} " +
-            "${merged.width}x${merged.height}")
-        var referenceDng: String? = null
-        if (outputFormat.includesDng) {
-            referenceDng = saveMfsrDng(merged, cameraId, captureTimeMillis, captureGps, selected)
-            host.reportSaveState("MFSR DNG SAVED")
-        }
-        if (outputFormat.includesJpeg) {
-            // The merge output is already RGB: no Amaze demosaic, fixed
-            // reference exposure (adaptive metering has no RGB leg yet).
-            // ZSL bursts never use ETTR, so no residual headroom cap.
-            val developer = host.developer()
-            if (developedFormat == DevelopedFormat.JXL) {
-                val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
-                    merged.refMetadata, RawDevelopmentSettings(denoise = denoise),
-                    look = outputSettings, jxl = jxlSettings)
-                JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
-                    captureTimeMillis = captureTimeMillis,
-                    typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
-                host.publishDevelopedJxlScope(developed)
-                host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG • JXL" else "MFSR MERGED • JXL")
-            } else {
-                val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                    merged.refMetadata, RawDevelopmentSettings(denoise = denoise), outputSettings)
-                try {
-                    JpegSaver(context).save(developed, merged.refMetadata,
-                        merged.refResult, captureTimeMillis = captureTimeMillis,
-                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
-                    host.publishDevelopedScope(developed.bitmap)
-                    host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG" else "MFSR MERGED")
-                } finally {
-                    recycleUltraHdrGainmapContents(developed)
-                    developed.bitmap.recycle()
-                }
+        try {
+            val mergeMs = android.os.SystemClock.elapsedRealtime() - tMerge0
+            Log.i(LOG_TAG, "MFSR timing merge=${mergeMs}ms frames=${merged.keptCount}/${selected.size} " +
+                "${merged.width}x${merged.height}")
+            var referenceDng: String? = null
+            if (outputFormat.includesDng) {
+                referenceDng = saveMfsrDng(merged, cameraId, captureTimeMillis, captureGps, selected)
+                host.reportSaveState("MFSR DNG SAVED")
             }
-        } else {
-            host.reportSaveState("MFSR DNG SAVED")
+            if (outputFormat.includesJpeg) {
+                // The merge output is already RGB: no Amaze demosaic, fixed
+                // reference exposure (adaptive metering has no RGB leg yet).
+                // ZSL bursts never use ETTR, so no residual headroom cap.
+                val developer = host.developer()
+                if (developedFormat == DevelopedFormat.JXL) {
+                    val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
+                        merged.refMetadata, RawDevelopmentSettings(denoise = denoise),
+                        look = outputSettings, jxl = jxlSettings)
+                    JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
+                        captureTimeMillis = captureTimeMillis,
+                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
+                    host.publishDevelopedJxlScope(developed)
+                    host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG • JXL" else "MFSR MERGED • JXL")
+                } else {
+                    val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
+                        merged.refMetadata, RawDevelopmentSettings(denoise = denoise), outputSettings)
+                    try {
+                        JpegSaver(context).save(developed, merged.refMetadata,
+                            merged.refResult, captureTimeMillis = captureTimeMillis,
+                            typeSuffix = CaptureFileNames.TYPE_MFSR, gps = captureGps)
+                        host.publishDevelopedScope(developed.bitmap)
+                        host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG" else "MFSR MERGED")
+                    } finally {
+                        recycleUltraHdrGainmapContents(developed)
+                        developed.bitmap.recycle()
+                    }
+                }
+            } else {
+                host.reportSaveState("MFSR DNG SAVED")
+            }
+        } finally {
+            // Native output (MfsrMerge): free once the DNG/JPEG tail is done.
+            merged.release()
         }
     }
 

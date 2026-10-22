@@ -10,6 +10,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -3128,4 +3129,25 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeRo
   env->GetFloatArrayRegion(beta, 0, 3, b);
   return static_cast<jint>(srp::SrpRobustHfGpu(ctx, static_cast<uint32_t>(width),
       static_cast<uint32_t>(height), m_vk, v_vk, h_vk, rho, k, a, b, module));
+}
+
+// Native (malloc) direct buffers for the large merge scratch and output:
+// ART places ByteBuffer.allocateDirect memory in the Java heap, where
+// back-to-back 50-150 MB blocks fragment it until a merge cannot place its
+// output (MFSR OOM on the second ZSL press). These live outside the heap
+// and are freed explicitly by the owner (SrpBridge.NativeFloats / caller).
+extern "C" JNIEXPORT jobject JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeAllocDirect(
+    JNIEnv* env, jclass /*cls*/, jlong bytes) {
+  if (bytes <= 0) return nullptr;
+  void* p = std::calloc(1, static_cast<size_t>(bytes));
+  if (p == nullptr) return nullptr;
+  jobject buf = env->NewDirectByteBuffer(p, bytes);
+  if (buf == nullptr) std::free(p);
+  return buf;
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_rawlens_srpipeline_SrpBridge_nativeFreeDirect(
+    JNIEnv* env, jclass /*cls*/, jobject buffer) {
+  if (buffer == nullptr) return;
+  std::free(env->GetDirectBufferAddress(buffer));
 }

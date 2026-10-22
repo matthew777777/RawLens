@@ -142,52 +142,57 @@ internal class BurstMergeRunner(private val appContext: Context) {
         val tMerge = SystemClock.elapsedRealtime()
         val merged = MfsrMerge.mergeDecoded(appContext, ordered, inputs.mfsr)
             ?: throw IllegalStateException("MFSR merge failed")
-        val mergeMs = SystemClock.elapsedRealtime() - tMerge
-        val outputs = ArrayList<String>()
-        if (format.includesDng) {
-            merged.rgb.rewind()
-            val triplets = FloatArray(merged.width * merged.height * 3)
-            merged.rgb.asFloatBuffer().get(triplets)
-            outputs += LinearRgbDngSaver(appContext).saveLinearRgb(
-                MergedLinearRgb(merged.width, merged.height, triplets),
-                merged.refMetadata,
-                MergeProvenance(
-                    algorithmVersion = "RawLens-Mfsr/scale1-sr-pipeline",
-                    selectedFrames = ordered.size,
-                    acceptedFrames = merged.keptCount,
-                    rejectedFrames = ordered.size - merged.keptCount,
-                    referenceTimestampNs = merged.refMetadata.timestampNanos,
-                    outputScale = 1,
-                    sourceCameraId = merged.refMetadata.cameraId,
-                    lensShadingApplied = false,
-                    effectiveFrames = merged.keptCount.toDouble()
-                ),
-                captureId = captureId, gps = null
-            )
-        }
-        if (format.includesJpeg) {
-            val developer = RawDevelopmentCoordinator(appContext)
-            if (inputs.developedFormat == DevelopedFormat.JXL) {
-                val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
-                    merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
-                    look = inputs.jpeg, jxl = inputs.jxl)
-                outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
-                    captureTimeMillis = captureId,
-                    typeSuffix = CaptureFileNames.TYPE_MFSR)
-            } else {
-                val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                    merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
-                try {
-                    outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
+        try {
+            val mergeMs = SystemClock.elapsedRealtime() - tMerge
+            val outputs = ArrayList<String>()
+            if (format.includesDng) {
+                merged.rgb.rewind()
+                val triplets = FloatArray(merged.width * merged.height * 3)
+                merged.rgb.asFloatBuffer().get(triplets)
+                outputs += LinearRgbDngSaver(appContext).saveLinearRgb(
+                    MergedLinearRgb(merged.width, merged.height, triplets),
+                    merged.refMetadata,
+                    MergeProvenance(
+                        algorithmVersion = "RawLens-Mfsr/scale1-sr-pipeline",
+                        selectedFrames = ordered.size,
+                        acceptedFrames = merged.keptCount,
+                        rejectedFrames = ordered.size - merged.keptCount,
+                        referenceTimestampNs = merged.refMetadata.timestampNanos,
+                        outputScale = 1,
+                        sourceCameraId = merged.refMetadata.cameraId,
+                        lensShadingApplied = false,
+                        effectiveFrames = merged.keptCount.toDouble()
+                    ),
+                    captureId = captureId, gps = null
+                )
+            }
+            if (format.includesJpeg) {
+                val developer = RawDevelopmentCoordinator(appContext)
+                if (inputs.developedFormat == DevelopedFormat.JXL) {
+                    val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
+                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise),
+                        look = inputs.jpeg, jxl = inputs.jxl)
+                    outputs += JxlSaver(appContext).save(developed, merged.refMetadata, null,
                         captureTimeMillis = captureId,
-                        typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
-                } finally {
-                    developed.bitmap.recycle()
+                        typeSuffix = CaptureFileNames.TYPE_MFSR)
+                } else {
+                    val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
+                        merged.refMetadata, RawDevelopmentSettings(denoise = inputs.denoise), inputs.jpeg)
+                    try {
+                        outputs += JpegSaver(appContext).save(developed, merged.refMetadata, null,
+                            captureTimeMillis = captureId,
+                            typeSuffix = CaptureFileNames.TYPE_MFSR, gps = null)
+                    } finally {
+                        developed.bitmap.recycle()
+                    }
                 }
             }
+            return Completed(outputs, merged.keptCount, ordered.size, mergeMs,
+                merged.width, merged.height)
+        } finally {
+            // Native output (MfsrMerge): free once the DNG/JPEG tail is done.
+            merged.release()
         }
-        return Completed(outputs, merged.keptCount, ordered.size, mergeMs,
-            merged.width, merged.height)
     }
 
     private fun runHdrPlus(

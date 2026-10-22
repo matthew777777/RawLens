@@ -738,6 +738,37 @@ object SrpBridge {
             .order(ByteOrder.nativeOrder())
 
     /**
+     * malloc-backed direct buffer (zeroed), outside the Java heap; null on
+     * allocation failure. The caller must [nativeFreeDirect] it exactly
+     * once and never touch it afterwards.
+     */
+    @JvmStatic
+    external fun nativeAllocDirect(bytes: Long): ByteBuffer?
+
+    @JvmStatic
+    external fun nativeFreeDirect(buffer: ByteBuffer)
+
+    /** Native-order float view over [nativeAllocDirect]; throws OOM on failure. */
+    @JvmStatic
+    fun nativeFloats(count: Int): ByteBuffer =
+        (nativeAllocDirect(count.toLong() * java.lang.Float.BYTES)
+            ?: throw OutOfMemoryError("native direct buffer of $count floats"))
+            .order(ByteOrder.nativeOrder())
+
+    /**
+     * Scoped set of [nativeFloats] buffers freed together by [close]; every
+     * buffer must be dead (not referenced by running code) at close.
+     */
+    class NativeFloats : AutoCloseable {
+        private val owned = ArrayList<ByteBuffer>()
+        fun floats(count: Int): ByteBuffer = nativeFloats(count).also { owned += it }
+        override fun close() {
+            for (b in owned) nativeFreeDirect(b)
+            owned.clear()
+        }
+    }
+
+    /**
      * Validated wrapper for [nativeMergeAccumulate]: throws
      * IllegalArgumentException before crossing JNI on bad arguments.
      */
