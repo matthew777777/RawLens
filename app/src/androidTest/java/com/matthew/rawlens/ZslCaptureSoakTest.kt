@@ -35,6 +35,9 @@ class ZslCaptureSoakTest {
         // file per press. Enables that merge and disables source-burst saves
         // for the run only; the user's values are restored afterwards.
         val zslMerge = args.getString("zslMerge")
+        // ETTR (-e ettr true, with -e mode AUTO): enabled for the run only;
+        // the user's value is restored afterwards.
+        val ettrOn = args.getString("ettr") == "true"
         // AgX (JPEG-look) scopes, as the UI selects for JPEG formats; default linear.
         val agxScope = args.getString("agxScope", "false").toBoolean()
         instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
@@ -44,8 +47,10 @@ class ZslCaptureSoakTest {
         context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
             .edit().putBoolean("lens_setup_complete", true).commit()
         val mergePrefs = context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
-        val mergeKeys = listOf("hdr_plus_enabled", "hdr_plus_keep_source_burst", "mfsr_enabled", "mfsr_keep_source_burst")
+        val mergeKeys = listOf("hdr_plus_enabled", "hdr_plus_keep_source_burst", "mfsr_enabled",
+            "mfsr_keep_source_burst", "ettr_enabled")
         val savedMerge = mergePrefs.all.filterKeys { it in mergeKeys }
+        if (ettrOn) mergePrefs.edit().putBoolean("ettr_enabled", true).commit()
         if (zslMerge != null) {
             mergePrefs.edit()
                 .putBoolean("hdr_plus_enabled", zslMerge == "hdrplus")
@@ -55,7 +60,7 @@ class ZslCaptureSoakTest {
                 .commit()
         }
         fun restoreMergePrefs() {
-            if (zslMerge == null) return
+            if (zslMerge == null && !ettrOn) return
             val edit = mergePrefs.edit()
             for (key in mergeKeys) {
                 val value = savedMerge[key]
