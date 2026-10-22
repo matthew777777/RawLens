@@ -367,18 +367,8 @@ class RawCameraController(
      * would otherwise walk stops toward the target. Tracking glides from there.
      */
     private var programFastStart = true
-    // RAW-based ETTR single-exposure state. The repeating preview keeps running under
-    // hardware AE; every sampled RAW frame refreshes this pair, which the next still
-    // capture (and HDR bracket base) uses instead of the Camera2 meter.
-    @Volatile private var ettrSettings = initialEttrSettings
-    private var ettrIso: Int? = null
-    private var ettrShutterNanos: Long? = null
-    private var ettrConverged = false
-    private var ettrHottest = Float.NaN
-    /** Measured clipped fractions (hottest/second) of the latest sampled frame. */
-    private var ettrClipHot = Float.NaN
-    private var ettrClipSecond = Float.NaN
-    private var lastEttrUpdateMs = Long.MIN_VALUE
+    /** RAW-based ETTR single-exposure state (see EttrLoop). */
+    private val ettr = EttrLoop(initialEttrSettings)
     /** Wall time of the last metering sample; slow samplers back off (see dispatch). */
     @Volatile private var lastMeteringSampleMs = 0L
     private var ettrStreaming = false
@@ -2060,9 +2050,9 @@ class RawCameraController(
             val analogMax = (c[CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY] ?: isoRange.upper)
                 .coerceIn(isoRange.lower,isoRange.upper)
             val program = captureExposureMode == CaptureExposureMode.PROGRAM && dynamicExposureSettings.enabled
-            val meterIso = selectedIso ?: (if (ettrCaptureActive()) ettrIso else null)
+            val meterIso = selectedIso ?: (if (ettrCaptureActive()) ettr.iso else null)
                 ?: (if (program) dynamicIso else null) ?: lastIso
-            val meterTime = selectedExposureNanos ?: (if (ettrCaptureActive()) ettrShutterNanos else null)
+            val meterTime = selectedExposureNanos ?: (if (ettrCaptureActive()) ettr.shutterNanos else null)
                 ?: (if (program) dynamicShutterNanos else null) ?: lastExposureNanos
             val plan = try { DualRawExposure.plan(meterIso,meterTime,isoRange.lower,analogMax,timeRange.lower,timeRange.upper) }
             catch (_: IllegalArgumentException) { onState("RAW HDR TEST EXPOSURE LIMIT"); return@postShutter }
@@ -3586,11 +3576,11 @@ class RawCameraController(
         val timeRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
         val useProgram = captureExposureMode == CaptureExposureMode.PROGRAM && dynamicExposureSettings.enabled
         val useEttr = ettrCaptureActive()
-        val iso = (selectedIso ?: (if (useEttr) ettrIso else null)
+        val iso = (selectedIso ?: (if (useEttr) ettr.iso else null)
             ?: (if (useProgram) dynamicIso else null) ?: lastIso).let { value ->
             value.coerceIn(isoRange?.lower ?: value, isoRange?.upper ?: value)
         }
-        val base = selectedExposureNanos ?: (if (useEttr) ettrShutterNanos else null)
+        val base = selectedExposureNanos ?: (if (useEttr) ettr.shutterNanos else null)
             ?: (if (useProgram) dynamicShutterNanos else null) ?: lastExposureNanos
         val time = HdrBracketConfig.shutterNanos(base, stops).let { value ->
             value.coerceIn(timeRange?.lower ?: value, timeRange?.upper ?: value)
@@ -4133,28 +4123,21 @@ class RawCameraController(
             !rawZslRequested && selectedIso == null && selectedExposureNanos == null &&
             captureExposureMode != CaptureExposureMode.MANUAL
 
-    fun getEttrSettings(): EttrSettings = ettrSettings
+    fun getEttrSettings(): EttrSettings = ettr.settings
 
     fun setEttrSettings(settings: EttrSettings) {
         if (!isOnCameraThread()) {
             cameraHandler.post { setEttrSettings(settings) }
             return
         }
-        ettrSettings = settings.copy(headroomEv = settings.headroomEv.coerceIn(0f, 1f))
-        if (!ettrSettings.enabled) clearEttrLiveState()
-        lastEttrUpdateMs = Long.MIN_VALUE
+        ettr.settings = settings.copy(headroomEv = settings.headroomEv.coerceIn(0f, 1f))
+        if (!ettr.settings.enabled) clearEttrLiveState()
+        ettr.lastUpdateMs = Long.MIN_VALUE
         updateRepeatingRequest()
     }
 
     /** Drops the converged ETTR pair; the enabled preference is preserved. */
-    private fun clearEttrLiveState() {
-        ettrIso = null
-        ettrShutterNanos = null
-        ettrConverged = false
-        ettrHottest = Float.NaN
-        ettrClipHot = Float.NaN
-        ettrClipSecond = Float.NaN
-    }
+    private fun clearEttrLiveState() = ettr.clearLive()
 
     /**
      * True when a RAW-measured ETTR pair is ready for the next forward capture.
@@ -4166,9 +4149,9 @@ class RawCameraController(
         captureExposureMode == CaptureExposureMode.AUTO
 
     private fun ettrCaptureActive(): Boolean =
-        ettrSettings.enabled && ettrModeAvailable() && !rawZslRequested &&
+        ettr.settings.enabled && ettrModeAvailable() && !rawZslRequested &&
             selectedIso == null && selectedExposureNanos == null &&
-            ettrIso != null && ettrShutterNanos != null
+            ettr.iso != null && ettr.shutterNanos != null
 
     /**
      * Dispatches one shared metering sample for the custom-AE loops. The caller is the
@@ -4189,7 +4172,7 @@ class RawCameraController(
         }
         val now = SystemClock.elapsedRealtime()
         val wantProgram = programCustomActive() && !ettrCaptureActive()
-        val wantEttr = ettrSettings.enabled && ettrModeAvailable() &&
+        val wantEttr = ettr.settings.enabled && ettrModeAvailable() &&
             selectedIso == null && selectedExposureNanos == null
         if (!wantProgram && !wantEttr) {
             RawImageOwnership.release(image)
@@ -4202,15 +4185,15 @@ class RawCameraController(
             )
         val ettrDue = wantEttr &&
             RawHistogramThrottle.shouldSample(
-                now, lastEttrUpdateMs,
-                meteringInterval(if (ettrConverged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS)
+                now, ettr.lastUpdateMs,
+                meteringInterval(if (ettr.converged) ETTR_CONVERGED_INTERVAL_MS else ETTR_UPDATE_INTERVAL_MS)
             )
         if ((!programDue && !ettrDue) || !meteringInFlight.compareAndSet(false, true)) {
             RawImageOwnership.release(image)
             return
         }
         if (programDue) lastProgramUpdateMs = now
-        if (ettrDue) lastEttrUpdateMs = now
+        if (ettrDue) ettr.lastUpdateMs = now
         val generation = lifecycleGeneration
         try {
         meteringExecutor.execute {
@@ -4418,7 +4401,7 @@ class RawCameraController(
      * [dispatchMeteringSample]) and post the result here.
      */
     private fun updateEttrFromSample(sample: EttrRawSample) {
-        if (!ettrSettings.enabled || !ettrModeAvailable()) return
+        if (!ettr.settings.enabled || !ettrModeAvailable()) return
         if (captureInProgress.get()) return
         val levels = sample.levels
         val baselineIso = lastIso
@@ -4427,54 +4410,11 @@ class RawCameraController(
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
         val shutterRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) ?: return
-        updateEttrClipState(sample)
-        val shift = RawEttrMeter.correctionEv(levels.hottest, ettrSettings.headroomEv)
-        val result = RawEttrMeter.solve(
-            baselineIso,
-            baselineShutter,
-            shift,
-            EttrLimits(
-                isoMin = isoRange.lower,
-                isoMax = ettrSettings.isoLimit.takeIf { it > 0 }
-                    ?.coerceIn(isoRange.lower, isoRange.upper) ?: isoRange.upper,
-                shutterMinNanos = shutterRange.lower,
-                shutterMaxNanos = shutterRange.upper,
-                safeShutterNanos = ettrSafeShutterCeiling(shutterRange.upper)
-            ),
-            hottestChannel = levels.hottest
+        ettr.update(
+            sample, baselineIso, baselineShutter,
+            isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper,
+            ettrSafeShutterCeiling(shutterRange.upper)
         )
-        ettrIso = result.iso
-        ettrShutterNanos = result.shutterNanos
-        ettrConverged = result.converged
-        ettrHottest = levels.hottest
-    }
-
-    /**
-     * Hottest/second measured clipped fractions for the ETTR debug readout, judged
-     * over R, pooled green, B — both greens are one color for reconstruction.
-     */
-    private fun updateEttrClipState(sample: EttrRawSample) {
-        fun fraction(saturated: Int, total: Int): Float =
-            if (total > 0) saturated.toFloat() / total else 0f
-        val greenTotal = sample.totals.getOrElse(1) { 0 } + sample.totals.getOrElse(2) { 0 }
-        val greenSat = sample.saturated.getOrElse(1) { 0 } + sample.saturated.getOrElse(2) { 0 }
-        val colors = floatArrayOf(
-            fraction(sample.saturated.getOrElse(0) { 0 }, sample.totals.getOrElse(0) { 0 }),
-            fraction(greenSat, greenTotal),
-            fraction(sample.saturated.getOrElse(3) { 0 }, sample.totals.getOrElse(3) { 0 })
-        )
-        var hottest = 0f
-        var second = 0f
-        for (value in colors) {
-            if (value > hottest) {
-                second = hottest
-                hottest = value
-            } else if (value > second) {
-                second = value
-            }
-        }
-        ettrClipHot = hottest
-        ettrClipSecond = second
     }
 
     /** Auto handheld ceiling for ETTR, further clamped by live gyro motion. */
@@ -4568,7 +4508,7 @@ class RawCameraController(
         programConverged = false
         programFastStart = true
         lastProgramUpdateMs = Long.MIN_VALUE
-        lastEttrUpdateMs = Long.MIN_VALUE
+        ettr.lastUpdateMs = Long.MIN_VALUE
         if (mode != CaptureExposureMode.AUTO) {
             // ETTR is AUTO-only: drop any settled pair so returning to AUTO
             // reconverges from live metering instead of a stale exposure.
@@ -4579,9 +4519,9 @@ class RawCameraController(
             CaptureExposureMode.MANUAL -> {
                 // Entering M freezes the currently metered pair, like a DSLR's manual mode.
                 // A settled ETTR pair seeds it so manual starts from the optimal exposure.
-                selectedIso = selectedIso ?: (if (ettrCaptureActive()) ettrIso else null) ?: lastIso
+                selectedIso = selectedIso ?: (if (ettrCaptureActive()) ettr.iso else null) ?: lastIso
                 selectedExposureNanos = selectedExposureNanos
-                    ?: (if (ettrCaptureActive()) ettrShutterNanos else null) ?: lastExposureNanos
+                    ?: (if (ettrCaptureActive()) ettr.shutterNanos else null) ?: lastExposureNanos
             }
             else -> {
                 selectedIso = null
@@ -4937,7 +4877,7 @@ class RawCameraController(
                 stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0,
                 histogramEnabled = scopes.histogramEnabled,
                 histogramDisabledForSession = rawHistogramDisabledForSession,
-                ettrEnabled = ettrSettings.enabled,
+                ettrEnabled = ettr.settings.enabled,
                 ettrModeAvailable = ettrModeAvailable(),
                 manualIsoOrShutter = selectedIso != null || selectedExposureNanos != null,
                 exposureModeManual = captureExposureMode == CaptureExposureMode.MANUAL,
@@ -5188,12 +5128,12 @@ class RawCameraController(
                 val showEttr = ettrCaptureActive()
                 val showDynamic = !showEttr && dynamicExposureDisplayActive()
                 val displayIso = when {
-                    showEttr -> ettrIso ?: iso
+                    showEttr -> ettr.iso ?: iso
                     showDynamic -> dynamicIso ?: iso
                     else -> iso
                 }
                 val displayShutter = when {
-                    showEttr -> ettrShutterNanos ?: shutter
+                    showEttr -> ettr.shutterNanos ?: shutter
                     showDynamic -> dynamicShutterNanos ?: shutter
                     else -> shutter
                 }
@@ -5288,8 +5228,8 @@ class RawCameraController(
         ) {
             val isoRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
             val exposureRange = characteristics?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            val targetIso = selectedIso ?: (if (ettrExposure) ettrIso else null) ?: dynamicIso ?: lastIso
-            val targetExposure = selectedExposureNanos ?: (if (ettrExposure) ettrShutterNanos else null)
+            val targetIso = selectedIso ?: (if (ettrExposure) ettr.iso else null) ?: dynamicIso ?: lastIso
+            val targetExposure = selectedExposureNanos ?: (if (ettrExposure) ettr.shutterNanos else null)
                 ?: dynamicShutterNanos ?: lastExposureNanos
             val iso = targetIso.coerceIn(isoRange?.lower ?: targetIso, isoRange?.upper ?: targetIso)
             val exposure = targetExposure.coerceIn(
@@ -5721,14 +5661,14 @@ class RawCameraController(
             liveShutterNanos = dynamicShutterNanos,
             programConverged = programConverged,
             programBrightness = programBrightness,
-            ettrEnabled = ettrSettings.enabled,
+            ettrEnabled = ettr.settings.enabled,
             ettrModeAvailable = ettrModeAvailable(),
-            ettrIso = ettrIso,
-            ettrShutterNanos = ettrShutterNanos,
-            ettrConverged = ettrConverged,
-            ettrHottest = ettrHottest,
-            ettrClipHot = ettrClipHot,
-            ettrClipSecond = ettrClipSecond,
+            ettrIso = ettr.iso,
+            ettrShutterNanos = ettr.shutterNanos,
+            ettrConverged = ettr.converged,
+            ettrHottest = ettr.hottest,
+            ettrClipHot = ettr.clipHot,
+            ettrClipSecond = ettr.clipSecond,
             zslStreaming = rawZslStreaming,
             zslBuffered = rawZslBuffer?.size ?: 0,
             zslCapacity = rawZslCapacity,
@@ -6197,7 +6137,7 @@ class RawCameraController(
         // the user may have changed format, lens, ETTR or the focus point.
         val captureDevelopedFormat = activeDevelopedFormat
         val captureJxlSettings = activeJxlOutputSettings
-        val captureEttrHeadroomEv = if (ettrCaptureActive()) ettrSettings.headroomEv else null
+        val captureEttrHeadroomEv = if (ettrCaptureActive()) ettr.settings.headroomEv else null
         val captureFocusView = developFocusView
         val captureDngOverrides = dngMetadataOverrides(selectedCameraId)
         val captureDngBackend = dngWriterBackend()
@@ -6486,7 +6426,7 @@ class RawCameraController(
         // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
         val wantHistogram = scopes.histogramEnabled &&
             !rawHistogramDisabledForSession
-        val wantEttr = ettrSettings.enabled && ettrModeAvailable()
+        val wantEttr = ettr.settings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
         if (!wantHistogram && !wantEttr && !wantProgram && rawViewfinder == null && bguViewfinder == null) return
         updateRepeatingRequest(allowRawZsl = zslRestartFitsReader())
