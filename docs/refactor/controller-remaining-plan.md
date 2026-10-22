@@ -86,3 +86,14 @@ behaviour surface last; A3/A6 need a study first).
   in RawStreamPlan). Phone: AUTO, MANUAL, ZSL soaks 2/2 each, no request
   failures. Finding for the rewrite batch (R-A3-1): with only ISO manual,
   the shutter is taken from a left-over PROGRAM pair when one exists.
+- ZSL merge jobs done: `fix(zsl)` froze their save settings at shutter
+  time (ZslMergeSaveSettings); `HdrPlusZslSaveJob` / `MfsrZslSaveJob` hold
+  the writer-thread bodies verbatim (line diff: only Host substitutions),
+  host built at job start so status lines keep the job-start generation.
+  Ring selection, retries and completion stay in the controller. Soak
+  gains `-e zslMerge hdrplus|mfsr` (restores the user's merge settings).
+  Phone: HDR+ ZSL 2/2 (11.4 s, 9.9 s merges). MFSR: first merge OK, the
+  back-to-back second one fails with OutOfMemoryError on the 150 MB
+  output buffer; the pre-move baseline build fails identically, so it
+  is pre-existing (being fixed separately).
+  Record only: the jobs' failure paths call onState on the writer thread.

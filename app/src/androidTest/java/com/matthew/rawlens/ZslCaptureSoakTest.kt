@@ -31,6 +31,10 @@ class ZslCaptureSoakTest {
         val burst = args.getString("burst", "false").toBoolean()
         // HDR bracket (-2/0/+2 EV): one merged DNG and/or JPEG per press.
         val hdrBracket = args.getString("hdrBracket", "false").toBoolean()
+        // ZSL merge (-e zslMerge hdrplus|mfsr, with -e mode ZSL): one merged
+        // file per press. Enables that merge and disables source-burst saves
+        // for the run only; the user's values are restored afterwards.
+        val zslMerge = args.getString("zslMerge")
         // AgX (JPEG-look) scopes, as the UI selects for JPEG formats; default linear.
         val agxScope = args.getString("agxScope", "false").toBoolean()
         instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
@@ -39,6 +43,26 @@ class ZslCaptureSoakTest {
         // KEY_LENS_SETUP_COMPLETE, as in VideoModeUiTest).
         context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
             .edit().putBoolean("lens_setup_complete", true).commit()
+        val mergePrefs = context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
+        val mergeKeys = listOf("hdr_plus_enabled", "hdr_plus_keep_source_burst", "mfsr_enabled", "mfsr_keep_source_burst")
+        val savedMerge = mergePrefs.all.filterKeys { it in mergeKeys }
+        if (zslMerge != null) {
+            mergePrefs.edit()
+                .putBoolean("hdr_plus_enabled", zslMerge == "hdrplus")
+                .putBoolean("mfsr_enabled", zslMerge == "mfsr")
+                .putBoolean("hdr_plus_keep_source_burst", false)
+                .putBoolean("mfsr_keep_source_burst", false)
+                .commit()
+        }
+        fun restoreMergePrefs() {
+            if (zslMerge == null) return
+            val edit = mergePrefs.edit()
+            for (key in mergeKeys) {
+                val value = savedMerge[key]
+                if (value is Boolean) edit.putBoolean(key, value) else edit.remove(key)
+            }
+            edit.commit()
+        }
         android.util.Log.i("RawLensSoak", "Launching activity")
         val activity = instrumentation.startActivitySync(Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
@@ -105,7 +129,7 @@ class ZslCaptureSoakTest {
                 format.includesJpeg -> minOf(frames, 6)
                 else -> frames
             }
-            val outputs = if (hdrBracket) (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
+            val outputs = if (hdrBracket || zslMerge != null) (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
                 else expectedFrames * (if (format == CaptureFormat.JPEG_DNG) 2 else 1)
             repeat(cycles) { cycle ->
                 awaitCondition("Cycle $cycle did not rearm") {
@@ -184,6 +208,9 @@ class ZslCaptureSoakTest {
                     "pairs=$heldPairs saves=$heldSaves minFps=$minObservedFps gpuOnly=${RawImageOwnership.gpuOnlyCount()} " +
                     "vf=${activity.findViewById<RawViewfinder>(R.id.rawViewfinder).snapshot()}")
             }
-        } finally { instrumentation.runOnMainSync { activity.finish() } }
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            restoreMergePrefs()
+        }
     }
 }
