@@ -55,7 +55,24 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
       changes; reuse our focus-peaking and motion data.
 - [ ] F5 [2.0.x] Focus stacking (src/focus.c focus stack): automatic
       focus-distance bracketing via Camera2; merge later.
-Not applicable: dual ISO (needs per-line sensor gain, not exposed on
+- [ ] F6 [2.0.x] Auto-range HDR bracketing (src/shoot.c, Frames
+      "Autodetect"; ISO shifting): add darker/brighter frames until
+      highlights are unclipped and shadows are lifted, instead of a fixed
+      count. Fits the HDR bracket rework (B section).
+- [ ] F7 [2.0.x] White balance from raw (src/shoot.c kelvin_auto,
+      wbs_gm_auto): set Kelvin and green-magenta from a neutral spot's raw
+      values.
+- [ ] F8 [2.0.x] Vectorscope (src/vectorscope.c) next to histogram/waveform.
+- [ ] F9 [2.0.x] Magic Zoom (src/zebra.c): persistent magnified window
+      over the focus point for manual focus.
+- [ ] F10 [2.0.x] Rack focus / follow focus for video (src/focus.c): two
+      saved focus distances, smooth move between them while recording.
+- [ ] F11 [2.0.x] Depth-of-field info (src/lens.c): near/far limits and
+      hyperfocal distance from Camera2 lens data.
+- [ ] F12 [2.0.x] Cropmarks and ghost-image overlay (src/cropmarks.c,
+      src/zebra.c): aspect frame lines; last photo shown semi-transparent.
+- [ ] F13 [2.0.x] Anamorphic desqueeze preview (src/zebra.c).
+Not applicable: AFMA (afma.c), mirror lockup, dual ISO (needs per-line sensor gain, not exposed on
 Android), silent pictures, FPS override, crop_rec (sensor register hacks).
 
 ## E. Build and release
