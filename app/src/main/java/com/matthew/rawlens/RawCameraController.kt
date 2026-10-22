@@ -459,19 +459,8 @@ class RawCameraController(
      * are view-proportional). Camera thread writes; volatile for saver reads.
      */
     @Volatile private var developFocusView: Pair<Float, Float>? = null
-    // Face-priority AF/AE (HAL STATISTICS_FACES): regions applied only while no
-    // tap target overrides them (see applyCameraControls). Camera thread only,
-    // except maxFaceCount/faceDetectRejected which the UI reads for the N/A note.
-    private var facePriorityEnabled: Boolean = initialFacePriorityEnabled
-    @Volatile private var maxFaceCount: Int = 0
-    @Volatile private var faceDetectRejected: Boolean = false
-    private var faceAfRegion: MeteringRectangle? = null
-    private var faceAeRegion: MeteringRectangle? = null
-    private var trackedFace: HalFace? = null
-    private var faceRegionRect: Rect? = null
-    private var faceMissCount: Int = 0
-    private var lastFaceRegionPushMs: Long = 0L
-    private var lastFacePublishMs: Long = 0L
+    // Face-priority AF/AE (HAL STATISTICS_FACES); see FaceTracking.
+    private val faces = FaceTracking(FaceTrackingHost(), initialFacePriorityEnabled)
 
     // Tap / hold focus and metering (Open Camera continuous-picture AF port).
     private val touchFocus = TouchFocus(TouchFocusHost())
@@ -686,9 +675,7 @@ class RawCameraController(
             chainPairedAny = false
             rawHistogramDisabledForSession = false
             rawHistogramStreaming = false
-            maxFaceCount = characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0
-            faceDetectRejected = false
-            clearFaceState()
+            faces.resetForSession(characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0)
             clampControlsToCamera()
         
             val pixelArraySize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
@@ -3859,28 +3846,30 @@ class RawCameraController(
             cameraHandler.post { setFacePriorityEnabled(enabled) }
             return
         }
-        if (facePriorityEnabled == enabled) return
-        facePriorityEnabled = enabled
-        clearFaceState()
+        if (!faces.setEnabled(enabled)) return
         updateRepeatingRequest(preserveRawZslBuffer = true)
     }
 
     /** False before the first open, on lenses without face stats, or after a HAL rejection. */
-    fun isFaceDetectSupported(): Boolean = maxFaceCount > 0 && !faceDetectRejected
+    fun isFaceDetectSupported(): Boolean = faces.isSupported()
 
-    private fun clearFaceState() {
-        trackedFace = null
-        faceRegionRect = null
-        faceAfRegion = null
-        faceAeRegion = null
-        faceMissCount = 0
-        onFaces(emptyList())
+    private fun clearFaceState() = faces.clear()
+
+    private inner class FaceTrackingHost : FaceTracking.Host {
+        override fun nowMs(): Long = SystemClock.elapsedRealtime()
+        override fun pushRegions() = updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
+        override fun viewSize(): Pair<Int, Int> = viewfinder.width to viewfinder.height
+        override fun sensorOrientation(): Int =
+            characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        override fun frontFacing(): Boolean = characteristics?.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT
+        override fun publish(boxes: List<FaceOverlayBox>) = onFaces(boxes)
     }
 
     /** FULL scores every face for the tracker; OFF is set explicitly so a toggle-off sticks. */
     private fun applyFaceDetectMode(builder: CaptureRequest.Builder) {
-        if (faceDetectRejected) return
-        val mode = if (facePriorityEnabled && maxFaceCount > 0)
+        val full = faces.requestedDetectFull() ?: return
+        val mode = if (full)
             CameraMetadata.STATISTICS_FACE_DETECT_MODE_FULL
         else CameraMetadata.STATISTICS_FACE_DETECT_MODE_OFF
         try {
@@ -3888,7 +3877,7 @@ class RawCameraController(
         } catch (failure: IllegalArgumentException) {
             // A HAL that advertises faces but rejects the key must not break the
             // repeating stream: latch off for this session and run faceless.
-            faceDetectRejected = true
+            faces.markRejected()
             Log.w(LOG_TAG, "Face-detect mode rejected; running without faces", failure)
         }
     }
@@ -3899,53 +3888,16 @@ class RawCameraController(
      * must not rebuild the stream every frame) and the overlay publication.
      */
     private fun handlePreviewFaces(result: TotalCaptureResult) {
-        if (!facePriorityEnabled || maxFaceCount <= 0 || faceDetectRejected) return
+        if (!faces.enabled || faces.maxFaceCount <= 0 || faces.rejected) return
         val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
         val crop = result.get(CaptureResult.SCALER_CROP_REGION) ?: active
-        val faces = result.get(CaptureResult.STATISTICS_FACES)
+        val halFaces = result.get(CaptureResult.STATISTICS_FACES)
             ?.mapNotNull { halFaceIn(it, active) } ?: emptyList()
-        val selected = FacePriority.select(faces, trackedFace)
-        if (selected == null) {
-            // Debounce: a single faceless result is usually a blink, not a departure.
-            if (++faceMissCount >= FACE_MISS_TOLERANCE && trackedFace != null) {
-                trackedFace = null
-                faceRegionRect = null
-                faceAfRegion = null
-                faceAeRegion = null
-                updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
-            }
-        } else {
-            faceMissCount = 0
-            trackedFace = selected
-            val rect = Rect(selected.left, selected.top, selected.right, selected.bottom)
-            // Metering rectangles must sit inside the crop, like tap targets.
-            if (!rect.intersect(crop)) {
-                if (faceAfRegion != null || faceAeRegion != null) {
-                    faceRegionRect = null
-                    faceAfRegion = null
-                    faceAeRegion = null
-                    updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
-                }
-            } else {
-                val tolerance = (active.width() * FACE_REGION_MOVE_FRACTION).toInt().coerceAtLeast(1)
-                val previous = faceRegionRect
-                val moved = previous == null ||
-                    Math.abs(previous.left - rect.left) > tolerance ||
-                    Math.abs(previous.top - rect.top) > tolerance ||
-                    Math.abs(previous.right - rect.right) > tolerance ||
-                    Math.abs(previous.bottom - rect.bottom) > tolerance
-                val now = SystemClock.elapsedRealtime()
-                if (moved && now - lastFaceRegionPushMs >= FACE_REGION_PUSH_MIN_INTERVAL_MS) {
-                    lastFaceRegionPushMs = now
-                    faceRegionRect = Rect(rect)
-                    val region = MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX)
-                    faceAfRegion = region
-                    faceAeRegion = region
-                    updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
-                }
-            }
-        }
-        publishFaces(faces, selected, active)
+        faces.onPreviewFaces(
+            halFaces,
+            SensorActiveArray(active.left, active.top, active.right, active.bottom),
+            SensorActiveArray(crop.left, crop.top, crop.right, crop.bottom)
+        )
     }
 
     private fun halFaceIn(face: Face, active: Rect): HalFace? {
@@ -3956,29 +3908,6 @@ class RawCameraController(
         val bottom = bounds.bottom.coerceIn(active.top, active.bottom)
         if (right <= left || bottom <= top) return null
         return HalFace(left, top, right, bottom, face.score)
-    }
-
-    private fun publishFaces(faces: List<HalFace>, tracked: HalFace?, active: Rect) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastFacePublishMs < FACE_OVERLAY_INTERVAL_MS) return
-        lastFacePublishMs = now
-        val width = viewfinder.width
-        val height = viewfinder.height
-        if (width <= 0 || height <= 0) return
-        // Same un-offset convention as taps: overlay pixels are fractions of the
-        // viewfinder size, so boxes land where a tap at the same spot meters.
-        val sensorActive = SensorActiveArray(active.left, active.top, active.right, active.bottom)
-        val rotation = characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        val mirrored = characteristics?.get(CameraCharacteristics.LENS_FACING) ==
-            CameraCharacteristics.LENS_FACING_FRONT
-        onFaces(faces.map { face ->
-            val box = FacePriority.mapToView(face, sensorActive, rotation, mirrored)
-            FaceOverlayBox(
-                box.left * width, box.top * height,
-                box.right * width, box.bottom * height,
-                face == tracked
-            )
-        })
     }
 
     fun cycleIso() {
@@ -5379,11 +5308,14 @@ class RawCameraController(
         // and clearing the tap hands control back to the tracked face. Regions
         // are harmless where AF/AE run open-loop (manual/PROGRAM sensor drive):
         // the HAL ignores them, so no mode gating is needed here.
-        (afRegion ?: faceAfRegion)?.takeIf {
+        val faceRegion = faces.region?.let {
+            MeteringRectangle(Rect(it.left, it.top, it.right, it.bottom), MeteringRectangle.METERING_WEIGHT_MAX)
+        }
+        (afRegion ?: faceRegion)?.takeIf {
             (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
         }?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
         val aeRegions = aeRegion?.let { arrayOf(it) }
-            ?: faceAeRegion?.let { arrayOf(it) }
+            ?: faceRegion?.let { arrayOf(it) }
             ?: standardAeMeteringRegions()
         if (aeRegions != null && isAeMeteringSupported()) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, aeRegions)
@@ -7430,14 +7362,6 @@ class RawCameraController(
 
     companion object {
         private const val ASPECT_RATIO_TOLERANCE = 0.015
-        /** Consecutive faceless results before the tracked face (and its regions) drops. */
-        private const val FACE_MISS_TOLERANCE = 5
-        /** Minimum gap between face-region repeating pushes; HAL boxes jitter every frame. */
-        private const val FACE_REGION_PUSH_MIN_INTERVAL_MS = 150L
-        /** Face-box overlay cadence; full preview rate would just churn invalidates. */
-        private const val FACE_OVERLAY_INTERVAL_MS = 80L
-        /** Region rebuild threshold as a fraction of the active-array width. */
-        private const val FACE_REGION_MOVE_FRACTION = 0.02f
         private const val CAPTURE_TIMEOUT_MS = 8_000L
         private const val PAIR_TIMEOUT_MS = 5_000L
         /** P0 flash precapture: convergence wait ceiling and poll cadence. */

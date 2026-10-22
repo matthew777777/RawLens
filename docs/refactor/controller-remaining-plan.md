@@ -43,3 +43,8 @@ behaviour surface last; A3/A6 need a study first).
   decision, formatExposure/clipPercent) is pure; the controller keeps the
   throttles, the idle-AF log and the callbacks and passes a
   `DebugOverlaySnapshot`. Strings unchanged (normalized diff), 6 JVM tests.
+- A8 done: `FaceTracking` owns the 10 face fields, select/debounce/
+  move-tolerance/push-throttle/overlay logic behind a Host; the controller
+  keeps Camera2 reads, the face-detect key and the region -> MeteringRectangle
+  step. `Rect.intersect` became the identical integer test; the two
+  always-equal AF/AE regions became one. 8 JVM tests (first coverage).
