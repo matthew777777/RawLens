@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import java.util.zip.GZIPOutputStream
 
 plugins {
     id("com.android.application")
@@ -128,11 +129,13 @@ android {
 
     buildTypes {
         release {
-            // R8 code shrinking runs for F-Droid builds (store requirement;
-            // JNI entry points and layout-inflated views are covered by
-            // proguard-rules.pro). GitHub releases stay unobfuscated for
-            // now so perf comparisons run on identical code.
-            isMinifyEnabled = isFdroidBuild
+            // R8 for every release (GitHub and F-Droid ship the same code):
+            // dex 9.8 -> 1.4 MB. JNI entry points and layout-inflated views
+            // are covered by proguard-rules.pro; enum names (stored in
+            // preferences) survive as string constants. The mapping is
+            // archived per version (archiveReleaseMapping below) so crash
+            // stack traces can be retraced.
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -149,6 +152,15 @@ android {
             // plus CMake Release (-O3) native code. Force complete AOT on the
             // device after install with:
             //   adb shell cmd package compile -m speed -f com.matthew.rawlens
+        }
+        // Instrumented tests: release in every respect except R8. The device
+        // tests reflect on private controller fields by name (soak, refactor
+        // checks), which renaming would break; the minified APK itself gets
+        // a smoke run per release instead.
+        create("deviceTest") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -188,7 +200,7 @@ android {
     // On-device tests always run against release (CMake -O3): debug native
     // code is ~40x slower and cannot hold record-mode cadence, so debug
     // numbers never represent shipping performance.
-    testBuildType = "release"
+    testBuildType = "deviceTest"
 
 
     // Name APKs after the app instead of the generic module name, e.g.
@@ -203,6 +215,35 @@ android {
 
 }
 
+// R8 mapping per release: RawLens-<version>-release-mapping.txt.gz next to
+// the APK (attach it to the GitHub release) and a copy in release-mappings/
+// at the repo root, which `clean` never touches. Retrace a crash with
+//   retrace RawLens-<version>-release-mapping.txt stacktrace.txt
+// (Android SDK cmdline-tools / R8).
+val archiveReleaseMapping by tasks.registering {
+    description = "Saves the release R8 mapping (gzip) next to the APK and in release-mappings/."
+    val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
+    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
+    val archiveDir = rootProject.layout.projectDirectory.dir("release-mappings")
+    val name = "RawLens-$appVersionName-release-mapping.txt.gz"
+    inputs.file(mappingFile)
+    outputs.file(apkDir.map { it.file(name) })
+    doLast {
+        val src = mappingFile.get().asFile
+        val targets = listOf(apkDir.get().file(name).asFile, archiveDir.file(name).asFile)
+        for (target in targets) {
+            target.parentFile.mkdirs()
+            GZIPOutputStream(target.outputStream()).use { out ->
+                src.inputStream().use { it.copyTo(out) }
+            }
+        }
+        println("R8 mapping saved: ${targets.joinToString { it.path }}")
+    }
+}
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+    finalizedBy(archiveReleaseMapping)
+}
+
 // F-Droid builds must not ship the updater-only permissions (stripped by
 // app/fdroid/AndroidManifest.xml). Fails the build if they survive the
 // manifest merge, so a future manifest refactor cannot silently re-add
@@ -211,7 +252,12 @@ if (isFdroidBuild) {
     val checkFdroidPermissions by tasks.registering {
         description = "Fails if updater-only permissions survived the F-Droid manifest merge."
         doLast {
-            val merged = layout.buildDirectory.dir("intermediates/merged_manifests/release")
+            // The output of processReleaseMainManifest, the task this check
+            // finalizes. (merged_manifests/release is written later by
+            // processReleaseManifest: a stale copy from the previous build,
+            // or absent on a clean F-Droid build.)
+            val merged = layout.buildDirectory
+                .dir("intermediates/merged_manifest/release/processReleaseMainManifest")
                 .get().asFile.walkTopDown().firstOrNull { it.name == "AndroidManifest.xml" }
                 ?: error("checkFdroidPermissions: merged release manifest not found")
             val leaked = listOf(

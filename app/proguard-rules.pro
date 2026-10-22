@@ -1,5 +1,5 @@
-# RawLens R8 rules (applied when minification is enabled, i.e. F-Droid
-# builds; GitHub releases stay unobfuscated for now). The default
+# RawLens R8 rules (every release build; instrumented tests run the
+# unminified deviceTest build type). The default
 # proguard-android-optimize.txt covers manifest components, AndroidX,
 # annotations, and enum/serialization machinery; only app-specific
 # reflection-adjacent cases need rules here.

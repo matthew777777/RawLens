@@ -41,3 +41,6 @@ fastlane/test_output/
 # Session transcripts/trajectories accidentally committed once; never again.
 conversation-*.txt
 trajectory-*.json
+
+# R8 mappings archived per release (attach to each GitHub release)
+release-mappings/
