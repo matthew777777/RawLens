@@ -38,10 +38,15 @@ private data class Plan(
     val knCap: Float = KernelNet.DEFAULT_SIGMA_CAP,
     /** Supplement S.3 high-frequency rejection (off = IPOL parity). */
     val s3: Boolean = true,
+    /** Robustness strengths: [s1] where the flow varies (M > Mt), [s2] elsewhere (IPOL 2 / 12; paper S.2 12 / 2). */
+    val s1: Float = 2f,
+    val s2: Float = 12f,
+    /** GAT before Wronski kernel estimation (IPOL; the paper has none). */
+    val kernelGat: Boolean = true,
 )
 
 private fun usage(): String = """
-    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N] [--kernel wronski|kernelnet] [--kn-scale F] [--kn-cap F] [--s3 on|off]
+    Usage: sr-pipeline --in DIR --out DIR [--ref N] [--crop x,y,w,h] [--limit N] --backend cpu|vulkan [--scale F] [--lib PATH] [--spv-dir DIR] [--lut PATH] [--heap-budget-mb N] [--kernel wronski|kernelnet] [--kn-scale F] [--kn-cap F] [--s3 on|off] [--s1 F --s2 F] [--kernel-gat on|off]
       --in DIR       input frame directory with .dng burst frames (required)
       --out DIR      output directory, receives merged.dng (required)
       --ref N        reference frame index into the sorted frames, >= 0 (default 0)
@@ -91,6 +96,9 @@ private fun parseArgs(args: Array<String>): Plan {
     var knScale = KernelNet.DEFAULT_SIGMA_SCALE
     var knCap = KernelNet.DEFAULT_SIGMA_CAP
     var s3 = true
+    var s1 = 2f
+    var s2 = 12f
+    var kernelGat = true
 
     var i = 0
     while (i < args.size) {
@@ -158,6 +166,18 @@ private fun parseArgs(args: Array<String>): Plan {
                 s3 = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--s3 requires on|off") }
                 i++
             }
+            "--s1" -> {
+                s1 = args.getOrNull(++i)?.toFloatOrNull() ?: fail("--s1 requires a number")
+                i++
+            }
+            "--s2" -> {
+                s2 = args.getOrNull(++i)?.toFloatOrNull() ?: fail("--s2 requires a number")
+                i++
+            }
+            "--kernel-gat" -> {
+                kernelGat = when (args.getOrNull(++i)) { "on" -> true; "off" -> false; else -> fail("--kernel-gat requires on|off") }
+                i++
+            }
             "--lut" -> {
                 lut = args.getOrNull(++i) ?: fail("--lut requires a PATH value")
                 i++
@@ -199,6 +219,9 @@ private fun parseArgs(args: Array<String>): Plan {
         knScale = knScale,
         knCap = knCap,
         s3 = s3,
+        s1 = s1,
+        s2 = s2,
+        kernelGat = kernelGat,
     )
 }
 
@@ -300,10 +323,10 @@ private fun merge(plan: Plan) {
             dTh = fin.dTh.toFloat(),
             dTr = fin.dTr.toFloat(),
         ),
-        kernelPreprocessing = "gat",
+        kernelPreprocessing = if (plan.kernelGat) "gat" else null,
         kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
         kernelBeta = FloatArray(4) { beta[it].toFloat() },
-        robustnessParams = RobustnessParams(noiseCorrection = noiseCorrection, s3 = plan.s3),
+        robustnessParams = RobustnessParams(noiseCorrection = noiseCorrection, s3 = plan.s3, s1 = plan.s1, s2 = plan.s2),
         robustnessEnabled = true,
         sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
         dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
