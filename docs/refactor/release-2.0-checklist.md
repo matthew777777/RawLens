@@ -30,21 +30,11 @@ can follow. Owner may move items.
 - [ ] B8 [2.0] 3-bracket HDR merge on B5/B6, delete deghost/FlowNet route
       (hdr-bracket-merge-study.md). Owner: bracket DNGs with moving cars.
 
-## C. MFSR
-- [ ] C9 [2.0] Dim-burst divergence vs the Python reference (70.5 dB).
-- [ ] C10 [2.0.x] Scale > 1 for zoom; S.3 thresholds; failed-tile
-      alignment check (mfsr-paper-gaps.md).
-- [x] C10a s1/s2 and kernel-GAT A/B: keep IPOL (closed 2026-10-22,
-      mfsr-paper-gaps.md).
-- [ ] C11 [2.0.x] UI toggles (kernel, S.3); duplicate KernelNet model in the
-      APK; 150 MB FloatArray copy before the MFSR DNG; perf (CPU pyramid,
-      KernelNet conv).
-- [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
-
-- [ ] C13 [2.0] MFSR "Wronski 2.0" (owner goal: improve beyond the paper):
-      fix the core (merge resolution gain, single-frame reconstruction,
-      alignment precision, motion-blur cases); no sharpening/exposure
-      post-fixes (mfsr-wronski-2.md).
+## C. Zipper / dot / square artefacts (NEXT, owner 2026-10-22)
+- [ ] Z1 [2.0] Find and fix the root cause of the zipper pattern: dots and
+      small squares alternating one dark, the next brighter, along edges
+      and in fine detail. Root cause only (demosaic, green imbalance,
+      CFA phase, black level, etc. - to be found), no masking filter.
 
 ## D. Other open items [2.0.x]
 - [ ] D13 ZSL copy-out pool (MotionCam; needs measurements).
@@ -68,6 +58,22 @@ can follow. Owner may move items.
 - [ ] E24 [2.0] Version 2.0.0, merge refactor/2.0 -> main, tag, attach the
       R8 mapping (release-mappings/) to the GitHub release; F-Droid recipe
       supplies libjxl source (else JXL is "not bundled").
+
+## M. MFSR (moved last, owner 2026-10-22: after everything else)
+- [ ] C9 [2.0] Dim-burst divergence vs the Python reference (70.5 dB).
+- [ ] C10 [2.0.x] Scale > 1 for zoom; S.3 thresholds; failed-tile
+      alignment check (mfsr-paper-gaps.md).
+- [x] C10a s1/s2 and kernel-GAT A/B: keep IPOL (closed 2026-10-22,
+      mfsr-paper-gaps.md).
+- [ ] C11 [2.0.x] UI toggles (kernel, S.3); duplicate KernelNet model in the
+      APK; 150 MB FloatArray copy before the MFSR DNG; perf (CPU pyramid,
+      KernelNet conv).
+- [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
+
+- [ ] C13 [2.0] MFSR "Wronski 2.0" (owner goal: improve beyond the paper):
+      fix the core (merge resolution gain, single-frame reconstruction,
+      alignment precision, motion-blur cases); no sharpening/exposure
+      post-fixes (mfsr-wronski-2.md).
 
 ## Done today (for reference)
 Controller A1-A10 + ZSL merge jobs, MFSR back-to-back OOM fix, MFSR S.3 and
