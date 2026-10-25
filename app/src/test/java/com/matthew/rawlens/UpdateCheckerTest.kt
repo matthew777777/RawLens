@@ -33,4 +33,34 @@ class UpdateCheckerTest {
         assertFalse(UpdateChecker.isNewerThan("1.0", "1.0.0"))
         assertTrue(UpdateChecker.isNewerThan("1.0", "1.0.1"))
     }
+
+    private fun asset(name: String) =
+        UpdateChecker.ApkAsset(name, "https://example.com/$name", 1L)
+
+    @Test fun picksDeviceAbiSplitOverOthers() {
+        val assets = listOf(
+            asset("RawLens-1.0.500-release-armeabi-v7a.apk"),
+            asset("RawLens-1.0.500-release.apk"),
+            asset("RawLens-1.0.500-release-arm64-v8a.apk"),
+        )
+        assertEquals(
+            "RawLens-1.0.500-release-arm64-v8a.apk",
+            UpdateChecker.pickApkAsset(assets, arrayOf("arm64-v8a", "armeabi-v7a"))?.name,
+        )
+        assertEquals(
+            "RawLens-1.0.500-release-armeabi-v7a.apk",
+            UpdateChecker.pickApkAsset(assets, arrayOf("armeabi-v7a"))?.name,
+        )
+    }
+
+    @Test fun fallsBackToUniversalWhenNoSplitMatches() {
+        val assets = listOf(
+            asset("RawLens-1.0.500-release-armeabi-v7a.apk"),
+            asset("RawLens-1.0.500-release.apk"),
+        )
+        assertEquals(
+            "RawLens-1.0.500-release.apk",
+            UpdateChecker.pickApkAsset(assets, arrayOf("arm64-v8a", "armeabi-v7a"))?.name,
+        )
+    }
 }

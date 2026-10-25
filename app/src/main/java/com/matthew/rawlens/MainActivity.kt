@@ -3071,7 +3071,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun applyMfsrSettings(settings: MfsrSettings): Boolean {
+    internal fun applyMfsrSettings(settings: MfsrSettings): Boolean {
         if (!controller.setMfsrSettings(settings)) {
             setStatus("MFSR LOCKED • SAVING")
             return false

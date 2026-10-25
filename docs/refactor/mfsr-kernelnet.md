@@ -1,4 +1,4 @@
-# MFSR: PhotonCamera KernelNet as the Wronski reconstruction kernel
+ # MFSR: PhotonCamera KernelNet as the Wronski reconstruction kernel
 
 Wronski et al. 2019 reconstruct each output pixel as a kernel-weighted sum
 (Eq. 1-2) with anisotropic Gaussian kernels from each frame's structure

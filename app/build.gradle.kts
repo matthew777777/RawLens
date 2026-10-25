@@ -70,6 +70,10 @@ android {
         }
         externalNativeBuild {
             cmake {
+                // Force true CMake Release (-O3 -DNDEBUG, no debug info)
+                // for every build type. AGP otherwise uses RelWithDebInfo
+                // (-O2 -g) even for the release build type.
+                arguments("-DCMAKE_BUILD_TYPE=Release")
                 if (isFdroidBuild) {
                     arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
                 }
@@ -97,6 +101,20 @@ android {
             if (isFdroidBuild) {
                 manifest.srcFile("fdroid/AndroidManifest.xml")
             }
+        }
+    }
+
+    // Per-ABI APK splits plus a universal APK. Devices download/install
+    // only their ABI's native libraries (roughly half the native payload
+    // of the universal APK); the universal APK remains the fallback the
+    // F-Droid recipe and older links expect. F-Droid builds disable
+    // splits: that channel ships exactly one universal APK.
+    splits {
+        abi {
+            isEnable = !isFdroidBuild
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
         }
     }
 
@@ -140,7 +158,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            isShrinkResources = false
+            // Resource shrinking on: no getIdentifier/dynamic resource
+            // lookups exist (audited 2026-10), so R8 can safely drop
+            // unreferenced resources. Keep rules live in
+            // res/raw/keep.xml if that ever changes.
+            isShrinkResources = true
             isDebuggable = false
             isJniDebuggable = false
             // Signed with RAWLENS_KEYSTORE when provided, otherwise with the
@@ -160,6 +182,9 @@ android {
         create("deviceTest") {
             initWith(getByName("release"))
             isMinifyEnabled = false
+            // Resource shrinking requires code shrinking (AGP enforces
+            // the pair); tests keep the full resource set instead.
+            isShrinkResources = false
             matchingFallbacks += listOf("release")
         }
     }
@@ -204,12 +229,22 @@ android {
 
 
     // Name APKs after the app instead of the generic module name, e.g.
-    // RawLens-1.0.0-release.apk instead of app-release.apk.
+    // RawLens-1.0.0-release.apk instead of app-release.apk. ABI splits
+    // carry their ABI: RawLens-1.0.0-release-arm64-v8a.apk. Split
+    // version codes sit above the universal APK's so a device that can
+    // run a split always picks it (arm64 > armeabi-v7a > universal).
     applicationVariants.all {
         val variant = this
         outputs.all {
-            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-                "RawLens-${variant.versionName}-${variant.buildType.name}.apk"
+            val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = out.getFilter(com.android.build.OutputFile.ABI)
+            if (abi == null) {
+                out.outputFileName =
+                    "RawLens-${variant.versionName}-${variant.buildType.name}.apk"
+            } else {
+                out.outputFileName =
+                    "RawLens-${variant.versionName}-${variant.buildType.name}-$abi.apk"
+            }
         }
     }
 
@@ -281,6 +316,9 @@ dependencies {
     implementation(project(":tools:sr-pipeline"))
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     implementation("androidx.core:core-ktx:1.19.1")
+    // Installs the Baseline Profile (src/main/baseline-prof.txt) at
+    // first launch so startup code is AOT-compiled instead of JIT'd.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.24.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
@@ -293,6 +331,21 @@ dependencies {
 // https://developer.android.com/build/releases/agp-9-0-0-release-notes
 androidComponents.onVariants { variant ->
     variant.sources.assets?.addStaticSourceDirectory("build/generated/srpspv")
+    // Split version codes above the universal APK's (see splits block):
+    // a device that can run a split always picks it over the universal.
+    for (output in variant.outputs) {
+        val abi = output.filters.find {
+            it.filterType ==
+                com.android.build.api.variant.FilterConfiguration.FilterType.ABI
+        }?.identifier ?: continue
+        output.versionCode.set(
+            appVersionCode + when (abi) {
+                "arm64-v8a" -> 2
+                "armeabi-v7a" -> 1
+                else -> 0
+            }
+        )
+    }
 }
 
 // Syncs the desktop-proven stage SPVs (tools/sr-pipeline/host/build,

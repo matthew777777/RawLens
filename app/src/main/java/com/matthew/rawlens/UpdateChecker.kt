@@ -40,6 +40,33 @@ object UpdateChecker {
     private const val CONNECT_TIMEOUT_MS = 8_000
     private const val READ_TIMEOUT_MS = 8_000
 
+    data class ApkAsset(val name: String, val url: String?, val sizeBytes: Long)
+
+    private val knownAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+
+    /**
+     * Release assets may carry per-ABI splits plus a universal APK.
+     * Prefer the split for the device's primary ABI, then the
+     * universal APK (it still carries the primary ABI's native code),
+     * then any other supported-ABI split, then the first APK.
+     */
+    internal fun pickApkAsset(assets: List<ApkAsset>, supportedAbis: Array<String>): ApkAsset? {
+        val apks = assets.filter { it.name.endsWith(".apk", ignoreCase = true) }
+        if (apks.isEmpty()) return null
+        fun splitFor(abi: String) =
+            apks.firstOrNull { it.name.endsWith("-$abi.apk", ignoreCase = true) }
+        supportedAbis.firstOrNull()?.let { primary ->
+            splitFor(primary)?.let { return it }
+        }
+        apks.firstOrNull { asset ->
+            knownAbis.none { asset.name.endsWith("-$it.apk", ignoreCase = true) }
+        }?.let { return it }
+        for (abi in supportedAbis) {
+            splitFor(abi)?.let { return it }
+        }
+        return apks.first()
+    }
+
     data class UpdateInfo(
         val tag: String,
         val name: String,
@@ -172,14 +199,21 @@ object UpdateChecker {
         var apkSize = 0L
         val assets = json.optJSONArray("assets")
         if (assets != null) {
-            for (i in 0 until assets.length()) {
-                val asset = assets.optJSONObject(i) ?: continue
-                val name = asset.optString("name", "")
-                if (name.endsWith(".apk", ignoreCase = true)) {
-                    apkUrl = asset.optString("browser_download_url", "").ifEmpty { null }
-                    apkSize = asset.optLong("size", 0L)
-                    break
+            val candidates = buildList {
+                for (i in 0 until assets.length()) {
+                    val asset = assets.optJSONObject(i) ?: continue
+                    add(
+                        ApkAsset(
+                            asset.optString("name", ""),
+                            asset.optString("browser_download_url", "").ifEmpty { null },
+                            asset.optLong("size", 0L),
+                        )
+                    )
                 }
+            }
+            pickApkAsset(candidates, Build.SUPPORTED_ABIS)?.let {
+                apkUrl = it.url
+                apkSize = it.sizeBytes
             }
         }
         return UpdateInfo(

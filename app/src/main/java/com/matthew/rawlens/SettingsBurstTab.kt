@@ -157,8 +157,41 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                 setStatus(if (hybridTopup) "ZSL TOP-UP ON" else "ZSL TOP-UP OFF")
             }
         })
-        // Future SR hook: SR settings rows here (merge enable checkbox, DNG mode,
-        // sharpest reference, kernel preset, mosaic scale, linear scale).
+        content.addView(sectionTitle("MFSR sharp merge"))
+        content.addView(sectionDesc(
+            "Reconstruction kernel and Wronski supplement S.3 high-frequency " +
+                "artefact rejection for the sharp merge (live tile and offline " +
+                "merges). KernelNet predicts one kernel map from the reference " +
+                "frame; Wronski uses the paper's per-frame anisotropic kernels. " +
+                "S.3 off gives 1:1 parity with the IPOL reference, which has no S.3."
+        ))
+        fun mfsrKernelText(kernel: MfsrKernel): String = when (kernel) {
+            MfsrKernel.KERNELNET -> "Kernel: KernelNet"
+            MfsrKernel.WRONSKI -> "Kernel: Wronski (paper S.1)"
+        }
+        content.addView(settingsButton(mfsrKernelText(mfsrSettings.kernel)).apply {
+            setOnClickListener {
+                val next = when (mfsrSettings.kernel) {
+                    MfsrKernel.KERNELNET -> MfsrKernel.WRONSKI
+                    MfsrKernel.WRONSKI -> MfsrKernel.KERNELNET
+                }
+                if (applyMfsrSettings(mfsrSettings.copy(kernel = next))) {
+                    text = mfsrKernelText(next)
+                    setStatus("MFSR ${mfsrKernelText(next).uppercase(Locale.US)}")
+                }
+            }
+        })
+        content.addView(settingsCheck("S.3 artefact rejection", mfsrSettings.s3).apply {
+            setOnCheckedChangeListener { _, checked ->
+                if (checked != mfsrSettings.s3) {
+                    if (applyMfsrSettings(mfsrSettings.copy(s3 = checked))) {
+                        setStatus(if (checked) "MFSR S.3 • ON" else "MFSR S.3 • OFF")
+                    } else {
+                        isChecked = mfsrSettings.s3
+                    }
+                }
+            }
+        })
         content.addView(sectionTitle("HDR+ merge"))
         content.addView(sectionDesc(
             "Noise-reduction strength " +

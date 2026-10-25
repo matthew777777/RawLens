@@ -48,7 +48,13 @@ target_include_directories(srpipeline PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # Android arm64-v8a + armeabi-v7a), so contraction and fast-math are off
 # here — matching the app's other parity-sensitive targets.
 target_compile_options(srpipeline PRIVATE
-    -Wall -Wextra -Werror=return-type -O2 -ffp-contract=off -fno-fast-math)
+    -Wall -Wextra -Werror=return-type -O3 -ffp-contract=off -fno-fast-math)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    # Explicit thin-LTO flags (CMake's IPO probe needs the gold
+    # linker, removed from NDK r27; clang/LLD thin LTO works).
+    target_compile_options(srpipeline PRIVATE -flto=thin)
+    target_link_options(srpipeline PRIVATE -flto=thin)
+endif()
 
 find_library(SRP_VULKAN_LIB vulkan REQUIRED)
 find_library(SRP_LOG_LIB log REQUIRED)

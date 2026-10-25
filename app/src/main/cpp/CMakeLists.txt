@@ -505,3 +505,26 @@ target_link_options(rawLensVfEgl PRIVATE "-Wl,-z,max-page-size=16384")
 if(ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_options(rawLensVfEgl PRIVATE -mfpu=neon)
 endif()
+
+# Release optimization for every first-party target defined above:
+# -O3 (overriding any target-local -O2; the last -O flag wins) plus
+# link-time optimization where the toolchain supports it. Imported
+# prebuilt archives are skipped: they carry no LLVM bitcode to inline
+# across, and forcing IPO on them errors out. Vendored subdirectory
+# builds (libjxl and friends) keep their upstream flags.
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    # Thin LTO via explicit flags: CMake's IPO probe links its test
+    # binary with -fuse-ld=gold, which NDK r27 no longer ships, so
+    # check_ipo_supported always fails here even though clang/LLD
+    # thin LTO works.
+    get_property(_rawlens_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_t IN LISTS _rawlens_targets)
+        get_target_property(_imported ${_t} IMPORTED)
+        get_target_property(_type ${_t} TYPE)
+        if(_imported OR NOT _type MATCHES "^(SHARED|STATIC|MODULE|OBJECT)_LIBRARY$")
+            continue()
+        endif()
+        target_compile_options(${_t} PRIVATE -O3 -flto=thin)
+        target_link_options(${_t} PRIVATE -flto=thin)
+    endforeach()
+endif()

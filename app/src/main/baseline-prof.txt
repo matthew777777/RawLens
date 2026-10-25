@@ -1,0 +1,14 @@
+# Baseline Profile: cold-start path (Application -> Welcome -> Main).
+# Compiled into assets/dexopt/baseline.prof at build time and installed
+# by androidx.profileinstaller so these classes/methods are AOT-compiled
+# at install/first launch instead of interpreted + JIT-compiled.
+# Regenerate/extend from a device profile dump when the startup flow
+# changes materially; rules for missing classes are ignored safely.
+HSPLcom/matthew/rawlens/RawLensApp;->onCreate()V
+Lcom/matthew/rawlens/RawLensApp;
+HSPLcom/matthew/rawlens/WelcomeActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/matthew/rawlens/WelcomeActivity;->onResume()V
+Lcom/matthew/rawlens/WelcomeActivity;
+HSPLcom/matthew/rawlens/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/matthew/rawlens/MainActivity;->onResume()V
+Lcom/matthew/rawlens/MainActivity;

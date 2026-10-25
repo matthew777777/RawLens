@@ -449,13 +449,13 @@ internal object MfsrMerge {
                 kernelPreprocessing = "gat",
                 kernelAlpha = FloatArray(4) { alpha[it].toFloat() },
                 kernelBeta = FloatArray(4) { beta[it].toFloat() },
-                robustnessParams = RobustnessParams(noiseCorrection = curves != null),
+                robustnessParams = RobustnessParams(noiseCorrection = curves != null, s3 = settings.s3),
                 robustnessEnabled = true,
                 sigmaSqCurve = curves?.sigmaSq ?: floatArrayOf(0f, 0f),
                 dSqCurve = curves?.dSq ?: floatArrayOf(0f, 0f),
                 memoryTight = true,
                 icaIterations = 3,
-                // KernelNet (default): one kernel map from the reference
+                // KernelNet (when selected): one kernel map from the reference
                 // frame, which on the device IS the full frame, so no
                 // separate full-frame copy; the net runs in sensor
                 // orientation via the RGGB-normalization flips.
@@ -470,7 +470,7 @@ internal object MfsrMerge {
                     )
                 }
             )
-            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s".format(snr, fin.tileSize, settings.kernel))
+            Log.i(LOG_TAG, "sharp merge ${w}x$h N=$count snr=%.2f tile=%d kernel=%s s3=%s".format(snr, fin.tileSize, settings.kernel, settings.s3))
             fun asset(name: String): ByteArray =
                 context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
             val fft = asset("fft")

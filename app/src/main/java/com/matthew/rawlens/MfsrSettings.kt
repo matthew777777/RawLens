@@ -27,12 +27,20 @@ data class MfsrSettings(
     /** Also save every source frame as DNG alongside the merge. */
     val keepSourceBurst: Boolean = false,
     /**
-     * Reconstruction kernel: PhotonCamera KernelNet from the reference
-     * frame (default), or Wronski's per-frame anisotropic kernels (paper
-     * supplement S.1, kept for parity with the reference implementation
-     * and as the fallback).
+     * Reconstruction kernel: Wronski's per-frame anisotropic kernels
+     * (paper supplement S.1, default — parity with the reference
+     * implementation), or PhotonCamera KernelNet from the reference
+     * frame. KernelNet stays selectable in Settings -> Burst but is
+     * not the default until it is fixed (owner 2026-10-23).
      */
-    val kernel: MfsrKernel = MfsrKernel.KERNELNET
+    val kernel: MfsrKernel = MfsrKernel.WRONSKI,
+    /**
+     * Wronski supplement S.3 high-frequency artefact rejection in the
+     * robustness stage (default on, as measured in docs/refactor/
+     * mfsr-s3.md). Off gives 1:1 parity with the IPOL reference, which
+     * has no S.3.
+     */
+    val s3: Boolean = true
 ) {
     init {
         require(frameCount in MIN_MERGE_FRAMES..MAX_MERGE_FRAMES) {
@@ -46,7 +54,8 @@ data class MfsrSettings(
         "mfsr_enabled" to enabled,
         "mfsr_frames" to frameCount,
         "mfsr_keep_source_burst" to keepSourceBurst,
-        "mfsr_kernel" to kernel.name
+        "mfsr_kernel" to kernel.name,
+        "mfsr_s3" to s3
     )
 
     fun quickText(buffered: Int, available: Boolean?, busy: Boolean): String = "MFSR\n" + when {
@@ -65,7 +74,8 @@ data class MfsrSettings(
                 ?: DEFAULT_FRAMES,
             keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false,
             kernel = MfsrKernel.entries.firstOrNull { it.name == values["mfsr_kernel"] }
-                ?: MfsrKernel.KERNELNET
+                ?: MfsrKernel.WRONSKI,
+            s3 = values["mfsr_s3"] as? Boolean ?: true
         )
 
         const val MIN_MERGE_FRAMES = 2
