@@ -17,7 +17,7 @@ class StagedVideoRescueTest {
     private fun closedTake(dir: File, name: String, payloadBytes: Int = 64): File {
         val file = File(dir, name)
         val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(3).putLong(8)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(3).putLong(8)
         val payload = ByteArray(payloadBytes) { it.toByte() }
         file.writeBytes(payload + tail.array())
         return file
@@ -58,11 +58,11 @@ class StagedVideoRescueTest {
         File(dir, "garbage.crs").writeBytes(ByteArray(64) { 2 })
         // Bad footer: zero frame count.
         val zero = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(0).putLong(8)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(0).putLong(8)
         File(dir, "zero.crs").writeBytes(ByteArray(64) { 3 } + zero.array())
         // Bad footer: index offset outside the file.
         val badOff = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(3).putLong(9999)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(3).putLong(9999)
         File(dir, "badoff.crs").writeBytes(ByteArray(64) { 4 } + badOff.array())
         assertTrue(RawVideoSaver.stagedTakes(dir, null).isEmpty())
     }

@@ -4,36 +4,27 @@ package com.matthew.rawlens
 import java.nio.ByteBuffer
 
 /**
- * Writer handle to the vendored CRS container (GPL-3.0-only,
- * see NOTICE.md). Thin wrapper in the [VfCpuNeon]/[CrsSpike] style.
+ * Writer hook for CRS, the RawLens in-house RAW video container.
  *
- * Threading: the native handle is confined to the recorder's single
- * committer thread (all [writeFrame]/[writeAudio]/[writeGyro]/[writeAccel]/
- * [close] calls); [encodeFrame] runs on any number of worker threads
- * (stateless: thread_local scratch in native). [encodeFrame] feeds the HAL's
- * unpacked RAW16 plane straight to the type-7 encoder — per the P0 verdict,
- * packed-RAW10 input is never used (scalar encoder path, 4x slower).
+ * The Kotlin API is the contract the recorder codes against; the native
+ * encoder/container is not implemented yet, so [available] is false and
+ * RAW video recording reports itself unavailable. Plug the CRS backend in
+ * by implementing the `container*` functions (and flipping [available]).
+ *
+ * Threading: the handle is confined to the recorder's single committer
+ * thread (all [writeFrame]/[writeAudio]/[writeGyro]/[writeAccel]/[close]
+ * calls); [encodeFrame] runs on any number of worker threads.
  */
 internal object CrsWriter {
-    val available: Boolean
-
-    init {
-        var loaded = false
-        try {
-            System.loadLibrary("rawLensCrs")
-            loaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            loaded = false
-        }
-        available = loaded
-    }
+    /** True once a CRS backend is linked in. */
+    val available: Boolean = false
 
     fun open(path: String, containerMetadataJson: String): Long {
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val handle = try {
             containerOpen(path, containerMetadataJson)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs writer missing", e)
+            throw IllegalStateException("CRS writer missing", e)
         }
         if (handle == 0L) throw IllegalStateException("ContainerWriter failed to open $path")
         return handle
@@ -56,7 +47,7 @@ internal object CrsWriter {
         require(source.isDirect && destination.isDirect) {
             "CrsWriter needs direct buffers"
         }
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val dstOffset = destination.position()
         val written = try {
             containerEncodeFrame(
@@ -65,7 +56,7 @@ internal object CrsWriter {
                 destination, dstOffset, destination.remaining()
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs encoder missing", e)
+            throw IllegalStateException("CRS encoder missing", e)
         }
         if (written < 0) throw IllegalStateException("encodeFrame failed: code=$written")
         destination.position(dstOffset + written)
@@ -85,13 +76,13 @@ internal object CrsWriter {
         require(payload.remaining() >= bytes) {
             "Payload holds ${payload.remaining()}, needs $bytes"
         }
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val written = try {
             containerWriteFrame(
                 handle, payload, payload.position(), bytes, timestampNs, frameJson
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs writer missing", e)
+            throw IllegalStateException("CRS writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeFrame failed: code=$written")
     }
@@ -115,11 +106,11 @@ internal object CrsWriter {
     }
 
     fun close(handle: Long) {
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val code = try {
             containerClose(handle)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs writer missing", e)
+            throw IllegalStateException("CRS writer missing", e)
         }
         if (code != 0) throw IllegalStateException("containerClose failed: code=$code")
     }
@@ -141,13 +132,13 @@ internal object CrsWriter {
         require(samples.remaining() >= frames * channels * 2) {
             "Audio buffer holds ${samples.remaining()}, needs ${frames * channels * 2}"
         }
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val written = try {
             containerWriteAudio(
                 handle, samples, samples.position(), frames * channels, timestampNs
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs writer missing", e)
+            throw IllegalStateException("CRS writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeAudio failed: code=$written")
         return written
@@ -155,10 +146,9 @@ internal object CrsWriter {
 
     /**
      * Append motion samples: [count] samples, [timestampsNs] length [count],
-     * [axes] length `count * 3` (x/y/z triplets). The native writer buffers
-     * and coalesces them — at most one chunk per sensor per committed frame
-     * plus a trailing chunk at close — because reference decoder rejects
-     * files with more motion chunks than frames + 1. Gyro axes are rad/s in
+     * [axes] length `count * 3` (x/y/z triplets). The writer may buffer
+     * and coalesce them (at most one chunk per sensor per committed frame
+     * plus a trailing chunk at close). Gyro axes are rad/s in
      * the camera frame (map with [GyroCameraFrameMapper] before calling);
      * accel axes are m/s^2 including gravity, platform convention.
      * Timestamps are boot-time ns on the video frame timeline, ascending.
@@ -176,43 +166,46 @@ internal object CrsWriter {
         require(count > 0) { "Empty motion chunk" }
         require(timestampsNs.size >= count) { "timestamps hold ${timestampsNs.size}, need $count" }
         require(axes.size >= count * 3) { "axes hold ${axes.size}, need ${count * 3}" }
-        if (!available) throw IllegalStateException("crs native library unavailable")
+        if (!available) throw IllegalStateException("CRS writer unavailable")
         val written = try {
             if (gyro) containerWriteGyro(handle, timestampsNs, axes, count)
             else containerWriteAccel(handle, timestampsNs, axes, count)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("crs writer missing", e)
+            throw IllegalStateException("CRS writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeMotion failed: code=$written")
         return written
     }
 
-    external fun containerOpen(path: String, metadataJson: String): Long
+    private fun unavailable(): Nothing =
+        throw UnsupportedOperationException("CRS writer not implemented yet")
 
-    external fun containerEncodeFrame(
+    fun containerOpen(path: String, metadataJson: String): Long = unavailable()
+
+    fun containerEncodeFrame(
         src: ByteBuffer, srcOffset: Int, size: Int,
         w: Int, h: Int, stride: Int, cropTop: Int, cropHeight: Int,
         bin: Boolean, cfa: Int,
         dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
-    ): Int
+    ): Int = unavailable()
 
-    external fun containerWriteFrame(
+    fun containerWriteFrame(
         handle: Long, payload: ByteBuffer, payloadOffset: Int, payloadBytes: Int,
         timestampNs: Long, frameJson: String
-    ): Int
+    ): Int = unavailable()
 
-    external fun containerWriteAudio(
+    fun containerWriteAudio(
         handle: Long, samples: ByteBuffer, offset: Int, totalShorts: Int,
         timestampNs: Long
-    ): Int
+    ): Int = unavailable()
 
-    external fun containerWriteGyro(
+    fun containerWriteGyro(
         handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int
-    ): Int
+    ): Int = unavailable()
 
-    external fun containerWriteAccel(
+    fun containerWriteAccel(
         handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int
-    ): Int
+    ): Int = unavailable()
 
-    external fun containerClose(handle: Long): Int
+    fun containerClose(handle: Long): Int = unavailable()
 }

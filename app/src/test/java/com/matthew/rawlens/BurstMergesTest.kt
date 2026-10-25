@@ -80,7 +80,7 @@ class BurstMergesTest {
     private fun stagedBurst(dir: File, name: String, frames: Int): File {
         val file = File(dir, name)
         val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(frames).putLong(8)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(frames).putLong(8)
         file.writeBytes(ByteArray(64) { it.toByte() } + tail.array())
         return file
     }

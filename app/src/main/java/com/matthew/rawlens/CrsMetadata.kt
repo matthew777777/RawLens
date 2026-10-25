@@ -7,7 +7,7 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** MotionCam's metadata spelling and nesting are part of the on-disk contract. */
+/** CRS metadata spelling and nesting are part of the on-disk contract. */
 internal object CrsMetadata {
     fun container(base: String, chars: CameraCharacteristics, realtime: Boolean,
                   audioRate: Int, audioChannels: Int, motion: Boolean, orientation: Int,
@@ -60,9 +60,8 @@ internal object CrsMetadata {
      * Frame metadata with container timestamps rebased to [originNs] (the
      * first acquired frame's sensor timestamp). Readers do 32-bit ms math
      * that absolute boot-time timestamps overflow, breaking audio sync
-     * entirely (PhotonCamera's words, our symptom in desktop tools) — so
-     * every on-disk timestamp is recording-relative like genuine MotionCam
-     * and PhotonCamera takes. The result match still uses absolute capture
+     * entirely — so
+     * every on-disk timestamp is recording-relative. The result match still uses absolute capture
      * timestamps; only the serialized strings are rebased.
      */
     fun frame(base: String, result: CaptureResult, originNs: Long): String {

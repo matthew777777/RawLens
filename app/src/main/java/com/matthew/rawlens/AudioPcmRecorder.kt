@@ -14,8 +14,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * P4 PCM16 audio capture for RAW video: 48 kHz stereo-first from the
  * camcorder mic (mono fallback when stereo init fails), chunked for the
- * `.crs` container. Stereo is the reference configuration — PhotonCamera
- * records it and reference decoder's own fixture declares it.
+ * `.crs` container. Stereo is the reference configuration.
  *
  * Timestamp model: [AudioRecord] positions live in the audio clock, video
  * frames in boot-time ns. Each chunk's [Chunk.timestampNs] is mapped with

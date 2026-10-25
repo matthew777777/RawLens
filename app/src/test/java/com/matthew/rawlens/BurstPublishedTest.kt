@@ -106,7 +106,7 @@ class BurstPublishedTest {
 
     private fun closedBytes(frames: Int): ByteArray {
         val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(frames).putLong(8)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(frames).putLong(8)
         return ByteArray(64) { it.toByte() } + tail.array()
     }
 }

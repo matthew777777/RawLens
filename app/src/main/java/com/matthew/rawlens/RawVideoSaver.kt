@@ -52,7 +52,7 @@ internal object RawVideoSaver {
                 }
                 tail.flip()
                 if (tail.int != 0 || tail.int != 16) return false
-                if (tail.int != 0x43525346.toInt()) return false
+                if (tail.int != CrsFormat.FOOTER_MAGIC) return false
                 if (tail.int <= 0) return false
                 val indexOff = tail.long
                 indexOff > 0 && indexOff < length - 24

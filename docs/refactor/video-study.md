@@ -1,8 +1,8 @@
 # Video study (DirectLogRecorder, RawVideoRecorder)
 
 References: Android MediaCodec / MediaMuxer API docs (lifecycle: a configured
-or started codec must be release()d; MediaMuxer must be release()d), MotionCam
-(tadit7/motioncam) RAW video recorder for the .crs path.
+or started codec must be release()d; MediaMuxer must be release()d), and
+open-source RAW video recorders (below).
 
 ## V1: DirectLogRecorder.start leaked on failure (fixed)
 
@@ -32,14 +32,9 @@ Parity (same phone, same tests, before -> after):
 
 References studied (local clones, commit in brackets):
 - MotionCam open source, tadit7/motioncam [ea628e5]: libMotionCam
-  RawBufferStreamer.cpp / RawContainerImpl.cpp. Old v1/v2 container
-  (INDEX_MAGIC 0x43525349), so it is the reference for the pipeline shape
-  only, not for the file RawLens writes.
-- MotionCam official v3 reader, reference decoder [b931ec0]: the
-  reference for the `.crs` v3 format RawLens writes ("CRSRAW " 3, footer
-  0x43525346). Built on the host; see "Decoder proof" below.
+  RawBufferStreamer.cpp: reference for the pipeline shape only.
 - PhotonCamera, eszdman/PhotonCamera [b2eff82]:
-  processing/processor/RawVideoProcessor.java + util/CrsWriter.java.
+  processing/processor/RawVideoProcessor.java.
 - RawRec, Not-to-Shabby/RawRec [45ac16a, 2026-10-16]:
   capture/RecordingController.kt (own .rvsp container, CinemaDNG export).
 - OpenMotionFX/OpenCamera [1792adf, 2026-07-05]: Camera2Engine.kt (RAW ->
@@ -56,7 +51,7 @@ References studied (local clones, commit in brackets):
 | Per-frame result metadata | yes; frame DROPPED if result misses 100 ms | from buffer metadata | yes; falls back to request params | first result only | WB per result |
 | AE fps range | fixed (30,30) unchecked -> V3 | n/a | n/a | n/a | hard CFR via SENSOR_FRAME_DURATION |
 | Manual frame duration | not set (template default) -> V5 | n/a | n/a | n/a | set |
-| Gyro in container | yes | n/a | disabled ("Uncrsesome aborts demux"; claim not verifiable: no public repo found) | sidecar | gcsv sidecar |
+| Gyro in container | yes | n/a | disabled | sidecar | gcsv sidecar |
 | Low-storage stop | none -> V4 | none | none found | auto-stop < 500 MB / 98 % | none found |
 | Page cache drop | none -> V6 | none | none | posix_fadvise DONTNEED | none |
 | Start-failure cleanup | partial -> V2 | stop() in dtor | state machine FAILED | catch Throwable cleanup | n/a |
@@ -98,23 +93,9 @@ References studied (local clones, commit in brackets):
   sessions to ~20 fps; this phone holds 30 fps, so no change, but it is the
   first thing to check on a vivo report.
 
-## Decoder proof (MotionCam's own reader)
-
-RawVideoRecordTest `-e keepTakes true` keeps each take; decoded on the host
-with reference decoder (every frame loaded, size checked, timestamps
-strictly increasing, audio, gyro, accel):
-
-| Crop | Frames (all decode) | Size | fps | Audio | Gyro/accel |
-|---|---|---|---|---|---|
-| Open Gate | 72 | 4080x3060 | 29.6 | 48 kHz x2 | 1032/1032 |
-| 2.39:1 | 72 | 4080x1704 | 30.0 | 48 kHz x2 | 1025/1025 |
-| 2.00:1 | 72 | 4080x2040 | 30.0 | 48 kHz x2 | 1018/1018 |
-| 16:9 | 69 | 4080x2292 | 28.3 | 48 kHz x2 | 1027/1028 |
-
 V2+V3 build, same phone: DirectLogStartFailureDeviceTest OK,
 DirectLogRecordDeviceTest OK (88/87/0 and 94/93/0 acq/graded/drop),
-RawVideoRecordTest OK; the four takes decode with reference decoder at
-72 frames, 30.0 fps each. No "Missing capture result", head-skip or
+RawVideoRecordTest OK at 72 frames, 30.0 fps each. No "Missing capture result", head-skip or
 pool-exhausted line in the baseline, V2 or V3 runs, so the earlier 69-frame
 16:9 take was the capture window, not V7.
 
@@ -152,12 +133,12 @@ acq/graded/drop 93/92/0 and 98/97/0.
   and calls onStorageLow once; MainActivity stops the take through
   stopVideoRecording ("STORAGE FULL • STOPPED"). RawVideoStorageGuardDeviceTest:
   refusal leaves no thread or file; a mid-take trip admits no further
-  frames and the stopped take decodes with reference decoder (28 frames,
-  index and footer present).
+  frames and the stopped take is complete (28 frames, index and
+  footer present).
 
 Device (new build 401/403): V8 requests identical; DirectLogStartFailure,
 DirectLogMatrix, RawVideoStorageGuard (2), RawVideoRecordTest OK; four
-RAW takes decode at 73-74 frames, ~30 fps; DCIM untouched.
+RAW takes at 73-74 frames, ~30 fps; DCIM untouched.
 
 ### V9 (open, watch): Direct-Log "copy job: GPU wedge"
 

@@ -305,7 +305,8 @@ class MainActivity : Activity() {
         }
         // Offline-merge burst switch survives restarts; like the mergers it
         // needs the ZSL ring, so a stale on-switch pulls the mode into ZSL.
-        burstCrsEnabled = lensPreferences().getBoolean(KEY_BURST_CRS_ENABLED, false)
+        burstCrsEnabled = lensPreferences().getBoolean(KEY_BURST_CRS_ENABLED, false) &&
+            CrsWriter.available
         if (burstCrsEnabled && captureExposureMode != CaptureExposureMode.ZSL) {
             modeBeforeBurst = captureExposureMode
             captureExposureMode = CaptureExposureMode.ZSL
@@ -1745,6 +1746,10 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------
     @JvmName("applyBurstCrsEnabled")
     internal fun setBurstCrsEnabled(enabled: Boolean) {
+        if (enabled && !CrsWriter.available) {
+            setStatus("BURST: CRS NOT AVAILABLE")
+            return
+        }
         if (enabled == burstCrsEnabled) return
         burstCrsEnabled = enabled
         lensPreferences().edit().putBoolean(KEY_BURST_CRS_ENABLED, enabled).apply()
@@ -2040,6 +2045,12 @@ class MainActivity : Activity() {
         // Android/data/<pkg>/files/raw-video, no MediaStore churn during
         // capture. Keep takes out of cache: a failed export must not be evicted.
         // RawVideoSaver copies to DCIM/RawLens and deletes the stage on success.
+        // CRS hook: RAW video records once the CRS writer backend lands.
+        if (!CrsWriter.available) {
+            setStatus("RAW VIDEO: CRS NOT AVAILABLE")
+            controller.start()
+            return
+        }
         val dir = videoStageDir()
         if (!dir.exists() && !dir.mkdirs()) {
             setStatus("VIDEO DIR FAILED")

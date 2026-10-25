@@ -8,25 +8,17 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Reader handle to the vendored CRS decoder (GPL-3.0-only,
- * see NOTICE.md). Thin wrapper in the [CrsWriter] style.
+ * Reader hook for CRS takes (RawLens in-house container), used by the
+ * offline burst merge. No CRS backend is linked yet, so [available] is
+ * false and burst merge reports itself unavailable; implement the
+ * reader functions below to enable it.
  *
  * Threading: one reader per merge thread; all calls below run on that
- * single thread. Negative native codes become exceptions.
+ * single thread. Negative codes become exceptions.
  */
 internal object CrsReader {
-    val available: Boolean
-
-    init {
-        var loaded = false
-        try {
-            System.loadLibrary("rawLensBurstCrs")
-            loaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            loaded = false
-        }
-        available = loaded
-    }
+    /** True once a CRS backend is linked in. */
+    val available: Boolean = false
 
     data class TakeInfo(
         val timestamps: LongArray,
@@ -34,11 +26,11 @@ internal object CrsReader {
     )
 
     fun open(path: String): Long {
-        if (!available) throw IllegalStateException("burstcrs native library unavailable")
+        if (!available) throw IllegalStateException("CRS reader unavailable")
         val handle = try {
             openReader(path)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("burstcrs reader missing", e)
+            throw IllegalStateException("CRS reader missing", e)
         }
         if (handle == 0L) throw IllegalStateException("ContainerReader failed to open $path")
         return handle
@@ -103,12 +95,15 @@ internal object CrsReader {
         }
     }
 
-    external fun openReader(path: String): Long
-    external fun closeReader(handle: Long)
-    external fun containerMetadata(handle: Long): String?
-    external fun frameTimestamps(handle: Long): LongArray?
-    external fun frameMetadata(handle: Long, timestamp: Long): String?
-    external fun decodeFrame(
+    private fun unavailable(): Nothing =
+        throw UnsupportedOperationException("CRS reader not implemented yet")
+
+    fun openReader(path: String): Long = unavailable()
+    fun closeReader(handle: Long): Unit = unavailable()
+    fun containerMetadata(handle: Long): String? = unavailable()
+    fun frameTimestamps(handle: Long): LongArray? = unavailable()
+    fun frameMetadata(handle: Long, timestamp: Long): String? = unavailable()
+    fun decodeFrame(
         handle: Long, timestamp: Long, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
-    ): Int
+    ): Int = unavailable()
 }

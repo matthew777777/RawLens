@@ -224,7 +224,7 @@ internal class RawVideoRecorder(
      * Preview HAL lens-shading grid to embed, set before [start] (never
      * mutated after). Each frame resamples it to its own encoded crop and
      * carries the per-frame `lensShadingMapWidth` / `lensShadingMapHeight` /
-     * `lensShadingMap` triplet (CRS shape), so mid-take crop
+     * `lensShadingMap` triplet, so mid-take crop
      * switches stay correct. Null records without the map, as does a HAL
      * that already applied correction or geometry the map cannot cover.
      */
@@ -292,8 +292,7 @@ internal class RawVideoRecorder(
      * and the committer (frame/audio/motion rebasing). Every on-disk
      * timestamp is recording-relative (`ts - origin`) because readers do
      * 32-bit ms math that absolute boot-time timestamps overflow, breaking
-     * audio sync entirely (PhotonCamera's fix, our desktop tools
-     * symptom). In-memory tracking (reorder, fps) stays absolute.
+     * audio sync entirely (PhotonCamera's fix). In-memory tracking (reorder, fps) stays absolute.
      */
     @Volatile private var timeOriginNs = Long.MIN_VALUE
     private val acquired = AtomicInteger(0)

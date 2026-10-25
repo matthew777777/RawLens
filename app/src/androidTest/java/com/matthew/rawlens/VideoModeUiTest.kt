@@ -173,19 +173,20 @@ class VideoModeUiTest {
         }
     }
 
-    private fun validateCrsMagic(file: File) {        RandomAccessFile(file, "r").use { raf ->
+    private fun validateCrsMagic(file: File) {
+        RandomAccessFile(file, "r").use { raf ->
             assertTrue("Clip too small", raf.length() >= 32)
             val head = ByteArray(8)
             raf.readFully(head)
-            assertEquals("CRSRAW ", String(head, 0, 7, Charsets.US_ASCII))
-            assertEquals(3, head[7].toInt())
+            assertEquals(CrsFormat.HEADER_TAG, String(head, 0, 7, Charsets.US_ASCII))
+            assertEquals(CrsFormat.VERSION, head[7].toInt())
             raf.seek(raf.length() - 24)
             val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
             raf.channel.read(tail)
             tail.flip()
             assertEquals(0, tail.int)
             assertEquals(16, tail.int)
-            assertEquals(0x43525346.toInt(), tail.int)
+            assertEquals(CrsFormat.FOOTER_MAGIC, tail.int)
             assertTrue("Empty container", tail.int > 0)
         }
     }

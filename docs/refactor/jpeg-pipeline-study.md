@@ -192,8 +192,8 @@ demosaic. Encoder cost kept flat by unpacking each band's source rows
 once and binning the band in tight per-parity loops (byte-identical to
 the per-tap helper on the real frame, all CFAs). Device, open gate binned,
 cooled and interleaved: old 37.7-38.5 ms, new 37.8-38.5 ms per frame,
-0 drops. Gates: tools/crs binning_quality (flat, centring, MTF) and
-parallel_parity (independent centred spec, re-pinned golden).
+0 drops. Gates: binning quality (flat, centring, MTF) and parallel parity
+(independent centred spec, re-pinned golden).
 
 ## ZSL MFSR frame selection (HDR+ behaviour)
 

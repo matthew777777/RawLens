@@ -19,7 +19,7 @@ class BurstCrsStoreTest {
     private fun closedFile(dir: File, name: String, frameCount: Int = 3): File {
         val file = File(dir, name)
         val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(0x43525346.toInt()).putInt(frameCount).putLong(8)
+            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(frameCount).putLong(8)
         file.writeBytes(ByteArray(64) { it.toByte() } + tail.array())
         return file
     }

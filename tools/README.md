@@ -22,7 +22,6 @@ error envelopes in `sr-pipeline/PARITY.md`.
 
 | Path | What |
 |---|---|
-| `crs/` | CRS compatibility harness vs both reference decoders. [README](crs/README.md). |
 | `tinydng_roundtrip.c`, `verify_tinydng.py` | Host regression for the vendored TinyDNG writer. |
 | `verify_dng_gainmap.py` | DNG OpcodeList2 GainMap geometry/payload check (stdlib only). |
 | `verify_highlights.py` | Highlight handling on a DNG+JPEG pair. |

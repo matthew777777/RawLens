@@ -102,7 +102,7 @@ internal object BurstCrsStore {
                 }
                 tail.flip()
                 if (tail.int != 0 || tail.int != 16) return null
-                if (tail.int != 0x43525346.toInt()) return null
+                if (tail.int != CrsFormat.FOOTER_MAGIC) return null
                 val frameCount = tail.int
                 if (frameCount <= 0) return null
                 val indexOff = tail.long

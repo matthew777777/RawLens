@@ -4,15 +4,12 @@ package com.matthew.rawlens
 import kotlin.math.floor
 
 /**
- * Per-frame `lensShadingMap` for RAW video takes, in the CRS shape.
+ * Per-frame `lensShadingMap` for RAW video takes.
  *
- * The vendored CRS encoder (`LensShading.h` under
- * `app/src/main/cpp/crs`) defines the on-disk schema: each frame JSON
- * may carry `lensShadingMapWidth` / `lensShadingMapHeight` plus
- * `lensShadingMap` as four nested color planes (R, Gr, Gb, B), each
- * `Width x Height` row-major gains. desktop tools reads these keys and
- * bakes the correction into its DNG output; it ignores a missing or
- * malformed map, so takes without the keys keep working everywhere.
+ * On-disk schema (CRS): each frame JSON may carry `lensShadingMapWidth` /
+ * `lensShadingMapHeight` plus `lensShadingMap` as four nested color planes
+ * (R, Gr, Gb, B), each `Width x Height` row-major gains. Readers bake the
+ * correction into DNG output and ignore a missing or malformed map, so takes without the keys keep working everywhere.
  *
  * Planes are color order, NOT CFA tile order: pixels map to planes through
  * `sensorArrangment`, with green in an R row reading Gr and green in a B row
