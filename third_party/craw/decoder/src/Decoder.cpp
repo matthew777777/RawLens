@@ -241,7 +241,7 @@ FrameInfo probeFrame(const uint8_t* p, size_t size) {
     if (p[0] < 1 || p[0] > 3) throw DecodeError("craw: unknown codec id");
     FrameInfo f;
     f.bitDepth = p[1];
-    if (p[2] > 3) throw DecodeError("craw: bad CFA");
+    if (p[2] > 4 || (p[2] == 4 && p[0] == 1)) throw DecodeError("craw: bad CFA");
     f.cfa = static_cast<Cfa>(p[2]);
     f.width = rd32(p + 4);
     f.height = rd32(p + 8);
@@ -272,7 +272,7 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
             throw DecodeError("craw: bad tile offsets");
 
     out.resize(size_t{f.width} * f.height);
-    const int* L = kLayout[static_cast<int>(f.cfa)];
+    const int* L = f.cfa == Cfa::RGB ? kLayout[0] : kLayout[static_cast<int>(f.cfa)];  // unused for RGB
     std::atomic<uint32_t> next{0};
     std::exception_ptr error;
     std::mutex errorMutex;

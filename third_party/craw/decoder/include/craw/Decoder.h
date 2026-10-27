@@ -12,7 +12,8 @@
 
 namespace craw {
 
-enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3 };
+// RGB (SPEC 3.8): cell frame carrying a half-size RGB image (codecs 2 and 3).
+enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3, RGB = 4 };
 
 struct FrameInfo {
     uint32_t width = 0, height = 0;

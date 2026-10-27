@@ -769,7 +769,8 @@ template <typename Emit>
 void encodeTiles(const uint16_t* raw, size_t stride, const FrameDesc& d, unsigned threads, Emit&& emit) {
     if (!raw || d.width == 0 || d.height == 0 || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || d.tile == 0 || stride < d.width ||
-        static_cast<int>(d.cfa) > 3 || (d.codec < 1 || d.codec > 3))
+        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 3) ||
+        (d.cfa == Cfa::RGB && d.codec == 1))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
 
     const uint32_t pw = d.width / 2, ph = d.height / 2;
@@ -855,7 +856,8 @@ size_t encodeSerialInto(const uint16_t* raw, size_t stride, const FrameDesc& d,
                         uint8_t* dst, size_t capacity) {
     if (!raw || !d.width || !d.height || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || !d.tile || stride < d.width ||
-        static_cast<int>(d.cfa) > 3 || (d.codec < 1 || d.codec > 3))
+        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 3) ||
+        (d.cfa == Cfa::RGB && d.codec == 1))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
     const uint32_t pw = d.width / 2, ph = d.height / 2;
     const uint32_t nx = (pw + d.tile - 1) / d.tile, ny = (ph + d.tile - 1) / d.tile;

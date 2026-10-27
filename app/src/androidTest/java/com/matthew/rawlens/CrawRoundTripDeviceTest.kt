@@ -142,28 +142,49 @@ class CrawRoundTripDeviceTest {
         assertTrue("encode $mpixPerS MPix/s < required $minMpix", mpixPerS >= minMpix)
     }
 
-    /** Independent reference of the centre-aligned binning (craw_writer_jni.cpp). */
+    /**
+     * Independent reference of the RGB binning (craw_writer_jni.cpp binRgb),
+     * returned as the cell frame: (0,0) R, (0,1) G, (1,0) B, (1,1) 0.
+     */
     private fun binReference(src: ShortArray, w: Int, h: Int, cfa: Int): IntArray {
         val ow = w / 2; val oh = h / 2
         val greenEven = cfa == 1 || cfa == 2
+        val rPos = arrayOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(0, 1), intArrayOf(1, 1))[cfa]
+        val bPos = arrayOf(intArrayOf(1, 1), intArrayOf(0, 1), intArrayOf(1, 0), intArrayOf(0, 0))[cfa]
         fun m(i: Int, n: Int) = if (i < 0) -i else if (i >= n) 2 * (n - 1) - i else i
         fun at(x: Int, y: Int) = src[m(y, h) * w + m(x, w)].toInt() and 0xffff
-        val kw = intArrayOf(1, 5, 3)
-        return IntArray(ow * oh) { idx ->
-            val ox = idx % ow; val oy = idx / ow; val sx = 2 * ox; val sy = 2 * oy
-            val green = (((ox + oy) and 1) == 0) == greenEven
-            if (!green) {
-                val cx = sx + (ox and 1); val cy = sy + (oy and 1)
-                val dx = if ((ox and 1) == 1) -2 else 2; val dy = if ((oy and 1) == 1) -2 else 2
-                var sum = 0
-                for (j in 0 until 3) for (i in 0 until 3) sum += kw[i] * kw[j] * at(cx + (i - 1) * dx, cy + (j - 1) * dy)
-                (sum + 40) / 81
-            } else if (!greenEven) {
-                (2 * (at(sx + 1, sy) + at(sx, sy + 1)) + at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2) + 4) shr 3
-            } else {
-                (2 * (at(sx, sy) + at(sx + 1, sy + 1)) + at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2) + 4) shr 3
-            }
+        fun diff(x: Int, y: Int): Int {   // 4 x (C - edge-directed green)
+            val c = at(x, y); val l = at(x - 1, y); val r = at(x + 1, y); val u = at(x, y - 1); val d = at(x, y + 1)
+            val dh = 2 * kotlin.math.abs(l - r) + kotlin.math.abs(2 * c - at(x - 2, y) - at(x + 2, y))
+            val dv = 2 * kotlin.math.abs(u - d) + kotlin.math.abs(2 * c - at(x, y - 2) - at(x, y + 2))
+            val g2 = if (dh < dv) 2 * (l + r) else if (dv < dh) 2 * (u + d) else l + r + u + d
+            return 4 * c - g2
         }
+        val white = 1023; val clip = white - white / 20
+        val out = IntArray(w * h)
+        for (j in 0 until oh) for (i in 0 until ow) {
+            val sx = 2 * i; val sy = 2 * j
+            val gin = if (greenEven) at(sx, sy) + at(sx + 1, sy + 1) else at(sx + 1, sy) + at(sx, sy + 1)
+            val ring = if (greenEven) at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2)
+                else at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2)
+            val g16 = 6 * gin + ring
+            var near = false
+            for (bj in maxOf(j - 1, 0)..minOf(j + 1, oh - 1)) for (bi in maxOf(i - 1, 0)..minOf(i + 1, ow - 1))
+                for (k in 0 until 4) if (at(2 * bi + (k and 1), 2 * bj + (k shr 1)) >= clip) near = true
+            fun channel(p: IntArray): Int {
+                val x = sx + p[0]; val y = sy + p[1]
+                // Same-colour neighbours toward the block centre, mirrored on the site grid.
+                val tx = 2 * m(i + (if (p[0] == 0) 1 else -1), ow) + p[0]
+                val ty = 2 * m(j + (if (p[1] == 0) 1 else -1), oh) + p[1]
+                val v = if (near) (9 * at(x, y) + 3 * at(tx, y) + 3 * at(x, ty) + at(tx, ty) + 8) shr 4
+                    else (4 * g16 + 9 * diff(x, y) + 3 * diff(tx, y) + 3 * diff(x, ty) + diff(tx, ty) + 32) shr 6
+                return v.coerceIn(0, white)
+            }
+            out[sy * w + sx] = channel(rPos)
+            out[sy * w + sx + 1] = (g16 + 8) shr 4
+            out[(sy + 1) * w + sx] = channel(bPos)
+        }
+        return out
     }
 
     private fun encodeDecodeBinned(src: ByteBuffer, width: Int, height: Int, cfa: Int): IntArray {
@@ -178,15 +199,15 @@ class CrawRoundTripDeviceTest {
         try {
             val ts = CrawReader.frameTimestamps(reader)!!.single()
             val out = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.LITTLE_ENDIAN)
-            assertEquals(width / 2 to height / 2, CrawReader.decodeFrame(reader, ts, out))
-            return IntArray(width / 2 * height / 2) { out.getShort(it * 2).toInt() and 0xffff }
+            assertEquals(width to height, CrawReader.decodeFrame(reader, ts, out))  // RGB cell frame
+            return IntArray(width * height) { out.getShort(it * 2).toInt() and 0xffff }
         } finally {
             CrawReader.closeReader(reader)
             file.delete()
         }
     }
 
-    @Test fun binnedFrameIsCentreAlignedForEveryCfa() {
+    @Test fun binnedFrameIsRgbForEveryCfa() {
         assumeTrue("craw libraries unavailable", CrawWriter.available && CrawReader.available)
         val width = 64
         val height = 32
@@ -195,10 +216,11 @@ class CrawRoundTripDeviceTest {
         for (cfa in 0..3) {
             assertArrayEquals("cfa $cfa", binReference(shorts, width, height, cfa), encodeDecodeBinned(src, width, height, cfa))
         }
-        // Flat field passes exactly (rounded means, normalised weights).
+        // Flat field passes exactly: R = G = B = 417, unused cell 0.
         val flat = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.LITTLE_ENDIAN)
         repeat(width * height) { flat.putShort(it * 2, 417.toShort()) }
-        assertTrue(encodeDecodeBinned(flat, width, height, 0).all { it == 417 })
+        val cells = encodeDecodeBinned(flat, width, height, 0)
+        assertTrue(cells.withIndex().all { (k, v) -> v == if ((k / width) % 2 == 1 && k % 2 == 1) 0 else 417 })
     }
 
     @Test fun lensShadingChunkExpandsIntoFrameJson() {
