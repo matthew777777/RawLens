@@ -1,0 +1,2 @@
+10-26 08:00:14.719  4132  6800 I RawLensCamera: FLASH_RESULT id=2 requestAe=3 requestFlash=0 resultAe=3 aeState=2 flashState=3 iso=1013 ns=9997000
+UI smoke completed; Flash reset to Off.

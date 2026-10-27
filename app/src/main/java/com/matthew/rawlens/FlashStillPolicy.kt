@@ -13,6 +13,21 @@ import com.matthew.rawlens.RawCameraController.FlashStillMode
  * docs/refactor/controller-remaining-plan.md).
  */
 internal object FlashStillPolicy {
+    const val AUTO_UNAVAILABLE_NOTE =
+        "Auto flash is unavailable in PROGRAM and ETTR. RawLens needs its own auto-flash metering."
+
+    fun allowsAutoFlash(programMode: Boolean, ettrActive: Boolean): Boolean =
+        !programMode && !ettrActive
+
+    fun nextMode(current: FlashStillMode, autoAllowed: Boolean): FlashStillMode = when (current) {
+        FlashStillMode.OFF -> FlashStillMode.ON
+        FlashStillMode.ON -> if (autoAllowed) FlashStillMode.AUTO else FlashStillMode.OFF
+        FlashStillMode.AUTO -> FlashStillMode.OFF
+    }
+
+    fun permittedMode(current: FlashStillMode, autoAllowed: Boolean): FlashStillMode =
+        if (current == FlashStillMode.AUTO && !autoAllowed) FlashStillMode.OFF else current
+
     /**
      * Still-flash AE resolution (P0/P3, pure for unit tests). Manual
      * exposure keeps AE OFF (the flash fires via FLASH SINGLE, not the AE

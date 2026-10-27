@@ -1,0 +1,2 @@
+Installed minified release: 1.0.434 arm64
+SHA256: 4758b6ff3606acc81738381d2c7666ad59f60953891c7175da8a5d361ce61a12
