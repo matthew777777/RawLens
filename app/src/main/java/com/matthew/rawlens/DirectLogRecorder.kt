@@ -333,7 +333,7 @@ class DirectLogRecorder(
     @Volatile private var hasAudioStream = false
     @Volatile private var aacBytesOut = 0L
     // Stab gyro capture (post-record warp pass): full-take MotionRecorder
-    // (same class the CRS path uses) + the queued-frame sensor-ts
+    // (same class the CRAW path uses) + the queued-frame sensor-ts
     // table. The table appends in queueReady — the ONLY point that sees
     // exactly the queued frames in order (the gate advances past starved
     // copies, so submit order would misalign the warp by every starve).

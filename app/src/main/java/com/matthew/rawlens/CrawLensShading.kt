@@ -6,7 +6,7 @@ import kotlin.math.floor
 /**
  * Per-frame `lensShadingMap` for RAW video takes.
  *
- * On-disk schema (CRS): each frame JSON may carry `lensShadingMapWidth` /
+ * On-disk schema (CRAW): each frame JSON may carry `lensShadingMapWidth` /
  * `lensShadingMapHeight` plus `lensShadingMap` as four nested color planes
  * (R, Gr, Gb, B), each `Width x Height` row-major gains. Readers bake the
  * correction into DNG output and ignore a missing or malformed map, so takes without the keys keep working everywhere.
@@ -27,7 +27,7 @@ import kotlin.math.floor
  * [LensShadingSnapshot] and geometry into primitives. Every failure returns
  * null so the recorder skips embedding instead of writing a wrong map.
  */
-internal object CrsLensShading {
+internal object CrawLensShading {
     /** Grid backstop shared with `LensShading.h` (`kMaxGridExtent`). */
     const val MAX_EXTENT = 512
 

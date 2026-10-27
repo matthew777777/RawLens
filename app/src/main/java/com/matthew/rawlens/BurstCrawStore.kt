@@ -16,13 +16,12 @@ import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
  * Offline-merge burst takes: one shutter tap dumps the whole ZSL ring to
- * `IMG_<ts>_BURST.crs` (container `recordingType=BURST`), stored apart
+ * `IMG_<ts>_BURST.craw` (container `recordingType=BURST`), stored apart
  * from RAW video and excluded from video lists.
  *
  * Phase 1 covers capture-side storage + listing. Pixel decode for the
@@ -30,7 +29,7 @@ import java.nio.ByteOrder
  * listings until then rely on the container footer (frame count) plus
  * file size, never a full decode.
  */
-internal object BurstCrsStore {
+internal object BurstCrawStore {
     const val RECORDING_TYPE_BURST = "BURST"
     const val STAGE_SUBDIR = "raw-bursts"
 
@@ -51,13 +50,13 @@ internal object BurstCrsStore {
 
     fun isBurstFile(file: File): Boolean {
         if (!file.isFile) return false
-        if (file.extension != "crs") return false
+        if (file.extension != "craw") return false
         val stem = file.nameWithoutExtension.uppercase(java.util.Locale.US)
         return stem.endsWith("_${CaptureFileNames.TYPE_BURST}")
     }
 
     fun burstFileName(captureTimeMillis: Long): String =
-        CaptureFileNames.burstCrs(captureTimeMillis)
+        CaptureFileNames.burstCraw(captureTimeMillis)
 
     /**
      * Closed burst takes eligible for the Merges list, oldest first.
@@ -68,7 +67,7 @@ internal object BurstCrsStore {
         val files = stageDir.listFiles() ?: return emptyList()
         val activePath = active?.absolutePath
         return files.filter { file ->
-            file.isFile && file.extension == "crs" && isBurstFile(file) &&
+            file.isFile && file.extension == "craw" && isBurstFile(file) &&
                 file.length() > 0 && file.absolutePath != activePath &&
                 hasValidFooter(file)
         }.sortedBy { it.lastModified() }
@@ -86,39 +85,10 @@ internal object BurstCrsStore {
 
     fun hasValidFooter(file: File): Boolean = footerFrameCount(file) != null
 
-    /** Frame count from the type-0 container footer, or null when invalid. */
-    internal fun footerFrameCount(file: File): Int? {
-        val length = file.length()
-        if (length < 32) return null
-        return try {
-            RandomAccessFile(file, "r").use { raf ->
-                raf.seek(length - 24)
-                val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-                var read = 0
-                while (read < 24) {
-                    val n = raf.channel.read(tail)
-                    if (n < 0) return null
-                    read += n
-                }
-                tail.flip()
-                if (tail.int != 0 || tail.int != 16) return null
-                if (tail.int != CrsFormat.FOOTER_MAGIC) return null
-                val frameCount = tail.int
-                if (frameCount <= 0) return null
-                val indexOff = tail.long
-                if (indexOff <= 0 || indexOff >= length - 24) return null
-                frameCount
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
+    /** Frame count of a cleanly closed .CRAW take, or null when unclosed/invalid. */
+    internal fun footerFrameCount(file: File): Int? = CrawFormat.closedFrameCount(file)
 
-    fun payloadBound(width: Int, height: Int): Int {
-        val ew = (width + 63) / 64 * 64
-        return (ew.toLong() * height * 2 + ew * height / 4 + 65536)
-            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-    }
+    fun payloadBound(width: Int, height: Int): Int = CrawFormat.payloadBound(width, height)
 
     /**
      * Encodes [frames] (timestamp order) into [output] as a BURST container.
@@ -126,7 +96,7 @@ internal object BurstCrsStore {
      * on success or failure. Timestamps must be unique (the ZSL ring dedups);
      * a regression aborts the dump rather than writing an unreadable file.
      */
-    fun writeZslRingToCrs(
+    fun writeZslRingToCraw(
         frames: List<BufferedRawFrame>,
         characteristics: CameraCharacteristics,
         realtimeTimestamps: Boolean,
@@ -134,7 +104,8 @@ internal object BurstCrsStore {
     ): BurstDumpStats {
         require(frames.isNotEmpty()) { "Empty ZSL ring" }
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
-        require(cfa != null && cfa in 0..3) { "CRS requires a Bayer sensor" }
+        val bitDepth = CrawWriter.bitDepthFor(characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
+        require(cfa != null && cfa in 0..3) { "CRAW requires a Bayer sensor" }
         val ordered = frames.sortedBy { it.timestampNanos }
         val originNs = ordered.first().timestampNanos
         val first = ordered.first()
@@ -148,13 +119,13 @@ internal object BurstCrsStore {
         val baseJson = "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
             "\"width\":$width,\"height\":$height," +
             "\"crop\":\"FULL\",\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Burst\"}"
-        val containerJson = CrsMetadata.container(
+        val containerJson = CrawMetadata.container(
             baseJson, characteristics, realtimeTimestamps,
             audioRate = 0, audioChannels = 0, motion = false,
             orientation = orientation, recordingType = RECORDING_TYPE_BURST
         )
         val startedMs = System.currentTimeMillis()
-        val handle = CrsWriter.open(output.absolutePath, containerJson)
+        val handle = CrawWriter.open(output.absolutePath, containerJson)
         var lastRel = Long.MIN_VALUE
         var written = 0
         try {
@@ -175,16 +146,16 @@ internal object BurstCrsStore {
                     val relTs = maxOf(0L, absTs - originNs)
                     require(relTs > lastRel) { "Non-increasing burst timestamp" }
                     val baseJson = "{\"width\":$width,\"height\":$height," +
-                        "\"compressionType\":7,\"timestamp\":$absTs,\"crop\":\"FULL\"}"
-                    val frameJson = CrsMetadata.frame(baseJson, frame.result, originNs)
+                        "\"codec\":\"CRAW-Fast\",\"timestamp\":$absTs,\"crop\":\"FULL\"}"
+                    val frameJson = CrawMetadata.frame(baseJson, frame.result, originNs)
                     dst.clear()
                     val src = plane.buffer
-                    val bytes = CrsWriter.encodeFrame(
+                    val bytes = CrawWriter.encodeFrame(
                         src, src.remaining(), width, height, plane.rowStride,
-                        0, height, dst, false, cfa
+                        0, height, dst, false, cfa, bitDepth
                     )
                     dst.flip()
-                    CrsWriter.writeFrame(handle, dst, bytes, relTs, frameJson)
+                    CrawWriter.writeFrame(handle, dst, bytes, relTs, frameJson)
                     lastRel = relTs
                     written++
                 } finally {
@@ -192,10 +163,10 @@ internal object BurstCrsStore {
                 }
             }
         } catch (failure: Exception) {
-            try { CrsWriter.close(handle) } catch (_: Exception) { }
+            try { CrawWriter.close(handle) } catch (_: Exception) { }
             throw failure
         }
-        CrsWriter.close(handle)
+        CrawWriter.close(handle)
         return BurstDumpStats(
             framesWritten = written,
             fileBytes = output.length(),
@@ -216,7 +187,7 @@ internal object BurstCrsStore {
         require(isBurstFile(source)) { "Not a burst take: ${source.name}" }
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, source.name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/x-crs")
+            put(MediaStore.Video.Media.MIME_TYPE, "video/x-craw")
             put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/RawLens/Bursts")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
@@ -280,7 +251,7 @@ internal object BurstCrsStore {
         val fileUri = try {
             DocumentsContract.createDocument(
                 resolver, DocumentsContract.buildDocumentUriUsingTree(treeUri, dirId),
-                "video/x-crs", source.name
+                "video/x-craw", source.name
             ) ?: throw IOException("Could not create burst take in granted folder")
         } catch (failure: IOException) {
             throw failure

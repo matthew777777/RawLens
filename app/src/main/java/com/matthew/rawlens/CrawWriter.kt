@@ -4,27 +4,31 @@ package com.matthew.rawlens
 import java.nio.ByteBuffer
 
 /**
- * Writer hook for CRS, the RawLens in-house RAW video container.
- *
- * The Kotlin API is the contract the recorder codes against; the native
- * encoder/container is not implemented yet, so [available] is false and
- * RAW video recording reports itself unavailable. Plug the CRS backend in
- * by implementing the `container*` functions (and flipping [available]).
+ * Writer for Cinematic RAW Studio (.CRAW) takes: lossless RAW video and
+ * burst containers (encoder: third_party/craw, Apache-2.0; JNI:
+ * cpp/craw_writer_jni.cpp, library `rawLensCraw`).
  *
  * Threading: the handle is confined to the recorder's single committer
  * thread (all [writeFrame]/[writeAudio]/[writeGyro]/[writeAccel]/[close]
  * calls); [encodeFrame] runs on any number of worker threads.
  */
-internal object CrsWriter {
-    /** True once a CRS backend is linked in. */
-    val available: Boolean = false
+internal object CrawWriter {
+    /** True when the native encoder loaded (false on host JVM tests). */
+    val available: Boolean by lazy {
+        try {
+            System.loadLibrary("rawLensCraw")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     fun open(path: String, containerMetadataJson: String): Long {
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val handle = try {
             containerOpen(path, containerMetadataJson)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS writer missing", e)
+            throw IllegalStateException("CRAW writer missing", e)
         }
         if (handle == 0L) throw IllegalStateException("ContainerWriter failed to open $path")
         return handle
@@ -34,29 +38,31 @@ internal object CrsWriter {
      * Encode one RAW16 frame into [destination] (position advanced by the
      * payload size). Worker-thread safe. Returns the payload byte count;
      * negative native codes become exceptions (-3 = destination too small).
-     * With [bin], each 2x2 block bins to one binned-Bayer sample at half
-     * resolution (inward R/B 4-tap box, diamond-averaged green); [cfa] is the
-     * Camera2 color-filter arrangement (0..3) routing the binning taps.
+     * With [bin], the frame is binned to half resolution: each output sample is
+     * the rounded mean of the four same-colour samples of its 4x4 block (lossy
+     * by nature); [cfa] is the Camera2 color-filter arrangement (0..3).
+     * [bitDepth] comes from SENSOR_INFO_WHITE_LEVEL ([bitDepthFor]); a sample
+     * above it falls back to 16-bit coding, so encoding stays lossless.
      */
     fun encodeFrame(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
         cropTop: Int, cropHeight: Int, destination: ByteBuffer,
-        bin: Boolean, cfa: Int
+        bin: Boolean, cfa: Int, bitDepth: Int = 16
     ): Int {
         checkFrameGeometry(width, height, cropTop, cropHeight, bin, cfa)
         require(source.isDirect && destination.isDirect) {
-            "CrsWriter needs direct buffers"
+            "CrawWriter needs direct buffers"
         }
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val dstOffset = destination.position()
         val written = try {
             containerEncodeFrame(
                 source, source.position(), size, width, height, stride,
-                cropTop, cropHeight, bin, cfa,
+                cropTop, cropHeight, bin, cfa, bitDepth.coerceIn(1, 16),
                 destination, dstOffset, destination.remaining()
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS encoder missing", e)
+            throw IllegalStateException("CRAW encoder missing", e)
         }
         if (written < 0) throw IllegalStateException("encodeFrame failed: code=$written")
         destination.position(dstOffset + written)
@@ -72,20 +78,24 @@ internal object CrsWriter {
         handle: Long, payload: ByteBuffer, bytes: Int, timestampNs: Long, frameJson: String
     ) {
         require(bytes > 0) { "Empty payload" }
-        require(payload.isDirect) { "CrsWriter needs a direct buffer" }
+        require(payload.isDirect) { "CrawWriter needs a direct buffer" }
         require(payload.remaining() >= bytes) {
             "Payload holds ${payload.remaining()}, needs $bytes"
         }
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val written = try {
             containerWriteFrame(
                 handle, payload, payload.position(), bytes, timestampNs, frameJson
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS writer missing", e)
+            throw IllegalStateException("CRAW writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeFrame failed: code=$written")
     }
+
+    /** Bits needed for samples up to [whiteLevel] (Camera2 SENSOR_INFO_WHITE_LEVEL). */
+    fun bitDepthFor(whiteLevel: Int?): Int =
+        if (whiteLevel == null || whiteLevel <= 0) 16 else (32 - Integer.numberOfLeadingZeros(whiteLevel)).coerceIn(1, 16)
 
     private fun checkFrameGeometry(
         width: Int, height: Int, cropTop: Int, cropHeight: Int, bin: Boolean, cfa: Int
@@ -106,39 +116,38 @@ internal object CrsWriter {
     }
 
     fun close(handle: Long) {
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val code = try {
             containerClose(handle)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS writer missing", e)
+            throw IllegalStateException("CRAW writer missing", e)
         }
         if (code != 0) throw IllegalStateException("containerClose failed: code=$code")
     }
 
     /**
-     * Append one PCM16 chunk with [channels] interleaved channels (1 or 2).
-     * [samples] holds `frames * channels` little-endian int16 samples;
-     * [timestampNs] is the first frame's time on the video frame timeline
-     * (recording-relative ns). The container is channel-agnostic — it
-     * stores the int16 array verbatim; players interpret channels via
-     * `extraData.audioChannels`. Returns payload bytes written.
+     * Append one PCM16 chunk (AUDI format S16) with [channels] interleaved
+     * channels (1 or 2) at [sampleRate]. [samples] holds `frames * channels`
+     * little-endian int16 samples; [timestampNs] is the first frame's time on
+     * the video frame timeline (recording-relative ns). Returns bytes written.
      */
     fun writeAudio(
-        handle: Long, samples: ByteBuffer, frames: Int, channels: Int, timestampNs: Long
+        handle: Long, samples: ByteBuffer, frames: Int, channels: Int, timestampNs: Long,
+        sampleRate: Int = AudioPcmRecorder.SAMPLE_RATE
     ): Int {
         require(frames > 0) { "Empty audio chunk" }
         require(channels == 1 || channels == 2) { "Bad channel count $channels" }
-        require(samples.isDirect) { "CrsWriter needs a direct buffer" }
+        require(samples.isDirect) { "CrawWriter needs a direct buffer" }
         require(samples.remaining() >= frames * channels * 2) {
             "Audio buffer holds ${samples.remaining()}, needs ${frames * channels * 2}"
         }
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val written = try {
             containerWriteAudio(
-                handle, samples, samples.position(), frames * channels, timestampNs
+                handle, samples, samples.position(), frames, channels, sampleRate, timestampNs
             )
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS writer missing", e)
+            throw IllegalStateException("CRAW writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeAudio failed: code=$written")
         return written
@@ -166,46 +175,43 @@ internal object CrsWriter {
         require(count > 0) { "Empty motion chunk" }
         require(timestampsNs.size >= count) { "timestamps hold ${timestampsNs.size}, need $count" }
         require(axes.size >= count * 3) { "axes hold ${axes.size}, need ${count * 3}" }
-        if (!available) throw IllegalStateException("CRS writer unavailable")
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
         val written = try {
             if (gyro) containerWriteGyro(handle, timestampsNs, axes, count)
             else containerWriteAccel(handle, timestampsNs, axes, count)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS writer missing", e)
+            throw IllegalStateException("CRAW writer missing", e)
         }
         if (written < 0) throw IllegalStateException("writeMotion failed: code=$written")
         return written
     }
 
-    private fun unavailable(): Nothing =
-        throw UnsupportedOperationException("CRS writer not implemented yet")
+    external fun containerOpen(path: String, metadataJson: String): Long
 
-    fun containerOpen(path: String, metadataJson: String): Long = unavailable()
-
-    fun containerEncodeFrame(
+    external fun containerEncodeFrame(
         src: ByteBuffer, srcOffset: Int, size: Int,
         w: Int, h: Int, stride: Int, cropTop: Int, cropHeight: Int,
-        bin: Boolean, cfa: Int,
+        bin: Boolean, cfa: Int, bitDepth: Int,
         dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
-    ): Int = unavailable()
+    ): Int
 
-    fun containerWriteFrame(
+    external fun containerWriteFrame(
         handle: Long, payload: ByteBuffer, payloadOffset: Int, payloadBytes: Int,
         timestampNs: Long, frameJson: String
-    ): Int = unavailable()
+    ): Int
 
-    fun containerWriteAudio(
-        handle: Long, samples: ByteBuffer, offset: Int, totalShorts: Int,
-        timestampNs: Long
-    ): Int = unavailable()
+    external fun containerWriteAudio(
+        handle: Long, samples: ByteBuffer, offset: Int, frames: Int, channels: Int,
+        sampleRate: Int, timestampNs: Long
+    ): Int
 
-    fun containerWriteGyro(
+    external fun containerWriteGyro(
         handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int
-    ): Int = unavailable()
+    ): Int
 
-    fun containerWriteAccel(
+    external fun containerWriteAccel(
         handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int
-    ): Int = unavailable()
+    ): Int
 
-    fun containerClose(handle: Long): Int = unavailable()
+    external fun containerClose(handle: Long): Int
 }

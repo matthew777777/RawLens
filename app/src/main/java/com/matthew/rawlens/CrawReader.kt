@@ -8,17 +8,24 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Reader hook for CRS takes (RawLens in-house container), used by the
- * offline burst merge. No CRS backend is linked yet, so [available] is
- * false and burst merge reports itself unavailable; implement the
- * reader functions below to enable it.
+ * Reader for Cinematic RAW Studio (.CRAW) takes, used by the offline burst
+ * merge (decoder: third_party/craw, Apache-2.0; JNI: cpp/craw_reader_jni.cpp,
+ * library `rawLensCrawReader`). Files are memory-mapped; crashed takes
+ * without a trailer are recovered by scanning.
  *
  * Threading: one reader per merge thread; all calls below run on that
  * single thread. Negative codes become exceptions.
  */
-internal object CrsReader {
-    /** True once a CRS backend is linked in. */
-    val available: Boolean = false
+internal object CrawReader {
+    /** True when the native decoder loaded (false on host JVM tests). */
+    val available: Boolean by lazy {
+        try {
+            System.loadLibrary("rawLensCrawReader")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     data class TakeInfo(
         val timestamps: LongArray,
@@ -26,11 +33,11 @@ internal object CrsReader {
     )
 
     fun open(path: String): Long {
-        if (!available) throw IllegalStateException("CRS reader unavailable")
+        if (!available) throw IllegalStateException("CRAW reader unavailable")
         val handle = try {
             openReader(path)
         } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("CRS reader missing", e)
+            throw IllegalStateException("CRAW reader missing", e)
         }
         if (handle == 0L) throw IllegalStateException("ContainerReader failed to open $path")
         return handle
@@ -55,7 +62,7 @@ internal object CrsReader {
      * Returns width × height.
      */
     fun decodeFrame(handle: Long, timestamp: Long, destination: ByteBuffer): Pair<Int, Int> {
-        require(destination.isDirect) { "CrsReader needs a direct buffer" }
+        require(destination.isDirect) { "CrawReader needs a direct buffer" }
         val meta = frameMetadata(handle, timestamp)
             ?: throw IllegalStateException("frame metadata unreadable ts=$timestamp")
         val json = org.json.JSONObject(meta)
@@ -95,15 +102,12 @@ internal object CrsReader {
         }
     }
 
-    private fun unavailable(): Nothing =
-        throw UnsupportedOperationException("CRS reader not implemented yet")
-
-    fun openReader(path: String): Long = unavailable()
-    fun closeReader(handle: Long): Unit = unavailable()
-    fun containerMetadata(handle: Long): String? = unavailable()
-    fun frameTimestamps(handle: Long): LongArray? = unavailable()
-    fun frameMetadata(handle: Long, timestamp: Long): String? = unavailable()
-    fun decodeFrame(
+    external fun openReader(path: String): Long
+    external fun closeReader(handle: Long)
+    external fun containerMetadata(handle: Long): String?
+    external fun frameTimestamps(handle: Long): LongArray?
+    external fun frameMetadata(handle: Long, timestamp: Long): String?
+    external fun decodeFrame(
         handle: Long, timestamp: Long, dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
-    ): Int = unavailable()
+    ): Int
 }

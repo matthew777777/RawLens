@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicLongArray
 
 /**
  * RAW Video recorder: a standalone TEMPLATE_RECORD RAW-only session that
- * writes one `.crs` file (type-7 frames, PCM16 audio, gyro/accel motion).
+ * writes one `.craw` file (CRAW-Fast lossless frames, PCM16 audio, gyro/accel motion).
  *
  * Pipeline (60fps-ready by design, 30fps sustained on MT6878 Open Gate):
  * - Camera thread acquires, assigns sequence numbers, fans out to the live
@@ -172,6 +172,8 @@ internal class RawVideoRecorder(
     @Volatile var binActive = false
         private set
     private var binCfa = 0
+    /** CRAW sample bit depth from SENSOR_INFO_WHITE_LEVEL; take-const like [binCfa]. */
+    private var crawBitDepth = 16
 
     /**
      * Live preview fan-out: when attached, every acquired frame is offered to
@@ -331,7 +333,7 @@ internal class RawVideoRecorder(
     fun start(output: File, containerMetadataJson: String) {
         MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
         check(device == null) { "Already started" }
-        require(CrsWriter.available) { "crs native library unavailable" }
+        require(CrawWriter.available) { "craw native library unavailable" }
         val reserve = storageReserveBytes
         val free = freeBytes(output)
         if (free < reserve) throw StorageFullException(free, reserve)
@@ -377,6 +379,7 @@ internal class RawVideoRecorder(
         val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         binActive = binningActive(binning, sensorCfa, frameSize.width)
         binCfa = if (sensorCfa != null && sensorCfa in 0..3) sensorCfa else 0
+        crawBitDepth = CrawWriter.bitDepthFor(chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
         if (binning && !binActive) {
             Log.w(
                 TAG, "binning off for this take: cfa=$sensorCfa " +
@@ -426,11 +429,11 @@ internal class RawVideoRecorder(
             }
         }
         writerHandle = try {
-            val meta = CrsMetadata.container(
+            val meta = CrawMetadata.container(
                 containerMetadataJson, chars, realtime, audioRate,
                 audioChannels, hasMotionStream, orientation
             )
-            CrsWriter.open(output.absolutePath, meta)
+            CrawWriter.open(output.absolutePath, meta)
         } catch (e: Exception) {
             shutdownStreams()
             throw e
@@ -546,10 +549,10 @@ internal class RawVideoRecorder(
                     val cfa = shadingCfa
                     val active = shadingActive
                     if (snap != null && cfa != null && active != null) {
-                        CrsLensShading.resample(
+                        CrawLensShading.resample(
                             snap, cfa, active, frameSize.width, frameSize.height,
                             resolved.top, resolved.height
-                        )?.let { CrsLensShading.toFrameJson(it) }
+                        )?.let { CrawLensShading.toFrameJson(it) }
                     } else null
                 } catch (_: Exception) {
                     null
@@ -572,7 +575,7 @@ internal class RawVideoRecorder(
                     timestampNs = ts,
                     frameJson = "{\"width\":$encW," +
                         "\"height\":$encH," +
-                        "\"compressionType\":7,\"timestamp\":$ts," +
+                        "\"codec\":\"CRAW-Fast\",\"timestamp\":$ts," +
                         "\"crop\":\"${crop.name}\"" +
                         (if (shadingTriplet != null) ",$shadingTriplet" else "") +
                         "}",
@@ -698,7 +701,7 @@ internal class RawVideoRecorder(
         val handle = writerHandle
         writerHandle = 0L
         try {
-            if (handle != 0L) CrsWriter.close(handle)
+            if (handle != 0L) CrawWriter.close(handle)
         } finally {
             teardown()
         }
@@ -905,9 +908,9 @@ internal class RawVideoRecorder(
                     continue
                 }
                 val t0 = SystemClock.elapsedRealtimeNanos()
-                val bytes = CrsWriter.encodeFrame(
+                val bytes = CrawWriter.encodeFrame(
                     task.src, task.size, task.width, task.height, task.stride,
-                    task.cropTop, task.cropHeight, buf, binActive, binCfa
+                    task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth
                 )
                 val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
                 // Benign races on stats: worst case a slightly stale overlay.
@@ -933,7 +936,7 @@ internal class RawVideoRecorder(
                 resultWaitMsMax =
                     if (waitMs > resultWaitMsMax) waitMs else resultWaitMsMax * 0.999f + waitMs * 0.001f
                 val frameJson =
-                    CrsMetadata.frame(task.frameJson, result, timeOriginNs)
+                    CrawMetadata.frame(task.frameJson, result, timeOriginNs)
                 buf.flip()
                 synchronized(reorderLock) {
                     reorder[task.seq] =
@@ -1068,7 +1071,7 @@ internal class RawVideoRecorder(
             val relTs = pend.timestampNs - timeOriginNs
             try {
                 val write0 = SystemClock.elapsedRealtimeNanos()
-                CrsWriter.writeFrame(
+                CrawWriter.writeFrame(
                     writerHandle, pend.payload, pend.bytes, relTs, pend.frameJson
                 )
                 val writeMs = (SystemClock.elapsedRealtimeNanos() - write0) / 1e6f
@@ -1171,7 +1174,7 @@ internal class RawVideoRecorder(
             if (rel < 0) {
                 audioDropped.incrementAndGet()
             } else try {
-                CrsWriter.writeAudio(
+                CrawWriter.writeAudio(
                     writerHandle, chunk.data, chunk.frames, chunk.channels, rel
                 )
                 audioChunks.incrementAndGet()
@@ -1192,7 +1195,7 @@ internal class RawVideoRecorder(
         while (chunk != null) {
             try {
                 rebaseMotion(chunk, origin)?.let {
-                    CrsWriter.writeGyro(
+                    CrawWriter.writeGyro(
                         writerHandle, it.timestampsNs, it.axes, it.count
                     )
                     gyroSamples.addAndGet(it.count.toLong())
@@ -1207,7 +1210,7 @@ internal class RawVideoRecorder(
         while (accel != null) {
             try {
                 rebaseMotion(accel, origin)?.let {
-                    CrsWriter.writeAccel(
+                    CrawWriter.writeAccel(
                         writerHandle, it.timestampsNs, it.axes, it.count
                     )
                     accelSamples.addAndGet(it.count.toLong())
@@ -1378,7 +1381,7 @@ internal class RawVideoRecorder(
         writerHandle = 0L
         if (handle != 0L) {
             try {
-                CrsWriter.close(handle)
+                CrawWriter.close(handle)
             } catch (_: Exception) {
             }
         }

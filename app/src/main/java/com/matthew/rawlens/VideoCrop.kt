@@ -2,7 +2,7 @@
 package com.matthew.rawlens
 
 /**
- * RAW Video crop selector. Crops are applied inside the CRS
+ * RAW Video crop selector. Crops are applied inside the CRAW
  * encoder ([cropTop]/[cropHeight]) — the camera session always streams the
  * full sensor frame, so switching crops never reconfigures the session.
  * Even-row crops preserve Bayer CFA phase, as the encoder requires.

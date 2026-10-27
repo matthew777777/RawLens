@@ -94,7 +94,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 if (isChecked != directLogEnabled) isChecked = directLogEnabled
             }
         })
-        content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .crs: BT.709, ACES fitted BT.709, S-Log3, or HLG in this tab or the LOG quick tile. Selectable recording crop, live RAW viewfinder; sound follows the Sound toggle."))
+        content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .craw: BT.709, ACES fitted BT.709, S-Log3, or HLG in this tab or the LOG quick tile. Selectable recording crop, live RAW viewfinder; sound follows the Sound toggle."))
         content.addView(Button(this).apply {
             fun refresh() {
                 text = "LOG profile: ${directLogProfile().description}"
@@ -179,7 +179,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(sectionTitle("RAW video"))
         content.addView(Button(this).apply {
             fun refresh() {
-                text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRS crop: ${videoCropShort()}"
+                text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRAW crop: ${videoCropShort()}"
             }
             refresh()
             setOnClickListener {
@@ -199,7 +199,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
             }
         })
-        content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .crs: averaged R/B and diamond-averaged green. Applies to the next take; N/A in Direct Log."))
+        content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .craw: each sample is the mean of four same-colour sensor samples. Applies to the next take; N/A in Direct Log."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(CheckBox(this).apply {
             text = "Lock exposure on record"

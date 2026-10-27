@@ -95,8 +95,8 @@ object CaptureFileNames {
         return fileName(captureTimeMillis, "F%02d".format(index), "dng")
     }
 
-    /** Offline-merge burst take: `IMG_<ts>_BURST.crs` (recordingType=BURST, never a video take). */
-    fun burstCrs(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_BURST, "crs")
+    /** Offline-merge burst take: `IMG_<ts>_BURST.craw` (recordingType=BURST, never a video take). */
+    fun burstCraw(captureTimeMillis: Long): String = fileName(captureTimeMillis, TYPE_BURST, "craw")
 
     private val SUFFIX_REGEX = Regex("[A-Za-z0-9]+")
     private val EXTENSION_REGEX = Regex("[A-Za-z0-9]{2,5}")

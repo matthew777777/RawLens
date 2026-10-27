@@ -7,7 +7,7 @@ import java.nio.ByteBuffer
 import org.json.JSONObject
 
 /**
- * One decoded `_BURST.crs` frame ready for offline merge: row-major
+ * One decoded `_BURST.craw` frame ready for offline merge: row-major
  * uint16 Bayer pixels plus metadata synthesized from the container and
  * frame JSON (no Camera2 result exists offline, so [RawFrameMetadata] is
  * built directly; unknown HAL tags stay null exactly like an unreported
@@ -83,7 +83,7 @@ internal object OfflineBurstMetadata {
                 sensorOriginX = 0,
                 sensorOriginY = 0,
                 processingCrop = RawCrop(0, 0, width, height),
-                provenance = "crs-offline"
+                provenance = "craw-offline"
             ),
             lensShadingAlreadyApplied = false,
             lensShadingMap = shadingMap,
@@ -122,7 +122,7 @@ internal object OfflineBurstMetadata {
     /**
      * Parses the optional per-frame `lensShadingMapWidth` /
      * `lensShadingMapHeight` / `lensShadingMap` triplet (four nested
-     * R, G-even, G-odd, B planes, cf. `CrsLensShading.toFrameJson`)
+     * R, G-even, G-odd, B planes, cf. `CrawLensShading.toFrameJson`)
      * into Camera2 map order. Strictly validated (extents, plane
      * counts, finite gains >= 1.0 as `LensShadingModel` requires);
      * any defect nulls the map (no android Log here: this path runs in
@@ -156,8 +156,8 @@ internal object OfflineBurstMetadata {
      * shape/value defect.
      */
     fun buildSnapshot(columns: Int, rows: Int, planes: List<List<Double>>): LensShadingSnapshot {
-        require(rows in 1..CrsLensShading.MAX_EXTENT
-            && columns in 1..CrsLensShading.MAX_EXTENT) {
+        require(rows in 1..CrawLensShading.MAX_EXTENT
+            && columns in 1..CrawLensShading.MAX_EXTENT) {
             "lens-shading grid extents out of range ($columns x $rows)"
         }
         require(planes.size == 4) { "lens-shading map needs 4 planes" }

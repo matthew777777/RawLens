@@ -22,7 +22,7 @@ import java.util.concurrent.Executors
  * Bottom-panel gallery seat: the newest finished RawLens capture (photo or
  * video under DCIM/RawLens) as a thumbnail, refreshed whenever MediaStore
  * changes. Every saver publishes through MediaStore with IS_PENDING, so one
- * observer covers DNG, developed JPEG/JXL, CRS and Direct-Log without
+ * observer covers DNG, developed JPEG/JXL, CRAW and Direct-Log without
  * touching the capture paths. Captures exported only to a SAF tree are not
  * indexed and never show here.
  */
@@ -65,7 +65,7 @@ class LastCaptureThumbnail(
         io.execute {
             // Newest first across photos and videos; show the first one that
             // actually yields a picture. A capture with no thumbnail (a DNG the
-            // platform thumbnailer skips, an CRS) never turns the seat grey.
+            // platform thumbnailer skips, an CRAW) never turns the seat grey.
             val candidates = (recent(MediaStore.Images.Media.EXTERNAL_CONTENT_URI) +
                 recent(MediaStore.Video.Media.EXTERNAL_CONTENT_URI))
                 .sortedByDescending { it.added }

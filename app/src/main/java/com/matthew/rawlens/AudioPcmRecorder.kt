@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * P4 PCM16 audio capture for RAW video: 48 kHz stereo-first from the
  * camcorder mic (mono fallback when stereo init fails), chunked for the
- * `.crs` container. Stereo is the reference configuration.
+ * `.craw` container. Stereo is the reference configuration.
  *
  * Timestamp model: [AudioRecord] positions live in the audio clock, video
  * frames in boot-time ns. Each chunk's [Chunk.timestampNs] is mapped with
@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong
  * video sync). First-chunk ts should land within ~1 video frame of the first
  * frame ts; the record test asserts that loosely, not sample-exactness.
  *
- * Owns its thread and never touches [CrsWriter]: chunks are handed to
+ * Owns its thread and never touches [CrawWriter]: chunks are handed to
  * the recorder's encode thread, which owns all container writes. Chunk
  * timestamps stay boot-time here; the committer rebases them to
  * recording-relative on write (absolute timestamps overflow 32-bit ms
@@ -59,7 +59,7 @@ internal class AudioPcmRecorder {
 
     /**
      * @return false when the mic is unavailable (no permission, no hardware,
-     * mic privacy toggle). Callers record silent video instead — legal .crs.
+     * mic privacy toggle). Callers record silent video instead — legal .craw.
      */
     fun start(onChunk: (Chunk) -> Unit): Boolean {
         check(thread == null) { "Already started" }

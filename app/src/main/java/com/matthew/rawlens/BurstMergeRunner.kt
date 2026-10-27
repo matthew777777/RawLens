@@ -10,7 +10,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Offline merge over a staged `_BURST.crs` take: decode (with
+ * Offline merge over a staged `_BURST.craw` take: decode (with
  * per-frame progress), merge (MFSR or HDR+), save (DNG and/or JPEG).
  *
  * Runs on the caller's thread (the Merges screen uses one background
@@ -67,16 +67,16 @@ internal class BurstMergeRunner(private val appContext: Context) {
         inputs: Inputs = Inputs(),
         listener: Listener = Listener { }
     ): Completed {
-        require(BurstCrsStore.isBurstFile(take)) { "Not a burst take: ${take.name}" }
+        require(BurstCrawStore.isBurstFile(take)) { "Not a burst take: ${take.name}" }
         val t0 = SystemClock.elapsedRealtime()
         val inBytes = take.length()
-        val handle = CrsReader.open(take.absolutePath)
+        val handle = CrawReader.open(take.absolutePath)
         val nativeBufs = ArrayList<ByteBuffer>()
         try {
-            val timestamps = CrsReader.frameTimestamps(handle)
+            val timestamps = CrawReader.frameTimestamps(handle)
                 ?: throw IllegalStateException("Frame index unreadable: ${take.name}")
             require(timestamps.isNotEmpty()) { "Take holds no frames: ${take.name}" }
-            val containerJson = CrsReader.containerMetadata(handle)
+            val containerJson = CrawReader.containerMetadata(handle)
                 ?: throw IllegalStateException("Container metadata unreadable: ${take.name}")
             val poolCap = when (method) {
                 Method.MFSR -> inputs.mfsr.activeFrameCount(timestamps.size)
@@ -89,7 +89,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 .map { timestamps[it] }
             require(pool.size >= 2) { "Take holds fewer than 2 frames" }
             val frames = pool.mapIndexed { i, ts ->
-                val meta = CrsReader.frameMetadata(handle, ts)
+                val meta = CrawReader.frameMetadata(handle, ts)
                     ?: throw IllegalStateException("Frame metadata unreadable ts=$ts")
                 val json = org.json.JSONObject(meta)
                 val w = json.getInt("width")
@@ -100,7 +100,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
                 val need = w.toLong() * h * 2
                 require(buf.remaining().toLong() >= need) { "Native pixel buffer too small" }
                 val off = buf.position()
-                val written = CrsReader.decodeFrame(handle, ts, buf, off, buf.remaining())
+                val written = CrawReader.decodeFrame(handle, ts, buf, off, buf.remaining())
                 if (written < 0) throw IllegalStateException("Decode failed ts=$ts code=$written")
                 buf.position(off + written)
                 val metadata = OfflineBurstMetadata.synthesize(containerJson, meta, i)
@@ -125,7 +125,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
             return completed
         } finally {
             nativeBufs.forEach { runCatching { HdrPlusVulkan.freeBuffer(it) } }
-            runCatching { CrsReader.closeReader(handle) }
+            runCatching { CrawReader.closeReader(handle) }
         }
     }
 
