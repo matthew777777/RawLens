@@ -96,11 +96,11 @@ class ZslCaptureSoakTest {
             arrayOf("DCIM/RawLens/%", "%.dng", "%.jpg"), null)?.use { it.count } ?: 0
         try {
             // -e mfsr <n>: ZSL MFSR merge of n frames (one artifact per press).
-            args.getString("mfsr")?.toInt()?.let { n ->
+            args.getString("mfsr")?.toInt()?.let {
                 assertTrue(controller.setMfsrSettings(
-                    controller.mfsrSettings().copy(enabled = true, frameCount = n, keepSourceBurst = false)))
+                    controller.mfsrSettings().copy(enabled = true, keepSourceBurst = false)))
             }
-            controller.setRawZslFrameCount(frames)
+            controller.setRawZslFrameCount(args.getString("mfsr")?.toInt() ?: frames)
             controller.setZslHybridTopup(hybrid)
             controller.setCaptureExposureMode(mode)
             assertTrue(controller.setCaptureFormat(format))

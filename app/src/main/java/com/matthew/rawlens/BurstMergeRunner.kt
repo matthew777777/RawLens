@@ -79,7 +79,7 @@ internal class BurstMergeRunner(private val appContext: Context) {
             val containerJson = CrsReader.containerMetadata(handle)
                 ?: throw IllegalStateException("Container metadata unreadable: ${take.name}")
             val poolCap = when (method) {
-                Method.MFSR -> inputs.mfsr.activeFrameCount()
+                Method.MFSR -> inputs.mfsr.activeFrameCount(timestamps.size)
                 Method.HDRPLUS -> minOf(
                     inputs.hdrPlus.activeFrameCount(timestamps.size),
                     HdrPlusMerge.MAX_NATIVE_FRAMES

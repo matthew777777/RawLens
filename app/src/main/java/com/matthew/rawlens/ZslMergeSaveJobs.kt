@@ -149,7 +149,10 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
         Log.i(LOG_TAG, "HDR+ timing merge=${mergeMs}ms " +
             "frames=${keptInputs.size}/${inputs.size} ${mergedRaw.width}x${mergedRaw.height}")
         val refInput = keptInputs[decision.refIndex]
-        val refMetadata = refInput.metadata
+        val refMetadata = refInput.metadata.copy(
+            compositeSourceCount = inputs.size,
+            compositeUsedCount = keptInputs.size
+        )
         val refResult = refInput.result
         val merged = requireNotNull(RawPreDemosaicPipeline.process(
             mergedRaw, refMetadata, PreDemosaicSettings()).cfa)
@@ -210,8 +213,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             // The HDR+ average lives in the single-frame normalized domain, so the
             // merged develop meters through the LDR adaptive path on the merged CFA
             // itself (same highlight guards as single-frame). The DNG above stays
-            // linear and dark; only this developed still lifts. ZSL bursts never use
-            // ETTR, so no residual headroom cap applies.
+            // linear and dark; only this developed still lifts.
             if (developedFormat == DevelopedFormat.JXL) {
                 val developed = developer.developMergedJxl(effectiveMerged, refMetadata,
                     RawDevelopmentSettings(
@@ -343,13 +345,18 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
                 host.reportSaveState("MFSR DNG SAVED")
             }
             if (outputFormat.includesJpeg) {
-                // The merge output is already RGB: no Amaze demosaic, fixed
-                // reference exposure (adaptive metering has no RGB leg yet).
-                // ZSL bursts never use ETTR, so no residual headroom cap.
+                // Meter merged camera-linear RGB; DNG above retains the merge values.
+                val development = RawDevelopmentSettings(
+                    denoise = denoise,
+                    adaptiveExposureStrength = adaptivePreviewStrength(saveSettings.exposureMode, outputSettings),
+                    adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
+                        outputSettings, saveSettings.focusView
+                    )
+                )
                 val developer = host.developer()
                 if (developedFormat == DevelopedFormat.JXL) {
                     val developed = developer.developMfsrJxl(merged.rgb, merged.width, merged.height,
-                        merged.refMetadata, RawDevelopmentSettings(denoise = denoise),
+                        merged.refMetadata, development,
                         look = outputSettings, jxl = jxlSettings)
                     JxlSaver(context).save(developed, merged.refMetadata, merged.refResult,
                         captureTimeMillis = captureTimeMillis,
@@ -358,7 +365,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
                     host.reportSaveState(if (referenceDng != null) "MFSR MERGED+DNG • JXL" else "MFSR MERGED • JXL")
                 } else {
                     val developed = developer.developMfsrJpeg(merged.rgb, merged.width, merged.height,
-                        merged.refMetadata, RawDevelopmentSettings(denoise = denoise), outputSettings)
+                        merged.refMetadata, development, outputSettings)
                     try {
                         JpegSaver(context).save(developed, merged.refMetadata,
                             merged.refResult, captureTimeMillis = captureTimeMillis,
