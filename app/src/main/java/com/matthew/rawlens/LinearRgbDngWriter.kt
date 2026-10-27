@@ -244,6 +244,7 @@ object LinearRgbDngWriter {
             bytes(50706, byteArrayOf(1, 4, 0, 0))
             bytes(50707, byteArrayOf(1, 4, 0, 0))
             ascii(50708, cameraName)
+            ascii(50936, "RawLens Camera2 calibration")
             shorts(50713, 1, 1)
             rationals(50714, doubleArrayOf(0.0, 0.0, 0.0))
             // One WhiteLevel per sample channel: the DNG spec fixes this

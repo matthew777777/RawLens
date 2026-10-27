@@ -69,10 +69,10 @@ object NativeDngWriter {
         }
         val tags = TinyDngMetadata.create(metadata, overrides, outputPattern,
             black, white, active, dng17 = jxl)
-        result.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
+        metadata.focalLengthMm?.takeIf { it.isFinite() && it > 0f }?.let {
             tags.reals(37386, doubleArrayOf(it.toDouble()), 5)
         }
-        result.get(CaptureResult.LENS_APERTURE)?.let {
+        metadata.aperture?.takeIf { it.isFinite() && it > 0f }?.let {
             tags.reals(33437, doubleArrayOf(it.toDouble()), 5)
         }
         writeNative(contiguousRawBuffer(image, plane), image.width, image.height,

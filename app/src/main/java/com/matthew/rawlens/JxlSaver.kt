@@ -70,7 +70,9 @@ class JxlSaver(private val context: Context) {
                 gps = gps,
                 make = Build.MANUFACTURER,
                 model = Build.MODEL,
-                hdrPq = settings.hdrTransfer == JxlHdrTransfer.PQ
+                hdrPq = settings.hdrTransfer == JxlHdrTransfer.PQ,
+                outputWidth = developed.width,
+                outputHeight = developed.height
             )
             resolver.openFileDescriptor(uri, "rw")?.use { descriptor ->
                 NativeJxlEncoder.encode(

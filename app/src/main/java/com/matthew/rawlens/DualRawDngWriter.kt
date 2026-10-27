@@ -84,6 +84,7 @@ object DualRawDngWriter {
             bytes(50706, byteArrayOf(1, 4, 0, 0))
             bytes(50707, byteArrayOf(1, 4, 0, 0))
             ascii(50708, cameraName)
+            ascii(50936, "RawLens Camera2 calibration")
             shorts(50713, 2, 2)
             // One level per Bayer phase of the 2x2 repeat grid (count 1 is
             // rejected by rawspeed/Darktable). RATIONAL to match the files

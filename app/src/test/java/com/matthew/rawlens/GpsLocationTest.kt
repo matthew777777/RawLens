@@ -78,7 +78,7 @@ class GpsLocationTest {
         assertEquals(listOf(2L, 17L), parsed.rationals(4).take(2).map { it.first / it.second })
         assertArrayEquals(byteArrayOf(0), parsed.bytes(5))
         assertEquals(35500L / 1000L, parsed.rationals(6).single().let { it.first / it.second })
-        assertEquals("GPS", parsed.ascii(27))
+        assertArrayEquals(byteArrayOf(65, 83, 67, 73, 73, 0, 0, 0, 71, 80, 83), parsed.bytes(27))
         assertEquals("2026:06:01", parsed.ascii(29))
     }
 
@@ -129,7 +129,7 @@ class GpsLocationTest {
         val exif = mock(ExifInterface::class.java)
         val location = GpsLocation(48.858222, -2.2945, -5.25, timeMillis = 1780276800000L)
         location.writeTo(exif)
-        verify(exif).setAttribute(ExifInterface.TAG_GPS_VERSION_ID, "2.3.0.0")
+        verify(exif).setAttribute(ExifInterface.TAG_GPS_VERSION_ID, GpsLocation.GPS_VERSION)
         verify(exif).setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, "N")
         verify(exif).setAttribute(
             ExifInterface.TAG_GPS_LATITUDE, location.latitudeDms().toExifString()
@@ -141,7 +141,7 @@ class GpsLocationTest {
         verify(exif).setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, "1")
         verify(exif).setAttribute(ExifInterface.TAG_GPS_ALTITUDE, "5250/1000")
         verify(exif).setAttribute(ExifInterface.TAG_GPS_DATESTAMP, "2026:06:01")
-        verify(exif).setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, "GPS")
+        verify(exif).setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, "ASCII\u0000\u0000\u0000GPS")
         assertNotNull(location.latitudeDms().toExifString())
     }
 
@@ -149,7 +149,7 @@ class GpsLocationTest {
         val exif = mock(ExifInterface::class.java)
         // 2026-06-01T01:20:00Z.
         GpsLocation(0.0, 0.0, timeMillis = 1780276800000L).writeTo(exif)
-        verify(exif).setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, "1/1,20/1,0/1")
+        verify(exif).setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, "01:20:00")
         verify(exif).setAttribute(ExifInterface.TAG_GPS_DATESTAMP, "2026:06:01")
     }
 

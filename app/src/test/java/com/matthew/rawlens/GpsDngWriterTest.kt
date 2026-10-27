@@ -88,7 +88,7 @@ class GpsDngWriterTest {
         assertArrayEquals(byteArrayOf(0), gpsIfd.bytes(5))
         assertEquals(35.5, gpsIfd.rational(6), 1e-6)
         assertEquals("2026:06:01", gpsIfd.ascii(29))
-        assertEquals("GPS", gpsIfd.ascii(27))
+        assertArrayEquals(byteArrayOf(65, 83, 67, 73, 73, 0, 0, 0, 71, 80, 83), gpsIfd.bytes(27))
     }
 
     private fun metadata(): RawFrameMetadata {

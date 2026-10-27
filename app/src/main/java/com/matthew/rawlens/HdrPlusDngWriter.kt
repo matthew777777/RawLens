@@ -122,6 +122,7 @@ object HdrPlusDngWriter {
                 bytes(50707, byteArrayOf(1, 3, 0, 0))
             }
             ascii(50708, cameraName)
+            ascii(50936, "RawLens Camera2 calibration")
             shorts(50713, 2, 2)
             // BlackLevel count must cover the 2x2 repeat grid (one level per
             // Bayer phase): count 1 is rejected by rawspeed/Darktable
@@ -182,6 +183,13 @@ object HdrPlusDngWriter {
 
         val fields = buildFields(cfa.pattern, metadata, provenance, compression)
         val exif = DngExifDirectory.fields(metadata, captureTimeMillis)
+            ?: if (provenance != null) TiffFields() else null
+        if (provenance != null && provenance.selectedFrames <= 65535 &&
+            exif != null && exif.descriptors.chunked(3).none { it[0] == 42080 }
+        ) {
+            exif.shorts(42080, 2)
+            exif.shorts(42081, provenance.selectedFrames, provenance.mergedFrames)
+        }
         val gpsFields = gps?.let { GpsTiffDirectory.fields(it) }
         val mosaic = ByteArray(Math.multiplyExact(cfa.width * cfa.height, 2))
         var o = 0

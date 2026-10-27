@@ -26,6 +26,48 @@ import kotlin.math.max
  */
 @RunWith(AndroidJUnit4::class)
 class MergedJpegDevelopInstrumentedTest {
+    @Test fun mfsrAdaptiveMatchesExplicitExposureAndPreservesRgb() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val developer = RawDevelopmentCoordinator(context)
+        val rgb = ByteBuffer.allocateDirect(8 * 8 * 12).order(ByteOrder.nativeOrder())
+        repeat(8 * 8 * 3) { rgb.putFloat(0.03f) }
+        rgb.rewind()
+        val original = ByteArray(rgb.remaining()).also { rgb.duplicate().get(it) }
+        val correction = AdaptiveDevelopmentExposure.analyzeRgb(rgb, 8, 8).correctionEv
+        assertTrue("Dark RGB should lift", correction > 0.0)
+        try {
+            for (strength in listOf(0f, 0.5f, 1f)) {
+                val automatic = developer.developMfsrJpeg(rgb, 8, 8, metadata(),
+                    RawDevelopmentSettings(adaptiveExposureStrength = strength))
+                val explicit = developer.developMfsrJpeg(rgb, 8, 8, metadata(),
+                    RawDevelopmentSettings(exposureEv = correction * strength))
+                try {
+                    val actual = IntArray(64)
+                    val expected = IntArray(64)
+                    automatic.bitmap.getPixels(actual, 0, 8, 0, 0, 8, 8)
+                    explicit.bitmap.getPixels(expected, 0, 8, 0, 0, 8, 8)
+                    assertArrayEquals("strength=$strength", expected, actual)
+                    val automaticJxl = developer.developMfsrJxl(rgb, 8, 8, metadata(),
+                        RawDevelopmentSettings(adaptiveExposureStrength = strength))
+                    val explicitJxl = developer.developMfsrJxl(rgb, 8, 8, metadata(),
+                        RawDevelopmentSettings(exposureEv = correction * strength))
+                    val actualHalf = ByteArray(automaticJxl.halfRgba.remaining()).also {
+                        automaticJxl.halfRgba.duplicate().get(it)
+                    }
+                    val expectedHalf = ByteArray(explicitJxl.halfRgba.remaining()).also {
+                        explicitJxl.halfRgba.duplicate().get(it)
+                    }
+                    assertArrayEquals("JXL strength=$strength", expectedHalf, actualHalf)
+                    assertEquals(0, rgb.position())
+                    assertArrayEquals(original, ByteArray(rgb.remaining()).also { rgb.duplicate().get(it) })
+                } finally {
+                    automatic.bitmap.recycle(); automatic.gainmap?.recycle()
+                    explicit.bitmap.recycle(); explicit.gainmap?.recycle()
+                }
+            }
+        } finally { developer.close() }
+    }
+
     @Test fun uniformFieldMatchesCpuForBothWhiteBalanceSources() {
         withGl {
             // Unity neutral (UNITY_FALLBACK path is not hit: gains null + neutral

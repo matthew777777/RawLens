@@ -54,7 +54,8 @@ class DngSaver(private val context: Context) {
         try {
             resolver.openOutputStream(uri, "w")?.use {
                 FloatCfaDngWriter.write(it, cfa, metadata, gps,
-                    description = "Captured with RawLens\nAI-denoised CFA DNG (32-bit float, normalized, zero black level)")
+                    description = "Captured with RawLens\nAI-denoised CFA DNG (32-bit float, normalized, zero black level)",
+                    captureTimeMillis = captureId)
             } ?: throw IOException("Could not open AI DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish AI DNG")
@@ -110,7 +111,8 @@ class DngSaver(private val context: Context) {
                     captureTimeMillis = captureId, provenance = hdrPlusProvenance,
                     compression = mergedCompression)
                 else FloatCfaDngWriter.write(it, cfa, metadata, gps,
-                    baselineExposureEv = baselineExposureEv, description = description)
+                    baselineExposureEv = baselineExposureEv, description = description,
+                    captureTimeMillis = captureId)
             } ?: throw IOException("Could not open HDR DNG output stream")
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) throw IOException("Could not publish HDR DNG")
@@ -126,9 +128,8 @@ class DngSaver(private val context: Context) {
      * a JPEG XL codestream (DNG 1.7, Compression 52546 — the iPhone ProRAW
      * flavor). Applies to the single-frame path only: packed frames and
      * merged DNGs stay uncompressed. JXL forces the TinyDNG backend (the
-     * platform writer cannot emit 52546); when a GPS fix is present the
-     * save stays uncompressed instead, because TinyDNG cannot carry the
-     * GPS sub-IFD and silently dropping location is worse than a bigger file.
+     * platform writer cannot emit 52546). Capture/GPS directories are appended
+     * before publication for both backends.
      */
     @Throws(IOException::class)
     fun save(
@@ -193,15 +194,7 @@ class DngSaver(private val context: Context) {
             Log.w(LOG_TAG, "JXL DNG compression needs the single-frame path; " +
                 "packed frame $displayName stays uncompressed")
         }
-        // JXL rides TinyDNG (the platform writer has no 52546); a present
-        // GPS fix keeps the uncompressed platform file instead of losing
-        // location through TinyDNG's flat IFD.
-        val wantJxl = dngCompression == DngCompression.JXL && packedFormat == null
-        if (wantJxl && gps != null) {
-            Log.w(LOG_TAG, "JXL DNG compression skipped for $displayName: " +
-                "GPS fix preserved via uncompressed DNG (TinyDNG has no GPS sub-IFD)")
-        }
-        val useJxl = wantJxl && gps == null
+        val useJxl = dngCompression == DngCompression.JXL && packedFormat == null
         val compressionBackend = if (useJxl && effectiveBackend != DngWriterBackend.TINY_DNG) {
             Log.i(LOG_TAG, "JXL DNG compression forces TinyDNG backend for $displayName")
             DngWriterBackend.TINY_DNG
@@ -236,15 +229,7 @@ class DngSaver(private val context: Context) {
                     gps = gps
                 )
             }
-            // Packed saves report TINY_DNG below only as the closest surviving
-            // label; their HDR+ file keeps GPS, so the discard warning must
-            // not fire for them.
-            if (gps != null && actualBackend == DngWriterBackend.TINY_DNG && packedFormat == null) {
-                // The pinned TinyDNG writer emits a single flat IFD and cannot
-                // carry the GPS sub-IFD; the fix is dropped rather than written
-                // half-correctly. The platform backend remains the GPS path.
-                Log.w(LOG_TAG, "TinyDNG backend discards the GPS fix for $displayName")
-            }
+            DngCaptureMetadata.apply(context, uri, metadata, captureId, gps)
 
             // Android DngCreator deliberately follows device Camera2 metadata. Preserve RawLens'
             // optional calibration editor by patching only already-declared tags after writing.

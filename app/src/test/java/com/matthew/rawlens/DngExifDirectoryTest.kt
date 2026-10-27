@@ -96,6 +96,13 @@ class DngExifDirectoryTest {
         flash: Boolean? = null
     ): RawFrameMetadata {
         val m = mock(RawFrameMetadata::class.java)
+        `when`(m.aeMode).thenReturn(null)
+        `when`(m.awbMode).thenReturn(null)
+        `when`(m.digitalZoomRatio).thenReturn(null)
+        `when`(m.exposureCompensationEv).thenReturn(null)
+        `when`(m.sensitivityIso).thenReturn(null)
+        `when`(m.compositeUsedCount).thenReturn(null)
+        `when`(m.compositeSourceCount).thenReturn(null)
         `when`(m.cameraId).thenReturn("0")
         `when`(m.exposureTimeNanos).thenReturn(exposureNanos)
         `when`(m.aperture).thenReturn(aperture)

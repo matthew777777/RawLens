@@ -12,6 +12,46 @@ import java.nio.ByteOrder
 import javax.xml.parsers.DocumentBuilderFactory
 
 class JxlMetadataBoxesTest {
+    @Test fun sharedCaptureFactsAndGpsAndOutputDimensions() {
+        val boxes = JxlMetadataBoxes.build(
+            metadata = metadata().copy(
+                aeMode = 0, awbMode = 0, exposureCompensationEv = -1.5,
+                exposureTimeNanos = 2_000_000_000L, sensitivityIso = 100_000,
+                lensModel = "Camera 0", compositeSourceCount = 8, compositeUsedCount = 6
+            ),
+            awbAuto = true, captureTimeMillis = 1_700_000_000_123L,
+            displayP3 = false, gps = GpsLocation(51.0, -1.0, -5.5, accuracyMeters = 2.5f),
+            make = "OEM", model = "Device", outputWidth = 2000, outputHeight = 1500
+        )
+        val root = Tiff.root(boxes.exif)
+        val exif = root.subIfd(0x8769)
+        assertEquals(2000L, root.long(256))
+        assertEquals(2000L, exif.long(40962))
+        assertEquals(1500L, exif.long(40963))
+        assertEquals(1, exif.short(41986))
+        assertEquals(1, exif.short(41987)) // Frozen manual AWB overrides legacy auto argument.
+        assertEquals("-3/2", exif.exifString(37380))
+        assertEquals("-1/1", exif.exifString(37377))
+        assertEquals(100_000L, exif.long(34867))
+        assertEquals("123", exif.ascii(37521))
+        assertEquals(DngExifDirectory.offsetString(1_700_000_000_123L), exif.ascii(36881))
+        assertEquals("Camera 0", exif.ascii(42036))
+        assertEquals(2, exif.short(42080))
+        val counts = ByteBuffer.wrap(exif.raw(42081)).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(8, counts.short.toInt())
+        assertEquals(6, counts.short.toInt())
+        val gps = root.subIfd(34853)
+        org.junit.Assert.assertArrayEquals(byteArrayOf(2, 3, 0, 0), gps.raw(0))
+        assertEquals("ASCII\u0000\u0000\u0000GPS", gps.raw(27).toString(Charsets.US_ASCII))
+        assertEquals(5L to 2L, gps.rational(31))
+        org.junit.Assert.assertFalse(gps.has(16)) // No invented image direction reference.
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(ByteArrayInputStream(boxes.xmp))
+        val desc = doc.getElementsByTagName("rdf:Description").item(0)
+        assertEquals("2000", desc.attributes.getNamedItem("tiff:ImageWidth").nodeValue)
+        assertEquals("1", desc.attributes.getNamedItem("exif:WhiteBalance").nodeValue)
+    }
+
     @Test
     fun exifBlobCarriesJpegParityTags() {
         val boxes = JxlMetadataBoxes.build(
@@ -34,14 +74,14 @@ class JxlMetadataBoxesTest {
         assertEquals(4000, tiff.long(0x0100))
         assertEquals(3000, tiff.long(0x0101))
         assertEquals(1, tiff.short(0x0112))
-        assertEquals(1, tiff.short(0xA001))
+        assertEquals(1, tiff.subIfd(0x8769).short(0xA001))
         assertTrue(tiff.ascii(0x0132).matches(Regex("\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}")))
         val exif = tiff.subIfd(0x8769)
-        assertEquals("0232", exif.raw(0x9000).toString(Charsets.US_ASCII))
+        assertEquals("0300", exif.raw(0x9000).toString(Charsets.US_ASCII))
         assertEquals(1L to 100L, exif.rational(0x829A))
-        assertEquals(2800L to 1000L, exif.rational(0x829D))
+        assertEquals(14L to 5L, exif.rational(0x829D))
         assertEquals(100, exif.short(0x8827))
-        assertEquals(4300L to 1000L, exif.rational(0x920A))
+        assertEquals(43L to 10L, exif.rational(0x920A))
         assertEquals(0, exif.short(0x9209))
         assertEquals(0, exif.short(0xA403))
         val gps = tiff.subIfd(0x8825)
@@ -58,7 +98,7 @@ class JxlMetadataBoxesTest {
             metadata = metadata(), awbAuto = null, captureTimeMillis = 0L,
             displayP3 = true, gps = null, make = "M", model = "M"
         )
-        assertEquals(0xFFFF, Tiff.root(boxes.exif).short(0xA001))
+        assertEquals(0xFFFF, Tiff.root(boxes.exif).subIfd(0x8769).short(0xA001))
     }
 
     @Test
@@ -69,7 +109,7 @@ class JxlMetadataBoxesTest {
             displayP3 = false, gps = null, make = "M", model = "M",
             hdrPq = true
         )
-        assertEquals(0xFFFF, Tiff.root(boxes.exif).short(0xA001))
+        assertEquals(0xFFFF, Tiff.root(boxes.exif).subIfd(0x8769).short(0xA001))
     }
 
     @Test
@@ -112,8 +152,12 @@ class JxlMetadataBoxesTest {
         private fun readIfd(at: Int): Map<Int, Entry> {
             val n = buf.getShort(at).toInt() and 0xffff
             val map = HashMap<Int, Entry>()
+            var previous = -1
             for (i in 0 until n) {
                 val p = at + 2 + i * 12
+                val tag = buf.getShort(p).toInt() and 0xffff
+                assertTrue("IFD tags must be unique and sorted", tag > previous)
+                previous = tag
                 val bytes = ByteArray(4)
                 buf.position(p + 8)
                 buf.get(bytes)
@@ -131,7 +175,7 @@ class JxlMetadataBoxesTest {
             1, 2, 7 -> 1
             3 -> 2
             4 -> 4
-            5 -> 8
+            5, 10 -> 8
             else -> error("type $type")
         }
 
@@ -156,6 +200,7 @@ class JxlMetadataBoxesTest {
         }
 
         fun raw(tag: Int): ByteArray = bytes(tag)
+        fun has(tag: Int): Boolean = entries.containsKey(tag)
         fun byte(tag: Int): Int = bytes(tag)[0].toInt() and 0xff
         fun exifString(tag: Int): String {
             val b = ByteBuffer.wrap(bytes(tag)).order(ByteOrder.LITTLE_ENDIAN)

@@ -107,7 +107,18 @@ data class RawFrameMetadata(
      * session was chosen). Defaults to `RAW_SENSOR` so every existing
      * construction keeps meaning "unpacked 16-bit".
      */
-    val rawImageFormat: Int = android.graphics.ImageFormat.RAW_SENSOR
+    val rawImageFormat: Int = android.graphics.ImageFormat.RAW_SENSOR,
+    /** Capture controls, retained for delayed/offline writers; states are not modes. */
+    val aeMode: Int? = null,
+    val awbMode: Int? = null,
+    val exposureCompensationEv: Double? = null,
+    val digitalZoomRatio: Float? = null,
+    /** App-generated lens identifier, built from reported camera ID/focal length/aperture. */
+    val lensModel: String? = null,
+    /** EXIF min/max focal length and maximum apertures, only for a declared fixed lens. */
+    val lensSpecification: ImmutableDoubleValues? = null,
+    val compositeSourceCount: Int? = null,
+    val compositeUsedCount: Int? = null
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -345,7 +356,32 @@ object RawFrameMetadataFactory {
             flashFired = result.get(CaptureResult.FLASH_STATE)?.let {
                 it == CaptureResult.FLASH_STATE_FIRED || it == CaptureResult.FLASH_STATE_PARTIAL
             },
-            rawImageFormat = image.format
+            rawImageFormat = image.format,
+            aeMode = if (result.get(CaptureResult.CONTROL_MODE) == CaptureResult.CONTROL_MODE_OFF) 0
+                else result.get(CaptureResult.CONTROL_AE_MODE),
+            awbMode = if (result.get(CaptureResult.CONTROL_MODE) == CaptureResult.CONTROL_MODE_OFF) 0
+                else result.get(CaptureResult.CONTROL_AWB_MODE),
+            exposureCompensationEv = result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION)?.let { steps ->
+                characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+                    ?.toDouble()?.let { steps * it }?.takeIf(Double::isFinite)
+            },
+            digitalZoomRatio = result.get(CaptureResult.CONTROL_ZOOM_RATIO)
+                ?.takeIf { it.isFinite() && it >= 1f &&
+                    capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true },
+            lensModel = sensorKey(CaptureResult.LENS_FOCAL_LENGTH)
+                ?.takeIf { it.isFinite() && it > 0f }?.let { focal ->
+                    val aperture = sensorKey(CaptureResult.LENS_APERTURE)?.takeIf { it.isFinite() && it > 0f }
+                    "${Build.MODEL} camera ${physicalId ?: cameraId} ${focal}mm" +
+                        (aperture?.let { " f/$it" } ?: "")
+                },
+            lensSpecification = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.singleOrNull()?.takeIf { it.isFinite() && it > 0f }?.let { focal ->
+                    characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                        ?.filter { it.isFinite() && it > 0f }?.minOrNull()?.let { aperture ->
+                            ImmutableDoubleValues(doubleArrayOf(focal.toDouble(), focal.toDouble(),
+                                aperture.toDouble(), aperture.toDouble()))
+                        }
+                }
         )
     }
 

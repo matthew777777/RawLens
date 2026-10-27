@@ -79,18 +79,22 @@ data class GpsLocation(
         val utc = utcCalendar(timeMillis)
         exif.setAttribute(
             ExifInterface.TAG_GPS_TIMESTAMP,
-            "${utc.get(Calendar.HOUR_OF_DAY)}/1,${utc.get(Calendar.MINUTE)}/1," +
-                "${utc.get(Calendar.SECOND)}/1"
+            String.format(java.util.Locale.US, "%02d:%02d:%02d",
+                utc.get(Calendar.HOUR_OF_DAY), utc.get(Calendar.MINUTE), utc.get(Calendar.SECOND))
         )
         exif.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, dateStamp(timeMillis))
-        exif.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, processingMethod)
+        exif.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, "ASCII\u0000\u0000\u0000" + processingMethod)
+        accuracyMeters?.takeIf { it.isFinite() && it >= 0f }?.let {
+            val (n, d) = TiffFields.rationalPair(it.toDouble(), signed = false)
+            exif.setAttribute(ExifInterface.TAG_GPS_H_POSITIONING_ERROR, "$n/$d")
+        }
     }
 
     companion object {
         const val METHOD_GPS = "GPS"
         const val METHOD_NETWORK = "CELLID"
-        /** EXIF GPSVersionID unfolds to BYTE 2.3.0.0; kept as text for ExifInterface. */
-        const val GPS_VERSION = "2.3.0.0"
+        /** ExifInterface BYTE values are encoded as US-ASCII bytes, not parsed numbers. */
+        const val GPS_VERSION = "\u0002\u0003\u0000\u0000"
         const val ALTITUDE_ABOVE_SEA = "0"
         const val ALTITUDE_BELOW_SEA = "1"
         const val ALTITUDE_DENOMINATOR = 1000L
@@ -182,7 +186,12 @@ object GpsTiffDirectory {
             putInt(utc.get(Calendar.MINUTE)).putInt(1)
             putInt(utc.get(Calendar.SECOND)).putInt(1)
         }.array())
-        ascii(27, location.processingMethod)
+        // EXIF GPSProcessingMethod is UNDEFINED with an 8-byte character-code prefix.
+        undefined(27, byteArrayOf(65, 83, 67, 73, 73, 0, 0, 0) +
+            location.processingMethod.toByteArray(Charsets.US_ASCII))
         ascii(29, GpsLocation.dateStamp(location.timeMillis))
+        location.accuracyMeters?.takeIf { it.isFinite() && it >= 0f }?.let {
+            rationals(31, doubleArrayOf(it.toDouble()))
+        }
     }
 }

@@ -13,18 +13,12 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.roundToInt
 
 /** Pending-MediaStore JPEG writer. Every failure deletes its unpublished entry. */
 class JpegSaver(private val context: Context) {
     @Throws(IOException::class)
     /**
-     * @param result live capture result for aperture/focal/AWB EXIF tags;
-     * null for offline merges, which carry no Camera2 result (those tags
-     * fall back to the synthesized metadata or are omitted).
+     * @param result retained for source compatibility; capture facts come from the frozen snapshot.
      */
     fun save(developed: DevelopedJpeg, metadata: RawFrameMetadata, result: CaptureResult?,
              captureTimeMillis: Long = System.currentTimeMillis(),
@@ -102,38 +96,7 @@ class JpegSaver(private val context: Context) {
                         ExifInterface.TAG_EXPOSURE_TIME,
                         metadata.exposureTimeNanos?.let { it / 1_000_000_000.0 }?.toString()
                     )
-                    result?.get(CaptureResult.LENS_APERTURE)?.let {
-                        setAttribute(ExifInterface.TAG_F_NUMBER, it.toString())
-                    }
-                    metadata.aperture?.let {
-                        if (result?.get(CaptureResult.LENS_APERTURE) == null) {
-                            setAttribute(ExifInterface.TAG_F_NUMBER, it.toString())
-                        }
-                    }
-                    result?.get(CaptureResult.LENS_FOCAL_LENGTH)?.let {
-                        setAttribute(
-                            ExifInterface.TAG_FOCAL_LENGTH,
-                            "${(it * 1000f).roundToInt()}/1000"
-                        )
-                    }
-                    metadata.focalLengthMm?.let {
-                        if (result?.get(CaptureResult.LENS_FOCAL_LENGTH) == null) {
-                            setAttribute(
-                                ExifInterface.TAG_FOCAL_LENGTH,
-                                "${(it * 1000f).roundToInt()}/1000"
-                            )
-                        }
-                    }
-                    result?.get(CaptureResult.CONTROL_AWB_MODE)?.let {
-                        setAttribute(
-                            ExifInterface.TAG_WHITE_BALANCE,
-                            if (it == CaptureResult.CONTROL_AWB_MODE_AUTO) "0" else "1"
-                        )
-                    }
-                    val date = EXIF_DATE_FORMAT.format(Date(captureTimeMillis))
-                    setAttribute(ExifInterface.TAG_DATETIME, date)
-                    setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, date)
-                    setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, date)
+                    CaptureExifAttributes.writeTo(this, metadata, captureTimeMillis)
                     setAttribute(
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
                         "RAW_SENSOR -> AMaZE -> ACEScg -> AgX Base -> " +
@@ -178,6 +141,5 @@ class JpegSaver(private val context: Context) {
 
     private companion object {
         const val LOG_TAG = "RawLensDevelop"
-        val EXIF_DATE_FORMAT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
     }
 }

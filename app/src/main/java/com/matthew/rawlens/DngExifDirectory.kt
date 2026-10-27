@@ -18,13 +18,10 @@ import kotlin.math.log2
  * [captureTimeMillis]; anything unknown is omitted, never fabricated.
  * Sub-IFD layout (sorting, offsets, blobs) is owned by the writer.
  *
- * Deliberately omitted (no truthful source): ExposureMode/WhiteBalance (AE/AWB
- * state does not map to the EXIF auto/manual enum), MeteringMode,
- * DigitalZoomRatio, FocalLengthIn35mmFormat (no crop factor — sensor physical
- * size is unavailable), LensInfo/LensMake/LensModel (fixed-lens min==max is an
- * inference we do not make), ComponentsConfiguration/FlashpixVersion/ColorSpace
- * (meaningless for raw data). ISO and ExposureTime stay in IFD0 where the DNG
- * writers already emit them and parser tests pin them.
+ * Metering pattern and lens branding are not exposed by Camera2 and are omitted.
+ * AE/AWB modes come from the frozen controls, never their convergence states.
+ * ISO/ExposureTime are also written here for EXIF readers; legacy IFD0 copies
+ * are retained by the existing DNG writers.
  */
 object DngExifDirectory {
     const val TAG_EXIF_IFD_POINTER = 34665
@@ -49,17 +46,49 @@ object DngExifDirectory {
         val flash = metadata.flashFired
         val whenMs = captureTimeMillis?.takeIf { it > 0 }
         if (exposureSec == null && aperture == null && focal == null &&
-            subject == null && flash == null && whenMs == null
+            subject == null && flash == null && whenMs == null &&
+            metadata.sensitivityIso == null && metadata.aeMode == null &&
+            metadata.awbMode == null && metadata.exposureCompensationEv == null &&
+            metadata.digitalZoomRatio == null && metadata.lensModel == null &&
+            metadata.lensSpecification == null && metadata.compositeUsedCount == null
         ) {
             return null
         }
         return TiffFields().apply {
             undefined(36864, "0300".toByteArray(Charsets.US_ASCII))
+            val used = metadata.compositeUsedCount
+            val total = metadata.compositeSourceCount
+            if (used != null && total != null && used in 2..65535 && total in used..65535) {
+                shorts(42080, 2) // General composite; no claim that field of view stayed constant.
+                shorts(42081, total, used)
+            }
+            metadata.lensModel?.let { ascii(42036, it) }
+            metadata.lensSpecification?.toDoubleArray()?.takeIf {
+                it.size == 4 && it.all { value -> value.isFinite() && value > 0.0 }
+            }?.let { rationals(42034, it) }
+            metadata.sensitivityIso?.takeIf { it > 0 }?.let {
+                shorts(34855, it.coerceAtMost(65535))
+                shorts(34864, 3) // SensitivityType = ISO speed.
+                longs(34867, it)
+            }
+            metadata.aeMode?.let {
+                val manual = it == 0 // Camera2 CONTROL_AE_MODE_OFF
+                shorts(41986, if (manual) 1 else 0)
+                shorts(34850, if (manual) 1 else 2)
+            }
+            metadata.awbMode?.let { shorts(41987, if (it == 1) 0 else 1) }
+            metadata.exposureCompensationEv?.takeIf(Double::isFinite)?.let {
+                srationals(37380, doubleArrayOf(it))
+            }
+            metadata.digitalZoomRatio?.takeIf { it.isFinite() && it >= 1f }?.let {
+                rationals(41988, doubleArrayOf(it.toDouble()))
+            }
             if (aperture != null) {
                 rationals(33437, doubleArrayOf(aperture.toDouble()))
                 rationals(37378, doubleArrayOf(apexAperture(aperture.toDouble())))
             }
             if (exposureSec != null) {
+                rationals(33434, doubleArrayOf(exposureSec))
                 srationals(37377, doubleArrayOf(apexShutter(exposureSec)))
             }
             if (focal != null) {

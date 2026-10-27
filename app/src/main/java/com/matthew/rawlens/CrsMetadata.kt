@@ -33,6 +33,11 @@ internal object CrsMetadata {
         json.put("referenceIlluminant1", chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1))
         json.put("referenceIlluminant2", chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2))
         json.put("sensorOrientation", orientation)
+        json.put("zoomRatioIsDigital", chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true)
+        chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.let {
+            json.put("exposureCompensationStep", it.toDouble())
+        }
         // Lower-camel twin of UniqueCameraModel for readers that follow the
         // lower-camel JSON naming (PhotonCamera emits both; DNG exporters
         // copy UniqueCameraModel to tag 50708).
@@ -75,6 +80,16 @@ internal object CrsMetadata {
         json.put("asShotNeutral", JSONArray(neutral.map { it.toDouble() }))
         json.put("exposureTime", result.get(CaptureResult.SENSOR_EXPOSURE_TIME))
         json.put("iso", result.get(CaptureResult.SENSOR_SENSITIVITY))
+        // Optional EXIF capture facts survive a CRS dump and later offline development.
+        json.put("aperture", result.get(CaptureResult.LENS_APERTURE))
+        json.put("focalLengthMm", result.get(CaptureResult.LENS_FOCAL_LENGTH))
+        json.put("focusDistanceDiopters", result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+        json.put("flashState", result.get(CaptureResult.FLASH_STATE))
+        val controlsOff = result.get(CaptureResult.CONTROL_MODE) == CaptureResult.CONTROL_MODE_OFF
+        json.put("aeMode", if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AE_MODE))
+        json.put("awbMode", if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AWB_MODE))
+        json.put("exposureCompensationSteps", result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION))
+        json.put("digitalZoomRatio", result.get(CaptureResult.CONTROL_ZOOM_RATIO))
         val rel = maxOf(0L, timestamp - originNs).toString()
         json.put("metadataTimestamp", rel)
         json.put("metadataMatched", true)

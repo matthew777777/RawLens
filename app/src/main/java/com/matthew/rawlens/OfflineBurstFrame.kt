@@ -102,7 +102,20 @@ internal object OfflineBurstMetadata {
             noiseProfile = null,
             sensorPixelMode = null,
             rawBinningFactorUsed = false,
-            activePhysicalCameraId = null
+            activePhysicalCameraId = null,
+            aperture = frame.optDouble("aperture", Double.NaN).toFloat().takeIf { it.isFinite() && it > 0f },
+            focalLengthMm = frame.optDouble("focalLengthMm", Double.NaN).toFloat().takeIf { it.isFinite() && it > 0f },
+            focusDistanceM = frame.optDouble("focusDistanceDiopters", Double.NaN)
+                .takeIf { it.isFinite() && it > 0.0 }?.let { (1.0 / it).toFloat() },
+            flashFired = if (frame.has("flashState")) frame.getInt("flashState").let { it == 3 || it == 4 } else null,
+            aeMode = if (frame.has("aeMode")) frame.getInt("aeMode") else null,
+            awbMode = if (frame.has("awbMode")) frame.getInt("awbMode") else null,
+            exposureCompensationEv = if (frame.has("exposureCompensationSteps")) {
+                (frame.getInt("exposureCompensationSteps") *
+                    container.optDouble("exposureCompensationStep", Double.NaN)).takeIf(Double::isFinite)
+            } else null,
+            digitalZoomRatio = frame.optDouble("digitalZoomRatio", Double.NaN).toFloat()
+                .takeIf { it.isFinite() && it >= 1f && container.optBoolean("zoomRatioIsDigital", false) }
         )
     }
 

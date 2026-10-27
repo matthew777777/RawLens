@@ -32,7 +32,8 @@ object FloatCfaDngWriter {
         metadata: RawFrameMetadata,
         gps: GpsLocation? = null,
         baselineExposureEv: Double? = null,
-        description: String? = null
+        description: String? = null,
+        captureTimeMillis: Long? = null
     ) {
         cfa.requireAmazeCompatible()
         require(cfa.values.size == cfa.width * cfa.height)
@@ -56,6 +57,7 @@ object FloatCfaDngWriter {
             bytes(50706, byteArrayOf(1, 4, 0, 0))
             bytes(50707, byteArrayOf(1, 4, 0, 0))
             ascii(50708, cameraName)
+            ascii(50936, "RawLens Camera2 calibration")
             shorts(50713, 2, 2)
             rationals(50714, doubleArrayOf(0.0, 0.0, 0.0, 0.0))
             longs(50717, 1)
@@ -113,7 +115,7 @@ object FloatCfaDngWriter {
         TinyDngImageWriter.write(output, cfa.width, cfa.height,
             samplesPerPixel = 1, bitsPerSample = 32, sampleFormat = 3,
             photometric = 32803, rowsPerStrip = cfa.height,
-            fields = fields, exif = null,
+            fields = fields, exif = DngExifDirectory.fields(metadata, captureTimeMillis),
             gps = gps?.let { GpsTiffDirectory.fields(it) }, stripCount = 1) {
             val bytes = ByteArray(Math.multiplyExact(cfa.width * cfa.height, 4))
             var o = 0

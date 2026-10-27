@@ -3,7 +3,6 @@ package com.matthew.rawlens
 import android.os.Build
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.roundToInt
 
 /** TIFF field payloads for the pinned TinyDNG v3 writer. Matrices are serialized in DNG row-major order. */
 internal class TinyDngMetadata {
@@ -28,8 +27,8 @@ internal class TinyDngMetadata {
             values.forEach {
                 if (type == 12) putDouble(it) else {
                     require(type == 10 || it >= 0.0)
-                    val denominator = 1_000_000
-                    putInt((it * denominator).roundToInt()).putInt(denominator)
+                    val (numerator, denominator) = TiffFields.rationalPair(it, signed = type == 10)
+                    putInt(numerator).putInt(denominator)
                 }
             }
         }.array())
