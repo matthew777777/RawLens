@@ -4,8 +4,6 @@
 package com.matthew.rawlens
 
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -58,9 +56,9 @@ class BurstMergesTest {
     @Test fun loadStageListsWithoutNativeLib() {
         // Host JVM has no native library: rows fall back to footer stats.
         val dir = Files.createTempDirectory("rawlens-merges").toFile()
-        stagedBurst(dir, "IMG_20260926_010000_000_BURST.crs", frames = 5)
+        stagedBurst(dir, "IMG_20260926_010000_000_BURST.craw", frames = 5)
             .setLastModified(1000L)
-        stagedBurst(dir, "IMG_20260926_020000_000_BURST.crs", frames = 9)
+        stagedBurst(dir, "IMG_20260926_020000_000_BURST.craw", frames = 9)
             .setLastModified(2000L)
         val rows = BurstMergeTakes.loadStage(dir)
         assertEquals(2, rows.size)
@@ -79,9 +77,7 @@ class BurstMergesTest {
 
     private fun stagedBurst(dir: File, name: String, frames: Int): File {
         val file = File(dir, name)
-        val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(frames).putLong(8)
-        file.writeBytes(ByteArray(64) { it.toByte() } + tail.array())
+        file.writeBytes(CrawFormat.closedStub(frames, ByteArray(64) { it.toByte() }))
         return file
     }
 }

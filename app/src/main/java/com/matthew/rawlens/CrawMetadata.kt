@@ -7,14 +7,14 @@ import android.hardware.camera2.params.ColorSpaceTransform
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** CRS metadata spelling and nesting are part of the on-disk contract. */
-internal object CrsMetadata {
+/** CRAW metadata spelling and nesting are part of the on-disk contract. */
+internal object CrawMetadata {
     fun container(base: String, chars: CameraCharacteristics, realtime: Boolean,
                   audioRate: Int, audioChannels: Int, motion: Boolean, orientation: Int,
                   recordingType: String = "VIDEO"): String {
         val json = JSONObject(base)
         val cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
-        require(cfa != null && cfa in 0..3) { "CRS requires a Bayer sensor" }
+        require(cfa != null && cfa in 0..3) { "CRAW requires a Bayer sensor" }
         json.put("sensorArrangment", arrayOf("rggb", "grbg", "gbrg", "bggr")[cfa])
         val black = requireNotNull(chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN))
         json.put("blackLevel", JSONArray(List(4) { black.getOffsetForIndex(it % 2, it / 2) }))
@@ -52,7 +52,7 @@ internal object CrsMetadata {
         val extra = json.optJSONObject("extraData") ?: JSONObject()
         extra.put("audioSampleRate", audioRate)
         extra.put("audioChannels", if (audioRate > 0) audioChannels else 0)
-        extra.put("formatName", "CRS")
+        extra.put("formatName", "CRAW")
         extra.put("frameRate", RawVideoRecorder.FPS)
         extra.put("recordingType", recordingType)
         extra.put("useAccurateTimestamp", realtime)
@@ -80,7 +80,7 @@ internal object CrsMetadata {
         json.put("asShotNeutral", JSONArray(neutral.map { it.toDouble() }))
         json.put("exposureTime", result.get(CaptureResult.SENSOR_EXPOSURE_TIME))
         json.put("iso", result.get(CaptureResult.SENSOR_SENSITIVITY))
-        // Optional EXIF capture facts survive a CRS dump and later offline development.
+        // Optional EXIF capture facts survive a CRAW dump and later offline development.
         json.put("aperture", result.get(CaptureResult.LENS_APERTURE))
         json.put("focalLengthMm", result.get(CaptureResult.LENS_FOCAL_LENGTH))
         json.put("focusDistanceDiopters", result.get(CaptureResult.LENS_FOCUS_DISTANCE))

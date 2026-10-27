@@ -19,7 +19,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Offline burst-merge screen: staged `_BURST.crs` takes only, never
+ * Offline burst-merge screen: staged `_BURST.craw` takes only, never
  * RAW video. Pick a take, pick MFSR or HDR+, pick the output panel
  * (DNG / developed / developed+DNG) and the developed container
  * (JPEG / JXL, shared with shutter captures), run with a stats progress
@@ -149,7 +149,7 @@ class MergesActivity : Activity() {
     private fun prefs() = getSharedPreferences(SettingsBackup.STORE_MAIN, Context.MODE_PRIVATE)
 
     private fun stageDir(): File =
-        getExternalFilesDir(BurstCrsStore.STAGE_SUBDIR) ?: File(filesDir, BurstCrsStore.STAGE_SUBDIR)
+        getExternalFilesDir(BurstCrawStore.STAGE_SUBDIR) ?: File(filesDir, BurstCrawStore.STAGE_SUBDIR)
 
     private fun reloadTakes() {
         detailLine.text = "Loading burst takes…"
@@ -215,7 +215,7 @@ class MergesActivity : Activity() {
         val date = if (pub.lastModified > 0) {
             SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date(pub.lastModified))
         } else "?"
-        return "${pub.displayName.removeSuffix(".crs")}\n${"%.1f".format(mb)}MB • $date • copies to stage to merge"
+        return "${pub.displayName.removeSuffix(".craw")}\n${"%.1f".format(mb)}MB • $date • copies to stage to merge"
     }
 
     private fun rowText(row: BurstTakeRow): String {

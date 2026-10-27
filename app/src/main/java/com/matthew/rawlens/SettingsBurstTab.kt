@@ -78,23 +78,23 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         content.removeAllViews()
         content.addView(sectionTitle("Offline burst merges"))
         content.addView(sectionDesc(
-            "Staged IMG_<ts>_BURST.crs takes merge here later via MFSR or HDR+, " +
+            "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR or HDR+, " +
                 "to DNG, JPEG, or both. RAW video never lists."
         ))
         content.addView(settingsButton("OPEN MERGES").apply {
             setOnClickListener { openMerges() }
         })
         content.addView(CheckBox(this).apply {
-            text = "Save ZSL bursts to .crs for offline merge"
+            text = "Save ZSL bursts to .craw for offline merge"
             setTextColor(getColor(R.color.text_primary))
-            isChecked = burstCrsEnabled
+            isChecked = burstCrawEnabled
             setOnCheckedChangeListener { _, enabled ->
-                if (enabled != burstCrsEnabled) setBurstCrsEnabled(enabled)
+                if (enabled != burstCrawEnabled) setBurstCrawEnabled(enabled)
             }
         })
         content.addView(sectionDesc(
             "When on, the shutter dumps the whole ZSL ring to one " +
-                "IMG_<ts>_BURST.crs instead of merging immediately."
+                "IMG_<ts>_BURST.craw instead of merging immediately."
         ))
         content.addView(sectionTitle("Zero shutter lag"))
         content.addView(CheckBox(this).apply {

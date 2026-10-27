@@ -1982,9 +1982,9 @@ class RawCameraController(
      * caller's thread (queue on [writer] like other saves). Returns null
      * when the ring is empty; images always transfer exactly once.
      */
-    internal fun dumpZslRingToBurstCrs(
+    internal fun dumpZslRingToBurstCraw(
         output: java.io.File
-    ): BurstCrsStore.BurstDumpStats? {
+    ): BurstCrawStore.BurstDumpStats? {
         val frames = rawZslBuffer?.takeAll().orEmpty()
         if (frames.isEmpty()) {
             lastZslTakeSize = 0
@@ -2000,7 +2000,7 @@ class RawCameraController(
         }
         onState("BURST ×${frames.size} • SAVING")
         return try {
-            BurstCrsStore.writeZslRingToCrs(
+            BurstCrawStore.writeZslRingToCraw(
                 frames, chars, rawZslRealtimeTimestamps, output
             ).also {
                 onState("BURST ×${it.framesWritten} • SAVED")
@@ -4310,7 +4310,7 @@ class RawCameraController(
      * calls this on the UI thread before taking over the camera: the HAL map
      * is session-static, so any recent preview result will do, and each
      * recorded frame resamples it to its own crop as the per-frame
-     * `lensShadingMap` triplet (see [CrsLensShading]). A null return
+     * `lensShadingMap` triplet (see [CrawLensShading]). A null return
      * records without the map.
      */
     fun snapshotPreviewLensShading(cameraId: String): LensShadingSnapshot? {

@@ -25,7 +25,7 @@ class RawVideoBinningTest {
         val src = ByteBuffer.allocateDirect(64)
         val dst = ByteBuffer.allocateDirect(64)
         fun encode(width: Int, height: Int, cropTop: Int, cropHeight: Int, bin: Boolean, cfa: Int) =
-            CrsWriter.encodeFrame(
+            CrawWriter.encodeFrame(
                 src, 64, width, height, width * 2, cropTop, cropHeight, dst, bin, cfa
             )
         // Binned width must stay even for the tile codec.

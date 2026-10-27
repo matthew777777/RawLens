@@ -8,7 +8,7 @@ import android.provider.MediaStore
 import java.io.File
 
 /**
- * Merges-screen listing: staged `_BURST.crs` takes only, never RAW
+ * Merges-screen listing: staged `_BURST.craw` takes only, never RAW
  * video. Rows carry footer frame counts plus decoded dimensions when
  * the native reader is present; without it (or on a corrupt take) the
  * row still lists with dimensions unknown rather than disappearing.
@@ -22,7 +22,7 @@ internal data class BurstTakeRow(
     val height: Int?
 )
 
-/** A published `_BURST.crs` from the shared library (no local path). */
+/** A published `_BURST.craw` from the shared library (no local path). */
 internal data class PublishedTake(
     val displayName: String,
     val sizeBytes: Long,
@@ -32,10 +32,10 @@ internal data class PublishedTake(
 
 internal object BurstMergeTakes {
     fun loadStage(stageDir: File): List<BurstTakeRow> {
-        val takes = BurstCrsStore.listTakes(stageDir)
-        if (!CrsReader.available) return takes.map { it.toRow(null) }
+        val takes = BurstCrawStore.listTakes(stageDir)
+        if (!CrawReader.available) return takes.map { it.toRow(null) }
         return takes.map { take ->
-            take.toRow(runCatching { CrsReader.dimsOf(take.file) }.getOrNull())
+            take.toRow(runCatching { CrawReader.dimsOf(take.file) }.getOrNull())
         }
     }
 
@@ -62,7 +62,7 @@ internal object BurstMergeTakes {
                     MediaStore.Video.Media.DATE_MODIFIED
                 ),
                 "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",
-                arrayOf("%_BURST.crs"),
+                arrayOf("%_BURST.craw"),
                 "${MediaStore.Video.Media.DATE_MODIFIED} ASC"
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndex(MediaStore.Video.Media._ID)
@@ -74,7 +74,7 @@ internal object BurstMergeTakes {
                 while (cursor.moveToNext()) {
                     val name = runCatching { cursor.getString(nameCol) }.getOrNull()
                         ?: continue
-                    if (!name.uppercase(java.util.Locale.US).endsWith("_BURST.CRS")) continue
+                    if (!name.uppercase(java.util.Locale.US).endsWith("_BURST.CRAW")) continue
                     val id = runCatching { cursor.getLong(idCol) }.getOrNull() ?: continue
                     val size = if (sizeCol >= 0) {
                         runCatching { cursor.getLong(sizeCol) }.getOrDefault(0L)
@@ -102,7 +102,7 @@ internal object BurstMergeTakes {
      * one already exists. The published original is kept.
      */
     fun restage(resolver: ContentResolver, published: PublishedTake, stageDir: File): File {
-        require(published.displayName.uppercase(java.util.Locale.US).endsWith("_BURST.CRS")) {
+        require(published.displayName.uppercase(java.util.Locale.US).endsWith("_BURST.CRAW")) {
             "Not a burst take: ${published.displayName}"
         }
         if (!stageDir.exists() && !stageDir.mkdirs()) {
@@ -110,7 +110,7 @@ internal object BurstMergeTakes {
         }
         val staged = File(stageDir, published.displayName)
         if (staged.isFile && published.sizeBytes > 0 && staged.length() == published.sizeBytes &&
-            BurstCrsStore.listTakes(stageDir).any { it.file.absolutePath == staged.absolutePath }
+            BurstCrawStore.listTakes(stageDir).any { it.file.absolutePath == staged.absolutePath }
         ) {
             return staged
         }
@@ -137,6 +137,6 @@ internal object BurstMergeTakes {
         return List(max) { k -> (k.toLong() * (size - 1) / (max - 1)).toInt() }
     }
 
-    private fun BurstCrsStore.BurstTake.toRow(dims: Pair<Int, Int>?): BurstTakeRow =
+    private fun BurstCrawStore.BurstTake.toRow(dims: Pair<Int, Int>?): BurstTakeRow =
         BurstTakeRow(file, frameCount, fileBytes, lastModified, dims?.first, dims?.second)
 }

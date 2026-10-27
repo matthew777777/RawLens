@@ -83,7 +83,7 @@ internal object MfsrMerge {
     }
 
     /**
-     * One offline input: a decoded `_BURST.crs` frame plus its unpacked
+     * One offline input: a decoded `_BURST.craw` frame plus its unpacked
      * CFA. Mirrors [MfsrFrame] without the live [BufferedRawFrame].
      */
     data class MfsrDecodedFrame(

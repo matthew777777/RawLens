@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class CrsLensShadingTest {
+class CrawLensShadingTest {
     private fun snapshot(rows: Int, cols: Int, gains: FloatArray) =
         LensShadingSnapshot(rows, cols, ImmutableFloatValues(gains))
 
@@ -17,7 +17,7 @@ class CrsLensShadingTest {
         // Distinct per-channel constants: R=1, Ge=2, Go=3, B=4.
         val hal = snapshot(2, 2, FloatArray(2 * 2 * 4) { (it % 4 + 1).toFloat() })
         val grid = checkNotNull(
-            CrsLensShading.resample(hal, 0, active(8, 8), 8, 8, 0, 8)
+            CrawLensShading.resample(hal, 0, active(8, 8), 8, 8, 0, 8)
         )
         assertEquals(2, grid.columns)
         assertEquals(2, grid.rows)
@@ -43,7 +43,7 @@ class CrsLensShadingTest {
         )
         for ((cfa, want) in expected) {
             val grid = checkNotNull(
-                CrsLensShading.resample(hal, cfa, active(8, 8), 8, 8, 0, 8)
+                CrawLensShading.resample(hal, cfa, active(8, 8), 8, 8, 0, 8)
             )
             for (ch in 0 until 4) {
                 assertEquals("cfa=$cfa ch=$ch", want[ch], grid.gains[ch], 0f)
@@ -58,7 +58,7 @@ class CrsLensShadingTest {
         // ones (Ge=2). The decoder maps the same frame rows to the same
         // planes, so each pixel keeps a gain from its own physical channel.
         val grid = checkNotNull(
-            CrsLensShading.resample(hal, 0, active(8, 8, 0, 1), 8, 8, 0, 8)
+            CrawLensShading.resample(hal, 0, active(8, 8, 0, 1), 8, 8, 0, 8)
         )
         val want = floatArrayOf(1f, 3f, 2f, 4f)
         for (ch in 0 until 4) {
@@ -70,7 +70,7 @@ class CrsLensShadingTest {
         val hal = snapshot(1, 1, floatArrayOf(1.5f, 1.5f, 1.5f, 1.5f))
         for (cfa in 0..3) {
             val grid = checkNotNull(
-                CrsLensShading.resample(hal, cfa, active(64, 48), 64, 48, 8, 32)
+                CrawLensShading.resample(hal, cfa, active(64, 48), 64, 48, 8, 32)
             )
             assertTrue(grid.gains.all { it == 1.5f })
         }
@@ -87,7 +87,7 @@ class CrsLensShadingTest {
         // Encode rows 4..8 of an 8x8 frame; grid point (0,0) sits at encoded
         // y=1 -> sensor y=5, point (0,1) at encoded y=3 -> sensor y=7.
         val grid = checkNotNull(
-            CrsLensShading.resample(hal, 0, active(8, 8), 8, 8, 4, 4)
+            CrawLensShading.resample(hal, 0, active(8, 8), 8, 8, 4, 4)
         )
         fun halR(sensorY: Double): Double {
             val mapY = (sensorY / 7.0) * 1.0
@@ -101,24 +101,24 @@ class CrsLensShadingTest {
         val good = FloatArray(2 * 2 * 4) { 1f }
         val box = active(8, 8)
         // Bad gain content.
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good.copyOf().also { it[3] = Float.NaN }), 0, box, 8, 8, 0, 8))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good.copyOf().also { it[0] = 0f }), 0, box, 8, 8, 0, 8))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good.copyOf().also { it[7] = Float.POSITIVE_INFINITY }), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good.copyOf().also { it[3] = Float.NaN }), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good.copyOf().also { it[0] = 0f }), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good.copyOf().also { it[7] = Float.POSITIVE_INFINITY }), 0, box, 8, 8, 0, 8))
         // Gain-count mismatch.
-        assertNull(CrsLensShading.resample(snapshot(2, 2, FloatArray(15) { 1f }), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, FloatArray(15) { 1f }), 0, box, 8, 8, 0, 8))
         // Oversize grid.
-        assertNull(CrsLensShading.resample(snapshot(1, 513, FloatArray(0)), 0, box, 8, 8, 0, 8))
-        assertNull(CrsLensShading.resample(snapshot(0, 2, FloatArray(0)), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(1, 513, FloatArray(0)), 0, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(0, 2, FloatArray(0)), 0, box, 8, 8, 0, 8))
         // Non-Bayer CFA.
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 4, box, 8, 8, 0, 8))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), -1, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 4, box, 8, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), -1, box, 8, 8, 0, 8))
         // Frame must cover the active array exactly.
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 0, box, 8, 4, 0, 4))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 0, active(0, 8), 0, 8, 0, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 0, box, 8, 4, 0, 4))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 0, active(0, 8), 0, 8, 0, 8))
         // Bad crop window.
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, -2, 8))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, 0, 0))
-        assertNull(CrsLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, 4, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, -2, 8))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, 0, 0))
+        assertNull(CrawLensShading.resample(snapshot(2, 2, good), 0, box, 8, 8, 4, 8))
     }
 
     private fun parseTriplet(triplet: String): Triple<Int, Int, List<List<Float>>> {
@@ -133,8 +133,8 @@ class CrsLensShadingTest {
     }
 
     @Test fun frameJsonCarriesNestedPlanesAndRoundTrips() {
-        val grid = CrsLensShading.Grid(2, 1, FloatArray(8) { 1f + it * 0.125f })
-        val (width, height, planes) = parseTriplet(CrsLensShading.toFrameJson(grid))
+        val grid = CrawLensShading.Grid(2, 1, FloatArray(8) { 1f + it * 0.125f })
+        val (width, height, planes) = parseTriplet(CrawLensShading.toFrameJson(grid))
         assertEquals(2, width)
         assertEquals(1, height)
         assertEquals(4, planes.size)
@@ -149,10 +149,10 @@ class CrsLensShadingTest {
     @Test fun frameJsonMatchesUpstreamGoldenValues() {
         // Upstream EncoderTests golden (C++ prints 1, Kotlin prints 1.0 —
         // same JSON numbers, equivalent text).
-        val grid = CrsLensShading.Grid(
+        val grid = CrawLensShading.Grid(
             2, 1, floatArrayOf(1.0f, 1.5f, 2.0f, 2.5f, 0.5f, 1.25f, 3.0f, 4.0f)
         )
-        val (width, height, planes) = parseTriplet(CrsLensShading.toFrameJson(grid))
+        val (width, height, planes) = parseTriplet(CrawLensShading.toFrameJson(grid))
         assertEquals(2, width)
         assertEquals(1, height)
         val want = listOf(
@@ -163,8 +163,8 @@ class CrsLensShadingTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun frameJsonRejectsBadGains() {
-        CrsLensShading.toFrameJson(
-            CrsLensShading.Grid(1, 1, floatArrayOf(1f, 1f, Float.NaN, 1f))
+        CrawLensShading.toFrameJson(
+            CrawLensShading.Grid(1, 1, floatArrayOf(1f, 1f, Float.NaN, 1f))
         )
     }
 }

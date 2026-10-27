@@ -143,8 +143,8 @@ class MainActivity : Activity() {
     internal var mfsrSettings = MfsrSettings()
     internal lateinit var mfsrQuick: TextView
     private var modeBeforeMfsr: CaptureExposureMode? = null
-    /** Offline-merge switch (Settings → Burst): when on, the shutter dumps the ZSL ring to _BURST.crs. */
-    internal var burstCrsEnabled = false
+    /** Offline-merge switch (Settings → Burst): when on, the shutter dumps the ZSL ring to _BURST.craw. */
+    internal var burstCrawEnabled = false
     private var modeBeforeBurst: CaptureExposureMode? = null
     private val burstDumpInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     internal var programHintShown = false
@@ -307,9 +307,9 @@ class MainActivity : Activity() {
         }
         // Offline-merge burst switch survives restarts; like the mergers it
         // needs the ZSL ring, so a stale on-switch pulls the mode into ZSL.
-        burstCrsEnabled = lensPreferences().getBoolean(KEY_BURST_CRS_ENABLED, false) &&
-            CrsWriter.available
-        if (burstCrsEnabled && captureExposureMode != CaptureExposureMode.ZSL) {
+        burstCrawEnabled = lensPreferences().getBoolean(KEY_BURST_CRAW_ENABLED, false) &&
+            CrawWriter.available
+        if (burstCrawEnabled && captureExposureMode != CaptureExposureMode.ZSL) {
             modeBeforeBurst = captureExposureMode
             captureExposureMode = CaptureExposureMode.ZSL
         }
@@ -487,7 +487,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     // Video chrome is authoritative in VIDEO mode: stills info
                     // publications (which keep arriving until the recorder
-                    // takes the camera) must not stomp the CRS labels.
+                    // takes the camera) must not stomp the CRAW labels.
                     if (isVideoMode) {
                         refreshVideoSensorInfo()
                         return@runOnUiThread
@@ -842,7 +842,7 @@ class MainActivity : Activity() {
         releaseQuick.setOnClickListener {
             if (isVideoMode) {
                 // Tap selects the output profile; hold selects the crop. The tile switches
-                // the output profile instead, like CROP on the CRS path.
+                // the output profile instead, like CROP on the CRAW path.
                 if (directLogEnabled) cycleDirectLogProfile() else cycleVideoCrop()
             } else toggleReleaseMode()
         }
@@ -1019,7 +1019,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == AUDIO_PERMISSION) {
             // Lazy mic grant for RAW video: granted -> start with sound,
-            // denied -> record silent (legal .crs), never block video.
+            // denied -> record silent (legal .craw), never block video.
             val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
             if (videoStartPending) {
                 videoStartPending = false
@@ -1744,9 +1744,9 @@ class MainActivity : Activity() {
             return
         }
         // Offline-merge switch owns the shutter: one tap dumps the whole
-        // ZSL ring to _BURST.crs instead of any immediate merge or save.
-        if (burstCrsEnabled) {
-            captureBurstCrs()
+        // ZSL ring to _BURST.craw instead of any immediate merge or save.
+        if (burstCrawEnabled) {
+            captureBurstCraw()
             return
         }
         // Long-press always forces a burst; otherwise HDR is an independent
@@ -1774,26 +1774,26 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------
     // Offline-merge burst switch (Settings → Burst): ON dumps the whole
-    // ZSL ring to IMG_<ts>_BURST.crs (recordingType=BURST, staged under
+    // ZSL ring to IMG_<ts>_BURST.craw (recordingType=BURST, staged under
     // raw-bursts, published to DCIM/RawLens/Bursts); OFF restores normal
     // merging. Like the merger tiles it needs ZSL, so enabling pulls the
     // mode into ZSL and disabling restores the previous mode.
     // ------------------------------------------------------------------
-    @JvmName("applyBurstCrsEnabled")
-    internal fun setBurstCrsEnabled(enabled: Boolean) {
-        if (enabled && !CrsWriter.available) {
-            setStatus("BURST: CRS NOT AVAILABLE")
+    @JvmName("applyBurstCrawEnabled")
+    internal fun setBurstCrawEnabled(enabled: Boolean) {
+        if (enabled && !CrawWriter.available) {
+            setStatus("BURST: CRAW NOT AVAILABLE")
             return
         }
-        if (enabled == burstCrsEnabled) return
-        burstCrsEnabled = enabled
-        lensPreferences().edit().putBoolean(KEY_BURST_CRS_ENABLED, enabled).apply()
+        if (enabled == burstCrawEnabled) return
+        burstCrawEnabled = enabled
+        lensPreferences().edit().putBoolean(KEY_BURST_CRAW_ENABLED, enabled).apply()
         if (enabled) {
             if (captureExposureMode != CaptureExposureMode.ZSL) {
                 modeBeforeBurst = captureExposureMode
                 applyCaptureExposureMode(CaptureExposureMode.ZSL)
             }
-            setStatus("BURST CRS • WARMING")
+            setStatus("BURST CRAW • WARMING")
         } else {
             val restore = modeBeforeBurst
             modeBeforeBurst = null
@@ -1802,9 +1802,9 @@ class MainActivity : Activity() {
             ) {
                 applyCaptureExposureMode(restore)
             }
-            setStatus("BURST CRS OFF")
+            setStatus("BURST CRAW OFF")
         }
-        android.util.Log.i(LOG_TAG, "BurstCrs enabled=$enabled")
+        android.util.Log.i(LOG_TAG, "BurstCraw enabled=$enabled")
     }
 
     /** Offline burst-merge screen: staged takes only, never RAW video. */
@@ -1817,8 +1817,8 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Single-tap dump: whole ZSL ring to one _BURST.crs, then publish. */
-    private fun captureBurstCrs() {
+    /** Single-tap dump: whole ZSL ring to one _BURST.craw, then publish. */
+    private fun captureBurstCraw() {
         if (!burstDumpInFlight.compareAndSet(false, true)) {
             setStatus("BURST BUSY")
             return
@@ -1829,11 +1829,11 @@ class MainActivity : Activity() {
             setStatus("BURST DIR FAILED")
             return
         }
-        val file = File(dir, BurstCrsStore.burstFileName(System.currentTimeMillis()))
+        val file = File(dir, BurstCrawStore.burstFileName(System.currentTimeMillis()))
         setStatus("BURST • SAVING")
         Thread({
             val stats = try {
-                controller.dumpZslRingToBurstCrs(file)
+                controller.dumpZslRingToBurstCraw(file)
             } catch (e: Exception) {
                 android.util.Log.w(LOG_TAG, "burst dump failed: ${e.message}")
                 null
@@ -1867,7 +1867,7 @@ class MainActivity : Activity() {
     }
 
     private fun burstStageDir(): File =
-        getExternalFilesDir(BurstCrsStore.STAGE_SUBDIR) ?: File(filesDir, BurstCrsStore.STAGE_SUBDIR)
+        getExternalFilesDir(BurstCrawStore.STAGE_SUBDIR) ?: File(filesDir, BurstCrawStore.STAGE_SUBDIR)
 
     /**
      * Publishes one closed burst take: MediaStore first
@@ -1876,7 +1876,7 @@ class MainActivity : Activity() {
      */
     private fun tryExportBurst(source: File): RawVideoSaver.Saved? {
         try {
-            val saved = BurstCrsStore.publishToBursts(applicationContext.contentResolver, source)
+            val saved = BurstCrawStore.publishToBursts(applicationContext.contentResolver, source)
             android.util.Log.i(LOG_TAG, "burst exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
             return saved
         } catch (mediaStoreFailure: Exception) {
@@ -1884,7 +1884,7 @@ class MainActivity : Activity() {
             val tree = SidecarTreeAccess.savedTreeUri(applicationContext)
             if (tree != null && SidecarTreeAccess.hasWriteAccess(applicationContext, tree)) {
                 try {
-                    val saved = BurstCrsStore.publishViaTree(applicationContext, tree, source)
+                    val saved = BurstCrawStore.publishViaTree(applicationContext, tree, source)
                     android.util.Log.i(LOG_TAG, "burst exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
                     return saved
                 } catch (treeFailure: Exception) {
@@ -1927,10 +1927,10 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.shutter).contentDescription =
             if (directLogEnabled) "Record Direct Log video" else "Record RAW video"
         refreshVideoButton()
-        rawBadge.text = if (directLogEnabled) logBadgeLabel() else "CRS"
+        rawBadge.text = if (directLogEnabled) logBadgeLabel() else "CRAW"
         rawBadge.setTextColor(getColor(R.color.danger))
         findViewById<TextView>(R.id.dngInfo)?.text =
-            if (directLogEnabled) "${directLogProfile().hudLabel} • HEVC10" else "CRS"
+            if (directLogEnabled) "${directLogProfile().hudLabel} • HEVC10" else "CRAW"
         refreshVideoSensorInfo()
         setStatus("VIDEO READY")
         updateQuickControls()
@@ -1975,7 +1975,7 @@ class MainActivity : Activity() {
         // Restore the stills info chips (DNG bit depth / sensor): video mode
         // overwrote them and refreshVideoSensorInfo() is a no-op once
         // isVideoMode is false, so without this they stay stuck on
-        // CRS/BT709 labels in photo mode.
+        // CRAW/BT709 labels in photo mode.
         if (::controller.isInitialized) controller.republishInfo()
         // Restore the photo scope edge (video landscape may have yielded it).
         updateOverlayStack()
@@ -2080,9 +2080,9 @@ class MainActivity : Activity() {
         // Android/data/<pkg>/files/raw-video, no MediaStore churn during
         // capture. Keep takes out of cache: a failed export must not be evicted.
         // RawVideoSaver copies to DCIM/RawLens and deletes the stage on success.
-        // CRS hook: RAW video records once the CRS writer backend lands.
-        if (!CrsWriter.available) {
-            setStatus("RAW VIDEO: CRS NOT AVAILABLE")
+        // CRAW hook: RAW video records once the CRAW writer backend lands.
+        if (!CrawWriter.available) {
+            setStatus("RAW VIDEO: CRAW NOT AVAILABLE")
             controller.start()
             return
         }
@@ -2092,7 +2092,7 @@ class MainActivity : Activity() {
             controller.start()
             return
         }
-        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.crs")
+        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
@@ -2150,7 +2150,7 @@ class MainActivity : Activity() {
         // Silent session death (stolen camera, dead HAL stream) looks
         // identical to a healthy take with no UI feedback. Fail LOUD: no
         // acquired frame within 2.5s aborts the take instead of recording
-        // minutes of audio-only .crs.
+        // minutes of audio-only .craw.
         window.decorView.postDelayed({
             if (videoRecording && videoRecorder === recorder &&
                 recorder.snapshot().framesAcquired == 0
@@ -2165,9 +2165,9 @@ class MainActivity : Activity() {
     /**
      * Direct-Log take: sensor RAW -> Vulkan superpixel + log grade ->
      * HW HEVC Main10 -> MP4. Video-only (no mic prompt), staged like
-     * .crs takes and published to DCIM/RawLens on stop.
+     * .craw takes and published to DCIM/RawLens on stop.
      *
-     * Live RAW VF during the take, like .crs: frames fan out to the
+     * Live RAW VF during the take, like .craw: frames fan out to the
      * viewfinder while the camera thread records. Safe because the shared
      * native Vulkan context is mutex-serialized across the two threads.
      */
@@ -2574,7 +2574,7 @@ class MainActivity : Activity() {
             refreshVideoButton()
             refreshVideoAudioDescription()
             refreshCaptureFormatControl()
-            rawBadge.text = "CRS"
+            rawBadge.text = "CRAW"
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
                 if (stats == null) "REC FAILED • LOCAL FILE KEPT"
@@ -2951,7 +2951,7 @@ class MainActivity : Activity() {
         val binTag = if (binned) " • BIN" else ""
         findViewById<TextView>(R.id.sensorInfo)?.text = "$dims • ${RawVideoRecorder.FPS}FPS"
         findViewById<TextView>(R.id.dngInfo)?.text =
-            "CRS • ${videoCrop.label.uppercase(Locale.US)}$binTag"
+            "CRAW • ${videoCrop.label.uppercase(Locale.US)}$binTag"
     }
 
     /**
@@ -3372,7 +3372,7 @@ class MainActivity : Activity() {
         // follows the video format regardless of stills state updates.
         if (isVideoMode) {
             rawBadge.text = if (directLogEnabled) logBadgeLabel(videoRecording)
-                else if (videoRecording) "● REC" else "CRS"
+                else if (videoRecording) "● REC" else "CRAW"
             rawBadge.setTextColor(getColor(R.color.danger))
             return
         }
@@ -3407,11 +3407,11 @@ class MainActivity : Activity() {
             applyMfsrSettings(mfsrSettings.copy(enabled = false))
             modeBeforeMfsr = null
         }
-        if (mode != CaptureExposureMode.ZSL && burstCrsEnabled) {
+        if (mode != CaptureExposureMode.ZSL && burstCrawEnabled) {
             // An explicit mode change out of ZSL is the new intent: the
             // burst switch turns off instead of stranding the shutter.
-            burstCrsEnabled = false
-            lensPreferences().edit().putBoolean(KEY_BURST_CRS_ENABLED, false).apply()
+            burstCrawEnabled = false
+            lensPreferences().edit().putBoolean(KEY_BURST_CRAW_ENABLED, false).apply()
             modeBeforeBurst = null
         }
         val dynamic = dynamicExposureSettings().copy(enabled = mode == CaptureExposureMode.PROGRAM)
@@ -4280,7 +4280,7 @@ class MainActivity : Activity() {
         const val KEY_DNG_WRITER_BACKEND = "dng_writer_backend"
         const val KEY_DNG_COMPRESSION = "dng_compression"
         const val KEY_BURST_RELEASE = "burst_release"
-        const val KEY_BURST_CRS_ENABLED = "burst_crs_enabled"
+        const val KEY_BURST_CRAW_ENABLED = "burst_craw_enabled"
         const val KEY_RELEASE_MODE = "release_mode"
         const val KEY_HDR_ENABLED = "hdr_enabled"
         const val KEY_HDR_SAVE_EACH_BRACKET = "hdr_save_each_bracket"

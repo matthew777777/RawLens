@@ -12,17 +12,14 @@ import android.provider.MediaStore
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
-import java.io.RandomAccessFile
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
-/** Publishes a closed CRS; the private original survives any copy/publish failure. */
+/** Publishes a closed CRAW; the private original survives any copy/publish failure. */
 internal object RawVideoSaver {
     data class Saved(val uri: Uri, val sourceRemoved: Boolean)
 
     /**
      * Closed takes eligible for export retry/rescue, oldest first: non-empty
-     * `.crs` files in [stageDir] with a valid container footer, excluding
+     * `.craw` files in [stageDir] with a valid container footer, excluding
      * the actively recording [active] file. Unfinalized (footerless) takes
      * are never published. Pure filesystem scan, host-testable.
      */
@@ -30,44 +27,21 @@ internal object RawVideoSaver {
         val files = stageDir.listFiles() ?: return emptyList()
         val activePath = active?.absolutePath
         return files.filter { file ->
-            file.isFile && file.extension == "crs" && file.length() > 0 &&
+            file.isFile && file.extension == "craw" && file.length() > 0 &&
                 file.absolutePath != activePath && hasValidFooter(file) &&
-                !BurstCrsStore.isBurstFile(file)
+                !BurstCrawStore.isBurstFile(file)
         }.sortedBy { it.lastModified() }
     }
 
-    /** True when the file ends in a valid type-0 container footer. */
-    private fun hasValidFooter(file: File): Boolean {
-        val length = file.length()
-        if (length < 32) return false
-        return try {
-            RandomAccessFile(file, "r").use { raf ->
-                raf.seek(length - 24)
-                val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-                var read = 0
-                while (read < 24) {
-                    val n = raf.channel.read(tail)
-                    if (n < 0) return false
-                    read += n
-                }
-                tail.flip()
-                if (tail.int != 0 || tail.int != 16) return false
-                if (tail.int != CrsFormat.FOOTER_MAGIC) return false
-                if (tail.int <= 0) return false
-                val indexOff = tail.long
-                indexOff > 0 && indexOff < length - 24
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
+    /** True when the file is a cleanly closed .CRAW take (trailer + index). */
+    private fun hasValidFooter(file: File): Boolean = CrawFormat.isClosed(file)
 
     fun save(resolver: ContentResolver, source: File): Saved {
         val expected = source.length()
         require(source.isFile && expected > 0) { "Missing or empty RAW video" }
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, source.name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/x-crs")
+            put(MediaStore.Video.Media.MIME_TYPE, "video/x-craw")
             put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/RawLens")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
@@ -105,7 +79,7 @@ internal object RawVideoSaver {
     /**
      * SAF fallback reusing the burst sidecar tree grant (DCIM/RawLens or DCIM).
      * Used only when the MediaStore.Video copy fails — e.g. OEMs rejecting the
-     * custom `video/x-crs` MIME. Writes the file binary directly under the
+     * custom `video/x-craw` MIME. Writes the file binary directly under the
      * granted folder, then deletes the stage on success like [save].
      */
     fun saveViaTree(context: Context, treeUri: Uri, source: File): Saved {
@@ -131,7 +105,7 @@ internal object RawVideoSaver {
         val fileUri = try {
             DocumentsContract.createDocument(
                 resolver, buildDocUri(treeUri, dirId),
-                "video/x-crs", source.name
+                "video/x-craw", source.name
             ) ?: throw IOException("Could not create RAW video in granted folder")
         } catch (failure: IOException) {
             throw failure

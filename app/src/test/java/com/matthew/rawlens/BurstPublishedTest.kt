@@ -9,8 +9,6 @@ import android.net.Uri
 import android.provider.MediaStore
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -51,13 +49,13 @@ class BurstPublishedTest {
 
     @Test fun publishedListsBurstTakes() {
         val cursor = cursorFor(
-            listOf("IMG_20260926_010000_000_BURST.crs", "IMG_20260926_020000_000_BURST.crs"),
+            listOf("IMG_20260926_010000_000_BURST.craw", "IMG_20260926_020000_000_BURST.craw"),
             listOf(1000L, 2000L),
             listOf(100L, 200L)
         )
         val rows = BurstMergeTakes.loadPublished(resolverWith(cursor)) { mock(Uri::class.java) }
         assertEquals(2, rows.size)
-        assertEquals("IMG_20260926_010000_000_BURST.crs", rows[0].displayName)
+        assertEquals("IMG_20260926_010000_000_BURST.craw", rows[0].displayName)
         assertEquals(1000L, rows[0].sizeBytes)
         assertEquals(100_000L, rows[0].lastModified)
         assertEquals(2000L, rows[1].sizeBytes)
@@ -65,13 +63,13 @@ class BurstPublishedTest {
 
     @Test fun publishedSkipsNonBurstNames() {
         val cursor = cursorFor(
-            listOf("notes.txt", "IMG_20260926_010000_000_BURST.crs"),
+            listOf("notes.txt", "IMG_20260926_010000_000_BURST.craw"),
             listOf(10L, 1000L),
             listOf(1L, 100L)
         )
         val rows = BurstMergeTakes.loadPublished(resolverWith(cursor)) { mock(Uri::class.java) }
         assertEquals(1, rows.size)
-        assertEquals("IMG_20260926_010000_000_BURST.crs", rows[0].displayName)
+        assertEquals("IMG_20260926_010000_000_BURST.craw", rows[0].displayName)
     }
 
     @Test fun publishedEmptyWhenQueryFails() {
@@ -84,13 +82,13 @@ class BurstPublishedTest {
         val resolver = mock(ContentResolver::class.java)
         `when`(resolver.openInputStream(uri)).thenReturn(ByteArrayInputStream(payload))
         val stage = Files.createTempDirectory("rawlens-restage").toFile()
-        val published = PublishedTake("IMG_20260926_010000_000_BURST.crs", payload.size.toLong(), 0L, uri)
+        val published = PublishedTake("IMG_20260926_010000_000_BURST.craw", payload.size.toLong(), 0L, uri)
         val staged = BurstMergeTakes.restage(resolver, published, stage)
         assertEquals(File(stage, published.displayName).absolutePath, staged.absolutePath)
         assertTrue(staged.isFile)
         assertEquals(payload.size.toLong(), staged.length())
         // Restaged file is a valid staged take.
-        assertEquals(listOf(staged), BurstCrsStore.stagedBursts(stage))
+        assertEquals(listOf(staged), BurstCrawStore.stagedBursts(stage))
     }
 
     @Test fun restageRejectsNonBurstName() {
@@ -105,8 +103,6 @@ class BurstPublishedTest {
     }
 
     private fun closedBytes(frames: Int): ByteArray {
-        val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(0).putInt(16).putInt(CrsFormat.FOOTER_MAGIC).putInt(frames).putLong(8)
-        return ByteArray(64) { it.toByte() } + tail.array()
+        return CrawFormat.closedStub(frames, ByteArray(64) { it.toByte() })
     }
 }
