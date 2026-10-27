@@ -13,6 +13,7 @@ import android.content.SharedPreferences
  */
 internal object MergeScreenSettings {
     fun jpeg(prefs: SharedPreferences): JpegOutputSettings = JpegOutputSettings(
+        activeDLighting = ActiveDLighting.fromName(prefs.getString(ActiveDLighting.PREFERENCE_KEY, null)),
         ultraHdr = prefs.getBoolean(MainActivity.KEY_JPEG_ULTRA_HDR, false),
         displayP3 = prefs.getBoolean(MainActivity.KEY_JPEG_DISPLAY_P3, false),
         jpegQuality = prefs.getInt(MainActivity.KEY_JPEG_QUALITY, 100),

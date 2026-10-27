@@ -22,7 +22,8 @@ enum class ProgramLockMode {
 enum class ProgramMetering {
     CENTER_WEIGHTED,
     AVERAGE,
-    SPOT;
+    SPOT,
+    HIGHLIGHT_WEIGHTED;
 
     companion object {
         fun fromName(name: String?): ProgramMetering =

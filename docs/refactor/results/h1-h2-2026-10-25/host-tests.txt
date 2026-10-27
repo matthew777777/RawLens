@@ -1,0 +1,13 @@
+com.matthew.rawlens.AdaptiveDevelopmentExposureTest: tests=33 failures=0 errors=0 skipped=0
+com.matthew.rawlens.AgxScopeCurveTest: tests=6 failures=0 errors=0 skipped=0
+com.matthew.rawlens.BguVfEvParityTest: tests=2 failures=0 errors=0 skipped=0
+com.matthew.rawlens.EttrLoopTest: tests=2 failures=0 errors=0 skipped=0
+com.matthew.rawlens.HighlightLightingTest: tests=11 failures=0 errors=0 skipped=0
+com.matthew.rawlens.JpegOutputSettingsTest: tests=8 failures=0 errors=0 skipped=0
+com.matthew.rawlens.ProgramAeLoopTest: tests=4 failures=0 errors=0 skipped=0
+com.matthew.rawlens.ProgramAgcTest: tests=9 failures=0 errors=0 skipped=0
+com.matthew.rawlens.RawEttrSamplerTest: tests=7 failures=0 errors=0 skipped=0
+com.matthew.rawlens.RawProgramMeterTest: tests=11 failures=0 errors=0 skipped=0
+com.matthew.rawlens.ScopeLutCacheTest: tests=3 failures=0 errors=0 skipped=0
+com.matthew.rawlens.ScopeMeterNativeTest: tests=16 failures=0 errors=0 skipped=0
+TOTAL: 112 tests; 0 failures, 0 errors, 0 skipped.

@@ -113,7 +113,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             GLES31.glUniform1f(
                 location(outputProgram, "u_agx_hue_preservation"), resolvedLook.agxHuePreservation
             )
-            GLES31.glUniform1f(location(outputProgram, "u_agx_shadow_ev"), resolvedLook.agxShadowEv)
+            GLES31.glUniform1f(location(outputProgram, "u_agx_shadow_ev"), resolvedLook.effectiveAgxShadowEv)
             GLES31.glUniform1f(location(outputProgram, "u_agx_highlight_ev"), resolvedLook.agxHighlightEv)
             GLES31.glUniform1f(
                 location(outputProgram, "u_agx_gamut_compression"), resolvedLook.agxGamutCompression

@@ -257,6 +257,7 @@ internal class PhotoSettingsTab(
             }
             currentJpegSettings = resolved
             host.lensPreferences().edit()
+                .putString(ActiveDLighting.PREFERENCE_KEY, resolved.activeDLighting.name)
                 .putBoolean(MainActivity.KEY_JPEG_ULTRA_HDR, resolved.ultraHdr)
                 .putBoolean(MainActivity.KEY_JPEG_DISPLAY_P3, resolved.displayP3)
                 .putInt(MainActivity.KEY_JPEG_QUALITY, resolved.jpegQuality)
@@ -275,9 +276,20 @@ internal class PhotoSettingsTab(
                 .putFloat(MainActivity.KEY_JPEG_SKY_PROTECTION, resolved.highlightSoftHeadroom)
                 .putFloat(MainActivity.KEY_JPEG_HIGHLIGHT_SHOULDER, resolved.highlightShoulder)
                 .putBoolean(MainActivity.KEY_JPEG_HL_RECONSTRUCTION, resolved.hlReconstruction)
+                .putBoolean(HighlightReconstructionDefaults.APPLIED, true)
                 .apply()
             return true
         }
+        kit.content.addView(Button(activity).apply {
+            fun refresh() { text = "Active D-Lighting: ${currentJpegSettings.activeDLighting.label}" }
+            refresh()
+            setOnClickListener {
+                val levels = ActiveDLighting.values()
+                val next = levels[(currentJpegSettings.activeDLighting.ordinal + 1) % levels.size]
+                if (applyJpegOutputSettings(currentJpegSettings.copy(activeDLighting = next))) refresh()
+            }
+        })
+        kit.content.addView(kit.sectionDesc("Protects highlights in PROGRAM/ETTR and lifts JPEG/JXL shadows and midtones. RAW exposure changes; RAW pixel development stays untouched. Off preserves the existing look."))
         kit.content.addView(CheckBox(activity).apply {
             text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 "Ultra HDR JPEG (Android 14+ gainmap)"
@@ -306,7 +318,7 @@ internal class PhotoSettingsTab(
             }
         })
         kit.content.addView(CheckBox(activity).apply {
-            text = "Highlight reconstruction (color propagation)"
+            text = "Highlight reconstruction (inpaint opposed)"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJpegSettings.hlReconstruction
             setOnCheckedChangeListener { button, enabled ->
@@ -545,6 +557,7 @@ internal class PhotoSettingsTab(
             text = "Reset official AgX Base"
             setOnClickListener {
                 val official = JpegOutputSettings(
+                    activeDLighting = currentJpegSettings.activeDLighting,
                     ultraHdr = currentJpegSettings.ultraHdr,
                     displayP3 = currentJpegSettings.displayP3,
                     adaptiveExposureAuto = currentJpegSettings.adaptiveExposureAuto,

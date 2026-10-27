@@ -45,10 +45,13 @@ data class AdaptiveExposureTuning(
      * directly). Guards ignore it by design.
      */
     val focusX: Float? = null,
-    val focusY: Float? = null
+    val focusY: Float? = null,
+    /** Scene-linear grey target matched to the packaged shadow lift, avoiding double compensation. */
+    val middleGreyTarget: Double = 0.18
 ) {
     init {
         require(highlightHeadroom.isFinite() && highlightSoftHeadroom.isFinite())
+        require(middleGreyTarget.isFinite())
         require(highlightShoulder.isFinite())
         require(centerWeight.isFinite())
         require(focusX == null || focusX.isFinite())
@@ -61,7 +64,8 @@ data class AdaptiveExposureTuning(
         highlightShoulder = highlightShoulder.coerceIn(0f, 1f),
         centerWeight = centerWeight.coerceIn(0f, 3f),
         focusX = focusX?.coerceIn(0f, 1f),
-        focusY = focusY?.coerceIn(0f, 1f)
+        focusY = focusY?.coerceIn(0f, 1f),
+        middleGreyTarget = middleGreyTarget.coerceIn(0.01, 0.5)
     )
 
     companion object {
@@ -92,7 +96,12 @@ data class AdaptiveExposureTuning(
                 highlightShoulder = resolved.highlightShoulder,
                 centerWeight = resolved.centerWeight,
                 focusX = focus?.first,
-                focusY = focus?.second
+                focusY = focus?.second,
+                middleGreyTarget = if (resolved.activeDLighting == ActiveDLighting.OFF) 0.18 else
+                    AgxDisplayTransform.invertScopeCurve(
+                        AgxDisplayTransform.scopeCurve(0.18f, resolved.copy(activeDLighting = ActiveDLighting.OFF)),
+                        resolved
+                    ).toDouble()
             ).bounded()
         }
     }
@@ -192,14 +201,18 @@ object AdaptiveDevelopmentExposure {
 
     fun workspace(): Workspace = Workspace()
 
+    /** An even linear stride on an even-width Bayer image misses both odd-column sites. */
+    private fun bayerSampleStride(pixelCount: Int): Int =
+        maxOf(1, pixelCount / MAX_SAMPLES) or 1
+
+
     fun analyze(
         cfa: UnpackedRawCfa,
         workspace: Workspace = Workspace(),
-        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
-        ettrHeadroomEv: Float? = null
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
     ): AdaptiveExposureResult {
         require(cfa.values.size == cfa.width * cfa.height)
-        val stride = maxOf(1, cfa.values.size / MAX_SAMPLES)
+        val stride = bayerSampleStride(cfa.values.size)
         val samples = workspace.samples
         val bounded = tuning.bounded()
         val weights = if (bounded.centerWeight > 0f) workspace.weights else null
@@ -219,7 +232,51 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, ettrHeadroomEv, weights)
+        return analyzeSamples(samples, count, tuning, weights)
+    }
+
+    /**
+     * Camera-linear interleaved float RGB, before WB / colour conversion.
+     * Each sampled pixel votes R:G:B = 1:2:1, matching Bayer's channel population
+     * without phase-locking the sampling stride to a single CFA colour.
+     * Reuses the CFA placement policy; see docs/refactor/mfsr-exposure-audit.md.
+     * Absolute reads on a duplicate preserve the native merge buffer's state.
+     */
+    fun analyzeRgb(
+        rgb: ByteBuffer,
+        width: Int,
+        height: Int,
+        workspace: Workspace = Workspace(),
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
+    ): AdaptiveExposureResult {
+        require(width > 0 && height > 0)
+        val pixels = Math.multiplyExact(width, height)
+        val bytes = Math.multiplyExact(pixels, 12)
+        require(rgb.remaining() >= bytes)
+        val input = rgb.duplicate().order(ByteOrder.nativeOrder())
+        val origin = input.position()
+        val stride = maxOf(1, (pixels + MAX_SAMPLES / 4 - 1) / (MAX_SAMPLES / 4))
+        val bounded = tuning.bounded()
+        val weights = if (bounded.centerWeight > 0f) workspace.weights else null
+        var count = 0
+        var pixel = 0
+        while (pixel < pixels) {
+            val weight = if (weights != null) spatialWeight(
+                pixel % width, pixel / width, width, height, bounded.centerWeight,
+                bounded.focusX ?: 0.5f, bounded.focusY ?: 0.5f
+            ) else 1f
+            for (vote in 0..3) {
+                val channel = when (vote) { 0 -> 0; 3 -> 2; else -> 1 }
+                val value = input.getFloat(origin + pixel * 12 + channel * 4)
+                if (value.isFinite() && value > SHADOW_FLOOR) {
+                    workspace.samples[count] = value
+                    if (weights != null) weights[count] = weight
+                    count++
+                }
+            }
+            pixel += stride
+        }
+        return analyzeSamples(workspace.samples, count, tuning, weights)
     }
 
     /** Samples packed RAW directly, applying the same normalization and lens gain as GLES. */
@@ -230,14 +287,13 @@ object AdaptiveDevelopmentExposure {
         crop: RawCrop,
         lensShading: LensShadingModel?,
         workspace: Workspace = Workspace(),
-        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
-        ettrHeadroomEv: Float? = null
+        tuning: AdaptiveExposureTuning = AdaptiveExposureTuning()
     ): AdaptiveExposureResult {
         require(crop.left + crop.width <= layout.width && crop.top + crop.height <= layout.height)
         val input = source.duplicate().order(ByteOrder.nativeOrder())
         val origin = input.position()
         val pixelCount = crop.width * crop.height
-        val stride = maxOf(1, pixelCount / MAX_SAMPLES)
+        val stride = bayerSampleStride(pixelCount)
         val samples = workspace.samples
         val bounded = tuning.bounded()
         val weights = if (bounded.centerWeight > 0f) workspace.weights else null
@@ -271,7 +327,7 @@ object AdaptiveDevelopmentExposure {
             }
             index += stride
         }
-        return analyzeSamples(samples, count, tuning, ettrHeadroomEv, weights)
+        return analyzeSamples(samples, count, tuning, weights)
     }
 
     /**
@@ -299,7 +355,7 @@ object AdaptiveDevelopmentExposure {
         require(exposureGain.isFinite() && exposureGain > 0.0) {
             "HDR exposure gain must be finite and positive"
         }
-        val stride = maxOf(1, cfa.values.size / MAX_SAMPLES)
+        val stride = bayerSampleStride(cfa.values.size)
         val samples = workspace.samples
         val bounded = tuning.bounded()
         val weights = if (bounded.centerWeight > 0f) workspace.weights else null
@@ -383,21 +439,15 @@ object AdaptiveDevelopmentExposure {
     }
 
     /**
-     * Shared with the VF live preview estimator ([VfGpuImport.estimatePreviewCorrectionEv]).
-     *
-     * @param ettrHeadroomEv capture-time ETTR headroom (see [EttrSettings.headroomEv]),
-     *   or null when the frame was not ETTR-exposed. ETTR frames are already near-optimally
-     *   bright by construction (the loop placed the hottest channel near 2^-headroom),
-     *   so develop lift is capped at the residual needed to complete the measured p99.5
-     *   to the loop target: bright frames take a small completion lift that keeps skies
-     *   blue, while dark/stale frames (loop still tracking, ISO-limited night) keep most
-     *   of the legacy lift instead of rendering too dark.
+     * Display exposure placement shared with the viewfinder, regardless of capture mode.
+     * Capture ETTR headroom protects sensor samples, not a JPEG white point: after
+     * capture, middle-grey placement and the common display guards own the correction.
+     * Reference: darktable's scene-referred exposure workflow; docs/refactor/ettr-development-audit.md.
      */
     internal fun analyzeSamples(
         samples: FloatArray,
         count: Int,
         tuning: AdaptiveExposureTuning = AdaptiveExposureTuning(),
-        ettrHeadroomEv: Float? = null,
         weights: FloatArray? = null
     ): AdaptiveExposureResult {
         // AE-1: the log-average takes log2 of every sample between p5 and p95,
@@ -439,25 +489,13 @@ object AdaptiveDevelopmentExposure {
         // Broad-area highlight level (sky, walls): keeps large bright regions
         // from flattening even when the p99 spike itself is still safe.
         val highlightBroad = percentile(samples, count, 0.95).toDouble()
-        var correction = log2(TARGET_MIDDLE / exp2(logAverage))
+        val bounded = tuning.bounded()
+        var correction = log2(bounded.middleGreyTarget / exp2(logAverage))
         // Do not move the measured upper tail past display-referred white before AgX rolls it off.
         // Hard guard on the spike (p99 -> headroom, 1% clip budget) plus a soft shoulder on the broad
         // highlight mass (p95 -> soft headroom) so skies keep gradation instead of flat white.
-        val bounded = tuning.bounded()
         correction = min(correction, log2(bounded.highlightHeadroom / spikeGuardLevel.coerceAtLeast(1e-6)))
         correction = min(correction, log2(bounded.highlightSoftHeadroom / highlightBroad.coerceAtLeast(1e-6)))
-        if (ettrHeadroomEv != null) {
-            require(ettrHeadroomEv.isFinite()) { "ETTR headroom must be finite" }
-            // Single residual tier: complete p99.5 to the loop target and stop.
-            // A hard-zero tier for verified-bright frames (shipped, reverted
-            // 2026-10-09) held them at 0 EV and rendered too-dark shadows on
-            // device; the residual keeps the hot tail at target — skies stay
-            // blue — while mids still lift (replica-verified on 175945/180030).
-            correction = min(
-                correction,
-                log2(RawEttrMeter.targetLevel(ettrHeadroomEv) / highlight.coerceAtLeast(1e-6))
-            )
-        }
 
         val midLevel = exp2(logAverage)
         // HDR-scene detector: spike-to-midtone range past what fits LDR
@@ -480,15 +518,15 @@ object AdaptiveDevelopmentExposure {
         // lamp street the guard never sees. A second tier lets those lamps ride
         // to 4x white (AgX shoulder) up to the LDR cap, so lit night reads as
         // lit instead of crushed black. Uniform streets (sep ~0) and day content
-        // never enter the window; ETTR frames skip it so the residual cap stays
-        // exact. Strictly non-darkening via max().
-        if (ettrHeadroomEv == null && lowKey && !hdrScene && correction > 0.0) {
+        // never enter the window. This applies to ETTR captures too: sensor
+        // headroom does not determine display placement. Non-darkening via max().
+        if (lowKey && !hdrScene && correction > 0.0) {
             val spikeLevel = spikeGuardLevel.coerceAtLeast(1e-6)
             val broadLevel = highlightBroad.coerceAtLeast(1e-6)
             if (log2(spikeLevel / broadLevel) >= NIGHT_SEP_MIN_EV) {
                 val tierRelief = min(
                     min(
-                        log2(TARGET_MIDDLE / midLevel.coerceAtLeast(1e-9)),
+                        log2(bounded.middleGreyTarget / midLevel.coerceAtLeast(1e-9)),
                         log2(NIGHT_SPIKE_HEADROOM / spikeLevel)
                     ),
                     min(log2(bounded.highlightSoftHeadroom / broadLevel), NIGHT_TIER_MAX_EV)

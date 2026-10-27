@@ -1,0 +1,8 @@
+PASS: neutral-area ETTR vs PROGRAM -0.106000 EV (limit +/-0.3 EV).
+PASS: neutral-area ETTR vs AUTO +0.139299 EV (limit +/-0.3 EV).
+PASS: improvement vs former cap; former vs PROGRAM -1.123038 EV.
+PASS: RAW byte hash unchanged through all AUTO/PROGRAM/ETTR developments.
+PASS: zero sampled JPEG whites (all channels >=250) in each of four renders.
+Device: Xiaomi 25080RABDG, Android 16, camera 0, 4080x3060; app 1.0.427 deviceTest.
+Evidence is one stationary bright-window scene, not multi-device or physical grey-card calibration.
+AUTO tolerance was verified on this saved report and retained as a future instrumented assertion.

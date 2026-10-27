@@ -26,8 +26,7 @@ import kotlin.math.sqrt
  * RawLens adaptations, all stated: the statistic is the RAW pooled-green
  * mean in the selected metering zone (the HAL gives no Y region sums), the
  * saturation model uses the frame's green histogram, and the per-frame
- * filter is applied for the number of sensor frames elapsed between
- * updates. The ISO / shutter split stays PhotonCamera's handheld curve
+ * filter is advanced once per preview-frame interval. The ISO / shutter split stays PhotonCamera's handheld curve
  * (AutoExposureBalance); RAW never takes digital gain.
  */
 internal object ProgramAgc {

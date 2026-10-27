@@ -1,0 +1,9 @@
+Device: Xiaomi 25080RABDG; Android 16; camera 0; RAW/JPEG 4080x3060.
+Build: 1.0.424 deviceTest, versionCode 511.
+Instrumentation: 2 tests passed, 75.805 s.
+Scene: bright window with dark room and bedding; JPEGs visually inspected.
+12 full-resolution JPEGs produced and retrieved.
+Report assertions PASS: exposure strictly decreases across five H2 levels in both PROGRAM/HIGHLIGHT and ETTR; median JPEG code strictly increases; Extra High has no sampled clipping in either mode; H1 Off clips less than CENTER; H1 High has no sampled clipping.
+Host regression evidence: ../h1-h2-2026-10-25/host-tests.txt (112 tests passed).
+No physical grey card or multi-device performance claim; grey placement verified by GPU ramp and host fixtures.
+Full JPEGs: /tmp/rawlens-h12-oct26-window/ (not committed).

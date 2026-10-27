@@ -206,12 +206,14 @@ internal fun MainActivity.programMeteringLabel(metering: ProgramMetering): Strin
     ProgramMetering.CENTER_WEIGHTED -> "CENTER"
     ProgramMetering.AVERAGE -> "AVERAGE"
     ProgramMetering.SPOT -> "SPOT"
+    ProgramMetering.HIGHLIGHT_WEIGHTED -> "HIGHLIGHT"
 }
 
 internal fun MainActivity.nextProgramMetering(metering: ProgramMetering): ProgramMetering = when (metering) {
     ProgramMetering.CENTER_WEIGHTED -> ProgramMetering.AVERAGE
     ProgramMetering.AVERAGE -> ProgramMetering.SPOT
-    ProgramMetering.SPOT -> ProgramMetering.CENTER_WEIGHTED
+    ProgramMetering.SPOT -> ProgramMetering.HIGHLIGHT_WEIGHTED
+    ProgramMetering.HIGHLIGHT_WEIGHTED -> ProgramMetering.CENTER_WEIGHTED
 }
 
 internal fun MainActivity.programEvBiasText(bias: Float): String =

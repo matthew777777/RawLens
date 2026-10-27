@@ -29,15 +29,7 @@ data class RawDevelopmentSettings(
      * (nothing above white to roll off), so [adaptiveExposureStrength] scales the
      * [AdaptiveDevelopmentExposure.analyze] correction on the merged CFA itself.
      */
-    val hdrAdaptiveTuning: HdrAdaptiveTuning? = null,
-    /**
-     * Capture-time ETTR headroom ([EttrSettings.headroomEv]), or null when the frame was
-     * not ETTR-exposed. ETTR frames are already optimally bright: verified-bright frames
-     * keep zero positive lift (a bright haze gradient needs ~0 EV to stay blue), darker
-     * frames fall back to the residual-to-target cap. Single-shot path only (HDR brackets
-     * never use ETTR).
-     */
-    val ettrHeadroomEv: Float? = null
+    val hdrAdaptiveTuning: HdrAdaptiveTuning? = null
 )
 
 data class SceneLinearGpuFrame(
@@ -82,7 +74,7 @@ internal fun resolveMergedAdaptive(
                 )
             } else {
                 AdaptiveDevelopmentExposure.analyze(
-                    cfa, workspace, settings.adaptiveExposureTuning, settings.ettrHeadroomEv
+                    cfa, workspace, settings.adaptiveExposureTuning
                 )
             }
         }
@@ -138,6 +130,17 @@ class RawDevelopmentCoordinator(context: Context) {
     private val mergedJpegOutput = Gles31JpegOutputProcessor(context)
     private var mergedEgl: Gles31AmazeProcessor.EglComputeContext? = null
     private val adaptiveWorkspace = AdaptiveDevelopmentExposure.workspace()
+
+    private fun resolveMfsrExposure(
+        rgb: ByteBuffer, width: Int, height: Int, settings: RawDevelopmentSettings
+    ): Double {
+        if (settings.adaptiveExposureStrength <= 0f) return settings.exposureEv
+        val result = AdaptiveDevelopmentExposure.analyzeRgb(
+            rgb, width, height, adaptiveWorkspace, settings.adaptiveExposureTuning
+        )
+        return settings.exposureEv + result.correctionEv *
+            settings.adaptiveExposureStrength.coerceIn(0f, 1f)
+    }
     private val aiDenoiser by lazy { RawNindDenoiser(appContext) }
     private val waveletDenoiser by lazy { WaveletDenoiser(appContext) }
 
@@ -146,42 +149,39 @@ class RawDevelopmentCoordinator(context: Context) {
     /** Enable-time Vulkan preload for the post-demosaic wavelet stage. */
     fun prewarmWavelet() = waveletDenoiser.ensureInit()
 
-    // Highlight-reconstruction Vulkan device: opened lazily on the first
-    // large-ROI photo, never closed (process lifetime, like the wavelet
-    // handle). Each photo builds its own GpuContext borrowing it, so Vk
-    // sessions stay confined to their develop worker thread; programs,
-    // images, and staging release per photo. Any failure permanently
-    // disables the Vulkan arm — the CPU twin stays.
-    private val hlVkLock = Any()
+    // Coordinator-owned device and cached pipeline; per-photo images release in the runner.
     @Volatile private var hlVkHandle: VulkanHub.Handle? = null
-    @Volatile private var hlVkDead = false
+    private var opposedSession: OpposedHighlightsVulkan.Session? = null
 
-    // Highlight-stage CPU pool: convert/pack row bands and pre-stage tiles
-    // split over four daemon workers. Bands/tiles are disjoint and reduces
-    // order-fixed, so parallel runs are bit-identical to sequential —
-    // the parity gates cannot tell. Process lifetime, like the handles.
-    private val hlWorkers: java.util.concurrent.ExecutorService =
-        java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
-            Thread(r, "hl-worker").apply { isDaemon = true }
+    private fun opposedSession(): OpposedHighlightsVulkan.Session {
+        opposedSession?.let { return it }
+        val cache = VulkanPipelineCache.file(appContext.cacheDir, VulkanPipelineCache.HOST_OPPOSED)
+        val handle = hlVkHandle ?: VulkanHub.openVulkan10().also {
+            it.loadPipelineCache(cache)
+            hlVkHandle = it
         }
+        return OpposedHighlightsVulkan.Session(handle, appContext.assets).also {
+            opposedSession = it
+            handle.savePipelineCache(cache)
+        }
+    }
 
-    /** Per-photo HL Vulkan session, or null when Vulkan is unavailable. */
-    internal fun hlGpuContext(): VulkanHub.GpuContext? {
-        if (hlVkDead) return null
-        val handle = hlVkHandle ?: synchronized(hlVkLock) {
-            hlVkHandle ?: try {
-                VulkanHub.open().also { hlVkHandle = it }
-            } catch (failure: Exception) {
-                Log.w(LOG_TAG, "HL Vulkan unavailable, CPU only", failure)
-                hlVkDead = true
-                return null
-            }
-        }
+    /** Called on the serial save worker before capture; no CFA or large staging allocation. */
+    fun prewarmHighlights() { runCatching { opposedSession() } }
+
+    private fun reconstructBayer(cfa: UnpackedRawCfa, enabled: Boolean, metadata: RawFrameMetadata, owned: Boolean = false): UnpackedRawCfa {
+        if (!enabled) return cfa
+        val clipping = cfa.highlightClipping
+        if (clipping != null) { if (!clipping.any) return cfa }
+        else if (cfa.values.none { it >= OpposedHighlights.CLIP }) return cfa
+        val started = SystemClock.elapsedRealtime()
         return try {
-            VulkanHub.GpuContext(handle, appContext.assets)
+            opposedSession().run(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata), owned).cfa.also {
+                Log.i(LOG_TAG, "Opposed Bayer Vulkan ${cfa.width}x${cfa.height}: ${SystemClock.elapsedRealtime() - started}ms")
+            }
         } catch (failure: Exception) {
-            Log.w(LOG_TAG, "HL Vulkan session failed, CPU only", failure)
-            null
+            Log.w(LOG_TAG, "Opposed Vulkan failed; using Bayer CPU reference", failure)
+            OpposedHighlights.cpu(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata))
         }
     }
 
@@ -190,6 +190,7 @@ class RawDevelopmentCoordinator(context: Context) {
         metadata: RawFrameMetadata,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
         fusedOutputSettings: JpegOutputSettings? = null,
+        allowOutputFusion: Boolean = true,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         MemoryLeakDiagnostics.stillCapture()
@@ -227,7 +228,8 @@ class RawDevelopmentCoordinator(context: Context) {
         // inference shared by the denoised DNG and the JPEG. develop() itself
         // stays AI-free on purpose: an internal hook here would re-run
         // inference on CFAs the controller already denoised.
-        val directGpu = pixelStride == Short.SIZE_BYTES && rowStride % Short.SIZE_BYTES == 0 &&
+        val opposedEnabled = (fusedOutputSettings?.hlReconstruction ?: false) && !metadata.quadBayer
+        val directGpu = !opposedEnabled && pixelStride == Short.SIZE_BYTES && rowStride % Short.SIZE_BYTES == 0 &&
             metadata.hotPixels.isEmpty() && !settings.preDemosaic.defectCorrection.autoDetect
         val lensModel = RawPreDemosaicPipeline.lensShadingModel(metadata)
         val preparedAt: Long
@@ -263,15 +265,14 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 if (cpuCfa != null) AdaptiveDevelopmentExposure.analyze(
-                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
-                    settings.ettrHeadroomEv
+                    cpuCfa, adaptiveWorkspace, settings.adaptiveExposureTuning
                 )
                 else AdaptiveDevelopmentExposure.analyzeRaw(
                     // Packed frames never reach here: their branch above
                     // always produces a CFA, so analyze() wins instead.
                     rawPlane, requireNotNull(layout),
                     normalization, geometry.processingCrop, lensModel,
-                    adaptiveWorkspace, settings.adaptiveExposureTuning, settings.ettrHeadroomEv
+                    adaptiveWorkspace, settings.adaptiveExposureTuning
                 )
             }
         } else null
@@ -282,53 +283,32 @@ class RawDevelopmentCoordinator(context: Context) {
             SceneLinearColorMetadata.from(metadata),
             resolvedExposureEv
         )
+        val demosaicCfa = cpuCfa?.let { reconstructBayer(it, opposedEnabled, metadata, owned = true) }
         val transformAt = SystemClock.elapsedRealtime()
         // Post-demosaic wavelet (resolver parity): single-frame only,
         // never Quad-Bayer (no camera-linear tap there yet), never fused
         // (the wavelet stage needs the unfused RGBA16F frame).
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        // Highlight reconstruction runs on the same camera-linear tap but is
-        // independent of wavelet: the toggle alone requests the tap, runs the
-        // RT stage on the readback, and re-uploads. Never fused (like wavelet,
-        // it needs the unfused RGBA16F frame); off restores the exact old path.
-        val hlPlan = (fusedOutputSettings?.hlReconstruction ?: false) && !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan || hlPlan
-        val effectiveFused = if (cameraLinearPlan) null else fusedOutputSettings
+        // Only wavelet needs the post-demosaic camera-linear readback.
+        val cameraLinearPlan = waveletPlan
+        val effectiveFused = if (cameraLinearPlan || !allowOutputFusion) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
             Log.i(LOG_TAG, "Demosaic done: ${SystemClock.elapsedRealtime() - transformAt}ms")
             if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                 output.internalFormat == AmazeTextureFormat.RGBA16F
             ) {
-                if (waveletPlan) {
-                    consumeWaveletDenoised(
-                        output, metadata, normalization, transform, preDemosaic,
-                        settings.denoise.wavelet,
-                        fusedOutputSettings?.hlReconstruction ?: false,
-                        { hlGpuContext() },
-                        consume
-                    )
-                } else {
-                    consumeHlReconstructed(
-                        output, metadata, normalization, transform, preDemosaic,
-                        fusedOutputSettings?.hlReconstruction ?: false,
-                        { hlGpuContext() },
-                        consume
-                    )
-                }
+                consumeWaveletDenoised(
+                    output, metadata, normalization, transform, preDemosaic,
+                    settings.denoise.wavelet, consume
+                )
             } else {
                 consume(SceneLinearGpuFrame(output, preDemosaic, transform))
             }
         }
-        // The HL tap must see true channel values: sensor-white
-        // desaturation would force unclipped brights toward neutral white
-        // and manufacture phantom clipping (RT runs recovery pre-desat).
-        // Wavelet-alone keeps the LDR window (denoise input unchanged).
-        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
-        else floatArrayOf(
-            SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
-            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
-        )
+        val tapWhiteWindow = if (opposedEnabled) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else floatArrayOf(SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
+            SceneLinearColorProcessor.WHITE_WINDOW_LDR_END)
         fun runAmaze(): T {
             return if (directGpu) {
                 // directGpu needs pixelStride 2, which packed planes never
@@ -346,7 +326,7 @@ class RawDevelopmentCoordinator(context: Context) {
                 )
             } else {
                 amaze.process(
-                    requireNotNull(cpuCfa),
+                    requireNotNull(demosaicCfa),
                     cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                     cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                     fusedOutputSettings = effectiveFused,
@@ -371,14 +351,16 @@ class RawDevelopmentCoordinator(context: Context) {
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                         cameraLinear = cameraLinearPlan,
+                        whiteWindow = tapWhiteWindow,
                         consume = consumeOutput
                     )
                 } else {
                     amaze.processRcdCfa(
-                        requireNotNull(cpuCfa),
+                        requireNotNull(demosaicCfa),
                         cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                         cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                         cameraLinear = cameraLinearPlan,
+                        whiteWindow = tapWhiteWindow,
                         consume = consumeOutput
                     )
                 }
@@ -419,8 +401,6 @@ class RawDevelopmentCoordinator(context: Context) {
         transform: ResolvedSceneLinearTransform,
         preDemosaic: PreDemosaicResult,
         settings: WaveletSettings,
-        hlReconstruct: Boolean = true,
-        gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         val t0 = SystemClock.elapsedRealtime()
@@ -440,15 +420,7 @@ class RawDevelopmentCoordinator(context: Context) {
             val g = gains[1].takeIf { it.isFinite() && it > 0f } ?: 1f
             floatArrayOf(gains[0] / g, 1f, gains[2] / g)
         }
-        // RT "Color propagation" on the demosaiced camera-linear frame
-        // (pre-WB): repairs clipped-channel color before denoise/WB. Any
-        // highlight failure returns the readback untouched, so the capture
-        // never fails for reconstruction reasons. Per-stage ms go to logcat
-        // under "HlRecon" for the Vulkan optimization pass.
-        val reconstructed = HlReconstructionStage.applyIfEnabled(
-            camera, output.width, output.height, hlReconstruct,
-            hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
-        )
+        val reconstructed = camera
         val t2 = SystemClock.elapsedRealtime()
         val denoised = ByteBuffer.allocateDirect(reconstructed.remaining()).order(ByteOrder.nativeOrder())
         val ok = try {
@@ -475,62 +447,6 @@ class RawDevelopmentCoordinator(context: Context) {
             LOG_TAG,
             "Wavelet tap stages: readback=${t1 - t0}ms hl=${t2 - t1}ms wavelet=${t3 - t2}ms " +
                 "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
-        )
-        return result
-    }
-
-    /** Levels for the highlight stage from capture metadata (sRGB luminance
-     * row when the device ships no color matrix). */
-    private fun hlStageInputs(
-        metadata: RawFrameMetadata,
-        normalization: RawNormalization
-    ) = HlReconstructionStage.Inputs(
-        whiteLevel = normalization.whiteLevel,
-        blackLevels = normalization.blackLevels.toFloatArray(),
-        xyzRow = metadata.colorMatrix1?.takeIf { it.size >= 9 }?.let {
-            floatArrayOf(it[3].toFloat(), it[4].toFloat(), it[5].toFloat())
-        } ?: floatArrayOf(0.2126f, 0.7152f, 0.0722f)
-    )
-
-    /**
-     * Highlight reconstruction without wavelet: same camera-linear tap and
-     * re-upload, no denoise. Lets the HL toggle work standalone — wavelet
-     * stays off unless the user enables it.
-     */
-    private fun <T> consumeHlReconstructed(
-        output: AmazeGpuOutput,
-        metadata: RawFrameMetadata,
-        normalization: RawNormalization,
-        transform: ResolvedSceneLinearTransform,
-        preDemosaic: PreDemosaicResult,
-        hlReconstruct: Boolean,
-        gpuProvider: (() -> VulkanHub.GpuContext?)? = null,
-        consume: (SceneLinearGpuFrame) -> T
-    ): T {
-        val t0 = SystemClock.elapsedRealtime()
-        val camera = try {
-            amaze.readbackHalfFloat(output)
-        } catch (failure: Exception) {
-            Log.w(LOG_TAG, "HL readback failed, developing without reconstruction", failure)
-            return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
-        }
-        val reconstructed = HlReconstructionStage.applyIfEnabled(
-            camera, output.width, output.height, hlReconstruct,
-            hlStageInputs(metadata, normalization), gpuProvider, hlWorkers
-        )
-        val t2 = SystemClock.elapsedRealtime()
-        var t3 = 0L
-        val result = amaze.transformCameraLinear(
-            reconstructed, output.width, output.height,
-            transform.glslColumnMajorMatrix()
-        ) { aces ->
-            t3 = SystemClock.elapsedRealtime()
-            consume(SceneLinearGpuFrame(aces, preDemosaic, transform))
-        }
-        val t4 = SystemClock.elapsedRealtime()
-        Log.i(
-            LOG_TAG,
-            "HL tap stages: readback+hl=${t2 - t0}ms upload+toAces=${t3 - t2}ms output=${t4 - t3}ms"
         )
         return result
     }
@@ -594,8 +510,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 AdaptiveDevelopmentExposure.analyze(
-                    frame.samples, adaptiveWorkspace, settings.adaptiveExposureTuning,
-                    settings.ettrHeadroomEv
+                    frame.samples, adaptiveWorkspace, settings.adaptiveExposureTuning
                 )
             }
         } else null
@@ -765,8 +680,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 AdaptiveDevelopmentExposure.analyze(
-                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
-                    settings.ettrHeadroomEv
+                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning
                 )
             }
         } else null
@@ -777,19 +691,17 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val hlPlan = outputSettings.hlReconstruction && !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan || hlPlan
-        // Same blend-free tap contract as develop(): the HL stage must see
-        // true channel values (see the tapWhiteWindow note there).
-        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        val cameraLinearPlan = waveletPlan
+        val tapWhiteWindow = if (outputSettings.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         )
+        val reconstructedCfa = reconstructBayer(cfa, outputSettings.hlReconstruction && !metadata.quadBayer, metadata)
         return developWithTileDropRetry("cfa-frame ${cfa.width}x${cfa.height}") {
             amaze.process(
-                cfa,
-                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                reconstructedCfa,
+                clipPoint = reconstructedCfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 fusedOutputSettings = if (cameraLinearPlan) null else outputSettings,
@@ -805,24 +717,13 @@ class RawDevelopmentCoordinator(context: Context) {
                         amaze.transformCameraTexture(
                             output, transform.glslColumnMajorMatrix()
                         ) { aces -> finishJpeg(aces, outputSettings) }
-                    } else if (waveletPlan) {
+                    } else {
                         consumeWaveletDenoised(
                             output, metadata, normalization, transform,
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet,
-                            outputSettings.hlReconstruction,
-                            { hlGpuContext() }
-                        ) { frame -> finishJpeg(frame.texture, outputSettings) }
-                    } else {
-                        consumeHlReconstructed(
-                            output, metadata, normalization, transform,
-                            PreDemosaicResult(
-                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
-                            ),
-                            outputSettings.hlReconstruction,
-                            { hlGpuContext() }
+                            settings.denoise.wavelet
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
                 } else {
@@ -891,7 +792,13 @@ class RawDevelopmentCoordinator(context: Context) {
         // HDR merges keep saturated-highlight color: only the exactly-1.0
         // all-frames-clipped fallback neutralizes (uniform merges keep the
         // LDR window).
-        val whiteWindow = if (settings.hdrAdaptiveTuning != null) floatArrayOf(
+        // Same-exposure HDR+ uses sensor thresholds. Brackets require merge provenance;
+        // an unknown radiance CFA must never be treated as a sensor-white measurement.
+        val opposed = outputSettings.hlReconstruction && !metadata.quadBayer &&
+            (settings.hdrAdaptiveTuning == null || cfa.highlightClipping != null)
+        val reconstructed = reconstructBayer(cfa, opposed, metadata)
+        val whiteWindow = if (opposed) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else if (settings.hdrAdaptiveTuning != null) floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_HDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_HDR_END
         ) else floatArrayOf(
@@ -900,8 +807,8 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         return developWithTileDropRetry("merged-frame ${cfa.width}x${cfa.height}") {
             amaze.process(
-                cfa,
-                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                reconstructed,
+                clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 fusedOutputSettings = developOutput,
@@ -922,10 +829,9 @@ class RawDevelopmentCoordinator(context: Context) {
      * Amaze is bypassed — the frame is already RGB — but the color
      * contract is identical to [developMergedJpeg]: the same rcd_final
      * tail (negative clip, sensor-white desaturation, camera-to-ACEScg)
-     * feeds the same [jpegOutput] AGX/encode. Exposure is fixed
-     * ([RawDevelopmentSettings.exposureEv]; adaptive metering analyzes
-     * CFA and has no RGB leg yet), matching the legacy fixed-exposure
-     * develop. No tile-drop retry: one full-frame dispatch, not AMaZE
+     * feeds the same [jpegOutput] AGX/encode. Adaptive exposure meters
+     * the merged camera-linear RGB before colour conversion, using the
+     * same placement policy and strength as the CFA path. No tile-drop retry: one full-frame dispatch, not AMaZE
      * tiling (see [developWithTileDropRetry]).
      */
     fun developMfsrJpeg(
@@ -939,7 +845,7 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(
-            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings)
         )
         return amaze.processMfsrRgb(
             rgb, width, height,
@@ -1129,7 +1035,7 @@ class RawDevelopmentCoordinator(context: Context) {
     ): DevelopedJxl = developJxlWithTileDropRetry(
         "single-frame JXL ${metadata.imageWidth}x${metadata.imageHeight}"
     ) {
-        develop(rawPlane, metadata, settings) { frame ->
+        develop(rawPlane, metadata, settings, fusedOutputSettings = look, allowOutputFusion = false) { frame ->
             finishJxl(frame.texture, look, jxl)
         }
     }
@@ -1153,8 +1059,7 @@ class RawDevelopmentCoordinator(context: Context) {
         val adaptive = if (settings.adaptiveExposureStrength > 0f) {
             (settings.sharedAdaptiveExposure ?: SharedAdaptiveExposure()).resolve {
                 AdaptiveDevelopmentExposure.analyze(
-                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning,
-                    settings.ettrHeadroomEv
+                    cfa, adaptiveWorkspace, settings.adaptiveExposureTuning
                 )
             }
         } else null
@@ -1165,19 +1070,17 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val hlPlan = look.hlReconstruction && !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan || hlPlan
-        // Same blend-free tap contract as develop(): the HL stage must see
-        // true channel values (see the tapWhiteWindow note there).
-        val tapWhiteWindow = if (hlPlan) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        val cameraLinearPlan = waveletPlan
+        val tapWhiteWindow = if (look.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_END
         )
+        val reconstructedCfa = reconstructBayer(cfa, look.hlReconstruction && !metadata.quadBayer, metadata)
         return developJxlWithTileDropRetry("cfa-frame JXL ${cfa.width}x${cfa.height}") {
             amaze.process(
-                cfa,
-                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                reconstructedCfa,
+                clipPoint = reconstructedCfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 fusedOutputSettings = null,
@@ -1193,24 +1096,13 @@ class RawDevelopmentCoordinator(context: Context) {
                         amaze.transformCameraTexture(
                             output, transform.glslColumnMajorMatrix()
                         ) { aces -> finishJxl(aces, look, jxl) }
-                    } else if (waveletPlan) {
+                    } else {
                         consumeWaveletDenoised(
                             output, metadata, normalization, transform,
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet,
-                            look.hlReconstruction,
-                            { hlGpuContext() }
-                        ) { frame -> finishJxl(frame.texture, look, jxl) }
-                    } else {
-                        consumeHlReconstructed(
-                            output, metadata, normalization, transform,
-                            PreDemosaicResult(
-                                null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
-                            ),
-                            look.hlReconstruction,
-                            { hlGpuContext() }
+                            settings.denoise.wavelet
                         ) { frame -> finishJxl(frame.texture, look, jxl) }
                     }
                 } else {
@@ -1260,7 +1152,13 @@ class RawDevelopmentCoordinator(context: Context) {
                 highlightShoulder = minOf(look.highlightShoulder, HDR_HIGHLIGHT_SHOULDER)
             )
         } else look
-        val whiteWindow = if (settings.hdrAdaptiveTuning != null) floatArrayOf(
+        // Same-exposure HDR+ uses sensor thresholds. Brackets require merge provenance;
+        // an unknown radiance CFA must never be treated as a sensor-white measurement.
+        val opposed = look.hlReconstruction && !metadata.quadBayer &&
+            (settings.hdrAdaptiveTuning == null || cfa.highlightClipping != null)
+        val reconstructed = reconstructBayer(cfa, opposed, metadata)
+        val whiteWindow = if (opposed) SceneLinearColorProcessor.WHITE_WINDOW_OFF
+        else if (settings.hdrAdaptiveTuning != null) floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_HDR_START,
             SceneLinearColorProcessor.WHITE_WINDOW_HDR_END
         ) else floatArrayOf(
@@ -1269,8 +1167,8 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         return developJxlWithTileDropRetry("merged-frame JXL ${cfa.width}x${cfa.height}") {
             amaze.process(
-                cfa,
-                clipPoint = cfa.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
+                reconstructed,
+                clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 fusedOutputSettings = null,
@@ -1299,7 +1197,7 @@ class RawDevelopmentCoordinator(context: Context) {
         MemoryLeakDiagnostics.stillCapture()
         metadata.rawDevelopmentUnsupportedReason?.let { throw UnsupportedOperationException(it) }
         val transform = SceneLinearColorProcessor.resolve(
-            SceneLinearColorMetadata.from(metadata), settings.exposureEv
+            SceneLinearColorMetadata.from(metadata), resolveMfsrExposure(rgb, width, height, settings)
         )
         return amaze.processMfsrRgb(
             rgb, width, height,
@@ -1371,6 +1269,10 @@ class RawDevelopmentCoordinator(context: Context) {
         jxlOutput.close()
         jpegOutput.close()
         amaze.close()
+        opposedSession?.close()
+        opposedSession = null
+        hlVkHandle?.close()
+        hlVkHandle = null
         MemoryLeakDiagnostics.sample(
             "development-coordinator-closed",
             expectGlReleased = true,

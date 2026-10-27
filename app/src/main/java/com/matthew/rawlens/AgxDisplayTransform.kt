@@ -73,13 +73,13 @@ object AgxDisplayTransform {
         }
         var value = softScene
         value = map(AGX_INSET, value)
-        val minimumEv = MIDDLE_GRAY_LOG2 - settings.agxShadowEv
+        val minimumEv = MIDDLE_GRAY_LOG2 - settings.effectiveAgxShadowEv
         val maximumEv = MIDDLE_GRAY_LOG2 + settings.agxHighlightEv
         val evRange = maximumEv - minimumEv
         for (channel in 0..2) {
             val logValue = log2(max(value[channel], 1e-10f))
             val normalized = ((logValue - minimumEv) / evRange).coerceIn(0f, 1f)
-            val pivot = settings.agxShadowEv / evRange
+            val pivot = settings.effectiveAgxShadowEv / evRange
             value[channel] = (pivot + (normalized - pivot) * settings.agxContrast).coerceIn(0f, 1f)
         }
         value = FloatArray(3) { contrast(value[it]) }
@@ -141,20 +141,21 @@ object AgxDisplayTransform {
             shoulder <= 0f -> positive
             else -> { val c = compressHighlight(positive); positive + shoulder * (c - positive) }
         }
-        val minimumEv = MIDDLE_GRAY_LOG2 - resolved.agxShadowEv
-        val evRange = resolved.agxShadowEv + resolved.agxHighlightEv
+        val minimumEv = MIDDLE_GRAY_LOG2 - resolved.effectiveAgxShadowEv
+        val evRange = resolved.effectiveAgxShadowEv + resolved.agxHighlightEv
         val normalized = ((log2(max(soft, 1e-10f)) - minimumEv) / evRange).coerceIn(0f, 1f)
-        val pivot = resolved.agxShadowEv / evRange
+        val pivot = resolved.effectiveAgxShadowEv / evRange
         val contrasted = (pivot + (normalized - pivot) * resolved.agxContrast).coerceIn(0f, 1f)
         val displayLinear = max(0f, contrast(contrasted)).pow(2.2f).coerceIn(0f, 1f)
         return srgbOetf(displayLinear)
     }
 
     /** Sampled [scopeCurve] for scope hot loops; index `i` maps linear `i/(size-1)`. */
-    fun buildScopeLut(settings: JpegOutputSettings, size: Int = SCOPE_LUT_SIZE): FloatArray {
+    fun buildScopeLut(settings: JpegOutputSettings, size: Int = SCOPE_LUT_SIZE, exposureEv: Double = 0.0): FloatArray {
         require(size >= 2)
         val resolved = settings.resolvedForPlatform()
-        return FloatArray(size) { scopeCurve(it.toFloat() / (size - 1), resolved) }
+        val gain = if (exposureEv.isFinite()) 2.0.pow(exposureEv).toFloat() else 1f
+        return FloatArray(size) { scopeCurve(it.toFloat() / (size - 1) * gain, resolved) }
     }
 
     /** LUT lookup for normalized linear 0..1; out-of-range inputs clamp to the ends. */
@@ -164,11 +165,11 @@ object AgxDisplayTransform {
     }
 
     /**
-     * Scene-referred exposure for scopes: the linear gain applies BEFORE the
-     * AgX curve LUT, exactly where develop applies exposureEv (pre-tonemap —
-     * the darktable/ACES/Filament rule). Over-driven values clip to the LUT
-     * ends, mirroring the saved JPEG's highlight clip. A null LUT is the
-     * linear-RAW path: the gain is ignored, keeping DNG scopes bit-exact.
+     * Lookup into a sensor-normalized LUT. Live scopes bake exposure into
+     * buildScopeLut so values above scene-linear 1 reach the tone curve.
+     * The optional gain is retained for callers with an unexposed LUT; that
+     * lookup saturates at the LUT domain boundary and cannot represent HDR
+     * values above it. A null LUT returns the linear sensor value unchanged.
      */
     fun scopeEncode(linear: Double, lut: FloatArray?, exposureGain: Double = 1.0): Double {
         if (lut == null) return linear

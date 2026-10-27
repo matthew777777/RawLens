@@ -9,8 +9,8 @@ package com.matthew.rawlens
  * this pair. Camera thread only.
  *
  * The control law is libcamera's RPi AGC ([ProgramAgc]): each metering sample
- * sets a target total exposure; the controller's 10 Hz tick runs the AGC
- * filter for the sensor frames elapsed and splits the filtered exposure into
+ * sets a target total exposure; the controller runs one AGC filter step
+ * per preview-frame interval and splits the filtered exposure into
  * ISO + shutter (PhotonCamera handheld curve, profile balance/locks, flicker
  * rounding). Replaces the earlier EMA + capped steps + glide + 0.9 highlight
  * guard, which had no reference (docs/refactor/exposure-audit.md).
@@ -80,15 +80,22 @@ internal class ProgramAeLoop {
         currentShutterNanos: Long,
         flickerPeriodNanos: Long,
         mode: ProgramAgc.ConstraintMode = ProgramAgc.ConstraintMode.NORMAL,
+        lighting: ActiveDLighting = ActiveDLighting.OFF,
     ): Step? {
         if (currentIso <= 0 || currentShutterNanos <= 0L) return null
         val metered = RawProgramMeter.brightness(sample, profile.metering).toDouble()
         brightness = metered.toFloat()
         val histogram = ProgramAgc.Histogram(RawProgramMeter.frameGreenBins(sample))
-        val gain = ProgramAgc.computeGain(metered, histogram, Math.pow(2.0, profile.evBias.toDouble()), mode)
+        // H1 uses average for subject placement and a separate brightness/area ceiling.
+        // Feeding the highlight statistic to the grey-target AGC would darken it to 16%.
+        val subject = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED)
+            RawProgramMeter.meanBrightness(sample).toDouble() else metered
+        val gain = ProgramAgc.computeGain(subject, histogram, Math.pow(2.0, profile.evBias.toDouble()), mode)
+        val protectedGain = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED || lighting != ActiveDLighting.OFF)
+            RawProgramMeter.protectedGain(sample, gain.gain, lighting) else gain.gain
         val current = currentIso.toDouble() * currentShutterNanos
         val maxTotal = limits.isoMax.toDouble() * limits.shutterMaxNanos
-        targetTotal = (current * gain.gain).coerceIn(1.0, maxTotal)
+        targetTotal = (current * protectedGain).coerceIn(1.0, maxTotal)
         val (lIso, lShutter) = ProgramAeSolver.resolveLockedValues(
             profile, limits, iso ?: currentIso, shutterNanos ?: currentShutterNanos,
             currentIso, currentShutterNanos

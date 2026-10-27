@@ -26,7 +26,6 @@ internal data class RawFrameSaveInput(
     val sharedAdaptiveExposure: SharedAdaptiveExposure,
     val developedFormat: DevelopedFormat,
     val jxl: JxlOutputSettings,
-    val ettrHeadroomEv: Float?,
     val focusView: Pair<Float, Float>?,
     val dngOverrides: DngMetadataOverrides,
     val dngBackend: DngWriterBackend,
@@ -78,11 +77,7 @@ internal class RawFrameSaveJob(
                     sharedAdaptiveExposure = input.sharedAdaptiveExposure,
                     adaptiveExposureTuning = AdaptiveExposureTuning.fromOutputSettings(
                         input.outputSettings, input.focusView
-                    ),
-                    // ETTR frames are already optimally bright: develop caps the
-                    // adaptive lift at the residual to the ETTR target instead of
-                    // pushing bright skies past white.
-                    ettrHeadroomEv = input.ettrHeadroomEv
+                    )
                 )
                 // The AI-denoised CFA is shared by the denoised-DNG write
                 // and the JPEG; null means the legacy paths below run
