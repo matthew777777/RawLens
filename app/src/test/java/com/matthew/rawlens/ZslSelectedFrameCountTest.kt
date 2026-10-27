@@ -42,7 +42,16 @@ class ZslSelectedFrameCountTest {
         assertEquals(2, selected(hdrPlus = hdrOn, configured = 2, format = CaptureFormat.JPEG_DNG))
     }
 
-    // Future SR hook: superResolutionUnchanged test here.
+    @Test fun mfsrFollowsZslUpTo16InEveryOutputFormat() {
+        val mfsr = MfsrSettings(enabled = true)
+        for (format in CaptureFormat.entries) {
+            for (count in listOf(2, 4, 8, 12, 15, 16, 24, 30)) {
+                assertEquals(minOf(count, 16), ZslPolicy.zslSelectedFrameCountFor(
+                    hdrOff, count, format, mfsr))
+                assertEquals(1, ZslPolicy.availabilitySlotCountFor(hdrOff, count, format, mfsr))
+            }
+        }
+    }
 
     @Test fun plainBurstKeepsJpegCap() {
         // Per-frame JPEG saves still serialize through the 6-slot

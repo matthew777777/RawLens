@@ -236,7 +236,7 @@ internal object MfsrMerge {
         ordered: List<MfsrFrame>,
         settings: MfsrSettings
     ): MfsrResult? {
-        val count = settings.activeFrameCount().coerceAtMost(ordered.size)
+        val count = minOf(ordered.size, MfsrSettings.MAX_MERGE_FRAMES)
         if (count < MfsrSettings.MIN_MERGE_FRAMES) return null
         val kept = ordered.take(count)
         val w = kept[0].metadata.imageWidth
@@ -290,7 +290,7 @@ internal object MfsrMerge {
         ordered: List<MfsrDecodedFrame>,
         settings: MfsrSettings
     ): MfsrResult? {
-        val count = settings.activeFrameCount().coerceAtMost(ordered.size)
+        val count = minOf(ordered.size, MfsrSettings.MAX_MERGE_FRAMES)
         if (count < MfsrSettings.MIN_MERGE_FRAMES) return null
         val kept = ordered.take(count)
         val w = kept[0].cfa.width

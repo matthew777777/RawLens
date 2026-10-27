@@ -18,12 +18,6 @@ package com.matthew.rawlens
  */
 data class MfsrSettings(
     val enabled: Boolean = false,
-    /**
-     * Frames per merge, 2..15. Defaults to 8: the SR engine's proven
-     * operating point (the 30-frame proof is still pending, so the
-     * ceiling stays conservative).
-     */
-    val frameCount: Int = DEFAULT_FRAMES,
     /** Also save every source frame as DNG alongside the merge. */
     val keepSourceBurst: Boolean = false,
     /**
@@ -42,36 +36,28 @@ data class MfsrSettings(
      */
     val s3: Boolean = true
 ) {
-    init {
-        require(frameCount in MIN_MERGE_FRAMES..MAX_MERGE_FRAMES) {
-            "ZSL sharp merge needs $MIN_MERGE_FRAMES..$MAX_MERGE_FRAMES frames, got $frameCount"
-        }
-    }
-
-    fun activeFrameCount(): Int = frameCount.coerceIn(MIN_MERGE_FRAMES, MAX_MERGE_FRAMES)
+    /** Follow the shared ZSL selection, with an MFSR-only ceiling. */
+    fun activeFrameCount(configuredCount: Int): Int =
+        configuredCount.coerceIn(MIN_MERGE_FRAMES, MAX_MERGE_FRAMES)
 
     fun toPreferences(): Map<String, Any> = mapOf(
         "mfsr_enabled" to enabled,
-        "mfsr_frames" to frameCount,
         "mfsr_keep_source_burst" to keepSourceBurst,
         "mfsr_kernel" to kernel.name,
         "mfsr_s3" to s3
     )
 
-    fun quickText(buffered: Int, available: Boolean?, busy: Boolean): String = "MFSR\n" + when {
+    fun quickText(count: Int, buffered: Int, available: Boolean?, busy: Boolean): String = "MFSR\n" + when {
         !enabled -> "OFF"
         busy -> "MERGING"
         available == false -> "UNAVAILABLE"
-        available == null || buffered < activeFrameCount() -> "WARMING"
-        else -> "×${activeFrameCount()}"
+        available == null || buffered < activeFrameCount(count) -> "WARMING"
+        else -> "×${activeFrameCount(count)}"
     }
 
     companion object {
         fun fromPreferences(values: Map<String, *>): MfsrSettings = MfsrSettings(
             enabled = values["mfsr_enabled"] as? Boolean ?: false,
-            frameCount = (values["mfsr_frames"] as? Number)?.toInt()
-                ?.coerceIn(MIN_MERGE_FRAMES, MAX_MERGE_FRAMES)
-                ?: DEFAULT_FRAMES,
             keepSourceBurst = values["mfsr_keep_source_burst"] as? Boolean ?: false,
             kernel = MfsrKernel.entries.firstOrNull { it.name == values["mfsr_kernel"] }
                 ?: MfsrKernel.WRONSKI,
@@ -79,8 +65,7 @@ data class MfsrSettings(
         )
 
         const val MIN_MERGE_FRAMES = 2
-        const val MAX_MERGE_FRAMES = 15
-        const val DEFAULT_FRAMES = 8
+        const val MAX_MERGE_FRAMES = 16
     }
 }
 

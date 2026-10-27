@@ -38,7 +38,7 @@ internal object ZslPolicy {
     /**
      * Pure ZSL selection size behind [RawCameraController.zslSelectedFrameCount].
      * Merge modes save one artifact (one save slot), so each uses its
-     * own 2..30 merge bounds and bypasses the per-frame JPEG queue cap;
+     * own merge bounds and bypasses the per-frame JPEG queue cap;
      * plain bursts keep the cap in JPEG modes (JPEG development holds
      * large intermediates per frame). Unit-testable without the Android
      * framework.
@@ -46,9 +46,10 @@ internal object ZslPolicy {
     internal fun zslSelectedFrameCountFor(
         hdrPlus: HdrPlusSettings,
         configuredCount: Int,
-        outputFormat: CaptureFormat
+        outputFormat: CaptureFormat,
+        mfsr: MfsrSettings = MfsrSettings()
     ): Int {
-        // Future SR hook: `if (sr.enabled) return sr.activeFrameCount(...)` first.
+        if (mfsr.enabled) return mfsr.activeFrameCount(configuredCount)
         if (hdrPlus.enabled) return hdrPlus.activeFrameCount(configuredCount)
         return if (outputFormat.includesJpeg) {
             minOf(configuredCount, RawCameraController.MAX_IN_FLIGHT_JPEG_SAVES)
