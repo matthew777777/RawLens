@@ -6,8 +6,13 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <string>
 
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#define CRAW_HAVE_WIN32_MAP 1
+#elif defined(__unix__) || defined(__APPLE__)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -39,6 +44,27 @@ Reader::Reader(const std::string& path) {
     }
     ::close(fd);
 #endif
+#ifdef CRAW_HAVE_WIN32_MAP
+    {
+        const int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+        std::wstring wpath(wlen > 0 ? wlen - 1 : 0, L'\0');
+        if (wlen > 0) MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
+        HANDLE file = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) throw DecodeError("craw: cannot open " + path);
+        LARGE_INTEGER sz{};
+        if (GetFileSizeEx(file, &sz) && sz.QuadPart > 0 && static_cast<uint64_t>(sz.QuadPart) <= SIZE_MAX) {
+            if (HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+                if (void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0)) {
+                    data_ = static_cast<const uint8_t*>(view);
+                    size_ = static_cast<size_t>(sz.QuadPart);
+                }
+                CloseHandle(mapping);  // the view keeps the mapping alive
+            }
+        }
+        CloseHandle(file);
+    }
+#endif
     if (!data_) {
         std::ifstream f(path, std::ios::binary);
         if (!f) throw DecodeError("craw: cannot open " + path);
@@ -59,6 +85,9 @@ Reader::~Reader() { release(); }
 void Reader::release() {
 #ifdef CRAW_HAVE_MMAP
     if (data_ && owned_.empty()) ::munmap(const_cast<uint8_t*>(data_), size_);
+#endif
+#ifdef CRAW_HAVE_WIN32_MAP
+    if (data_ && owned_.empty()) UnmapViewOfFile(data_);
 #endif
     data_ = nullptr;
     size_ = 0;

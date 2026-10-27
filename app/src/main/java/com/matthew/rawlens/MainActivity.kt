@@ -2097,6 +2097,7 @@ class MainActivity : Activity() {
         val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
+            compressionCodec = lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
@@ -4230,6 +4231,7 @@ class MainActivity : Activity() {
         const val UPDATE_INSTALL_SOURCES = 47
         const val AUDIO_PERMISSION = 45
         const val KEY_VIDEO_CROP = "video_crop"
+        const val KEY_VIDEO_CODEC = "video_craw_codec"
         const val KEY_VIDEO_BINNING = "video_binning"
         const val KEY_VIDEO_AUDIO = "video_audio"
         const val KEY_VIDEO_STAB_OUTPUT = "video_stab_output"

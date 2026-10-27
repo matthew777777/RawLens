@@ -54,6 +54,10 @@ void bin2x2(const uint8_t* src, int stride, int width, int rows, std::vector<uin
     }
 }
 
+// Off by default: in a live take the fast cores also run the viewfinder and
+// camera service, and leaving the efficiency cores available measured faster.
+bool pinWorkers = false;
+
 // Pins the calling encode worker to the fastest CPU cluster (highest
 // cpuinfo_max_freq) once per thread: little cores would hold the in-order
 // committer back. Best effort; failures leave the scheduler in charge.
@@ -93,20 +97,24 @@ Java_com_matthew_rawlens_CrawWriter_containerOpen(JNIEnv* env, jobject, jstring 
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CrawWriter_containerEncodeFrame(
     JNIEnv* env, jobject, jobject src, jint srcOffset, jint size, jint w, jint h, jint stride,
-    jint cropTop, jint cropHeight, jboolean bin, jint cfa, jint bitDepth, jobject dst, jint dstOffset,
-    jint dstCapacity) {
+    jint cropTop, jint cropHeight, jboolean bin, jint cfa, jint bitDepth, jint codec, jobject dst,
+    jint dstOffset, jint dstCapacity) {
     const auto* s = static_cast<const uint8_t*>(env->GetDirectBufferAddress(src));
     auto* d = static_cast<uint8_t*>(env->GetDirectBufferAddress(dst));
     if (!s || !d || size < 0 || stride % 2 || stride < w * 2) return -2;
     if (static_cast<int64_t>(cropTop + cropHeight - 1) * stride + int64_t{w} * 2 > size) return -4;
     (void)h;
-    pinToFastCores();
+    if (pinWorkers) pinToFastCores();
     try {
         thread_local std::vector<uint16_t> binned;
         const uint8_t* base = s + srcOffset + static_cast<size_t>(cropTop) * stride;
         craw::FrameDesc desc;
         desc.cfa = static_cast<craw::Cfa>(cfa & 3);
         desc.bitDepth = static_cast<uint8_t>(std::clamp<jint>(bitDepth, 1, 16));
+        // Both live recording codecs are protected by the container chunk CRC.
+        // Avoid an additional full RAW-frame checksum pass in either mode.
+        desc.codec = codec == 2 ? 2 : 1;
+        desc.frameCrc = false;
         const uint16_t* raw;
         size_t rawStride;
         if (bin) {

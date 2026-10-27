@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Lossless encoder for .CRAW codec 1 ("CRAW-Fast") frame payloads.
+// Lossless encoder for .CRAW frame payloads: codec 1 ("CRAW-Fast") and
+// codec 2 ("CRAW-Live").
 // Wire format: CinematicRAWStudio-Spec/SPEC.md section 3.
 #pragma once
 
@@ -18,7 +19,14 @@ struct FrameDesc {
     uint8_t bitDepth = 10;   // 1..16, every sample < 2^bitDepth
     Cfa cfa = Cfa::RGGB;
     uint16_t tile = 128;     // tile edge in plane samples
-    uint16_t riceInit = 0;   // 0 = default noise class for bitDepth
+    uint16_t riceInit = 0;   // 0 = default noise class for bitDepth (codec 1)
+    // 1 = CRAW-Fast (block-adaptive Rice, smallest files),
+    // 2 = CRAW-Live (fixed-width block packing, ~3x cheaper; for live capture).
+    uint8_t codec = 1;
+    // Store a CRC32C of the raw samples in the frame header. The container's
+    // per-chunk CRC32C covers the payload either way; turning this off saves a
+    // full pass over the frame (live capture).
+    bool frameCrc = true;
 };
 
 uint16_t defaultRiceInit(uint8_t bitDepth);

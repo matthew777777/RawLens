@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #if defined(__ARM_FEATURE_CRC32)
 #include <arm_acle.h>
@@ -17,7 +18,7 @@ inline uint32_t crc32c(const void* data, size_t n, uint32_t crc = 0) {
 #if defined(__ARM_FEATURE_CRC32)
     for (; n >= 8; n -= 8, p += 8) {
         uint64_t v;
-        __builtin_memcpy(&v, p, 8);
+        std::memcpy(&v, p, 8);
         crc = __crc32cd(crc, v);
     }
     for (; n; --n) crc = __crc32cb(crc, *p++);
