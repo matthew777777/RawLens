@@ -20,6 +20,16 @@ class DirectLogAcesTest {
             assertArrayEquals(input.toList().toString(),expected,VfLogGrade.encodePixelAces(input),2e-6f)
     }
 
+    @Test fun signedCcmOutputMatchesPublishedFitWithoutInputClipping() {
+        // Independently evaluated double-precision BakingLab reference, followed by display gamma.
+        val samples = listOf(
+            floatArrayOf(-.1f,.2f,.4f) to floatArrayOf(0f,.40621588f,.58565076f),
+            floatArrayOf(.8f,-.05f,.1f) to floatArrayOf(.78266712f,0f,.27272470f),
+            floatArrayOf(.1f,.3f,-.2f) to floatArrayOf(.23371743f,.51582323f,.29275145f))
+        for ((input, expected) in samples)
+            assertArrayEquals(expected, VfLogGrade.encodePixelAces(input), 2e-6f)
+    }
+
     @Test fun grayWedgeIsNeutralMonotonicAndRollsOffPastOne() {
         var previous = -1f
         for (i in 0..240) {

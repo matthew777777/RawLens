@@ -290,7 +290,8 @@ internal object VfLogGrade {
      */
     fun acesFitted(developed: FloatArray): FloatArray {
         require(developed.size == 3 && developed.all { it.isFinite() })
-        val x = developed.map { it.coerceAtLeast(0f).toDouble() }
+        // Preserve signed CCM output, as in the published fit; saturate only at the end.
+        val x = developed.map { it.toDouble() }
         val input = arrayOf(
             doubleArrayOf(0.59719, 0.35458, 0.04823),
             doubleArrayOf(0.07600, 0.90834, 0.01566),
