@@ -104,11 +104,26 @@ vec3 slogEncode(vec3 v) {
 // on the CPU. outMode (u_misc2.y): 0 = BT.709, 1 = Sony S-Log3
 // (flat), 2 = BT.2020 + HLG. The branch is push-constant-uniform: no
 // divergence. CPU goldens are VfLogGrade.encodePixel*.
+
+// Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.
+// ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
+// Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
+vec3 acesFitted(vec3 v) {
+    v = max(v, vec3(0.0));
+    v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
+             dot(v, vec3(0.07600,0.90834,0.01566)),
+             dot(v, vec3(0.02840,0.13383,0.83777)));
+    v = (v*(v+0.0245786)-0.000090537)/(v*(0.983729*v+0.4329510)+0.238081);
+    return clamp(vec3(dot(v,vec3(1.60475,-0.53108,-0.07367)),
+                      dot(v,vec3(-0.10208,1.10813,-0.00605)),
+                      dot(v,vec3(-0.00327,-0.07276,1.07602))),0.0,1.0);
+}
 vec3 gradeTexel(vec2 uv) {
     vec4 q = imageLoad(img_in, ivec2(uv));
     vec3 rgb = rgbOf(q);
     vec3 developed = vec3(dot(p.u_ccmR.rgb, rgb), dot(p.u_ccmG.rgb, rgb), dot(p.u_ccmB.rgb, rgb));
     int mode = int(p.u_misc2.y + 0.5);
+    if (mode == 3) return pow(acesFitted(developed), vec3(1.0 / 2.4));
     if (mode == 1) return slogEncode(developed);
     if (mode == 2) return hlgEncode(srgbToBt2020(developed));
     return bt709Encode(developed);

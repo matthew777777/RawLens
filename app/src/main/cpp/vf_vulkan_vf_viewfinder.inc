@@ -271,12 +271,18 @@ static int initContext(JNIEnv* env, jbyteArray spv) {
         wantF16 = f16Features.shaderFloat16 == VK_TRUE;
     }
     if (wantF16) devExt.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+    VkPhysicalDeviceFeatures supportedCore{};
+    vkGetPhysicalDeviceFeatures(ctx->gpu, &supportedCore);
+    VkPhysicalDeviceFeatures enabledCore{};
+    enabledCore.shaderStorageImageExtendedFormats = supportedCore.shaderStorageImageExtendedFormats;
+    ctx->hasExtendedStorageFormats = enabledCore.shaderStorageImageExtendedFormats == VK_TRUE;
     VkDeviceCreateInfo devInfo{};
     devInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &queueInfo;
     devInfo.enabledExtensionCount = static_cast<uint32_t>(devExt.size());
     devInfo.ppEnabledExtensionNames = devExt.data();
+    devInfo.pEnabledFeatures = &enabledCore;
     if (wantF16) {
         f16Features.shaderFloat16 = VK_TRUE;
         f16Features.shaderInt8 = VK_FALSE;

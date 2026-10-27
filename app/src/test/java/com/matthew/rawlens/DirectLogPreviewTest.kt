@@ -17,8 +17,8 @@ class DirectLogPreviewTest {
     fun previewDimsQuarterEvenFloor() {
         assertArrayEquals(intArrayOf(960, 540), VfRecordPreview.previewDims(3840, 2160))
         assertArrayEquals(intArrayOf(480, 270), VfRecordPreview.previewDims(1920, 1080))
-        // Odd quarter floors to even (chroma grid is half-res).
-        assertArrayEquals(intArrayOf(24, 24), VfRecordPreview.previewDims(100, 100))
+        // RGBA preview may be odd; it must still divide encode dimensions exactly.
+        assertArrayEquals(intArrayOf(25, 25), VfRecordPreview.previewDims(100, 100))
     }
 
     @Test
@@ -143,4 +143,17 @@ class DirectLogPreviewTest {
             assertArrayEquals("rgb=${rgb.toList()}", rgb, back, 0.005f)
         }
     }
+    @Test fun croppedPreviewAlwaysHasExactChromaAlignedBox() {
+        for (w in listOf(1920, 2560, 3840)) {
+            for (crop in listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00)) {
+                val h = LogVideoLadder.directLogHeight(w, crop)
+                val dims = VfRecordPreview.previewDims(w, h)
+                val box = VfRecordPreview.previewBox(w, h, dims[0], dims[1])
+                assertEquals(w, dims[0] * box)
+                assertEquals(h, dims[1] * box)
+                assertEquals(0, box % 2)
+            }
+        }
+    }
+
 }

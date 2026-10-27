@@ -447,18 +447,19 @@ void destroyGrade(Context* ctx) {
         AHardwareBuffer_release(entry.first);
     }
     ctx->scratchOuts.clear();
-    if (ctx->rcdPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->rcdPipeline, nullptr);
+    for (auto pipeline : ctx->rcdPipelines)
+        if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, pipeline, nullptr);
     if (ctx->rcdPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(ctx->device, ctx->rcdPipelineLayout, nullptr);
     if (ctx->rcdSetLayout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(ctx->device, ctx->rcdSetLayout, nullptr);
     if (ctx->rcdPool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(ctx->device, ctx->rcdPool, nullptr);
-    ctx->rcdPipeline = VK_NULL_HANDLE;
+    for (auto& pipeline : ctx->rcdPipelines) pipeline = VK_NULL_HANDLE;
     ctx->rcdPipelineLayout = VK_NULL_HANDLE;
     ctx->rcdSetLayout = VK_NULL_HANDLE;
     ctx->rcdPool = VK_NULL_HANDLE;
-    for (int i = 0; i < 3; ++i) ctx->rcdSets[i] = VK_NULL_HANDLE;
+    for (auto& set : ctx->rcdSets) set = VK_NULL_HANDLE;
     if (ctx->rcdYuvPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->rcdYuvPipeline, nullptr);
     if (ctx->rcdYuvPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(ctx->device, ctx->rcdYuvPipelineLayout, nullptr);

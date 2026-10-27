@@ -140,4 +140,14 @@ object LogVideoLadder {
         val top = ((sensorH - h) / 2 / 2) * 2
         return Crop(left, top, w, h)
     }
+    /** Direct Log excludes open gate; preserve the existing 16:9 field of view. */
+    fun directLogCrop(sensorW: Int, sensorH: Int, crop: VideoCrop): Crop {
+        val base = centerCropCapped16x9(sensorW, sensorH)
+        val h = minOf(base.height, directLogHeight(base.width, crop))
+        return Crop(base.left, ((sensorH - h) / 4) * 2, base.width, h)
+    }
+
+    fun directLogHeight(width: Int, crop: VideoCrop): Int =
+        (width / (crop.ratio ?: (16.0 / 9.0)) / 2).toInt() * 2
+
 }

@@ -300,6 +300,7 @@ struct Context {
     // shaderFloat16 (VK_KHR_shader_float16_int8): the fused record kernel
     // selects its fp16 SPIR-V when true, the fp32 twin otherwise.
     bool hasF16Math = false;
+    bool hasExtendedStorageFormats = false;
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     std::string pipelineCachePath;  // empty = in-memory cache only
     std::map<AHardwareBuffer*, ImportedBuffer> inputs;
@@ -425,9 +426,10 @@ struct Context {
     // are cached by pointer like the other recorder maps.
     VkDescriptorSetLayout rcdSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout rcdPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline rcdPipeline = VK_NULL_HANDLE;
+    VkPipeline rcdPipelines[4] = {};
     VkDescriptorPool rcdPool = VK_NULL_HANDLE;
-    VkDescriptorSet rcdSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    // Each slot owns a descriptor set per mode: modes are submitted without CPU waits.
+    VkDescriptorSet rcdSets[12] = {};
     VkCommandBuffer twinRcdCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> rgbOuts;
     std::map<AHardwareBuffer*, ImportedImage> scratchOuts;

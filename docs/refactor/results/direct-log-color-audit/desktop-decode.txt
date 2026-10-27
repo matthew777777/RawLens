@@ -1,0 +1,3 @@
+aces_1920_WIDE_16_9.mp4: decoded=36 1920x1080 tenBitOutput=true
+aces_1920_SCOPE_2_39.mp4: decoded=34 1920x802 tenBitOutput=true
+aces_1920_UNIVISIUM_2_00.mp4: decoded=34 1920x960 tenBitOutput=true

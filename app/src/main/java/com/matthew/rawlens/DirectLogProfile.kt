@@ -15,9 +15,8 @@ import android.media.MediaFormat
  * (`vf_gradeyuv.comp`, `vf_mhcyuv.comp`), a CPU golden in [VfLogGrade],
  * and container colors here.
  *
- * The record path currently applies NO contrast curve and NO saturation in
- * any profile (direct encode); the developed-look warp is dormant until the
- * look/LUT work lands.
+ * ACES applies a fitted filmic rendering followed by display gamma 2.4. Other
+ * profiles encode the developed linear signal directly.
  */
 enum class DirectLogProfile(
     /** Stable wire id carried in the grade params ([VfLogGrade.packGrade] slot 17). */
@@ -34,12 +33,23 @@ enum class DirectLogProfile(
     SLOG3(1, "SLOG3", "_LOGSLOG3"),
 
     /** Ready-to-watch HDR: linear sRGB -> BT.2020 -> HLG OETF -> BT.2020 YUV. */
-    HLG(2, "HLG", "_LOGHLG");
+    HLG(2, "HLG", "_LOGHLG"),
+
+    /** ACES fitted approximation -> Rec.709 / gamma 2.4. Baked look, not ACES data. */
+    ACES(3, "ACES", "_LOGACES");
+
+    /** Human-readable output description; HUD labels remain compact. */
+    val description: String get() = when (this) {
+        BT709 -> "BT.709"
+        ACES -> "BT.709 / ACES fitted / gamma 2.4"
+        SLOG3 -> "BT.709 primaries / S-Log3"
+        HLG -> "BT.2020 / HLG"
+    }
 
     /** Container color signalling for the encoder format ([LogVideoProbe.Target]). */
     fun targetColors(): LogVideoProbe.Target =
         when (this) {
-            BT709, SLOG3 -> LogVideoProbe.Target(
+            BT709, SLOG3, ACES -> LogVideoProbe.Target(
                 colorStandard = MediaFormat.COLOR_STANDARD_BT709,
                 colorTransfer = MediaFormat.COLOR_TRANSFER_SDR_VIDEO,
                 colorRange = MediaFormat.COLOR_RANGE_LIMITED,
@@ -51,7 +61,7 @@ enum class DirectLogProfile(
             )
         }
 
-    /** Next profile in HUD cycle order (BT709 -> SLOG3 -> HLG -> BT709). */
+    /** Next profile in HUD cycle order (BT709 -> SLOG3 -> HLG -> ACES -> BT709). */
     fun next(): DirectLogProfile {
         val entries = entries
         return entries[(entries.indexOf(this) + 1) % entries.size]

@@ -45,6 +45,12 @@ const float16_t RCD_EPSSQ = 1e-10hf;
 int mir(int i, int n) {
     if (i < 0) i = -i;
     if (i >= n) i = 2 * n - 2 - i;
+    // Wide packed tiles can extend beyond a second reflection on tiny crops.
+    if (i < 0 || i >= n) {
+        int period = max(2 * n - 2, 1);
+        i = ((i % period) + period) % period;
+        if (i >= n) i = period - i;
+    }
     return i;
 }
 ivec2 mirror(ivec2 s) {
@@ -67,6 +73,8 @@ int colorAt(ivec2 s) {
 
 float16_t normCode(ivec2 s) {
     uint idx = uint(s.y + p.u_origin.y) * uint(p.u_pitch) + uint(s.x + p.u_origin.x);
+    // Still-photo CFA after highlight reconstruction is float32, including above-white signal.
+    if ((p.u_mode & 16) != 0) return float16_t(max(0.0, uintBitsToFloat(codes[idx])));
     uint word = codes[idx >> 1u];
     uint code = ((idx & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
     int q = quadOf(s);
@@ -75,23 +83,27 @@ float16_t normCode(ivec2 s) {
 
 // Workgroup CFA tile (normalized f16); loaded once per dispatch, then
 // every stencil tap is a shared read.
-shared float16_t tile[16][16];
+layout(constant_id = 0) const int RCD_STAGE = -1;
+int stageIndex() { return RCD_STAGE >= 0 ? RCD_STAGE : (p.u_mode & 3); }
+ivec2 groupBase() { return ivec2(gl_WorkGroupID.xy) * ivec2(stageIndex() == 0 ? 8 : 16, 8); }
+shared float16_t tile[16][24];
 
 void loadTile() {
-    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
-    uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
-    for (uint k = 0u; k < 4u; ++k) {
-        uint lin = lane * 4u + k;
-        ivec2 t = ivec2(int(lin & 15u), int(lin >> 4u));
+    ivec2 base = groupBase();
+    uint lane = gl_LocalInvocationIndex;
+    uint tw = stageIndex() == 0 ? 16u : 24u;
+    for (uint lin = lane; lin < tw * 16u; lin += 64u) {
+        ivec2 t = ivec2(int(lin % tw), int(lin / tw));
         tile[t.y][t.x] = normCode(mirror(base + t - ivec2(4)));
     }
     barrier();
 }
 
 float16_t fetchN(ivec2 s) {
-    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
-    ivec2 m = mirror(s);
-    return tile[m.y - base.y + 4][m.x - base.x + 4];
+    ivec2 base = groupBase();
+    // loadTile already mirrored every halo sample; address that copy
+    // directly instead of reflecting every stencil tap a second time.
+    return tile[s.y - base.y + 4][s.x - base.x + 4];
 }
 
 // Prior-mode rgb read (imageLoad neither clamps nor mirrors).
@@ -187,15 +199,31 @@ float16_t ratioEps(float16_t num, float16_t d0, float16_t d1) {
 }
 
 
+// Compile a separate stage so register allocation is not dominated by the
+// largest branch of the four-stage shader. -1 keeps old callers compatible.
+
+
 void main() {
+    if (any(greaterThanEqual(groupBase(), p.u_dims))) return;
+    int stage = stageIndex();
     ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    if (stage != 0) {
+        int x0Green = colorAt(ivec2(0, ij.y)) == 1 ? 1 : 0;
+        int parity = stage == 3 ? 1 - x0Green : x0Green;
+        ij.x = ij.x * 2 + parity;
+    }
     // The tile load covers threads past the edge too (mirrored), so no
     // early-out before the barrier: every invocation must participate.
     loadTile();
+    // An odd-width crop may end on the green companion of a missing R/B site.
+    if (stage == 1 && (p.u_dims.x & 1) != 0 && ij.x == p.u_dims.x && ij.y < p.u_dims.y) {
+        ivec2 mate = ivec2(ij.x ^ 1, ij.y);
+        imageStore(img_rgb, mate, vec4(0.0, float(fetchN(mate)), 0.0, 1.0));
+    }
     if (any(greaterThanEqual(ij, p.u_dims))) return;
     int c = colorAt(ij);
 
-    if (p.u_mode == 0) {
+    if ((RCD_STAGE >= 0 ? RCD_STAGE : (p.u_mode & 3)) == 0) {
         // Directions + low-pass to scratch (VH everywhere; lpf/PQ at
         // R/B sites, zero elsewhere and never read there).
         float16_t vh = vhDir(ij);
@@ -208,7 +236,7 @@ void main() {
         imageStore(img_scratch, ij, vec4(f16vec4(vh, lp, pq, 0.0hf)));
         return;
     }
-    if (p.u_mode == 1) {
+    if ((RCD_STAGE >= 0 ? RCD_STAGE : (p.u_mode & 3)) == 1) {
         // Green full-res + R/B mosaic init (overwrites every texel).
         float16_t g;
         if (c == 1) {
@@ -242,9 +270,11 @@ void main() {
         float16_t r = (c == 0) ? fetchN(ij) : 0.0hf;
         float16_t b = (c == 2) ? fetchN(ij) : 0.0hf;
         imageStore(img_rgb, ij, vec4(f16vec4(r, g, b, 1.0hf)));
+        ivec2 mate = ivec2(ij.x ^ 1, ij.y);
+        if (mate.x < p.u_dims.x) imageStore(img_rgb, mate, vec4(0.0, float(fetchN(mate)), 0.0, 1.0));
         return;
     }
-    if (p.u_mode == 2) {
+    if ((RCD_STAGE >= 0 ? RCD_STAGE : (p.u_mode & 3)) == 2) {
         // RT 4.2: R/B at opposite-color sites (green sites untouched).
         if (c == 1) return;
         int opp = 2 - c;

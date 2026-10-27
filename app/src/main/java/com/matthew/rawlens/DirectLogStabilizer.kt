@@ -141,7 +141,7 @@ class DirectLogStabilizer(private val appContext: Context) {
             // Surface encoder + convert + EGL present, after the 10-bit
             // modes. The warp is single-threaded, so one convert buffer
             // and one EGL context serve the whole pass.
-            val sdrMode = if (profile == DirectLogProfile.BT709 &&
+            val sdrMode = if (profile in listOf(DirectLogProfile.BT709, DirectLogProfile.ACES) &&
                 LogVideoProbe.preferredMain8EncoderAt(w, h, fps) != null
             ) {
                 LogVideoProbe.EncoderInputMode.SDR_EGL

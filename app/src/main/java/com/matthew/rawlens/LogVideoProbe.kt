@@ -533,7 +533,9 @@ object LogVideoProbe {
      */
     fun encodeCandidates(requestedWidth: Int, requestedHeight: Int): List<EncodeSize> {
         val reqPixels = requestedWidth * requestedHeight
-        return (listOf(EncodeSize(requestedWidth, requestedHeight)) + ENCODE_LADDER)
+        return (listOf(EncodeSize(requestedWidth, requestedHeight)) + ENCODE_LADDER.map {
+            EncodeSize(it.width, (it.width.toDouble() * requestedHeight / requestedWidth / 2).toInt() * 2)
+        })
             .distinct()
             .filter { it.width * it.height <= reqPixels }
     }

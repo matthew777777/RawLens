@@ -641,7 +641,19 @@ bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
     pipeInfo.stage.module = module;
     pipeInfo.stage.pName = "main";
     pipeInfo.layout = ctx->rcdPipelineLayout;
-    VkResult r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1, &pipeInfo, nullptr, &ctx->rcdPipeline);
+    VkSpecializationMapEntry stageEntry{0, 0, sizeof(int32_t)};
+    VkSpecializationInfo specialization{};
+    specialization.mapEntryCount = 1;
+    specialization.pMapEntries = &stageEntry;
+    specialization.dataSize = sizeof(int32_t);
+    pipeInfo.stage.pSpecializationInfo = &specialization;
+    VkResult r = VK_SUCCESS;
+    for (int32_t mode = 0; mode < 4; ++mode) {
+        specialization.pData = &mode;
+        r = vkCreateComputePipelines(ctx->device, pipelineCacheFor(ctx), 1,
+                                    &pipeInfo, nullptr, &ctx->rcdPipelines[mode]);
+        if (r != VK_SUCCESS) break;
+    }
     vkDestroyShaderModule(ctx->device, module, nullptr);
     if (r != VK_SUCCESS) {
         LOGW("vf-vk: rcd compute pipeline failed %d", r);
@@ -650,18 +662,18 @@ bool createRcdPipeline(Context* ctx, const uint32_t* code, size_t words) {
     savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 3;
+    poolSizes[0].descriptorCount = 12;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 6;
+    poolSizes[1].descriptorCount = 24;
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 3;
+    poolInfo.maxSets = 12;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(ctx->device, &poolInfo, nullptr, &ctx->rcdPool) != VK_SUCCESS) {
         return false;
     }
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 12; ++i) {
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocInfo.descriptorPool = ctx->rcdPool;
