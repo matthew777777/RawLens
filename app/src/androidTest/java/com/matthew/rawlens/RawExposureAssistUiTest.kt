@@ -96,7 +96,7 @@ class RawExposureAssistUiTest {
             }
             report.appendLine("OFF PASS no stale overlay/readout")
             fun bounds(id: Int): Rect = Rect().also { activity.findViewById<View>(id).getGlobalVisibleRect(it) }
-            for (mode in listOf("PHOTO", "LOG", "CRS")) {
+            for (mode in listOf("PHOTO", "LOG", "CRAW")) {
                 val oldLog = activity.directLogEnabled
                 inst.runOnMainSync {
                     if (mode != "PHOTO") {

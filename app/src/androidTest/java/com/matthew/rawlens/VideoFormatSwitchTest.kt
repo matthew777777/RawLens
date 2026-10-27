@@ -25,7 +25,7 @@ class VideoFormatSwitchTest {
                 activity.videoCrop = VideoCrop.SCOPE_2_39
                 repeat(3) {
                     activity.setDirectLogMode(true)
-                    // Simulate the shared stills refresh that used to overwrite LOG with CRS.
+                    // Simulate the shared stills refresh that used to overwrite LOG with CRAW.
                     activity.refreshCaptureFormatControl()
                     assertTrue(activity.findViewById<TextView>(R.id.rawBadge).text.startsWith("LOG"))
                     assertNull(activity.findViewById<CameraGuideOverlay>(R.id.guideOverlay).videoCrop)
@@ -33,7 +33,7 @@ class VideoFormatSwitchTest {
                     assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.releaseQuick).visibility)
                     assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.videoFormatQuickRow).visibility)
                     activity.setDirectLogMode(false)
-                    assertEquals("CRS", activity.findViewById<TextView>(R.id.rawBadge).text.toString())
+                    assertEquals("CRAW", activity.findViewById<TextView>(R.id.rawBadge).text.toString())
                     assertEquals(VideoCrop.SCOPE_2_39, activity.findViewById<CameraGuideOverlay>(R.id.guideOverlay).videoCrop)
                     assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.videoBinningQuick).visibility)
                     assertEquals(View.GONE, activity.findViewById<View>(R.id.videoFormatQuickRow).visibility)

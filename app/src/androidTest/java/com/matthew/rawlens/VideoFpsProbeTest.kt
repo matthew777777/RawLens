@@ -166,6 +166,6 @@ class VideoFpsProbeTest {
     }
 
     companion object {
-        private const val TAG = "CrsSpike"
+        private const val TAG = "CrawSpike"
     }
 }

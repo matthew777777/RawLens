@@ -31,7 +31,7 @@ class RawVideoStorageGuardDeviceTest {
 
     private fun setup(): Triple<CameraManager, String, android.util.Size> {
         assumeTrue("Pass -e rawlensVideoRecord true", args.getString("rawlensVideoRecord") == "true")
-        assumeTrue("crs native library unavailable", CrsWriter.available)
+        assumeTrue("craw native library unavailable", CrawWriter.available)
         instrumentation.uiAutomation
             .executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
         val manager = context.getSystemService(CameraManager::class.java)
@@ -50,7 +50,7 @@ class RawVideoStorageGuardDeviceTest {
     @Test
     fun startRefusesBelowReserve() {
         val (manager, id, size) = setup()
-        val file = File(context.cacheDir, "v4_refused.crs").apply { delete() }
+        val file = File(context.cacheDir, "v4_refused.craw").apply { delete() }
         val recorder = RawVideoRecorder(manager, id, size, context).apply {
             audioEnabled = false
             storageReserveBytes = Long.MAX_VALUE
@@ -72,7 +72,7 @@ class RawVideoStorageGuardDeviceTest {
     @Test
     fun lowStorageMidTakeStopsCleanly() {
         val (manager, id, size) = setup()
-        val file = File(context.cacheDir, "v4_low.crs").apply { delete() }
+        val file = File(context.cacheDir, "v4_low.craw").apply { delete() }
         val fired = CountDownLatch(1)
         val recorder = RawVideoRecorder(manager, id, size, context).apply {
             audioEnabled = false
