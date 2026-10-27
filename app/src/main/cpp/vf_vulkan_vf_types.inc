@@ -607,6 +607,8 @@ struct Context {
 };
 
 Context* g = nullptr;
+// Guarded by vkMutex; recorder owns shared pipelines until its take drains.
+static bool recordSessionActive = false;
 
 // Pipeline-cache file set from Kotlin (VulkanPipelineCache). Static: the
 // Context is deleted + recreated across reinit, but the path persists.

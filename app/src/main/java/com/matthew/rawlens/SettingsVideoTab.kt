@@ -138,7 +138,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus("LOG DEMOSAIC • ${next.label} — NEXT TAKE")
             }
         })
-        content.addView(sectionDesc("MHC (fused, one dispatch) is the realtime record path. RCD runs the 4-mode split path and drops to a few fps at 4K: A/B comparison only. Super pixel bins each 2x2 Bayer quad into one pixel: cheapest and artifact-free, half the detail."))
+        content.addView(sectionDesc("MHC favors realtime recording. RCD favors fine detail and may record below the selected frame rate, depending on the device and resolution. Super pixel bins each 2x2 Bayer quad into one pixel: faster processing with half the detail."))
         var logGainEv = directLogGainPref()
         val logGainLabel = TextView(this).apply {
             text = logGainText(logGainEv)
