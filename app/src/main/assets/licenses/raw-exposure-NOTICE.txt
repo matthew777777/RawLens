@@ -1,0 +1,27 @@
+RAW exposure assist
+
+Magic Lantern RAW zebras and RAW spot meter
+Copyright (C) 2009 Trammell Hudson <hudson+ml@osresearch.net>
+Copyright (C) 2013 Magic Lantern Team
+Licensed under GNU GPL version 2 or (at your option) any later version.
+See GPL-2.0.txt, bundled alongside this notice.
+Source: https://github.com/reticulatedpines/magiclantern_simplified
+Revision: 142472e95054d73640f50789ac0fd66325499d82
+Ported functions: src/zebra.c zebra_rgb_solid_color and spotmeter_step RAW averaging;
+src/raw.c raw_to_ev and ev_to_raw. RawLens changes: Kotlin, per-CFA black/white,
+Camera2 saturation boundary, bounded sampling, Android colours/geometry, two greens,
+physical-result calibration and optional Camera2 noise-profile floor.
+No Canon firmware framebuffer, alternating-row dual ISO or ExpSim hack is included.
+
+Turbo false-colour colormap
+Copyright 2019 Google LLC.
+Licensed under Apache License, Version 2.0; see Apache-2.0.txt alongside this notice.
+Authors: Anton Mikhailov (colormap design); Ruofei Du (GLSL approximation).
+Source: https://gist.github.com/mikhailov-work/0d177465a8151eb6ede1768d51d476c7
+Revision: f0b77bf03aa5fce5a3ebe25988fef36ec43f5096
+RawLens changes: Kotlin ARGB8 lookup table, quantization clipping, and RAW EV input.
+The RAW EV -10..0 mapping adapts Magic Lantern's raw.c preview log window;
+it is not Magic Lantern's YUV-luma false-colour or an IRE/skin-tone calibration.
+
+RawLens modifications copyright (C) 2026 RawLens contributors.
+The combined RawLens application is distributed under GPL version 3 or later.

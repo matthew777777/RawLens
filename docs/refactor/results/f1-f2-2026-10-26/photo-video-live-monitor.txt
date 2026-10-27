@@ -1,0 +1,13 @@
+HUD RAW −3.6 EV sensor=Rect(757, 85 - 924, 126) spot=Rect(939, 162 - 1097, 198)
+CYCLE ZEBRAS cols=256 rows=192
+CYCLE FALSE_COLOR cols=512 rows=384
+CYCLE OFF cols=256 rows=192
+TAP PASS spot=RawSpotReading(ev=-3.368168006844667, atBlack=false, clippedChannels=0, left=0.24313726, top=0.24084967, right=0.25710785, bottom=0.25947714)
+OFF PASS no stale overlay/readout
+COMPACT PHOTO header=Rect(0, 0 - 1280, 247) preview=Rect(15, 195 - 1264, 1861) unchanged by spot
+COMPACT LOG header=Rect(0, 0 - 1280, 247) preview=Rect(15, 195 - 1264, 1861) unchanged by spot
+COMPACT CRS header=Rect(0, 0 - 1280, 247) preview=Rect(15, 195 - 1264, 1861) unchanged by spot
+UI RECORD ZEBRAS fps=29.988004798080766 previewFrames=63 drops=0
+UI RECORD FALSE_COLOR fps=29.988004798080766 previewFrames=72 drops=0
+UI RECORD OFF fps=30.37569944044764 previewFrames=74 drops=0
+UI STOP Stats(sensorSize=4080x3060, cropRect=3840x2160@(120,450), exportSize=1920x1080, framesAcquired=436, framesGraded=435, framesDropped=0, resultMiss=1, staleResults=435, waitFreeFrames=435, fallbackWaits=0, fusedFrames=435, rcdFrames=0, shadedFrames=435, cpuChainMsAvg=1.1765629, cpuChainMsMax=12.356, overBudgetFrames=0, cycleMsMax=19.676308, cycleOverBudget=0, headDroppedFrames=1, previewFrames=394, previewSkipped=41, maxBacklogDepth=0, copyMsAvg=10.97137, copyMsMax=24.652231, fenceWaitMsAvg=16.303255, fenceWaitMsMax=30.550768, true10Bit=true, inputStarved=0, degradedFrames=0, frameErrors=0, audioChunks=0, audioFrames=0, audioDropped=0, hasAudio=false, aacBytes=0, audioOutBufs=0, outputBuffers=436, outputBytes=81717257, fileBytes=81720466, thermalStatus=0, heatDegraded=false, profile=HLG, hasStabGyro=false, stabGyroSamples=0)

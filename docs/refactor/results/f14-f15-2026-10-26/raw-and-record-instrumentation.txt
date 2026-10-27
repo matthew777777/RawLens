@@ -1,0 +1,56 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlFocusEttrDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.MlFocusEttrDeviceTest:
+INSTRUMENTATION_STATUS: test=realRawSweepAndArmCorrectionFixtures
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlFocusEttrDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=realRawSweepAndArmCorrectionFixtures
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlRecordingPeakingDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.MlRecordingPeakingDeviceTest:
+INSTRUMENTATION_STATUS: test=directLogMfPullKeepsSamplingAndClearsOnAuto
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlRecordingPeakingDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=directLogMfPullKeepsSamplingAndClearsOnAuto
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlRecordingPeakingDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=rawVideoMfPullKeepsSamplingAndClearsOnAuto
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MlRecordingPeakingDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stack=org.junit.AssumptionViolatedException: CRS backend is not implemented in this tree
+	at org.junit.Assume.assumeTrue(Assume.java:68)
+	at com.matthew.rawlens.MlRecordingPeakingDeviceTest.rawVideoMfPullKeepsSamplingAndClearsOnAuto(MlRecordingPeakingDeviceTest.kt:66)
+
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=rawVideoMfPullKeepsSamplingAndClearsOnAuto
+INSTRUMENTATION_STATUS_CODE: -4
+INSTRUMENTATION_RESULT: stream=
+
+Time: 53.299
+
+OK (3 tests)
+
+
+INSTRUMENTATION_CODE: -1

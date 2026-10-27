@@ -72,4 +72,46 @@ class MagicLanternEttrTest {
         assertEquals(10.0, MagicLanternEttr.dynamicRangeEv(Math.pow(2.0, -20.0)), 1e-9)
         assertTrue(MagicLanternEttr.dynamicRangeEv(0.0).isNaN())
     }
+    /** Same scene, G four stops above R/B: MAX tail flattens, MIN still slopes. */
+    private fun greenClips(exposureEv: Double): EttrQuadStats {
+        val maxHist = IntArray(EttrQuadStats.BINS)
+        val minHist = IntArray(EttrQuadStats.BINS)
+        var over = 0
+        val n = 6000
+        for (i in 0 until n) {
+            val green = Math.pow(2.0, -4.0 + 2.0 * (i + 0.5) / n + exposureEv)
+            val g = minOf(1.0, green).toFloat()
+            val rb = minOf(1.0, green / 16).toFloat()
+            maxHist[EttrQuadStats.binOf(g)]++
+            minHist[EttrQuadStats.binOf(rb)]++
+            if ((g + 2 * rb) / 3 >= EttrQuadStats.OVEREXPOSED_LEVEL) over++
+        }
+        return EttrQuadStats(maxHist, n, over, minHist)
+    }
+
+    @Test fun minChannelsRetainOvershootWhenGreenTailIsEntirelyClipped() {
+        val memory = MagicLanternEttr.Memory()
+        MagicLanternEttr.correction(greenClips(0.0), memory, -0.5, Double.NaN)
+        val result = MagicLanternEttr.correction(greenClips(4.0), memory, -0.5, Double.NaN)
+        assertTrue(result.overexposed)
+        // True G highlight near +2 EV: go back 2.5 EV, even though AVG is below 80%.
+        assertEquals(-2.5, result.correctionEv, 0.04)
+    }
+
+    @Test fun clearingMemoryDropsBothProjectionHistories() {
+        val memory = MagicLanternEttr.Memory()
+        MagicLanternEttr.correction(greenClips(0.0), memory, -0.5, Double.NaN)
+        assertTrue(memory.hasMinGradient)
+        memory.clear()
+        assertTrue(!memory.hasMinGradient)
+        assertTrue(memory.diffFromMin.all { it == 0.0 })
+        assertTrue(memory.diffFromLower.all { it == 0.0 })
+    }
+
+    @Test fun disabledSnrLimitsDoNotAddTheClippedFrameProbe() {
+        val r = MagicLanternEttr.correction(at(1f), MagicLanternEttr.Memory(),
+            -0.5, 10.0, midtoneSnrEv = 0.0, shadowSnrEv = 0.0)
+        assertEquals(-10.0, r.correctionEv, 0.0)
+    }
+
 }

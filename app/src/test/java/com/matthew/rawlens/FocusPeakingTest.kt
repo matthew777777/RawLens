@@ -290,4 +290,17 @@ class FocusPeakingTest {
             1e-6f
         )
     }
+    @Test fun recordingCropMapsFullSensorAndClipsLetterbox() {
+        val frame = FocusPeakingFrame(128, 96, BooleanArray(128 * 96),
+            sensorWidth = 4000, sensorHeight = 3000,
+            monitorCrop = intArrayOf(0, 375, 4000, 2250))
+        val (cover, clip) = FocusPeakingGeometry.monitorRects(frame, 1600, 1200)!!
+        // 16:9 recording inside a 4:3 monitor: top/bottom bars 150 px.
+        org.junit.Assert.assertArrayEquals(intArrayOf(0, 150, 1600, 1050), clip)
+        org.junit.Assert.assertArrayEquals(floatArrayOf(0f, 0f, 1600f, 1200f), cover, 0.001f)
+        val (portraitCover, portraitClip) = FocusPeakingGeometry.monitorRects(frame.copy(rotation = 90), 1200, 1600)!!
+        org.junit.Assert.assertArrayEquals(intArrayOf(150, 0, 1050, 1600), portraitClip)
+        org.junit.Assert.assertArrayEquals(floatArrayOf(0f, 0f, 1200f, 1600f), portraitCover, 0.001f)
+    }
+
 }

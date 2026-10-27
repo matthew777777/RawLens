@@ -193,6 +193,28 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
                 text = vfPreviewModeText()
             }
         })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "Exposure overlay: ${rawExposureSettings.overlay.label}" }
+            refresh()
+            setOnClickListener {
+                saveRawExposureAssist(rawExposureSettings.copy(overlay = rawExposureSettings.overlay.next()))
+                refresh()
+            }
+        })
+        content.addView(CheckBox(this).apply {
+            text = "RAW exposure meter"
+            isChecked = rawExposureSettings.spotMeter
+            setOnCheckedChangeListener { _, enabled -> saveRawExposureAssist(rawExposureSettings.copy(spotMeter = enabled)) }
+        })
+        content.addView(Button(this).apply {
+            fun refresh() { text = "RAW meter: ${rawExposureSettings.meterMode.label}" }
+            refresh()
+            setOnClickListener {
+                saveRawExposureAssist(rawExposureSettings.copy(meterMode = rawExposureSettings.meterMode.next()))
+                refresh()
+            }
+        })
+        content.addView(sectionDesc("RAW values before white balance, tone mapping or LOG gain. Spot follows the photo AE target; recording uses centre. Average shows the whole frame's mean EV and estimated clipped area (any RAW channel); recording measures its crop. Sparse sampling can miss tiny clipped highlights. This readout does not change exposure. Zebras mark clipping and the black/noise floor with diagonal stripes. False colour maps −10 to 0 RAW EV. Waiting means no fresh RAW data."))
         content.addView(CheckBox(this).apply {
             text = "Focus peaking (manual + tap focus)"
             setTextColor(getColor(R.color.text_primary))
@@ -201,6 +223,9 @@ internal fun MainActivity.showGeneralSettings(p: SettingsPage) {
                 focusPeakingEnabled = enabled
                 lensPreferences().edit().putBoolean(KEY_FOCUS_PEAKING, enabled).apply()
                 controller.setFocusPeakingEnabled(enabled)
+                videoRecorder?.focusPeakingEnabled = enabled
+                logRecorder?.focusPeakingEnabled = enabled
+                if (!enabled) setFocusPeakingVisible(false)
                 setStatus(if (enabled) "PEAKING ON" else "PEAKING OFF")
             }
         })

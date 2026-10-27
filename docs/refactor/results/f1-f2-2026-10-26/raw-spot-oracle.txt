@@ -1,0 +1,8 @@
+DEVICE 25080RABDG Android=16 camera=0 RAW=4080x3060
+FRAME iso=50 ns=1000000 EV=-9.905387005018131 oracle=-9.905387005018131 clips=0 marked=30836 cells=256x192 noiseFloor=true medianMs=3.974462
+FRAME iso=50 ns=16000000 EV=-8.092650185671166 oracle=-8.09265017814653 clips=0 marked=6173 cells=256x192 noiseFloor=true medianMs=4.003923
+FRAME iso=50 ns=50000000 EV=-6.4143729000982495 oracle=-6.414372914532287 clips=0 marked=1164 cells=256x192 noiseFloor=true medianMs=4.180307
+FRAME iso=3200 ns=1000000 EV=-6.062072472615656 oracle=-6.062072475881896 clips=0 marked=1864 cells=256x192 noiseFloor=true medianMs=4.098769
+FRAME iso=3200 ns=16000000 EV=-1.89348695791844 oracle=-1.8934869579674938 clips=0 marked=37 cells=256x192 noiseFloor=true medianMs=4.086462
+FRAME iso=3200 ns=50000000 EV=-0.29615141232486997 oracle=-0.29615141212842766 clips=2 marked=6923 cells=256x192 noiseFloor=true medianMs=4.071461
+PASS realFrames=6 RAW byte hashes unchanged; RAW spot oracle agreement <=0.001 EV
