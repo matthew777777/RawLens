@@ -31,12 +31,12 @@ import java.util.concurrent.atomic.AtomicLongArray
 
 /**
  * RAW Video recorder: a standalone TEMPLATE_RECORD RAW-only session that
- * writes one `.craw` file (CRAW-Fast lossless frames, PCM16 audio, gyro/accel motion).
+ * writes one `.craw` file (CRAW-Live or CRAW-Fast lossless frames, PCM16 audio, gyro/accel motion).
  *
  * Pipeline (60fps-ready by design, 30fps sustained on MT6878 Open Gate):
  * - Camera thread acquires, assigns sequence numbers, fans out to the live
- *   Vulkan VF, and queues bounded (cap 8, drop-oldest): cadence over latency.
- * - N encode workers ([encodeWorkers], default 3, up to 4) encode RAW16
+ *   Vulkan VF, and queues bounded (cap 6, drop-oldest): cadence over latency.
+ * - N encode workers ([encodeWorkers], default min(cores, 3), up to 8) encode RAW16
  *   planes concurrently into pooled payload buffers (~10ms effective at 3x).
  * - One committer drains a sequence-numbered reorder buffer strictly in
  *   capture order (the container rejects timestamp regressions), plus audio
@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicLongArray
  *   (a mid-take resolution change would break players): read once at
  *   [start] into [binActive], which also gates the frame-JSON dimensions
  *   and the % 8 crop resolve.
- * - P4 streams: 32-bit float (PCM16 fallback) stereo-first audio ([AudioPcmRecorder]) and continuous
+ * - P4 streams: PCM16 stereo-first audio (float capture available, off) ([AudioPcmRecorder]) and continuous
  *   gyro/accel ([MotionRecorder]) share the video frame timeline. Capture
  *   runs on boot-time ns, but every on-disk timestamp is
  *   recording-relative (`ts - timeOriginNs`, the first queued frame's
@@ -127,13 +127,12 @@ internal class RawVideoRecorder(
         val cropLabel: String,
     )
 
-    /** Encode worker count, set before [start]. 3 sustains 30fps Open Gate
-     * with one worker to spare: a wedged/exiled worker is parked, and the
-     * two survivors still cover 30fps (~66ms each). 2 has no redundancy —
-     * one parked worker leaves a solo ~22fps feed. 4 targets 60fps gates on
-     * stronger SoCs (more heat). Idle workers block in take(), so
-     * steady-state CPU/heat is unchanged; only burst parallelism grows. */
-    var encodeWorkers: Int = 3
+    /** Frame-level parallelism; three workers limit retained RAW/payload memory. */
+    var encodeWorkers: Int = DEFAULT_WORKERS
+
+    /** Selected before start; frozen for the entire take. */
+    var compressionCodec: Int = CrawWriter.CODEC_LIVE
+    private var takeCodec: Int = CrawWriter.CODEC_LIVE
 
     /** Switchable any time, including mid-recording; no session reconfig. */
     @Volatile var crop: VideoCrop = VideoCrop.OPEN_GATE
@@ -359,6 +358,7 @@ internal class RawVideoRecorder(
     @Volatile private var hasAudioStream = false
     @Volatile private var hasMotionStream = false
     private var lastFrameTs = -1L // committer thread only
+    private var lastStatsLogTs = 0L // committer thread only
 
     fun start(output: File, containerMetadataJson: String) {
         MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
@@ -369,8 +369,11 @@ internal class RawVideoRecorder(
         if (free < reserve) throw StorageFullException(free, reserve)
         storageLow = false
         lastSpaceCheckMs = 0L
+        lastStatsLogTs = 0L
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
         encodeWorkers = workers
+        require(compressionCodec == CrawWriter.CODEC_FAST || compressionCodec == CrawWriter.CODEC_LIVE)
+        takeCodec = compressionCodec
         outputFile = output
         acquired.set(0)
         encoded.set(0)
@@ -453,7 +456,9 @@ internal class RawVideoRecorder(
         var audioChannels = 0
         if (audioEnabled) {
             val rec = AudioPcmRecorder()
-            if (rec.start(preferFloat = true) { chunk -> onAudioChunk(chunk) }) {
+            // PCM16: the float path measured near-silent levels on the
+            // MT6878 camcorder mic and float WAVs trip NLE audio sync.
+            if (rec.start(preferFloat = PREFER_FLOAT_AUDIO) { chunk -> onAudioChunk(chunk) }) {
                 audio = rec
                 hasAudioStream = true
                 audioRate = AudioPcmRecorder.SAMPLE_RATE
@@ -608,7 +613,7 @@ internal class RawVideoRecorder(
                     timestampNs = ts,
                     frameJson = "{\"width\":$encW," +
                         "\"height\":$encH," +
-                        "\"codec\":\"CRAW-Fast\",\"timestamp\":$ts," +
+                        "\"codec\":\"${if (takeCodec == CrawWriter.CODEC_LIVE) "CRAW-Live" else "CRAW-Fast"}\",\"timestamp\":$ts," +
                         "\"crop\":\"${crop.name}\"" +
                         "}",
                     shading = shadingGrid,
@@ -946,7 +951,8 @@ internal class RawVideoRecorder(
                 val t0 = SystemClock.elapsedRealtimeNanos()
                 val bytes = CrawWriter.encodeFrame(
                     task.src, task.size, task.width, task.height, task.stride,
-                    task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth
+                    task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
+                    takeCodec
                 )
                 val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
                 // Benign races on stats: worst case a slightly stale overlay.
@@ -1197,6 +1203,16 @@ internal class RawVideoRecorder(
             }
         }
         lastFrameTs = ts
+        // Once per second of sensor time: where frames go (camera -> encode -> commit).
+        if (ts - lastStatsLogTs >= 1_000_000_000L) {
+            lastStatsLogTs = ts
+            Log.i(TAG, String.format(java.util.Locale.US,
+                "rec acq=%d enc=%d drop=%d skip=%d purged=%d q=%d reorder=%d encMs=%.1f/%.1f " +
+                    "writeMs=%.1f/%.1f waitMs=%.1f/%.1f fps=%.1f",
+                acquired.get(), encoded.get(), dropped.get(), commitSkipped.get(), latePurged.get(),
+                encodeQueue.size, synchronized(reorderLock) { reorder.size }, encodeMsAvg, encodeMsMax,
+                writeMsAvg, writeMsMax, resultWaitMsAvg, resultWaitMsMax, fpsEstimate))
+        }
     }
 
     private fun drainAudioQueue() {
@@ -1442,10 +1458,14 @@ internal class RawVideoRecorder(
         // Outstanding Images must stay <= QUEUE_CAP + workers in hand with
         // margin: the acquire loop drops (never wedges) when encode
         // backpressures. GPU-borrowed frames pin one extra buffer each.
-        private const val READER_MAX_IMAGES = 12
-        private const val QUEUE_CAP = 8
+        private const val READER_MAX_IMAGES = 15
+        private const val QUEUE_CAP = 6
         private const val AUDIO_QUEUE_CAP = 32
-        private const val MAX_WORKERS = 4
+        private const val MAX_WORKERS = 8
+        private const val PREFER_FLOAT_AUDIO = false
+        // Six full-frame workspaces competed with the camera/viewfinder.
+        // Device profiling can override this before starting a take.
+        private val DEFAULT_WORKERS = Runtime.getRuntime().availableProcessors().coerceIn(1, 3)
         private const val SKIP_TIMEOUT_MS = 250L
         private const val COMMIT_POLL_MS = 10L
         private const val POOL_WAIT_MS = 100L

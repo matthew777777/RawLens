@@ -30,7 +30,10 @@ import org.junit.runner.RunWith
  *
  * Opt-in: `-e rawlensVideoUi true`. Requires completed lens setup on the
  * device (first-run dialog) and grants CAMERA + RECORD_AUDIO via shell.
- * Leaves the app in photo mode with the clip in Movies/RawLens.
+ * Leaves the app in photo mode with the clip in DCIM/RawLens.
+ * `-e rawlensCrawCodec live|fast -e rawlensVideoSeconds 30` selects the take.
+ * Cadence requires >=29.5 fps and no sensor timestamp gap over 50 ms;
+ * `-e rawlensRequire30Fps false` runs only the UI/container smoke checks.
  */
 @RunWith(AndroidJUnit4::class)
 class VideoModeUiTest {
@@ -57,6 +60,15 @@ class VideoModeUiTest {
         val activity = instrumentation.startActivitySync(
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ) as MainActivity
+        val prefs = activity.lensPreferences()
+        val previousCodec = prefs.getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)
+        val codec = when (args.getString("rawlensCrawCodec", "live")) {
+            "live" -> CrawWriter.CODEC_LIVE
+            "fast" -> CrawWriter.CODEC_FAST
+            else -> error("rawlensCrawCodec must be live or fast")
+        }
+        val seconds = args.getString("rawlensVideoSeconds")?.toLongOrNull()?.coerceIn(5, 300) ?: 30L
+        prefs.edit().putInt(MainActivity.KEY_VIDEO_CODEC, codec).commit()
         try {
             fun view(id: Int): View = activity.findViewById(id)
             fun click(v: View) {
@@ -83,6 +95,7 @@ class VideoModeUiTest {
             assertEquals("CRAW", badge)
 
             // 2. Shutter starts the take; the video HUD appears.
+            val recordStartMs = System.currentTimeMillis() - 2_000
             click(view(R.id.shutter))
             SystemClock.sleep(1500)
             var hudVisible = false
@@ -114,21 +127,25 @@ class VideoModeUiTest {
             assertTrue("VF not on zero-copy GPU path during recording: $vf", vf.gpu)
             screenshot("vui_video_rec")
 
+            SystemClock.sleep((seconds * 1000 - 4000).coerceAtLeast(0))
+
             // 4. Stop; wait for the file to stop growing (container close
             // finalizes the footer), then validate it as .craw.
             click(view(R.id.shutter))
-            val dir = File(
-                context.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES),
-                "RawLens"
-            )
+            // Finished takes are published to DCIM/RawLens (MediaStore); the
+            // app-private stage dir only holds takes still being written.
+            val stage = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES), "RawLens")
+            @Suppress("DEPRECATION")
+            val published = File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DCIM), "RawLens")
             var clip: File? = null
             var lastSize = -1L
             var stablePolls = 0
             val stopDeadline = SystemClock.elapsedRealtime() + 45_000
             while (SystemClock.elapsedRealtime() < stopDeadline) {
-                clip = dir.listFiles()
-                    ?.filter { it.extension == "craw" }
-                    ?.maxByOrNull { it.lastModified() }
+                clip = ((stage.listFiles() ?: emptyArray()) + (published.listFiles() ?: emptyArray()))
+                    .filter { it.extension == "craw" && it.lastModified() >= recordStartMs }
+                    .maxByOrNull { it.lastModified() }
                 val size = clip?.length() ?: -1L
                 if (clip != null && size > 1_000_000) {
                     if (size == lastSize) {
@@ -143,6 +160,7 @@ class VideoModeUiTest {
             assertTrue("No .craw clip finalized", clip != null && lastSize > 1_000_000)
             val finalClip = requireNotNull(clip)
             validateCrawMagic(finalClip)
+            validateCadence(finalClip, codec, args.getString("rawlensRequire30Fps", "true") != "false")
             android.util.Log.i(
                 TAG, "SPIKE ui clip=${finalClip.name} bytes=${finalClip.length()}"
             )
@@ -157,6 +175,7 @@ class VideoModeUiTest {
             }
             assertEquals("DNG", badge)
         } finally {
+            prefs.edit().putInt(MainActivity.KEY_VIDEO_CODEC, previousCodec).commit()
             instrumentation.runOnMainSync { activity.finish() }
         }
     }
@@ -182,6 +201,51 @@ class VideoModeUiTest {
         }
         val frames = CrawFormat.closedFrameCount(file)
         assertTrue("Unclosed or empty container", frames != null && frames > 0)
+    }
+
+    private fun validateCadence(file: File, codec: Int, require30: Boolean) {
+        var count = 0L
+        var first = -1L
+        var last = -1L
+        var maxGap = 0L
+        RandomAccessFile(file, "r").use { raf ->
+            fun u32(): Long = Integer.reverseBytes(raf.readInt()).toLong() and 0xffffffffL
+            fun i64(): Long = java.lang.Long.reverseBytes(raf.readLong())
+            var offset = 16L
+            while (offset + 20 <= raf.length()) {
+                raf.seek(offset)
+                val tag = ByteArray(4).also { raf.readFully(it) }.toString(Charsets.US_ASCII)
+                u32() // flags
+                val bytes = i64()
+                assertTrue("Invalid chunk length", bytes >= 0 && bytes <= raf.length() - offset - 20)
+                if (tag == "FRAM") {
+                    assertTrue("Truncated frame", bytes >= 44)
+                    i64() // frame id
+                    val ts = i64()
+                    val jsonBytes = u32()
+                    assertTrue("Invalid frame metadata length", jsonBytes <= bytes - 44)
+                    raf.seek(offset + 16 + 20 + jsonBytes)
+                    assertEquals("Wrong recorded codec", codec, raf.readUnsignedByte())
+                    if (first < 0) first = ts
+                    if (last >= 0) {
+                        assertTrue("Non-monotonic timestamps", ts > last)
+                        maxGap = maxOf(maxGap, ts - last)
+                    }
+                    last = ts
+                    count++
+                }
+                if (tag == "INDX") break
+                offset += 20 + bytes
+            }
+        }
+        assertEquals("Footer frame count", count, requireNotNull(CrawFormat.closedFrameCount(file)).toLong())
+        assertTrue("Too few recorded frames", count >= 2 && last > first)
+        val fps = (count - 1) * 1e9 / (last - first)
+        android.util.Log.i(TAG, "CRAW cadence codec=$codec frames=$count fps=$fps maxGapMs=${maxGap / 1e6}")
+        if (require30) {
+            assertTrue("Recording below 30fps: $fps", fps >= 29.5)
+            assertTrue("Recording dropped a frame: gap=${maxGap / 1e6}ms", maxGap <= 50_000_000L)
+        }
     }
 
     companion object {

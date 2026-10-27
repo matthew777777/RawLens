@@ -120,11 +120,55 @@ void decodePlane(BitReader& br, int32_t* p, int w, int h, int32_t firstPred, uin
     }
 }
 
+// CRAW-Live tile (SPEC 3.6) into four cell-order planes of tw x th.
+void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
+    if (len < 5) throw DecodeError("craw: truncated live tile");
+    const uint32_t nibBytes = rd32(d + 1);
+    if (nibBytes > len - 5) throw DecodeError("craw: bad live nibble length");
+    const uint8_t* nib = d + 5;
+    const uint8_t* data = nib + nibBytes;
+    const uint8_t* end = d + len;
+    size_t ni = 0;
+    auto nextNibble = [&]() -> int {
+        if (ni >= size_t{nibBytes} * 2) throw DecodeError("craw: live nibbles overrun");
+        const int v = (nib[ni >> 1] >> (4 * (ni & 1))) & 15;
+        ++ni;
+        return v;
+    };
+    const size_t n = size_t{tw} * th;
+    for (uint32_t y = 0; y < th; ++y)
+        for (int cell = 0; cell < 4; ++cell) {
+            int32_t* row = planes + cell * n + size_t{y} * tw;
+            int32_t prev = y == 0 ? first : row[-static_cast<ptrdiff_t>(tw)];
+            for (uint32_t x0 = 0; x0 < tw; x0 += kBlock) {
+                const uint32_t cnt = std::min<uint32_t>(kBlock, tw - x0);
+                int w = nextNibble();
+                if (w == 15) w += nextNibble();
+                if (w > 17) throw DecodeError("craw: bad live width");
+                const size_t bytes = (size_t{cnt} * w + 7) / 8;
+                if (bytes > static_cast<size_t>(end - data)) throw DecodeError("craw: live data overrun");
+                uint64_t acc = 0;
+                int bits = 0;
+                const uint8_t* q = data;
+                const uint32_t mask = w ? (w >= 32 ? 0xFFFFFFFFu : (1u << w) - 1) : 0;
+                for (uint32_t i = 0; i < cnt; ++i) {
+                    while (bits < w) { acc |= uint64_t{*q++} << bits; bits += 8; }
+                    const uint32_t u = static_cast<uint32_t>(acc) & mask;
+                    acc >>= w;
+                    bits -= w;
+                    prev += (u & 1) ? -static_cast<int32_t>((u + 1) >> 1) : static_cast<int32_t>(u >> 1);
+                    row[x0 + i] = prev;
+                }
+                data += bytes;
+            }
+        }
+}
+
 }  // namespace
 
 FrameInfo probeFrame(const uint8_t* p, size_t size) {
     if (!p || size < kHeaderSize) throw DecodeError("craw: payload too small");
-    if (p[0] != 1) throw DecodeError("craw: unknown codec id");
+    if (p[0] != 1 && p[0] != 2) throw DecodeError("craw: unknown codec id");
     FrameInfo f;
     f.bitDepth = p[1];
     if (p[2] > 3) throw DecodeError("craw: bad CFA");
@@ -134,6 +178,8 @@ FrameInfo probeFrame(const uint8_t* p, size_t size) {
     f.tile = rd16(p + 12);
     f.riceInit = rd16(p + 14);
     f.crc = rd32(p + 16);
+    f.codec = p[0];
+    f.hasCrc = (p[3] & 1) == 0;
     if (f.bitDepth < 1 || f.bitDepth > 16 || f.width == 0 || f.height == 0 || f.width % 2 ||
         f.height % 2 || f.tile == 0 || f.width > 65536 || f.height > 65536)
         throw DecodeError("craw: bad frame header");
@@ -173,9 +219,12 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
                 const size_t len = rd32(table + 4 * (t + 1)) - rd32(table + 4 * t);
                 if (len < 1) throw DecodeError("craw: empty tile");
                 planes.resize(4 * n);
+                const bool live = f.codec == 2;
                 if (d[0] == 1) {
                     if (len != 1 + 8 * n) throw DecodeError("craw: bad stored tile size");
                     for (size_t i = 0; i < 4 * n; ++i) planes[i] = rd16(d + 1 + 2 * i);
+                } else if (d[0] == 0 && live) {
+                    decodeTileLive(d, len, tw, th, 1 << (f.bitDepth - 1), planes.data());
                 } else if (d[0] == 0) {
                     BitReader br(d + 1, len - 1);
                     for (int i = 0; i < 4; ++i)
@@ -189,7 +238,8 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
                 }
                 const int32_t maxv = (1 << f.bitDepth) - 1;
                 for (int i = 0; i < 4; ++i) {
-                    const int py = L[i] >> 1, px = L[i] & 1;
+                    const int pos = live ? i : L[i];  // Live planes are in cell order
+                    const int py = pos >> 1, px = pos & 1;
                     const int32_t* src = planes.data() + i * n;
                     for (uint32_t y = 0; y < th; ++y) {
                         uint16_t* dst = out.data() + size_t(2 * (ty + y) + py) * f.width + 2 * tx + px;
@@ -214,6 +264,7 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
     for (auto& t : pool) t.join();
     if (error) std::rethrow_exception(error);
 
+    if (!f.hasCrc) return f;
     uint32_t crc = 0;
     if constexpr (std::endian::native == std::endian::little) {
         crc = detail::crc32c(out.data(), out.size() * 2);

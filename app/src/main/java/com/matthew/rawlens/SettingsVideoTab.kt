@@ -178,6 +178,21 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         content.addView(sectionTitle("RAW video"))
         content.addView(Button(this).apply {
+            isEnabled = !videoRecording
+            fun refresh() {
+                text = if (lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE) == CrawWriter.CODEC_FAST)
+                    "Compression: CRAW-Fast" else "Compression: CRAW-Live"
+            }
+            refresh()
+            setOnClickListener {
+                val current = lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)
+                val next = if (current == CrawWriter.CODEC_LIVE) CrawWriter.CODEC_FAST else CrawWriter.CODEC_LIVE
+                lensPreferences().edit().putInt(MainActivity.KEY_VIDEO_CODEC, next).apply()
+                refresh()
+            }
+        })
+        content.addView(sectionDesc("Both modes preserve every RAW sample. Live favors recording speed; Fast favors smaller files. Applies to the next take."))
+        content.addView(Button(this).apply {
             fun refresh() {
                 text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRAW crop: ${videoCropShort()}"
             }

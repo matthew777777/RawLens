@@ -47,7 +47,7 @@ internal object CrawWriter {
     fun encodeFrame(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
         cropTop: Int, cropHeight: Int, destination: ByteBuffer,
-        bin: Boolean, cfa: Int, bitDepth: Int = 16
+        bin: Boolean, cfa: Int, bitDepth: Int = 16, codec: Int = CODEC_FAST
     ): Int {
         checkFrameGeometry(width, height, cropTop, cropHeight, bin, cfa)
         require(source.isDirect && destination.isDirect) {
@@ -58,7 +58,7 @@ internal object CrawWriter {
         val written = try {
             containerEncodeFrame(
                 source, source.position(), size, width, height, stride,
-                cropTop, cropHeight, bin, cfa, bitDepth.coerceIn(1, 16),
+                cropTop, cropHeight, bin, cfa, bitDepth.coerceIn(1, 16), codec,
                 destination, dstOffset, destination.remaining()
             )
         } catch (e: UnsatisfiedLinkError) {
@@ -92,6 +92,11 @@ internal object CrawWriter {
         }
         if (written < 0) throw IllegalStateException("writeFrame failed: code=$written")
     }
+
+    /** CRAW-Fast: smallest files (bursts, archives). */
+    const val CODEC_FAST = 1
+    /** CRAW-Live: cheaper prediction/packing; file size depends on the scene. */
+    const val CODEC_LIVE = 2
 
     /** Bits needed for samples up to [whiteLevel] (Camera2 SENSOR_INFO_WHITE_LEVEL). */
     fun bitDepthFor(whiteLevel: Int?): Int =
@@ -208,7 +213,7 @@ internal object CrawWriter {
     external fun containerEncodeFrame(
         src: ByteBuffer, srcOffset: Int, size: Int,
         w: Int, h: Int, stride: Int, cropTop: Int, cropHeight: Int,
-        bin: Boolean, cfa: Int, bitDepth: Int,
+        bin: Boolean, cfa: Int, bitDepth: Int, codec: Int,
         dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
     ): Int
 
