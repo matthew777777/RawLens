@@ -144,4 +144,19 @@ class FlashStillPolicyTest {
         assertFalse(FlashStillPolicy.needsFlashPrecapture(false, on, noFlashAeModes, true, false))
         assertFalse(FlashStillPolicy.needsFlashPrecapture(false, auto, noFlashAeModes, true, false))
     }
+    @Test fun programAndEttrDoNotOfferAutoFlash() {
+        assertFalse(FlashStillPolicy.allowsAutoFlash(programMode = true, ettrActive = false))
+        assertFalse(FlashStillPolicy.allowsAutoFlash(programMode = false, ettrActive = true))
+        assertFalse(FlashStillPolicy.allowsAutoFlash(programMode = true, ettrActive = true))
+        assertTrue(FlashStillPolicy.allowsAutoFlash(programMode = false, ettrActive = false))
+    }
+
+    @Test fun unavailableAutoIsSkippedAndExistingAutoBecomesOff() {
+        assertEquals(RawCameraController.FlashStillMode.OFF, FlashStillPolicy.nextMode(RawCameraController.FlashStillMode.ON, false))
+        assertEquals(RawCameraController.FlashStillMode.ON, FlashStillPolicy.nextMode(RawCameraController.FlashStillMode.OFF, false))
+        assertEquals(RawCameraController.FlashStillMode.OFF, FlashStillPolicy.permittedMode(RawCameraController.FlashStillMode.AUTO, false))
+        assertEquals(RawCameraController.FlashStillMode.ON, FlashStillPolicy.permittedMode(RawCameraController.FlashStillMode.ON, false))
+        assertEquals(RawCameraController.FlashStillMode.AUTO, FlashStillPolicy.nextMode(RawCameraController.FlashStillMode.ON, true))
+    }
+
 }

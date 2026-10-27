@@ -1,0 +1,8 @@
+DEVICE 25080RABDG camera=0 AE=[0, 1, 2, 3] flash=true level=3
+OFF_AUTO_EXPOSURE 10-26 07:53:38.490  5505  5621 I RawLensCamera: FLASH_RESULT id=2 requestAe=1 requestFlash=0 resultAe=1 aeState=4 flashState=2 iso=15081 ns=20003770
+ON_AUTO_EXPOSURE 10-26 07:53:42.169  5505  5621 I RawLensCamera: FLASH_RESULT id=5 requestAe=3 requestFlash=0 resultAe=3 aeState=4 flashState=3 iso=1433 ns=9997000
+AUTO_AUTO_EXPOSURE 10-26 07:53:46.769  5505  5621 I RawLensCamera: FLASH_RESULT id=8 requestAe=2 requestFlash=0 resultAe=2 aeState=4 flashState=3 iso=50 ns=4799000
+ON_MANUAL_EXPOSURE 10-26 07:53:48.899  5505  5621 I RawLensCamera: FLASH_RESULT id=11 requestAe=0 requestFlash=1 resultAe=0 aeState=0 flashState=3 iso=800 ns=10000000
+FORCED_AUTO_FIRED=true MANUAL_FIRED=true
+ON_PROGRAM_EXPOSURE 10-26 07:53:52.097  5505  5621 I RawLensCamera: FLASH_RESULT id=14 requestAe=0 requestFlash=1 resultAe=0 aeState=0 flashState=3 iso=10097 ns=67033373
+ON_ETTR_EXPOSURE 10-26 07:53:53.983  5505  5621 I RawLensCamera: FLASH_RESULT id=17 requestAe=0 requestFlash=1 resultAe=0 aeState=0 flashState=3 iso=12800 ns=67033373

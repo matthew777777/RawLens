@@ -26,3 +26,34 @@ leave it <= 3 s; null AE state passes both), fed with every preview
 result's AE state plus a 100 ms timeout tick; an IDLE trigger precedes
 START (F2). A pre-trigger CONVERGED / FLASH_REQUIRED can no longer fire
 the still (F1). 4 JVM tests. Device verification pending.
+
+
+## Device follow-up and owner policy (2026-10-26)
+
+- PROGRAM (including its custom-AE setting) and enabled ETTR offer **Off / On only**.
+  Entering either with Auto already selected clears it to Off; the cycle skips
+  Auto. Exposure settings and flash accessibility descriptions explain:
+  "Auto flash is unavailable in PROGRAM and ETTR. RawLens needs its own auto-flash metering."
+- Their ISO/shutter resolution is unchanged. Forced On retains AE_OFF and
+  FLASH_SINGLE; no HAL AE takeover of the PROGRAM/ETTR pair was shipped.
+- Ordinary hardware-AE flash now uses the existing singleShotTarget fallback
+  for RAW-only sessions, feeds one-shot 3A results into the precapture waiter,
+  discards those RAW preview frames from still pairing, and keeps its metered
+  flash AE mode until capture completion. Completion/error/stop clears the waiter
+  and override. Explicit manual ISO/shutter keeps the original SINGLE path.
+- Reference: [Android CaptureRequest](https://developer.android.com/reference/android/hardware/camera2/CaptureRequest)
+  and [AOSP 3A modes](https://source.android.com/docs/core/camera/camera3_3Amodes).
+  Hardware AUTO flash is HAL-controlled and conditional on scene brightness;
+  PROGRAM/ETTR do not substitute a guessed software flash threshold.
+
+On Redmi 25080RABDG / Android 16, the final real-controller probe passed:
+OFF did not fire; ordinary forced ON and AUTO when FLASH_REQUIRED reported
+FIRED; explicit manual, PROGRAM and ETTR forced ON reported FIRED with AE_OFF.
+The owner also confirmed seeing the LED pulse. Tests check Auto suppression,
+selection reset, and cleanup. **91 focused unit tests passed** in isolated
+reports. The tested minified release **1.0.434** was installed on the phone.
+[Device traces, test result and release hash](results/flash-2026-10-26/).
+The probe creates real still captures; existing media was not deleted.
+
+TODO: implement RawLens-owned auto-flash metering for PROGRAM/ETTR before
+re-enabling Auto there. This remains deliberately unimplemented.

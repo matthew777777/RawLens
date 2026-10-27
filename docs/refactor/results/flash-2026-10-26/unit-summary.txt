@@ -1,0 +1,11 @@
+com.matthew.rawlens.RawEttrMeterTest: 14 tests, 0 failures, 0 errors
+com.matthew.rawlens.RawEttrSamplerTest: 7 tests, 0 failures, 0 errors
+com.matthew.rawlens.RequestExposureTest: 6 tests, 0 failures, 0 errors
+com.matthew.rawlens.VideoManualPolicyTest: 6 tests, 0 failures, 0 errors
+com.matthew.rawlens.MagicLanternEttrTest: 10 tests, 0 failures, 0 errors
+com.matthew.rawlens.FlashStillPolicyTest: 14 tests, 0 failures, 0 errors
+com.matthew.rawlens.FrameLeaseRegistryTest: 6 tests, 0 failures, 0 errors
+com.matthew.rawlens.FocusPeakingTest: 22 tests, 0 failures, 0 errors
+com.matthew.rawlens.FlashPrecaptureTest: 4 tests, 0 failures, 0 errors
+com.matthew.rawlens.EttrLoopTest: 2 tests, 0 failures, 0 errors
+Total: 91 focused tests passed.
