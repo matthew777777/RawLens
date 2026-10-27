@@ -11,7 +11,7 @@ The DNG `encodeCfaJxl` helper described in this historical study has been
 removed. JNI now passes RAW16 pixels to TinyDNG, whose optional libjxl encoder
 owns lossless compression, DNG 1.7 version defaults and chunked compressed
 output. The developed-still encoder remains in `native_jxl_encoder.cpp`.
-All 13 shared TinyDNG files match upstream `e1d6442` byte-for-byte.
+All 13 shared TinyDNG files match upstream `4df281b` byte-for-byte.
 
 Android links libjxl on `tinydng_v3`; host builds discover installed libjxl
 through pkg-config. Effort remains 3 by default with automatic threads.

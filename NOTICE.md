@@ -85,7 +85,7 @@ RawLens development feature and does not alter DNG pixels or frozen Camera2 capt
 
 The active TinyDNG DNG backend compiles the checked-in C11 v3 sources under
 `app/src/main/cpp/deps/tinydng`, synchronized with
-https://github.com/matthew777777/tinydng at `e1d6442`.
+https://github.com/matthew777777/tinydng at `4df281b`.
 TinyDNG is Copyright (c) 2016-present Syoyo Fujita and contributors and is
 licensed under MIT; its license is retained in the vendor directory.
 `UPSTREAM.json` records the original `1f18169` source hashes, and `rawlens.patch`

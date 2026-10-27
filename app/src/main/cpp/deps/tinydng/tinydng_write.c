@@ -1574,7 +1574,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     }
     comp = TINYDNG_COMPRESSION_NEW_JPEG;
   } else if (comp == TINYDNG_COMPRESSION_JPEG_XL) {
-    /* Lossless unsigned 16-bit single-channel mosaic strips. */
+    /* Lossless unsigned 16-bit single-channel strips. */
     if (bps != 16u || spp != 1u || sfmt != TINYDNG_SAMPLEFORMAT_UINT) {
       td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
                    "JPEG XL writer requires 16-bit single-channel input");
@@ -1815,9 +1815,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   if (opts && opts->as_dng) {
     const tinydng_raw_info *raw = meta->raw;
     const tinydng_cfa *cfa = meta->cfa;
-    /* TIFF 6.0 mandates LONG for NewSubfileType; SHORT makes Apple ImageIO
-     * (Finder Quick Look, sips) reject the file. Matches the pre-TinyDNG
-     * Kotlin writer, which emitted Entry(254, LONG, ...). */
+    /* TIFF 6.0 specifies LONG for NewSubfileType. */
     td_add_long(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
     if (cfa && cfa->present) {
       uint16_t dim[2];
@@ -1878,7 +1876,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     }
   }
 
-  /* Camera2 metadata, including DOUBLE NoiseProfile and opaque opcodes. */
+  /* Caller-provided TIFF fields, including DOUBLE and opaque payloads. */
   if (meta->field_count && !meta->fields) w->w.failed = 1;
   for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
     const tinydng_field *f = &meta->fields[i];

@@ -74,7 +74,7 @@ The TinyDNG backend owns TIFF layout, checked metadata fields, EXIF/GPS director
 lens-shading opcode transport and optional native lossless JPEG XL encoding.
 RawLens supplies frozen Camera2 metadata and RAW pixels through a small JNI bridge;
 it no longer uses PhotonCamera's DNG writer or downloads `tiny_dng_writer.h`.
-The shared TinyDNG sources match upstream commit `e1d6442` byte-for-byte.
+The shared TinyDNG sources match upstream commit `4df281b` byte-for-byte.
 
 Android links TinyDNG to the existing libjxl target when available (pinned v0.12.0).
 For source builds, supply `-PjxlSourceDir=<checkout with submodules>`; builds with

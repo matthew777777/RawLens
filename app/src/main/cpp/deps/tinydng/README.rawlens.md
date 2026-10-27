@@ -12,7 +12,7 @@ UPSTREAM.json retains hashes of the base sources; reproduce by copying those
 sources and applying rawlens.patch with patch -p1.
 
 Shared-source sync: all 13 files named by UPSTREAM.json match TinyDNG commit
-`e1d6442` byte-for-byte. The manifest records the older base intentionally;
+`4df281b` byte-for-byte. The manifest records the older base intentionally;
 apply rawlens.patch to that base to reproduce the current header and writer.
 The app no longer contains a separate DNG JXL encoder in tinydng_jni.cpp.
 Host builds detect libjxl/libjxl_threads >=0.8 through pkg-config; Android
