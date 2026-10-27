@@ -20,6 +20,11 @@
 // frame count divides instead of multiplying by a reciprocal, and the
 // reference accumulates in frame order over a cleared accumulator.
 #include <array>
+#include <cstdlib>
+#include <map>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -197,14 +202,11 @@ class Scratch {
             !addImage("hdrp_aligned", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_ref_blur", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_comp_blur", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
-            !addImage("hdrp_blur_tmp", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_diff", VK_FORMAT_R32_SFLOAT, cellsX, cellsY) ||
             !addImage("hdrp_weight", VK_FORMAT_R32_SFLOAT, cellsX, cellsY) ||
             !addImage("hdrp_accum", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_output", VK_FORMAT_R16G16B16A16_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_cfa", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
-            !addImage("hdrp_pyr_tmp_a", VK_FORMAT_R32_SFLOAT, g.levels.front().width,
-                      g.levels.front().height) ||
             !addImage("hdrp_pyr_tmp_b", VK_FORMAT_R32_SFLOAT, g.levels.front().width,
                       g.levels.front().height))
             return false;
@@ -229,8 +231,6 @@ class Scratch {
         const auto& g = f.align;
         if (!addImage("hdrp_ref_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
             !addImage("hdrp_comp_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
-            !addImage("hdrp_pyr_tmp_a", VK_FORMAT_R32_SFLOAT, g.levels.front().width,
-                      g.levels.front().height) ||
             !addImage("hdrp_pyr_tmp_b", VK_FORMAT_R32_SFLOAT, g.levels.front().width,
                       g.levels.front().height))
             return false;
@@ -327,7 +327,7 @@ class Recorder {
     }
     bool recordPrepare(bool reference, VkImageView rawU16, const RawNormalization& frame);
     bool recordPyramid(bool reference);
-    bool recordBlur(const GpuImage& src, std::array<std::int32_t, 2> srcOffset, const GpuImage& tmp,
+    bool recordBlur(const GpuImage& src, std::array<std::int32_t, 2> srcOffset,
                     const GpuImage& dst, std::uint32_t w, std::uint32_t h, std::int32_t kernelSize,
                     std::int32_t stride, bool quantizeHalf);
 
@@ -373,18 +373,13 @@ bool Recorder::recordPrepare(bool reference, VkImageView rawU16, const RawNormal
 }
 
 bool Recorder::recordBlur(const GpuImage& src, std::array<std::int32_t, 2> srcOffset,
-                          const GpuImage& tmp, const GpuImage& dst, std::uint32_t w, std::uint32_t h,
+                          const GpuImage& dst, std::uint32_t w, std::uint32_t h,
                           std::int32_t kernelSize, std::int32_t stride, bool quantizeHalf) {
+    // One dispatch runs both separable passes (hdrp_blur.comp, bit-identical
+    // to upstream's x-into-temp then y), so no full-size temp image.
     BlurPc x{std::int32_t(w), std::int32_t(h), srcOffset[0], srcOffset[1], 0, 0, kernelSize, stride,
              0,           quantizeHalf ? 1 : 0};
-    if (!run(Shader::HdrpBlur, {ib(0, src), ib(1, tmp)}, {}, &x, sizeof(x), divUp(w, 16),
-             divUp(h, 16)))
-        return false;
-    compute_write_barrier(cmd_);
-    BlurPc y = x;
-    y.srcX = y.srcY = 0;
-    y.direction = 1;
-    if (!run(Shader::HdrpBlur, {ib(0, tmp), ib(1, dst)}, {}, &y, sizeof(y), divUp(w, 16),
+    if (!run(Shader::HdrpBlur, {ib(0, src), ib(1, dst)}, {}, &x, sizeof(x), divUp(w, 16),
              divUp(h, 16)))
         return false;
     compute_write_barrier(cmd_);
@@ -393,7 +388,6 @@ bool Recorder::recordBlur(const GpuImage& src, std::array<std::int32_t, 2> srcOf
 
 bool Recorder::recordPyramid(bool reference) {
     const auto& padded = scratch_.image(reference ? "hdrp_ref_padded" : "hdrp_comp_padded");
-    const auto& tmpA = scratch_.image("hdrp_pyr_tmp_a");
     const auto& tmpB = scratch_.image("hdrp_pyr_tmp_b");
     for (std::size_t i = 0; i < geometry_.levels.size(); ++i) {
         const auto& level = geometry_.levels[i];
@@ -402,7 +396,7 @@ bool Recorder::recordPyramid(bool reference) {
         if (i > 0) {
             // Upstream build_pyramid: blur(previous level, pattern 1, kernel 2), then pool.
             const auto& prev = geometry_.levels[i - 1];
-            if (!recordBlur(scratch_.image(levelName(reference, i - 1)), {0, 0}, tmpA, tmpB,
+            if (!recordBlur(scratch_.image(levelName(reference, i - 1)), {0, 0}, tmpB,
                             prev.width, prev.height, 2, 1, true))
                 return false;
             src = &tmpB;
@@ -426,7 +420,7 @@ bool Recorder::recordReference(VkImageView rawU16, const RawNormalization& frame
     const auto& blur = scratch_.image("hdrp_ref_blur");
     const std::array<std::int32_t, 2> pad{std::int32_t(geometry_.padLeft),
                                          std::int32_t(geometry_.padTop)};
-    if (!recordBlur(padded, pad, scratch_.image("hdrp_blur_tmp"), blur, geometry_.width,
+    if (!recordBlur(padded, pad, blur, geometry_.width,
                     geometry_.height, 16, 2, false))
         return false;
     // Noise level: mean per-cell |ref - blur(ref)| (upstream estimate_color_noise).
@@ -812,7 +806,7 @@ bool Recorder::recordCompanionMerge(std::uint32_t frameCount, std::uint32_t fram
         return false;
     compute_write_barrier(cmd_);
     const auto& compBlur = scratch_.image("hdrp_comp_blur");
-    if (!recordBlur(aligned, {0, 0}, scratch_.image("hdrp_blur_tmp"), compBlur, geometry_.width,
+    if (!recordBlur(aligned, {0, 0}, compBlur, geometry_.width,
                     geometry_.height, 16, 2, false))
         return false;
     const std::uint32_t cellsX = geometry_.width / 2u, cellsY = geometry_.height / 2u;
@@ -1109,11 +1103,37 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         vkFreeCommandBuffers(ctx->device, ctx->pool, 1, &cmd);
         return fail("hdrplus: query pool creation failed");
     }
+    // Per-dispatch profile (dev only): one timestamp per record() call.
+    bool profile = std::getenv("HDRPLUS_PROFILE") != nullptr;
+#ifdef __ANDROID__
+    {
+        char v[PROP_VALUE_MAX] = {0};
+        if (__system_property_get("debug.rawlens.hdrp_prof", v) > 0 && v[0] == '1') profile = true;
+    }
+#endif
+    ctx->prof_shaders.clear();
+    ctx->prof_pool = VK_NULL_HANDLE;
+    ctx->prof_cap = 0;
+    if (profile) {
+        VkQueryPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        pci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        pci.queryCount = 8192;
+        if (vkCreateQueryPool(ctx->device, &pci, nullptr, &ctx->prof_pool) == VK_SUCCESS)
+            ctx->prof_cap = pci.queryCount;
+        else
+            ctx->prof_pool = VK_NULL_HANDLE;
+    }
     VkFence fence = VK_NULL_HANDLE;
     VkFenceCreateInfo fci{};
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     if (vkCreateFence(ctx->device, &fci, nullptr, &fence) != VK_SUCCESS) {
         vkDestroyQueryPool(ctx->device, queryPool, nullptr);
+        if (ctx->prof_pool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(ctx->device, ctx->prof_pool, nullptr);
+            ctx->prof_pool = VK_NULL_HANDLE;
+            ctx->prof_shaders.clear();
+        }
         vkFreeCommandBuffers(ctx->device, ctx->pool, 1, &cmd);
         return fail("hdrplus: fence creation failed");
     }
@@ -1155,6 +1175,10 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &upBar, 0, nullptr, 0, nullptr);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, 0);
+        if (ctx->prof_pool != VK_NULL_HANDLE) {
+            vkCmdResetQueryPool(cmd, ctx->prof_pool, 0, ctx->prof_cap);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->prof_pool, 0);
+        }
 
         std::vector<VkImageView> views;
         std::vector<RawNormalization> norms;
@@ -1281,6 +1305,29 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
             ctx->last_gpu_ms =
                 (stamps[1] - stamps[0]) * ctx->timestamp_period_ns / 1'000'000.0;
+        }
+        if (ctx->prof_pool != VK_NULL_HANDLE && !ctx->prof_shaders.empty()) {
+            const std::uint32_t n = static_cast<std::uint32_t>(ctx->prof_shaders.size()) + 1;
+            std::vector<std::uint64_t> ts(n, 0);
+            if (vkGetQueryPoolResults(ctx->device, ctx->prof_pool, 0, n, n * sizeof(std::uint64_t),
+                                      ts.data(), sizeof(std::uint64_t),
+                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) ==
+                VK_SUCCESS) {
+                std::map<std::uint32_t, std::pair<double, std::uint32_t>> per;
+                for (std::uint32_t i = 1; i < n; ++i) {
+                    auto& e = per[ctx->prof_shaders[i - 1]];
+                    const double ms = (ts[i] - ts[i - 1]) * ctx->timestamp_period_ns / 1e6;
+                    e.first += ms;
+                    if (ms > 20.0)
+                        HP_LOGI("hdrplus prof #%u %s %.1fms", i - 1,
+                                shader_asset_name(static_cast<Shader>(ctx->prof_shaders[i - 1])), ms);
+                    e.second++;
+                }
+                for (const auto& kv : per)
+                    HP_LOGI("hdrplus prof %-22s %8.1fms x%u",
+                            shader_asset_name(static_cast<Shader>(kv.first)), kv.second.first,
+                            kv.second.second);
+            }
         }
         std::memcpy(out, download->mapped, static_cast<size_t>(W) * H * sizeof(float));
         for (const auto& d : dumpStages) {

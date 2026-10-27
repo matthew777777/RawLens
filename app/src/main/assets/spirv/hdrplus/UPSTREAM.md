@@ -61,6 +61,17 @@ RAWR `f41e6c2` at vendoring time; pristine copies re-fetchable from that commit:
   triple map binding + mapOffset/origin/dims push; negative offset keeps
   the upstream computation)
 
+RawLens performance patches (2026-10-27, B7): bit-identical output, verified
+by byte-comparing merged DNGs (desktop, Fast + HQ) and float outputs (Mali
+G615, Fast + HQ) against the pre-patch build on a real 8-frame 12 MP burst,
+plus the parity suite. Pre-patch md5s (this repo before the patch):
+
+- hdrp_blur.comp: 1369aa1a609a592228ee7c3e5e142b37 (both separable passes
+  in one dispatch from shared memory, no dynamic vector/array indexing; the
+  host drops the full-size blur temp and the pyramid temp A)
+- hdrp_correct_upsampling.comp: 711ceecdfc3466510549910a46c5dbc2 (the three
+  candidate sums reduce on three lanes in the same order instead of one)
+
 Host deviations from RAWR toward Burst Photo (same proof doc): the HQ
 tile-border pass is skipped (upstream-off returns early for unknown black),
 and the spatial reference accumulates in frame order over a cleared

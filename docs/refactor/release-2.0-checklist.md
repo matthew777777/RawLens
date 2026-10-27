@@ -46,11 +46,18 @@ moves to [2.0.x]. Release mechanics (E19, E22-E24) kept [2.0] because the
       of AUTO, highlight detail retained. 112 host tests pass; F15 develop
       row updated. [References and evidence](ettr-development-audit.md).
 
-## B. HDR+ and HDR bracket merge
-- [ ] B5 [2.0] HDR+ 1:1 with Burst Photo default mode (hdrplus-parity-todo.md 1-5).
-- [ ] B6 [2.0] Burst Photo bracketed path for AE-drift bursts (todo 6).
-- [ ] B7 [2.0] HDR+ Vulkan speed/memory pass.
-- [ ] B8 [2.0] 3-bracket HDR merge on B5/B6, delete deghost/FlowNet route
+## B. HDR+ and HDR bracket merge (owner 2026-10-27: porting B5/B6/B8 moved to 2.0.x; only performance for 2.0)
+- [ ] B5 [2.0.x] HDR+ 1:1 with Burst Photo default mode (hdrplus-parity-todo.md 1-5).
+- [ ] B6 [2.0.x] Burst Photo bracketed path for AE-drift bursts (todo 6).
+- [ ] B7 [2.0] HDR+ Vulkan speed/memory pass. First pass done 2026-10-27,
+      bit-identical to the previous build (owner rule): Mali G615, 8x12 MP,
+      Fast 4.6 -> 3.5 s wall (GPU 3.74 -> 3.04 s), HQ 6.6 -> 6.1 s (6.24 ->
+      5.75 s); -50 MB GPU scratch. Per-dispatch profile: setprop
+      debug.rawlens.hdrp_prof 1 (desktop HDRPLUS_PROFILE=1). Remaining top
+      costs: blur 1.39 s, correct_upsampling 0.61 s, hdrq_merge 1.7 s,
+      mismatch 0.74 s, forward DFT 0.72 s; further gains mostly need float
+      reordering, which the bit-parity rule forbids.
+- [ ] B8 [2.0.x] 3-bracket HDR merge on B5/B6, delete deghost/FlowNet route
       (hdr-bracket-merge-study.md). Owner: bracket DNGs with moving cars.
 
 ## D. Other open items

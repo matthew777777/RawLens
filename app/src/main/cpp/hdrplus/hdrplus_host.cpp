@@ -346,6 +346,11 @@ bool record(HdrPlusContext* ctx, RunDescriptors& desc, VkCommandBuffer cmd, Shad
         vkCmdPushConstants(cmd, program.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_bytes, push);
     }
     vkCmdDispatch(cmd, gx, gy, 1);
+    if (ctx->prof_pool != VK_NULL_HANDLE && ctx->prof_shaders.size() + 1 < ctx->prof_cap) {
+        ctx->prof_shaders.push_back(static_cast<std::uint32_t>(shader));
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ctx->prof_pool,
+                            static_cast<std::uint32_t>(ctx->prof_shaders.size()));
+    }
     return true;
 }
 
