@@ -379,6 +379,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Preview highlight guards (hard p99.5 / soft p95), mirroring the save path. */
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
+    @Volatile private var previewMiddleGreyTarget = 0.18
     /** Preview shoulder, mirroring the save-path meter (see [setAgx]). */
     @Volatile private var previewShoulder = 1f
     /** Preview center weight, mirroring the save-path meter (see [setAgx]). */
@@ -825,7 +826,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         agxSaturation = resolved.agxSaturation
         agxPurity = resolved.agxPurityBoost
         agxHue = resolved.agxHuePreservation
-        agxShadowEv = resolved.agxShadowEv
+        agxShadowEv = resolved.effectiveAgxShadowEv
         agxHighlightEv = resolved.agxHighlightEv
         agxGamut = resolved.agxGamutCompression
         highlightShoulder = resolved.highlightShoulder
@@ -835,6 +836,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // so the preview EV matches the saved JPEG EV.
         val meterTuning = AdaptiveExposureTuning.fromOutputSettings(settings)
         previewSoftHeadroom = meterTuning.highlightSoftHeadroom.toFloat()
+        previewMiddleGreyTarget = meterTuning.middleGreyTarget
         previewShoulder = meterTuning.highlightShoulder
         previewCenterWeight = meterTuning.centerWeight
         previewP3 = resolved.displayP3
@@ -1333,6 +1335,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         val tuning = AdaptiveExposureTuning(
             highlightHeadroom = previewHeadroom.toDouble(),
             highlightSoftHeadroom = previewSoftHeadroom.toDouble(),
+            middleGreyTarget = previewMiddleGreyTarget,
             highlightShoulder = previewShoulder,
             centerWeight = previewCenterWeight,
             focusX = previewFocusX,

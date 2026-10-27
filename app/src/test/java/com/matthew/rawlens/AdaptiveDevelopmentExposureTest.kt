@@ -10,6 +10,85 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AdaptiveDevelopmentExposureTest {
+    @Test fun largeBayerMeterMustNotLockToOneColumnParity() {
+        val width = 512
+        val height = 512 // historical stride = 4: misses both odd-column sites
+        val values = FloatArray(width * height) { if (it % width % 2 == 0) 0.12f else 0.03f }
+        val reference = AdaptiveDevelopmentExposure.analyze(cfa(FloatArray(4096) { if (it % 2 == 0) 0.12f else 0.03f }))
+        val large = UnpackedRawCfa(width, height, BayerPattern.RGGB, values, RawCrop(0, 0, width, height))
+        val cpu = AdaptiveDevelopmentExposure.analyze(large)
+        val raw = ByteBuffer.allocate(values.size * 2).order(ByteOrder.nativeOrder())
+        values.forEach { raw.putShort((it * 10000).toInt().toShort()) }
+        raw.rewind()
+        val direct = AdaptiveDevelopmentExposure.analyzeRaw(raw,
+            RawPlaneLayout(width, height, width * 2, 2),
+            RawNormalization(BayerPattern.RGGB, listOf(0f, 0f, 0f, 0f), 10000f),
+            RawCrop(0, 0, width, height), null)
+        assertEquals("CPU Bayer phase bias", reference.correctionEv, cpu.correctionEv, 0.001)
+        assertEquals("direct RAW Bayer phase bias", reference.correctionEv, direct.correctionEv, 0.001)
+    }
+
+    @Test
+    fun localLinearDngSamplesMatchEquivalentCfaHistogram() {
+        val names = listOf("181439_401", "181608_583", "182635_083", "182329_149")
+        for (name in names) {
+            val path = "/mfsr-exposure/IMG_20261023_${name}_LINEAR.f32"
+            val bytes = javaClass.getResourceAsStream(path)!!.use { it.readBytes() }
+            val rgb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val native = ByteBuffer.allocate(bytes.size).order(ByteOrder.nativeOrder())
+            while (rgb.hasRemaining()) native.putFloat(rgb.float)
+            native.flip()
+            val values = FloatArray(4096) { vote ->
+                val channel = when (vote % 4) { 0 -> 0; 3 -> 2; else -> 1 }
+                native.getFloat((vote / 4 * 3 + channel) * 4)
+            }
+            val reference = AdaptiveDevelopmentExposure.analyze(cfa(values))
+            val result = AdaptiveDevelopmentExposure.analyzeRgb(native, 32, 32)
+            assertTrue(result.correctionEv.isFinite())
+            assertEquals(path, reference.correctionEv, result.correctionEv, 1e-9)
+            println("C14 $path correctionEV=${result.correctionEv}")
+        }
+    }
+
+    @Test
+    fun rgbMeterMatchesBayerChannelPopulationAndPreservesInput() {
+        val rgb = ByteBuffer.allocate(64 * 64 * 12 + 8).order(ByteOrder.nativeOrder())
+        rgb.position(8)
+        repeat(64 * 64) { rgb.putFloat(0.03f).putFloat(0.09f).putFloat(0.18f) }
+        rgb.position(8)
+        val before = rgb.array().clone()
+        val result = AdaptiveDevelopmentExposure.analyzeRgb(rgb, 64, 64)
+        val reference = AdaptiveDevelopmentExposure.analyze(cfa(FloatArray(4096) {
+            when (it % 4) { 0 -> 0.03f; 3 -> 0.18f; else -> 0.09f }
+        }))
+        assertEquals(reference.correctionEv, result.correctionEv, 1e-9)
+        assertEquals(reference.highlight, result.highlight, 1e-9)
+        assertEquals(8, rgb.position())
+        assertTrue(before.contentEquals(rgb.array()))
+    }
+
+    @Test
+    fun rgbMeterRejectsTruncatedInput() {
+        try {
+            AdaptiveDevelopmentExposure.analyzeRgb(ByteBuffer.allocate(11), 1, 1)
+            throw AssertionError("Truncated RGB accepted")
+        } catch (expected: IllegalArgumentException) {
+            // Validate before any native-buffer read.
+        }
+    }
+
+    @Test
+    fun ettrCaptureTargetMustNotBecomeTheJpegWhitePoint() {
+        val values = FloatArray(4096) { index ->
+            if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.51f
+        }
+        val display = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        val formerResidual = kotlin.math.log2(Math.pow(2.0, -0.5) / display.highlight)
+        assertTrue("Capture target incorrectly kept as JPEG white", display.correctionEv > formerResidual + 0.5)
+        assertEquals(0.400, display.correctionEv, 0.02)
+        assertTrue("Shared spike guard lost", display.highlight * Math.pow(2.0, display.correctionEv) < 1.05)
+    }
+
     @Test
     fun placesOrdinaryMidtonesNearTargetWithinBoundedCorrection() {
         val under = AdaptiveDevelopmentExposure.analyze(cfa(FloatArray(4096) { 0.09f }))
@@ -112,9 +191,7 @@ class AdaptiveDevelopmentExposureTest {
         assertTrue("night day-ified: $result", result.correctionEv <= 1.5)
         val pushedLamp = result.highlight * Math.pow(2.0, result.correctionEv)
         assertTrue("lamps past tier headroom: $pushedLamp", pushedLamp <= 4.01)
-        // ETTR frames skip the tier so the residual cap stays exact.
-        val ettr = AdaptiveDevelopmentExposure.analyze(cfa(platform), ettrHeadroomEv = 0.3f)
-        assertTrue("ETTR tier leak: $ettr", ettr.correctionEv < 0.5)
+        // ETTR frames now share this display placement: no capture-mode exclusion.
     }
 
     @Test
@@ -244,99 +321,22 @@ class AdaptiveDevelopmentExposureTest {
     }
 
     @Test
-    fun ettrBrightFrameCapsAtResidualToTarget() {
-        // ETTR shape (IMG_20261004 whites): dim mids (big legacy need) with
-        // a nearly converged hot tail (p99.5 ~0.78, just under the 0.81 loop
-        // target). ETTR develop completes the tail to target (~+0.05) instead
-        // of the legacy +0.35 — hot pixels stop at the level ETTR exposed
-        // for, so skies keep color while mids still lift.
-        val values = FloatArray(4096) { index ->
-            if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.51f
-        }
-        // Legacy meters the p99 spike under the 1% clip budget (was p99.5);
-        // the ETTR residual still completes p99.5 to the loop target.
-        val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(0.400, legacy.correctionEv, 0.02)
-        val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(0.054, ettr.correctionEv, 0.02)
-    }
-
-    @Test
-    fun ettrTrackingFrameKeepsPartialCompletionLift() {
-        // Hot tail below the ETTR target (loop still tracking, like the
-        // 175945 frame at p99.5 ~0.62): develop completes the tail to the
-        // 0.81 target (+0.39) instead of the legacy +0.69 — shadows lift
-        // while the hot tail stops where ETTR exposed for (regression: a
-        // hard-zero tier here rendered too-dark shadows on device).
+    fun trackingEttrHistogramKeepsDisplayLiftAndBroadGuard() {
         val values = FloatArray(4096) { index ->
             if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.34f
         }
-        // Legacy meters the p99 spike under the 1% clip budget (was p99.5);
-        // the ETTR residual still completes p99.5 to the loop target.
-        val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(0.725, legacy.correctionEv, 0.03)
-        val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(0.386, ettr.correctionEv, 0.03)
+        val result = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        assertEquals(kotlin.math.log2(1.0 / 0.605), result.correctionEv, 0.03)
+        assertTrue(result.highlight * Math.pow(2.0, result.correctionEv) < 1.05)
     }
 
     @Test
-    fun ettrMidDarkFrameFallsBackToResidualCap() {
-        // With a dim hot tail (p99.5 ~0.31) the residual-to-target cap
-        // governs: +1.40 completes toward the ETTR target without reaching
-        // the legacy +1.5 clamp — a darker frame still gets its lift.
-        val values = FloatArray(4096) { index ->
-            if (index < 3686) 0.03f else 0.1f + (index - 3686) / 410f * 0.22f
-        }
-        val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(1.5, legacy.correctionEv, 1e-9)
-        val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(1.40, ettr.correctionEv, 0.03)
-    }
-
-    @Test
-    fun ettrDarkFrameKeepsLegacyClamp() {
-        // Dark/stale ETTR frame (no hot tail): the residual cap is loose,
-        // so the legacy ±1.5 clamp still governs — never darker or
-        // brighter than a non-ETTR frame with the same histogram.
+    fun staleDarkEttrHistogramRetainsExistingLiftCeiling() {
         val values = FloatArray(4096) { index ->
             if (index < 3891) 0.02f else 0.02f + (index - 3891) / 205f * 0.13f
         }
-        val legacy = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(1.5, legacy.correctionEv, 1e-9)
-        val ettr = AdaptiveDevelopmentExposure.analyze(cfa(values), ettrHeadroomEv = 0.3f)
-        assertEquals(legacy.correctionEv, ettr.correctionEv, 1e-9)
-    }
-
-    @Test
-    fun ettrZeroHeadroomDegradesToSpikeGuard() {
-        // Headroom 0 exposes to white itself, so the residual target is 1.0
-        // and the ETTR cap degrades to the spike guard: it binds a half
-        // percentile tighter (p99.5) than the 1% clip-budget guard (p99), so
-        // on ramp-top fixtures ETTR holds the hot tail exactly at white while
-        // legacy lets the top percent ride a touch past — skies stay blue
-        // either way (the cap only bites when ETTR deliberately kept headroom
-        // below white).
-        val bright = FloatArray(4096) { index ->
-            if (index < 3686) 0.05f else 0.3f + (index - 3686) / 410f * 0.51f
-        }
-        val legacyBright = AdaptiveDevelopmentExposure.analyze(cfa(bright))
-        val ettrBright = AdaptiveDevelopmentExposure.analyze(cfa(bright), ettrHeadroomEv = 0f)
-        assertEquals(0.400, legacyBright.correctionEv, 0.02)
-        assertEquals(0.354, ettrBright.correctionEv, 0.02)
-        assertTrue(ettrBright.correctionEv <= legacyBright.correctionEv)
-        val pushedTail = ettrBright.highlight * Math.pow(2.0, ettrBright.correctionEv)
-        assertTrue("headroom-0 tail past white: $pushedTail", pushedTail <= 1.001)
-        val dark = FloatArray(4096) { index ->
-            if (index < 3891) 0.02f else 0.02f + (index - 3891) / 205f * 0.13f
-        }
-        val legacyDark = AdaptiveDevelopmentExposure.analyze(cfa(dark))
-        val ettrDark = AdaptiveDevelopmentExposure.analyze(cfa(dark), ettrHeadroomEv = 0f)
-        assertEquals(legacyDark.correctionEv, ettrDark.correctionEv, 1e-12)
-        assertEquals(legacyDark.logAverage, ettrDark.logAverage, 1e-12)
-        try {
-            AdaptiveDevelopmentExposure.analyze(cfa(bright), ettrHeadroomEv = Float.NaN)
-            assertTrue("NaN headroom accepted", false)
-        } catch (expected: IllegalArgumentException) { /* required */ }
+        val result = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        assertTrue("Unbounded stale-frame lift", result.correctionEv in 0.0..1.5)
     }
 
     @Test

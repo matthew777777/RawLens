@@ -22,6 +22,10 @@ internal fun meterGridStep(spanPixels: Long, targetPixels: Int): Int =
     kotlin.math.sqrt((spanPixels / targetPixels.toDouble()).coerceAtLeast(1.0))
         .toInt().coerceAtLeast(1)
 
+/** A pixel grid needs an odd stride to alternate both x/y Bayer phases (a 2x2 period). */
+internal fun meterCfaGridStep(spanPixels: Long, targetPixels: Int): Int =
+    meterGridStep(spanPixels, targetPixels) or 1
+
 /**
  * Native fused scope+meter sampler (Halide AOT, `rawLensScopeMeter`).
  *
@@ -130,7 +134,8 @@ internal object ScopeMeterNative {
     /** Guard scan runs exactly when the Kotlin path runs one: cropped
      * metering at sub-FULL density. Pure. */
     internal fun resolveGuard(req: ScopeMeterRequest): Boolean =
-        req.density != EttrDensity.FULL && req.metering != ProgramMetering.AVERAGE
+        req.density != EttrDensity.FULL && req.metering != ProgramMetering.AVERAGE &&
+            req.metering != ProgramMetering.HIGHLIGHT_WEIGHTED
 
     /** Every consumer's output from one fused sample. */
     data class ScopeMeterFrame(
@@ -236,8 +241,8 @@ internal object ScopeMeterNative {
         val rh = region[3] - region[1]
         if (rw <= 0 || rh <= 0) return null
         val scopeStep = meterGridStep((w / 2).toLong() * (h / 2), SCOPE_TARGET_BLOCKS)
-        val ettrStep = meterGridStep(rw.toLong() * rh, req.density.targetPx)
-        val guardStep = meterGridStep(w.toLong() * h, RawEttrSampler.GUARD_PIXELS)
+        val ettrStep = meterCfaGridStep(rw.toLong() * rh, req.density.targetPx)
+        val guardStep = meterCfaGridStep(w.toLong() * h, RawEttrSampler.GUARD_PIXELS)
         val doGuard = resolveGuard(req)
         val ip = scratch.iparams
         ip[IP_WHITE] = cal.white

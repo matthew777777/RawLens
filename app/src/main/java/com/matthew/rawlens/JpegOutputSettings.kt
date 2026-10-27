@@ -8,6 +8,7 @@ import android.os.Build
 /** Output contract captured with each shutter press; it never changes while that RAW is queued. */
 data class JpegOutputSettings(
     val ultraHdr: Boolean = false,
+    val activeDLighting: ActiveDLighting = ActiveDLighting.OFF,
     val displayP3: Boolean = false,
     val jpegQuality: Int = 100,
     val chromaSubsampling: JpegChromaSubsampling = JpegChromaSubsampling.YUV_422,
@@ -79,12 +80,21 @@ data class JpegOutputSettings(
     /** Soft-knee chroma compression around the per-pixel channel mean. */
     val chromaKnee: Float = 0.05f,
     /**
-     * RT "Color propagation" highlight reconstruction on the demosaiced
-     * camera-linear frame (pre-WB). Repairs clipped-channel color before
-     * tone mapping; disable to compare against plain clipping.
+     * darktable inpaint opposed on normalized Bayer data before demosaic.
+     * Repairs clipped photosites; disable to compare with the measured CFA.
      */
     val hlReconstruction: Boolean = true
 ) {
+    /**
+     * Expand the existing AgX shadow range to restore middle grey after protection.
+     * Solving (S' - b)/(S' + H) = S/(S + H) gives S' = S + b*(S+H)/H.
+     * This also lifts shadows more than highlights; no extra shader/pass or LUT.
+     * Kept separate from the stored knob so repeated resolution is idempotent.
+     */
+    val effectiveAgxShadowEv: Float get() = if (activeDLighting == ActiveDLighting.OFF) agxShadowEv else
+        (agxShadowEv + activeDLighting.protectionEv.toFloat() *
+            (agxShadowEv + agxHighlightEv) / agxHighlightEv.coerceAtLeast(3f)).coerceAtMost(18f)
+
     /** Ultra HDR is an Android 14 (API 34) platform JPEG feature. */
     fun resolvedForPlatform(): JpegOutputSettings {
         fun bounded(value: Float, minimum: Float, maximum: Float, fallback: Float): Float =

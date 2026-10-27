@@ -35,7 +35,7 @@ internal class EttrLoop(initialSettings: EttrSettings) {
         hottest = Float.NaN
         clipHot = Float.NaN
         clipSecond = Float.NaN
-        memory.diffFromLower.fill(0.0)
+        memory.clear()
     }
 
     /** One sample against the metered baseline pair and the camera's ranges. */
@@ -49,12 +49,13 @@ internal class EttrLoop(initialSettings: EttrSettings) {
         shutterUpper: Long,
         safeShutterNanos: Long,
         dynamicRangeEv: Double = Double.NaN,
+        lighting: ActiveDLighting = ActiveDLighting.OFF,
     ) {
         val levels = sample.levels
         val quads = sample.quads ?: return
         updateClipState(sample)
         val shift = MagicLanternEttr.correction(
-            quads, memory, -settings.headroomEv.toDouble(), dynamicRangeEv
+            quads, memory, -lighting.ettrHeadroom(settings.headroomEv).toDouble(), dynamicRangeEv
         ).correctionEv
         val result = RawEttrMeter.solve(
             baselineIso,

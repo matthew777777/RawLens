@@ -540,3 +540,19 @@ internal fun MainActivity.formatFocusDistance(scaledDiopters: Long): String {
     return if (meters >= 10.0) String.format(Locale.US, "%.0f m", meters)
     else String.format(Locale.US, "%.1f m", meters)
 }
+
+/** Share the photo settings level with PROGRAM metering and ETTR protection. */
+internal fun MainActivity.cycleQuickDLighting() {
+    if (isVideoMode || (captureExposureMode != CaptureExposureMode.PROGRAM &&
+            !(captureExposureMode == CaptureExposureMode.AUTO && controller.getEttrSettings().enabled))) return
+    val current = jpegOutputSettings()
+    val levels = ActiveDLighting.entries
+    val next = levels[(current.activeDLighting.ordinal + 1) % levels.size]
+    if (!controller.setJpegOutputSettings(current.copy(activeDLighting = next).resolvedForPlatform())) {
+        setStatus("SETTINGS AFTER SAVES")
+        return
+    }
+    lensPreferences().edit().putString(ActiveDLighting.PREFERENCE_KEY, next.name).apply()
+    updateQuickControls()
+    setStatus("D-LIGHTING • ${next.label.uppercase(Locale.US)}")
+}
