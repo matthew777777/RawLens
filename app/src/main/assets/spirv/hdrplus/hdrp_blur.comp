@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_control_flow_attributes : enable
 // Port of hdr-plus-swift blur_mosaic_texture: one separable pass of a
 // truncated binomial filter over same-colour samples (stride = mosaic width),
 // renormalized at the borders of the region. Region-relative offsets let the
@@ -12,7 +13,7 @@ layout(push_constant) uniform P {
     ivec2 dstOffset;
     int kernelSize;   // 2 (pyramid) or 16 (merge); nothing else is used
     int stride;       // mosaic pattern width: 1 or 2
-    int direction;    // 0 = x, 1 = y
+    int direction;    // unused: one dispatch now runs x then y (see below)
     int quantizeHalf; // emulate upstream r16Float storage
 } p;
 
@@ -21,24 +22,97 @@ const float BW16[9] = float[9](601080390., 565722720., 471435600., 347373600., 2
                                28048800., 10518300.);
 const float BW2[3] = float[3](6., 4., 1.);
 
+// RawLens performance patch (bit-identical): both separable passes in one
+// dispatch. Upstream runs x into a temp texture, then y from it. Here each
+// 16x16 output block stages its 48x48 source neighbourhood (+-16 = max
+// trunc 8 * stride 2) in shared memory, computes the x pass for the 48 rows
+// the y pass reads, then the y pass. Every x value and every output goes
+// through the same taps, weights, out-of-region skips, summation order,
+// division and optional half quantization as the two-pass version, so the
+// floats are identical; the full-size temp image round trip is gone.
+const int GROUP = 16;
+const int HALO = 16;
+const int SPAN = GROUP + 2 * HALO;  // 48
+const int SPITCH = SPAN + 1;
+const int XPITCH = GROUP + 1;
+shared float sSrc[SPAN * SPITCH];   // [row][col], rows/cols base - HALO ..
+shared float sX[SPAN * XPITCH];     // x pass: [row][col], cols base ..
+
+float quantize(float v) {
+    return p.quantizeHalf != 0 ? unpackHalf2x16(packHalf2x16(vec2(v, 0.0))).x : v;
+}
+
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(q, p.size))) return;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * GROUP;
+    int w = p.size.x;
+    int h = p.size.y;
+    int lin = l.y * GROUP + l.x;
     bool wide = p.kernelSize == 16;
-    int trunc = wide ? 8 : 2;
-    int n = p.size[p.direction];
-    int i0 = q[p.direction];
-    float total = 0.0, weight = 0.0;
-    for (int di = -trunc; di <= trunc; ++di) {
-        int i = i0 + p.stride * di;
-        if (i < 0 || i >= n) continue;
-        ivec2 xy = q;
-        xy[p.direction] = i;
-        float w = wide ? BW16[abs(di)] : BW2[abs(di)];
-        total += w * imageLoad(src, p.srcOffset + xy).x;
-        weight += w;
+    int stride = p.stride;
+
+    // 1. Source neighbourhood. Out-of-region slots stay unread.
+    for (int k = lin; k < SPAN * SPAN; k += GROUP * GROUP) {
+        int r = k / SPAN;
+        int c = k % SPAN;
+        int gy = base.y - HALO + r;
+        int gx = base.x - HALO + c;
+        if (gx >= 0 && gx < w && gy >= 0 && gy < h)
+            sSrc[r * SPITCH + c] = imageLoad(src, p.srcOffset + ivec2(gx, gy)).x;
     }
-    float v = total / weight;
-    if (p.quantizeHalf != 0) v = unpackHalf2x16(packHalf2x16(vec2(v, 0.0))).x;
-    imageStore(dst, p.dstOffset + q, vec4(v));
+    barrier();
+
+    // 2. x pass for every row the y pass reads (48 rows x 16 cols).
+    for (int k = lin; k < SPAN * GROUP; k += GROUP * GROUP) {
+        int r = k / GROUP;
+        int c = k % GROUP;
+        int gy = base.y - HALO + r;
+        int gx = base.x + c;
+        if (gy < 0 || gy >= h || gx >= w) continue;
+        int rowOff = r * SPITCH + HALO - base.x;
+        float total = 0.0, weight = 0.0;
+        if (wide) {
+            [[unroll]] for (int di = -8; di <= 8; ++di) {
+                int i = gx + stride * di;
+                if (i < 0 || i >= w) continue;
+                float wt = BW16[abs(di)];
+                total += wt * sSrc[rowOff + i];
+                weight += wt;
+            }
+        } else {
+            [[unroll]] for (int di = -2; di <= 2; ++di) {
+                int i = gx + stride * di;
+                if (i < 0 || i >= w) continue;
+                float wt = BW2[abs(di)];
+                total += wt * sSrc[rowOff + i];
+                weight += wt;
+            }
+        }
+        sX[r * XPITCH + c] = quantize(total / weight);
+    }
+    barrier();
+
+    // 3. y pass from the x results.
+    if (any(greaterThanEqual(q, p.size))) return;
+    int colOff = l.x + (HALO - base.y) * XPITCH;
+    float total = 0.0, weight = 0.0;
+    if (wide) {
+        [[unroll]] for (int di = -8; di <= 8; ++di) {
+            int i = q.y + stride * di;
+            if (i < 0 || i >= h) continue;
+            float wt = BW16[abs(di)];
+            total += wt * sX[colOff + i * XPITCH];
+            weight += wt;
+        }
+    } else {
+        [[unroll]] for (int di = -2; di <= 2; ++di) {
+            int i = q.y + stride * di;
+            if (i < 0 || i >= h) continue;
+            float wt = BW2[abs(di)];
+            total += wt * sX[colOff + i * XPITCH];
+            weight += wt;
+        }
+    }
+    imageStore(dst, p.dstOffset + q, vec4(quantize(total / weight)));
 }

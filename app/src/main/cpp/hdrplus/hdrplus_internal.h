@@ -186,6 +186,11 @@ struct HdrPlusContext {
     rawlens::hdrplus::Program programs[rawlens::hdrplus::kShaderCount];
     std::uint32_t loaded_shaders = 0;
     double last_gpu_ms = 0.0;
+    // Opt-in per-dispatch profile (HDRPLUS_PROFILE / debug.rawlens.hdrp_prof):
+    // record() writes a timestamp after each dispatch while prof_pool is set.
+    VkQueryPool prof_pool = VK_NULL_HANDLE;
+    std::uint32_t prof_cap = 0;
+    std::vector<std::uint32_t> prof_shaders;
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     std::string pipeline_cache_path;  // empty = in-memory cache only
 };

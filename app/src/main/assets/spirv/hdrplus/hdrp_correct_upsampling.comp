@@ -22,6 +22,7 @@ const int MAX_TILE = 32;
 shared float sRef[MAX_TILE * MAX_TILE];
 shared float sComp[MAX_TILE * MAX_TILE];
 shared float sPartial[3][64];
+shared float sSum[3];
 
 void main() {
     ivec2 g = ivec2(gl_WorkGroupID.xy);
@@ -52,12 +53,17 @@ void main() {
         sPartial[c][lane] = partial;
     }
     barrier();
-    if (lane != 0) return;
-    float sDiff[3];
-    for (int c = 0; c < 3; ++c) {
-        sDiff[c] = 0.0;
-        for (int i = 0; i < 64; ++i) sDiff[c] += sPartial[c][i];
+    // RawLens performance patch (bit-identical): lanes 0..2 each reduce one
+    // candidate's 64 partials in the same fixed order lane 0 used to run
+    // for all three, so each sum is the same float; lane 0 then picks.
+    if (lane < 3) {
+        float sum = 0.0;
+        for (int i = 0; i < 64; ++i) sum += sPartial[lane][i];
+        sSum[lane] = sum;
     }
+    barrier();
+    if (lane != 0) return;
+    float sDiff[3] = float[3](sSum[0], sSum[1], sSum[2]);
     ivec2 best = (sDiff[0] < sDiff[1] && sDiff[0] < sDiff[2]) ? cand[0] : (sDiff[1] < sDiff[2] ? cand[1] : cand[2]);
     corrected.v[g.y * p.tiles.x + g.x] = best;
 }
