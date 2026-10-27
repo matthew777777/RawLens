@@ -17,6 +17,11 @@
 #include "td_internal.h"
 #include "tiny_dng_ljpeg92_v2.h"
 
+#ifdef TINYDNG_HAVE_JXL
+#include <jxl/encode.h>
+#include <jxl/resizable_parallel_runner.h>
+#endif
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -695,6 +700,8 @@ struct tinydng_writer {
   uint16_t spp, bps, sfmt, photo;
   uint16_t compression; /* effective: NONE / LZW / NEW_JPEG / JPEG_XL(52546) */
   uint8_t precompressed; /* image data arrives compressed, store verbatim */
+  uint8_t jxl_effort;
+  uint32_t jxl_num_threads;
   uint8_t ljpeg_arithmetic;
   uint8_t ljpeg_predictor;
   uint16_t ljpeg_restart_interval;
@@ -817,6 +824,96 @@ static long td_packbits_encode(const uint8_t *in, size_t in_len, uint8_t *out,
   return (long)op;
 }
 
+int tinydng_has_jxl_encoder(void) {
+#ifdef TINYDNG_HAVE_JXL
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+#ifdef TINYDNG_HAVE_JXL
+/* Encode from host-order pixels, draining directly to the TIFF sink through
+   the writer's reusable staging buffer. libjxl owns its frame/runner memory. */
+static tinydng_status td_writer_jxl(tinydng_writer *w, const uint8_t *pixels,
+                                    uint32_t pw, uint32_t ph, size_t bytes,
+                                    uint64_t at, size_t *out_len,
+                                    tinydng_error *err) {
+  JxlEncoder *enc = NULL;
+  void *runner = NULL;
+  JxlEncoderFrameSettings *frame;
+  JxlBasicInfo info;
+  JxlColorEncoding color;
+  JxlPixelFormat format = {1, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
+  JxlEncoderStatus result;
+  tinydng_status st = TINYDNG_E_INTERNAL;
+  uint8_t *buffer = td_writer_scratch(w, &w->scratch_enc,
+                                    &w->scratch_enc_cap, 65536u, err);
+  if (!buffer) return TINYDNG_E_OOM;
+  enc = JxlEncoderCreate(NULL);
+  if (!enc) { st = TINYDNG_E_OOM; goto done; }
+  if (w->jxl_num_threads != 1u) {
+    runner = JxlResizableParallelRunnerCreate(NULL);
+    if (!runner) { st = TINYDNG_E_OOM; goto done; }
+    JxlResizableParallelRunnerSetThreads(runner, w->jxl_num_threads
+        ? w->jxl_num_threads : JxlResizableParallelRunnerSuggestThreads(pw, ph));
+    if (JxlEncoderSetParallelRunner(enc, JxlResizableParallelRunner, runner)
+        != JXL_ENC_SUCCESS) goto done;
+  }
+  JxlEncoderInitBasicInfo(&info);
+  info.xsize = pw;
+  info.ysize = ph;
+  info.num_color_channels = 1;
+  info.bits_per_sample = 16;
+  info.uses_original_profile = JXL_TRUE;
+  memset(&color, 0, sizeof(color));
+  color.color_space = JXL_COLOR_SPACE_GRAY;
+  color.white_point = JXL_WHITE_POINT_D65;
+  color.primaries = JXL_PRIMARIES_SRGB;
+  color.transfer_function = JXL_TRANSFER_FUNCTION_LINEAR;
+  color.rendering_intent = JXL_RENDERING_INTENT_PERCEPTUAL;
+  if (JxlEncoderSetBasicInfo(enc, &info) != JXL_ENC_SUCCESS ||
+      JxlEncoderSetColorEncoding(enc, &color) != JXL_ENC_SUCCESS) goto done;
+  frame = JxlEncoderFrameSettingsCreate(enc, NULL);
+  if (!frame || JxlEncoderSetFrameDistance(frame, 0.0f) != JXL_ENC_SUCCESS ||
+      JxlEncoderSetFrameLossless(frame, JXL_TRUE) != JXL_ENC_SUCCESS ||
+      JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EFFORT,
+                                      w->jxl_effort) != JXL_ENC_SUCCESS ||
+      JxlEncoderAddImageFrame(frame, &format, pixels, bytes) != JXL_ENC_SUCCESS)
+    goto done;
+  JxlEncoderCloseInput(enc);
+  do {
+    uint8_t *cursor = buffer;
+    size_t available = 65536u, produced;
+    uint64_t pos;
+    result = JxlEncoderProcessOutput(enc, &cursor, &available);
+    if (result != JXL_ENC_SUCCESS && result != JXL_ENC_NEED_MORE_OUTPUT)
+      goto done;
+    produced = 65536u - available;
+    if (!td_safe_add_u64(at, (uint64_t)*out_len, &pos) ||
+        produced > SIZE_MAX - *out_len ||
+        (!w->bigtiff && (pos > UINT32_MAX || produced > UINT32_MAX - pos))) {
+      st = TINYDNG_E_BOUNDS;
+      goto done;
+    }
+    if (produced && w->sink.write(&w->sink, pos, buffer, produced) != produced) {
+      st = td_wio_err(&w->sink, pos, err);
+      goto done;
+    }
+    *out_len += produced;
+  } while (result == JXL_ENC_NEED_MORE_OUTPUT);
+  st = TINYDNG_OK;
+done:
+  /* Encoder destruction may still use its parallel runner. */
+  if (enc) JxlEncoderDestroy(enc);
+  if (runner) JxlResizableParallelRunnerDestroy(runner);
+  if (st != TINYDNG_OK && st != TINYDNG_E_IO)
+    td_set_error(err, st, TINYDNG_STAGE_WRITE, 0, 0, at,
+                 "JPEG XL encoding failed");
+  return st;
+}
+#endif
+
 /* Encode one tile/strip payload and write it at absolute `at`. Returns the
    encoded length via *out_len. `pw`/`ph` are the (edge-cropped) payload
    dims. */
@@ -841,6 +938,10 @@ static tinydng_status td_writer_put_payload(tinydng_writer *w,
 
   *out_len = 0;
   switch (w->compression) {
+#ifdef TINYDNG_HAVE_JXL
+    case TINYDNG_COMPRESSION_JPEG_XL:
+      return td_writer_jxl(w, pixels, pw, ph, data_size, at, out_len, err);
+#endif
     case TINYDNG_COMPRESSION_NONE:
       if (need_swap) {
         uint8_t* tmp = td_writer_scratch(w, &w->scratch_swap,
@@ -1473,10 +1574,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     }
     comp = TINYDNG_COMPRESSION_NEW_JPEG;
   } else if (comp == TINYDNG_COMPRESSION_JPEG_XL) {
-    /* copy-through for caller-compressed (libjxl) strips. The
-       codestream carries 16-bit single-channel mosaic data; geometry tags
-       still describe the decoded raster (DNG 1.7, Compression 52546). */
-    if (bps != 16u || spp != 1u) {
+    /* Lossless unsigned 16-bit single-channel mosaic strips. */
+    if (bps != 16u || spp != 1u || sfmt != TINYDNG_SAMPLEFORMAT_UINT) {
       td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
                    "JPEG XL writer requires 16-bit single-channel input");
       return TINYDNG_E_UNSUPPORTED;
@@ -1529,9 +1628,18 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     td_writer_destroy(w);
     return TINYDNG_E_INVALID_ARG;
   }
-  if (comp == TINYDNG_COMPRESSION_JPEG_XL && !w->precompressed) {
+  if (comp == TINYDNG_COMPRESSION_JPEG_XL && !w->precompressed &&
+      !tinydng_has_jxl_encoder()) {
+    td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                 "JPEG XL encoding requires a libjxl-enabled build (TINYDNG_ENABLE_JXL=ON)");
+    td_writer_destroy(w);
+    return TINYDNG_E_UNSUPPORTED;
+  }
+  w->jxl_effort = opts && opts->jxl_effort ? opts->jxl_effort : 3u;
+  w->jxl_num_threads = opts ? opts->jxl_num_threads : 0u;
+  if (w->jxl_effort > 9u) {
     td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
-                 "JPEG XL compression needs precompressed input (no encoder here)");
+                 "JPEG XL effort must be 0 (default) or 1..9");
     td_writer_destroy(w);
     return TINYDNG_E_INVALID_ARG;
   }
