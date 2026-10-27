@@ -79,6 +79,27 @@ class ScopeExposureEvTest {
         )
     }
 
+    @Test fun liveExposureLutKeepsBrightHistogramAndWaveformResponsive() {
+        val (image, plane) = uniformFrame(code = 512)
+        val settings = JpegOutputSettings(highlightShoulder = 0f)
+        val cache = ScopeLutCache()
+        val base = cache.get(settings, 2.0)
+        val lifted = cache.get(settings, 4.0)
+        val h0 = RawHistogramSampler.sample(image, plane, 0, null, 1023, base, 0.0)!!
+        val h1 = RawHistogramSampler.sample(image, plane, 0, null, 1023, lifted, 0.0)!!
+        assertTrue(peakBin(h1.green) > peakBin(h0.green))
+        val w0 = RawWaveformSampler.sample(image, plane, 0, null, 1023, base, 0.0)!!
+        val w1 = RawWaveformSampler.sample(image, plane, 0, null, 1023, lifted, 0.0)!!
+        fun peakLevel(wave: RgbWaveform): Int {
+            val levels = IntArray(wave.levels)
+            wave.green.forEachIndexed { index, count -> levels[index % wave.levels] += count }
+            return peakBin(levels)
+        }
+        assertTrue(peakLevel(w1) > peakLevel(w0))
+        assertEquals(h0.green.sum(), h1.green.sum())
+        assertEquals(w0.green.sum(), w1.green.sum())
+    }
+
     @Test fun histogramEvIgnoredWithoutLut() {
         // DNG path: no curve, no gain — bit-exact legacy regardless of EV.
         val (image, plane) = uniformFrame()

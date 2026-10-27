@@ -4,7 +4,11 @@
 package com.matthew.rawlens
 
 import android.graphics.Bitmap
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.os.Build
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.params.BlackLevelPattern
 import android.media.Image
 import android.os.SystemClock
 import android.util.Log
@@ -130,7 +134,8 @@ internal class LiveScopes(
     fun publishRawScopeIfDue(
         image: Image,
         cameraCharacteristics: CameraCharacteristics,
-        force: Boolean = false
+        force: Boolean = false,
+        result: CaptureResult? = null
     ) {
         if (!histogramEnabled) return
         val now = SystemClock.elapsedRealtime()
@@ -138,17 +143,30 @@ internal class LiveScopes(
         if (!RawHistogramThrottle.shouldSample(now, lastSampleMs, RAW_HISTOGRAM_INTERVAL_MS, force)) return
         lastSampleMs = now
         val lutStartNs = System.nanoTime()
-        val lut = if (agxApplied) lutCache.get(host.jpegOutputSettings()) else null
-        // JPEG scope predicts the saved file: the same adaptive EV develop
-        // applies pre-tonemap. DNG scopes stay unexposed linear (lut null
-        // ignores the gain), matching the linear DNG.
+        // Bake exposure into the LUT before lookup. Clamping a gained sensor
+        // value to 1 first freezes all highlights at scopeCurve(1).
         val scopeEv = if (agxApplied) liveScopeExposureEv() else 0.0
+        val lut = if (agxApplied) lutCache.get(host.jpegOutputSettings(), scopeEv) else null
+        val physicalResults = if (Build.VERSION.SDK_INT >= 31 && result is TotalCaptureResult) {
+            runCatching { result.physicalCameraTotalResults }.getOrNull()
+        } else null
+        val physicalId = RawFrameMetadataFactory.selectPhysicalResultId(
+            result?.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID),
+            physicalResults?.keys ?: emptySet()
+        )
+        val physical = physicalId?.let { physicalResults?.get(it) }
+        val dynamicWhite = physical?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+            ?: result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+        val dynamicBlack = (physical?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+            ?: result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL))
+            ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
+            ?.let { levels -> BlackLevelPattern(IntArray(4) { levels[it].toInt() }) }
         val scanStartNs = System.nanoTime()
         guard.run("scope") {
             if (mode == ScopeMode.WAVEFORM) {
-                RawWaveformSampler.sample(image, cameraCharacteristics, lut, scopeEv)?.let(host::onRawWaveform)
+                RawWaveformSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawWaveform)
             } else {
-                RawHistogramSampler.sample(image, cameraCharacteristics, lut, scopeEv)?.let(host::onRawHistogram)
+                RawHistogramSampler.sample(image, cameraCharacteristics, lut, 0.0, dynamicBlack, dynamicWhite)?.let(host::onRawHistogram)
             }
         }
         noteScopeSample(now, scanStartNs - lutStartNs, System.nanoTime() - scanStartNs)
@@ -240,7 +258,7 @@ internal class LiveScopes(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val LOG_TAG = "RawLensCamera"
         const val RAW_HISTOGRAM_INTERVAL_MS = 250L
         /** Scope cost telemetry cadence: one LUT/scan average line per 5 s. */
