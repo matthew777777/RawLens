@@ -1,0 +1,16 @@
+Device: fe79feha9lmb6hhi
+Production test APK: RawLens-1.0.513-deviceTest-arm64-v8a.apk
+AmazePipelineContractTest: 16 tests, 0 failures.
+AmazeHighlightDeviceTest: OK (1 test), four Bayer phases, both final shaders.
+OpposedRealDngParityDeviceTest, actual darktable CPU dump: OK (1 test).
+{"case":"hdrplus","pixels":12484800,"bit_mismatches":128,"max_abs_error":1.2516975E-5,"mean_abs_error":1.280243299289436E-10,"changed_pixels":128,"chroma":[-0.10434465,0.20291767,-0.04744743],"elapsed_ms":1379.173538}
+OpposedRealDngParityDeviceTest, pinned source oracle, strict bits: OK (1 test).
+{"case":"oracle","pixels":12484800,"bit_mismatches":0,"max_abs_error":0,"mean_abs_error":0,"changed_pixels":128,"chroma":[-0.10434465,0.20291767,-0.04744743],"elapsed_ms":1295.371384}
+Elapsed includes cold Vulkan session creation and comparison, not an isolated stage benchmark.
+Initial CPU comparison with temperature preset 4 was invalid (late correction still active).
+Corrected fixture: temperature disabled, preset 0; channelmixerrgb disabled; opposed clip 1.0.
+Raw CFA input matches actual darktable module input dump exactly.
+Source: IMG_20261022_165407_773_HDRPLUS.dng (4080x3060 GBRG).
+Darktable binary: /Applications/darktable.app/Contents/MacOS/darktable-cli, version 5.6.2.
+Original DNG untouched. Isolated database and dumps: /tmp/rawlens-dt-comparison.
+Full testDebugUnitTest suite: {'tests': 1677, 'failures': 0, 'errors': 0, 'skipped': 5}. BUILD SUCCESSFUL.

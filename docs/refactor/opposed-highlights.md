@@ -202,3 +202,40 @@ tests passed: masked HDR GPU/CPU bit parity; both HDR+ and HDR public JPEG/JXL
 routes against explicit reconstruction; unchanged shared CFA/DNG input arrays;
 the existing full-resolution/parity/cache suite; and unchanged MFSR RGB behavior.
 Evidence: `results/merged-highlights-2026-10-26.txt`.
+
+
+## Real HDR+ DNG and AMaZE OFF validation (2026-10-27)
+
+Tested `IMG_20261022_165407_773_HDRPLUS.dng`, 4080×3060 GBRG,
+against actual darktable 5.6.2 highlight-module input/output PFM dumps.
+The input dump matches the DNG's normalized visible CFA exactly. Temperature
+and color calibration were disabled; temperature's preset must also be changed
+from late D65 (4) to as-shot (0), otherwise late correction remains active even
+with those modules disabled. The comparison uses inpaint opposed, clip 1.0.
+It compares the CFA stage, not final JPEG rendering.
+
+Vulkan versus a scalar execution of the pinned, verbatim OpenCL kernels on that
+same full-resolution input: **0 bit mismatches out of 12,484,800 samples**.
+Vulkan versus the installed darktable CPU module: 128 bit mismatches, maximum
+absolute error 0.0000125169754, mean absolute error 1.2802433e-10. Both paths
+change 128 samples. This installed CPU comparison is not bit-exact; source/version
+and CPU/OpenCL implementation differences remain relevant. Do not advertise
+bit-exact parity with the installed darktable CPU renderer.
+
+`verify_opposed_reference.py --input <CFA.f32> --width 4080 --height 3060
+--pattern GBRG --output <oracle.bin>` reproduces the full-resolution source
+oracle (input, output, row reductions, chroma, all float32). The opt-in
+`OpposedRealDngParityDeviceTest` imports shell-owned fixtures through
+instrumentation, reports all sample errors and asserts strict bits when the
+manifest sets `expect_bit_exact`. Fixtures remain outside the repository.
+
+With reconstruction OFF, both AMaZE final shaders detect sensor clipping after
+undoing demosaic balance. This catches clipped green even when every balanced
+channel is below the white-window threshold. The contract test now checks this
+sensor basis. `AmazeHighlightDeviceTest` passes all four Bayer patterns through
+fused JPEG and unfused scene-linear output with realistic non-unity white balance,
+checks neutral clipped highlights, and verifies the disabled white fallback keeps
+color when opposed reconstruction is ON. This is a synthetic GPU regression;
+visual validation on additional real OFF captures remains useful.
+
+Evidence: `results/opposed-real-dng-2026-10-27.txt`.
