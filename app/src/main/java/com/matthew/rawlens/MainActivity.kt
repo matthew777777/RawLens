@@ -2097,7 +2097,7 @@ class MainActivity : Activity() {
         val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
-            compressionCodec = lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)
+            compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio

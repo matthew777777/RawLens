@@ -142,15 +142,35 @@ class CrawRoundTripDeviceTest {
         assertTrue("encode $mpixPerS MPix/s < required $minMpix", mpixPerS >= minMpix)
     }
 
-    @Test fun binnedFrameIsHalfResolution() {
-        assumeTrue("craw libraries unavailable", CrawWriter.available && CrawReader.available)
-        val width = 64
-        val height = 32
-        val src = syntheticFrame(width, height, 10, 7)
+    /** Independent reference of the centre-aligned binning (craw_writer_jni.cpp). */
+    private fun binReference(src: ShortArray, w: Int, h: Int, cfa: Int): IntArray {
+        val ow = w / 2; val oh = h / 2
+        val greenEven = cfa == 1 || cfa == 2
+        fun m(i: Int, n: Int) = if (i < 0) -i else if (i >= n) 2 * (n - 1) - i else i
+        fun at(x: Int, y: Int) = src[m(y, h) * w + m(x, w)].toInt() and 0xffff
+        val kw = intArrayOf(1, 5, 3)
+        return IntArray(ow * oh) { idx ->
+            val ox = idx % ow; val oy = idx / ow; val sx = 2 * ox; val sy = 2 * oy
+            val green = (((ox + oy) and 1) == 0) == greenEven
+            if (!green) {
+                val cx = sx + (ox and 1); val cy = sy + (oy and 1)
+                val dx = if ((ox and 1) == 1) -2 else 2; val dy = if ((oy and 1) == 1) -2 else 2
+                var sum = 0
+                for (j in 0 until 3) for (i in 0 until 3) sum += kw[i] * kw[j] * at(cx + (i - 1) * dx, cy + (j - 1) * dy)
+                (sum + 40) / 81
+            } else if (!greenEven) {
+                (2 * (at(sx + 1, sy) + at(sx, sy + 1)) + at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2) + 4) shr 3
+            } else {
+                (2 * (at(sx, sy) + at(sx + 1, sy + 1)) + at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2) + 4) shr 3
+            }
+        }
+    }
+
+    private fun encodeDecodeBinned(src: ByteBuffer, width: Int, height: Int, cfa: Int): IntArray {
         val file = File(context.cacheDir, "craw-binned.craw").apply { delete() }
         val handle = CrawWriter.open(file.absolutePath, "{}")
         val dst = ByteBuffer.allocateDirect(CrawFormat.payloadBound(width, height))
-        val n = CrawWriter.encodeFrame(src, src.capacity(), width, height, width * 2, 0, height, dst, true, 0, 10)
+        val n = CrawWriter.encodeFrame(src, src.capacity(), width, height, width * 2, 0, height, dst, true, cfa, 10)
         dst.flip()
         CrawWriter.writeFrame(handle, dst, n, 1L, "{}")
         CrawWriter.close(handle)
@@ -159,14 +179,26 @@ class CrawRoundTripDeviceTest {
             val ts = CrawReader.frameTimestamps(reader)!!.single()
             val out = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.LITTLE_ENDIAN)
             assertEquals(width / 2 to height / 2, CrawReader.decodeFrame(reader, ts, out))
-            // Output (0,0) is the R mean of source (0,0),(0,2),(2,0),(2,2).
-            val s = src.asShortBuffer()
-            val expect = (s.get(0) + s.get(2) + s.get(2 * width) + s.get(2 * width + 2) + 2) shr 2
-            assertEquals(expect, out.getShort(0).toInt())
+            return IntArray(width / 2 * height / 2) { out.getShort(it * 2).toInt() and 0xffff }
         } finally {
             CrawReader.closeReader(reader)
             file.delete()
         }
+    }
+
+    @Test fun binnedFrameIsCentreAlignedForEveryCfa() {
+        assumeTrue("craw libraries unavailable", CrawWriter.available && CrawReader.available)
+        val width = 64
+        val height = 32
+        val src = syntheticFrame(width, height, 10, 7)
+        val shorts = ShortArray(width * height).also { src.duplicate().order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(it) }
+        for (cfa in 0..3) {
+            assertArrayEquals("cfa $cfa", binReference(shorts, width, height, cfa), encodeDecodeBinned(src, width, height, cfa))
+        }
+        // Flat field passes exactly (rounded means, normalised weights).
+        val flat = ByteBuffer.allocateDirect(width * height * 2).order(ByteOrder.LITTLE_ENDIAN)
+        repeat(width * height) { flat.putShort(it * 2, 417.toShort()) }
+        assertTrue(encodeDecodeBinned(flat, width, height, 0).all { it == 417 })
     }
 
     @Test fun lensShadingChunkExpandsIntoFrameJson() {

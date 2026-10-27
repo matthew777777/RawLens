@@ -180,18 +180,23 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(Button(this).apply {
             isEnabled = !videoRecording
             fun refresh() {
-                text = if (lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE) == CrawWriter.CODEC_FAST)
-                    "Compression: CRAW-Fast" else "Compression: CRAW-Live"
+                text = "Compression: " + CrawWriter.codecName(
+                    CrawWriter.normalizeCodec(lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)))
             }
             refresh()
             setOnClickListener {
-                val current = lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)
-                val next = if (current == CrawWriter.CODEC_LIVE) CrawWriter.CODEC_FAST else CrawWriter.CODEC_LIVE
+                val current = CrawWriter.normalizeCodec(lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
+                // Live v2 (default) -> Live v1 -> Fast -> Live v2
+                val next = when (current) {
+                    CrawWriter.CODEC_LIVE -> CrawWriter.CODEC_LIVE_V1
+                    CrawWriter.CODEC_LIVE_V1 -> CrawWriter.CODEC_FAST
+                    else -> CrawWriter.CODEC_LIVE
+                }
                 lensPreferences().edit().putInt(MainActivity.KEY_VIDEO_CODEC, next).apply()
                 refresh()
             }
         })
-        content.addView(sectionDesc("Both modes preserve every RAW sample. Live favors recording speed; Fast favors smaller files. Applies to the next take."))
+        content.addView(sectionDesc("All modes preserve every RAW sample. Live v2 (default) balances speed and size; Live v1 is cheapest; Fast makes the smallest files but needs the most CPU. Applies to the next take."))
         content.addView(Button(this).apply {
             fun refresh() {
                 text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRAW crop: ${videoCropShort()}"
@@ -214,7 +219,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
             }
         })
-        content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .craw: each sample is the mean of four same-colour sensor samples. Applies to the next take; N/A in Direct Log."))
+        content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .craw: centre-aligned (triangle-weighted R/B, ring-weighted green) so the half-resolution Bayer grid stays regular. Applies to the next take; N/A in Direct Log."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(CheckBox(this).apply {
             text = "Lock exposure on record"

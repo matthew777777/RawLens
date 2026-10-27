@@ -36,20 +36,55 @@ std::string jstr(JNIEnv* env, jstring s) {
 
 craw::Writer* writerFrom(jlong h) { return reinterpret_cast<craw::Writer*>(h); }
 
-// 2x2 binning to a half-resolution Bayer frame with the same CFA: each output
-// sample is the rounded mean of the four same-colour samples of its 4x4 block.
-void bin2x2(const uint8_t* src, int stride, int width, int rows, std::vector<uint16_t>& out) {
+// 2x Bayer binning to half resolution, CENTRE-ALIGNED: output (ox, oy) keeps
+// the CFA colour of its parity and stands for the centre of its 2x2 source
+// block, so the result is a regular Bayer grid a demosaicer can trust.
+// R/B: separable triangle (weights behind/own/toward = 1, 5, 3, sum 81) on the
+// 2 px same-colour grid. Green: the 2 in-block greens at weight 2 plus the
+// symmetric ring of 4 nearest outer greens at weight 1 (sum 8). Rounded
+// means, so flat fields and black/white levels pass exactly. Edges mirror
+// parity-preservingly. Measured on a real 4080x2032 frame through
+// RawTherapee AMaZE (vs full-res AMaZE downscaled 2x): error 0.0423 -> 0.0344
+// and flat-sky noise -15 % compared with the inward box + diamond green.
+// Ported from RawLens commit 9099988 (cinemaraw Binning.h); original
+// diamond-green idea by Eszdman (https://github.com/eszdman).
+void binCentred(const uint8_t* src, int stride, int width, int rows, int cfa, std::vector<uint16_t>& out) {
     const int ow = width / 2, oh = rows / 2;
     out.resize(static_cast<size_t>(ow) * oh);
-    for (int y = 0; y < oh; ++y) {
-        // Output row y has CFA phase y & 1; its sources are rows 2*(y & ~1) + (y & 1) + {0, 2}.
-        const int sy = 2 * (y & ~1) + (y & 1);
-        const auto* r0 = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(sy) * stride);
-        const auto* r1 = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(sy + 2) * stride);
-        uint16_t* o = out.data() + static_cast<size_t>(y) * ow;
-        for (int x = 0; x < ow; ++x) {
-            const int sx = 2 * (x & ~1) + (x & 1);
-            o[x] = static_cast<uint16_t>((uint32_t{r0[sx]} + r0[sx + 2] + r1[sx] + r1[sx + 2] + 2) >> 2);
+    const bool greenEven = cfa == 1 || cfa == 2;  // green on even (x + y) parity
+    auto mirror = [](int i, int n) { return i < 0 ? -i : i >= n ? 2 * (n - 1) - i : i; };
+    auto at = [&](int x, int y) -> uint32_t {
+        const auto* row = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(mirror(y, rows)) * stride);
+        return row[mirror(x, width)];
+    };
+    static constexpr uint32_t kW[3] = {1, 5, 3};  // behind, own, toward
+    for (int oy = 0; oy < oh; ++oy) {
+        uint16_t* o = out.data() + static_cast<size_t>(oy) * ow;
+        const int sy = 2 * oy;
+        for (int ox = 0; ox < ow; ++ox) {
+            const int sx = 2 * ox;
+            const bool isGreen = (((ox + oy) & 1) == 0) == greenEven;
+            if (!isGreen) {
+                const int cx = sx + (ox & 1), cy = sy + (oy & 1);
+                const int dx = (ox & 1) ? -2 : 2, dy = (oy & 1) ? -2 : 2;
+                uint32_t sum = 0;
+                for (int jy = 0; jy < 3; ++jy)
+                    for (int ix = 0; ix < 3; ++ix)
+                        sum += kW[ix] * kW[jy] * at(cx + (ix - 1) * dx, cy + (jy - 1) * dy);
+                o[ox] = static_cast<uint16_t>((sum + 40) / 81);
+                continue;
+            }
+            uint32_t inBlock, ring;
+            if (!greenEven) {
+                // Greens at (1,0), (0,1); ring (-1,0), (0,-1), (2,1), (1,2).
+                inBlock = at(sx + 1, sy) + at(sx, sy + 1);
+                ring = at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2);
+            } else {
+                // Greens at (0,0), (1,1); ring (1,-1), (-1,1), (2,0), (0,2).
+                inBlock = at(sx, sy) + at(sx + 1, sy + 1);
+                ring = at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2);
+            }
+            o[ox] = static_cast<uint16_t>((2 * inBlock + ring + 4) >> 3);
         }
     }
 }
@@ -113,12 +148,12 @@ Java_com_matthew_rawlens_CrawWriter_containerEncodeFrame(
         desc.bitDepth = static_cast<uint8_t>(std::clamp<jint>(bitDepth, 1, 16));
         // Both live recording codecs are protected by the container chunk CRC.
         // Avoid an additional full RAW-frame checksum pass in either mode.
-        desc.codec = codec == 2 ? 2 : 1;
+        desc.codec = (codec == 2 || codec == 3) ? static_cast<uint8_t>(codec) : 1;
         desc.frameCrc = false;
         const uint16_t* raw;
         size_t rawStride;
         if (bin) {
-            bin2x2(base, stride, w, cropHeight, binned);
+            binCentred(base, stride, w, cropHeight, cfa & 3, binned);
             desc.width = static_cast<uint32_t>(w / 2);
             desc.height = static_cast<uint32_t>(cropHeight / 2);
             raw = binned.data();

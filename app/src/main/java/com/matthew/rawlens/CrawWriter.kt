@@ -96,7 +96,18 @@ internal object CrawWriter {
     /** CRAW-Fast: smallest files (bursts, archives). */
     const val CODEC_FAST = 1
     /** CRAW-Live: cheaper prediction/packing; file size depends on the scene. */
-    const val CODEC_LIVE = 2
+    const val CODEC_LIVE = 3
+    /** CRAW-Live v1 (codec 2): left-neighbour prediction; slightly cheaper, larger. */
+    const val CODEC_LIVE_V1 = 2
+
+    fun normalizeCodec(stored: Int): Int =
+        if (stored == CODEC_FAST || stored == CODEC_LIVE_V1 || stored == CODEC_LIVE) stored else CODEC_LIVE
+
+    fun codecName(codec: Int): String = when (codec) {
+        CODEC_FAST -> "CRAW-Fast"
+        CODEC_LIVE_V1 -> "CRAW-Live v1"
+        else -> "CRAW-Live v2"
+    }
 
     /** Bits needed for samples up to [whiteLevel] (Camera2 SENSOR_INFO_WHITE_LEVEL). */
     fun bitDepthFor(whiteLevel: Int?): Int =

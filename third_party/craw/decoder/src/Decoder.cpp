@@ -121,6 +121,76 @@ void decodePlane(BitReader& br, int32_t* p, int w, int h, int32_t firstPred, uin
 }
 
 // CRAW-Live tile (SPEC 3.6) into four cell-order planes of tw x th.
+// CRAW-Live v2 tile (SPEC 3.7): 4-neighbour prediction, plain or PFOR blocks.
+void decodeTileLive2(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
+    if (len < 5) throw DecodeError("craw: truncated live2 tile");
+    const uint32_t nibBytes = rd32(d + 1);
+    if (nibBytes > len - 5) throw DecodeError("craw: bad live2 nibble length");
+    const uint8_t* nib = d + 5;
+    const uint8_t* data = nib + nibBytes;
+    const uint8_t* end = d + len;
+    size_t ni = 0;
+    auto nextNibble = [&]() -> int {
+        if (ni >= size_t{nibBytes} * 2) throw DecodeError("craw: live2 nibbles overrun");
+        const int v = (nib[ni >> 1] >> (4 * (ni & 1))) & 15;
+        ++ni;
+        return v;
+    };
+    auto width = [&]() { const int v = nextNibble(); return v < 15 ? v : 15 + nextNibble(); };
+    auto unpack = [&](uint32_t* dst, uint32_t cnt, int w) {
+        if (w > 18) throw DecodeError("craw: bad live2 width");
+        const size_t bytes = (size_t{cnt} * w + 7) / 8;
+        if (bytes > static_cast<size_t>(end - data)) throw DecodeError("craw: live2 data overrun");
+        uint64_t acc = 0;
+        int bits = 0;
+        const uint32_t mask = w ? (1u << w) - 1 : 0;
+        for (uint32_t i = 0; i < cnt; ++i) {
+            while (bits < w) { acc |= uint64_t{*data++} << bits; bits += 8; }
+            dst[i] = static_cast<uint32_t>(acc) & mask;
+            acc >>= w;
+            bits -= w;
+        }
+    };
+    const size_t n = size_t{tw} * th;
+    uint32_t u[kBlock];
+    for (uint32_t y = 0; y < th; ++y)
+        for (int cell = 0; cell < 4; ++cell) {
+            int32_t* row = planes + cell * n + size_t{y} * tw;
+            const int32_t* up = row - tw;
+            for (uint32_t x0 = 0; x0 < tw; x0 += kBlock) {
+                const uint32_t cnt = std::min<uint32_t>(kBlock, tw - x0);
+                const int t = nextNibble();
+                if (t != 14) {
+                    unpack(u, cnt, t < 15 ? t : 14 + nextNibble());
+                } else {
+                    const int k = width();
+                    const int ne = nextNibble();
+                    const int hb = width();
+                    int idx[16];
+                    for (int e = 0; e < ne; ++e) idx[e] = nextNibble();
+                    unpack(u, cnt, k);
+                    uint32_t high[16];
+                    unpack(high, static_cast<uint32_t>(ne), hb);
+                    for (int e = 0; e < ne; ++e) {
+                        if (idx[e] >= static_cast<int>(cnt)) throw DecodeError("craw: bad live2 exception index");
+                        u[idx[e]] |= high[e] << k;
+                    }
+                }
+                for (uint32_t i = 0; i < cnt; ++i) {
+                    const uint32_t x = x0 + i;
+                    int32_t pred;
+                    if (y == 0) pred = x == 0 ? first : row[x - 1];
+                    else if (x == 0) pred = up[0];
+                    else {
+                        const int32_t U = up[x];
+                        pred = (row[x - 1] + U + up[x - 1] + (x + 1 < tw ? up[x + 1] : U) + 2) >> 2;
+                    }
+                    row[x] = pred + ((u[i] & 1) ? -static_cast<int32_t>((u[i] + 1) >> 1) : static_cast<int32_t>(u[i] >> 1));
+                }
+            }
+        }
+}
+
 void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
     if (len < 5) throw DecodeError("craw: truncated live tile");
     const uint32_t nibBytes = rd32(d + 1);
@@ -168,7 +238,7 @@ void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int3
 
 FrameInfo probeFrame(const uint8_t* p, size_t size) {
     if (!p || size < kHeaderSize) throw DecodeError("craw: payload too small");
-    if (p[0] != 1 && p[0] != 2) throw DecodeError("craw: unknown codec id");
+    if (p[0] < 1 || p[0] > 3) throw DecodeError("craw: unknown codec id");
     FrameInfo f;
     f.bitDepth = p[1];
     if (p[2] > 3) throw DecodeError("craw: bad CFA");
@@ -219,10 +289,12 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
                 const size_t len = rd32(table + 4 * (t + 1)) - rd32(table + 4 * t);
                 if (len < 1) throw DecodeError("craw: empty tile");
                 planes.resize(4 * n);
-                const bool live = f.codec == 2;
+                const bool live = f.codec == 2 || f.codec == 3;
                 if (d[0] == 1) {
                     if (len != 1 + 8 * n) throw DecodeError("craw: bad stored tile size");
                     for (size_t i = 0; i < 4 * n; ++i) planes[i] = rd16(d + 1 + 2 * i);
+                } else if (d[0] == 0 && f.codec == 3) {
+                    decodeTileLive2(d, len, tw, th, 1 << (f.bitDepth - 1), planes.data());
                 } else if (d[0] == 0 && live) {
                     decodeTileLive(d, len, tw, th, 1 << (f.bitDepth - 1), planes.data());
                 } else if (d[0] == 0) {

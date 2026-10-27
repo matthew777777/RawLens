@@ -372,7 +372,8 @@ internal class RawVideoRecorder(
         lastStatsLogTs = 0L
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
         encodeWorkers = workers
-        require(compressionCodec == CrawWriter.CODEC_FAST || compressionCodec == CrawWriter.CODEC_LIVE)
+        require(compressionCodec == CrawWriter.CODEC_FAST || compressionCodec == CrawWriter.CODEC_LIVE ||
+            compressionCodec == CrawWriter.CODEC_LIVE_V1)
         takeCodec = compressionCodec
         outputFile = output
         acquired.set(0)
@@ -613,7 +614,7 @@ internal class RawVideoRecorder(
                     timestampNs = ts,
                     frameJson = "{\"width\":$encW," +
                         "\"height\":$encH," +
-                        "\"codec\":\"${if (takeCodec == CrawWriter.CODEC_LIVE) "CRAW-Live" else "CRAW-Fast"}\",\"timestamp\":$ts," +
+                        "\"codec\":\"${CrawWriter.codecName(takeCodec)}\",\"timestamp\":$ts," +
                         "\"crop\":\"${crop.name}\"" +
                         "}",
                     shading = shadingGrid,
