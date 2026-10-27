@@ -8,7 +8,7 @@
 //   Worker threads; each call is single-threaded (frame-level parallelism).
 // - containerWriteFrame: commit an encoded payload. Committer thread only;
 //   the writer rejects timestamp regressions.
-// Audio/motion entry points are committer-thread-only like writes.
+// Audio (PCM16 or float32) and motion entry points are committer-thread-only like writes.
 #include <jni.h>
 
 #include <craw/Writer.h>
@@ -165,14 +165,16 @@ Java_com_matthew_rawlens_CrawWriter_containerWriteFrame(
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CrawWriter_containerWriteAudio(
     JNIEnv* env, jobject, jlong handle, jobject buf, jint offset, jint frames, jint channels,
-    jint sampleRate, jlong timestampNs) {
+    jint sampleRate, jboolean isFloat, jlong timestampNs) {
     auto* writer = writerFrom(handle);
     const auto* b = static_cast<const uint8_t*>(env->GetDirectBufferAddress(buf));
     if (!writer || !b || frames <= 0 || channels <= 0 || channels > 255 || sampleRate <= 0) return -2;
     try {
-        writer->addAudio(timestampNs, craw::AudioFormat::S16, static_cast<uint8_t>(channels),
-                         static_cast<uint32_t>(sampleRate), b + offset, static_cast<uint32_t>(frames));
-        return frames * channels * 2;
+        const bool f32 = isFloat != JNI_FALSE;
+        writer->addAudio(timestampNs, f32 ? craw::AudioFormat::F32 : craw::AudioFormat::S16,
+                         static_cast<uint8_t>(channels), static_cast<uint32_t>(sampleRate), b + offset,
+                         static_cast<uint32_t>(frames));
+        return frames * channels * (f32 ? 4 : 2);
     } catch (...) {
         return -5;
     }

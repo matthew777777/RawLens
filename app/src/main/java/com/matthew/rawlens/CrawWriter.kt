@@ -126,25 +126,27 @@ internal object CrawWriter {
     }
 
     /**
-     * Append one PCM16 chunk (AUDI format S16) with [channels] interleaved
-     * channels (1 or 2) at [sampleRate]. [samples] holds `frames * channels`
-     * little-endian int16 samples; [timestampNs] is the first frame's time on
-     * the video frame timeline (recording-relative ns). Returns bytes written.
+     * Append one audio chunk with [channels] interleaved channels (1 or 2) at
+     * [sampleRate]: little-endian float32 (AUDI format F32) when [float], else
+     * int16 (S16). [samples] holds `frames * channels` samples; [timestampNs]
+     * is the first frame's time on the video frame timeline (recording-
+     * relative ns). Returns bytes written.
      */
     fun writeAudio(
         handle: Long, samples: ByteBuffer, frames: Int, channels: Int, timestampNs: Long,
-        sampleRate: Int = AudioPcmRecorder.SAMPLE_RATE
+        sampleRate: Int = AudioPcmRecorder.SAMPLE_RATE, float: Boolean = false
     ): Int {
         require(frames > 0) { "Empty audio chunk" }
         require(channels == 1 || channels == 2) { "Bad channel count $channels" }
         require(samples.isDirect) { "CrawWriter needs a direct buffer" }
-        require(samples.remaining() >= frames * channels * 2) {
-            "Audio buffer holds ${samples.remaining()}, needs ${frames * channels * 2}"
+        val need = frames * channels * (if (float) 4 else 2)
+        require(samples.remaining() >= need) {
+            "Audio buffer holds ${samples.remaining()}, needs $need"
         }
         if (!available) throw IllegalStateException("CRAW writer unavailable")
         val written = try {
             containerWriteAudio(
-                handle, samples, samples.position(), frames, channels, sampleRate, timestampNs
+                handle, samples, samples.position(), frames, channels, sampleRate, float, timestampNs
             )
         } catch (e: UnsatisfiedLinkError) {
             throw IllegalStateException("CRAW writer missing", e)
@@ -202,7 +204,7 @@ internal object CrawWriter {
 
     external fun containerWriteAudio(
         handle: Long, samples: ByteBuffer, offset: Int, frames: Int, channels: Int,
-        sampleRate: Int, timestampNs: Long
+        sampleRate: Int, float: Boolean, timestampNs: Long
     ): Int
 
     external fun containerWriteGyro(

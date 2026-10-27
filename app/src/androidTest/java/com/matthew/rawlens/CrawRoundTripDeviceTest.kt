@@ -83,7 +83,8 @@ class CrawRoundTripDeviceTest {
             while (next < minOf(workers * 2, frames)) submit(next++)
             val gyroTs = LongArray(8)
             val gyroXyz = FloatArray(24) { it * 0.01f }
-            val audio = ByteBuffer.allocateDirect(1600 * 2 * 2).order(ByteOrder.LITTLE_ENDIAN)
+            // 32-bit float stereo, as RawVideoRecorder records it.
+            val audio = ByteBuffer.allocateDirect(1600 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
             while (inflight.isNotEmpty()) {
                 val (i, future) = inflight.removeFirst()
                 val payload = future.get()
@@ -93,7 +94,7 @@ class CrawRoundTripDeviceTest {
                 for (k in 0 until 8) gyroTs[k] = ts + k * 4_000_000L
                 CrawWriter.writeGyro(handle, gyroTs, gyroXyz, 8)
                 audio.clear()
-                CrawWriter.writeAudio(handle, audio, 1600, 2, ts)
+                CrawWriter.writeAudio(handle, audio, 1600, 2, ts, float = true)
                 buffers.add(payload)
                 if (next < frames) submit(next++)
             }
