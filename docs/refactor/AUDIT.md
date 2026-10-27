@@ -139,3 +139,46 @@ No frame failed or lost a buffer in these runs, so the new C3/C4 branches did no
 | Galosh | `Galosh*`, `cpp/galosh/`, `spirv/galosh/` | `docs/galosh-phase2-parity.md`: PASS ≥69 dB on Mali-G615 |
 | Wavelet | `Wavelet*`, `cpp/wavelet/`, `spirv/wavelet/` | `spirv/wavelet/UPSTREAM.md`: vendored bit-identical (rawr / darktable) |
 | ML (FlowNet, RawNIND) | `HdrFlowNetAligner`, `RawNind*`, `cpp/flownet/` | vendored PhotonCamera sources (`cpp/flownet/UPSTREAM.md`) |
+
+## Vendor-key source comparison (2026-10-27)
+
+See [vendor-keys-study.md](vendor-keys-study.md) for pinned PhotonCamera,
+PhotonVidCam and AOSP sources, V1–V12 findings, compatibility gaps and validation.
+Model/JSON/store/Android helpers split into separate files; JSON/store bodies
+verified byte-identical. Added opt-in String values, preserved operating mode
+when editing key lists, prevented stored mode overflow, enabled mode-only
+export/preset save and corrected builder-probe/error-report wording. Session
+gating, physical routing, hidden custom-session path and defaults retained.
+These targeted fixes change the affected editor/error paths; universal device
+parity and sensor-mode effects are not established by JVM checks.
+
+Validation: vendor 23/0; full app suite 1681 tests / 0 failures / 5 skips; debug/release and deviceTest instrumentation Kotlin compile passed.
+Device-unverified.
+
+## Vendor-key gap completion (owner-authorized, 2026-10-27)
+
+V4–V8/V11/V12 and persistence gaps implemented; see
+[vendor-keys-study.md](vendor-keys-study.md) for sources and behavior changes.
+Numeric aliases resolve to advertised typed/provider-specific keys; vendor
+session types and early parameters use the same modern configuration;
+sync/async rejection has bounded fallback. Physical probes use the actual
+destination, discovery excludes static metadata, profile edits are atomic,
+imports are strict, stored corruption is contained, and report state resets.
+Default profiles enable no additional vendor behavior. No processing pipeline
+was modified for this work.
+
+**Owner validation requirement:** all phone validation uses the fully optimized
+release APK (R8 + resource shrinking + native Release, non-debuggable, ART
+`speed`), never the unminified deviceTest APK. The new
+`tools/vendor_release_smoke.py` verifies the installed APK checksum against
+the release output and drives the UI without requiring R8 keep rules.
+
+Final unit suite: **1700 tests / 0 failures / 0 errors / 5 skips**, including
+42 vendor tests. Full release **1.0.558** built with normal release checks.
+Installed arm64 APK SHA-256:
+`c29c91f39caeb137371218ca39cd6c1055eaae9572ef2dc849720301b98f5704`.
+Connected Xiaomi 25080RABDG: numeric control 0x10003, custom mode 37379 with
+early parameters, real capture/save, key add/delete preserving mode, unknown
+numeric refusal, mode-only import/export, reserved-mode refusal, and original
+profile restoration/reopen passed. Full details and limits in the study.
+This is not universal OEM sensor-mode or performance parity evidence.

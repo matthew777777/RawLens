@@ -169,6 +169,73 @@ class VendorKeysTest {
         assertEquals(1.toByte(), VendorKeyEntry("a.b", VendorKeyType.BYTE, VendorKeyScope.REQUEST, "1").parsedValue())
     }
 
+    @Test fun `Xiaomi client name is a string and survives profile serialization`() {
+        val client = entry("com.xiaomi.sessionparams.clientName", VendorKeyType.STRING,
+            VendorKeyScope.REQUEST, "com.android.camera")
+        client.validate()
+        assertEquals("com.android.camera", client.parsedValue())
+        val profile = VendorKeyProfile(listOf(client))
+        assertEquals(profile, VendorKeyProfile.fromJson(profile.toJson()))
+        assertEquals("  camera client  ", VendorKeyType.STRING.parse("  camera client  "))
+        assertFails { VendorKeyType.STRING.parse("x".repeat(VendorKeyType.MAX_VALUE_CHARS + 1)) }
+    }
+
+    @Test fun `mode-only profile can be exported while default is empty`() {
+        assertTrue(VendorKeyProfile().isEmpty())
+        val profile = VendorKeyProfile(operatingMode = 37379)
+        assertFalse(profile.isEmpty())
+        assertEquals(profile, VendorKeyProfile.fromJson(profile.toJson()))
+    }
+
+    @Test fun `out of range stored modes cannot wrap into another valid mode`() {
+        for (mode in listOf("4295004675", "2147483648", "-1")) {
+            assertEquals(0, VendorKeyProfile.fromJson(
+                """{"v":1,"op":$mode,"entries":[]}""").operatingMode)
+        }
+    }
+
+    @Test fun `mode-only import fills default but never overwrites an existing vendor mode`() {
+        val incoming = VendorKeyProfile(operatingMode = 37379)
+        assertEquals(37379, VendorKeyProfile().mergedWith(incoming).operatingMode)
+        assertEquals(32769, VendorKeyProfile(operatingMode = 32769).mergedWith(incoming).operatingMode)
+    }
+
+    @Test fun `strict import rejects damaged rows duplicate aliases and unsupported versions`() {
+        val bad = """{"v":1,"entries":[{"n":"broken"}]}"""
+        assertFails { VendorKeyProfile.fromJson(bad, strict = true) }
+        assertTrue(VendorKeyProfile.fromJson(bad).entries.isEmpty())
+        val alias1 = entry(name = "0X80000001")
+        val alias2 = entry(name = "0x80000001")
+        val duplicate = VendorKeyProfile(listOf(alias1, alias2)).toJson()
+        assertFails { VendorKeyProfile.fromJson(duplicate, strict = true) }
+        assertEquals(1, VendorKeyProfile.fromJson(duplicate).entries.size)
+        assertFails { VendorKeyProfile.fromJson("""{"v":2,"entries":[]}""") }
+        assertFails { VendorKeyProfile.fromJson("""{"v":1,"op":1,"entries":[]}""", strict = true) }
+    }
+
+    @Test fun `tolerant load bounds the profile and strict import refuses excess keys`() {
+        val oversized = VendorKeyProfile(List(40) { entry(name = "vendor.tag$it") }).toJson()
+        assertEquals(32, VendorKeyProfile.fromJson(oversized).entries.size)
+        assertFails { VendorKeyProfile.fromJson(oversized, strict = true) }
+        assertFails { VendorKeyProfile.fromJson(" ".repeat(VendorKeyProfile.MAX_JSON_CHARS) + "{}") }
+    }
+
+    @Test fun `string limits include whitespace and accept empty strings while rejecting NUL`() {
+        assertEquals("", VendorKeyType.STRING.parse(""))
+        assertFails { VendorKeyType.STRING.parse(" ".repeat(VendorKeyType.MAX_VALUE_CHARS) + "x") }
+        assertFails { VendorKeyType.STRING.parse("x\u0000y") }
+        assertArrayEquals(byteArrayOf(-128, -1, 0, -1), VendorKeyType.BYTE_ARRAY.parse("-128,-1,0,255") as ByteArray)
+    }
+
+    @Test fun `JSON rejects ambiguous numbers duplicate fields and raw controls`() {
+        for (number in listOf("01", "1.", "1e", "1e9999", "-")) {
+            assertFails { VendorKeyJson.parseObject("{\"n\":$number}") }
+        }
+        assertFails { VendorKeyJson.parseObject("{\"n\":1,\"n\":2}") }
+        assertFails { VendorKeyJson.parseObject("{\"n\":\"line\nline\"}") }
+        assertEquals("\u000c", VendorKeyJson.parseObject("{\"n\":\"\\f\"}")["n"])
+    }
+
     private fun assertFails(block: () -> Unit) {
         try {
             block()

@@ -19,20 +19,6 @@ class VendorKeyApplyTest {
         assertFalse(VendorKeyApply.isLevelTag("xiaomi.sensor.blackLevel"))
     }
 
-    @Test fun `partition keeps advertised keys and reports the rest`() {
-        val entries = listOf(entry("a.one"), entry("b.two"), entry("c.three"))
-        val (attempt, refused) = VendorKeyApply.partition(entries, setOf("b.two", "c.three"))
-        assertEquals(listOf("b.two", "c.three"), attempt.map { it.name })
-        assertEquals(listOf("a.one"), refused.map { it.name })
-    }
-
-    @Test fun `unknown advertisement means attempt everything`() {
-        val entries = listOf(entry("a.one"), entry("b.two"))
-        val (attempt, refused) = VendorKeyApply.partition(entries, emptySet())
-        assertEquals(entries, attempt)
-        assertTrue(refused.isEmpty())
-    }
-
     @Test fun `fingerprint ignores order but flips on any change`() {
         val one = entry("b.two")
         val two = entry("a.one")
@@ -51,6 +37,16 @@ class VendorKeyApplyTest {
                 listOf(VendorKeyEntry("b.two", VendorKeyType.INT, VendorKeyScope.SESSION, "2", enabled = false))
             )
         )
+    }
+
+    @Test fun `fingerprint cannot collide through delimiters in string values`() {
+        val one = VendorKeyEntry("a.one", VendorKeyType.STRING, VendorKeyScope.SESSION,
+            "first~true|b.two~String~session~last")
+        val two = listOf(
+            VendorKeyEntry("a.one", VendorKeyType.STRING, VendorKeyScope.SESSION, "first"),
+            VendorKeyEntry("b.two", VendorKeyType.STRING, VendorKeyScope.SESSION, "last")
+        )
+        assertNotEquals(VendorKeyApply.fingerprint(listOf(one)), VendorKeyApply.fingerprint(two))
     }
 
     @Test fun `session and request entries split by scope`() {

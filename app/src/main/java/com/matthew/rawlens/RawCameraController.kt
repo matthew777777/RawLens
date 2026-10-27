@@ -17,7 +17,6 @@ import android.hardware.camera2.params.StreamConfigurationMap
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.RggbChannelVector
-import android.hardware.camera2.params.InputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.BlackLevelPattern
 import android.hardware.camera2.params.ColorSpaceTransform
@@ -532,6 +531,7 @@ class RawCameraController(
     @Volatile private var vendorSessionFingerprint: String? = null
     @Volatile private var vendorSessionOpmode: Int? = null
     @Volatile private var vendorSessionRoute: String? = null
+    @Volatile private var vendorKeyCharacteristics: CameraCharacteristics? = null
     private val previewLayoutListener = View.OnLayoutChangeListener { _, left, top, right, bottom,
                                                                        oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
@@ -614,6 +614,14 @@ class RawCameraController(
             val openCameraId = effectiveRoute.openCameraId
             activePhysicalCameraId = effectiveRoute.physicalCameraId
             characteristics = effectiveRoute.characteristics
+            vendorKeyCharacteristics = if (effectiveRoute.physicalCameraId == null) effectiveRoute.characteristics
+                else runCatching { cameraManager.getCameraCharacteristics(openCameraId) }
+                    .getOrDefault(effectiveRoute.characteristics)
+            lastVendorSessionReport = null
+            lastVendorRequestReport = null
+            vendorSessionFingerprint = null
+            vendorSessionOpmode = null
+            vendorSessionRoute = null
             hasPreviewMetadata = false
             lastPreviewMetadataPublishMs = 0L
             lastWbKelvin = null
@@ -1247,42 +1255,28 @@ class RawCameraController(
         val callback = sessionCallback(device, generation)
         val plan = chooseSessionPerformancePlan(device, preview, raw, callback)
         lastSessionPlanLabel = plan.label
-        // Vendor stream operating mode (e.g. Xiaomi DCG opmode 37379): opens the
-        // session through the hidden createCustomCaptureSession path like
-        // PhotonVidCam. Any failure falls back to the standard session below.
-        val opmode = try {
-            vendorKeys(selectedCameraId).operatingMode
-        } catch (_: Exception) {
-            0
-        }
-        if (opmode != 0) {
-            try {
-                createCustomCaptureSession(device, plan.configuration, opmode, callback)
-                lastSessionPlanLabel = "${plan.label} + opmode $opmode"
-                Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
-                return
-            } catch (failure: Exception) {
-                Log.w(LOG_TAG, "Custom opmode session failed (opmode=$opmode); using standard session", failure)
-            }
-        }
-        try {
-            device.createCaptureSession(plan.configuration)
-            Log.i(LOG_TAG, "Camera session configured: ${plan.label}")
-        } catch (failure: UnsupportedOperationException) {
-            // Legacy / vendor HALs (e.g. Snapdragon 685 on Redmi Note 13 4G) accept
-            // SessionConfiguration creation but not execution, or reject the modern
-            // entry point outright. The deprecated surface-list API is equivalent
-            // when no stream-use-case / physical-routing hints are attached.
-            Log.w(LOG_TAG, "Modern session API unsupported (${plan.label}); using legacy surfaces", failure)
-            device.createCaptureSession(listOfNotNull(preview, raw), callback, cameraHandler)
-            lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
-            Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
-        } catch (failure: IllegalArgumentException) {
-            Log.w(LOG_TAG, "Modern session config rejected (${plan.label}); using legacy surfaces", failure)
-            device.createCaptureSession(listOfNotNull(preview, raw), callback, cameraHandler)
-            lastSessionPlanLabel = "LEGACY fallback for ${plan.label}"
-            Log.i(LOG_TAG, "Camera session configured: $lastSessionPlanLabel")
-        }
+        val opmode = runCatching { vendorKeys(selectedCameraId).operatingMode }.getOrDefault(0)
+        val builtReport = lastVendorSessionReport ?: VendorKeyApplyReport(emptyList(), emptyList())
+        VendorSessionOpener(
+            device, plan.configuration, opmode, listOfNotNull(preview, raw), cameraHandler,
+            isCurrent = { isCurrent(generation) && camera === device },
+            configured = { attempt, legacy, configured ->
+                vendorSessionOpmode = attempt.operatingMode
+                if (!attempt.parameters) vendorSessionFingerprint = VendorKeyApply.fingerprint(emptyList())
+                val detail = "Configured mode ${attempt.operatingMode}" +
+                    if (attempt.operatingMode != opmode) " (requested $opmode; fallback)" else ""
+                lastVendorSessionReport = if (attempt.parameters) builtReport.copy(detail = detail)
+                    else builtReport.rejected(detail + if (legacy) "; legacy outputs, no session keys" else "; no session keys")
+                lastSessionPlanLabel = "${plan.label} mode=${attempt.operatingMode}" + if (legacy) " LEGACY" else ""
+                callback.onConfigured(configured)
+            },
+            failed = { reason ->
+                lastVendorSessionReport = builtReport.rejected("Session failed: $reason")
+                rawReader?.let { discardSessionOutputs(it, previewSurface) }
+                handleSessionSetupFailed(generation, reason)
+            },
+            log = { Log.i(LOG_TAG, it) }
+        ).open()
     }
 
     private data class SessionPerformancePlan(
@@ -1331,8 +1325,7 @@ class RawCameraController(
                 cameraExecutor,
                 callback
             )
-            // Vendor SESSION keys (e.g. Vivo DCG forceSensorMode) must load
-            // BEFORE session creation; per-request sets are silently ignored.
+            // Session-init entries must be attached before session creation.
             attachVendorSessionParams(device, sessionConfig)
             return sessionConfig
         }
@@ -1392,8 +1385,8 @@ class RawCameraController(
 
     /**
      * Step 2 vendor SESSION keys, attached before createCaptureSession.
-     * No-ops when this lens enables no session keys. A HAL rejection of the
-     * parameters only drops the vendor keys; the session itself still opens.
+     * No-ops when this lens enables no session keys. Attachment errors are
+     * caught here; asynchronous session-configuration failures use normal recovery.
      */
     private fun attachVendorSessionParams(device: CameraDevice, config: SessionConfiguration) {
         val routeId = selectedCameraId ?: return
@@ -1409,11 +1402,11 @@ class RawCameraController(
             vendorSessionRoute = routeId
             return
         }
-        val chars = characteristics ?: return
+        val chars = vendorKeyCharacteristics ?: return
         val (params, report) = VendorKeyApply.buildSessionParameters(device, profile, chars) { message ->
             Log.i(LOG_TAG, message)
         }
-        lastVendorSessionReport = report
+        lastVendorSessionReport = report.copy(detail = "Pending session configuration")
         vendorSessionFingerprint = VendorKeyApply.fingerprint(profile.sessionEntries())
         vendorSessionOpmode = profile.operatingMode
         vendorSessionRoute = routeId
@@ -1422,36 +1415,9 @@ class RawCameraController(
             config.setSessionParameters(params)
             Log.i(LOG_TAG, "Vendor session parameters attached for $routeId")
         } catch (failure: IllegalArgumentException) {
+            lastVendorSessionReport = report.rejected("Session parameter attachment rejected")
             Log.w(LOG_TAG, "Vendor session parameters rejected for $routeId", failure)
         }
-    }
-
-    /**
-     * Hidden `CameraDevice.createCustomCaptureSession` via plain reflection —
-     * the same call PhotonVidCam makes through RestrictionBypass. Plain
-     * reflection works where the platform permits hidden access; anything else
-     * throws so the caller falls back to the standard session path.
-     */
-    private fun createCustomCaptureSession(
-        device: CameraDevice,
-        config: SessionConfiguration,
-        opmode: Int,
-        callback: CameraCaptureSession.StateCallback
-    ) {
-        // AOSP signature takes List<OutputConfiguration> (CameraDevice.java,
-        // CameraDeviceImpl.createCustomCaptureSession iterates it as such);
-        // reflection does not check generics, so passing Surfaces threw
-        // ClassCastException inside the framework on every call.
-        val method = device.javaClass.getDeclaredMethod(
-            "createCustomCaptureSession",
-            InputConfiguration::class.java,
-            List::class.java,
-            Int::class.javaPrimitiveType,
-            CameraCaptureSession.StateCallback::class.java,
-            Handler::class.java
-        )
-        method.isAccessible = true
-        method.invoke(device, config.inputConfiguration, config.outputConfigurations, opmode, callback, cameraHandler)
     }
 
     private fun sessionCallback(device: CameraDevice, generation: Int) = object : CameraCaptureSession.StateCallback() {
@@ -4193,7 +4159,7 @@ class RawCameraController(
 
     /** Advertised vendor keys for the open lens, backing the per-lens key editor. */
     fun vendorKeyDiscovery(): List<DiscoveredVendorKey> {
-        val chars = characteristics ?: return emptyList()
+        val chars = vendorKeyCharacteristics ?: return emptyList()
         return VendorKeyAndroid.discover(chars)
     }
 
@@ -4222,7 +4188,7 @@ class RawCameraController(
             return
         }
         val device = camera
-        val chars = characteristics
+        val chars = vendorKeyCharacteristics
         if (device == null || chars == null) {
             onResult(VendorKeyProbeResult(false, "Camera not open"))
             return
@@ -4943,8 +4909,7 @@ class RawCameraController(
         } catch (_: Exception) {
             return
         }
-        if (profile.requestEntries().isEmpty()) return
-        val chars = characteristics ?: return
+        val chars = vendorKeyCharacteristics ?: return
         try {
             val report = VendorKeyApply.applyRequestKeys(
                 builder, profile, chars, activePhysicalCameraId
@@ -4955,8 +4920,8 @@ class RawCameraController(
             if (report.applied.isNotEmpty()) {
                 Log.i(LOG_TAG, "Vendor request keys applied for $routeId: ${report.applied}")
             }
-        } catch (_: Exception) {
-            // Vendor keys must never break a capture request.
+        } catch (failure: Exception) {
+            lastVendorRequestReport = VendorKeyApplyReport(emptyList(), profile.requestEntries().map { it.name }, failure.toString())
         }
     }
 
@@ -6465,6 +6430,10 @@ class RawCameraController(
             rawReaderMaxImages = 0
             activePhysicalCameraId = null
             characteristics = null
+            vendorKeyCharacteristics = null
+            lastVendorSessionReport = null
+            lastVendorRequestReport = null
+            vendorSessionRoute = null
         }
         pairing.clearForTeardown(ignoreReleaseFailures = false)
         rawZslBuffer = null

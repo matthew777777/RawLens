@@ -3,24 +3,18 @@
 
 package com.matthew.rawlens
 
-import android.content.Context
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CaptureRequest
-
 /**
  * Per-lens vendor keys / vendor tags the user adds in settings.
  *
- * Step 1 of the bit-by-bit build: data model + per-lens store + discovery
- * helpers only. Nothing here touches a camera session or a request builder,
- * so adding this file changes no capture behavior.
+ * Data model for the per-lens editor and request/session application.
  *
  * Scope mirrors Camera2 reality (see upstream camera apps):
  * - [VendorKeyScope.SESSION] keys must be loaded into
  *   `SessionConfiguration.setSessionParameters()` *before* session creation.
- *   Vivo X300 Ultra DCG (`vivo.control.forceSensorMode`) only takes effect
- *   this way; setting it per-request does nothing.
- * - [VendorKeyScope.REQUEST] keys ride on every `CaptureRequest.Builder`
- *   (e.g. standard `android.sensor.blackLevelPattern` overrides).
+ *   OEM-specific effects require device verification; see
+ *   `docs/refactor/vendor-keys-study.md`.
+ * - [VendorKeyScope.REQUEST] keys are applied after standard request controls.
+ *   Static black/white-level characteristics are not request overrides.
  */
 enum class VendorKeyType(val label: String) {
     INT("Int32"),
@@ -32,10 +26,16 @@ enum class VendorKeyType(val label: String) {
     INT_ARRAY("Int32[]"),
     LONG_ARRAY("Int64[]"),
     FLOAT_ARRAY("Float[]"),
-    BYTE_ARRAY("Byte[]");
+    BYTE_ARRAY("Byte[]"),
+    STRING("String");
 
     /** Parse a user-typed value into the boxed/array object this key carries. */
     fun parse(raw: String): Any {
+        require(raw.length <= MAX_VALUE_CHARS) { "Value too long" }
+        if (this == STRING) {
+            require('\u0000' !in raw) { "String must not contain NUL" }
+            return raw
+        }
         val text = raw.trim()
         require(text.isNotEmpty()) { "Value must not be blank" }
         require(text.length <= MAX_VALUE_CHARS) { "Value too long" }
@@ -57,6 +57,7 @@ enum class VendorKeyType(val label: String) {
             LONG_ARRAY -> parseLongArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS longs" } }
             FLOAT_ARRAY -> parseFloatArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS floats" } }
             BYTE_ARRAY -> parseByteArray(text).also { require(it.size in 1..MAX_ARRAY_ELEMENTS) { "Need 1..$MAX_ARRAY_ELEMENTS bytes" } }
+            STRING -> raw
         }
     }
 
@@ -95,8 +96,8 @@ enum class VendorKeyType(val label: String) {
             val cells = splitCells(text)
             require(cells.isNotEmpty()) { "Empty array" }
             return ByteArray(cells.size) {
-                cells[it].toIntOrNull()?.takeIf { v -> v in 0..255 }?.toByte()
-                    ?: throw IllegalArgumentException("Not a byte (0..255): ${cells[it]}")
+                cells[it].toIntOrNull()?.takeIf { v -> v in -128..255 }?.toByte()
+                    ?: throw IllegalArgumentException("Not a byte (-128..255): ${cells[it]}")
             }
         }
     }
@@ -134,8 +135,11 @@ data class VendorKeyEntry(
         type.parse(value)
     }
 
-    /** Boxed/array payload for `CaptureRequest.Key` set calls (Step 2 consumes this). */
+    /** Typed payload for request/session application. */
     fun parsedValue(): Any = type.parse(value)
+
+    /** Canonical identity also deduplicates differently spelled numeric aliases. */
+    fun identity(): String = numericTagValue(name)?.let { "0x" + it.toUInt().toString(16) } ?: name.trim()
 
     fun toJson(): String = buildString {
         append("{\"n\":\"").append(VendorKeyJson.esc(name.trim())).append('"')
@@ -150,7 +154,7 @@ data class VendorKeyEntry(
         private val NAME_CHARS = Regex("[A-Za-z0-9._-]+")
         private val NUMERIC_TAG = Regex("0[xX][0-9a-fA-F]{1,8}")
 
-        /** Numeric vendor tag (`0x80020000`), as RAWR accepts alongside names. */
+        /** Numeric aliases resolve against the open camera's advertised request keys. */
         fun isNumericTag(name: String): Boolean = NUMERIC_TAG.matches(name.trim())
 
         /** 32-bit tag value, or null when out of range. */
@@ -170,8 +174,9 @@ data class VendorKeyEntry(
                 ?: throw IllegalArgumentException("Unknown vendor key type: ${obj["t"]}")
             val scope = VendorKeyScope.fromId(obj["s"] as? String)
                 ?: throw IllegalArgumentException("Unknown vendor key scope: ${obj["s"]}")
+            require(!obj.containsKey("e") || obj["e"] is Boolean) { "Enabled must be Boolean" }
             return VendorKeyEntry(
-                name = obj["n"] as? String ?: throw IllegalArgumentException("Vendor key needs a name"),
+                name = (obj["n"] as? String)?.trim() ?: throw IllegalArgumentException("Vendor key needs a name"),
                 type = type,
                 scope = scope,
                 value = obj["v"] as? String ?: throw IllegalArgumentException("Vendor key needs a value"),
@@ -195,13 +200,12 @@ data class VendorKeyProfile(
     val entries: List<VendorKeyEntry> = emptyList(),
     /**
      * Vendor stream operating mode (`0` = default). Non-zero opens the session
-     * through the hidden `createCustomCaptureSession` path like PhotonVidCam,
-     * which is how recipes such as Xiaomi 15 Ultra DCG (opmode 37379) select
-     * their sensor mode. `0` keeps the standard session path untouched.
+     * through `SessionConfiguration` so early session keys travel with it. OEM values and sensor effects require device verification.
+     * `0` keeps the standard session path untouched.
      */
     val operatingMode: Int = 0
 ) {
-    fun isEmpty(): Boolean = entries.isEmpty()
+    fun isEmpty(): Boolean = entries.isEmpty() && operatingMode == 0
 
     fun activeEntries(): List<VendorKeyEntry> = entries.filter { it.enabled }
 
@@ -211,22 +215,23 @@ data class VendorKeyProfile(
 
     /**
      * Preset application: this profile's keys win; [other]'s entries are
-     * appended only where no same-named key exists. Never deletes.
+     * appended only where no same-named key exists. A nonzero lens mode wins;
+     * otherwise adopt the imported mode. Never deletes.
      */
     fun mergedWith(other: VendorKeyProfile): VendorKeyProfile {
-        val names = entries.map { it.name.trim() }.toSet()
+        val names = entries.map { it.identity() }.toSet()
         return VendorKeyProfile(
-            (entries + other.entries.filter { it.name.trim() !in names }).sortedBy { it.name },
-            operatingMode
+            (entries + other.entries.filter { it.identity() !in names }).sortedBy { it.name },
+            operatingMode.takeIf { it != 0 } ?: other.operatingMode
         )
     }
 
     fun validate() {
         entries.forEach(VendorKeyEntry::validate)
-        val names = entries.map { it.name.trim() }
+        val names = entries.map { it.identity() }
         require(names.size == names.toSet().size) { "Duplicate vendor key name" }
         require(entries.size <= MAX_ENTRIES) { "Too many vendor keys (max $MAX_ENTRIES)" }
-        require(operatingMode >= 0) { "Operating mode cannot be negative" }
+        require(VendorSessionAttempt.validMode(operatingMode)) { "Mode must be 0 or a vendor mode (32768 or higher)" }
     }
 
     fun toJson(): String = buildString {
@@ -242,21 +247,40 @@ data class VendorKeyProfile(
         const val FORMAT_VERSION = 1
         const val MAX_ENTRIES = 32
 
-        fun fromJson(json: String?): VendorKeyProfile {
+        const val MAX_JSON_CHARS = 262144
+
+        /** Tolerant persisted load; imports use strict=true to avoid silently dropping data. */
+        fun fromJson(json: String?, strict: Boolean = false): VendorKeyProfile {
             if (json.isNullOrBlank()) return VendorKeyProfile()
+            require(json.length <= MAX_JSON_CHARS) { "Vendor key profile too large" }
             val root = VendorKeyJson.parseObject(json)
+            require(!root.containsKey("v") || root["v"] == FORMAT_VERSION.toLong()) {
+                "Unsupported vendor key profile version"
+            }
             val array = root["entries"] as? List<*>
                 ?: throw IllegalArgumentException("Vendor key profile needs an entries array")
-            val kept = mutableListOf<VendorKeyEntry>()
+            val kept = linkedMapOf<String, VendorKeyEntry>()
             for (row in array) {
-                // Tolerant load: drop single bad rows (hand edits, OEM renames),
-                // keep every valid key. Strict validation still applies on save.
-                @Suppress("UNCHECKED_CAST")
-                val obj = row as? Map<String, Any?> ?: continue
-                runCatching { VendorKeyEntry.fromJson(obj) }.onSuccess { kept += it }
+                val entry = runCatching {
+                    @Suppress("UNCHECKED_CAST")
+                    val obj = row as? Map<String, Any?>
+                        ?: throw IllegalArgumentException("Invalid vendor key row")
+                    VendorKeyEntry.fromJson(obj)
+                }.getOrElse { failure ->
+                    if (strict) throw IllegalArgumentException("Invalid vendor key row", failure)
+                    continue
+                }
+                if (entry.identity() in kept || kept.size >= MAX_ENTRIES) {
+                    require(!strict) { "Duplicate or too many vendor keys" }
+                    continue
+                }
+                kept[entry.identity()] = entry
             }
-            val opmode = (root["op"] as? Long)?.toInt()?.takeIf { it >= 0 } ?: 0
-            return VendorKeyProfile(kept, opmode)
+            val storedMode = root["op"] as? Long
+            val mode = storedMode?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
+                ?.toInt()?.takeIf(VendorSessionAttempt::validMode)
+            require(!strict || !root.containsKey("op") || mode != null) { "Invalid operating mode" }
+            return VendorKeyProfile(kept.values.toList(), mode ?: 0)
         }
 
         /** Pure + host-tested: parses the session operating mode field. */
@@ -265,14 +289,14 @@ data class VendorKeyProfile(
             require(clean.isNotEmpty()) { "Operating mode must not be blank (0 = default)" }
             val value = clean.toIntOrNull()
                 ?: throw IllegalArgumentException("Operating mode must be a whole number")
-            require(value >= 0) { "Operating mode cannot be negative" }
+            require(VendorSessionAttempt.validMode(value)) { "Mode must be 0 or a vendor mode (32768 or higher)" }
             return value
         }
 
         /**
          * Disabled-by-default templates shown when a lens has no keys yet.
          * Enabling them is always explicit: nothing is sent until the user
-         * toggles a key on (Step 2 reads only [VendorKeyProfile.activeEntries]).
+         * toggles a key on (application reads only [VendorKeyProfile.activeEntries]).
          *
          * Black/white levels are deliberately NOT here: SDK-verified, no
          * `CaptureRequest` keys exist for them, so they stay on the per-lens
@@ -280,7 +304,7 @@ data class VendorKeyProfile(
          */
         fun presets(): VendorKeyProfile = VendorKeyProfile(
             listOf(
-                // Proven Vivo X300 Ultra DCG switch: session-early only.
+                // Legacy opt-in template; device effect is not verified by this audit.
                 VendorKeyEntry(
                     name = "vivo.control.forceSensorMode",
                     type = VendorKeyType.INT,
@@ -291,309 +315,4 @@ data class VendorKeyProfile(
             )
         )
     }
-}
-
-/**
- * Minimal JSON codec for the fixed vendor-key shape. Pure Kotlin (no Android
- * calls) so host unit tests exercise the real round trip; mirrors the
- * escaping rules in [SettingsBackup].
- */
-internal object VendorKeyJson {
-    fun esc(s: String): String = buildString(s.length + 8) {
-        for (c in s) when (c) {
-            '"' -> append("\\\"")
-            '\\' -> append("\\\\")
-            '\n' -> append("\\n")
-            '\r' -> append("\\r")
-            '\t' -> append("\\t")
-            else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
-        }
-    }
-
-    fun parseObject(json: String): Map<String, Any?> {
-        val parsed = Parser(json).parse()
-            ?: throw IllegalArgumentException("Vendor key profile must be a JSON object")
-        @Suppress("UNCHECKED_CAST")
-        return parsed as? Map<String, Any?>
-            ?: throw IllegalArgumentException("Vendor key profile must be a JSON object")
-    }
-
-    private class Parser(private val text: String) {
-        private var pos = 0
-
-        fun parse(): Any? {
-            val value = parseValue(0)
-            skipWs()
-            if (pos != text.length) fail("trailing characters")
-            return value
-        }
-
-        private fun parseValue(depth: Int): Any? {
-            if (depth > 16) fail("nesting too deep")
-            skipWs()
-            if (pos >= text.length) fail("unexpected end")
-            return when (val c = text[pos]) {
-                '{' -> parseObject(depth + 1)
-                '[' -> parseArray(depth + 1)
-                '"' -> parseString()
-                't' -> literal("true", true)
-                'f' -> literal("false", false)
-                'n' -> literal("null", null)
-                '-', in '0'..'9' -> parseNumber()
-                else -> fail("unexpected '$c'")
-            }
-        }
-
-        private fun parseObject(depth: Int): Map<String, Any?> {
-            pos++ // {
-            val out = LinkedHashMap<String, Any?>()
-            skipWs()
-            if (peek() == '}') {
-                pos++
-                return out
-            }
-            while (true) {
-                skipWs()
-                if (peek() != '"') fail("object keys must be strings")
-                val key = parseString()
-                skipWs()
-                if (peek() != ':') fail("expected ':'")
-                pos++
-                out[key] = parseValue(depth)
-                skipWs()
-                when (peek()) {
-                    ',' -> pos++
-                    '}' -> {
-                        pos++
-                        return out
-                    }
-                    else -> fail("expected ',' or '}'")
-                }
-            }
-        }
-
-        private fun parseArray(depth: Int): List<Any?> {
-            pos++ // [
-            val out = ArrayList<Any?>()
-            skipWs()
-            if (peek() == ']') {
-                pos++
-                return out
-            }
-            while (true) {
-                out.add(parseValue(depth))
-                skipWs()
-                when (peek()) {
-                    ',' -> pos++
-                    ']' -> {
-                        pos++
-                        return out
-                    }
-                    else -> fail("expected ',' or ']'")
-                }
-            }
-        }
-
-        private fun parseString(): String {
-            pos++ // opening quote
-            val sb = StringBuilder()
-            while (true) {
-                if (pos >= text.length) fail("unterminated string")
-                val c = text[pos++]
-                if (c == '"') return sb.toString()
-                if (c != '\\') {
-                    sb.append(c)
-                    continue
-                }
-                if (pos >= text.length) fail("unterminated escape")
-                when (val e = text[pos++]) {
-                    '"', '\\', '/' -> sb.append(e)
-                    'n' -> sb.append('\n')
-                    'r' -> sb.append('\r')
-                    't' -> sb.append('\t')
-                    'b' -> sb.append('\b')
-                    'u' -> {
-                        if (pos + 4 > text.length) fail("bad unicode escape")
-                        val hex = text.substring(pos, pos + 4)
-                        pos += 4
-                        sb.append(hex.toIntOrNull(16)?.toChar() ?: fail("bad unicode escape"))
-                    }
-                    else -> fail("bad escape '\\$e'")
-                }
-            }
-        }
-
-        private fun parseNumber(): Number {
-            val start = pos
-            if (peek() == '-') pos++
-            while (pos < text.length && (text[pos].isDigit() || text[pos] in ".eE+-")) pos++
-            val raw = text.substring(start, pos)
-            raw.toLongOrNull()?.let { return it }
-            return raw.toDoubleOrNull() ?: fail("bad number $raw")
-        }
-
-        private fun literal(word: String, value: Any?): Any? {
-            if (!text.startsWith(word, pos)) fail("expected $word")
-            pos += word.length
-            return value
-        }
-
-        private fun skipWs() {
-            while (pos < text.length && text[pos].isWhitespace()) pos++
-        }
-
-        private fun peek(): Char = if (pos < text.length) text[pos] else 0.toChar()
-
-        private fun fail(message: String): Nothing =
-            throw IllegalArgumentException("Invalid vendor key JSON: $message")
-    }
-}
-
-/** Per-lens vendor-key storage. Mirrors [DngMetadataOverrideStore] keying. */
-class VendorKeyStore(context: Context) {
-    private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
-    fun get(cameraId: String?): VendorKeyProfile = VendorKeyProfile.fromJson(
-        cameraId?.let { preferences.getString(key(it), null) }
-    )
-
-    fun hasProfile(cameraId: String?): Boolean =
-        cameraId != null && preferences.contains(key(cameraId))
-
-    fun save(cameraId: String, profile: VendorKeyProfile) {
-        profile.validate()
-        preferences.edit().putString(key(cameraId), profile.toJson()).apply()
-    }
-
-    fun clear(cameraId: String) = preferences.edit().remove(key(cameraId)).apply()
-
-    /** Named user presets, shareable across lenses. Never deleted by lens reset. */
-    fun listPresets(): List<String> = preferences.all.keys
-        .filter { it.startsWith(PRESET_PREFIX) }
-        .map { it.removePrefix(PRESET_PREFIX) }
-        .sorted()
-
-    fun getPreset(name: String): VendorKeyProfile = VendorKeyProfile.fromJson(
-        preferences.getString(presetKey(cleanPresetName(name)), null)
-    )
-
-    fun savePreset(name: String, profile: VendorKeyProfile) {
-        profile.validate()
-        preferences.edit().putString(presetKey(cleanPresetName(name)), profile.toJson()).apply()
-    }
-
-    fun deletePreset(name: String) {
-        preferences.edit().remove(presetKey(cleanPresetName(name))).apply()
-    }
-
-    private fun key(cameraId: String) = "profile_$cameraId"
-
-    private fun presetKey(name: String) = "$PRESET_PREFIX$name"
-
-    companion object {
-        const val PREFS_NAME = "rawlens_vendor_keys"
-        const val PRESET_PREFIX = "preset_"
-        const val MAX_PRESET_NAME_CHARS = 64
-        private val PRESET_NAME_CHARS = Regex("[A-Za-z0-9 _-]+")
-
-        /** Pure + host-tested: trims and validates a user preset name. */
-        fun cleanPresetName(name: String): String {
-            val clean = name.trim()
-            require(clean.isNotEmpty()) { "Preset name must not be blank" }
-            require(clean.length <= MAX_PRESET_NAME_CHARS) { "Preset name too long" }
-            require(PRESET_NAME_CHARS.matches(clean)) { "Preset name uses unsupported characters" }
-            return clean
-        }
-    }
-}
-
-/** One key discovered on-device, with a hint for which scope accepts it. */
-data class DiscoveredVendorKey(
-    val name: String,
-    val scopeHint: VendorKeyScope,
-    val source: String,
-    /** Native tag (`0x…`) resolved like RAWR, null when the HAL hides it. */
-    val tagHex: String? = null
-)
-
-/**
- * Android reflection/discovery helpers, line-by-line after PhotonVidCam:
- * - `VendorTagUtils.isSupported(builder, key)` probes `builder.get(key)` and
- *   treats `IllegalArgumentException` as "not on this camera".
- * - `SettingsActivity.getCharacteristicsValue` enumerates
- *   `characteristics.getKeys()` by name. PhotonVidCam's further fallback
- *   (constructing a hidden `CameraCharacteristics.Key` by reflection) is not
- *   used here: discovery lists only keys the HAL advertises.
- */
-object VendorKeyAndroid {
-    /** Enumerate everything this lens advertises, tagged with the scope that accepts it. */
-    fun discover(characteristics: CameraCharacteristics): List<DiscoveredVendorKey> {
-        val found = linkedMapOf<String, DiscoveredVendorKey>()
-        runCatching { characteristics.keys }.getOrDefault(emptyList()).forEach { key ->
-            found[key.name] = DiscoveredVendorKey(key.name, VendorKeyScope.REQUEST, "characteristics", tagHexOf(key))
-        }
-        runCatching { characteristics.availableCaptureRequestKeys }.getOrDefault(emptyList()).forEach { key ->
-            found.putIfAbsent(key.name, DiscoveredVendorKey(key.name, VendorKeyScope.REQUEST, "request", tagHexOf(key)))
-        }
-        runCatching { characteristics.availableSessionKeys }.getOrDefault(emptyList()).forEach { key ->
-            found[key.name] = DiscoveredVendorKey(key.name, VendorKeyScope.SESSION, "session", tagHexOf(key))
-        }
-        return found.values.sortedBy { it.name }
-    }
-
-    /**
-     * Native tag for a key name, mirroring RAWR's `CameraTagResolver`: match an
-     * advertised key first, else read through a constructed characteristics key
-     * (some HALs accept tags missing from every list). Null when unresolvable.
-     */
-    fun resolveNativeTag(characteristics: CameraCharacteristics, name: String): Int? = runCatching {
-        val clean = name.trim()
-        if (clean.isEmpty()) return@runCatching null
-        val keys = characteristics.availableCaptureRequestKeys +
-            characteristics.availableSessionKeys.orEmpty() +
-            characteristics.availablePhysicalCameraRequestKeys.orEmpty()
-        val match = keys.firstOrNull { it.name == clean }
-        if (match != null) return@runCatching tagOf(match)
-        val probeKey = CameraCharacteristics.Key(clean, ByteArray::class.java)
-        try {
-            characteristics.get(probeKey)
-        } catch (_: IllegalArgumentException) {
-            return@runCatching null
-        }
-        tagOf(probeKey)
-    }.getOrNull()
-
-    /** Native tag of an advertised key object, or null when hidden. */
-    fun tagOf(key: Any): Int? = runCatching {
-        val nativeKey = nativeKeyOf(key) ?: return@runCatching null
-        nativeKey.javaClass.getDeclaredMethod("getTag").invoke(nativeKey) as? Int
-    }.getOrNull()
-
-    fun tagHexOf(key: Any): String? = tagOf(key)?.let(::tagHex)
-
-    fun tagHex(tag: Int): String = "0x" + tag.toUInt().toString(16).uppercase()
-
-    private fun nativeKeyOf(key: Any): Any? = runCatching {
-        val method = key.javaClass.getDeclaredMethod("getNativeKey")
-        method.isAccessible = true
-        method.invoke(key)
-    }.getOrNull()
-
-    /** PhotonVidCam `VendorTagUtils.isSupported`: probe-only, never throws. */
-    fun isSupported(builder: CaptureRequest.Builder, key: CaptureRequest.Key<*>): Boolean =
-        try {
-            builder.get(key)
-            true
-        } catch (_: IllegalArgumentException) {
-            false
-        }
-
-    /** Typed `CaptureRequest.Key` construction; null when the HAL rejects the name. */
-    fun <T> requestKeyOf(name: String, clazz: Class<T>): CaptureRequest.Key<T>? =
-        try {
-            CaptureRequest.Key(name, clazz)
-        } catch (_: Exception) {
-            null
-        }
-
 }

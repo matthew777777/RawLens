@@ -1,0 +1,54 @@
+RawLens vendor-key gap validation — 2026-10-27
+Full release: RawLens-1.0.558-release-arm64-v8a.apk (versionCode 645)
+SHA-256 (built and installed): c29c91f39caeb137371218ca39cd6c1055eaae9572ef2dc849720301b98f5704
+Phone: Xiaomi 25080RABDG (lapis), Android 16 / API 36; selected route 3
+Normal R8 optimization and resource shrinking; native Release; non-debuggable; ART speed compile success.
+No deviceTest APK installed or used for runtime evidence.
+
+JVM suite: 1700 tests, 0 failures, 0 errors, 5 skipped; vendor tests 42/42.
+Full release assembleRelease: BUILD SUCCESSFUL (2m 16s).
+
+Release UI checks (no reflection into minified app classes):
+PASS discovery resolved android.control.aeMode -> 0x10003
+PASS profile import/export retained mode 37379 plus early and numeric request controls
+PASS 19:33:21.264: Vendor session parameters attached for 3
+PASS 19:33:21.264: Submitting vendor session: VendorSessionAttempt(operatingMode=37379, parameters=true) legacy=false
+PASS 19:33:21.331: Vendor request keys applied for 3: [0x10003]
+PASS 19:33:21.332: Session ready (zsl=false vf=true)
+PASS 19:33:44.613: DNG saved name=IMG_20261027_193344_162.dng
+PASS add/delete inactive key preserved operating mode
+PASS 0xFFFFFFFF probe explicitly refused as unresolved
+PASS mode-only profile import/export
+PASS reserved mode 1 import refused without changing saved profile
+PASS original empty profile restored and standard camera reopened; screenshot READY
+
+Saved DNG validation:
+{
+  "bytes": 24977962,
+  "rawSize": [
+    4080,
+    3060
+  ],
+  "bitsPerSample": [
+    16
+  ],
+  "compression": [
+    1
+  ],
+  "strips": 1,
+  "payloadVaries": true
+}
+
+Limits: mode acceptance is not proof of DCG/remosaic or any proprietary sensor effect.
+Physical routing and asynchronous fallback fault-tested in JVM, not induced on this phone.
+No multi-device performance A/B; no claim of universal OEM compatibility.
+UI driver failures (text entry, canonical sort comparison, reopening after Cancel) were corrected;
+profiles were restored after each run. Core checks passed in main UI run, remaining imports in extra run.
+No production source changes were required by those UI driver corrections.
+Initial combined Gradle packaging hit lint FIR failure; next combined run terminated.
+Isolated final unit suite and full-release packaging both passed.
+
+Reusable full-release-only harness: tools/vendor_release_smoke.py
+Build/unit logs: /tmp/rawlens-vendor-ready-final-unit.log; /tmp/rawlens-vendor-ready-release-build.log
+Phone logs: /tmp/rawlens-vendor-release-ui-results.txt; /tmp/rawlens-vendor-release-extra-results.txt
+Artifacts: /tmp/rawlens-vendor-release-ui/ (screenshots, captured DNG, camera logs, DNG validation JSON)
