@@ -4,6 +4,7 @@ Requires clang++ (or CXX). No third-party Python packages. Run from any director
 The OpenCL kernel bodies are used verbatim except their image coordinate constructor.
 """
 import os
+import argparse
 from pathlib import Path
 import subprocess
 import tempfile
@@ -74,13 +75,41 @@ int main(int argc,char **argv) {
 }
 '''
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', type=Path, help='Headerless little-endian float32 CFA')
+    parser.add_argument('--width', type=int)
+    parser.add_argument('--height', type=int)
+    parser.add_argument('--pattern', choices=['RGGB', 'GRBG', 'GBRG', 'BGGR'], default='RGGB')
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args()
+    main_source = MAIN
+    destination = FIXTURE
+    if args.input:
+        if not args.width or not args.height or not args.output:
+            parser.error('--input requires --width, --height and --output')
+        if args.input.stat().st_size != args.width * args.height * 4:
+            parser.error('Input size does not match dimensions')
+        cells = {'RGGB': [0,1,1,2], 'GRBG': [1,0,2,1],
+                 'GBRG': [1,2,0,1], 'BGGR': [2,1,1,0]}[args.pattern]
+        filters = sum(c << (2*i) for i,c in enumerate(cells))
+        main_source = main_source.replace('w=192,h=144', f'w={args.width},h={args.height}')
+        main_source = main_source.replace('filters=0|(1<<2)|(1<<4)|(2<<6)', f'filters={filters}')
+        start = main_source.index('  uint32_t state=42;')
+        end = main_source.index('  image2d_t', start)
+        main_source = main_source[:start] + '''  std::ifstream raw(argv[2],std::ios::binary);
+  raw.read(reinterpret_cast<char*>(input.data()),w*h*4);
+''' + main_source[end:]
+        destination = args.output
     kernels = SOURCE.read_text().replace('(int2)(x, y)', 'Int2{x,y}')
     with tempfile.TemporaryDirectory(prefix='opposed-reference-') as temp:
         source = Path(temp)/'oracle.cpp'
         exe = Path(temp)/'oracle'
-        source.write_text(PRELUDE + kernels + MAIN)
+        source.write_text(PRELUDE + kernels + main_source)
         subprocess.run([os.environ.get('CXX','clang++'),'-std=c++17','-O2','-ffp-contract=off',str(source),'-o',str(exe)],check=True)
-        FIXTURE.parent.mkdir(parents=True,exist_ok=True)
-        subprocess.run([str(exe),str(FIXTURE)],check=True)
-    print(FIXTURE)
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        command = [str(exe),str(destination)]
+        if args.input:
+            command.append(str(args.input))
+        subprocess.run(command,check=True)
+    print(destination)
 if __name__ == '__main__': main()

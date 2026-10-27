@@ -45,7 +45,17 @@ class OpposedRealDngParityDeviceTest {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
         val name=InstrumentationRegistry.getArguments().getString("opposedCase")
         org.junit.Assume.assumeTrue("Pass -e opposedCase <case directory>",name!=null)
-        val dir=File(context.getExternalFilesDir(null),"opposed-real-dng/$name")
+        require(name!!.matches(Regex("[A-Za-z0-9_-]+")))
+        val dir=File(context.cacheDir,"opposed-real-dng/$name").apply { mkdirs() }
+        // adb-created external directories may belong to shell on scoped-storage devices.
+        // Import through instrumentation's shell identity, then read as the app.
+        for (file in listOf("manifest.json", "input.f32", "darktable-output.f32")) {
+            val path="${context.getExternalFilesDir(null)}/opposed-real-dng/$name/$file"
+            val fd=InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("cat $path")
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).use { source ->
+                File(dir,file).outputStream().use { source.copyTo(it) }
+            }
+        }
         val manifest=JSONObject(File(dir,"manifest.json").readText())
         val w=manifest.getInt("width"); val h=manifest.getInt("height")
         val pattern=BayerPattern.valueOf(manifest.getString("pattern"))
@@ -73,6 +83,8 @@ class OpposedRealDngParityDeviceTest {
         File(dir,"vulkan-report.json").writeText(report.toString(2))
         write(File(dir,"vulkan-output.f32"),result.cfa.values)
         Log.i("OpposedDng",report.toString())
+        if (manifest.optBoolean("expect_bit_exact", false))
+            assertEquals("Pinned source oracle mismatch: $report", 0, bits)
         // Numerical bound is separate from the strict bit-mismatch report.
         assertTrue("Unexpected reconstruction divergence: $report",maxError<0.0001f)
     }

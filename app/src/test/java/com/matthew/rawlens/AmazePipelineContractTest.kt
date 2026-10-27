@@ -57,7 +57,11 @@ class AmazePipelineContractTest {
             assertTrue("$asset declares u_white_window",
                 shader.contains("uniform highp vec2 u_white_window;"))
             assertTrue("$asset blends with u_white_window",
-                shader.contains("smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb)"))
+                shader.contains("smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), sensorRgb)"))
+            assertTrue("$asset detects clipping before demosaic balance",
+                shader.contains("sensorRgb = cameraRgb * u_demosaic_unbalance;"))
+            assertTrue("$asset declares inverse balance",
+                shader.contains("uniform highp vec3 u_demosaic_unbalance;"))
             assertTrue("$asset keeps no hardcoded white window",
                 !shader.contains("smoothstep(vec3(0.70), vec3(0.99), cameraRgb)"))
         }
