@@ -302,6 +302,14 @@ revision `f0b77bf03aa5fce5a3ebe25988fef36ec43f5096`.
 RawLens precomputes ARGB8 entries and supplies RAW EV rather than processed luma.
 Bundled notices and license texts: `app/src/main/assets/licenses/`.
 
+## Cinematic RAW Studio (.CRAW) encoder and decoder
+
+`third_party/craw/{encoder,decoder}` vendor the Cinematic RAW Studio encoder
+and decoder (Apache License 2.0; LICENSE and NOTICE files alongside, commit
+pins in `third_party/craw/SOURCE.md`). They are linked into the separate
+`rawLensCraw` and `rawLensCrawReader` native libraries through RawLens'
+GPL-3.0-or-later JNI bridges (`craw_writer_jni.cpp`, `craw_reader_jni.cpp`).
+
 ## Packed-ratio RCD variant
 
 The shaders under `app/src/main/assets/shaders/rcd_packed` are adapted from the user-provided packed-ratio RCD source archive (commit e0e284d58f85ae9c4bc1b2cffe0c9722969a7bb8), licensed under GNU GPL v3. Original sources, license, and provenance are preserved in `third_party/rcd-packed-upstream`.

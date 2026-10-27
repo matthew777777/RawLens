@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Lossless encoder for .CRAW codec 1 ("CRAW-Fast") frame payloads.
+// Wire format: CinematicRAWStudio-Spec/SPEC.md section 3.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace craw {
+
+enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3 };
+
+struct FrameDesc {
+    uint32_t width = 0;      // even
+    uint32_t height = 0;     // even
+    uint8_t bitDepth = 10;   // 1..16, every sample < 2^bitDepth
+    Cfa cfa = Cfa::RGGB;
+    uint16_t tile = 128;     // tile edge in plane samples
+    uint16_t riceInit = 0;   // 0 = default noise class for bitDepth
+};
+
+uint16_t defaultRiceInit(uint8_t bitDepth);
+
+// Encodes one Bayer frame of `height` rows, `strideSamples` uint16 apart.
+// `threads` > 1 encodes tiles in parallel; output is identical either way.
+// `out` is cleared first and its capacity reused.
+// Throws std::invalid_argument on bad geometry or out-of-range samples.
+void encodeFrame(const uint16_t* raw, size_t strideSamples, const FrameDesc& desc,
+                 std::vector<uint8_t>& out, unsigned threads = 1);
+
+// Same, into caller memory (e.g. a pooled direct buffer); returns the payload
+// size. Throws std::length_error when `capacity` is too small.
+size_t encodeFrame(const uint16_t* raw, size_t strideSamples, const FrameDesc& desc,
+                   uint8_t* dst, size_t capacity, unsigned threads = 1);
+
+}  // namespace craw
