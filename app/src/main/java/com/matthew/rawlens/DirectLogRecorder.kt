@@ -1172,6 +1172,9 @@ class DirectLogRecorder(
     /** Latest mic peak 0..1 for HUD meters (0 when silent); safe any thread. */
     fun audioLevel(): Float = pcm?.lastPeak ?: 0f
 
+    /** Latest stereo peaks [L, R] in dBFS, or null without audio. */
+    fun audioLevelsDbfs(): FloatArray? = pcm?.let { floatArrayOf(it.lastPeakDbfsL, it.lastPeakDbfsR) }
+
     /**
      * Photo-tile range for the live slider while rolling. Shutter caps at
      * the 1/[fps] frame budget (the stills controller is stopped).

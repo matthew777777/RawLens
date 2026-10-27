@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicLongArray
  *   (a mid-take resolution change would break players): read once at
  *   [start] into [binActive], which also gates the frame-JSON dimensions
  *   and the % 8 crop resolve.
- * - P4 streams: PCM16 stereo-first audio ([AudioPcmRecorder]) and continuous
+ * - P4 streams: 32-bit float (PCM16 fallback) stereo-first audio ([AudioPcmRecorder]) and continuous
  *   gyro/accel ([MotionRecorder]) share the video frame timeline. Capture
  *   runs on boot-time ns, but every on-disk timestamp is
  *   recording-relative (`ts - timeOriginNs`, the first queued frame's
@@ -421,7 +421,7 @@ internal class RawVideoRecorder(
         var audioChannels = 0
         if (audioEnabled) {
             val rec = AudioPcmRecorder()
-            if (rec.start { chunk -> onAudioChunk(chunk) }) {
+            if (rec.start(preferFloat = true) { chunk -> onAudioChunk(chunk) }) {
                 audio = rec
                 hasAudioStream = true
                 audioRate = AudioPcmRecorder.SAMPLE_RATE
@@ -431,7 +431,8 @@ internal class RawVideoRecorder(
         writerHandle = try {
             val meta = CrawMetadata.container(
                 containerMetadataJson, chars, realtime, audioRate,
-                audioChannels, hasMotionStream, orientation
+                audioChannels, hasMotionStream, orientation,
+                audioFloat = audio?.isFloat == true
             )
             CrawWriter.open(output.absolutePath, meta)
         } catch (e: Exception) {
@@ -742,6 +743,9 @@ internal class RawVideoRecorder(
 
     /** Latest mic peak 0..1 for HUD meters (0 when silent); safe any thread. */
     fun audioLevel(): Float = audio?.lastPeak ?: 0f
+
+    /** Latest stereo peaks [L, R] in dBFS (float input may exceed 0), or null without audio. */
+    fun audioLevelsDbfs(): FloatArray? = audio?.let { floatArrayOf(it.lastPeakDbfsL, it.lastPeakDbfsR) }
 
     /**
      * Photo-tile range for the live slider while rolling. Uses this take's
@@ -1175,7 +1179,8 @@ internal class RawVideoRecorder(
                 audioDropped.incrementAndGet()
             } else try {
                 CrawWriter.writeAudio(
-                    writerHandle, chunk.data, chunk.frames, chunk.channels, rel
+                    writerHandle, chunk.data, chunk.frames, chunk.channels, rel,
+                    float = chunk.float
                 )
                 audioChunks.incrementAndGet()
                 audioFrames.addAndGet(chunk.frames.toLong())

@@ -206,6 +206,8 @@ class MainActivity : Activity() {
     private lateinit var videoDebugOverlay: TextView
     /** Peak-held mic level feeding the stats-box audio line (HUD tick decays it). */
     private var videoAudioPeak = 0f
+    /** Stereo meter peak hold [L, R] in dBFS. */
+    private val videoAudioPeakDb = floatArrayOf(AudioPcmRecorder.METER_MIN_DB, AudioPcmRecorder.METER_MIN_DB)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -2743,13 +2745,23 @@ class MainActivity : Activity() {
     private fun audioMeterLine(): String {
         if (!videoSoundOn()) {
             videoAudioPeak = 0f
+            videoAudioPeakDb.fill(AudioPcmRecorder.METER_MIN_DB)
             return "AUD MUTED"
         }
-        val level = (videoRecorder?.audioLevel() ?: logRecorder?.audioLevel() ?: 0f)
-            .coerceIn(0f, 1f)
-        videoAudioPeak = maxOf(level, videoAudioPeak * 0.85f)
-        val filled = (videoAudioPeak * 10f).toInt().coerceIn(0, 10)
-        return "AUD [" + "#".repeat(filled) + "-".repeat(10 - filled) + "]"
+        val db = videoRecorder?.audioLevelsDbfs() ?: logRecorder?.audioLevelsDbfs()
+            ?: floatArrayOf(AudioPcmRecorder.METER_MIN_DB, AudioPcmRecorder.METER_MIN_DB)
+        // Peak hold in dB: falls 1.5 dB per HUD tick.
+        videoAudioPeakDb[0] = maxOf(db[0], videoAudioPeakDb[0] - 1.5f)
+        videoAudioPeakDb[1] = maxOf(db[1], videoAudioPeakDb[1] - 1.5f)
+        return "AUD L" + stereoMeterBar(videoAudioPeakDb[0]) + " R" + stereoMeterBar(videoAudioPeakDb[1])
+    }
+
+    /** dBFS (-60..+12) as 12 segments of 6 dB; `!` marks segments above 0 dBFS. */
+    private fun stereoMeterBar(db: Float): String {
+        val filled = ((db - AudioPcmRecorder.METER_MIN_DB) / 6f).toInt().coerceIn(0, 12)
+        val bar = StringBuilder("[")
+        for (i in 0 until 12) bar.append(if (i >= filled) '-' else if (i >= 10) '!' else '#')
+        return bar.append("] ").append(String.format(java.util.Locale.US, "%+3.0f", db)).toString()
     }
 
     /** Persisted Direct-Log grade gain in EV stops, 0 (= ×1.0 neutral) out of

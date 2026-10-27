@@ -11,7 +11,7 @@ import org.json.JSONObject
 internal object CrawMetadata {
     fun container(base: String, chars: CameraCharacteristics, realtime: Boolean,
                   audioRate: Int, audioChannels: Int, motion: Boolean, orientation: Int,
-                  recordingType: String = "VIDEO"): String {
+                  recordingType: String = "VIDEO", audioFloat: Boolean = false): String {
         val json = JSONObject(base)
         val cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         require(cfa != null && cfa in 0..3) { "CRAW requires a Bayer sensor" }
@@ -52,6 +52,7 @@ internal object CrawMetadata {
         val extra = json.optJSONObject("extraData") ?: JSONObject()
         extra.put("audioSampleRate", audioRate)
         extra.put("audioChannels", if (audioRate > 0) audioChannels else 0)
+        if (audioRate > 0) extra.put("audioFormat", if (audioFloat) "F32" else "S16")
         extra.put("formatName", "CRAW")
         extra.put("frameRate", RawVideoRecorder.FPS)
         extra.put("recordingType", recordingType)
