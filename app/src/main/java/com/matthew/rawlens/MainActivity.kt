@@ -3027,7 +3027,7 @@ class MainActivity : Activity() {
             "\"width\":${size.width},\"height\":${size.height}," +
             "\"crop\":\"${videoCrop.name}\",\"fps\":${RawVideoRecorder.FPS}," +
             (if (bin) "\"binning\":\"" +
-                (if (lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) == BINNING_CFA) "centred2x2" else "rgb2x2") +
+                (if (lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) == BINNING_CFA) "remosaic2x2" else "rgb2x2") +
                 "\"," else "") +
             "\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Video\"}"
     }
