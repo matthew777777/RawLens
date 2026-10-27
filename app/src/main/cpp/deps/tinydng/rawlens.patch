@@ -406,7 +406,7 @@
 +
 @@ -1236,0 +1576,8 @@
 +  } else if (comp == TINYDNG_COMPRESSION_JPEG_XL) {
-+    /* Lossless unsigned 16-bit single-channel mosaic strips. */
++    /* Lossless unsigned 16-bit single-channel strips. */
 +    if (bps != 16u || spp != 1u || sfmt != TINYDNG_SAMPLEFORMAT_UINT) {
 +      td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
 +                   "JPEG XL writer requires 16-bit single-channel input");
@@ -469,17 +469,15 @@
 -    td_ctx_free(ctx, w->segs);
 -    td_ctx_free(ctx, w);
 +    td_writer_destroy(w);
-@@ -1443 +1818,4 @@
+@@ -1443 +1818,2 @@
 -    td_add_short(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
-+    /* TIFF 6.0 mandates LONG for NewSubfileType; SHORT makes Apple ImageIO
-+     * (Finder Quick Look, sips) reject the file. Matches the pre-TinyDNG
-+     * Kotlin writer, which emitted Entry(254, LONG, ...). */
++    /* TIFF 6.0 specifies LONG for NewSubfileType. */
 +    td_add_long(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
-@@ -1471 +1849 @@
+@@ -1471 +1847 @@
 -        uint8_t ver[4] = {1u, 4u, 0u, 0u};
 +        uint8_t ver[4] = {1u, (comp == TINYDNG_COMPRESSION_JPEG_XL ? 7u : 4u), 0u, 0u};
-@@ -1502,0 +1881,80 @@
-+  /* Camera2 metadata, including DOUBLE NoiseProfile and opaque opcodes. */
+@@ -1502,0 +1879,80 @@
++  /* Caller-provided TIFF fields, including DOUBLE and opaque payloads. */
 +  if (meta->field_count && !meta->fields) w->w.failed = 1;
 +  for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
 +    const tinydng_field *f = &meta->fields[i];
@@ -559,12 +557,12 @@
 +    }
 +  }
 +
-@@ -1506,3 +1964 @@
+@@ -1506,3 +1962 @@
 -    td_ctx_free(ctx, w->w.extras);
 -    td_ctx_free(ctx, w->segs);
 -    td_ctx_free(ctx, w);
 +    td_writer_destroy(w);
-@@ -1513,0 +1970,39 @@
+@@ -1513,0 +1968,39 @@
 +
 +  /* locate the sub-IFD pointer entries at their sorted slots. */
 +  if (w->sub_exif_count || w->sub_gps_count) {
@@ -604,25 +602,25 @@
 +    *out = w;
 +    return TINYDNG_OK;
 +  }
-@@ -1518,3 +2013 @@
+@@ -1518,3 +2011 @@
 -    td_ctx_free(ctx, w->w.extras);
 -    td_ctx_free(ctx, w->segs);
 -    td_ctx_free(ctx, w);
 +    td_writer_destroy(w);
-@@ -1531,5 +2024 @@
+@@ -1531,5 +2022 @@
 -      td_ctx_free(ctx, w->lzw_tbl.keys);
 -      td_ctx_free(ctx, w->lzw_tbl.codes);
 -      td_ctx_free(ctx, w->w.extras);
 -      td_ctx_free(ctx, w->segs);
 -      td_ctx_free(ctx, w);
 +      td_writer_destroy(w);
-@@ -1559,0 +2049,5 @@
+@@ -1559,0 +2047,5 @@
 +  if (w->precompressed) {
 +    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
 +                 "use tinydng_writer_write_compressed_strip for precompressed input");
 +    return TINYDNG_E_INVALID_ARG;
 +  }
-@@ -1567 +2061,14 @@
+@@ -1567 +2059,14 @@
 -  if (w->segs[index].offset != 0u) {
 +  if (w->header_first) {
 +    /* Header-first offsets are precomputed: a non-seekable sink needs
@@ -638,9 +636,9 @@
 +      return TINYDNG_E_INTERNAL;
 +    }
 +  } else if (w->segs[index].offset != 0u) {
-@@ -1602,0 +2110 @@
+@@ -1602,0 +2108 @@
 +  if (w->header_first) w->next_seg++;
-@@ -1713,0 +2222,76 @@
+@@ -1713,0 +2220,76 @@
 +/* store one already-compressed strip verbatim (JPEG XL
 +   codestream). Mirrors the non-header-first tail of td_writer_put_segment,
 +   minus geometry-derived sizing: the caller owns the byte count. */
@@ -717,7 +715,7 @@
 +  return TINYDNG_OK;
 +}
 +
-@@ -1764,0 +2349,10 @@
+@@ -1764,0 +2347,10 @@
 +  if (w->header_first) {
 +    /* Header, IFD and extras went out at create; only completeness left. */
 +    if (w->next_seg != w->seg_count) {
@@ -728,14 +726,14 @@
 +    }
 +    goto flush;
 +  }
-@@ -1785,0 +2380,4 @@
+@@ -1785,0 +2378,4 @@
 +  st = tdw_serialize_subs(w, extras_base, err);
 +  if (st != TINYDNG_OK) {
 +    goto cleanup;
 +  }
-@@ -1808,0 +2407 @@
+@@ -1808,0 +2405 @@
 +flush:
-@@ -1821,8 +2420 @@
+@@ -1821,8 +2418 @@
 -  td_ctx_free(w->ctx, w->w.extras);
 -  td_ctx_free(w->ctx, w->segs);
 -  td_ctx_free(w->ctx, w->lzw_tbl.keys);
@@ -745,7 +743,7 @@
 -  w->finished = 1;
 -  td_ctx_free(w->ctx, w);
 +  td_writer_destroy(w);
-@@ -1870,0 +2463,64 @@
+@@ -1870,0 +2461,64 @@
 +  /* precompressed input is a codestream, not a raster — the
 +     geometry-size check cannot apply; non-empty is the only invariant. */
 +  if (opts && opts->precompressed) {
@@ -810,16 +808,16 @@
 +                 "null argument to tinydng_write_file");
 +    return TINYDNG_E_INVALID_ARG;
 +  }
-@@ -1875 +2531 @@
+@@ -1875 +2529 @@
 -  st = tinydng_write_io_open_memory(ctx, &io, err);
 +  st = tinydng_write_io_open_file(ctx, path, &io, err);
-@@ -1894,5 +2549,0 @@
+@@ -1894,5 +2547,0 @@
 -  if (st != TINYDNG_OK) {
 -    io.close(&io);
 -    return st;
 -  }
 -  st = tinydng_write_io_memory_take(ctx, &io, out_data, out_size, err);
-@@ -1902,45 +2552,0 @@
+@@ -1902,45 +2550,0 @@
 -
 -void tinydng_buffer_free(tinydng_context *ctx, uint8_t *buf) {
 -  td_ctx_free(ctx, buf);

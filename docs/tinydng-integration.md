@@ -4,7 +4,7 @@
 
 RawLens vendors the C11 v3 writer from
 https://github.com/matthew777777/tinydng. All 13 shared files in
-`app/src/main/cpp/deps/tinydng/UPSTREAM.json` match TinyDNG commit `e1d6442`
+`app/src/main/cpp/deps/tinydng/UPSTREAM.json` match TinyDNG commit `4df281b`
 byte-for-byte. That manifest intentionally retains the original `1f18169`
 base hashes; `rawlens.patch` reproduces the updated header/writer from that
 base. Vendor-only provenance files and Android/JNI code are separate.
