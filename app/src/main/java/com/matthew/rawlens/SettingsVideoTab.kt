@@ -219,7 +219,20 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
             }
         })
-        content.addView(sectionDesc("Half-resolution RGB: each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic and show no magenta/green fringes. Cleaner and smaller than full resolution. Applies to the next take; N/A in Direct Log."))
+        content.addView(Button(this).apply {
+            fun refresh() {
+                val cfaMode = lensPreferences().getString(MainActivity.KEY_VIDEO_BINNING_MODE, MainActivity.BINNING_RGB) == MainActivity.BINNING_CFA
+                text = if (cfaMode) "Binning output: CFA (cheap)" else "Binning output: RGB (best)"
+            }
+            refresh()
+            setOnClickListener {
+                val cfaMode = lensPreferences().getString(MainActivity.KEY_VIDEO_BINNING_MODE, MainActivity.BINNING_RGB) == MainActivity.BINNING_CFA
+                lensPreferences().edit().putString(MainActivity.KEY_VIDEO_BINNING_MODE,
+                    if (cfaMode) MainActivity.BINNING_RGB else MainActivity.BINNING_CFA).apply()
+                refresh()
+            }
+        })
+        content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): centre-aligned half-res Bayer, half the data of RGB and less CPU, but softer with some fringing after demosaic. Applies to the next take; N/A in Direct Log."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(CheckBox(this).apply {
             text = "Lock exposure on record"

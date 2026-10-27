@@ -68,7 +68,15 @@ class VideoModeUiTest {
             else -> error("rawlensCrawCodec must be live or fast")
         }
         val seconds = args.getString("rawlensVideoSeconds")?.toLongOrNull()?.coerceIn(5, 300) ?: 30L
-        prefs.edit().putInt(MainActivity.KEY_VIDEO_CODEC, codec).commit()
+        // Optional: -e rawlensVideoBinning true|false (default: leave as set).
+        val previousBinning = prefs.getBoolean(MainActivity.KEY_VIDEO_BINNING, false)
+        val binning = args.getString("rawlensVideoBinning")?.toBooleanStrictOrNull() ?: previousBinning
+        // Optional: -e rawlensVideoBinningMode rgb|cfa.
+        val previousMode = prefs.getString(MainActivity.KEY_VIDEO_BINNING_MODE, MainActivity.BINNING_RGB)
+        val mode = args.getString("rawlensVideoBinningMode") ?: previousMode
+        prefs.edit().putInt(MainActivity.KEY_VIDEO_CODEC, codec)
+            .putBoolean(MainActivity.KEY_VIDEO_BINNING, binning)
+            .putString(MainActivity.KEY_VIDEO_BINNING_MODE, mode).commit()
         try {
             fun view(id: Int): View = activity.findViewById(id)
             fun click(v: View) {
@@ -176,6 +184,8 @@ class VideoModeUiTest {
             assertEquals("DNG", badge)
         } finally {
             prefs.edit().putInt(MainActivity.KEY_VIDEO_CODEC, previousCodec).commit()
+            prefs.edit().putBoolean(MainActivity.KEY_VIDEO_BINNING, previousBinning)
+                .putString(MainActivity.KEY_VIDEO_BINNING_MODE, previousMode).commit()
             instrumentation.runOnMainSync { activity.finish() }
         }
     }

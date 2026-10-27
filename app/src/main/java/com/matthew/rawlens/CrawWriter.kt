@@ -38,16 +38,19 @@ internal object CrawWriter {
      * Encode one RAW16 frame into [destination] (position advanced by the
      * payload size). Worker-thread safe. Returns the payload byte count;
      * negative native codes become exceptions (-3 = destination too small).
-     * With [bin], the frame is binned to half resolution: each output sample is
-     * the rounded mean of the four same-colour samples of its 4x4 block (lossy
-     * by nature); [cfa] is the Camera2 color-filter arrangement (0..3).
+     * With [bin], the frame is binned to half resolution (lossy by nature):
+     * [binRgb] true demosaics once into a half-res RGB cell frame (SPEC 3.8,
+     * best quality, no re-demosaic fringes); false bins to a centre-aligned
+     * half-res Bayer mosaic (cheap: a quarter of the samples). [cfa] is the
+     * Camera2 color-filter arrangement (0..3).
      * [bitDepth] comes from SENSOR_INFO_WHITE_LEVEL ([bitDepthFor]); a sample
      * above it falls back to 16-bit coding, so encoding stays lossless.
      */
     fun encodeFrame(
         source: ByteBuffer, size: Int, width: Int, height: Int, stride: Int,
         cropTop: Int, cropHeight: Int, destination: ByteBuffer,
-        bin: Boolean, cfa: Int, bitDepth: Int = 16, codec: Int = CODEC_FAST
+        bin: Boolean, cfa: Int, bitDepth: Int = 16, codec: Int = CODEC_FAST,
+        binRgb: Boolean = true
     ): Int {
         checkFrameGeometry(width, height, cropTop, cropHeight, bin, cfa)
         require(source.isDirect && destination.isDirect) {
@@ -58,7 +61,7 @@ internal object CrawWriter {
         val written = try {
             containerEncodeFrame(
                 source, source.position(), size, width, height, stride,
-                cropTop, cropHeight, bin, cfa, bitDepth.coerceIn(1, 16), codec,
+                cropTop, cropHeight, bin, binRgb, cfa, bitDepth.coerceIn(1, 16), codec,
                 destination, dstOffset, destination.remaining()
             )
         } catch (e: UnsatisfiedLinkError) {
@@ -224,7 +227,7 @@ internal object CrawWriter {
     external fun containerEncodeFrame(
         src: ByteBuffer, srcOffset: Int, size: Int,
         w: Int, h: Int, stride: Int, cropTop: Int, cropHeight: Int,
-        bin: Boolean, cfa: Int, bitDepth: Int, codec: Int,
+        bin: Boolean, binRgb: Boolean, cfa: Int, bitDepth: Int, codec: Int,
         dst: ByteBuffer, dstOffset: Int, dstCapacity: Int
     ): Int
 
