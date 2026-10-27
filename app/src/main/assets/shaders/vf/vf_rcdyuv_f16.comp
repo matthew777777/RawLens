@@ -272,7 +272,7 @@ f16vec3 slogEncode(f16vec3 v) {
 // ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
 // Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
 vec3 acesFitted(vec3 v) {
-    v = max(v, vec3(0.0));
+    // Keep signed CCM values until the reference fit's final clamp.
     v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
              dot(v, vec3(0.07600,0.90834,0.01566)),
              dot(v, vec3(0.02840,0.13383,0.83777)));

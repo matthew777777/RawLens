@@ -112,3 +112,15 @@ BT.2020 matrix or tags.
 - [ACES output transforms](https://docs.acescentral.com/system-components/output-transforms/)
 - [ACES display encoding presets, including BT.1886/gamma 2.4](https://docs.acescentral.com/system-components/output-transforms/parameters/)
 - [Blackmagic Resolve color-management guide](https://documents.blackmagicdesign.com/UserManuals/DaVinci-Resolve-17-Colorist-Guide.pdf)
+
+
+## 2026-10-27: published fitted reference alignment (including Packed RCD)
+
+User selected the fast ACES fitted implementation, preserving the existing performance architecture.
+Compared against Stephen Hill’s MIT-licensed [BakingLab ACES.hlsl](https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl), retrieved 2026-10-27. Input/output matrices and rational coefficients match. Found and removed an extra nonnegative input clamp in the CPU reference and all six GLSL record implementations (grade, MHC fp32/fp16, split RCD fp32/fp16, Packed RCD). The published function accepts signed input and saturates only after the output matrix. This matters for negative channels produced by the camera CCM. Added three independent signed-input regression anchors. Existing nonnegative-input anchors remain unchanged.
+
+The fit produces display-linear RGB. Our separate inverse gamma-2.4 display encoding remains; this is a Rec.709 display look, not a full Academy ACES output transform. No additional passes, buffers, texture reads, or per-pixel operations were introduced; one clamp was removed. FPS impact has not been measured on the phone for this change.
+
+[ITU-R BT.709-6](https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.709-6-201506-I!!PDF-E.pdf), sections 1, 3 and 4, confirms the existing piecewise OETF (including the published 0.018 boundary), D65/Rec.709 target, luma coefficients 0.2126/0.7152/0.0722 and chroma divisors 1.8556/1.5748. Record packing uses nominal 10-bit limited Y 64–940 and Cb/Cr 64–960, neutral chroma 512. Preview applies the inverse of that matrix/range to encoded RGB. No BT.709 math change was needed. Android encoder configuration requests BT.709/SDR/limited; actual new-file metadata and display behavior still require device verification.
+
+Validation: all six modified shaders compiled and passed spirv-val for Vulkan 1.1. DirectLog JVM tests passed, including signed reference anchors. The phone was absent from adb during this audit, so updated GPU comparisons, saved-file validation and shading-enabled cadence tests remain pending. This entry does not supersede the earlier measured-device results with a new device pass.
