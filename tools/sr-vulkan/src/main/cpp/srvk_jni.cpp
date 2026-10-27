@@ -9,6 +9,8 @@
 #include <string.h>
 
 #include "srvk_compute.h"
+#include "srvk_internal.h"
+#include <vector>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -38,6 +40,14 @@ Java_com_matthew_rawlens_VulkanHub_nativeInit(JNIEnv* env, jobject /*thiz*/) {
     char info[1024];
     srvk_device_info(ctx, info, sizeof(info));
     SRVK_LOGI("init: %s", info);
+    return (jlong)(uintptr_t)ctx;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeInitVersion(JNIEnv* env, jobject, jint version) {
+    char errmsg[SRVK_ERR_LEN] = {};
+    SrvkContext* ctx = srvk_create_version((uint32_t)version, errmsg, sizeof(errmsg));
+    if (!ctx) throw_runtime(env, errmsg);
     return (jlong)(uintptr_t)ctx;
 }
 
@@ -147,6 +157,56 @@ static void* check_direct(JNIEnv* env, jobject buf, jlong* capacity) {
     return bytes;
 }
 
+JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeLoadPipelineCache(JNIEnv* env, jobject, jlong handle,
+                                                           jbyteArray initial) {
+    SrvkContext* ctx = check_ctx(env, handle);
+    if (!ctx) return;
+    std::vector<unsigned char> bytes;
+    if (initial) {
+        jsize n = env->GetArrayLength(initial);
+        if (n >= 32 && n <= (16<<20)) {
+            bytes.resize((size_t)n);
+            env->GetByteArrayRegion(initial, 0, n, (jbyte*)bytes.data());
+            if (env->ExceptionCheck()) return;
+            VkPhysicalDeviceProperties props = {};
+            vkGetPhysicalDeviceProperties(ctx->physical, &props);
+            uint32_t header[4]; memcpy(header, bytes.data(), 16);
+            if (header[0] < 32 || header[0] > (uint32_t)n ||
+                header[1] != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+                header[2] != props.vendorID || header[3] != props.deviceID ||
+                memcmp(bytes.data()+16, props.pipelineCacheUUID, VK_UUID_SIZE) != 0) bytes.clear();
+        }
+    }
+    if (ctx->pipeline_cache) vkDestroyPipelineCache(ctx->device, ctx->pipeline_cache, NULL);
+    ctx->pipeline_cache = VK_NULL_HANDLE;
+    VkPipelineCacheCreateInfo ci = {};
+    ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    ci.initialDataSize = bytes.size(); ci.pInitialData = bytes.empty() ? NULL : bytes.data();
+    if (vkCreatePipelineCache(ctx->device, &ci, NULL, &ctx->pipeline_cache) != VK_SUCCESS) {
+        ci.initialDataSize = 0; ci.pInitialData = NULL;
+        vkCreatePipelineCache(ctx->device, &ci, NULL, &ctx->pipeline_cache);
+    }
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeSavePipelineCache(JNIEnv* env, jobject, jlong handle) {
+    SrvkContext* ctx = check_ctx(env, handle);
+    if (!ctx || !ctx->pipeline_cache) return NULL;
+    for (int attempt=0; attempt<3; ++attempt) {
+        size_t n = 0;
+        if (vkGetPipelineCacheData(ctx->device, ctx->pipeline_cache, &n, NULL) != VK_SUCCESS || n > (16u<<20)) return NULL;
+        std::vector<unsigned char> bytes(n);
+        VkResult result = vkGetPipelineCacheData(ctx->device, ctx->pipeline_cache, &n, bytes.data());
+        if (result == VK_INCOMPLETE) continue;
+        if (result != VK_SUCCESS) return NULL;
+        jbyteArray output = env->NewByteArray((jsize)n);
+        if (output) env->SetByteArrayRegion(output, 0, (jsize)n, (jbyte*)bytes.data());
+        return output;
+    }
+    return NULL;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_matthew_rawlens_VulkanHub_nativeCreateImage(JNIEnv* env, jobject /*thiz*/, jlong handle,
                                                     jint w, jint h, jint format) {
@@ -174,6 +234,49 @@ Java_com_matthew_rawlens_VulkanHub_nativeWriteImage(JNIEnv* env, jobject /*thiz*
         SRVK_LOGE("writeImage failed: %s", errmsg);
         throw_runtime(env, errmsg);
     }
+}
+
+// GetFloatArrayRegion copies directly into mapped Vulkan staging. No full-frame
+// Java direct buffer and no pinned array across a fence wait.
+JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeWriteImageFloats(JNIEnv* env, jobject, jlong handle,
+                                                          jlong image, jfloatArray values) {
+    SrvkContext* ctx = check_ctx(env, handle);
+    if (!ctx || !values) return;
+    jsize n = env->GetArrayLength(values);
+    char errmsg[SRVK_ERR_LEN] = {};
+    void* ptr = srvk_prepare_image_upload(ctx, (uint64_t)image, (size_t)n * 4, errmsg, sizeof(errmsg));
+    if (!ptr) { throw_runtime(env, errmsg); return; }
+    env->GetFloatArrayRegion(values, 0, n, (jfloat*)ptr);
+    if (env->ExceptionCheck()) return;
+    if (srvk_write_image(ctx, (uint64_t)image, ptr, (size_t)n * 4, errmsg, sizeof(errmsg)) != 0)
+        throw_runtime(env, errmsg);
+}
+
+JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeReadImageFloatsInto(JNIEnv* env, jobject, jlong handle,
+    jlong image, jint w, jint h, jfloatArray output, jint stride, jint dx, jint dy) {
+    SrvkContext* ctx = check_ctx(env, handle);
+    if (!ctx || !output) return;
+    const jsize n = env->GetArrayLength(output);
+    if (w <= 0 || h <= 0 || dx < 0 || dy < 0 || stride < dx+w ||
+        (int64_t)(dy+h-1)*stride+dx+w > n) {
+        throw_runtime(env, "float readback destination outside array"); return;
+    }
+    char errmsg[SRVK_ERR_LEN] = {};
+    float* ptr = (float*)srvk_read_image_region_mapped(ctx, (uint64_t)image, 0, 0, w, h,
+                                                     errmsg, sizeof(errmsg));
+    if (!ptr) { throw_runtime(env, errmsg); return; }
+    if (w == stride && dx == 0) {
+        env->SetFloatArrayRegion(output, dy*stride, w*h, ptr);
+    } else for (int row=0; row<h && !env->ExceptionCheck(); ++row)
+        env->SetFloatArrayRegion(output, (dy+row)*stride+dx, w, ptr+(size_t)row*w);
+}
+
+JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VulkanHub_nativeReleaseStaging(JNIEnv* env, jobject, jlong handle) {
+    SrvkContext* ctx = check_ctx(env, handle);
+    if (ctx) srvk_release_staging(ctx);
 }
 
 JNIEXPORT void JNICALL

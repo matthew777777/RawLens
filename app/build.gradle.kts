@@ -1,9 +1,61 @@
 import java.io.File
 import java.util.Properties
 import java.util.zip.GZIPOutputStream
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
 
 plugins {
     id("com.android.application")
+}
+
+abstract class CompileSrpShaders : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val shaderDirectory: DirectoryProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val compiler: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    @TaskAction
+    fun compile() {
+        val sources = shaderDirectory.get().asFile.listFiles()
+            .orEmpty().filter { it.extension == "comp" }.sortedBy { it.name }
+        check(sources.isNotEmpty()) { "No SR pipeline shader sources found" }
+        val destination = outputDirectory.get().dir("sr_spv").asFile
+        destination.mkdirs()
+        for (source in sources) {
+            execOperations.exec {
+                commandLine(
+                    compiler.get().asFile.absolutePath,
+                    "--target-env=vulkan1.0", "-fshader-stage=compute",
+                    source.absolutePath, "-o", destination.resolve("${source.nameWithoutExtension}.spv")
+                )
+            }
+        }
+    }
+}
+
+// Use the pinned Android NDK's compiler: a fresh checkout needs neither
+// a desktop Vulkan SDK nor precompiled files in the host proof build tree.
+val compileSrpShaders by tasks.registering(CompileSrpShaders::class) {
+    shaderDirectory.set(rootProject.layout.projectDirectory.dir("tools/sr-pipeline/src/main/cpp/shaders"))
+    val host = when {
+        System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows-x86_64"
+        else -> "linux-x86_64"
+    }
+    val executable = if (host.startsWith("windows")) "glslc.exe" else "glslc"
+    compiler.set(androidComponents.sdkComponents.ndkDirectory.map {
+        it.file("shader-tools/$host/$executable")
+    })
+    outputDirectory.set(layout.buildDirectory.dir("generated/srpspv"))
 }
 
 // Version source of truth is version.properties. Every real assemble/bundle
@@ -325,12 +377,12 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
 }
 
-// Generated assets dir with the desktop-proven stage SPVs (filled by
-// syncSrpSpv below, never committed). AGP 9 rejects Provider-based
-// sourceSet dirs; the Variant API Sources interface is the replacement:
-// https://developer.android.com/build/releases/agp-9-0-0-release-notes
+// Register the producer with AGP so every variant's asset consumers wait
+// for shader compilation, including packaging and lint on clean builds.
 androidComponents.onVariants { variant ->
-    variant.sources.assets?.addStaticSourceDirectory("build/generated/srpspv")
+    variant.sources.assets?.addGeneratedSourceDirectory(
+        compileSrpShaders, CompileSrpShaders::outputDirectory
+    )
     // Split version codes above the universal APK's (see splits block):
     // a device that can run a split always picks it over the universal.
     for (output in variant.outputs) {
@@ -347,20 +399,6 @@ androidComponents.onVariants { variant ->
         )
     }
 }
-
-// Syncs the desktop-proven stage SPVs (tools/sr-pipeline/host/build,
-// bit-identity-gated on desktop) into the generated assets dir as
-// sr_spv/*.spv. Runs before asset merging; nothing generated is
-// committed. Refresh the source SPVs with the desktop shader build
-// (shaders/build.sh) before release packaging.
-val syncSrpSpv by tasks.registering(Copy::class) {
-    from("${rootDir}/tools/sr-pipeline/host/build") { include("*.spv") }
-    into(layout.buildDirectory.dir("generated/srpspv/sr_spv"))
-}
-tasks.matching {
-    (it.name.startsWith("merge") && it.name.contains("Assets")) ||
-        it.name.contains("LintVital", ignoreCase = true)
-}.configureEach { dependsOn(syncSrpSpv) }
 
 configurations.all {
     resolutionStrategy.eachDependency {

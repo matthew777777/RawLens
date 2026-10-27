@@ -30,6 +30,10 @@ static int has_instance_ext(const char* name) {
 }
 
 SrvkContext* srvk_create(char* errmsg, size_t errmsg_len) {
+    return srvk_create_version(VK_API_VERSION_1_2, errmsg, errmsg_len);
+}
+
+SrvkContext* srvk_create_version(uint32_t api_version, char* errmsg, size_t errmsg_len) {
     SrvkContext* ctx = (SrvkContext*)calloc(1, sizeof(SrvkContext));
     if (ctx == NULL) {
         if (errmsg != NULL && errmsg_len > 0) snprintf(errmsg, errmsg_len, "out of memory");
@@ -42,7 +46,8 @@ SrvkContext* srvk_create(char* errmsg, size_t errmsg_len) {
     app.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
     app.pEngineName = "RawLens";
     app.engineVersion = VK_MAKE_VERSION(0, 1, 0);
-    app.apiVersion = VK_API_VERSION_1_2;
+    app.apiVersion = api_version;
+    ctx->api_version = api_version;
 
     // Portability enumeration (MoltenVK and other conformant-but-portable
     // drivers) when the loader advertises it; harmless when absent.
@@ -181,7 +186,11 @@ void srvk_device_info(SrvkContext* ctx, char* buf, size_t len) {
     VkPhysicalDeviceProperties2 props2 = {};
     props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     props2.pNext = &subgroup;
-    vkGetPhysicalDeviceProperties2(ctx->physical, &props2);
+    if (ctx->api_version >= VK_API_VERSION_1_1) {
+        auto get_props2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+            vkGetInstanceProcAddr(ctx->instance, "vkGetPhysicalDeviceProperties2"));
+        if (get_props2) get_props2(ctx->physical, &props2);
+    }
     char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
     snprintf(name, sizeof(name), "%s", props.deviceName);
     // Flatten whitespace so the report stays one line.

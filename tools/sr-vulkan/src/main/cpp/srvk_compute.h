@@ -27,6 +27,8 @@ typedef struct SrvkContext SrvkContext;
 
 /** Create instance + pick device + open compute queue. NULL on failure. */
 SrvkContext* srvk_create(char* errmsg, size_t errmsg_len);
+/** Explicit core version for hosts with a smaller shader/API requirement. */
+SrvkContext* srvk_create_version(uint32_t api_version, char* errmsg, size_t errmsg_len);
 
 /** One-line `key=value;` device report for logs/CLI (always NUL-terminated). */
 void srvk_device_info(SrvkContext* ctx, char* buf, size_t len);
@@ -76,6 +78,12 @@ int srvk_read_image(SrvkContext* ctx, uint64_t image, void* out, size_t len,
  * tightly packed; len must equal w*h*texel. 0 ok, -1 error. */
 int srvk_read_image_region(SrvkContext* ctx, uint64_t image, int x, int y, int w, int h,
                            void* out, size_t len, char* errmsg, size_t errmsg_len);
+/** Borrowed mapped staging pointers, valid until the next resource/transfer operation. */
+void* srvk_prepare_image_upload(SrvkContext* ctx, uint64_t image, size_t len,
+                                char* errmsg, size_t errmsg_len);
+void* srvk_read_image_region_mapped(SrvkContext* ctx, uint64_t image, int x, int y, int w, int h,
+                                    char* errmsg, size_t errmsg_len);
+void srvk_release_staging(SrvkContext* ctx);
 void srvk_destroy_image(SrvkContext* ctx, uint64_t image);
 
 uint64_t srvk_create_pipeline(SrvkContext* ctx, uint64_t module, int ubo_binding, size_t ubo_size,

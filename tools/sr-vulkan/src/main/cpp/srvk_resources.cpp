@@ -394,7 +394,7 @@ int srvk_write_image(SrvkContext* ctx, uint64_t handle, const void* bytes, size_
         return -1;
     }
     if (ensure_staging(ctx, len, errmsg, errmsg_len) != 0) return -1;
-    memcpy(ctx->staging_mapped, bytes, len);
+    if (ctx->staging_mapped != bytes) memcpy(ctx->staging_mapped, bytes, len);
     VkCommandBuffer cmd;
     if (alloc_cmd(ctx, &cmd, errmsg, errmsg_len) != 0) return -1;
     transition(cmd, img->image, img->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -464,9 +464,43 @@ int srvk_read_image_region(SrvkContext* ctx, uint64_t handle, int x, int y, int 
     free_cmd(ctx, &cmd);
     if (rc == 0) {
         img->layout = VK_IMAGE_LAYOUT_GENERAL;
-        memcpy(out, ctx->staging_mapped, len);
+        if (out != ctx->staging_mapped) memcpy(out, ctx->staging_mapped, len);
     }
     return rc;
+}
+
+void* srvk_prepare_image_upload(SrvkContext* ctx, uint64_t handle, size_t len,
+                                char* errmsg, size_t errmsg_len) {
+    SrvkImage* img = (SrvkImage*)(uintptr_t)handle;
+    if (!ctx || !img || len != img->bytes) {
+        if (errmsg && errmsg_len) snprintf(errmsg, errmsg_len, "array upload: size mismatch");
+        return NULL;
+    }
+    if (ensure_staging(ctx, len, errmsg, errmsg_len) != 0) return NULL;
+    return ctx->staging_mapped;
+}
+
+void* srvk_read_image_region_mapped(SrvkContext* ctx, uint64_t handle, int x, int y, int w, int h,
+                                    char* errmsg, size_t errmsg_len) {
+    SrvkImage* img = (SrvkImage*)(uintptr_t)handle;
+    if (!ctx || !img || w <= 0 || h <= 0) return NULL;
+    size_t texel = img->bytes / ((size_t)img->width * img->height);
+    size_t len = (size_t)w * h * texel;
+    if (ensure_staging(ctx, len, errmsg, errmsg_len) != 0) return NULL;
+    if (srvk_read_image_region(ctx, handle, x, y, w, h, ctx->staging_mapped, len,
+                               errmsg, errmsg_len) != 0) return NULL;
+    return ctx->staging_mapped;
+}
+
+void srvk_release_staging(SrvkContext* ctx) {
+    if (!ctx) return;
+    if (ctx->staging_mapped) vkUnmapMemory(ctx->device, ctx->staging_memory);
+    if (ctx->staging) vkDestroyBuffer(ctx->device, ctx->staging, NULL);
+    if (ctx->staging_memory) vkFreeMemory(ctx->device, ctx->staging_memory, NULL);
+    ctx->staging = VK_NULL_HANDLE;
+    ctx->staging_memory = VK_NULL_HANDLE;
+    ctx->staging_mapped = NULL;
+    ctx->staging_size = 0;
 }
 
 void srvk_destroy_image(SrvkContext* ctx, uint64_t handle) {
@@ -563,7 +597,12 @@ uint64_t srvk_create_pipeline(SrvkContext* ctx, uint64_t module, int ubo_binding
         ci.stage.module = (VkShaderModule)(uintptr_t)module;
         ci.stage.pName = "main";
         ci.layout = pipe_layout;
-        res = vkCreateComputePipelines(ctx->device, VK_NULL_HANDLE, 1, &ci, NULL, &pipe->pipeline);
+        if (ctx->pipeline_cache == VK_NULL_HANDLE) {
+            VkPipelineCacheCreateInfo cache_info = {};
+            cache_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+            vkCreatePipelineCache(ctx->device, &cache_info, NULL, &ctx->pipeline_cache);
+        }
+        res = vkCreateComputePipelines(ctx->device, ctx->pipeline_cache, 1, &ci, NULL, &pipe->pipeline);
         if (res != VK_SUCCESS) {
             srvk_set_err(errmsg, errmsg_len, "vkCreateComputePipelines failed", res);
             break;
@@ -801,6 +840,7 @@ void srvk_resources_teardown(SrvkContext* ctx) {
     if (ctx->staging_mapped != NULL) vkUnmapMemory(ctx->device, ctx->staging_memory);
     if (ctx->staging != VK_NULL_HANDLE) vkDestroyBuffer(ctx->device, ctx->staging, NULL);
     if (ctx->staging_memory != VK_NULL_HANDLE) vkFreeMemory(ctx->device, ctx->staging_memory, NULL);
+    if (ctx->pipeline_cache != VK_NULL_HANDLE) vkDestroyPipelineCache(ctx->device, ctx->pipeline_cache, NULL);
     if (ctx->desc_pool != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx->device, ctx->desc_pool, NULL);
     if (ctx->cmd_pool != VK_NULL_HANDLE) vkDestroyCommandPool(ctx->device, ctx->cmd_pool, NULL);
     if (ctx->sampler != VK_NULL_HANDLE) vkDestroySampler(ctx->device, ctx->sampler, NULL);

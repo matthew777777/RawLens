@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.rawlens.srpipeline.SrpBridge
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,12 +18,31 @@ import kotlin.math.abs
  * on the 1024 Pattern input, and the full-buffer checksums must equal
  * the desktop values to 12 digits (same shaders, same math — the values
  * `sr_device` already matched bit-identically). SPVs come from the
- * generated `sr_spv` assets (desktop-gated set).
+ * generated `sr_spv` assets (compiled by the Android build).
  *
  * Opt-in: `-e rawlensSrp true` (keeps normal runs green/fast).
  */
 @RunWith(AndroidJUnit4::class)
 class SrpPipelineDeviceTest {
+    // Always run: a missing generated asset must fail even when GPU probes
+    // are disabled. Cover both Wronski and KernelNet capture paths.
+    @Test fun mfsrShadersArePackaged() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val required = listOf(
+            "fft", "align", "corr", "ica", "corr_direct", "ica_wg",
+            "gat", "grad", "kernels", "divide", "robustness", "merge_splat",
+            "grey_fft", "kernelnet"
+        )
+        for (name in required) {
+            val bytes = context.assets.open("sr_spv/$name.spv").use { it.readBytes() }
+            assertTrue("$name has a complete SPIR-V header", bytes.size >= 20 && bytes.size % 4 == 0)
+            assertEquals(
+                "$name SPIR-V magic", 0x07230203,
+                java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+            )
+        }
+    }
+
     @Test fun greyMatchesDesktopChecksum() {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue(

@@ -12,11 +12,13 @@
 #include <stdio.h>
 
 struct SrvkContext {
+    uint32_t api_version;
     VkInstance instance;
     VkPhysicalDevice physical;
     uint32_t physical_index;
     uint32_t queue_family;
     VkDevice device;
+    VkPipelineCache pipeline_cache;
     VkQueue queue;
     uint32_t device_count;
     VkPhysicalDevice* devices;
