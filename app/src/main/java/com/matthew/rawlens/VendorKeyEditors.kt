@@ -132,16 +132,17 @@ internal fun MainActivity.showVendorKeysEditor() {
         setPadding(dp(20), 0, dp(20), 0)
         addView(TextView(this@showVendorKeysEditor).apply {
             text = "Camera $cameraId • ${profile.entries.size} keys ($onCount on)\n" +
-                "Session keys load before the session opens (Vivo DCG needs this). " +
+                "Session keys load before the session opens. " +
                 "Request keys ride every capture. Black/white levels are not camera " +
                 "keys — set them under Sensor levels."
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
             setPadding(0, 0, 0, dp(8))
         })
         fun reportLine(name: String, report: VendorKeyApplyReport?): String? =
-            report?.takeIf { it.applied.isNotEmpty() || it.skipped.isNotEmpty() }?.let {
-                "$name ${it.applied.size} on / ${it.skipped.size} off" +
-                    if (it.skipped.isNotEmpty()) " (${it.skipped.take(2).joinToString()})" else ""
+            report?.takeIf { it.applied.isNotEmpty() || it.skipped.isNotEmpty() || it.detail != null }?.let {
+                "$name ${it.applied.size} accepted / ${it.skipped.size} skipped" +
+                    (if (it.skipped.isNotEmpty()) " (${it.skipped.take(2).joinToString()})" else "") +
+                    it.detail?.let { detail -> "\n$detail" }.orEmpty()
             }
         val (lastSession, lastRequest) = controller.vendorLastApply()
         val applySummary = listOfNotNull(
@@ -149,14 +150,14 @@ internal fun MainActivity.showVendorKeysEditor() {
         ).joinToString("\n")
         if (applySummary.isNotEmpty()) {
             addView(TextView(this@showVendorKeysEditor).apply {
-                text = "Last apply\n$applySummary"
+                text = "Last builder/session result\n$applySummary"
                 setTextColor(getColor(R.color.text_secondary)); textSize = 12f
                 setPadding(0, 0, 0, dp(8))
             })
         }
         if (controller.vendorSessionNeedsReopen()) {
             addView(TextView(this@showVendorKeysEditor).apply {
-                text = "Session keys changed — reopen the camera."
+                text = "Saved session settings differ from the active session — reopen to retry."
                 setTextColor(getColor(R.color.danger)); textSize = 12f
                 setTypeface(typeface, Typeface.BOLD)
                 setPadding(0, 0, 0, dp(8))
@@ -171,7 +172,7 @@ internal fun MainActivity.showVendorKeysEditor() {
     }
     content.addView(vendorSectionHeader("Add"))
     content.addView(vendorActionButton("Add key") { edit(null) })
-    if (profile.entries.isNotEmpty()) {
+    if (!profile.isEmpty()) {
         content.addView(vendorActionButton("Save current as preset") {
             showPresetNameDialog { name ->
                 try {
@@ -187,8 +188,8 @@ internal fun MainActivity.showVendorKeysEditor() {
     if (presets.isNotEmpty()) {
         content.addView(vendorActionButton("Apply preset") {
             showPresetPicker(presets, "Apply preset") { name ->
-                val merged = profile.mergedWith(vendorKeyStore.getPreset(name))
-                if (saveVendorKeys(cameraId, merged)) {
+                val incoming = vendorKeyStore.getPreset(name)
+                if (updateVendorKeys(cameraId) { it.mergedWith(incoming) }) {
                     editor?.dismiss()
                     showVendorKeysEditor()
                 }
@@ -207,7 +208,7 @@ internal fun MainActivity.showVendorKeysEditor() {
         content.addView(vendorActionButton("Add Vivo DCG preset (off)") {
             val missing = VendorKeyProfile.presets().entries
                 .filter { preset -> profile.entries.none { it.name == preset.name } }
-            if (saveVendorKeys(cameraId, VendorKeyProfile(profile.entries + missing))) {
+            if (updateVendorKeys(cameraId) { current -> current.mergedWith(VendorKeyProfile(missing)) }) {
                 editor?.dismiss()
                 showVendorKeysEditor()
             }
@@ -407,25 +408,20 @@ internal fun MainActivity.showVendorKeyEditDialog(
             else valueInput.error = message
             return@setOnClickListener
         }
-        val current = vendorKeyStore.get(cameraId)
-        val merged = (current.entries.filter { it.name.trim() != candidate.name.trim() } + candidate)
-            .sortedBy { it.name }
-        try {
-            VendorKeyProfile(merged).validate()
-        } catch (failure: IllegalArgumentException) {
-            valueInput.error = failure.message
-            return@setOnClickListener
-        }
-        if (saveVendorKeys(cameraId, VendorKeyProfile(merged))) {
+        if (updateVendorKeys(cameraId) { current ->
+            val merged = (current.entries.filter { it.identity() != candidate.identity() &&
+                (existing == null || it.identity() != existing.identity()) } + candidate).sortedBy { it.name }
+            current.copy(entries = merged)
+        }) {
             dialog.dismiss()
             onSaved()
         }
     }
     if (existing != null) {
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-            val current = vendorKeyStore.get(cameraId)
-            val kept = current.entries.filter { it.name.trim() != existing.name.trim() }
-            if (saveVendorKeys(cameraId, VendorKeyProfile(kept))) {
+            if (updateVendorKeys(cameraId) { current ->
+                current.copy(entries = current.entries.filter { it.identity() != existing.identity() })
+            }) {
                 dialog.dismiss()
                 onSaved()
             }
@@ -505,7 +501,7 @@ internal fun MainActivity.showVendorDiscoveryDialog(cameraId: String) {
 
 internal fun MainActivity.showOperatingModeDialog(cameraId: String, profile: VendorKeyProfile, onSaved: () -> Unit) {
     val opmodeInput = EditText(this).apply {
-        hint = "0 = default (e.g. 37379 for Xiaomi DCG)"
+        hint = "0 = default; use a device-verified value"
         setText(profile.operatingMode.toString())
         inputType = InputType.TYPE_CLASS_NUMBER
         setSelectAllOnFocus(true)
@@ -515,8 +511,9 @@ internal fun MainActivity.showOperatingModeDialog(cameraId: String, profile: Ven
         setPadding(dp(20), 0, dp(20), 0)
         addView(TextView(this@showOperatingModeDialog).apply {
             text = "Non-zero opens the session through the vendor operating-mode " +
-                "path (PhotonVidCam recipe). A wrong value only falls back to " +
-                "the standard session. Takes effect after reopen."
+                "path. Immediate API failures fall back to " +
+                "the standard session; configuration may still fail later. " +
+                "Session keys travel with the mode. Takes effect after reopen."
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
         })
         addView(opmodeInput)
@@ -532,7 +529,7 @@ internal fun MainActivity.showOperatingModeDialog(cameraId: String, profile: Ven
             opmodeInput.error = failure.message
             return@setOnClickListener
         }
-        if (saveVendorKeys(cameraId, profile.copy(operatingMode = opmode))) {
+        if (updateVendorKeys(cameraId) { it.copy(operatingMode = opmode) }) {
             dialog.dismiss()
             onSaved()
         }
@@ -618,7 +615,7 @@ internal fun MainActivity.showVendorImportDialog(cameraId: String) {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(20), 0, dp(20), 0)
         addView(TextView(this@showVendorImportDialog).apply {
-            text = "Adds keys this lens does not already have. Nothing is deleted."
+            text = "Adds missing keys. Keeps this lens’s nonzero operating mode; otherwise imports the shared mode."
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
         })
         addView(pasteBox)
@@ -630,7 +627,7 @@ internal fun MainActivity.showVendorImportDialog(cameraId: String) {
         .setPositiveButton("Import", null).show()
     dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
         val incoming = try {
-            VendorKeyProfile.fromJson(pasteBox.text.toString()).also(VendorKeyProfile::validate)
+            VendorKeyProfile.fromJson(pasteBox.text.toString(), strict = true).also(VendorKeyProfile::validate)
         } catch (failure: IllegalArgumentException) {
             resultLine.text = "Not a key set (${failure.message})"
             resultLine.setTextColor(getColor(R.color.danger))
@@ -641,24 +638,24 @@ internal fun MainActivity.showVendorImportDialog(cameraId: String) {
             resultLine.setTextColor(getColor(R.color.danger))
             return@setOnClickListener
         }
-        val current = vendorKeyStore.get(cameraId)
-        if (saveVendorKeys(cameraId, current.mergedWith(incoming))) {
+        if (updateVendorKeys(cameraId) { it.mergedWith(incoming) }) {
             dialog.dismiss()
             showVendorKeysEditor()
         }
     }
 }
 
-internal fun MainActivity.saveVendorKeys(cameraId: String, profile: VendorKeyProfile): Boolean {
-    try {
-        vendorKeyStore.save(cameraId, profile)
+internal fun MainActivity.updateVendorKeys(
+    cameraId: String,
+    edit: (VendorKeyProfile) -> VendorKeyProfile
+): Boolean {
+    val profile = try {
+        vendorKeyStore.update(cameraId, edit)
     } catch (failure: Exception) {
-        setStatus("VENDOR NOT SAVED")
+        setStatus("VENDOR NOT SAVED: ${failure.message.orEmpty()}")
         return false
     }
-    // Request keys take effect on the live repeating request; session keys
-    // wait for the next open (see "Reopen camera" above).
     controller.refreshVendorKeys()
-    setStatus(if (profile.activeEntries().isEmpty()) "VENDOR OFF" else "VENDOR SAVED")
+    setStatus(if (profile.isEmpty()) "VENDOR OFF" else "VENDOR SAVED")
     return true
 }

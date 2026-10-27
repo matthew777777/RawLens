@@ -6,13 +6,15 @@ package com.matthew.rawlens
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.params.SessionConfiguration
 
-/** What Step 2 applied (or deliberately skipped) for one lens. */
+/** Builder application outcome for one lens; not sensor verification. */
 data class VendorKeyApplyReport(
     val applied: List<String>,
-    val skipped: List<String>
-)
+    val skipped: List<String>,
+    val detail: String? = null
+) {
+    fun rejected(reason: String) = VendorKeyApplyReport(emptyList(), (applied + skipped).distinct(), reason)
+}
 
 /** Probe-before-save outcome shown in the edit dialog. */
 data class VendorKeyProbeResult(
@@ -21,21 +23,21 @@ data class VendorKeyProbeResult(
 )
 
 /**
- * Step 2 of the bit-by-bit build: SESSION-early + REQUEST application.
+ * Session-parameter and per-request application.
  *
  * - SESSION entries are built into a `CaptureRequest` via a TEMPLATE_PREVIEW
  *   builder and attached with `SessionConfiguration.setSessionParameters()`
- *   *before* `createCaptureSession()`. Vivo X300 Ultra DCG
- *   (`vivo.control.forceSensorMode`) only takes effect this way; a per-request
- *   set is silently ignored, which is why PhotonCamera-style request-only
- *   application cannot do it.
+ *   *before* `createCaptureSession()`, as in PhotonCamera buildSessionParams.
+ *   Vendor operating modes use the same SessionConfiguration path.
+ *   See `docs/refactor/vendor-keys-study.md` for source and device limits.
  * - REQUEST entries ride on every `CaptureRequest.Builder` after the standard
- *   controls, probed with `VendorKeyAndroid.isSupported` (PhotonVidCam
- *   `VendorTagUtils.isSupported`) and routed via `setPhysicalCameraKey` on
- *   logical/physical routes when advertised.
+ *   controls. Acceptance is tested by setting the actual destination, as in
+ *   PhotonCamera's session-init path; physical-advertised keys use
+ *   `setPhysicalCameraKey` without a preliminary logical read.
  *
  * Every key is guarded individually: an unknown name, bad value, or HAL
- * rejection skips that key with a log line and never fails capture.
+ * rejection during builder application skips that key with a log line.
+ * Builder acceptance does not prove HAL acceptance or a sensor-mode change.
  * Black/white levels are intentionally NOT request keys (SDK-verified: no such
  * `CaptureRequest` keys exist). They stay on the per-lens DNG calibration
  * editor; [isLevelTag] names the tags so a stale profile explains itself
@@ -50,21 +52,6 @@ object VendorKeyApply {
 
     fun isLevelTag(name: String): Boolean = name.trim() in LEVEL_TAGS
 
-    /**
-     * Pure partition for tests and logs: entries the HAL advertises versus
-     * entries it does not. An empty [advertised] set means "unknown" (the
-     * query failed), so everything stays attemptable; each set is still
-     * guarded individually.
-     */
-    fun partition(
-        entries: List<VendorKeyEntry>,
-        advertised: Set<String>
-    ): Pair<List<VendorKeyEntry>, List<VendorKeyEntry>> {
-        if (advertised.isEmpty()) return entries to emptyList()
-        val names = advertised.map(String::trim).toSet()
-        return entries.partition { it.name.trim() in names }
-    }
-
     /** Session-early parameters plus their report; request is null when nothing applied. */
     fun buildSessionParameters(
         device: CameraDevice,
@@ -76,27 +63,19 @@ object VendorKeyApply {
         val skipped = mutableListOf<String>()
         val entries = profile.sessionEntries()
         if (entries.isEmpty()) return null to VendorKeyApplyReport(applied, skipped)
-        val advertised = runCatching {
-            characteristics.availableSessionKeys.map { it.name }.toSet()
-        }.getOrDefault(emptySet())
-        val (attempt, refused) = partition(entries, advertised)
-        refused.forEach {
-            log("vendor session: skip ${it.name} (not in availableSessionKeys)")
-            skipped += it.name
-        }
         val builder = try {
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         } catch (failure: Exception) {
             log("vendor session: template failed ($failure)")
-            return null to VendorKeyApplyReport(applied, skipped)
+            return null to VendorKeyApplyReport(emptyList(), entries.map { it.name })
         }
-        for (entry in attempt) {
+        for (entry in entries) {
             if (isLevelTag(entry.name)) {
                 log("vendor session: skip ${entry.name} (level tags are not request keys; use DNG calibration)")
                 skipped += entry.name
                 continue
             }
-            if (setOnBuilder(builder, entry, log, "session", null, null)) applied += entry.name
+            if (setOnBuilder(builder, entry, log, "session", null, characteristics)) applied += entry.name
             else skipped += entry.name
         }
         if (applied.isEmpty()) return null to VendorKeyApplyReport(applied, skipped)
@@ -110,9 +89,7 @@ object VendorKeyApply {
 
     /** Pure fingerprint of session entries backing the reopen-needed badge. */
     fun fingerprint(entries: List<VendorKeyEntry>): String =
-        entries.sortedBy { it.name.trim() }.joinToString("|") {
-            "${it.name.trim()}~${it.type.label}~${it.scope.id}~${it.value}~${it.enabled}"
-        }
+        if (entries.isEmpty()) "" else VendorKeyProfile(entries.sortedBy { it.name.trim() }).toJson()
 
     /** Throwaway-builder probe against the live HAL. Never throws. */
     fun probe(
@@ -129,32 +106,24 @@ object VendorKeyApply {
         } catch (failure: IllegalArgumentException) {
             return VendorKeyProbeResult(false, "Bad value (${failure.message})")
         }
-        if (entry.scope == VendorKeyScope.SESSION) {
-            val advertised = runCatching {
-                characteristics.availableSessionKeys.map { it.name }.toSet()
-            }.getOrDefault(emptySet())
-            if (advertised.isNotEmpty() && entry.name.trim() !in advertised) {
-                return VendorKeyProbeResult(false, "Not in availableSessionKeys")
-            }
-        }
-        val tagHex = if (VendorKeyEntry.isNumericTag(entry.name)) {
-            entry.name.trim()
-        } else {
-            VendorKeyAndroid.resolveNativeTag(characteristics, entry.name)?.let(VendorKeyAndroid::tagHex)
+        val tagHex = VendorKeyAndroid.resolveNativeTag(characteristics, entry.name)
+            ?.let(VendorKeyAndroid::tagHex)
+        if (VendorKeyEntry.isNumericTag(entry.name) && tagHex == null) {
+            return VendorKeyProbeResult(false, "Numeric tag not resolved on this camera; use its advertised name")
         }
         val tagSuffix = tagHex?.let { " ($it)" }.orEmpty()
-        val ok = setAny(builder, entry.name, entry.type, value, physicalCameraId, characteristics)
+        val ok = setAny(builder, entry.name, entry.type, value, physicalCameraId.takeIf { entry.scope == VendorKeyScope.REQUEST }, characteristics)
         if (!ok) {
             return if (tagHex != null) {
-                VendorKeyProbeResult(false, "HAL rejected despite resolving $tagHex")
+                VendorKeyProbeResult(false, "Builder rejected resolved tag $tagHex")
             } else {
-                VendorKeyProbeResult(false, "HAL rejected (not on this lens)")
+                VendorKeyProbeResult(false, "Builder rejected name or value type")
             }
         }
         return if (entry.scope == VendorKeyScope.SESSION) {
-            VendorKeyProbeResult(true, "Accepted — takes effect after reopen$tagSuffix")
+            VendorKeyProbeResult(true, "Builder accepted — reopen to apply$tagSuffix")
         } else {
-            VendorKeyProbeResult(true, "Accepted on this lens$tagSuffix")
+            VendorKeyProbeResult(true, "Builder accepted on this lens$tagSuffix")
         }
     }
 
@@ -189,7 +158,7 @@ object VendorKeyApply {
         log: (String) -> Unit,
         where: String,
         physicalCameraId: String?,
-        characteristics: CameraCharacteristics?
+        characteristics: CameraCharacteristics
     ): Boolean {
         val value = try {
             entry.parsedValue()
@@ -211,9 +180,10 @@ object VendorKeyApply {
         type: VendorKeyType,
         value: Any,
         physicalCameraId: String?,
-        characteristics: CameraCharacteristics?
+        characteristics: CameraCharacteristics
     ): Boolean = try {
         when (type) {
+            VendorKeyType.STRING -> setTyped(builder, name, value as String, String::class.java, physicalCameraId, characteristics)
             VendorKeyType.INT -> setTyped(builder, name, value as Int, Int::class.java, physicalCameraId, characteristics)
             VendorKeyType.LONG -> setTyped(builder, name, value as Long, Long::class.java, physicalCameraId, characteristics)
             VendorKeyType.FLOAT -> setTyped(builder, name, value as Float, Float::class.java, physicalCameraId, characteristics)
@@ -235,21 +205,17 @@ object VendorKeyApply {
         value: T,
         clazz: Class<T>,
         physicalCameraId: String?,
-        characteristics: CameraCharacteristics?
+        characteristics: CameraCharacteristics
     ): Boolean {
-        val key = VendorKeyAndroid.requestKeyOf(name, clazz) ?: return false
-        if (!VendorKeyAndroid.isSupported(builder, key)) return false
-        if (physicalCameraId != null && characteristics != null) {
-            val physicalNames = runCatching {
-                characteristics.availablePhysicalCameraRequestKeys.map { it.name }.toSet()
-            }.getOrDefault(emptySet())
-            if (name.trim() in physicalNames) {
-                try {
-                    builder.setPhysicalCameraKey(key, value, physicalCameraId)
-                    return true
-                } catch (_: IllegalArgumentException) {
-                    // Fall through to the logical builder below.
-                }
+        val key = VendorKeyAndroid.requestKeyOf(name, clazz, characteristics) ?: return false
+        if (isLevelTag(key.name)) return false
+        // Test the actual destination. A physical-only key need not support a logical get().
+        if (physicalCameraId != null && VendorKeyAndroid.isPhysicalKey(characteristics, key.name)) {
+            try {
+                builder.setPhysicalCameraKey(key, value, physicalCameraId)
+                return true
+            } catch (_: IllegalArgumentException) {
+                // Preserve the existing logical fallback for OEM physical-set refusals.
             }
         }
         builder.set(key, value)
