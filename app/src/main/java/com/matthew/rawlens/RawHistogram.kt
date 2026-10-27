@@ -70,7 +70,9 @@ object RawHistogramSampler {
          * the JPEG scope predicts the saved file. Honored only with a LUT;
          * the linear-RAW (DNG) path ignores it, staying bit-exact.
          */
-        exposureEv: Double = 0.0
+        exposureEv: Double = 0.0,
+        dynamicBlack: BlackLevelPattern? = null,
+        dynamicWhite: Int? = null
     ): RgbHistogram? {
         val plane = image.planes.singleOrNull() ?: return null
         if (image.width < 2 || image.height < 2) return null
@@ -78,8 +80,9 @@ object RawHistogramSampler {
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
             ?: return null
         if (cfa !in 0..3) return null
-        val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-        val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+        val black = dynamicBlack ?: characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+        val white = (dynamicWhite?.takeIf { it > 0 }
+            ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
             ?.coerceAtLeast(1) ?: return null
         return sample(image, plane, cfa, black, white, scopeLut, exposureEv)
     }

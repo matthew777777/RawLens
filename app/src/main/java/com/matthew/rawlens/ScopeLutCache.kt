@@ -16,11 +16,15 @@ internal class ScopeLutCache(
 ) {
     private var settings: JpegOutputSettings? = null
     private var lut: FloatArray? = null
+    private var exposureEv = 0.0
 
-    fun get(current: JpegOutputSettings): FloatArray {
+    fun get(current: JpegOutputSettings, ev: Double = 0.0): FloatArray {
+        val safeEv = if (ev.isFinite()) ev.coerceIn(-8.0, 8.0) else 0.0
         val cached = lut
-        if (cached != null && current == settings) return cached
-        return build(current).also {
+        if (cached != null && current == settings && safeEv == exposureEv) return cached
+        return (if (safeEv == 0.0) build(current) else
+            AgxDisplayTransform.buildScopeLut(current, exposureEv = safeEv)).also {
+            exposureEv = safeEv
             settings = current
             lut = it
         }
