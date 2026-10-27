@@ -168,4 +168,35 @@ class CrawRoundTripDeviceTest {
             file.delete()
         }
     }
+
+    @Test fun lensShadingChunkExpandsIntoFrameJson() {
+        assumeTrue("craw libraries unavailable", CrawWriter.available && CrawReader.available)
+        val width = 32
+        val height = 16
+        val src = syntheticFrame(width, height, 10, 3)
+        val file = File(context.cacheDir, "craw-shading.craw").apply { delete() }
+        val grid = CrawLensShading.Grid(3, 2, FloatArray(24) { 1f + it * 0.125f })
+        val handle = CrawWriter.open(file.absolutePath, "{}")
+        val dst = ByteBuffer.allocateDirect(CrawFormat.payloadBound(width, height))
+        val n = CrawWriter.encodeFrame(src, src.capacity(), width, height, width * 2, 0, height, dst, false, 0, 10)
+        dst.flip()
+        CrawWriter.writeShading(handle, 1L, 1, grid)
+        CrawWriter.writeFrame(handle, dst, n, 1L, "{\"iso\":50,\"lshd_ref\":1}")
+        CrawWriter.close(handle)
+        val reader = CrawReader.open(file.absolutePath)
+        try {
+            val ts = CrawReader.frameTimestamps(reader)!!.single()
+            val json = org.json.JSONObject(CrawReader.frameMetadata(reader, ts)!!)
+            assertEquals(3, json.getInt("lensShadingMapWidth"))
+            assertEquals(2, json.getInt("lensShadingMapHeight"))
+            val planes = json.getJSONArray("lensShadingMap")
+            // Plane ch holds gains[i * 4 + ch], i.e. colour planes R, Gr, Gb, B.
+            for (ch in 0 until 4) for (i in 0 until 6)
+                assertEquals(grid.gains[i * 4 + ch].toDouble(), planes.getJSONArray(ch).getDouble(i), 1e-6)
+            assertEquals(width, json.getInt("width"))
+        } finally {
+            CrawReader.closeReader(reader)
+            file.delete()
+        }
+    }
 }

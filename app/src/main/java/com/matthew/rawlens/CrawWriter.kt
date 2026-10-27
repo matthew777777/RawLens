@@ -165,6 +165,21 @@ internal object CrawWriter {
      * Timestamps are boot-time ns on the video frame timeline, ascending.
      * Returns samples written.
      */
+    /**
+     * Append a lens-shading / vignetting map as an LSHD chunk with [id]; frames
+     * refer to it with `"lshd_ref": id`. [grid] gains are four per point in
+     * colour order (R, Gr, Gb, B), as [CrawLensShading.Grid]. Committer thread only.
+     */
+    fun writeShading(handle: Long, timestampNs: Long, id: Int, grid: CrawLensShading.Grid) {
+        require(grid.gains.size == grid.columns * grid.rows * 4) { "Lens-shading gain count mismatch" }
+        require(grid.columns in 1..CrawLensShading.MAX_EXTENT && grid.rows in 1..CrawLensShading.MAX_EXTENT) {
+            "Lens-shading grid extents out of range"
+        }
+        if (!available) throw IllegalStateException("CRAW writer unavailable")
+        val code = containerWriteShading(handle, timestampNs, id, grid.columns, grid.rows, grid.gains)
+        if (code < 0) throw IllegalStateException("writeShading failed: code=$code")
+    }
+
     fun writeGyro(handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int): Int =
         writeMotion(handle, timestampsNs, axes, count, gyro = true)
 
@@ -213,6 +228,10 @@ internal object CrawWriter {
 
     external fun containerWriteAccel(
         handle: Long, timestampsNs: LongArray, axes: FloatArray, count: Int
+    ): Int
+
+    external fun containerWriteShading(
+        handle: Long, timestampNs: Long, id: Int, columns: Int, rows: Int, gains: FloatArray
     ): Int
 
     external fun containerClose(handle: Long): Int

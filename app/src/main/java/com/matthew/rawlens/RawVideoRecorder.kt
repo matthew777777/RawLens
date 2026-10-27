@@ -269,6 +269,7 @@ internal class RawVideoRecorder(
         val cropHeight: Int,
         val timestampNs: Long,
         val frameJson: String,
+        val shading: CrawLensShading.Grid?,
     )
 
     private data class PendingFrame(
@@ -277,7 +278,36 @@ internal class RawVideoRecorder(
         val bytes: Int,
         val timestampNs: Long,
         val frameJson: String,
+        val shading: CrawLensShading.Grid?,
     )
+
+    // Committer thread only: the LSHD chunk the next frames refer to.
+    private var lastShading: CrawLensShading.Grid? = null
+    private var lastShadingId = 0
+
+    /**
+     * Frame JSON with `lshd_ref` to the frame's lens-shading map. A new LSHD
+     * chunk is written only when the map changes (AWB/zoom/crop), instead of
+     * repeating thousands of gains in every frame's JSON.
+     */
+    private fun shadingRef(pend: PendingFrame, relTs: Long): String {
+        val grid = pend.shading ?: return pend.frameJson
+        val last = lastShading
+        if (last == null || last.columns != grid.columns || last.rows != grid.rows ||
+            !last.gains.contentEquals(grid.gains)
+        ) {
+            try {
+                CrawWriter.writeShading(writerHandle, relTs, lastShadingId + 1, grid)
+                lastShadingId++
+                lastShading = grid
+            } catch (e: Exception) {
+                Log.w(TAG, "lens shading write failed: ${e.message}")
+                return pend.frameJson
+            }
+        }
+        val json = pend.frameJson
+        return json.substring(0, json.lastIndexOf('}')) + ",\"lshd_ref\":$lastShadingId}"
+    }
 
     private val encodeQueue = ArrayBlockingQueue<Any>(QUEUE_CAP)
     private val audioQueue =
@@ -362,6 +392,8 @@ internal class RawVideoRecorder(
         writeMsAvg = 0f
         writeMsMax = 0f
         lastFrameTs = -1L
+        lastShading = null
+        lastShadingId = 0
         hasAudioStream = false
         hasMotionStream = false
         nextSeq = 0L
@@ -545,7 +577,7 @@ internal class RawVideoRecorder(
                 // Per-frame lens-shading triplet over this frame's own crop
                 // (a few thousand bilinear samples, far below the encode
                 // cost). Any failure records this frame without the map.
-                val shadingTriplet = try {
+                val shadingGrid = try {
                     val snap = lensShading
                     val cfa = shadingCfa
                     val active = shadingActive
@@ -553,7 +585,7 @@ internal class RawVideoRecorder(
                         CrawLensShading.resample(
                             snap, cfa, active, frameSize.width, frameSize.height,
                             resolved.top, resolved.height
-                        )?.let { CrawLensShading.toFrameJson(it) }
+                        )
                     } else null
                 } catch (_: Exception) {
                     null
@@ -578,8 +610,8 @@ internal class RawVideoRecorder(
                         "\"height\":$encH," +
                         "\"codec\":\"CRAW-Fast\",\"timestamp\":$ts," +
                         "\"crop\":\"${crop.name}\"" +
-                        (if (shadingTriplet != null) ",$shadingTriplet" else "") +
                         "}",
+                    shading = shadingGrid,
                 )
                 if (!encodeQueue.offer(task)) {
                     // Latest-wins for video: drop the oldest queued frame.
@@ -944,7 +976,7 @@ internal class RawVideoRecorder(
                 buf.flip()
                 synchronized(reorderLock) {
                     reorder[task.seq] =
-                        PendingFrame(task.seq, buf, bytes, task.timestampNs, frameJson)
+                        PendingFrame(task.seq, buf, bytes, task.timestampNs, frameJson, task.shading)
                     buf = null // ownership transferred to the committer
                     reorderLock.notifyAll()
                 }
@@ -1076,7 +1108,7 @@ internal class RawVideoRecorder(
             try {
                 val write0 = SystemClock.elapsedRealtimeNanos()
                 CrawWriter.writeFrame(
-                    writerHandle, pend.payload, pend.bytes, relTs, pend.frameJson
+                    writerHandle, pend.payload, pend.bytes, relTs, shadingRef(pend, relTs)
                 )
                 val writeMs = (SystemClock.elapsedRealtimeNanos() - write0) / 1e6f
                 writeMsAvg =

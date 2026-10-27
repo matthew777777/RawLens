@@ -7,6 +7,8 @@
 #include <craw/Reader.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <string>
@@ -15,11 +17,31 @@
 
 namespace {
 
+struct Shading {
+    uint16_t columns = 0, rows = 0;
+    std::vector<float> gains;  // 4 per point, colour order R, Gr, Gb, B
+};
+
 struct Handle {
     explicit Handle(const std::string& path) : reader(path) {
         // Index from chunk headers only: one corrupt frame must not hide the take.
         size_t i = 0;
         for (const auto& c : reader.chunks()) {
+            if (std::memcmp(c.fourcc.data(), "LSHD", 4) == 0 && c.crcOk) {
+                const auto p = reader.payload(c);
+                if (p.size() < 16) continue;
+                Shading sh;
+                uint32_t id;
+                std::memcpy(&id, p.data() + 8, 4);
+                std::memcpy(&sh.columns, p.data() + 12, 2);
+                std::memcpy(&sh.rows, p.data() + 14, 2);
+                const size_t n = size_t{sh.columns} * sh.rows * 4;
+                if (n == 0 || p.size() != 16 + 4 * n) continue;
+                sh.gains.resize(n);
+                std::memcpy(sh.gains.data(), p.data() + 16, 4 * n);
+                shading[id] = std::move(sh);
+                continue;
+            }
             if (std::memcmp(c.fourcc.data(), "FRAM", 4) != 0) continue;
             byTs.emplace(c.timestampNs, i++);
             timestamps.push_back(c.timestampNs);
@@ -28,6 +50,7 @@ struct Handle {
     craw::Reader reader;
     std::unordered_map<int64_t, size_t> byTs;
     std::vector<int64_t> timestamps;
+    std::unordered_map<uint32_t, Shading> shading;
 };
 
 Handle* from(jlong h) { return reinterpret_cast<Handle*>(h); }
@@ -48,6 +71,33 @@ std::string withGeometry(const std::string& json, const craw::FrameInfo& info) {
     if (json.size() < 2 || json.front() != '{') return "{" + dims + "}";
     const bool empty = json.find_first_not_of(" \t\r\n", 1) == json.size() - 1;
     return "{" + dims + (empty ? "" : ",") + json.substr(1);
+}
+
+// Expands `"lshd_ref":N` into the legacy per-frame triplet
+// (lensShadingMapWidth/Height + four colour planes) that frame readers parse.
+std::string withShading(const std::string& json, const Handle& h) {
+    const auto key = json.find("\"lshd_ref\":");
+    if (key == std::string::npos || json.find("\"lensShadingMap\"") != std::string::npos) return json;
+    const auto id = static_cast<uint32_t>(std::strtoul(json.c_str() + key + 11, nullptr, 10));
+    const auto it = h.shading.find(id);
+    if (it == h.shading.end()) return json;
+    const Shading& sh = it->second;
+    std::string t = "\"lensShadingMapWidth\":" + std::to_string(sh.columns) +
+                    ",\"lensShadingMapHeight\":" + std::to_string(sh.rows) + ",\"lensShadingMap\":[";
+    const size_t points = size_t{sh.columns} * sh.rows;
+    char num[32];
+    for (int ch = 0; ch < 4; ++ch) {
+        t += ch ? ",[" : "[";
+        for (size_t i = 0; i < points; ++i) {
+            std::snprintf(num, sizeof num, i ? ",%.9g" : "%.9g", sh.gains[i * 4 + ch]);
+            t += num;
+        }
+        t += ']';
+    }
+    t += ']';
+    const auto close = json.rfind('}');
+    if (close == std::string::npos) return json;
+    return json.substr(0, close) + "," + t + json.substr(close);
 }
 
 }  // namespace
@@ -93,7 +143,7 @@ Java_com_matthew_rawlens_CrawReader_frameMetadata(JNIEnv* env, jobject, jlong h,
     try {
         const auto rec = handle->reader.frame(it->second);
         const auto info = craw::probeFrame(rec.payload, rec.payloadSize);
-        return env->NewStringUTF(withGeometry(rec.metaJson, info).c_str());
+        return env->NewStringUTF(withShading(withGeometry(rec.metaJson, info), *handle).c_str());
     } catch (...) {
         return nullptr;
     }
