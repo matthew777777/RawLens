@@ -287,6 +287,8 @@ object HdrSeqMerge {
             sqrt(max(scale * CLIP_LEVEL + offset, 1e-12f)) * sqrt(2f)
         }
         val merged = pair.cfa.values.copyOf()
+        val clipStride = (w + 31) / 32
+        val unrecovered = IntArray(clipStride * h)
         var clipped = 0L
         var rescued = 0L
         HdrPools.runStriped(h, 8) { y0, y1 ->
@@ -296,12 +298,16 @@ object HdrSeqMerge {
                 val idx = y * w + x
                 if (merged[idx] < CLIP_LEVEL) continue
                 lClip++
+                val bit = y * clipStride + x / 32
+                val flag = 1 shl (x and 31)
+                unrecovered[bit] = unrecovered[bit] or flag
                 val s = shiftFor(shortShifts, x / 2, y / 2)
                 if (s.validFrac < TRUST_VALID_FRAC) continue
                 if (s.costPerPixel > TRUST_K * trustSigma) continue
                 val raw = HdrRawMerge.sampleSmoothAt(short.cfa, s.dx, s.dy, x, y)
                 if (raw >= SHORT_CLIP) continue
                 merged[idx] = raw * gain
+                unrecovered[bit] = unrecovered[bit] and flag.inv()
                 lResc++
             }
             synchronized(this) {
@@ -310,7 +316,8 @@ object HdrSeqMerge {
             }
         }
         val rescueMs = (System.nanoTime() - t) / 1_000_000
-        val cfa = reference.cfa.copy(values = merged)
+        val cfa = reference.cfa.copy(values = merged,
+            highlightClipping = CfaHighlightClipping(w, h, unrecovered))
         return Result(
             cfa, refIndex, pair.keptFraction,
             if (clipped == 0L) 1.0 else rescued.toDouble() / clipped,

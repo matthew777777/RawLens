@@ -110,7 +110,9 @@ data class UnpackedRawCfa(
     val sourceCrop: RawCrop,
     /** Full-sensor coordinates of values[0], required for CFA and calibration-map parity. */
     val sensorCropLeft: Int = 0,
-    val sensorCropTop: Int = 0
+    val sensorCropTop: Int = 0,
+    /** Null for sensor/HDR+ threshold detection; explicit unrecovered pixels for bracket HDR. */
+    val highlightClipping: CfaHighlightClipping? = null
 ) {
     fun requireAmazeCompatible() {
         require(width >= 4 && height >= 4 && width % 2 == 0 && height % 2 == 0) {

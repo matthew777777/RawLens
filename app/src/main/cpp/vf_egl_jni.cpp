@@ -299,6 +299,24 @@ Java_com_matthew_rawlens_VfEglImport_blitBytesToBlob(
     return 0;
 }
 
+// Float CFA upload without a Java direct staging copy or uint16 quantization.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfEglImport_blitFloatsToBlob(
+    JNIEnv* env, jobject, jobject dst, jfloatArray src) {
+    if (!dst || !src) return -1;
+    const jsize count = env->GetArrayLength(src);
+    AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, dst);
+    if (!buf) return -4;
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(buf, &desc);
+    if (desc.width < (uint64_t)count * sizeof(float)) return -5;
+    void* ptr = nullptr;
+    if (AHardwareBuffer_lock(buf, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &ptr) != 0 || !ptr) return -6;
+    env->GetFloatArrayRegion(src, 0, count, (jfloat*)ptr);
+    AHardwareBuffer_unlock(buf, nullptr);
+    return env->ExceptionCheck() ? -7 : 0;
+}
+
 // BGU guide-sample handoff: export the current GL stream position as a
 // dup'd native fence fd. The GPU signals it when all prior work (the
 // slice sample of this frame's export) completes; the offer thread waits

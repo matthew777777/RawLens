@@ -11,15 +11,16 @@ uniform highp mat3 u_camera_to_acescg;
 uniform highp vec3 u_camera_white_normalized;
 // Wavelet path: emit pre-matrix camera RGB instead of ACEScg.
 uniform int u_camera_linear;
+uniform highp vec2 u_white_window;
 
 layout(binding = 0, rgba16f) writeonly uniform highp image2D img_out;
 void main() {
     ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x >= u_outsize.x || o.y >= u_outsize.y) return;
     vec3 cameraRgb = max(texelFetch(u_rgb, o, 0).rgb, vec3(0.0));
-    vec3 whiteBlendRgb = smoothstep(vec3(0.70), vec3(0.99), cameraRgb);
+    vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
     float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
-    cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
+    if (u_camera_linear == 0) cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
     vec3 acescg = u_camera_to_acescg * cameraRgb;
     vec3 outRgb = (u_camera_linear != 0) ? cameraRgb : acescg;
     imageStore(img_out, o, vec4(outRgb, 1.0));
