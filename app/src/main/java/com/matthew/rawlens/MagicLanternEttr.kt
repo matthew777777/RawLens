@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Magic Lantern modules/ettr/ettr.c @ 142472e: Copyright (C) Magic Lantern
+// Team, GPL-2.0-or-later (assets/licenses/GPL-2.0.txt; NOTICE.md).
 
 package com.matthew.rawlens
 

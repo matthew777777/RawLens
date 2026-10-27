@@ -1,5 +1,8 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from libcamera src/ipa/rpi/controller/rpi/agc_channel.cpp and
+// src/ipa/libipa/histogram.cpp @ 0bf3fc5: Copyright (C) 2019, 2023 Raspberry Pi Ltd,
+// BSD-2-Clause (license text: assets/licenses/BSD-2-Clause-libcamera.txt; NOTICE.md).
 
 package com.matthew.rawlens
 
