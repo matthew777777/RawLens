@@ -219,6 +219,9 @@ struct TileJob {
 };
 
 // Appends up to 64 bits LSB-first; flushes whole 32-bit words.
+// Bytes a vectorized block store may write past the coded data.
+constexpr size_t kPackSlack = 16;
+
 struct LiveBits {
     uint8_t* out;
     uint64_t acc = 0;
@@ -268,21 +271,16 @@ inline void packBlock(LiveBits& lb, const uint16_t* q, uint32_t n, int w) {
         const int64x2_t sh2 = vdupq_n_s64(2 * w);
         const uint64x2_t q0 = vorrq_u64(vmovl_u32(vget_low_u32(e2)), vshlq_u64(vmovl_u32(vget_low_u32(o2)), sh2));
         const uint64x2_t q1 = vorrq_u64(vmovl_high_u32(e2), vshlq_u64(vmovl_high_u32(o2), sh2));
-        // A full block is exactly 2w bytes: place the four 4w-bit chunks at
-        // fixed bit offsets (multiples of 4) in a zeroed staging area.
-        const uint64_t chunk[4] = {vgetq_lane_u64(q0, 0), vgetq_lane_u64(q0, 1), vgetq_lane_u64(q1, 0),
-                                   vgetq_lane_u64(q1, 1)};
-        uint8_t tmp[48] = {};
-        const int n4 = 4 * w;
-        for (int k = 0; k < 4; ++k) {
-            const int o = k * n4, byte = o >> 3, shift = o & 7;  // shift is 0 or 4
-            uint64_t cur;
-            std::memcpy(&cur, tmp + byte, 8);
-            cur |= chunk[k] << shift;
-            std::memcpy(tmp + byte, &cur, 8);
-            if (shift && n4 + shift > 64) tmp[byte + 8] |= static_cast<uint8_t>(chunk[k] >> (64 - shift));
-        }
-        std::memcpy(lb.out, tmp, static_cast<size_t>(2 * w));
+        // A full block is exactly 2w bytes, and each half (8 samples, 8w bits)
+        // is exactly w bytes: build the halves as 128-bit values and store
+        // them directly. The second 16-byte store may run past the block;
+        // the next block overwrites that, and tile buffers keep kPackSlack.
+        using u128 = unsigned __int128;
+        const int n4 = 4 * w;  // 4w <= 64
+        const u128 h0 = u128{vgetq_lane_u64(q0, 0)} | (u128{vgetq_lane_u64(q0, 1)} << n4);
+        const u128 h1 = u128{vgetq_lane_u64(q1, 0)} | (u128{vgetq_lane_u64(q1, 1)} << n4);
+        std::memcpy(lb.out, &h0, 16);  // little-endian targets (NEON path)
+        std::memcpy(lb.out + w, &h1, 16);
         lb.out += 2 * w;
         return;
     }
@@ -680,7 +678,7 @@ void encodeTile(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, uint32_
         // At most 17 bits/sample, byte aligned, plus two width nibbles.
         // Avoid retaining the much larger Rice bound for every Live tile.
         const size_t blocks = size_t{4} * th * ((tw + kBlock - 1) / kBlock);
-        uint8_t* dst = out.reserve(5 + blocks * (j.d->codec == 3 ? 48 : 35));
+        uint8_t* dst = out.reserve(5 + blocks * (j.d->codec == 3 ? 48 : 35) + kPackSlack);
         const size_t coded = j.d->codec == 3 ? encodeTileLive2(j, tx, ty, tw, th, dst, maxSample)
                                              : encodeTileLive(j, tx, ty, tw, th, dst, u, maxSample);
         const size_t stored = 1 + 8 * n;

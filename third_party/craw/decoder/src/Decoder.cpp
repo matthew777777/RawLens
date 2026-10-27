@@ -4,6 +4,7 @@
 #include "Crc32c.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstring>
@@ -22,6 +23,15 @@ constexpr size_t kHeaderSize = 24;
 
 // Coded plane order G1, G2, R, B -> position in the 2x2 cell (py * 2 + px).
 constexpr int kLayout[4][4] = {{1, 2, 0, 3}, {0, 3, 1, 2}, {0, 3, 2, 1}, {1, 2, 3, 0}};
+// Plane index at each cell position: identity for Live codecs (cell order),
+// the inverse of kLayout (plane -> position) for codec 1.
+constexpr int kIdentity[4] = {0, 1, 2, 3};
+constexpr auto kInverse = [] {
+    std::array<std::array<int, 4>, 4> inv{};
+    for (int c = 0; c < 4; ++c)
+        for (int i = 0; i < 4; ++i) inv[c][kLayout[c][i]] = i;
+    return inv;
+}();
 
 uint16_t rd16(const uint8_t* p) { return uint16_t(p[0] | p[1] << 8); }
 uint32_t rd32(const uint8_t* p) { return uint32_t(p[0]) | p[1] << 8 | p[2] << 16 | uint32_t(p[3]) << 24; }
@@ -120,6 +130,40 @@ void decodePlane(BitReader& br, int32_t* p, int w, int h, int32_t firstPred, uin
     }
 }
 
+// Unpacks `cnt` fixed-width (w <= 18) little-endian bit fields from `data`.
+// With 8 readable bytes past the block, each field is one unaligned 64-bit
+// load at its own bit offset: fields are independent, so the loop pipelines
+// instead of refilling a bit buffer byte by byte.
+inline void unpackFields(const uint8_t* data, const uint8_t* end, uint32_t* dst, uint32_t cnt, int w) {
+    if (w == 0) {
+        std::fill(dst, dst + cnt, 0u);
+        return;
+    }
+    const uint32_t mask = (1u << w) - 1;
+    const size_t bytes = (size_t{cnt} * w + 7) / 8;
+    if (static_cast<size_t>(end - data) >= bytes + 8) {
+        for (uint32_t i = 0; i < cnt; ++i) {
+            const size_t bp = size_t{i} * w;
+            uint64_t v;
+            std::memcpy(&v, data + (bp >> 3), 8);
+            if constexpr (std::endian::native == std::endian::big) v = __builtin_bswap64(v);
+            dst[i] = static_cast<uint32_t>(v >> (bp & 7)) & mask;
+        }
+        return;
+    }
+    uint64_t acc = 0;
+    int bits = 0;
+    for (uint32_t i = 0; i < cnt; ++i) {
+        while (bits < w) { acc |= uint64_t{*data++} << bits; bits += 8; }
+        dst[i] = static_cast<uint32_t>(acc) & mask;
+        acc >>= w;
+        bits -= w;
+    }
+}
+
+// Zig-zag residual: 0, -1, 1, -2, 2, ...
+inline int32_t unzig(uint32_t u) { return (u & 1) ? -static_cast<int32_t>((u + 1) >> 1) : static_cast<int32_t>(u >> 1); }
+
 // CRAW-Live tile (SPEC 3.6) into four cell-order planes of tw x th.
 // CRAW-Live v2 tile (SPEC 3.7): 4-neighbour prediction, plain or PFOR blocks.
 void decodeTileLive2(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
@@ -141,22 +185,20 @@ void decodeTileLive2(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int
         if (w > 18) throw DecodeError("craw: bad live2 width");
         const size_t bytes = (size_t{cnt} * w + 7) / 8;
         if (bytes > static_cast<size_t>(end - data)) throw DecodeError("craw: live2 data overrun");
-        uint64_t acc = 0;
-        int bits = 0;
-        const uint32_t mask = w ? (1u << w) - 1 : 0;
-        for (uint32_t i = 0; i < cnt; ++i) {
-            while (bits < w) { acc |= uint64_t{*data++} << bits; bits += 8; }
-            dst[i] = static_cast<uint32_t>(acc) & mask;
-            acc >>= w;
-            bits -= w;
-        }
+        unpackFields(data, end, dst, cnt, w);
+        data += bytes;
     };
     const size_t n = size_t{tw} * th;
     uint32_t u[kBlock];
-    for (uint32_t y = 0; y < th; ++y)
+    // Residuals of one row for all four cell planes, parsed first (the bit
+    // stream is cell-major); the four planes' left-neighbour chains are then
+    // independent and run interleaved.
+    thread_local std::vector<int32_t> rbuf, sbuf;
+    rbuf.resize(4 * size_t{tw});
+    sbuf.resize(4 * size_t{tw});
+    for (uint32_t y = 0; y < th; ++y) {
         for (int cell = 0; cell < 4; ++cell) {
-            int32_t* row = planes + cell * n + size_t{y} * tw;
-            const int32_t* up = row - tw;
+            int32_t* r = rbuf.data() + cell * size_t{tw};
             for (uint32_t x0 = 0; x0 < tw; x0 += kBlock) {
                 const uint32_t cnt = std::min<uint32_t>(kBlock, tw - x0);
                 const int t = nextNibble();
@@ -176,19 +218,37 @@ void decodeTileLive2(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int
                         u[idx[e]] |= high[e] << k;
                     }
                 }
-                for (uint32_t i = 0; i < cnt; ++i) {
-                    const uint32_t x = x0 + i;
-                    int32_t pred;
-                    if (y == 0) pred = x == 0 ? first : row[x - 1];
-                    else if (x == 0) pred = up[0];
-                    else {
-                        const int32_t U = up[x];
-                        pred = (row[x - 1] + U + up[x - 1] + (x + 1 < tw ? up[x + 1] : U) + 2) >> 2;
-                    }
-                    row[x] = pred + ((u[i] & 1) ? -static_cast<int32_t>((u[i] + 1) >> 1) : static_cast<int32_t>(u[i] >> 1));
-                }
+                for (uint32_t i = 0; i < cnt; ++i) r[x0 + i] = unzig(u[i]);
             }
         }
+        int32_t* rows[4];
+        for (int cell = 0; cell < 4; ++cell) rows[cell] = planes + cell * n + size_t{y} * tw;
+        if (y == 0) {
+            for (int cell = 0; cell < 4; ++cell) {
+                const int32_t* r = rbuf.data() + cell * size_t{tw};
+                int32_t prev = first;
+                for (uint32_t x = 0; x < tw; ++x) rows[cell][x] = prev = prev + r[x];
+            }
+            continue;
+        }
+        // U + UL + UR + 2 per sample (UR clamps to U at the tile's right edge).
+        for (int cell = 0; cell < 4; ++cell) {
+            const int32_t* up = rows[cell] - tw;
+            int32_t* sv = sbuf.data() + cell * size_t{tw};
+            for (uint32_t x = 1; x + 1 < tw; ++x) sv[x] = up[x] + up[x - 1] + up[x + 1] + 2;
+            if (tw > 1) sv[tw - 1] = 2 * up[tw - 1] + up[tw - 2] + 2;
+            rows[cell][0] = up[0] + rbuf[cell * size_t{tw}];
+        }
+        const int32_t *r0 = rbuf.data(), *r1 = r0 + tw, *r2 = r1 + tw, *r3 = r2 + tw;
+        const int32_t *s0 = sbuf.data(), *s1 = s0 + tw, *s2 = s1 + tw, *s3 = s2 + tw;
+        int32_t l0 = rows[0][0], l1 = rows[1][0], l2 = rows[2][0], l3 = rows[3][0];
+        for (uint32_t x = 1; x < tw; ++x) {
+            rows[0][x] = l0 = ((l0 + s0[x]) >> 2) + r0[x];
+            rows[1][x] = l1 = ((l1 + s1[x]) >> 2) + r1[x];
+            rows[2][x] = l2 = ((l2 + s2[x]) >> 2) + r2[x];
+            rows[3][x] = l3 = ((l3 + s3[x]) >> 2) + r3[x];
+        }
+    }
 }
 
 void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
@@ -217,18 +277,9 @@ void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int3
                 if (w > 17) throw DecodeError("craw: bad live width");
                 const size_t bytes = (size_t{cnt} * w + 7) / 8;
                 if (bytes > static_cast<size_t>(end - data)) throw DecodeError("craw: live data overrun");
-                uint64_t acc = 0;
-                int bits = 0;
-                const uint8_t* q = data;
-                const uint32_t mask = w ? (w >= 32 ? 0xFFFFFFFFu : (1u << w) - 1) : 0;
-                for (uint32_t i = 0; i < cnt; ++i) {
-                    while (bits < w) { acc |= uint64_t{*q++} << bits; bits += 8; }
-                    const uint32_t u = static_cast<uint32_t>(acc) & mask;
-                    acc >>= w;
-                    bits -= w;
-                    prev += (u & 1) ? -static_cast<int32_t>((u + 1) >> 1) : static_cast<int32_t>(u >> 1);
-                    row[x0 + i] = prev;
-                }
+                uint32_t u[kBlock];
+                unpackFields(data, end, u, cnt, w);
+                for (uint32_t i = 0; i < cnt; ++i) row[x0 + i] = prev = prev + unzig(u[i]);
                 data += bytes;
             }
         }
@@ -272,7 +323,6 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
             throw DecodeError("craw: bad tile offsets");
 
     out.resize(size_t{f.width} * f.height);
-    const int* L = f.cfa == Cfa::RGB ? kLayout[0] : kLayout[static_cast<int>(f.cfa)];  // unused for RGB
     std::atomic<uint32_t> next{0};
     std::exception_ptr error;
     std::mutex errorMutex;
@@ -308,20 +358,24 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
                 } else {
                     throw DecodeError("craw: unknown tile mode");
                 }
-                const int32_t maxv = (1 << f.bitDepth) - 1;
-                for (int i = 0; i < 4; ++i) {
-                    const int pos = live ? i : L[i];  // Live planes are in cell order
-                    const int py = pos >> 1, px = pos & 1;
-                    const int32_t* src = planes.data() + i * n;
+                const uint32_t maxv = (1u << f.bitDepth) - 1;
+                const int* planeAt = live ? kIdentity : kInverse[static_cast<int>(f.cfa) & 3].data();  // plane of each cell position
+                uint32_t bad = 0;
+                for (int py = 0; py < 2; ++py) {
+                    const int32_t* a = planes.data() + planeAt[py * 2] * n;
+                    const int32_t* b = planes.data() + planeAt[py * 2 + 1] * n;
                     for (uint32_t y = 0; y < th; ++y) {
-                        uint16_t* dst = out.data() + size_t(2 * (ty + y) + py) * f.width + 2 * tx + px;
+                        uint16_t* dst = out.data() + size_t(2 * (ty + y) + py) * f.width + 2 * tx;
+                        const int32_t *ra = a + size_t{y} * tw, *rb = b + size_t{y} * tw;
                         for (uint32_t x = 0; x < tw; ++x) {
-                            const int32_t v = src[y * tw + x];
-                            if (v < 0 || v > maxv) throw DecodeError("craw: sample out of range");
-                            dst[2 * x] = static_cast<uint16_t>(v);
+                            const uint32_t va = static_cast<uint32_t>(ra[x]), vb = static_cast<uint32_t>(rb[x]);
+                            bad |= (va > maxv) | (vb > maxv);  // negative wraps above maxv
+                            dst[2 * x] = static_cast<uint16_t>(va);
+                            dst[2 * x + 1] = static_cast<uint16_t>(vb);
                         }
                     }
                 }
+                if (bad) throw DecodeError("craw: sample out of range");
             } catch (...) {
                 std::lock_guard lock(errorMutex);
                 if (!error) error = std::current_exception();

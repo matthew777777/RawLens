@@ -17,8 +17,7 @@ struct ChunkRef {
     std::array<char, 4> fourcc;
     uint64_t offset;      // chunk header offset
     uint64_t size;        // payload size
-    int64_t timestampNs;  // from INDX, or parsed for FRAM when recovered
-    bool crcOk;
+    int64_t timestampNs;  // from INDX, or parsed from the chunk when recovered
 };
 
 struct FrameRecord {
@@ -32,6 +31,12 @@ struct FrameRecord {
 class Reader {
 public:
     explicit Reader(const std::string& path);  // throws DecodeError; memory-maps the file
+#ifndef _WIN32
+    // Memory-maps an already open file (e.g. an Android content-provider
+    // descriptor that cannot be reopened by path). `fd` stays owned by the
+    // caller and may be closed after construction. `name` labels errors.
+    Reader(int fd, const std::string& name);
+#endif
     ~Reader();
     Reader(const Reader&) = delete;
     Reader& operator=(const Reader&) = delete;
@@ -39,14 +44,21 @@ public:
     const std::string& metaJson() const { return meta_; }
     const std::vector<ChunkRef>& chunks() const { return chunks_; }
     bool recovered() const { return recovered_; }
+    // True when the file is memory-mapped (false: read into memory).
+    bool mapped() const { return owned_.empty(); }
     size_t frameCount() const { return frames_.size(); }
 
-    // Chunk payload bytes; verifies CRC lazily.
+    // Chunk payload bytes (not CRC-checked; see crcOk).
     std::string_view payload(const ChunkRef& c) const;
+    // Verifies the chunk's CRC32C (reads the whole payload). frame() checks
+    // FRAM chunks itself; opening a file reads no payloads.
+    bool crcOk(const ChunkRef& c) const;
     FrameRecord frame(size_t i) const;
 
 private:
     void scan();
+    bool scanIndex();  // closed file: chunk table from the trailer + INDX
+    void scanOrRelease();
     void release();
 
     const uint8_t* data_ = nullptr;
@@ -56,6 +68,7 @@ private:
     std::vector<ChunkRef> chunks_;
     std::vector<size_t> frames_;  // indices into chunks_
     bool recovered_ = false;
+
 };
 
 }  // namespace craw
