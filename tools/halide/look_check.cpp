@@ -91,9 +91,9 @@ static void matVecD(const double m[3][3], const double v[3], double o[3]) {
 static void refLook(const uint8_t q[4], int x, int y, const Buffer<float> &lensMap,
                     const Params &p, double guide[3], double out[3]) {
     double qr = q[0] / 255.0, qgr = q[1] / 255.0, qgb = q[2] / 255.0, qb = q[3] / 255.0;
-    guide[0] = qr;
-    guide[1] = (qgr + qgb) * 0.5;
-    guide[2] = qb;
+    guide[0] = oetfD(qr);
+    guide[1] = oetfD((qgr + qgb) * 0.5);
+    guide[2] = oetfD(qb);
 
     double lg[4] = {1.0, 1.0, 1.0, 1.0};
     if (p.applyLens) {

@@ -1,0 +1,26 @@
+== generator: bgu_look
+== host AOT + check: bgu_look
+ok raw-identity/lens0 (24x17)
+ok raw-identity/lens1 (24x17)
+ok raw-realistic/lens0 (24x17)
+ok raw-realistic/lens1 (24x17)
+ok jpeg-default/lens0 (24x17)
+ok jpeg-default/lens1 (24x17)
+ok jpeg-extreme/lens0 (24x17)
+ok jpeg-extreme/lens1 (24x17)
+max abs err over all cases: 1.87e-05
+look check OK: 8 cases match (guide 1e-6, developed 5e-4)
+== cross AOT: bgu_look
+total 1040
+drwxr-xr-x  11 monikamalinowska  staff     352 Oct  9 00:28 .
+drwxr-xr-x   3 monikamalinowska  staff      96 Oct  9 01:40 ..
+drwxr-xr-x   7 monikamalinowska  staff     224 Oct 26 13:32 arm64-v8a
+drwxr-xr-x   7 monikamalinowska  staff     224 Oct 26 13:32 armeabi-v7a
+-rw-r--r--   1 monikamalinowska  staff  105445 Oct  9 13:31 bgu_fit.h
+-rw-r--r--   1 monikamalinowska  staff  105985 Oct 26 13:32 bgu_look.h
+-rw-r--r--   1 monikamalinowska  staff  105437 Oct  9 13:31 bgu_spike_downsample.h
+-rw-r--r--   1 monikamalinowska  staff  105656 Oct  9 13:32 hdrplus_meter.h
+-rw-r--r--   1 monikamalinowska  staff  106093 Oct 25 19:28 scope_meter.h
+drwxr-xr-x   7 monikamalinowska  staff     224 Oct 26 13:32 x86
+drwxr-xr-x   7 monikamalinowska  staff     224 Oct 26 13:32 x86_64
+OK

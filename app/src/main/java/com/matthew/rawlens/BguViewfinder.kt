@@ -10,25 +10,20 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.media.Image
 import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
-import android.opengl.EGLSurface
-import android.opengl.GLES30
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
 /**
- * From-scratch BGU viewfinder engine: RAW_SENSOR only, one render path, no
- * tier fallbacks (failure degrades to the legacy engine at the controller).
+ * RAW_SENSOR BGU viewfinder: Vulkan import/upload tiers, with a CPU guide
+ * fallback and controller-owned legacy fallback on persistent failure.
+ * Algorithm and platform provenance: docs/refactor/bgu-study.md.
  *
  * Per frame, on the camera thread: sparse point-sample of the low-res quads
  * (~12k reads from the already-mapped Bayer plane) plus a synchronous Vulkan
@@ -58,6 +53,7 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var evStrength = 1f
     @Volatile private var previewHeadroom = 1f
     @Volatile private var previewSoftHeadroom = 0.85f
+    @Volatile private var previewMiddleGreyTarget = 0.18
     @Volatile private var previewShoulder = 1f
     @Volatile private var previewCenterWeight = 0f
     @Volatile private var previewFocusX: Float? = null
@@ -128,13 +124,14 @@ class BguViewfinder @JvmOverloads constructor(
         val r = settings.resolvedForPlatform()
         agx = floatArrayOf(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
-            r.agxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder
+            r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder
         )
         // The VF meter runs the save's tuning, so VF EV == save EV: same
         // derived broad guard and shoulder as AdaptiveExposureTuning.
         previewHeadroom = r.highlightHeadroom
         val meterTuning = AdaptiveExposureTuning.fromOutputSettings(settings)
         previewSoftHeadroom = meterTuning.highlightSoftHeadroom.toFloat()
+        previewMiddleGreyTarget = meterTuning.middleGreyTarget
         previewShoulder = meterTuning.highlightShoulder
         previewCenterWeight = meterTuning.centerWeight
     }
@@ -162,7 +159,7 @@ class BguViewfinder @JvmOverloads constructor(
     // ------------------------------------------------------------ job pipes
 
     private data class LowJob(
-        val seq: Long,
+        val seq: Long, val generation: Long,
         val quad: ByteArray, val lowW: Int, val lowH: Int,
         val lens: FloatArray, val lensCols: Int, val lensRows: Int,
         val wb: FloatArray, val ccm: FloatArray, val aces: FloatArray, val white: FloatArray,
@@ -170,7 +167,7 @@ class BguViewfinder @JvmOverloads constructor(
     )
 
     private data class RenderJob(
-        val seq: Long, val slot: Int, val geo: BguGuideGeo,
+        val seq: Long, val generation: Long, val slot: Int, val geo: BguGuideGeo,
         val lowW: Int, val lowH: Int, val rotation: Int, val mirrored: Boolean,
         // True when the CPU fallback produced this job's guide: render
         // uploads the job's cpuGuides bytes instead of binding its EGL image.
@@ -180,12 +177,11 @@ class BguViewfinder @JvmOverloads constructor(
         val sensorTsNs: Long = 0L
     )
 
-    private data class GridJob(val seq: Long, val grid: BguGrid)
-
     private fun <T : Any> ArrayBlockingQueue<T>.offerOrDrop(job: T) {
         var offered = offer(job)
         while (!offered) {
-            poll()
+            val dropped = poll()
+            if (dropped is LowJob) quadPool.release(dropped.quad)
             offered = offer(job)
         }
     }
@@ -195,7 +191,7 @@ class BguViewfinder @JvmOverloads constructor(
     private val renderQueue = ArrayBlockingQueue<Any>(4)
     private object Poison
 
-    @Volatile private var latestGrid: GridJob? = null
+    private val gridExchange = BguGridExchange()
     /** Throttled look-params snapshot (handler-owned; see offer). */
     private var cachedParams: LookParams? = null
     private var cachedParamsSeq = 0L
@@ -246,6 +242,7 @@ class BguViewfinder @JvmOverloads constructor(
         val cols: Int, val rows: Int, val atMs: Long
     )
     private var lensCache: LensCache? = null
+    private var lensMapRevision = 0L
 
     // Dual-illuminant statics (6 matrices + 2 illuminants) never change per
     // camera; re-fetching them per frame is pure waste (8 gets + allocs).
@@ -280,6 +277,7 @@ class BguViewfinder @JvmOverloads constructor(
     // slot reuse, and the render thread drains GL after every swap, so no
     // slot is ever written while sampled.
     private val exportLock = Any()
+    private val guideSlots = BguGuideSlots()
     private val exports = arrayOfNulls<HardwareBuffer>(3)
     private val exportW = IntArray(3)
     private val exportH = IntArray(3)
@@ -296,19 +294,10 @@ class BguViewfinder @JvmOverloads constructor(
     private val cpuGuideW = IntArray(3)
     private val cpuGuideH = IntArray(3)
     private val cpuGuideSeq = LongArray(3)
-    private var cpuSliced: java.nio.ByteBuffer? = null
-    private var cpuSlicedW = 0
-    private var cpuSlicedH = 0
-    private var identityUploaded = false
-    private val identityGrid = BguSliceCpu.identityGrid()
 
     // Stats (render-owned, read by snapshot()).
     @Volatile private var statFps = 0f
-    // Rotating low-sample buffers: a fresh ~200 KB allocation per frame at
-    // 30 fps is pure GC churn on the camera handler (dropped-frame jitter).
-    // Live quads are bounded by sampler(1) + fitQueue(2) + fitting(1) = 4.
-    private val quadPool = arrayOfNulls<ByteArray>(6)
-    private var quadPoolNext = 0
+    private val quadPool = BguQuadPool()
     @Volatile private var guideBoost = false
     private var boostOffers = 0L
     @Volatile private var statSharp = 0f
@@ -319,7 +308,6 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var statFitMs = 0f
     @Volatile private var statVkMs = 0f
     @Volatile private var statCpuMs = 0f
-    @Volatile private var statSliMs = 0f
     @Volatile private var statOfferMs = 0f
     @Volatile private var statSmpMs = 0f
     @Volatile private var statParMs = 0f
@@ -354,6 +342,7 @@ class BguViewfinder @JvmOverloads constructor(
 
     override fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?) {
         if (disposed || fatal != null) return
+        val generation = gridExchange.generation
         val now = SystemClock.elapsedRealtime()
         val floorMs = when {
             recordMode -> 100L
@@ -432,6 +421,7 @@ class BguViewfinder @JvmOverloads constructor(
                 "${image.width}x${image.height}/${key.crop}/${effTarget} = ${geo.width}x${geo.height} step=${geo.step}")
             geoCacheKey = key
             geoCache = geo
+            cachedParams = null // lens coordinates must follow geometry immediately
         }
         val low = BguGeometry.lowDims(geo.width, geo.height)
         val lowW = low[0]
@@ -475,74 +465,84 @@ class BguViewfinder @JvmOverloads constructor(
             if (den > 1f) 1f / den else 1f / 1023f
         }
         val quadSize = lowW * lowH * 4
-        val quadIdx = quadPoolNext
-        quadPoolNext = (quadPoolNext + 1) % quadPool.size
-        val quad = quadPool[quadIdx]?.takeIf { it.size == quadSize }
-            ?: ByteArray(quadSize).also { quadPool[quadIdx] = it }
-        val smpT0 = SystemClock.elapsedRealtimeNanos()
-        val sampled = BguSample.sampleLowFrame(
-            buf, rowStride, pixelStride, geo.left, geo.top, geo.step * BguGeometry.LOW_DF,
-            lowW, lowH, channels, levels, inv, quad
-        )
-        if (!sampled) return
-        val sharp = BguSample.guideSharpness(quad, lowW, lowH)
-        statSharp = if (statSharp == 0f) sharp else statSharp * 0.9f + sharp * 0.1f
-        val smpMs = (SystemClock.elapsedRealtimeNanos() - smpT0) / 1e6f
-        statSmpMs = if (statSmpMs == 0f) smpMs else statSmpMs * 0.9f + smpMs * 0.1f
+        val quad = quadPool.acquire(quadSize) ?: return
+        var transferred = false
+        try {
+            val smpT0 = SystemClock.elapsedRealtimeNanos()
+            val sampled = BguSample.sampleLowFrame(
+                buf, rowStride, pixelStride, geo.left, geo.top, geo.step * BguGeometry.LOW_DF,
+                lowW, lowH, channels, levels, inv, quad
+            )
+            if (!sampled) return
+            val sharp = BguSample.guideSharpness(quad, lowW, lowH)
+            statSharp = if (statSharp == 0f) sharp else statSharp * 0.9f + sharp * 0.1f
+            val smpMs = (SystemClock.elapsedRealtimeNanos() - smpT0) / 1e6f
+            statSmpMs = if (statSmpMs == 0f) smpMs else statSmpMs * 0.9f + smpMs * 0.1f
 
-        val parT0 = SystemClock.elapsedRealtimeNanos()
-        // Tone inputs (WB/CCM/ACES/lens map) move slowly; rebuilding them
-        // every frame costs ~7 ms of camera-handler time on slower phones
-        // (pure motion-to-photon latency). Refresh every 3rd offer (~100 ms
-        // at 30 fps — invisible tone lag), reuse the immutable snapshot
-        // between (fit jobs consume them sequentially on one thread).
-        val params = if (cachedParams == null || cachedParamsCam !== c ||
-            seq - cachedParamsSeq >= 3
-        ) {
-            snapshotParams(
-                c, result, buf, rowStride, pixelStride, image.width, image.height,
-                levels, geo, white
-            )?.also {
-                cachedParams = it
-                cachedParamsSeq = seq
-                cachedParamsCam = c
-            } ?: return
-        } else {
-            cachedParams!!
-        }
-        val parMs = (SystemClock.elapsedRealtimeNanos() - parT0) / 1e6f
-        statParMs = if (statParMs == 0f) parMs else statParMs * 0.9f + parMs * 0.1f
+            val parT0 = SystemClock.elapsedRealtimeNanos()
+            // Tone inputs (WB/CCM/ACES/lens map) move slowly; rebuilding them
+            // every frame costs ~7 ms of camera-handler time on slower phones
+            // (pure motion-to-photon latency). Refresh every 3rd offer (~100 ms
+            // at 30 fps — invisible tone lag), reuse the immutable snapshot
+            // between (fit jobs consume them sequentially on one thread).
+            val params = if (cachedParams == null || cachedParamsCam !== c ||
+                seq - cachedParamsSeq >= 3
+            ) {
+                snapshotParams(
+                    c, result, buf, rowStride, pixelStride, image.width, image.height,
+                    levels, geo, white
+                )?.also {
+                    cachedParams = it
+                    cachedParamsSeq = seq
+                    cachedParamsCam = c
+                } ?: return
+            } else {
+                cachedParams!!
+            }
+            val parMs = (SystemClock.elapsedRealtimeNanos() - parT0) / 1e6f
+            statParMs = if (statParMs == 0f) parMs else statParMs * 0.9f + parMs * 0.1f
 
-        val slot = (seq % 3).toInt()
-        // Per-offer evaluation: the automatic fallback and the manual
-        // BGU_CPU override take the identical CPU path, and each job
-        // records which guide it carries, so mid-stream taps flip cleanly.
-        val useCpu = cpuFallback || cpuForced
-        val guideOk = if (!useCpu) {
-            offerGpuGuide(image, buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
-        } else {
-            offerCpuGuide(buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
+            val slot = (seq % 3).toInt()
+            if (!guideSlots.tryWrite(slot)) { statBusy++; return }
+            try {
+                // Per-offer evaluation: the automatic fallback and the manual
+                // BGU_CPU override take the identical CPU path, and each job
+                // records which guide it carries, so mid-stream taps flip cleanly.
+                val useCpu = cpuFallback || cpuForced
+                val guideOk = if (!useCpu) {
+                    offerGpuGuide(image, buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
+                } else {
+                    offerCpuGuide(buf, rowStride, pixelStride, geo, slot, channels, levels, white, offerT0)
+                }
+                if (!guideOk) return
+                seq++
+                statRawW = image.width
+                statRawH = image.height
+                synchronized(exportLock) { exportSeq[slot] = seq; if (useCpu) cpuGuideSeq[slot] = seq }
+                guideSlots.publish(slot, seq)
+                fitQueue.offerOrDrop(
+                    LowJob(seq, generation, quad, lowW, lowH, params.lens, params.lensCols, params.lensRows,
+                        params.wb, params.ccm, params.aces, params.white, params.fparams, params.iparams)
+                )
+                transferred = true
+                val rotation = try {
+                    c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+                } catch (_: Exception) {
+                    0
+                }
+                val mirrored = try {
+                    c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                } catch (_: Exception) {
+                    false
+                }
+                guideSlots.finishWrite(slot) // release before waking the consumer
+                renderQueue.offerOrDrop(RenderJob(seq, generation, slot, geo, lowW, lowH, rotation, mirrored, useCpu, image.timestamp))
+            } finally {
+                guideSlots.finishWrite(slot)
+            }
+        } finally {
+            if (!transferred) quadPool.release(quad)
         }
-        if (!guideOk) return
-        seq++
-        statRawW = image.width
-        statRawH = image.height
-        synchronized(exportLock) { exportSeq[slot] = seq; if (useCpu) cpuGuideSeq[slot] = seq }
-        fitQueue.offerOrDrop(
-            LowJob(seq, quad, lowW, lowH, params.lens, params.lensCols, params.lensRows,
-                params.wb, params.ccm, params.aces, params.white, params.fparams, params.iparams)
-        )
-        val rotation = try {
-            c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        } catch (_: Exception) {
-            0
-        }
-        val mirrored = try {
-            c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-        } catch (_: Exception) {
-            false
-        }
-        renderQueue.offerOrDrop(RenderJob(seq, slot, geo, lowW, lowH, rotation, mirrored, useCpu, image.timestamp))
     }
 
     /**
@@ -683,16 +683,23 @@ class BguViewfinder @JvmOverloads constructor(
                     }
                 }
             } finally {
-                try {
-                    VfEglImport.closeSyncFd(fenceFd)
-                } catch (_: Exception) {
+                if (signaled) {
+                    try {
+                        VfEglImport.closeSyncFd(fenceFd)
+                    } catch (_: Exception) {
+                    }
+                } else {
+                    // Keep the unsignalled fence for the next offer; closing
+                    // it and writing anyway races the GPU's previous sample.
+                    synchronized(exportLock) { storeSlotFence(fenceFds, slot, fenceFd) }
                 }
             }
             if (signaled) {
                 fenceWaitStreak = 0
             } else if (++fenceWaitStreak == 1 || fenceWaitStreak % 30 == 0) {
-                Log.w(TAG, "guide fence wait timed out, proceeding (%d)".format(fenceWaitStreak))
+                Log.w(TAG, "guide fence wait timed out, dropping frame (%d)".format(fenceWaitStreak))
             }
+            if (!signaled) return false
         }
         if (!vulkanReady) {
             val spv = try {
@@ -1176,12 +1183,12 @@ class BguViewfinder @JvmOverloads constructor(
                     AdaptiveExposureTuning(
                         highlightHeadroom = previewHeadroom.toDouble(),
                         highlightSoftHeadroom = previewSoftHeadroom.toDouble(),
+                        middleGreyTarget = previewMiddleGreyTarget,
                         highlightShoulder = previewShoulder,
                         centerWeight = previewCenterWeight,
                         focusX = previewFocusX,
                         focusY = previewFocusY
-                    ).bounded(),
-                    null
+                    ).bounded()
                 ).correctionEv
             } catch (_: Exception) {
                 Double.NaN
@@ -1268,9 +1275,11 @@ class BguViewfinder @JvmOverloads constructor(
                         val raw = FloatArray(rows * cols * 4)
                         map.copyGainFactors(raw, 0)
                         if (raw.all { it.isFinite() && it >= 1f }) {
-                            val mid = raw.size / 2
-                            val key = "$cols,$rows,${raw[0]},${raw[mid]},${raw[raw.size - 1]}"
-                            if (cached != null && cached.key == key) {
+                            // Every map element affects the operator. Comparing
+                            // three sentinels missed changes in other cells.
+                            if (cached != null && cached.cols == cols && cached.rows == rows &&
+                                cached.raw.contentEquals(raw)
+                            ) {
                                 lensCache = cached.copy(atMs = now)
                             } else {
                                 // Transpose cell-interleaved [R, Ge, Go, B] to
@@ -1283,6 +1292,7 @@ class BguViewfinder @JvmOverloads constructor(
                                 for (cell in 0 until cells) for (ch in 0..3) {
                                     gains[ch * cells + cell] = raw[cell * 4 + ch]
                                 }
+                                val key = "$cols,$rows,${++lensMapRevision}"
                                 lensCache = LensCache(key, gains, raw, cols, rows, now)
                             }
                         }
@@ -1385,41 +1395,46 @@ class BguViewfinder @JvmOverloads constructor(
             } catch (_: InterruptedException) {
                 return
             }
-            if (job === Poison || disposed) return
+            if (job === Poison) return
             job as LowJob
-            if (fatal != null) continue
-            if (!BguLook.available) {
-                fail("halide-missing")
-                continue
+            try {
+                if (disposed) return
+                if (job.generation != gridExchange.generation) continue
+                if (fatal != null) continue
+                if (!BguLook.available) {
+                    fail("halide-missing")
+                    continue
+                }
+                val t0 = SystemClock.elapsedRealtimeNanos()
+                val frame = fitBuffers.frame(job.lowW, job.lowH)
+                val rcLook = try {
+                    BguLook.runInto(job.quad, job.lowW, job.lowH, job.lens, job.lensCols, job.lensRows,
+                        job.wb, job.ccm, job.aces, job.white, job.fparams, job.iparams,
+                        frame.guide, frame.developed)
+                } catch (_: Exception) {
+                    -1
+                }
+                if (rcLook != 0) {
+                    if (++lookFailStreak >= 20) fail("look-failed")
+                    continue
+                }
+                val dims = BguFit.gridDims(job.lowW, job.lowH)
+                val back = gridExchange.beginFit(dims[0], dims[1], dims[2])
+                val rcFit = try {
+                    BguFit.fitInto(frame.guide, frame.developed, job.lowW, job.lowH, back.coeffs)
+                } catch (_: Exception) {
+                    -1
+                }
+                if (rcFit != 0) {
+                    if (++lookFailStreak >= 20) fail("fit-failed")
+                    continue
+                }
+                lookFailStreak = 0
+                statFitMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
+                gridExchange.publish(BguFittedGrid(job.seq, job.lowW, job.lowH, back), job.generation)
+            } finally {
+                quadPool.release(job.quad)
             }
-            val t0 = SystemClock.elapsedRealtimeNanos()
-            val frame = fitBuffers.frame(job.lowW, job.lowH)
-            val rcLook = try {
-                BguLook.runInto(job.quad, job.lowW, job.lowH, job.lens, job.lensCols, job.lensRows,
-                    job.wb, job.ccm, job.aces, job.white, job.fparams, job.iparams,
-                    frame.guide, frame.developed)
-            } catch (_: Exception) {
-                -1
-            }
-            if (rcLook != 0) {
-                if (++lookFailStreak >= 20) fail("look-failed")
-                continue
-            }
-            val dims = BguFit.gridDims(job.lowW, job.lowH)
-            val back = fitBuffers.backGrid(dims[0], dims[1], dims[2])
-            val rcFit = try {
-                BguFit.fitInto(frame.guide, frame.developed, job.lowW, job.lowH, back)
-            } catch (_: Exception) {
-                -1
-            }
-            if (rcFit != 0) {
-                if (++lookFailStreak >= 20) fail("fit-failed")
-                continue
-            }
-            fitBuffers.flip()
-            lookFailStreak = 0
-            statFitMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
-            latestGrid = GridJob(job.seq, BguGrid(dims[0], dims[1], dims[2], back))
         }
     }
 
@@ -1428,8 +1443,8 @@ class BguViewfinder @JvmOverloads constructor(
     // Owns the EGL context and all GL objects. Drains to the latest guide job
     // (stale frames never render), uploads the latest grid, slices, presents.
 
-    private var egl: EglCore? = null
-    private var gl: GlSlice? = null
+    private var egl: BguEglCore? = null
+    private var gl: BguGlSlice? = null
     private val eglImages = LongArray(3)
     private val eglImageSlot = arrayOfNulls<HardwareBuffer>(3)
     // Per-slot GL->Vulkan handoff fences (dup'd native fds, -1 = none),
@@ -1437,7 +1452,7 @@ class BguViewfinder @JvmOverloads constructor(
     // dispatch reuse. Common case is instant (fence signaled ~99 ms ago).
     private val fenceFds = IntArray(3) { -1 }
     private var fenceWaitStreak = 0
-    private var lastRenderedSeq = 0L
+    @Volatile private var lastRenderedSeq = 0L
     private var lastGridSeq = 0L
     private var lastSwapMs = 0L
     private var lastStatsMs = 0L
@@ -1472,7 +1487,7 @@ class BguViewfinder @JvmOverloads constructor(
                 }
                 latest = next as RenderJob
             }
-            if (latest.seq <= lastRenderedSeq) {
+            if (latest.generation != gridExchange.generation || latest.seq <= lastRenderedSeq) {
                 checkWatchdog()
                 continue
             }
@@ -1494,18 +1509,27 @@ class BguViewfinder @JvmOverloads constructor(
     }
 
     private fun renderOne(job: RenderJob) {
+        if (job.generation != gridExchange.generation || !guideSlots.tryRead(job.slot, job.seq)) return
+        try {
+            renderLeasedGuide(job)
+        } finally {
+            guideSlots.finishRead(job.slot)
+        }
+    }
+
+    private fun renderLeasedGuide(job: RenderJob) {
         if (egl == null) {
             val surface = holder.surface
             if (surface == null || !surface.isValid) return
             val core = try {
-                EglCore(surface)
+                BguEglCore(surface)
             } catch (e: Exception) {
                 fail("egl-init: ${e.message}")
                 return
             }
             egl = core
             gl = try {
-                GlSlice()
+                BguGlSlice()
             } catch (e: Exception) {
                 fail("gl-init: ${e.message}")
                 return
@@ -1574,15 +1598,17 @@ class BguViewfinder @JvmOverloads constructor(
             eglImage = eglImages[job.slot]
         }
         // Upload the latest grid (reuse the last one while the fit catches up).
-        val gridJob = latestGrid
+        val gridJob = gridExchange.acquireLatest()
         if (gridJob != null && gridJob.seq > lastGridSeq) {
             try {
-                slice.uploadGrid(gridJob.grid)
+                slice.uploadGrid(gridJob)
             } catch (e: Exception) {
                 fail("grid-upload: ${e.message}")
                 return
             }
-            lastGridSeq = gridJob.seq
+            synchronized(gridExchange) {
+                if (job.generation == gridExchange.generation) lastGridSeq = gridJob.seq
+            }
         }
         if (lastGridSeq == 0L) {
             // No fit yet: wait for the first grid instead of slicing zeros.
@@ -1606,7 +1632,7 @@ class BguViewfinder @JvmOverloads constructor(
         }
         val ok = try {
             val drew = slice.draw(
-                eglImage, cpuBuf, job.geo, job.lowW, job.lowH,
+                eglImage, cpuBuf, job.geo,
                 job.rotation, job.mirrored, width, height, fit
             )
             val t1 = SystemClock.elapsedRealtimeNanos()
@@ -1668,8 +1694,11 @@ class BguViewfinder @JvmOverloads constructor(
         // instantaneous rates: bursty delivery made the EMA swing 20-50.
         fpsWindow.onSwap(now)
         statFps = fpsWindow.fps
-        lastSwapMs = now
-        lastRenderedSeq = job.seq
+        synchronized(gridExchange) {
+            if (job.generation != gridExchange.generation) return
+            lastSwapMs = now
+            lastRenderedSeq = job.seq
+        }
         // Frame age at present: sensor timestamp -> swap completion. This
         // is the motion-to-photon proxy the fps number cannot show: a
         // pipeline can hold 30 fps while displaying 200 ms-old frames.
@@ -1740,324 +1769,6 @@ class BguViewfinder @JvmOverloads constructor(
 
     // ---------------------------------------------------------- EGL + slice
 
-    /** Minimal ES3-only EGL owner: display, config, context, window surface. */
-    private class EglCore(surface: android.view.Surface) {
-        private val display: EGLDisplay
-        private val context: EGLContext
-        private val eglSurface: EGLSurface
-
-        init {
-            display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-            if (display === EGL14.EGL_NO_DISPLAY) throw IllegalStateException("no display")
-            val version = IntArray(2)
-            if (!EGL14.eglInitialize(display, version, 0, version, 1)) {
-                throw IllegalStateException("eglInitialize failed")
-            }
-            val attribs = intArrayOf(
-                EGL14.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_NONE
-            )
-            val configs = arrayOfNulls<EGLConfig>(1)
-            val count = IntArray(1)
-            if (!EGL14.eglChooseConfig(display, attribs, 0, configs, 0, 1, count, 0) ||
-                count[0] == 0 || configs[0] == null
-            ) {
-                EGL14.eglTerminate(display)
-                throw IllegalStateException("no ES3 config")
-            }
-            context = EGL14.eglCreateContext(
-                display, configs[0], EGL14.EGL_NO_CONTEXT,
-                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0
-            )
-            if (context === EGL14.EGL_NO_CONTEXT) {
-                EGL14.eglTerminate(display)
-                throw IllegalStateException("no ES3 context")
-            }
-            eglSurface = EGL14.eglCreateWindowSurface(display, configs[0], surface, intArrayOf(EGL14.EGL_NONE), 0)
-            if (eglSurface === EGL14.EGL_NO_SURFACE) {
-                EGL14.eglDestroyContext(display, context)
-                EGL14.eglTerminate(display)
-                throw IllegalStateException("no window surface")
-            }
-            if (!EGL14.eglMakeCurrent(display, eglSurface, eglSurface, context)) {
-                destroy()
-                throw IllegalStateException("makeCurrent failed")
-            }
-            EGL14.eglSwapInterval(display, 1)
-        }
-
-        fun swap(): Boolean = EGL14.eglSwapBuffers(display, eglSurface)
-
-        fun destroy() {
-            try {
-                EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            } catch (_: Exception) {
-            }
-            try {
-                EGL14.eglDestroySurface(display, eglSurface)
-            } catch (_: Exception) {
-            }
-            try {
-                EGL14.eglDestroyContext(display, context)
-            } catch (_: Exception) {
-            }
-            try {
-                EGL14.eglTerminate(display)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    /** Slice program + textures + quad. All calls run on the render thread. */
-    private class GlSlice {
-        private val program: Int
-        private val aPosition: Int
-        private val aUv: Int
-        private val uGuide: Int
-        private val uGrid0: Int
-        private val uGrid1: Int
-        private val uGrid2: Int
-        private val uScale: Int
-        private val uGridDim: Int
-        private val vboPos: Int
-        private val vboUv: Int
-        private val texGuide: Int
-        // Separate texture for CPU-fallback guides: a texture with an EGL
-        // image bound must never see glTexImage2D, so the byte-upload path
-        // gets its own name with identical sampling parameters.
-        private val texCpuGuide: Int
-        private var cpuGuideW = 0
-        private var cpuGuideH = 0
-        private val texGrid = IntArray(3)
-        private var gridW = 0
-        private var gridH = 0
-        private var gridZ = 0
-        private var uvKey = ""
-
-        init {
-            program = link(BguSlice.vertexShader(), BguSlice.fragmentShader())
-            aPosition = GLES30.glGetAttribLocation(program, "position")
-            aUv = GLES30.glGetAttribLocation(program, "uv")
-            uGuide = GLES30.glGetUniformLocation(program, "uGuide")
-            uGrid0 = GLES30.glGetUniformLocation(program, "uGrid0")
-            uGrid1 = GLES30.glGetUniformLocation(program, "uGrid1")
-            uGrid2 = GLES30.glGetUniformLocation(program, "uGrid2")
-            uScale = GLES30.glGetUniformLocation(program, "uScale")
-            uGridDim = GLES30.glGetUniformLocation(program, "uGridDim")
-            val vbos = IntArray(2)
-            GLES30.glGenBuffers(2, vbos, 0)
-            vboPos = vbos[0]
-            vboUv = vbos[1]
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboPos)
-            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, 8 * 4, floatBufferOf(
-                -1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f
-            ), GLES30.GL_STATIC_DRAW)
-            val tex = IntArray(5)
-            GLES30.glGenTextures(5, tex, 0)
-            texGuide = tex[0]
-            texGrid[0] = tex[1]
-            texGrid[1] = tex[2]
-            texGrid[2] = tex[3]
-            texCpuGuide = tex[4]
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texGuide)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texCpuGuide)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            for (i in 0..2) {
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texGrid[i])
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-                GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
-            }
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-        }
-
-        fun uploadGrid(grid: BguGrid) {
-            val packed = BguSlice.packGrid(grid)
-            for (i in 0..2) {
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texGrid[i])
-                val buf = ByteBuffer.allocateDirect(packed[i].size * 2)
-                    .order(ByteOrder.nativeOrder())
-                for (s in packed[i]) buf.putShort(s)
-                buf.flip()
-                if (grid.gw != gridW || grid.gh != gridH || grid.gz != gridZ) {
-                    GLES30.glTexImage3D(
-                        GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGBA16F,
-                        grid.gw, grid.gh, grid.gz, 0,
-                        GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, buf
-                    )
-                } else {
-                    GLES30.glTexSubImage3D(
-                        GLES30.GL_TEXTURE_3D, 0, 0, 0, 0,
-                        grid.gw, grid.gh, grid.gz,
-                        GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, buf
-                    )
-                }
-            }
-            gridW = grid.gw
-            gridH = grid.gh
-            gridZ = grid.gz
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
-        }
-
-        /**
-         * CPU-fallback guide upload: RGBA8 bytes into the dedicated texture
-         * (reallocates only on size change). Same sampling contract as the
-         * EGL-imported Vulkan export, so the slice shader is untouched.
-         */
-        fun uploadCpuGuide(buf: ByteBuffer, w: Int, h: Int) {
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texCpuGuide)
-            if (w != cpuGuideW || h != cpuGuideH || w <= 0 || h <= 0) {
-                if (w <= 0 || h <= 0) return
-                GLES30.glTexImage2D(
-                    GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0,
-                    GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf
-                )
-                cpuGuideW = w
-                cpuGuideH = h
-            } else {
-                GLES30.glTexSubImage2D(
-                    GLES30.GL_TEXTURE_2D, 0, 0, 0, w, h,
-                    GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf
-                )
-            }
-        }
-
-        fun draw(
-            eglImage: Long, cpuGuide: ByteBuffer?, geo: BguGuideGeo, lowW: Int, lowH: Int,
-            rotation: Int, mirrored: Boolean, viewW: Int, viewH: Int, fit: IntArray
-        ): Boolean {
-            if (viewW <= 0 || viewH <= 0) return true
-            val guideTex = if (cpuGuide != null) {
-                uploadCpuGuide(cpuGuide, geo.width, geo.height)
-                texCpuGuide
-            } else {
-                if (eglImage == 0L) return true
-                if (VfEglImport.bindEGLImageToTexture2D(eglImage, texGuide) != 0) return false
-                texGuide
-            }
-            val key = "$rotation,$mirrored"
-            if (key != uvKey) {
-                uvKey = key
-                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboUv)
-                GLES30.glBufferData(
-                    GLES30.GL_ARRAY_BUFFER, 8 * 4,
-                    floatBufferOf(*BguGeometry.displayUv(rotation, mirrored)),
-                    GLES30.GL_DYNAMIC_DRAW
-                )
-                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-            }
-            // WYSIWYG aspect-fit: the frame keeps its display aspect centered
-            // in the surface; the full surface clears first so the bars stay
-            // black (glClear is viewport-scissored).
-            GLES30.glViewport(0, 0, viewW, viewH)
-            GLES30.glClearColor(0f, 0f, 0f, 1f)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-            GLES30.glViewport(fit[0], fit[1], fit[2], fit[3])
-            GLES30.glUseProgram(program)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, guideTex)
-            GLES30.glUniform1i(uGuide, 0)
-            val units = intArrayOf(uGrid0, uGrid1, uGrid2)
-            for (i in 0..2) {
-                GLES30.glActiveTexture(GLES30.GL_TEXTURE1 + i)
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texGrid[i])
-                GLES30.glUniform1i(units[i], 1 + i)
-            }
-            val s = BguFit.DEFAULT_S.toFloat()
-            val r = BguFit.DEFAULT_R
-            val dims = BguFit.gridDims(lowW, lowH)
-            GLES30.glUniform3f(uScale, lowW / s, lowH / s, 1f / r)
-            GLES30.glUniform3f(uGridDim, dims[0].toFloat(), dims[1].toFloat(), dims[2].toFloat())
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboPos)
-            GLES30.glEnableVertexAttribArray(aPosition)
-            GLES30.glVertexAttribPointer(aPosition, 2, GLES30.GL_FLOAT, false, 0, 0)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboUv)
-            GLES30.glEnableVertexAttribArray(aUv)
-            GLES30.glVertexAttribPointer(aUv, 2, GLES30.GL_FLOAT, false, 0, 0)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-            GLES30.glDisableVertexAttribArray(aPosition)
-            GLES30.glDisableVertexAttribArray(aUv)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-            return true
-        }
-
-        fun destroy() {
-            try {
-                GLES30.glDeleteProgram(program)
-            } catch (_: Exception) {
-            }
-            try {
-                GLES30.glDeleteBuffers(2, intArrayOf(vboPos, vboUv), 0)
-            } catch (_: Exception) {
-            }
-            try {
-                GLES30.glDeleteTextures(5, intArrayOf(texGuide, texGrid[0], texGrid[1], texGrid[2], texCpuGuide), 0)
-            } catch (_: Exception) {
-            }
-        }
-
-        companion object {
-            private fun floatBufferOf(vararg values: Float): java.nio.FloatBuffer {
-                val buf = ByteBuffer.allocateDirect(values.size * 4)
-                    .order(ByteOrder.nativeOrder()).asFloatBuffer()
-                buf.put(values)
-                buf.flip()
-                return buf
-            }
-
-            private fun compile(type: Int, src: String): Int {
-                val shader = GLES30.glCreateShader(type)
-                if (shader == 0) throw IllegalStateException("createShader failed")
-                GLES30.glShaderSource(shader, src)
-                GLES30.glCompileShader(shader)
-                val status = IntArray(1)
-                GLES30.glGetShaderiv(shader, GLES30.GL_COMPILE_STATUS, status, 0)
-                if (status[0] == 0) {
-                    val log = GLES30.glGetShaderInfoLog(shader)
-                    GLES30.glDeleteShader(shader)
-                    throw IllegalStateException("compile failed: $log")
-                }
-                return shader
-            }
-
-            private fun link(vs: String, fs: String): Int {
-                val program = GLES30.glCreateProgram()
-                if (program == 0) throw IllegalStateException("createProgram failed")
-                val v = compile(GLES30.GL_VERTEX_SHADER, vs)
-                val f = compile(GLES30.GL_FRAGMENT_SHADER, fs)
-                GLES30.glAttachShader(program, v)
-                GLES30.glAttachShader(program, f)
-                GLES30.glLinkProgram(program)
-                GLES30.glDeleteShader(v)
-                GLES30.glDeleteShader(f)
-                val status = IntArray(1)
-                GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, status, 0)
-                if (status[0] == 0) {
-                    val log = GLES30.glGetProgramInfoLog(program)
-                    GLES30.glDeleteProgram(program)
-                    throw IllegalStateException("link failed: $log")
-                }
-                return program
-            }
-        }
-    }
-
     // ----------------------------------------------- surface / seam lifecycle
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -2074,7 +1785,7 @@ class BguViewfinder @JvmOverloads constructor(
         surfaceAlive = false
     }
 
-    override fun invalidateSession() {
+    override fun invalidateSession() = synchronized(gridExchange) {
         fatal = null
         seq = 0
         lastRenderedSeq = 0
@@ -2110,6 +1821,8 @@ class BguViewfinder @JvmOverloads constructor(
         planeVerified = false
         copyVerified = false
         synchronized(exportLock) { for (i in 0..2) cpuGuideSeq[i] = 0L }
+        cachedParams = null
+        cachedParamsCam = null
         geoCacheKey = null
         geoCache = null
         lensCache = null
@@ -2118,8 +1831,12 @@ class BguViewfinder @JvmOverloads constructor(
         lensDiagDone = false
         calibStaticsCam = null
         calibStatics = null
-        latestGrid = null
-        fitQueue.clear()
+        gridExchange.clear()
+        guideSlots.clear()
+        while (true) {
+            val dropped = fitQueue.poll() ?: break
+            if (dropped is LowJob) quadPool.release(dropped.quad)
+        }
         renderQueue.clear()
     }
 
@@ -2240,9 +1957,6 @@ class BguViewfinder @JvmOverloads constructor(
             if (surfaceLongEdge <= 0) return userTarget
             return maxOf(userTarget, minOf(surfaceLongEdge, GPU_TARGET_CAP))
         }
-
-        /** EGL_RENDERABLE_TYPE bit for OpenGL ES 3.x configs (EGL_KHR_create_context). */
-        private const val EGL_OPENGL_ES3_BIT = 0x0040
 
         /**
          * One lens-crossfade step: lerp from the last emitted gain toward the

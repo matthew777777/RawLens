@@ -1,0 +1,41 @@
+--------- beginning of main
+10-26 14:29:06.314 22963 22963 I RawViewfinder: VF engine override: CPU
+10-26 14:29:06.326 22963 24390 I RawViewfinder: NEON sample: avg 4.6 ms over 1 frames (510x382)
+10-26 14:29:11.363 22963 24390 I RawViewfinder: NEON sample: avg 3.3 ms over 149 frames (510x382)
+10-26 14:29:14.826 22963 22963 I RawViewfinder: VF engine override: AUTO
+10-26 14:29:14.827 22963 22963 W RawViewfinder: VF surface lost; hiding VF until surface returns
+10-26 14:29:14.916 22963 24390 I BguViewfinder: geo init -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:29:14.928 22963 24390 I BguViewfinder: lens live map 17x17 key=17,17,1
+10-26 14:29:14.934 22963 24390 W BguViewfinder: BGU image tier rejected (image-unsupported); bridge/upload tiers cover
+10-26 14:29:15.064 22963 24385 I BguViewfinder: stats fps=0.0 age=94 ageMax=94 sharp=0.013 frameMs=8.5 drawMs=7.3 swapMs=0.8 fenMs=0.3 offerMs=23.0 smpMs=10.4 parMs=1.5 vkMs=48.4 fitMs=8.4 cpuMs=0.0 ev=+0.00 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=2 busy=1
+10-26 14:29:25.090 22963 24385 I BguViewfinder: stats fps=29.5 age=107 ageMax=282 sharp=0.013 frameMs=3.2 drawMs=1.0 swapMs=1.5 fenMs=0.5 offerMs=7.7 smpMs=2.4 parMs=0.9 vkMs=21.7 fitMs=5.8 cpuMs=0.0 ev=+1.20 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=280 busy=6
+10-26 14:29:30.303 22963 24390 I BguViewfinder: geo init -> 3264x2448/full/1080 = 816x612 step=4
+10-26 14:29:30.334 22963 24390 I BguViewfinder: geo 3264x2448/full/1080 -> 3264x2448/0,0,3264,2448/1080 = 816x612 step=4
+10-26 14:29:30.335 22963 24390 I BguViewfinder: lens live map 17x17 key=17,17,16
+10-26 14:29:35.093 22963 24385 I BguViewfinder: stats fps=28.5 age=94 ageMax=132 sharp=0.004 frameMs=5.7 drawMs=2.5 swapMs=2.8 fenMs=0.4 offerMs=8.9 smpMs=5.3 parMs=0.4 vkMs=5.5 fitMs=7.9 cpuMs=0.0 ev=+1.00 vf=816x612 tgt=1080 surf=1249x1666 up=2.0x seq=140 busy=0
+10-26 14:29:40.924 22963 24390 I BguViewfinder: geo init -> 4080x3060/full/1080 = 1020x764 step=4
+10-26 14:29:40.930 22963 24390 W BguViewfinder: BGU image tier rejected (image-unsupported); bridge/upload tiers cover
+10-26 14:29:40.989 22963 24390 I BguViewfinder: geo 4080x3060/full/1080 -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:29:40.990 22963 24390 I BguViewfinder: lens live map 17x17 key=17,17,26
+10-26 14:29:45.107 22963 24385 I BguViewfinder: stats fps=20.3 age=132 ageMax=206 sharp=0.013 frameMs=3.6 drawMs=1.9 swapMs=1.6 fenMs=0.1 offerMs=9.5 smpMs=3.3 parMs=1.4 vkMs=26.5 fitMs=5.7 cpuMs=0.0 ev=-0.77 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=100 busy=8
+10-26 14:29:50.429 22963 22963 I BguViewfinder: BGU CPU guide override engaged
+10-26 14:29:55.139 22963 24385 I BguViewfinder: stats fps=30.0 age=63 ageMax=140 sharp=0.009 frameMs=3.2 drawMs=2.1 swapMs=1.0 fenMs=0.1 offerMs=5.3 smpMs=1.6 parMs=0.5 vkMs=0.0 fitMs=5.3 cpuMs=6.1 ev=+1.32 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=402 busy=8
+10-26 14:30:05.173 22963 24385 I BguViewfinder: stats fps=30.0 age=62 ageMax=85 sharp=0.009 frameMs=2.7 drawMs=1.8 swapMs=0.8 fenMs=0.1 offerMs=4.6 smpMs=1.6 parMs=0.4 vkMs=0.0 fitMs=7.1 cpuMs=7.4 ev=+1.27 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=703 busy=8
+10-26 14:30:07.679 22963 24390 I BguViewfinder: geo init -> 4080x3060/full/1080 = 1020x764 step=4
+10-26 14:30:07.710 22963 24390 I BguViewfinder: geo 4080x3060/full/1080 -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:30:07.715 22963 24390 I BguViewfinder: lens live map 17x17 key=17,17,50
+10-26 14:30:15.210 22963 24385 I BguViewfinder: stats fps=30.0 age=79 ageMax=144 sharp=0.015 frameMs=4.4 drawMs=2.7 swapMs=1.4 fenMs=0.2 offerMs=4.8 smpMs=2.4 parMs=0.5 vkMs=0.0 fitMs=7.1 cpuMs=13.5 ev=+0.38 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=224 busy=0
+10-26 14:30:20.170 22963 22963 I BguViewfinder: BGU CPU guide override released
+10-26 14:30:20.176 22963 24383 I RawViewfinder: VF surface created 1249x1666
+10-26 14:30:20.252 22963 24390 I RawViewfinder: VF raw strides pixelStride=2 rowStride=8160 w=4080 h=3060
+10-26 14:30:20.252 22963 24390 I RawViewfinder: VF first frame raw=4080x3060 cfa=2 chans=2,3,0,1 pitch=4080 black=64.0,64.0,64.0,64.0 white=1023.0 geom=(0,0 1020x764 s4) dataMin=62 dataMax=535 dataMean=111
+10-26 14:30:20.252 22963 24390 I RawViewfinder: Slow RAW offer: 50.0ms interval=20ms
+10-26 14:30:20.271 22963 24383 I RawViewfinder: VF GL ES3 (fences on)
+10-26 14:30:20.271 22963 24383 I RawViewfinder: VF EGL surface 1249x1666 matches viewport
+10-26 14:30:20.271 22963 24383 I RawViewfinder: VF vsync-paced present (swapInterval=1)
+10-26 14:30:20.275 22963 24383 I RawViewfinder: VF GPU program ready
+10-26 14:30:20.278 22963 24383 W RawViewfinder: VF image tier unsupported (image-unsupported); upload tiers cover
+10-26 14:30:20.287 22963 24383 I RawViewfinder: VF zero-copy verified (outputMax=111)
+10-26 14:30:20.308 22963 24383 I RawViewfinder: VF GPU active (vulkan-zero)
+10-26 14:30:20.308 22963 24383 I RawViewfinder: VF stats: fps=0.0 gpu=true jpeg=false engine=AUTO vf=1020x764 camInterval=33ms
+10-26 14:30:20.308 22963 24383 I RawViewfinder: Slow RAW draw: total=56ms compute=6ms tone=20ms swap=1ms age=50ms

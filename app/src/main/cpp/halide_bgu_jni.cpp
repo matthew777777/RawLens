@@ -8,6 +8,7 @@
 
 #include <android/log.h>
 #include <cstdint>
+#include "bgu_jni_shape.h"
 
 #include "halide/filters/bgu_spike_downsample.h"
 
@@ -36,8 +37,10 @@ Java_com_matthew_rawlens_BguSpike_downsampleNative(
     if (pixels == nullptr || w <= 0 || h <= 0 || c <= 0 || factor < 2 || factor > 16) {
         return nullptr;
     }
-    const int ow = (w + factor - 1) / factor;
-    const int oh = (h + factor - 1) / factor;
+    if (env->GetArrayLength(pixels) != bguElementCount({w, h, c})) return nullptr;
+    const int ow = 1 + (w - 1) / factor;
+    const int oh = 1 + (h - 1) / factor;
+    if (bguElementCount({ow, oh, c}) < 0) return nullptr;
     jshort *inPtr = env->GetShortArrayElements(pixels, nullptr);
     if (inPtr == nullptr) {
         return nullptr;

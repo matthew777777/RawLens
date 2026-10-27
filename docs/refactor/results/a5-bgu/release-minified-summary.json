@@ -1,0 +1,20 @@
+{
+  "version": "1.0.468",
+  "pid": "22963",
+  "started": "10-26 14:29:06.000",
+  "mode_cycle": [
+    "CPU",
+    "BGU",
+    "BGU_CPU",
+    "AUTO"
+  ],
+  "lens_switches": [
+    "0.7x",
+    "1x"
+  ],
+  "resume": "BGU_CPU",
+  "crash": false,
+  "bgu_fatal": false,
+  "final_mode": "AUTO",
+  "foreground_guard": true
+}

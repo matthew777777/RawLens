@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Step-7 CPU fallback: BGU slice on the CPU (scalar C++, auto-vectorized).
+// BGU slice oracle on the CPU (scalar C++, auto-vectorized).
 // Same math as the GL shader (BguSlice) and the Kotlin reference
 // (BguSliceCpu.sliceScalar): guide merge, luma, trilinear grid lookup with
 // GL CLAMP_TO_EDGE semantics, affine, clamp, optional IGN dither. Output is
-// quad-layout (R, G, G, B) bytes feeding the identity-grid GL present.
+// developed quad-layout (R, G, G, B) bytes for parity/image checks.
 //
-// Only used when Vulkan is unavailable; the GPU path stays the default.
+// The live CPU fallback uses a CPU guide plus GL slice, not this function.
 #include <jni.h>
 
 #include <android/log.h>
 #include <cmath>
 #include <cstdint>
+#include "bgu_jni_shape.h"
 
 #define LOG_TAG "RawLensSliceCpu"
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
@@ -20,6 +21,11 @@ namespace {
 
 inline float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Regression guide conditioning, matching BguGuideEncoding and bgu_look.
+inline float encodeGuide(float v) {
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f;
 }
 
 // GL LINEAR + CLAMP_TO_EDGE on one axis. Matches BguSliceCpu.clampAxis.
@@ -60,7 +66,9 @@ Java_com_matthew_rawlens_BguSliceCpu_sliceNative(
     if (w <= 0 || h <= 0 || gw <= 0 || gh <= 0 || gz <= 0) return 1;
     if (step != 1 && step != 2) return 1;
     if (w % step != 0 || h % step != 0) return 1;
-    if (!(scaleX > 0.0f) || !(scaleY > 0.0f) || !(scaleZ > 0.0f)) return 1;
+    if (!(scaleX > 0.0f) || !(scaleY > 0.0f) || !(scaleZ > 0.0f) ||
+        !std::isfinite(scaleX) || !std::isfinite(scaleY) || !std::isfinite(scaleZ)) return 1;
+    if (bguElementCount({w, h, 4}) < 0) return 1;
     uint8_t *gPtr = (uint8_t *)env->GetDirectBufferAddress(guide);
     uint8_t *oPtr = (uint8_t *)env->GetDirectBufferAddress(out);
     if (gPtr == nullptr || oPtr == nullptr) return 3;
@@ -72,7 +80,7 @@ Java_com_matthew_rawlens_BguSliceCpu_sliceNative(
         oCap - outOffset < (int64_t)ow * oh * 4) {
         return 1;
     }
-    if (env->GetArrayLength(gridCoeffs) != gw * gh * gz * 12) return 1;
+    if (env->GetArrayLength(gridCoeffs) != bguElementCount({gw, gh, gz, 12})) return 1;
     float *coeffs = (float *)env->GetPrimitiveArrayCritical(gridCoeffs, nullptr);
     if (coeffs == nullptr) return 1;
 
@@ -85,9 +93,9 @@ Java_com_matthew_rawlens_BguSliceCpu_sliceNative(
         const float py = (float)oy + 0.5f;
         for (int ox = 0; ox < ow; ox++) {
             const int gi = ((oy * step) * w + ox * step) * 4;
-            const float gr = (float)src[gi] * (1.0f / 255.0f);
-            const float gg = (float)(src[gi + 1] + src[gi + 2]) * 0.5f * (1.0f / 255.0f);
-            const float gb = (float)src[gi + 3] * (1.0f / 255.0f);
+            const float gr = encodeGuide((float)src[gi] * (1.0f / 255.0f));
+            const float gg = encodeGuide((float)(src[gi + 1] + src[gi + 2]) * 0.5f * (1.0f / 255.0f));
+            const float gb = encodeGuide((float)src[gi + 3] * (1.0f / 255.0f));
             const float luma = clampf(0.25f * gr + 0.5f * gg + 0.25f * gb, 0.0f, 1.0f);
             const float cellX = ((float)ox + 0.5f) / (float)ow * scaleX;
             const float cellZ = luma * scaleZ;

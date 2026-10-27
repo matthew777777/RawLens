@@ -23,8 +23,8 @@ internal object BguSpike {
     }
 
     /**
-     * Downsample [pixels] ([w] x [h] x [c], row-major, channel-interleaved
-     * planes) by [factor]. Returns the (ceil(w/f) x ceil(h/f) x c) plane,
+     * Downsample [pixels] ([w] x [h] x [c], row-major, channel-planar
+     * storage (index = x + w * (y + h * ch))) by [factor]. Returns the (ceil(w/f) x ceil(h/f) x c) plane,
      * or null on invalid input or filter failure.
      */
     fun downsample(pixels: ShortArray, w: Int, h: Int, c: Int, factor: Int): ShortArray? {

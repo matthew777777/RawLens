@@ -3,8 +3,8 @@
 package com.matthew.rawlens
 
 /**
- * Low-res look output: unlensed guide RGB (fit input) + developed RGB (fit
- * output), both [w] x [h] x 3 row-major floats. No dither by design.
+ * Low-res output: unlensed sRGB-conditioned guide RGB and developed RGB,
+ * both planar [w] x [h] x 3 floats (channel outermost). No dither.
  */
 data class BguLookOut(
     val guide: FloatArray,

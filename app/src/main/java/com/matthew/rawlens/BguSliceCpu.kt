@@ -5,15 +5,12 @@ package com.matthew.rawlens
 import java.nio.ByteBuffer
 
 /**
- * CPU fallback for the BGU slice (step 7): the same slice math as the GL
- * shader ([BguSlice]), evaluated on the CPU over a CPU superpixel guide
- * ([VfCpuNeon]) for devices without working Vulkan. Output feeds the SAME GL
- * present path: RGBA bytes in quad layout (R, G, G, B) uploaded as the guide
- * texture with an identity grid, so the shader's green-merge and affine
- * become transparent and rotation/upscale/present are reused untouched.
- *
- * [sliceScalar] is the pure reference (JVM-tested); [slice] runs the native
- * NEON implementation (instrumented-parity-tested against the scalar).
+ * Native and scalar slice oracles for the BGU encoded-guide contract.
+ * The live CPU fallback builds a guide with [VfCpuNeon] and renders it with
+ * [BguGlSlice]; it does not call this CPU slicer. These implementations are
+ * retained for native/GL parity and frozen-frame image checks.
+ * Output is developed, encoded (R,G,G,B) bytes; it must not be passed back
+ * through the guide-encoding shader as if it were a linear sensor guide.
  */
 internal object BguSliceCpu {
     /** Same .so as the CPU guide; fallback needs both or neither. */
@@ -30,11 +27,11 @@ internal object BguSliceCpu {
 
     /**
      * Reference slice over interleaved RGBA quad [guide] ([w] x [h], bytes
-     * R/Gr/Gb/B per texel): guide merge, luma, trilinear grid lookup with
+     * R/Gr/Gb/B per texel): guide merge, sRGB conditioning, luma, trilinear grid lookup with
      * GL CLAMP_TO_EDGE semantics, affine, clamp, optional IGN dither.
      * [scale] = (lowW / s, lowH / s, 1 / r), same values as the GL uniforms.
      * [step] nearest-subsamples the guide (2 = half-res fallback output).
-     * Returns interleaved (R, G, G, B) bytes for the identity-grid present.
+     * Returns developed, encoded interleaved (R, G, G, B) bytes.
      */
     fun sliceScalar(
         guide: ByteArray, w: Int, h: Int, grid: BguGrid,
@@ -52,9 +49,9 @@ internal object BguSliceCpu {
             for (ox in 0 until ow) {
                 val gi = ((oy * step) * w + ox * step) * 4
                 val oi = (oy * ow + ox) * 4
-                val gr = (guide[gi].toInt() and 0xff) / 255f
-                val gg = ((guide[gi + 1].toInt() and 0xff) + (guide[gi + 2].toInt() and 0xff)) * 0.5f / 255f
-                val gb = (guide[gi + 3].toInt() and 0xff) / 255f
+                val gr = BguGuideEncoding.encode((guide[gi].toInt() and 0xff) / 255f)
+                val gg = BguGuideEncoding.encode(((guide[gi + 1].toInt() and 0xff) + (guide[gi + 2].toInt() and 0xff)) * 0.5f / 255f)
+                val gb = BguGuideEncoding.encode((guide[gi + 3].toInt() and 0xff) / 255f)
                 val luma = (0.25f * gr + 0.5f * gg + 0.25f * gb).coerceIn(0f, 1f)
                 // Texel-center coords over the OUTPUT span (GL texel
                 // (ox+0.5)/ow); u_texel = cell.

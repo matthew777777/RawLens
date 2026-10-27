@@ -1,0 +1,33 @@
+host check OK: 2x2x3 downsample matches (0,0,0)=60
+ok raw-identity/lens0 (24x17)
+ok raw-identity/lens1 (24x17)
+ok raw-realistic/lens0 (24x17)
+ok raw-realistic/lens1 (24x17)
+ok jpeg-default/lens0 (24x17)
+ok jpeg-default/lens1 (24x17)
+ok jpeg-extreme/lens0 (24x17)
+ok jpeg-extreme/lens1 (24x17)
+max abs err over all cases: 1.87e-05
+look check OK: 8 cases match (guide 1e-6, developed 5e-4)
+fit affine 5x4x9 grid in 1.00 ms host; slice-reconstruction mean=5.35e-05 max=0.00823
+fit curve 5x4x9 grid in 0.61 ms host; slice-reconstruction mean=0.00723 max=0.0423
+fit check OK
+oracle 1x1 mode=0 coeffMax=0.0145478 predictionMax=3.53392e-09
+oracle 1x1 mode=1 coeffMax=0.0316874 predictionMax=1.88623e-07
+oracle 1x1 mode=2 coeffMax=0.011091 predictionMax=1.81122e-08
+oracle 1x1 mode=3 coeffMax=0.266087 predictionMax=1.02056e-07
+oracle 1x1 mode=4 coeffMax=0.0840367 predictionMax=1.18931e-07
+oracle 1x1 mode=5 coeffMax=0.000122173 predictionMax=1.45191e-08
+oracle 7x5 mode=0 coeffMax=0.0145478 predictionMax=3.53392e-09
+oracle 7x5 mode=1 coeffMax=0.0316874 predictionMax=1.88623e-07
+oracle 7x5 mode=2 coeffMax=0.011091 predictionMax=1.81122e-08
+oracle 7x5 mode=3 coeffMax=0.202362 predictionMax=1.23234e-07
+oracle 7x5 mode=4 coeffMax=0.000430809 predictionMax=4.4363e-06
+oracle 7x5 mode=5 coeffMax=0.017092 predictionMax=4.53468e-07
+oracle 17x13 mode=0 coeffMax=0.0145478 predictionMax=3.53392e-09
+oracle 17x13 mode=1 coeffMax=0.0465741 predictionMax=1.96074e-07
+oracle 17x13 mode=2 coeffMax=0.0120814 predictionMax=1.81122e-08
+oracle 17x13 mode=3 coeffMax=0.228069 predictionMax=1.51438e-07
+oracle 17x13 mode=4 coeffMax=0.000120541 predictionMax=2.33337e-06
+oracle 17x13 mode=5 coeffMax=0.0359991 predictionMax=6.61229e-07
+independent BGU oracle OK: 18 cases

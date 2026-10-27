@@ -132,7 +132,10 @@ public:
 
         // Guide: unlensed quad with merged greens. The lens gain is part of
         // the OPERATOR (below), never of the guide the grid slices on.
-        guide_(x, y, c) = select(c == 0, qr, select(c == 1, (qgr + qgb) * 0.5f, qb));
+        // Only the regression guide is encoded. The operator below still
+        // consumes linear quads and preserves the existing developed target.
+        guide_(x, y, c) = srgbOetfCh(select(c == 0, qr,
+            select(c == 1, (qgr + qgb) * 0.5f, qb)));
 
         // Lens gain: manual bilinear over the float map with CLAMP_TO_EDGE,
         // matching the shader's hardware LINEAR sample of the same UV.

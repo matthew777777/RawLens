@@ -7,6 +7,8 @@
 
 #include <android/log.h>
 #include <cstdint>
+#include <cmath>
+#include "bgu_jni_shape.h"
 
 #include "halide/filters/bgu_fit.h"
 
@@ -56,11 +58,14 @@ Java_com_matthew_rawlens_BguFit_fitIntoNative(
     static const bool poolCapped = [] { return halide_set_num_threads(2) == 0; }();
     (void)poolCapped;
     if (guide == nullptr || developed == nullptr || coeffsOut == nullptr || w <= 0 || h <= 0 ||
-        s < 1 || !(r > 0) || gw <= 0 || gh <= 0 || gz <= 0) {
+        s < 1 || !(r > 0) || !std::isfinite(r) ||
+        !(lambda > 0) || !std::isfinite(lambda) || gw <= 0 || gh <= 0 || gz <= 0) {
         return -1;
     }
     // Caller buffer (fit hot loop reuses it; this entry never news arrays).
-    if (env->GetArrayLength(coeffsOut) != gw * gh * gz * 12) {
+    if (env->GetArrayLength(guide) != bguElementCount({w, h, 3}) ||
+        env->GetArrayLength(developed) != bguElementCount({w, h, 3}) ||
+        env->GetArrayLength(coeffsOut) != bguElementCount({gw, gh, gz, 12})) {
         return -1;
     }
     float *guidePtr = env->GetFloatArrayElements(guide, nullptr);

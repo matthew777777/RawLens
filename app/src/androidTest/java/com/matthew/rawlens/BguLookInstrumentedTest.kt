@@ -42,7 +42,10 @@ class BguLookInstrumentedTest {
             val merged = doubleArrayOf(q[0], (q[1] + q[2]) * 0.5, q[3])
             for (ch in 0..2) {
                 val guideGot = out!!.guide[(ch * h + y) * w + x].toDouble()
-                assertEquals("guide ($x,$y,$ch)", merged[ch], guideGot, 1e-6)
+                val linear = merged[ch]
+                val encoded = if(linear <= 0.0031308) 12.92*linear
+                    else 1.055*linear.pow(1.0/2.4)-0.055
+                assertEquals("guide ($x,$y,$ch)", encoded, guideGot, 1e-6)
                 val lin = merged[ch] * 2.0
                 val want = (lin / (1.0 + lin)).pow(1.0 / 2.2)
                 val got = out.developed[(ch * h + y) * w + x].toDouble()

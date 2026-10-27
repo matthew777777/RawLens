@@ -1,0 +1,6 @@
+linear=0 alpha=0.00 s=16 bins=8 fitMs=0.389 meanAbs=0.015279 max=0.227582 darkBias=0.023267 darkN=119910 blackBias=0.049625 blackN=11105
+linear=0 alpha=0.00 s=16 bins=16 fitMs=0.449 meanAbs=0.013945 max=0.201878 darkBias=0.015480 darkN=119910 blackBias=0.032909 blackN=11105
+linear=0 alpha=0.00 s=16 bins=32 fitMs=0.521 meanAbs=0.013375 max=0.176418 darkBias=0.011528 darkN=119910 blackBias=0.014188 blackN=11105
+linear=0 alpha=0.00 s=8 bins=8 fitMs=0.384 meanAbs=0.007970 max=0.213324 darkBias=0.016149 darkN=119910 blackBias=0.041305 blackN=11105
+linear=0 alpha=0.00 s=8 bins=16 fitMs=0.529 meanAbs=0.006532 max=0.189518 darkBias=0.010444 darkN=119910 blackBias=0.028776 blackN=11105
+linear=0 alpha=0.00 s=8 bins=32 fitMs=0.589 meanAbs=0.006020 max=0.162532 darkBias=0.007101 darkN=119910 blackBias=0.015191 blackN=11105

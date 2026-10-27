@@ -1,0 +1,13 @@
+
+com.matthew.rawlens.BguSpikeInstrumentedTest:..
+com.matthew.rawlens.BguLookInstrumentedTest:.......
+com.matthew.rawlens.BguFitInstrumentedTest:...
+com.matthew.rawlens.BguSliceCpuInstrumentedTest:.
+com.matthew.rawlens.BguGlSliceInstrumentedTest:.
+com.matthew.rawlens.BguViewfinderDeviceTest:.
+
+Time: 59.519
+
+OK (15 tests)
+
+

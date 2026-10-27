@@ -2,8 +2,8 @@
 // BGU viewfinder spike: box-downsample a u16 RGB image by an integer factor.
 //
 // Adapted from google/bgu src/halide/box_downsample_generator.cpp (Apache 2.0,
-// see NOTICE.md) to the modern Halide Generator API. This exact stage becomes
-// the BGU low-resolution input later; for the spike it proves host Halide ->
+// see NOTICE.md) to the modern Halide Generator API. This toolchain spike
+// is not the live point sampler (BguSample); it proves host Halide ->
 // AOT static archive per Android ABI -> JNI -> on-device execution.
 #include "Halide.h"
 

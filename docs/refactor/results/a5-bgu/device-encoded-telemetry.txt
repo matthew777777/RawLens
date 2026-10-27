@@ -1,0 +1,32 @@
+10-26 14:08:46.722 21575 21601 I RawLensBguA5: GL slice low=[17, 13] signed=false maxCodeError=1
+10-26 14:08:46.725 21575 21601 I RawLensBguA5: GL slice low=[49, 33] signed=false maxCodeError=1
+10-26 14:08:46.726 21575 21601 I RawLensBguA5: GL slice low=[17, 13] signed=true maxCodeError=1
+10-26 14:08:46.728 21575 21601 I RawLensBguA5: GL slice low=[49, 33] signed=true maxCodeError=1
+10-26 14:08:47.001 21575 21601 I RawLensBguFrozen: RAW meanAbs old=0.021314262656745388 new=0.01331058165543704 neutralDarkBias old=0.03351042559470984 new=0.004783400108896054 count=44700
+10-26 14:08:47.897 21575 21601 I RawLensBguFrozen: JPEG meanAbs old=0.02618192433203168 new=0.015307884066025254 neutralDarkBias old=0.07635485087545942 new=0.027629809464823383 count=19224
+10-26 14:08:50.415 21575 21601 I BguViewfinder: lens live map 17x17 key=17,17,1
+10-26 14:08:56.255 21575 21758 I BguViewfinder: geo init -> 4080x3060/full/1080 = 1020x764 step=4
+10-26 14:08:56.314 21575 21758 W BguViewfinder: BGU image tier rejected (image-unsupported); bridge/upload tiers cover
+10-26 14:08:56.367 21575 21753 I BguViewfinder: stats fps=0.0 age=203 ageMax=203 sharp=0.011 frameMs=4.3 drawMs=3.1 swapMs=1.0 fenMs=0.3 offerMs=58.5 smpMs=1.5 parMs=0.4 vkMs=34.7 fitMs=4.3 cpuMs=0.0 ev=+0.00 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=1 busy=1
+10-26 14:08:56.375 21575 21758 I BguViewfinder: geo 4080x3060/full/1080 -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:08:56.378 21575 21758 I BguViewfinder: lens live map 17x17 key=17,17,1
+10-26 14:09:06.394 21575 21753 I BguViewfinder: stats fps=28.9 age=118 ageMax=188 sharp=0.014 frameMs=4.8 drawMs=2.3 swapMs=2.4 fenMs=0.1 offerMs=9.2 smpMs=3.2 parMs=0.5 vkMs=23.1 fitMs=18.0 cpuMs=0.0 ev=+1.13 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=284 busy=6
+10-26 14:09:07.716 21575 21601 I RawLensBguA5: gpu RawVfStats(fps=29.644268, frameMs=4.383396, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=6, gpu=true, jpeg=false, exposureEv=1.1254878, engine=BGU)
+10-26 14:09:07.718 21575 21575 I BguViewfinder: BGU CPU guide override engaged
+10-26 14:09:14.719 21575 21601 I RawLensBguA5: cpu RawVfStats(fps=30.093735, frameMs=2.9701853, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=6, gpu=false, jpeg=false, exposureEv=1.0819867, engine=BGU)
+10-26 14:09:14.749 21575 21758 I BguViewfinder: geo 4080x3060/0,0,4080,3060/1080 -> 4080x3060/0,0,4080,3060/480 = 408x306 step=10
+10-26 14:09:16.418 21575 21753 I BguViewfinder: stats fps=30.1 age=56 ageMax=156 sharp=0.021 frameMs=2.3 drawMs=1.3 swapMs=0.9 fenMs=0.1 offerMs=3.8 smpMs=0.3 parMs=0.3 vkMs=0.0 fitMs=11.6 cpuMs=2.0 ev=+1.04 vf=408x306 tgt=480 surf=1249x1666 up=4.1x seq=585 busy=6
+10-26 14:09:21.721 21575 21601 I RawLensBguA5: cpu-small RawVfStats(fps=30.049261, frameMs=2.263684, vfWidth=408, vfHeight=306, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=6, gpu=false, jpeg=false, exposureEv=1.1075538, engine=BGU)
+10-26 14:09:21.746 21575 21758 I BguViewfinder: geo 4080x3060/0,0,4080,3060/480 -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:09:26.426 21575 21753 I BguViewfinder: stats fps=29.9 age=69 ageMax=127 sharp=0.013 frameMs=3.5 drawMs=2.3 swapMs=0.9 fenMs=0.1 offerMs=4.3 smpMs=1.6 parMs=0.3 vkMs=0.0 fitMs=9.0 cpuMs=6.3 ev=+1.11 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=884 busy=6
+10-26 14:09:28.722 21575 21601 I RawLensBguA5: cpu-large RawVfStats(fps=30.183077, frameMs=2.888888, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=6, gpu=false, jpeg=false, exposureEv=1.1044989, engine=BGU)
+10-26 14:09:28.725 21575 21575 I BguViewfinder: BGU CPU guide override released
+10-26 14:09:35.726 21575 21601 I RawLensBguA5: gpu-raw RawVfStats(fps=29.80626, frameMs=2.3826656, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=7, gpu=true, jpeg=false, exposureEv=1.068121, engine=BGU)
+10-26 14:09:36.508 21575 21753 I BguViewfinder: stats fps=29.8 age=84 ageMax=162 sharp=0.013 frameMs=2.0 drawMs=0.9 swapMs=1.0 fenMs=0.1 offerMs=6.2 smpMs=1.7 parMs=1.2 vkMs=24.4 fitMs=17.6 cpuMs=0.0 ev=+1.07 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=1168 busy=7
+10-26 14:09:42.728 21575 21601 I RawLensBguA5: gpu-power-save RawVfStats(fps=11.74743, frameMs=1.8998594, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=7, gpu=true, jpeg=true, exposureEv=1.0699633, engine=BGU)
+10-26 14:09:44.013 21575 21758 I BguViewfinder: geo init -> 4080x3060/full/1080 = 1020x764 step=4
+10-26 14:09:44.019 21575 21758 W BguViewfinder: BGU image tier rejected (image-unsupported); bridge/upload tiers cover
+10-26 14:09:44.072 21575 21758 I BguViewfinder: geo 4080x3060/full/1080 -> 4080x3060/0,0,4080,3060/1080 = 1020x764 step=4
+10-26 14:09:44.073 21575 21758 I BguViewfinder: lens live map 17x17 key=17,17,45
+10-26 14:09:46.519 21575 21753 I BguViewfinder: stats fps=26.0 age=126 ageMax=162 sharp=0.013 frameMs=4.5 drawMs=2.0 swapMs=2.4 fenMs=0.2 offerMs=10.3 smpMs=5.2 parMs=0.4 vkMs=24.3 fitMs=12.9 cpuMs=0.0 ev=+1.08 vf=1020x764 tgt=1080 surf=1249x1666 up=1.6x seq=64 busy=3
+10-26 14:09:53.424 21575 21601 I RawLensBguA5: gpu-resume RawVfStats(fps=29.078363, frameMs=4.9322414, vfWidth=1020, vfHeight=764, rawWidth=4080, rawHeight=3060, glActive=true, starved=false, busySkips=7, gpu=true, jpeg=true, exposureEv=1.0549484, engine=BGU)

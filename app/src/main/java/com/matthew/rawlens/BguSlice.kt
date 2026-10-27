@@ -25,14 +25,17 @@ internal object BguSlice {
      * cell units. uGridDim = (gw, gh, gz): cell units to normalized 3D
      * texture coords ((cell + 0.5) / dim hits texel centers).
      */
+    // Affine coefficients are signed and may exceed the lowp guaranteed
+    // range; highp also preserves cancellation during matrix application.
+    // GLSL ES 3.00 section 4.5.2; production GPU oracle: BguGlSliceInstrumentedTest.
     fun fragmentShader(): String =
         "#version 300 es\n" +
-            "precision mediump float;\n" +
+            "precision highp float;\n" +
             "precision highp int;\n" +
             "uniform lowp sampler2D uGuide;\n" +
-            "uniform lowp sampler3D uGrid0;\n" +
-            "uniform lowp sampler3D uGrid1;\n" +
-            "uniform lowp sampler3D uGrid2;\n" +
+            "uniform highp sampler3D uGrid0;\n" +
+            "uniform highp sampler3D uGrid1;\n" +
+            "uniform highp sampler3D uGrid2;\n" +
             "uniform vec3 uScale;\n" +
             "uniform vec3 uGridDim;\n" +
             "in highp vec2 tex;\n" +
@@ -40,9 +43,13 @@ internal object BguSlice {
             "highp float ign(highp vec2 p, highp float ch) {\n" +
             "  return fract(52.9829189 * fract(dot(p + ch * 19.19, vec2(0.06711056, 0.00583715))));\n" +
             "}\n" +
+            "vec3 encodeGuide(vec3 v) {\n" +
+            "  return mix(1.055 * pow(v, vec3(1.0 / 2.4)) - vec3(0.055),\n" +
+            "             12.92 * v, lessThanEqual(v, vec3(0.0031308)));\n" +
+            "}\n" +
             "void main() {\n" +
             "  vec4 q = texture(uGuide, tex);\n" +
-            "  vec3 g = vec3(q.r, (q.g + q.b) * 0.5, q.a);\n" +
+            "  vec3 g = encodeGuide(vec3(q.r, (q.g + q.b) * 0.5, q.a));\n" +
             "  float luma = clamp(dot(g, vec3(0.25, 0.5, 0.25)), 0.0, 1.0);\n" +
             "  vec3 cell = vec3(tex.x * uScale.x, tex.y * uScale.y, luma * uScale.z);\n" +
             "  vec3 n = (cell + vec3(0.5)) / uGridDim;\n" +

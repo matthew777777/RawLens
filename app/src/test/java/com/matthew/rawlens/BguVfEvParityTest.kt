@@ -56,7 +56,7 @@ class BguVfEvParityTest {
             RawPlaneLayout(size, size, size * 2, 2),
             RawNormalization(BayerPattern.RGGB, List(4) { black }, white),
             RawCrop(0, 0, size, size),
-            model, AdaptiveDevelopmentExposure.workspace(), tuning, null
+            model, AdaptiveDevelopmentExposure.workspace(), tuning
         ).correctionEv
         // Legacy-shaped call: coarse quad grid, same rule + tuning + lens.
         val legacy = VfGpuImport.estimatePreviewCorrectionEv(

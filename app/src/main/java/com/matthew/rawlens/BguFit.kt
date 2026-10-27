@@ -119,24 +119,12 @@ internal object BguFit {
     ): Int
 }
 
-/**
- * Fit hot-loop buffer pool: reuses the look frame pair (fit-thread-local,
- * consumed synchronously) and ping-pongs two grid coefficient buffers (the
- * render thread uploads the published one while the next fit writes the
- * other). Reallocates only when dims change. Single-thread confined; the
- * ping-pong assumes a grid upload completes well within one fit period (a
- * torn upload would self-heal on the next publish).
- */
+/** Fit-thread-local look buffers; no array from this pool crosses threads. */
 internal class BguFitBuffers {
     private var fw = 0
     private var fh = 0
     private var guide = FloatArray(0)
     private var developed = FloatArray(0)
-    private var gw = 0
-    private var gh = 0
-    private var gz = 0
-    private var grids = arrayOf(FloatArray(0), FloatArray(0))
-    private var back = 0
 
     fun frame(w: Int, h: Int): BguLookOut {
         if (w != fw || h != fh) {
@@ -146,21 +134,5 @@ internal class BguFitBuffers {
             fh = h
         }
         return BguLookOut(guide, developed, w, h)
-    }
-
-    fun backGrid(gw: Int, gh: Int, gz: Int): FloatArray {
-        if (gw != this.gw || gh != this.gh || gz != this.gz) {
-            val n = gw * gh * gz * 12
-            grids = arrayOf(FloatArray(n), FloatArray(n))
-            this.gw = gw
-            this.gh = gh
-            this.gz = gz
-            back = 0
-        }
-        return grids[back]
-    }
-
-    fun flip() {
-        back = 1 - back
     }
 }
