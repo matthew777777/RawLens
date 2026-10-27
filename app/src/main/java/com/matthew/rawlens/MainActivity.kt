@@ -91,6 +91,8 @@ class MainActivity : Activity() {
     internal lateinit var waveformView: WaveformView
     private lateinit var meteringOverlay: FocusMeteringOverlay
     internal lateinit var focusPeakingOverlay: FocusPeakingOverlayView
+    internal lateinit var rawExposureOverlay: RawExposureOverlayView
+    internal var rawExposureSettings = RawExposureAssistSettings()
     internal lateinit var quickPanel: LinearLayout
     internal lateinit var gridQuick: TextView
     internal lateinit var histogramQuick: TextView
@@ -363,6 +365,19 @@ class MainActivity : Activity() {
         rawVfDebugOverlay.visibility = if (lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)) View.VISIBLE else View.GONE
         meteringOverlay = findViewById(R.id.focusMeteringOverlay)
         focusPeakingOverlay = findViewById(R.id.focusPeakingOverlay)
+        rawExposureOverlay = findViewById(R.id.rawExposureOverlay)
+        rawExposureSettings = RawExposureAssistSettings(
+            RawExposureOverlayMode.fromName(lensPreferences().getString(RawExposureAssistSettings.KEY_OVERLAY, null)),
+            lensPreferences().getBoolean(RawExposureAssistSettings.KEY_SPOT, true),
+            RawExposureMeterMode.fromName(lensPreferences().getString(RawExposureAssistSettings.KEY_METER_MODE, null)))
+        rawExposureOverlay.onMeterReading = ::refreshRawSpotMeter
+        rawExposureOverlay.settings = rawExposureSettings
+        findViewById<TextView>(R.id.rawExposureToggle).apply {
+            setOnClickListener {
+                saveRawExposureAssist(rawExposureSettings.copy(overlay = rawExposureSettings.overlay.next()))
+            }
+        }
+        refreshRawExposureToggle()
         guideOverlay = findViewById(R.id.guideOverlay)
         levelOverlay = findViewById(R.id.levelOverlay)
         // WYSIWYG aspect-fit: the engines letterbox the frame into their
@@ -615,6 +630,9 @@ class MainActivity : Activity() {
                 runOnUiThread { setFocusPeakingVisible(active) }
             },
             bguViewfinder = findViewById(R.id.bguViewfinder),
+            onRawExposureAssist = { frame -> runOnUiThread {
+                if (!videoRecording) rawExposureOverlay.update(frame)
+            } },
             initialFacePriorityEnabled = lensPreferences().getBoolean(KEY_FACE_PRIORITY, false),
             onFaces = { boxes ->
                 runOnUiThread {
@@ -656,6 +674,7 @@ class MainActivity : Activity() {
         controller.setZslHybridTopup(lensPreferences().getBoolean(KEY_ZSL_HYBRID_TOPUP, true))
         controller.setCaptureFormat(captureFormat)
         controller.setJpegOutputSettings(jpegOutputSettings())
+        controller.setRawExposureAssist(rawExposureSettings)
         controller.setJxlOutputSettings(jxlOutputSettings())
         controller.setDevelopedFormat(developedFormat)
         controller.setDenoiseSettings(denoiseSettings())
@@ -807,6 +826,8 @@ class MainActivity : Activity() {
             setStatus(scopeStatusLabel())
             true
         }
+        wireVideoQuickControls()
+        findViewById<View>(R.id.dLightingQuick).setOnClickListener { cycleQuickDLighting() }
         levelQuick.setOnClickListener { toggleLevel() }
         aeMeteringQuick.setOnClickListener { cycleAeMeteringMode() }
         hdrPlusQuick.setOnClickListener { toggleHdrPlus() }
@@ -815,9 +836,12 @@ class MainActivity : Activity() {
         ettrQuick.setOnClickListener { toggleEttr() }
         hdrQuick.setOnClickListener { toggleHdrEnabled() }
         timerQuick.setOnClickListener { cycleTimer() }
+        releaseQuick.setOnLongClickListener {
+            if (isVideoMode && directLogEnabled) { cycleVideoCrop(); true } else false
+        }
         releaseQuick.setOnClickListener {
             if (isVideoMode) {
-                // LOG takes are full-sensor (crop N/A): the tile switches
+                // Tap selects the output profile; hold selects the crop. The tile switches
                 // the output profile instead, like CROP on the CRS path.
                 if (directLogEnabled) cycleDirectLogProfile() else cycleVideoCrop()
             } else toggleReleaseMode()
@@ -1528,7 +1552,10 @@ class MainActivity : Activity() {
         findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
         findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
         findViewById(R.id.lightQuick),
-        findViewById(R.id.ettrQuick),
+        findViewById(R.id.ettrQuick), findViewById(R.id.dLightingQuick),
+        findViewById(R.id.videoModeQuick), findViewById(R.id.videoBinningQuick),
+        findViewById(R.id.directLogCropQuick), findViewById(R.id.videoResolutionQuick),
+        findViewById(R.id.videoFpsQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton)
@@ -1548,6 +1575,8 @@ class MainActivity : Activity() {
      * rotated text can never clip them to invisible. */
     private fun fixedOrientationViews(): List<View> = listOfNotNull(
         findViewById(R.id.rawBadge),
+        findViewById(R.id.rawExposureToggle),
+        findViewById(R.id.rawSpotReading),
         findViewById(R.id.status),
         findViewById(R.id.dngInfo),
         findViewById(R.id.sensorInfo)
@@ -1617,11 +1646,17 @@ class MainActivity : Activity() {
         if (::meteringOverlay.isInitialized) placeOverlayInContent(meteringOverlay, box, full)
         if (::focusPeakingOverlay.isInitialized) {
             placeOverlayInContent(focusPeakingOverlay, box, full)
+            focusPeakingOverlay.clipBounds = null
             val cover = vfContentRectFor(box.width, box.height)
             focusPeakingOverlay.contentTransform = RectF(
                 cover.left.toFloat(), cover.top.toFloat(),
                 cover.right.toFloat(), cover.bottom.toFloat()
             )
+        }
+        if (::rawExposureOverlay.isInitialized) {
+            placeOverlayInContent(rawExposureOverlay, box, full)
+            val cover = vfContentRectFor(box.width, box.height)
+            rawExposureOverlay.contentTransform = RectF(cover.left.toFloat(), cover.top.toFloat(), cover.right.toFloat(), cover.bottom.toFloat())
         }
         if (::levelOverlay.isInitialized) placeOverlayInContent(levelOverlay, box, full)
     }
@@ -1878,7 +1913,7 @@ class MainActivity : Activity() {
         Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
         updateQuickControls()
         closeFloatingPanels()
-        guideOverlay.videoCrop = videoCrop
+        guideOverlay.videoCrop = if (directLogEnabled) directLogCrop() else videoCrop
         guideOverlay.videoActive = true
         // Same chrome as photo: the top island stays (its gear opens the
         // Video tab) and the viewport keeps the photo 3:4 box. Exposure chips (SS/ISO/WB/focus/EV) stay visible
@@ -1895,7 +1930,7 @@ class MainActivity : Activity() {
         rawBadge.text = if (directLogEnabled) logBadgeLabel() else "CRS"
         rawBadge.setTextColor(getColor(R.color.danger))
         findViewById<TextView>(R.id.dngInfo)?.text =
-            if (directLogEnabled) "${directLogProfile().hudLabel} • HEVC10" else "CRS • TYPE-7"
+            if (directLogEnabled) "${directLogProfile().hudLabel} • HEVC10" else "CRS"
         refreshVideoSensorInfo()
         setStatus("VIDEO READY")
         updateQuickControls()
@@ -2064,6 +2099,12 @@ class MainActivity : Activity() {
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
+            focusPeakingEnabled = this@MainActivity.focusPeakingEnabled
+            onFocusPeaking = this@MainActivity::publishRecordingFocusPeaking
+            rawExposureSettings = this@MainActivity.rawExposureSettings
+            onRawExposureAssist = { frame -> runOnUiThread {
+                if (videoRecording) rawExposureOverlay.update(frame)
+            } }
             // Live RAW VF during the take: frames fan out to the same routed
             // engine visibility shows (Vulkan zero-copy lease) while the
             // encode thread encodes.
@@ -2090,7 +2131,9 @@ class MainActivity : Activity() {
         }
         videoRecorder = recorder
         videoOutputFile = file
+        rawExposureOverlay.clear()
         videoRecording = true
+        updateQuickControls()
         Log.i(
             LOG_TAG, "video start ${file.name} ${size.width}x${size.height} " +
                 "audio=$withAudio bin=${recorder.binActive}"
@@ -2161,8 +2204,15 @@ class MainActivity : Activity() {
             height = res.height
             bitrate = LogVideoProbe.defaultBitrateFor(res.width, res.height)
             logProfile = profile
+            recordingCrop = directLogCrop()
             videoDemosaic = videoDemosaic()
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
+            focusPeakingEnabled = this@MainActivity.focusPeakingEnabled
+            onFocusPeaking = this@MainActivity::publishRecordingFocusPeaking
+            rawExposureSettings = this@MainActivity.rawExposureSettings
+            onRawExposureAssist = { frame -> runOnUiThread {
+                if (videoRecording) rawExposureOverlay.update(frame)
+            } }
             attachPreviewDisplay(findViewById(R.id.recordPreview))
         }
         // Take monitor: overlay the staged encode pixels (aspect-fit)
@@ -2180,7 +2230,9 @@ class MainActivity : Activity() {
         }
         logRecorder = recorder
         videoOutputFile = file
+        rawExposureOverlay.clear()
         videoRecording = true
+        updateQuickControls()
         lastDirectLogStats = null
         Log.i(LOG_TAG, "direct-log start ${file.name}")
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
@@ -2200,6 +2252,26 @@ class MainActivity : Activity() {
                 setStatus("NO FRAMES • STOPPED")
             }
         }, 2_500L)
+    }
+
+    private fun publishRecordingFocusPeaking(frame: FocusPeakingFrame?) {
+        runOnUiThread {
+            if (!videoRecording) return@runOnUiThread
+            val manual = videoRecorder?.videoManual?.focusDiopters != null ||
+                logRecorder?.videoManual?.focusDiopters != null
+            val show = focusPeakingEnabled && manual && frame != null
+            setFocusPeakingVisible(show)
+            if (show && frame != null) {
+                val rects = FocusPeakingGeometry.monitorRects(frame,
+                    focusPeakingOverlay.width, focusPeakingOverlay.height)
+                if (rects != null) {
+                    val (cover, clip) = rects
+                    focusPeakingOverlay.contentTransform = RectF(cover[0], cover[1], cover[2], cover[3])
+                    focusPeakingOverlay.clipBounds = Rect(clip[0], clip[1], clip[2], clip[3])
+                }
+                focusPeakingOverlay.update(frame)
+            }
+        }
     }
 
     /**
@@ -2264,7 +2336,10 @@ class MainActivity : Activity() {
         val recorder = videoRecorder ?: return
         val source = videoOutputFile
         if (!videoRecording) return
+        rawExposureOverlay.clear()
         videoRecording = false
+        setFocusPeakingVisible(false)
+        updateQuickControls()
         Log.i(LOG_TAG, "video stop requested rearm=$rearmPreview")
         setStatus("STOPPING…")
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
@@ -2323,7 +2398,10 @@ class MainActivity : Activity() {
         val recorder = logRecorder ?: return
         val source = videoOutputFile
         if (!videoRecording) return
+        rawExposureOverlay.clear()
         videoRecording = false
+        setFocusPeakingVisible(false)
+        updateQuickControls()
         Log.i(LOG_TAG, "direct-log stop requested rearm=$rearmPreview")
         setStatus("STOPPING…")
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
@@ -2421,6 +2499,7 @@ class MainActivity : Activity() {
         afterStop: (() -> Unit)?
     ) {
         logRecorder = null
+        updateQuickControls()
         videoOutputFile = null
         lastDirectLogStats = stats
         hideRecordPreview()
@@ -2484,6 +2563,7 @@ class MainActivity : Activity() {
         afterStop: (() -> Unit)?
     ) {
         videoRecorder = null
+        updateQuickControls()
         videoOutputFile = null
         val mb = (stats?.fileBytes ?: 0L) / 1e6
         // Viewfinder proof: fps + GPU (Vulkan zero-copy) vs CPU path while rolling.
@@ -2685,10 +2765,12 @@ class MainActivity : Activity() {
         if (lensPreferences().getInt(KEY_DIRECT_LOG_FPS, LogVideoProbe.FPS) == 24) 24 else 30
 
     internal fun cycleDirectLogFps() {
+        if (videoRecording) return
         val next = if (directLogFpsPref() == 24) 30 else 24
         lensPreferences().edit().putInt(KEY_DIRECT_LOG_FPS, next).apply()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
+        updateQuickControls()
         setStatus("LOG ${next}FPS — NEXT TAKE")
     }
 
@@ -2698,6 +2780,7 @@ class MainActivity : Activity() {
         LogVideoProbe.encodeSizeForRes(lensPreferences().getString(KEY_DIRECT_LOG_RES, null))
 
     internal fun cycleDirectLogRes() {
+        if (videoRecording) return
         val w = directLogResPref().width
         val next = when {
             w > 2560 -> "HD1080"
@@ -2707,6 +2790,7 @@ class MainActivity : Activity() {
         lensPreferences().edit().putString(KEY_DIRECT_LOG_RES, next).apply()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
+        updateQuickControls()
         val label = LogVideoProbe.encodeSizeForRes(next)
         setStatus("LOG ${label.width}x${label.height} — NEXT TAKE")
     }
@@ -2731,7 +2815,7 @@ class MainActivity : Activity() {
         if (videoRecording) return // encoder format is fixed at take start
         val next = directLogProfile().next()
         lensPreferences().edit().putString(KEY_DIRECT_LOG_PROFILE, next.name).apply()
-        rawBadge.text = logBadgeLabel()
+        if (isVideoMode && directLogEnabled) refreshCaptureFormatControl()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         updateQuickControls()
@@ -2807,9 +2891,26 @@ class MainActivity : Activity() {
         VideoCrop.UNIVISIUM_2_00 -> "2.00"
     }
 
+    internal fun directLogCrop(): VideoCrop =
+        runCatching { VideoCrop.valueOf(lensPreferences().getString("direct_log_crop", null) ?: "") }
+            .getOrDefault(VideoCrop.WIDE_16_9).let {
+                if (it == VideoCrop.OPEN_GATE) VideoCrop.WIDE_16_9 else it
+            }
+
+    internal fun cycleDirectLogCrop() {
+        if (videoRecording) return
+        val crops = listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00)
+        val next = crops[(crops.indexOf(directLogCrop()) + 1) % crops.size]
+        lensPreferences().edit().putString("direct_log_crop", next.name).apply()
+        if (directLogEnabled) guideOverlay.videoCrop = next
+        refreshVideoSensorInfo()
+        setStatus("LOG CROP • ${next.label} • NEXT TAKE")
+        updateQuickControls()
+    }
+
     internal fun cycleVideoCrop() {
         if (directLogEnabled) {
-            setStatus("CROP N/A IN LOG • FULL SENSOR")
+            cycleDirectLogCrop()
             return
         }
         val values = VideoCrop.entries
@@ -2826,7 +2927,7 @@ class MainActivity : Activity() {
     internal fun refreshVideoSensorInfo() {
         if (!isVideoMode) return
         if (directLogEnabled && videoRecorder == null) {
-            findViewById<TextView>(R.id.sensorInfo)?.text = "FULL SENSOR • ${directLogFpsPref()}FPS"
+            findViewById<TextView>(R.id.sensorInfo)?.text = "${directLogResPref().width}x${LogVideoLadder.directLogHeight(directLogResPref().width, directLogCrop())} • ${directLogFpsPref()}FPS"
             findViewById<TextView>(R.id.dngInfo)?.text = "${directLogProfile().hudLabel} • HEVC10"
             return
         }
@@ -3268,9 +3369,10 @@ class MainActivity : Activity() {
 
     internal fun refreshCaptureFormatControl() {
         // Same authority rule as the info labels: in VIDEO mode the badge
-        // stays CRS/●REC no matter what the stills state machine reports.
+        // follows the video format regardless of stills state updates.
         if (isVideoMode) {
-            rawBadge.text = if (videoRecording) "● REC" else "CRS"
+            rawBadge.text = if (directLogEnabled) logBadgeLabel(videoRecording)
+                else if (videoRecording) "● REC" else "CRS"
             rawBadge.setTextColor(getColor(R.color.danger))
             return
         }
@@ -3423,7 +3525,7 @@ class MainActivity : Activity() {
         val prefs = lensPreferences()
         return EttrSettings(
             enabled = prefs.getBoolean(KEY_ETTR_ENABLED, false),
-            headroomEv = prefs.getFloat(KEY_ETTR_HEADROOM_EV, 1f)
+            headroomEv = prefs.getFloat(KEY_ETTR_HEADROOM_EV, EttrSettings().headroomEv)
                 .coerceIn(EttrSettings.MIN_HEADROOM_EV, EttrSettings.MAX_HEADROOM_EV),
             isoLimit = prefs.getInt(KEY_ETTR_ISO_LIMIT, 0)
         )
@@ -3479,6 +3581,7 @@ class MainActivity : Activity() {
     }
 
     internal fun jpegOutputSettings(): JpegOutputSettings = JpegOutputSettings(
+        activeDLighting = ActiveDLighting.fromName(lensPreferences().getString(ActiveDLighting.PREFERENCE_KEY, null)),
         ultraHdr = lensPreferences().getBoolean(KEY_JPEG_ULTRA_HDR, false),
         displayP3 = lensPreferences().getBoolean(KEY_JPEG_DISPLAY_P3, false),
         jpegQuality = lensPreferences().getInt(KEY_JPEG_QUALITY, 100),
@@ -3506,7 +3609,7 @@ class MainActivity : Activity() {
         highlightHeadroom = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_HEADROOM, 1f),
         highlightSoftHeadroom = lensPreferences().getFloat(KEY_JPEG_SKY_PROTECTION, 0.85f),
         highlightShoulder = lensPreferences().getFloat(KEY_JPEG_HIGHLIGHT_SHOULDER, 1f),
-        hlReconstruction = lensPreferences().getBoolean(KEY_JPEG_HL_RECONSTRUCTION, true)
+        hlReconstruction = HighlightReconstructionDefaults.read(lensPreferences())
     ).resolvedForPlatform()
 
     /** JPEG XL container options (darktable parity); defaults resolve to 16-bit lossless. */
@@ -3720,7 +3823,9 @@ class MainActivity : Activity() {
         if (lensPreferences().getInt(KEY_HDR_BRACKET_STOPS, 2) == 4) 4 else 2
 
     internal fun seqTrioEnabled(): Boolean =
-        lensPreferences().getBoolean(KEY_SEQ_TRIO_ENABLED, false)
+        // Temporary default while the standard HDR bracket merge is being repaired.
+        // Keep an explicitly saved choice; this only affects HDR, never HDR+ bursts.
+        lensPreferences().getBoolean(KEY_SEQ_TRIO_ENABLED, true)
 
     internal fun selectedLensIds(): Set<String> =
         lensPreferences().getStringSet(KEY_SELECTED_LENSES, emptySet())?.toSet().orEmpty()
@@ -3866,6 +3971,47 @@ class MainActivity : Activity() {
     }
 
     /** Edge-triggered by the controller's manual/tap-focus auto-show policy. */
+    internal fun saveRawExposureAssist(settings: RawExposureAssistSettings) {
+        rawExposureSettings = settings
+        lensPreferences().edit().putString(RawExposureAssistSettings.KEY_OVERLAY, settings.overlay.name)
+            .putBoolean(RawExposureAssistSettings.KEY_SPOT, settings.spotMeter)
+            .putString(RawExposureAssistSettings.KEY_METER_MODE, settings.meterMode.name).apply()
+        rawExposureOverlay.settings = settings
+        controller.setRawExposureAssist(settings)
+        videoRecorder?.rawExposureSettings = settings
+        logRecorder?.rawExposureSettings = settings
+        refreshRawExposureToggle()
+    }
+
+    private fun refreshRawSpotMeter(reading: RawSpotReading?, average: RawAverageReading?) {
+        findViewById<TextView>(R.id.rawSpotReading).apply {
+            visibility = if (rawExposureSettings.spotMeter) View.VISIBLE else View.GONE
+            if (rawExposureSettings.meterMode == RawExposureMeterMode.AVERAGE) {
+                text = RawAverageMeterText.format(average, compact = true)
+                contentDescription = RawAverageMeterText.format(average)
+            } else {
+                val description = RawSpotMeterText.format(reading)
+                text = description.replace("RAW SPOT  ", "RAW ").replace(" · CLIP ", " !")
+                contentDescription = if (reading == null) "RAW spot meter waiting for RAW" else description
+            }
+            val clipped = if (rawExposureSettings.meterMode == RawExposureMeterMode.AVERAGE)
+                (average?.clippedCells ?: 0) > 0 else (reading?.clippedChannels ?: 0) != 0
+            setTextColor(getColor(if (clipped) R.color.danger else R.color.accent))
+        }
+    }
+
+    private fun refreshRawExposureToggle() {
+        findViewById<TextView>(R.id.rawExposureToggle).apply {
+            text = when (rawExposureSettings.overlay) {
+                RawExposureOverlayMode.OFF -> "OFF"
+                RawExposureOverlayMode.ZEBRAS -> "ZEBRA"
+                RawExposureOverlayMode.FALSE_COLOR -> "FALSE"
+            }
+            isSelected = rawExposureSettings.overlay != RawExposureOverlayMode.OFF
+            contentDescription = "RAW exposure assist: ${rawExposureSettings.overlay.label}. Tap to cycle Off, Zebra, False colour."
+        }
+    }
+
     internal fun setFocusPeakingVisible(visible: Boolean) {
         if (!::focusPeakingOverlay.isInitialized) return
         focusPeakingOverlay.visibility = if (visible) View.VISIBLE else View.GONE
@@ -3955,7 +4101,7 @@ class MainActivity : Activity() {
             aeMetering.isEnabled = aeMeteringSupported
             aeMetering.alpha = if (aeMeteringSupported) 1f else 0.4f
             aeMetering.contentDescription =
-                "Hardware AE metering ${aeMeteringMode.label}. Tap to switch."
+                "Hardware AE metering ${aeMeteringMode.label}. Tap to switch; hold to change crop."
             setQuickTileState(aeMetering, aeMeteringMode != AeMeteringMode.AUTO)
         }
         hdr.text = "HDR\n${if (hdrEnabled) "ON" else "OFF"}"
@@ -3964,6 +4110,7 @@ class MainActivity : Activity() {
         release.text = if (dualRawEnabled) "RELEASE\nRAW HDR TEST" else "RELEASE\n${if (releaseMode == 1) "BURST 6" else "SINGLE"}"
         val sharpAvailable = !dualRawEnabled && rawZslStatus.state != RawZslState.FALLBACK
         sharp.text = mfsrSettings.quickText(
+            lensPreferences().getInt(KEY_RAW_ZSL_FRAME_COUNT, DEFAULT_RAW_ZSL_FRAME_COUNT),
             rawZslStatus.bufferedFrames, sharpAvailable, rawZslStatus.mfsrBusy)
         sharp.isEnabled = sharpAvailable
         sharp.alpha = if (sharpAvailable) 1f else 0.4f
@@ -3977,6 +4124,14 @@ class MainActivity : Activity() {
         ettr.text = "ETTR\n" + if (ettrEnabled) "ON" else "OFF"
         ettr.isEnabled = ettrAvailable
         ettr.alpha = if (ettrAvailable) 1f else 0.4f
+        findViewById<TextView>(R.id.dLightingQuick).apply {
+            visibility = if (!isVideoMode &&
+                (captureExposureMode == CaptureExposureMode.PROGRAM || ettrEnabled)) View.VISIBLE else View.GONE
+            val lighting = jpegOutputSettings().activeDLighting
+            text = "D-LIGHTING\n${lighting.label.uppercase(Locale.US)}"
+            contentDescription = "Active D-Lighting ${lighting.label}. Tap to cycle Off, Low, Normal, High, Extra High."
+            setQuickTileState(this, lighting != ActiveDLighting.OFF)
+        }
         setQuickTileState(grid, gridEnabled)
         setQuickTileState(histogram, histogramEnabled)
         setQuickTileState(level, levelEnabled)
@@ -3987,9 +4142,10 @@ class MainActivity : Activity() {
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
         // Video (RAW / Direct-Log) records continuous frames: still-only
-        // tiles (HDR, HDR+, MFSR, timer, release) go, and LIGHT becomes a
+        // tiles (HDR, HDR+, MFSR, timer) go, and LIGHT becomes a
         // torch. Rows left empty collapse so the grid stays tight.
-        val stillOnly = listOf(hdr, hdrPlus, sharp, timer, release)
+        val stillOnly = listOf(hdr, hdrPlus, sharp, timer)
+        release.visibility = View.VISIBLE
         stillOnly.forEach { it.visibility = if (isVideoMode) View.GONE else View.VISIBLE }
         if (isVideoMode) {
             val flash = runCatching { controller.isFlashAvailable() }.getOrDefault(false)
@@ -3998,6 +4154,10 @@ class MainActivity : Activity() {
             lightQuick.alpha = if (flash) 1f else 0.4f
             lightQuick.contentDescription = "Video torch ${if (videoTorchOn) "on" else "off"}. Tap to toggle."
             setQuickTileState(lightQuick, videoTorchOn)
+        } else {
+            lightQuick.contentDescription = if (controller.isAutoFlashAvailable())
+                "Still flash ${controller.flashStillMode().name.lowercase(Locale.US)}. Tap to cycle Off, On, Auto."
+            else "Still flash ${controller.flashStillMode().name.lowercase(Locale.US)}. Tap to cycle Off, On. ${FlashStillPolicy.AUTO_UNAVAILABLE_NOTE}"
         }
         (stillOnly + listOf(ettr, lightQuick)).map { it.parent as ViewGroup }.distinct().forEach { row ->
             row.visibility = if ((0 until row.childCount).any { row.getChildAt(it).visibility == View.VISIBLE })
@@ -4014,17 +4174,18 @@ class MainActivity : Activity() {
                 first = false
             }
         }
+        updateVideoQuickControls()
         refreshFeatureTags(ettrEnabled)
         // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
         // button itself stays photo-only (video is a separate red button).
-        // LOG takes are full-sensor, so the tile shows the output profile.
+        // LOG tile shows the output profile; hold changes the recording crop.
         release.contentDescription = null // else the LOG text lingers after mode switches
         if (isVideoMode) {
             if (directLogEnabled) {
                 val profile = directLogProfile()
                 release.text = "LOG\n${profile.hudLabel}"
                 release.contentDescription =
-                    "Direct Log output profile ${profile.hudLabel}. Tap to switch."
+                    "Direct Log output profile ${profile.hudLabel}. Tap to switch; hold to change crop."
                 setQuickTileState(release, profile != DirectLogProfile.BT709)
             } else {
                 release.text = "CROP\n${videoCropShort()}"

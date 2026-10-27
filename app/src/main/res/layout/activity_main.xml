@@ -29,22 +29,29 @@
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
-    <!-- Focus-peaking sparkle: drawn in the window above the RAW VF surface,
-         below guides + metering so focus squares stay on top. Sized to the
-         viewfinder rect at runtime (syncGuideOverlayToViewfinder). -->
-    <com.matthew.rawlens.FocusPeakingOverlayView
-        android:id="@+id/focusPeakingOverlay"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:visibility="gone"
-        android:importantForAccessibility="no" />
-
     <!-- Direct-Log take monitor: stacked directly over the RAW viewfinder,
          sized to its rect at record start, GONE otherwise. Shows the staged
          encode pixels (aspect-fit) instead of a separately-demosaiced
          viewfinder; the RAW VF idles untouched underneath. -->
     <com.matthew.rawlens.DirectLogPreviewView
         android:id="@+id/recordPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
+    <com.matthew.rawlens.RawExposureOverlayView
+        android:id="@+id/rawExposureOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:importantForAccessibility="yes" />
+
+    <!-- Focus-peaking sparkle: drawn above both RAW VF and recording monitor surfaces,
+         below guides + metering so focus squares stay on top. Sized to the
+         viewfinder rect at runtime (syncGuideOverlayToViewfinder). -->
+    <com.matthew.rawlens.FocusPeakingOverlayView
+        android:id="@+id/focusPeakingOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone"
@@ -199,6 +206,7 @@
                     android:background="@drawable/raw_badge"
                     android:letterSpacing="0.08"
                     android:text="DNG"
+                    android:singleLine="true"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp"
                     android:textStyle="bold" />
@@ -228,6 +236,18 @@
                 android:textSize="10sp"
                 android:textStyle="bold"
                 android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/rawSpotReading"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:ellipsize="end"
+                android:maxWidth="110dp"
+                android:singleLine="true"
+                android:text="RAW —"
+                android:textColor="@color/accent"
+                android:textSize="9sp" />
 
             <TextView
                 android:id="@+id/status"
@@ -287,6 +307,15 @@
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:letterSpacing="0.08" android:text="QUICK CONTROL" android:textColor="@color/text_primary" android:textSize="9sp" android:textStyle="bold" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/quickPanelHint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tap outside to close" android:textColor="@color/text_muted" android:textSize="9sp" />
         </LinearLayout>
+        <LinearLayout android:id="@+id/videoModeQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:visibility="gone">
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/videoModeQuick" style="@style/QuickControlTile" android:layout_marginStart="0dp" android:text="VIDEO" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/directLogCropQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="CROP" android:visibility="gone" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/videoBinningQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="BINNING" />
+        </LinearLayout>
+        <LinearLayout android:id="@+id/videoFormatQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:visibility="gone">
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/videoResolutionQuick" style="@style/QuickControlTile" android:layout_marginStart="0dp" android:text="RESOLUTION" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/videoFpsQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="FPS" />
+        </LinearLayout>
         <!-- Balanced 3 x 3 grid: every row same weight so tiles never stretch. -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/gridQuick" style="@style/QuickControlTile" android:text="GRID\nTHIRDS" />
@@ -308,6 +337,7 @@
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
             <com.matthew.rawlens.RotatingTextView android:id="@+id/hdrPlusQuick" style="@style/QuickControlTile" android:text="HDR+\nOFF" />
             <com.matthew.rawlens.RotatingTextView android:id="@+id/mfsrQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="MFSR\nOFF" />
+            <com.matthew.rawlens.RotatingTextView android:id="@+id/dLightingQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="D-LIGHTING\nOFF" android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>
 
@@ -537,6 +567,21 @@
                     android:layout_width="0dp"
                     android:layout_height="1dp"
                     android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/rawExposureToggle"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/raw_exposure_toggle"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:text="OFF"
+                    android:includeFontPadding="false"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="8sp" />
 
                 <!-- RAW VF engine: shows the current engine, tap cycles it
                      (same as tapping the RAW VF debug overlay). -->
