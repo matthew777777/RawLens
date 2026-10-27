@@ -228,6 +228,8 @@ internal object VfVulkan {
     ): Int
 
     /** Evict all cached imports (session boundary). Keeps device + pipeline. */
+    /** Pin shared GPU resources while a recording take owns them. */
+    external fun setRecordSessionNative(active: Boolean)
     external fun resetNative()
 
     /**

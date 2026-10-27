@@ -2,13 +2,22 @@
 // Adapted execution for third_party/rcd-packed-upstream. The old RCD backend
 // remains independent. All four stages share one command buffer; internal
 // quarter-resolution images stay owned by this Vulkan queue throughout.
+struct PackedRcdGradeParams {
+    RcdYuvParams grade{};
+    int32_t shadeDims[4]{};
+    float shadeActive[4]{};
+};
+static_assert(sizeof(PackedRcdGradeParams) == 192, "Packed RCD shade SSBO layout");
+static_assert(sizeof(PackedRcdGradeParams) <= 256, "Fits each RCD grade parameter allocation");
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfPackedRcd_initNative(
-    JNIEnv* env, jobject, jobjectArray stages, jint localX, jint localY, jboolean fused) {
+    JNIEnv* env, jobject, jobjectArray stages, jint localX, jint localY, jboolean fused, jboolean tuned) {
     const std::lock_guard<std::mutex> guard(vkMutex);
     if (!g) return VFVK_NOT_INITIALIZED;
     if (!g->hasF16Math || !g->hasExtendedStorageFormats || !stages || env->GetArrayLength(stages) != 4 ||
-        localX < 1 || localX > 16 || localY < 1 || localY > 16) return VFVK_BAD_ARGUMENT;
+        localX < 1 || localX > 32 || localY < 1 || localY > 32 ||
+        (fused && (localY < 2 || localY % 2))) return VFVK_BAD_ARGUMENT;
     auto& s = g->packedRcd;
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(g->gpu, &properties);
@@ -28,10 +37,10 @@ Java_com_matthew_rawlens_VfPackedRcd_initNative(
     }
     uint64_t shaderHash = 1469598103934665603ull;
     for (const auto& stage : code) for (uint32_t word : stage) { shaderHash ^= word; shaderHash *= 1099511628211ull; }
-    if (s.pipelines[3] && s.localX == localX && s.localY == localY && s.shaderHash == shaderHash && s.yuv == (fused == JNI_TRUE)) return VFVK_OK;
+    if (s.pipelines[3] && s.localX == localX && s.localY == localY && s.shaderHash == shaderHash && s.yuv == (fused == JNI_TRUE) && s.tuned == (tuned == JNI_TRUE)) return VFVK_OK;
     if (vkDeviceWaitIdle(g->device) != VK_SUCCESS) return VFVK_DEVICE_LOST;
     destroyPackedRcd(g);
-    if (!createPackedRcd(g, code, localX, localY)) {
+    if (!createPackedRcd(g, code, localX, localY, tuned == JNI_TRUE)) {
         destroyPackedRcd(g); return VFVK_PIPELINE_FAILED;
     }
     s.shaderHash = shaderHash;
@@ -42,12 +51,16 @@ Java_com_matthew_rawlens_VfPackedRcd_initNative(
 
 static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
     jintArray iparams, jfloatArray fparams, jobject p010Buffer,
-    const RcdYuvParams* gradeParams, const jint* strides) {
+    const RcdYuvParams* gradeParams, const jint* strides, int asyncSlot = -1, jintArray shadeDims = nullptr, jshortArray shadeGains = nullptr) {
     const std::lock_guard<std::mutex> guard(vkMutex);
     if (!g) return -VFVK_NOT_INITIALIZED;
     auto& s = g->packedRcd;
     if (!s.pipelines[3]) return -VFVK_PIPELINE_FAILED;
     const bool fused = p010Buffer != nullptr;
+    const bool async = asyncSlot >= 0;
+    if (asyncSlot > 2 || (async && (!fused || !g->hasSemaphoreFd))) return -VFVK_BAD_ARGUMENT;
+    const int slot = async ? asyncSlot : 0;
+    const bool timed = s.queries && !async;
     if (s.yuv != fused) return -VFVK_BAD_ARGUMENT;
     if (!cfaBuffer || (!fused && !rgbBuffer) || !iparams || !fparams ||
         env->GetArrayLength(iparams) < 10 || env->GetArrayLength(fparams) < 8) return -VFVK_BAD_ARGUMENT;
@@ -68,13 +81,19 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
     AHardwareBuffer* rgb = rgbBuffer ? AHardwareBuffer_fromHardwareBuffer(env, rgbBuffer) : nullptr;
     AHardwareBuffer* p010 = fused ? AHardwareBuffer_fromHardwareBuffer(env, p010Buffer) : nullptr;
     if (!cfa || (fused ? !p010 : !rgb)) return -VFVK_BAD_ARGUMENT;
-    if (rcdSetInUse(g, s.sets[0])) return -VFVK_BUSY;
+    // The exported sync fd can signal slightly before the submission fence.
+    // Reuse is gated by the actual fence, rather than dropping an otherwise
+    // complete frame after the generic 2 ms grace period.
+    for (const auto& pending : g->rcdPending) if (pending.set == s.sets[slot * 4]) {
+        VkResult retired = vkWaitForFences(g->device, 1, &pending.fence, VK_TRUE, 100'000'000ull);
+        if (retired != VK_SUCCESS) return retired == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_BUSY;
+    }
     if (!fused) {
         AHardwareBuffer_Desc description{};
         AHardwareBuffer_describe(rgb, &description);
         if (description.width != (uint32_t)ii[0] || description.height != (uint32_t)ii[1] ||
             description.format != AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT) return -VFVK_BAD_ARGUMENT;
-    } else if (!gradeParams || !strides || gradeParams->oDims[0] != ii[0] || gradeParams->oDims[1] != ii[1]) {
+    } else if (!gradeParams || !strides || gradeParams->oDims[0] < 2 || gradeParams->oDims[1] < 2) {
         return -VFVK_BAD_ARGUMENT;
     }
     auto input = g->inputs.find(cfa);
@@ -96,29 +115,36 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
     if (fused) {
         result = importP010Out(g, p010, strides[0], strides[1], strides[2], strides[3], &p010Output);
         if (result != VFVK_OK) return result == -20 ? -20 : -result;
-        memcpy(g->rcdYuvParamMaps[0], gradeParams, sizeof(*gradeParams));
     }
+    PackedRcdGradeParams packedGrade{};
+    if (gradeParams) packedGrade.grade = *gradeParams;
+    VkImageView shadeView = VK_NULL_HANDLE;
+    uploadShadeMap(env, shadeDims, shadeGains, slot,
+        packedGrade.shadeDims, packedGrade.shadeActive, &shadeView);
+    if (!shadeView || ((shadeDims || shadeGains) && !packedGrade.shadeDims[2])) return -VFVK_COPY_UPLOAD_FAILED;
+    memcpy(g->rcdYuvParamMaps[slot], &packedGrade, sizeof(packedGrade));
     VkDescriptorBufferInfo raw{input->second.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo packedOutput{fused ? p010Output.buffer : raw.buffer, 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo gradeInfo{g->rcdYuvParamBufs[0], 0, sizeof(RcdYuvParams)};
+    VkDescriptorBufferInfo gradeInfo{g->rcdYuvParamBufs[slot], 0, sizeof(PackedRcdGradeParams)};
+    VkDescriptorImageInfo shadeInfo{g->shadeSampler, shadeView, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorImageInfo sampled[3]{};
     for (int i = 0; i < 3; ++i) sampled[i] = {s.sampler, s.views[i], VK_IMAGE_LAYOUT_GENERAL};
     for (int stage = 0; stage < 4; ++stage) {
         VkDescriptorImageInfo destination{VK_NULL_HANDLE,
             stage < 3 ? s.views[stage] : fused ? s.views[0] : output.view, VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet writes[7]{};
-        const uint32_t bindings[7] = {0, 2, 6, 7, 8, 9, 10};
-        for (int i = 0; i < 7; ++i) {
+        VkWriteDescriptorSet writes[8]{};
+        const uint32_t bindings[8] = {0, 2, 6, 7, 8, 9, 10, 4};
+        for (int i = 0; i < 8; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = s.sets[stage]; writes[i].dstBinding = bindings[i];
+            writes[i].dstSet = s.sets[slot * 4 + stage]; writes[i].dstBinding = bindings[i];
             writes[i].descriptorCount = 1;
-            writes[i].descriptorType = (i == 0 || i >= 5) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER :
+            writes[i].descriptorType = (i == 0 || i == 5 || i == 6) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER :
                 i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             if (i == 0) writes[i].pBufferInfo = &raw;
-            else if (i >= 5) writes[i].pBufferInfo = i == 5 ? &packedOutput : &gradeInfo;
-            else writes[i].pImageInfo = i == 1 ? &destination : &sampled[i - 2];
+            else if (i == 5 || i == 6) writes[i].pBufferInfo = i == 5 ? &packedOutput : &gradeInfo;
+            else writes[i].pImageInfo = i == 7 ? &shadeInfo : i == 1 ? &destination : &sampled[i - 2];
         }
-        vkUpdateDescriptorSets(g->device, 7, writes, 0, nullptr);
+        vkUpdateDescriptorSets(g->device, 8, writes, 0, nullptr);
     }
     VkCommandBuffer cmd = VK_NULL_HANDLE; VkFence fence = VK_NULL_HANDLE;
     result = acquireRcdCmd(g, &cmd, &fence);
@@ -130,7 +156,7 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
         g->rcdFreeCbs.push_back(cmd);
         return -VFVK_SUBMIT_FAILED;
     }
-    if (s.queries) vkCmdResetQueryPool(cmd, s.queries, 0, 8);
+    if (timed) vkCmdResetQueryPool(cmd, s.queries, 0, 8);
     VkBufferMemoryBarrier acquire{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
     acquire.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
@@ -153,28 +179,30 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
         outputBarrier.buffer = p010Output.buffer; outputBarrier.size = VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0, 0, nullptr, 1, &outputBarrier, 0, nullptr);
-        VkBufferMemoryBarrier parameters{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-        parameters.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        parameters.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        parameters.srcQueueFamilyIndex = parameters.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        parameters.buffer = gradeInfo.buffer; parameters.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 0, nullptr, 1, &parameters, 0, nullptr);
     } else {
-    layoutBarrier(cmd, output.image, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
+        layoutBarrier(cmd, output.image, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     }
-    const uint32_t groupsX = ((ii[0] + 1) / 2 + s.localX - 1) / s.localX;
-    const uint32_t groupsY = ((ii[1] + 1) / 2 + s.localY - 1) / s.localY;
+    VkBufferMemoryBarrier parameters{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    parameters.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    parameters.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    parameters.srcQueueFamilyIndex = parameters.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    parameters.buffer = gradeInfo.buffer; parameters.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 1, &parameters, 0, nullptr);
     for (int stage = 0; stage < 4; ++stage) {
-        if (s.queries) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s.queries, stage * 2);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.pipelines[stage]);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.layout, 0, 1, &s.sets[stage], 0, nullptr);
+        if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s.queries, stage * 2);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.pipelines[stage == 3 && fused ? 3 + int(gradeParams->gMisc2[1]) +
+            (ii[0] != gradeParams->oDims[0] || ii[1] != gradeParams->oDims[1] ? 4 : 0) : stage]);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.layout, 0, 1, &s.sets[slot * 4 + stage], 0, nullptr);
         vkCmdPushConstants(cmd, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(params), &params);
-        vkCmdDispatch(cmd, groupsX, groupsY, 1);
-        if (s.queries) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s.queries, stage * 2 + 1);
+        const uint32_t lx = s.stageLocalX[stage], ly = s.stageLocalY[stage];
+        const uint32_t dispatchWidth = stage == 3 && fused ? (gradeParams->oDims[0] + 1) / 2 : (ii[0] + 1) / 2;
+        const uint32_t dispatchHeight = stage == 3 && fused ? gradeParams->oDims[1] : (ii[1] + 1) / 2;
+        vkCmdDispatch(cmd, (dispatchWidth + lx - 1) / lx, (dispatchHeight + ly - 1) / ly, 1);
+        if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s.queries, stage * 2 + 1);
         if (stage < 3) layoutBarrier(cmd, s.images[stage], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
@@ -186,9 +214,9 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                              0, 0, nullptr, 1, &outputBarrier, 0, nullptr);
     } else {
-    layoutBarrier(cmd, output.image, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-        g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
+        layoutBarrier(cmd, output.image, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+            g->queueFamily, VK_QUEUE_FAMILY_FOREIGN_EXT);
     }
     acquire.srcAccessMask = VK_ACCESS_SHADER_READ_BIT; acquire.dstAccessMask = 0;
     acquire.srcQueueFamilyIndex = g->queueFamily; acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
@@ -199,21 +227,47 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
         g->rcdFreeCbs.push_back(cmd);
         return -VFVK_SUBMIT_FAILED;
     }
+    VkSemaphore sem = VK_NULL_HANDLE;
+    if (async) {
+        VkExportSemaphoreCreateInfo exportInfo{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+        exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        semInfo.pNext = &exportInfo;
+        if (vkCreateSemaphore(g->device, &semInfo, nullptr, &sem) != VK_SUCCESS) {
+            vkDestroyFence(g->device, fence, nullptr);
+            g->rcdFreeCbs.push_back(cmd);
+            return -VFVK_SUBMIT_FAILED;
+        }
+    }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1; submit.pCommandBuffers = &cmd;
+    if (async) { submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &sem; }
     VkResult vr = vkQueueSubmit(g->queue, 1, &submit, fence);
     if (vr != VK_SUCCESS) {
+        if (sem) vkDestroySemaphore(g->device, sem, nullptr);
         vkDestroyFence(g->device, fence, nullptr);
         g->rcdFreeCbs.push_back(cmd);
         return -VFVK_SUBMIT_FAILED;
     }
     s.initialized = true;
-    g->rcdPending.push_back({cmd, fence, VK_NULL_HANDLE, s.sets[0]});
+    g->rcdPending.push_back({cmd, fence, sem, s.sets[slot * 4]});
+    if (async) {
+        VkSemaphoreGetFdInfoKHR info{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
+        info.semaphore = sem;
+        info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        int fd = -1;
+        vr = g->getSemFd(g->device, &info, &fd);
+        if (vr == VK_SUCCESS && fd >= 0) return fd;
+        // Export may report an already-signaled payload (-1). Prove completion
+        // before returning the recorder's completed sentinel; never release RAW early.
+        vr = vkWaitForFences(g->device, 1, &fence, VK_TRUE, 5'000'000'000ull);
+        return vr == VK_SUCCESS ? -1 : -VFVK_BUSY;
+    }
     // Serial ownership is deliberate: descriptors and the internal images may
     // be reused only after all stages finish, and RAW stays leased until here.
     vr = vkWaitForFences(g->device, 1, &fence, VK_TRUE, 5'000'000'000ull);
     if (vr != VK_SUCCESS) return vr == VK_ERROR_DEVICE_LOST ? -VFVK_DEVICE_LOST : -VFVK_BUSY;
-    if (s.queries) {
+    if (timed) {
         uint64_t ticks[8]{};
         if (vkGetQueryPoolResults(g->device, s.queries, 0, 8, sizeof(ticks), ticks,
                                   sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
@@ -228,13 +282,12 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfPackedRcd_processNative(JNIEnv* env, jobject, jobject cfa, jobject rgb,
-                                               jintArray ip, jfloatArray fp) {
-    return runPackedRcd(env, cfa, rgb, ip, fp, nullptr, nullptr, nullptr);
+                                               jintArray ip, jfloatArray fp, jintArray shadeDims, jshortArray shadeGains) {
+    return runPackedRcd(env, cfa, rgb, ip, fp, nullptr, nullptr, nullptr, -1, shadeDims, shadeGains);
 }
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfPackedRcd_processYuvNative(JNIEnv* env, jobject, jobject cfa, jobject p010,
-    jintArray ip, jfloatArray fp, jfloatArray grade, jintArray strides) {
+static jint packedRcdYuv(JNIEnv* env, jobject cfa, jobject p010,
+    jintArray ip, jfloatArray fp, jfloatArray grade, jintArray strides, int slot, jintArray shadeDims, jshortArray shadeGains) {
     if (!grade || !strides || env->GetArrayLength(grade) < 18 || env->GetArrayLength(strides) < 4) return -VFVK_BAD_ARGUMENT;
     jfloat gf[18]; jint st[4];
     env->GetFloatArrayRegion(grade, 0, 18, gf);
@@ -252,7 +305,20 @@ Java_com_matthew_rawlens_VfPackedRcd_processYuvNative(JNIEnv* env, jobject, jobj
     params.gMisc[1] = float(st[0] / 2); params.gMisc[2] = float(st[1] / 2);
     params.gMisc[3] = float(int64_t(st[0]) * st[3]);
     params.gMisc2[0] = 1.0f; params.gMisc2[1] = float(mode); params.gMisc2[2] = gf[16];
-    return runPackedRcd(env, cfa, nullptr, ip, fp, p010, &params, st);
+    return runPackedRcd(env, cfa, nullptr, ip, fp, p010, &params, st, slot, shadeDims, shadeGains);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfPackedRcd_processYuvNative(JNIEnv* env, jobject, jobject cfa, jobject p010,
+    jintArray ip, jfloatArray fp, jfloatArray grade, jintArray strides, jintArray shadeDims, jshortArray shadeGains) {
+    return packedRcdYuv(env, cfa, p010, ip, fp, grade, strides, -1, shadeDims, shadeGains);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfPackedRcd_submitYuvNative(JNIEnv* env, jobject, jobject cfa, jobject p010,
+    jintArray ip, jfloatArray fp, jfloatArray grade, jintArray strides, jint slot, jintArray shadeDims, jshortArray shadeGains) {
+    if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
+    return packedRcdYuv(env, cfa, p010, ip, fp, grade, strides, slot, shadeDims, shadeGains);
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
@@ -262,4 +328,18 @@ Java_com_matthew_rawlens_VfPackedRcd_timingsNative(JNIEnv* env, jobject) {
     jfloatArray out = env->NewFloatArray(4);
     if (out) env->SetFloatArrayRegion(out, 0, 4, g->packedRcd.stageMs);
     return out;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfPackedRcd_validateP010Native(JNIEnv* env, jobject, jobject buffer, jint width, jint height) {
+    const std::lock_guard<std::mutex> guard(vkMutex);
+    if (!g || !buffer || width < 2 || height < 2 || width % 2 || height % 2) return VFVK_BAD_ARGUMENT;
+    AHardwareBuffer* ahb = AHardwareBuffer_fromHardwareBuffer(env, buffer);
+    if (!ahb) return VFVK_BAD_ARGUMENT;
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(ahb, &desc);
+    if (desc.format != AHARDWAREBUFFER_FORMAT_YCbCr_P010 || desc.width != (uint32_t)width ||
+        desc.height != (uint32_t)height || !(desc.usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER)) return VFVK_BAD_ARGUMENT;
+    ImportedBuffer imported{};
+    return importP010Out(g, ahb, desc.stride * 2, desc.stride * 2, width, height, &imported);
 }

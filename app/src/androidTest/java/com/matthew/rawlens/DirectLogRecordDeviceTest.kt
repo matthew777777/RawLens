@@ -57,13 +57,37 @@ class DirectLogRecordDeviceTest {
             "Pass -e rawlensDirectLog true to open the camera and record",
             args.getString("rawlensDirectLog") == "true"
         )
-        val seconds = args.getString("seconds", "4").toInt().coerceIn(3, 15)
+        val seconds = args.getString("seconds", "4").toInt().coerceIn(3, 60)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         instrumentation.uiAutomation
             .executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
         instrumentation.uiAutomation
             .executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO").close()
+
+        val foreground = if (args.getString("foreground") == "true") {
+            context.getSharedPreferences("rawlens_settings", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("lens_setup_complete", true).commit()
+            val activity = instrumentation.startActivitySync(android.content.Intent(context, MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            SystemClock.sleep(1500)
+            instrumentation.runOnMainSync {
+                activity.controller.stop()
+                val preview = activity.findViewById<DirectLogPreviewView>(R.id.recordPreview)
+                val vf = listOf(activity.findViewById<android.view.View>(R.id.rawViewfinder),
+                    activity.findViewById<android.view.View>(R.id.bguViewfinder))
+                    .firstOrNull { it.visibility == android.view.View.VISIBLE && it.width > 0 && it.height > 0 }
+                preview.layoutParams = android.widget.FrameLayout.LayoutParams(
+                    vf?.width ?: android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    vf?.height ?: android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.Gravity.TOP or android.view.Gravity.START).apply {
+                    leftMargin = vf?.left ?: 0; topMargin = vf?.top ?: 0
+                }
+                preview.visibility = android.view.View.VISIBLE
+            }
+            SystemClock.sleep(500)
+            activity
+        } else null
 
         val manager = context.getSystemService(CameraManager::class.java)
         val power = context.getSystemService(android.os.PowerManager::class.java)
@@ -100,6 +124,7 @@ class DirectLogRecordDeviceTest {
             configs.clear()
             configs.add(Config("rcd-4k", LogVideoLadder.Rung.FULL, 2, true))
         }
+        try {
         for ((label, rung, step, fused) in configs) {
             val file = File(context.cacheDir, "directlog_${label.replace('-', '_')}.mp4")
             if (file.exists()) file.delete()
@@ -107,24 +132,42 @@ class DirectLogRecordDeviceTest {
             rec.rung = rung
             // -e fps 24|30 (default: the recorder default).
             args.getString("fps")?.let { rec.fps = it.toInt() }
+            args.getString("width")?.let { rec.width = it.toInt() }
+            args.getString("height")?.let { rec.height = it.toInt() }
+            rec.bitrate = LogVideoProbe.defaultBitrateFor(rec.width, rec.height)
             rec.computeStep = step
             rec.preferMhc = fused
             if (rcdOnly) {
                 rec.videoDemosaic = VideoDemosaic.RCD
+                rec.preferRcdGpuWriter = args.getString("gpuWriter") != "false"
                 rec.logProfile = DirectLogProfile.ACES
             }
+            if (foreground != null) rec.attachPreviewDisplay(foreground.findViewById(R.id.recordPreview))
             rec.allowThermalDegrade = false
             rec.start(file)
-            repeat(seconds * 2) {
+            foreground?.let { activity -> instrumentation.runOnMainSync {
+                activity.findViewById<android.widget.TextView>(R.id.rawBadge).apply {
+                    text = "● RCD TEST • ${rec.width}×${rec.height} • ${rec.fps}FPS"
+                    setTextColor(android.graphics.Color.RED)
+                }
+            } }
+            repeat(seconds * 2) { tick ->
                 SystemClock.sleep(500)
+                if (args.getString("resetDuringRecording") == "true" && tick == seconds) {
+                    // A photo-viewfinder teardown must not invalidate an active take.
+                    VfVulkan.resetNative()
+                }
             }
+            foreground?.let { activity -> instrumentation.runOnMainSync {
+                activity.findViewById<android.widget.TextView>(R.id.rawBadge).text = "RCD TEST • SAVING"
+            } }
             val stats = rec.stop()
             Log.i(
                 TAG, "SPIKE directlog fps=${rec.fps} label=$label rung=${rung.label} step=$step sensor=${stats.sensorSize} " +
                     "crop=${stats.cropRect} export=${stats.exportSize} " +
                     "acq=${stats.framesAcquired} graded=${stats.framesGraded} " +
                     "drop=${stats.framesDropped} miss=${stats.resultMiss} stale=${stats.staleResults} " +
-                    "waitFree=${stats.waitFreeFrames} fallback=${stats.fallbackWaits} " +
+                    "waitFree=${stats.waitFreeFrames} fallback=${stats.fallbackWaits} preview=${stats.previewFrames} shaded=${stats.shadedFrames} " +
                     "fused=${stats.fusedFrames} " +
                     "heat=${stats.heatDegraded} thermal=${stats.thermalStatus} " +
                     "cpuChain=${"%.1f".format(stats.cpuChainMsAvg)}ms " +
@@ -154,6 +197,7 @@ class DirectLogRecordDeviceTest {
                 "[$label] export not 16:9: ${stats.exportSize}",
                 Math.abs(aspect - 16.0 / 9.0) < 0.005
             )
+            if (foreground != null) assertTrue("Foreground monitor never submitted a frame", stats.previewFrames > 0)
             assertTrue("[$label] no frames acquired", stats.framesAcquired > 0)
             assertTrue("[$label] no frames graded", stats.framesGraded > 0)
             // Cooled floor (observed ~80%+ graded; below half the take is
@@ -165,6 +209,11 @@ class DirectLogRecordDeviceTest {
             if (!rcdOnly) assertTrue("[$label] wait-free path never engaged", stats.waitFreeFrames > 0)
             if (rcdOnly) {
                 assertTrue("RCD path did not run", stats.rcdFrames > 0)
+                if (args.getString("requireShading") == "true") {
+                    assertTrue("Lens shading was not applied", stats.shadedFrames > 0)
+                    assertTrue("Lens shading flapped during recording: ${stats.shadedFrames}/${stats.framesGraded}",
+                        stats.shadedFrames >= stats.framesGraded - 2)
+                }
             } else if (fused) {
                 assertTrue("[$label] fused record path never engaged", stats.fusedFrames > 0)
             } else {
@@ -202,10 +251,17 @@ class DirectLogRecordDeviceTest {
                 val retriever = android.media.MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(file.absolutePath)
-                    val frame = retriever.getFrameAtTime(1_000_000L,
+                    val frame = retriever.getFrameAtTime(if (seconds >= 8) 5_000_000L else 1_000_000L,
                         android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                     assertTrue("RCD MP4 could not decode a video frame", frame != null)
-                    frame?.recycle()
+                    frame?.let { bitmap ->
+                        val decoded = File(context.getExternalFilesDir(null), "directlog_rcd_decoded.png")
+                        if (args.getString("fast") != "true") {
+                            decoded.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            Log.i(TAG, "RCD decoded frame: ${decoded.absolutePath}")
+                        }
+                        bitmap.recycle()
+                    }
                 } finally { retriever.release() }
                 val expectedBytes = file.length()
                 val published = DirectLogSaver.save(context.contentResolver, file)
@@ -215,6 +271,9 @@ class DirectLogRecordDeviceTest {
                 Log.i(TAG, "RCD published: ${published.uri} bytes=$expectedBytes")
             }
             file.delete()
+        }
+        } finally {
+            foreground?.let { activity -> instrumentation.runOnMainSync { activity.finish() } }
         }
     }
 
@@ -235,8 +294,11 @@ class DirectLogRecordDeviceTest {
             assertTrue("[$label] no AAC track", audioTrack >= 0)
             val vfmt = ext.getTrackFormat(videoTrack)
             val afmt = ext.getTrackFormat(audioTrack)
-            assertEquals(3840, vfmt.getInteger(MediaFormat.KEY_WIDTH))
-            assertEquals(2160, vfmt.getInteger(MediaFormat.KEY_HEIGHT))
+            assertEquals(InstrumentationRegistry.getArguments().getString("width")?.toInt() ?: 3840, vfmt.getInteger(MediaFormat.KEY_WIDTH))
+            assertEquals(InstrumentationRegistry.getArguments().getString("height")?.toInt() ?: 2160, vfmt.getInteger(MediaFormat.KEY_HEIGHT))
+            if (rcd && vfmt.containsKey(MediaFormat.KEY_PROFILE))
+                assertEquals("RCD output must remain Main10", android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
+                    vfmt.getInteger(MediaFormat.KEY_PROFILE))
             // Developed-file color signalling: the pixels are sRGB-OETF
             // (see the grade shaders) and the encoder is configured
             // SDR/BT.709/limited. Log always (evidence); assert the values
@@ -286,6 +348,23 @@ class DirectLogRecordDeviceTest {
             // not to this pipeline. Steady state on a cool device: ~29fps.
             val muxedFps = videoSamples * 1_000_000.0 / durationUs.coerceAtLeast(1L)
             Log.i(TAG, "SPIKE directlog [$label] muxedFps=${"%.1f".format(muxedFps)}")
+            if (videoPts.size > 2) {
+                val start = videoPts.first()
+                val fullSeconds = ((videoPts.last() - start) / 1_000_000L).toInt()
+                val windows = (2 until fullSeconds).map { second ->
+                    videoPts.count { it >= start + second * 1_000_000L && it < start + (second + 1) * 1_000_000L }
+                }
+                val gaps = videoPts.zipWithNext { a, b -> b - a }.drop(48).sorted()
+                val stableFps = InstrumentationRegistry.getArguments().getString("stableFps")?.toInt()
+                if (stableFps != null) {
+                    assertTrue("No steady-state cadence windows", windows.isNotEmpty())
+                    assertTrue("Unstable one-second frame counts: $windows", windows.all { it >= stableFps - 1 })
+                    assertTrue("Steady p95 frame gap exceeds cadence", gaps[(gaps.size * .95).toInt()] <= 1_200_000L / stableFps)
+                }
+                Log.i(TAG, "RCD cadence fullSecondCounts=$windows steadyGapUs=" +
+                    if (gaps.isEmpty()) "none" else "min=${gaps.first()} p50=${gaps[gaps.size / 2]} p95=${gaps[(gaps.size * .95).toInt()]} max=${gaps.last()}")
+            }
+
             assertTrue("[$label] no muxed audio", audioSamples > seconds * 10)
             assertTrue("[$label] duration implausible: $durationUs", durationUs > (seconds - if (rcd) 3 else 2) * 1_000_000L)
             // Constant frame rate: every consecutive PTS gap sits on the

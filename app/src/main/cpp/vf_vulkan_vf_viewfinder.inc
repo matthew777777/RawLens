@@ -1268,8 +1268,18 @@ Java_com_matthew_rawlens_VfVulkan_supportsF16MathNative(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_matthew_rawlens_VfVulkan_setRecordSessionNative(JNIEnv*, jobject, jboolean active) {
+    const std::lock_guard<std::mutex> guard(vkMutex);
+    recordSessionActive = active == JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_matthew_rawlens_VfVulkan_resetNative(JNIEnv*, jobject) {
     std::unique_lock<std::mutex> vkGuard(vkMutex);
+    if (recordSessionActive) {
+        LOGI("vf-vk: viewfinder reset deferred while recorder owns GPU resources");
+        return;
+    }
     if (g == nullptr) return;
     // Called from non-worker threads (recorder stop): join an in-flight
     // viewfinder wait before destroying the imports/output it uses.

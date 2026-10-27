@@ -39,15 +39,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Direct-video demosaic backend. MHC (fused MHC+grade, one dispatch)
- * is the record path; RCD runs modes 0-2 plus the fused finalize +
- * grade dispatch (split mode 3 + grade-YUV fallback intact) and cannot
- * hold 24/30fps at 4K (~250ms/frame measured: 236ms modes + ~18ms
- * grade; fused measures the same within noise, minus one dispatch and
- * ~187MB DRAM traffic) — it drops to a few fps effective and exists
- * for A/B comparison, not realtime takes. SUPER (superpixel binning:
- * each 2x2 Bayer quad becomes one RGB pixel, upscaled by the grade-YUV
- * pass) is the cheapest path: no demosaic artifacts, half the detail.
+ * Direct-video demosaic backend. MHC uses fused demosaic/grade; RCD uses
+ * the independent Packed RCD pipeline. SUPER bins each Bayer quad into
+ * one RGB pixel before grading. Still-photo RCD is independent of this selection.
  */
 enum class VideoDemosaic(val label: String) {
     MHC("MHC"),
@@ -71,12 +65,13 @@ enum class VideoDemosaic(val label: String) {
  * Direct-Log recorder: sensor RAW -> fused Vulkan MHC demosaic + log
  * grade in one dispatch (per-frame WB/CCM from the capture result;
  * superpixel fallback when fused is unavailable) -> HW HEVC Main10 ->
- * MP4. No synthetic buffers, no CPU pixel copies, no `glFinish` stalls.
+ * MP4. Packed RCD writes directly into encoder-owned P010 buffers when
+ * supported; other input paths retain the staging/copy fallback.
  *
  * Ownership per frame mirrors the viewfinder contract: adopt into
  * [RawImageOwnership], borrow a GPU lease, release the camera ref up front
- * (native close deferred to lease close), run the GPU chain synchronously
- * on the camera thread, then close lease + HardwareBuffer. The take
+ * (native close deferred to lease close), submit the GPU chain, and retain
+ * the lease until its completion fence signals on the delivery worker. The take
  * monitor shows the staged encode pixels (one tiny P010->RGBA8 dispatch
  * per frame, same-queue ordered behind the encode) instead of a
  * separately-demosaiced viewfinder: no second full-res dispatch contends
@@ -256,6 +251,8 @@ class DirectLogRecorder(
 
     private var codec: MediaCodec? = null
     /** True when this take feeds the encoder through a P010 ImageWriter (Surface-only encoders). */
+    internal var preferRcdGpuWriter = true
+    private var gpuWriterMode = false
     private var writerMode = false
     private var imageWriter: ImageWriter? = null
     private var writerSurface: Surface? = null
@@ -409,6 +406,7 @@ class DirectLogRecorder(
     private var useRcd = false
     /** Fused RCD finalize + grade (one dispatch replaces mode 3 + grade). */
     private var useRcdFused = false
+    @Volatile private var gpuSessionPinned = false
     private var usePackedRcd = false
     private var usePackedRcdFused = false
     /**
@@ -526,6 +524,8 @@ class DirectLogRecorder(
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
         resetTakeState(output)
         val geometry = resolveGeometry()
+        VfVulkan.setRecordSessionNative(true)
+        gpuSessionPinned = true
         initGpuStages(geometry.crop, geometry.preferMhc)
         startEncoder()
         allocateBuffers(geometry.export)
@@ -726,7 +726,7 @@ class DirectLogRecorder(
         } else if (videoDemosaic == VideoDemosaic.RCD) {
             // Video uses Packed RCD; the still-photo RCD pipeline stays independent.
             try {
-                val fused = crop.width == width && crop.height == height && width % 2 == 0 && height % 2 == 0
+                val fused = width % 2 == 0 && height % 2 == 0
                 var rc = VfPackedRcd.init(appContext, fused = fused)
                 var selectedFused = fused
                 if (rc != VfVulkan.OK && fused) {
@@ -821,7 +821,7 @@ class DirectLogRecorder(
                     LogVideoProbe.preferredHwEncoderAt(cw, ch, fps) ?: forceName
                 } else null
             var attempt: MediaCodec? = null
-            if (directTry != null) {
+            if (directTry != null && !(preferRcdGpuWriter && usePackedRcdFused && writerAllowed)) {
                 val configured = MediaCodec.createByCodecName(directTry)
                 var directOk = false
                 try {
@@ -865,8 +865,21 @@ class DirectLogRecorder(
                     imageWriter = ImageWriter.Builder(surface)
                         .setImageFormat(ImageFormat.YCBCR_P010)
                         .setMaxImages(LogVideoProbe.WRITER_MAX_IMAGES)
-                        .setUsage(LogVideoProbe.WRITER_P010_USAGE)
+                        .setUsage(if (preferRcdGpuWriter && usePackedRcdFused)
+                            android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
+                                android.hardware.HardwareBuffer.USAGE_VIDEO_ENCODE or
+                                android.hardware.HardwareBuffer.USAGE_CPU_READ_OFTEN
+                            else LogVideoProbe.WRITER_P010_USAGE)
                         .build()
+                    if (preferRcdGpuWriter && usePackedRcdFused) {
+                        val probe = imageWriter!!.dequeueInputImage()
+                        try {
+                            val buffer = probe.hardwareBuffer ?: error("P010 writer does not expose GPU buffers")
+                            try { check(VfPackedRcd.validateP010Native(buffer, cw, ch) == VfVulkan.OK) {
+                                "P010 writer layout is not supported for GPU output"
+                            } } finally { buffer.close() }
+                        } finally { probe.close() }
+                    }
                     writerSurface = surface
                 } catch (e: Exception) {
                     tried += "$surfaceTry@${cw}x$ch writer: ${e.message}"
@@ -875,11 +888,29 @@ class DirectLogRecorder(
                     runCatching { surface?.release() }
                     writerSurface = null
                     runCatching { configured.release() }
-                    continue
+                    // A device that cannot expose tightly packed encoder buffers
+                    // retains the validated direct-P010 staging/copy path.
+                    if (preferRcdGpuWriter && usePackedRcdFused && directTry != null) {
+                        val direct = MediaCodec.createByCodecName(directTry)
+                        try {
+                            direct.configure(LogVideoProbe.toMediaFormat(colors,
+                                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUVP010),
+                                null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                            attempt = direct
+                            codecName = directTry
+                            inputMode = LogVideoProbe.EncoderInputMode.DIRECT_P010
+                        } catch (fallback: Exception) {
+                            tried += "$directTry direct fallback: ${fallback.message}"
+                            runCatching { direct.release() }
+                            continue
+                        }
+                    } else continue
                 }
-                attempt = configured
-                codecName = surfaceTry
-                inputMode = LogVideoProbe.EncoderInputMode.IMAGE_WRITER
+                if (imageWriter != null) {
+                    attempt = configured
+                    codecName = surfaceTry
+                    inputMode = LogVideoProbe.EncoderInputMode.IMAGE_WRITER
+                }
             }
             if (attempt == null) {
                 if (directTry == null && surfaceTry == null) {
@@ -973,6 +1004,8 @@ class DirectLogRecorder(
                 else ""
         )
         writerMode = inputMode == LogVideoProbe.EncoderInputMode.IMAGE_WRITER
+        gpuWriterMode = writerMode && preferRcdGpuWriter && usePackedRcdFused
+        Log.i(TAG, "RCD GPU writer=$gpuWriterMode")
         codec = encoder
         val target = sessionProfile.targetColors()
             .copy(width = width, height = height, fps = fps, bitrate = bitrate)
@@ -1734,21 +1767,53 @@ class DirectLogRecorder(
         // record path; superpixel + grade-YUV (two dispatches, same-queue
         // ordered) is the session fallback.
         val mc = codec ?: return false
-        val strides = intArrayOf(ourYStrideB, ourUvStrideB, width, height)
-        val p010Buf = s.p010!!.buffer
+        var writerImage: Image? = null
+        var writerBuffer: android.hardware.HardwareBuffer? = null
+        val strides: IntArray
+        val p010Buf: android.hardware.HardwareBuffer
+        if (gpuWriterMode) {
+            writerImage = (imageWriter ?: error("GPU writer gone")).dequeueInputImage()
+            try {
+                // getHardwareBuffer does not consume ImageWriter's acquire fence
+                // (getPlanes would). The previous encoder read must finish before
+                // Vulkan writes this recycled buffer.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    writerImage.fence.use { fence ->
+                        check(!fence.isValid || fence.await(java.time.Duration.ofSeconds(1))) { "Encoder buffer acquire fence timed out" }
+                    }
+                } else error("GPU writer needs Android 13+")
+                writerBuffer = writerImage.hardwareBuffer ?: error("Writer has no hardware buffer")
+                val layout = VfEglImport.describeP010(writerBuffer) ?: error("Writer P010 layout unavailable")
+                strides = intArrayOf(layout[0], layout[1], width, height)
+                p010Buf = writerBuffer
+            } catch (e: Exception) {
+                writerBuffer?.close()
+                writerImage.close()
+                throw e
+            }
+        } else {
+            strides = intArrayOf(ourYStrideB, ourUvStrideB, width, height)
+            p010Buf = s.p010!!.buffer
+        }
         val f = FrameSubmit(
             hb, p010Buf, crop, pitch, levels, white, result, strides, slotIndex,
             shadeD, shadeG, s, expW, expH,
         )
-        val fd: Int = when {
-            useFused -> submitFused(f)
-            useRcd -> submitRcd(f)
-            else -> submitSuperpixel(f)
-        } ?: return false
+        val fd: Int = try {
+            when {
+                useFused -> submitFused(f)
+                useRcd -> submitRcd(f)
+                else -> submitSuperpixel(f)
+            } ?: run {
+                writerBuffer?.close(); writerImage?.close(); return false
+            }
+        } catch (e: Exception) {
+            writerBuffer?.close(); writerImage?.close(); throw e
+        }
         if (fd == -20) {
             error("P010 staging layout mismatch (see logcat); aborting take")
         }
-        val gpuComplete = usePackedRcd && usePackedRcdFused && fd == -1
+        var gpuComplete = usePackedRcd && usePackedRcdFused && fd == -1
         if (fd < 0 && !gpuComplete) {
             Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
             dropped.incrementAndGet()
@@ -1764,7 +1829,14 @@ class DirectLogRecorder(
         if (shadeD != null) shadedCount.incrementAndGet()
         // Monitor preview for this graded frame (best-effort; never
         // throws, never gates: any skip keeps an older monitor frame).
-        submitPreview(s, slotIndex)
+        var copyFd = fd
+        val previewFd = submitPreview(s, slotIndex, writerBuffer, strides)
+        if (previewFd >= 0) {
+            if (fd >= 0) VfEglImport.closeSyncFd(fd)
+            copyFd = previewFd
+            gpuComplete = false
+            s.fd = copyFd
+        }
         // Hand the P010 to the copy worker (fd travels by value; the
         // worker closes it). The camera thread never touches pixels.
         // The RAW lease travels with it: the worker releases the camera
@@ -1776,13 +1848,14 @@ class DirectLogRecorder(
         val seq = frameCounter - 1
         copyQueue.put(
             CopyJob(
-                s.p010!!, fd, cfrUs, latch, seq, ts, lease,
-                if (eightBitMode) s.rgb8 else null, slotIndex, gpuComplete
+                if (writerBuffer != null) HardwareBufferRef(writerBuffer) else s.p010!!,
+                copyFd, cfrUs, latch, seq, ts, lease,
+                if (eightBitMode) s.rgb8 else null, slotIndex, gpuComplete, writerImage
             )
         )
-        // RCD waits for its batch to keep RAW and internal intermediates alive.
-        // Realtime fused MHC remains submit-only.
-        if (!useRcd) waitFree.incrementAndGet()
+        // Fused Packed RCD and MHC return completion fds; the delivery
+        // worker retains RAW until completion. RGB fallback RCD waits.
+        if (!useRcd || (usePackedRcdFused && fd >= 0)) waitFree.incrementAndGet()
         val chainMs = (android.os.SystemClock.elapsedRealtimeNanos() - chainStartNs) / 1e6f
         cpuChainMsAvg = if (cpuChainMsAvg == 0f) chainMs else cpuChainMsAvg * 0.9f + chainMs * 0.1f
         if (chainMs > cpuChainMsMax) cpuChainMsMax = chainMs
@@ -1835,25 +1908,31 @@ class DirectLogRecorder(
         return fd
     }
 
-    /** Returns -1 only for a batch that already completed on the GPU. */
+    /** Returns a completion fd, or -1 for an already completed GPU batch. */
     private fun submitPackedRcd(f: FrameSubmit): Int? {
         val (ip, fp) = VfRcd.packRcd(f.crop.width, f.crop.height, f.crop.left, f.crop.top,
             channels, f.pitch, 0, f.levels, f.white)
         val (dims, grade) = VfLogGrade.packGrade(intArrayOf(width, height),
             wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
         if (usePackedRcdFused) {
-            val rc = VfPackedRcd.processYuvNative(f.hb, f.p010Buf, ip, fp, grade, f.strides)
+            val startedNs = SystemClock.elapsedRealtimeNanos()
+            val rc = VfPackedRcd.submitYuvNative(f.hb, f.p010Buf, ip, fp, grade, f.strides, f.slotIndex, f.shadeD, f.shadeG)
+            if (rcdCount.get() % 30 == 0) {
+                val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNs) / 1e6f
+                Log.i(TAG, "RCD timing crop=${f.crop.width}x${f.crop.height} output=${width}x${height} " +
+                    "submitMs=$elapsedMs")
+            }
             if (rc == -20) error("P010 staging layout mismatch; aborting take")
-            if (rc != VfVulkan.OK) {
+            if (rc < -1) {
                 Log.w(TAG, "packed RCD P010 failed ($rc); dropping frame")
                 dropped.incrementAndGet()
                 return null
             }
             rcdCount.incrementAndGet()
-            return -1 // The native call waited for its single batch fence.
+            return rc // Copy worker owns the fence and RAW lease until completion.
         }
         val rgb = rcdRgb?.buffer ?: return null
-        val rc = VfPackedRcd.processNative(f.hb, rgb, ip, fp)
+        val rc = VfPackedRcd.processNative(f.hb, rgb, ip, fp, f.shadeD, f.shadeG)
         if (rc != VfVulkan.OK) {
             Log.w(TAG, "packed RCD failed ($rc); dropping frame")
             dropped.incrementAndGet()
@@ -2009,8 +2088,9 @@ class DirectLogRecorder(
      * slot, or submit failure only skips the monitor frame (counted),
      * the encode already queued is unaffected. Never throws.
      */
-    private fun submitPreview(s: Slot, slotIndex: Int) {
-        if (!previewEnabled) return
+    private fun submitPreview(s: Slot, slotIndex: Int,
+        source: android.hardware.HardwareBuffer? = null, sourceStrides: IntArray? = null): Int {
+        if (!previewEnabled) return -1
         // This frame's latch once replaced (counted down here if the
         // offer never takes it; countDown is idempotent, so a racing
         // view release double-counts harmlessly).
@@ -2020,26 +2100,26 @@ class DirectLogRecorder(
             val previewBuf = s.preview?.buffer
             if (view == null || previewBuf == null) {
                 previewSkipped.incrementAndGet()
-                return
+                return -1
             }
             // Idle worker + released slot, else skip: the monitor is
             // latest-only, catching up is pointless.
             if (!view.isPreviewActive || !view.isIdleForOffer()) {
                 previewSkipped.incrementAndGet()
-                return
+                return -1
             }
             if (s.previewDone.count > 0L) {
                 previewSkipped.incrementAndGet()
-                return
+                return -1
             }
             val latch = CountDownLatch(1)
             s.previewDone = latch
             mine = latch
             val pfd = VfRecordPreview.previewSubmitNative(
-                s.p010!!.buffer, previewBuf,
+                source ?: s.p010!!.buffer, previewBuf,
                 intArrayOf(previewWidth, previewHeight),
                 intArrayOf(width, height),
-                intArrayOf(ourYStrideB, ourUvStrideB, width, height),
+                sourceStrides ?: intArrayOf(ourYStrideB, ourUvStrideB, width, height),
                 previewBox, slotIndex
             )
             if (pfd < 0) {
@@ -2049,12 +2129,16 @@ class DirectLogRecorder(
                     previewErrorLogged = true
                     Log.w(TAG, "preview submit failed ($pfd); monitor skipping (encode unaffected)")
                 }
-                return
+                return -1
             }
+            // The encoder must not recycle a writer buffer until the preview
+            // dispatch has finished reading it. The view owns the original fd.
+            val encoderFd = if (source != null) android.os.ParcelFileDescriptor.fromFd(pfd).detachFd() else -1
             view.offerPreview(previewBuf, pfd, previewRotation, previewMirrored) {
                 latch.countDown()
             }
             previewCount.incrementAndGet()
+            return encoderFd
         } catch (e: Exception) {
             // Paranoia only (offerPreview is contractually non-throwing):
             // never break the encode for the monitor. No fd cleanup here
@@ -2067,6 +2151,7 @@ class DirectLogRecorder(
             Log.w(TAG, "preview failed (${e.message}); monitor skipping")
             previewSkipped.incrementAndGet()
         }
+        return -1
     }
 
     /**
@@ -2124,6 +2209,7 @@ class DirectLogRecorder(
         val slot: Int = 0,
         /** Native RCD already proved completion; fd is -1, never an error fd. */
         val gpuComplete: Boolean = false,
+        val writerImage: Image? = null,
     )
 
     /** A filled codec input awaiting its ordered turn at queueInputBuffer. */
@@ -2221,10 +2307,18 @@ class DirectLogRecorder(
                 frameErrors.incrementAndGet()
                 ready = null
             } finally {
-                if (job.fd >= 0) try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
+                if (job.fd >= 0) {
+                    // Clear the slot before releasing its latch: teardown must
+                    // never close a stale fd number later reused by the codec.
+                    if (slots[job.slot].fd == job.fd) slots[job.slot].fd = -1
+                    try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
+                }
                 // Backstop: normally already released right after the
                 // fence wait in processCopyJob (idempotent).
                 try { job.rawLease.close() } catch (_: Exception) {}
+                if (job.writerImage != null && ready == null) {
+                    try { job.writerImage.close() } catch (_: Exception) {}
+                }
                 if (!eightBitMode || ready == null) job.done.countDown()
             }
             synchronized(queueGate) {
@@ -2232,6 +2326,7 @@ class DirectLogRecorder(
                 try {
                     if (ready != null) queueReady(job, ready)
                 } finally {
+                    if (job.writerImage != null) job.p010.close()
                     nextQueueSeq++
                     queueGate.notifyAll()
                     if (eightBitMode && ready != null) job.done.countDown()
@@ -2295,6 +2390,7 @@ class DirectLogRecorder(
             dropped.incrementAndGet()
             return null
         }
+        if (job.writerImage != null) return ReadyQueue(-1, null, 0, job.writerImage)
         if (writerMode) return processWriterCopyJob(job)
         if (eightBitMode) return processSdrCopyJob(job)
         val mc = codec
@@ -3008,6 +3104,10 @@ class DirectLogRecorder(
         rcdRgb = null
         try { rcdScratch?.close() } catch (_: Exception) {}
         rcdScratch = null
+        if (gpuSessionPinned) {
+            try { VfVulkan.setRecordSessionNative(false) } catch (_: Exception) {}
+            gpuSessionPinned = false
+        }
         try { VfVulkan.resetNative() } catch (_: Exception) {}
     }
 

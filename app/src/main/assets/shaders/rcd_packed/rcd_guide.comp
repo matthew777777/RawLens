@@ -9,11 +9,9 @@
 layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D guideImage;
 
-const int RCD_MAX_LOCAL_SIZE = 16;
 const int RCD_GUIDE_HALO = 4;
-const int RCD_GUIDE_TILE_SIZE = RCD_MAX_LOCAL_SIZE * 2 + RCD_GUIDE_HALO * 2;
 
-shared float16_t rcdGuideCfaTile[RCD_GUIDE_TILE_SIZE][RCD_GUIDE_TILE_SIZE];
+shared float16_t rcdGuideCfaTile[gl_WorkGroupSize.y * 2 + 8][gl_WorkGroupSize.x * 2 + 8];
 
 float16_t rcdRawNormalizedF16(ivec2 position)
 {

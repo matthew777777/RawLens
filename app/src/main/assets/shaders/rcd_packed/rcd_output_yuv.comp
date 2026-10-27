@@ -7,18 +7,43 @@
 #include "rcd_common.glsl"
 
 layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(constant_id = 14) const int OUTPUT_PROFILE = 0;
+layout(constant_id = 15) const bool SCALED_OUTPUT = false;
 
 layout(set = 0, binding = 7) uniform sampler2D greenImage;
 layout(set = 0, binding = 8) uniform sampler2D ratioImage;
 
+struct RcdYuvParams {
+    ivec2 cDims;      // crop W/H (RCD domain, full res)
+    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 cChans;     // quad-offset map, channels[] convention
+    vec4 cBlack;      // per-quad-pos black levels
+    vec4 cInvRange;   // per-quad-pos 1/(white-black)
+    int cPitch;       // sensor row stride in pixels
+    int _pad0;
+    ivec2 oDims;      // export W/H (encode domain)
+    vec4 gCcmR;       // WB+exposure-folded CCM row R (CPU-folded)
+    vec4 gCcmG;
+    vec4 gCcmB;
+    vec4 gMisc;       // bypass(0), yStrideW, uvStrideW, uvBaseOffB
+    vec4 gMisc2;      // fullRgb(1), outMode, reserved, 0
+    ivec4 shadeDims;
+    vec4 shadeActive;
+};
+layout(binding = 10) readonly buffer Params { RcdYuvParams u; };
+layout(binding = 9) writeonly buffer P010 { uint words[]; } buf_out;
+#include "rcd_shading.glsl"
+
+
 // Ratio data are already stored in half precision. Preserve those exact
 // values while sharing each neighborhood across the workgroup.
-shared f16vec2 ratioTile[18][18];
+shared f16vec2 ratioTile[gl_WorkGroupSize.y / 2 + 2][gl_WorkGroupSize.x + 2];
 void loadRatioTile() {
+    if (SCALED_OUTPUT) return;
     ivec2 size = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
-    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.x, gl_WorkGroupSize.y / 2) - ivec2(1);
     int tw = int(gl_WorkGroupSize.x) + 2;
-    int th = int(gl_WorkGroupSize.y) + 2;
+    int th = int(gl_WorkGroupSize.y) / 2 + 2;
     uint count = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
     for (uint i = gl_LocalInvocationIndex; i < uint(tw * th); i += count) {
         ivec2 t = ivec2(int(i % uint(tw)), int(i / uint(tw)));
@@ -28,7 +53,8 @@ void loadRatioTile() {
     barrier();
 }
 highp vec2 ratioFetch(ivec2 q) {
-    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    if (SCALED_OUTPUT) return texelFetch(ratioImage, q, 0).rg;
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.x, gl_WorkGroupSize.y / 2) - ivec2(1);
     ivec2 t = q - base;
     return vec2(ratioTile[t.y][t.x]);
 }
@@ -113,23 +139,6 @@ highp vec3 rcdRgbRawAt(ivec2 position, ivec2 ratioSize)
     return rgb;
 }
 
-struct RcdYuvParams {
-    ivec2 cDims;      // crop W/H (RCD domain, full res)
-    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
-    ivec4 cChans;     // quad-offset map, channels[] convention
-    vec4 cBlack;      // per-quad-pos black levels
-    vec4 cInvRange;   // per-quad-pos 1/(white-black)
-    int cPitch;       // sensor row stride in pixels
-    int _pad0;
-    ivec2 oDims;      // export W/H (encode domain)
-    vec4 gCcmR;       // WB+exposure-folded CCM row R (CPU-folded)
-    vec4 gCcmG;
-    vec4 gCcmB;
-    vec4 gMisc;       // bypass(0), yStrideW, uvStrideW, uvBaseOffB
-    vec4 gMisc2;      // fullRgb(1), outMode, reserved, 0
-};
-layout(binding = 10) readonly buffer Params { RcdYuvParams u; };
-layout(binding = 9) writeonly buffer P010 { uint words[]; } buf_out;
 
 vec3 bt709Encode(vec3 v) {
     v = clamp(v, 0.0, 1.0);
@@ -175,7 +184,7 @@ vec3 slogEncode(vec3 v) {
 // ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
 // Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
 vec3 acesFitted(vec3 v) {
-    v = max(v, vec3(0.0));
+    // Keep signed CCM values until the reference fit's final clamp.
     v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
              dot(v, vec3(0.07600,0.90834,0.01566)),
              dot(v, vec3(0.02840,0.13383,0.83777)));
@@ -186,7 +195,7 @@ vec3 acesFitted(vec3 v) {
 }
 vec3 gradeOf(vec3 rgb) {
     vec3 developed = vec3(dot(u.gCcmR.rgb, rgb), dot(u.gCcmG.rgb, rgb), dot(u.gCcmB.rgb, rgb));
-    int mode = int(u.gMisc2.y + 0.5);
+    int mode = OUTPUT_PROFILE;
     if (mode == 3) return pow(acesFitted(developed), vec3(1.0 / 2.4));
     if (mode == 1) return slogEncode(developed);
     if (mode == 2) return hlgEncode(srgbToBt2020(developed));
@@ -214,18 +223,30 @@ uint pack10(float v, float low, float high) {
 
 void main() {
     loadRatioTile();
-    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
-    if (any(greaterThanEqual(block, size))) return;
+    ivec2 block = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y >> 1);
+    ivec2 ratioSize = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    ivec2 size = (u.oDims + 1) >> 1;
+    if (any(greaterThanEqual(block, size)) || gl_GlobalInvocationID.y >= uint(u.oDims.y)) return;
     ivec2 base = block << 1;
     int yStride = int(u.gMisc.y);
-    int mode = int(u.gMisc2.y + 0.5);
-    for (int row = 0; row < 2; ++row) {
+    int mode = OUTPUT_PROFILE;
+    {
+        int row = int(gl_GlobalInvocationID.y & 1u);
         ivec2 position = base + ivec2(0, row);
         // Preserve the source RGBA16F store before applying the unchanged
         // Direct Log grade. This is precision preservation, not fp16 grading.
-        vec3 rgb0 = vec3(f16vec3(rcdRgbRawAt(position, size)));
-        vec3 rgb1 = vec3(f16vec3(rcdRgbRawAt(position + ivec2(1, 0), size)));
+        // Match the separate grade's nearest source mapping and its f32
+        // multiply/divide order, including non-integer scaling ratios.
+        ivec2 source0 = position;
+        ivec2 source1 = position + ivec2(1, 0);
+        if (SCALED_OUTPUT) {
+            source0 = ivec2((vec2(position) + 0.5) * vec2(p.u_dims) / vec2(u.oDims));
+            source1 = ivec2((vec2(position + ivec2(1, 0)) + 0.5) * vec2(p.u_dims) / vec2(u.oDims));
+        }
+        vec3 rgb0 = vec3(f16vec3(rcdRgbRawAt(source0, ratioSize)));
+        vec3 rgb1 = vec3(f16vec3(rcdRgbRawAt(source1, ratioSize)));
+        rgb0 = applyLensShading(rgb0, source0, u.shadeDims, u.shadeActive);
+        rgb1 = applyLensShading(rgb1, source1, u.shadeDims, u.shadeActive);
         vec3 yuv0 = rgbToYuv(gradeOf(rgb0), mode);
         vec3 yuv1 = rgbToYuv(gradeOf(rgb1), mode);
         uint y0 = pack10(yuv0.x, 64.0, 940.0);

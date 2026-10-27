@@ -10,8 +10,7 @@ layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
 layout(set = 0, binding = 7) uniform sampler2D greenImage;
 layout(set = 0, binding = 2, rg16f) uniform writeonly image2D ratioImage;
 
-const int RCD_MAX_MEDIAN_TILE_SIZE = 34;
-shared f16vec2 rcdRatioTile[RCD_MAX_MEDIAN_TILE_SIZE][RCD_MAX_MEDIAN_TILE_SIZE];
+shared f16vec2 rcdRatioTile[gl_WorkGroupSize.y + 2][gl_WorkGroupSize.x + 2];
 
 ivec2 rcdBlockSize()
 {
@@ -46,40 +45,31 @@ f16vec2 median10(
     f16vec2 v0, f16vec2 v1, f16vec2 v2, f16vec2 v3, f16vec2 v4,
     f16vec2 v5, f16vec2 v6, f16vec2 v7, f16vec2 v8, f16vec2 v9)
 {
-    f16vec2 values[10] = f16vec2[10](
-        v0, v1, v2, v3, v4, v5, v6, v7, v8, v9);
-    // Middle-output pruning of the 10-input sorting network documented at
-    // https://bertdobbelaere.github.io/sorting_networks.html#N10L29D8
-    sortPair(values[0], values[8]);
-    sortPair(values[1], values[9]);
-    sortPair(values[2], values[7]);
-    sortPair(values[3], values[5]);
-    sortPair(values[4], values[6]);
+    // v4 and v5 are the same center sample. Sort the eight neighbors,
+    // then insert the duplicated center into the two required middle ranks.
+    f16vec2 values[8] = f16vec2[8](v0, v1, v2, v3, v6, v7, v8, v9);
     sortPair(values[0], values[2]);
-    sortPair(values[1], values[4]);
-    sortPair(values[5], values[8]);
-    sortPair(values[7], values[9]);
-    sortPair(values[0], values[3]);
-    sortPair(values[2], values[4]);
-    sortPair(values[5], values[7]);
-    sortPair(values[6], values[9]);
-    sortPair(values[0], values[1]);
-    sortPair(values[3], values[6]);
-    sortPair(values[8], values[9]);
-    sortPair(values[1], values[5]);
-    sortPair(values[2], values[3]);
-    sortPair(values[4], values[8]);
-    sortPair(values[6], values[7]);
-    sortPair(values[1], values[2]);
-    sortPair(values[3], values[5]);
+    sortPair(values[1], values[3]);
     sortPair(values[4], values[6]);
-    sortPair(values[7], values[8]);
+    sortPair(values[5], values[7]);
+    sortPair(values[0], values[4]);
+    sortPair(values[1], values[5]);
+    sortPair(values[2], values[6]);
+    sortPair(values[3], values[7]);
+    sortPair(values[0], values[1]);
     sortPair(values[2], values[3]);
     sortPair(values[4], values[5]);
     sortPair(values[6], values[7]);
+    sortPair(values[2], values[4]);
+    sortPair(values[3], values[5]);
+    sortPair(values[1], values[4]);
+    sortPair(values[3], values[6]);
+    sortPair(values[1], values[2]);
     sortPair(values[3], values[4]);
     sortPair(values[5], values[6]);
-    return float16_t(0.5) * (values[4] + values[5]);
+    f16vec2 lower = clamp(v4, values[2], values[4]);
+    f16vec2 upper = clamp(v4, values[3], values[5]);
+    return float16_t(0.5) * (lower + upper);
 }
 
 f16vec2 medianRatio()

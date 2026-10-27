@@ -273,15 +273,17 @@ struct ImportedBuffer {
 struct PackedRcdState {
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkPipeline pipelines[4] = {};
+    VkPipeline pipelines[11] = {};
     VkDescriptorPool pool = VK_NULL_HANDLE;
-    VkDescriptorSet sets[4] = {};
+    VkDescriptorSet sets[12] = {};
     VkSampler sampler = VK_NULL_HANDLE;
     VkImage images[3] = {};
     VkImageView views[3] = {};
     VkDeviceMemory memory[3] = {};
     VkQueryPool queries = VK_NULL_HANDLE;
     float stageMs[4] = {};
+    uint32_t stageLocalX[4] = {}, stageLocalY[4] = {};
+    bool tuned = false;
     uint64_t shaderHash = 0;
     uint32_t timestampBits = 0;
     bool yuv = false;
@@ -627,6 +629,8 @@ struct Context {
 };
 
 Context* g = nullptr;
+// Guarded by vkMutex; recorder owns shared pipelines until its take drains.
+static bool recordSessionActive = false;
 
 // Pipeline-cache file set from Kotlin (VulkanPipelineCache). Static: the
 // Context is deleted + recreated across reinit, but the path persists.

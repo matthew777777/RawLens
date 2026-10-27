@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Resources for the separately retained Packed-ratio packed-ratio variant.
+// Resources for the separately retained packed-ratio variant.
 static void destroyPackedRcdImages(Context* ctx) {
     auto& s = ctx->packedRcd;
     for (int i = 0; i < 3; ++i) {
@@ -27,6 +27,7 @@ static void destroyPackedRcd(Context* ctx) {
 static bool ensurePackedRcdImages(Context* ctx, int width, int height) {
     auto& s = ctx->packedRcd;
     if (s.width == width && s.height == height) return true;
+    if (s.width && vkDeviceWaitIdle(ctx->device) != VK_SUCCESS) return false;
     destroyPackedRcdImages(ctx);
     VkPhysicalDeviceMemoryProperties memoryProperties{};
     vkGetPhysicalDeviceMemoryProperties(ctx->gpu, &memoryProperties);
@@ -68,31 +69,41 @@ static bool ensurePackedRcdImages(Context* ctx, int width, int height) {
     return true;
 }
 
-static bool createPackedRcd(Context* ctx, const std::vector<std::vector<uint32_t>>& code, int localX, int localY) {
+static bool createPackedRcd(Context* ctx, const std::vector<std::vector<uint32_t>>& code, int localX, int localY, bool tuned) {
     auto& s = ctx->packedRcd;
-    s.localX = localX; s.localY = localY;
-    VkDescriptorSetLayoutBinding bindings[7]{};
-    const uint32_t ids[7] = {0, 2, 6, 7, 8, 9, 10};
-    for (int i = 0; i < 7; ++i) {
+    s.localX = localX; s.localY = localY; s.tuned = tuned;
+    for (int stage = 0; stage < 4; ++stage) {
+        s.stageLocalX[stage] = localX;
+        s.stageLocalY[stage] = tuned && stage == 0 ? std::min(localY, 16) :
+            tuned && stage == 2 ? std::min(localY, 8) : localY;
+    }
+    VkDescriptorSetLayoutBinding bindings[8]{};
+    const uint32_t ids[8] = {0, 2, 6, 7, 8, 9, 10, 4};
+    for (int i = 0; i < 8; ++i) {
         bindings[i].binding = ids[i]; bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        bindings[i].descriptorType = (i == 0 || i >= 5) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER :
+        bindings[i].descriptorType = (i == 0 || i == 5 || i == 6) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER :
             i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     }
     VkDescriptorSetLayoutCreateInfo setInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    setInfo.bindingCount = 7; setInfo.pBindings = bindings;
+    setInfo.bindingCount = 8; setInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &s.setLayout) != VK_SUCCESS) return false;
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RcdParams)};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout.setLayoutCount = 1; layout.pSetLayouts = &s.setLayout;
     layout.pushConstantRangeCount = 1; layout.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(ctx->device, &layout, nullptr, &s.layout) != VK_SUCCESS) return false;
-    const uint32_t local[2] = {(uint32_t)localX, (uint32_t)localY};
-    const VkSpecializationMapEntry entries[2] = {{12, 0, 4}, {13, 4, 4}};
-    VkSpecializationInfo specialization{2, entries, sizeof(local), local};
-    for (int i = 0; i < 4; ++i) {
+    const VkSpecializationMapEntry entries[4] = {{12, 0, 4}, {13, 4, 4}, {14, 8, 4}, {15, 12, 4}};
+    // Specialize only the output profile; the arithmetic within each profile
+    // remains unchanged, while unused transfer functions can be eliminated.
+    for (int i = 0; i < 11; ++i) {
+        const auto& source = code[std::min(i, 3)];
+        const int stage = std::min(i, 3);
+        const uint32_t constants[4] = {s.stageLocalX[stage], s.stageLocalY[stage],
+            (uint32_t)(std::max(i - 3, 0) % 4), i >= 7 ? 1u : 0u};
+        VkSpecializationInfo specialization{4, entries, sizeof(constants), constants};
         VkShaderModuleCreateInfo moduleInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        moduleInfo.codeSize = code[i].size() * 4; moduleInfo.pCode = code[i].data();
+        moduleInfo.codeSize = source.size() * 4; moduleInfo.pCode = source.data();
         VkShaderModule module = VK_NULL_HANDLE;
         if (vkCreateShaderModule(ctx->device, &moduleInfo, nullptr, &module) != VK_SUCCESS) return false;
         VkComputePipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -104,14 +115,15 @@ static bool createPackedRcd(Context* ctx, const std::vector<std::vector<uint32_t
         vkDestroyShaderModule(ctx->device, module, nullptr);
         if (result != VK_SUCCESS) return false;
     }
-    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12}};
+    VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 36},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12}, {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 48}};
     VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool.maxSets = 4; pool.poolSizeCount = 3; pool.pPoolSizes = sizes;
+    pool.maxSets = 12; pool.poolSizeCount = 3; pool.pPoolSizes = sizes;
     if (vkCreateDescriptorPool(ctx->device, &pool, nullptr, &s.pool) != VK_SUCCESS) return false;
-    VkDescriptorSetLayout layouts[4] = {s.setLayout, s.setLayout, s.setLayout, s.setLayout};
+    VkDescriptorSetLayout layouts[12];
+    for (auto& entry : layouts) entry = s.setLayout;
     VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    allocate.descriptorPool = s.pool; allocate.descriptorSetCount = 4; allocate.pSetLayouts = layouts;
+    allocate.descriptorPool = s.pool; allocate.descriptorSetCount = 12; allocate.pSetLayouts = layouts;
     if (vkAllocateDescriptorSets(ctx->device, &allocate, s.sets) != VK_SUCCESS) return false;
     VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;

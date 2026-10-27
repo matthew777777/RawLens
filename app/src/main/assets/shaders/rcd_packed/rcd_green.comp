@@ -10,11 +10,9 @@ layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
 layout(set = 0, binding = 6) uniform sampler2D guideImage;
 layout(set = 0, binding = 2, rg16f) uniform writeonly image2D greenImage;
 
-const int RCD_MAX_LOCAL_SIZE = 16;
 const int RCD_GREEN_HALO = 4;
-const int RCD_GREEN_TILE_SIZE = RCD_MAX_LOCAL_SIZE * 2 + RCD_GREEN_HALO * 2;
 
-shared float16_t rcdGreenCfaTile[RCD_GREEN_TILE_SIZE][RCD_GREEN_TILE_SIZE];
+shared float16_t rcdGreenCfaTile[gl_WorkGroupSize.y * 2 + 8][gl_WorkGroupSize.x * 2 + 8];
 
 float16_t rcdRawNormalizedF16(ivec2 position)
 {
