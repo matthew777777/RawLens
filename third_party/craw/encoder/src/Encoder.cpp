@@ -411,6 +411,199 @@ size_t encodeTileLive(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, u
     return 5 + nibBytes + dataBytes;
 }
 
+// ---- codec 3: CRAW-Live v2 (SPEC 3.7) --------------------------------------
+
+constexpr int kPforTag = 14;  // first nibble: 0..13 plain width, 14 PFOR, 15 escape (14 + next)
+constexpr int kPforMaxExceptions = 15;
+
+inline void widthNibbles(NibbleWriter& nw, int v) {  // 0..14 direct, else 15 + (v - 15)
+    if (v < 15) nw.put(static_cast<uint8_t>(v));
+    else { nw.put(15); nw.put(static_cast<uint8_t>(v - 15)); }
+}
+
+// Codes one plane row of zigzag residuals as plain or PFOR blocks.
+template <typename T>
+inline void packAny(LiveBits& lb, const T* q, uint32_t n, int w) {
+    if constexpr (sizeof(T) == 2) {
+        packBlock(lb, q, n, w);
+    } else {
+        for (uint32_t i = 0; i < n; ++i) lb.put(q[i], w);
+        lb.align();
+    }
+}
+
+template <typename T>
+inline void pforRow(LiveBits& lb, NibbleWriter& nw, const T* u, uint32_t tw, bool pfor) {
+    for (uint32_t x0 = 0; x0 < tw; x0 += kBlock) {
+        const uint32_t n = std::min<uint32_t>(kBlock, tw - x0);
+        const T* q = u + x0;
+        // exceptions(k) = number of values >= 2^k.
+        uint32_t mx = 0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        const bool vec = sizeof(T) == 2 && n == kBlock;
+        uint16x8_t va = vdupq_n_u16(0), vb = vdupq_n_u16(0);
+        if constexpr (sizeof(T) == 2) {
+            if (vec) {
+                va = vld1q_u16(reinterpret_cast<const uint16_t*>(q));
+                vb = vld1q_u16(reinterpret_cast<const uint16_t*>(q) + 8);
+                mx = vmaxvq_u16(vmaxq_u16(va, vb));
+            }
+        }
+        if (!vec)
+#endif
+            for (uint32_t i = 0; i < n; ++i) mx = std::max<uint32_t>(mx, q[i]);
+        auto countAtLeast = [&](uint32_t t) -> int {
+#if defined(__ARM_NEON) && defined(__aarch64__)
+            if (vec) {
+                const uint16x8_t th = vdupq_n_u16(static_cast<uint16_t>(t));
+                const uint16x8_t c = vaddq_u16(vshrq_n_u16(vcgeq_u16(va, th), 15), vshrq_n_u16(vcgeq_u16(vb, th), 15));
+                return vaddvq_u16(c);
+            }
+#endif
+            int c = 0;
+            for (uint32_t i = 0; i < n; ++i) c += q[i] >= t;
+            return c;
+        };
+        const int bw = static_cast<int>(std::bit_width(mx));
+        int bestCost = static_cast<int>(n) * bw + (bw < kPforTag ? 4 : 8), bestK = -1, bestExc = 0;
+        for (int k = bw - 1; pfor && k >= std::max(0, bw - 8); --k) {
+            const int above = countAtLeast(1u << k);
+            if (above > kPforMaxExceptions) break;
+            const int hb = bw - k;
+            const int cost = static_cast<int>(n) * k + 4 + (k < 15 ? 4 : 8) + 4 + (hb < 15 ? 4 : 8) + above * (4 + hb);
+            if (cost < bestCost) { bestCost = cost; bestK = k; bestExc = above; }
+        }
+        if (bestK < 0) {  // plain block
+            if (bw < kPforTag) nw.put(static_cast<uint8_t>(bw));
+            else { nw.put(15); nw.put(static_cast<uint8_t>(bw - kPforTag)); }
+            if (bw) packAny(lb, q, n, bw);
+            continue;
+        }
+        const int k = bestK, hb = bw - k;
+        nw.put(kPforTag);
+        widthNibbles(nw, k);
+        nw.put(static_cast<uint8_t>(bestExc));
+        widthNibbles(nw, hb);
+        T low[kBlock];
+        uint32_t high[kBlock];
+        int ne = 0;
+        const uint32_t mask = (1u << k) - 1;
+        for (uint32_t i = 0; i < n; ++i) {
+            low[i] = static_cast<T>(q[i] & mask);
+            if (q[i] >> k) { nw.put(static_cast<uint8_t>(i)); high[ne++] = static_cast<uint32_t>(q[i] >> k); }
+        }
+        if (k) packAny(lb, low, n, k);
+        for (int e = 0; e < ne; ++e) lb.put(high[e], hb);
+        lb.align();
+    }
+}
+
+// One fused pass per tile: 4-neighbour average prediction within each colour
+// plane (SPEC 3.7), zigzag, PFOR blocks. Rows of the tile, cells (py, px) in order.
+size_t encodeTileLive2(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th, uint8_t* out,
+                       uint16_t& maxSample) {
+    thread_local std::vector<uint16_t> ubuf;
+    ubuf.resize(2 * (size_t{tw} + 16));
+    uint16_t* u0 = ubuf.data();
+    uint16_t* u1 = ubuf.data() + tw + 16;
+    const int32_t first = 1 << (j.d->bitDepth - 1);
+    const bool narrow = j.d->bitDepth <= 15;  // 16-bit zigzag residuals
+    const size_t maxNib = (size_t{4} * th * ((tw + kBlock - 1) / kBlock) * 24 + 1) / 2;
+    uint8_t* const nibBegin = out + 5;
+    uint8_t* const blocks = out + 5 + maxNib;
+    LiveBits lb{blocks};
+    NibbleWriter nw{nibBegin};
+    uint16_t mx = maxSample;
+    auto zz = [](int32_t e) { return static_cast<uint16_t>(e >= 0 ? 2 * e : -2 * e - 1); };
+    for (uint32_t y = 0; y < th; ++y) {
+        for (int py = 0; py < 2; ++py) {
+            const uint16_t* src = j.raw + (2 * (ty + y) + py) * j.stride + 2 * tx;
+            const uint16_t* up = src - 2 * j.stride;
+            auto at = [&](const uint16_t* row, uint32_t x, int px) { return int32_t{row[2 * x + px]}; };
+            if (!narrow) {
+                // 16-bit samples: 17-bit residuals, scalar 32-bit path.
+                thread_local std::vector<uint32_t> w32;
+                w32.resize(tw);
+                auto zz32 = [](int32_t e) { return e >= 0 ? 2u * uint32_t(e) : 2u * uint32_t(-e) - 1u; };
+                for (int px = 0; px < 2; ++px) {
+                    for (uint32_t x = 0; x < tw; ++x) {
+                        int32_t pred;
+                        if (y == 0) pred = x == 0 ? first : at(src, x - 1, px);
+                        else if (x == 0) pred = at(up, 0, px);
+                        else {
+                            const int32_t U = at(up, x, px);
+                            pred = (at(src, x - 1, px) + U + at(up, x - 1, px) + (x + 1 < tw ? at(up, x + 1, px) : U) + 2) >> 2;
+                        }
+                        w32[x] = zz32(at(src, x, px) - pred);
+                    }
+                    pforRow(lb, nw, w32.data(), tw, j.d->pfor);
+                }
+                for (uint32_t x = 0; x < 2 * tw; ++x) mx = std::max(mx, src[x]);
+                continue;
+            }
+            if (y == 0) {
+                for (int px = 0; px < 2; ++px) {
+                    uint16_t* u = px ? u1 : u0;
+                    u[0] = zz(at(src, 0, px) - first);
+                    for (uint32_t x = 1; x < tw; ++x) u[x] = zz(at(src, x, px) - at(src, x - 1, px));
+                }
+                for (uint32_t x = 0; x < 2 * tw; ++x) mx = std::max(mx, src[x]);
+            } else {
+                mx = std::max({mx, src[0], src[1]});
+                u0[0] = zz(at(src, 0, 0) - at(up, 0, 0));
+                u1[0] = zz(at(src, 0, 1) - at(up, 0, 1));
+                uint32_t x = 1;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Interior (x + 1 < tw keeps the up-right neighbour in the tile); one
+                // set of deinterleaving loads serves both cells of the raw row.
+                const uint32x4_t two = vdupq_n_u32(2);
+                auto predict = [&](uint16x8_t L, uint16x8_t U, uint16x8_t UL, uint16x8_t UR) {
+                    const uint32x4_t sl = vaddq_u32(vaddq_u32(vaddl_u16(vget_low_u16(L), vget_low_u16(U)),
+                                                              vaddl_u16(vget_low_u16(UL), vget_low_u16(UR))), two);
+                    const uint32x4_t sh = vaddq_u32(vaddq_u32(vaddl_high_u16(L, U), vaddl_high_u16(UL, UR)), two);
+                    return vcombine_u16(vshrn_n_u32(sl, 2), vshrn_n_u32(sh, 2));
+                };
+                auto zzv = [](uint16x8_t v, uint16x8_t pred) {
+                    const int16x8_t e = vreinterpretq_s16_u16(vsubq_u16(v, pred));
+                    return vreinterpretq_u16_s16(veorq_s16(vshlq_n_s16(e, 1), vshrq_n_s16(e, 15)));
+                };
+                uint16x8_t vmx = vdupq_n_u16(mx);
+                for (; x + 8 < tw; x += 8) {
+                    const uint16x8x2_t cur = vld2q_u16(src + 2 * x);
+                    vmx = vmaxq_u16(vmx, vmaxq_u16(cur.val[0], cur.val[1]));
+                    const uint16x8x2_t l = vld2q_u16(src + 2 * x - 2);
+                    const uint16x8x2_t uu = vld2q_u16(up + 2 * x);
+                    const uint16x8x2_t ul = vld2q_u16(up + 2 * x - 2);
+                    const uint16x8x2_t ur = vld2q_u16(up + 2 * x + 2);
+                    vst1q_u16(u0 + x, zzv(cur.val[0], predict(l.val[0], uu.val[0], ul.val[0], ur.val[0])));
+                    vst1q_u16(u1 + x, zzv(cur.val[1], predict(l.val[1], uu.val[1], ul.val[1], ur.val[1])));
+                }
+                mx = vmaxvq_u16(vmx);
+#endif
+                for (; x < tw; ++x)
+                    for (int px = 0; px < 2; ++px) {
+                        mx = std::max(mx, src[2 * x + px]);
+                        const int32_t L = at(src, x - 1, px), U = at(up, x, px), UL = at(up, x - 1, px);
+                        const int32_t UR = x + 1 < tw ? at(up, x + 1, px) : U;
+                        (px ? u1 : u0)[x] = zz(at(src, x, px) - ((L + U + UL + UR + 2) >> 2));
+                    }
+            }
+            if (narrow) {
+                pforRow(lb, nw, u0, tw, j.d->pfor);
+                pforRow(lb, nw, u1, tw, j.d->pfor);
+            }
+        }
+    }
+    maxSample = mx;
+    const size_t nibBytes = nw.finish(nibBegin);
+    out[0] = 0;
+    out[1] = uint8_t(nibBytes); out[2] = uint8_t(nibBytes >> 8);
+    out[3] = uint8_t(nibBytes >> 16); out[4] = uint8_t(nibBytes >> 24);
+    const size_t dataBytes = static_cast<size_t>(lb.out - blocks);
+    std::memmove(out + 5 + nibBytes, blocks, dataBytes);
+    return 5 + nibBytes + dataBytes;
+}
+
 // Splits a tile into the four coded planes (SPEC 3.2): G1, G2-G1, R-G1, B-G1,
 // and tracks the largest raw sample for the bit-depth check.
 void extractTile(const TileJob& j, const int* L, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
@@ -480,15 +673,16 @@ size_t scratchBytes(uint32_t tile);
 void encodeTile(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
                 std::vector<int32_t>& planes, std::vector<uint32_t>& u, std::vector<int64_t>& sums,
                 uint8_t* scratch, TileBuf& out, uint16_t& maxSample) {
-    if (j.d->codec == 2) {
+    if (j.d->codec == 2 || j.d->codec == 3) {
         const size_t n = size_t{tw} * th;
         // Encode in place into the tile buffer (no copy).
         (void)scratch;
         // At most 17 bits/sample, byte aligned, plus two width nibbles.
         // Avoid retaining the much larger Rice bound for every Live tile.
         const size_t blocks = size_t{4} * th * ((tw + kBlock - 1) / kBlock);
-        uint8_t* dst = out.reserve(5 + blocks * 35);
-        const size_t coded = encodeTileLive(j, tx, ty, tw, th, dst, u, maxSample);
+        uint8_t* dst = out.reserve(5 + blocks * (j.d->codec == 3 ? 48 : 35));
+        const size_t coded = j.d->codec == 3 ? encodeTileLive2(j, tx, ty, tw, th, dst, maxSample)
+                                             : encodeTileLive(j, tx, ty, tw, th, dst, u, maxSample);
         const size_t stored = 1 + 8 * n;
         if (coded < stored) {
             out.size = coded;
@@ -575,7 +769,7 @@ template <typename Emit>
 void encodeTiles(const uint16_t* raw, size_t stride, const FrameDesc& d, unsigned threads, Emit&& emit) {
     if (!raw || d.width == 0 || d.height == 0 || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || d.tile == 0 || stride < d.width ||
-        static_cast<int>(d.cfa) > 3 || (d.codec != 1 && d.codec != 2))
+        static_cast<int>(d.cfa) > 3 || (d.codec < 1 || d.codec > 3))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
 
     const uint32_t pw = d.width / 2, ph = d.height / 2;
@@ -661,7 +855,7 @@ size_t encodeSerialInto(const uint16_t* raw, size_t stride, const FrameDesc& d,
                         uint8_t* dst, size_t capacity) {
     if (!raw || !d.width || !d.height || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || !d.tile || stride < d.width ||
-        static_cast<int>(d.cfa) > 3 || (d.codec != 1 && d.codec != 2))
+        static_cast<int>(d.cfa) > 3 || (d.codec < 1 || d.codec > 3))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
     const uint32_t pw = d.width / 2, ph = d.height / 2;
     const uint32_t nx = (pw + d.tile - 1) / d.tile, ny = (ph + d.tile - 1) / d.tile;

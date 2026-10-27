@@ -21,12 +21,16 @@ struct FrameDesc {
     uint16_t tile = 128;     // tile edge in plane samples
     uint16_t riceInit = 0;   // 0 = default noise class for bitDepth (codec 1)
     // 1 = CRAW-Fast (block-adaptive Rice, smallest files),
-    // 2 = CRAW-Live (fixed-width block packing, ~3x cheaper; for live capture).
+    // 2 = CRAW-Live (fixed-width block packing, ~3x cheaper; for live capture),
+    // 3 = CRAW-Live v2 (4-neighbour prediction, same packing; 4-11 % smaller than 2).
     uint8_t codec = 1;
     // Store a CRC32C of the raw samples in the frame header. The container's
     // per-chunk CRC32C covers the payload either way; turning this off saves a
     // full pass over the frame (live capture).
     bool frameCrc = true;
+    // Codec 3 only: search patched (PFOR) blocks. ~0.2-0.5 % smaller files for
+    // about twice the encode time; off for live capture.
+    bool pfor = false;
 };
 
 uint16_t defaultRiceInit(uint8_t bitDepth);
