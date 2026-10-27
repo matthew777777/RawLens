@@ -304,6 +304,35 @@ Platform adaptations and exact source ranges are documented in
 `docs/refactor/raw-exposure-assist-audit.md`; original excerpts are retained
 under `docs/refactor/upstream/`. No Canon firmware or profiles are bundled.
 
+RawLens's ETTR (`MagicLanternEttr.kt`) ports `auto_ettr_get_correction` from
+`modules/ettr/ettr.c` at the same commit (single-ISO path: percentile
+targets, overexposure extrapolation, SNR limits). GPL-2.0-or-later,
+Copyright (C) Magic Lantern Team.
+
+## libcamera (Raspberry Pi AGC)
+
+PROGRAM auto exposure (`ProgramAgc.kt`, `ProgramAeLoop.kt`) ports the
+Raspberry Pi AGC channel and histogram helpers from libcamera commit
+`0bf3fc5` (`src/ipa/rpi/controller/rpi/agc_channel.cpp`,
+`src/ipa/libipa/histogram.cpp`) with the imx477 default tuning values.
+Copyright (C) 2019, 2023 Raspberry Pi Ltd, BSD-2-Clause; license text bundled
+as `app/src/main/assets/licenses/BSD-2-Clause-libcamera.txt`.
+https://gitlab.freedesktop.org/camera/libcamera
+
+## Open Camera (flash precapture)
+
+The flash precapture wait (`FlashPrecapture.kt`: AE must enter PRECAPTURE
+within 2 s, then leave it within 3 s) follows Open Camera's
+`CameraController2` at commit `0dd4cbe`. Open Camera, Copyright Mark Harman,
+GPL-3.0-or-later. https://sourceforge.net/projects/opencamera/
+
+## BakingLab ACES fit (Direct Log ACES profile)
+
+The Direct Log ACES look (`VfLogGrade.kt` and the direct-video grade
+shaders) uses Stephen Hill's fitted ACES RRT/ODT from TheRealMJP/BakingLab
+`ACES.hlsl`. Copyright (c) 2016 MJP, MIT License; license text bundled as
+`app/src/main/assets/licenses/bakinglab-aces.txt`.
+
 ## Google Turbo colormap
 
 `TurboColormap.kt` ports the GLSL polynomial approximation by Anton Mikhailov

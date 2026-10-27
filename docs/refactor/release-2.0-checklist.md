@@ -288,13 +288,14 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
       extends F1 (e.g. 95+ only), same raw-value basis.
 
 ## E. Build and release
-- [ ] E19 [2.0] Owner's uncommitted UI files (MainActivity, manifest,
-      activity_main, ScopeStyle, ic_gallery).
+- [x] E19 [2.0] Uncommitted work committed in topical commits 2026-10-27
+      (bae736a, e147592, 57922e7, 7dcbf90).
 - [ ] E20 [2.0.x] androidx.core pin 1.9.0 vs declared 1.19.1 (device tests).
 - [ ] E21 [2.0.x] android.newDsl=false -> listenToArtifacts (before AGP 10).
-- [ ] E22 [2.0] Full on-device suite vs the original build (deviceTest), plus
+- [ ] E22 [2.0] (PARKED by owner 2026-10-27 until they say go) Full on-device suite vs the original build (deviceTest), plus
       a smoke run of the minified release APK.
-- [ ] E23 [2.0] NOTICE (drop GALOSH; add libcamera / Magic Lantern if ported;
+- [x] E23 [2.0] (done 2026-10-27: NOTICE adds libcamera, Open Camera, ML ETTR,
+      BakingLab; CHANGELOG 2.0.0 since 1.0.192; RELEASE_NOTES_2.0.md) NOTICE (drop GALOSH; add libcamera / Magic Lantern if ported;
       H-J maker items are mimicry + user-imported data, so add entries only
       if code is actually ported, e.g. H4), CHANGELOG and 2.0 release notes.
 - [ ] E24 [2.0] Version 2.0.0, merge refactor/2.0 -> main, tag, attach the

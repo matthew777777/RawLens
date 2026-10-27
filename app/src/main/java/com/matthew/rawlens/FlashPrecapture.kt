@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 RawLens contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Precapture wait follows Open Camera CameraController2 @ 0dd4cbe: Copyright Mark Harman,
+// GPL-3.0-or-later (NOTICE.md).
 
 package com.matthew.rawlens
 
