@@ -1,8 +1,11 @@
 Source: https://github.com/matthew777777/tinydng
-Commit: 1f181699511e08e51baabd9fdab2311ea1253d4b
+Base commit: 1f181699511e08e51baabd9fdab2311ea1253d4b
 
 Vendored C11 v3 core and lossless JPEG codec; ZIP, baseline JPEG, PSD and threading disabled.
-rawlens.patch adds checked extra TIFF fields to the writer and increases its tag capacity.
-Upstream v3 parses NoiseProfile/GainMap but does not emit them; the app supplies these
-and full Camera2 calibration as serialized extra fields. Duplicate generated tags fail.
-Reproduce by copying the named upstream files and applying this patch with patch -p1.
+rawlens.patch records the writer metadata/streaming extensions now ported upstream:
+checked TIFF fields, EXIF/GPS directories, sequential header-first strips and
+precompressed JPEG XL (DNG 1.7). The upstream port also fixes directory allocation
+cleanup, header-first flush/completeness handling and JXL version validation.
+Camera2 metadata conversion and JPEG XL encoding remain in RawLens.
+UPSTREAM.json retains hashes of the base sources; reproduce by copying those
+sources and applying rawlens.patch with patch -p1.
