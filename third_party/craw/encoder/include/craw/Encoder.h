@@ -11,7 +11,9 @@
 
 namespace craw {
 
-enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3 };
+// RGB (SPEC 3.8): a W x H RGB image stored as a 2W x 2H cell frame, cells
+// (0,0)=R, (0,1)=G, (1,0)=B, (1,1)=0. Codecs 2 and 3 only.
+enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3, RGB = 4 };
 
 struct FrameDesc {
     uint32_t width = 0;      // even

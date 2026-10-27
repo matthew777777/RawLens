@@ -219,7 +219,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
             }
         })
-        content.addView(sectionDesc("2x2 sensor binning for smaller, cleaner .craw: centre-aligned (triangle-weighted R/B, ring-weighted green) so the half-resolution Bayer grid stays regular. Applies to the next take; N/A in Direct Log."))
+        content.addView(sectionDesc("Half-resolution RGB: each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic and show no magenta/green fringes. Cleaner and smaller than full resolution. Applies to the next take; N/A in Direct Log."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(CheckBox(this).apply {
             text = "Lock exposure on record"
