@@ -1,0 +1,148 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd/rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(set = 0, binding = 6) uniform sampler2D guideImage;
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D greenImage;
+
+const int RCD_MAX_LOCAL_SIZE = 16;
+const int RCD_GREEN_HALO = 4;
+const int RCD_GREEN_TILE_SIZE = RCD_MAX_LOCAL_SIZE * 2 + RCD_GREEN_HALO * 2;
+
+shared float16_t rcdGreenCfaTile[RCD_GREEN_TILE_SIZE][RCD_GREEN_TILE_SIZE];
+
+float16_t rcdRawNormalizedF16(ivec2 position)
+{
+    return float16_t(getRaw(position));
+}
+int rcdPackedChannel(ivec2 position)
+{
+    return ((position.y & 1) << 1) | (position.x & 1);
+}
+
+highp float guideVh(ivec2 position)
+{
+    position = clamp(
+        position, ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    return texelFetch(guideImage, position >> 1, 0)[rcdPackedChannel(position)];
+}
+
+highp float greenTileAt(int x, int y, int dx, int dy)
+{
+    return float(rcdGreenCfaTile[y + dy][x + dx]);
+}
+
+highp float guideLpfTile(int x, int y)
+{
+    return greenTileAt(x, y, 0, 0) +
+           0.5 * (greenTileAt(x, y, 0, -1) + greenTileAt(x, y, 0, 1) +
+                  greenTileAt(x, y, -1, 0) + greenTileAt(x, y, 1, 0)) +
+           0.25 * (greenTileAt(x, y, -1, -1) + greenTileAt(x, y, 1, -1) +
+                   greenTileAt(x, y, -1, 1) + greenTileAt(x, y, 1, 1));
+}
+
+highp float rcdVHDisc(ivec2 position)
+{
+    highp float center = guideVh(position);
+    highp float diagonal = 0.25 * (
+        guideVh(position + ivec2(-1, -1)) +
+        guideVh(position + ivec2(1, -1)) +
+        guideVh(position + ivec2(-1, 1)) +
+        guideVh(position + ivec2(1, 1)));
+    return abs(0.5 - center) < abs(0.5 - diagonal) ? diagonal : center;
+}
+
+highp float rcdGreenAtTile(ivec2 position, int x, int y)
+{
+    if (rcdIsGreen(position))
+        return greenTileAt(x, y, 0, 0);
+
+    highp float center = greenTileAt(x, y, 0, 0);
+    highp float n1 = greenTileAt(x, y, 0, -1);
+    highp float n2 = greenTileAt(x, y, 0, -2);
+    highp float n3 = greenTileAt(x, y, 0, -3);
+    highp float n4 = greenTileAt(x, y, 0, -4);
+    highp float s1 = greenTileAt(x, y, 0, 1);
+    highp float s2 = greenTileAt(x, y, 0, 2);
+    highp float s3 = greenTileAt(x, y, 0, 3);
+    highp float s4 = greenTileAt(x, y, 0, 4);
+    highp float w1 = greenTileAt(x, y, -1, 0);
+    highp float w2 = greenTileAt(x, y, -2, 0);
+    highp float w3 = greenTileAt(x, y, -3, 0);
+    highp float w4 = greenTileAt(x, y, -4, 0);
+    highp float e1 = greenTileAt(x, y, 1, 0);
+    highp float e2 = greenTileAt(x, y, 2, 0);
+    highp float e3 = greenTileAt(x, y, 3, 0);
+    highp float e4 = greenTileAt(x, y, 4, 0);
+
+    highp float nGradient = RCD_EPS +
+        abs(n1 - s1) + abs(center - n2) + abs(n1 - n3) + abs(n2 - n4);
+    highp float sGradient = RCD_EPS +
+        abs(n1 - s1) + abs(center - s2) + abs(s1 - s3) + abs(s2 - s4);
+    highp float wGradient = RCD_EPS +
+        abs(w1 - e1) + abs(center - w2) + abs(w1 - w3) + abs(w2 - w4);
+    highp float eGradient = RCD_EPS +
+        abs(w1 - e1) + abs(center - e2) + abs(e1 - e3) + abs(e2 - e4);
+
+    highp float lpf = guideLpfTile(x, y);
+    highp float twiceLpf = lpf + lpf;
+    highp float north = n1 * twiceLpf /
+        (RCD_EPS + lpf + guideLpfTile(x, y - 2));
+    highp float south = s1 * twiceLpf /
+        (RCD_EPS + lpf + guideLpfTile(x, y + 2));
+    highp float west = w1 * twiceLpf /
+        (RCD_EPS + lpf + guideLpfTile(x - 2, y));
+    highp float east = e1 * twiceLpf /
+        (RCD_EPS + lpf + guideLpfTile(x + 2, y));
+
+    highp float vertical = clamp(
+        sGradient / (nGradient + sGradient) * north +
+        (1.0 - sGradient / (nGradient + sGradient)) * south,
+        0.0, 1.0);
+    highp float horizontal = clamp(
+        wGradient / (wGradient + eGradient) * east +
+        (1.0 - wGradient / (wGradient + eGradient)) * west,
+        0.0, 1.0);
+    highp float direction = rcdVHDisc(position);
+    return vertical + direction * (horizontal - vertical);
+}
+
+void main()
+{
+    ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+    int blockWidth = (RCD_WIDTH + 1) >> 1;
+    int blockHeight = (RCD_HEIGHT + 1) >> 1;
+    ivec2 localSize = ivec2(gl_WorkGroupSize.xy);
+    ivec2 groupFullBase =
+        ivec2(gl_WorkGroupID.xy) * localSize * 2 - ivec2(RCD_GREEN_HALO);
+    int tileWidth = localSize.x * 2 + RCD_GREEN_HALO * 2;
+    int tileHeight = localSize.y * 2 + RCD_GREEN_HALO * 2;
+    uint localCount = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint index = gl_LocalInvocationIndex;
+         index < uint(tileWidth * tileHeight);
+         index += localCount) {
+        ivec2 tilePosition = ivec2(
+            int(index % uint(tileWidth)), int(index / uint(tileWidth)));
+        rcdGreenCfaTile[tilePosition.y][tilePosition.x] =
+            rcdRawNormalizedF16(groupFullBase + tilePosition);
+    }
+    barrier();
+
+    if (position.x >= blockWidth || position.y >= blockHeight)
+        return;
+
+    ivec2 base = position << 1;
+    ivec2 redPosition = clamp(
+        base + rcdRedOffset(), ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    ivec2 bluePosition = clamp(
+        base + rcdBlueOffset(), ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    ivec2 redLocal = redPosition - groupFullBase;
+    ivec2 blueLocal = bluePosition - groupFullBase;
+    f16vec2 green = f16vec2(
+        rcdGreenAtTile(redPosition, redLocal.x, redLocal.y),
+        rcdGreenAtTile(bluePosition, blueLocal.x, blueLocal.y));
+    imageStore(greenImage, position, vec4(green, 0.0, 1.0));
+}

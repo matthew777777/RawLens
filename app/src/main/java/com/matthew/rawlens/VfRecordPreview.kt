@@ -21,15 +21,18 @@ internal object VfRecordPreview {
     const val PREVIEW_BOX = 4
 
     /**
-     * Preview dims for an encode size: quarter res per axis, floored to
-     * even (the chroma grid is half-res). 3840x2160 -> 960x540.
+     * Prefer quarter-size monitoring. Cropped encodes may only divide by
+     * two (e.g. 3840x1606); odd RGBA output heights are valid. Keep the
+     * integer box exact so chroma stays aligned and take start cannot fail.
      */
     fun previewDims(width: Int, height: Int): IntArray {
-        require(width > 0 && height > 0) { "encode size must be positive" }
-        return intArrayOf(evenFloor(width / PREVIEW_BOX), evenFloor(height / PREVIEW_BOX))
+        require(width > 0 && height > 0 && width % 2 == 0 && height % 2 == 0) {
+            "encode dimensions must be positive and even"
+        }
+        val box = if (width % PREVIEW_BOX == 0 && height % PREVIEW_BOX == 0)
+            PREVIEW_BOX else 2
+        return intArrayOf(width / box, height / box)
     }
-
-    private fun evenFloor(v: Int): Int = v / 2 * 2
 
     /**
      * Downsample box the native submit validates: both axes must scale by

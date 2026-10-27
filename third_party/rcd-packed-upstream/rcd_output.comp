@@ -1,0 +1,106 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd/rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 7) uniform sampler2D greenImage;
+layout(set = 0, binding = 8) uniform sampler2D ratioImage;
+
+highp float rcdGreenAt(ivec2 position, ivec2 ratioSize)
+{
+    position = clamp(
+        position, ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    int color = rcdFc(position);
+    if (color == CFA_GREEN)
+        return getRaw(position);
+    ivec2 blockPosition = clamp(
+        position >> 1, ivec2(0), ratioSize - ivec2(1));
+    f16vec2 greens = f16vec2(texelFetch(greenImage, blockPosition, 0).rg);
+    return color == CFA_RED ? greens.r : greens.g;
+}
+
+highp vec2 rcdFetchBlockRatiosNearest(highp vec2 position, ivec2 ratioSize)
+{
+    ivec2 integerPosition = clamp(
+        ivec2(floor(position + vec2(0.5))),
+        ivec2(0), ratioSize - ivec2(1));
+    return vec2(f16vec2(texelFetch(ratioImage, integerPosition, 0).rg));
+}
+
+highp vec2 rcdSampleBlockRatios(highp vec2 position, ivec2 ratioSize)
+{
+    highp vec2 clamped = clamp(
+        position, vec2(0.0), vec2(ratioSize - ivec2(1)));
+    ivec2 lower = ivec2(floor(clamped));
+    ivec2 upper = min(lower + ivec2(1), ratioSize - ivec2(1));
+    highp vec2 fraction = clamped - vec2(lower);
+    highp vec2 topLeft = vec2(f16vec2(
+        texelFetch(ratioImage, lower, 0).rg));
+    highp vec2 topRight = vec2(f16vec2(
+        texelFetch(ratioImage, ivec2(upper.x, lower.y), 0).rg));
+    highp vec2 bottomLeft = vec2(f16vec2(
+        texelFetch(ratioImage, ivec2(lower.x, upper.y), 0).rg));
+    highp vec2 bottomRight = vec2(f16vec2(
+        texelFetch(ratioImage, upper, 0).rg));
+    return mix(
+        mix(topLeft, topRight, fraction.x),
+        mix(bottomLeft, bottomRight, fraction.x),
+        fraction.y);
+}
+
+highp vec2 rcdRatiosAt(ivec2 position, ivec2 ratioSize)
+{
+    ivec2 fullSize = ratioSize << 1;
+    ivec2 clamped = clamp(position, ivec2(0), fullSize - ivec2(1));
+    highp vec2 redRatioPosition =
+        (vec2(clamped) - vec2(rcdRedOffset())) * 0.5;
+    highp vec2 blueRatioPosition =
+        (vec2(clamped) - vec2(rcdBlueOffset())) * 0.5;
+    bool edge = clamped.x < 2 || clamped.y < 2 ||
+                clamped.x >= fullSize.x - 2 ||
+                clamped.y >= fullSize.y - 2;
+    highp vec2 redRatio = edge
+        ? rcdFetchBlockRatiosNearest(redRatioPosition, ratioSize)
+        : rcdSampleBlockRatios(redRatioPosition, ratioSize);
+    highp vec2 blueRatio = edge
+        ? rcdFetchBlockRatiosNearest(blueRatioPosition, ratioSize)
+        : rcdSampleBlockRatios(blueRatioPosition, ratioSize);
+    return vec2(redRatio.r, blueRatio.g);
+}
+
+highp vec3 rcdRgbRawAt(ivec2 position, ivec2 ratioSize)
+{
+    highp float green = rcdGreenAt(position, ratioSize);
+    highp vec2 ratios = rcdRatiosAt(position, ratioSize);
+    highp vec3 rgb = vec3(
+        clamp(green * ratios.r, 0.0, 1.0),
+        clamp(green, 0.0, 1.0),
+        clamp(green * ratios.g, 0.0, 1.0));
+    if (any(isnan(rgb)) || any(isinf(rgb)))
+        return vec3(clamp(green, 0.0, 1.0));
+    return rgb;
+}
+
+void main()
+{
+    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 ratioSize = ivec2(
+        (RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    if (any(greaterThanEqual(block, ratioSize)))
+        return;
+
+    ivec2 base = block << 1;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 position = base + ivec2(x, y);
+            if (position.x >= RCD_WIDTH || position.y >= RCD_HEIGHT)
+                continue;
+            imageStore(
+                outputImage, position,
+                vec4(rcdRgbRawAt(position, ratioSize), 1.0));
+        }
+    }
+}

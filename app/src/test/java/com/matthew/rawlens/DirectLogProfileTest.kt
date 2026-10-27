@@ -53,7 +53,7 @@ class DirectLogProfileTest {
 
     @Test
     fun sdrProfilesSignalBt709() {
-        for (p in listOf(DirectLogProfile.BT709, DirectLogProfile.SLOG3)) {
+        for (p in listOf(DirectLogProfile.BT709, DirectLogProfile.SLOG3, DirectLogProfile.ACES)) {
             val t = p.targetColors()
             assertEquals(MediaFormat.COLOR_STANDARD_BT709, t.colorStandard)
             assertEquals(MediaFormat.COLOR_TRANSFER_SDR_VIDEO, t.colorTransfer)
@@ -73,7 +73,8 @@ class DirectLogProfileTest {
     fun nextCyclesInHudOrder() {
         assertEquals(DirectLogProfile.SLOG3, DirectLogProfile.BT709.next())
         assertEquals(DirectLogProfile.HLG, DirectLogProfile.SLOG3.next())
-        assertEquals(DirectLogProfile.BT709, DirectLogProfile.HLG.next())
+        assertEquals(DirectLogProfile.ACES, DirectLogProfile.HLG.next())
+        assertEquals(DirectLogProfile.BT709, DirectLogProfile.ACES.next())
     }
 
     @Test

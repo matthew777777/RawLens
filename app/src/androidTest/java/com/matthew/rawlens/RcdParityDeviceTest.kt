@@ -33,12 +33,16 @@ class RcdParityDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
-        val rcdspv = context.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
+        val rcdspv = args.getString("rcdShaderPath")?.let { java.io.File(it).readBytes() }
+            ?: context.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "rcd init failed" }
 
-        parity64(context)
+        if (args.getString("rcdBenchmarkOnly") != "true") {
+            parity64(context)
+
+        }
         perfFullRes()
     }
 
@@ -287,12 +291,12 @@ class RcdParityDeviceTest {
                 for (mode in 0..3) {
                     val (ip, fp) = VfRcd.packRcd(w, h, 0, 0, channels, pitch, mode, levels, white)
                     val fd = VfRcd.rcdSubmitNative(raw, rgb, scratch, ip, fp, round)
-                    assumeTrue("rapid submit round $round mode $mode failed: $fd", fd >= 0)
+                    org.junit.Assert.assertTrue("rapid submit round $round mode $mode failed: $fd", fd >= 0)
                     fds.add(fd)
                 }
             }
             for ((i, fd) in fds.withIndex()) {
-                assumeTrue("rapid submit $i never completed (wedge?)", pollFd(fd))
+                org.junit.Assert.assertTrue("rapid submit $i never completed (wedge?)", pollFd(fd))
                 VfEglImport.closeSyncFd(fd)
             }
             val gpu = VfEglImport.dumpFp16(rgb, w, h)
@@ -484,11 +488,10 @@ class RcdParityDeviceTest {
     }
 
     /** 64x64 tile: GPU vs CPU reference, mean abs diff gate. */
-    private fun parity64(context: android.content.Context) {
+    private fun parity64(context: android.content.Context,
+                         channels: IntArray = intArrayOf(0, 1, 2, 3),
+                         w: Int = 64, h: Int = 64) {
         val dump = InstrumentationRegistry.getArguments().getString("rawlensRcdDump") == "true"
-        val w = 64
-        val h = 64
-        val channels = intArrayOf(0, 1, 2, 3)
         val levels = floatArrayOf(0f, 0f, 0f, 0f)
         val white = 1023f
         val raw = VfEglImport.createBayerInput(w, h)

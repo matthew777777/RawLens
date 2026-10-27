@@ -1,0 +1,91 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd/rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D guideImage;
+
+const int RCD_MAX_LOCAL_SIZE = 16;
+const int RCD_GUIDE_HALO = 4;
+const int RCD_GUIDE_TILE_SIZE = RCD_MAX_LOCAL_SIZE * 2 + RCD_GUIDE_HALO * 2;
+
+shared float16_t rcdGuideCfaTile[RCD_GUIDE_TILE_SIZE][RCD_GUIDE_TILE_SIZE];
+
+float16_t rcdRawNormalizedF16(ivec2 position)
+{
+    return float16_t(getRaw(position));
+}
+highp float guideTileAt(int x, int y, int dx, int dy)
+{
+    return float(rcdGuideCfaTile[y + dy][x + dx]);
+}
+
+highp float rcdGuideHpfVTile(int x, int y)
+{
+    highp float value =
+        (guideTileAt(x, y, 0, -3) - guideTileAt(x, y, 0, -1) -
+         guideTileAt(x, y, 0, 1) + guideTileAt(x, y, 0, 3)) -
+        3.0 * (guideTileAt(x, y, 0, -2) + guideTileAt(x, y, 0, 2)) +
+        6.0 * guideTileAt(x, y, 0, 0);
+    return value * value;
+}
+
+highp float rcdGuideHpfHTile(int x, int y)
+{
+    highp float value =
+        (guideTileAt(x, y, -3, 0) - guideTileAt(x, y, -1, 0) -
+         guideTileAt(x, y, 1, 0) + guideTileAt(x, y, 3, 0)) -
+        3.0 * (guideTileAt(x, y, -2, 0) + guideTileAt(x, y, 2, 0)) +
+        6.0 * guideTileAt(x, y, 0, 0);
+    return value * value;
+}
+
+highp float rcdVHDirTile(int x, int y)
+{
+    highp float vertical = max(
+        RCD_EPSSQ,
+        rcdGuideHpfVTile(x - 1, y) +
+        rcdGuideHpfVTile(x, y) +
+        rcdGuideHpfVTile(x + 1, y));
+    highp float horizontal = max(
+        RCD_EPSSQ,
+        rcdGuideHpfHTile(x, y - 1) +
+        rcdGuideHpfHTile(x, y) +
+        rcdGuideHpfHTile(x, y + 1));
+    return vertical / (vertical + horizontal);
+}
+
+void main()
+{
+    ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+    int blockWidth = (RCD_WIDTH + 1) >> 1;
+    int blockHeight = (RCD_HEIGHT + 1) >> 1;
+    ivec2 localSize = ivec2(gl_WorkGroupSize.xy);
+    ivec2 groupFullBase =
+        ivec2(gl_WorkGroupID.xy) * localSize * 2 - ivec2(RCD_GUIDE_HALO);
+    int tileWidth = localSize.x * 2 + RCD_GUIDE_HALO * 2;
+    int tileHeight = localSize.y * 2 + RCD_GUIDE_HALO * 2;
+    uint localCount = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint index = gl_LocalInvocationIndex;
+         index < uint(tileWidth * tileHeight);
+         index += localCount) {
+        ivec2 tilePosition = ivec2(
+            int(index % uint(tileWidth)), int(index / uint(tileWidth)));
+        rcdGuideCfaTile[tilePosition.y][tilePosition.x] =
+            rcdRawNormalizedF16(groupFullBase + tilePosition);
+    }
+    barrier();
+
+    if (position.x >= blockWidth || position.y >= blockHeight)
+        return;
+
+    ivec2 localBase = (position << 1) - groupFullBase;
+    f16vec4 guide = f16vec4(
+        rcdVHDirTile(localBase.x, localBase.y),
+        rcdVHDirTile(localBase.x + 1, localBase.y),
+        rcdVHDirTile(localBase.x, localBase.y + 1),
+        rcdVHDirTile(localBase.x + 1, localBase.y + 1));
+    imageStore(guideImage, position, vec4(guide));
+}

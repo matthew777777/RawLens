@@ -188,6 +188,7 @@ class DirectLogRecorder(
      * start (the encoder format is fixed then); the HUD toggle applies
      * to the next take. Read into [sessionProfile] in [start].
      */
+    @Volatile var recordingCrop: VideoCrop = VideoCrop.WIDE_16_9
     @Volatile var logProfile: DirectLogProfile = DirectLogProfile.BT709
     /** Effective profile for this take (snapshot of [logProfile]). */
     private var sessionProfile: DirectLogProfile = DirectLogProfile.BT709
@@ -293,7 +294,15 @@ class DirectLogRecorder(
      * Set before [start] via [configureVideoManual]; live tweaks go through
      * [setVideoManualControl] which rebuilds the repeating request.
      */
-    var videoManual: VideoManualSnapshot = VideoManualSnapshot()
+    @Volatile var focusPeakingEnabled: Boolean = false
+    @Volatile var onFocusPeaking: ((FocusPeakingFrame?) -> Unit)? = null
+    private val recordingPeaking = RecordingFocusPeaking()
+    @Volatile internal var rawExposureSettings = RawExposureAssistSettings(spotMeter = false)
+        set(value) { field = value; recordingExposure.configure(value) }
+    @Volatile internal var onRawExposureAssist: ((RawExposureAssistFrame?) -> Unit)? = null
+    private val recordingExposure = RawExposureAssist { onRawExposureAssist?.invoke(it) }
+
+    @Volatile var videoManual: VideoManualSnapshot = VideoManualSnapshot()
     var videoLocks: VideoRecordLocks = VideoRecordLocks()
     var videoMeteredIso: Int = 100
     var videoMeteredShutterNanos: Long = 10_000_000L
@@ -400,6 +409,8 @@ class DirectLogRecorder(
     private var useRcd = false
     /** Fused RCD finalize + grade (one dispatch replaces mode 3 + grade). */
     private var useRcdFused = false
+    private var usePackedRcd = false
+    private var usePackedRcdFused = false
     /**
      * RCD split-path working buffers (crop-sized RGBA_FP16, single shared
      * pair): GPU-only with same-queue FIFO submit order, so no per-slot
@@ -646,7 +657,7 @@ class DirectLogRecorder(
         require(size.width % 2 == 0 && size.height % 2 == 0) { "Odd sensor size ${size.width}x${size.height}" }
         require(effStep >= 2 && effStep % 2 == 0) { "computeStep must be even and >= 2" }
         rawSize = size
-        val crop = LogVideoLadder.centerCropCapped16x9(size.width, size.height)
+        val crop = LogVideoLadder.directLogCrop(size.width, size.height, recordingCrop)
         cropRect = crop
         // 16:9 compute region (not full 4:3 frame): the blit stretches
         // texture->surface, so correct aspect comes from the region.
@@ -681,6 +692,8 @@ class DirectLogRecorder(
         useFused = false
         useRcd = false
         useRcdFused = false
+        usePackedRcd = false
+        usePackedRcdFused = false
         fusedCount.set(0)
         rcdCount.set(0)
         fun tryInitFused(): Boolean {
@@ -711,45 +724,28 @@ class DirectLogRecorder(
             // above are the whole path, nothing more to init.
             Log.i(TAG, "superpixel selected")
         } else if (videoDemosaic == VideoDemosaic.RCD) {
-            // RCD path (fused finalize when available, else 4 RCD modes
-            // + grade-YUV): A/B lever only until the optimization lands.
-            // Init failure falls back to fused MHC.
+            // Video uses Packed RCD; the still-photo RCD pipeline stays independent.
             try {
-                // f32 RCD always: the f16 variants measured only ~6% on
-                // this latency-bound path while opening Nyquist-content
-                // fidelity questions at RGB level (see RcdParityDeviceTest
-                // f16 run), so they stay test-only until proven.
-                val rcdspv = appContext.assets.open(VfRcd.rcdAsset(false)).use { it.readBytes() }
-                if (VfRcd.initRcdNative(rcdspv) != VfVulkan.OK) {
-                    Log.w(TAG, "rcd init failed; fused fallback")
-                    tryInitFused()
+                val fused = crop.width == width && crop.height == height && width % 2 == 0 && height % 2 == 0
+                var rc = VfPackedRcd.init(appContext, fused = fused)
+                var selectedFused = fused
+                if (rc != VfVulkan.OK && fused) {
+                    rc = VfPackedRcd.init(appContext, fused = false)
+                    selectedFused = false
+                }
+                if (rc == VfVulkan.OK) {
+                    if (!selectedFused) rcdRgb = HardwareBufferRef.create(crop.width, crop.height)
+                    useRcd = true
+                    usePackedRcd = true
+                    usePackedRcdFused = selectedFused
                 } else {
-                    try {
-                        rcdRgb = HardwareBufferRef.create(crop.width, crop.height)
-                        rcdScratch = HardwareBufferRef.create(crop.width, crop.height)
-                        useRcd = true
-                        // Fused finalize (mode 3 + grade in one dispatch).
-                        // Failure is never fatal: the take keeps the split
-                        // path (mode 3 + grade-YUV) below.
-                        try {
-                            val rcdYuvSpv = appContext.assets.open(VfRcd.rcdYuvAsset(false)).use { it.readBytes() }
-                            useRcdFused = VfRcd.initRcdYuvNative(rcdYuvSpv) == VfVulkan.OK
-                            if (!useRcdFused) Log.w(TAG, "rcd-yuv init failed; split fallback")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "rcd-yuv unavailable (${e.message}); split fallback")
-                            useRcdFused = false
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "rcd buffers failed (${e.message}); fused fallback")
-                        try { rcdRgb?.close() } catch (_: Exception) {}
-                        try { rcdScratch?.close() } catch (_: Exception) {}
-                        rcdRgb = null
-                        rcdScratch = null
-                        tryInitFused()
-                    }
+                    Log.w(TAG, "packed RCD init failed ($rc); MHC fallback")
+                    tryInitFused()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "rcd unavailable (${e.message}); fused fallback")
+                Log.w(TAG, "packed RCD unavailable; MHC fallback", e)
+                try { rcdRgb?.close() } catch (_: Exception) {}
+                rcdRgb = null
                 tryInitFused()
             }
         } else {
@@ -757,6 +753,8 @@ class DirectLogRecorder(
         }
         Log.i(
             TAG, "demosaic path=" + when {
+                usePackedRcd && usePackedRcdFused -> "rcd-packed-p010"
+                usePackedRcd -> "rcd-packed-rgb"
                 useRcd && useRcdFused -> "rcd-fused"
                 useRcd -> "rcd-split"
                 useFused -> "fused-mhcyuv"
@@ -799,6 +797,7 @@ class DirectLogRecorder(
         // recordable configs top out at 8-bit). Per ladder rung, prefer
         // direct; MediaCodec.configure (plus the writer build) is the
         // final gate.
+        height = LogVideoLadder.directLogHeight(width, recordingCrop)
         bitrate = LogVideoProbe.clampedBitrate(bitrate, LogVideoProbe.maxBitrateMbps)
         val writerAllowed = LogVideoProbe.writerPathAvailable()
         val tried = ArrayList<String>()
@@ -902,7 +901,7 @@ class DirectLogRecorder(
         // 8-bit SDR fallback (BT709 takes only: S-Log3/HLG need 10-bit):
         // Main-profile Surface encoder + P010->RGBA8 convert + EGL
         // present, walked over the same ladder after the 10-bit rungs.
-        if (mc == null && sessionProfile == DirectLogProfile.BT709) {
+        if (mc == null && sessionProfile in listOf(DirectLogProfile.BT709, DirectLogProfile.ACES)) {
             for (candidate in LogVideoProbe.encodeCandidates(width, height)) {
                 val cw = candidate.width
                 val ch = candidate.height
@@ -1609,6 +1608,11 @@ class DirectLogRecorder(
         val cycleStartNs = android.os.SystemClock.elapsedRealtimeNanos()
         acquired.incrementAndGet()
         RawImageOwnership.adopt(image, rd)
+        chars?.let { c -> recordingPeaking.offer(image, c,
+            focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking,
+            cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }) }
+        chars?.let { c -> recordingExposure.offer(image, c,
+            monitorCrop = cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = lastResult) }
         val hb = try {
             image.hardwareBuffer
         } catch (_: Exception) {
@@ -1679,13 +1683,16 @@ class DirectLogRecorder(
             return false
         }
         if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
-        // Constant frame rate: PTS comes from the submit-order frame index
+        // RCD is throughput-limited on mobile GPUs: preserve sensor time so
+        // skipped frames do not speed up video or desynchronize microphone audio.
+        // Constant frame rate for the real-time paths: PTS comes from the submit-order frame index
         // on the ideal 1/fps grid — never from the sensor timestamp. Sensor
         // jitter and AE exposure wander would otherwise bake uneven PTS
         // into the file (variable frame rate); the grid keeps every sample
         // duration identical. Audio stays sensor-relative against the same
         // origin, so both timelines still start at 0 together.
-        val cfrUs = constantPtsUs(frameCounter, fps)
+        val cfrUs = if (useRcd) (ts - timeOriginNs).coerceAtLeast(0L) / 1_000L
+            else constantPtsUs(frameCounter, fps)
         val (levels, white) = blackWhite(c, result)
         // Same result feeds WB/CCM and shading, so the three never disagree.
         val (shadeD, shadeG) = snapshotShading(result)
@@ -1738,7 +1745,8 @@ class DirectLogRecorder(
         if (fd == -20) {
             error("P010 staging layout mismatch (see logcat); aborting take")
         }
-        if (fd < 0) {
+        val gpuComplete = usePackedRcd && usePackedRcdFused && fd == -1
+        if (fd < 0 && !gpuComplete) {
             Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
             dropped.incrementAndGet()
             return false
@@ -1766,13 +1774,12 @@ class DirectLogRecorder(
         copyQueue.put(
             CopyJob(
                 s.p010!!, fd, cfrUs, latch, seq, ts, lease,
-                if (eightBitMode) s.rgb8 else null, slotIndex
+                if (eightBitMode) s.rgb8 else null, slotIndex, gpuComplete
             )
         )
-        // Submit-only pair + fd handoff: zero CPU stall by construction
-        // (no blocking twin exists on the P010 path, so fallbackWaits
-        // stays 0 — any reclaim-valve stall would be a GPU wedge).
-        waitFree.incrementAndGet()
+        // RCD waits for its batch to keep RAW and internal intermediates alive.
+        // Realtime fused MHC remains submit-only.
+        if (!useRcd) waitFree.incrementAndGet()
         val chainMs = (android.os.SystemClock.elapsedRealtimeNanos() - chainStartNs) / 1e6f
         cpuChainMsAvg = if (cpuChainMsAvg == 0f) chainMs else cpuChainMsAvg * 0.9f + chainMs * 0.1f
         if (chainMs > cpuChainMsMax) cpuChainMsMax = chainMs
@@ -1825,19 +1832,49 @@ class DirectLogRecorder(
         return fd
     }
 
+    /** Returns -1 only for a batch that already completed on the GPU. */
+    private fun submitPackedRcd(f: FrameSubmit): Int? {
+        val (ip, fp) = VfRcd.packRcd(f.crop.width, f.crop.height, f.crop.left, f.crop.top,
+            channels, f.pitch, 0, f.levels, f.white)
+        val (dims, grade) = VfLogGrade.packGrade(intArrayOf(width, height),
+            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
+        if (usePackedRcdFused) {
+            val rc = VfPackedRcd.processYuvNative(f.hb, f.p010Buf, ip, fp, grade, f.strides)
+            if (rc == -20) error("P010 staging layout mismatch; aborting take")
+            if (rc != VfVulkan.OK) {
+                Log.w(TAG, "packed RCD P010 failed ($rc); dropping frame")
+                dropped.incrementAndGet()
+                return null
+            }
+            rcdCount.incrementAndGet()
+            return -1 // The native call waited for its single batch fence.
+        }
+        val rgb = rcdRgb?.buffer ?: return null
+        val rc = VfPackedRcd.processNative(f.hb, rgb, ip, fp)
+        if (rc != VfVulkan.OK) {
+            Log.w(TAG, "packed RCD failed ($rc); dropping frame")
+            dropped.incrementAndGet()
+            return null
+        }
+        val fd = VfLogGrade.gradeYuvSubmitNative(rgb, f.p010Buf, dims,
+            intArrayOf(f.crop.width, f.crop.height), grade, f.strides, f.slotIndex, 1)
+        if (fd == -20) error("P010 staging layout mismatch; aborting take")
+        if (fd < 0) { dropped.incrementAndGet(); return null }
+        rcdCount.incrementAndGet()
+        return fd
+    }
+
     /** processFrame branch: RCD modes 0-2 then fused finalize or mode 3 + grade-YUV (A/B only). Returns the final sync fd, or null on a counted drop. */
     private fun submitRcd(f: FrameSubmit): Int? {
+        if (usePackedRcd) return submitPackedRcd(f)
         val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
         val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
         val slotIndex = f.slotIndex; val shadeD = f.shadeD; val shadeG = f.shadeG; val s = f.s
         val expW = f.expW; val expH = f.expH
         val fd: Int
-        // RCD path (A/B only): modes 0-2 (same-queue FIFO ordered,
-        // so no CPU wait between modes) then the fused finalize +
-        // grade, or mode 3 + grade-YUV fullRgb=1 when the fused
-        // init failed. Intermediate sync fds close immediately;
-        // only the final fd gates the copy. ~250ms/frame at 4K: the
-        // take drops to a few fps effective.
+        // Complete each intermediate stage before handing its RAW lease back
+        // on any later failure. Full-resolution RCD can take hundreds of ms;
+        // it must not use the realtime MHC path's 100 ms completion valve.
         val rgbBuf = rcdRgb?.buffer
         val scratchBuf = rcdScratch?.buffer
         if (rgbBuf == null || scratchBuf == null) {
@@ -1860,7 +1897,12 @@ class DirectLogRecorder(
                 rcdOk = false
                 break
             }
-            try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {}
+            // A real 4K stage can exceed the MHC path's 100 ms valve.
+            // Complete each submitted stage before reusing its descriptors or
+            // releasing this RAW lease on a later-stage failure.
+            val completed = try { waitSyncFd(rfd, 5_000L) }
+                finally { try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {} }
+            check(completed) { "RCD mode $mode GPU completion timed out" }
         }
         if (!rcdOk) return null
         val (gidims, gfparams) = VfLogGrade.packGrade(
@@ -1897,7 +1939,9 @@ class DirectLogRecorder(
                 dropped.incrementAndGet()
                 return null
             }
-            try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {}
+            val completed = try { waitSyncFd(m3fd, 5_000L) }
+                finally { try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {} }
+            check(completed) { "RCD mode 3 GPU completion timed out" }
             fd = VfLogGrade.gradeYuvSubmitNative(
                 rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
             )
@@ -2075,6 +2119,8 @@ class DirectLogRecorder(
         /** Convert target + twin slot for the 8-bit path (null otherwise). */
         val rgb8: HardwareBufferRef? = null,
         val slot: Int = 0,
+        /** Native RCD already proved completion; fd is -1, never an error fd. */
+        val gpuComplete: Boolean = false,
     )
 
     /** A filled codec input awaiting its ordered turn at queueInputBuffer. */
@@ -2172,7 +2218,7 @@ class DirectLogRecorder(
                 frameErrors.incrementAndGet()
                 ready = null
             } finally {
-                try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
+                if (job.fd >= 0) try { VfEglImport.closeSyncFd(job.fd) } catch (_: Exception) {}
                 // Backstop: normally already released right after the
                 // fence wait in processCopyJob (idempotent).
                 try { job.rawLease.close() } catch (_: Exception) {}
@@ -2204,6 +2250,10 @@ class DirectLogRecorder(
      * by the caller like any other loss).
      */
     private fun awaitGpuFence(job: CopyJob): Boolean {
+        if (job.gpuComplete) {
+            try { job.rawLease.close() } catch (_: Exception) {}
+            return true
+        }
         // Fence wait = GPU queue time still outstanding when the worker
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
@@ -2211,9 +2261,9 @@ class DirectLogRecorder(
         if (!VfEglImport.pollSyncFd(job.fd)) {
             // Not ready long after submit: pathological. Blocking valve
             // (rare) instead of corrupting the slot.
-            val deadline = System.currentTimeMillis() + 100
+            val deadline = SystemClock.elapsedRealtime() + if (useRcd) 5_000L else 100L
             var ready = false
-            while (System.currentTimeMillis() < deadline) {
+            while (SystemClock.elapsedRealtime() < deadline) {
                 if (VfEglImport.pollSyncFd(job.fd)) {
                     ready = true
                     break
@@ -2323,10 +2373,10 @@ class DirectLogRecorder(
     }
 
     /** Poll-valve wait on a convert/export fd (true = signaled). No counting; caller owns it. */
-    private fun waitSyncFd(fd: Int): Boolean {
+    private fun waitSyncFd(fd: Int, timeoutMs: Long = 100L): Boolean {
         if (VfEglImport.pollSyncFd(fd)) return true
-        val deadline = System.currentTimeMillis() + 100
-        while (System.currentTimeMillis() < deadline) {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
             if (VfEglImport.pollSyncFd(fd)) return true
             Thread.sleep(2)
         }
@@ -2890,6 +2940,8 @@ class DirectLogRecorder(
     /** teardown step 1: Motion, audio, then the camera thread (joined so no onFrame races the GPU teardown). */
     private fun stopCameraAndAudio() {
         accepting = false
+        recordingPeaking.close()
+        recordingExposure.close()
         // Motion listener off (start-failure path lands here with the
         // recorder mid-take; the stop path already stopped it — idempotent).
         stopStabMotion()

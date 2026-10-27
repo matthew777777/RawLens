@@ -1,0 +1,243 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from third_party/rcd-packed-upstream; see SOURCE.md there.
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+
+layout(set = 0, binding = 7) uniform sampler2D greenImage;
+layout(set = 0, binding = 8) uniform sampler2D ratioImage;
+
+// Ratio data are already stored in half precision. Preserve those exact
+// values while sharing each neighborhood across the workgroup.
+shared f16vec2 ratioTile[18][18];
+void loadRatioTile() {
+    ivec2 size = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    int tw = int(gl_WorkGroupSize.x) + 2;
+    int th = int(gl_WorkGroupSize.y) + 2;
+    uint count = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint i = gl_LocalInvocationIndex; i < uint(tw * th); i += count) {
+        ivec2 t = ivec2(int(i % uint(tw)), int(i / uint(tw)));
+        ivec2 q = clamp(base + t, ivec2(0), size - ivec2(1));
+        ratioTile[t.y][t.x] = f16vec2(texelFetch(ratioImage, q, 0).rg);
+    }
+    barrier();
+}
+highp vec2 ratioFetch(ivec2 q) {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    ivec2 t = q - base;
+    return vec2(ratioTile[t.y][t.x]);
+}
+
+highp float rcdGreenAt(ivec2 position, ivec2 ratioSize)
+{
+    position = clamp(
+        position, ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    int color = rcdFc(position);
+    if (color == CFA_GREEN)
+        return getRaw(position);
+    ivec2 blockPosition = clamp(
+        position >> 1, ivec2(0), ratioSize - ivec2(1));
+    f16vec2 greens = f16vec2(texelFetch(greenImage, blockPosition, 0).rg);
+    return color == CFA_RED ? greens.r : greens.g;
+}
+
+highp vec2 rcdFetchBlockRatiosNearest(highp vec2 position, ivec2 ratioSize)
+{
+    ivec2 integerPosition = clamp(
+        ivec2(floor(position + vec2(0.5))),
+        ivec2(0), ratioSize - ivec2(1));
+    return ratioFetch(integerPosition);
+}
+
+highp vec2 rcdSampleBlockRatios(highp vec2 position, ivec2 ratioSize)
+{
+    highp vec2 clamped = clamp(
+        position, vec2(0.0), vec2(ratioSize - ivec2(1)));
+    ivec2 lower = ivec2(floor(clamped));
+    ivec2 upper = min(lower + ivec2(1), ratioSize - ivec2(1));
+    highp vec2 fraction = clamped - vec2(lower);
+    highp vec2 topLeft = ratioFetch(lower);
+    highp vec2 topRight = ratioFetch(ivec2(upper.x, lower.y));
+    highp vec2 bottomLeft = ratioFetch(ivec2(lower.x, upper.y));
+    highp vec2 bottomRight = ratioFetch(upper);
+    return mix(
+        mix(topLeft, topRight, fraction.x),
+        mix(bottomLeft, bottomRight, fraction.x),
+        fraction.y);
+}
+
+// Every output site lies on an integer Bayer grid: ratio fractions are
+// exactly zero or one-half. Avoid generic floating-point floor/clamp work
+// and fetch only the taps with nonzero weights, retaining mix order.
+highp float ratioChannel(ivec2 position, ivec2 offset, int channel,
+                        ivec2 ratioSize, bool edge) {
+    ivec2 delta = position - offset;
+    if (edge) {
+        ivec2 nearest = clamp((delta + ivec2(1)) >> 1, ivec2(0), ratioSize - ivec2(1));
+        return ratioFetch(nearest)[channel];
+    }
+    ivec2 lower = delta >> 1;
+    ivec2 fraction = delta & ivec2(1);
+    highp float top = ratioFetch(lower)[channel];
+    if (fraction.x != 0) top = mix(top, ratioFetch(lower + ivec2(1, 0))[channel], 0.5);
+    if (fraction.y == 0) return top;
+    highp float bottom = ratioFetch(lower + ivec2(0, 1))[channel];
+    if (fraction.x != 0) bottom = mix(bottom, ratioFetch(lower + ivec2(1, 1))[channel], 0.5);
+    return mix(top, bottom, 0.5);
+}
+
+highp vec2 rcdRatiosAt(ivec2 position, ivec2 ratioSize) {
+    ivec2 fullSize = ratioSize << 1;
+    ivec2 clamped = clamp(position, ivec2(0), fullSize - ivec2(1));
+    bool edge = clamped.x < 2 || clamped.y < 2 ||
+                clamped.x >= fullSize.x - 2 || clamped.y >= fullSize.y - 2;
+    return vec2(ratioChannel(clamped, rcdRedOffset(), 0, ratioSize, edge),
+                ratioChannel(clamped, rcdBlueOffset(), 1, ratioSize, edge));
+}
+
+highp vec3 rcdRgbRawAt(ivec2 position, ivec2 ratioSize)
+{
+    highp float green = rcdGreenAt(position, ratioSize);
+    highp vec2 ratios = rcdRatiosAt(position, ratioSize);
+    highp vec3 rgb = vec3(
+        clamp(green * ratios.r, 0.0, 1.0),
+        clamp(green, 0.0, 1.0),
+        clamp(green * ratios.g, 0.0, 1.0));
+    if (any(isnan(rgb)) || any(isinf(rgb)))
+        return vec3(clamp(green, 0.0, 1.0));
+    return rgb;
+}
+
+struct RcdYuvParams {
+    ivec2 cDims;      // crop W/H (RCD domain, full res)
+    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 cChans;     // quad-offset map, channels[] convention
+    vec4 cBlack;      // per-quad-pos black levels
+    vec4 cInvRange;   // per-quad-pos 1/(white-black)
+    int cPitch;       // sensor row stride in pixels
+    int _pad0;
+    ivec2 oDims;      // export W/H (encode domain)
+    vec4 gCcmR;       // WB+exposure-folded CCM row R (CPU-folded)
+    vec4 gCcmG;
+    vec4 gCcmB;
+    vec4 gMisc;       // bypass(0), yStrideW, uvStrideW, uvBaseOffB
+    vec4 gMisc2;      // fullRgb(1), outMode, reserved, 0
+};
+layout(binding = 10) readonly buffer Params { RcdYuvParams u; };
+layout(binding = 9) writeonly buffer P010 { uint words[]; } buf_out;
+
+vec3 bt709Encode(vec3 v) {
+    v = clamp(v, 0.0, 1.0);
+    vec3 lo = 4.5 * v;
+    vec3 hi = 1.099 * pow(v, vec3(0.45)) - 0.099;
+    return mix(hi, lo, vec3(lessThan(v, vec3(0.018))));
+}
+
+float hlgOetf(float e) {
+    e = clamp(e, 0.0, 1.0);
+    if (e <= 1.0 / 12.0) return sqrt(3.0 * e);
+    return clamp(0.17883277 * log(12.0 * e - 0.28466892) + 0.55991073, 0.0, 1.0);
+}
+
+vec3 hlgEncode(vec3 v2020) {
+    return vec3(hlgOetf(v2020.r), hlgOetf(v2020.g), hlgOetf(v2020.b));
+}
+
+vec3 srgbToBt2020(vec3 v) {
+    return vec3(
+        dot(v, vec3(0.6274040, 0.3292820, 0.0433136)),
+        dot(v, vec3(0.0690970, 0.9195400, 0.0113612)),
+        dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
+}
+
+float slog3cutY() {
+    return (420.0 + log2((0.01125 + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+}
+
+float sonySlog3(float x) {
+    x = max(x, 0.0);
+    if (x >= 0.01125) {
+        return (420.0 + log2((x + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
+    }
+    return (95.0 + x * (slog3cutY() * 1023.0 - 95.0) / 0.01125) / 1023.0;
+}
+
+vec3 slogEncode(vec3 v) {
+    return vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+}
+
+// Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.
+// ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
+// Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
+vec3 acesFitted(vec3 v) {
+    v = max(v, vec3(0.0));
+    v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
+             dot(v, vec3(0.07600,0.90834,0.01566)),
+             dot(v, vec3(0.02840,0.13383,0.83777)));
+    v = (v*(v+0.0245786)-0.000090537)/(v*(0.983729*v+0.4329510)+0.238081);
+    return clamp(vec3(dot(v,vec3(1.60475,-0.53108,-0.07367)),
+                      dot(v,vec3(-0.10208,1.10813,-0.00605)),
+                      dot(v,vec3(-0.00327,-0.07276,1.07602))),0.0,1.0);
+}
+vec3 gradeOf(vec3 rgb) {
+    vec3 developed = vec3(dot(u.gCcmR.rgb, rgb), dot(u.gCcmG.rgb, rgb), dot(u.gCcmB.rgb, rgb));
+    int mode = int(u.gMisc2.y + 0.5);
+    if (mode == 3) return pow(acesFitted(developed), vec3(1.0 / 2.4));
+    if (mode == 1) return slogEncode(developed);
+    if (mode == 2) return hlgEncode(srgbToBt2020(developed));
+    return bt709Encode(developed);
+}
+
+vec3 rgbToYuv(vec3 rgb, int mode) {
+    if (mode == 2) {
+        float y = 0.2627 * rgb.r + 0.6780 * rgb.g + 0.0593 * rgb.b;
+        float cb = (rgb.b - y) / 1.8814 + 0.5;
+        float cc = (rgb.r - y) / 1.4746 + 0.5;
+        return vec3(y, cb, cc);
+    }
+    float y = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    float cb = (rgb.b - y) / (2.0 * (1.0 - 0.0722)) + 0.5;
+    float cc = (rgb.r - y) / (2.0 * (1.0 - 0.2126)) + 0.5;
+    return vec3(y, cb, cc);
+}
+
+uint pack10(float v, float low, float high) {
+    uint code = uint(round(clamp(v, 0.0, 1.0) * (high - low) + low));
+    return (code << 6) & 0xFFC0u;
+}
+
+
+void main() {
+    loadRatioTile();
+    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    if (any(greaterThanEqual(block, size))) return;
+    ivec2 base = block << 1;
+    int yStride = int(u.gMisc.y);
+    int mode = int(u.gMisc2.y + 0.5);
+    for (int row = 0; row < 2; ++row) {
+        ivec2 position = base + ivec2(0, row);
+        // Preserve the source RGBA16F store before applying the unchanged
+        // Direct Log grade. This is precision preservation, not fp16 grading.
+        vec3 rgb0 = vec3(f16vec3(rcdRgbRawAt(position, size)));
+        vec3 rgb1 = vec3(f16vec3(rcdRgbRawAt(position + ivec2(1, 0), size)));
+        vec3 yuv0 = rgbToYuv(gradeOf(rgb0), mode);
+        vec3 yuv1 = rgbToYuv(gradeOf(rgb1), mode);
+        uint y0 = pack10(yuv0.x, 64.0, 940.0);
+        uint y1 = pack10(yuv1.x, 64.0, 940.0);
+        uint index = uint(position.y) * uint(yStride) + uint(position.x);
+        buf_out.words[index >> 1u] = y0 | (y1 << 16u);
+        if (row == 0) {
+            vec3 meanYuv = (yuv0 + yuv1) * 0.5;
+            uint uc = pack10(meanYuv.g, 64.0, 960.0);
+            uint vc = pack10(meanYuv.b, 64.0, 960.0);
+            uint uvIndex = uint(u.gMisc.w) / 2u + uint(block.y) * uint(u.gMisc.z) + uint(block.x) * 2u;
+            buf_out.words[uvIndex >> 1u] = uc | (vc << 16u);
+        }
+    }
+}

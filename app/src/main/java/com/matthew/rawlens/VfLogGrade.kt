@@ -13,8 +13,8 @@ import kotlin.math.sqrt
  * record stages, `vf_vulkan_vf.cpp` for the host side). Shares the [VfVulkan]
  * device; the viewfinder never initializes it.
  *
- * The record path currently applies NO contrast curve and NO saturation in
- * any profile: each output pixel is the developed linear value through the
+ * BT.709, S-Log3 and HLG apply no contrast curve or saturation; ACES fitted
+ * has a filmic rendering and display gamma 2.4. For the direct profiles: each output pixel is the developed linear value through the
  * profile's transfer function only. The S-shaped contrast warp and
  * saturation below ([slog3], [contrastCurve], [saturate], [bakeLut],
  * [developLinear]) are DORMANT reference code — still unit-tested, not on
@@ -282,6 +282,36 @@ internal object VfLogGrade {
         require(developed.size == 3)
         return FloatArray(3) { bt709Oetf(developed[it]) }
     }
+
+    /**
+     * Stephen Hill's fitted RRT/ODT approximation (BakingLab, MIT; see
+     * assets/licenses/bakinglab-aces.txt). Linear Rec.709 in; display-linear
+     * Rec.709 out. Not a full Academy/Resolve ACES transform.
+     */
+    fun acesFitted(developed: FloatArray): FloatArray {
+        require(developed.size == 3 && developed.all { it.isFinite() })
+        val x = developed.map { it.coerceAtLeast(0f).toDouble() }
+        val input = arrayOf(
+            doubleArrayOf(0.59719, 0.35458, 0.04823),
+            doubleArrayOf(0.07600, 0.90834, 0.01566),
+            doubleArrayOf(0.02840, 0.13383, 0.83777))
+        val output = arrayOf(
+            doubleArrayOf(1.60475, -0.53108, -0.07367),
+            doubleArrayOf(-0.10208, 1.10813, -0.00605),
+            doubleArrayOf(-0.00327, -0.07276, 1.07602))
+        val v = input.map { row ->
+            val t = row.indices.sumOf { row[it] * x[it] }
+            (t * (t + 0.0245786) - 0.000090537) /
+                (t * (0.983729 * t + 0.4329510) + 0.238081)
+        }
+        return FloatArray(3) { r ->
+            output[r].indices.sumOf { output[r][it] * v[it] }.coerceIn(0.0, 1.0).toFloat()
+        }
+    }
+
+    /** Fitted look is already display-referred: inverse gamma-2.4 EOTF. */
+    fun encodePixelAces(developed: FloatArray): FloatArray =
+        acesFitted(developed).map { it.toDouble().pow(1.0 / 2.4).toFloat() }.toFloatArray()
 
     fun encodePixelHlg(developed: FloatArray): FloatArray {
         require(developed.size == 3)

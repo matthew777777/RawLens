@@ -270,7 +270,27 @@ struct ImportedBuffer {
     uint32_t height = 0;
 };
 
+struct PackedRcdState {
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipelines[4] = {};
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet sets[4] = {};
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkImage images[3] = {};
+    VkImageView views[3] = {};
+    VkDeviceMemory memory[3] = {};
+    VkQueryPool queries = VK_NULL_HANDLE;
+    float stageMs[4] = {};
+    uint64_t shaderHash = 0;
+    uint32_t timestampBits = 0;
+    bool yuv = false;
+    int width = 0, height = 0, localX = 8, localY = 8;
+    bool initialized = false;
+};
+
 struct Context {
+    PackedRcdState packedRcd;
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice gpu = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
@@ -300,6 +320,7 @@ struct Context {
     // shaderFloat16 (VK_KHR_shader_float16_int8): the fused record kernel
     // selects its fp16 SPIR-V when true, the fp32 twin otherwise.
     bool hasF16Math = false;
+    bool hasExtendedStorageFormats = false;
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     std::string pipelineCachePath;  // empty = in-memory cache only
     std::map<AHardwareBuffer*, ImportedBuffer> inputs;
@@ -425,9 +446,10 @@ struct Context {
     // are cached by pointer like the other recorder maps.
     VkDescriptorSetLayout rcdSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout rcdPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline rcdPipeline = VK_NULL_HANDLE;
+    VkPipeline rcdPipelines[4] = {};
     VkDescriptorPool rcdPool = VK_NULL_HANDLE;
-    VkDescriptorSet rcdSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    // Each slot owns a descriptor set per mode: modes are submitted without CPU waits.
+    VkDescriptorSet rcdSets[12] = {};
     VkCommandBuffer twinRcdCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> rgbOuts;
     std::map<AHardwareBuffer*, ImportedImage> scratchOuts;

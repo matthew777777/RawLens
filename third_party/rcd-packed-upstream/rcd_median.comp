@@ -1,0 +1,137 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd/rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(set = 0, binding = 7) uniform sampler2D greenImage;
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D ratioImage;
+
+const int RCD_MAX_MEDIAN_TILE_SIZE = 34;
+shared f16vec2 rcdRatioTile[RCD_MAX_MEDIAN_TILE_SIZE][RCD_MAX_MEDIAN_TILE_SIZE];
+
+ivec2 rcdBlockSize()
+{
+    return ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+}
+
+highp vec2 ratioAtBlock(ivec2 blockPosition)
+{
+    ivec2 blockSize = rcdBlockSize();
+    blockPosition = clamp(blockPosition, ivec2(0), blockSize - ivec2(1));
+    ivec2 base = blockPosition << 1;
+    ivec2 redPosition = clamp(
+        base + rcdRedOffset(), ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    ivec2 bluePosition = clamp(
+        base + rcdBlueOffset(), ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    highp vec2 greens = texelFetch(greenImage, blockPosition, 0).rg;
+    return clamp(
+        vec2(getRaw(redPosition) / max(greens.r, RCD_EPS),
+             getRaw(bluePosition) / max(greens.g, RCD_EPS)),
+        vec2(0.0), vec2(8.0));
+}
+
+void sortPair(inout f16vec2 first, inout f16vec2 second)
+{
+    f16vec2 lower = min(first, second);
+    f16vec2 upper = max(first, second);
+    first = lower;
+    second = upper;
+}
+
+f16vec2 median10(
+    f16vec2 v0, f16vec2 v1, f16vec2 v2, f16vec2 v3, f16vec2 v4,
+    f16vec2 v5, f16vec2 v6, f16vec2 v7, f16vec2 v8, f16vec2 v9)
+{
+    f16vec2 values[10] = f16vec2[10](
+        v0, v1, v2, v3, v4, v5, v6, v7, v8, v9);
+    sortPair(values[0], values[1]);
+    sortPair(values[0], values[2]);
+    sortPair(values[0], values[3]);
+    sortPair(values[0], values[4]);
+    sortPair(values[0], values[5]);
+    sortPair(values[0], values[6]);
+    sortPair(values[0], values[7]);
+    sortPair(values[0], values[8]);
+    sortPair(values[0], values[9]);
+    sortPair(values[1], values[2]);
+    sortPair(values[1], values[3]);
+    sortPair(values[1], values[4]);
+    sortPair(values[1], values[5]);
+    sortPair(values[1], values[6]);
+    sortPair(values[1], values[7]);
+    sortPair(values[1], values[8]);
+    sortPair(values[1], values[9]);
+    sortPair(values[2], values[3]);
+    sortPair(values[2], values[4]);
+    sortPair(values[2], values[5]);
+    sortPair(values[2], values[6]);
+    sortPair(values[2], values[7]);
+    sortPair(values[2], values[8]);
+    sortPair(values[2], values[9]);
+    sortPair(values[3], values[4]);
+    sortPair(values[3], values[5]);
+    sortPair(values[3], values[6]);
+    sortPair(values[3], values[7]);
+    sortPair(values[3], values[8]);
+    sortPair(values[3], values[9]);
+    sortPair(values[4], values[5]);
+    sortPair(values[4], values[6]);
+    sortPair(values[4], values[7]);
+    sortPair(values[4], values[8]);
+    sortPair(values[4], values[9]);
+    sortPair(values[5], values[6]);
+    sortPair(values[5], values[7]);
+    sortPair(values[5], values[8]);
+    sortPair(values[5], values[9]);
+    sortPair(values[6], values[7]);
+    sortPair(values[6], values[8]);
+    sortPair(values[6], values[9]);
+    sortPair(values[7], values[8]);
+    sortPair(values[7], values[9]);
+    sortPair(values[8], values[9]);
+    return float16_t(0.5) * (values[4] + values[5]);
+}
+
+f16vec2 medianRatio()
+{
+    ivec2 local = ivec2(gl_LocalInvocationID.xy) + ivec2(1);
+    f16vec2 center = rcdRatioTile[local.y][local.x];
+    return median10(
+        rcdRatioTile[local.y - 1][local.x - 1],
+        rcdRatioTile[local.y - 1][local.x],
+        rcdRatioTile[local.y - 1][local.x + 1],
+        rcdRatioTile[local.y][local.x - 1],
+        center, center,
+        rcdRatioTile[local.y][local.x + 1],
+        rcdRatioTile[local.y + 1][local.x - 1],
+        rcdRatioTile[local.y + 1][local.x],
+        rcdRatioTile[local.y + 1][local.x + 1]);
+}
+
+void main()
+{
+    ivec2 position = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 blockSize = rcdBlockSize();
+    ivec2 localSize = ivec2(gl_WorkGroupSize.xy);
+    int tileWidth = localSize.x + 2;
+    int tileHeight = localSize.y + 2;
+    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * localSize - ivec2(1);
+    uint localCount = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint index = gl_LocalInvocationIndex;
+         index < uint(tileWidth * tileHeight);
+         index += localCount) {
+        ivec2 tilePosition = ivec2(
+            int(index % uint(tileWidth)), int(index / uint(tileWidth)));
+        rcdRatioTile[tilePosition.y][tilePosition.x] =
+            f16vec2(ratioAtBlock(groupBase + tilePosition));
+    }
+    barrier();
+
+    if (any(greaterThanEqual(position, blockSize)))
+        return;
+    imageStore(
+        ratioImage, position,
+        vec4(clamp(vec2(medianRatio()), vec2(0.0), vec2(8.0)), 0.0, 1.0));
+}

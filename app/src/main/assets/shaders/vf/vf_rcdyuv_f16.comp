@@ -73,6 +73,12 @@ const float16_t RCD_EPSSQ = 1e-10hf;
 int mir(int i, int n) {
     if (i < 0) i = -i;
     if (i >= n) i = 2 * n - 2 - i;
+    // Wide packed tiles can extend beyond a second reflection on tiny crops.
+    if (i < 0 || i >= n) {
+        int period = max(2 * n - 2, 1);
+        i = ((i % period) + period) % period;
+        if (i >= n) i = period - i;
+    }
     return i;
 }
 ivec2 mirrorCrop(ivec2 s) {
@@ -103,24 +109,22 @@ float16_t normCode(ivec2 s) {
 // Workgroup CFA tile (normalized); loaded once, then stencil taps are
 // shared reads. Partner-site taps outside the tile (large ladder steps)
 // fall back to global reads so any export/crop ratio stays correct.
-shared float16_t tile[16][16];
+shared float16_t tile[16][24];
 
 void loadTile() {
-    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
-    uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
-    for (uint k = 0u; k < 4u; ++k) {
-        uint lin = lane * 4u + k;
-        ivec2 t = ivec2(int(lin & 15u), int(lin >> 4u));
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(16, 8);
+    uint lane = gl_LocalInvocationIndex;
+    for (uint lin = lane; lin < 384u; lin += 64u) {
+        ivec2 t = ivec2(int(lin % 24u), int(lin / 24u));
         tile[t.y][t.x] = normCode(mirrorCrop(base + t - ivec2(4)));
     }
     barrier();
 }
 
 float16_t fetchN(ivec2 s) {
-    ivec2 base = ivec2(gl_WorkGroupID.xy) << 3;
-    ivec2 m = mirrorCrop(s);
-    ivec2 t = m - base + ivec2(4);
-    if (t.x < 0 || t.y < 0 || t.x >= 16 || t.y >= 16) return normCode(m);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(16, 8);
+    ivec2 t = s - base + ivec2(4);
+    if (t.x < 0 || t.y < 0 || t.x >= 24 || t.y >= 16) return normCode(mirrorCrop(s));
     return tile[t.y][t.x];
 }
 
@@ -264,9 +268,23 @@ f16vec3 slogEncode(f16vec3 v) {
     return f16vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
 }
 
+// Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.
+// ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
+// Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
+vec3 acesFitted(vec3 v) {
+    v = max(v, vec3(0.0));
+    v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
+             dot(v, vec3(0.07600,0.90834,0.01566)),
+             dot(v, vec3(0.02840,0.13383,0.83777)));
+    v = (v*(v+0.0245786)-0.000090537)/(v*(0.983729*v+0.4329510)+0.238081);
+    return clamp(vec3(dot(v,vec3(1.60475,-0.53108,-0.07367)),
+                      dot(v,vec3(-0.10208,1.10813,-0.00605)),
+                      dot(v,vec3(-0.00327,-0.07276,1.07602))),0.0,1.0);
+}
 f16vec3 gradeOf(f16vec3 rgb) {
     f16vec3 developed = f16vec3(dot(f16vec3(u.gCcmR.rgb), rgb), dot(f16vec3(u.gCcmG.rgb), rgb), dot(f16vec3(u.gCcmB.rgb), rgb));
     int mode = int(u.gMisc2.y + 0.5);
+    if (mode == 3) return f16vec3(pow(acesFitted(vec3(developed)), vec3(1.0 / 2.4)));
     if (mode == 1) return slogEncode(developed);
     if (mode == 2) return hlgEncode(srgbToBt2020(developed));
     return bt709Encode(developed);
@@ -301,11 +319,9 @@ f16vec3 gradeSite(ivec2 e) {
     return gradeOf(rcdRgbAt(exportSample(e)));
 }
 
-void main() {
-    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
-    // The tile load covers threads past the edge too, so no early-out
-    // before the barrier: every invocation must participate.
-    loadTile();
+// Each invocation owns two crop sites; this removes idle odd owners
+// while preserving canonical sampling for every ladder export ratio.
+void writeSite(ivec2 ij) {
     if (any(greaterThanEqual(ij, u.cDims))) return;
     // Only canonical export samplers do work: site c works iff it is
     // the sampler of its export pixel (same float expression as
@@ -336,4 +352,12 @@ void main() {
             + uint(e.x / 2) * 2u;
         buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
     }
+}
+
+void main() {
+    if (any(greaterThanEqual(ivec2(gl_WorkGroupID.xy) * ivec2(16, 8), u.cDims))) return;
+    loadTile();
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * ivec2(2, 1);
+    writeSite(ij);
+    writeSite(ij + ivec2(1, 0));
 }

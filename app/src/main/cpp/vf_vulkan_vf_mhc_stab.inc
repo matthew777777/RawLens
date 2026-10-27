@@ -295,7 +295,7 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
         outMode = (int)(m + 0.5f);
     }
     if (env->ExceptionCheck()) return -VFVK_BAD_ARGUMENT;
-    if (outMode < 0 || outMode > 2) return -VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 3) return -VFVK_BAD_ARGUMENT;
     params.cDims[0] = mi[0];
     params.cDims[1] = mi[1];
     params.cOrigin[0] = mi[2];
@@ -475,9 +475,10 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->fusedPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->fusedPipelineLayout, 0, 1, &g->fusedSets[slot], 0, nullptr);
-    // Fused uses 16x16 workgroups (vf_mhcyuv.comp; verified in the .spv):
-    // /8 over-dispatches 4x (harmless via the oDims guard, but wasted GPU).
-    const uint32_t gx = (uint32_t)(params.oDims[0] + 15) / 16;
+    // vf_mhcyuv: 16x16 invocations, each owning two horizontal pixels.
+    // https://docs.vulkan.org/spec/latest/chapters/dispatch.html
+    const uint32_t pairs = (uint32_t)(params.oDims[0] + 1) / 2;
+    const uint32_t gx = (pairs + 15) / 16;
     const uint32_t gy = (uint32_t)(params.oDims[1] + 15) / 16;
     vkCmdDispatch(cmd, gx, gy, 1);
     inBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;

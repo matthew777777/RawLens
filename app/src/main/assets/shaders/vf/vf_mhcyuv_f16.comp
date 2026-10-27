@@ -376,9 +376,24 @@ f16vec3 slogEncode(f16vec3 v) {
 // arrives WB+exposure-folded on the CPU. outMode (u.sDims.w): 0 =
 // BT.709, 1 = Sony S-Log3 (flat), 2 = BT.2020 + HLG. The branch is
 // SSBO-uniform: no divergence.
+
+// Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.
+// ACES fitted rendering, Stephen Hill's RRT/ODT approximation.
+// Reference: TheRealMJP/BakingLab, ACES.hlsl (MIT).
+vec3 acesFitted(vec3 v) {
+    v = max(v, vec3(0.0));
+    v = vec3(dot(v, vec3(0.59719,0.35458,0.04823)),
+             dot(v, vec3(0.07600,0.90834,0.01566)),
+             dot(v, vec3(0.02840,0.13383,0.83777)));
+    v = (v*(v+0.0245786)-0.000090537)/(v*(0.983729*v+0.4329510)+0.238081);
+    return clamp(vec3(dot(v,vec3(1.60475,-0.53108,-0.07367)),
+                      dot(v,vec3(-0.10208,1.10813,-0.00605)),
+                      dot(v,vec3(-0.00327,-0.07276,1.07602))),0.0,1.0);
+}
 f16vec3 gradeRgb(f16vec3 rgb) {
     f16vec3 developed = f16vec3(dot(f16vec3(u.gCcmR.rgb), rgb), dot(f16vec3(u.gCcmG.rgb), rgb), dot(f16vec3(u.gCcmB.rgb), rgb));
     int mode = u.sDims.w;
+    if (mode == 3) return f16vec3(pow(acesFitted(vec3(developed)), vec3(1.0 / 2.4)));
     if (mode == 1) return slogEncode(developed);
     if (mode == 2) return hlgEncode(srgbToBt2020(developed));
     return bt709Encode(developed);
@@ -450,12 +465,12 @@ uint pack10(float16_t v, float16_t low, float16_t high) {
 }
 
 void main() {
-    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    // One invocation owns one horizontal P010 pair. The old dispatch
+    // launched an extra odd-x invocation that returned without writing.
+    // Pixel coordinates and all demosaic/grade/packing arithmetic stay identical.
+    // Mapping: Khronos GLSL builtins, gl_GlobalInvocationID.
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * ivec2(2, 1);
     if (any(greaterThanEqual(ij, u.oDims))) return;
-    // Storage is u32 words but P010 codes are u16: every store packs a
-    // pair. Y pairs go to even-x invocations (odd-x has no unique word);
-    // UV pairs are naturally (U, V).
-    if ((ij.x & 1) != 0) return;
     int yStride = int(u.gMisc.y);  // u16 words per Y row
     int outMode = u.sDims.w;
     f16vec3 lg0 = pixelLog(ij);

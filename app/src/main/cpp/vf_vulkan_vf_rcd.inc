@@ -7,7 +7,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfRcd_initRcdNative(JNIEnv* env, jobject, jbyteArray spv) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
-    if (g->rcdPipeline != VK_NULL_HANDLE) return VFVK_OK;
+    if (g->rcdPipelines[0] != VK_NULL_HANDLE) return VFVK_OK;
     // Twin command buffers live with the grade init (as for grade-YUV).
     if (g->gradePipeline == VK_NULL_HANDLE) return VFVK_PIPELINE_FAILED;
     if (!ensureTwinResources(g)) return VFVK_DEVICE_FAILED;
@@ -31,7 +31,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return -VFVK_NOT_INITIALIZED;
     if (slot < 0 || slot > 2) return -VFVK_BAD_ARGUMENT;
-    if (g->rcdPipeline == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
+    if (g->rcdPipelines[0] == VK_NULL_HANDLE) return -VFVK_PIPELINE_FAILED;
     if (!g->hasSemaphoreFd) return -1;
     if (!cfaBuffer || !rgbBuffer || !scratchBuffer || !iparams || !fparams) {
         return -VFVK_BAD_ARGUMENT;
@@ -62,7 +62,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     if (params.dims[0] <= 0 || params.dims[1] <= 0 ||
         params.dims[0] > VFVK_MAX_EDGE || params.dims[1] > VFVK_MAX_EDGE ||
         params.pitch <= 0 || params.pitch > 16384 ||
-        params.mode < 0 || params.mode > 3 ||
+        params.mode < 0 || (params.mode & ~19) != 0 ||
         params.origin[0] < 0 || params.origin[1] < 0) {
         return -VFVK_BAD_ARGUMENT;
     }
@@ -91,12 +91,14 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     r = gradeImage(g, scrBuf, "rcd-scratch", &g->scratchOuts, &scrImg);
     if (r != VFVK_OK) return -r;
 
+    // Separate immutable bindings for each mode allow back-to-back stage submits.
+    const VkDescriptorSet modeSet = g->rcdSets[slot * 4 + (params.mode & 3)];
     // Dynamic per-submit CB (see acquireRcdCmd): never a twin reset.
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence submitFence = VK_NULL_HANDLE;
     {
         // A4: the slot's set (and fused params) may still be in flight.
-        if (rcdSetInUse(g, g->rcdSets[slot])) return -VFVK_BUSY;
+        if (rcdSetInUse(g, modeSet)) return -VFVK_BUSY;
         int cr = acquireRcdCmd(g, &cmd, &submitFence);
         if (cr != VFVK_OK) return -cr;
     }
@@ -112,19 +114,19 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     scrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSet writes[3]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = g->rcdSets[slot];
+    writes[0].dstSet = modeSet;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[0].pBufferInfo = &inInfo;
     writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = g->rcdSets[slot];
+    writes[1].dstSet = modeSet;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outInfo;
     writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = g->rcdSets[slot];
+    writes[2].dstSet = modeSet;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -165,7 +167,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     // fresh and reads scratch; modes 2-3 read-modify-write rgb texels
     // (same-invocation RMW only — no intra-dispatch hazard by the
     // shader's mosaic-from-CFA discipline) and read scratch.
-    const int mode = params.mode;
+    const int mode = params.mode & 3;
     const bool scrWrite = mode == 0;
     const bool rgbWrite = mode >= 1;
     const bool rgbRead = mode >= 2;
@@ -197,12 +199,13 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
                       VK_IMAGE_LAYOUT_GENERAL,
                       VK_QUEUE_FAMILY_FOREIGN_EXT, g->queueFamily);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rcdPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rcdPipelines[params.mode & 3]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            g->rcdPipelineLayout, 0, 1, &g->rcdSets[slot], 0, nullptr);
+                            g->rcdPipelineLayout, 0, 1, &modeSet, 0, nullptr);
     vkCmdPushConstants(cmd, g->rcdPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(params), &params);
-    const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;
+    const uint32_t blockWidth = (params.mode & 3) == 0 ? 8u : 16u;
+    const uint32_t gx = (uint32_t)(params.dims[0] + blockWidth - 1) / blockWidth;
     const uint32_t gy = (uint32_t)(params.dims[1] + 7) / 8;
     vkCmdDispatch(cmd, gx, gy, 1);
     if (scrWrite) {
@@ -256,7 +259,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     int fd = -1;
     vr = g->getSemFd(g->device, &fdInfo, &fd);
     // A5: semaphore and set stay owned by the submission until its fence signals.
-    g->rcdPending.push_back({cmd, submitFence, sem, g->rcdSets[slot]});
+    g->rcdPending.push_back({cmd, submitFence, sem, modeSet});
     if (vr != VK_SUCCESS || fd < 0) {
         return -VFVK_SUBMIT_FAILED;
     }
@@ -343,7 +346,7 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
         outMode = (int)(m + 0.5f);
     }
     if (env->ExceptionCheck()) return -VFVK_BAD_ARGUMENT;
-    if (outMode < 0 || outMode > 2) return -VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 3) return -VFVK_BAD_ARGUMENT;
     params.cDims[0] = ri[0];
     params.cDims[1] = ri[1];
     params.cOrigin[0] = ri[2];
@@ -548,7 +551,7 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
                             g->rcdYuvPipelineLayout, 0, 1, &g->rcdYuvSets[slot], 0, nullptr);
     // Crop-domain dispatch (the shared CFA tile needs crop locality);
     // only canonical export samplers pack (see vf_rcdyuv.comp).
-    const uint32_t gx = (uint32_t)(params.cDims[0] + 7) / 8;
+    const uint32_t gx = (uint32_t)(params.cDims[0] + 15) / 16;
     const uint32_t gy = (uint32_t)(params.cDims[1] + 7) / 8;
     vkCmdDispatch(cmd, gx, gy, 1);
     layoutBarrier(cmd, rgbImg.image,

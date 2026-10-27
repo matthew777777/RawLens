@@ -1,0 +1,136 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Adapted from third_party/rcd-packed-upstream; see SOURCE.md there.
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rcd_common.glsl"
+
+layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 7) uniform sampler2D greenImage;
+layout(set = 0, binding = 8) uniform sampler2D ratioImage;
+
+// Ratio data are already stored in half precision. Preserve those exact
+// values while sharing each neighborhood across the workgroup.
+shared f16vec2 ratioTile[18][18];
+void loadRatioTile() {
+    ivec2 size = ivec2((RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    int tw = int(gl_WorkGroupSize.x) + 2;
+    int th = int(gl_WorkGroupSize.y) + 2;
+    uint count = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
+    for (uint i = gl_LocalInvocationIndex; i < uint(tw * th); i += count) {
+        ivec2 t = ivec2(int(i % uint(tw)), int(i / uint(tw)));
+        ivec2 q = clamp(base + t, ivec2(0), size - ivec2(1));
+        ratioTile[t.y][t.x] = f16vec2(texelFetch(ratioImage, q, 0).rg);
+    }
+    barrier();
+}
+highp vec2 ratioFetch(ivec2 q) {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(gl_WorkGroupSize.xy) - ivec2(1);
+    ivec2 t = q - base;
+    return vec2(ratioTile[t.y][t.x]);
+}
+
+highp float rcdGreenAt(ivec2 position, ivec2 ratioSize)
+{
+    position = clamp(
+        position, ivec2(0), ivec2(RCD_WIDTH - 1, RCD_HEIGHT - 1));
+    int color = rcdFc(position);
+    if (color == CFA_GREEN)
+        return getRaw(position);
+    ivec2 blockPosition = clamp(
+        position >> 1, ivec2(0), ratioSize - ivec2(1));
+    f16vec2 greens = f16vec2(texelFetch(greenImage, blockPosition, 0).rg);
+    return color == CFA_RED ? greens.r : greens.g;
+}
+
+highp vec2 rcdFetchBlockRatiosNearest(highp vec2 position, ivec2 ratioSize)
+{
+    ivec2 integerPosition = clamp(
+        ivec2(floor(position + vec2(0.5))),
+        ivec2(0), ratioSize - ivec2(1));
+    return ratioFetch(integerPosition);
+}
+
+highp vec2 rcdSampleBlockRatios(highp vec2 position, ivec2 ratioSize)
+{
+    highp vec2 clamped = clamp(
+        position, vec2(0.0), vec2(ratioSize - ivec2(1)));
+    ivec2 lower = ivec2(floor(clamped));
+    ivec2 upper = min(lower + ivec2(1), ratioSize - ivec2(1));
+    highp vec2 fraction = clamped - vec2(lower);
+    highp vec2 topLeft = ratioFetch(lower);
+    highp vec2 topRight = ratioFetch(ivec2(upper.x, lower.y));
+    highp vec2 bottomLeft = ratioFetch(ivec2(lower.x, upper.y));
+    highp vec2 bottomRight = ratioFetch(upper);
+    return mix(
+        mix(topLeft, topRight, fraction.x),
+        mix(bottomLeft, bottomRight, fraction.x),
+        fraction.y);
+}
+
+// Every output site lies on an integer Bayer grid: ratio fractions are
+// exactly zero or one-half. Avoid generic floating-point floor/clamp work
+// and fetch only the taps with nonzero weights, retaining mix order.
+highp float ratioChannel(ivec2 position, ivec2 offset, int channel,
+                        ivec2 ratioSize, bool edge) {
+    ivec2 delta = position - offset;
+    if (edge) {
+        ivec2 nearest = clamp((delta + ivec2(1)) >> 1, ivec2(0), ratioSize - ivec2(1));
+        return ratioFetch(nearest)[channel];
+    }
+    ivec2 lower = delta >> 1;
+    ivec2 fraction = delta & ivec2(1);
+    highp float top = ratioFetch(lower)[channel];
+    if (fraction.x != 0) top = mix(top, ratioFetch(lower + ivec2(1, 0))[channel], 0.5);
+    if (fraction.y == 0) return top;
+    highp float bottom = ratioFetch(lower + ivec2(0, 1))[channel];
+    if (fraction.x != 0) bottom = mix(bottom, ratioFetch(lower + ivec2(1, 1))[channel], 0.5);
+    return mix(top, bottom, 0.5);
+}
+
+highp vec2 rcdRatiosAt(ivec2 position, ivec2 ratioSize) {
+    ivec2 fullSize = ratioSize << 1;
+    ivec2 clamped = clamp(position, ivec2(0), fullSize - ivec2(1));
+    bool edge = clamped.x < 2 || clamped.y < 2 ||
+                clamped.x >= fullSize.x - 2 || clamped.y >= fullSize.y - 2;
+    return vec2(ratioChannel(clamped, rcdRedOffset(), 0, ratioSize, edge),
+                ratioChannel(clamped, rcdBlueOffset(), 1, ratioSize, edge));
+}
+
+highp vec3 rcdRgbRawAt(ivec2 position, ivec2 ratioSize)
+{
+    highp float green = rcdGreenAt(position, ratioSize);
+    highp vec2 ratios = rcdRatiosAt(position, ratioSize);
+    highp vec3 rgb = vec3(
+        clamp(green * ratios.r, 0.0, 1.0),
+        clamp(green, 0.0, 1.0),
+        clamp(green * ratios.g, 0.0, 1.0));
+    if (any(isnan(rgb)) || any(isinf(rgb)))
+        return vec3(clamp(green, 0.0, 1.0));
+    return rgb;
+}
+
+void main()
+{
+    loadRatioTile();
+    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 ratioSize = ivec2(
+        (RCD_WIDTH + 1) >> 1, (RCD_HEIGHT + 1) >> 1);
+    if (any(greaterThanEqual(block, ratioSize)))
+        return;
+
+    ivec2 base = block << 1;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 position = base + ivec2(x, y);
+            if (position.x >= RCD_WIDTH || position.y >= RCD_HEIGHT)
+                continue;
+            imageStore(
+                outputImage, position,
+                vec4(rcdRgbRawAt(position, ratioSize), 1.0));
+        }
+    }
+}

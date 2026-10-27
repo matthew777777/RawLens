@@ -106,7 +106,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
         outMode = (int)(m + 0.5f);
     }
     if (env->ExceptionCheck()) return -VFVK_BAD_ARGUMENT;
-    if (outMode < 0 || outMode > 2) return -VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 3) return -VFVK_BAD_ARGUMENT;
     params.dims[0] = ii[0];
     params.dims[1] = ii[1];
     params.srcDims[0] = si[0];
@@ -331,7 +331,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
         outMode = (int)(m + 0.5f);
     }
     if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
-    if (outMode < 0 || outMode > 2) return VFVK_BAD_ARGUMENT;
+    if (outMode < 0 || outMode > 3) return VFVK_BAD_ARGUMENT;
     params.dims[0] = ii[0];
     params.dims[1] = ii[1];
     params.srcDims[0] = si[0];

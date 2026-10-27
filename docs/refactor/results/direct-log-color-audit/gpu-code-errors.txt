@@ -1,0 +1,7 @@
+Device: Redmi lapis, Android 16, arm64
+2026-10-26
+split checks=468 max10BitCodeError=0
+mhc checks=468 max10BitCodeError=0
+mhc_f16 checks=468 max10BitCodeError=2
+rcd checks=468 max10BitCodeError=0
+rcd_f16 checks=468 max10BitCodeError=2

@@ -77,27 +77,27 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
     val videoTab = p.tabs[2]
         content.removeAllViews()
         content.addView(sectionTitle("Direct Log"))
+        content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses BT.709 primaries, not Sony S-Gamut3."))
+        content.addView(Button(this).apply {
+            isEnabled = !videoRecording
+            fun refresh() { text = "LOG crop: ${directLogCrop().label}" }
+            refresh()
+            setOnClickListener { cycleDirectLogCrop(); refresh() }
+        })
         content.addView(CheckBox(this).apply {
             text = "Direct Log video"
             setTextColor(getColor(R.color.text_primary))
+            isEnabled = !videoRecording
             isChecked = directLogEnabled
             setOnCheckedChangeListener { _, enabled ->
-                directLogEnabled = enabled
-                lensPreferences().edit().putBoolean(KEY_DIRECT_LOG, enabled).apply()
-                if (isVideoMode && !videoRecording) {
-                    refreshVideoAudioDescription()
-                    refreshVideoSensorInfo()
-                    rawBadge.text = if (enabled) logBadgeLabel() else "CRS"
-                    setStatus(if (enabled) "${directLogProfile().hudLabel} • HEVC 10-BIT" else "CRS • TYPE-7")
-                } else {
-                    setStatus(if (enabled) "LOG VIDEO ON" else "LOG VIDEO OFF")
-                }
+                setDirectLogMode(enabled)
+                if (isChecked != directLogEnabled) isChecked = directLogEnabled
             }
         })
-        content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .crs: BT.709, S-Log3, or HLG in this tab or the LOG quick tile. Full sensor, live RAW viewfinder; sound follows the Sound toggle."))
+        content.addView(sectionDesc("HEVC 10-bit MP4 instead of RAW .crs: BT.709, ACES fitted BT.709, S-Log3, or HLG in this tab or the LOG quick tile. Selectable recording crop, live RAW viewfinder; sound follows the Sound toggle."))
         content.addView(Button(this).apply {
             fun refresh() {
-                text = "LOG profile: ${directLogProfile().hudLabel}"
+                text = "LOG profile: ${directLogProfile().description}"
             }
             refresh()
             setOnClickListener {
@@ -179,7 +179,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(sectionTitle("RAW video"))
         content.addView(Button(this).apply {
             fun refresh() {
-                text = "CRS crop: ${videoCropShort()}"
+                text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRS crop: ${videoCropShort()}"
             }
             refresh()
             setOnClickListener {
@@ -187,7 +187,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 refresh()
             }
         })
-        content.addView(sectionDesc("RAW .crs container crop. N/A in Direct Log (full sensor)."))
+        content.addView(sectionDesc("Recording crop. Direct Log: 16:9, 2.39:1, or 2.00:1; changes apply to the next take."))
         content.addView(CheckBox(this).apply {
             text = "Binning (half resolution)"
             setTextColor(getColor(R.color.text_primary))
@@ -195,6 +195,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
             setOnCheckedChangeListener { _, enabled ->
                 lensPreferences().edit().putBoolean(KEY_VIDEO_BINNING, enabled).apply()
                 if (isVideoMode && !videoRecording) refreshVideoSensorInfo()
+                updateQuickControls()
                 setStatus(if (enabled) "BINNING ON — NEXT TAKE" else "BINNING OFF")
             }
         })

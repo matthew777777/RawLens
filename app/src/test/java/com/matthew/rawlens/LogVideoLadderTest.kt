@@ -160,4 +160,15 @@ class LogVideoLadderTest {
         assertEquals(2040, exp.width)
         assertEquals(crop.height / 2, exp.height)
     }
+    @org.junit.Test fun directLogWidescreenGeometry() {
+        for (crop in listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00)) {
+            val c = LogVideoLadder.directLogCrop(4080, 3060, crop)
+            org.junit.Assert.assertEquals(0, c.top % 2)
+            org.junit.Assert.assertEquals(0, c.left % 2)
+            org.junit.Assert.assertEquals(crop.ratio!!, c.width.toDouble()/c.height, 0.003)
+            org.junit.Assert.assertTrue(c.top + c.height <= 3060)
+            org.junit.Assert.assertEquals(0, LogVideoLadder.directLogHeight(1920, crop) % 2)
+        }
+    }
+
 }

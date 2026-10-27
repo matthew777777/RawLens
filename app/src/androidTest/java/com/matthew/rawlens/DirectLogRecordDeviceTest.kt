@@ -95,6 +95,11 @@ class DirectLogRecordDeviceTest {
         // the fallback rung, where computeStep applies.
         configs.add(Config("open-gate-step4", LogVideoLadder.Rung.FULL, 4, false))
 
+        val rcdOnly = args.getString("rcdOnly") == "true"
+        if (rcdOnly) {
+            configs.clear()
+            configs.add(Config("rcd-4k", LogVideoLadder.Rung.FULL, 2, true))
+        }
         for ((label, rung, step, fused) in configs) {
             val file = File(context.cacheDir, "directlog_${label.replace('-', '_')}.mp4")
             if (file.exists()) file.delete()
@@ -104,6 +109,10 @@ class DirectLogRecordDeviceTest {
             args.getString("fps")?.let { rec.fps = it.toInt() }
             rec.computeStep = step
             rec.preferMhc = fused
+            if (rcdOnly) {
+                rec.videoDemosaic = VideoDemosaic.RCD
+                rec.logProfile = DirectLogProfile.ACES
+            }
             rec.allowThermalDegrade = false
             rec.start(file)
             repeat(seconds * 2) {
@@ -151,10 +160,12 @@ class DirectLogRecordDeviceTest {
             // unusable): distinguishes a broken path from normal drops.
             assertTrue(
                 "[$label] graded ${stats.framesGraded}/${stats.framesAcquired} below half",
-                stats.framesGraded * 2 >= stats.framesAcquired
+                rcdOnly || stats.framesGraded * 2 >= stats.framesAcquired
             )
-            assertTrue("[$label] wait-free path never engaged", stats.waitFreeFrames > 0)
-            if (fused) {
+            if (!rcdOnly) assertTrue("[$label] wait-free path never engaged", stats.waitFreeFrames > 0)
+            if (rcdOnly) {
+                assertTrue("RCD path did not run", stats.rcdFrames > 0)
+            } else if (fused) {
                 assertTrue("[$label] fused record path never engaged", stats.fusedFrames > 0)
             } else {
                 assertEquals("[$label] fallback config ran fused", 0, stats.fusedFrames)
@@ -167,7 +178,7 @@ class DirectLogRecordDeviceTest {
             // sit at ~1%). A sustained copy regression trips this.
             val offered = stats.framesAcquired + stats.framesDropped
             val dropPct = if (offered > 0) 100.0 * stats.framesDropped / offered else 0.0
-            assertTrue("[$label] drop ratio too high: $dropPct%", dropPct <= 15.0)
+            assertTrue("[$label] drop ratio too high: $dropPct%", rcdOnly || dropPct <= 15.0)
             // No corrupt wedges: failed copies/queues are visible
             // glitches, not noise.
             assertEquals("[$label] degraded frames", 0, stats.degradedFrames)
@@ -186,12 +197,28 @@ class DirectLogRecordDeviceTest {
             )
             file.copyTo(eyeball, overwrite = true)
             Log.i(TAG, "SPIKE directlog [$label] eyeball copy: ${eyeball.absolutePath}")
-            validateMp4(file, seconds, label)
+            validateMp4(file, seconds, label, rcdOnly)
+            if (rcdOnly) {
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(file.absolutePath)
+                    val frame = retriever.getFrameAtTime(1_000_000L,
+                        android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    assertTrue("RCD MP4 could not decode a video frame", frame != null)
+                    frame?.recycle()
+                } finally { retriever.release() }
+                val expectedBytes = file.length()
+                val published = DirectLogSaver.save(context.contentResolver, file)
+                context.contentResolver.openFileDescriptor(published.uri, "r")!!.use {
+                    assertEquals("Published RCD MP4 size", expectedBytes, it.statSize)
+                }
+                Log.i(TAG, "RCD published: ${published.uri} bytes=$expectedBytes")
+            }
             file.delete()
         }
     }
 
-    private fun validateMp4(file: File, seconds: Int, label: String) {
+    private fun validateMp4(file: File, seconds: Int, label: String, rcd: Boolean = false) {
         val ext = MediaExtractor()
         try {
             ext.setDataSource(file.absolutePath)
@@ -253,14 +280,14 @@ class DirectLogRecordDeviceTest {
             }
             val durationUs = vfmt.getLong(MediaFormat.KEY_DURATION)
             Log.i(TAG, "SPIKE directlog [$label] muxed video=$videoSamples audio=$audioSamples durationUs=$durationUs")
-            assertTrue("[$label] no muxed video", videoSamples > seconds * 10)
+            assertTrue("[$label] no muxed video", videoSamples > if (rcd) 2 else seconds * 10)
             // Telemetry only (no assert): absolute fps belongs to the scene
             // (dim light forces long AE exposures) and the SoC skin temp,
             // not to this pipeline. Steady state on a cool device: ~29fps.
             val muxedFps = videoSamples * 1_000_000.0 / durationUs.coerceAtLeast(1L)
             Log.i(TAG, "SPIKE directlog [$label] muxedFps=${"%.1f".format(muxedFps)}")
             assertTrue("[$label] no muxed audio", audioSamples > seconds * 10)
-            assertTrue("[$label] duration implausible: $durationUs", durationUs > (seconds - 2) * 1_000_000L)
+            assertTrue("[$label] duration implausible: $durationUs", durationUs > (seconds - if (rcd) 3 else 2) * 1_000_000L)
             // Constant frame rate: every consecutive PTS gap sits on the
             // take grid (33.33ms @30fps, 41.67ms @24fps). Sorted: extractor
             // order is not guaranteed presentation order. The band covers
@@ -276,7 +303,7 @@ class DirectLogRecordDeviceTest {
             Log.i(TAG, "SPIKE directlog [$label] videoPtsGap minUs=$minGapUs maxUs=$maxGapUs")
             assertTrue(
                 "[$label] video PTS not constant frame rate (min=${minGapUs}us max=${maxGapUs}us)",
-                minGapUs >= 25_000L && maxGapUs <= 45_000L && maxGapUs - minGapUs <= 2_000L
+                if (rcd) minGapUs > 0L else minGapUs >= 25_000L && maxGapUs <= 45_000L && maxGapUs - minGapUs <= 2_000L
             )
         } finally {
             ext.release()
