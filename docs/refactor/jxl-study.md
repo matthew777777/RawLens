@@ -1,9 +1,27 @@
 # JPEG XL stills and DNG JXL compression — study (2026-10-20)
 
-Scope: `native_jxl_encoder.cpp` (developed stills), `tinydng_jni.cpp`
+Original 2026-10-20 scope: `native_jxl_encoder.cpp` (developed stills), `tinydng_jni.cpp`
 `encodeCfaJxl` (DNG 1.7 JXL tiles), the Kotlin wrappers (`NativeJxlEncoder`,
 `JxlOutputSettings`, `JxlPixelPack`, `JxlMetadataBoxes`, `JxlSaver`,
 `DngCompression`) and the libjxl pin in `app/src/main/cpp/CMakeLists.txt`.
+
+## Current integration (2026-10-27)
+
+The DNG `encodeCfaJxl` helper described in this historical study has been
+removed. JNI now passes RAW16 pixels to TinyDNG, whose optional libjxl encoder
+owns lossless compression, DNG 1.7 version defaults and chunked compressed
+output. The developed-still encoder remains in `native_jxl_encoder.cpp`.
+All 13 shared TinyDNG files match upstream `e1d6442` byte-for-byte.
+
+Android links libjxl on `tinydng_v3`; host builds discover installed libjxl
+through pkg-config. Effort remains 3 by default with automatic threads.
+Single-frame and 16-bit HDR+ JXL saves preserve EXIF/GPS. Packed and float-CFA
+paths remain uncompressed. Native encode tests independently decode exact
+samples, including both TIFF byte orders and partial/multiple strips.
+The 2026-10-27 run passed 58 selected JVM tests without skips, TinyDNG's 10-test
+suite with ASan/UBSan, and an Android arm64 library build. Historical device
+ratios/timings below have not been remeasured after moving the encoder.
+See [current integration and build instructions](../tinydng-integration.md).
 
 ## References (pinned)
 
