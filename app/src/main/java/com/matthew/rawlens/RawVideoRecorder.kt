@@ -50,8 +50,8 @@ import java.util.concurrent.atomic.AtomicLongArray
  *   mid-recording (fps locks at record start).
  * - [binning] halves the resolution inside the encoder; [binningRgb]
  *   picks RGB (each 2x2 block demosaiced once to one RGB pixel, SPEC 3.8:
- *   readers never re-demosaic, no fringes) or the cheap centre-aligned
- *   half-res Bayer mosaic. The viewfinder fan-out still sees full-res
+ *   readers never re-demosaic, no fringes) or the cheap half-res Bayer
+ *   remosaiced from it. The viewfinder fan-out still sees full-res
  *   frames. Take-const
  *   (a mid-take resolution change would break players): read once at
  *   [start] into [binActive], which also gates the frame-JSON dimensions

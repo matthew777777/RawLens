@@ -187,27 +187,16 @@ class CrawRoundTripDeviceTest {
         return out
     }
 
-    /** Independent reference of the cheap centre-aligned CFA binning (craw_writer_jni.cpp). */
-    private fun binCentredReference(src: ShortArray, w: Int, h: Int, cfa: Int): IntArray {
-        val ow = w / 2; val oh = h / 2
-        val greenEven = cfa == 1 || cfa == 2
-        fun m(i: Int, n: Int) = if (i < 0) -i else if (i >= n) 2 * (n - 1) - i else i
-        fun at(x: Int, y: Int) = src[m(y, h) * w + m(x, w)].toInt() and 0xffff
-        val kw = intArrayOf(1, 5, 3)
-        return IntArray(ow * oh) { idx ->
-            val ox = idx % ow; val oy = idx / ow; val sx = 2 * ox; val sy = 2 * oy
-            val green = (((ox + oy) and 1) == 0) == greenEven
-            if (!green) {
-                val cx = sx + (ox and 1); val cy = sy + (oy and 1)
-                val dx = if ((ox and 1) == 1) -2 else 2; val dy = if ((oy and 1) == 1) -2 else 2
-                var sum = 0
-                for (j in 0 until 3) for (i in 0 until 3) sum += kw[i] * kw[j] * at(cx + (i - 1) * dx, cy + (j - 1) * dy)
-                (sum + 40) / 81
-            } else if (!greenEven) {
-                (2 * (at(sx + 1, sy) + at(sx, sy + 1)) + at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2) + 4) shr 3
-            } else {
-                (2 * (at(sx, sy) + at(sx + 1, sy + 1)) + at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2) + 4) shr 3
-            }
+    /** Reference of the cheap CFA mode: the RGB-bin reference sampled at each site's colour. */
+    private fun binRemosaicReference(src: ShortArray, w: Int, h: Int, cfa: Int): IntArray {
+        val cells = binReference(src, w, h, cfa)
+        val colour = arrayOf(intArrayOf(0, 1, 1, 2), intArrayOf(1, 0, 2, 1), intArrayOf(1, 2, 0, 1), intArrayOf(2, 1, 1, 0))[cfa]
+        val cell = arrayOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(0, 1))  // (x, y) of R, G, B
+        val ow = w / 2
+        return IntArray(ow * (h / 2)) { k ->
+            val i = k % ow; val j = k / ow
+            val c = cell[colour[(j and 1) * 2 + (i and 1)]]
+            cells[(2 * j + c[1]) * w + 2 * i + c[0]]
         }
     }
 
@@ -232,14 +221,14 @@ class CrawRoundTripDeviceTest {
         }
     }
 
-    @Test fun cheapBinnedFrameIsCentreAlignedForEveryCfa() {
+    @Test fun cheapBinnedFrameIsRemosaicForEveryCfa() {
         assumeTrue("craw libraries unavailable", CrawWriter.available && CrawReader.available)
         val width = 64
         val height = 32
         val src = syntheticFrame(width, height, 10, 7)
         val shorts = ShortArray(width * height).also { src.duplicate().order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(it) }
         for (cfa in 0..3) {
-            assertArrayEquals("cfa $cfa", binCentredReference(shorts, width, height, cfa),
+            assertArrayEquals("cfa $cfa", binRemosaicReference(shorts, width, height, cfa),
                 encodeDecodeBinned(src, width, height, cfa, rgb = false))
         }
     }

@@ -40,7 +40,7 @@ internal object CrawWriter {
      * negative native codes become exceptions (-3 = destination too small).
      * With [bin], the frame is binned to half resolution (lossy by nature):
      * [binRgb] true demosaics once into a half-res RGB cell frame (SPEC 3.8,
-     * best quality, no re-demosaic fringes); false bins to a centre-aligned
+     * best quality, no re-demosaic fringes); false remosaics that RGB to a
      * half-res Bayer mosaic (cheap: a quarter of the samples). [cfa] is the
      * Camera2 color-filter arrangement (0..3).
      * [bitDepth] comes from SENSOR_INFO_WHITE_LEVEL ([bitDepthFor]); a sample

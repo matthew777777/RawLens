@@ -39,59 +39,6 @@ std::string jstr(JNIEnv* env, jstring s) {
 
 craw::Writer* writerFrom(jlong h) { return reinterpret_cast<craw::Writer*>(h); }
 
-// Cheap mode: 2x Bayer binning to half resolution, CENTRE-ALIGNED: output (ox, oy) keeps
-// the CFA colour of its parity and stands for the centre of its 2x2 source
-// block, so the result is a regular Bayer grid a demosaicer can trust.
-// R/B: separable triangle (weights behind/own/toward = 1, 5, 3, sum 81) on the
-// 2 px same-colour grid. Green: the 2 in-block greens at weight 2 plus the
-// symmetric ring of 4 nearest outer greens at weight 1 (sum 8). Rounded
-// means, so flat fields and black/white levels pass exactly. Edges mirror
-// parity-preservingly. Measured on a real 4080x2032 frame through
-// RawTherapee AMaZE (vs full-res AMaZE downscaled 2x): error 0.0423 -> 0.0344
-// and flat-sky noise -15 % compared with the inward box + diamond green.
-// Ported from RawLens commit 9099988 (cinemaraw Binning.h); original
-// diamond-green idea by Eszdman (https://github.com/eszdman).
-void binCentred(const uint8_t* src, int stride, int width, int rows, int cfa, std::vector<uint16_t>& out) {
-    const int ow = width / 2, oh = rows / 2;
-    out.resize(static_cast<size_t>(ow) * oh);
-    const bool greenEven = cfa == 1 || cfa == 2;  // green on even (x + y) parity
-    auto mirror = [](int i, int n) { return i < 0 ? -i : i >= n ? 2 * (n - 1) - i : i; };
-    auto at = [&](int x, int y) -> uint32_t {
-        const auto* row = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(mirror(y, rows)) * stride);
-        return row[mirror(x, width)];
-    };
-    static constexpr uint32_t kW[3] = {1, 5, 3};  // behind, own, toward
-    for (int oy = 0; oy < oh; ++oy) {
-        uint16_t* o = out.data() + static_cast<size_t>(oy) * ow;
-        const int sy = 2 * oy;
-        for (int ox = 0; ox < ow; ++ox) {
-            const int sx = 2 * ox;
-            const bool isGreen = (((ox + oy) & 1) == 0) == greenEven;
-            if (!isGreen) {
-                const int cx = sx + (ox & 1), cy = sy + (oy & 1);
-                const int dx = (ox & 1) ? -2 : 2, dy = (oy & 1) ? -2 : 2;
-                uint32_t sum = 0;
-                for (int jy = 0; jy < 3; ++jy)
-                    for (int ix = 0; ix < 3; ++ix)
-                        sum += kW[ix] * kW[jy] * at(cx + (ix - 1) * dx, cy + (jy - 1) * dy);
-                o[ox] = static_cast<uint16_t>((sum + 40) / 81);
-                continue;
-            }
-            uint32_t inBlock, ring;
-            if (!greenEven) {
-                // Greens at (1,0), (0,1); ring (-1,0), (0,-1), (2,1), (1,2).
-                inBlock = at(sx + 1, sy) + at(sx, sy + 1);
-                ring = at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2);
-            } else {
-                // Greens at (0,0), (1,1); ring (1,-1), (-1,1), (2,0), (0,2).
-                inBlock = at(sx, sy) + at(sx + 1, sy + 1);
-                ring = at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2);
-            }
-            o[ox] = static_cast<uint16_t>((2 * inBlock + ring + 4) >> 3);
-        }
-    }
-}
-
 // 2x RGB binning (SPEC 3.8): the full-res mosaic is demosaiced once, here,
 // into a half-resolution RGB image whose pixels stand for the centres of the
 // 2x2 source blocks. A binned *mosaic* would be demosaiced a second time by
@@ -110,40 +57,47 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             std::vector<uint16_t>& out) {
     const int ow = width / 2, oh = rows / 2;
     auto mirror = [](int i, int n) { return i < 0 ? -i : i >= n ? 2 * (n - 1) - i : i; };
-    // Mirrored copy with a 4-sample border (parity-preserving), so the hot
-    // loops below read without bounds checks.
-    constexpr int kPad = 4;
-    const int pw = width + 2 * kPad;
-    thread_local std::vector<uint16_t> padded;
-    padded.resize(static_cast<size_t>(pw) * (rows + 2 * kPad) + 16);
-    for (int y = -kPad; y < rows + kPad; ++y) {
-        const auto* s = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(mirror(y, rows)) * stride);
-        uint16_t* d = padded.data() + static_cast<size_t>(y + kPad) * pw + kPad;
-        std::copy(s, s + width, d);
-        for (int k = 1; k <= kPad; ++k) { d[-k] = s[k]; d[width - 1 + k] = s[width - 1 - k]; }
-    }
-    const uint16_t* P0 = padded.data() + static_cast<size_t>(kPad) * pw + kPad;
-    auto row = [&](int y) { return P0 + static_cast<ptrdiff_t>(y) * pw; };
+    // Rows mirror by pointer; columns mirror only on the scalar edge paths, so
+    // the vector loops read the camera buffer directly (no padded copy).
+    auto row = [&](int y) {
+        return reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(mirror(y, rows)) * stride);
+    };
+    auto px = [&](const uint16_t* r, int x) -> int32_t { return r[mirror(x, width)]; };
     // In-block (x, y) of R and B for RGGB, GRBG, GBRG, BGGR.
     static constexpr int kR[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
     static constexpr int kB[4][2] = {{1, 1}, {0, 1}, {1, 0}, {0, 0}};
     const int* cR = kR[cfa];
     const int* cB = kB[cfa];
     const bool greenEven = cfa == 1 || cfa == 2;
-    // Site planes (int16: |4C - 2g| <= 4 * white) with one mirrored column each side.
+    const int white = (1 << bitDepth) - 1, clip = white - white / 20;
+    // Vector loops cover site columns [1, vEnd): every read of x - 2 .. x + 17 stays in the row.
+    const int vEnd = std::max(1, ow - 9);
+    // Site planes (int16: |4C - 2g| <= 4 * white) with one mirrored column each side,
+    // and per-block clip flags; both filled row by row just ahead of use.
     const int ps = ow + 2;
     thread_local std::vector<int16_t> dR, dB;
+    thread_local std::vector<uint8_t> hot, nearRow;
     dR.resize(static_cast<size_t>(ps) * oh);
     dB.resize(static_cast<size_t>(ps) * oh);
+    hot.resize(static_cast<size_t>(ow) * oh);
+    nearRow.resize(ow + 16);
     // 4 x (C - edge-directed green) at the sites of one colour in output row j.
     auto diffRow = [&](const int* c, int j, int16_t* o) {
         const int y = 2 * j + c[1];
-        const uint16_t *r0 = row(y) + c[0], *ru = row(y - 1) + c[0], *rd = row(y + 1) + c[0];
-        const uint16_t *ruu = row(y - 2) + c[0], *rdd = row(y + 2) + c[0];
+        const uint16_t *r0 = row(y), *ru = row(y - 1), *rd = row(y + 1), *ruu = row(y - 2), *rdd = row(y + 2);
+        auto scalar = [&](int i) {
+            const int x = 2 * i + c[0];
+            const int32_t C = r0[x], l = px(r0, x - 1), r = px(r0, x + 1), u = ru[x], dn = rd[x];
+            const int32_t dh = 2 * std::abs(l - r) + std::abs(2 * C - px(r0, x - 2) - px(r0, x + 2));
+            const int32_t dv = 2 * std::abs(u - dn) + std::abs(2 * C - ruu[x] - rdd[x]);
+            const int32_t g2 = dh < dv ? 2 * (l + r) : dv < dh ? 2 * (u + dn) : l + r + u + dn;
+            o[i] = static_cast<int16_t>(4 * C - g2);
+        };
         int i = 0;
+        scalar(i++);
 #if defined(__aarch64__)
-        for (; i + 8 <= ow; i += 8) {
-            const int x = 2 * i;
+        for (; i + 8 <= vEnd; i += 8) {
+            const int x = 2 * i + c[0];
             const uint16x8x2_t m = vld2q_u16(r0 + x), mL = vld2q_u16(r0 + x - 2);
             const int16x8_t C = vreinterpretq_s16_u16(m.val[0]), r = vreinterpretq_s16_u16(m.val[1]);
             const int16x8_t a = vreinterpretq_s16_u16(mL.val[0]), l = vreinterpretq_s16_u16(mL.val[1]);
@@ -162,28 +116,13 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             vst1q_s16(o + i, vsubq_s16(vshlq_n_s16(C, 2), g2));
         }
 #endif
-        for (; i < ow; ++i) {
-            const int x = 2 * i;
-            const int32_t C = r0[x], l = r0[x - 1], r = r0[x + 1], u = ru[x], dn = rd[x];
-            const int32_t dh = 2 * std::abs(l - r) + std::abs(2 * C - r0[x - 2] - r0[x + 2]);
-            const int32_t dv = 2 * std::abs(u - dn) + std::abs(2 * C - ruu[x] - rdd[x]);
-            const int32_t g2 = dh < dv ? 2 * (l + r) : dv < dh ? 2 * (u + dn) : l + r + u + dn;
-            o[i] = static_cast<int16_t>(4 * C - g2);
-        }
+        for (; i < ow; ++i) scalar(i);
         o[-1] = o[mirror(-1, ow)];
         o[ow] = o[mirror(ow, ow)];
     };
-    for (int j = 0; j < oh; ++j) {
-        diffRow(cR, j, dR.data() + static_cast<size_t>(j) * ps + 1);
-        diffRow(cB, j, dB.data() + static_cast<size_t>(j) * ps + 1);
-    }
-    // Near-clip test: any sample of the 3x3 block neighbourhood (-2..3 around
-    // the block) at or above 95 % of white. hot[] flags blocks whose 2x2 max clips.
-    const int white = (1 << bitDepth) - 1, clip = white - white / 20;
-    thread_local std::vector<uint8_t> hot;
-    hot.resize(static_cast<size_t>(ow) * oh);
+    // Block j: 2x2 max at or above 95 % of white.
     bool anyHot = false;
-    for (int j = 0; j < oh; ++j) {
+    auto hotRow = [&](int j) {
         const uint16_t *a = row(2 * j), *b = row(2 * j + 1);
         uint8_t* h = hot.data() + static_cast<size_t>(j) * ow;
         int i = 0;
@@ -203,19 +142,43 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             h[i] = m >= clip;
             anyHot |= h[i] != 0;
         }
-    }
-    auto near = [&](int i, int j) {
-        for (int bj = std::max(j - 1, 0); bj <= std::min(j + 1, oh - 1); ++bj)
-            for (int bi = std::max(i - 1, 0); bi <= std::min(i + 1, ow - 1); ++bi)
-                if (hot[static_cast<size_t>(bj) * ow + bi]) return true;
-        return false;
     };
+    int ready = 0;  // diff/hot rows [0, ready) are filled
+    auto fillTo = [&](int n) {
+        for (; ready < std::min(n, oh); ++ready) {
+            diffRow(cR, ready, dR.data() + static_cast<size_t>(ready) * ps + 1);
+            diffRow(cB, ready, dB.data() + static_cast<size_t>(ready) * ps + 1);
+            hotRow(ready);
+        }
+    };
+    fillTo(2);
     out.resize(static_cast<size_t>(width) * rows);
     const int rStep = cR[0] == 0 ? 1 : -1, bStep = cB[0] == 0 ? 1 : -1;
     for (int j = 0; j < oh; ++j) {
+        fillTo(j + 2);
         uint16_t* o0 = out.data() + static_cast<size_t>(2 * j) * width;
         uint16_t* o1 = o0 + width;
         const uint16_t *q0 = row(2 * j), *qu = row(2 * j - 1), *q1 = row(2 * j + 1), *q2 = row(2 * j + 2);
+        // Near-clip flags for this output row: hot blocks dilated by one block.
+        uint8_t* nr = nearRow.data() + 1;
+        bool rowNear = false;
+        if (anyHot) {
+            const uint8_t* hu = hot.data() + static_cast<size_t>(std::max(j - 1, 0)) * ow;
+            const uint8_t* hc = hot.data() + static_cast<size_t>(j) * ow;
+            const uint8_t* hd = hot.data() + static_cast<size_t>(std::min(j + 1, oh - 1)) * ow;
+            uint8_t acc = 0;
+            for (int i = 0; i < ow; ++i) { nr[i] = hu[i] | hc[i] | hd[i]; acc |= nr[i]; }
+            if (acc) {
+                nr[-1] = nr[0]; nr[ow] = nr[ow - 1];
+                uint8_t prev = 0;  // dilate horizontally (clamped at the edges)
+                for (int i = 0; i < ow; ++i) {
+                    const uint8_t cur = nr[i];
+                    nr[i] = static_cast<uint8_t>(cur | (i > 0 ? prev : 0) | (i + 1 < ow ? nr[i + 1] : 0));
+                    prev = cur;
+                }
+                rowNear = true;
+            }
+        }
         // Diff rows: own and the row toward the block centre (mirrored on the site grid).
         const int16_t* R0 = dR.data() + static_cast<size_t>(j) * ps + 1;
         const int16_t* R1 = dR.data() + static_cast<size_t>(mirror(j + (cR[1] == 0 ? 1 : -1), oh)) * ps + 1;
@@ -224,11 +187,11 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
         auto scalar = [&](int i) {
             const int x = 2 * i;
             const int32_t gin = greenEven ? q0[x] + q1[x + 1] : q0[x + 1] + q1[x];
-            const int32_t ring = greenEven ? qu[x + 1] + q1[x - 1] + q0[x + 2] + q2[x]
-                                           : q0[x - 1] + qu[x] + q1[x + 2] + q2[x + 1];
+            const int32_t ring = greenEven ? px(qu, x + 1) + px(q1, x - 1) + px(q0, x + 2) + q2[x]
+                                           : px(q0, x - 1) + qu[x] + px(q1, x + 2) + q2[x + 1];
             const int32_t g16 = 6 * gin + ring;
             int32_t R, B;
-            if (anyHot && near(i, j)) {
+            if (rowNear && nr[i]) {
                 // Plain same-colour bilinear near clipping (keeps highlights neutral);
                 // neighbours mirror on the same-colour site grid, like the diff planes.
                 auto plain = [&](const int* c, int ti) {
@@ -249,6 +212,7 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             o1[x + 1] = 0;
         };
         int i = 0;
+        scalar(i++);
 #if defined(__aarch64__)
         const int16x8_t vWhite = vdupq_n_s16(static_cast<int16_t>(white));
         // (4 g16 + 9 d0 + 3 (d0' + d1) + d1' + 32) >> 6 in 32 bits, clamped to 0..white.
@@ -266,7 +230,7 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             const int16x8_t v = vcombine_s16(vqrshrn_n_s32(lo, 6), vqrshrn_n_s32(hi, 6));
             return vreinterpretq_u16_s16(vminq_s16(vmaxq_s16(v, vdupq_n_s16(0)), vWhite));
         };
-        for (; i + 8 <= ow; i += 8) {
+        for (; i + 8 <= vEnd; i += 8) {
             const int x = 2 * i;
             uint16x8_t gin, ring;
             if (greenEven) {
@@ -286,13 +250,41 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             bottom.val[1] = vdupq_n_u16(0);
             vst2q_u16(o0 + x, top);
             vst2q_u16(o1 + x, bottom);
+            // Rare: blocks near clipping redo the plain path.
+            if (rowNear) {
+                uint64_t flags;
+                std::memcpy(&flags, nr + i, 8);
+                if (flags)
+                    for (int k = i; k < i + 8; ++k)
+                        if (nr[k]) scalar(k);
+            }
         }
-        // Rare: blocks near clipping redo the plain path.
-        if (anyHot)
-            for (int k = 0; k < i; ++k)
-                if (near(k, j)) scalar(k);
 #endif
         for (; i < ow; ++i) scalar(i);
+    }
+}
+
+// Cheap mode: half-resolution Bayer remosaiced from the RGB bin (demosaic,
+// downscale, remosaic, as ISP Bayer rescalers do): each output site keeps
+// its colour of the RGB pixel at that site. Sharper and lower luma error
+// than plain same-colour binning (detail 0.75-0.92 vs 0.54-0.79 of the
+// full-res reference on three real takes); a quarter of the samples of RGB.
+// Any half-res mosaic still fringes somewhat once re-demosaiced.
+void binRemosaic(const uint8_t* src, int stride, int width, int rows, int cfa, int bitDepth,
+                 std::vector<uint16_t>& cells, std::vector<uint16_t>& out) {
+    binRgb(src, stride, width, rows, cfa, bitDepth, cells);
+    const int ow = width / 2, oh = rows / 2;
+    // Cell column/row of each output parity's colour: R (0,0), G (1,0), B (0,1) in (x, y).
+    static constexpr int kColour[4][4] = {{0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}};
+    static constexpr int kCell[3][2] = {{0, 0}, {1, 0}, {0, 1}};
+    out.resize(static_cast<size_t>(ow) * oh);
+    for (int j = 0; j < oh; ++j) {
+        uint16_t* o = out.data() + static_cast<size_t>(j) * ow;
+        for (int par = 0; par < 2; ++par) {
+            const int* cell = kCell[kColour[cfa][(j & 1) * 2 + par]];
+            const uint16_t* c = cells.data() + static_cast<size_t>(2 * j + cell[1]) * width + cell[0];
+            for (int i = par; i < ow; i += 2) o[i] = c[2 * i];
+        }
     }
 }
 
@@ -361,10 +353,11 @@ Java_com_matthew_rawlens_CrawWriter_containerEncodeFrame(
         const uint16_t* raw;
         size_t rawStride;
         if (bin && !rgb) {
-            // Cheap mode: half-resolution Bayer (quarter of the samples).
-            binCentred(base, stride, w, cropHeight, cfa & 3, binned);
+            // Cheap mode: half-resolution Bayer remosaic (quarter of the samples).
+            thread_local std::vector<uint16_t> cells;
+            binRemosaic(base, stride, w & ~1, cropHeight & ~1, cfa & 3, desc.bitDepth, cells, binned);
             desc.width = static_cast<uint32_t>(w / 2);
-            desc.height = static_cast<uint32_t>(cropHeight / 2);
+            desc.height = static_cast<uint32_t>((cropHeight & ~1) / 2);
             raw = binned.data();
             rawStride = desc.width;
         } else if (rgb) {

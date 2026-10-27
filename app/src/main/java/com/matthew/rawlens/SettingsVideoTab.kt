@@ -232,7 +232,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 refresh()
             }
         })
-        content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): centre-aligned half-res Bayer, half the data of RGB and less CPU, but softer with some fringing after demosaic. Applies to the next take; N/A in Direct Log."))
+        content.addView(sectionDesc("RGB (best): each 2x2 block is demosaiced once on the phone (edge-directed), so editors never re-demosaic a binned mosaic: no magenta/green fringes, ~90 % of full-res detail. CFA (cheap): half-res Bayer remosaiced from the RGB bin (as camera ISPs rescale raw), a quarter of the samples of RGB and smaller files; any half-res mosaic still fringes a little once your editor demosaics it. Applies to the next take; N/A in Direct Log."))
         content.addView(sectionTitle("Locks on record"))
         content.addView(CheckBox(this).apply {
             text = "Lock exposure on record"
