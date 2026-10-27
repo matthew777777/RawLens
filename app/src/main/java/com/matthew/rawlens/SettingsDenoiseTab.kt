@@ -68,6 +68,79 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         var settings = denoiseSettings()
         val aiSubordinate = ArrayList<View>()
 
+        content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
+        val waveSubordinate = ArrayList<View>()
+        val waveMaster = CheckBox(this).apply {
+            text = "Wavelet luma+chroma denoise (Vulkan)\nPost-demosaic darktable-profiled wavelets on camera-linear RGB; JPEG only, never the DNG."
+            setTextColor(getColor(R.color.text_primary))
+            isChecked = settings.wavelet.enabled
+            setOnCheckedChangeListener { button, value ->
+                val proposed = settings.copy(wavelet = settings.wavelet.copy(enabled = value))
+                if (persistDenoiseSettings(proposed)) {
+                    settings = proposed
+                    waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
+                    if (settings.wavelet.enabled) controllerIfReady?.prewarmWavelet()
+                } else if (button.isChecked != settings.wavelet.enabled) {
+                    button.isChecked = settings.wavelet.enabled
+                }
+            }
+        }
+        content.addView(waveMaster)
+        fun addWaveSlider(
+            title: String,
+            maximum: Int,
+            initial: Int,
+            format: (Int) -> String,
+            update: (WaveletSettings, Int) -> WaveletSettings
+        ) {
+            var selected = initial.coerceIn(0, maximum)
+            val label = TextView(this).apply {
+                text = "$title: ${format(selected)}"
+                setTextColor(getColor(R.color.text_primary))
+                textSize = 14f
+                setPadding(dp(12), dp(8), dp(12), 0)
+            }
+            content.addView(label)
+            val bar = SeekBar(this).apply {
+                max = maximum
+                progress = selected
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        selected = progress
+                        label.text = "$title: ${format(selected)}"
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        val proposed = settings.copy(wavelet = update(settings.wavelet, selected))
+                        if (persistDenoiseSettings(proposed)) {
+                            settings = proposed
+                            setStatus("WAVELET ${title.uppercase(Locale.US)} • ${format(selected)}")
+                        } else {
+                            selected = initial.coerceIn(0, maximum)
+                            seekBar.progress = selected
+                        }
+                    }
+                })
+            }
+            content.addView(bar)
+            waveSubordinate += label
+            waveSubordinate += bar
+        }
+        addWaveSlider("Strength", 200, (settings.wavelet.strength * 100 + 0.5f).toInt(),
+            { "$it%" }) { s, v -> s.copy(strength = v / 100f) }
+        addWaveSlider("Luma", 100, (settings.wavelet.luma * 100 + 0.5f).toInt(),
+            { "$it%" }) { s, v -> s.copy(luma = v / 100f) }
+        addWaveSlider("Scales", 7, settings.wavelet.maxScale,
+            { if (it <= 1) "$it scale" else "$it scales" }) { s, v -> s.copy(maxScale = v.coerceAtLeast(1)) }
+        content.addView(TextView(this).apply {
+            text = "Strength 100% and 7 scales are the validated defaults; luma 25% keeps fine detail while chroma (fixed 75%) does the heavy lifting. Noise comes from the sensor profile, so higher ISO denoises harder automatically."
+            setTextColor(getColor(R.color.text_secondary))
+            textSize = 12f
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+        })
+        waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
+
+
         content.addView(sectionTitle("AI RAW denoise (RawNIND Bayer)"))
 
         val aiStatus = TextView(this).apply {
@@ -145,78 +218,6 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         aiSubordinate += aiStrengthLabel
         aiSubordinate += aiStrengthBar
         aiSubordinate.forEach { it.isEnabled = settings.aiEnabled }
-
-        content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
-        val waveSubordinate = ArrayList<View>()
-        val waveMaster = CheckBox(this).apply {
-            text = "Wavelet luma+chroma denoise (Vulkan)\nPost-demosaic darktable-profiled wavelets on camera-linear RGB; JPEG only, never the DNG."
-            setTextColor(getColor(R.color.text_primary))
-            isChecked = settings.wavelet.enabled
-            setOnCheckedChangeListener { button, value ->
-                val proposed = settings.copy(wavelet = settings.wavelet.copy(enabled = value))
-                if (persistDenoiseSettings(proposed)) {
-                    settings = proposed
-                    waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
-                    if (settings.wavelet.enabled) controllerIfReady?.prewarmWavelet()
-                } else if (button.isChecked != settings.wavelet.enabled) {
-                    button.isChecked = settings.wavelet.enabled
-                }
-            }
-        }
-        content.addView(waveMaster)
-        fun addWaveSlider(
-            title: String,
-            maximum: Int,
-            initial: Int,
-            format: (Int) -> String,
-            update: (WaveletSettings, Int) -> WaveletSettings
-        ) {
-            var selected = initial.coerceIn(0, maximum)
-            val label = TextView(this).apply {
-                text = "$title: ${format(selected)}"
-                setTextColor(getColor(R.color.text_primary))
-                textSize = 14f
-                setPadding(dp(12), dp(8), dp(12), 0)
-            }
-            content.addView(label)
-            val bar = SeekBar(this).apply {
-                max = maximum
-                progress = selected
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        selected = progress
-                        label.text = "$title: ${format(selected)}"
-                    }
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
-                        val proposed = settings.copy(wavelet = update(settings.wavelet, selected))
-                        if (persistDenoiseSettings(proposed)) {
-                            settings = proposed
-                            setStatus("WAVELET ${title.uppercase(Locale.US)} • ${format(selected)}")
-                        } else {
-                            selected = initial.coerceIn(0, maximum)
-                            seekBar.progress = selected
-                        }
-                    }
-                })
-            }
-            content.addView(bar)
-            waveSubordinate += label
-            waveSubordinate += bar
-        }
-        addWaveSlider("Strength", 200, (settings.wavelet.strength * 100 + 0.5f).toInt(),
-            { "$it%" }) { s, v -> s.copy(strength = v / 100f) }
-        addWaveSlider("Luma", 100, (settings.wavelet.luma * 100 + 0.5f).toInt(),
-            { "$it%" }) { s, v -> s.copy(luma = v / 100f) }
-        addWaveSlider("Scales", 7, settings.wavelet.maxScale,
-            { if (it <= 1) "$it scale" else "$it scales" }) { s, v -> s.copy(maxScale = v.coerceAtLeast(1)) }
-        content.addView(TextView(this).apply {
-            text = "Strength 100% and 7 scales are the validated defaults; luma 25% keeps fine detail while chroma (fixed 75%) does the heavy lifting. Noise comes from the sensor profile, so higher ISO denoises harder automatically."
-            setTextColor(getColor(R.color.text_secondary))
-            textSize = 12f
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-        })
-        waveSubordinate.forEach { it.isEnabled = settings.wavelet.enabled }
 
         markActive(denoiseTab)
         polish()
