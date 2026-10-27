@@ -1,83 +1,40 @@
 --- a/tinydng.h
 +++ b/tinydng.h
-@@ -700,6 +700,10 @@
-   size_t data_size;
-   const tinydng_cfa *cfa;      /* optional */
-   const tinydng_raw_info *raw; /* optional DNG metadata */
-+  /* RawLens: additional tags, serialized in opts->big_endian byte order.
-+     Must not duplicate generated tags. Payloads are copied at writer_create. */
-+  const tinydng_field *fields;
-+  size_t field_count;
- } tinydng_write_image;
- 
- /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;
---- a/tinydng_write.c
-+++ b/tinydng_write.c
-@@ -26,7 +26,7 @@
- #define TD_PHOTO_RGB 2u
- #define TD_PHOTO_CFA 32803u
- 
--#define TD_WMAX_ENTRIES 48
-+#define TD_WMAX_ENTRIES 64
- #define TD_WMAX_EXTRAS (256u * 1024u)
- 
- static void* tdw_lj92_ctx_alloc(void* user, size_t size) {
-@@ -1497,7 +1497,27 @@
-         td_add_short(&w->w, TD_TAG_CALIBRATION_ILLUMINANT1,
-                      raw->calibration_illuminant1);
-       }
-+    }
-+  }
-+
-+  /* RawLens Camera2 metadata, including DOUBLE NoiseProfile and opaque opcodes. */
-+  if (meta->field_count && !meta->fields) w->w.failed = 1;
-+  for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
-+    const tinydng_field *f = &meta->fields[i];
-+    size_t unit = 0;
-+    switch (f->type) {
-+      case 1: case 2: case 7: unit = 1; break;
-+      case 3: unit = 2; break;
-+      case 4: case 9: case 11: unit = 4; break;
-+      case 5: case 10: case 12: unit = 8; break;
-+      default: w->w.failed = 1; break;
-+    }
-+    if (!f->data || !f->count || !unit || f->count > SIZE_MAX / unit ||
-+        f->size != (size_t)f->count * unit) { w->w.failed = 1; break; }
-+    for (size_t j = 0; j < w->w.entry_count; ++j) {
-+      if (w->w.entries[j].tag == f->tag) w->w.failed = 1;
-     }
-+    if (!w->w.failed) td_add(&w->w, f->tag, f->type, f->count, f->data, f->size);
-   }
- 
-   if (w->w.failed) {
---- a/tinydng.h
-+++ b/tinydng.h
-@@ -150,7 +150,11 @@ typedef enum tinydng_compression {
+@@ -150,7 +150,11 @@
    TINYDNG_COMPRESSION_NEW_JPEG = 7,
    TINYDNG_COMPRESSION_ZIP = 8,
    TINYDNG_COMPRESSION_PACKBITS = 32773,
 -  TINYDNG_COMPRESSION_LOSSY_JPEG = 34892
 +  TINYDNG_COMPRESSION_LOSSY_JPEG = 34892,
-+  /* RawLens: JPEG XL (DNG 1.7, Compression 52546). Copy-through only: the
++  /* JPEG XL (DNG 1.7, Compression 52546). Copy-through only: the
 +     caller compresses (e.g. libjxl) and hands already-compressed bytes to
 +     tinydng_writer_write_compressed_strip. No encoder lives here. */
 +  TINYDNG_COMPRESSION_JPEG_XL = 52546
  } tinydng_compression;
  
  typedef enum tinydng_sample_format {
-@@ -687,12 +691,18 @@ typedef struct tinydng_write_options {
+@@ -677,7 +681,7 @@
+                                       tinydng_error *err);
+ 
+ /* ------------------------------------------------------------------ */
+-/* Writer (uncompressed TIFF / DNG, single image)                     */
++/* Writer (TIFF / DNG, single image)                     */
+ /* ------------------------------------------------------------------ */
+ 
+ typedef struct tinydng_write_options {
+@@ -687,7 +691,18 @@
    uint8_t ljpeg_arithmetic; /* compression=7: SOF11 instead of SOF3   */
    uint8_t ljpeg_predictor;  /* 0 => 1; otherwise Annex H selector 1..7 */
    uint16_t ljpeg_restart_interval_mcus; /* 0 => none; whole MCU rows   */
 -  uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits */
 +  uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits,
-+                           52546 precompressed JPEG XL (RawLens) */
-   /* RawLens: header-first streaming for uncompressed output to non-seekable
-      sinks. The header, IFD and extras are emitted at create (offsets
-      precomputed — valid only for uncompressed striped layouts), and strips
-      must arrive in index order. Classic TIFF only. */
-   uint8_t header_first;
-+  /* RawLens: the image data arrives already compressed (JPEG XL codestream).
++                           52546 precompressed JPEG XL */
++  /* header-first streaming for uncompressed output to non-seekable
++     sinks. The header, IFD and extras are emitted at create (offsets
++     precomputed — valid only for uncompressed striped layouts), and strips
++     must arrive in index order. Classic TIFF only. */
++  uint8_t header_first;
++  /* the image data arrives already compressed (JPEG XL codestream).
 +     writer_create requires compression == 52546 with 16-bit single-channel
 +     input; tinydng_write_memory skips the raster-size check and stores the
 +     bytes verbatim via tinydng_writer_write_compressed_strip. */
@@ -85,13 +42,31 @@
  } tinydng_write_options;
  
  typedef struct tinydng_write_image {
-@@ -811,6 +821,17 @@ tinydng_status tinydng_writer_write_strip(tinydng_writer *w,
+@@ -700,6 +715,17 @@
+   size_t data_size;
+   const tinydng_cfa *cfa;      /* optional */
+   const tinydng_raw_info *raw; /* optional DNG metadata */
++  /* additional tags, serialized in opts->big_endian byte order.
++     Must not duplicate generated tags. Payloads are copied at writer_create. */
++  const tinydng_field *fields;
++  size_t field_count;
++  /* nested EXIF (34665) / GPS (34853) sub-IFD contents. Each list is
++     assembled into its own sorted sub-IFD; empty count omits the sub-IFD.
++     Same payload rules as `fields`. Not supported with bigtiff. */
++  const tinydng_field *exif_fields;
++  size_t exif_field_count;
++  const tinydng_field *gps_fields;
++  size_t gps_field_count;
+ } tinydng_write_image;
+ 
+ /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;
+@@ -795,6 +821,17 @@
                                            const void *pixels,
                                            tinydng_error *err);
  
-+/* RawLens: write one already-compressed strip (JPEG XL codestream bytes).
++/* write one already-compressed strip (JPEG XL codestream bytes).
 +   Requires a writer created with compression == 52546 + precompressed, a
-+   non-header-first sink, and strip_index 0..seg_count (one-shot writes use
++   non-header-first sink, and strip_index 0..seg_count-1 (one-shot writes use
 +   strip 0 with len == img->data_size). Bytes are stored verbatim; no
 +   byte-swap, no re-encode. */
 +tinydng_status tinydng_writer_write_compressed_strip(tinydng_writer *w,
@@ -105,22 +80,282 @@
  tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err);
 --- a/tinydng_write.c
 +++ b/tinydng_write.c
-@@ -693,7 +693,8 @@ struct tinydng_writer {
+@@ -26,7 +26,7 @@
+ #define TD_PHOTO_RGB 2u
+ #define TD_PHOTO_CFA 32803u
+ 
+-#define TD_WMAX_ENTRIES 48
++#define TD_WMAX_ENTRIES 64
+ #define TD_WMAX_EXTRAS (256u * 1024u)
+ 
+ static void* tdw_lj92_ctx_alloc(void* user, size_t size) {
+@@ -693,7 +693,8 @@
    int bigtiff;
    uint32_t width, height;
    uint16_t spp, bps, sfmt, photo;
 -  uint16_t compression; /* effective: NONE / LZW / NEW_JPEG */
 +  uint16_t compression; /* effective: NONE / LZW / NEW_JPEG / JPEG_XL(52546) */
-+  uint8_t precompressed; /* RawLens: image data arrives compressed, store verbatim */
++  uint8_t precompressed; /* image data arrives compressed, store verbatim */
    uint8_t ljpeg_arithmetic;
    uint8_t ljpeg_predictor;
    uint16_t ljpeg_restart_interval;
-@@ -1458,6 +1459,16 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
+@@ -705,6 +706,15 @@
+   td_writer w;
+   uint64_t data_pos;
+   int finished;
++  /* header-first streaming + sub-IFDs (all context-owned). */
++  int header_first;
++  uint32_t next_seg;
++  tinydng_field *sub_exif;
++  size_t sub_exif_count;
++  tinydng_field *sub_gps;
++  size_t sub_gps_count;
++  td_wentry *sub_exif_entry;
++  td_wentry *sub_gps_entry;
+   /* Cached LZW encoder hash table (reused across tiles). */
+   td_lzw_table lzw_tbl;
+   /* Scratch buffers reused across tiles (grown on demand):
+@@ -1178,6 +1188,234 @@
+   return (b == 0u) ? 0u : (a / b) + ((a % b) != 0u);
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* Sub-IFD assembly + header-first streaming                           */
++/* ------------------------------------------------------------------ */
++static void td_writer_destroy(tinydng_writer *w) {
++  tinydng_context *ctx = w->ctx;
++  td_ctx_free(ctx, w->sub_exif);
++  td_ctx_free(ctx, w->sub_gps);
++  td_ctx_free(ctx, w->w.extras);
++  td_ctx_free(ctx, w->segs);
++  td_ctx_free(ctx, w->lzw_tbl.keys);
++  td_ctx_free(ctx, w->lzw_tbl.codes);
++  td_ctx_free(ctx, w->scratch_swap);
++  td_ctx_free(ctx, w->scratch_enc);
++  td_ctx_free(ctx, w);
++}
++
++#define TD_W_TAG_EXIF_IFD 34665u
++#define TD_W_TAG_GPS_IFD 34853u
++#define TD_W_SUB_MAX_FIELDS 128u
++
++/* Unit size for a TIFF field type, or 0 when the writer cannot carry it. */
++static size_t tdw_field_unit(uint16_t type) {
++  switch (type) {
++    case 1: case 2: case 6: case 7: return 1;
++    case 3: case 8: return 2;
++    case 4: case 9: case 11: case 13: return 4;
++    case 5: case 10: case 12: return 8;
++    default: return 0;
++  }
++}
++
++/* One caller field is well-formed: known type, sane count, payload matches. */
++static int tdw_field_ok(const tinydng_field *f) {
++  size_t unit;
++  if (!f || !f->data || !f->count) return 0;
++  unit = tdw_field_unit(f->type);
++  if (!unit || f->count > SIZE_MAX / unit) return 0;
++  return f->size == (size_t)f->count * unit;
++}
++
++/* Deep-copy + tag-sort a sub-IFD field list into context-owned storage.
++   Rejects duplicate tags and nested sub-IFD pointers (regress for readers). */
++static tinydng_status tdw_copy_sub(tinydng_context *ctx,
++                                     const tinydng_field *src, size_t count,
++                                     tinydng_field **out, tinydng_error *err) {
++  tinydng_field *dst;
++  size_t i, j;
++  if (count > TD_W_SUB_MAX_FIELDS) {
++    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "sub-IFD field count %zu exceeds %u", count,
++                 TD_W_SUB_MAX_FIELDS);
++    return TINYDNG_E_BOUNDS;
++  }
++  /* One allocation owns descriptors and payloads; validate before allocating. */
++  size_t total = count * sizeof(*dst), cursor = total;
++  for (i = 0; i < count; i++) {
++    if (!tdw_field_ok(&src[i]) ||
++        src[i].tag == TD_W_TAG_EXIF_IFD || src[i].tag == TD_W_TAG_GPS_IFD ||
++        !td_safe_add_size(total, src[i].size, &total) ||
++        total > TD_WMAX_EXTRAS) {
++      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0,
++                   src[i].tag, 0, "invalid or oversized sub-IFD field");
++      return TINYDNG_E_INVALID_ARG;
++    }
++    for (j = 0; j < i; j++) {
++      if (src[j].tag == src[i].tag) {
++        td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0,
++                     src[i].tag, 0, "duplicate sub-IFD tag");
++        return TINYDNG_E_INVALID_ARG;
++      }
++    }
++  }
++  dst = (tinydng_field *)td_ctx_alloc(ctx, total, err);
++  if (!dst) return TINYDNG_E_OOM;
++  for (i = 0; i < count; i++) {
++    dst[i] = src[i];
++    dst[i].data = (uint8_t *)dst + cursor;
++    memcpy(dst[i].data, src[i].data, src[i].size);
++    cursor += src[i].size;
++  }
++  /* Insertion sort by tag (TIFF requires ascending); tiny n. */
++  for (i = 1; i < count; i++) {
++    tinydng_field tmp = dst[i];
++    j = i;
++    while (j > 0 && dst[j - 1].tag > tmp.tag) {
++      dst[j] = dst[j - 1];
++      j--;
++    }
++    dst[j] = tmp;
++  }
++  *out = dst;
++  return TINYDNG_OK;
++}
++
++/* Checked serialized size of a sorted sub-IFD blob (classic entries). */
++static int tdw_sub_blob_size(const tinydng_field *fields, size_t count,
++                               size_t *out) {
++  size_t total = 2 + 4; /* entry count + next-IFD */
++  size_t i;
++  if (!td_safe_mul_size(count, 12u, &i) ||
++      !td_safe_add_size(total, i, &total)) {
++    return 0;
++  }
++  for (i = 0; i < count; i++) {
++    size_t padded;
++    if (fields[i].size <= 4u) continue;
++    if (!td_safe_add_size(fields[i].size, 1u, &padded)) return 0;
++    padded &= ~(size_t)1u;
++    if (!td_safe_add_size(total, padded, &total)) return 0;
++  }
++  *out = total;
++  return 1;
++}
++
++/* Serialize one sorted sub-IFD into `blob` (exactly the size computed by
++   tdw_sub_blob_size); value offsets are absolute from the TIFF header. */
++static void tdw_serialize_sub(uint8_t *blob, const tinydng_field *fields,
++                                size_t count, uint64_t blob_off, int be) {
++  size_t head = 2 + count * 12u + 4u;
++  size_t running = head;
++  size_t i;
++  td_put16(blob, (uint16_t)count, be);
++  for (i = 0; i < count; i++) {
++    const tinydng_field *f = &fields[i];
++    uint8_t *ep = blob + 2 + i * 12u;
++    td_put16(ep, f->tag, be);
++    td_put16(ep + 2, f->type, be);
++    td_put32(ep + 4, f->count, be);
++    if (f->size <= 4u) {
++      memcpy(ep + 8, f->data, f->size);
++      memset(ep + 8 + f->size, 0, 4u - f->size);
++    } else {
++      size_t padded = (f->size + 1u) & ~(size_t)1u;
++      td_put32(ep + 8, (uint32_t)(blob_off + running), be);
++      memcpy(blob + running, f->data, f->size);
++      if (padded > f->size) blob[running + f->size] = 0;
++      running += padded;
++    }
++  }
++  td_put32(blob + 2 + count * 12u, 0u, be);
++}
++
++/* Serialize every reserved sub-IFD blob now that extras_base is known.
++   Must run after td_writer_relayout_extras (final region positions). */
++static tinydng_status tdw_serialize_subs(tinydng_writer *w,
++                                           uint64_t extras_base,
++                                           tinydng_error *err) {
++  size_t k;
++  for (k = 0; k < 2u; k++) {
++    td_wentry *e = k == 0 ? w->sub_exif_entry : w->sub_gps_entry;
++    const tinydng_field *fields = k == 0 ? w->sub_exif : w->sub_gps;
++    size_t count = k == 0 ? w->sub_exif_count : w->sub_gps_count;
++    uint64_t blob_off;
++    if (!e) continue;
++    if (!td_safe_add_u64(extras_base,
++                         (uint64_t)(e->ext - w->w.extras), &blob_off) ||
++        blob_off > (uint64_t)UINT32_MAX ||
++        e->ext_len > (uint64_t)UINT32_MAX - blob_off) {
++      td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, e->tag,
++                   extras_base, "sub-IFD offset overflow");
++      return TINYDNG_E_BOUNDS;
++    }
++    tdw_serialize_sub((uint8_t *)e->ext, fields, count, blob_off,
++                        w->big_endian);
++  }
++  return TINYDNG_OK;
++}
++
++/* Forward: defined below with the streaming writer. */
++static tinydng_status td_writer_relayout_extras(tinydng_writer *w,
++                                                tinydng_error *err);
++
++/* Header-first layout + emit (classic uncompressed strips only): fix the
++   extras layout now, precompute every strip offset, serialize sub-IFDs,
++   then emit header, IFD and extras in increasing-offset order so a
++   non-seekable sink stays sequential. Strips append after at data_pos. */
++static tinydng_status tdw_emit_head(tinydng_writer *w, tinydng_error *err) {
++  uint64_t ifd_size, extras_base, pos;
++  uint32_t k;
++  tinydng_status st;
++  st = td_writer_relayout_extras(w, err);
++  if (st != TINYDNG_OK) return st;
++  ifd_size = 2u + (uint64_t)w->w.entry_count * 12u + 4u; /* n <= 64 */
++  extras_base = 8u + ifd_size;
++  st = tdw_serialize_subs(w, extras_base, err);
++  if (st != TINYDNG_OK) return st;
++  /* Precompute strip offsets exactly as td_writer_put_segment advances. */
++  pos = extras_base + (uint64_t)w->w.extras_len;
++  for (k = 0; k < w->seg_count; k++) {
++    uint64_t y = (uint64_t)k * (uint64_t)w->rows_per_strip;
++    uint32_t rows = w->rows_per_strip;
++    size_t len;
++    if (y + (uint64_t)rows > (uint64_t)w->height) {
++      rows = w->height - (uint32_t)y;
++    }
++    if (!td_safe_mul_size((size_t)w->width, (size_t)rows, &len) ||
++        !td_safe_mul_size(len, (size_t)w->spp, &len) ||
++        !td_safe_mul_size(len, (size_t)w->bps / 8u, &len) ||
++        pos > (uint64_t)UINT32_MAX) {
++      td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, pos,
++                   "header-first strip layout overflow");
++      return TINYDNG_E_BOUNDS;
++    }
++    w->segs[k].offset = pos;
++    w->segs[k].byte_count = (uint64_t)len;
++    pos += (uint64_t)len;
++    if (pos & 1u) pos++; /* put_segment's alignment pad byte */
++  }
++  td_writer_patch_segs(w);
++  if (w->w.failed) {
++    td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "header-first segment patch overflow");
++    return TINYDNG_E_INTERNAL;
++  }
++  st = td_writer_put_header(&w->sink, w->big_endian, 0, 8u, err);
++  if (st != TINYDNG_OK) return st;
++  st = td_writer_emit_ifd(&w->w, &w->sink, 8u, extras_base, err);
++  if (st != TINYDNG_OK) return st;
++  if (w->w.extras_len > 0u) {
++    if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
++        w->w.extras_len) {
++      return td_wio_err(&w->sink, extras_base, err);
++    }
++  }
++  w->data_pos = w->segs[0].offset;
++  return TINYDNG_OK;
++}
++
+ tinydng_status tinydng_writer_create(tinydng_context *ctx,
+                                      tinydng_write_io sink,
+                                      const tinydng_write_image *meta,
+@@ -1234,6 +1472,16 @@
        return TINYDNG_E_UNSUPPORTED;
      }
      comp = TINYDNG_COMPRESSION_NEW_JPEG;
 +  } else if (comp == TINYDNG_COMPRESSION_JPEG_XL) {
-+    /* RawLens: copy-through for caller-compressed (libjxl) strips. The
++    /* copy-through for caller-compressed (libjxl) strips. The
 +       codestream carries 16-bit single-channel mosaic data; geometry tags
 +       still describe the decoded raster (DNG 1.7, Compression 52546). */
 +    if (bps != 16u || spp != 1u) {
@@ -132,31 +367,337 @@
    } else {
      td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
                   "unsupported writer compression %u", (unsigned)comp);
-@@ -1492,6 +1503,19 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
+@@ -1251,6 +1499,12 @@
+     }
+   }
+ 
++  if (comp == TINYDNG_COMPRESSION_JPEG_XL && tiling &&
++      tiling->tile_width && tiling->tile_length) {
++    td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "JPEG XL copy-through requires strips");
++    return TINYDNG_E_UNSUPPORTED;
++  }
+   w = (tinydng_writer *)td_ctx_calloc(ctx, sizeof(*w), err);
+   if (!w) {
+     return TINYDNG_E_OOM;
+@@ -1267,6 +1521,20 @@
+   w->sfmt = sfmt;
    w->photo = photo;
    w->compression = comp;
-   w->header_first = opts && opts->header_first;
++  w->header_first = opts && opts->header_first;
 +  w->precompressed = opts && opts->precompressed;
 +  if (w->precompressed && comp != TINYDNG_COMPRESSION_JPEG_XL) {
 +    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
 +                 "precompressed input requires JPEG XL compression (52546)");
-+    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
 +    return TINYDNG_E_INVALID_ARG;
 +  }
 +  if (comp == TINYDNG_COMPRESSION_JPEG_XL && !w->precompressed) {
 +    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
 +                 "JPEG XL compression needs precompressed input (no encoder here)");
-+    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
 +    return TINYDNG_E_INVALID_ARG;
 +  }
    w->ljpeg_arithmetic = opts ? (opts->ljpeg_arithmetic != 0) : 0;
    w->ljpeg_predictor =
        (opts && opts->ljpeg_predictor) ? opts->ljpeg_predictor : 1u;
-@@ -2065,6 +2089,82 @@ tinydng_status tinydng_writer_write_strip(tinydng_writer *w,
+@@ -1277,7 +1545,7 @@
+     td_set_error(
+         err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+         "lossless JPEG options require compression=7 and predictor 1..7");
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_INVALID_ARG;
+   }
+ 
+@@ -1285,7 +1553,7 @@
+     if (tiling->tile_width > 0xFFFFu || tiling->tile_length > 0xFFFFu) {
+       td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                    "tile dims must be <= 65535");
+-      td_ctx_free(ctx, w);
++      td_writer_destroy(w);
+       return TINYDNG_E_UNSUPPORTED;
+     }
+     w->tiled = 1;
+@@ -1310,7 +1578,7 @@
+                    "lossless JPEG requires dims <= 65535 and spp in 1..4 "
+                    "(got %ux%u spp=%u)",
+                    meta->width, meta->height, (unsigned)spp);
+-      td_ctx_free(ctx, w);
++      td_writer_destroy(w);
+       return TINYDNG_E_UNSUPPORTED;
+     }
+     if (w->ljpeg_restart_interval != 0u) {
+@@ -1321,7 +1589,7 @@
+                      "lossless JPEG restart interval must be a multiple "
+                      "of the segment width (%u)",
+                      segment_width);
+-        td_ctx_free(ctx, w);
++        td_writer_destroy(w);
+         return TINYDNG_E_INVALID_ARG;
+       }
+     }
+@@ -1329,7 +1597,7 @@
+   if ((uint64_t)across * (uint64_t)down > 0xFFFFFFu) {
+     td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                  "segment count too large (%u x %u)", across, down);
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_BOUNDS;
+   }
+   seg_count = across * down;
+@@ -1337,12 +1605,12 @@
+   if (!td_safe_mul_size((size_t)seg_count, sizeof(td_writer_seg), &seg_bytes)) {
+     td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                  "segment table size overflow");
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_BOUNDS;
+   }
+   w->segs = (td_writer_seg *)td_ctx_calloc(ctx, seg_bytes, err);
+   if (!w->segs) {
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_OOM;
+   }
+ 
+@@ -1352,8 +1620,7 @@
+   w->w.extras_cap = w->bigtiff ? (4u * 1024u * 1024u) : TD_WMAX_EXTRAS;
+   w->w.extras = (uint8_t *)td_ctx_alloc(ctx, w->w.extras_cap, err);
+   if (!w->w.extras) {
+-    td_ctx_free(ctx, w->segs);
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_OOM;
+   }
+ 
+@@ -1440,7 +1707,10 @@
+   if (opts && opts->as_dng) {
+     const tinydng_raw_info *raw = meta->raw;
+     const tinydng_cfa *cfa = meta->cfa;
+-    td_add_short(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
++    /* TIFF 6.0 mandates LONG for NewSubfileType; SHORT makes Apple ImageIO
++     * (Finder Quick Look, sips) reject the file. Matches the pre-TinyDNG
++     * Kotlin writer, which emitted Entry(254, LONG, ...). */
++    td_add_long(&w->w, TD_TAG_NEW_SUBFILE_TYPE, 0);
+     if (cfa && cfa->present) {
+       uint16_t dim[2];
+       dim[0] = cfa->pattern_dim[0] ? cfa->pattern_dim[0] : 2u;
+@@ -1468,7 +1738,7 @@
+       if (raw->has_dng_version) {
+         td_add_bytes(&w->w, TD_TAG_DNG_VERSION, raw->dng_version, 4);
+       } else {
+-        uint8_t ver[4] = {1u, 4u, 0u, 0u};
++        uint8_t ver[4] = {1u, (comp == TINYDNG_COMPRESSION_JPEG_XL ? 7u : 4u), 0u, 0u};
+         td_add_bytes(&w->w, TD_TAG_DNG_VERSION, ver, 4);
+       }
+       if (raw->black_level_present) {
+@@ -1500,24 +1770,139 @@
+     }
+   }
+ 
++  /* Camera2 metadata, including DOUBLE NoiseProfile and opaque opcodes. */
++  if (meta->field_count && !meta->fields) w->w.failed = 1;
++  for (size_t i = 0; !w->w.failed && i < meta->field_count; ++i) {
++    const tinydng_field *f = &meta->fields[i];
++    if (!tdw_field_ok(f)) { w->w.failed = 1; break; }
++    for (size_t j = 0; j < w->w.entry_count; ++j) {
++      if (w->w.entries[j].tag == f->tag) w->w.failed = 1;
++    }
++    if (!w->w.failed) td_add(&w->w, f->tag, f->type, f->count, f->data, f->size);
++  }
++
++  /* JPEG XL needs DNG 1.7 version tags even without as_dng/raw. */
++  if (!w->w.failed && comp == TINYDNG_COMPRESSION_JPEG_XL) {
++    const uint16_t tags[2] = {TD_TAG_DNG_VERSION, TD_TAG_DNG_BACKWARD_VERSION};
++    const uint8_t ver[4] = {1, 7, 0, 0};
++    for (size_t k = 0; k < 2; k++) {
++      size_t j;
++      for (j = 0; j < w->w.entry_count; j++) {
++        td_wentry *e = &w->w.entries[j];
++        if (e->tag != tags[k]) continue;
++        if (e->type != TD_TYPE_BYTE || e->count != 4 ||
++            memcmp(e->value, ver, 4) < 0) w->w.failed = 1;
++        break;
++      }
++      if (j == w->w.entry_count) td_add_bytes(&w->w, tags[k], ver, 4);
++    }
++  }
++
++  /* nested EXIF/GPS sub-IFDs: validate + copy now, reserve the blob
++     regions (sizes are layout-independent); contents serialize once absolute
++     offsets exist (header-first: at create; streaming: at finish). */
++  if (!w->w.failed &&
++      (meta->exif_field_count || meta->gps_field_count)) {
++    const tinydng_field *lists[2] = {meta->exif_fields, meta->gps_fields};
++    const size_t counts[2] = {meta->exif_field_count, meta->gps_field_count};
++    const uint16_t ptrs[2] = {TD_W_TAG_EXIF_IFD, TD_W_TAG_GPS_IFD};
++    size_t k;
++    if (w->bigtiff) {
++      td_set_error(err, TINYDNG_E_UNSUPPORTED, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "sub-IFDs require classic TIFF");
++      td_writer_destroy(w);
++      return TINYDNG_E_UNSUPPORTED;
++    }
++    for (k = 0; k < 2u; ++k) {
++      tinydng_field *copy = NULL;
++      size_t blob_size = 0;
++      uint8_t *region;
++      size_t j;
++      if (!counts[k]) continue;
++      if (!lists[k]) { w->w.failed = 1; break; }
++      for (j = 0; j < w->w.entry_count; ++j) {
++        if (w->w.entries[j].tag == ptrs[k]) w->w.failed = 1;
++      }
++      if (w->w.failed) break;
++      st = tdw_copy_sub(ctx, lists[k], counts[k], &copy, err);
++      if (st != TINYDNG_OK) {
++        td_writer_destroy(w);
++        return st;
++      }
++      if (k == 0) w->sub_exif = copy;
++      else w->sub_gps = copy;
++      if (!tdw_sub_blob_size(copy, counts[k], &blob_size)) {
++        td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, ptrs[k],
++                     0, "sub-IFD size overflow");
++        td_writer_destroy(w);
++        return TINYDNG_E_BOUNDS;
++      }
++      region = td_reserve(&w->w, blob_size);
++      if (!region) break; /* w->failed set; handled below */
++      td_add_reserved(&w->w, ptrs[k], TD_TYPE_LONG, 1u, region, blob_size);
++      if (k == 0) {
++        w->sub_exif = copy;
++        w->sub_exif_count = counts[k];
++      } else {
++        w->sub_gps = copy;
++        w->sub_gps_count = counts[k];
++      }
++    }
++  }
++
+   if (w->w.failed) {
+     td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                  "writer ran out of tag/extras capacity");
+-    td_ctx_free(ctx, w->w.extras);
+-    td_ctx_free(ctx, w->segs);
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return TINYDNG_E_INTERNAL;
+   }
+ 
+   /* Sort entries by tag (TIFF requires ascending). */
+   qsort(w->w.entries, w->w.entry_count, sizeof(td_wentry), td_entry_cmp);
++
++  /* locate the sub-IFD pointer entries at their sorted slots. */
++  if (w->sub_exif_count || w->sub_gps_count) {
++    size_t i;
++    for (i = 0; i < w->w.entry_count; i++) {
++      if (w->w.entries[i].tag == TD_W_TAG_EXIF_IFD) {
++        w->sub_exif_entry = &w->w.entries[i];
++      } else if (w->w.entries[i].tag == TD_W_TAG_GPS_IFD) {
++        w->sub_gps_entry = &w->w.entries[i];
++      }
++    }
++    if (!!w->sub_exif_count != !!w->sub_exif_entry ||
++        !!w->sub_gps_count != !!w->sub_gps_entry) {
++      td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "sub-IFD pointer entry lost in sort");
++      td_writer_destroy(w);
++      return TINYDNG_E_INTERNAL;
++    }
++  }
++
++  if (w->header_first) {
++    /* Uncompressed sizes are known upfront, so the whole header (IFD +
++       extras + sub-IFDs) goes out now and strips append after it — a
++       non-seekable sink never needs a backward patch. */
++    if (w->tiled || w->compression != TINYDNG_COMPRESSION_NONE ||
++        w->bigtiff) {
++      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "header-first needs uncompressed classic strips");
++      td_writer_destroy(w);
++      return TINYDNG_E_INVALID_ARG;
++    }
++    st = tdw_emit_head(w, err);
++    if (st != TINYDNG_OK) {
++      td_writer_destroy(w);
++      return st;
++    }
++    *out = w;
++    return TINYDNG_OK;
++  }
+ 
+   /* Header placeholder; the IFD offset is patched at finish. */
+   st = td_writer_put_header(&w->sink, be, w->bigtiff, 0, err);
+   if (st != TINYDNG_OK) {
+-    td_ctx_free(ctx, w->w.extras);
+-    td_ctx_free(ctx, w->segs);
+-    td_ctx_free(ctx, w);
++    td_writer_destroy(w);
+     return st;
+   }
+   /* Pre-allocate the LZW hash table if LZW compression is selected so it can
+@@ -1528,11 +1913,7 @@
+     w->lzw_tbl.codes = (uint16_t *)td_ctx_alloc(
+         ctx, (size_t)TD_LZW_HASH_SIZE * sizeof(uint16_t), err);
+     if (!w->lzw_tbl.keys || !w->lzw_tbl.codes) {
+-      td_ctx_free(ctx, w->lzw_tbl.keys);
+-      td_ctx_free(ctx, w->lzw_tbl.codes);
+-      td_ctx_free(ctx, w->w.extras);
+-      td_ctx_free(ctx, w->segs);
+-      td_ctx_free(ctx, w);
++      td_writer_destroy(w);
+       return TINYDNG_E_OOM;
+     }
+   }
+@@ -1557,6 +1938,11 @@
+                  "writer already finished");
+     return TINYDNG_E_INVALID_ARG;
+   }
++  if (w->precompressed) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "use tinydng_writer_write_compressed_strip for precompressed input");
++    return TINYDNG_E_INVALID_ARG;
++  }
+   at = w->data_pos;
+   if (index >= w->seg_count) {
+     td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+@@ -1564,7 +1950,20 @@
+                  w->seg_count);
+     return TINYDNG_E_INVALID_ARG;
+   }
+-  if (w->segs[index].offset != 0u) {
++  if (w->header_first) {
++    /* Header-first offsets are precomputed: a non-seekable sink needs
++       strict index order, and the running position must hit the plan. */
++    if (index != w->next_seg) {
++      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "header-first strips must arrive in index order");
++      return TINYDNG_E_INVALID_ARG;
++    }
++    if (at != w->segs[index].offset) {
++      td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, at,
++                   "header-first strip position missed its plan");
++      return TINYDNG_E_INTERNAL;
++    }
++  } else if (w->segs[index].offset != 0u) {
+     td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+                  "segment %u written twice", index);
+     return TINYDNG_E_INVALID_ARG;
+@@ -1600,6 +1999,7 @@
+     }
+     w->data_pos++;
+   }
++  if (w->header_first) w->next_seg++;
+   return TINYDNG_OK;
+ }
+ 
+@@ -1711,6 +2111,82 @@
    return td_writer_put_segment(w, strip_index, pixels, w->width, ph, err);
  }
  
-+/* RawLens: store one already-compressed strip verbatim (JPEG XL
++/* store one already-compressed strip verbatim (JPEG XL
 +   codestream). Mirrors the non-header-first tail of td_writer_put_segment,
 +   minus geometry-derived sizing: the caller owns the byte count. */
 +tinydng_status tinydng_writer_write_compressed_strip(tinydng_writer *w,
@@ -235,14 +776,63 @@
  /* The extras buffer is laid out in entry-ADD order, but the IFD's running
     offsets walk the SORTED entries. After patching, rebuild the buffer in
     sorted-entry order (and fix the entry pointers) so the two agree. */
-@@ -2236,9 +2336,19 @@ tinydng_status tinydng_write_memory(tinydng_context *ctx,
+@@ -1762,6 +2238,16 @@
+                  "writer already finished");
+     return TINYDNG_E_INVALID_ARG;
+   }
++  if (w->header_first) {
++    /* Header, IFD and extras went out at create; only completeness left. */
++    if (w->next_seg != w->seg_count) {
++      td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                   "segment %u was never written", w->next_seg);
++      st = TINYDNG_E_INVALID_ARG;
++      goto cleanup;
++    }
++    goto flush;
++  }
+   for (i = 0; i < w->seg_count; i++) {
+     if (w->segs[i].offset == 0u) {
+       td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+@@ -1783,6 +2269,10 @@
+   }
+ 
+   extras_base = w->data_pos; /* already even-aligned */
++  st = tdw_serialize_subs(w, extras_base, err);
++  if (st != TINYDNG_OK) {
++    goto cleanup;
++  }
+   if (w->w.extras_len > 0u) {
+     if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
+         w->w.extras_len) {
+@@ -1806,6 +2296,7 @@
+   if (st == TINYDNG_OK) {
+     st = td_writer_put_header(&w->sink, w->big_endian, w->bigtiff, ifd_off, err);
+   }
++flush:
+   /* Keep flushing internal so the public sink layout stays compatible. */
+   if (st == TINYDNG_OK && w->sink.write == td_wio_file_write &&
+       w->sink.size == td_wio_file_size &&
+@@ -1818,14 +2309,7 @@
+   }
+ 
+ cleanup:
+-  td_ctx_free(w->ctx, w->w.extras);
+-  td_ctx_free(w->ctx, w->segs);
+-  td_ctx_free(w->ctx, w->lzw_tbl.keys);
+-  td_ctx_free(w->ctx, w->lzw_tbl.codes);
+-  td_ctx_free(w->ctx, w->scratch_swap);
+-  td_ctx_free(w->ctx, w->scratch_enc);
+-  w->finished = 1;
+-  td_ctx_free(w->ctx, w);
++  td_writer_destroy(w);
+   return st;
+ }
+ 
+@@ -1868,11 +2352,75 @@
    }
    *out_data = NULL;
    *out_size = 0;
--  st = td_write_check_data(img, err);
--  if (st != TINYDNG_OK) {
--    return st;
-+  /* RawLens: precompressed input is a codestream, not a raster — the
++  /* precompressed input is a codestream, not a raster — the
 +     geometry-size check cannot apply; non-empty is the only invariant. */
 +  if (opts && opts->precompressed) {
 +    if (img->data_size == 0u) {
@@ -255,19 +845,120 @@
 +    if (st != TINYDNG_OK) {
 +      return st;
 +    }
-   }
-   st = tinydng_write_io_open_memory(ctx, &io, err);
-   if (st != TINYDNG_OK) {
-@@ -2249,7 +2359,11 @@ tinydng_status tinydng_write_memory(tinydng_context *ctx,
-     io.close(&io);
-     return st;
-   }
--  st = tinydng_writer_write_strip(w, 0, img->data, err);
++  }
++  st = tinydng_write_io_open_memory(ctx, &io, err);
++  if (st != TINYDNG_OK) {
++    return st;
++  }
++  st = tinydng_writer_create(ctx, io, img, opts, NULL, &w, err);
++  if (st != TINYDNG_OK) {
++    io.close(&io);
++    return st;
++  }
 +  if (opts && opts->precompressed) {
 +    st = tinydng_writer_write_compressed_strip(w, 0, img->data, img->data_size, err);
 +  } else {
 +    st = tinydng_writer_write_strip(w, 0, img->data, err);
 +  }
++  if (st != TINYDNG_OK) {
++    /* Cleanup finish() clears `err`; use a scratch error so the original
++       failure message survives. */
++    tinydng_error cerr;
++    tinydng_writer_finish(w, &cerr); /* releases writer state */
++    io.close(&io);
++    return st;
++  }
++  st = tinydng_writer_finish(w, err);
++  if (st != TINYDNG_OK) {
++    io.close(&io);
++    return st;
++  }
++  st = tinydng_write_io_memory_take(ctx, &io, out_data, out_size, err);
++  io.close(&io);
++  return st;
++}
++
++void tinydng_buffer_free(tinydng_context *ctx, uint8_t *buf) {
++  td_ctx_free(ctx, buf);
++}
++
++tinydng_status tinydng_write_file(tinydng_context *ctx, const char *path,
++                                  const tinydng_write_image *img,
++                                  const tinydng_write_options *opts,
++                                  tinydng_error *err) {
++  tinydng_writer *w = NULL;
++  tinydng_write_io io;
++  tinydng_status st;
++
++  tinydng_error_clear(err);
++  if (!ctx || !path || !img || !img->data) {
++    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
++                 "null argument to tinydng_write_file");
++    return TINYDNG_E_INVALID_ARG;
++  }
+   st = td_write_check_data(img, err);
    if (st != TINYDNG_OK) {
-     /* Cleanup finish() clears `err`; use a scratch error so the original
-        failure message survives. */
+     return st;
+   }
+-  st = tinydng_write_io_open_memory(ctx, &io, err);
++  st = tinydng_write_io_open_file(ctx, path, &io, err);
+   if (st != TINYDNG_OK) {
+     return st;
+   }
+@@ -1891,56 +2439,6 @@
+     return st;
+   }
+   st = tinydng_writer_finish(w, err);
+-  if (st != TINYDNG_OK) {
+-    io.close(&io);
+-    return st;
+-  }
+-  st = tinydng_write_io_memory_take(ctx, &io, out_data, out_size, err);
+   io.close(&io);
+   return st;
+ }
+-
+-void tinydng_buffer_free(tinydng_context *ctx, uint8_t *buf) {
+-  td_ctx_free(ctx, buf);
+-}
+-
+-tinydng_status tinydng_write_file(tinydng_context *ctx, const char *path,
+-                                  const tinydng_write_image *img,
+-                                  const tinydng_write_options *opts,
+-                                  tinydng_error *err) {
+-  tinydng_writer *w = NULL;
+-  tinydng_write_io io;
+-  tinydng_status st;
+-
+-  tinydng_error_clear(err);
+-  if (!ctx || !path || !img || !img->data) {
+-    td_set_error(err, TINYDNG_E_INVALID_ARG, TINYDNG_STAGE_WRITE, 0, 0, 0,
+-                 "null argument to tinydng_write_file");
+-    return TINYDNG_E_INVALID_ARG;
+-  }
+-  st = td_write_check_data(img, err);
+-  if (st != TINYDNG_OK) {
+-    return st;
+-  }
+-  st = tinydng_write_io_open_file(ctx, path, &io, err);
+-  if (st != TINYDNG_OK) {
+-    return st;
+-  }
+-  st = tinydng_writer_create(ctx, io, img, opts, NULL, &w, err);
+-  if (st != TINYDNG_OK) {
+-    io.close(&io);
+-    return st;
+-  }
+-  st = tinydng_writer_write_strip(w, 0, img->data, err);
+-  if (st != TINYDNG_OK) {
+-    /* Cleanup finish() clears `err`; use a scratch error so the original
+-       failure message survives. */
+-    tinydng_error cerr;
+-    tinydng_writer_finish(w, &cerr); /* releases writer state */
+-    io.close(&io);
+-    return st;
+-  }
+-  st = tinydng_writer_finish(w, err);
+-  io.close(&io);
+-  return st;
+-}
