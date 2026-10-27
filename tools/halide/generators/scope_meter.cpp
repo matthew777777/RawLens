@@ -482,7 +482,7 @@ public:
             Expr lapM = lsum(fc, fr) / Expr(4.0f);
             Expr ratio = select(tenM > kZeroF, lapM / tenM, kZeroF);
             focus_energy_(fc, fr) =
-                select(ratio >= Expr(0.5f), min(tenM, lapM), kZeroF);
+                select(ratio >= Expr(0.65f), min(tenM, lapM), kZeroF);
             focus_mean_(fc, fr) = pmean(fc, fr) / Expr(16.0f);
         }
 

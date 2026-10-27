@@ -305,7 +305,7 @@ void scalar_case(const std::vector<uint16_t> &data, int W, int H, int stride,
             }
             float ten = tsum / 4.0f, lap = lsum / 4.0f;
             float ratio = ten > 0.0f ? lap / ten : 0.0f;
-            float e = ratio >= 0.5f ? (ten < lap ? ten : lap) : 0.0f;
+            float e = ratio >= 0.65f ? (ten < lap ? ten : lap) : 0.0f;
             o.fenergy[(size_t)row * kFocusCols + col] = e;
             o.fmean[(size_t)row * kFocusCols + col] = pmean / 16.0f;
         }

@@ -7,6 +7,7 @@
 
 #include <android/log.h>
 #include <cstdint>
+#include "bgu_jni_shape.h"
 
 #include "halide/filters/bgu_look.h"
 
@@ -86,10 +87,10 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
     if (env->GetArrayLength(fparams) != 9 || env->GetArrayLength(iparams) != 11 ||
         env->GetArrayLength(wb) != 4 || env->GetArrayLength(ccm) != 9 ||
         env->GetArrayLength(aces) != 9 || env->GetArrayLength(white) != 3 ||
-        env->GetArrayLength(quad) != w * h * 4 ||
-        env->GetArrayLength(lens) != lensCols * lensRows * 4 ||
-        env->GetArrayLength(guideOut) != w * h * 3 ||
-        env->GetArrayLength(devOut) != w * h * 3) {
+        env->GetArrayLength(quad) != bguElementCount({w, h, 4}) ||
+        env->GetArrayLength(lens) != bguElementCount({lensCols, lensRows, 4}) ||
+        env->GetArrayLength(guideOut) != bguElementCount({w, h, 3}) ||
+        env->GetArrayLength(devOut) != bguElementCount({w, h, 3})) {
         return -1;
     }
     jbyte *quadPtr = env->GetByteArrayElements(quad, nullptr);

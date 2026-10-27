@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
 
-/** Fit buffer-pool pins: reuse identity, realloc rules, ping-pong order. */
+/** Fit-thread-local frame buffer reuse and resize rules. */
 class BguFitBuffersTest {
     @Test fun frameReusesWhileDimsMatch() {
         val b = BguFitBuffers()
@@ -27,20 +27,4 @@ class BguFitBuffersTest {
         assertEquals(128 * 96 * 3, a.guide.size)
     }
 
-    @Test fun backGridPingPongsAndResizes() {
-        val b = BguFitBuffers()
-        val g0 = b.backGrid(8, 6, 9)
-        assertEquals(8 * 6 * 9 * 12, g0.size)
-        b.flip()
-        val g1 = b.backGrid(8, 6, 9)
-        assertEquals(8 * 6 * 9 * 12, g1.size)
-        b.flip()
-        assertSame(g0, b.backGrid(8, 6, 9))
-        assertSame(g1, run { b.flip(); b.backGrid(8, 6, 9) })
-        // Dim change reallocates both sides to the new size.
-        val r0 = b.backGrid(4, 3, 9)
-        assertEquals(4 * 3 * 9 * 12, r0.size)
-        b.flip()
-        assertEquals(4 * 3 * 9 * 12, b.backGrid(4, 3, 9).size)
-    }
 }

@@ -1,0 +1,4 @@
+Command: ./gradlew :app:testDebugUnitTest --tests com.matthew.rawlens.Bgu* --console=plain
+Observed XML totals immediately after encoded-guide build: 78 tests, 0 failures.
+Build result: BUILD SUCCESSFUL in 2m 9s.
+Shared build/test-results was subsequently replaced by a different test filter; per-class XML is no longer present.

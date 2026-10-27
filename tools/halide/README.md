@@ -131,3 +131,12 @@ not in scratch scripts.
 port in later steps derives from `fit_and_slice_affine_grid_halide.cpp`
 (modern Generator style — base new code on it, not on the 2016-era
 `fit_and_slice_3x4.cpp`). License entries go to `NOTICE.md` at hardening time.
+
+## A5 source audit and host-only checks
+
+See `docs/refactor/bgu-study.md` for pinned source versions, numerical
+conventions, application adaptations and device evidence. Run
+`bash tools/halide/check_bgu.sh` for BGU host gates without regenerating
+Android archives. This includes the independent double-precision fit
+oracle in `fit_reference_check.cpp`. The live low frame uses `BguSample`
+point sampling; the box-downsample spike is not wired into that path.

@@ -63,11 +63,22 @@ build_one() {
     done
 }
 
-build_one bgu_spike_downsample host_check.cpp
-build_one bgu_look look_check.cpp
-build_one bgu_fit fit_check.cpp
-build_one hdrplus_meter meter_check.cpp
-build_one scope_meter scope_meter_check.cpp
+# Optional filter names allow an audited stage to be regenerated without
+# touching unrelated checked-in archives. No arguments retain the full build.
+filters=("$@")
+if [ "${#filters[@]}" -eq 0 ]; then
+    filters=(bgu_spike_downsample bgu_look bgu_fit hdrplus_meter scope_meter)
+fi
+for name in "${filters[@]}"; do
+    case "$name" in
+        bgu_spike_downsample) build_one "$name" host_check.cpp ;;
+        bgu_look) build_one "$name" look_check.cpp ;;
+        bgu_fit) build_one "$name" fit_check.cpp ;;
+        hdrplus_meter) build_one "$name" meter_check.cpp ;;
+        scope_meter) build_one "$name" scope_meter_check.cpp ;;
+        *) echo "Unknown filter: $name" >&2; exit 2 ;;
+    esac
+done
 
 ls -la "$OUT" | head -n 12
 echo OK

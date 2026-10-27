@@ -45,14 +45,12 @@ class BguSliceCpuTest {
 
     @Test
     fun trilerpMixesZLevels() {
-        // 1x1x2 grid (planar: idx = z + gz * ch): z=0 identity, z=1 twofold
-        // gain. Guide mid-gray (128/255 = 0.50196); scaleZ=1 -> cellZ inside
-        // (0, 1): mix ~50/50 -> developed ~= 0.50196 * 1.50196 = 0.75392
-        // -> byte 192 (+-1).
+        // Encoded mid-grey = .73665; z blends gains .5 and 1.0.
+        // .73665 * (.5 + .5*.73665) * 255 ~= 163 codes.
         val coeffs = FloatArray(1 * 1 * 2 * 12)
         for (row in 0..2) {
-            coeffs[0 + 2 * (row * 4 + row)] = 1f
-            coeffs[1 + 2 * (row * 4 + row)] = 2f
+            coeffs[0 + 2 * (row * 4 + row)] = 0.5f
+            coeffs[1 + 2 * (row * 4 + row)] = 1f
         }
         val grid = BguGrid(1, 1, 2, coeffs)
         val guide = byteArrayOf(128.toByte(), 128.toByte(), 128.toByte(), 128.toByte())
@@ -60,22 +58,22 @@ class BguSliceCpuTest {
         val r = out[0].toInt() and 0xff
         val g = out[1].toInt() and 0xff
         val b = out[3].toInt() and 0xff
-        assertTrue("r=$r", r in 191..193)
-        assertTrue("g=$g", g in 191..193)
-        assertTrue("b=$b", b in 191..193)
+        assertTrue("r=$r", r in 162..164)
+        assertTrue("g=$g", g in 162..164)
+        assertTrue("b=$b", b in 162..164)
         // Quad layout: Gr slot mirrors G for the shader merge.
         assertEquals(out[1], out[2])
     }
 
     @Test
     fun greenMergeAveragesGrGb() {
-        // (R,Gr,Gb,B) = (0,255,0,0): merged G = 0.5 -> identity -> 128.
+        // Merge in linear: G=.5, then encode -> 188 (encoding first would give 128).
         val guide = byteArrayOf(0, 255.toByte(), 0, 0)
         val out = BguSliceCpu.sliceScalar(
             guide, 1, 1, BguSliceCpu.identityGrid(), 1f, 1f, 1f, false
         )
         assertEquals(0, out[0].toInt() and 0xff)
-        assertEquals(128, out[1].toInt() and 0xff)
+        assertEquals(188, out[1].toInt() and 0xff)
         assertEquals(0, out[3].toInt() and 0xff)
     }
 
@@ -107,7 +105,7 @@ class BguSliceCpuTest {
             guide, 2, 2, BguSliceCpu.identityGrid(), 1f, 1f, 1f, false, step = 2
         )
         assertEquals(4, out.size)
-        assertArrayEquals(byteArrayOf(200.toByte(), 100.toByte(), 100.toByte(), 50.toByte()), out)
+        assertArrayEquals(byteArrayOf(229.toByte(), 168.toByte(), 168.toByte(), 122.toByte()), out)
     }
 
     @Test

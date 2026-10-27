@@ -4,7 +4,9 @@
 // the 3x4 matrix mapping input colors to output colors, with membrane
 // smoothness via blurred Gram matrices (paper section 4, "Fast approximation").
 //
-// Adapted from google/bgu src/halide/fit_and_slice_affine_grid_halide.cpp
+// Adapted from google/bgu @ f2d6f2d1950b64790a2f712dc80b6c4bada410d5
+// src/halide/fit_and_slice_3x4.cpp (2016 parameters) and
+// src/halide/fit_and_slice_affine_grid_halide.cpp (Generator structure)
 // (Apache 2.0, see NOTICE.md): f32 I/O instead of int16 (matches bgu_look),
 // fit-only output (slicing runs on the GPU in step 4), BGU luma weights
 // (0.25, 0.5, 0.25) hardcoded to match the slice shader's z-coordinate, and
@@ -121,6 +123,7 @@ Expr pack_channels(Var c, std::vector<Expr> exprs) {
 
 class BguFit : public Halide::Generator<BguFit> {
 public:
+    GeneratorParam<float> curve_alpha{"curve_alpha", 0.0f};
     // Low-res guide RGB (fit input) and developed RGB (fit output), f32.
     Input<Buffer<float>> guide_{"guide", 3};
     Input<Buffer<float>> developed_{"developed", 3};
@@ -142,8 +145,11 @@ public:
         // Luma bin coordinate. Weights MUST match the slice shader, which
         // hardcodes dot(color, (0.25, 0.5, 0.25)) for the z lookup.
         Func gray("gray");
-        gray(x, y) = 0.25f * clampedGuide(x, y, 0) + 0.5f * clampedGuide(x, y, 1) +
-                     0.25f * clampedGuide(x, y, 2);
+        Expr luma = 0.25f * clampedGuide(x, y, 0) + 0.5f * clampedGuide(x, y, 1) +
+                    0.25f * clampedGuide(x, y, 2);
+        // Google's later Generator curves the intensity coordinate identically
+        // at fit and slice. Zero keeps the original 2016 implementation.
+        gray(x, y) = luma / lerp(1.0f, luma, Expr(float(curve_alpha)));
 
         // Splat: accumulate Gram (ααᵀ, symmetric 4x4 -> 10) + rhs (βαᵀ -> 12)
         // into the cell covering each low-res pixel. Cell (x, y) covers
@@ -215,6 +221,9 @@ public:
 
             // Regularize toward the cell's mean output/input luma ratio
             // (paper eq. 2): under-constrained cells degrade to a gain map.
+            // Original 2016 implementation uses 1e-6 for BOTH epsilon and
+            // lambda. The later Generator uses epsilon=0.1; retain the
+            // original prior for existing image parity (bgu-study.md).
             const float epsilon = 1e-6f;
             Expr n = A(3, 3);
             Expr outLuma = b(3, 0) + 2.0f * b(3, 1) + b(3, 2) + epsilon * (n + 1.0f);
