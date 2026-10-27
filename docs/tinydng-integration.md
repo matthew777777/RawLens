@@ -1,27 +1,66 @@
 # TinyDNG integration
 
-RawLens' `TINY_DNG` backend uses the C11 v3 writer from
-https://github.com/matthew777777/tinydng at commit
-`1f181699511e08e51baabd9fdab2311ea1253d4b`.
-The requested repository is cloned into `references/tinydng` (ignored research checkout).
-The build uses pinned, checked-in sources under `app/src/main/cpp/deps/tinydng`, so it
-needs neither a network fetch nor that checkout. `UPSTREAM.json` records original
-file hashes; `rawlens.patch` records every modification to upstream code.
+## Sources and ownership
 
-Upstream v3 can read NoiseProfile and GainMap but its writer omits them, ActiveArea,
-and several calibration tags. The local patch adds validated extra TIFF fields:
-known field sizes, payload length checks, duplicate rejection, and a 64-tag limit.
-The existing 256 KiB metadata capacity remains enforced with a reported error.
-RawLens supplies Camera2 metadata as these fields while TinyDNG owns TIFF layout,
-strip offsets and pixel serialization. The old PhotonCamera DNG bridge and C++
-header are no longer compiled. The `dngCreator` library name remains for JPEG JNI.
+RawLens vendors the C11 v3 writer from
+https://github.com/matthew777777/tinydng. All 13 shared files in
+`app/src/main/cpp/deps/tinydng/UPSTREAM.json` match TinyDNG commit `e1d6442`
+byte-for-byte. That manifest intentionally retains the original `1f18169`
+base hashes; `rawlens.patch` reproduces the updated header/writer from that
+base. Vendor-only provenance files and Android/JNI code are separate.
+The checked-in TinyDNG source build needs no fetch or research checkout.
 
-`NativeDngWriter` packs padded RAW16 rows without modifying samples, shifts black
-levels and CFA to the stored buffer origin, then calls `rawLensDng` JNI. JNI validates
-buffer capacity and descriptors, writes uncompressed 16-bit CFA, and sends the
-result to the OutputStream in 64 KiB chunks. Native output is currently materialized
-in memory; this does not claim constant-memory streaming. Native failures and Java
-OutputStream exceptions propagate to DngSaver's existing failed-media cleanup.
+The shared writer now supports checked serialized TIFF/DNG fields, sorted
+EXIF/GPS directories, all three opaque opcode lists, sequential uncompressed
+strips and native lossless JPEG XL. It enforces 64 total main-IFD entries,
+256 KiB extras and 128 fields per EXIF/GPS directory. Malformed lengths,
+duplicate tags and unsupported combinations fail explicitly. EXIF/GPS directories
+and header-first output currently require classic TIFF. Generic fields preserve
+DNG 1.7 tags; this does not imply interpretation of every DNG 1.7 feature.
+
+RawLens owns Camera2 metadata conversion, coordinate/CFA transforms and pixel
+quantization; TinyDNG owns TIFF layout, directories, offsets and compression.
+The former PhotonCamera DNG bridge and C++ header are no longer the active writer.
+
+## Pixel and output paths
+
+`NativeDngWriter` packs padded RAW16 rows without changing sample values, shifts
+black levels/CFA to the stored buffer origin and calls `rawLensDng` JNI. JNI
+validates descriptors/capacity and passes pixels directly to TinyDNG. Single-frame
+uncompressed and JXL saves still materialize the final TIFF in memory before
+chunked OutputStream delivery; errors propagate to failed-media cleanup.
+
+`TinyDngImageWriter` uses header-first streaming for uncompressed merged,
+linear RGB and float-CFA output. Header, metadata and precomputed strip offsets
+are emitted at open; strips append in order to a non-seekable stream. EXIF/GPS
+subdirectories are deep-copied by the native writer. The 16-bit HDR+ JXL path
+uses the one-shot native encoder with those same directories. Float-CFA and
+packed-input paths remain uncompressed. Single-frame GPS enrichment still uses
+`DngCaptureMetadata`; selecting JXL does not discard location.
+
+## JPEG XL / DNG 1.7
+
+Callers pass ordinary host-order unsigned RAW16 pixels with compression 52546;
+no app-side compressed buffer or `precompressed` flag is required. TinyDNG
+encodes losslessly, supplies missing DNGVersion/DNGBackwardVersion 1.7.0.0 tags,
+and rejects explicit older versions. Defaults match the former JNI encoder:
+effort 3, automatic threads, linear grayscale and original-profile lossless
+samples. Compressed bytes drain directly to the TIFF sink through reusable
+64 KiB staging; libjxl still allocates its own frame/runner memory outside
+TinyDNG's tracked context cap. JXL tiles and header-first output are unsupported.
+TinyDNG does not decode JPEG XL. Caller-encoded strip copy-through remains
+available without libjxl for other library clients.
+
+Android defines `TINYDNG_HAVE_JXL` on `tinydng_v3` and links it to the existing
+`jxl`/`jxl_threads` targets. The configured libjxl pin is v0.12.0; use
+`-PjxlSourceDir=<checkout with submodules>` for a source checkout or
+`-PdisableJxl` to disable it. Host `tools/build_dng_native.sh` discovers
+libjxl/libjxl_threads >=0.8 through pkg-config and adds their runtime paths;
+custom installs use `PKG_CONFIG_PATH`. Without libjxl, ordinary saves still
+work and JXL pixel encoding reports unsupported. Standalone TinyDNG uses
+`-DTINYDNG_ENABLE_JXL=ON` and exposes `tinydng_has_jxl_encoder()`.
+
+## Capture metadata
 
 `TinyDngMetadata` preserves fractional black levels, white level, orientation,
 ActiveArea/default crop, row-major Camera2 color/calibration/forward matrices,
@@ -45,22 +84,36 @@ Camera2 R/Ge/Go/B samples are selected using CFA color and original sensor-row
 parity, including odd stored-buffer and ActiveArea offsets. Maps are omitted when
 absent or already applied by the HAL, avoiding double correction.
 
-Android DngCreator remains the default; AUTO still falls back to TinyDNG. HDR
-float-CFA export remains its separate writer.
+Android DngCreator remains the default for ordinary captures; AUTO can fall
+back to TinyDNG, and JXL selects TinyDNG explicitly. Float-CFA exports use the
+shared TinyDNG transport with their own metadata and quantization rules.
 
 ## Verification
 
-- `./gradlew :app:testDebugUnitTest --tests com.matthew.rawlens.DngNoiseProfileTest --tests com.matthew.rawlens.TinyDngMetadataTest :app:assembleDebug`
-- `python3 tools/verify_tinydng.py`
+```sh
+./gradlew :app:testDebugUnitTest \
+  --tests 'com.matthew.rawlens.NativeJxlDngWriterTest' \
+  --tests 'com.matthew.rawlens.LinearRgbDngWriterTest' \
+  --tests 'com.matthew.rawlens.FloatCfaDngWriterTest' \
+  --tests 'com.matthew.rawlens.HdrPlusDngWriterTest' \
+  --tests 'com.matthew.rawlens.GpsDngWriterTest' \
+  --tests 'com.matthew.rawlens.DngCompressionTest' \
+  --tests 'com.matthew.rawlens.DngExifDirectoryTest' \
+  --tests 'com.matthew.rawlens.TinyDngMetadataTest'
+python3 tools/verify_tinydng.py
+```
 
-The native test runs with ASan/UBSan and checks lossless sample round-trip,
-DOUBLE NoiseProfile, parsed GainMap/ActiveArea, rejected malformed and duplicate
-tags, and allocation cleanup. It also independently parses OpcodeList2 using the
-existing Python checker. With the reference checkout present, it verifies the
-vendored source can be reproduced exactly from upstream plus the recorded patch.
-Kotlin tests cover all four CFA layouts, both buffer-origin parities, cropped
-ActiveArea geometry, distinct gain channels, fractional black levels, calibration,
-and already-applied lens shading.
+Provide host libjxl through pkg-config to execute `NativeJxlDngWriterTest`;
+it skips when the host library lacks the encoder. On 2026-10-27 all 58 selected
+JVM tests passed without skips with libjxl 0.12.0. The ASan/UBSan host GainMap
+verifier passed, and `rawLensDng` built for Android arm64. TinyDNG's separate
+10-test suite passed in default/encoder-enabled builds and with ASan/UBSan
+while independently decoding JXL strips to exact RAW16 samples. Its metadata
+tests cover both byte orders, all opcode lists, EXIF/GPS, sequential sinks,
+allocation failures and cleanup. The recorded vendor patch was reproduced
+against its base and all 13 shared files compared byte-for-byte.
 
-No Android device was connected during this integration; a fresh camera capture
-and external RAW developer rendering still require device verification.
+These checks validate the library/JNI integration. Fresh camera captures,
+MediaStore behavior and external RAW-developer rendering still need device
+verification for this encoder move; older device benchmarks below describe
+the earlier implementation, not a new performance measurement.

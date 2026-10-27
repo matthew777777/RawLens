@@ -81,14 +81,22 @@ log-luminance analysis of the corrected RAW CFA, protects the upper percentile, 
 plus or minus 1.5 EV, and shares one correction across each logical burst/ZSL selection. This is a
 RawLens development feature and does not alter DNG pixels or frozen Camera2 capture metadata.
 
-## PhotonCamera DNG creator and TinyDNG
+## TinyDNG and historical PhotonCamera DNG integration
 
-The DNG target compiles PhotonCamera's checked-in `app/src/main/cpp/dngCreator.cpp` directly and
-generates its Java `processing/DngCreator.java` verbatim from the local reference at commit
-`54d9febc596b34376b8be242a388f386d97e8f5d`.
-That implementation uses the unmodified ParticlesDevs TinyDNG fork requested by PhotonCamera.
-TinyDNG is Copyright (c) 2016-present Syoyo Fujita and contributors and is distributed under
-the MIT License. PhotonCamera remains licensed under GPL-3.0-or-later. No stb code is used.
+The active TinyDNG DNG backend compiles the checked-in C11 v3 sources under
+`app/src/main/cpp/deps/tinydng`, synchronized with
+https://github.com/matthew777777/tinydng at `e1d6442`.
+TinyDNG is Copyright (c) 2016-present Syoyo Fujita and contributors and is
+licensed under MIT; its license is retained in the vendor directory.
+`UPSTREAM.json` records the original `1f18169` source hashes, and `rawlens.patch`
+reproduces the current writer/header from that base. The Android DNG build
+compiles out ZIP, baseline JPEG, PSD and multi-threaded decode.
+
+RawLens supplies Camera2 metadata while TinyDNG handles checked TIFF fields,
+EXIF/GPS directories, opcode payload transport and optional lossless JPEG XL.
+The DNG encoder links libjxl through TinyDNG, rather than a separate JNI codec.
+PhotonCamera's earlier DNG integration is no longer the active writer; its
+historical attribution and retained source licenses remain applicable.
 
 ## darktable
 
@@ -137,10 +145,13 @@ JPEG XL output is encoded by the JPEG XL reference implementation:
 - Repository: https://github.com/libjxl/libjxl
 - License: BSD 3-Clause (GPL-3.0 compatible)
 - Integration: `app/src/main/cpp/native_jxl_encoder.cpp` via the `jxlEncoder`
-  JNI bridge; `app/src/main/cpp/CMakeLists.txt` (`LIBJXL_SOURCE_DIR`).
+  JNI bridge for developed stills; `deps/tinydng/tinydng_write.c` through
+  `rawLensDng` for unsigned 16-bit single-channel DNG pixels.
+- Build: `app/src/main/cpp/CMakeLists.txt` (`LIBJXL_SOURCE_DIR`), with
+  `TINYDNG_HAVE_JXL` defined on the TinyDNG target; host discovery uses pkg-config.
 
 libjxl auto-fetches at configure time (pinned `LIBJXL_VERSION`, currently
-v0.11.1, verified at `794a5dcf0d54f9f0b20d288a12e87afb91d20dfc` with encoder-only
+v0.12.0 (`a7a9c78`) with encoder-only
 flags plus `JPEGXL_ENABLE_SJPEG/JPEGLI=OFF` for NDK r27) unless
 `LIBJXL_SOURCE_DIR` points at an existing checkout or `-DRAWLENS_ENABLE_JXL=OFF`
 (source-only/F-Droid builds) is set; `./gradlew` accepts `-PjxlSourceDir=` and

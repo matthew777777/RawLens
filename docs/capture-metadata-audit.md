@@ -54,3 +54,15 @@ Merged/float/linear writers serialize EXIF/GPS directly through TinyDNG. Float C
 ## Validation
 
 Targeted host tests cover the real AndroidX JPEG EXIF save/reopen path, including raw GPS version bytes, signed exposure values, UTC GPS time and altitude/accuracy; the host-only Android Pair stub is supplied with constructor values. DNG append tests run in both byte orders, check opaque payload and original-byte preservation, and verify appended signed rationals and GPS fields. Existing native TinyDNG writer tests cover float, linear RGB, HDR+, GPS and metadata output. Physical-device MediaStore and camera-HAL validation remain necessary, especially for Ultra HDR, JXL and logical multi-camera devices.
+
+## TinyDNG encoder sync (2026-10-27)
+
+TinyDNG now owns RAW16-to-JPEG-XL encoding for single-frame and 16-bit HDR+
+DNG output; JNI supplies pixels and metadata directly. EXIF/GPS handling above
+continues to apply. The generic writer transports OpcodeList1/2/3 verbatim,
+including future opcodes, while RawLens remains responsible for valid Camera2
+lens-shading and distortion conversions. The sync does not add a new distortion
+model. Missing JXL version tags become DNG 1.7.0.0; explicit older versions fail.
+`NativeJxlDngWriterTest` verifies the JNI JXL path with automatic versions and a
+GPS directory when host libjxl is available. See
+[TinyDNG integration](tinydng-integration.md) for build, limits and verification.

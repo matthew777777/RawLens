@@ -25,11 +25,12 @@ RawLens is a photography-first, open-source Android camera built around a scene-
 - Optional JPEG XL output (Settings → JPEG → JPEG XL output): the same AgX develop saved as `.jxl` up to
   16-bit integer (plus 16/32-bit float) with darktable-style bit depth, quality, effort, and decoding-speed
   options and embedded EXIF/XMP; requires a libjxl-enabled build (bundled automatically when the build
-  machine has network, otherwise JPEG/DNG only)
-- Optional JXL-compressed DNG (Settings → General → DNG compression): single-frame mosaics stored losslessly
-  as JPEG XL codestreams (DNG 1.7, like iPhone ProRAW) at roughly half the file size; needs a libjxl-enabled
-  build and a reader with DNG 1.7 support (Lightroom / Apple Photos — darktable cannot read them yet), off by
-  default, GPS-tagged and merged frames stay uncompressed
+  configuration enables bundled libjxl or supplies a libjxl checkout)
+- Optional lossless JPEG XL DNG (Settings → General → DNG compression, off by
+  default): TinyDNG encodes single-frame RAW16 and 16-bit HDR+ mosaics directly,
+  with DNG 1.7 version tags and retained EXIF/GPS. Requires a libjxl-enabled build
+  and a compatible DNG reader. Packed input and float-CFA exports retain their
+  uncompressed paths. See [DNG integration](docs/tinydng-integration.md).
 - Optional AI RAW denoise (RawNIND-tiny): writes a denoised DNG and develops the JPEG from it, with an option to keep the original sensor DNG
 - Portrait viewfinder layout
 
@@ -68,7 +69,21 @@ From the repository root:
 
 The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-The DNG target compiles the checked-in PhotonCamera `dngCreator.cpp` directly, generates an exact build copy of PhotonCamera's `DngCreator.java`, and downloads the same unmodified ParticlesDevs `tiny_dng_writer.h` requested by PhotonCamera's CMake project. Still captures use PhotonCamera's `setParameters` → `setCompression(false)` → `writeBuffer(OutputStream, …)` sequence. RawLens only bridges its frozen Camera2 metadata into the parameter fields, repacks a padded RAW plane when necessary, and supplies the pending MediaStore output stream. It does not patch TinyDNG or add a preview image. Aside from the optional update check (Settings → About; disabled in F-Droid builds), the installed app makes no network requests at runtime.
+DNG output uses Android DngCreator or the checked-in C11 TinyDNG v3 writer.
+The TinyDNG backend owns TIFF layout, checked metadata fields, EXIF/GPS directories,
+lens-shading opcode transport and optional native lossless JPEG XL encoding.
+RawLens supplies frozen Camera2 metadata and RAW pixels through a small JNI bridge;
+it no longer uses PhotonCamera's DNG writer or downloads `tiny_dng_writer.h`.
+The shared TinyDNG sources match upstream commit `e1d6442` byte-for-byte.
+
+Android links TinyDNG to the existing libjxl target when available (pinned v0.12.0).
+For source builds, supply `-PjxlSourceDir=<checkout with submodules>`; builds with
+JXL disabled still support uncompressed DNG. Host tests detect installed libjxl
+and libjxl_threads >=0.8 through pkg-config; custom installations use
+`PKG_CONFIG_PATH`. TinyDNG's standalone CMake option is `TINYDNG_ENABLE_JXL=ON`.
+See [integration and verification](docs/tinydng-integration.md) for details.
+Aside from the optional update check (disabled in F-Droid builds), the installed
+app makes no network requests at runtime.
 
 To create a distributable release, configure your own Android signing key and build a signed release APK or App Bundle using Android Studio. Signing credentials and keystores must never be committed.
 
@@ -95,7 +110,9 @@ out) for Linux and macOS (M1 included). Start at
 
 ## Current architecture
 
-`MainActivity` owns the portrait viewfinder UI, settings, gesture overlays, rotation-aware control placement, and persisted preferences. `RawCameraController` owns Camera2 capture, timestamp pairing, ZSL lifecycle, and fallback behavior. `RawDevelopmentCoordinator` performs normalized RAW validation, corrected pre-demosaic processing, adaptive exposure analysis, AMaZE demosaicing, and JPEG development. `Gles31JpegOutputProcessor` applies AgX and optional Ultra HDR gainmaps. `DngSaver` combines each selected `RAW_SENSOR` image with its exact frozen capture metadata and provides a pending MediaStore stream to PhotonCamera's Java/native DNG saver. PROGRAM and ZSL use this identical path. UI overlays and lens discovery are kept in small, separate classes under `app/src/main/java/com/matthew/rawlens`.
+`MainActivity` owns the portrait viewfinder UI, settings, gesture overlays, rotation-aware control placement, and persisted preferences. `RawCameraController` owns Camera2 capture, timestamp pairing, ZSL lifecycle, and fallback behavior. `RawDevelopmentCoordinator` performs normalized RAW validation, corrected pre-demosaic processing, adaptive exposure analysis, AMaZE demosaicing, and JPEG development. `Gles31JpegOutputProcessor` applies AgX and optional Ultra HDR gainmaps. `DngSaver` combines each selected `RAW_SENSOR` image with its exact frozen capture metadata and provides a pending MediaStore stream to Android DngCreator or TinyDNG.
+`TinyDngImageWriter` also serializes merged, linear RGB and float-CFA output;
+TinyDNG owns lossless JXL encoding for supported RAW16 paths. PROGRAM and ZSL use this identical path. UI overlays and lens discovery are kept in small, separate classes under `app/src/main/java/com/matthew/rawlens`.
 
 ## Contributing
 
