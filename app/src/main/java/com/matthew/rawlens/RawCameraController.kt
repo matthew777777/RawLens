@@ -186,6 +186,7 @@ class RawCameraController(
     private val onFocusPeaking: (FocusPeakingFrame) -> Unit = { },
     private val onFocusPeakingActive: (Boolean) -> Unit = { },
     private val bguViewfinder: VfEngine? = null,
+    private val onRawExposureAssist: (RawExposureAssistFrame?) -> Unit = {},
     initialFacePriorityEnabled: Boolean = false,
     private val onFaces: (List<FaceOverlayBox>) -> Unit = { },
     private val vendorKeys: (cameraId: String?) -> VendorKeyProfile = { VendorKeyProfile() }
@@ -234,6 +235,7 @@ class RawCameraController(
     }
     private val meteringInFlight = AtomicBoolean(false)
     @Volatile private var rawDeveloper: RawDevelopmentCoordinator? = null
+    private val highlightsPrewarmQueued = AtomicBoolean(false)
     // Future SR hook: SR-confined developer + merge processor + settings
     // (rawSuperResolutionSettings / activeRawSuperResolutionSettings /
     // rawSrCapability / rawSrProbeStarted) here.
@@ -344,7 +346,6 @@ class RawCameraController(
     private val program = ProgramAeLoop()
     private var programStreaming = false
     private var programRampCallback: Runnable? = null
-    private var lastProgramTickNs = 0L
     /** RAW-based ETTR single-exposure state (see EttrLoop). */
     private val ettr = EttrLoop(initialEttrSettings)
     /** Wall time of the last metering sample; slow samplers back off (see dispatch). */
@@ -394,6 +395,7 @@ class RawCameraController(
     /** Live RAW scope-only repeating stream outside ZSL (AUTO/PROGRAM/MANUAL). Frames are
      * sampled for the histogram/waveform and closed; nothing is buffered and ZSL status
      * is unaffected. */
+    private val rawExposureAssist = RawExposureAssist(onRawExposureAssist)
     private var rawHistogramStreaming = false
     private var rawHistogramDisabledForSession = false
     @Volatile private var lastPreviewSensorTimestamp = Long.MIN_VALUE
@@ -540,6 +542,7 @@ class RawCameraController(
     fun start() {
         if (destroyed || running) return
         running = true
+        prewarmHighlightsIfNeeded()
         lifecycleGeneration++
         ladder.resetRouteRetries()
         viewfinder.removeOnLayoutChangeListener(previewLayoutListener)
@@ -1111,6 +1114,7 @@ class RawCameraController(
                 // Focus peaking rides the same RAW VF stream at its own throttle,
                 // gated by the manual/tap-focus auto-show policy.
                 characteristics?.let { publishFocusPeakingIfDue(image, it) }
+                characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = latestPreviewResult) }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
                 if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
@@ -2173,6 +2177,7 @@ class RawCameraController(
             return true
         }
         captureFormat = format
+        prewarmHighlightsIfNeeded()
         // FOLLOW may flip the tonemap (DNG_ONLY <-> JPEG): push so the next sampled
         // frame renders the contract being saved.
         pushVfRenderState()
@@ -2186,7 +2191,14 @@ class RawCameraController(
             cameraHandler.post { setJpegOutputSettings(settings) }
             return true
         }
-        jpegOutputSettings = settings.resolvedForPlatform()
+        val resolved = settings.resolvedForPlatform()
+        if (resolved.activeDLighting != jpegOutputSettings.activeDLighting) {
+            // A changed capture target must not reuse a converged pair from the old level.
+            ettr.clearLive()
+            program.resetLoop()
+        }
+        jpegOutputSettings = resolved
+        prewarmHighlightsIfNeeded()
         // Live-link AgX sliders + adaptive strength to the JPEG preview: the next
         // sampled frame carries them.
         pushVfRenderState()
@@ -2322,6 +2334,7 @@ class RawCameraController(
         outputFormat: CaptureFormat,
         orientationSnapshot: Int
     ) {
+        enforceAutoFlashAvailability()
         // P0 flash: ring frames predate the flash, and merge queues would mix
         // flashed and unflashed frames, so a flash press always fires one
         // forward still (metered first under hardware AE) instead of ZSL.
@@ -2496,7 +2509,7 @@ class RawCameraController(
     private fun zslSelectedFrameCount(outputFormat: CaptureFormat): Int =
         ZslPolicy.zslSelectedFrameCountFor(
             hdrPlusSettings,
-            rawZslFrameCount, outputFormat
+            rawZslFrameCount, outputFormat, mfsrSettings
         )
 
     private fun beginCapture(
@@ -2553,7 +2566,7 @@ class RawCameraController(
         // + JPEG out). Mutual exclusivity with HDR+ is enforced at the
         // settings layer; this branch wins when both somehow engage.
         if (activeMfsrSettings.enabled) {
-            return takeFullRingForMerge(cutoff, activeMfsrSettings.activeFrameCount(), "MFSR", ::saveMfsrMerge)
+            return takeFullRingForMerge(cutoff, selectedFrameCount, "MFSR", ::saveMfsrMerge)
         }
         // HDR+ merges to one artifact: same full-ring discipline as SR.
         if (activeHdrPlusSettings.enabled) {
@@ -3609,16 +3622,29 @@ class RawCameraController(
             onState("FLASH N/A")
             return
         }
-        flashStillMode = when (flashStillMode) {
-            FlashStillMode.OFF -> FlashStillMode.ON
-            FlashStillMode.ON -> FlashStillMode.AUTO
-            FlashStillMode.AUTO -> FlashStillMode.OFF
-        }
+        flashStillMode = FlashStillPolicy.nextMode(flashStillMode, isAutoFlashAvailable())
         publishControls()
-        onState("FLASH ${flashStillMode.name}")
+        onState(if (flashStillMode == FlashStillMode.OFF && !isAutoFlashAvailable())
+            "FLASH OFF • AUTO NEEDS RAWLENS METERING" else "FLASH ${flashStillMode.name}")
     }
 
     fun flashStillMode(): FlashStillMode = flashStillMode
+
+    private fun rawLensAutoExposureOwnsCapture(): Boolean = !isAutoFlashAvailable()
+
+    fun isAutoFlashAvailable(): Boolean = FlashStillPolicy.allowsAutoFlash(
+        captureExposureMode == CaptureExposureMode.PROGRAM || dynamicExposureSettings.enabled,
+        ettr.settings.enabled && ettrModeAvailable()
+    )
+
+    private fun enforceAutoFlashAvailability() {
+        val permitted = FlashStillPolicy.permittedMode(flashStillMode, isAutoFlashAvailable())
+        if (permitted != flashStillMode) {
+            flashStillMode = permitted
+            publishControls()
+            onState(FlashStillPolicy.AUTO_UNAVAILABLE_NOTE)
+        }
+    }
 
     /** Preview-assist torch only; still captures always resolve flash separately. */
     fun setTorchEnabled(enabled: Boolean) {
@@ -3720,12 +3746,20 @@ class RawCameraController(
         override fun onFocusPeakingActive(active: Boolean) = this@RawCameraController.onFocusPeakingActive(active)
     }
 
+    internal fun setRawExposureAssist(settings: RawExposureAssistSettings) {
+        if (!isOnCameraThread()) { cameraHandler.post { setRawExposureAssist(settings) }; return }
+        rawExposureAssist.configure(settings)
+        updateRepeatingRequest(preserveRawZslBuffer = true)
+    }
+
     fun setDynamicExposureSettings(settings: DynamicExposureSettings) {
         if (!isOnCameraThread()) {
             cameraHandler.post { setDynamicExposureSettings(settings) }
             return
         }
         dynamicExposureSettings = settings.copy(balance = settings.balance.coerceIn(0.25f, 4f))
+        enforceAutoFlashAvailability()
+        publishControls()
         program.clearLivePair()
         updateRepeatingRequest()
     }
@@ -3766,6 +3800,8 @@ class RawCameraController(
         ettr.settings = settings.copy(
             headroomEv = settings.headroomEv.coerceIn(EttrSettings.MIN_HEADROOM_EV, EttrSettings.MAX_HEADROOM_EV)
         )
+        enforceAutoFlashAvailability()
+        publishControls()
         if (!ettr.settings.enabled) clearEttrLiveState()
         ettr.lastUpdateMs = Long.MIN_VALUE
         updateRepeatingRequest()
@@ -3816,7 +3852,7 @@ class RawCameraController(
         val programDue = wantProgram &&
             RawHistogramThrottle.shouldSample(
                 now, program.lastUpdateMs,
-                meteringInterval(if (program.converged) PROGRAM_CONVERGED_INTERVAL_MS else PROGRAM_UPDATE_INTERVAL_MS)
+                meteringInterval(PROGRAM_UPDATE_INTERVAL_MS)
             )
         val ettrDue = wantEttr &&
             RawHistogramThrottle.shouldSample(
@@ -3901,10 +3937,10 @@ class RawCameraController(
         // The sampled frame's own exposure (latest result), as libcamera's
         // AGC measures against the device status of the frame it meters.
         val step = program.onSample(
-            sample, profile, limits, lastIso, lastExposureNanos, sceneFlickerPeriodNanos()
+            sample, profile, limits, lastIso, lastExposureNanos, sceneFlickerPeriodNanos(),
+            lighting = jpegOutputSettings.activeDLighting
         ) ?: return
         if (step == ProgramAeLoop.Step.START) {
-            lastProgramTickNs = SystemClock.elapsedRealtimeNanos()
             programRampTick()
             Log.i(LOG_TAG, "PROGRAM start ISO ${program.iso} EXP ${program.shutterNanos?.let(::formatExposure)}")
         } else if (programRampCallback == null) {
@@ -3921,8 +3957,8 @@ class RawCameraController(
         }
 
     /**
-     * One AGC tick (~10 Hz): run libcamera's per-frame exposure filter for the
-     * sensor frames elapsed since the last tick, split, push the live request.
+     * One AGC step per preview-frame interval: filter, split, push the live request.
+     * Never batch missed steps: their intermediate exposures would not reach the sensor.
      * Reschedules itself until the filtered exposure settles in the stable
      * region; the next metering sample restarts it.
      */
@@ -3932,17 +3968,12 @@ class RawCameraController(
             !running || destroyed
         ) return
         if (touchFocus.scanning) {
-            // A ~10 Hz repeating rebuild mid-scan restarts the HAL AF sweep.
+            // A repeating rebuild mid-scan restarts the HAL AF sweep.
             // Defer the exposure glide until the touch lock settles or times out.
             scheduleProgramRampTick()
             return
         }
-        val now = SystemClock.elapsedRealtimeNanos()
-        val frameNs = (latestPreviewResult?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L)
-            .takeIf { it > 0L } ?: 33_333_333L
-        val frames = ((now - lastProgramTickNs) / frameNs).toInt().coerceIn(1, 30)
-        lastProgramTickNs = now
-        val (changed, settled) = program.tick(frames) ?: return
+        val (changed, settled) = program.tick(1) ?: return
         if (changed) pushProgramPairLive()
         if (!settled) scheduleProgramRampTick()
     }
@@ -3953,7 +3984,13 @@ class RawCameraController(
         programRampCallback = Runnable {
             programRampCallback = null
             if (generation == lifecycleGeneration) programRampTick()
-        }.also { cameraHandler.postDelayed(it, PROGRAM_RAMP_INTERVAL_MS) }
+        }.also {
+            val frameNs = (latestPreviewResult?.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L)
+                .takeIf { duration -> duration > 0L } ?: 33_333_333L
+            // Round up so there is at most one new request per preview-frame interval.
+            cameraHandler.postDelayed(it, (frameNs / 1_000_000L +
+                if (frameNs % 1_000_000L != 0L) 1L else 0L).coerceAtLeast(1L))
+        }
     }
 
     private fun cancelProgramRampTick() {
@@ -3963,7 +4000,7 @@ class RawCameraController(
 
     /** Lightweight live push: rebuild only the repeating request with the gliding
      * pair. Unlike a full [updateRepeatingRequest], it never drains RAW buffers,
-     * so ~10 Hz micro-pushes stay cheap. Failures snap straight to target. */
+     * so per-frame exposure updates do not restart the RAW stream. */
     private fun pushProgramPairLive() {
         try {
             updateRepeatingRequest(preserveRawZslBuffer = true, light = true)
@@ -3997,7 +4034,7 @@ class RawCameraController(
             sample, baselineIso, baselineShutter,
             isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper,
             ettrSafeShutterCeiling(shutterRange.upper),
-            sensorDynamicRangeEv()
+            sensorDynamicRangeEv(), lighting = jpegOutputSettings.activeDLighting
         )
     }
 
@@ -4082,6 +4119,7 @@ class RawCameraController(
             return
         }
         captureExposureMode = mode
+        enforceAutoFlashAvailability()
         val wasRawZslRequested = rawZslRequested
         rawZslRequested = mode == CaptureExposureMode.ZSL
         if (rawZslRequested && !wasRawZslRequested) {
@@ -4217,6 +4255,22 @@ class RawCameraController(
             return
         }
         restartCameraForConfigurationChange()
+    }
+
+    private fun prewarmHighlightsIfNeeded() {
+        if (destroyed || pendingSaveCount.get() > 0 || !writer.queue.isEmpty() ||
+            !captureFormat.includesJpeg || !jpegOutputSettings.hlReconstruction ||
+            !highlightsPrewarmQueued.compareAndSet(false, true)) return
+        try {
+            writer.execute {
+                try {
+                    if (!destroyed && captureFormat.includesJpeg && jpegOutputSettings.hlReconstruction) {
+                        val developer = rawDeveloper ?: RawDevelopmentCoordinator(context).also { rawDeveloper = it }
+                        developer.prewarmHighlights()
+                    }
+                } finally { highlightsPrewarmQueued.set(false) }
+            }
+        } catch (_: RejectedExecutionException) { highlightsPrewarmQueued.set(false) }
     }
 
     fun prewarmWavelet() {
@@ -4461,7 +4515,7 @@ class RawCameraController(
                 rawRetryReady = SystemClock.elapsedRealtime() >= rawPreviewRetryUntilMs,
                 captureInProgress = captureInProgress.get(),
                 stillExecuting = cameraCaptureSequenceActive || activeFramesRemaining.get() > 0,
-                histogramEnabled = scopes.histogramEnabled,
+                histogramEnabled = scopes.histogramEnabled || rawExposureAssist.settings.enabled,
                 histogramDisabledForSession = rawHistogramDisabledForSession,
                 ettrEnabled = ettr.settings.enabled,
                 ettrModeAvailable = ettrModeAvailable(),
@@ -4850,7 +4904,8 @@ class RawCameraController(
             // double-tap / reset-button / retap / manual / lens-switch / stop.
             // CONTROL_AE_LOCK is only meaningful with AE ON; manual/PROGRAM exposure
             // already drives the sensor directly so the lock stays off there.
-            builder.set(CaptureRequest.CONTROL_AE_LOCK, touchFocus.aeLockIndefinite)
+            builder.set(CaptureRequest.CONTROL_AE_LOCK,
+                flashRepeatingAeModeOverride == null && touchFocus.aeLockIndefinite)
         }
         val kelvin = selectedWbKelvin
         if (kelvin == null) {
@@ -4980,7 +5035,9 @@ class RawCameraController(
         orientationSnapshot: Int
     ) {
         if (!beginCapture(outputFormat, requiredSaveSlots = 1, orientationSnapshot = orientationSnapshot)) return
-        val manualExposure = selectedIso != null || selectedExposureNanos != null
+        // PROGRAM/ETTR retain their AE_OFF sensor pair. Forced ON uses
+        // FLASH_SINGLE; AUTO is disabled until RawLens can meter flash itself.
+        val manualExposure = selectedIso != null || selectedExposureNanos != null || rawLensAutoExposureOwnsCapture()
         val aeModes = characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: IntArray(0)
         if (FlashStillPolicy.needsFlashPrecapture(
                 manualExposure,
@@ -5006,7 +5063,9 @@ class RawCameraController(
     private fun runFlashPrecaptureThenCapture() {
         val device = camera
         val currentSession = session
-        val surface = previewSurface
+        // RAW-only sessions still have a valid 3A target. Requiring an ISP
+        // preview surface silently skipped precapture on those sessions.
+        val surface = singleShotTarget()
         if (device == null || currentSession == null || surface == null) {
             captureFrames(1, captureAlreadyStarted = true)
             return
@@ -5036,7 +5095,8 @@ class RawCameraController(
                 debugCaptureCallback, cameraHandler)
             currentSession.capture(precaptureRequest(CameraMetadata.CONTROL_AE_PRECAPTURE_TRIGGER_START),
                 debugCaptureCallback, cameraHandler)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Flash precapture submission failed", e)
             flashRepeatingAeModeOverride = null
             captureFrames(1, captureAlreadyStarted = true)
             return
@@ -5066,7 +5126,9 @@ class RawCameraController(
         flashPrecapture = null
         flashPrecaptureTick?.let(cameraHandler::removeCallbacks)
         flashPrecaptureTick = null
-        flashRepeatingAeModeOverride = null
+        // Keep the metered AE flash mode on repeating and still requests.
+        // Resetting it here restarts AE before the subsequent STILL_CAPTURE.
+        // finishCapture clears it on success, error, timeout and stop.
         if (wait.timedOut) Log.w(LOG_TAG, "Flash precapture timed out; firing best-effort still")
         captureFrames(1, captureAlreadyStarted = true)
     }
@@ -5204,6 +5266,15 @@ class RawCameraController(
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
+            // One-shot 3A results can contain the entire PRECAPTURE transition
+            // between repeating results. Feed them to the same waiter.
+            flashPrecapture?.let { wait ->
+                if (wait.onAeState(result.get(CaptureResult.CONTROL_AE_STATE), SystemClock.elapsedRealtime()))
+                    finishFlashPrecapture()
+            }
+            if (previewSurface == null && rawReader != null) {
+                result.get(CaptureResult.SENSOR_TIMESTAMP)?.let(pairing::dropPreviewRaw)
+            }
             if (request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON) {
                 updateDynamicExposureFromMetering(
                     result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0,
@@ -5347,6 +5418,10 @@ class RawCameraController(
                 "RAW result id=$captureId frame=${tag?.frameNumber ?: "?"}/${tag?.frameCount ?: "?"} " +
                     "timestamp=$timestamp"
             )
+            Log.i(LOG_TAG, "FLASH_RESULT id=$captureId requestAe=${request.get(CaptureRequest.CONTROL_AE_MODE)} " +
+                "requestFlash=${request.get(CaptureRequest.FLASH_MODE)} resultAe=${result.get(CaptureResult.CONTROL_AE_MODE)} " +
+                "aeState=${result.get(CaptureResult.CONTROL_AE_STATE)} flashState=${result.get(CaptureResult.FLASH_STATE)} " +
+                "iso=${result.get(CaptureResult.SENSOR_SENSITIVITY)} ns=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}")
             pairing.putForwardResult(timestamp, result)
             schedulePairTimeout(timestamp, reportCaptureFailure = true)
             pairAvailableFrame(timestamp)
@@ -5445,7 +5520,7 @@ class RawCameraController(
             RawImageOwnership.release(image)
             return false
         }
-        publishRawScopeIfDue(image, c)
+        publishRawScopeIfDue(image, c, result = result)
         val buffer = rawZslBuffer ?: run {
             RawImageOwnership.release(image)
             return false
@@ -5507,8 +5582,9 @@ class RawCameraController(
     private fun publishRawScopeIfDue(
         image: Image,
         cameraCharacteristics: CameraCharacteristics,
-        force: Boolean = false
-    ) = scopes.publishRawScopeIfDue(image, cameraCharacteristics, force)
+        force: Boolean = false,
+        result: TotalCaptureResult? = latestPreviewResult
+    ) = scopes.publishRawScopeIfDue(image, cameraCharacteristics, force, result)
 
     private fun publishDevelopedScope(bitmap: Bitmap) = scopes.publishDevelopedScope(bitmap)
 
@@ -5716,7 +5792,7 @@ class RawCameraController(
             return
         }
         val orientation = activeOutputOrientation
-        publishRawScopeIfDue(image, c, force = true)
+        publishRawScopeIfDue(image, c, force = true, result = result)
         // Freeze the exact paired result before crossing to the writer thread. Future JPEG
         // development consumes this snapshot, never a later preview result or mutable HAL array.
         val frameMetadata = try {
@@ -5743,7 +5819,6 @@ class RawCameraController(
         // the user may have changed format, lens, ETTR or the focus point.
         val captureDevelopedFormat = activeDevelopedFormat
         val captureJxlSettings = activeJxlOutputSettings
-        val captureEttrHeadroomEv = if (ettrCaptureActive()) ettr.settings.headroomEv else null
         val captureFocusView = developFocusView
         val captureDngOverrides = dngMetadataOverrides(selectedCameraId)
         val captureDngBackend = dngWriterBackend()
@@ -5775,7 +5850,7 @@ class RawCameraController(
                     adaptiveExposureStrength = adaptiveExposureStrength,
                     sharedAdaptiveExposure = sharedAdaptiveExposure,
                     developedFormat = captureDevelopedFormat, jxl = captureJxlSettings,
-                    ettrHeadroomEv = captureEttrHeadroomEv, focusView = captureFocusView,
+                    focusView = captureFocusView,
                     dngOverrides = captureDngOverrides, dngBackend = captureDngBackend,
                     dngCompression = captureDngCompression, gps = captureGps,
                     captureTimeMillis = captureTimeMillis, fileNameSuffix = fileNameSuffix,
@@ -5932,6 +6007,10 @@ class RawCameraController(
     }
 
     private fun finishCapture(message: String? = null) {
+        flashPrecaptureTick?.let(cameraHandler::removeCallbacks)
+        flashPrecaptureTick = null
+        flashPrecapture = null
+        flashRepeatingAeModeOverride = null
         streamCapture = null
         cancelCaptureTimeout()
         // End of any serialized still chain (normal, timeout, or error): no
@@ -6030,7 +6109,7 @@ class RawCameraController(
         }
         if (rawViewfinderStreaming || rawZslStreaming || rawHistogramStreaming || ettrStreaming || programStreaming) return
         // If the ring cannot fit, the viewfinder remains a sample-and-release stream.
-        val wantHistogram = scopes.histogramEnabled &&
+        val wantHistogram = (scopes.histogramEnabled || rawExposureAssist.settings.enabled) &&
             !rawHistogramDisabledForSession
         val wantEttr = ettr.settings.enabled && ettrModeAvailable()
         val wantProgram = programCustomActive()
@@ -6353,6 +6432,7 @@ class RawCameraController(
     fun isRunning(): Boolean = running
 
     fun stop() {
+        rawExposureAssist.clear()
         rawViewfinder?.invalidateSession()
         bguViewfinder?.invalidateSession()
         rawViewfinderStreaming = false
@@ -6398,6 +6478,7 @@ class RawCameraController(
         if (destroyed) return
         stop()
         destroyed = true
+        rawExposureAssist.close()
         cameraRouteCache.clear()
         rawViewfinder?.onStarvation = null
         bguViewfinder?.onStarvation = null
@@ -6862,12 +6943,8 @@ class RawCameraController(
         private const val SICK_SAMPLE_LOG_MS = 150L
         /** PROGRAM custom AE tracks RAW mid-tone; cheap samples allow 4 Hz. */
         private const val PROGRAM_UPDATE_INTERVAL_MS = 250L
-        /** Relaxed metering once the loop has converged; any correction snaps back. */
-        private const val PROGRAM_CONVERGED_INTERVAL_MS = 1000L
         /** Relaxed metering once ETTR has converged; any correction snaps back. */
         private const val ETTR_CONVERGED_INTERVAL_MS = 1000L
-        /** Glide tick cadence: fine gradient steps at ~1 stop/s catch-up. */
-        private const val PROGRAM_RAMP_INTERVAL_MS = 100L
         private const val PROGRAM_SHUTTER_END_NANOS = 1_000_000_000L / 15
         private const val MIN_WB_KELVIN = 2000
         private const val MAX_WB_KELVIN = 10000
