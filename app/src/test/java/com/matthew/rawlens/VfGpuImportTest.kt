@@ -220,12 +220,26 @@ class VfGpuImportTest {
         assertTrue("GPU missing u_lensGreenRow", gpu.contains("u_lensGreenRow"))
         assertTrue(
             "CPU must offset the green swap by the Gr row",
-            cpu.contains("mod(float(q.y + u_lensGreenRow), 2.0)")
+            cpu.contains("mod(greenRow + float(u_lensGreenRow), 2.0)")
         )
         assertTrue(
             "GPU must offset the green swap by the Gr row",
             gpu.contains("(q.y + u_lensGreenRow) & 1")
         )
+    }
+
+    @Test fun `lens geometry preserves odd sensor rows beyond fp16 exact integers`() {
+        // Reproduce the old conversion at 2049; its mod 2 selects the wrong gain.
+        val roundedRow = VfGpuImport.halfBitsToFloat(VfGpuImport.floatToHalfBits(2049f))
+        assertEquals(0f, roundedRow % 2f, 0f)
+        assertEquals(1f, 2049f % 2f, 0f)
+        for (shader in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
+            assertTrue(shader.contains("vfLensGain(VFHP vec2 t)"))
+            assertTrue(shader.contains("VFHP ivec2 ij"))
+            assertTrue(shader.contains("VFHP ivec2 q"))
+            assertTrue(shader.contains("VFHP vec2 uv"))
+        }
+        assertTrue(VfGpuImport.cpuFragmentShader().contains("VFHP float greenRow = float(q.y)"))
     }
 
     @Test fun `lens green row matches the Gr site for every CFA pattern`() {
