@@ -9,19 +9,19 @@ moves to [2.0.x]. Release mechanics (E19, E22-E24) kept [2.0] because the
 2.0.0 release cannot happen without them.
 
 ## A. Rewrite batch (after the controller moves, owner 2026-10-22)
-- [x] A1 [2.0] (done 113a004; device check pending) PROGRAM AE on libcamera RPi AGC: one total-exposure filter,
+- [x] A1 [2.0] (done 113a004; device 2026-10-27: 5-press PROGRAM soak OK, no crash; convergence not judged - scene dark, held at ISO 12800 1/15 cap; recheck in light) PROGRAM AE on libcamera RPi AGC: one total-exposure filter,
       Y-target + q0.98-1.0 highlight constraint, flicker rounding
       (exposure-audit.md). Owner: no +0.5 EV default.
-- [x] A2 [2.0] (done 15dee6b; device check pending) ETTR on Magic Lantern: target <= -0.5 EV, overshoot
+- [x] A2 [2.0] (done 15dee6b; device 2026-10-27: 5-press AUTO+ETTR soak OK, no crash; ETTR has no log line, so its decisions need a lit-scene check) ETTR on Magic Lantern: target <= -0.5 EV, overshoot
       extrapolation (E2), single-shot correction, midtone/shadow SNR limits.
       Owner: yes, Magic Lantern rules.
-- [x] A3 [2.0] (done 78f5637; device check pending) Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
+- [x] A3 [2.0] (done 78f5637; device 2026-10-27: FlashCaptureDeviceTest OK, flash fired in forced-auto and manual) Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
       Flash follow-up 2026-10-26: forced ON / hardware AUTO / manual verified
       on device; PROGRAM/ETTR preserve their own pairs and offer Off/On only
       ([flash evidence](flash-study.md)).
 - [ ] A3b [2.0.x] RawLens-owned auto-flash metering for PROGRAM/ETTR.
       Owner 2026-10-26: keep Auto disabled with an explanatory note until implemented.
-- [x] A4 [2.0] (done 566f66f; device check pending) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
+- [x] A4 [2.0] (done 566f66f; device check pending: no headless test drives ISO-only manual) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
 - [x] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
       `BguViewfinder`, `BguFit`, `BguSlice`, `BguSliceCpu`, `BguLook`,
       `BguSample`, `BguGeometry`, `BguSpike`, `bgu_slice_cpu.cpp`,
@@ -419,6 +419,11 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
       MGC SABRE, but 1x denoise merge - no density/forward-model/
       2x help; usable only as same-burst A/B oracle and for
       rejection/merged-noise tuning reference).
+
+## Device checks 2026-10-27 (Mali G615 phone)
+- MFSR JPEG+DNG OOM fix (9d6aa37): 3 back-to-back 8-frame presses, all
+  saved, no OutOfMemoryError.
+- HDR+ perf (50a01af): byte-identical outputs vs the previous build.
 
 ## Done today (for reference)
 Controller A1-A10 + ZSL merge jobs, MFSR back-to-back OOM fix, MFSR S.3 and
