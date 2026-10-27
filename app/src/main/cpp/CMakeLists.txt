@@ -388,9 +388,32 @@ endif()
 # identical DNG files.
 add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
 
-# CRS (RawLens in-house RAW video / burst container): native encoder and
-# reader libraries land here. Until then CrsWriter/CrsReader report
-# available = false and RAW video / offline burst merge stay disabled.
+# Cinematic RAW Studio (.CRAW) RAW video / burst container (vendored,
+# Apache-2.0; see third_party/craw/SOURCE.md, refresh with tools/sync_craw.sh).
+# Encoder and decoder are separate libraries: they are independent
+# implementations of the spec and share type names.
+set(CRAW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/craw")
+add_library(rawLensCraw SHARED
+    ${CRAW_DIR}/encoder/src/Encoder.cpp
+    ${CRAW_DIR}/encoder/src/Writer.cpp
+    craw_writer_jni.cpp)
+target_include_directories(rawLensCraw PRIVATE "${CRAW_DIR}/encoder/include")
+add_library(rawLensCrawReader SHARED
+    ${CRAW_DIR}/decoder/src/Decoder.cpp
+    ${CRAW_DIR}/decoder/src/Reader.cpp
+    craw_reader_jni.cpp)
+target_include_directories(rawLensCrawReader PRIVATE "${CRAW_DIR}/decoder/include")
+foreach(craw_lib rawLensCraw rawLensCrawReader)
+    set_target_properties(${craw_lib} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_compile_options(${craw_lib} PRIVATE -O3)
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        target_compile_options(${craw_lib} PRIVATE -march=armv8-a+crc)
+    elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+        target_compile_options(${craw_lib} PRIVATE -mfpu=neon)
+    endif()
+    target_link_libraries(${craw_lib} PRIVATE log)
+    target_link_options(${craw_lib} PRIVATE "-Wl,-z,max-page-size=16384")
+endforeach()
 
 # BGU viewfinder spike: JNI bridge to Halide AOT filters. The .a archives are
 # prebuilt per ABI by tools/halide/build_aot.sh and checked in (ncnn precedent).
