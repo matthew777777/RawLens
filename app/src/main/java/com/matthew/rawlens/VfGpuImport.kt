@@ -327,43 +327,45 @@ internal object VfGpuImport {
     // (u_quadBase/u_frameSize/u_step) is in sensor coordinates; u_lensActive is
     // SENSOR_INFO_ACTIVE_ARRAY_SIZE.
     private const val LENS_UNIFORMS_COMMON =
-        "uniform sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
-            "uniform int u_applyLens; uniform ivec2 u_quadBase; uniform ivec2 u_frameSize;" +
+        "uniform sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
+            "uniform int u_applyLens; uniform VFHP ivec2 u_quadBase; uniform VFHP ivec2 u_frameSize;" +
             "uniform int u_step; uniform int u_lensGreenRow;"
 
     // ESSL 1.00 variant: single hardware-filtered texture2D fetch. No texelFetch
-    // and no integer bitwise ops, so parity uses mod(). ESSL 1.00 also has no
+    // and no integer bitwise ops, so parity uses highp mod(). FP16 rounds
+    // 2049 to 2048, selecting G-even for an odd row. ESSL 1.00 also has no
     // integer max/min overloads, so the active-array clamp stays in float.
     private const val LENS_GAIN_ES1 =
-        "vec4 vfLensGain(vec2 t) {" +
+        "vec4 vfLensGain(VFHP vec2 t) {" +
             " if (u_applyLens == 0) return vec4(1.0);" +
-            " ivec2 ij = ivec2(floor(t * vec2(float(u_frameSize.x), float(u_frameSize.y))));" +
-            " ivec2 q = u_quadBase + ij * u_step;" +
-            " float aw = max(float(u_lensActive.z - u_lensActive.x - 1), 1.0);" +
-            " float ah = max(float(u_lensActive.w - u_lensActive.y - 1), 1.0);" +
-            " vec2 nuv = clamp(vec2((float(q.x - u_lensActive.x)) / aw," +
+            " VFHP ivec2 ij = ivec2(floor(t * vec2(float(u_frameSize.x), float(u_frameSize.y))));" +
+            " VFHP ivec2 q = u_quadBase + ij * u_step;" +
+            " VFHP float aw = max(float(u_lensActive.z - u_lensActive.x - 1), 1.0);" +
+            " VFHP float ah = max(float(u_lensActive.w - u_lensActive.y - 1), 1.0);" +
+            " VFHP vec2 nuv = clamp(vec2((float(q.x - u_lensActive.x)) / aw," +
             " (float(q.y - u_lensActive.y)) / ah), 0.0, 1.0);" +
-            " vec2 sz = vec2(float(u_lensSize.x), float(u_lensSize.y));" +
-            " vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
+            " VFHP vec2 sz = vec2(float(u_lensSize.x), float(u_lensSize.y));" +
+            " VFHP vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
             " vec4 g = texture2D(u_lens, uv);" +
-            " if (mod(float(q.y + u_lensGreenRow), 2.0) != 0.0) g = vec4(g.r, g.b, g.g, g.a);" +
+            " VFHP float greenRow = float(q.y);" +
+            " if (mod(greenRow + float(u_lensGreenRow), 2.0) != 0.0) g = vec4(g.r, g.b, g.g, g.a);" +
             " return g; }"
 
     // ESSL 3.00 variant: single hardware-filtered texture() fetch. Integer
     // bitwise ops are available here (unavailable in ESSL 1.00). Float math
-    // runs at default (mediump) precision: the ~17-cell map needs none
-    // finer; quad coordinates stay highp int (mediump int is 16-bit).
+    // uses highp for sensor geometry: mediump loses odd rows above 2048
+    // and can move floor() across a quad boundary. Gains and tonemap stay mediump.
     private const val LENS_GAIN_ES3 =
-        "vec4 vfLensGain(vec2 t) {" +
+        "vec4 vfLensGain(VFHP vec2 t) {" +
             " if (u_applyLens == 0) return vec4(1.0);" +
-            " highp ivec2 ij = ivec2(floor(t * vec2(u_frameSize)));" +
-            " highp ivec2 q = u_quadBase + ij * u_step;" +
-            " float aw = float(max(u_lensActive.z - u_lensActive.x - 1, 1));" +
-            " float ah = float(max(u_lensActive.w - u_lensActive.y - 1, 1));" +
-            " vec2 nuv = clamp(vec2(float(q.x - u_lensActive.x) / aw," +
+            " VFHP ivec2 ij = ivec2(floor(t * vec2(u_frameSize)));" +
+            " VFHP ivec2 q = u_quadBase + ij * u_step;" +
+            " VFHP float aw = float(max(u_lensActive.z - u_lensActive.x - 1, 1));" +
+            " VFHP float ah = float(max(u_lensActive.w - u_lensActive.y - 1, 1));" +
+            " VFHP vec2 nuv = clamp(vec2(float(q.x - u_lensActive.x) / aw," +
             " float(q.y - u_lensActive.y) / ah), 0.0, 1.0);" +
-            " vec2 sz = vec2(u_lensSize);" +
-            " vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
+            " VFHP vec2 sz = vec2(u_lensSize);" +
+            " VFHP vec2 uv = (nuv * (sz - vec2(1.0)) + vec2(0.5)) / sz;" +
             " vec4 g = texture(u_lens, uv);" +
             " if (((q.y + u_lensGreenRow) & 1) != 0) g = vec4(g.r, g.b, g.g, g.a);" +
             " return g; }"
@@ -431,14 +433,14 @@ internal object VfGpuImport {
     }
 
     /**
-     * ESSL 1.00 fragment shader for the CPU-sampled RGBA path. Float math
-     * runs mediump (fp16 on mobile): the 8-bit dithered output needs no
-     * finer; only the dither hash keeps highp (VFHP) where available.
+     * ESSL 1.00 fragment shader for the CPU-sampled RGBA path. Color math
+     * stays mediump; sensor geometry, UVs and dither use highp (VFHP)
+     * where available. Lens correction is disabled on the ES2 fallback.
      */
     fun cpuFragmentShader(): String =
         "precision mediump float;\n" +
             "#ifdef GL_FRAGMENT_PRECISION_HIGH\n#define VFHP highp\n#else\n#define VFHP mediump\n#endif\n" +
-            "varying vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
+            "varying VFHP vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
             TONEMAP_HELPERS +
@@ -464,9 +466,9 @@ internal object VfGpuImport {
             "#define VFHP highp\n" +
             "precision mediump float; precision highp int; precision highp sampler2D;" +
             "uniform highp usampler2D u_bayer;" +
-            "uniform ivec2 u_quadBase; uniform ivec2 u_frameSize; uniform int u_step;" +
+            "uniform VFHP ivec2 u_quadBase; uniform VFHP ivec2 u_frameSize; uniform int u_step;" +
             "uniform ivec4 u_chans; uniform highp ivec4 u_blackQ; uniform highp ivec4 u_denQ;" +
-            "uniform mediump sampler2D u_lens; uniform ivec2 u_lensSize; uniform ivec4 u_lensActive;" +
+            "uniform mediump sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
             "uniform int u_applyLens; uniform int u_lensGreenRow;" +
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
