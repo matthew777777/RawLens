@@ -80,7 +80,7 @@ class VideoModeUiTest {
             instrumentation.runOnMainSync {
                 badge = (activity.findViewById<TextView>(R.id.rawBadge)).text.toString()
             }
-            assertEquals("CRS", badge)
+            assertEquals("CRAW", badge)
 
             // 2. Shutter starts the take; the video HUD appears.
             click(view(R.id.shutter))
@@ -115,7 +115,7 @@ class VideoModeUiTest {
             screenshot("vui_video_rec")
 
             // 4. Stop; wait for the file to stop growing (container close
-            // finalizes the footer), then validate it as .crs.
+            // finalizes the footer), then validate it as .craw.
             click(view(R.id.shutter))
             val dir = File(
                 context.getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES),
@@ -127,7 +127,7 @@ class VideoModeUiTest {
             val stopDeadline = SystemClock.elapsedRealtime() + 45_000
             while (SystemClock.elapsedRealtime() < stopDeadline) {
                 clip = dir.listFiles()
-                    ?.filter { it.extension == "crs" }
+                    ?.filter { it.extension == "craw" }
                     ?.maxByOrNull { it.lastModified() }
                 val size = clip?.length() ?: -1L
                 if (clip != null && size > 1_000_000) {
@@ -140,9 +140,9 @@ class VideoModeUiTest {
                 }
                 SystemClock.sleep(1000)
             }
-            assertTrue("No .crs clip finalized", clip != null && lastSize > 1_000_000)
+            assertTrue("No .craw clip finalized", clip != null && lastSize > 1_000_000)
             val finalClip = requireNotNull(clip)
-            validateCrsMagic(finalClip)
+            validateCrawMagic(finalClip)
             android.util.Log.i(
                 TAG, "SPIKE ui clip=${finalClip.name} bytes=${finalClip.length()}"
             )
@@ -173,25 +173,18 @@ class VideoModeUiTest {
         }
     }
 
-    private fun validateCrsMagic(file: File) {
+    private fun validateCrawMagic(file: File) {
         RandomAccessFile(file, "r").use { raf ->
             assertTrue("Clip too small", raf.length() >= 32)
-            val head = ByteArray(8)
+            val head = ByteArray(4)
             raf.readFully(head)
-            assertEquals(CrsFormat.HEADER_TAG, String(head, 0, 7, Charsets.US_ASCII))
-            assertEquals(CrsFormat.VERSION, head[7].toInt())
-            raf.seek(raf.length() - 24)
-            val tail = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-            raf.channel.read(tail)
-            tail.flip()
-            assertEquals(0, tail.int)
-            assertEquals(16, tail.int)
-            assertEquals(CrsFormat.FOOTER_MAGIC, tail.int)
-            assertTrue("Empty container", tail.int > 0)
+            assertEquals(CrawFormat.MAGIC, String(head, Charsets.US_ASCII))
         }
+        val frames = CrawFormat.closedFrameCount(file)
+        assertTrue("Unclosed or empty container", frames != null && frames > 0)
     }
 
     companion object {
-        private const val TAG = "CrsSpike"
+        private const val TAG = "CrawSpike"
     }
 }

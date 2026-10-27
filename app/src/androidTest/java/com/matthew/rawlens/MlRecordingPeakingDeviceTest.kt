@@ -63,10 +63,10 @@ class MlRecordingPeakingDeviceTest {
     }
     @Test fun rawVideoMfPullKeepsSamplingAndClearsOnAuto() {
         val id = setup()
-        assumeTrue("CRS backend is not implemented in this tree", CrsWriter.available)
+        assumeTrue("CRAW backend is not implemented in this tree", CrawWriter.available)
         val size = manager.getCameraCharacteristics(id)[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!
             .getOutputSizes(ImageFormat.RAW_SENSOR)!!.maxBy { it.width.toLong() * it.height }
-        val file = File(context.cacheDir, "ml-peaking-raw-test.crs")
+        val file = File(context.cacheDir, "ml-peaking-raw-test.craw")
         val recorder = RawVideoRecorder(manager, id, size, context).apply {
             audioEnabled = false; motionEnabled = false
             videoManual = VideoManualSnapshot(iso = 1600, shutterNanos = 10_000_000, focusDiopters = 0.5f)
@@ -86,17 +86,17 @@ class MlRecordingPeakingDeviceTest {
             val p1 = recorder.snapshot()
             val baseFps = (b1.framesEncoded - b0.framesEncoded) * 1000.0 / (b1.elapsedMs - b0.elapsedMs)
             val peakFps = (p1.framesEncoded - p0.framesEncoded) * 1000.0 / (p1.elapsedMs - p0.elapsedMs)
-            log("CRS sensor=$size baselineFps=$baseFps peakingFps=$peakFps baselineDrops=${b1.framesDropped - b0.framesDropped} peakingDrops=${p1.framesDropped - p0.framesDropped}")
+            log("CRAW sensor=$size baselineFps=$baseFps peakingFps=$peakFps baselineDrops=${b1.framesDropped - b0.framesDropped} peakingDrops=${p1.framesDropped - p0.framesDropped}")
             assertTrue("recording stalled with peaking", peakFps >= 12.0)
             val stats = recorder.stop()
             started = false
-            log("CRS STOP $stats")
+            log("CRAW STOP $stats")
             assertTrue(stats.containerFrames > 0)
             verifyStopped()
         } finally {
             if (started) recorder.stop()
             file.delete()
-            File(context.getExternalFilesDir(null), "ml-peaking-crs-device.txt").writeText(report.toString())
+            File(context.getExternalFilesDir(null), "ml-peaking-craw-device.txt").writeText(report.toString())
         }
     }
     @Test fun directLogMfPullKeepsSamplingAndClearsOnAuto() {

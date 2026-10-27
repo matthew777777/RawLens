@@ -101,7 +101,7 @@ class RawExposureRecordingDeviceTest {
         val id = setup()
         val size = manager.getCameraCharacteristics(id)[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!
             .getOutputSizes(ImageFormat.RAW_SENSOR)!!.maxBy { it.width.toLong() * it.height }
-        val file = File(context.cacheDir, "f12-recording-audit.crs")
+        val file = File(context.cacheDir, "f12-recording-audit.craw")
         val recorder = RawVideoRecorder(manager, id, size, context).apply {
             audioEnabled = false; motionEnabled = false
             videoManual = VideoManualSnapshot(iso = 1600, shutterNanos = 10_000_000, focusDiopters = 0.5f)
@@ -109,32 +109,32 @@ class RawExposureRecordingDeviceTest {
         }
         var started = false
         try {
-            if (!CrsWriter.available) {
+            if (!CrawWriter.available) {
                 recorder.rawExposureSettings = RawExposureAssistSettings(RawExposureOverlayMode.ZEBRAS, true)
                 try {
                     recorder.start(file, "{}")
-                    fail("Unavailable CRS must reject recording before acquiring RAW frames")
+                    fail("Unavailable CRAW must reject recording before acquiring RAW frames")
                 } catch (expected: IllegalArgumentException) {
-                    assertEquals("crs native library unavailable", expected.message)
+                    assertEquals("craw native library unavailable", expected.message)
                 }
                 val stats = recorder.stop()
                 assertEquals(0, stats.framesAcquired)
-                assertFalse("Unavailable CRS created an output", file.exists())
+                assertFalse("Unavailable CRAW created an output", file.exists())
                 verifyStopped()
-                report.appendLine("CRS UNAVAILABLE: existing backend is unimplemented; start rejection/cleanup PASS. Recording throughput is excluded, not claimed tested.")
+                report.appendLine("CRAW UNAVAILABLE: existing backend is unimplemented; start rejection/cleanup PASS. Recording throughput is excluded, not claimed tested.")
                 return
             }
             recorder.start(file, "{}")
             started = true
             exercise({ recorder.rawExposureSettings = it }, { recorder.snapshot().let { Counts(it.elapsedMs, it.framesEncoded, it.framesDropped) } }, false)
             val stats = recorder.stop(); started = false
-            assertTrue("Empty CRS recording", stats.containerFrames > 0)
-            report.appendLine("CRS STOP $stats")
+            assertTrue("Empty CRAW recording", stats.containerFrames > 0)
+            report.appendLine("CRAW STOP $stats")
             verifyStopped()
         } finally {
             if (started) recorder.stop()
             file.delete()
-            File(context.getExternalFilesDir(null), "f12-recording-crs.txt").writeText(report.toString())
+            File(context.getExternalFilesDir(null), "f12-recording-craw.txt").writeText(report.toString())
         }
     }
     @Test fun directLogExposureAssistsPreserveRecording() {

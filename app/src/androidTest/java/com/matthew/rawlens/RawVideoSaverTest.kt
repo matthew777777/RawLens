@@ -14,7 +14,7 @@ class RawVideoSaverTest {
     @Test fun publishesExactBytesAndRemovesPrivateSource() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val resolver = context.contentResolver
-        val source = File(context.filesDir, "rawlens_export_test_${System.nanoTime()}.crs")
+        val source = File(context.filesDir, "rawlens_export_test_${System.nanoTime()}.craw")
         val bytes = ByteArray(1024 * 1024 + 137) { (it * 31).toByte() }
         source.writeBytes(bytes)
         var saved: RawVideoSaver.Saved? = null
@@ -41,7 +41,7 @@ class RawVideoSaverTest {
 
     @Test fun emptySourceIsRetained() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val source = File(context.filesDir, "rawlens_empty_test_${System.nanoTime()}.crs")
+        val source = File(context.filesDir, "rawlens_empty_test_${System.nanoTime()}.craw")
         source.writeBytes(byteArrayOf())
         try {
             try {
