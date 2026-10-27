@@ -129,11 +129,16 @@ android {
                 if (isFdroidBuild) {
                     arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
                 }
-                // JXL overrides: -PjxlSourceDir=<libjxl checkout> reuses a
-                // local clone instead of fetching; -PdisableJxl builds the
-                // "not bundled" stub (offline builds).
-                if (project.hasProperty("jxlSourceDir")) {
-                    arguments("-DLIBJXL_SOURCE_DIR=${project.property("jxlSourceDir")}")
+                // JXL source: -PjxlSourceDir=<libjxl checkout> wins; else the
+                // pinned third_party/libjxl submodule when checked out (F-Droid
+                // builds it from there with submodules: true, no network);
+                // else CMake fetches the pinned release. -PdisableJxl builds
+                // the "not bundled" stub (offline builds).
+                val jxlSubmodule = rootProject.file("third_party/libjxl")
+                val jxlSource = project.findProperty("jxlSourceDir")?.toString()
+                    ?: jxlSubmodule.takeIf { it.resolve("CMakeLists.txt").isFile }?.absolutePath
+                if (jxlSource != null) {
+                    arguments("-DLIBJXL_SOURCE_DIR=$jxlSource")
                 }
                 if (project.hasProperty("disableJxl")) {
                     arguments("-DRAWLENS_ENABLE_JXL=OFF")
