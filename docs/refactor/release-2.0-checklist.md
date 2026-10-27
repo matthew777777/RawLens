@@ -16,8 +16,13 @@ moves to [2.0.x]. Release mechanics (E19, E22-E24) kept [2.0] because the
       extrapolation (E2), single-shot correction, midtone/shadow SNR limits.
       Owner: yes, Magic Lantern rules.
 - [x] A3 [2.0] (done 78f5637; device check pending) Flash precapture as Open Camera's two-phase wait (flash-study F1/F2).
+      Flash follow-up 2026-10-26: forced ON / hardware AUTO / manual verified
+      on device; PROGRAM/ETTR preserve their own pairs and offer Off/On only
+      ([flash evidence](flash-study.md)).
+- [ ] A3b [2.0.x] RawLens-owned auto-flash metering for PROGRAM/ETTR.
+      Owner 2026-10-26: keep Auto disabled with an explanatory note until implemented.
 - [x] A4 [2.0] (done 566f66f; device check pending) ISO-only manual takes a left-over PROGRAM shutter (R-A3-1).
-- [ ] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
+- [x] A5 [2.0] **BGU viewfinder: same treatment as the Vulkan VF.** Study
       `BguViewfinder`, `BguFit`, `BguSlice`, `BguSliceCpu`, `BguLook`,
       `BguSample`, `BguGeometry`, `BguSpike`, `bgu_slice_cpu.cpp`,
       `halide_bgu_*_jni.cpp` and their Halide generators against the
@@ -27,22 +32,19 @@ moves to [2.0.x]. Release mechanics (E19, E22-E24) kept [2.0] because the
       Find AI-written mistakes (unreferenced constants, wrong grid/slice
       maths, fit regularization, boundary handling), fix to the reference,
       verify on device (vf-native-study.md is the template).
-- [ ] A6 [2.0] **ETTR JPEGs are too dark** (owner report 2026-10-23).
-      The DNG is the point of ETTR and is unaffected; the developed
-      JPEG is not placing brightness where AUTO/PROGRAM do. Prime
-      suspects, in order: (1) the ETTR develop rule in
-      `RawDevelopmentSettings.ettrHeadroomEv` — verified-bright ETTR
-      frames get zero positive lift by design, on the assumption the
-      capture exposure already placed the scene; (2) A2's ML target
-      (<= -0.5 EV, highlight-first) is a RAW exposure, so a straight
-      develop is expected to sit dark unless the develop compensates;
-      (3) adaptive strength actually armed on the ETTR save path
-      (AUTO 1.0 / PROGRAM slider) and the residual-to-target cap.
-      Fix belongs on the develop side, not by exposing hotter at
-      capture (that would defeat ETTR). Gate: paired same-scene
-      ETTR vs AUTO vs PROGRAM JPEGs, mid-grey placement and shadow
-      detail compared, highlights still protected; F15's ML table
-      gains a develop-compensation row from whatever is found.
+      Closed 2026-10-26: pinned source/decision table, EGL/GL split,
+      ownership/JNI/geometry fixes and encoded-guide haze correction.
+      78 host + 17 device tests pass; frozen-RAW neutral-shadow lift reduced
+      86% RAW / 64% JPEG; normal preview remains about 29–30 fps on the test
+      phone. R8 release 1.0.468 mode/lens/resume smoke passed; AUTO restored.
+      Residual approximation error and device/performance limits are explicit
+      in the [study and evidence](bgu-study.md); E22 remains release-wide.
+- [x] A6 [2.0] **ETTR JPEGs are too dark** (closed 2026-10-26).
+      Removed the ETTR-only develop residual cap; capture exposure and DNG
+      writing unchanged. Same-RAW before/after plus AUTO/PROGRAM device
+      comparison passes: neutral areas within 0.11 EV of PROGRAM / 0.14 EV
+      of AUTO, highlight detail retained. 112 host tests pass; F15 develop
+      row updated. [References and evidence](ettr-development-audit.md).
 
 ## B. HDR+ and HDR bracket merge
 - [ ] B5 [2.0] HDR+ 1:1 with Burst Photo default mode (hdrplus-parity-todo.md 1-5).
@@ -65,11 +67,18 @@ moves to [2.0.x]. Release mechanics (E19, E22-E24) kept [2.0] because the
 
 ## F. From Magic Lantern (owner 2026-10-22; ML source: reticulatedpines/magiclantern_simplified)
 Port each against its ML source (cite file + commit), same as A2 ETTR.
-- [ ] F1 [2.0] Raw zebras + false colour on the viewfinder, from raw
+- [x] F1 [2.0] Raw zebras + false colour on the viewfinder
+      (closed 2026-10-26; [audit](raw-exposure-assist-audit.md)), from raw
       values (src/zebra.c): over/under-exposure marks relative to the
       raw white/black level, not the processed preview. Pairs with ETTR.
-- [ ] F2 [2.0] Raw spot meter in EV relative to clipping (src/zebra.c
-      spotmeter): extend the current spot meter.
+- [x] F2 [2.0] Raw spot meter in EV relative to clipping
+      (closed 2026-10-26; compact text beside AUTO/status;
+      [audit](raw-exposure-assist-audit.md)) (src/zebra.c
+      spotmeter): extend the current spot meter. Real RAW oracle, UI, DirectLog
+      recording/monitor and lease checks passed. Existing unavailable CRS backend
+      is explicitly excluded; rejection/cleanup passed (not a recording pass).
+      Average + clipped-area readout extension implemented 2026-10-26;
+      [accuracy checks passed; UI/recording pending phone reconnect](raw-average-meter-audit.md).
 - [ ] F3 [2.0.x] Intervalometer with raw deflicker (modules/adv_int,
       modules/deflick): steady exposure across timelapse frames from raw
       metering; bulb ramping for sunset-to-night.
@@ -84,7 +93,8 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
       count. Fits the HDR bracket rework (B section).
 - [ ] F7 [2.0.x] White balance from raw (src/shoot.c kelvin_auto,
       wbs_gm_auto): set Kelvin and green-magenta from a neutral spot's raw
-      values.
+      values. Source caveat: those ML routines measure processed spot YUV;
+      a RAW implementation requires a documented Camera2/calibration adaptation.
 - [ ] F8 [2.0.x] Vectorscope (src/vectorscope.c) next to histogram/waveform.
 - [ ] F9 [2.0.x] Magic Zoom (src/zebra.c): persistent magnified window
       over the focus point for manual focus.
@@ -95,8 +105,12 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
 - [ ] F12 [2.0.x] Cropmarks and ghost-image overlay (src/cropmarks.c,
       src/zebra.c): aspect frame lines; last photo shown semi-transparent.
 - [ ] F13 [2.0.x] Anamorphic desqueeze preview (src/zebra.c).
-- [ ] F14 [2.0] **Recheck focus peaking against ML** (src/zebra.c focus
-      peak; owner 2026-10-23). Ours shipped without an ML diff:
+- [x] F14 [2.0] **Recheck focus peaking against ML**
+      (closed 2026-10-26: pinned source table, native/Kotlin ratio fix,
+      recording peaking handoff + crop geometry, real RAW comparisons,
+      1080p/1440p/4K MF/AF recording checks and minified release UI smoke;
+      CRS backend unavailable; [evidence and limits](ml-focus-ettr-audit.md)). Source: src/zebra.c focus
+      peak (owner 2026-10-23). Original scope:
       `FocusPeaking.kt` (Tenengrad + Laplacian on the green quad,
       absolute threshold, wash guard, despeckle, black-mean floor).
       Re-derive ML's detector from source (kernel, threshold scale and
@@ -105,8 +119,12 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
       intentional-diff. Scene gates: high-ISO false positives,
       low-contrast sharp edges, defocus ramps, MF pull at record
       resolution. Fix deviations; document the rest in the file header.
-- [ ] F15 [2.0] **Recheck ETTR against ML** (modules/ettr; owner
-      2026-10-23). A2 is marked done, but no line-by-line audit exists.
+- [x] F15 [2.0] **Recheck ETTR against ML**
+      (closed 2026-10-26: pinned source table, minimum-channel overshoot
+      gradient, analytic/ARM fixture, 18 real RAW comparisons including
+      2,324 locally green-only clipped quads, paired sampler timings and
+      release UI smoke; [evidence and limits](ml-focus-ettr-audit.md)). Source: modules/ettr (owner
+      2026-10-23). Original scope: audit A2 against ML source.
       Same table as F14 over: target <= -0.5 EV, overexposed-pixel
       allowance, midtone/shadow SNR limits, highlight-ignore fraction,
       correction clamp and single-shot extrapolation (E2). Any ML rule
@@ -152,14 +170,18 @@ register tuning (sharpen, gamma tables).
 ## H. From Nikon (owner 2026-10-23; survey: camera-maker-harvest.md §2, §9)
 Clean-room mimicry only: Nikon publishes no reusable code. Behaviour
 and parameter sets are ours to reimplement; no Nikon profiles bundled.
-- [ ] H1 [2.0] **Highlight-weighted metering** (Nikon, D810-era):
+- [x] H1 [2.0] **Highlight-weighted metering** (closed 2026-10-26:
+      host regressions + ADB GPU/RAW/JPEG + stationary window scene pass;
+      CFA stride bug fixed; [rules and evidence](nikon-metering-audit.md)):
       fourth PROGRAM metering weight in `RawProgramMeter` beside
       centre / average / spot. Weight by highlight brightness x area
       so small bright regions (spotlit subject, window in a dark room)
       stop clipping without dragging the whole frame down. Gates:
       synthetic + on-device scenes where centre/spot each fail one
       way; must not fight the H2 capture bias when both are on.
-- [ ] H2 [2.0] **Active D-Lighting** (Nikon): one control,
+- [x] H2 [2.0] **Active D-Lighting** (closed 2026-10-26:
+      all five strengths verified in PROGRAM/ETTR on the stationary window
+      scene, GPU grey ramp passes; [rules and evidence](nikon-metering-audit.md)): one control,
       Off / Low / Normal / High / Extra High, coupling (a) a
       capture-side highlight-protection bias in PROGRAM/ETTR with
       (b) develop-side shadow + midtone lift in the JPEG look. Both
@@ -312,14 +334,19 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
             perf (CPU pyramid, KernelNet conv).
       - [ ] C12 [2.0.x] One 122 s first-merge outlier (likely thermal).
       - [ ] C14 [2.0.x] **MFSR auto exposure wiring, like HDR+** (owner
-            2026-10-23). The HDR+ ZSL save job develops its merge
+            2026-10-23). Implementation added 2026-10-26: merged-RGB
+            meter + shared JPEG/JXL strength/tuning; 49 host tests pass,
+            including four local linear-DNG sampled fixtures; JPEG/JXL GPU
+            equivalence and unchanged-buffer checks pass on device. Remains open
+            for same-scene GPU/save/VF and device-performance acceptance.
+            [Audit](mfsr-exposure-audit.md). The HDR+ ZSL save job develops its merge
             through the adaptive path (`adaptivePreviewStrength` +
             `AdaptiveExposureTuning.fromOutputSettings` on the merged
-            CFA); `MfsrZslSaveJob` passes only
+            CFA); `MfsrZslSaveJob` previously passed only
             `RawDevelopmentSettings(denoise)` — the merged RGB develops
             at fixed reference exposure, as its own comment admits
             ("adaptive metering has no RGB leg yet"). Merged JPEGs
-            therefore land at whatever brightness the reference frame
+            therefore landed at whatever brightness the reference frame
             had. Work: give the adaptive meter an RGB leg (analyse
             the merged RGB, or resolve the correction on the
             reference CFA pre-merge and carry it through), wire the

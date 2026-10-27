@@ -96,7 +96,7 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 - Shutter-vs-ISO priority slider (0=ISO priority … 0.5=balanced … 1=shutter priority)
 - Per-lens PROGRAM profiles (metering, ISO/shutter min/max, locks, balance, brightness bias) with migration from legacy global ceilings
 - ISO-lock (shutter auto) and shutter-lock (ISO auto) single-axis modes
-- PROGRAM brightness bias (default +0.5 EV) against stock + spektra underexposure
+- PROGRAM brightness bias (default +0.5 EV) to compensate for observed underexposure
 - Viewfinder PROGRAM editor via ISO/S chips; ETTR overrides PROGRAM still exposure when converged
 - Chip contract: hold ISO/SHUTTER to lock, tap for slider, slider Auto releases both, lock-both enters MANUAL seeded from live pair
 - Quick panel refreshes in place after PROGRAM profile and mode changes instead of waiting for collapse/reopen

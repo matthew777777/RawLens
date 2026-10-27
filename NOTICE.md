@@ -110,6 +110,16 @@ lens-shading correction occurs before highlight reconstruction. The adapted sour
 remains licensed under GPL-3.0-or-later; darktable and its contributors do not endorse
 RawLens.
 
+The active Vulkan Bayer opposed port and its Kotlin fallback reference darktable
+commit `891e46cd57b64d67dbde183d5d3c0e430edd11d6`, particularly
+`data/kernels/basic.cl::{_calc_refavg,highlights_initmask,highlights_dilatemask,highlights_chroma,highlights_opposed}`
+and `src/iop/hlreconstruct/opposed.c::process_opposed_cl`. Pinned source excerpts
+are in `docs/refactor/upstream/darktable-opposed.{c,cl}`. The Vulkan translation
+uses storage images in place of planar masks, preserves row reduction order,
+and implements binary32 cube-root rounding with integer midpoint comparisons.
+Lens-shading correction is undone for reconstruction math and restored on changed
+photosites. This port and the source-derived oracle remain GPL-3.0-or-later.
+
 RawLens's exposure-bracket radiance merge is additionally adapted from darktable commit
 `52435b9a0c6bcf470f683e0c4455ecd321b9aec5`, primarily
 `src/control/jobs/control_jobs.c::_control_merge_hdr_process()` and `_envelope()`. It retains the
@@ -264,8 +274,34 @@ Upstream authors provide their work without endorsement of RawLens.
 - License: Apache License, Version 2.0
 - Adapted (not vendored) into RawLens's own Halide generators and shaders:
   `bgu_spike_downsample` adapts `src/halide/box_downsample_generator.cpp`,
-  `bgu_fit` adapts `src/halide/fit_and_slice_affine_grid_halide.cpp`
-  (f32 I/O, fit-only, BGU luma weights), and the GPU slice shader ports
+  `bgu_fit` adapts `src/halide/fit_and_slice_3x4.cpp` (2016 gain prior)
+  and `src/halide/fit_and_slice_affine_grid_halide.cpp` (Generator structure;
+  f32 I/O, fit-only, BGU luma weights), and the GPU slice shader ports
   `apply_local_curves.fs.glsl` to hand-written OpenGL ES 3.00. The paper's
   fit/slice split (§4–§5) shapes the whole viewfinder engine; the engine,
   JNI bridges, and schedules are RawLens's own work.
+
+## Magic Lantern RAW exposure assist
+
+F1/F2 port RAW zebra colour classification, RAW EV conversion and spot-region
+averaging from `reticulatedpines/magiclantern_simplified` commit
+`142472e95054d73640f50789ac0fd66325499d82`, `src/zebra.c` and `src/raw.c`.
+Copyright (C) 2009 Trammell Hudson; Copyright (C) 2013 Magic Lantern Team.
+These source files are GPL-2.0-or-later; the combined application uses GPL-3.0-or-later.
+The Kotlin port retains upstream attribution in `MagicLanternRawExposure.kt`.
+Platform adaptations and exact source ranges are documented in
+`docs/refactor/raw-exposure-assist-audit.md`; original excerpts are retained
+under `docs/refactor/upstream/`. No Canon firmware or profiles are bundled.
+
+## Google Turbo colormap
+
+`TurboColormap.kt` ports the GLSL polynomial approximation by Anton Mikhailov
+and Ruofei Du, Copyright 2019 Google LLC., Apache-2.0, from
+https://gist.github.com/mikhailov-work/0d177465a8151eb6ede1768d51d476c7
+revision `f0b77bf03aa5fce5a3ebe25988fef36ec43f5096`.
+RawLens precomputes ARGB8 entries and supplies RAW EV rather than processed luma.
+Bundled notices and license texts: `app/src/main/assets/licenses/`.
+
+## Packed-ratio RCD variant
+
+The shaders under `app/src/main/assets/shaders/rcd_packed` are adapted from the user-provided packed-ratio RCD source archive (commit e0e284d58f85ae9c4bc1b2cffe0c9722969a7bb8), licensed under GNU GPL v3. Original sources, license, and provenance are preserved in `third_party/rcd-packed-upstream`.
