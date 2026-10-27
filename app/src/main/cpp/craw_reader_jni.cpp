@@ -27,7 +27,7 @@ struct Handle {
         // Index from chunk headers only: one corrupt frame must not hide the take.
         size_t i = 0;
         for (const auto& c : reader.chunks()) {
-            if (std::memcmp(c.fourcc.data(), "LSHD", 4) == 0 && c.crcOk) {
+            if (std::memcmp(c.fourcc.data(), "LSHD", 4) == 0 && reader.crcOk(c)) {
                 const auto p = reader.payload(c);
                 if (p.size() < 16) continue;
                 Shading sh;
