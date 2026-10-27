@@ -48,10 +48,11 @@ import java.util.concurrent.atomic.AtomicLongArray
  * - [crop] switches Open Gate / 16:9 / 2.39:1 / 2.00:1 via the encoder's
  *   crop args with no session reconfiguration. Safe to change
  *   mid-recording (fps locks at record start).
- * - [binning] demosaics each 2x2 block to one RGB pixel at half
- *   resolution (RGB frame, SPEC 3.8) inside the encoder, so readers never
- *   demosaic a binned mosaic a second time; the viewfinder fan-out still
- *   sees full-res frames. Take-const
+ * - [binning] halves the resolution inside the encoder; [binningRgb]
+ *   picks RGB (each 2x2 block demosaiced once to one RGB pixel, SPEC 3.8:
+ *   readers never re-demosaic, no fringes) or the cheap centre-aligned
+ *   half-res Bayer mosaic. The viewfinder fan-out still sees full-res
+ *   frames. Take-const
  *   (a mid-take resolution change would break players): read once at
  *   [start] into [binActive], which also gates the frame-JSON dimensions
  *   and the % 8 crop resolve.
@@ -162,6 +163,10 @@ internal class RawVideoRecorder(
 
     /** 2x binning request, set before [start]. Take-const: see [binActive]. */
     var binning: Boolean = false
+
+    /** Binning output: true RGB (best), false half-res Bayer (cheap). Take-const. */
+    var binningRgb: Boolean = true
+    private var binRgbActive = true
 
     /**
      * Live binning state for this take ([binning] + Bayer CFA + width % 4),
@@ -415,6 +420,7 @@ internal class RawVideoRecorder(
         vfChars = chars
         val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         binActive = binningActive(binning, sensorCfa, frameSize.width)
+        binRgbActive = binningRgb
         binCfa = if (sensorCfa != null && sensorCfa in 0..3) sensorCfa else 0
         crawBitDepth = CrawWriter.bitDepthFor(chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
         if (binning && !binActive) {
@@ -498,11 +504,13 @@ internal class RawVideoRecorder(
         // worker can never starve the others into a pool deadlock (checkout
         // below is non-blocking regardless). Sized for the worst case
         // (near-incompressible frame); overflow drops the frame instead of
-        // growing. Binned takes size from the encoded (half-res) extent —
-        // the tallest binned window is the % 8-trimmed full height.
-        val boundW = if (binActive) frameSize.width / 2 else frameSize.width
+        // growing. Bayer-binned takes size from the encoded (half-res)
+        // extent — the tallest binned window is the % 8-trimmed full height;
+        // RGB-binned takes encode a full-size cell frame (SPEC 3.8).
+        val halfBound = binActive && !binRgbActive
+        val boundW = if (halfBound) frameSize.width / 2 else frameSize.width
         val boundH =
-            if (binActive) frameSize.height / 8 * 8 / 2 else frameSize.height
+            if (halfBound) frameSize.height / 8 * 8 / 2 else frameSize.height
         val ew = (boundW + 63) / 64 * 64
         val payloadBound =
             (ew.toLong() * boundH * 2 + ew * boundH / 4 + 65536)
@@ -954,7 +962,7 @@ internal class RawVideoRecorder(
                 val bytes = CrawWriter.encodeFrame(
                     task.src, task.size, task.width, task.height, task.stride,
                     task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
-                    takeCodec
+                    takeCodec, binRgbActive
                 )
                 val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6f
                 // Benign races on stats: worst case a slightly stale overlay.

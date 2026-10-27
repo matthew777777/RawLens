@@ -2099,6 +2099,7 @@ class MainActivity : Activity() {
             crop = videoCrop
             compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
             binning = lensPreferences().getBoolean(KEY_VIDEO_BINNING, false)
+            binningRgb = lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) != BINNING_CFA
             lensShading = lensShadingSnapshot
             audioEnabled = withAudio
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
@@ -3025,7 +3026,9 @@ class MainActivity : Activity() {
         return "{\"UniqueCameraModel\":\"${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\"," +
             "\"width\":${size.width},\"height\":${size.height}," +
             "\"crop\":\"${videoCrop.name}\",\"fps\":${RawVideoRecorder.FPS}," +
-            (if (bin) "\"binning\":\"diamond2x2\"," else "") +
+            (if (bin) "\"binning\":\"" +
+                (if (lensPreferences().getString(KEY_VIDEO_BINNING_MODE, BINNING_RGB) == BINNING_CFA) "centred2x2" else "rgb2x2") +
+                "\"," else "") +
             "\"sensorOrientation\":$orientation,\"encoder\":\"RawLens-Video\"}"
     }
 
@@ -4233,6 +4236,10 @@ class MainActivity : Activity() {
         const val KEY_VIDEO_CROP = "video_crop"
         const val KEY_VIDEO_CODEC = "video_craw_codec"
         const val KEY_VIDEO_BINNING = "video_binning"
+        /** Binning output: [BINNING_RGB] (best quality) or [BINNING_CFA] (cheap half-res Bayer). */
+        const val KEY_VIDEO_BINNING_MODE = "video_binning_mode"
+        const val BINNING_RGB = "rgb"
+        const val BINNING_CFA = "cfa"
         const val KEY_VIDEO_AUDIO = "video_audio"
         const val KEY_VIDEO_STAB_OUTPUT = "video_stab_output"
         const val KEY_VIDEO_DEMOSAIC = "video_demosaic"
