@@ -1,0 +1,193 @@
+Device 25080RABDG; 2026-10-26; Vulkan 1.0 opposed host
+10-26 18:33:04.260 26292 26318 I OpposedParity: OPT roi=[1900, 1400, 301, 301] peakImageMiB=58.80470275878906 phasesMs=[71.868308, 48.516307, 3.390769, 44.288308]
+10-26 18:33:04.286 26292 26318 I OpposedParity: FULL 4096x3072 warmMs=193.693462 coldMs=220.459693
+10-26 18:33:05.083 26292 26318 I OpposedParity: DENSE=false shaded=true totalMs=218.283154 roi=[1900, 1400, 301, 301] peakImageMiB=58.83599853515625 phasesMs=[45.604923, 87.52577, 4.794461, 10.162539]
+10-26 18:33:05.743 26292 26318 I OpposedParity: DENSE=true shaded=true totalMs=575.893847 roi=[0, 0, 4096, 3072] peakImageMiB=96.03131103515625 phasesMs=[31.893231, 77.011154, 381.777154, 40.891385]
+10-26 18:33:06.268 26292 26318 I OpposedParity: CACHE pass=0 compileMs=446.904076 bytes=27445
+10-26 18:33:06.310 26292 26318 I OpposedParity: CACHE pass=1 compileMs=0.857154 bytes=27445
+10-26 18:33:06.776 26292 26318 I OpposedParity: RGGB 4x4 maxError=0.0 unequalBits=0 totalMs=439.03223
+10-26 18:33:06.794 26292 26318 I OpposedParity: RGGB 50x46 maxError=0.0 unequalBits=0 totalMs=16.382462
+10-26 18:33:06.870 26292 26318 I OpposedParity: RGGB 192x144 maxError=0.0 unequalBits=0 totalMs=67.606846
+10-26 18:33:06.880 26292 26318 I OpposedParity: GRBG 4x4 maxError=0.0 unequalBits=0 totalMs=9.310154
+10-26 18:33:06.893 26292 26318 I OpposedParity: GRBG 50x46 maxError=0.0 unequalBits=0 totalMs=12.927615
+10-26 18:33:06.985 26292 26318 I OpposedParity: GRBG 192x144 maxError=0.0 unequalBits=0 totalMs=78.599693
+10-26 18:33:06.994 26292 26318 I OpposedParity: GBRG 4x4 maxError=0.0 unequalBits=0 totalMs=8.493461
+10-26 18:33:07.006 26292 26318 I OpposedParity: GBRG 50x46 maxError=0.0 unequalBits=0 totalMs=11.230538
+10-26 18:33:07.095 26292 26318 I OpposedParity: GBRG 192x144 maxError=0.0 unequalBits=0 totalMs=77.51623
+10-26 18:33:07.104 26292 26318 I OpposedParity: BGGR 4x4 maxError=0.0 unequalBits=0 totalMs=9.072077
+10-26 18:33:07.119 26292 26318 I OpposedParity: BGGR 50x46 maxError=0.0 unequalBits=0 totalMs=13.731693
+10-26 18:33:07.206 26292 26318 I OpposedParity: BGGR 192x144 maxError=0.0 unequalBits=0 totalMs=76.977769
+10-26 18:33:07.692 26292 26318 I OpposedParity: RANDOM RGGB shaded=false unequalBits=0 maxError=0.0
+10-26 18:33:07.764 26292 26318 I OpposedParity: RANDOM RGGB shaded=true unequalBits=0 maxError=0.0
+10-26 18:33:07.801 26292 26318 I OpposedParity: RANDOM GRBG shaded=false unequalBits=0 maxError=0.0
+10-26 18:33:07.859 26292 26318 I OpposedParity: RANDOM GRBG shaded=true unequalBits=0 maxError=0.0
+10-26 18:33:07.895 26292 26318 I OpposedParity: RANDOM GBRG shaded=false unequalBits=0 maxError=0.0
+10-26 18:33:07.954 26292 26318 I OpposedParity: RANDOM GBRG shaded=true unequalBits=0 maxError=0.0
+10-26 18:33:07.997 26292 26318 I OpposedParity: RANDOM BGGR shaded=false unequalBits=0 maxError=0.0
+10-26 18:33:08.076 26292 26318 I OpposedParity: RANDOM BGGR shaded=true unequalBits=0 maxError=0.0
+10-26 18:37:00.562 26851 26877 I RawLensDevelop: Pre-demosaic 4080x3060: lensShading=119ms defects=0ms total=119ms
+10-26 18:37:00.762 26851 26877 I RawLensDevelop: Opposed Bayer Vulkan 4080x3060: 196ms
+10-26 18:37:01.156 26851 26877 I RawLensDevelop: Demosaic done: 394ms
+10-26 18:37:03.532 26851 26877 I RawLensDevelop: JPEG fused output 4080x3060: baseRead=2349ms baseBitmap=27ms gain+attach=0ms total=2376ms
+10-26 18:37:03.566 26851 26877 I RawLensDevelop: AMaZE 4080x3060: prepareCpu=57ms submitCpu=262ms downstream=2410ms textureHits=0 textureMisses=18 retained=230809600B
+10-26 18:37:03.598 26851 26877 I RawLensDevelop: RAW development 4080x3060: preprocessCpu=156ms path=CPU_FALLBACK demosaic=AMAZE adaptive=0ms color=200ms adaptiveEV=0.0 appliedEV=0.0 GPU+output=2836ms total=3192ms
+10-26 18:37:03.948 26851 26877 I OpposedParity: CAPTURE_SAVE raw=4080x3060 jpeg=4080x3060 cameraMs=576.131077 developMs=3198.83077 encodeSyncMs=346.811077 totalMs=4121.772924 bytes=9526232
+
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.OpposedHighlightsDeviceTest:
+INSTRUMENTATION_STATUS: test=shadingDoesNotManufactureClippingAndFullResolutionTiming
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=shadingDoesNotManufactureClippingAndFullResolutionTiming
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=full12MpDenseClippingAndShadingStayWithinMemoryBudget
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=full12MpDenseClippingAndShadingStayWithinMemoryBudget
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=diskCacheAndOwnedArrayReusePreserveEveryBit
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=diskCacheAndOwnedArrayReusePreserveEveryBit
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=compareEveryOutputAndRowStatisticAcrossPatternsAndBorders
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=compareEveryOutputAndRowStatisticAcrossPatternsAndBorders
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=randomizedChannelClippingAndVaryingLensShading
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedHighlightsDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=5
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=randomizedChannelClippingAndVaryingLensShading
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 4.815
+
+OK (5 tests)
+
+
+INSTRUMENTATION_CODE: -1
+
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedCaptureSaveDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.OpposedCaptureSaveDeviceTest:
+INSTRUMENTATION_STATUS: test=fullResolutionCaptureToDurableJpeg
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedCaptureSaveDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=fullResolutionCaptureToDurableJpeg
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 4.897
+
+OK (1 test)
+
+
+INSTRUMENTATION_CODE: -1
+
+RCD above-white preservation, existing uint16 RCD parity, and shared RGB-tail regression:
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedRcdQualityDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.OpposedRcdQualityDeviceTest:
+INSTRUMENTATION_STATUS: test=floatCfaAndWhiteWindowPreserveReconstructedAboveWhiteValues
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.OpposedRcdQualityDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=floatCfaAndWhiteWindowPreserveReconstructedAboveWhiteValues
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.RcdParityDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.RcdParityDeviceTest:
+INSTRUMENTATION_STATUS: test=gpuMatchesCpuReference
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.RcdParityDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=gpuMatchesCpuReference
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MergedJpegDevelopInstrumentedTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.MergedJpegDevelopInstrumentedTest:
+INSTRUMENTATION_STATUS: test=mfsrAdaptiveMatchesExplicitExposureAndPreservesRgb
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MergedJpegDevelopInstrumentedTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=3
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=mfsrAdaptiveMatchesExplicitExposureAndPreservesRgb
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 2.57
+
+OK (3 tests)
+
+
+INSTRUMENTATION_CODE: -1

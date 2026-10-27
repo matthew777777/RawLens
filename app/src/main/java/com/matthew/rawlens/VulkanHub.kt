@@ -106,6 +106,12 @@ object VulkanHub {
         return Handle(nativeInit())
     }
 
+    /** Core Vulkan 1.0 host for Bayer opposed: no subgroup or newer API requirement. */
+    internal fun openVulkan10(): Handle {
+        load()
+        return Handle(nativeInitVersion(1 shl 22))
+    }
+
     class Handle internal constructor(private var handle: Long) : Closeable {
         fun deviceInfo(): String {
             check(handle != 0L) { "srvulkan handle is closed" }
@@ -145,6 +151,38 @@ object VulkanHub {
         fun writeImage(image: Long, bytes: ByteBuffer) {
             check(handle != 0L) { "srvulkan handle is closed" }
             nativeWriteImage(handle, image, bytes)
+        }
+
+        internal fun loadPipelineCache(file: java.io.File) {
+            check(handle != 0L)
+            val bytes = runCatching { if (file.length() in 32..(16L shl 20)) file.readBytes() else null }.getOrNull()
+            nativeLoadPipelineCache(handle, bytes)
+        }
+        internal fun savePipelineCache(file: java.io.File) {
+            check(handle != 0L)
+            val bytes = nativeSavePipelineCache(handle) ?: return
+            runCatching {
+                file.parentFile?.mkdirs()
+                val tmp = java.io.File(file.parentFile, file.name + ".tmp")
+                tmp.writeBytes(bytes)
+                java.nio.file.Files.move(tmp.toPath(), file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            }
+        }
+
+        internal fun writeImageFloats(image: Long, values: FloatArray) {
+            check(handle != 0L)
+            nativeWriteImageFloats(handle, image, values)
+        }
+        internal fun readImageFloatsInto(image: Long, w: Int, h: Int, output: FloatArray,
+                                        stride: Int, dx: Int, dy: Int) {
+            check(handle != 0L)
+            nativeReadImageFloatsInto(handle, image, w, h, output, stride, dx, dy)
+        }
+        internal fun releaseStaging() {
+            check(handle != 0L)
+            nativeReleaseStaging(handle)
         }
 
         fun readImage(image: Long, out: ByteBuffer) {
@@ -201,6 +239,13 @@ object VulkanHub {
     }
 
     private external fun nativeInit(): Long
+    private external fun nativeInitVersion(version: Int): Long
+    private external fun nativeLoadPipelineCache(handle: Long, bytes: ByteArray?)
+    private external fun nativeSavePipelineCache(handle: Long): ByteArray?
+    private external fun nativeWriteImageFloats(handle: Long, image: Long, values: FloatArray)
+    private external fun nativeReadImageFloatsInto(handle: Long, image: Long, w: Int, h: Int,
+                                                  output: FloatArray, stride: Int, dx: Int, dy: Int)
+    private external fun nativeReleaseStaging(handle: Long)
     private external fun nativeDeviceInfo(handle: Long): String
     private external fun nativeDeviceCount(handle: Long): Int
     private external fun nativeDeviceName(handle: Long, index: Int): String

@@ -143,6 +143,7 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         cameraLinear: Boolean = false,
+        whiteWindow: FloatArray = floatArrayOf(0.70f, 0.99f),
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -178,21 +179,21 @@ class Gles31AmazeProcessor(
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
             cameraLinear = cameraLinear,
+            whiteWindow = whiteWindow,
             consume = consume
         )
     }
 
     /**
-     * RCD over an unpacked normalized CFA (CPU-fallback path): floats
-     * quantize back to uint16 (levels 0, white 65535 — the unpack
-     * already baked black/white + lens shading + defects), tight crop
-     * buffer, crop-local pattern.
+     * RCD over normalized float32 CFA, preserving reconstructed above-white
+     * values. Direct array-to-BLOB upload avoids Java staging and uint16 clipping.
      */
     fun <T> processRcdCfa(
         input: UnpackedRawCfa,
         cameraToAcescgColumnMajor: FloatArray = IDENTITY_MATRIX,
         cameraWhiteNormalized: FloatArray = UNIT_WHITE,
         cameraLinear: Boolean = false,
+        whiteWindow: FloatArray = floatArrayOf(0.70f, 0.99f),
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(input.width >= 4 && input.height >= 4 && input.width % 2 == 0 && input.height % 2 == 0) {
@@ -201,29 +202,23 @@ class Gles31AmazeProcessor(
         require(input.values.size == input.width * input.height) {
             "CFA values size mismatch"
         }
-        val bytes = input.width * input.height * 2
-        val staging = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder())
-        val shorts = staging.asShortBuffer()
-        for (v in input.values) {
-            val q = (v.coerceIn(0f, 1f) * 65535f + 0.5f).toInt().coerceIn(0, 65535)
-            shorts.put(q.toShort())
-        }
-        staging.position(0)
-        staging.limit(bytes)
+        val bytes = input.width * input.height * 4
         return processRcdCore(
             width = input.width,
             height = input.height,
-            codes = staging,
+            codes = null,
+            floatCfa = input.values,
             byteCount = bytes,
             pitch = input.width,
             left = 0,
             top = 0,
             channels = VfRcd.channelsFromPattern(input.pattern),
             levels = FloatArray(4),
-            white = 65535f,
+            white = 1f,
             cameraToAcescgColumnMajor = cameraToAcescgColumnMajor,
             cameraWhiteNormalized = cameraWhiteNormalized,
             cameraLinear = cameraLinear,
+            whiteWindow = whiteWindow,
             consume = consume
         )
     }
@@ -231,7 +226,7 @@ class Gles31AmazeProcessor(
     private fun <T> processRcdCore(
         width: Int,
         height: Int,
-        codes: ByteBuffer,
+        codes: ByteBuffer?,
         byteCount: Int,
         pitch: Int,
         left: Int,
@@ -242,6 +237,8 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         cameraLinear: Boolean,
+        whiteWindow: FloatArray,
+        floatCfa: FloatArray? = null,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(cameraToAcescgColumnMajor.size == 9 && cameraToAcescgColumnMajor.all(Float::isFinite)) {
@@ -265,7 +262,9 @@ class Gles31AmazeProcessor(
         // photo's GPU reads are done before the next blit overwrites it.
         val cfa = rcdCfaFor(byteCount)
         try {
-            if (VfEglImport.blitBytesToBlob(cfa, codes, byteCount) != 0) {
+            val uploaded = if (floatCfa != null) VfEglImport.blitFloatsToBlob(cfa, floatCfa)
+            else VfEglImport.blitBytesToBlob(cfa, requireNotNull(codes), byteCount)
+            if (uploaded != 0) {
                 throw UnsupportedOperationException("RCD CFA upload failed")
             }
             // B5: the native output cache acquires every RGB/scratch buffer and
@@ -277,6 +276,7 @@ class Gles31AmazeProcessor(
                     val (ip, fp) = VfRcd.packRcd(
                         width, height, left, top, channels, pitch, mode, levels, white
                     )
+                    if (floatCfa != null) ip[9] = ip[9] or 16
                     val fd = VfRcd.rcdSubmitNative(cfa, rgb, scratch, ip, fp, 0)
                     if (fd < 0) throw UnsupportedOperationException("RCD mode $mode submit failed ($fd)")
                     try {
@@ -289,7 +289,7 @@ class Gles31AmazeProcessor(
                 }
                 return rcdTail(
                     rgb, width, height, cameraToAcescgColumnMajor, cameraWhiteNormalized,
-                    cameraLinear, consume
+                    cameraLinear, whiteWindow, consume
                 )
             } finally {
                 // rgb/scratch are reused across photos (rcdOutputsFor).
@@ -372,6 +372,7 @@ class Gles31AmazeProcessor(
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
         cameraLinear: Boolean,
+        whiteWindow: FloatArray,
         consume: (AmazeGpuOutput) -> T
     ): T {
         val session = processingSession()
@@ -416,6 +417,7 @@ class Gles31AmazeProcessor(
                                 check(it >= 0) { "rcd_final uniform 'u_camera_white_normalized' is missing" }
                             }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
                         )
+                        GLES31.glUniform2f(GLES31.glGetUniformLocation(program, "u_white_window"), whiteWindow[0], whiteWindow[1])
                         GLES31.glUniform1i(
                             GLES31.glGetUniformLocation(program, "u_camera_linear").also {
                                 check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
@@ -528,6 +530,7 @@ class Gles31AmazeProcessor(
                             check(it >= 0) { "rcd_final uniform 'u_camera_white_normalized' is missing" }
                         }, cameraWhiteNormalized[0], cameraWhiteNormalized[1], cameraWhiteNormalized[2]
                     )
+                    GLES31.glUniform2f(GLES31.glGetUniformLocation(program, "u_white_window"), 0.70f, 0.99f)
                     GLES31.glUniform1i(
                         GLES31.glGetUniformLocation(program, "u_camera_linear").also {
                             check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
@@ -1150,11 +1153,11 @@ class Gles31AmazeProcessor(
                 vec2("u_white_window", whiteWindow)
                 if (fusedSettings == null) {
                     integer("u_camera_linear", if (cameraLinear) 1 else 0)
-                    vec3(
-                        "u_demosaic_unbalance",
-                        FloatArray(3) { 1f / demosaicBalance[it].coerceAtLeast(1e-6f) }
-                    )
                 }
+                vec3(
+                    "u_demosaic_unbalance",
+                    FloatArray(3) { 1f / demosaicBalance[it].coerceAtLeast(1e-6f) }
+                )
                 ivec2(
                     "u_inner",
                     AmazePipelineContract.PAD + AmazePipelineContract.BORDER,
@@ -1174,7 +1177,7 @@ class Gles31AmazeProcessor(
                 finalProgram.float("u_agx_contrast", settings.agxContrast)
                 finalProgram.float("u_agx_saturation", settings.agxSaturation)
                 finalProgram.float("u_agx_hue_preservation", settings.agxHuePreservation)
-                finalProgram.float("u_agx_shadow_ev", settings.agxShadowEv)
+                finalProgram.float("u_agx_shadow_ev", settings.effectiveAgxShadowEv)
                 finalProgram.float("u_agx_highlight_ev", settings.agxHighlightEv)
                 finalProgram.float("u_agx_gamut_compression", settings.agxGamutCompression)
                 finalProgram.float("u_highlight_shoulder", settings.resolvedForPlatform().highlightShoulder)

@@ -78,6 +78,8 @@ internal object VfEglImport {
      * CFA upload; Java cannot lock a HardwareBuffer). Returns 0 or a
      * negative diagnostic.
      */
+    external fun blitFloatsToBlob(dst: HardwareBuffer, src: FloatArray): Int
+
     external fun blitBytesToBlob(dst: HardwareBuffer, src: ByteBuffer, byteCount: Int): Int
 
     /**

@@ -16,3 +16,4 @@
 #include "vf_vulkan_vf_p010_preview.inc"  // True-10-bit P010 stage and the record-preview monitor.
 #include "vf_vulkan_vf_rcd.inc"  // RCD demosaic and the fused RCD finalize + grade.
 #include "vf_vulkan_vf_mhc_stab.inc"  // Malvar-He-Cutler demosaic, fused MHC+grade, and the stabilization warp.
+

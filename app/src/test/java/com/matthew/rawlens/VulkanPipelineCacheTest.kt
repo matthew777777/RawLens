@@ -18,6 +18,8 @@ class VulkanPipelineCacheTest {
             File("/cache/vulkan_pipeline_cache/vf.bin"),
             VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_VF)
         )
+        assertEquals(File("/cache/vulkan_pipeline_cache/opposed.bin"),
+            VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_OPPOSED))
         assertEquals(
             File("/cache/vulkan_pipeline_cache/hdrplus.bin"),
             VulkanPipelineCache.file(cacheDir, VulkanPipelineCache.HOST_HDRPLUS)

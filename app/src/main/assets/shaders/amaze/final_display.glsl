@@ -15,6 +15,7 @@ uniform highp vec3 u_camera_white_normalized;
 // (near-white is clipped), HDR merges use 0.995/1.0 (only the all-frames-
 // clipped fallback is achromatic; valid short-frame highlights keep color).
 uniform highp vec2 u_white_window;
+uniform highp vec3 u_demosaic_unbalance;
 
 const int HALO = 2;
 const int TW = LW + 2 * HALO;
@@ -73,7 +74,10 @@ void main() {
     // Sensor-domain white-point protection, identical to the non-fused path. Detect clipping
     // from 70%..99% in demosaiced camera RGB and blend toward camera-space neutral white before
     // WB/calibration/color conversion. This turns clipped magenta highlights into neutral white.
-    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
+    // AMaZE works in an attenuated WB-balanced basis. Detect saturation in
+    // sensor units: green can clip while every balanced channel is below 0.70.
+    highp vec3 sensorRgb = cameraRgb * u_demosaic_unbalance;
+    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), sensorRgb);
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 

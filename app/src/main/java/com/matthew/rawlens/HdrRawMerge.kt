@@ -170,6 +170,7 @@ object HdrRawMerge {
         private val photonList = photons.toList()
         private val pixels = FloatArray(count)
         private val weights = FloatArray(count)
+        private val clipping = IntArray(((width + 31) / 32) * height)
         // Reused across frames (sequential loop): avoids re-allocating and
         // zeroing ~2x12MB block buffers per frame. Values fed to the
         // accumulate loop are identical; only allocation churn is removed.
@@ -309,12 +310,15 @@ object HdrRawMerge {
                             pixels[i] = if (cellMin + HdrRawMerge.QUANTIZATION_MARGIN >= 1f) 1f
                             else sample * cal / whiteLevel
                             weights[i] = -cellMin
+                            setClipped(clipping, width, x, y,
+                                cellMin + HdrRawMerge.QUANTIZATION_MARGIN >= 1f || sample >= OpposedHighlights.CLIP)
                         }
                     } else {
                         if (weights[i] <= 0f) {
                             pixels[i] = 0f
                             weights[i] = 0f
-                        }
+                            setClipped(clipping, width, x, y, sample >= OpposedHighlights.CLIP)
+                        } else if (sample < OpposedHighlights.CLIP) setClipped(clipping, width, x, y, false)
                         pixels[i] += weight * sample * cal
                         weights[i] += weight
                     }
@@ -331,9 +335,7 @@ object HdrRawMerge {
             require(accumulated == frameCount) {
                 "Merge finished after $accumulated of $frameCount frames"
             }
-            for (i in pixels.indices) if (weights[i] > 0f)
-                pixels[i] = max(0f, pixels[i] / (weights[i] * whiteLevel))
-            return reference.cfa.copy(values = pixels)
+            return normalizeAndTag(reference.cfa, pixels, weights, whiteLevel, clipping)
         }
 
         /** Per-frame slice of [checkFrames]: geometry plus normalized-domain guard. */
@@ -417,6 +419,7 @@ object HdrRawMerge {
         val count = width * height
         val pixels = FloatArray(count)
         val weights = FloatArray(count)
+        val clipping = IntArray(((width + 31) / 32) * height)
         var whiteLevel = 0f
         val cals = frames.map { calibration(it) }
         val photons = frames.map { photonCount(it) }
@@ -447,17 +450,33 @@ object HdrRawMerge {
                     if (weights[i] <= 0f && (weights[i] == 0f || minimum < -weights[i])) {
                         pixels[i] = if (minimum + QUANTIZATION_MARGIN >= 1f) 1f else sample * cal / whiteLevel
                         weights[i] = -minimum
+                        setClipped(clipping, width, x, y, minimum + QUANTIZATION_MARGIN >= 1f || sample >= OpposedHighlights.CLIP)
                     }
                 } else {
-                    if (weights[i] <= 0f) { pixels[i] = 0f; weights[i] = 0f }
+                    if (weights[i] <= 0f) {
+                        pixels[i] = 0f; weights[i] = 0f
+                        setClipped(clipping, width, x, y, sample >= OpposedHighlights.CLIP)
+                    } else if (sample < OpposedHighlights.CLIP) setClipped(clipping, width, x, y, false)
                     pixels[i] += weight * sample * cal
                     weights[i] += weight
                 }
             }
         }
+        return normalizeAndTag(reference, pixels, weights, whiteLevel, clipping)
+    }
+
+    private fun setClipped(words: IntArray, width: Int, x: Int, y: Int, value: Boolean) {
+        val i = y * ((width + 31) / 32) + x / 32
+        val bit = 1 shl (x and 31)
+        words[i] = if (value) words[i] or bit else words[i] and bit.inv()
+    }
+
+    private fun normalizeAndTag(reference: UnpackedRawCfa, pixels: FloatArray,
+                                weights: FloatArray, whiteLevel: Float, clipping: IntArray): UnpackedRawCfa {
         for (i in pixels.indices) if (weights[i] > 0f)
             pixels[i] = max(0f, pixels[i] / (weights[i] * whiteLevel))
-        return reference.copy(values = pixels)
+        return reference.copy(values = pixels,
+            highlightClipping = CfaHighlightClipping(reference.width, reference.height, clipping))
     }
 
     // ---- darktable calibration (control_jobs.c) ----

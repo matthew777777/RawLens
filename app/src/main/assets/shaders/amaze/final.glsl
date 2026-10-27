@@ -25,7 +25,7 @@ uniform highp vec2 u_white_window;
 // darktable's post-highlight-reconstruction denoise input) instead of ACEScg.
 uniform int u_camera_linear;
 // Inverse of the executor's demosaic pre-balance D (balanced CFA basis back
-// to true camera RGB). Only read when u_camera_linear != 0.
+// to true camera RGB). Also used to detect sensor-domain clipping.
 uniform highp vec3 u_demosaic_unbalance;
 
 const int HALO = 2;   // half-grid reads hpos(q) can land one column left of q
@@ -86,7 +86,10 @@ void main() {
     // progressively remove chroma by converging on the camera's measured neutral white. This is
     // deliberately before WB/calibration/color matrices: doing it afterwards cannot undo the
     // magenta generated when a clipped channel is amplified by white balance.
-    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), cameraRgb);
+    // AMaZE works in an attenuated WB-balanced basis. Detect saturation in
+    // sensor units: green can clip while every balanced channel is below 0.70.
+    highp vec3 sensorRgb = cameraRgb * u_demosaic_unbalance;
+    highp vec3 whiteBlendRgb = smoothstep(vec3(u_white_window.x), vec3(u_white_window.y), sensorRgb);
     highp float whiteBlend = max(whiteBlendRgb.r, max(whiteBlendRgb.g, whiteBlendRgb.b));
     cameraRgb = mix(cameraRgb, u_camera_white_normalized, whiteBlend);
 
