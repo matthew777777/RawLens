@@ -108,8 +108,8 @@ object TinyDngImageWriter {
     /**
      * One-shot lossless-JXL write for merged 16-bit CFA mosaics (DNG 1.7,
      * Compression 52546). [mosaic] is the full-frame little-endian u16
-     * raster; [fields] must carry DNG 1.7 version tags (the native side only
-     * stores the caller's tags). EXIF/GPS sub-IFDs ride along, so merged
+     * raster. TinyDNG handles lossless encoding and supplies missing DNG 1.7
+     * version tags. EXIF/GPS sub-IFDs ride along, so merged
      * JXL files keep location. Uncompressed merges keep using [write].
      */
     fun writeCompressed(

@@ -151,9 +151,8 @@ typedef enum tinydng_compression {
   TINYDNG_COMPRESSION_ZIP = 8,
   TINYDNG_COMPRESSION_PACKBITS = 32773,
   TINYDNG_COMPRESSION_LOSSY_JPEG = 34892,
-  /* JPEG XL (DNG 1.7, Compression 52546). Copy-through only: the
-     caller compresses (e.g. libjxl) and hands already-compressed bytes to
-     tinydng_writer_write_compressed_strip. No encoder lives here. */
+  /* JPEG XL (DNG 1.7). Encoding requires TINYDNG_HAVE_JXL / libjxl.
+     Precompressed strip copy-through is available in every build. */
   TINYDNG_COMPRESSION_JPEG_XL = 52546
 } tinydng_compression;
 
@@ -692,17 +691,17 @@ typedef struct tinydng_write_options {
   uint8_t ljpeg_predictor;  /* 0 => 1; otherwise Annex H selector 1..7 */
   uint16_t ljpeg_restart_interval_mcus; /* 0 => none; whole MCU rows   */
   uint16_t compression; /* 0/1 none, 5 LZW, 7 lossless JPEG, 32773 PackBits,
-                           52546 precompressed JPEG XL */
+                           52546 lossless JPEG XL */
   /* header-first streaming for uncompressed output to non-seekable
      sinks. The header, IFD and extras are emitted at create (offsets
      precomputed — valid only for uncompressed striped layouts), and strips
      must arrive in index order. Classic TIFF only. */
   uint8_t header_first;
-  /* the image data arrives already compressed (JPEG XL codestream).
-     writer_create requires compression == 52546 with 16-bit single-channel
-     input; tinydng_write_memory skips the raster-size check and stores the
-     bytes verbatim via tinydng_writer_write_compressed_strip. */
+  /* 0: encode host-order pixels normally (requires libjxl for JPEG XL).
+     1: JPEG XL input is already compressed; copy it verbatim instead. */
   uint8_t precompressed;
+  uint8_t jxl_effort;       /* 0 => 3 (fast lossless); otherwise 1..9 */
+  uint32_t jxl_num_threads; /* 0 => automatic; 1 => serial encoder    */
 } tinydng_write_options;
 
 typedef struct tinydng_write_image {
@@ -727,6 +726,10 @@ typedef struct tinydng_write_image {
   const tinydng_field *gps_fields;
   size_t gps_field_count;
 } tinydng_write_image;
+
+/* Nonzero if this build can encode JPEG XL pixels through libjxl.
+   Precompressed JPEG XL strip writing works regardless of this result. */
+int tinydng_has_jxl_encoder(void);
 
 /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;
    free with tinydng_buffer_free). */
