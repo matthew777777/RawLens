@@ -217,6 +217,25 @@ Java_com_matthew_rawlens_CrawWriter_containerWriteAccel(JNIEnv* env, jobject, jl
 }
 
 JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_CrawWriter_containerWriteShading(JNIEnv* env, jobject, jlong handle, jlong ts,
+                                                          jint id, jint columns, jint rows,
+                                                          jfloatArray gains) {
+    auto* writer = writerFrom(handle);
+    if (!writer || !gains || columns <= 0 || rows <= 0 || columns > 65535 || rows > 65535) return -2;
+    const jsize n = static_cast<jsize>(columns) * rows * 4;
+    if (env->GetArrayLength(gains) < n) return -4;
+    std::vector<float> g(n);
+    env->GetFloatArrayRegion(gains, 0, n, g.data());
+    try {
+        writer->addShading(ts, static_cast<uint32_t>(id), static_cast<uint16_t>(columns),
+                           static_cast<uint16_t>(rows), g.data());
+        return 0;
+    } catch (...) {
+        return -5;
+    }
+}
+
+JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CrawWriter_containerClose(JNIEnv*, jobject, jlong handle) {
     auto* writer = writerFrom(handle);
     if (!writer) return -2;
