@@ -21,9 +21,9 @@ data class EttrSettings(
     val enabled: Boolean = false,
     /**
      * Target level below clipping, in EV: Magic Lantern's auto ETTR level
-     * (default -1 EV, never closer than -0.5 EV; [MIN_HEADROOM_EV]).
+     * (default -0.5 EV, never closer than -0.5 EV; [MIN_HEADROOM_EV]).
      */
-    val headroomEv: Float = 1f,
+    val headroomEv: Float = 0.5f,
     /**
      * Gain ceiling for ETTR brightening, mirroring the PROGRAM ISO ceiling.
      * Zero means the sensor maximum. When the ceiling binds, ETTR keeps the
@@ -261,6 +261,7 @@ object RawEttrSampler {
         val quadCount = (width / 2).toLong() * (height / 2)
         val step = meterGridStep(quadCount, targetQuads)
         val hist = IntArray(EttrQuadStats.BINS)
+        val minHist = IntArray(EttrQuadStats.BINS)
         var total = 0
         var over = 0
         val level = FloatArray(4)
@@ -283,6 +284,7 @@ object RawEttrSampler {
                 if (ok) {
                     val g = 0.5f * (level[1] + level[2])
                     hist[EttrQuadStats.binOf(maxOf(level[0], g, level[3]))]++
+                    minHist[EttrQuadStats.binOf(minOf(level[0], level[1], level[2], level[3]))]++
                     if ((level[0] + g + level[3]) / 3f >= EttrQuadStats.OVEREXPOSED_LEVEL) over++
                     total++
                 }
@@ -290,7 +292,7 @@ object RawEttrSampler {
             }
             qy += step
         }
-        return if (total > 0) EttrQuadStats(hist, total, over) else null
+        return if (total > 0) EttrQuadStats(hist, total, over, minHist) else null
     }
 
     /**
@@ -308,7 +310,7 @@ object RawEttrSampler {
         val region = meteringScanRegion(image.width, image.height, metering)
         val sample = sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4, region)
             ?: return null
-        if (metering == ProgramMetering.AVERAGE) return sample
+        if (metering == ProgramMetering.AVERAGE || metering == ProgramMetering.HIGHLIGHT_WEIGHTED) return sample
         val frame = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height))
         return EttrRawSample(
             sample.levels, sample.bins, sample.saturated, sample.totals,
@@ -327,7 +329,7 @@ object RawEttrSampler {
         val half = when (metering) {
             ProgramMetering.SPOT -> SPOT_SCALE / 2
             ProgramMetering.CENTER_WEIGHTED -> 0.35
-            ProgramMetering.AVERAGE -> 0.5
+            ProgramMetering.AVERAGE, ProgramMetering.HIGHLIGHT_WEIGHTED -> 0.5
         }
         val left = ((0.5 - half) * width).toInt().coerceIn(0, width - 1)
         val top = ((0.5 - half) * height).toInt().coerceIn(0, height - 1)
@@ -401,7 +403,7 @@ object RawEttrSampler {
         val regionBottom = region.getOrElse(3) { height }.coerceIn(regionTop + 1, height)
         val regionWidth = regionRight - regionLeft
         val regionHeight = regionBottom - regionTop
-        val step = meterGridStep(regionWidth.toLong() * regionHeight, targetPixels)
+        val step = meterCfaGridStep(regionWidth.toLong() * regionHeight, targetPixels)
         val colCount = (regionWidth + step - 1) / step
         val colZone = DoubleArray(colCount) { i ->
             zoneCoord((regionLeft + i * step).coerceAtMost(width - 1), width)

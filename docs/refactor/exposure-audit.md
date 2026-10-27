@@ -1,5 +1,10 @@
 # PROGRAM AE and ETTR: reference audit (2026-10-22)
 
+Historical A1/A2 baseline. For the 2026-10-25 F15 source recheck, current
+working-tree default, explicit approximations and minimum-channel extension,
+see [the F14/F15 audit](ml-focus-ettr-audit.md). Its findings supersede the
+older ETTR parity/default claims below.
+
 Every number and heuristic in the PROGRAM loop (RawProgramMeter,
 ProgramAeSolver, AutoExposureBalance, controller loop) and ETTR (RawEttr,
 EttrLoop) checked against non-AI references.

@@ -1,0 +1,13 @@
+DEVICE 25080RABDG Android=16
+NEGOTIATED encoder=3840x2160 fps=30 profile=HLG
+CONTROL_ONLY=false
+Phase(name=OFF-before, fps=28.314457028647567, drops=0, samples=0)
+GEOMETRY SPOT raw=4080x3060 grid=256x192 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-4.0652314566434224, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=SPOT, fps=28.29560585885486, drops=0, samples=11)
+GEOMETRY ZEBRA raw=4080x3060 grid=256x192 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-4.8935299659012195, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=ZEBRA, fps=29.27478376580173, drops=0, samples=23)
+GEOMETRY FALSE raw=4080x3060 grid=512x384 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-4.100587591036812, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=FALSE, fps=29.323558813728756, drops=0, samples=22)
+Phase(name=OFF-after, fps=28.638028638028636, drops=0, samples=0)
+LOG requested=3840x2160 30fps STOP Stats(sensorSize=4080x3060, cropRect=3840x2160@(120,450), exportSize=1920x1080, framesAcquired=553, framesGraded=552, framesDropped=0, resultMiss=1, staleResults=552, waitFreeFrames=552, fallbackWaits=0, fusedFrames=552, rcdFrames=0, shadedFrames=552, cpuChainMsAvg=0.95326793, cpuChainMsMax=19.401615, overBudgetFrames=0, cycleMsMax=42.069847, cycleOverBudget=2, headDroppedFrames=1, previewFrames=0, previewSkipped=552, maxBacklogDepth=2, copyMsAvg=14.974903, copyMsMax=64.74493, fenceWaitMsAvg=27.334677, fenceWaitMsMax=63.28823, true10Bit=true, inputStarved=0, degradedFrames=0, frameErrors=0, audioChunks=0, audioFrames=0, audioDropped=0, hasAudio=false, aacBytes=0, audioOutBufs=0, outputBuffers=553, outputBytes=172396040, fileBytes=172399248, thermalStatus=0, heatDegraded=false, profile=HLG, hasStabGyro=false, stabGyroSamples=0)
+STOP PASS callbacks=70 leases=0 no post-stop publications

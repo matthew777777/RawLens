@@ -200,7 +200,15 @@ internal class RawVideoRecorder(
      * Set before [start] via [configureVideoManual]; live tweaks go through
      * [setVideoManualControl] which rebuilds the repeating request.
      */
-    var videoManual: VideoManualSnapshot = VideoManualSnapshot()
+    @Volatile var focusPeakingEnabled: Boolean = false
+    @Volatile var onFocusPeaking: ((FocusPeakingFrame?) -> Unit)? = null
+    private val recordingPeaking = RecordingFocusPeaking()
+    @Volatile internal var rawExposureSettings = RawExposureAssistSettings(spotMeter = false)
+        set(value) { field = value; recordingExposure.configure(value) }
+    @Volatile internal var onRawExposureAssist: ((RawExposureAssistFrame?) -> Unit)? = null
+    private val recordingExposure = RawExposureAssist { onRawExposureAssist?.invoke(it) }
+
+    @Volatile var videoManual: VideoManualSnapshot = VideoManualSnapshot()
     var videoLocks: VideoRecordLocks = VideoRecordLocks()
     var videoMeteredIso: Int = 100
     var videoMeteredShutterNanos: Long = 10_000_000L
@@ -503,6 +511,17 @@ internal class RawVideoRecorder(
                     } catch (e: Exception) {
                         Log.w(TAG, "vf adopt failed: ${e.message}")
                     }
+                }
+                if (onFocusPeaking != null) {
+                    RawImageOwnership.adopt(img, rd)
+                    recordingPeaking.offer(img, chars,
+                        focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking)
+                }
+                if (rawExposureSettings.enabled) {
+                    RawImageOwnership.adopt(img, rd)
+                    val meteredCrop = crop.resolve(img.width, img.height, binActive)
+                    recordingExposure.offer(img, chars, result = synchronized(resultLock) { captureResults[img.timestamp] },
+                        meterCrop = intArrayOf(0, meteredCrop.top, img.width, meteredCrop.height))
                 }
                 val plane = img.planes[0]
                 if (plane.pixelStride != 2) {
@@ -1328,6 +1347,8 @@ internal class RawVideoRecorder(
 
     private fun teardown() {
         accepting = false
+        recordingPeaking.close()
+        recordingExposure.close()
         try {
             session?.close()
         } catch (_: Exception) {

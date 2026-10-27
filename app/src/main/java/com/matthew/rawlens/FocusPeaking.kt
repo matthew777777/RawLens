@@ -50,7 +50,11 @@ data class FocusPeakingFrame(
     val rows: Int,
     val mask: BooleanArray,
     val rotation: Int = 0,
-    val mirrored: Boolean = false
+    val mirrored: Boolean = false,
+    val sensorWidth: Int = 0,
+    val sensorHeight: Int = 0,
+    /** Recording monitor sensor crop [left, top, width, height], or full-frame VF. */
+    val monitorCrop: IntArray? = null
 )
 
 /**
@@ -67,6 +71,39 @@ object FocusPeakingGeometry {
             270 -> (if (mirrored) 1f - sv else sv) to 1f - su
             else -> (if (mirrored) 1f - su else su) to sv
         }
+
+    /**
+     * Full-sensor cover rectangle and visible clip for an aspect-fit cropped
+     * recording monitor. Uses the same fit as DirectLogPreviewView. All
+     * coordinates are top-left view pixels, including rotated/mirrored crops.
+     */
+    internal fun monitorRects(frame: FocusPeakingFrame, width: Int, height: Int): Pair<FloatArray, IntArray>? =
+        monitorRects(frame.sensorWidth, frame.sensorHeight, frame.rotation, frame.mirrored, frame.monitorCrop, width, height)
+
+    internal fun monitorRects(sensorWidth: Int, sensorHeight: Int, rotation: Int, mirrored: Boolean,
+                              monitorCrop: IntArray?, width: Int, height: Int): Pair<FloatArray, IntArray>? {
+        val crop = monitorCrop ?: return null
+        if (crop.size != 4) return null
+        if (sensorWidth <= 0 || sensorHeight <= 0 || width <= 0 || height <= 0) return null
+        val l = crop[0].toFloat() / sensorWidth
+        val t = crop[1].toFloat() / sensorHeight
+        val r = (crop[0] + crop[2]).toFloat() / sensorWidth
+        val b = (crop[1] + crop[3]).toFloat() / sensorHeight
+        val (x0, y0) = viewPoint(l, t, rotation, mirrored)
+        val (x1, y1) = viewPoint(r, b, rotation, mirrored)
+        val vx = minOf(x0, x1)
+        val vy = minOf(y0, y1)
+        val cw = kotlin.math.abs(x1 - x0)
+        val ch = kotlin.math.abs(y1 - y0)
+        if (cw <= 0f || ch <= 0f) return null
+        val fit = VfAspectFit.fit(width, height, crop[2], crop[3], rotation)
+        val fullW = fit[2] / cw
+        val fullH = fit[3] / ch
+        val left = fit[0] - vx * fullW
+        val top = fit[1] - vy * fullH
+        return floatArrayOf(left, top, left + fullW, top + fullH) to
+            intArrayOf(fit[0], fit[1], fit[0] + fit[2], fit[1] + fit[3])
+    }
 
     /** Normalized view rect [l,t,r,b] for sensor cell ([col],[row]). */
     fun viewCell(
@@ -88,6 +125,17 @@ object FocusPeakingGeometry {
 }
 
 /**
+ * F14 reference audit: docs/refactor/ml-focus-ettr-audit.md, Magic Lantern
+ * src/zebra.c @ 142472e95054d73640f50789ac0fd66325499d82, calc_peak.
+ * Intentional differences: RAW green squared-energy/ratio detector instead of
+ * display-luma absolute Laplacian; fixed gates instead of ML's per-mille
+ * occupancy servo; static user colour instead of global/local strength colours;
+ * no display-filter, grayscale or blinking mode. Thresholds below are RawLens
+ * tuning, not ML constants and not calibrated to sensor gain. High-ISO noise
+ * can clear both gates; despeckle is a spatial heuristic, not a noise model.
+ * Retained for existing-device parity; measured scene gates and remaining
+ * platform limits are recorded in the audit.
+ *
  * Samples sharpness from the sensor mosaic without demosaicing, on the same
  * repeating RAW stream (and ~4 Hz throttle) as the live histogram.
  *
@@ -106,7 +154,7 @@ object FocusPeakingGeometry {
  * leaves native resolution. Green-only matches what the eye focuses on.
  *
  * Noise discipline: a black-mean floor gates pure-black cells, the threshold
- * sits ~2× above bright-area shot-noise energy, a one-step wash guard
+ * is fixed (not gain-calibrated); a one-step wash guard
  * doubles the threshold past [WASH_FRACTION], and [despeckle] drops isolated
  * singles (sensor noise spikes; real edges are contiguous).
  *
@@ -148,8 +196,8 @@ object RawFocusPeakingSampler {
      * edges from dim-but-sharp texture where no absolute threshold can —
      * contrast and blur are confounded in either energy alone. The bar sits
      * well above moderate-blur scores with margin, and well below the sharp
-     * ~1.0 so dim texture keeps full recall. White noise scores ~10 but
-     * dies on the absolute floor, so the ratio never sees it.
+     * ~1.0 so dim texture keeps full recall. White noise can also pass the ratio and absolute floor at high gain;
+     * these gates do not establish a calibrated noise rejection guarantee.
      */
     const val MIN_SHARPNESS_RATIO = 0.65f
 
@@ -393,6 +441,6 @@ object RawFocusPeakingSampler {
         val rotation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val mirrored = characteristics.get(CameraCharacteristics.LENS_FACING) ==
             CameraCharacteristics.LENS_FACING_FRONT
-        return FocusPeakingFrame(cols, rows, mask, rotation, mirrored)
+        return FocusPeakingFrame(cols, rows, mask, rotation, mirrored, image.width, image.height)
     }
 }

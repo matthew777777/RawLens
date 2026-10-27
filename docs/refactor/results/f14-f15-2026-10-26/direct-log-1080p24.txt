@@ -1,0 +1,6 @@
+MF=0 frames=2 mask=0
+MF=500 frames=4 mask=4
+MF=5000 frames=6 mask=0
+LOG baselineFps=23.976023976023978 peakingFps=24.251805985552117 baselineDrops=0 peakingDrops=0
+LOG STOP Stats(sensorSize=4080x3060, cropRect=3840x2160@(120,450), exportSize=1920x1080, framesAcquired=141, framesGraded=140, framesDropped=0, resultMiss=1, staleResults=140, waitFreeFrames=140, fallbackWaits=0, fusedFrames=140, rcdFrames=0, shadedFrames=140, cpuChainMsAvg=1.054913, cpuChainMsMax=17.78146, overBudgetFrames=0, cycleMsMax=22.10454, cycleOverBudget=0, headDroppedFrames=1, previewFrames=0, previewSkipped=140, maxBacklogDepth=0, copyMsAvg=6.3525686, copyMsMax=12.533769, fenceWaitMsAvg=14.911082, fenceWaitMsMax=37.138466, true10Bit=true, inputStarved=0, degradedFrames=0, frameErrors=0, audioChunks=0, audioFrames=0, audioDropped=0, hasAudio=false, aacBytes=0, audioOutBufs=0, outputBuffers=141, outputBytes=54408464, fileBytes=54411672, thermalStatus=0, heatDegraded=false, profile=BT709, hasStabGyro=false, stabGyroSamples=0)
+PEAKING frames=7 medianIntervalMs=284 maxIntervalMs=504 geometry=128x96 leases=0

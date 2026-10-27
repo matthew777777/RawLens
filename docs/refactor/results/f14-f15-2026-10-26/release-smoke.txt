@@ -1,0 +1,12 @@
+2026-10-26 minified release UI smoke, via ADB normal controls
+APK: RawLens-1.0.425-release-arm64-v8a.apk
+Device: Redmi 25080RABDG / Android 16 (API 36), camera 0
+PASS: launch and live 4080x3060 RAW preview.
+PASS: manual focus at 0.9 m displays green peaking on window/frame detail.
+PASS: manual near focus at 0.1 m visibly defocuses the scene and retires peaking.
+PASS: AUTO focus reset clears the overlay and returns the AF chip to --.
+PASS: ETTR enabled and disabled through the quick control; live preview remains active.
+Source-level recording/MF lifecycle was tested separately on release-native deviceTest (see recording reports).
+Screenshots were inspected from /tmp; private scene images are not added to the repository.
+R8 instrumentation-runner attachment is unsupported and is not counted as a pass.
+SHA256: 8621e2068257e5803caba79039214ea64dff78709f532f6fb1235589da93a703

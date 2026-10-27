@@ -14,7 +14,13 @@ import kotlin.math.min
  * [BINS_PER_EV] bins per EV over [-[EV_RANGE], 0], and the count of quads whose
  * average RGB is at least [OVEREXPOSED_LEVEL] (raw_hist_get_overexposure_percentage).
  */
-class EttrQuadStats(val evHistogram: IntArray, val total: Int, val overexposed: Int) {
+class EttrQuadStats(
+    val evHistogram: IntArray,
+    val total: Int,
+    val overexposed: Int,
+    /** Owner F15 extension: min(R, Gr, Gb, B), used only for overshoot gradients. */
+    val minChannelHistogram: IntArray? = null
+) {
     companion object {
         const val BINS_PER_EV = 64
         const val EV_RANGE = 16
@@ -31,12 +37,12 @@ class EttrQuadStats(val evHistogram: IntArray, val total: Int, val overexposed: 
     }
 
     /** raw_hist_get_percentile_levels for one per-mille percentile, as EV below white. */
-    fun percentileEv(permille: Int): Double {
+    fun percentileEv(permille: Int, histogram: IntArray = evHistogram): Double {
         if (total <= 0) return -EV_RANGE.toDouble()
         val target = (permille.toLong() * total) / 1000
         var cumulative = 0L
-        for (b in evHistogram.indices) {
-            cumulative += evHistogram[b]
+        for (b in histogram.indices) {
+            cumulative += histogram[b]
             if (cumulative > target) return min(0.0, b.toDouble() / BINS_PER_EV - EV_RANGE)
         }
         return 0.0
@@ -46,6 +52,10 @@ class EttrQuadStats(val evHistogram: IntArray, val total: Int, val overexposed: 
 }
 
 /**
+ * F15 audit: docs/refactor/ml-focus-ettr-audit.md. Minimum-channel overshoot
+ * gradients are an owner-requested extension, not an ML projection. Highlight
+ * target and SNR statistics still use ML's MAX_RGB projection.
+ *
  * Auto ETTR correction ported from Magic Lantern `modules/ettr/ettr.c`
  * (auto_ettr_get_correction @ 142472e, GPL), single-ISO path:
  *
@@ -54,7 +64,7 @@ class EttrQuadStats(val evHistogram: IntArray, val total: Int, val overexposed: 
  *   correction = target - highlight EV, applied in full.
  * - Overexposed frame (highlight >= -0.1 EV): extrapolate the true highlight
  *   from the 12 lower percentiles remembered from the last good frame
- *   (weights 13 - k); if fewer than 3 agree, they spread by more than 1 EV,
+ *   (weights 13 - k); if the weight sum is < 3, they spread by more than 1 EV,
  *   or the result is above -1 EV, fall back to -log2(1 + p^2) for p % of
  *   clipped quads, never below -10 EV.
  * - SNR limits (midtone 6 EV, shadow 2 EV): with SNR = dynamic range + EV
@@ -71,6 +81,14 @@ internal object MagicLanternEttr {
     /** Per-percentile memory of the last non-overexposed frame (diff_from_lower_percentiles). */
     class Memory {
         val diffFromLower = DoubleArray(PERCENTILES.size - 1)
+        val diffFromMin = DoubleArray(PERCENTILES.size - 1)
+        var hasMinGradient = false
+
+        fun clear() {
+            diffFromLower.fill(0.0)
+            diffFromMin.fill(0.0)
+            hasMinGradient = false
+        }
     }
 
     data class Result(val correctionEv: Double, val highlightEv: Double, val overexposed: Boolean)
@@ -98,17 +116,27 @@ internal object MagicLanternEttr {
         val overexposed = ev >= -0.1
         if (!overexposed) {
             for (k in 0 until PERCENTILES.size - 1) memory.diffFromLower[k] = ev - raw[k + 1]
+            // Anchor the MIN-channel tail to the MAX highlight of the same good frame.
+            // This preserves the clipping target while retaining gradients if G clips first.
+            val minHist = stats.minChannelHistogram
+            memory.hasMinGradient = minHist != null
+            if (minHist != null) for (k in memory.diffFromMin.indices) {
+                memory.diffFromMin[k] = ev - stats.percentileEv(PERCENTILES[k + 1], minHist)
+            }
         } else {
             overexposedFraction = stats.overexposedFraction
             var num = 0
             var sum = 0.0
             var lo = 100000.0
             var hi = -100000.0
+            val minHist = stats.minChannelHistogram.takeIf { memory.hasMinGradient }
+            val differences = if (minHist != null) memory.diffFromMin else memory.diffFromLower
             for (k in 0 until PERCENTILES.size - 1) {
-                if (memory.diffFromLower[k] > 0) {
-                    val lowerEv = raw[k + 1]
+                if (differences[k] > 0) {
+                    val lowerEv = if (minHist != null)
+                        stats.percentileEv(PERCENTILES[k + 1], minHist) else raw[k + 1]
                     if (lowerEv < -0.1) {
-                        ev = lowerEv + memory.diffFromLower[k]
+                        ev = lowerEv + differences[k]
                         if (target - ev < correction) {
                             val corr = target - ev
                             lo = min(lo, corr)
@@ -129,14 +157,14 @@ internal object MagicLanternEttr {
             }
         }
         if (dynamicRangeEv.isFinite()) {
-            if (overexposedFraction > 0) correction -= 2
+            if (overexposedFraction > 0 && (midtoneSnrEv > 0 || shadowSnrEv > 0)) correction -= 2
             val correction0 = correction
             val midtoneExpected = dynamicRangeEv + evMedian + correction0
-            if (midtoneExpected < midtoneSnrEv) {
+            if (midtoneSnrEv > 0 && midtoneExpected < midtoneSnrEv) {
                 correction = max(correction, correction0 + midtoneSnrEv - midtoneExpected)
             }
             val shadowExpected = dynamicRangeEv + evShadow + correction0
-            if (shadowExpected < shadowSnrEv) {
+            if (shadowSnrEv > 0 && shadowExpected < shadowSnrEv) {
                 correction = max(correction, correction0 + shadowSnrEv - shadowExpected)
             }
         }

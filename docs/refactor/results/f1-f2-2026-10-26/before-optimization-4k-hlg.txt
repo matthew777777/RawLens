@@ -1,0 +1,11 @@
+DEVICE 25080RABDG Android=16
+NEGOTIATED encoder=3840x2160 fps=30 profile=HLG
+Phase(name=OFF-before, fps=22.303595206391478, drops=0, samples=0)
+GEOMETRY SPOT raw=4080x3060 grid=256x192 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-9.905387005018131, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=SPOT, fps=21.978021978021978, drops=0, samples=11)
+GEOMETRY ZEBRA raw=4080x3060 grid=256x192 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-9.905387005018131, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=ZEBRA, fps=19.966722129783694, drops=1, samples=20)
+GEOMETRY FALSE raw=4080x3060 grid=512x384 rotation=90 mirror=false crop=[120, 450, 3840, 2160] spot=RawSpotReading(ev=-9.905387005018131, atBlack=false, clippedChannels=0, left=0.49313724, top=0.49084967, right=0.50710785, bottom=0.50947714)
+Phase(name=FALSE, fps=18.974700399467377, drops=1, samples=19)
+Phase(name=OFF-after, fps=19.640479360852197, drops=0, samples=0)
+LOG requested=3840x2160 30fps STOP Stats(sensorSize=4080x3060, cropRect=3840x2160@(120,450), exportSize=1920x1080, framesAcquired=396, framesGraded=395, framesDropped=2, resultMiss=1, staleResults=395, waitFreeFrames=395, fallbackWaits=0, fusedFrames=395, rcdFrames=0, shadedFrames=395, cpuChainMsAvg=47.215336, cpuChainMsMax=80.18, overBudgetFrames=367, cycleMsMax=81.627, cycleOverBudget=384, headDroppedFrames=1, previewFrames=0, previewSkipped=395, maxBacklogDepth=6, copyMsAvg=14.310376, copyMsMax=55.416, fenceWaitMsAvg=81.18342, fenceWaitMsMax=99.41223, true10Bit=true, inputStarved=0, degradedFrames=0, frameErrors=2, audioChunks=0, audioFrames=0, audioDropped=0, hasAudio=false, aacBytes=0, audioOutBufs=0, outputBuffers=394, outputBytes=124023296, fileBytes=124026504, thermalStatus=0, heatDegraded=false, profile=HLG, hasStabGyro=false, stabGyroSamples=0)

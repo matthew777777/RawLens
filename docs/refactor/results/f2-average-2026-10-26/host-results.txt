@@ -1,0 +1,3 @@
+com.matthew.rawlens.RawAverageMeterTest: tests=8 failures=0 errors=0
+com.matthew.rawlens.RawExposureAssistTest: tests=13 failures=0 errors=0
+com.matthew.rawlens.RawExposureImageTest: tests=4 failures=0 errors=0

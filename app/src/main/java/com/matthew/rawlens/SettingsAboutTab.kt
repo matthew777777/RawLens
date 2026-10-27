@@ -78,6 +78,15 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             textSize = 14f
         })
         content.addView(Button(this).apply {
+            text = "RAW assist open-source notices"
+            setOnClickListener {
+                val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt")
+                    .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
+                AlertDialog.Builder(this@showAboutSettings).setTitle("RAW exposure assist licences")
+                    .setMessage(notices).setPositiveButton("Close", null).show()
+            }
+        })
+        content.addView(Button(this).apply {
             text = "View GPLv3 license"
             setOnClickListener {
                 val licenseText = assets.open("LICENSE").bufferedReader().use { it.readText() }

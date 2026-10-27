@@ -1,0 +1,44 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.RawExposureRecordingDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.RawExposureRecordingDeviceTest:
+INSTRUMENTATION_STATUS: test=directLogExposureAssistsPreserveRecording
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.RawExposureRecordingDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: LOG frame errors expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.RawExposureRecordingDeviceTest.directLogExposureAssistsPreserveRecording(RawExposureRecordingDeviceTest.kt:149)
+
+INSTRUMENTATION_STATUS: stream=
+Error in directLogExposureAssistsPreserveRecording(com.matthew.rawlens.RawExposureRecordingDeviceTest):
+java.lang.AssertionError: LOG frame errors expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.RawExposureRecordingDeviceTest.directLogExposureAssistsPreserveRecording(RawExposureRecordingDeviceTest.kt:149)
+
+INSTRUMENTATION_STATUS: test=directLogExposureAssistsPreserveRecording
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 28.916
+There was 1 failure:
+1) directLogExposureAssistsPreserveRecording(com.matthew.rawlens.RawExposureRecordingDeviceTest)
+java.lang.AssertionError: LOG frame errors expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.RawExposureRecordingDeviceTest.directLogExposureAssistsPreserveRecording(RawExposureRecordingDeviceTest.kt:149)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1
