@@ -13,7 +13,11 @@
 
 #include <craw/Writer.h>
 
+#include <sched.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <fstream>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -50,6 +54,29 @@ void bin2x2(const uint8_t* src, int stride, int width, int rows, std::vector<uin
     }
 }
 
+// Pins the calling encode worker to the fastest CPU cluster (highest
+// cpuinfo_max_freq) once per thread: little cores would hold the in-order
+// committer back. Best effort; failures leave the scheduler in charge.
+void pinToFastCores() {
+    thread_local bool done = false;
+    if (done) return;
+    done = true;
+    const long n = sysconf(_SC_NPROCESSORS_CONF);
+    std::vector<long> freq(n > 0 ? n : 0, 0);
+    long best = 0;
+    for (long c = 0; c < n; ++c) {
+        std::ifstream f("/sys/devices/system/cpu/cpu" + std::to_string(c) + "/cpufreq/cpuinfo_max_freq");
+        if (f >> freq[c]) best = std::max(best, freq[c]);
+    }
+    if (best == 0) return;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    int count = 0;
+    for (long c = 0; c < n; ++c)
+        if (freq[c] >= best * 9 / 10) { CPU_SET(c, &set); ++count; }
+    if (count > 0 && count < n) sched_setaffinity(0, sizeof set, &set);
+}
+
 }  // namespace
 
 extern "C" {
@@ -73,6 +100,7 @@ Java_com_matthew_rawlens_CrawWriter_containerEncodeFrame(
     if (!s || !d || size < 0 || stride % 2 || stride < w * 2) return -2;
     if (static_cast<int64_t>(cropTop + cropHeight - 1) * stride + int64_t{w} * 2 > size) return -4;
     (void)h;
+    pinToFastCores();
     try {
         thread_local std::vector<uint16_t> binned;
         const uint8_t* base = s + srcOffset + static_cast<size_t>(cropTop) * stride;

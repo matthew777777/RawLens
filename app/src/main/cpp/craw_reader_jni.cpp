@@ -6,7 +6,9 @@
 
 #include <craw/Reader.h>
 
+#include <algorithm>
 #include <cstring>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -108,7 +110,9 @@ Java_com_matthew_rawlens_CrawReader_decodeFrame(JNIEnv* env, jobject, jlong h, j
     try {
         thread_local std::vector<uint16_t> pixels;
         const auto rec = handle->reader.frame(it->second);
-        craw::decodeFrame(rec.payload, rec.payloadSize, pixels);
+        // Tiles decode independently: use every core (offline merge, nothing else runs).
+        static const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
+        craw::decodeFrame(rec.payload, rec.payloadSize, pixels, threads);
         const size_t bytes = pixels.size() * 2;
         if (bytes > static_cast<size_t>(dstCapacity)) return -3;
         std::memcpy(d + dstOffset, pixels.data(), bytes);

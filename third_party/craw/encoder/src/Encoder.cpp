@@ -106,6 +106,30 @@ inline void putCode(BitWriter& bw, uint32_t u, int k) {
 inline void putBlock(BitWriter& bw, const uint32_t* u, int n, int k) {
     const uint32_t lowMask = (1u << k) - 1, mark = 1u << k;
     int x = 0;
+    for (; x + 4 <= n; x += 4) {
+        const uint32_t q0 = u[x] >> k, q1 = u[x + 1] >> k, q2 = u[x + 2] >> k, q3 = u[x + 3] >> k;
+        const uint32_t total = q0 + q1 + q2 + q3 + 4 * (1 + k);
+        if ((q0 | q1 | q2 | q3) < kRiceLimit && total <= 32) [[likely]] {
+            const uint32_t l1 = q1 + 1 + k, l2 = q2 + 1 + k, l3 = q3 + 1 + k;
+            uint64_t c = mark | (u[x] & lowMask);
+            c = (c << l1) | mark | (u[x + 1] & lowMask);
+            c = (c << l2) | mark | (u[x + 2] & lowMask);
+            c = (c << l3) | mark | (u[x + 3] & lowMask);
+            bw.put(static_cast<uint32_t>(c), static_cast<int>(total));
+            continue;
+        }
+        for (int i = 0; i < 4; i += 2) {
+            const uint32_t a = u[x + i] >> k, b = u[x + i + 1] >> k;
+            const uint32_t la = a + 1 + k, lb = b + 1 + k;
+            if (a < kRiceLimit && b < kRiceLimit && la + lb <= 32) {
+                bw.put(((mark | (u[x + i] & lowMask)) << lb) | mark | (u[x + i + 1] & lowMask),
+                       static_cast<int>(la + lb));
+            } else {
+                putCode(bw, u[x + i], k);
+                putCode(bw, u[x + i + 1], k);
+            }
+        }
+    }
     for (; x + 2 <= n; x += 2) {
         const uint32_t q0 = u[x] >> k, q1 = u[x + 1] >> k;
         const uint32_t len0 = q0 + 1 + k, len1 = q1 + 1 + k;
