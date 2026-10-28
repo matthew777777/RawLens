@@ -1,0 +1,34 @@
+--------- beginning of main
+10-28 21:27:13.273 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.392
+10-28 21:27:14.273 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.573308
+10-28 21:27:15.250 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.581461
+10-28 21:27:16.237 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.402539
+10-28 21:27:17.224 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.555461
+10-28 21:27:18.197 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.908923
+10-28 21:27:19.201 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.659
+10-28 21:27:20.225 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.653846
+10-28 21:27:21.222 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=1.862231
+10-28 21:27:22.222 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.379923
+10-28 21:27:23.222 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.572
+10-28 21:27:24.215 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.604846
+10-28 21:27:25.218 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.849538
+10-28 21:27:26.221 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.355077
+10-28 21:27:27.219 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.491615
+10-28 21:27:28.218 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.352616
+10-28 21:27:29.217 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.649769
+10-28 21:27:30.215 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.486769
+10-28 21:27:31.228 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.371692
+10-28 21:27:32.459 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.719615
+10-28 21:27:33.522 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.303154
+10-28 21:27:34.525 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.257307
+10-28 21:27:35.519 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.38
+10-28 21:27:36.523 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.330385
+10-28 21:27:37.525 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.321231
+10-28 21:27:38.525 20488 21092 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.488308
+10-28 21:27:40.877 20488 20488 I DirectLogPreview: preview detached: presented=188 adoptFailed=0 presentFailed=0
+10-28 21:27:48.002 20488 20511 I DirectLog: stab sidecar directlog_rcd_4k.stab.json frames=869 gyro=15610
+10-28 21:27:48.159 20488 20511 I DirectLog: SPIKE directlog fps=30 label=rcd-4k rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=1920x1080 acq=870 graded=869 drop=0 miss=1 stale=869 waitFree=869 fallback=0 preview=188 shaded=869 fused=0 heat=false thermal=0 cpuChain=30.6ms chainMax=72.3ms over=50 copy=0.0ms copyMax=0.0ms p010=true starved=0 degraded=0 aChunks=691 aFrames=1415168 aDrop=15 hasAudio=true aacBytes=472848 aOut=1384 outBufs=870 bytes=110262141 file=110750686
+10-28 21:27:48.422 20488 20511 I DirectLog: SPIKE directlog [rcd-4k] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens/files/directlog_rcd_4k.mp4
+10-28 21:27:48.433 20488 20511 I DirectLog: SPIKE directlog-color std=1 transfer=3 range=2
+10-28 21:27:48.829 20488 20511 I DirectLog: SPIKE directlog [rcd-4k] muxed video=869 audio=1384 durationUs=29416700
+10-28 21:27:48.829 20488 20511 I DirectLog: SPIKE directlog [rcd-4k] muxedFps=29.5

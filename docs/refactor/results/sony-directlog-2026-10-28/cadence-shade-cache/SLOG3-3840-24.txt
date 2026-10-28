@@ -1,0 +1,25 @@
+
+com.matthew.rawlens.DirectLogRecordDeviceTest:
+Error in recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest):
+java.lang.IllegalStateException: Camera open failed: error=2
+	at com.matthew.rawlens.DirectLogRecorder.openCamera(DirectLogRecorder.kt:2980)
+	at com.matthew.rawlens.DirectLogRecorder.startStreams(DirectLogRecorder.kt:1101)
+	at com.matthew.rawlens.DirectLogRecorder.startTake(DirectLogRecorder.kt:532)
+	at com.matthew.rawlens.DirectLogRecorder.start(DirectLogRecorder.kt:484)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:151)
+
+
+Time: 5.294
+There was 1 failure:
+1) recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest)
+java.lang.IllegalStateException: Camera open failed: error=2
+	at com.matthew.rawlens.DirectLogRecorder.openCamera(DirectLogRecorder.kt:2980)
+	at com.matthew.rawlens.DirectLogRecorder.startStreams(DirectLogRecorder.kt:1101)
+	at com.matthew.rawlens.DirectLogRecorder.startTake(DirectLogRecorder.kt:532)
+	at com.matthew.rawlens.DirectLogRecorder.start(DirectLogRecorder.kt:484)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:151)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+

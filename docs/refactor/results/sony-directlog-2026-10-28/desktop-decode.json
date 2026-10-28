@@ -1,0 +1,101 @@
+[
+  {
+    "file": "slog3_1920_SCOPE_2_39.mp4",
+    "width": 1920,
+    "height": 802,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "33"
+  },
+  {
+    "file": "slog3_1920_UNIVISIUM_2_00.mp4",
+    "width": 1920,
+    "height": 960,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "31"
+  },
+  {
+    "file": "slog3_1920_WIDE_16_9.mp4",
+    "width": 1920,
+    "height": 1080,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "34"
+  },
+  {
+    "file": "slog3_2560_SCOPE_2_39.mp4",
+    "width": 2560,
+    "height": 1070,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "33"
+  },
+  {
+    "file": "slog3_2560_UNIVISIUM_2_00.mp4",
+    "width": 2560,
+    "height": 1280,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "32"
+  },
+  {
+    "file": "slog3_2560_WIDE_16_9.mp4",
+    "width": 2560,
+    "height": 1440,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "31"
+  },
+  {
+    "file": "slog3_3840_SCOPE_2_39.mp4",
+    "width": 3840,
+    "height": 1606,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "32"
+  },
+  {
+    "file": "slog3_3840_UNIVISIUM_2_00.mp4",
+    "width": 3840,
+    "height": 1920,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "32"
+  },
+  {
+    "file": "slog3_3840_WIDE_16_9.mp4",
+    "width": 3840,
+    "height": 2160,
+    "pix_fmt": "yuv420p10le",
+    "color_range": "tv",
+    "color_space": "bt709",
+    "color_transfer": "bt709",
+    "color_primaries": "bt709",
+    "nb_frames": "32"
+  }
+]

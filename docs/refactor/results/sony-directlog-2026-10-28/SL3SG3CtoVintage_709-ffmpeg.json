@@ -1,0 +1,16 @@
+{
+  "cube_sha256": "54191fe29b49babed8e14cb18e5ce347468e034cf27603c808b34174dfb65c6f",
+  "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "interpolation": "trilinear",
+  "channels": 768,
+  "tolerance_rgb8": 2,
+  "cpu": {
+    "max_error_rgb8": 1,
+    "mean_error_rgb8": 0.4817708333333333
+  },
+  "gpu": {
+    "max_error_rgb8": 1,
+    "mean_error_rgb8": 0.4791666666666667
+  },
+  "reference_neutral_max_channel_spread_rgb8": 6
+}

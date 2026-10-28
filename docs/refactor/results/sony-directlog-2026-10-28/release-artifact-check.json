@@ -1,0 +1,18 @@
+{
+  "apk": "RawLens-2.0.5-release-arm64-v8a.apk",
+  "cube_shader_assets": [
+    "assets/shaders/rcd_packed/rcd_output_yuv_cube.spv",
+    "assets/shaders/vf/vf_gradeyuv_cube.spv",
+    "assets/shaders/vf/vf_mhcyuv_cube.spv",
+    "assets/shaders/vf/vf_mhcyuv_f16_cube.spv",
+    "assets/shaders/vf/vf_rcdyuv_cube.spv",
+    "assets/shaders/vf/vf_rcdyuv_f16_cube.spv"
+  ],
+  "native_record_cube_entry": [
+    "lib/arm64-v8a/librawLensDualRaw.so",
+    "lib/arm64-v8a/librawLensVfEgl.so"
+  ],
+  "vendor_cubes_bundled": false,
+  "r8_ui_smoke": "Pending: phone disconnected after successful install",
+  "final_cadence": "Deferred by owner; earlier warm failures retained"
+}

@@ -210,8 +210,19 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
       downloaded or bundled by the app.
 
 ## I. From Sony: DirectLog colour correctness (owner 2026-10-23; harvest §3, §8)
+Implementation/evidence 2026-10-28: [Sony DirectLog audit](sony-directlog-audit.md).
+I1's numeric pipeline and I2's LUT machinery are implemented; their original
+physical-chart/reference-render acceptance remains open. E22 stays parked.
 - [ ] I1 [2.0.x] **Full S-Gamut3.Cine / S-Log3, replacing the current
-      "SLo3".** Today `DirectLogProfile.SLOG3` applies the Sony curve
+      "SLo3".** Numeric correction implemented 2026-10-28 (CPU, probe,
+      split/fused MHC/RCD fp32/fp16, Packed RCD; generated gamut matrix,
+      signed toe, dormant working-log rename). 2,700 device channel checks
+      pass (fp32 exact; fp16 <=2 ten-bit codes); nine resolution/crop
+      recordings and independent decode pass. Limited-range transport
+      intentionally differs from Sony full-range files; exact code mapping
+      and input settings documented. Physical I2 gate, real Sony-file
+      metadata comparison and original-build performance parity remain open.
+      Original finding: `DirectLogProfile.SLOG3` applied the Sony curve
       formula (420 / 261.5 / divisor 0.19 / 95-code pedestal,
       `VfLogGrade.sonySlog3`, mirrored in `vf_gradeyuv.comp`,
       `vf_mhcyuv.comp`, `vf_loggrade.comp`) to **linear sRGB**. That
@@ -240,14 +251,21 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
         must never feed a Sony-named output; rename it as the
         internal working log or make it Sony-exact.
 - [ ] I2 [2.0.x] **Official Sony LUT acceptance gate** (depends on the
-      `.cube` parser half of J1): user imports Sony's own free LUTs (e.g.
+      `.cube` parser half of J1, now implemented): official s709 and all four
+      SG3C LUTs in the owner's BURANO ZIP pass device/independent FFmpeg
+      trilinear comparisons within one RGB8 code/channel on synthetic
+      ramps/patches. Physical chart/grey-ramp take and reference render
+      still pending. Vendor creative tints are preserved, not neutralized.
+      Original gate: user imports Sony's own free LUTs (e.g.
       SLog3S-Gamut3.Cine -> s709 / 709(800%)); never bundled. Grey
       ramp + colour-chart take recorded as I1 S-Log3, LUT applied in
       a reference tool and in-app: neutral greys stay neutral,
       chart patches within a stated code tolerance of the reference
       render. This gate is the definition of "official LUTs work";
       I1 is not done without it.
-- [ ] I3 [2.0.x] **Full S-Cinetone look for DirectLog** (Sony): new
+- [ ] I3 [2.0.x] **Full S-Cinetone look for DirectLog** (Sony)
+      (owner 2026-10-28: keep open; no Sony/Catalyst reference available;
+      no speculative fit/profile added). A new
       ready-to-watch `DirectLogProfile`, not a LUT and not a curve
       tweak. S-Cinetone = Venice-derived colour rendering in a
       BT.709 deliverable: film-like suppressed highlight contrast
@@ -260,17 +278,33 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
       preview/record parity). Gate: chart + skin-tone takes vs a
       Sony reference render (camera or Catalyst), stated tolerance;
       no Sony data files bundled.
-- [ ] I4 [2.0.x] Gamma Display Assist / user-LUT monitoring for
+- [x] I4 [2.0.x] (take-monitor implementation 2026-10-28: analytic BT.709
+      assist or imported cube, per-LUT intensity, optional GLES3 3D texture;
+      CPU/GPU and real take-monitor integration pass; R8 build passes.
+      Before-record RAW VF is unchanged; [scope/evidence](sony-directlog-audit.md)).
+      Gamma Display Assist / user-LUT monitoring for
       DirectLog (Sony): preview shows the I2 LUT (or a built-in
       709 assist) while the file stays S-Log3. Depends on J1.
 
 ## J. From the other makers, shared builds (owner 2026-10-23; harvest §4-§8, §10)
 - [ ] J1 [2.0.x] **`.cube` LUT import + library** (Panasonic Real Time
       LUT is the UX model: slots, intensity per LUT; harvest §8):
+      Parser/library/monitor UI implemented 2026-10-28 for I2/I4: bounded
+      16–65 grids, domain, 16 user imports, select/remove, persisted per-LUT
+      intensity, real import lifecycle and monitor checks pass. ZIP packs
+      must be extracted first. Recorded-grade extension is now implemented:
+      fused Vulkan 3D LUT, S-Log3 input / `_LUT709` output, no double monitor
+      transform, 0/.5/1 intensity + custom-domain/signed-output GPU gates
+      pass. Final candidate cadence remains open: cooler baseline soaks pass
+      all requested modes; later back-to-back LUT-on and LUT-off runs fail
+      strict timestamp checks. Before-record RAW VF still has no LUT preview.
       parser (LUT_3D_SIZE 16-65, domain), 3D texture in the
       DirectLog preview first (view assist, I4), then recorded grade.
       This one build unlocks the free Nikon RED, Sony, Fuji F-Log,
       Canon Log and Panasonic VariCam LUT packs as user imports.
+      Importability alone does not convert their expected source gamuts/log
+      curves: current recording support requires a matching
+      S-Gamut3.Cine/S-Log3-to-SDR-Rec.709 cube.
 - [ ] J2 [2.0.x] **Look / recipe system** (harvest §7): parameterised
       look + named packs (own approximations, generic names) +
       mono filters/toning + Fuji recipe layer (Highlight/Shadow

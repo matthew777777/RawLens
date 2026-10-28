@@ -1,0 +1,39 @@
+
+com.matthew.rawlens.DirectLogLutDeviceTest:
+Error in technicalAssistThroughDisplayShader(com.matthew.rawlens.DirectLogLutDeviceTest):
+java.lang.AssertionError: technical/1.0 display error 3 > 2 codes
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogLutDeviceTest.exercise(DirectLogLutDeviceTest.kt:81)
+	at com.matthew.rawlens.DirectLogLutDeviceTest.technicalAssistThroughDisplayShader(DirectLogLutDeviceTest.kt:22)
+.
+com.matthew.rawlens.DirectLogColorAuditDeviceTest:
+Error in recordSonyAtEveryResolutionAndCrop(com.matthew.rawlens.DirectLogColorAuditDeviceTest):
+java.lang.AssertionError: Frame errors expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.DirectLogColorAuditDeviceTest.recordProfile(DirectLogColorAuditDeviceTest.kt:179)
+	at com.matthew.rawlens.DirectLogColorAuditDeviceTest.recordSonyAtEveryResolutionAndCrop(DirectLogColorAuditDeviceTest.kt:151)
+.
+
+Time: 57.117
+There were 2 failures:
+1) technicalAssistThroughDisplayShader(com.matthew.rawlens.DirectLogLutDeviceTest)
+java.lang.AssertionError: technical/1.0 display error 3 > 2 codes
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogLutDeviceTest.exercise(DirectLogLutDeviceTest.kt:81)
+	at com.matthew.rawlens.DirectLogLutDeviceTest.technicalAssistThroughDisplayShader(DirectLogLutDeviceTest.kt:22)
+2) recordSonyAtEveryResolutionAndCrop(com.matthew.rawlens.DirectLogColorAuditDeviceTest)
+java.lang.AssertionError: Frame errors expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.DirectLogColorAuditDeviceTest.recordProfile(DirectLogColorAuditDeviceTest.kt:179)
+	at com.matthew.rawlens.DirectLogColorAuditDeviceTest.recordSonyAtEveryResolutionAndCrop(DirectLogColorAuditDeviceTest.kt:151)
+
+FAILURES!!!
+Tests run: 5,  Failures: 2
+
+

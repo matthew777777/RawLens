@@ -1,0 +1,21 @@
+--------- beginning of main
+10-28 19:46:24.921  9758 10008 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 19:46:24.938  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=15.966461
+10-28 19:46:25.005  9758  9836 I DirectLogPreview: preview GL ready 1249x1666
+10-28 19:46:25.051  9758  9981 I DirectLog: muxer started: video/hevc 1920x1080 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+10-28 19:46:26.060  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.434693
+10-28 19:46:27.132  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.399384
+10-28 19:46:28.123  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.495307
+10-28 19:46:29.123  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.455384
+10-28 19:46:30.139  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.401308
+10-28 19:46:31.235  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.361231
+10-28 19:46:32.129  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.317231
+10-28 19:46:33.129  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.79623
+10-28 19:46:34.198  9758 10008 I DirectLog: RCD timing crop=3840x2160 output=1920x1080 submitMs=0.490154
+10-28 19:46:42.702  9758  9782 I DirectLog: stab sidecar directlog_rcd_4k.stab.json frames=274 gyro=7507
+10-28 19:46:42.772  9758  9782 I DirectLogPreview: preview detached: presented=89 adoptFailed=0 presentFailed=0
+10-28 19:46:42.856  9758  9782 I DirectLog: SPIKE directlog fps=30 label=rcd-4k rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=1920x1080 acq=275 graded=274 drop=0 miss=1 stale=274 waitFree=274 fallback=0 preview=89 shaded=274 fused=0 heat=false thermal=0 cpuChain=22.1ms chainMax=88.6ms over=10 copy=0.0ms copyMax=0.0ms p010=true starved=0 degraded=0 aChunks=223 aFrames=456704 aDrop=14 hasAudio=true aacBytes=153302 aOut=448 outBufs=275 bytes=35160630 file=35321981
+10-28 19:46:42.936  9758  9782 I DirectLog: SPIKE directlog [rcd-4k] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens/files/directlog_rcd_4k.mp4
+10-28 19:46:42.962  9758  9782 I DirectLog: SPIKE directlog-color std=1 transfer=3 range=2
+10-28 19:46:43.089  9758  9782 I DirectLog: SPIKE directlog [rcd-4k] muxed video=274 audio=448 durationUs=9365600
+10-28 19:46:43.089  9758  9782 I DirectLog: SPIKE directlog [rcd-4k] muxedFps=29.3

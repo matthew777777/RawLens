@@ -1,0 +1,8 @@
+
+com.matthew.rawlens.DirectLogPreviewParityDeviceTest:.
+
+Time: 1.333
+
+OK (1 test)
+
+
