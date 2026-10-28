@@ -153,14 +153,16 @@ class CrawRoundTripDeviceTest {
         val bPos = arrayOf(intArrayOf(1, 1), intArrayOf(0, 1), intArrayOf(1, 0), intArrayOf(0, 0))[cfa]
         fun m(i: Int, n: Int) = if (i < 0) -i else if (i >= n) 2 * (n - 1) - i else i
         fun at(x: Int, y: Int) = src[m(y, h) * w + m(x, w)].toInt() and 0xffff
-        fun diff(x: Int, y: Int): Int {   // 4 x (C - edge-directed green)
+        fun diff(x: Int, y: Int): Int {   // 8 x (C - edge-weighted green), float32 in the C++ order
             val c = at(x, y); val l = at(x - 1, y); val r = at(x + 1, y); val u = at(x, y - 1); val d = at(x, y + 1)
             val dh = 2 * kotlin.math.abs(l - r) + kotlin.math.abs(2 * c - at(x - 2, y) - at(x + 2, y))
             val dv = 2 * kotlin.math.abs(u - d) + kotlin.math.abs(2 * c - at(x, y - 2) - at(x, y + 2))
-            val g2 = if (dh < dv) 2 * (l + r) else if (dv < dh) 2 * (u + d) else l + r + u + d
-            return 4 * c - g2
+            val a = (dv + 4).toFloat(); val b = (dh + 4).toFloat()
+            val wa = a * a; val wb = b * b
+            val twoG = ((l + r).toFloat() * wa + (u + d).toFloat() * wb) / (wa + wb)
+            return 8 * c - kotlin.math.floor(twoG * 4.0f + 0.5f).toInt()
         }
-        val white = 1023; val clip = white - white / 20
+        val white = 1023; val clip = white
         val out = IntArray(w * h)
         for (j in 0 until oh) for (i in 0 until ow) {
             val sx = 2 * i; val sy = 2 * j
@@ -168,16 +170,15 @@ class CrawRoundTripDeviceTest {
             val ring = if (greenEven) at(sx + 1, sy - 1) + at(sx - 1, sy + 1) + at(sx + 2, sy) + at(sx, sy + 2)
                 else at(sx - 1, sy) + at(sx, sy - 1) + at(sx + 2, sy + 1) + at(sx + 1, sy + 2)
             val g16 = 6 * gin + ring
-            var near = false
-            for (bj in maxOf(j - 1, 0)..minOf(j + 1, oh - 1)) for (bi in maxOf(i - 1, 0)..minOf(i + 1, ow - 1))
-                for (k in 0 until 4) if (at(2 * bi + (k and 1), 2 * bj + (k shr 1)) >= clip) near = true
+            var near = false  // block holds a clipped sample
+            for (k in 0 until 4) if (at(2 * i + (k and 1), 2 * j + (k shr 1)) >= clip) near = true
             fun channel(p: IntArray): Int {
                 val x = sx + p[0]; val y = sy + p[1]
                 // Same-colour neighbours toward the block centre, mirrored on the site grid.
                 val tx = 2 * m(i + (if (p[0] == 0) 1 else -1), ow) + p[0]
                 val ty = 2 * m(j + (if (p[1] == 0) 1 else -1), oh) + p[1]
                 val v = if (near) (9 * at(x, y) + 3 * at(tx, y) + 3 * at(x, ty) + at(tx, ty) + 8) shr 4
-                    else (4 * g16 + 9 * diff(x, y) + 3 * diff(tx, y) + 3 * diff(x, ty) + diff(tx, ty) + 32) shr 6
+                    else (8 * g16 + 9 * diff(x, y) + 3 * diff(tx, y) + 3 * diff(x, ty) + diff(tx, ty) + 64) shr 7
                 return v.coerceIn(0, white)
             }
             out[sy * w + sx] = channel(rPos)

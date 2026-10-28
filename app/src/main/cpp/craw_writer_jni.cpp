@@ -20,6 +20,7 @@
 #include <arm_neon.h>
 #endif
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <cstdint>
 #include <cstring>
@@ -45,16 +46,57 @@ craw::Writer* writerFrom(jlong h) { return reinterpret_cast<craw::Writer*>(h); }
 // the reader and fringe magenta/green at every fine edge; RGB avoids that.
 // Green: the 2 in-block greens at weight 6 plus the symmetric ring of 4
 // nearest outer greens at weight 1 (sum 16). R/B: green + colour difference,
-// where the difference at each R/B site uses an edge-directed green (average
-// along the smaller green gradient, never across an edge) and is
-// interpolated bilinearly (9,3,3,1) to the block centre. Blocks within 2
-// samples of a near-clipped sample use plain same-colour interpolation, so
-// highlights stay neutral. Measured on three real takes vs full-res AHD
+// where the difference at each R/B site uses an edge-weighted green: the
+// horizontal and vertical estimates blended with weights 1/(gradient + 4)^2
+// (VNG/PPG style; a hard choice between them misfires on small bright
+// points and leaves magenta/green specks), interpolated bilinearly
+// (9,3,3,1) to the block centre. Measured vs full-res AHD downscaled 2x:
+// edge chroma error -7..-14 %, chroma speckle -11..-12 % against the hard
+// choice. The blend is IEEE float32 in a fixed operation order with FP
+// contraction off, so NEON, scalar and the Kotlin test reference agree bit for
+// bit. Blocks holding a clipped sample use plain same-colour interpolation,
+// so blown highlights stay neutral. Measured on three real takes vs full-res AHD
 // downscaled 2x: edge chroma error -15..-65 %, luma error about half and
 // ~90 % detail, compared with the centre-aligned Bayer bin.
 // Output is the cell frame: (row 0, col 0) R, (0,1) G, (1,0) B, (1,1) zero.
+// round(8g) for the edge-weighted green at an R/B site: h2 = left + right,
+// v2 = up + down, dh/dv the gradient measures; weights 1/(d + 4)^2.
+// 8g = 4 * (h2 * (dv+4)^2 + v2 * (dh+4)^2) / ((dh+4)^2 + (dv+4)^2).
+// float32, this exact operation order, no FMA: the NEON and Kotlin versions match it.
+#pragma clang fp contract(off)
+inline int32_t weightedGreen8(int32_t h2, int32_t v2, int32_t dh, int32_t dv) {
+    const float a = static_cast<float>(dv + 4), b = static_cast<float>(dh + 4);
+    const float wa = a * a, wb = b * b;
+    const float twoG = (static_cast<float>(h2) * wa + static_cast<float>(v2) * wb) / (wa + wb);
+    return static_cast<int32_t>(std::floor(twoG * 4.0f + 0.5f));
+}
+#if defined(__aarch64__)
+inline int32x4_t weightedGreen8(int32x4_t h2, int32x4_t v2, int32x4_t dh, int32x4_t dv) {
+    const float32x4_t four = vdupq_n_f32(4.0f);
+    const float32x4_t a = vaddq_f32(vcvtq_f32_s32(dv), four), b = vaddq_f32(vcvtq_f32_s32(dh), four);
+    const float32x4_t wa = vmulq_f32(a, a), wb = vmulq_f32(b, b);
+    const float32x4_t num = vaddq_f32(vmulq_f32(vcvtq_f32_s32(h2), wa), vmulq_f32(vcvtq_f32_s32(v2), wb));
+    const float32x4_t twoG = vdivq_f32(num, vaddq_f32(wa, wb));
+    return vcvtmq_s32_f32(vaddq_f32(vmulq_f32(twoG, vdupq_n_f32(4.0f)), vdupq_n_f32(0.5f)));
+}
+#endif
+
 void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bitDepth,
             std::vector<uint16_t>& out) {
+    if (bitDepth > 12) {
+        // The int16 site planes hold up to 12-bit samples: bin a 12-bit copy
+        // and scale back (binning averages; 12 bits keep ample precision).
+        const int shift = bitDepth - 12;
+        thread_local std::vector<uint16_t> scaled;
+        scaled.resize(static_cast<size_t>(width) * rows);
+        for (int y = 0; y < rows; ++y) {
+            const auto* s = reinterpret_cast<const uint16_t*>(src + static_cast<size_t>(y) * stride);
+            for (int x = 0; x < width; ++x) scaled[static_cast<size_t>(y) * width + x] = static_cast<uint16_t>(s[x] >> shift);
+        }
+        binRgb(reinterpret_cast<const uint8_t*>(scaled.data()), width * 2, width, rows, cfa, 12, out);
+        for (auto& v : out) v = static_cast<uint16_t>(v << shift);
+        return;
+    }
     const int ow = width / 2, oh = rows / 2;
     auto mirror = [](int i, int n) { return i < 0 ? -i : i >= n ? 2 * (n - 1) - i : i; };
     // Rows mirror by pointer; columns mirror only on the scalar edge paths, so
@@ -69,19 +111,23 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
     const int* cR = kR[cfa];
     const int* cB = kB[cfa];
     const bool greenEven = cfa == 1 || cfa == 2;
-    const int white = (1 << bitDepth) - 1, clip = white - white / 20;
+    // Blocks holding a clipped sample: the channels clip at different levels,
+    // so colour differences there are meaningless (plain interpolation keeps
+    // blown highlights neutral). Only the block itself: a wider margin
+    // measurably softened detail beside highlights.
+    const int white = (1 << bitDepth) - 1, clip = white;
     // Vector loops cover site columns [1, vEnd): every read of x - 2 .. x + 17 stays in the row.
     const int vEnd = std::max(1, ow - 9);
-    // Site planes (int16: |4C - 2g| <= 4 * white) with one mirrored column each side,
+    // Site planes, int16 D8 = 8C - round(8g) (|D8| <= 8 * white, so <= 12-bit
+    // samples; deeper input is pre-scaled to 12 bits by the caller), with one mirrored column each side,
     // and per-block clip flags; both filled row by row just ahead of use.
     const int ps = ow + 2;
     thread_local std::vector<int16_t> dR, dB;
-    thread_local std::vector<uint8_t> hot, nearRow;
+    thread_local std::vector<uint8_t> hot;
     dR.resize(static_cast<size_t>(ps) * oh);
     dB.resize(static_cast<size_t>(ps) * oh);
     hot.resize(static_cast<size_t>(ow) * oh);
-    nearRow.resize(ow + 16);
-    // 4 x (C - edge-directed green) at the sites of one colour in output row j.
+    // 8 x (C - edge-weighted green) at the sites of one colour in output row j.
     auto diffRow = [&](const int* c, int j, int16_t* o) {
         const int y = 2 * j + c[1];
         const uint16_t *r0 = row(y), *ru = row(y - 1), *rd = row(y + 1), *ruu = row(y - 2), *rdd = row(y + 2);
@@ -90,8 +136,7 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             const int32_t C = r0[x], l = px(r0, x - 1), r = px(r0, x + 1), u = ru[x], dn = rd[x];
             const int32_t dh = 2 * std::abs(l - r) + std::abs(2 * C - px(r0, x - 2) - px(r0, x + 2));
             const int32_t dv = 2 * std::abs(u - dn) + std::abs(2 * C - ruu[x] - rdd[x]);
-            const int32_t g2 = dh < dv ? 2 * (l + r) : dv < dh ? 2 * (u + dn) : l + r + u + dn;
-            o[i] = static_cast<int16_t>(4 * C - g2);
+            o[i] = static_cast<int16_t>(8 * C - weightedGreen8(l + r, u + dn, dh, dv));
         };
         int i = 0;
         scalar(i++);
@@ -110,17 +155,18 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
             const int16x8_t dh = vaddq_s16(vshlq_n_s16(vabdq_s16(l, r), 1), vabsq_s16(vsubq_s16(vsubq_s16(C2, a), b)));
             const int16x8_t dv = vaddq_s16(vshlq_n_s16(vabdq_s16(u, d), 1), vabsq_s16(vsubq_s16(vsubq_s16(C2, uu), dd)));
             const int16x8_t h2 = vaddq_s16(l, r), v2 = vaddq_s16(u, d);
-            int16x8_t g2 = vaddq_s16(h2, v2);
-            g2 = vbslq_s16(vcltq_s16(dh, dv), vshlq_n_s16(h2, 1), g2);
-            g2 = vbslq_s16(vcltq_s16(dv, dh), vshlq_n_s16(v2, 1), g2);
-            vst1q_s16(o + i, vsubq_s16(vshlq_n_s16(C, 2), g2));
+            const int16x8_t g8 = vcombine_s16(
+                vmovn_s32(weightedGreen8(vmovl_s16(vget_low_s16(h2)), vmovl_s16(vget_low_s16(v2)),
+                                         vmovl_s16(vget_low_s16(dh)), vmovl_s16(vget_low_s16(dv)))),
+                vmovn_s32(weightedGreen8(vmovl_high_s16(h2), vmovl_high_s16(v2), vmovl_high_s16(dh), vmovl_high_s16(dv))));
+            vst1q_s16(o + i, vsubq_s16(vshlq_n_s16(C, 3), g8));
         }
 #endif
         for (; i < ow; ++i) scalar(i);
         o[-1] = o[mirror(-1, ow)];
         o[ow] = o[mirror(ow, ow)];
     };
-    // Block j: 2x2 max at or above 95 % of white.
+    // Block j: 2x2 max clipped.
     bool anyHot = false;
     auto hotRow = [&](int j) {
         const uint16_t *a = row(2 * j), *b = row(2 * j + 1);
@@ -159,25 +205,13 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
         uint16_t* o0 = out.data() + static_cast<size_t>(2 * j) * width;
         uint16_t* o1 = o0 + width;
         const uint16_t *q0 = row(2 * j), *qu = row(2 * j - 1), *q1 = row(2 * j + 1), *q2 = row(2 * j + 2);
-        // Near-clip flags for this output row: hot blocks dilated by one block.
-        uint8_t* nr = nearRow.data() + 1;
+        // Clipped-block flags for this output row.
+        const uint8_t* nr = hot.data() + static_cast<size_t>(j) * ow;
         bool rowNear = false;
         if (anyHot) {
-            const uint8_t* hu = hot.data() + static_cast<size_t>(std::max(j - 1, 0)) * ow;
-            const uint8_t* hc = hot.data() + static_cast<size_t>(j) * ow;
-            const uint8_t* hd = hot.data() + static_cast<size_t>(std::min(j + 1, oh - 1)) * ow;
             uint8_t acc = 0;
-            for (int i = 0; i < ow; ++i) { nr[i] = hu[i] | hc[i] | hd[i]; acc |= nr[i]; }
-            if (acc) {
-                nr[-1] = nr[0]; nr[ow] = nr[ow - 1];
-                uint8_t prev = 0;  // dilate horizontally (clamped at the edges)
-                for (int i = 0; i < ow; ++i) {
-                    const uint8_t cur = nr[i];
-                    nr[i] = static_cast<uint8_t>(cur | (i > 0 ? prev : 0) | (i + 1 < ow ? nr[i + 1] : 0));
-                    prev = cur;
-                }
-                rowNear = true;
-            }
+            for (int i = 0; i < ow; ++i) acc |= nr[i];
+            rowNear = acc != 0;
         }
         // Diff rows: own and the row toward the block centre (mirrored on the site grid).
         const int16_t* R0 = dR.data() + static_cast<size_t>(j) * ps + 1;
@@ -203,8 +237,8 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
                 R = plain(cR, mirror(i + rStep, ow));
                 B = plain(cB, mirror(i + bStep, ow));
             } else {
-                R = (4 * g16 + 9 * R0[i] + 3 * R0[i + rStep] + 3 * R1[i] + R1[i + rStep] + 32) >> 6;
-                B = (4 * g16 + 9 * B0[i] + 3 * B0[i + bStep] + 3 * B1[i] + B1[i + bStep] + 32) >> 6;
+                R = (8 * g16 + 9 * R0[i] + 3 * R0[i + rStep] + 3 * R1[i] + R1[i + rStep] + 64) >> 7;
+                B = (8 * g16 + 9 * B0[i] + 3 * B0[i + bStep] + 3 * B1[i] + B1[i + bStep] + 64) >> 7;
             }
             o0[x] = static_cast<uint16_t>(std::clamp(R, 0, white));
             o0[x + 1] = static_cast<uint16_t>((g16 + 8) >> 4);
@@ -215,19 +249,20 @@ void binRgb(const uint8_t* src, int stride, int width, int rows, int cfa, int bi
         scalar(i++);
 #if defined(__aarch64__)
         const int16x8_t vWhite = vdupq_n_s16(static_cast<int16_t>(white));
-        // (4 g16 + 9 d0 + 3 (d0' + d1) + d1' + 32) >> 6 in 32 bits, clamped to 0..white.
+        // (8 g16 + 9 d0 + 3 (d0' + d1) + d1' + 64) >> 7 in 32 bits, clamped to 0..white.
         auto colour = [&](uint16x8_t g16, const int16_t* d0, const int16_t* d1, int step) {
-            const int16x8_t a = vld1q_s16(d0), bc = vaddq_s16(vld1q_s16(d0 + step), vld1q_s16(d1));
+            // D8 reaches 8 * white (12-bit: 32760): widen each term, never add in 16 bits.
+            const int16x8_t a = vld1q_s16(d0), b = vld1q_s16(d0 + step), c = vld1q_s16(d1);
             const int16x8_t e = vld1q_s16(d1 + step);
-            int32x4_t lo = vreinterpretq_s32_u32(vshll_n_u16(vget_low_u16(g16), 2));
-            int32x4_t hi = vreinterpretq_s32_u32(vshll_high_n_u16(g16, 2));
+            int32x4_t lo = vreinterpretq_s32_u32(vshll_n_u16(vget_low_u16(g16), 3));
+            int32x4_t hi = vreinterpretq_s32_u32(vshll_high_n_u16(g16, 3));
             lo = vmlal_n_s16(lo, vget_low_s16(a), 9);
             hi = vmlal_high_n_s16(hi, a, 9);
-            lo = vmlal_n_s16(lo, vget_low_s16(bc), 3);
-            hi = vmlal_high_n_s16(hi, bc, 3);
+            lo = vmlal_n_s16(vmlal_n_s16(lo, vget_low_s16(b), 3), vget_low_s16(c), 3);
+            hi = vmlal_high_n_s16(vmlal_high_n_s16(hi, b, 3), c, 3);
             lo = vaddw_s16(lo, vget_low_s16(e));
             hi = vaddw_high_s16(hi, e);
-            const int16x8_t v = vcombine_s16(vqrshrn_n_s32(lo, 6), vqrshrn_n_s32(hi, 6));
+            const int16x8_t v = vcombine_s16(vqrshrn_n_s32(lo, 7), vqrshrn_n_s32(hi, 7));
             return vreinterpretq_u16_s16(vminq_s16(vmaxq_s16(v, vdupq_n_s16(0)), vWhite));
         };
         for (; i + 8 <= vEnd; i += 8) {
