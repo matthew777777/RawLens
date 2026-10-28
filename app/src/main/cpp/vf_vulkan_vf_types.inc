@@ -270,7 +270,21 @@ struct ImportedBuffer {
     uint32_t height = 0;
 };
 
+struct RecordCubeState {
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkBuffer params = VK_NULL_HANDLE;
+    VkDeviceMemory paramsMemory = VK_NULL_HANDLE;
+    bool enabled = false;
+};
+
 struct Context {
+    RecordCubeState recordCube;
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice gpu = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;

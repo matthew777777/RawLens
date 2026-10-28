@@ -55,7 +55,7 @@ internal object VfRecordPreview {
      * CPU golden for the preview kernel's color step: limited-range
      * BT.709 YUV (10-bit codes as floats) -> display RGB. Exact inverse
      * of the record stages' `rgbToYuv` + `pack10` (Kr = 0.2126,
-     * Kb = 0.0722); the P010 already holds sRGB-encoded components, so
+     * Kb = 0.0722); the P010 already holds profile-encoded components, so
      * no OETF runs here. The shader must implement this bit-for-bit
      * (modulo fp32 rounding); [DirectLogPreviewTest] pins the round trip.
      */

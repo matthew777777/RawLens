@@ -6,8 +6,8 @@
 // work, no second fullscreen tonemap pass.
 //
 // The curve is the published Sony S-Log3 10-bit code mapping, normalized to
-// 0..1. Input is treated as scene-linear camera RGB (post-CCM); matching it
-// to a real gamut (S-Gamut3/DCP) is later color-science work, not probed here.
+// 0..1. Post-CCM linear sRGB is converted to S-Gamut3.Cine (D65) before
+// the curve. Signed values retain the published linear toe below the cut.
 //
 // Regenerate the SPIR-V with:
 //   glslangValidator -V --target-env vulkan1.1 vf_loggrade.comp -o vf_loggrade.spv
@@ -32,14 +32,20 @@ layout(push_constant) uniform Params {
 // code mapping (420/261.5/1023 scaffolding, divisor 0.19) with the
 // 95-code black pedestal. Anchors: 0 -> 95, 0.01125 -> ~171.21,
 // 18% gray -> 420, 90% white -> ~597.9. The toe meets the log branch
-// at the cut, so the curve is continuous by construction (no kink at
-// the cut). CPU golden is VfLogGrade.sonySlog3.
+// at the cut, so the curve is continuous. CPU golden is VfLogGrade.sonySlog3.
+// BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
+vec3 srgbToSgamut3Cine(vec3 v) {
+    return vec3(dot(v, vec3(0.6456794776, 0.2591145470, 0.0952059754)),
+        dot(v, vec3(0.0875299915, 0.7596995626, 0.1527704459)),
+        dot(v, vec3(0.0369574199, 0.1292809048, 0.8337616753)));
+}
+// END generated Sony gamut
+
 float slog3cutY() {
     return (420.0 + log2((0.01125 + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
 }
 
 float slog3(float x) {
-    x = max(x, 0.0);
     if (x >= 0.01125) {
         // log10 via log2 (GLSL has no log10): 1/log2(10) = 0.30103.
         return (420.0 + log2((x + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
@@ -60,7 +66,7 @@ void main() {
     vec3 rgb = vec3(q.r, 0.5 * (q.g + q.b), q.a);
     vec3 wb = rgb * p.u_gains.rgb;
     vec3 ccm = vec3(dot(p.u_ccmR.rgb, wb), dot(p.u_ccmG.rgb, wb), dot(p.u_ccmB.rgb, wb));
-    vec3 ex = ccm * exp2(p.u_misc.x);
+    vec3 ex = srgbToSgamut3Cine(ccm * exp2(p.u_misc.x));
     vec3 lg = vec3(slog3(ex.r), slog3(ex.g), slog3(ex.b));
     imageStore(img_out, ij, vec4(lg, 1.0));
 }

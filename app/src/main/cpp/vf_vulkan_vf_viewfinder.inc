@@ -68,6 +68,7 @@ static void destroyContext(Context* ctx) {
     destroyShadeDummyImage(ctx);
     destroyShadeSampler(ctx);
     destroyGradeLut(ctx);
+    destroyRecordCube(ctx);
     for (auto& entry : ctx->inputs) destroyImportedBuffer(ctx, &entry.second);
     for (AHardwareBuffer* b : ctx->inputOrder) AHardwareBuffer_release(b);
     ctx->inputs.clear();

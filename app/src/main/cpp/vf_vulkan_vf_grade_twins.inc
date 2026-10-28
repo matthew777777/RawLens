@@ -321,16 +321,25 @@ void uploadShadeMap(JNIEnv* env, jintArray shadeDims, jshortArray shadeGains,
     }
     if (usable && ensureShadeSampler(g) &&
         ensureShadeImage(g, slot, (int)dd[0], (int)dd[1])) {
+        // Slot reuse is fence-gated by every caller. Its initialized image and
+        // coherent staging therefore still contain the previous map. Avoid a
+        // transfer submission/barrier when Camera2 repeats identical gains;
+        // changed maps retain the existing upload and ordering unchanged.
+        std::vector<uint16_t> incoming((size_t)gainLen);
         env->GetShortArrayRegion(shadeGains, 0, gainLen,
-                                 reinterpret_cast<jshort*>(g->shadeStagingMaps[slot]));
+                                 reinterpret_cast<jshort*>(incoming.data()));
         if (!env->ExceptionCheck()) {
+            const size_t bytes = (size_t)gainLen * sizeof(uint16_t);
+            const bool unchanged = g->shadeImgInit[slot] &&
+                memcmp(g->shadeStagingMaps[slot], incoming.data(), bytes) == 0;
+            if (!unchanged) memcpy(g->shadeStagingMaps[slot], incoming.data(), bytes);
             VkMappedMemoryRange range{};
             range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
             range.memory = g->shadeStagingMems[slot];
             range.offset = 0;
             range.size = VK_WHOLE_SIZE;
-            vkFlushMappedMemoryRanges(g->device, 1, &range);
-            if (blitShadeImage(g, slot)) {
+            if (!unchanged) vkFlushMappedMemoryRanges(g->device, 1, &range);
+            if (unchanged || blitShadeImage(g, slot)) {
                 outDims[0] = dd[0];
                 outDims[1] = dd[1];
                 outDims[2] = 1;

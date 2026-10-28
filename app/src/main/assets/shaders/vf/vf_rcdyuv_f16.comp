@@ -34,8 +34,13 @@
 // Regenerate the SPIR-V with:
 //   glslangValidator -V --target-env vulkan1.1 vf_rcdyuv_f16.comp -o vf_rcdyuv_f16.spv
 #version 450
+#extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#ifdef RECORD_CUBE
+#include "../record_cube.glsl"
+#endif
 layout(local_size_x = 8, local_size_y = 8) in;
 
 // Byte-exact sensor view (same convention as vf_rcd.comp): each uint
@@ -252,12 +257,19 @@ f16vec3 srgbToBt2020(f16vec3 v) {
         dot(v, f16vec3(0.0163916hf, 0.0880132hf, 0.8955950hf)));
 }
 
+// BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
+f16vec3 srgbToSgamut3Cine(f16vec3 v) {
+    return f16vec3(dot(v, f16vec3(0.6456794776hf, 0.2591145470hf, 0.0952059754hf)),
+        dot(v, f16vec3(0.0875299915hf, 0.7596995626hf, 0.1527704459hf)),
+        dot(v, f16vec3(0.0369574199hf, 0.1292809048hf, 0.8337616753hf)));
+}
+// END generated Sony gamut
+
 float16_t slog3cutY() {
     return (420.0hf + log2((0.01125hf + 0.01hf) / 0.19hf) * 0.30102999566hf * 261.5hf) / 1023.0hf;
 }
 
 float16_t sonySlog3(float16_t x) {
-    x = max(x, 0.0hf);
     if (x >= 0.01125hf) {
         return (420.0hf + log2((x + 0.01hf) / 0.19hf) * 0.30102999566hf * 261.5hf) / 1023.0hf;
     }
@@ -265,7 +277,13 @@ float16_t sonySlog3(float16_t x) {
 }
 
 f16vec3 slogEncode(f16vec3 v) {
-    return f16vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+    v = srgbToSgamut3Cine(v);
+    f16vec3 encoded = f16vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+#ifdef RECORD_CUBE
+    return f16vec3(applyRecordLut(vec3(encoded)));
+#else
+    return encoded;
+#endif
 }
 
 // Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.

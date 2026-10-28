@@ -227,6 +227,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->yuvPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->yuvPipelineLayout, 0, 1, &g->yuvSets[slot], 0, nullptr);
+    bindRecordCube(g, cmd, g->yuvPipelineLayout);
     vkCmdPushConstants(cmd, g->yuvPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(params), &params);
     const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;
@@ -433,6 +434,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->yuvPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->yuvPipelineLayout, 0, 1, &g->yuvSets[slot], 0, nullptr);
+    bindRecordCube(g, cmd, g->yuvPipelineLayout);
     vkCmdPushConstants(cmd, g->yuvPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(params), &params);
     const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;

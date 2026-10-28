@@ -9,6 +9,7 @@
 
 #include "vf_vulkan_vf_types.inc"  // Includes, logging, push-constant layouts and the shared Vulkan Context.
 #include "vf_vulkan_vf_resources.inc"  // Context-owned buffers: LUT, staging, bridge, and AHardwareBuffer imports.
+#include "vf_vulkan_vf_record_cube.inc"  // Optional take-constant 3D LUT and descriptor set.
 #include "vf_vulkan_vf_pipelines.inc"  // Compute pipeline creation for every stage (superpixel, grade, YUV, preview, RGB8, RCD, MHC, fused).
 #include "vf_vulkan_vf_shade_lut.inc"  // Lens-shading images, stage teardown and the grade LUT; closes the anonymous namespace.
 #include "vf_vulkan_vf_viewfinder.inc"  // Context lifecycle and the RAW viewfinder superpixel dispatch (buffer, image, bridge).
@@ -17,3 +18,4 @@
 #include "vf_vulkan_vf_rcd.inc"  // RCD demosaic and the fused RCD finalize + grade.
 #include "vf_vulkan_vf_mhc_stab.inc"  // Malvar-He-Cutler demosaic, fused MHC+grade, and the stabilization warp.
 
+#include "vf_vulkan_vf_record_cube_jni.inc"

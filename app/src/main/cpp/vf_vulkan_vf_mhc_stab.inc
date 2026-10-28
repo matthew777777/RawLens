@@ -475,6 +475,7 @@ Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->fusedPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->fusedPipelineLayout, 0, 1, &g->fusedSets[slot], 0, nullptr);
+    bindRecordCube(g, cmd, g->fusedPipelineLayout);
     // vf_mhcyuv: 16x16 invocations, each owning two horizontal pixels.
     // https://docs.vulkan.org/spec/latest/chapters/dispatch.html
     const uint32_t pairs = (uint32_t)(params.oDims[0] + 1) / 2;

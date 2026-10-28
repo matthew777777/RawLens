@@ -365,8 +365,10 @@ bool createYuvPipeline(Context* ctx, const uint32_t* code, size_t words) {
     push.size = sizeof(GradeYuvParams);
     VkPipelineLayoutCreateInfo pipeLayoutInfo{};
     pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeLayoutInfo.setLayoutCount = 1;
-    pipeLayoutInfo.pSetLayouts = &ctx->yuvSetLayout;
+    if (!ensureRecordCubeLayout(ctx)) { vkDestroyShaderModule(ctx->device, module, nullptr); return false; }
+    const VkDescriptorSetLayout recordLayouts[2] = {ctx->yuvSetLayout, ctx->recordCube.layout};
+    pipeLayoutInfo.setLayoutCount = 2;
+    pipeLayoutInfo.pSetLayouts = recordLayouts;
     pipeLayoutInfo.pushConstantRangeCount = 1;
     pipeLayoutInfo.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->yuvPipelineLayout) != VK_SUCCESS) {
@@ -795,8 +797,10 @@ bool createRcdYuvPipeline(Context* ctx, const uint32_t* code, size_t words) {
     }
     VkPipelineLayoutCreateInfo pipeLayoutInfo{};
     pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeLayoutInfo.setLayoutCount = 1;
-    pipeLayoutInfo.pSetLayouts = &ctx->rcdYuvSetLayout;
+    if (!ensureRecordCubeLayout(ctx)) { vkDestroyShaderModule(ctx->device, module, nullptr); return false; }
+    const VkDescriptorSetLayout recordLayouts[2] = {ctx->rcdYuvSetLayout, ctx->recordCube.layout};
+    pipeLayoutInfo.setLayoutCount = 2;
+    pipeLayoutInfo.pSetLayouts = recordLayouts;
     if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->rcdYuvPipelineLayout) != VK_SUCCESS) {
         vkDestroyDescriptorSetLayout(ctx->device, ctx->rcdYuvSetLayout, nullptr);
         ctx->rcdYuvSetLayout = VK_NULL_HANDLE;
@@ -973,8 +977,10 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
     }
     VkPipelineLayoutCreateInfo pipeLayoutInfo{};
     pipeLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeLayoutInfo.setLayoutCount = 1;
-    pipeLayoutInfo.pSetLayouts = &ctx->fusedSetLayout;
+    if (!ensureRecordCubeLayout(ctx)) { vkDestroyShaderModule(ctx->device, module, nullptr); return false; }
+    const VkDescriptorSetLayout recordLayouts[2] = {ctx->fusedSetLayout, ctx->recordCube.layout};
+    pipeLayoutInfo.setLayoutCount = 2;
+    pipeLayoutInfo.pSetLayouts = recordLayouts;
     if (vkCreatePipelineLayout(ctx->device, &pipeLayoutInfo, nullptr, &ctx->fusedPipelineLayout) != VK_SUCCESS) {
         vkDestroyDescriptorSetLayout(ctx->device, ctx->fusedSetLayout, nullptr);
         ctx->fusedSetLayout = VK_NULL_HANDLE;
