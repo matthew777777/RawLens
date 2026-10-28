@@ -69,6 +69,28 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
     private var surface = EGL14.EGL_NO_SURFACE
     private var program = 0
     private var texture = 0
+    private var monitorLut: CubeLut? = null
+    private var technicalAssist = false
+    private var monitorIntensity = 1f
+    private var monitorGl: DirectLogMonitorGl? = null
+
+    /** Freeze monitor preferences per take; parsing and upload never run on camera threads. */
+    fun configureMonitor(profile: DirectLogProfile) {
+        val library = DirectLogLutLibrary(context)
+        val selected = library.selected
+        val intensity = library.intensity
+        worker.post {
+            releaseGl()
+            monitorIntensity = intensity
+            technicalAssist = profile == DirectLogProfile.SLOG3 && selected == DirectLogLutLibrary.TECHNICAL
+            monitorLut = if (profile == DirectLogProfile.SLOG3) runCatching {
+                library.load(selected)
+            }.onFailure {
+                Log.w(TAG, "Monitor LUT unavailable; showing unassisted log", it)
+                post { android.widget.Toast.makeText(context, "Monitor LUT unavailable; showing log", android.widget.Toast.LENGTH_LONG).show() }
+            }.getOrNull() else null
+        }
+    }
     private var nextInitAttemptMs = 0L
 
     private var quadRotation = Int.MIN_VALUE
@@ -269,6 +291,7 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
         android.opengl.GLES20.glUniform1i(
             android.opengl.GLES20.glGetUniformLocation(program, "uTex"), 0
         )
+        monitorGl?.bind()
         GlBlit.drawQuad(program, quadFor(rotation, mirrored))
         // Sampling must complete before the slot latch releases (the
         // camera thread reuses the buffer on release). Swap presents
@@ -315,7 +338,7 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
             check(EGL14.eglInitialize(disp, IntArray(2), 0, IntArray(2), 0)) { "eglInitialize failed" }
             val configs = arrayOfNulls<android.opengl.EGLConfig>(1)
             val attrs = intArrayOf(
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_RENDERABLE_TYPE, if (monitorLut != null || technicalAssist) 0x40 else EGL14.EGL_OPENGL_ES2_BIT,
                 EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
                 EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8,
                 EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8, EGL14.EGL_NONE
@@ -325,7 +348,7 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
             }
             val ctx = EGL14.eglCreateContext(
                 disp, configs[0], EGL14.EGL_NO_CONTEXT,
-                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0
+                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, if (monitorLut != null || technicalAssist) 3 else 2, EGL14.EGL_NONE), 0
             )
             check(ctx != EGL14.EGL_NO_CONTEXT) { "eglCreateContext failed" }
             val surf = EGL14.eglCreateWindowSurface(disp, configs[0], target, intArrayOf(EGL14.EGL_NONE), 0)
@@ -342,12 +365,18 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
             display = disp
             eglContext = ctx
             surface = surf
-            program = GlBlit.buildProgram()
+            monitorGl = if (monitorLut != null || technicalAssist) DirectLogMonitorGl(monitorLut, monitorIntensity) else null
+            program = monitorGl?.program() ?: GlBlit.buildProgram()
             texture = GlBlit.genTexture()
             Log.i(TAG, "preview GL ready ${viewportWidth}x$viewportHeight")
             return true
         } catch (failure: Exception) {
             Log.w(TAG, "preview GL init failed; retrying", failure)
+            if (monitorLut != null || technicalAssist) {
+                monitorLut = null
+                technicalAssist = false
+                post { android.widget.Toast.makeText(context, "Display assist unavailable; showing log", android.widget.Toast.LENGTH_LONG).show() }
+            }
             releaseGl()
             return false
         }
@@ -355,6 +384,8 @@ class DirectLogPreviewView @JvmOverloads constructor(context: Context, attrs: At
 
     private fun releaseGl() {
         // Runs on the GL worker: drop GL state, never the framework Surface.
+        // All GL names die with the context below, including the optional LUT.
+        monitorGl = null
         program = 0
         texture = 0
         quadRotation = Int.MIN_VALUE
