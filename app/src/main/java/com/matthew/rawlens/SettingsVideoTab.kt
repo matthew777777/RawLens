@@ -77,7 +77,45 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
     val videoTab = p.tabs[2]
         content.removeAllViews()
         content.addView(sectionTitle("Direct Log"))
-        content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses BT.709 primaries, not Sony S-Gamut3."))
+        content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses S-Gamut3.Cine primaries; interpret data levels as Video/limited."))
+        content.addView(Button(this).apply {
+            text = "S-Log3 LUT library: choose assist / LUT"
+            isEnabled = !videoRecording
+            setOnClickListener { chooseDirectLogMonitorLut() }
+        })
+        content.addView(Button(this).apply {
+            text = "Import LUT (.cube)"
+            isEnabled = !videoRecording
+            setOnClickListener { pickDirectLogLut() }
+        })
+        content.addView(Button(this).apply {
+            text = "Selected LUT intensity"
+            isEnabled = !videoRecording
+            setOnClickListener {
+                val library = DirectLogLutLibrary(this@showVideoSettings)
+                AlertDialog.Builder(this@showVideoSettings).setTitle(library.label())
+                    .setSingleChoiceItems(arrayOf("0%", "25%", "50%", "75%", "100%"),
+                        (library.intensity * 4).toInt()) { dialog, which ->
+                        library.intensity = which / 4f
+                        dialog.dismiss()
+                    }.setNegativeButton("Close", null).show()
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Remove imported LUT"
+            isEnabled = !videoRecording
+            setOnClickListener { removeDirectLogMonitorLut() }
+        })
+        content.addView(CheckBox(this).apply {
+            text = "Bake selected LUT into S-Log3 recordings (SDR Rec.709 output)"
+            setTextColor(getColor(R.color.text_primary))
+            isEnabled = !videoRecording
+            isChecked = DirectLogLutLibrary(this@showVideoSettings).bakeIntoRecording
+            setOnCheckedChangeListener { _, checked ->
+                DirectLogLutLibrary(this@showVideoSettings).bakeIntoRecording = checked
+            }
+        })
+        content.addView(sectionDesc("With baking off, the take monitor shows the selected assist/LUT and the MP4 stays S-Gamut3.Cine/S-Log3. With baking on, select an imported S-Gamut3.Cine/S-Log3-to-Rec.709 cube; its look is saved in a _LUT709 MP4 and the monitor shows that output. Other profiles ignore this option. The built-in assist is monitor-only. Extract ZIP packs before importing. No Sony LUTs are bundled."))
         content.addView(Button(this).apply {
             isEnabled = !videoRecording
             fun refresh() { text = "LOG crop: ${directLogCrop().label}" }

@@ -1061,6 +1061,10 @@ class MainActivity : Activity() {
     @Deprecated("Use picker intent result for the sidecar folder grant")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == DirectLogLutLibrary.PICK_REQUEST) {
+            handleDirectLogLutResult(resultCode, data)
+            return
+        }
         if (requestCode == SETTINGS_EXPORT_REQUEST) {
             settingsTransfer.onExportResult(resultCode, data)
             return
@@ -2188,6 +2192,16 @@ class MainActivity : Activity() {
             .getOrDefault(10_000_000L)
         val meteredFocus = runCatching { controller.snapshotVideoMeteredFocus() }.getOrNull()
         val recordLocks = videoRecordLocks()
+        val profile = directLogProfile()
+        val lutLibrary = DirectLogLutLibrary(this)
+        val bakedLut = if (profile == DirectLogProfile.SLOG3 && lutLibrary.bakeIntoRecording) {
+            try {
+                requireNotNull(lutLibrary.load()) { "Select an imported cube for recording" }
+            } catch (failure: Exception) {
+                setStatus("LUT: ${failure.message}")
+                return
+            }
+        } else null
         hideManualControl()
         controller.stop()
         val dir = videoStageDir()
@@ -2196,8 +2210,8 @@ class MainActivity : Activity() {
             controller.start()
             return
         }
-        val profile = directLogProfile()
-        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}${profile.fileSuffix}.mp4")
+        val suffix = if (bakedLut != null) "_LUT709" else profile.fileSuffix
+        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}$suffix.mp4")
         val recorder = DirectLogRecorder(manager, cameraId, applicationContext).apply {
             audioEnabled = withAudio
             stabEnabled = stabOutputMode() != StabOutputMode.OG_ONLY
@@ -2208,6 +2222,8 @@ class MainActivity : Activity() {
             height = res.height
             bitrate = LogVideoProbe.defaultBitrateFor(res.width, res.height)
             logProfile = profile
+            recordLut = bakedLut
+            recordLutIntensity = lutLibrary.intensity
             recordingCrop = directLogCrop()
             videoDemosaic = videoDemosaic()
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
@@ -2433,7 +2449,7 @@ class MainActivity : Activity() {
                         runOnUiThread { setStatus("STABILIZING…") }
                         val stabFile = stabOutputFor(source)
                         val report = DirectLogStabilizer(applicationContext).stabilize(
-                            source, sidecar, stabFile, directLogProfile()
+                            source, sidecar, stabFile, DirectLogProfile.fromName(stats.profile)
                         ) { done, total ->
                             runOnUiThread { setStatus("STABILIZING $done/$total") }
                         }
@@ -2822,8 +2838,12 @@ class MainActivity : Activity() {
         VideoDemosaic.fromPreference(lensPreferences().getString(KEY_VIDEO_DEMOSAIC, null))
 
     /** LOG-mode badge: mode + live output profile (e.g. `LOG • SLOG3`). */
-    internal fun logBadgeLabel(recording: Boolean = false): String =
-        (if (recording) "● " else "") + "LOG • ${directLogProfile().hudLabel}"
+    internal fun logBadgeLabel(recording: Boolean = false): String {
+        val profile = directLogProfile()
+        val label = if (profile == DirectLogProfile.SLOG3 && DirectLogLutLibrary(this).bakeIntoRecording)
+            "LUT709" else profile.hudLabel
+        return (if (recording) "● " else "") + "LOG • $label"
+    }
 
     internal fun cycleDirectLogProfile() {
         if (videoRecording) return // encoder format is fixed at take start
