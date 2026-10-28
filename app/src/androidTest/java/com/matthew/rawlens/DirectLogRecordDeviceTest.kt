@@ -129,6 +129,7 @@ class DirectLogRecordDeviceTest {
             val file = File(context.cacheDir, "directlog_${label.replace('-', '_')}.mp4")
             if (file.exists()) file.delete()
             val rec = DirectLogRecorder(manager, cameraId, context)
+            rec.diagnoseFrameStages = args.getString("frameStages") == "true"
             rec.rung = rung
             // -e fps 24|30 (default: the recorder default).
             args.getString("fps")?.let { rec.fps = it.toInt() }
@@ -140,9 +141,17 @@ class DirectLogRecordDeviceTest {
             if (rcdOnly) {
                 rec.videoDemosaic = VideoDemosaic.RCD
                 rec.preferRcdGpuWriter = args.getString("gpuWriter") != "false"
-                rec.logProfile = DirectLogProfile.ACES
+                rec.logProfile = DirectLogProfile.fromName(args.getString("profile") ?: DirectLogProfile.ACES.name)
+                args.getString("recordLutPath")?.let { path ->
+                    rec.recordLut = File(path).reader().use { CubeLut.parse(it) }
+                    rec.recordLutIntensity = args.getString("recordLutIntensity", "1").toFloat()
+                }
             }
-            if (foreground != null) rec.attachPreviewDisplay(foreground.findViewById(R.id.recordPreview))
+            if (foreground != null) {
+                val preview = foreground.findViewById<DirectLogPreviewView>(R.id.recordPreview)
+                preview.configureMonitor(rec.logProfile)
+                rec.attachPreviewDisplay(preview)
+            }
             rec.allowThermalDegrade = false
             rec.start(file)
             foreground?.let { activity -> instrumentation.runOnMainSync {
@@ -221,6 +230,8 @@ class DirectLogRecordDeviceTest {
             }
             assertEquals("[$label] blocking fallbacks: ${stats.fallbackWaits}", 0, stats.fallbackWaits)
             assertEquals("[$label] frame exceptions: ${stats.frameErrors}", 0, stats.frameErrors)
+            if (args.getString("zeroDrops") == "true")
+                assertEquals("[$label] dropped frames", 0, stats.framesDropped)
             // Pipeline loss tripwire (heat-robust: ratio, not fps).
             // Halfway between broken (the per-pixel grade bled ~30%) and
             // worst-healthy (10% on a heat-soaked second rung; cool runs
@@ -360,6 +371,9 @@ class DirectLogRecordDeviceTest {
                     assertTrue("No steady-state cadence windows", windows.isNotEmpty())
                     assertTrue("Unstable one-second frame counts: $windows", windows.all { it >= stableFps - 1 })
                     assertTrue("Steady p95 frame gap exceeds cadence", gaps[(gaps.size * .95).toInt()] <= 1_200_000L / stableFps)
+                    if (InstrumentationRegistry.getArguments().getString("zeroDrops") == "true")
+                        assertTrue("Missing steady-state sensor interval: ${gaps.last()} us",
+                            gaps.last() <= 1_500_000L / stableFps)
                 }
                 Log.i(TAG, "RCD cadence fullSecondCounts=$windows steadyGapUs=" +
                     if (gaps.isEmpty()) "none" else "min=${gaps.first()} p50=${gaps[gaps.size / 2]} p95=${gaps[(gaps.size * .95).toInt()]} max=${gaps.last()}")
