@@ -1389,7 +1389,7 @@ class DirectLogRecorder(
         val realtime = c.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
             CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
         try {
-            val rec = MotionRecorder(appContext, stabOrientation, stabFront, realtime)
+            val rec = MotionRecorder(appContext, realtime, stabOrientation, stabFront, mapGyroToCamera = true)
             if (rec.start()) {
                 stabMotion = rec
                 stabTableArmed = true

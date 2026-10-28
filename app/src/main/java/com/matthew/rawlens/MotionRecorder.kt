@@ -25,15 +25,20 @@ import java.util.concurrent.atomic.AtomicLong
  * aren't realtime rather than writing a shifted timeline. The committer
  * rebases samples to recording-relative on write (see [RawVideoRecorder]).
  *
- * Gyro axes are mapped to the camera frame with [GyroCameraFrameMapper]
- * before chunking; accel keeps platform axes with gravity, per the
- * container contract (rad/s vs m/s^2).
+ * Axes: by default gyro and accel both keep the raw Android sensor axes
+ * (RAW video: CRAW SPEC 6, container meta `imuAxes: "android"`). Motion tools
+ * such as Gyroflow need every sensor in the same axes; readers map to the
+ * image from `sensorOrientation` / `lensFacing`. RAW takes recorded before
+ * this carry `gyroMapperVersion: 1` and mapped gyro, which readers undo.
+ * [mapGyroToCamera] maps gyro with [GyroCameraFrameMapper] for consumers of
+ * that pipeline's camera frame (the Direct Log stabilization table).
  */
 internal class MotionRecorder(
     context: Context,
-    private val sensorOrientationDeg: Int,
-    private val frontFacing: Boolean,
     private val realtimeTimestamps: Boolean,
+    private val sensorOrientationDeg: Int = 0,
+    private val frontFacing: Boolean = false,
+    private val mapGyroToCamera: Boolean = false,
 ) {
     data class Chunk(
         val timestampsNs: LongArray, // ascending, boot-time ns
@@ -64,7 +69,7 @@ internal class MotionRecorder(
             if (event.sensor.type == Sensor.TYPE_GYROSCOPE ||
                 event.sensor.type == Sensor.TYPE_GYROSCOPE_UNCALIBRATED
             ) {
-                val (x, y, z) = try {
+                val (x, y, z) = if (!mapGyroToCamera) Triple(v[0], v[1], v[2]) else try {
                     GyroCameraFrameMapper.map(
                         v[0], v[1], v[2], sensorOrientationDeg, frontFacing
                     )
