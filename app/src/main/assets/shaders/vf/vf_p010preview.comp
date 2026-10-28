@@ -50,11 +50,29 @@ void main() {
     if (any(greaterThanEqual(ij, p.u_dims))) return;
     int box = p.u_strides.w;
     float ySum = 0.0;
-    for (int dy = 0; dy < box; ++dy) {
-        int oy = min(ij.y * box + dy, p.u_srcDims.y - 1);
-        for (int dx = 0; dx < box; ++dx) {
-            int ox = min(ij.x * box + dx, p.u_srcDims.x - 1);
-            ySum += float(yCodeAt(ox, oy));
+    // Native validates an exact even box. For boxes <=128 every sum of
+    // 10-bit codes is below 2^24: integer accumulation is exactly the same
+    // as the original fp32 additions. Read each aligned Y word once rather
+    // than separately fetching its two 16-bit components. Odd padded row
+    // strides and larger boxes retain the general original path below.
+    bool packedBox = box <= 128 && (p.u_strides.x & 1) == 0;
+    if (packedBox) {
+        uint total = 0u;
+        for (int dy = 0; dy < box; ++dy) {
+            uint base = uint(ij.y * box + dy) * uint(p.u_strides.x) + uint(ij.x * box);
+            for (int dx = 0; dx < box; dx += 2) {
+                uint pair = words[(base + uint(dx)) >> 1u];
+                total += ((pair & 0xffffu) >> 6u) + (pair >> 22u);
+            }
+        }
+        ySum = float(total);
+    } else {
+        for (int dy = 0; dy < box; ++dy) {
+            int oy = min(ij.y * box + dy, p.u_srcDims.y - 1);
+            for (int dx = 0; dx < box; ++dx) {
+                int ox = min(ij.x * box + dx, p.u_srcDims.x - 1);
+                ySum += float(yCodeAt(ox, oy));
+            }
         }
     }
     int hbox = box / 2;
@@ -76,7 +94,7 @@ void main() {
     float v = vSum / float(hbox * hbox);
     // Limited-range -> unorm, then the inverse of vf_gradeyuv's rgbToYuv
     // (BT.709, Kr = 0.2126, Kb = 0.0722). The P010 already holds
-    // sRGB-encoded components, so this lands directly in display RGB.
+    // profile-encoded components, so this lands directly in display RGB.
     float yn = (y - 64.0) / (940.0 - 64.0);
     float cb = (u - 64.0) / (960.0 - 64.0) - 0.5;
     float cr = (v - 64.0) / (960.0 - 64.0) - 0.5;
