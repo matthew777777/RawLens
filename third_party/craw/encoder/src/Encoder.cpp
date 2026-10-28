@@ -566,6 +566,39 @@ size_t encodeTileLive2(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, 
                     return vreinterpretq_u16_s16(veorq_s16(vshlq_n_s16(e, 1), vshrq_n_s16(e, 15)));
                 };
                 uint16x8_t vmx = vdupq_n_u16(mx);
+                if (j.d->bitDepth <= 14 && x + 8 < tw) {
+                    // Samples < 2^14: L + U + UL + UR fits 16 bits, so predict in
+                    // 16-bit lanes ((sum + 2) >> 2 as a rounding shift). Only the
+                    // current and up rows are loaded; left, up-left and up-right
+                    // come from lane shifts of the neighbouring loads (2 loads per
+                    // 8 cells instead of 5). The look-ahead up load may read past
+                    // the tile; those lanes are never used.
+                    auto pred16 = [](uint16x8_t L, uint16x8_t U, uint16x8_t UL, uint16x8_t UR) {
+                        return vrshrq_n_u16(vaddq_u16(vaddq_u16(L, U), vaddq_u16(UL, UR)), 2);
+                    };
+                    // Lane 7 of the "previous" vectors must hold cell x - 1: load
+                    // from cell x - 1 (always inside the row) and broadcast lane 0.
+                    uint16x8x2_t prevCur = vld2q_u16(src + 2 * x - 2), prevUp = vld2q_u16(up + 2 * x - 2);
+                    for (int c = 0; c < 2; ++c) {
+                        prevCur.val[c] = vdupq_laneq_u16(prevCur.val[c], 0);
+                        prevUp.val[c] = vdupq_laneq_u16(prevUp.val[c], 0);
+                    }
+                    uint16x8x2_t uu = vld2q_u16(up + 2 * x);
+                    for (; x + 8 < tw; x += 8) {
+                        const uint16x8x2_t cur = vld2q_u16(src + 2 * x);
+                        const uint16x8x2_t nextUp = vld2q_u16(up + 2 * x + 16);
+                        vmx = vmaxq_u16(vmx, vmaxq_u16(cur.val[0], cur.val[1]));
+                        for (int c = 0; c < 2; ++c) {
+                            const uint16x8_t L = vextq_u16(prevCur.val[c], cur.val[c], 7);
+                            const uint16x8_t UL = vextq_u16(prevUp.val[c], uu.val[c], 7);
+                            const uint16x8_t UR = vextq_u16(uu.val[c], nextUp.val[c], 1);
+                            vst1q_u16((c ? u1 : u0) + x, zzv(cur.val[c], pred16(L, uu.val[c], UL, UR)));
+                        }
+                        prevCur = cur;
+                        prevUp = uu;
+                        uu = nextUp;
+                    }
+                }
                 for (; x + 8 < tw; x += 8) {
                     const uint16x8x2_t cur = vld2q_u16(src + 2 * x);
                     vmx = vmaxq_u16(vmx, vmaxq_u16(cur.val[0], cur.val[1]));
@@ -575,6 +608,22 @@ size_t encodeTileLive2(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, 
                     const uint16x8x2_t ur = vld2q_u16(up + 2 * x + 2);
                     vst1q_u16(u0 + x, zzv(cur.val[0], predict(l.val[0], uu.val[0], ul.val[0], ur.val[0])));
                     vst1q_u16(u1 + x, zzv(cur.val[1], predict(l.val[1], uu.val[1], ul.val[1], ur.val[1])));
+                }
+                if (x < tw && tw >= 9) {
+                    // Row end: one vector step over the last 8 cells (overlapping
+                    // cells already coded rewrites the same values) instead of up
+                    // to 7 scalar cells per row; the last cell's up-right clamps to up.
+                    x = tw - 8;
+                    const uint16x8x2_t cur = vld2q_u16(src + 2 * x);
+                    vmx = vmaxq_u16(vmx, vmaxq_u16(cur.val[0], cur.val[1]));
+                    const uint16x8x2_t l = vld2q_u16(src + 2 * x - 2);
+                    const uint16x8x2_t uu = vld2q_u16(up + 2 * x);
+                    const uint16x8x2_t ul = vld2q_u16(up + 2 * x - 2);
+                    uint16x8x2_t ur = vld2q_u16(up + 2 * x + 2);
+                    for (int c = 0; c < 2; ++c) ur.val[c] = vcopyq_laneq_u16(ur.val[c], 7, uu.val[c], 7);
+                    vst1q_u16(u0 + x, zzv(cur.val[0], predict(l.val[0], uu.val[0], ul.val[0], ur.val[0])));
+                    vst1q_u16(u1 + x, zzv(cur.val[1], predict(l.val[1], uu.val[1], ul.val[1], ur.val[1])));
+                    x = tw;
                 }
                 mx = vmaxvq_u16(vmx);
 #endif
@@ -668,9 +717,111 @@ struct TileBuf {
 
 size_t scratchBytes(uint32_t tile);
 
+
+// Desktop Compact (codec 4): tile predictor search and explicit block Rice k.
+int compactPred(const int32_t* p, uint32_t x, uint32_t y, uint32_t w, int32_t first, int mode) {
+    if (!y) return x ? p[y*w+x-1] : first;
+    if (!x) return p[(y-1)*w];
+    const int32_t L=p[y*w+x-1], U=p[(y-1)*w+x], UL=p[(y-1)*w+x-1];
+    const int32_t UR=p[(y-1)*w+std::min(x+1,w-1)];
+    if (mode==1) return med(L,U,UL);
+    if (mode==2) return (L+U+1)>>1;
+    if (mode==3) return (2*L+U+UR+2)>>2;
+    return (L+U+UL+UR+2)>>2;
+}
+template<int Mode>
+void compactResiduals(const int32_t* p,uint32_t w,uint32_t h,int32_t first,uint32_t* u) {
+    for(uint32_t y=0;y<h;++y) {
+        const int32_t* row=p+size_t(y)*w;
+        const int32_t* up=y ? row-w : row;
+        uint32_t* dst=u+size_t(y)*w;
+        dst[0]=zigzag(row[0]-(y ? up[0] : first));
+        if(!y) {for(uint32_t x=1;x<w;++x)dst[x]=zigzag(row[x]-row[x-1]);continue;}
+        uint32_t x=1;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        for(;x+4<w;x+=4) {
+            const int32x4_t L=vld1q_s32(row+x-1),U=vld1q_s32(up+x),UL=vld1q_s32(up+x-1),UR=vld1q_s32(up+x+1);
+            int32x4_t pred;
+            if constexpr(Mode==1) pred=vminq_s32(vmaxq_s32(vsubq_s32(vaddq_s32(L,U),UL),vminq_s32(L,U)),vmaxq_s32(L,U));
+            else if constexpr(Mode==2) pred=vrshrq_n_s32(vaddq_s32(L,U),1);
+            else if constexpr(Mode==3) pred=vrshrq_n_s32(vaddq_s32(vaddq_s32(L,L),vaddq_s32(U,UR)),2);
+            else pred=vrshrq_n_s32(vaddq_s32(vaddq_s32(L,U),vaddq_s32(UL,UR)),2);
+            const int32x4_t e=vsubq_s32(vld1q_s32(row+x),pred);
+            vst1q_u32(dst+x,vreinterpretq_u32_s32(veorq_s32(vshlq_n_s32(e,1),vshrq_n_s32(e,31))));
+        }
+#endif
+        for(;x<w;++x)dst[x]=zigzag(row[x]-compactPred(p,x,y,w,first,Mode));
+    }
+}
+
+int compactK(const uint32_t* u, uint32_t n, uint64_t& cost) {
+    int best=0; cost=UINT64_MAX;
+    for (int k=0;k<=15;++k) {
+        if (uint64_t(n)*(k+1)>=cost) break;
+        uint32_t c=0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        if(n==16) {
+            uint32x4_t sum=vdupq_n_u32(0);
+            const int32x4_t shift=vdupq_n_s32(-k);
+            for(int i=0;i<16;i+=4) {
+                const uint32x4_t q=vshlq_u32(vld1q_u32(u+i),shift);
+                sum=vaddq_u32(sum,vbslq_u32(vcltq_u32(q,vdupq_n_u32(24)),vaddq_u32(q,vdupq_n_u32(1+k)),vdupq_n_u32(49)));
+            }
+            c=vaddvq_u32(sum);
+        } else
+#endif
+        for (uint32_t i=0;i<n;++i) { const uint32_t q=u[i]>>k; c+=q<24 ? q+1+k : 49; }
+        if(c<cost) {cost=c;best=k;}
+    }
+    return best;
+}
+void encodeCompact(const TileJob& j,uint32_t tx,uint32_t ty,uint32_t tw,uint32_t th,
+                   TileBuf& out,uint16_t& maxSample) {
+    const size_t n=size_t(tw)*th, blocks=4*size_t(th)*((tw+15)/16);
+    std::vector<int32_t> p(4*n);
+    for(int c=0;c<4;++c) for(uint32_t y=0;y<th;++y) for(uint32_t x=0;x<tw;++x) {
+        const uint16_t v=j.raw[(2*(ty+y)+(c>>1))*j.stride+2*(tx+x)+(c&1)];
+        p[c*n+size_t(y)*tw+x]=v;maxSample=std::max(maxSample,v);
+    }
+    std::vector<uint32_t> candidate(4*n),best;
+    std::vector<uint8_t> ks(blocks),bestKs;
+    uint64_t bestCost=UINT64_MAX;int modeBest=0;
+    for(int mode=0;mode<4;++mode) {
+        uint64_t cost=0;size_t b=0;
+        for(int c=0;c<4;++c) {
+            auto src=p.data()+c*n;auto dst=candidate.data()+c*n;
+            const int first=1<<(j.d->bitDepth-1);
+            switch(mode) {
+                case 0:compactResiduals<0>(src,tw,th,first,dst);break;
+                case 1:compactResiduals<1>(src,tw,th,first,dst);break;
+                case 2:compactResiduals<2>(src,tw,th,first,dst);break;
+                case 3:compactResiduals<3>(src,tw,th,first,dst);break;
+            }
+        }
+        for(int c=0;c<4;++c) for(uint32_t y=0;y<th;++y) {
+            for(uint32_t x=0;x<tw;x+=16) {
+                uint64_t bits;ks[b++]=uint8_t(compactK(candidate.data()+c*n+size_t(y)*tw+x,std::min(16u,tw-x),bits));cost+=bits;
+            }
+        }
+        if(cost<bestCost) {bestCost=cost;modeBest=mode;best=candidate;bestKs=ks;}
+    }
+    const size_t nibBytes=(blocks+1)/2, coded=2+nibBytes+(bestCost+7)/8, stored=1+8*n;
+    uint8_t* dst=out.reserve(std::max(stored,coded)+16);
+    if(coded>=stored) {
+        dst[0]=1;for(size_t i=0;i<4*n;++i){dst[1+2*i]=uint8_t(p[i]);dst[2+2*i]=uint8_t(p[i]>>8);}out.size=stored;return;
+    }
+    dst[0]=0;dst[1]=uint8_t(modeBest);std::fill(dst+2,dst+2+nibBytes,0);
+    for(size_t b=0;b<blocks;++b) dst[2+b/2]|=uint8_t(bestKs[b]<<(4*(b&1)));
+    BitWriter bw(dst+2+nibBytes);size_t b=0;
+    for(int c=0;c<4;++c) for(uint32_t y=0;y<th;++y) for(uint32_t x=0;x<tw;x+=16)
+        putBlock(bw,best.data()+c*n+size_t(y)*tw+x,int(std::min(16u,tw-x)),bestKs[b++]);
+    out.size=2+nibBytes+bw.finish();
+}
+
 void encodeTile(const TileJob& j, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
                 std::vector<int32_t>& planes, std::vector<uint32_t>& u, std::vector<int64_t>& sums,
                 uint8_t* scratch, TileBuf& out, uint16_t& maxSample) {
+    if (j.d->codec == 4) { encodeCompact(j,tx,ty,tw,th,out,maxSample); return; }
     if (j.d->codec == 2 || j.d->codec == 3) {
         const size_t n = size_t{tw} * th;
         // Encode in place into the tile buffer (no copy).
@@ -767,7 +918,7 @@ template <typename Emit>
 void encodeTiles(const uint16_t* raw, size_t stride, const FrameDesc& d, unsigned threads, Emit&& emit) {
     if (!raw || d.width == 0 || d.height == 0 || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || d.tile == 0 || stride < d.width ||
-        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 3) ||
+        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 4) ||
         (d.cfa == Cfa::RGB && d.codec == 1))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
 
@@ -854,7 +1005,7 @@ size_t encodeSerialInto(const uint16_t* raw, size_t stride, const FrameDesc& d,
                         uint8_t* dst, size_t capacity) {
     if (!raw || !d.width || !d.height || d.width % 2 || d.height % 2 ||
         d.bitDepth < 1 || d.bitDepth > 16 || !d.tile || stride < d.width ||
-        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 3) ||
+        static_cast<int>(d.cfa) > 4 || (d.codec < 1 || d.codec > 4) ||
         (d.cfa == Cfa::RGB && d.codec == 1))
         throw std::invalid_argument("craw::encodeFrame: invalid frame geometry");
     const uint32_t pw = d.width / 2, ph = d.height / 2;

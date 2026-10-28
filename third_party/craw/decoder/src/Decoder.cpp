@@ -164,6 +164,32 @@ inline void unpackFields(const uint8_t* data, const uint8_t* end, uint32_t* dst,
 // Zig-zag residual: 0, -1, 1, -2, 2, ...
 inline int32_t unzig(uint32_t u) { return (u & 1) ? -static_cast<int32_t>((u + 1) >> 1) : static_cast<int32_t>(u >> 1); }
 
+
+// SPEC 3.9, Desktop Compact. Planes are cell ordered.
+void decodeCompact(const uint8_t* d,size_t len,uint32_t w,uint32_t h,int32_t first,int32_t* p) {
+    const size_t blocks=4*size_t(h)*((w+15)/16), nibBytes=(blocks+1)/2,n=size_t(w)*h;
+    if(len<2+nibBytes || d[1]>3) throw DecodeError("craw: bad compact header");
+    BitReader br(d+2+nibBytes,len-2-nibBytes);size_t b=0;
+    for(int c=0;c<4;++c) for(uint32_t y=0;y<h;++y) for(uint32_t x0=0;x0<w;x0+=16) {
+        const int k=(d[2+b/2]>>(4*(b&1)))&15;++b;
+        for(uint32_t x=x0;x<std::min(x0+16,w);++x) {
+            const int q=br.zeros(24);const uint32_t u=q==24 ? br.get(24) : (uint32_t(q)<<k)|br.get(k);
+            int32_t* a=p+c*n;int32_t pred=first;
+            if(!y) {if(x)pred=a[y*w+x-1];}
+            else if(!x) pred=a[(y-1)*w];
+            else {
+                const int32_t L=a[y*w+x-1],U=a[(y-1)*w+x],UL=a[(y-1)*w+x-1],UR=a[(y-1)*w+std::min(x+1,w-1)];
+                pred=d[1]==1 ? med(L,U,UL) : d[1]==2 ? (L+U+1)>>1 : d[1]==3 ? (2*L+U+UR+2)>>2 : (L+U+UL+UR+2)>>2;
+            }
+            // Bound before reconstruction, including malformed escape values.
+            const int64_t v=int64_t(pred)+unzig(u);
+            if(v<0 || v>65535) throw DecodeError("craw: compact sample out of range");
+            a[y*w+x]=int32_t(v);
+        }
+    }
+    if(br.overrun) throw DecodeError("craw: truncated compact data");
+}
+
 // CRAW-Live tile (SPEC 3.6) into four cell-order planes of tw x th.
 // CRAW-Live v2 tile (SPEC 3.7): 4-neighbour prediction, plain or PFOR blocks.
 void decodeTileLive2(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int32_t first, int32_t* planes) {
@@ -289,7 +315,7 @@ void decodeTileLive(const uint8_t* d, size_t len, uint32_t tw, uint32_t th, int3
 
 FrameInfo probeFrame(const uint8_t* p, size_t size) {
     if (!p || size < kHeaderSize) throw DecodeError("craw: payload too small");
-    if (p[0] < 1 || p[0] > 3) throw DecodeError("craw: unknown codec id");
+    if (p[0] < 1 || p[0] > 4) throw DecodeError("craw: unknown codec id");
     FrameInfo f;
     f.bitDepth = p[1];
     if (p[2] > 4 || (p[2] == 4 && p[0] == 1)) throw DecodeError("craw: bad CFA");
@@ -339,10 +365,12 @@ FrameInfo decodeFrame(const uint8_t* p, size_t size, std::vector<uint16_t>& out,
                 const size_t len = rd32(table + 4 * (t + 1)) - rd32(table + 4 * t);
                 if (len < 1) throw DecodeError("craw: empty tile");
                 planes.resize(4 * n);
-                const bool live = f.codec == 2 || f.codec == 3;
+                const bool live = f.codec >= 2;
                 if (d[0] == 1) {
                     if (len != 1 + 8 * n) throw DecodeError("craw: bad stored tile size");
                     for (size_t i = 0; i < 4 * n; ++i) planes[i] = rd16(d + 1 + 2 * i);
+                } else if (d[0] == 0 && f.codec == 4) {
+                    decodeCompact(d,len,tw,th,1 << (f.bitDepth-1),planes.data());
                 } else if (d[0] == 0 && f.codec == 3) {
                     decodeTileLive2(d, len, tw, th, 1 << (f.bitDepth - 1), planes.data());
                 } else if (d[0] == 0 && live) {

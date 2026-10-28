@@ -12,8 +12,11 @@
 
 namespace craw {
 
-// RGB (SPEC 3.8): cell frame carrying a half-size RGB image (codecs 2 and 3).
+// RGB (SPEC 3.8): cell frame carrying a half-size RGB image (codecs 2, 3 and 4).
+#ifndef CRAW_CFA_DEFINED
+#define CRAW_CFA_DEFINED
 enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3, RGB = 4 };
+#endif
 
 struct FrameInfo {
     uint32_t width = 0, height = 0;
@@ -21,7 +24,7 @@ struct FrameInfo {
     Cfa cfa = Cfa::RGGB;
     uint16_t tile = 0, riceInit = 0;
     uint32_t crc = 0;
-    uint8_t codec = 1;    // 1 CRAW-Fast, 2 CRAW-Live
+    uint8_t codec = 1;    // 1 Fast, 2 Live, 3 Live v2, 4 Compact
     bool hasCrc = true;   // frame CRC present (header flags bit 0 clear)
 };
 
