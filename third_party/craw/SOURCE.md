@@ -4,5 +4,5 @@ Apache-2.0. Synced by tools/sync_craw.sh; do not edit here.
 
 | part | repo | commit |
 |------|------|--------|
-| encoder | CinematicRAWStudio-Encoder | 9c2358885abb9b79ebbd05aa98d2b861a2aac0b7 |
-| decoder | CinematicRAWStudio-Decoder | 003934195f77ba27eb3b4e1467de89b88591554e |
+| encoder | CinematicRAWStudio-Encoder | 5564a42675633f5e20b0962306e0779e31eaa1dd |
+| decoder | CinematicRAWStudio-Decoder | eb3648c6d269f743b0ede50cafea2dffa4255160 |

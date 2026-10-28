@@ -12,8 +12,11 @@
 namespace craw {
 
 // RGB (SPEC 3.8): a W x H RGB image stored as a 2W x 2H cell frame, cells
-// (0,0)=R, (0,1)=G, (1,0)=B, (1,1)=0. Codecs 2 and 3 only.
+// (0,0)=R, (0,1)=G, (1,0)=B, (1,1)=0. Codecs 2, 3 and 4.
+#ifndef CRAW_CFA_DEFINED
+#define CRAW_CFA_DEFINED
 enum class Cfa : uint8_t { RGGB = 0, GRBG = 1, GBRG = 2, BGGR = 3, RGB = 4 };
+#endif
 
 struct FrameDesc {
     uint32_t width = 0;      // even
@@ -22,9 +25,10 @@ struct FrameDesc {
     Cfa cfa = Cfa::RGGB;
     uint16_t tile = 128;     // tile edge in plane samples
     uint16_t riceInit = 0;   // 0 = default noise class for bitDepth (codec 1)
-    // 1 = CRAW-Fast (block-adaptive Rice, smallest files),
+    // 1 = CRAW-Fast (block-adaptive Rice),
     // 2 = CRAW-Live (fixed-width block packing, ~3x cheaper; for live capture),
-    // 3 = CRAW-Live v2 (4-neighbour prediction, same packing; 4-11 % smaller than 2).
+    // 3 = CRAW-Live v2 (4-neighbour prediction, fixed packing),
+    // 4 = CRAW-Compact (tile predictor search + explicit Rice; desktop only).
     uint8_t codec = 1;
     // Store a CRC32C of the raw samples in the frame header. The container's
     // per-chunk CRC32C covers the payload either way; turning this off saves a
