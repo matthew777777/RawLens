@@ -46,7 +46,11 @@ internal object CrawMetadata {
         }
         json.put("realtimeTimestamps", realtime)
         json.put("hasMotion", motion)
-        json.put("gyroMapperVersion", GyroCameraFrameMapper.MAPPER_VERSION)
+        // IMU_ samples (gyro and accel) are raw Android sensor axes; readers
+        // map them to the image with sensorOrientation and lensFacing.
+        json.put("imuAxes", "android")
+        json.put("lensFacing", if (chars.get(CameraCharacteristics.LENS_FACING) ==
+            CameraCharacteristics.LENS_FACING_FRONT) "front" else "back")
         // Retain the old field for RawLens readers, but decoders read extraData.
         json.put("audioSampleRate", audioRate)
         val extra = json.optJSONObject("extraData") ?: JSONObject()
@@ -91,6 +95,9 @@ internal object CrawMetadata {
         json.put("awbMode", if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AWB_MODE))
         json.put("exposureCompensationSteps", result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION))
         json.put("digitalZoomRatio", result.get(CaptureResult.CONTROL_ZOOM_RATIO))
+        // Rolling-shutter readout (first to last row, ns): Gyroflow's
+        // frame_readout_time for rolling-shutter correction.
+        result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)?.let { json.put("rollingShutterSkew", it) }
         val rel = maxOf(0L, timestamp - originNs).toString()
         json.put("metadataTimestamp", rel)
         json.put("metadataMatched", true)

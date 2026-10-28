@@ -452,7 +452,7 @@ internal class RawVideoRecorder(
         // recorded in container metadata. Chunks queue behind the first
         // frame; index-based discovery doesn't care about file order.
         if (motionEnabled && appContext != null) {
-            val rec = MotionRecorder(appContext, orientation, front, realtime)
+            val rec = MotionRecorder(appContext, realtime)
             if (rec.start()) {
                 motion = rec
                 hasMotionStream = true
