@@ -13,12 +13,18 @@ import java.nio.ByteOrder
 class PackedRcdDeviceTest {
     private val inst = InstrumentationRegistry.getInstrumentation()
     private val context = inst.targetContext
+    private val cube by lazy {
+        InstrumentationRegistry.getArguments().getString("recordLutPath")?.let { path ->
+            java.io.File(path).reader().use { CubeLut.parse(it) }
+        }
+    }
 
     private fun initialize(local: Int) {
         assumeTrue("Pass -e rawlensPackedRcd true", InstrumentationRegistry.getArguments()
             .getString("rawlensPackedRcd") == "true")
         val rawShader = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         assertEquals(VfVulkan.OK, VfVulkan.initNative(rawShader))
+        assertEquals(VfVulkan.OK,VfLogGrade.recordCubeUploadNative(cube?.rgbaHalfBits(),cube?.size ?: 0,cube?.gpuParameters(1f)))
         assumeTrue("Device lacks float16 arithmetic", VfVulkan.supportsF16MathNative())
         val outputOverride = InstrumentationRegistry.getArguments().getString("packedOutputShader")
         val greenOverride = InstrumentationRegistry.getArguments().getString("packedGreenShader")
@@ -155,7 +161,7 @@ class PackedRcdDeviceTest {
     private fun assertFusedP010(outW: Int, outH: Int) {
         initialize(16)
         assertEquals(VfVulkan.OK, VfLogGrade.initGradeNative(context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }))
-        assertEquals(VfVulkan.OK, VfLogGrade.initGradeYuvNative(context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }))
+        assertEquals(VfVulkan.OK, VfLogGrade.initGradeYuvNative(context.assets.open(VfLogGrade.recordAsset("shaders/vf/vf_gradeyuv.spv",cube != null)).use { it.readBytes() }))
         assertEquals(VfVulkan.OK, VfLogGrade.gradeLutUploadNative(VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)))
         val w = 128; val h = 96
         val raw = VfEglImport.createBayerInput(w, h)!!
@@ -183,7 +189,7 @@ class PackedRcdDeviceTest {
                     while (!VfEglImport.pollSyncFd(fd) && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(2)
                     assertTrue("Separate grade completion", VfEglImport.pollSyncFd(fd))
                 } finally { VfEglImport.closeSyncFd(fd) }
-                assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true))
+                assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true, bakeLut = cube != null))
                 assertEquals(VfVulkan.OK, VfPackedRcd.processYuvNative(raw, fused, ip, fp, grade, strides))
                 var worst = 0
                 for (y in 0 until outH step 7) for (x in 0 until outW step 7) {
@@ -199,7 +205,7 @@ class PackedRcdDeviceTest {
 
     @Test fun asynchronousSlotsPreservePixelsAndGrades() {
         initialize(16)
-        assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true))
+        assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true, bakeLut = cube != null))
         val w = 128; val h = 96
         val inputs = List(3) { VfEglImport.createBayerInput(w, h)!! }
         val outputs = List(3) { VfEglImport.createP010(w, h)!! }
@@ -302,19 +308,20 @@ class PackedRcdDeviceTest {
                 val g = gain(x, y)
                 val neutral = FloatArray(3) { c -> baseline[(y * w + x) * 4 + c] * g[c] * wb[c] }
                 val developed = FloatArray(3) { r -> (0..2).sumOf { c -> (ccm[r * 3 + c] * neutral[c]).toDouble() }.toFloat() }
-                val encoded = when (profile) {
+                var encoded = when (profile) {
                     DirectLogProfile.BT709 -> VfLogGrade.encodePixel709(developed)
                     DirectLogProfile.ACES -> VfLogGrade.encodePixelAces(developed)
                     DirectLogProfile.SLOG3 -> VfLogGrade.encodePixelSlog3(developed)
                     DirectLogProfile.HLG -> VfLogGrade.encodePixelHlg(developed)
                 }
+                if (profile == DirectLogProfile.SLOG3 && cube != null) encoded = cube!!.apply(encoded)
                 val kr = if (profile == DirectLogProfile.HLG) .2627f else .2126f
                 val kb = if (profile == DirectLogProfile.HLG) .0593f else .0722f
                 val luma = kr * encoded[0] + (1 - kr - kb) * encoded[1] + kb * encoded[2]
                 return floatArrayOf(luma, (encoded[2] - luma) / (2 * (1 - kb)) + .5f,
                     (encoded[0] - luma) / (2 * (1 - kr)) + .5f)
             }
-            assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true))
+            assertEquals(VfVulkan.OK, VfPackedRcd.init(context, fused = true, bakeLut = cube != null))
             for ((ow, oh) in listOf(w to h, 64 to 48)) {
                 val output = VfEglImport.createP010(ow, oh)!!
                 try {
