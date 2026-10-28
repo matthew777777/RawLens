@@ -1,8 +1,7 @@
 # RawLens 2.0
 
-RawLens 2.0 rebuilds exposure on published camera software, adds handheld
-multi-frame super-resolution, and records RAW and Direct Log video faster
-and in a new container. The full list is in [CHANGELOG.md](CHANGELOG.md).
+RawLens 2.0 refreshes the app based on published camera software, adds handheld
+multi-frame super-resolution, and RAW Video in a new container Cinematic RAW Studio; RAW and Direct Log video records faster. The full list is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Exposure
 
@@ -25,6 +24,9 @@ and in a new container. The full list is in [CHANGELOG.md](CHANGELOG.md).
   captured just before it into a single cleaner photo, using natural hand
   shake for sub-pixel detail and leaving out blurred frames or frames taken
   while focus or exposure was still adjusting.
+- **Vendor keys** per lens (OEM request/session keys such as Xiaomi's DCG
+  operating mode): typed key aliases, modern session configuration,
+  bounded fallback, strict import, atomic profile edits
 - **HDR+** merges are faster (Fast 4.6 → 3.5 s on the test phone) with
   identical results.
 - **Highlight reconstruction** now uses darktable's "inpaint opposed" method
@@ -37,15 +39,14 @@ and in a new container. The full list is in [CHANGELOG.md](CHANGELOG.md).
 ## Video
 
 - **RAW video** is saved as `.craw` (Cinematic RAW Studio): lossless, about
-  5 % smaller with the new default codec, 32-bit float audio that cannot clip
-  digitally, and stereo level meters. Binning now records half-resolution
+  15 % smaller with the new default codec, hq audio, and stereo level meters. Binning now records half-resolution
   RGB, so desktop tools no longer show colour fringes.
 - **Direct Log** can record with the RCD demosaic in real time: 4K at 24 fps,
   1440p and 1080p at 30 fps. A new **ACES** look is available.
 
 ## Other
 
-- New Exposure settings tab, clearer feature tags and lens selector, a video
+- New UI design, clearer feature tags and lens selector, a video
   quick panel with torch, and gallery access from the camera screen.
 - Many reliability fixes, including an MFSR crash when saving JPEG and DNG
   together, and captures that no longer stop when one frame fails.
