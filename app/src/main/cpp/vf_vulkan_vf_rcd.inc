@@ -549,6 +549,7 @@ Java_com_matthew_rawlens_VfRcd_rcdFusedYuvSubmitNative(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->rcdYuvPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             g->rcdYuvPipelineLayout, 0, 1, &g->rcdYuvSets[slot], 0, nullptr);
+    bindRecordCube(g, cmd, g->rcdYuvPipelineLayout);
     // Crop-domain dispatch (the shared CFA tile needs crop locality);
     // only canonical export samplers pack (see vf_rcdyuv.comp).
     const uint32_t gx = (uint32_t)(params.cDims[0] + 15) / 16;

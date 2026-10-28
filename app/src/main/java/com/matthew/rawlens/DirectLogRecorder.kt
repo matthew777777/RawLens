@@ -185,6 +185,14 @@ class DirectLogRecorder(
      */
     @Volatile var recordingCrop: VideoCrop = VideoCrop.WIDE_16_9
     @Volatile var logProfile: DirectLogProfile = DirectLogProfile.BT709
+    /** Optional user-owned S-Gamut3.Cine/S-Log3 -> SDR Rec.709 cube, frozen per take. */
+    internal var recordLut: CubeLut? = null
+    internal var recordLutIntensity: Float = 1f
+    /** Test-only timing of submission backpressure; disabled in normal recording. */
+    internal var diagnoseFrameStages = false
+    private var sessionRecordLut: CubeLut? = null
+    private var sessionLutIntensity = 1f
+    private val outputProfile get() = if (sessionRecordLut != null) DirectLogProfile.BT709 else sessionProfile
     /** Effective profile for this take (snapshot of [logProfile]). */
     private var sessionProfile: DirectLogProfile = DirectLogProfile.BT709
     /**
@@ -589,6 +597,12 @@ class DirectLogRecorder(
         videoTrack = -1; muxerStarted = false
         heatThermalStatus = 0; heatDegraded = false
         sessionProfile = logProfile
+        sessionRecordLut = recordLut
+        sessionLutIntensity = recordLutIntensity
+        require(sessionRecordLut == null || sessionProfile == DirectLogProfile.SLOG3) {
+            "Recorded LUT input must be S-Gamut3.Cine/S-Log3"
+        }
+        require(sessionLutIntensity.isFinite() && sessionLutIntensity in 0f..1f)
         synchronized(resultLock) { captureResults.clear() }
         lastResult = null
         eosSeen = CountDownLatch(1)
@@ -676,11 +690,15 @@ class DirectLogRecorder(
         // Vulkan pipelines (idempotent; shared device with the viewfinder).
         val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val f16spv = appContext.assets.open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
-        val yuvspv = appContext.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
+        val bakeLut = sessionRecordLut != null
+        val yuvspv = appContext.assets.open(VfLogGrade.recordAsset("shaders/vf/vf_gradeyuv.spv", bakeLut)).use { it.readBytes() }
         val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
         VfVulkan.setPipelineCachePathNative(
             VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
+        val cube = sessionRecordLut
+        check(VfLogGrade.recordCubeUploadNative(cube?.rgbaHalfBits(), cube?.size ?: 0,
+            cube?.gpuParameters(sessionLutIntensity)) == VfVulkan.OK) { "Recorded LUT upload failed" }
         check(VfVulkan.initF16Native(f16spv) == VfVulkan.OK) { "f16 init failed" }
         // Grade init first: twin command buffers + isolated sets live with
         // it and the yuv submit reuses them.
@@ -702,7 +720,7 @@ class DirectLogRecorder(
                 // Mali test phone (MT6878) the f16 twin is SLOWER, 4K fused
                 // 34.9-35.0 ms vs 33.1-34.1 ms (and MHC-only 31.5 vs 26.4).
                 // Re-enable per GPU only with a measurement that wins.
-                val asset = VfLogGrade.fusedAsset(f16Math = false)
+                val asset = VfLogGrade.recordAsset(VfLogGrade.fusedAsset(f16Math = false), bakeLut)
                 Log.i(TAG, "fused asset $asset")
                 val fusedspv = appContext.assets.open(asset).use { it.readBytes() }
                 if (VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) {
@@ -727,7 +745,7 @@ class DirectLogRecorder(
             // Video uses Packed RCD; the still-photo RCD pipeline stays independent.
             try {
                 val fused = width % 2 == 0 && height % 2 == 0
-                var rc = VfPackedRcd.init(appContext, fused = fused)
+                var rc = VfPackedRcd.init(appContext, fused = fused, bakeLut = bakeLut)
                 var selectedFused = fused
                 if (rc != VfVulkan.OK && fused) {
                     rc = VfPackedRcd.init(appContext, fused = false)
@@ -761,6 +779,8 @@ class DirectLogRecorder(
                 else -> "superpixel-fallback"
             }
         )
+        // The monitor consumes already baked pixels; never apply the input LUT twice.
+        previewView?.configureMonitor(outputProfile)
         // Upload one neutral warp LUT BEFORE the camera streams (creation
         // + upload ≈ 17ms). The record shaders ignore the fetch (direct
         // encode, no look) but the native gate requires the upload; the
@@ -807,7 +827,7 @@ class DirectLogRecorder(
         for (candidate in LogVideoProbe.encodeCandidates(width, height)) {
             val cw = candidate.width
             val ch = candidate.height
-            val colors = sessionProfile.targetColors()
+            val colors = outputProfile.targetColors()
                 .copy(width = cw, height = ch, fps = fps, bitrate = bitrate)
             // Advertised picks first; the force pick (any HW encoder covering
             // the rung, regardless of advertised profile) follows because
@@ -941,7 +961,7 @@ class DirectLogRecorder(
                     tried += "${cw}x$ch@${fps}fps: no HW Main encoder"
                     continue
                 }
-                val colors = sessionProfile.targetColors()
+                val colors = outputProfile.targetColors()
                     .copy(
                         width = cw, height = ch, fps = fps, bitrate = bitrate,
                         profile = MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
@@ -1007,13 +1027,13 @@ class DirectLogRecorder(
         gpuWriterMode = writerMode && preferRcdGpuWriter && usePackedRcdFused
         Log.i(TAG, "RCD GPU writer=$gpuWriterMode")
         codec = encoder
-        val target = sessionProfile.targetColors()
+        val target = outputProfile.targetColors()
             .copy(width = width, height = height, fps = fps, bitrate = bitrate)
         val inputLabel = when {
             eightBitMode -> LogVideoProbe.EncoderInputMode.SDR_EGL
             else -> inputMode
         }
-        Log.i(TAG, "output profile=${sessionProfile.name} codec=$codecName input=$inputLabel " +
+        Log.i(TAG, "output profile=${outputProfile.name} inputProfile=${sessionProfile.name} lutBaked=${sessionRecordLut != null} codec=$codecName input=$inputLabel " +
             "cs=${target.colorStandard} xfer=${target.colorTransfer} range=${target.colorRange}")
         encoder.start()
         if (previewEnabled) {
@@ -1187,7 +1207,7 @@ class DirectLogRecorder(
             fallbackWaits = fallbackWaits.get(),
             cpuChainMsAvg = cpuChainMsAvg,
             previewFrames = previewCount.get(),
-            profile = sessionProfile.name,
+            profile = outputProfile.name,
             demosaic = when {
                 useRcd -> "RCD"
                 useFused -> "MHC"
@@ -1539,7 +1559,8 @@ class DirectLogRecorder(
         return Stats(
             sensorSize = "${rawSize?.width}x${rawSize?.height}",
             cropRect = cropRect?.let { "${it.width}x${it.height}@(${it.left},${it.top})" } ?: "?",
-            exportSize = "${exportSize?.width}x${exportSize?.height}",
+            // The compute intermediate can differ from the negotiated encode.
+            exportSize = "${width}x${height}",
             framesAcquired = acquired.get(),
             framesGraded = graded.get(),
             framesDropped = dropped.get(),
@@ -1578,7 +1599,7 @@ class DirectLogRecorder(
             fileBytes = outputFile?.length() ?: 0L,
             thermalStatus = heatThermalStatus,
             heatDegraded = heatDegraded,
-            profile = sessionProfile.name,
+            profile = outputProfile.name,
             hasStabGyro = stabSamples > 0,
             stabGyroSamples = stabSamples,
         )
@@ -1767,12 +1788,16 @@ class DirectLogRecorder(
         // record path; superpixel + grade-YUV (two dispatches, same-queue
         // ordered) is the session fallback.
         val mc = codec ?: return false
+        val slotReadyNs = if (diagnoseFrameStages) SystemClock.elapsedRealtimeNanos() else 0L
+        var writerReadyNs = slotReadyNs
+        var writerFencedNs = slotReadyNs
         var writerImage: Image? = null
         var writerBuffer: android.hardware.HardwareBuffer? = null
         val strides: IntArray
         val p010Buf: android.hardware.HardwareBuffer
         if (gpuWriterMode) {
             writerImage = (imageWriter ?: error("GPU writer gone")).dequeueInputImage()
+            if (diagnoseFrameStages) writerReadyNs = SystemClock.elapsedRealtimeNanos()
             try {
                 // getHardwareBuffer does not consume ImageWriter's acquire fence
                 // (getPlanes would). The previous encoder read must finish before
@@ -1782,6 +1807,7 @@ class DirectLogRecorder(
                         check(!fence.isValid || fence.await(java.time.Duration.ofSeconds(1))) { "Encoder buffer acquire fence timed out" }
                     }
                 } else error("GPU writer needs Android 13+")
+                if (diagnoseFrameStages) writerFencedNs = SystemClock.elapsedRealtimeNanos()
                 writerBuffer = writerImage.hardwareBuffer ?: error("Writer has no hardware buffer")
                 val layout = VfEglImport.describeP010(writerBuffer) ?: error("Writer P010 layout unavailable")
                 strides = intArrayOf(layout[0], layout[1], width, height)
@@ -1814,6 +1840,7 @@ class DirectLogRecorder(
             error("P010 staging layout mismatch (see logcat); aborting take")
         }
         var gpuComplete = usePackedRcd && usePackedRcdFused && fd == -1
+        val submittedNs = if (diagnoseFrameStages) SystemClock.elapsedRealtimeNanos() else 0L
         if (fd < 0 && !gpuComplete) {
             Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
             dropped.incrementAndGet()
@@ -1831,6 +1858,13 @@ class DirectLogRecorder(
         // throws, never gates: any skip keeps an older monitor frame).
         var copyFd = fd
         val previewFd = submitPreview(s, slotIndex, writerBuffer, strides)
+        if (diagnoseFrameStages && frameCounter % 30L == 0L) {
+            val now = SystemClock.elapsedRealtimeNanos()
+            Log.i(TAG, "RCD phases slotMs=${(slotReadyNs-chainStartNs)/1e6} " +
+                "writerDequeueMs=${(writerReadyNs-slotReadyNs)/1e6} " +
+                "writerFenceMs=${(writerFencedNs-writerReadyNs)/1e6} " +
+                "submitMs=${(submittedNs-writerFencedNs)/1e6} previewMs=${(now-submittedNs)/1e6}")
+        }
         if (previewFd >= 0) {
             if (fd >= 0) VfEglImport.closeSyncFd(fd)
             copyFd = previewFd

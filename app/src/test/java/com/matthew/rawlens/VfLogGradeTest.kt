@@ -65,9 +65,9 @@ class VfLogGradeTest {
 
     @Test
     fun slog3BlackIsZeroWhiteIsMidLog() {
-        assertEquals(0f, VfLogGrade.slog3(0f), 1e-6f)
+        assertEquals(0f, VfLogGrade.workingLog(0f), 1e-6f)
         // S-Log3 maps reference white to ~0.5 (log compression signature).
-        assertEquals(0.4972f, VfLogGrade.slog3(1f), 1e-3f)
+        assertEquals(0.4972f, VfLogGrade.workingLog(1f), 1e-3f)
     }
 
     @Test
@@ -75,30 +75,30 @@ class VfLogGradeTest {
         val c = VfLogGrade.LOG_CUT
         val e = 1e-6f
         // Continuous by construction: toe meets the log branch at the cut.
-        assertEquals(VfLogGrade.slog3(c), VfLogGrade.slog3(c - e), 1e-4f)
-        assertEquals(VfLogGrade.slog3(c), VfLogGrade.slog3(c + e), 1e-4f)
+        assertEquals(VfLogGrade.workingLog(c), VfLogGrade.workingLog(c - e), 1e-4f)
+        assertEquals(VfLogGrade.workingLog(c), VfLogGrade.workingLog(c + e), 1e-4f)
     }
 
     @Test
     fun slog3MonotonicAndCompressive() {
-        var prev = VfLogGrade.slog3(0f)
+        var prev = VfLogGrade.workingLog(0f)
         var x = 0.05f
         while (x <= 2f) {
-            val v = VfLogGrade.slog3(x)
+            val v = VfLogGrade.workingLog(x)
             assertTrue("not monotonic at $x", v > prev)
             prev = v
             x += 0.05f
         }
         // Highlights compress: the 1.0->2.0 step is smaller than 0.0->0.5.
-        val lowGain = VfLogGrade.slog3(0.5f) - VfLogGrade.slog3(0f)
-        val highGain = VfLogGrade.slog3(2f) - VfLogGrade.slog3(1f)
+        val lowGain = VfLogGrade.workingLog(0.5f) - VfLogGrade.workingLog(0f)
+        val highGain = VfLogGrade.workingLog(2f) - VfLogGrade.workingLog(1f)
         assertTrue("not compressive: low=$lowGain high=$highGain", highGain < lowGain)
     }
 
     @Test
     fun slog3MidGrayLandsNearPointFourTwo() {
         // Anchors the device readback expectation for ~0.5 linear input.
-        assertEquals(0.4214f, VfLogGrade.slog3(0.5f), 1e-3f)
+        assertEquals(0.4214f, VfLogGrade.workingLog(0.5f), 1e-3f)
     }
 
     @Test
@@ -202,8 +202,11 @@ class VfLogGradeTest {
             assertEquals("at $x", x, rt, 2e-4f * x.coerceAtLeast(1e-3f))
             x *= 1.25f
         }
-        // Codes below the black pedestal clip to 0, never negative.
-        assertEquals(0f, VfLogGrade.invSonySlog3(0f), 0f)
+        // Sony's linear toe extends below black; clipping here changes hue.
+        assertEquals(-0.0140237f, VfLogGrade.invSonySlog3(0f), 1e-7f)
+        for (signed in listOf(-0.1f, -0.01f, -0.001f, 0f)) {
+            assertEquals(signed, VfLogGrade.invSonySlog3(VfLogGrade.sonySlog3(signed)), 1e-7f)
+        }
     }
 
     @Test
@@ -294,10 +297,10 @@ class VfLogGradeTest {
 
     @Test
     fun invSlog3RoundTrips() {
-        assertEquals(0f, VfLogGrade.invSlog3(0f), 1e-7f)
+        assertEquals(0f, VfLogGrade.inverseWorkingLog(0f), 1e-7f)
         var x = 0.001f
         while (x <= 2f) {
-            val rt = VfLogGrade.invSlog3(VfLogGrade.slog3(x))
+            val rt = VfLogGrade.inverseWorkingLog(VfLogGrade.workingLog(x))
             assertEquals("at $x", x, rt, 1e-4f * x.coerceAtLeast(1e-3f))
             x *= 1.25f
         }

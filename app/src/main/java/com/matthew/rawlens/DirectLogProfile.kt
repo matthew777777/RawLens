@@ -9,8 +9,7 @@ import android.media.MediaFormat
  *
  * All profiles share the front end (MHC demosaic, per-frame WB/CCM, LOG gain);
  * they differ only in the output transfer, gamut matrix, and container
- * signalling. The enum is the extension point for later work (full
- * S-Gamut3/S-Log3, further log curves, technical/creative LUTs): a new
+ * signalling. The enum is the extension point for later work (further log curves, technical/creative LUTs): a new
  * profile adds a wire id, an encode branch in the two record shaders
  * (`vf_gradeyuv.comp`, `vf_mhcyuv.comp`), a CPU golden in [VfLogGrade],
  * and container colors here.
@@ -29,7 +28,7 @@ enum class DirectLogProfile(
     /** Ready-to-watch SDR: linear -> BT.709 OETF -> BT.709 YUV. Default. */
     BT709(0, "709", "_LOG709"),
 
-    /** Flat log for later grading: linear -> Sony S-Log3 -> BT.709 YUV. */
+    /** Flat log for later grading: linear sRGB -> S-Gamut3.Cine -> Sony S-Log3 -> BT.709 YUV. */
     SLOG3(1, "SLOG3", "_LOGSLOG3"),
 
     /** Ready-to-watch HDR: linear sRGB -> BT.2020 -> HLG OETF -> BT.2020 YUV. */
@@ -42,7 +41,7 @@ enum class DirectLogProfile(
     val description: String get() = when (this) {
         BT709 -> "BT.709"
         ACES -> "BT.709 / ACES fitted / gamma 2.4"
-        SLOG3 -> "BT.709 primaries / S-Log3"
+        SLOG3 -> "S-Gamut3.Cine / S-Log3"
         HLG -> "BT.2020 / HLG"
     }
 

@@ -4,6 +4,10 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_GOOGLE_include_directive : require
 
+#ifdef RECORD_CUBE
+#include "../record_cube.glsl"
+#endif
+
 #include "rcd_common.glsl"
 
 layout(local_size_x_id = 12, local_size_y_id = 13, local_size_z = 1) in;
@@ -164,12 +168,19 @@ vec3 srgbToBt2020(vec3 v) {
         dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
 }
 
+// BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
+vec3 srgbToSgamut3Cine(vec3 v) {
+    return vec3(dot(v, vec3(0.6456794776, 0.2591145470, 0.0952059754)),
+        dot(v, vec3(0.0875299915, 0.7596995626, 0.1527704459)),
+        dot(v, vec3(0.0369574199, 0.1292809048, 0.8337616753)));
+}
+// END generated Sony gamut
+
 float slog3cutY() {
     return (420.0 + log2((0.01125 + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
 }
 
 float sonySlog3(float x) {
-    x = max(x, 0.0);
     if (x >= 0.01125) {
         return (420.0 + log2((x + 0.01) / 0.19) * 0.30102999566 * 261.5) / 1023.0;
     }
@@ -177,7 +188,13 @@ float sonySlog3(float x) {
 }
 
 vec3 slogEncode(vec3 v) {
-    return vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+    v = srgbToSgamut3Cine(v);
+    vec3 encoded = vec3(sonySlog3(v.r), sonySlog3(v.g), sonySlog3(v.b));
+#ifdef RECORD_CUBE
+    return applyRecordLut(encoded);
+#else
+    return encoded;
+#endif
 }
 
 // Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.

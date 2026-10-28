@@ -15,8 +15,8 @@ import kotlin.math.sqrt
  *
  * BT.709, S-Log3 and HLG apply no contrast curve or saturation; ACES fitted
  * has a filmic rendering and display gamma 2.4. For the direct profiles: each output pixel is the developed linear value through the
- * profile's transfer function only. The S-shaped contrast warp and
- * saturation below ([slog3], [contrastCurve], [saturate], [bakeLut],
+ * profile's gamut conversion and transfer function. The S-shaped contrast warp and
+ * saturation below ([workingLog], [contrastCurve], [saturate], [bakeLut],
  * [developLinear]) are DORMANT reference code — still unit-tested, not on
  * the record path — reserved for the upcoming look/LUT work.
  */
@@ -78,18 +78,18 @@ internal object VfLogGrade {
      * black): it only ever fed the developed contrast warp. The live
      * log curve is [sonySlog3].
      */
-    fun slog3(x: Float): Float {
+    fun workingLog(x: Float): Float {
         val c = x.coerceAtLeast(0f)
         return if (c >= LOG_CUT) {
             (420.0 + Math.log10(((c + 0.01) / 0.4625).toDouble()) * 261.5).toFloat() / 1023f
         } else {
             // Linear toe through the cut point: continuous by construction.
-            c * slog3(LOG_CUT) / LOG_CUT
+            c * workingLog(LOG_CUT) / LOG_CUT
         }
     }
 
     /** Contrast pivot: 18% gray in log domain, so contrast preserves mids by definition. */
-    val LOG_PIVOT = slog3(0.18f)
+    val LOG_PIVOT = workingLog(0.18f)
 
     /**
      * DORMANT contrast S-curve around [LOG_PIVOT] (CPU bake only).
@@ -112,9 +112,9 @@ internal object VfLogGrade {
         else 1.055f * c.toDouble().pow(1.0 / 2.4).toFloat() - 0.055f
     }
 
-    /** DORMANT inverse of [slog3]: log working space back to scene-linear. */
-    fun invSlog3(y: Float): Float {
-        val cutY = slog3(LOG_CUT)
+    /** DORMANT inverse of [workingLog]: log working space back to scene-linear. */
+    fun inverseWorkingLog(y: Float): Float {
+        val cutY = workingLog(LOG_CUT)
         return if (y >= cutY) {
             (0.4625 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5).toDouble()) - 0.01).toFloat()
                 .coerceAtLeast(0f)
@@ -136,7 +136,7 @@ internal object VfLogGrade {
      */
     fun developLinear(developed: FloatArray, contrast: Float): FloatArray {
         require(developed.size == 3)
-        return FloatArray(3) { invSlog3(contrastCurve(slog3(developed[it]), contrast)) }
+        return FloatArray(3) { inverseWorkingLog(contrastCurve(workingLog(developed[it]), contrast)) }
     }
 
     /** 1D warp LUT length over [2^-10, 2^4] (mirrors the shader). */
@@ -197,9 +197,11 @@ internal object VfLogGrade {
      * (Sony S-Log3 whitepaper). Anchors: 0 -> 95/1023, 0.01125 ->
      * ~171.21/1023, 18% gray -> 420/1023, 90% white -> ~597.9/1023.
      * JVM-testable golden for [DirectLogProfile.SLOG3].
+     * Signed input uses Sony's linear toe below the cut; no per-channel clamp.
+     * Only final YUV storage clips to its representable range.
      */
     fun sonySlog3(x: Float): Float {
-        val c = x.coerceAtLeast(0f)
+        val c = x
         return if (c >= SLOG3_CUT) {
             (420.0 + Math.log10(((c + 0.01) / 0.19).toDouble()) * 261.5).toFloat() / 1023f
         } else {
@@ -216,7 +218,7 @@ internal object VfLogGrade {
             (0.19 * 10.0.pow(((y * 1023.0 - 420.0) / 261.5).toDouble()) - 0.01).toFloat()
                 .coerceAtLeast(0f)
         } else {
-            ((y - blackY) * SLOG3_CUT / (cutY - blackY)).coerceAtLeast(0f)
+            ((y - blackY) * SLOG3_CUT / (cutY - blackY))
         }
     }
 
@@ -322,7 +324,8 @@ internal object VfLogGrade {
 
     fun encodePixelSlog3(developed: FloatArray): FloatArray {
         require(developed.size == 3)
-        return FloatArray(3) { sonySlog3(developed[it]) }
+        val cine = SonyGamut.fromLinearSrgb(developed)
+        return FloatArray(3) { sonySlog3(cine[it]) }
     }
 
     /** Daylight-ish probe gains (R, G, B, spare) and identity CCM. */
@@ -413,6 +416,10 @@ internal object VfLogGrade {
 
     /** Upload a baked warp LUT (129 RGBA half words); required before any grade submit. */
     external fun gradeLutUploadNative(halfBits: ShortArray): Int
+    external fun recordCubeUploadNative(rgba: ShortArray?, size: Int, parameters: FloatArray?): Int
+
+    fun recordAsset(asset: String, bakeLut: Boolean): String =
+        if (bakeLut) asset.removeSuffix(".spv") + "_cube.spv" else asset
 
     /** Create the grade-YUV pipeline from SPIR-V bytes. Idempotent. */
     external fun initGradeYuvNative(spv: ByteArray): Int

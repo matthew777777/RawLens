@@ -90,7 +90,9 @@ static bool createPackedRcd(Context* ctx, const std::vector<std::vector<uint32_t
     if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &s.setLayout) != VK_SUCCESS) return false;
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RcdParams)};
     VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layout.setLayoutCount = 1; layout.pSetLayouts = &s.setLayout;
+    if (!ensureRecordCubeLayout(ctx)) return false;
+    const VkDescriptorSetLayout recordLayouts[2] = {s.setLayout, ctx->recordCube.layout};
+    layout.setLayoutCount = 2; layout.pSetLayouts = recordLayouts;
     layout.pushConstantRangeCount = 1; layout.pPushConstantRanges = &push;
     if (vkCreatePipelineLayout(ctx->device, &layout, nullptr, &s.layout) != VK_SUCCESS) return false;
     const VkSpecializationMapEntry entries[4] = {{12, 0, 4}, {13, 4, 4}, {14, 8, 4}, {15, 12, 4}};

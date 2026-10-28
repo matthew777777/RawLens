@@ -6,10 +6,12 @@ import android.hardware.HardwareBuffer
 
 /** Separate packed-ratio variant from third_party/rcd-packed-upstream. */
 internal object VfPackedRcd {
-    fun init(context: Context, localX: Int = 32, localY: Int = 32, fused: Boolean = false, tuned: Boolean = true): Int {
+    fun init(context: Context, localX: Int = 32, localY: Int = 32, fused: Boolean = false, tuned: Boolean = true,
+             bakeLut: Boolean = false): Int {
         if (!VfVulkan.available || !VfVulkan.supportsF16MathNative()) return VfVulkan.BAD_ARGUMENT
         val stages = arrayOf("guide", "green", "median", "output").map {
-            context.assets.open("shaders/rcd_packed/rcd_${if (it == "output" && fused) "output_yuv" else it}.spv").use { stream -> stream.readBytes() }
+            val asset = "shaders/rcd_packed/rcd_${if (it == "output" && fused) "output_yuv" else it}.spv"
+            context.assets.open(VfLogGrade.recordAsset(asset, bakeLut && it == "output" && fused)).use { stream -> stream.readBytes() }
         }.toTypedArray()
         val rc = initNative(stages, localX, localY, fused, tuned)
         return if (rc == VfVulkan.BAD_ARGUMENT && (localX > 16 || localY > 16))

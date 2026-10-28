@@ -197,6 +197,7 @@ static jint runPackedRcd(JNIEnv* env, jobject cfaBuffer, jobject rgbBuffer,
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.pipelines[stage == 3 && fused ? 3 + int(gradeParams->gMisc2[1]) +
             (ii[0] != gradeParams->oDims[0] || ii[1] != gradeParams->oDims[1] ? 4 : 0) : stage]);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.layout, 0, 1, &s.sets[slot * 4 + stage], 0, nullptr);
+        if (stage == 3 && fused) bindRecordCube(g, cmd, s.layout);
         vkCmdPushConstants(cmd, s.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(params), &params);
         const uint32_t lx = s.stageLocalX[stage], ly = s.stageLocalY[stage];
         const uint32_t dispatchWidth = stage == 3 && fused ? (gradeParams->oDims[0] + 1) / 2 : (ii[0] + 1) / 2;
