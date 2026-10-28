@@ -1,0 +1,7 @@
+--------- beginning of main
+10-28 19:48:56.713 11760 11783 I DirectLog: RCD GPU writer=true
+10-28 19:48:56.714 11760 11783 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+10-28 19:48:56.722 11760 11783 I DirectLog: preview 3840x2160 -> 960x540 box=4
+10-28 19:48:56.723 11760 11783 I DirectLog: ours P010 yStride=7680 uvStride=7680
+10-28 19:48:56.912 11760 11783 I DirectLog: audio AAC 2ch
+10-28 19:48:57.089 11760 12301 W DirectLog: drain dequeue failed: Pending dequeue output buffer request cancelled

@@ -1,0 +1,11 @@
+
+com.matthew.rawlens.DirectLogLutDeviceTest:...
+com.matthew.rawlens.DirectLogColorAuditDeviceTest:.
+com.matthew.rawlens.PackedRcdDeviceTest:
+com.matthew.rawlens.PackedRcdDeviceTest:
+
+Time: 19.406
+
+OK (7 tests)
+
+

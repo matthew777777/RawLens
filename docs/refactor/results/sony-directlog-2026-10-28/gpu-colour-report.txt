@@ -1,0 +1,5 @@
+split checks=540 max10BitCodeError=0
+mhc checks=540 max10BitCodeError=0
+mhc_f16 checks=540 max10BitCodeError=2
+rcd checks=540 max10BitCodeError=0
+rcd_f16 checks=540 max10BitCodeError=2

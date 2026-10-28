@@ -1,5 +1,13 @@
 # Direct Log color audit — 2026-10-26
 
+**S-Log3 update 2026-10-28:** the Sony-specific pipeline and interpretation
+below describe the older Rec.709-gamut implementation. New output converts
+linear sRGB to S-Gamut3.Cine before Sony S-Log3. Use S-Gamut3.Cine/S-Log3
+with Video/limited data levels for new clips. See the
+[Sony audit](refactor/sony-directlog-audit.md) for exact packed codes,
+container differences, LUT imports/monitoring and remaining acceptance gates.
+The ACES/BT.709/HLG findings below are unchanged by that correction.
+
 ## Result and limits
 
 The ACES option is **Stephen Hill's ACES fitted approximation**, rendered to

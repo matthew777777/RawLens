@@ -1,0 +1,70 @@
+--------- beginning of main
+10-28 18:34:22.954  4190  4232 I DirectLog: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+10-28 18:34:22.954  4190  4232 I DirectLog: lens shading: live HAL map (first frame arms it)
+10-28 18:34:22.969  4190  4232 I DirectLog: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+10-28 18:34:22.972  4190  4232 I DirectLog: sensor RAW sizes: 4080x3060
+10-28 18:34:22.973  4190  4232 I DirectLog: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+10-28 18:34:22.973  4190  4232 I DirectLog: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+10-28 18:34:23.125  4190  4232 I DirectLog: fused asset shaders/vf/vf_mhcyuv.spv
+10-28 18:34:23.380  4190  4232 I DirectLog: demosaic path=fused-mhcyuv
+10-28 18:34:23.720  4190  4232 I DirectLog: RCD GPU writer=false
+10-28 18:34:23.720  4190  4232 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+10-28 18:34:23.762  4190  4232 I DirectLog: preview 1920x1080 -> 480x270 box=4
+10-28 18:34:23.768  4190  4232 I DirectLog: ours P010 yStride=3840 uvStride=3840
+10-28 18:34:24.750  4190  4389 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 18:34:24.787  4190  4349 I DirectLog: codec P010 yStride=3840(2Bpx) uStride=3840(4Bpx) vStride=3840(4Bpx) nplanes=3 uRem=2073598 vRem=2073598
+10-28 18:34:24.788  4190  4349 I DirectLog: codec input queue size=6220800 (capacity, not Y+U+V)
+10-28 18:34:24.830  4190  4385 I DirectLog: muxer started: video/hevc 1920x1080
+10-28 18:34:34.442  4190  4232 I DirectLog: stab sidecar slog3_1920_WIDE_16_9.stab.json frames=35 gyro=4593
+10-28 18:34:34.611  4190  4232 I DirectLog: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+10-28 18:34:34.611  4190  4232 I DirectLog: lens shading: live HAL map (first frame arms it)
+10-28 18:34:34.618  4190  4232 I DirectLog: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+10-28 18:34:34.620  4190  4232 I DirectLog: sensor RAW sizes: 4080x3060
+10-28 18:34:34.620  4190  4232 I DirectLog: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+10-28 18:34:34.621  4190  4232 I DirectLog: compute step=2 crop=3840x1606@(120,726) export=1920x803
+10-28 18:34:34.623  4190  4232 I DirectLog: fused asset shaders/vf/vf_mhcyuv.spv
+10-28 18:34:34.624  4190  4232 I DirectLog: demosaic path=fused-mhcyuv
+10-28 18:34:34.671  4190  4232 I DirectLog: RCD GPU writer=false
+10-28 18:34:34.671  4190  4232 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+10-28 18:34:34.678  4190  4232 I DirectLog: preview 1920x802 -> 960x401 box=2
+10-28 18:34:34.680  4190  4232 I DirectLog: ours P010 yStride=3840 uvStride=3840
+10-28 18:34:35.479  4190  4627 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 18:34:35.505  4190  4609 I DirectLog: codec P010 yStride=3840(2Bpx) uStride=3840(4Bpx) vStride=3840(4Bpx) nplanes=3 uRem=1539838 vRem=1539838
+10-28 18:34:35.505  4190  4609 I DirectLog: codec input queue size=4619520 (capacity, not Y+U+V)
+10-28 18:34:35.566  4190  4626 I DirectLog: muxer started: video/hevc 1920x802
+10-28 18:34:45.007  4190  4232 I DirectLog: stab sidecar slog3_1920_SCOPE_2_39.stab.json frames=31 gyro=4147
+10-28 18:34:45.181  4190  4232 I DirectLog: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+10-28 18:34:45.181  4190  4232 I DirectLog: lens shading: live HAL map (first frame arms it)
+10-28 18:34:45.190  4190  4232 I DirectLog: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+10-28 18:34:45.192  4190  4232 I DirectLog: sensor RAW sizes: 4080x3060
+10-28 18:34:45.193  4190  4232 I DirectLog: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+10-28 18:34:45.193  4190  4232 I DirectLog: compute step=2 crop=3840x1920@(120,570) export=1920x960
+10-28 18:34:45.195  4190  4232 I DirectLog: fused asset shaders/vf/vf_mhcyuv.spv
+10-28 18:34:45.198  4190  4232 I DirectLog: demosaic path=fused-mhcyuv
+10-28 18:34:45.230  4190  4232 I DirectLog: RCD GPU writer=false
+10-28 18:34:45.230  4190  4232 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+10-28 18:34:45.236  4190  4232 I DirectLog: preview 1920x960 -> 480x240 box=4
+10-28 18:34:45.238  4190  4232 I DirectLog: ours P010 yStride=3840 uvStride=3840
+10-28 18:34:45.929  4190  4863 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 18:34:45.958  4190  4844 I DirectLog: codec P010 yStride=3840(2Bpx) uStride=3840(4Bpx) vStride=3840(4Bpx) nplanes=3 uRem=1843198 vRem=1843198
+10-28 18:34:45.958  4190  4844 I DirectLog: codec input queue size=5529600 (capacity, not Y+U+V)
+10-28 18:34:45.998  4190  4862 I DirectLog: muxer started: video/hevc 1920x960
+10-28 18:34:55.452  4190  4232 I DirectLog: stab sidecar slog3_1920_UNIVISIUM_2_00.stab.json frames=33 gyro=4114
+10-28 18:34:55.648  4190  4232 I DirectLog: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+10-28 18:34:55.648  4190  4232 I DirectLog: lens shading: live HAL map (first frame arms it)
+10-28 18:34:55.659  4190  4232 I DirectLog: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+10-28 18:34:55.662  4190  4232 I DirectLog: sensor RAW sizes: 4080x3060
+10-28 18:34:55.662  4190  4232 I DirectLog: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+10-28 18:34:55.662  4190  4232 I DirectLog: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+10-28 18:34:55.668  4190  4232 I DirectLog: fused asset shaders/vf/vf_mhcyuv.spv
+10-28 18:34:55.669  4190  4232 I DirectLog: demosaic path=fused-mhcyuv
+10-28 18:34:55.711  4190  4232 I DirectLog: RCD GPU writer=false
+10-28 18:34:55.711  4190  4232 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=DIRECT_P010 cs=1 xfer=3 range=2
+10-28 18:34:55.723  4190  4232 I DirectLog: preview 2560x1440 -> 640x360 box=4
+10-28 18:34:55.726  4190  4232 I DirectLog: ours P010 yStride=5120 uvStride=5120
+10-28 18:34:56.844  4190  5322 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 18:34:56.922  4190  5279 I DirectLog: codec P010 yStride=5120(2Bpx) uStride=5120(4Bpx) vStride=5120(4Bpx) nplanes=3 uRem=3686398 vRem=3686398
+10-28 18:34:56.922  4190  5279 I DirectLog: codec input queue size=11059200 (capacity, not Y+U+V)
+10-28 18:34:57.167  4190  5320 I DirectLog: muxer started: video/hevc 2560x1440
+10-28 18:34:57.295  4190  5284 W DirectLog: copy job: GPU wedge
+10-28 18:35:06.197  4190  4232 I DirectLog: stab sidecar slog3_2560_WIDE_16_9.stab.json frames=17 gyro=4195

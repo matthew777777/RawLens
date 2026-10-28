@@ -1,0 +1,43 @@
+--------- beginning of main
+10-28 19:55:15.791 16966 16990 I DirectLog: RCD GPU writer=true
+10-28 19:55:15.791 16966 16990 I DirectLog: output profile=SLOG3 codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+10-28 19:55:15.795 16966 16990 I DirectLog: preview 3840x2160 -> 960x540 box=4
+10-28 19:55:15.798 16966 16990 I DirectLog: ours P010 yStride=7680 uvStride=7680
+10-28 19:55:15.865 16966 16990 I DirectLog: audio AAC 2ch
+10-28 19:55:16.557 16966 17320 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-28 19:55:16.565 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=7.488307
+10-28 19:55:16.578 16966 17039 I DirectLogPreview: preview GL ready 1249x1666
+10-28 19:55:16.707 16966 17309 I DirectLog: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+10-28 19:55:17.812 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.529154
+10-28 19:55:19.062 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.355154
+10-28 19:55:20.310 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.290154
+10-28 19:55:21.559 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.326769
+10-28 19:55:22.811 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.300538
+10-28 19:55:24.059 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.262231
+10-28 19:55:25.312 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.258769
+10-28 19:55:26.563 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.448076
+10-28 19:55:27.814 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.458154
+10-28 19:55:29.060 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.259692
+10-28 19:55:30.312 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.308693
+10-28 19:55:31.562 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.282385
+10-28 19:55:32.812 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.341539
+10-28 19:55:34.062 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.216923
+10-28 19:55:35.312 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.321154
+10-28 19:55:36.562 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.324923
+10-28 19:55:37.811 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.327384
+10-28 19:55:39.060 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.224693
+10-28 19:55:40.313 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.361615
+10-28 19:55:41.565 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.313154
+10-28 19:55:42.816 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.269846
+10-28 19:55:44.061 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.223385
+10-28 19:55:45.311 16966 17320 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.269231
+10-28 19:55:54.578 16966 16990 I DirectLog: stab sidecar directlog_rcd_4k.stab.json frames=707 gyro=15645
+10-28 19:55:54.635 16966 16990 I DirectLogPreview: preview detached: presented=376 adoptFailed=0 presentFailed=0
+10-28 19:55:54.713 16966 16990 I DirectLog: SPIKE directlog fps=24 label=rcd-4k rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=1920x1080 acq=708 graded=707 drop=0 miss=1 stale=707 waitFree=707 fallback=0 preview=376 shaded=707 fused=0 heat=false thermal=0 cpuChain=0.8ms chainMax=19.2ms over=0 copy=0.0ms copyMax=0.0ms p010=true starved=0 degraded=0 aChunks=692 aFrames=1417216 aDrop=14 hasAudio=true aacBytes=473506 aOut=1386 outBufs=708 bytes=276384106 file=276871529
+10-28 19:55:55.235 16966 16990 I DirectLog: SPIKE directlog [rcd-4k] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens/files/directlog_rcd_4k.mp4
+10-28 19:55:55.247 16966 16990 I DirectLog: SPIKE directlog-color std=1 transfer=3 range=2
+10-28 19:55:55.897 16966 16990 I DirectLog: SPIKE directlog [rcd-4k] muxed video=707 audio=1386 durationUs=29460900
+10-28 19:55:55.897 16966 16990 I DirectLog: SPIKE directlog [rcd-4k] muxedFps=24.0
+10-28 19:55:55.899 16966 16990 I DirectLog: RCD cadence fullSecondCounts=[24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24] steadyGapUs=min=41666 p50=41667 p95=41667 max=41778
+10-28 19:55:55.899 16966 16990 I DirectLog: SPIKE directlog [rcd-4k] videoPtsGap minUs=41666 maxUs=41778
+10-28 19:55:56.894 16966 16990 I DirectLog: RCD published: content://media/external/video/media/56548 bytes=276871529

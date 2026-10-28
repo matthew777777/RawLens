@@ -1,0 +1,8 @@
+
+com.matthew.rawlens.DirectLogColorAuditDeviceTest:.
+
+Time: 96.662
+
+OK (1 test)
+
+
