@@ -1,0 +1,9 @@
+RawLens 2.0
+- PROGRAM exposure on libcamera's RPi AGC; ETTR on Magic Lantern
+- RAW zebras, false colour, RAW spot meter; Active D-Lighting
+- MFSR multi-frame super-resolution; faster HDR+
+- darktable highlight reconstruction
+- RAW video as .craw (Cinematic RAW Studio), RGB binning
+- Direct Log: real-time RCD 4K24/1080p30, ACES look
+- JPEG XL, Ultra HDR, lossless JXL DNG
+- New UI and many fixes
