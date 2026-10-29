@@ -67,21 +67,22 @@ class RawExposureAssistDeviceTest {
             view.update(frame.copy(sampledAtElapsedMs = SystemClock.elapsedRealtime()))
             val bitmap = Bitmap.createBitmap(720, 1080, Bitmap.Config.ARGB_8888)
             view.draw(Canvas(bitmap))
-            var white = 0; var black = 0; var transitions = 0; var previous = false
+            // Translucent white lines over clear gaps: the image must stay visible between stripes.
+            var white = 0; var clear = 0; var transitions = 0; var previous = false
             for (x in 20 until 300) {
                 val pixel = bitmap.getPixel(x, 200)
-                assertEquals(255, android.graphics.Color.alpha(pixel))
-                val light = android.graphics.Color.red(pixel) > 220
+                val alpha = android.graphics.Color.alpha(pixel)
+                val light = alpha > 200 && android.graphics.Color.red(pixel) > 220
                 if (light) white++
-                if (android.graphics.Color.red(pixel) < 30) black++
+                if (alpha < 20) clear++
                 if (x > 20 && light != previous) transitions++
                 previous = light
                 // Moving perpendicular to the gradient must remain on the same diagonal stripe.
                 assertTrue("Stripe must follow the diagonal (allow 8-bit dithering)",
-                    kotlin.math.abs(android.graphics.Color.red(pixel) - android.graphics.Color.red(bitmap.getPixel(x + 1, 199))) <= 2)
+                    kotlin.math.abs(alpha - android.graphics.Color.alpha(bitmap.getPixel(x + 1, 199))) <= 2)
             }
             assertTrue("Missing white stripes", white > 30)
-            assertTrue("Missing black stripes", black > 30)
+            assertTrue("Missing clear gaps between stripes", clear > 80)
             assertTrue("Stripes are too coarse", transitions > 8)
             assertEquals("Unclipped area must remain clear", 0, bitmap.getPixel(600, 200))
             File(output, "zebra-screen-stripes.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
