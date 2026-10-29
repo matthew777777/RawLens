@@ -1549,6 +1549,8 @@ class MainActivity : Activity() {
         // clip to invisible. Keep horizontal so they stay visible in the top bar.
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.galleryThumb),
+        // Square 48dp zebra / false-colour toggle: its short label fits rotated.
+        findViewById(R.id.rawExposureToggle),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
         findViewById(R.id.vfEngineButton),
         findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
@@ -1581,7 +1583,6 @@ class MainActivity : Activity() {
      * rotated text can never clip them to invisible. */
     private fun fixedOrientationViews(): List<View> = listOfNotNull(
         findViewById(R.id.rawBadge),
-        findViewById(R.id.rawExposureToggle),
         findViewById(R.id.rawSpotReading),
         findViewById(R.id.status),
         findViewById(R.id.dngInfo),
