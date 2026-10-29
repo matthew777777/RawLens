@@ -46,7 +46,7 @@ pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 2. Make sure the tagged tree builds from a clean clone with submodules (clone to /tmp and run
    the command above).
 3. Tag the release with a plain version tag matching `VERSION_NAME`, e.g.
-   `2.0.1` (the in-app updater and F-Droid auto-update both expect this
+   `2.0.2` (the in-app updater and F-Droid auto-update both expect this
    scheme; never reuse or move a tag after pushing).
 4. Push the tag. `UpdateCheckMode: Tags` picks up future releases
    automatically once the metadata below is merged.
@@ -64,7 +64,7 @@ pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 
 File: `metadata/com.matthew.rawlens.yml` in a fork of
 `https://gitlab.com/fdroid/fdroiddata`. `commit` is the full hash the
-release tag points to (`git rev-list -n 1 2.0.1`):
+release tag points to (`git rev-list -n 1 2.0.2`):
 
 ```yaml
 Categories:
@@ -81,8 +81,8 @@ RepoType: git
 Repo: https://github.com/matthew777777/RawLens.git
 
 Builds:
-  - versionName: 2.0.1
-    versionCode: 2001
+  - versionName: 2.0.2
+    versionCode: 2002
     commit: <full-hash>
     timeout: 10800
     subdir: app
@@ -111,8 +111,8 @@ Builds:
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: app/version.properties|VERSION_CODE=(\d+)|.|VERSION_NAME=(.+)
-CurrentVersion: 2.0.1
-CurrentVersionCode: 2001
+CurrentVersion: 2.0.2
+CurrentVersionCode: 2002
 ```
 
 `gradle: [fdroid]` makes fdroidserver run `assembleFdroidRelease`; with
@@ -170,12 +170,12 @@ listing shows release notes.
 ```bash
 git clone --recurse-submodules https://github.com/matthew777777/RawLens.git /tmp/rawlens-fdroid
 cd /tmp/rawlens-fdroid
-git checkout 2.0.1  # the release tag
+git checkout 2.0.2  # the release tag
 git submodule update --init --recursive
 ./gradlew :app:assembleFdroidRelease
 ```
 
-Expected: exactly one APK, `app/build/outputs/apk/fdroid/release/RawLens-2.0.1-release.apk`,
+Expected: exactly one APK, `app/build/outputs/apk/fdroid/release/RawLens-2.0.2-release.apk`,
 with `versionCode` equal to the tagged `VERSION_CODE`, no `INTERNET` /
 `REQUEST_INSTALL_PACKAGES` permission, no `rawLensBgu` / `rawLensHdrMeter` /
 `rawLensScopeMeter` `.so` files, and `ncnnMl` built from upstream ncnn sources.

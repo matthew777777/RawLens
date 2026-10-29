@@ -2,6 +2,12 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [2.0.2] - 2026-10-29
+
+### Fixed
+
+- F-Droid build: the release `signingConfig` assignment is now a single-token line, so fdroidserver's signing-key removal deletes it cleanly (the wrapped `?:` expression left half a statement behind and broke the build script). F-Droid builds are unsigned; GitHub and local builds sign exactly as before
+
 ## [2.0.1] - 2026-10-29
 
 ### Changed

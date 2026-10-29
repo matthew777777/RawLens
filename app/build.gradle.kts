@@ -242,9 +242,15 @@ android {
             isJniDebuggable = false
             // Signed with RAWLENS_KEYSTORE when provided, otherwise with the
             // auto-generated debug key: release stays installable straight
-            // from a fresh clone (see signingConfigs above).
-            signingConfig = signingConfigs.findByName("releaseEnv")
+            // from a fresh clone (see signingConfigs above). Keep the
+            // assignment a single-token line: fdroidserver deletes
+            // `signingConfig = <token>` lines (and the signingConfigs block)
+            // before building, so F-Droid gets an unsigned APK. A wrapped
+            // `?:` expression would leave its second half behind, attached
+            // to the line above, and break the script.
+            val releaseSigning = signingConfigs.findByName("releaseEnv")
                 ?: signingConfigs.getByName("debug")
+            signingConfig = releaseSigning
             // Full ART optimization at install (vs quicken+JIT for debuggable)
             // plus CMake Release (-O3) native code. Force complete AOT on the
             // device after install with:
