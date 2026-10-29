@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.content.Context
-import android.util.Log
 
 /** Per-lens vendor-key storage. Mirrors [DngMetadataOverrideStore] keying. */
 class VendorKeyStore(context: Context) {

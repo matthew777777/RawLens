@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
-import android.util.Log
 
 /**
  * Everything a single-frame save uses, captured at shutter time on the camera

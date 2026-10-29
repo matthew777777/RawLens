@@ -13,7 +13,6 @@ import android.opengl.GLES20
 import android.opengl.GLES30
 import android.opengl.GLES31
 import android.os.SystemClock
-import android.util.Log
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

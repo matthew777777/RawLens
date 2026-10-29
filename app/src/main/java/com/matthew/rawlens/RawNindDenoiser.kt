@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.content.Context
-import android.util.Log
 import com.particlesdevs.photoncamera.processing.ml.RawNindNcnnProcessor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

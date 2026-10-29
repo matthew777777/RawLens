@@ -8,7 +8,6 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
-import android.util.Log
 import java.util.concurrent.atomic.AtomicLong
 
 /**

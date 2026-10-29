@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.content.ContentValues
 import android.content.Context
 import android.provider.MediaStore
-import android.util.Log
 import java.io.IOException
 
 /**

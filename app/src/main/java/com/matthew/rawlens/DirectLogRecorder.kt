@@ -26,7 +26,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
 import android.util.Size
 import android.view.Surface
 import java.io.File
@@ -398,6 +397,8 @@ class DirectLogRecorder(
     private val resultLock = java.lang.Object()
     private val captureResults = java.util.TreeMap<Long, TotalCaptureResult>()
     private var lastResult: TotalCaptureResult? = null
+    /** Reused by [refreshVideoRequest]; a null callback there silently ended result pairing. */
+    private var repeatingCallback: CameraCaptureSession.CaptureCallback? = null
 
     @Volatile private var accepting: Boolean = false
     @Volatile private var timeOriginNs: Long = Long.MIN_VALUE
@@ -1090,10 +1091,12 @@ class DirectLogRecorder(
                 applyVideoManualToRequest(this, c)
             }.build()
             DirectLogBreadcrumb.mark(appContext, "session-repeating")
-            session!!.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
+            val afTrace = AfTrace(TAG, "Direct-Log")
+            val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
                 ) {
+                    afTrace.onResult(result)
                     val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
                     if (diagnoseFrameStages) {
                         val gap = ts - diagnosticCaptureTimestamp
@@ -1110,7 +1113,9 @@ class DirectLogRecorder(
                     }
                     lastResult = result
                 }
-            }, handler)
+            }
+            repeatingCallback = callback
+            session!!.setRepeatingRequest(req, callback, handler)
         } catch (e: Exception) {
             teardown()
             throw e
@@ -1258,7 +1263,7 @@ class DirectLogRecorder(
                     addTarget(surf)
                     applyVideoManualToRequest(this, c)
                 }.build()
-                sess.setRepeatingRequest(req, null, handler)
+                sess.setRepeatingRequest(req, repeatingCallback, handler)
             } catch (e: Exception) {
                 Log.w(TAG, "video manual refresh failed: ${e.message}")
             }

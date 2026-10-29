@@ -7,7 +7,6 @@ import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.os.SystemClock
-import android.util.Log
 import java.nio.ByteOrder
 
 /**

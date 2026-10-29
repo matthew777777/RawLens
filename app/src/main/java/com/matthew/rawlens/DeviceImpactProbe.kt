@@ -10,7 +10,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
 import android.util.Printer
 import android.view.FrameMetrics
 import android.view.Window

@@ -10,7 +10,6 @@ import android.hardware.camera2.CaptureResult
 import android.os.Build
 import android.os.SystemClock
 import android.provider.MediaStore
-import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import java.io.IOException
 

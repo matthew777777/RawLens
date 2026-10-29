@@ -431,7 +431,7 @@ object RawFocusPeakingSampler {
                 if (e > peak) peak = e
                 sum += e
             }
-            android.util.Log.i(
+            Log.i(
                 "RawLensCamera",
                 "Focus peaking first sample: grid=${cols}x$rows passes=${mask.count { it }} " +
                     "meanEnergy=${"%.5f".format(sum / energy.size)} peakEnergy=${"%.4f".format(peak)} " +

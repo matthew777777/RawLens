@@ -11,7 +11,6 @@ import android.graphics.PointF
 import android.graphics.RectF
 import android.os.SystemClock
 import android.util.AttributeSet
-import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View

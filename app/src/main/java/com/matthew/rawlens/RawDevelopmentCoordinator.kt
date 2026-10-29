@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.opengl.GLES30
 import android.opengl.GLES31
 import android.os.SystemClock
-import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 

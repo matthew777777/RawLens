@@ -12,7 +12,6 @@ import android.media.Image
 import android.opengl.EGL14
 import android.os.SystemClock
 import android.util.AttributeSet
-import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import java.nio.ByteBuffer

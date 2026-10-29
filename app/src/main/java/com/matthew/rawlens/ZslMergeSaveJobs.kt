@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.content.Context
 import android.hardware.camera2.TotalCaptureResult
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Save settings a ZSL merge job reads, frozen at shutter time like every

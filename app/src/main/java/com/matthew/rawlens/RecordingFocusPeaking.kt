@@ -4,7 +4,6 @@ package com.matthew.rawlens
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 import android.os.SystemClock
-import android.util.Log
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean

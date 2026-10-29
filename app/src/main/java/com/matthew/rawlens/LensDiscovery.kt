@@ -7,7 +7,6 @@ import android.content.Context
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.util.Log
 import java.util.Locale
 import java.util.concurrent.Executors
 

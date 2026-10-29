@@ -15,6 +15,16 @@ import android.hardware.camera2.CaptureRequest
  * adds the lens-shading map request after this.
  */
 internal object VideoManualControls {
+    private const val TAG = "VideoFocus"
+    /** Last logged AF decision; requests rebuild on every slider move, so log changes only. */
+    @Volatile private var lastAfDecision: String? = null
+
+    private fun logAfDecision(decision: String) {
+        if (decision == lastAfDecision) return
+        lastAfDecision = decision
+        Log.i(TAG, decision)
+    }
+
     fun hasManualSensor(c: CameraCharacteristics): Boolean =
         (c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf())
             .contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
@@ -52,7 +62,13 @@ internal object VideoManualControls {
             return afModes.firstOrNull() ?: mode
         }
         val frozenFocus = manualFocus ?: if (lockedFocus) meteredFocus else null
+        val caps = afModes.joinToString(",") { Camera2Names.afModeName(it) }
         if (frozenFocus != null) {
+            val reason = if (manualFocus != null) "manual" else "lock-on-record"
+            logAfDecision(
+                "Video AF request ${Camera2Names.afModeName(coerceAf(CaptureRequest.CONTROL_AF_MODE_OFF))} " +
+                    "fd=${String.format(java.util.Locale.US, "%.2f", frozenFocus)}D ($reason) caps=[$caps]"
+            )
             builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(CaptureRequest.CONTROL_AF_MODE_OFF))
             try {
                 builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, frozenFocus)
@@ -66,6 +82,11 @@ internal object VideoManualControls {
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 else -> CaptureRequest.CONTROL_AF_MODE_AUTO
             }
+            logAfDecision(
+                "Video AF request ${Camera2Names.afModeName(coerceAf(continuous))} " +
+                    "(auto${if (lockedFocus) ", focus lock armed but no metered focus yet" else ""}) " +
+                    "caps=[$caps]"
+            )
             builder.set(CaptureRequest.CONTROL_AF_MODE, coerceAf(continuous))
         }
         val resolvedIso = VideoManualPolicy.resolveIso(

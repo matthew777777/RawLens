@@ -4,7 +4,6 @@ package com.matthew.rawlens
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Log
 import java.io.File
 
 /**

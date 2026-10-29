@@ -6,7 +6,6 @@ import android.media.AudioRecord
 import android.media.AudioTimestamp
 import android.media.MediaRecorder
 import android.os.SystemClock
-import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicLong

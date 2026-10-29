@@ -10,7 +10,6 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.ImageWriter
 import android.os.Build
-import android.util.Log
 import android.view.Surface
 import java.io.File
 import java.nio.ByteBuffer

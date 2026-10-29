@@ -81,9 +81,24 @@ class LogcatFileWriterTest {
         // never an incomplete recording.
         assertEquals(
             "----- logcat produced no lines for pid 1234 after 15s " +
-                "(device logd may restrict app logs); session has headers only, app continues -----",
+                "(device logd may restrict app logs); falling back to RawLens's own log lines, " +
+                "native and system lines unavailable -----",
             LogcatFileWriter.captureSilentMarker(1234, 15)
         )
+    }
+
+    @Test fun `tee lines are threadtime shaped`() {
+        // Xiaomi 14T Pro field report: logd gave the app nothing, so the
+        // fallback writes RawLens's own lines; they must read like logcat.
+        assertEquals(
+            "10-29 14:03:05.123 28862 28901 W DirectLogRecorder: stage: open",
+            LogcatFileWriter.teeLine("10-29 14:03:05.123", 28862, 28901, 'W', "DirectLogRecorder", "stage: open")
+        )
+    }
+
+    @Test fun `logcat dividers do not count as proof that capture works`() {
+        assertTrue(LogcatFileWriter.isLogcatDivider("--------- beginning of main"))
+        assertTrue(!LogcatFileWriter.isLogcatDivider("10-29 14:03:05.123 28862 28901 I Tag: msg"))
     }
 
     @Test fun `silence timeout is decisive but not hasty`() {

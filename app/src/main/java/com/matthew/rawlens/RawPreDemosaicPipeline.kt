@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.os.SystemClock
-import android.util.Log
 
 import kotlin.math.abs
 import kotlin.math.floor

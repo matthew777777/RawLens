@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.content.Context
 import android.hardware.camera2.CaptureResult
 import android.os.SystemClock
-import android.util.Log
 import com.rawlens.srpipeline.SrpBridge
 import com.rawlens.srpipeline.stages.AlignGpu
 import com.rawlens.srpipeline.stages.BurstConfig

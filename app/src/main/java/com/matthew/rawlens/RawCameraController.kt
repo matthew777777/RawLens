@@ -28,7 +28,6 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.Surface
@@ -424,8 +423,14 @@ class RawCameraController(
     // Tap / hold focus and metering (Open Camera continuous-picture AF port).
     private val touchFocus = TouchFocus(TouchFocusHost())
     /** Last idle continuous-AF state/mode logged (transition-only trace). */
-    private var lastLoggedIdleAfState: Int? = null
-    private var lastLoggedIdleAfMode: Int? = null
+    /**
+     * Idle continuous-AF trace (transitions only), fed every repeating
+     * result: without it a "blurry VF" report with no taps is undecidable,
+     * and a throttled sample misses short PASSIVE_SCAN bursts.
+     */
+    private val idleAfTrace = AfTrace(LOG_TAG, "Idle")
+    /** Last logged AF request shape; requests rebuild often, so log changes only. */
+    private var lastLoggedAfRequest: String? = null
 
     private var lastDebugUpdateMs = 0L
     private var lastRawVfDebugMs = 0L
@@ -1973,7 +1978,7 @@ class RawCameraController(
                 publishRawZslStatus()
             }
         } catch (failure: Exception) {
-            android.util.Log.w(LOG_TAG, "BURST dump failed", failure)
+            Log.w(LOG_TAG, "BURST dump failed", failure)
             onState("BURST ERROR")
             null
         }
@@ -4390,6 +4395,14 @@ class RawCameraController(
                 selectedFocusDistanceDiopters = value?.let { raw ->
                     (raw.toFloat() / FOCUS_DISTANCE_SCALE).coerceIn(0f, minimumDistance)
                 }
+                // Manual focus forces AF OFF until cleared; a "focus never
+                // moves" report needs this visible next to the Idle AF trace.
+                Log.i(
+                    LOG_TAG,
+                    selectedFocusDistanceDiopters?.let {
+                        "Manual focus ${String.format(java.util.Locale.US, "%.2f", it)}D (AF off)"
+                    } ?: "Manual focus cleared (AF back to auto)"
+                )
                 // Manual focus takes over the held touch lock (see TouchFocus).
                 if (value != null) touchFocus.dropForManualFocus()
             }
@@ -4761,6 +4774,7 @@ class RawCameraController(
                     else -> shutter
                 }
                 publishPreviewMetadata(displayIso, displayShutter, wb)
+                if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(result)
                 publishDebugState(request, result)
                 touchFocus.onAfState(result.get(CaptureResult.CONTROL_AF_STATE))
             }
@@ -4797,17 +4811,14 @@ class RawCameraController(
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         val manualFocus = selectedFocusDistanceDiopters
+        val wantedAfMode = when {
+            manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
+            touchFocus.active -> CaptureRequest.CONTROL_AF_MODE_AUTO
+            else -> continuousPictureAfMode()
+        }
         // P2/P3: never request an AF mode the HAL did not advertise.
-        builder.set(
-            CaptureRequest.CONTROL_AF_MODE,
-            coerceAfMode(
-                when {
-                    manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
-                    touchFocus.active -> CaptureRequest.CONTROL_AF_MODE_AUTO
-                    else -> continuousPictureAfMode()
-                }
-            )
-        )
+        val afMode = coerceAfMode(wantedAfMode)
+        builder.set(CaptureRequest.CONTROL_AF_MODE, afMode)
         manualFocus?.let { builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, it) }
         builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
         builder.set(
@@ -4821,9 +4832,15 @@ class RawCameraController(
         val faceRegion = faces.region?.let {
             MeteringRectangle(Rect(it.left, it.top, it.right, it.bottom), MeteringRectangle.METERING_WEIGHT_MAX)
         }
-        (afRegion ?: faceRegion)?.takeIf {
-            (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
-        }?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
+        val afRegionsSupported = (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) > 0
+        (afRegion ?: faceRegion)?.takeIf { afRegionsSupported }
+            ?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
+        logAfRequest(wantedAfMode, afMode, manualFocus, when {
+            !afRegionsSupported -> "unsupported"
+            afRegion != null -> "tap"
+            faceRegion != null -> "face"
+            else -> "full-frame"
+        })
         val aeRegions = aeRegion?.let { arrayOf(it) }
             ?: faceRegion?.let { arrayOf(it) }
             ?: standardAeMeteringRegions()
@@ -4923,6 +4940,24 @@ class RawCameraController(
         } catch (failure: Exception) {
             lastVendorRequestReport = VendorKeyApplyReport(emptyList(), profile.requestEntries().map { it.name }, failure.toString())
         }
+    }
+
+    /**
+     * Logs the AF request shape on change: the mode actually sent (and the
+     * wanted one when the HAL forced a substitute), why, and what drives
+     * the region. Pairs with the Idle/Touch AF result traces.
+     */
+    private fun logAfRequest(wanted: Int, sent: Int, manualFocus: Float?, region: String) {
+        val why = when {
+            manualFocus != null -> "manual ${String.format(java.util.Locale.US, "%.2f", manualFocus)}D"
+            touchFocus.active -> "touch"
+            else -> "idle"
+        }
+        val coerced = if (wanted != sent) " (wanted ${Camera2Names.afModeName(wanted)}, not advertised)" else ""
+        val line = "AF request ${Camera2Names.afModeName(sent)}$coerced reason=$why region=$region"
+        if (line == lastLoggedAfRequest) return
+        lastLoggedAfRequest = line
+        Log.i(LOG_TAG, line)
     }
 
     /** P2/P3: clamp a requested AF mode to what the HAL advertised. */
@@ -5262,23 +5297,6 @@ class RawCameraController(
         val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
         val afState = result.get(CaptureResult.CONTROL_AF_STATE)
         val afTrigger = request.get(CaptureRequest.CONTROL_AF_TRIGGER)
-        // Idle continuous-AF trace (transitions only): without this, a
-        // "blurry VF" report with no taps is undecidable — the tap trace
-        // covers scans, but idle PASSIVE_* states were previously invisible.
-        if (!touchFocus.active &&
-            (afState != lastLoggedIdleAfState || afMode != lastLoggedIdleAfMode)
-        ) {
-            lastLoggedIdleAfState = afState
-            lastLoggedIdleAfMode = afMode
-            val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
-            Log.i(
-                LOG_TAG,
-                "Idle AF ${Camera2Names.afStateName(afState)} mode=${Camera2Names.afModeName(afMode)}" +
-                    (focusDistance?.let {
-                        " fd=${String.format(java.util.Locale.US, "%.2f", it)}D"
-                    } ?: "")
-            )
-        }
         onDebugState(ControllerDebugText.debugOverlay(DebugOverlaySnapshot(
             afMode = afMode,
             afTrigger = afTrigger,

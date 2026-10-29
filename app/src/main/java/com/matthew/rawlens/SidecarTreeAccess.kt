@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.util.Log
 import java.io.IOException
 
 /**

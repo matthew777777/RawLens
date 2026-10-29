@@ -17,7 +17,6 @@ import android.os.PowerManager
 import android.net.Uri
 import android.hardware.SensorManager
 import android.os.Bundle
-import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -1811,7 +1810,7 @@ class MainActivity : Activity() {
             }
             setStatus("BURST CRAW OFF")
         }
-        android.util.Log.i(LOG_TAG, "BurstCraw enabled=$enabled")
+        Log.i(LOG_TAG, "BurstCraw enabled=$enabled")
     }
 
     /** Offline burst-merge screen: staged takes only, never RAW video. */
@@ -1819,7 +1818,7 @@ class MainActivity : Activity() {
         try {
             startActivity(android.content.Intent(this, MergesActivity::class.java))
         } catch (failure: Exception) {
-            android.util.Log.w(LOG_TAG, "open merges failed: ${failure.message}")
+            Log.w(LOG_TAG, "open merges failed: ${failure.message}")
             setStatus("MERGES UNAVAILABLE")
         }
     }
@@ -1842,7 +1841,7 @@ class MainActivity : Activity() {
             val stats = try {
                 controller.dumpZslRingToBurstCraw(file)
             } catch (e: Exception) {
-                android.util.Log.w(LOG_TAG, "burst dump failed: ${e.message}")
+                Log.w(LOG_TAG, "burst dump failed: ${e.message}")
                 null
             }
             if (stats == null || stats.framesWritten <= 0) {
@@ -1884,22 +1883,22 @@ class MainActivity : Activity() {
     private fun tryExportBurst(source: File): RawVideoSaver.Saved? {
         try {
             val saved = BurstCrawStore.publishToBursts(applicationContext.contentResolver, source)
-            android.util.Log.i(LOG_TAG, "burst exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
+            Log.i(LOG_TAG, "burst exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
             return saved
         } catch (mediaStoreFailure: Exception) {
-            android.util.Log.w(LOG_TAG, "burst MediaStore export failed, trying granted folder", mediaStoreFailure)
+            Log.w(LOG_TAG, "burst MediaStore export failed, trying granted folder", mediaStoreFailure)
             val tree = SidecarTreeAccess.savedTreeUri(applicationContext)
             if (tree != null && SidecarTreeAccess.hasWriteAccess(applicationContext, tree)) {
                 try {
                     val saved = BurstCrawStore.publishViaTree(applicationContext, tree, source)
-                    android.util.Log.i(LOG_TAG, "burst exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
+                    Log.i(LOG_TAG, "burst exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
                     return saved
                 } catch (treeFailure: Exception) {
                     mediaStoreFailure.addSuppressed(treeFailure)
-                    android.util.Log.e(LOG_TAG, "burst export failed; original retained at ${source.absolutePath}", mediaStoreFailure)
+                    Log.e(LOG_TAG, "burst export failed; original retained at ${source.absolutePath}", mediaStoreFailure)
                 }
             } else {
-                android.util.Log.e(LOG_TAG, "burst export failed; original retained at ${source.absolutePath} (grant photo folder under Settings for SAF fallback)", mediaStoreFailure)
+                Log.e(LOG_TAG, "burst export failed; original retained at ${source.absolutePath} (grant photo folder under Settings for SAF fallback)", mediaStoreFailure)
             }
             return null
         }
