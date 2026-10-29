@@ -2,7 +2,7 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-28
 
 Everything since 1.0.192 (2026-10-15). 2.0 rebuilds exposure on published
 references (libcamera, Magic Lantern, Open Camera), replaces the RAW-SR
