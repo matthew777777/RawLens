@@ -25,9 +25,9 @@ class DemosaicBackendTest {
         assertEquals(JpegDemosaic.RCD, JpegOutputSettings().copy(demosaic = JpegDemosaic.RCD).demosaic)
     }
 
-    @Test fun videoDemosaicDefaultsToMhc() {
-        assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference(null))
-        assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference("BOGUS"))
+    @Test fun videoDemosaicDefaultsToRcd() {
+        assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference(null))
+        assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference("BOGUS"))
     }
 
     @Test fun videoDemosaicRoundTrips() {
