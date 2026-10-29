@@ -106,8 +106,6 @@ Builds:
       - third_party/libjxl/third_party/brotli/java
       - third_party/libjxl/third_party/brotli/js
       - third_party/libjxl/third_party/brotli/tests/testdata
-      - third_party/libjxl/third_party/lcms/testbed
-      - third_party/libjxl/third_party/lcms/utils/delphi
     ndk: 27.0.12077973
 
 AutoUpdateMode: Version
@@ -121,6 +119,9 @@ CurrentVersionCode: 2001
 `subdir: app` and no `output` it picks the single APK from
 `app/build/outputs/apk/fdroid/release/`. Verify recipe changes with
 `fdroid rewritemeta`, `fdroid lint` and `fdroid scanner` before pushing.
+Every `scandelete` / `scanignore` entry must match something the scanner
+flags as an error: unused entries fail the F-Droid build (scanner warnings,
+such as lcms's `.icc` test profiles, do not count).
 
 What the scan entries are:
 
@@ -131,7 +132,7 @@ What the scan entries are:
 - `scandelete` (never needed by the fdroid build): the vendored prebuilt
   ncnn/glslang and Halide `.a` archives (the flavor builds from source
   instead), the desktop training checkpoint, an archived benchmark source
-  tarball, two golden test fixtures, and libjxl's / brotli's / lcms's test
+  tarball, two golden test fixtures, and libjxl's / brotli's test
   corpora and language bindings (only referenced when `BUILD_TESTING`, which
   RawLens forces off).
 
