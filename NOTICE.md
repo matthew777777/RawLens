@@ -150,11 +150,12 @@ JPEG XL output is encoded by the JPEG XL reference implementation:
 - Build: `app/src/main/cpp/CMakeLists.txt` (`LIBJXL_SOURCE_DIR`), with
   `TINYDNG_HAVE_JXL` defined on the TinyDNG target; host discovery uses pkg-config.
 
-libjxl auto-fetches at configure time (pinned `LIBJXL_VERSION`, currently
-v0.12.0 (`a7a9c78`) with encoder-only
-flags plus `JPEGXL_ENABLE_SJPEG/JPEGLI=OFF` for NDK r27) unless
-`LIBJXL_SOURCE_DIR` points at an existing checkout or `-DRAWLENS_ENABLE_JXL=OFF`
-(source-only/F-Droid builds) is set; `./gradlew` accepts `-PjxlSourceDir=` and
+libjxl v0.12.0 (`a7a9c78`) is vendored as a git submodule at
+`third_party/libjxl` and built with encoder-only flags plus
+`JPEGXL_ENABLE_SJPEG/JPEGLI=OFF` for NDK r27. Gradle passes the submodule as
+`LIBJXL_SOURCE_DIR` whenever it is checked out (including F-Droid source-only
+builds); without it, CMake fetches the same pinned `LIBJXL_VERSION`.
+`./gradlew` accepts `-PjxlSourceDir=` (overrides the submodule) and
 `-PdisableJxl`. Without libjxl the bridge still builds but every encode call
 reports "not bundled" instead of writing. The encoder option mapping
 (bit depth 8/10/12/16/32, 16-bit uint vs half float, quality with lossless

@@ -4,9 +4,10 @@ Thank you for helping improve RawLens. By submitting a contribution, you agree t
 
 ## Development setup
 
-Use JDK 17 and install Android SDK 35. Build from the repository root with:
+Use JDK 21 or newer and install Android SDK 37, NDK 27.0.12077973 and CMake 3.22.1. Check out the libjxl submodule, then build from the repository root:
 
 ```bash
+git submodule update --init --recursive
 ./gradlew assembleDebug
 ```
 
@@ -14,7 +15,7 @@ Camera behavior varies significantly across Android devices, so camera-pipeline 
 
 The current activity is portrait-locked in the source manifest. Preview and control positioning still account for sensor/display rotation, but contributions should not assume that the activity can rotate into a separate landscape layout.
 
-The app currently supports AUTO, PROGRAM custom RAW-driven AE, ZSL RAW motion selection, and MANUAL exposure modes; single-frame and six-frame forward capture; optional 1–30-frame ZSL output targeting up to 30 FPS; AE metering modes; OIS; adaptive development exposure; AgX JPEG controls; denoise controls; per-lens PROGRAM AE profiles; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
+The app currently supports AUTO, PROGRAM (libcamera AGC port), ZSL, and MANUAL exposure modes with ETTR and Active D-Lighting; single-frame and six-frame forward capture; optional 1–59-frame ZSL output targeting up to 30 FPS; MFSR, HDR+, HDR bracket and offline burst merges; JPEG, JPEG XL, Ultra HDR and (optionally JXL-compressed) DNG output; `.craw` RAW video and Direct Log video with user LUTs; wavelet and AI denoise; per-lens PROGRAM AE profiles and vendor keys; and per-camera DNG metadata overrides. Changes to these behaviors should update current-state documentation and include the relevant fallback behavior.
 
 ## Pull requests
 

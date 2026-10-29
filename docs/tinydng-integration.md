@@ -52,9 +52,9 @@ TinyDNG does not decode JPEG XL. Caller-encoded strip copy-through remains
 available without libjxl for other library clients.
 
 Android defines `TINYDNG_HAVE_JXL` on `tinydng_v3` and links it to the existing
-`jxl`/`jxl_threads` targets. The configured libjxl pin is v0.12.0; use
-`-PjxlSourceDir=<checkout with submodules>` for a source checkout or
-`-PdisableJxl` to disable it. Host `tools/build_dng_native.sh` discovers
+`jxl`/`jxl_threads` targets. The libjxl pin is v0.12.0, vendored as the
+`third_party/libjxl` git submodule; use `-PjxlSourceDir=<checkout with
+submodules>` to override it or `-PdisableJxl` to disable it. Host `tools/build_dng_native.sh` discovers
 libjxl/libjxl_threads >=0.8 through pkg-config and adds their runtime paths;
 custom installs use `PKG_CONFIG_PATH`. Without libjxl, ordinary saves still
 work and JXL pixel encoding reports unsupported. Standalone TinyDNG uses

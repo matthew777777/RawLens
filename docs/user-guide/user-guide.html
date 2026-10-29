@@ -94,7 +94,7 @@
 
 <header class="cover">
   <h1>RawLens <span>• User Guide</span></h1>
-  <p><b>Photography-first RAW camera for Android.</b> Full-resolution Camera2 <code>RAW_SENSOR</code> → DNG + calibrated AgX JPEG. No gallery, no cloud, no account, no network.</p>
+  <p><b>Photography-first RAW camera for Android.</b> Full-resolution Camera2 <code>RAW_SENSOR</code> → DNG + calibrated AgX JPEG / JPEG XL, plus <code>.craw</code> RAW video and Direct Log video. No cloud, no account; the only network use is the opt-in update check in GitHub builds.</p>
   <div class="badges">
     <span class="badge lime">PORTRAIT VIEWFINDER</span>
     <span class="badge">DNG 10-BIT</span>
@@ -103,7 +103,7 @@
     <span class="badge">AgX JPEG</span>
   </div>
   <p style="margin-top:14px">How to read this manual — like a dishwasher manual: <b>1)</b> find the big picture with red numbered pins ①②③, <b>2)</b> follow the <span style="color:#ff7b7b">red arrows ➔</span> to the table, <b>3)</b> read “What it does / What to press / What you see”. Every control is explained twice: short label + long detail.</p>
-  <p class="muted" style="color:#9aa3b2">Version: matches app with Settings tabs General / JPEG / Exposure / Burst / Denoise / Lenses / Debug / About. Requires Android 10+, rear camera with <code>REQUEST_AVAILABLE_CAPABILITIES_RAW</code>.</p>
+  <p class="muted" style="color:#9aa3b2">Version: matches app with Settings tabs General / Photo / Video / Exposure / Burst / Denoise / Lenses / Debug / About. Requires Android 10+, rear camera with <code>REQUEST_AVAILABLE_CAPABILITIES_RAW</code>.</p>
 </header>
 
 <div class="warn"><b>⚠️ BEFORE YOU SHOOT — 3 things that confuse everyone</b>
@@ -124,7 +124,7 @@
 <li><a href="#slider">Chapter 5 — Manual ruler panel: LIMITS / AUTO + shutter ruler</a></li>
 <li><a href="#program">Chapter 6 — PROGRAM AE • custom panel (full editor)</a></li>
 <li><a href="#lens">Chapter 7 — Lens discovery: DIRECT vs LOGICAL vs VENDOR</a></li>
-<li><a href="#jpeg">Chapter 8 — Settings → JPEG: output + AgX look</a></li>
+<li><a href="#jpeg">Chapter 8 — Settings → Photo: output + AgX look</a></li>
 <li><a href="#exposure">Chapter 9 — Settings → Exposure: HDR, PROGRAM limits, ETTR</a></li>
 <li><a href="#othertabs">Chapter 10 — General / Burst (ZSL) / Denoise / Debug / About</a></li>
 <li><a href="#workflows">Chapter 11 — Recipes: AUTO, PROGRAM, ZSL, MANUAL, HDR, burst</a></li>
@@ -138,9 +138,9 @@
 <table>
 <tr><th>#</th><th>Save as</th><th>What it shows (from your upload)</th><th>Explained in</th></tr>
 <tr><td>Image 1</td><td><code>images/screenshot-01-lens-discovery.png</code></td><td>Lens discovery: 5 RAW lenses • 2 groups, DIRECT CAMERAS • 3, LOGICAL 3 • 2 LENSES</td><td><a href="#lens">Ch.7</a></td></tr>
-<tr><td>Image 2</td><td><code>images/screenshot-02-jpeg-adaptive.png</code></td><td>Settings → JPEG (lower half): Preserve hue 0%, Highlight +6.5 EV, Shadow 10.0 EV, Gamut 0%, Adaptive exposure, PROGRAM 50%, headroom 1.00, sky 0.85, shoulder 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
+<tr><td>Image 2</td><td><code>images/screenshot-02-jpeg-adaptive.png</code></td><td>Settings → Photo (lower half): Preserve hue 0%, Highlight +6.5 EV, Shadow 10.0 EV, Gamut 0%, Adaptive exposure, PROGRAM 50%, headroom 1.00, sky 0.85, shoulder 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
 <tr><td>Image 3</td><td><code>images/screenshot-03-exposure.png</code></td><td>Settings → Exposure: Lock NONE, Metering CENTER, ISO min/max SENSOR, Shutter min SENSOR MIN / max AUTO HANDHELD, Brightness +0.0 EV, ETTR checkbox, Highlight -0.3 EV, ISO ceiling SENSOR MAX</td><td><a href="#exposure">Ch.9</a></td></tr>
-<tr><td>Image 4</td><td><code>images/screenshot-04-jpeg-output.png</code></td><td>Settings → JPEG (upper half): JPEG output, Ultra HDR, Display P3, chroma 4:2:2, quality 100%, AgX purity/contrast/saturation 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
+<tr><td>Image 4</td><td><code>images/screenshot-04-jpeg-output.png</code></td><td>Settings → Photo (upper half): JPEG output, Ultra HDR, Display P3, chroma 4:2:2, quality 100%, AgX purity/contrast/saturation 100%</td><td><a href="#jpeg">Ch.8</a></td></tr>
 <tr><td>Image 5–9</td><td><code>images/screenshot-05 … 09.png</code></td><td><b>Arrived corrupted in chat (white with cyan/magenta/yellow streaks).</b> Please re-export and overwrite these 5 files. Placeholders are kept below.</td><td>—</td></tr>
 <tr><td>Image 10</td><td><code>images/screenshot-10-program-ae.png</code></td><td>PROGRAM AE • custom: Priority 0.50 balanced, LOCK NONE, LOCKED ISO/SHUTTER --, ISO/SHUTTER MIN/MAX, SHUTTER MAX AUTO HANDHELD, Brightness +0.0 EV, METERING CENTER</td><td><a href="#program">Ch.6</a></td></tr>
 <tr><td>Image 11</td><td><code>images/screenshot-11-manual-slider.png</code></td><td>Viewfinder with manual ruler open: S 1/14, LIMITS + AUTO, ISO 12800, WB 6769K, P PROGRAM, RAW•A</td><td><a href="#slider">Ch.5</a></td></tr>
@@ -207,7 +207,7 @@ If that works, everything else is seasoning.</div>
 <h2 id="top">Chapter 2 — Top bar in detail</h2>
 <table>
 <tr><th>Control</th><th>What it does</th><th>What you see / hear</th><th>Dishwasher analogy</th></tr>
-<tr><td>⚙ <b>Settings</b></td><td>Opens sheet with tabs General / JPEG / Exposure / Burst / Denoise / Lenses / Debug / About. Swipe left/right on empty space flips tabs like book pages. CLOSE dismisses.</td><td>Sheet slides up; status toast like <code>JPEG QUALITY • 100%</code>.</td><td>Control panel cover — everything behind one door.</td></tr>
+<tr><td>⚙ <b>Settings</b></td><td>Opens sheet with tabs General / Photo / Video / Exposure / Burst / Denoise / Lenses / Debug / About. Swipe left/right on empty space flips tabs like book pages. CLOSE dismisses.</td><td>Sheet slides up; status toast like <code>JPEG QUALITY • 100%</code>.</td><td>Control panel cover — everything behind one door.</td></tr>
 <tr><td>⚡ <b>Torch / Flash</b></td><td>Toggles LED torch for preview / capture assist. Not a xenon flash — continuous light.</td><td>Icon turns white when on. No effect on RAW exposure math except more light.</td><td>Rinse-aid boost.</td></tr>
 <tr><td>⏱ <b>Timer</b></td><td>Cycles Off → 2s → 5s. Counts down on shutter, then fires (burst fires full set).</td><td>Badge + beep/haptic; shutter disabled during countdown.</td><td>Delayed start.</td></tr>
 <tr><td><b>DNG badge + sub-line</b></td><td><b>TAP = switch capture format (see Chapter 2B).</b> Main line: <code>DNG</code> / <code>JPEG</code> / <code>JPEG + DNG</code> (+ green dot = will save). Sub-line: <code>AUTO AE</code>, <code>P NONE (both auto) 0.50 …</code>, <code>ZSL ACTIVE / ZSL … (warming) / ZSL OFF / ZSL N/A (fallback)</code>, <code>HDR ±2 EV</code>.</td><td>If you expect ZSL but see <code>ZSL N/A</code>, device rejected full-res stream combo — app fell back to normal RAW automatically. Toast after tap: <code>DNG ONLY / JPG / JPG+DNG</code>.</td><td>Display: “Eco 50° – 2:10 remaining” — tap = change program.</td></tr>
@@ -237,7 +237,7 @@ If that works, everything else is seasoning.</div>
 <tr><td>Share instantly</td><td><code>JPEG</code></td><td>1× .JPG (developed from RAW via AgX)</td><td>Messaging, small storage. JPEG is <b>always developed from the paired RAW frame</b>, never a separate capture.</td></tr>
 <tr><td>Both (safety)</td><td><code>JPEG + DNG</code></td><td>1× .DNG + 1× .JPG</td><td>Keep RAW master + ready-to-share copy. Burst/ZSL-6 = 6 pairs.</td></tr>
 </table>
-<p class="muted">ZSL note: JPEG/JPEG+DNG selections are bounded to 6 frames for memory; DNG-only can save up to 30. HDR merged mode saves one DNG by default (or 3 if “save all brackets” is on).</p>
+<p class="muted">ZSL note: JPEG/JPEG+DNG selections are bounded to 6 frames for memory; DNG-only can save the whole ring (up to 59). HDR merged mode saves one DNG by default (or 3 if “save all brackets” is on).</p>
 </div>
 </div>
 <div class="tip"><b>✅ Try it in 10 seconds</b> 1) Tap top-right pill → see <code>JPG</code> toast. 2) Take photo → check <code>DCIM/RawLens/&lt;stem&gt;.jpg</code> (no .dng). 3) Tap twice more → <code>JPG+DNG</code> → photo → you get both. 4) Tap once more → back to <code>DNG ONLY</code>.</div>
@@ -297,7 +297,7 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 <tr><td>④</td><td><code>ISO MIN: SENSOR MIN</code> / <code>ISO MAX: SENSOR MAX</code></td><td>Tap to cycle allowed bounds (e.g. 100/200/400/800 … 6400). Caps AUTO range per lens. Tighten MAX to forbid ISO 20000 mush.</td></tr>
 <tr><td>⑤</td><td><code>SHUTTER MIN: SENSOR MIN</code> / <code>SHUTTER MAX: AUTO HANDHELD</code> (lime)</td><td>Lime highlight = currently selected for editing. <code>AUTO HANDHELD</code> = 1/focal-length-safe floor (e.g. ~1/30–1/60). Tap to cycle fixed speeds or return to AUTO.</td></tr>
 <tr><td>⑥</td><td><code>Brightness bias: +0.0 EV</code> ruler</td><td>Neutral trim around PROGRAM target. + = brighter JPEG + higher exposure, – = protect highlights. Disabled in MANUAL.</td></tr>
-<tr><td>⑦</td><td><code>METERING: CENTER • TAP TO SWITCH</code></td><td>RAW metering: <code>CENTER</code> (center-weighted) → <code>AVERAGE</code> (frame average) → <code>SPOT</code> (metering target). In PROGRAM this meters the RAW, not the preview.</td></tr>
+<tr><td>⑦</td><td><code>METERING: CENTER • TAP TO SWITCH</code></td><td>RAW metering: <code>CENTER</code> (center-weighted) → <code>AVERAGE</code> (frame average) → <code>SPOT</code> (metering target) → <code>HIGHLIGHT</code> (highlight-weighted, all CFA channels). In PROGRAM this meters the RAW, not the preview.</td></tr>
 <tr><td>⑧</td><td><code>RESET PER-LENS DEFAULTS</code> + <code>DONE</code></td><td>Reset clears per-lens overrides for this lens only. DONE saves (persisted per Camera2 ID).</td></tr>
 </table>
 <figcaption>Keep this image as <code>images/screenshot-10-program-ae.png</code>. Priority 0.50 + NONE + CENTER is the sane default — start there.</figcaption>
@@ -318,7 +318,7 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 </table>
 <div class="tip"><b>✅ Recommended pick (your phone)</b> Check exactly 2: <code>ID 2 Ultra-wide 16 mm</code> + <code>ID 0 Wide 24 mm</code> → SAVE. You get clean <code>0.7× / 1×</code> pills, no duplicates. Add LOGICAL only if a telephoto is missing.</div>
 
-<h2 id="jpeg">Chapter 8 — Settings → JPEG (your Images 2 + 4)</h2>
+<h2 id="jpeg">Chapter 8 — Settings → Photo (your Images 2 + 4)</h2>
 <p>Two halves of one long scroll. Top = file container, bottom = AgX look + adaptive exposure. All JPEGs are <b>developed from the paired RAW</b>, never separate captures.</p>
 <h3>8A — Top half (Image 4)</h3>
 <table>
@@ -348,17 +348,17 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 <table>
 <tr><th>Control in Image 3</th><th>Detail</th></tr>
 <tr><td><code>Lock: NONE (both auto)</code></td><td>Mirror of PROGRAM lock. Tap to cycle NONE → ISO_LOCK → SHUTTER_LOCK.</td></tr>
-<tr><td><code>Metering: CENTER</code></td><td>Mirror of PROGRAM metering. Tap: CENTER → AVERAGE → SPOT.</td></tr>
+<tr><td><code>Metering: CENTER</code></td><td>Mirror of PROGRAM metering. Tap: CENTER → AVERAGE → SPOT → HIGHLIGHT.</td></tr>
 <tr><td><code>ISO min: SENSOR MIN</code> / <code>ISO max: SENSOR MAX</code></td><td>Tap to cycle numeric bounds. SENSOR MIN/MAX = full sensor range (widest). Narrow to limit noise (MAX) or force Hi-ISO (MIN).</td></tr>
 <tr><td><code>Shutter min: SENSOR MIN</code> / <code>Shutter max: AUTO HANDHELD</code></td><td>Same for shutter. AUTO HANDHELD = shake-safe floor. Fix MAX to 1/125 in wind, or allow 1/15 on tripod.</td></tr>
 <tr><td><code>Brightness bias: +0.0 EV</code></td><td>Same as PROGRAM bias. ± slider, neutral default.</td></tr>
 <tr><td><code>ETTR single exposure (RAW-measured)</code> ☐</td><td><b>Expose-To-The-Right:</b> pushes exposure as bright as possible without clipping RAW, from actual sensor stats. When gain ceiling binds, it keeps hand-motion shutter cap and accepts darker frame instead of trading noise for blur. Unchecked in your shot = OFF. Turn on for tripod landscapes, off for people/action.</td></tr>
-<tr><td><code>Highlight headroom: -0.3 EV</code></td><td>ETTR safety margin. -0.3 = leave 1/3 stop below clip. Tap to cycle 0 / -0.3 / -0.5 / -1.0. More negative = safer highlights, darker image.</td></tr>
+<tr><td><code>Highlight headroom: -0.5 EV</code></td><td>ETTR safety margin (Magic Lantern auto ETTR). -0.5 = leave half a stop below clip. Tap to cycle -0.5 / -1.0 / -1.5 / -2.0. More negative = safer highlights, darker image.</td></tr>
 <tr><td><code>ISO ceiling: SENSOR MAX</code></td><td>ETTR will never exceed this ISO. Lower to cap noise (e.g. 1600).</td></tr>
 </table>
 <div class="tip"><b>💡 HDR quick reference (top of this tab, not in screenshot but on same scroll)</b> <code>HDR: save all 3 brackets as separate DNGs</code> (off = merged single DNG), <code>HDR bracket range −4/0/+4 EV</code> (off = ±2 EV). Merged HDR saves one DNG by default. Debug frames live under Debug tab.</div>
 
-<h2 id="othertabs">Chapter 10 — General / Burst (ZSL) / Denoise / Lenses / Debug / About</h2>
+<h2 id="othertabs">Chapter 10 — General / Burst (ZSL) / Denoise / Lenses / Debug / About / Video</h2>
 <h3>General (Images 14–15 slot)</h3>
 <ul>
 <li><b>RAW capture, DNG backend, location, viewfinder.</b> RAW DNG calibration overrides per Camera2 ID (black/white levels, noise profile, color/calibration/forward matrices). Reset = device defaults. Undeclared tags are hidden (no unsafe overrides).</li>
@@ -368,21 +368,29 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 <h3>Burst — Zero shutter lag (ZSL)</h3>
 <ul>
 <li><b>Master:</b> <code>RAW zero shutter lag</code> checkbox = same as Z mode button. Needs compatible reprocessing or preview+RAW stream; else <code>ZSL N/A → fallback to normal RAW</code> automatically.</li>
-<li><b>Frame count 1–30 (default 2):</b> ring buffer size. 30 fps × 30 = ~1 s pre-shutter history. JPEG/JPEG+DNG bounded to 6 frames for memory; DNG-only can save all 30.</li>
+<li><b>Frame count 1–59 (default 8):</b> ring buffer size, clamped to what the HAL buffer queue fits. 30 fps × 30 = ~1 s pre-shutter history. JPEG/JPEG+DNG bounded to 6 frames for memory; DNG-only can save the whole ring.</li>
 <li><b>Badge language:</b> <code>RAW•ZSL</code> after first paired frame, <code>ZSL …</code> warming, <code>ZSL OFF</code> disabled, <code>ZSL N/A</code> fallback.</li>
 <li><b>Scoring:</b> on press, only fresh frames (readout finished by press instant) scored by recency, AF/AE state, lens movement, ISO, exposure, gyro motion. Request epochs block stale frames.</li>
-<li><b>Hybrid top-up, RAW SR merge (Linear RGB recommended / Mosaic for RawTherapee), sidecar folder grant.</b> SR forces ZSL on.</li>
+<li><b>ZSL top-up, MFSR sharp merge</b> (Wronski or KernelNet kernel, S.3 artefact rejection), <b>HDR+ merge</b> (AUTO or manual strength; turning HDR+ on pulls the mode into ZSL and off restores it), <b>burst gyro sidecars</b> (photo folder grant).</li>
+<li><b>Offline burst merges:</b> optionally save the whole ZSL ring to <code>IMG_&lt;ts&gt;_BURST.craw</code>; <code>OPEN MERGES</code> merges it later via MFSR or HDR+.</li>
 </ul>
 <h3>Denoise</h3>
 <ul>
 <li><b>AI RAW denoise (RawNIND Bayer):</b> writes denoised DNG + develops JPEG from it. Needs model in assets. Strength 0–100% (blend, no re-run). <code>Save original DNG alongside</code> off = halves storage.</li>
-<li><b>GALOSH Vulkan classical:</b> writes <code>_GALOSH</code> DNG + JPEG. Wins over AI when both on. Prewarms Vulkan on enable.</li>
+<li><b>Profiled wavelet (Vulkan):</b> noise-profile-driven wavelet denoise; strength and scales adjustable.</li>
 </ul>
 <h3>Lenses / Debug / About</h3>
 <ul>
 <li><b>Lenses:</b> same as <a href="#lens">Ch.7</a> + per-lens RAW DNG calibration link + ISO/shutter bounds link.</li>
 <li><b>Debug:</b> HDR debug frames, viewfinder overlays (grid/histogram/diagnostics), app logs, logcat file.</li>
-<li><b>About:</b> license (GPLv3+), privacy (camera permission only, no network), PhotonCamera/TinyDNG attribution.</li>
+<li><b>About:</b> version, license (GPLv3+), open-source notices and licences; GitHub builds add the update-check switch (off = no network at all) and a manual check.</li>
+</ul>
+<h3>Video</h3>
+<ul>
+<li><b>RAW video</b> → <code>.craw</code> (lossless Cinematic RAW Studio): codec Live v2 (default) / Live v1 / Fast, crop, binning (half resolution, RGB best or CFA cheap), 32-bit float stereo sound. Gyro + accelerometer stored in the file.</li>
+<li><b>Direct Log:</b> profile Rec.709 / S-Log3 (S-Gamut3.Cine) / HLG / ACES, resolution, frame rate, demosaic RCD (default) / MHC / Super pixel, crop, gain.</li>
+<li><b>S-Log3 LUT library:</b> import up to 16 <code>.cube</code> LUTs, pick assist or LUT, intensity; shown while recording, optionally baked in as Rec.709 (<code>_LUT709</code>). Not shown in the before-record viewfinder.</li>
+<li><b>Locks on record:</b> AE / AF / AWB lock or stay continuous. First video press asks for the microphone.</li>
 </ul>
 
 <h2 id="workflows">Chapter 11 — Recipes (tear-out card)</h2>
@@ -393,7 +401,7 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 <tr><td>Kids / decisive moment</td><td>Z ZSL, frames 6, hybrid top-up ON</td><td>Half-wait for <code>ZSL ACTIVE</code>, then shutter. Pick sharpest of 6.</td></tr>
 <tr><td>Full manual night</td><td>M MANUAL, ISO 1600, S 1/30, WB lock, EV n/a</td><td>Use histogram: push right without clipping. Tripod → allow 1/4s.</td></tr>
 <tr><td>Sunset HDR</td><td>Exposure tab HDR ±2 EV (or ±4 for harsh), merged DNG</td><td>HDR quick tile ON → shutter → one merged DNG.</td></tr>
-<tr><td>Cleanest landscape</td><td>ETTR ON, headroom -0.3, ISO ceiling 1600, tripod</td><td>Let ETTR converge (freezes PROGRAM), then fire.</td></tr>
+<tr><td>Cleanest landscape</td><td>ETTR ON, headroom -0.5, ISO ceiling 1600, tripod</td><td>Let ETTR converge (freezes PROGRAM), then fire.</td></tr>
 </table>
 <div class="warn"><b>⚠️ Don’t do this</b> PROGRAM + ZSL together (mutually exclusive — last one wins). ETTR + fast action (adds lag). Ultra HDR + old editor (colors wash). Select-all lenses (duplicate pills).</div>
 
@@ -421,8 +429,8 @@ Left = DNG bit depth for this lens. Right = active RAW size (here 12.5 MP Wide l
 <tr><td>Headroom / Sky / Shoulder</td><td>1.00 / 0.85 / 100%</td></tr>
 <tr><td>PROGRAM priority / lock / metering / bias</td><td>0.50 balanced / NONE / CENTER / +0.0 EV</td></tr>
 <tr><td>ISO/Shutter min/max</td><td>SENSOR MIN / SENSOR MAX, Shutter MAX AUTO HANDHELD</td></tr>
-<tr><td>ETTR / headroom / ceiling</td><td>OFF / -0.3 EV / SENSOR MAX</td></tr>
-<tr><td>ZSL frames</td><td>2 (1–30)</td></tr>
+<tr><td>ETTR / headroom / ceiling</td><td>OFF / -0.5 EV / SENSOR MAX</td></tr>
+<tr><td>ZSL frames</td><td>8 (1–59)</td></tr>
 </table>
 <h4>Glossary (plain words)</h4>
 <p><b>RAW_SENSOR / DNG:</b> uncooked sensor data + metadata — edit latitude. <b>AgX:</b> filmic tone mapper for JPEG look. <b>ETTR:</b> shoot as bright as possible without clipping. <b>ZSL:</b> camera remembers pre-press frames. <b>DIRECT vs LOGICAL:</b> real camera vs vendor-combined virtual camera. <b>Gainmap (Ultra HDR):</b> extra brightness layer for HDR screens. <b>P3:</b> wider color box. <b>Chroma subsampling:</b> color resolution squeeze. <b>p99.5 / p95:</b> brightest 0.5% / 5% pixels — used for highlight guards.</p>

@@ -13,9 +13,9 @@ then re-open the HTML and they appear inline:
 | # | Save as | Shows | Chapter |
 |---|---------|-------|---------|
 | Image 1 | `images/screenshot-01-lens-discovery.png` | Lens discovery: 5 RAW lenses, DIRECT 3, LOGICAL 3 | Ch.7 |
-| Image 2 | `images/screenshot-02-jpeg-adaptive.png` | Settings JPEG lower: hue/highlight/shadow/adaptive | Ch.8 |
+| Image 2 | `images/screenshot-02-jpeg-adaptive.png` | Settings Photo lower: hue/highlight/shadow/adaptive | Ch.8 |
 | Image 3 | `images/screenshot-03-exposure.png` | Settings Exposure + ETTR | Ch.9 |
-| Image 4 | `images/screenshot-04-jpeg-output.png` | Settings JPEG upper: UltraHDR/P3/chroma/quality/AgX | Ch.8 |
+| Image 4 | `images/screenshot-04-jpeg-output.png` | Settings Photo upper: UltraHDR/P3/chroma/quality/AgX | Ch.8 |
 | Image 5–9 | `images/screenshot-05 … 09.png` | **Arrived corrupted (white + CMY streaks). Re-export.** | slots kept |
 | Image 10 | `images/screenshot-10-program-ae.png` | PROGRAM AE custom panel | Ch.6 |
 | Image 11 | `images/screenshot-11-manual-slider.png` | Viewfinder + S 1/14 ruler, LIMITS/AUTO | Ch.5 |
@@ -83,7 +83,7 @@ Try: tap pill → `JPG` → shoot → only .jpg. Tap twice → `JPG+DNG` →
 both. Tap once more → back to `DNG ONLY`.
 If tap does nothing: you hit `RAW•A` (preview) not the top pill,
 or a save is in flight — wait and tap top-right again.
-ZSL note: JPEG modes bounded to 6 frames; DNG-only up to 30.
+ZSL note: JPEG modes bounded to 6 frames; DNG-only saves the whole ring (up to 59).
 
 ## 3. Ruler panel (Image 11: S 1/14 + LIMITS + AUTO)
 
@@ -105,7 +105,9 @@ Header: `PROGRAM • per-lens • RAW-driven (sensor ISO + shutter)`.
 - **ISO/SHUTTER MIN/MAX** — tap cycles bounds. `SHUTTER MAX: AUTO HANDHELD`
   (lime = editing) = shake-safe floor.
 - **Brightness bias +0.0 EV** — trim around target.
-- **METERING CENTER** — tap: CENTER → AVERAGE → SPOT (RAW metering).
+- **METERING CENTER** — tap: CENTER → AVERAGE → SPOT → HIGHLIGHT (RAW metering).
+  PROGRAM follows libcamera's Raspberry Pi AGC; Active D-Lighting (Photo tab
+  or quick panel) shifts its target to protect highlights.
 - **RESET PER-LENS DEFAULTS + DONE** — per-lens save.
 
 ETTR converged freezes PROGRAM and owns exposure.
@@ -146,9 +148,11 @@ One card per lens. Checked = viewfinder pill, widest first.
 
 Recommended: keep the pre-checked set → `0.7× / 1×`.
 
-## 6. Settings JPEG (Images 2 + 4)
+## 6. Settings Photo (Images 2 + 4)
 
-JPEGs are always developed from paired RAW.
+JPEG and JPEG XL are always developed from paired RAW. The format row also
+offers JPEG XL (bit depth, quality, effort, decoding speed); the demosaic row
+cycles AMaZE ↔ RCD; Active D-Lighting runs Off … Extra high.
 
 Top: Ultra HDR gainmap (Android 14+) ☐, Display P3 ☐,
 chroma `4:2:2` (tap cycles), quality `100%` (92–95% = same look, smaller),
@@ -166,39 +170,70 @@ Badge `HDR ±2 EV` = HDR on.
 
 Lock NONE, Metering CENTER, ISO min/max SENSOR MIN/MAX,
 Shutter min SENSOR MIN / max AUTO HANDHELD, Brightness `+0.0 EV`,
-ETTR ☐ (`Expose-To-The-Right`, RAW-measured; keeps shutter cap, accepts
-darker frame vs noise/blur), headroom `-0.3 EV`, ISO ceiling SENSOR MAX.
+ETTR ☐ (`Expose-To-The-Right` after Magic Lantern, RAW-measured; keeps shutter
+cap, accepts darker frame vs noise/blur), highlight headroom `-0.5 EV`
+(tap: 0.5 / 1 / 1.5 / 2 EV), ISO ceiling SENSOR MAX (or 400–6400).
 
 HDR block (same scroll): save 3 brackets vs merged single DNG,
-range ±2 vs ±4 EV. Debug frames under Debug tab.
+range ±2 vs ±4 EV, sequential trio 0 / −2 / 0 EV, experimental two-exposure
+RAW HDR (camera 0 only), face priority. Debug frames under Debug tab.
 
-## 8. General / Burst / Denoise / Debug
+## 8. General / Video / Burst / Denoise / Lenses / Debug / About
 
-- **General:** DNG backend, GPS, viewfinder resolution/mode, per-ID DNG
-  calibration (black/white, noise, matrices; Reset = defaults).
-- **Burst/ZSL:** master checkbox (= Z button), frames 1–30 (default 2),
-  30 fps ≈ 1 s history, JPEG bounded to 6, DNG-only to 30.
-  Badges: `RAW•ZSL` buffered, `ZSL …` warming, `ZSL OFF`, `ZSL N/A` fallback.
-  Scoring: recency/AF/AE/lens/ISO/shutter/gyro; epochs block stale frames.
-  Hybrid top-up, SR merge (Linear RGB / Mosaic), sidecars.
-- **Denoise:** RawNIND AI (needs models, strength blends, keep-original
-  halves storage), GALOSH Vulkan (`_GALOSH` DNG, wins over AI).
-- **Debug/About:** overlays, logs, HDR debug, GPLv3+, no network.
+- **General:** RAW capture, DNG backend, DNG compression (lossless JPEG XL,
+  off by default), GPS, viewfinder, settings backup, per-ID DNG calibration
+  (black/white, noise, matrices; Reset = defaults).
+- **Video:** see chapter 8B.
+- **Burst/ZSL:** offline merges (`OPEN MERGES`; optionally save the whole
+  ZSL ring to `IMG_<ts>_BURST.craw` and merge later), master checkbox
+  (= Z button), frames 1–59 (default 8), 30 fps ≈ 1 s history, JPEG bounded
+  to 6, DNG-only saves the ring. Badges: `RAW•ZSL` buffered, `ZSL …` warming,
+  `ZSL OFF`, `ZSL N/A` fallback. Scoring: recency/AF/AE/lens/ISO/shutter/gyro;
+  epochs block stale frames. ZSL top-up, MFSR sharp merge (Wronski or
+  KernelNet kernel, S.3 artefact rejection), HDR+ merge (AUTO or manual
+  strength), burst gyro sidecars.
+- **Denoise:** profiled wavelet (Vulkan) and RawNIND AI (needs models,
+  strength blends, keep-original halves storage).
+- **Lenses:** opens lens discovery (chapter 5).
+- **Debug:** HDR debug frames, camera diagnostics, app log.
+- **About:** version, GPLv3+, open-source notices; GitHub builds add the
+  update-check switch (off = no network at all).
+
+## 8B. Video
+
+Tap the red shutter mode. Two recorders:
+
+- **RAW video** → `.craw` (lossless, Cinematic RAW Studio). Codec Live v2
+  (default) / Live v1 / Fast, crop, binning (half resolution, RGB best or
+  CFA cheap), sound (32-bit float stereo, PCM16 fallback). Gyro and
+  accelerometer go into the file for desktop stabilization.
+- **Direct Log** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
+  HLG / ACES, resolution, frame rate, demosaic RCD (default) / MHC /
+  Super pixel, crop, gain. Real time on the test phone: 4K 24 fps,
+  1440p and 1080p 30 fps.
+- **S-Log3 LUT library:** `Import LUT (.cube)` (up to 16), choose assist or
+  LUT, intensity. The LUT shows while recording; tick *Bake selected LUT*
+  to record Rec.709 (`_LUT709` file). The before-record viewfinder does not
+  show the LUT.
+- **Locks on record:** AE / AF / AWB lock or stay continuous during takes.
+- First video press asks for the microphone; deny = silent video.
 
 ## 9. Recipes
 
 - Everyday: AUTO, 1×, Adaptive ON, 92% → focus → shutter.
 - Street: P 0.50 CENTER, ISO MAX 3200, AUTO HANDHELD.
 - Kids: ZSL ×6, wait ACTIVE → fire.
+- Handheld detail: ZSL + MFSR, hold still-ish, one press.
 - Night: M ISO 1600 1/30, histogram right without clipping.
 - Sunset: HDR ±2 (±4 harsh), merged.
-- Landscape: ETTR ON -0.3 ceiling 1600 tripod, let converge.
+- Landscape: ETTR ON -0.5 ceiling 1600 tripod, let converge.
+- Grading video: Direct Log S-Log3, monitor with a LUT, don't bake.
 
 Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 ## 10. Files + troubleshooting
 
-- Stills `DCIM/RawLens/<stem>.{dng,jpg}`, sidecars next to the DNGs
+- Stills `DCIM/RawLens/<stem>.{dng,jpg,jxl}`, video `.craw` / Direct Log, sidecars next to the DNGs
   (`burst.json + gyro/*.csv`, photo folder granted on first install;
   `Download/RawLens/<stem>/` fallback until granted).
 - Black preview = dark room ISO 20000 — add light.
@@ -211,8 +246,10 @@ Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 100%/4:2:2/off/off; AgX 100/100/100/0%; +6.5/10.0/0%; Adaptive ON/50%;
 1.00/0.85/100%; P 0.50/NONE/CENTER/+0.0; SENSOR bounds + AUTO HANDHELD;
-ETTR OFF/-0.3/SENSOR MAX; ZSL 2.
+ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Direct Log demosaic RCD; RAW video codec Live v2.
 
 Glossary: DNG = sensor + metadata; AgX = filmic mapper; ETTR = brightest
 unclipped; ZSL = pre-press memory; DIRECT = real, LOGICAL = virtual;
-gainmap = HDR layer; P3 = wide gamut; p99.5/p95 = brightest pixels.
+gainmap = HDR layer; P3 = wide gamut; p99.5/p95 = brightest pixels;
+MFSR = multi-frame super-resolution; `.craw` = lossless RAW video;
+S-Log3 = Sony log curve; LUT = colour look-up table.
