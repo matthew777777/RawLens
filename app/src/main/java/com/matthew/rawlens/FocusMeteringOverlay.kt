@@ -68,49 +68,20 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
     /** Finger wobble a hold tolerates before it becomes a drag (thumbs drift). */
     private val holdSlop = touchSlop * 2f
-    private val afPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 255, 255, 255)
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
-    }
-    private val aePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(200, 255, 255, 255)
-        style = Paint.Style.STROKE
-        strokeWidth = 1.25f * density
-    }
-    private val aeDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(200, 255, 255, 255)
-        style = Paint.Style.FILL
-    }
-    private val lockDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(221, 192, 141)
-        style = Paint.Style.FILL
-    }
-    private val lockShacklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(221, 192, 141)
-        style = Paint.Style.STROKE
-        strokeWidth = 2f * density
-        strokeCap = Paint.Cap.ROUND
-    }
-    private val lockKeyholePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(36, 27, 12)
-        style = Paint.Style.FILL
-    }
+    private val afPaint = OverlayStyle.stroke(OverlayStyle.STROKE, OverlayStyle.STROKE_DP, density)
+    private val aePaint = OverlayStyle.stroke(OverlayStyle.STROKE_SECONDARY, OverlayStyle.STROKE_THIN_DP, density)
+    private val aeDotPaint = OverlayStyle.fill(OverlayStyle.STROKE_SECONDARY, density, shadow = true)
+    private val lockDotPaint = OverlayStyle.fill(OverlayStyle.ACCENT, density, shadow = true)
+    private val lockShacklePaint = OverlayStyle.stroke(OverlayStyle.ACCENT, 2f, density, shadow = false)
+    private val lockKeyholePaint = OverlayStyle.fill(OverlayStyle.ACCENT_INK, density)
     private val lockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(221, 192, 141)
+        color = OverlayStyle.ACCENT
+        setShadowLayer(OverlayStyle.SHADOW_RADIUS_DP * density, 0f, 0.5f * density, OverlayStyle.SHADOW)
         textSize = 10f * resources.displayMetrics.density
         textAlign = Paint.Align.CENTER
     }
-    private val facePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(160, 255, 255, 255)
-        style = Paint.Style.STROKE
-        strokeWidth = 1.25f * density
-    }
-    private val faceTrackedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(221, 192, 141)
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
-    }
+    private val facePaint = OverlayStyle.stroke(OverlayStyle.STROKE_SECONDARY, OverlayStyle.STROKE_THIN_DP, density)
+    private val faceTrackedPaint = OverlayStyle.stroke(OverlayStyle.ACCENT, OverlayStyle.STROKE_DP, density)
     private val focusRect = RectF()
     /** HAL face boxes in overlay pixels; the sand one drives AF/AE. Not touch handles. */
     private var faceBoxes: List<RectF> = emptyList()

@@ -28,7 +28,7 @@ class RawExposureOverlayView @JvmOverloads constructor(context: Context, attrs: 
             0x59000000, Color.TRANSPARENT, Color.TRANSPARENT),
         floatArrayOf(0f, 0.52f, 0.58f, 0.64f, 0.82f, 0.88f, 0.94f, 1f), Shader.TileMode.REPEAT)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
-    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val line = OverlayStyle.stroke(OverlayStyle.STROKE, OverlayStyle.STROKE_DP, density)
     private val stale = Runnable {
         val f = frame
         if (f == null || SystemClock.elapsedRealtime() - f.sampledAtElapsedMs >= STALE_MS) {
@@ -98,8 +98,8 @@ class RawExposureOverlayView @JvmOverloads constructor(context: Context, attrs: 
         if (settings.spotMeter) f.spot?.let { spot ->
             val a = point(spot.left, spot.top); val b = point(spot.right, spot.bottom)
             val rect = RectF(minOf(a.first, b.first), minOf(a.second, b.second), maxOf(a.first, b.first), maxOf(a.second, b.second))
-            line.color = Color.BLACK; line.strokeWidth = 3f * density; canvas.drawRect(rect, line)
-            line.color = Color.WHITE; line.strokeWidth = density; canvas.drawRect(rect, line)
+            val r = OverlayStyle.CORNER_DP * density
+            canvas.drawRoundRect(rect, r, r, line)
         }
         canvas.restoreToCount(save)
     }

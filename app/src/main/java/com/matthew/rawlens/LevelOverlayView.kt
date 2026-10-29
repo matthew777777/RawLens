@@ -39,28 +39,12 @@ class LevelOverlayView @JvmOverloads constructor(
         private set
 
     private val density = resources.displayMetrics.density
-    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        color = Color.argb(140, 0, 0, 0)
-        strokeWidth = 3f * density
-    }
-    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeWidth = 1.5f * density
-        color = Color.WHITE
-    }
-    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        color = Color.argb(150, 255, 255, 255)
-        strokeWidth = 1.5f * density
-    }
-    private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.WHITE
-    }
+    // Soft shadow halo under the marks; replaces the old hard black outline stroke.
+    private val outlinePaint = OverlayStyle.stroke(OverlayStyle.SHADOW, 2.5f, density)
+    private val linePaint = OverlayStyle.stroke(OverlayStyle.STROKE, OverlayStyle.STROKE_DP, density, shadow = false)
+    private val trackPaint =
+        OverlayStyle.stroke(OverlayStyle.STROKE_SECONDARY, OverlayStyle.STROKE_DP, density, shadow = false)
+    private val bubblePaint = OverlayStyle.fill(OverlayStyle.STROKE, density)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -185,7 +169,7 @@ class LevelOverlayView @JvmOverloads constructor(
     }
 
     private companion object {
-        const val LEVEL_COLOR = 0xFFDDC08D.toInt()
-        const val TILT_COLOR = 0xE6FFFFFF.toInt()
+        const val LEVEL_COLOR = OverlayStyle.ACCENT
+        const val TILT_COLOR = OverlayStyle.STROKE
     }
 }
