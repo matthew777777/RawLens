@@ -59,7 +59,7 @@ val compileSrpShaders by tasks.registering(CompileSrpShaders::class) {
 }
 
 // Version source of truth is version.properties. Every real assemble/bundle
-// invocation bumps patch (1.0.0 -> 1.0.1) and versionCode by one, before the
+// invocation bumps patch (2.0.99 -> 2.1.0) and versionCode by one, before the
 // android block below consumes the values, so the APK just built already
 // carries the new version in its manifest and file name.
 val versionPropsFile = file("version.properties")
@@ -76,13 +76,17 @@ val isPackagingBuild = gradle.startParameter.taskNames.any {
 // check, and builds native code from source only (no vendored ncnn/Halide
 // archives; the emulator-tested stubs and Kotlin fallbacks take over).
 val isFdroidBuild = project.hasProperty("fdroidBuild") || System.getenv("FDROID_BUILD") == "1"
-if (isPackagingBuild && !isFdroidBuild) {
-    appVersionName.split(".").toMutableList().let { parts ->
-        parts.last().toIntOrNull()?.let { patch ->
-            parts[parts.size - 1] = (patch + 1).toString()
-            appVersionName = parts.joinToString(".")
-        }
+// `-PfreezeVersion` builds a tagged release at exactly the committed version
+// (no auto-bump), like F-Droid does.
+val freezeVersion = isFdroidBuild || project.hasProperty("freezeVersion")
+if (isPackagingBuild && !freezeVersion) {
+    val parts = appVersionName.split(".").map(String::toInt)
+    require(parts.size == 3 && parts.all { it >= 0 } && parts[2] <= 99) {
+        "VERSION_NAME must be major.minor.patch with patch between 0 and 99"
     }
+    val (major, minor, patch) = parts
+    appVersionName = if (patch == 99) "$major.${minor + 1}.0"
+        else "$major.$minor.${patch + 1}"
     appVersionCode += 1
     versionProps.setProperty("VERSION_CODE", appVersionCode.toString())
     versionProps.setProperty("VERSION_NAME", appVersionName)
