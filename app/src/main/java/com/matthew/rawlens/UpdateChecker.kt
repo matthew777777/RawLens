@@ -6,7 +6,6 @@ package com.matthew.rawlens
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection

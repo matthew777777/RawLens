@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.content.Context
-import android.util.Log
 import java.nio.ByteBuffer
 
 /**

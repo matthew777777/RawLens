@@ -11,7 +11,6 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.params.BlackLevelPattern
 import android.media.Image
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Live RAW scope (histogram / waveform parade) and focus peaking: switches,

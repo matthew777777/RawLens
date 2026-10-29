@@ -5,7 +5,6 @@ package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
-import android.util.Log
 
 /**
  * On-device transfer check: runs the fused native sampler and the four

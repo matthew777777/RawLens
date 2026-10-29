@@ -8,7 +8,6 @@ import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Duration

@@ -57,7 +57,7 @@ internal class EglPusher(private val surface: Surface) {
         // Our blit shader dithers explicitly; driver dither would add a
         // second uncontrolled noise source (and break dither-off controls).
         try { GLES20.glDisable(GLES20.GL_DITHER) } catch (_: Exception) {}
-        android.util.Log.i(TAG, "egl surface tenBit=$tenBit halfFloat=$halfFloat gl=$glVersion")
+        Log.i(TAG, "egl surface tenBit=$tenBit halfFloat=$halfFloat gl=$glVersion")
     }
 
     private data class Setup(val config: android.opengl.EGLConfig, val es3: Boolean)
@@ -107,8 +107,8 @@ internal class EglPusher(private val surface: Surface) {
                 it.contains("color_buffer_float") || it.contains("color_buffer_half_float") ||
                 it.contains("texture_norm16")
         }
-        android.util.Log.i(TAG, "egl gl extensions(capability): $interesting")
-        android.util.Log.i(TAG, "egl renderer=${GLES20.glGetString(GLES20.GL_RENDERER)} " +
+        Log.i(TAG, "egl gl extensions(capability): $interesting")
+        Log.i(TAG, "egl renderer=${GLES20.glGetString(GLES20.GL_RENDERER)} " +
             "version=${GLES20.glGetString(GLES20.GL_VERSION)}")
         return exts.contains("OES_texture_half_float")
     }

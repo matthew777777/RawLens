@@ -137,7 +137,7 @@ internal object HlTiledPrestage {
         }
         val t2 = android.os.SystemClock.elapsedRealtime()
         val maps = RtHighlightMap.directionalExtend(hil, hfw, hfh)
-        android.util.Log.i(
+        Log.i(
             HlReconstructionStage.LOG_TAG,
             "hlprestage tiles=${tileList.size} reduce=${t1 - t0}ms gate=${t2 - t1}ms " +
                 "scans=${android.os.SystemClock.elapsedRealtime() - t2}ms"

@@ -9,7 +9,6 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.MeteringRectangle
 import android.os.Handler
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Tap / press-and-hold focus and metering: the Open Camera continuous-picture
@@ -103,7 +102,11 @@ internal class TouchFocus(private val host: Host) {
             host.handler.post { start(viewX, viewY, indefinite, updateAe) }
             return
         }
-        if (!host.canSendOneShot()) return
+        if (!host.canSendOneShot()) {
+            // Video modes stop the photo session, so taps there land here.
+            Log.i(LOG_TAG, "Touch focus ignored (no photo camera session)")
+            return
+        }
         if (host.captureBusy()) {
             // A tap landing mid-still would be ignored or fail: drop it instead
             // of installing regions the scan can never use.
@@ -135,6 +138,7 @@ internal class TouchFocus(private val host: Host) {
             // has no AF regions, and setFocusAndMeteringArea() reports no focus
             // area. A hold still freezes AE indefinitely here (AF simply has
             // nothing to lock).
+            Log.i(LOG_TAG, "Touch focus: lens has no AF regions; metering only")
             if (host.isAeMeteringSupported()) {
                 host.aeRegion = host.meteringRegion(viewX, viewY)
                 host.syncDevelopFocus(viewX, viewY)
@@ -159,6 +163,7 @@ internal class TouchFocus(private val host: Host) {
         if (wasTouchActive) sendCancel()
         host.selectedFocusDistanceDiopters = null
         val region = host.meteringRegion(viewX, viewY) ?: run {
+            Log.i(LOG_TAG, "Touch focus ignored (tap maps to no metering region)")
             host.publishPeakingActiveIfChanged()
             return
         }
@@ -182,6 +187,7 @@ internal class TouchFocus(private val host: Host) {
         if (!AutoFocusPolicy.supportsTouchTrigger(host.afAvailableModes())) {
             // Open Camera still applies the focus/metering rectangles in modes where an explicit
             // AUTO trigger is unavailable; continuous AF then keeps running with the new region.
+            Log.i(LOG_TAG, "Touch focus: no AUTO mode; region set, continuous AF keeps running")
             active = false
             host.updateRepeatingRequest()
             host.onState("FOCUS AREA SET")
@@ -200,7 +206,8 @@ internal class TouchFocus(private val host: Host) {
                 if (active && !completed) sendStart()
             }.also { host.handler.postDelayed(it, START_SETTLE_MS) }
             host.publishPeakingActiveIfChanged()
-        } catch (_: CameraAccessException) {
+        } catch (failure: CameraAccessException) {
+            Log.w(LOG_TAG, "Touch focus request failed: ${host.cameraAccessReason(failure)}")
             abortOnError()
         }
     }
@@ -384,7 +391,10 @@ internal class TouchFocus(private val host: Host) {
     }
 
     private fun sendStart() {
-        if (!host.canSendOneShot()) return
+        if (!host.canSendOneShot()) {
+            Log.i(LOG_TAG, "AF START dropped (no photo camera session)")
+            return
+        }
         if (host.captureBusy()) {
             // START mid-still is ignored or fails: wait out the capture. The
             // touch timeout bounds this; it aborts START once completed.
@@ -412,7 +422,8 @@ internal class TouchFocus(private val host: Host) {
         if (!host.canSendOneShot()) return
         try {
             host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL, aeOnForDynamic = false)
-        } catch (_: CameraAccessException) {
+        } catch (failure: CameraAccessException) {
+            Log.w(LOG_TAG, "AF CANCEL failed: ${host.cameraAccessReason(failure)}")
         }
     }
 

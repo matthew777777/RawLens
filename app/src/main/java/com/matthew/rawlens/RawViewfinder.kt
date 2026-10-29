@@ -15,7 +15,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.AttributeSet
-import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView

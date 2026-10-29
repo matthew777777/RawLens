@@ -30,7 +30,6 @@ import android.os.PowerManager
 import android.net.Uri
 import android.hardware.SensorManager
 import android.os.Bundle
-import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent

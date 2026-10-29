@@ -18,7 +18,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.util.Log
 import android.util.Range
 import android.util.Size
 import java.io.File
@@ -658,9 +657,11 @@ internal class RawVideoRecorder(
                 addTarget(r.surface)
                 applyVideoManualToRequest(this, charsAtStart)
             }.build()
-            session!!.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
+            val afTrace = AfTrace(TAG, "RAW video")
+            val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(session: CameraCaptureSession,
                     request: CaptureRequest, result: TotalCaptureResult) {
+                    afTrace.onResult(result)
                     val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
                     synchronized(resultLock) {
                         captureResults[ts] = result
@@ -668,7 +669,9 @@ internal class RawVideoRecorder(
                         resultLock.notifyAll()
                     }
                 }
-            }, handler)
+            }
+            repeatingCallback = callback
+            session!!.setRepeatingRequest(req, callback, handler)
         } catch (e: Exception) {
             abortPipelineThreads()
             teardown()
@@ -853,12 +856,15 @@ internal class RawVideoRecorder(
                     addTarget(surf)
                     applyVideoManualToRequest(this, chars)
                 }.build()
-                sess.setRepeatingRequest(req, null, handler)
+                sess.setRepeatingRequest(req, repeatingCallback, handler)
             } catch (e: Exception) {
                 Log.w(TAG, "video manual refresh failed: ${e.message}")
             }
         }
     }
+
+    /** Reused by [refreshVideoRequest]; a null callback there silently ended result pairing. */
+    private var repeatingCallback: CameraCaptureSession.CaptureCallback? = null
 
     internal fun applyVideoManualToRequest(
         builder: CaptureRequest.Builder,

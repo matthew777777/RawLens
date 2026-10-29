@@ -14,7 +14,6 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Log
 
 /**
  * Keeps full-resolution RAW develop work in Android's foreground scheduling group after the

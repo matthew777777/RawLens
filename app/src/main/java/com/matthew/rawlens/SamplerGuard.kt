@@ -4,7 +4,6 @@
 package com.matthew.rawlens
 
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Live RAW samplers (scope, peaking, metering) are best-effort per-frame work

@@ -2,7 +2,6 @@ package com.matthew.rawlens
 
 import android.hardware.camera2.CaptureResult
 import android.media.Image
-import android.util.Log
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import kotlin.math.roundToInt
