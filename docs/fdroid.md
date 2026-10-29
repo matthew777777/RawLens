@@ -46,7 +46,7 @@ pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 2. Make sure the tagged tree builds from a clean clone with submodules (clone to /tmp and run
    the command above).
 3. Tag the release with a plain version tag matching `VERSION_NAME`, e.g.
-   `2.0.0` (the in-app updater and F-Droid auto-update both expect this
+   `2.0.1` (the in-app updater and F-Droid auto-update both expect this
    scheme; never reuse or move a tag after pushing).
 4. Push the tag. `UpdateCheckMode: Tags` picks up future releases
    automatically once the metadata below is merged.
@@ -63,15 +63,14 @@ pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 ## fdroiddata recipe
 
 File: `metadata/com.matthew.rawlens.yml` in a fork of
-`https://gitlab.com/fdroid/fdroiddata`. Replace `<full-hash>` with the commit
-hash the `2.0.0` tag points to (`git rev-list -n 1 2.0.0`):
+`https://gitlab.com/fdroid/fdroiddata`. `commit` is the full hash the
+release tag points to (`git rev-list -n 1 2.0.1`):
 
 ```yaml
 Categories:
-  - Multimedia
+  - Camera
 License: GPL-3.0-or-later
 AuthorName: matthew777777
-WebSite: https://github.com/matthew777777/RawLens
 SourceCode: https://github.com/matthew777777/RawLens
 IssueTracker: https://github.com/matthew777777/RawLens/issues
 Changelog: https://github.com/matthew777777/RawLens/releases
@@ -82,57 +81,67 @@ RepoType: git
 Repo: https://github.com/matthew777777/RawLens.git
 
 Builds:
-  - versionName: 2.0.0
-    versionCode: 2000
+  - versionName: 2.0.1
+    versionCode: 2001
     commit: <full-hash>
-    submodules: true
     timeout: 10800
+    subdir: app
+    submodules: true
     gradle:
-      - yes
-    output: app/build/outputs/apk/release/RawLens-*-release.apk
+      - fdroid
     scanignore:
       - app/src/main/assets/models
-      - python/rawnind-train
       - tools/sr-pipeline/src/main/resources/kernelnet/kernelnet_aniso_v2_2_params.ncnn.bin
-      - app/src/androidTest/assets/amaze_reference.bin
     scandelete:
       - app/src/main/cpp/ncnn
       - app/src/main/cpp/halide/filters
-    gradleprops:
-      - fdroidBuild
-
-MaintainerNotes: |-
-  Source-only build (-PfdroidBuild): the vendored ncnn/Halide .a archives
-  are deleted below; ncnnMl is built from pinned upstream ncnn sources
-  (CPU-only) with the real JNI bridge, and the Halide libraries use
-  Kotlin/legacy fallbacks. scanignore covers only
-  trained neural-network weight files (.ncnn.bin), which are data, not
-  code; the .spv shaders need no exception (not flagged). Upstream
-  releases are plain version tags (e.g. 2.0.0) with the version
-  frozen in app/version.properties.
+      - python/rawnind-train
+      - tools/rcd-baseline
+      - app/src/androidTest/assets/amaze_reference.bin
+      - app/src/test/resources/opposed-opencl-reference.bin
+      - third_party/libjxl/testdata
+      - third_party/libjxl/tools/scripts/test_cost-armhf.zip
+      - third_party/libjxl/tools/scripts/test_cost-i386.zip
+      - third_party/libjxl/tools/scripts/test_cost-x64.zip
+      - third_party/libjxl/third_party/brotli/java
+      - third_party/libjxl/third_party/brotli/js
+      - third_party/libjxl/third_party/brotli/tests/testdata
+      - third_party/libjxl/third_party/lcms/testbed
+      - third_party/libjxl/third_party/lcms/utils/delphi
+    ndk: 27.0.12077973
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: app/version.properties|VERSION_CODE=(\d+)|.|VERSION_NAME=(.+)
-CurrentVersion: 2.0.0
-CurrentVersionCode: 2000
+CurrentVersion: 2.0.1
+CurrentVersionCode: 2001
 ```
 
-(Order and escaping above match `fdroid rewritemeta` canonical output;
-verify with `fdroid rewritemeta` + `fdroid lint` + `fdroid checkupdates --auto`
-before pushing recipe changes.)
+`gradle: [fdroid]` makes fdroidserver run `assembleFdroidRelease`; with
+`subdir: app` and no `output` it picks the single APK from
+`app/build/outputs/apk/fdroid/release/`. Verify recipe changes with
+`fdroid rewritemeta`, `fdroid lint` and `fdroid scanner` before pushing.
+
+What the scan entries are:
+
+- `scanignore` (shipped, loaded at runtime): trained ncnn model weights
+  (`.ncnn.bin`, data, not code): the RawNIND denoiser and FlowNet in
+  `app/src/main/assets/models`, and the KernelNet MFSR kernel weights, a
+  classpath resource of `:tools:sr-pipeline`.
+- `scandelete` (never needed by the fdroid build): the vendored prebuilt
+  ncnn/glslang and Halide `.a` archives (the flavor builds from source
+  instead), the desktop training checkpoint, an archived benchmark source
+  tarball, two golden test fixtures, and libjxl's / brotli's / lcms's test
+  corpora and language bindings (only referenced when `BUILD_TESTING`, which
+  RawLens forces off).
 
 Notes for reviewers (also useful in the merge-request description):
 
 - License is GPL-3.0-or-later (`LICENSE`); third-party notices in `NOTICE.md`.
 - No proprietary dependencies: AndroidX + JUnit/Mockito only; no Play
   Services, Firebase, ads, or analytics.
-- The GitHub updater (GitHub releases API + in-app APK install) exists
-  upstream but is compiled out of F-Droid builds; no update-related Anti-Feature
-  applies to the packaged build.
-- `scanignore` covers only trained-model weight files (`.ncnn.bin`, data
-  not code) and one Amaze golden-test fixture; the `.spv` shaders are not
-  flagged by the scanner and need no exception.
+- The GitHub updater exists only in the `github` flavor; the `fdroid` APK
+  has no `INTERNET` permission, so no network Anti-Feature applies.
 
 ## Submission steps
 
@@ -160,12 +169,13 @@ listing shows release notes.
 ```bash
 git clone --recurse-submodules https://github.com/matthew777777/RawLens.git /tmp/rawlens-fdroid
 cd /tmp/rawlens-fdroid
-git checkout 2.0.0  # the release tag
+git checkout 2.0.1  # the release tag
 git submodule update --init --recursive
-./gradlew :app:assembleRelease -PfdroidBuild
+./gradlew :app:assembleFdroidRelease
 ```
 
-Expected: `app/build/outputs/apk/release/RawLens-2.0.0-release.apk` with
-`versionCode` equal to the tagged `VERSION_CODE`, no `rawLensBgu` /
-`rawLensHdrMeter` / `rawLensScopeMeter` `.so` files inside, and `ncnnMl`
-built from the stub. `aapt dump badging` on the APK confirms the versions.
+Expected: exactly one APK, `app/build/outputs/apk/fdroid/release/RawLens-2.0.1-release.apk`,
+with `versionCode` equal to the tagged `VERSION_CODE`, no `INTERNET` /
+`REQUEST_INSTALL_PACKAGES` permission, no `rawLensBgu` / `rawLensHdrMeter` /
+`rawLensScopeMeter` `.so` files, and `ncnnMl` built from upstream ncnn sources.
+`aapt2 dump badging` on the APK confirms the versions and permissions.

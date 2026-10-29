@@ -2,6 +2,16 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
+## [2.0.1] - 2026-10-29
+
+### Changed
+
+- **Build flavors** `github` (default) and `fdroid` replace the `-PfdroidBuild` property. The fdroid flavor compiles out the updater, builds native code from source only, and declares no `INTERNET` / `REQUEST_INSTALL_PACKAGES` permission or FileProvider (those now live in `src/github/` only); any fdroid task freezes the version and packages a single universal APK. GitHub release APKs are now under `app/build/outputs/apk/github/release/` with unchanged file names
+
+### Fixed
+
+- Diagnostics: an in-process log fallback for devices where logd hands the app no lines (session logs were empty on a Xiaomi 14T Pro), complete autofocus tracing, and video recorders keep their capture callback across manual-control refreshes (result pairing no longer ends mid-take)
+
 ## [2.0.0] - 2026-10-28
 
 Everything since 1.0.192 (2026-10-15). 2.0 rebuilds exposure on published
