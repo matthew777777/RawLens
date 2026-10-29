@@ -25,17 +25,10 @@ class CameraGuideOverlay @JvmOverloads constructor(
     private var contentTop = 0f
     private var contentEnd = 0f
     private var contentBottom = 0f
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(64, 255, 255, 255)
-        strokeWidth = density
-    }
-    private val letterboxPaint = Paint().apply {
-        color = Color.argb(204, 0, 0, 0)
-    }
-    private val letterboxEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(160, 255, 255, 255)
-        strokeWidth = density
-    }
+    private val gridPaint = OverlayStyle.stroke(OverlayStyle.GRID, OverlayStyle.HAIRLINE_DP, density, shadow = false)
+    private val letterboxPaint = Paint().apply { color = OverlayStyle.MASK }
+    private val letterboxEdgePaint =
+        OverlayStyle.stroke(OverlayStyle.STROKE_SECONDARY, OverlayStyle.HAIRLINE_DP, density, shadow = false)
 
     /**
      * RAW Video framing guides. When [videoActive] with a non-open [videoCrop],
