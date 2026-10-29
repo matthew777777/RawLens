@@ -57,7 +57,7 @@ enum class VideoDemosaic(val label: String) {
 
     companion object {
         fun fromPreference(value: String?): VideoDemosaic =
-            entries.firstOrNull { it.name == value } ?: MHC
+            entries.firstOrNull { it.name == value } ?: RCD
     }
 }
 
@@ -225,11 +225,11 @@ class DirectLogRecorder(
      */
     var preferMhc: Boolean = true
     /**
-     * Demosaic backend for the take (default [VideoDemosaic.MHC]).
+     * Demosaic backend for the take (default [VideoDemosaic.RCD]).
      * Decided at take start like [logProfile]; the Video tab applies
      * to the next take. RCD init failure falls back to fused MHC.
      */
-    @Volatile var videoDemosaic: VideoDemosaic = VideoDemosaic.MHC
+    @Volatile var videoDemosaic: VideoDemosaic = VideoDemosaic.RCD
     /**
      * Lens-shading (vignetting) correction (default on): the per-frame
      * HAL gain map multiplies demosaiced RGB pre-WB, like the
