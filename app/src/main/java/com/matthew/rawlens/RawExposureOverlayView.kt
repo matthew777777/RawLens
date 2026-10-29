@@ -22,9 +22,11 @@ class RawExposureOverlayView @JvmOverloads constructor(context: Context, attrs: 
     private var zebraShader: ComposeShader? = null
     private val density = resources.displayMetrics.density
     // Screen-space 45-degree stripes: independent of the RAW grid, zoom, orientation and resolution.
-    private val stripes = LinearGradient(0f, 0f, 7f * density, 7f * density,
-        intArrayOf(Color.BLACK, Color.BLACK, Color.WHITE, Color.WHITE, Color.BLACK),
-        floatArrayOf(0f, 0.47f, 0.5f, 0.97f, 1f), Shader.TileMode.REPEAT)
+    // Thin translucent white lines with a soft dark rim keep the image readable between stripes.
+    private val stripes = LinearGradient(0f, 0f, 6f * density, 6f * density,
+        intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, 0x59000000, 0xE6FFFFFF.toInt(), 0xE6FFFFFF.toInt(),
+            0x59000000, Color.TRANSPARENT, Color.TRANSPARENT),
+        floatArrayOf(0f, 0.52f, 0.58f, 0.64f, 0.82f, 0.88f, 0.94f, 1f), Shader.TileMode.REPEAT)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val stale = Runnable {
@@ -45,7 +47,7 @@ class RawExposureOverlayView @JvmOverloads constructor(context: Context, attrs: 
                 bitmap?.recycle()
                 bitmap = Bitmap.createBitmap(value.cols, value.rows, Bitmap.Config.ARGB_8888)
                 bitmapShader = BitmapShader(bitmap!!, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-                // The RAW classifier supplies coverage; camera-style white/black stripes supply colour.
+                // The RAW classifier supplies coverage; the translucent stripes supply colour and alpha.
                 zebraShader = ComposeShader(stripes, bitmapShader!!, PorterDuff.Mode.DST_IN)
             }
             bitmap!!.setPixels(value.colors, 0, value.cols, 0, 0, value.cols, value.rows)
