@@ -65,8 +65,10 @@ struct TonemapShadowParams {
     float thresholdIre = 10.0f;
     // Diagonal stripe period in pixels. Must be >= 2.
     float stripePeriod = 8.0f;
-    ColorRgba stripeColorA{0.0f, 0.0f, 0.0f, 1.0f};
-    ColorRgba stripeColorB{1.0f, 1.0f, 1.0f, 1.0f};
+    // Clear gap + translucent white stripe: the image stays readable between
+    // stripes (matches the RAW assist zebra and OverlayStyle on the Kotlin side).
+    ColorRgba stripeColorA{0.0f, 0.0f, 0.0f, 0.0f};
+    ColorRgba stripeColorB{1.0f, 1.0f, 1.0f, 0.6f};
 };
 
 struct FalseColorRange {
