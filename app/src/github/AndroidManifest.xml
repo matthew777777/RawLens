@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- github flavor only: everything the in-app GitHub updater needs. The
+     fdroid flavor compiles the updater out (BuildConfig.ENABLE_UPDATE_CHECK
+     = false) and never sees these entries; checkFdroidPermissions in
+     app/build.gradle.kts fails the build if they ever reach it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- In-app updater: fetch the latest GitHub release metadata on
+        startup (and only that host) plus the release APK itself.
+        No analytics, no telemetry. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- In-app updater: install the downloaded release APK. The user still
+        approves unknown-sources per app and confirms every install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application>
+        <!-- In-app updater: serves the staged release APK to the system
+            installer. Paths limited to the update staging dir (filepaths). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/filepaths" />
+        </provider>
+    </application>
+</manifest>

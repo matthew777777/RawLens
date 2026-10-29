@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
  * style). Log-only, never fails the build — every outcome is data.
  *
  * Run:
- *   ./gradlew :app:installRelease :app:installReleaseAndroidTest
+ *   ./gradlew :app:installGithubRelease :app:installGithubReleaseAndroidTest
  *   adb shell am instrument -w -e rawlensLogForceMain10 true [-e frames 15] \
  *     -e class com.matthew.rawlens.LogVideoProbeForceMain10DeviceTest \
  *     com.matthew.rawlens.test/androidx.test.runner.AndroidJUnitRunner

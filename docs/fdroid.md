@@ -6,14 +6,15 @@ step-by-step submission process.
 
 ## What the F-Droid build is
 
-`./gradlew :app:assembleRelease -PfdroidBuild` (or `FDROID_BUILD=1`) produces
-a **source-only** build:
+The F-Droid build is the `fdroid` product flavor (dimension `distribution`;
+`github` is the default flavor). `./gradlew :app:assembleFdroidRelease`
+produces a **source-only** build:
 
-- The vendored `libncnn.a` / `libglslang.a` archives are ignored; `ncnnMl`
-  is compiled against upstream ncnn built from the pinned source archive
-  (CPU-only, same pin as the desktop host build). AI denoise, FlowNet
-  alignment, and the KernelNet MFSR kernel all run — on CPU
-  instead of GPU.
+- The vendored `libncnn.a` / `libglslang.a` archives are ignored
+  (`-DRAWLENS_PREBUILT_NATIVE=OFF`, set by the flavor); `ncnnMl` is compiled
+  against upstream ncnn built from the pinned source archive (CPU-only, same
+  pin as the desktop host build). AI denoise, FlowNet alignment, and the
+  KernelNet MFSR kernel all run — on CPU instead of GPU.
 - JPEG XL is built from the `third_party/libjxl` git submodule (libjxl
   v0.12.0, BSD-3-Clause), so the recipe needs `submodules: true`; no
   configure-time download is involved.
@@ -21,12 +22,15 @@ a **source-only** build:
   and `rawLensScopeMeter` are not built. The viewfinder fails over to the
   legacy engine, the HDR/scope meters use their Kotlin fallbacks.
 - The in-app GitHub update check is compiled out (`BuildConfig.ENABLE_UPDATE_CHECK
-  == false`); Settings → About shows no updater UI. Its `INTERNET` and
-  `REQUEST_INSTALL_PACKAGES` permissions are stripped from the manifest
-  (`app/fdroid/AndroidManifest.xml` overlay), enforced by the
-  `checkFdroidPermissions` task, which fails the build if they survive.
-- The version is frozen from `app/version.properties` (no auto-bump), so the
-  built APK matches the tagged release.
+  == false` in the fdroid flavor); Settings → About shows no updater UI. Its
+  `INTERNET` and `REQUEST_INSTALL_PACKAGES` permissions and its
+  `FileProvider` are declared only in `app/src/github/AndroidManifest.xml`,
+  so they never enter the fdroid manifest; the `checkFdroidPermissions` task
+  fails the build if they ever do. The fdroid APK requests no network access.
+- Any requested `fdroid` task freezes the version from
+  `app/version.properties` (no auto-bump), so the built APK matches the
+  tagged release, and disables ABI splits, so exactly one universal APK lands
+  in `app/build/outputs/apk/fdroid/release/` (fdroidserver rejects more).
 - Only `arm64-v8a` + `armeabi-v7a` are packaged; the x86/x86_64 emulator
   ABIs (and their ~18MB-per-ABI from-source ncnn) stay local-only.
 

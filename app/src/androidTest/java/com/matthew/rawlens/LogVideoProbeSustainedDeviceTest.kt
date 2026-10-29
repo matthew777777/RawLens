@@ -17,7 +17,7 @@ import org.junit.runner.RunWith
  * output profile is Main10 and logs sustained submit fps.
  *
  * Run:
- *   ./gradlew :app:installRelease :app:installReleaseAndroidTest
+ *   ./gradlew :app:installGithubRelease :app:installGithubReleaseAndroidTest
  *   adb shell am instrument -w -e rawlensLogSustained true [-e seconds 10] \
  *     -e class com.matthew.rawlens.LogVideoProbeSustainedDeviceTest \
  *     com.matthew.rawlens.test/androidx.test.runner.AndroidJUnitRunner
