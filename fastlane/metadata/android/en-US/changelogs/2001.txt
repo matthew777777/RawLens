@@ -1,0 +1,4 @@
+RawLens 2.0.1
+- F-Droid build is now a dedicated flavor: no network permission at all
+- Diagnostics: log fallback for devices that withhold logcat, full autofocus tracing
+- Video: capture results stay paired across manual-control changes
