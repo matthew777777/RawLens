@@ -35,13 +35,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- In-app updater: fetch the latest GitHub release metadata on
-        startup (and only that host) plus the release APK itself.
+    <!-- No INTERNET here: the only network use is the in-app updater,
+        which exists in the github flavor alone (src/github/AndroidManifest.xml).
         No analytics, no telemetry. -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <!-- In-app updater: install the downloaded release APK. The user still
-        approves unknown-sources per app and confirms every install. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- No Auto Backup: settings are hardware-tied (lens setup, calibration)
         and a restore impersonates a fresh install — uninstall must reset.
@@ -84,16 +80,5 @@
             android:exported="false"
             android:screenOrientation="portrait">
         </activity>
-        <!-- In-app updater: serves the staged release APK to the system
-            installer. Paths limited to the update staging dir (filepaths). -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/filepaths" />
-        </provider>
     </application>
 </manifest>

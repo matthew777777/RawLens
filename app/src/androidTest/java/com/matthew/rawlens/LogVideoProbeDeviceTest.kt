@@ -19,7 +19,7 @@ import org.junit.runner.RunWith
  * claims support but configure/surface/drain breaks.
  *
  * Run:
- *   ./gradlew :app:installRelease
+ *   ./gradlew :app:installGithubRelease
  *   adb shell am instrument -w -e rawlensLogProbe true \
  *     -e class com.matthew.rawlens.LogVideoProbeDeviceTest \
  *     com.matthew.rawlens.test/androidx.test.runner.AndroidJUnitRunner

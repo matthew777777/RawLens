@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Black-box checks of the fully optimized release APK; backs up/restores the lens profile.
 
-Build :app:assembleRelease and install its arm64 APK first. This script verifies
+Build :app:assembleGithubRelease and install its arm64 APK first. This script verifies
 the installed package version, non-debuggable flags and APK checksum, forces
 ART speed compilation, then uses only the public UI. It writes a test DNG.
 """
@@ -78,8 +78,8 @@ def shot(name):
 def logs():
  pid=shell('pidof',pkg).split()[0]
  return run('logcat','-d','--pid',pid,'-s','RawLensCamera:I','AndroidRuntime:E')
-metadata=Path(__file__).resolve().parents[1]/'app/build/outputs/apk/release/output-metadata.json'
-d=json.loads(metadata.read_text());assert d['variantName']=='release';element=next(e for e in d['elements'] if any(f.get('value',f.get('identifier'))=='arm64-v8a' for f in e.get('filters',[])))
+metadata=Path(__file__).resolve().parents[1]/'app/build/outputs/apk/github/release/output-metadata.json'
+d=json.loads(metadata.read_text());assert d['variantName']=='githubRelease';element=next(e for e in d['elements'] if any(f.get('value',f.get('identifier'))=='arm64-v8a' for f in e.get('filters',[])))
 apk=metadata.parent/element['outputFile']
 print('Checking installed full release',apk,flush=True)
 print('Using installed release for repeated UI checks',flush=True)

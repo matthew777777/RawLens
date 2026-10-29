@@ -71,11 +71,13 @@ var appVersionName = versionProps.getProperty("VERSION_NAME") ?: "1.0.0"
 val isPackagingBuild = gradle.startParameter.taskNames.any {
     it.contains("assemble", ignoreCase = true) || it.contains("bundle", ignoreCase = true)
 } && !gradle.startParameter.isDryRun
-// F-Droid / reproducible builds: `-PfdroidBuild` (or FDROID_BUILD=1) freezes
-// the version from version.properties, disables the in-app GitHub update
-// check, and builds native code from source only (no vendored ncnn/Halide
-// archives; the emulator-tested stubs and Kotlin fallbacks take over).
-val isFdroidBuild = project.hasProperty("fdroidBuild") || System.getenv("FDROID_BUILD") == "1"
+// F-Droid builds the fdroid flavor (`assembleFdroidRelease`, recipe
+// `gradle: [fdroid]`). The flavor itself carries the code, manifest and
+// native differences (productFlavors below); the two things AGP cannot
+// vary per flavor, ABI splits and the version auto-bump, key off the
+// requested tasks instead: an fdroid build freezes the version from
+// version.properties and packages exactly one universal APK.
+val isFdroidBuild = gradle.startParameter.taskNames.any { it.contains("fdroid", ignoreCase = true) }
 // `-PfreezeVersion` builds a tagged release at exactly the committed version
 // (no auto-bump), like F-Droid does.
 val freezeVersion = isFdroidBuild || project.hasProperty("freezeVersion")
@@ -114,7 +116,6 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("boolean", "ENABLE_UPDATE_CHECK", if (isFdroidBuild) "false" else "true")
         // ARM-only app: every build (local, CI, store) ships arm64-v8a +
         // armeabi-v7a. x86/x86_64 emulator ABIs are excluded, so native
         // code (libjpeg-turbo, ncnn, Halide filters) is never compiled
@@ -130,9 +131,6 @@ android {
                 // for every build type. AGP otherwise uses RelWithDebInfo
                 // (-O2 -g) even for the release build type.
                 arguments("-DCMAKE_BUILD_TYPE=Release")
-                if (isFdroidBuild) {
-                    arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
-                }
                 // JXL source: -PjxlSourceDir=<libjxl checkout> wins; else the
                 // pinned third_party/libjxl submodule when checked out (F-Droid
                 // builds it from there with submodules: true, no network);
@@ -151,25 +149,41 @@ android {
         }
     }
 
-    buildFeatures {
-        buildConfig = true
-    }
-
-    sourceSets {
-        getByName("release") {
-            // F-Droid builds strip the updater-only permissions via the
-            // overlay manifest (merged over src/main/AndroidManifest.xml).
-            if (isFdroidBuild) {
-                manifest.srcFile("fdroid/AndroidManifest.xml")
+    // Distribution channel. github (default): GitHub releases with the
+    // in-app updater; its INTERNET / REQUEST_INSTALL_PACKAGES permissions
+    // and FileProvider live in src/github/AndroidManifest.xml only.
+    // fdroid: the F-Droid build: updater compiled out, no updater
+    // permissions, native code from source only (no vendored ncnn/Halide
+    // archives; ncnn from the pinned source tarball, Kotlin/legacy
+    // fallbacks for the Halide filters). See docs/fdroid.md.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+            isDefault = true
+            buildConfigField("boolean", "ENABLE_UPDATE_CHECK", "true")
+        }
+        create("fdroid") {
+            dimension = "distribution"
+            buildConfigField("boolean", "ENABLE_UPDATE_CHECK", "false")
+            externalNativeBuild {
+                cmake {
+                    arguments("-DRAWLENS_PREBUILT_NATIVE=OFF")
+                }
             }
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     // Per-ABI APK splits plus a universal APK. Devices download/install
     // only their ABI's native libraries (roughly half the native payload
     // of the universal APK); the universal APK remains the fallback the
-    // F-Droid recipe and older links expect. F-Droid builds disable
-    // splits: that channel ships exactly one universal APK.
+    // older links expect. F-Droid builds (fdroid tasks requested, see
+    // isFdroidBuild) disable splits: that channel ships exactly one
+    // universal APK, and fdroidserver rejects more than one.
     splits {
         abi {
             isEnable = !isFdroidBuild
@@ -311,15 +325,15 @@ android {
 
 }
 
-// R8 mapping per release: RawLens-<version>-release-mapping.txt.gz next to
-// the APK (attach it to the GitHub release) and a copy in release-mappings/
+// R8 mapping per GitHub release: RawLens-<version>-release-mapping.txt.gz
+// next to the githubRelease APK (attach it to the GitHub release) and a copy in release-mappings/
 // at the repo root, which `clean` never touches. Retrace a crash with
 //   retrace RawLens-<version>-release-mapping.txt stacktrace.txt
 // (Android SDK cmdline-tools / R8).
 val archiveReleaseMapping by tasks.registering {
     description = "Saves the release R8 mapping (gzip) next to the APK and in release-mappings/."
-    val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
-    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
+    val mappingFile = layout.buildDirectory.file("outputs/mapping/githubRelease/mapping.txt")
+    val apkDir = layout.buildDirectory.dir("outputs/apk/github/release")
     val archiveDir = rootProject.layout.projectDirectory.dir("release-mappings")
     val name = "RawLens-$appVersionName-release-mapping.txt.gz"
     inputs.file(mappingFile)
@@ -336,38 +350,37 @@ val archiveReleaseMapping by tasks.registering {
         println("R8 mapping saved: ${targets.joinToString { it.path }}")
     }
 }
-tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+tasks.matching { it.name == "assembleGithubRelease" || it.name == "bundleGithubRelease" }.configureEach {
     finalizedBy(archiveReleaseMapping)
 }
 
-// F-Droid builds must not ship the updater-only permissions (stripped by
-// app/fdroid/AndroidManifest.xml). Fails the build if they survive the
-// manifest merge, so a future manifest refactor cannot silently re-add
-// them to store builds.
-if (isFdroidBuild) {
-    val checkFdroidPermissions by tasks.registering {
-        description = "Fails if updater-only permissions survived the F-Droid manifest merge."
-        doLast {
-            // The output of processReleaseMainManifest, the task this check
-            // finalizes. (merged_manifests/release is written later by
-            // processReleaseManifest: a stale copy from the previous build,
-            // or absent on a clean F-Droid build.)
-            val merged = layout.buildDirectory
-                .dir("intermediates/merged_manifest/release/processReleaseMainManifest")
-                .get().asFile.walkTopDown().firstOrNull { it.name == "AndroidManifest.xml" }
-                ?: error("checkFdroidPermissions: merged release manifest not found")
-            val leaked = listOf(
-                "android.permission.INTERNET",
-                "android.permission.REQUEST_INSTALL_PACKAGES",
-            ).filter { merged.readText().contains(it) }
-            if (leaked.isNotEmpty()) {
-                error("checkFdroidPermissions: stripped permissions still present: $leaked")
-            }
+// The fdroid flavor must not ship the updater-only permissions (declared
+// only in src/github/AndroidManifest.xml). Fails the build if they reach
+// the merged fdroid manifest, so a future manifest refactor (or a library
+// that declares them) cannot silently re-add them to F-Droid builds.
+val checkFdroidPermissions by tasks.registering {
+    description = "Fails if updater-only permissions reached the fdroid release manifest."
+    val mergedDir = layout.buildDirectory
+        .dir("intermediates/merged_manifest/fdroidRelease/processFdroidReleaseMainManifest")
+    doLast {
+        // The output of processFdroidReleaseMainManifest, the task this
+        // check finalizes. (merged_manifests/fdroidRelease is written later
+        // by processFdroidReleaseManifest: stale or absent at this point.)
+        val merged = mergedDir.get().asFile.walkTopDown()
+            .firstOrNull { it.name == "AndroidManifest.xml" }
+            ?: error("checkFdroidPermissions: merged fdroid release manifest not found")
+        val leaked = listOf(
+            "android.permission.INTERNET",
+            "android.permission.REQUEST_INSTALL_PACKAGES",
+            "androidx.core.content.FileProvider",
+        ).filter { merged.readText().contains(it) }
+        if (leaked.isNotEmpty()) {
+            error("checkFdroidPermissions: updater-only entries in the fdroid manifest: $leaked")
         }
     }
-    tasks.matching { it.name == "processReleaseMainManifest" }.configureEach {
-        finalizedBy(checkFdroidPermissions)
-    }
+}
+tasks.matching { it.name == "processFdroidReleaseMainManifest" }.configureEach {
+    finalizedBy(checkFdroidPermissions)
 }
 
 dependencies {

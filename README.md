@@ -103,17 +103,23 @@ Clone with submodules (libjxl v0.12.0 lives at `third_party/libjxl`):
 git clone --recurse-submodules https://github.com/matthew777777/RawLens.git
 # or, in an existing checkout:
 git submodule update --init --recursive
-./gradlew assembleDebug
+./gradlew assembleGithubDebug
 ```
 
-The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+The debug APK is generated at `app/build/outputs/apk/github/debug/`.
+
+Build flavors (dimension `distribution`):
+
+| Flavor | Channel |
+|---|---|
+| `github` (default) | GitHub releases: in-app updater, vendored ncnn (GPU) and Halide filters |
+| `fdroid` | F-Droid: source-only native code, no updater and no `INTERNET` permission, version frozen, one universal APK. See [docs/fdroid.md](docs/fdroid.md) |
 
 Build properties:
 
 | Property | Effect |
 |---|---|
 | `-PfreezeVersion` | Build at exactly the committed `app/version.properties` (tagged releases). Without it, every `assemble`/`bundle` advances the patch number and `versionCode` |
-| `-PfdroidBuild` (or `FDROID_BUILD=1`) | Source-only F-Droid build; implies `freezeVersion`, compiles out the updater. See [docs/fdroid.md](docs/fdroid.md) |
 | `-PjxlSourceDir=<libjxl checkout>` | Use a specific libjxl checkout; otherwise the submodule is used, or GitHub builds fetch the same pin |
 | `-PdisableJxl` | Build without JPEG XL (JPEG / DNG still work; JXL reports "not bundled") |
 
@@ -138,8 +144,8 @@ Other host tools (shader builders, parity oracles, DNG and LUT checks) are liste
 
 1. Set the release version in `app/version.properties` (`VERSION_NAME`, `VERSION_CODE`) and build with `-PfreezeVersion` so it is not auto-bumped.
 2. Update `CHANGELOG.md`, the release notes, and `fastlane/metadata/android/en-US/changelogs/<VERSION_CODE>.txt`, and verify they describe the actual build.
-3. Run `./gradlew clean test assembleDebug` and perform capture tests on at least one RAW-capable device in AUTO, PROGRAM, MANUAL, burst, ZSL (when supported), RAW video and Direct Log. The full 2.0 checklist is in [docs/refactor/release-2.0-checklist.md](docs/refactor/release-2.0-checklist.md).
-4. Build and sign the release artifact with your private signing configuration; keep the R8 mapping.
+3. Run `./gradlew clean test assembleGithubDebug assembleFdroidRelease` and perform capture tests on at least one RAW-capable device in AUTO, PROGRAM, MANUAL, burst, ZSL (when supported), RAW video and Direct Log. The full 2.0 checklist is in [docs/refactor/release-2.0-checklist.md](docs/refactor/release-2.0-checklist.md).
+4. Build and sign the release artifact (`assembleGithubRelease -PfreezeVersion`) with your private signing configuration; keep the R8 mapping.
 5. Create a plain version tag, for example `2.0.0`, from the exact source used for the binary.
 6. Publish the signed artifact, R8 mapping, checksums, release notes, and corresponding source from that tag together.
 
