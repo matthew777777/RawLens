@@ -233,3 +233,17 @@ The manager still imports individual extracted `.cube` files, not ZIP packs.
 The before-record RAW viewfinder still has no LUT preview. Physical I2 chart
 acceptance, real Sony camera-file comparison and final candidate sustained
 cadence remain open. I3 remains deferred by the owner. E22 remains parked.
+
+
+## Release closure, 2026-10-29
+
+The owner requested software closure without a chart. Physical grey-card/colour-chart
+acceptance remains pending, separate from completed software implementation. I3
+remains deferred because no Sony/Catalyst reference is available.
+
+The final 30-second LUT-off runs passed at 3840×2160/24, 2560×1440/30 and
+1920×1080/30. Baked-LUT runs passed at 4K/24 and 1080p/30. The 1440p/30
+baked run failed the strict timestamp gate with a 66,689 µs interval despite
+zero recorder-reported drops; an isolated repeat also failed. These results
+do not establish unconditional zero-drop parity. Logs are retained in
+`results/sony-directlog-2026-10-28/2026-10-29-final-*`.

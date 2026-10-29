@@ -213,6 +213,10 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
 Implementation/evidence 2026-10-28: [Sony DirectLog audit](sony-directlog-audit.md).
 I1's numeric pipeline and I2's LUT machinery are implemented; their original
 physical-chart/reference-render acceptance remains open. E22 stays parked.
+Owner 2026-10-29: close software work without a chart; retain the physical gate.
+Final LUT-off 30-second cadence passes all three targets; baked LUT passes
+4K/24 and 1080p/30 but fails the strict 1440p/30 timestamp gate, including a repeat.
+See the audit for retained evidence; this is an unresolved performance limitation.
 - [ ] I1 [2.0.x] **Full S-Gamut3.Cine / S-Log3, replacing the current
       "SLo3".** Numeric correction implemented 2026-10-28 (CPU, probe,
       split/fused MHC/RCD fp32/fp16, Packed RCD; generated gamut matrix,
@@ -332,7 +336,8 @@ physical-chart/reference-render acceptance remains open. E22 stays parked.
       BakingLab; CHANGELOG 2.0.0 since 1.0.192; RELEASE_NOTES_2.0.md) NOTICE (drop GALOSH; add libcamera / Magic Lantern if ported;
       H-J maker items are mimicry + user-imported data, so add entries only
       if code is actually ported, e.g. H4), CHANGELOG and 2.0 release notes.
-- [ ] E24 [2.0] Version 2.0.0, merge refactor/2.0 -> main, tag, attach the
+- [ ] E24 [2.0] (version 2.0.0 / code 2000 committed 2026-10-28, tag 2.0.0 local;
+      merge to main and push pending) Version 2.0.0, merge refactor/2.0 -> main, tag, attach the
       R8 mapping (release-mappings/) to the GitHub release; F-Droid recipe
       supplies libjxl source (else JXL is "not bundled").
 

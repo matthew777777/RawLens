@@ -1,0 +1,23 @@
+
+com.matthew.rawlens.DirectLogRecordDeviceTest:
+Error in recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest):
+java.lang.AssertionError: Missing steady-state sensor interval: 66689 us
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.validateMp4(DirectLogRecordDeviceTest.kt:375)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:260)
+
+
+Time: 43.953
+There was 1 failure:
+1) recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest)
+java.lang.AssertionError: Missing steady-state sensor interval: 66689 us
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.validateMp4(DirectLogRecordDeviceTest.kt:375)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:260)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
