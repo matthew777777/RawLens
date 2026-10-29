@@ -214,9 +214,10 @@ Implementation/evidence 2026-10-28: [Sony DirectLog audit](sony-directlog-audit.
 I1's numeric pipeline and I2's LUT machinery are implemented; their original
 physical-chart/reference-render acceptance remains open. E22 stays parked.
 Owner 2026-10-29: close software work without a chart; retain the physical gate.
-Final LUT-off 30-second cadence passes all three targets; baked LUT passes
-4K/24 and 1080p/30 but fails the strict 1440p/30 timestamp gate, including a repeat.
-See the audit for retained evidence; this is an unresolved performance limitation.
+After the kernel-fence wait fix, final baked-LUT 30-second cadence passes
+4K/24, 1440p/30 and 1080p/30 with zero video drops and no missing steady
+intervals. The subsequent full-file 60-second 1440p/30 repeat fails cadence;
+sustained zero-drop acceptance remains OPEN. See the audit for retained evidence.
 - [ ] I1 [2.0.x] **Full S-Gamut3.Cine / S-Log3, replacing the current
       "SLo3".** Numeric correction implemented 2026-10-28 (CPU, probe,
       split/fused MHC/RCD fp32/fp16, Packed RCD; generated gamut matrix,
@@ -291,7 +292,7 @@ See the audit for retained evidence; this is an unresolved performance limitatio
       709 assist) while the file stays S-Log3. Depends on J1.
 
 ## J. From the other makers, shared builds (owner 2026-10-23; harvest §4-§8, §10)
-- [ ] J1 [2.0.x] **`.cube` LUT import + library** (Panasonic Real Time
+- [x] J1 [2.0.0] **`.cube` LUT import + library** (Panasonic Real Time
       LUT is the UX model: slots, intensity per LUT; harvest §8):
       Parser/library/monitor UI implemented 2026-10-28 for I2/I4: bounded
       16–65 grids, domain, 16 user imports, select/remove, persisted per-LUT
@@ -299,9 +300,10 @@ See the audit for retained evidence; this is an unresolved performance limitatio
       must be extracted first. Recorded-grade extension is now implemented:
       fused Vulkan 3D LUT, S-Log3 input / `_LUT709` output, no double monitor
       transform, 0/.5/1 intensity + custom-domain/signed-output GPU gates
-      pass. Final candidate cadence remains open: cooler baseline soaks pass
-      all requested modes; later back-to-back LUT-on and LUT-off runs fail
-      strict timestamp checks. Before-record RAW VF still has no LUT preview.
+      pass. Final kernel-fence-wait candidate passes strict 30-second baked
+      cadence at 4K/24, 1440p/30 and 1080p/30, retaining all old failures
+      in the evidence. A full-file 60-second 1440p/30 repeat still fails cadence;
+      sustained zero-drop acceptance remains open. Before-record RAW VF has no LUT preview.
       parser (LUT_3D_SIZE 16-65, domain), 3D texture in the
       DirectLog preview first (view assist, I4), then recorded grade.
       This one build unlocks the free Nikon RED, Sony, Fuji F-Log,

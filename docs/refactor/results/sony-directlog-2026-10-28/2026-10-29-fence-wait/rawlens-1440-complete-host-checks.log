@@ -1,0 +1,178 @@
+
+> Configure project :app
+WARNING: The option setting 'android.newDsl=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+WARNING: API 'applicationVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding 
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling applicationVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+Add android.sync.suppressAgpWarnings=DEPRECATED_DSL to the gradle.properties file to suppress this warning.
+
+> Task :tools:sr-pipeline:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDeviceTestBuild UP-TO-DATE
+> Task :tools:sr-pipeline:compileKotlin UP-TO-DATE
+> Task :tools:sr-pipeline:compileJava NO-SOURCE
+> Task :app:generateDeviceTestBuildConfig FROM-CACHE
+> Task :tools:sr-pipeline:processResources UP-TO-DATE
+> Task :tools:sr-pipeline:classes UP-TO-DATE
+> Task :tools:sr-pipeline:jar UP-TO-DATE
+> Task :app:generateDeviceTestResources FROM-CACHE
+> Task :app:packageDeviceTestResources
+> Task :app:processDeviceTestNavigationResources FROM-CACHE
+> Task :app:parseDeviceTestLocalResources FROM-CACHE
+> Task :app:generateDeviceTestRFile UP-TO-DATE
+> Task :app:javaPreCompileDeviceTest UP-TO-DATE
+> Task :app:checkDeviceTestAarMetadata UP-TO-DATE
+> Task :app:mapDeviceTestSourceSetPaths
+> Task :app:compileDeviceTestNavigationResources UP-TO-DATE
+> Task :app:mergeDeviceTestResources
+> Task :app:createDeviceTestCompatibleScreenManifests
+> Task :app:extractDeepLinksDeviceTest UP-TO-DATE
+> Task :app:processDeviceTestMainManifest FROM-CACHE
+> Task :app:processDeviceTestManifest FROM-CACHE
+> Task :app:processDeviceTestManifestForPackage FROM-CACHE
+> Task :app:processDeviceTestResources
+> Task :app:preDeviceTestAndroidTestBuild SKIPPED
+> Task :app:mergeDeviceTestAndroidTestManifest UP-TO-DATE
+> Task :app:processDeviceTestAndroidTestManifest UP-TO-DATE
+> Task :app:generateDeviceTestAndroidTestBuildConfig UP-TO-DATE
+> Task :app:generateDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:packageDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:processDeviceTestAndroidTestNavigationResources UP-TO-DATE
+> Task :app:parseDeviceTestAndroidTestLocalResources UP-TO-DATE
+> Task :app:generateDeviceTestAndroidTestRFile UP-TO-DATE
+> Task :app:javaPreCompileDeviceTestAndroidTest UP-TO-DATE
+> Task :app:generateDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:mergeDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:compressDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:desugarDeviceTestAndroidTestFileDependencies UP-TO-DATE
+> Task :app:checkDeviceTestAndroidTestAarMetadata UP-TO-DATE
+> Task :app:mapDeviceTestAndroidTestSourceSetPaths UP-TO-DATE
+> Task :app:compileDeviceTestAndroidTestNavigationResources UP-TO-DATE
+> Task :app:mergeDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:processDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:checkDeviceTestAndroidTestDuplicateClasses UP-TO-DATE
+> Task :app:mergeExtDexDeviceTestAndroidTest UP-TO-DATE
+> Task :app:mergeDeviceTestAndroidTestJniLibFolders UP-TO-DATE
+> Task :app:configureCMakeRelease[arm64-v8a]
+> Task :app:buildCMakeRelease[arm64-v8a]
+> Task :app:configureCMakeRelease[armeabi-v7a]
+> Task :app:buildCMakeRelease[armeabi-v7a]
+> Task :app:mergeDeviceTestJniLibFolders UP-TO-DATE
+> Task :app:mergeDeviceTestNativeLibs UP-TO-DATE
+> Task :app:mergeDeviceTestAndroidTestNativeLibs NO-SOURCE
+> Task :app:stripDeviceTestAndroidTestDebugSymbols NO-SOURCE
+> Task :app:validateSigningDeviceTestAndroidTest UP-TO-DATE
+> Task :app:writeDeviceTestAndroidTestSigningConfigVersions UP-TO-DATE
+
+> Task :app:buildDngNativeHost
+built /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/build/dng-native/librawLensDng.dylib
+
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugRFile UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:bundleDebugClassesToRuntimeJar UP-TO-DATE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:compileDebugUnitTestKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebugUnitTest UP-TO-DATE
+> Task :app:compileDebugUnitTestJavaWithJavac UP-TO-DATE
+> Task :app:processDebugJavaRes UP-TO-DATE
+> Task :app:processDebugUnitTestJavaRes UP-TO-DATE
+> Task :app:testDebugUnitTest UP-TO-DATE
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :app:checkReleaseDuplicateClasses UP-TO-DATE
+> Task :app:generateReleaseBuildConfig UP-TO-DATE
+> Task :app:generateReleaseResources FROM-CACHE
+> Task :app:packageReleaseResources
+> Task :app:processReleaseNavigationResources FROM-CACHE
+> Task :app:parseReleaseLocalResources FROM-CACHE
+> Task :app:generateReleaseRFile UP-TO-DATE
+
+> Task :app:compileDeviceTestKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:398:40 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:475:43 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2286:39 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2570:51 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3013:22 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraDevice'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3060:26 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraCaptureSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/MainActivity.kt:2285:25 Condition is always 'true'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/WelcomeActivity.kt:332:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:compileReleaseKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:398:40 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:475:43 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2286:39 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2570:51 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3013:22 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraDevice'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3060:26 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraCaptureSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/MainActivity.kt:2285:25 Condition is always 'true'.
+
+> Task :app:compileDeviceTestJavaWithJavac
+> Task :app:bundleDeviceTestClassesToCompileJar
+> Task :app:javaPreCompileRelease UP-TO-DATE
+> Task :app:compileReleaseJavaWithJavac UP-TO-DATE
+> Task :app:mergeReleaseArtProfile UP-TO-DATE
+> Task :app:checkReleaseAarMetadata UP-TO-DATE
+> Task :app:mapReleaseSourceSetPaths
+> Task :app:compileReleaseNavigationResources UP-TO-DATE
+> Task :app:mergeReleaseResources
+> Task :app:createReleaseCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksRelease UP-TO-DATE
+> Task :app:processReleaseMainManifest UP-TO-DATE
+> Task :app:processReleaseManifest UP-TO-DATE
+> Task :app:processReleaseManifestForPackage UP-TO-DATE
+> Task :app:processReleaseResources
+> Task :app:expandReleaseArtProfileWildcards
+> Task :app:extractProguardFiles UP-TO-DATE
+> Task :app:mergeReleaseGeneratedProguardFiles UP-TO-DATE
+> Task :app:processReleaseJavaRes UP-TO-DATE
+> Task :app:mergeReleaseJavaResource UP-TO-DATE
+> Task :app:mergeReleaseStartupProfile UP-TO-DATE
+> Task :app:compileDeviceTestAndroidTestKotlin
+> Task :app:compileDeviceTestAndroidTestJavaWithJavac UP-TO-DATE
+> Task :app:dexBuilderDeviceTestAndroidTest
+> Task :app:mergeDeviceTestAndroidTestGlobalSynthetics UP-TO-DATE
+> Task :app:processDeviceTestAndroidTestJavaRes UP-TO-DATE
+> Task :app:mergeDeviceTestAndroidTestJavaResource UP-TO-DATE
+> Task :app:mergeDexDeviceTestAndroidTest
+> Task :app:packageDeviceTestAndroidTest
+> Task :app:createDeviceTestAndroidTestApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleDeviceTestAndroidTest
+> Task :app:minifyReleaseWithR8
+
+[Incubating] Problems report is available at: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.8.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 41s
+116 actionable tasks: 24 executed, 10 from cache, 82 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html

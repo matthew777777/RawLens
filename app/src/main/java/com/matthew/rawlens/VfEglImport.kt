@@ -104,6 +104,8 @@ internal object VfEglImport {
      * fd (true = GPU work complete). Never closes; see [closeSyncFd].
      */
     external fun pollSyncFd(fd: Int): Boolean
+    /** Kernel wait for completion, with a bounded timeout; never consumes or closes [fd]. */
+    external fun awaitSyncFd(fd: Int, timeoutMs: Int): Boolean
     external fun closeSyncFd(fd: Int)
 
     /** App-owned P010 staging buffer (GPU-written, CPU-readable). Null on failure. */

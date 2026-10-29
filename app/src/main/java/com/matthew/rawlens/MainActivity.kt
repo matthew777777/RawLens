@@ -2259,7 +2259,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
         findViewById<View>(R.id.shutter).contentDescription = "Stop Direct Log video"
         refreshVideoButton()
-        rawBadge.text = "● LOG • ${profile.hudLabel}"
+        rawBadge.text = logBadgeLabel(recording = true)
         rawBadge.setTextColor(getColor(R.color.danger))
         refreshVideoAudioDescription()
         setStatus("REC • ${profile.hudLabel} • HEVC10")

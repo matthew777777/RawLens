@@ -247,3 +247,50 @@ baked run failed the strict timestamp gate with a 66,689 µs interval despite
 zero recorder-reported drops; an isolated repeat also failed. These results
 do not establish unconditional zero-drop parity. Logs are retained in
 `results/sony-directlog-2026-10-28/2026-10-29-final-*`.
+
+
+## GPU fence delivery fix, 2026-10-29
+
+The recorder previously polled completion fds with 2 ms sleeps. Completed
+buffers could stay occupied until the next wake-up. Delivery now blocks in
+`poll(POLLIN)` with the original 100 ms / 5 s bounds, an EINTR-safe monotonic
+deadline, and unchanged fd ownership. Invalid/error/hung-up descriptors fail
+rather than being accepted as successful completion. This follows AOSP
+[libsync sync_wait](https://android.googlesource.com/platform/system/core/+/refs/heads/main/libsync/sync.c).
+The RAW lease still returns only after GPU completion; no pixel processing,
+frame duplication, timestamp rewriting, queue-depth change or lowered gate.
+
+Final baked-LUT 30-second runs (RCD, live monitor, HAL shading, AAC and gyro)
+passed on the connected Mali-G615 phone:
+
+| Output | Graded frames | Complete steady seconds | Max steady gap | Video drops / starves / degraded |
+| --- | ---: | --- | ---: | --- |
+| 3840×2160 / 24 | 706 | 27 × 24 | 41,778 µs | 0 / 0 / 0 |
+| 2560×1440 / 30 | 884 | 27 × 30 | 33,434 µs | 0 / 0 / 0 |
+| 1920×1080 / 30 | 885 | 27 × 30 | 33,434 µs | 0 / 0 / 0 |
+
+JVM: 1,712 tests, zero failures/errors, six existing skips. R8 optimization
+and device-test assembly pass. Kernel readiness/timeout/ownership checks pass.
+An additional true 3:2 scaled-output reference case is retained. The long-take
+validator no longer stops after 4,000 combined audio/video samples; it reads
+the MP4 to EOS. The recording badge now correctly identifies baked LUT709.
+
+Experiments with output tiling, shared stencil caches, smaller workgroups,
+register stencil reuse and fixed preview taps were discarded because GPU
+measurements showed no improvement or regressions. The final RCD, colour
+and preview shader sources/binaries are unchanged. The preview experiment
+was bit-identical over 820,254 RGBA8 pixels in 18 cases, but is not shipped.
+
+Evidence: `results/sony-directlog-2026-10-28/2026-10-29-fence-wait/`.
+The earlier failed 1440p tests remain historical evidence, supplemented by the
+bounded final-candidate checks above. Physical colour acceptance, Sony-file
+metadata comparison, I3 and the parked E22 suite retain their existing status.
+
+Final sustained repeat: the corrected EOS validator read the entire new
+60-second 1440p/30 baked take and FAILED (steady seconds ranged 25–30
+frames). The earlier minute run's 4,000-sample cap covered only about 52
+seconds and is not a full-duration acceptance result. All three final
+30-second runs pass, but sustained zero-drop acceptance remains OPEN.
+The owner requested closure after being informed of this result. This
+commit delivers a measured fence-delivery improvement, not a claim that
+the sustained cadence problem is fully fixed.

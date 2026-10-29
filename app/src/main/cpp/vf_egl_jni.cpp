@@ -16,6 +16,8 @@
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
 #include <cstring>
+#include <cerrno>
+#include <chrono>
 #include <poll.h>
 #include <thread>
 #include <time.h>
@@ -643,6 +645,29 @@ Java_com_matthew_rawlens_VfEglImport_pollSyncFd(JNIEnv*, jobject, jint fd) {
     int r = poll(&pfd, 1, 0);
     if (r > 0 && (pfd.revents & (POLLIN | POLLERR | POLLHUP))) return JNI_TRUE;
     return JNI_FALSE;
+}
+
+// Kernel fence readiness, as in AOSP libsync/sync.c sync_wait(). Unlike a
+// sleep/poll loop, poll wakes as soon as the GPU signals. EINTR retries retain
+// the original timeout budget. The caller still owns and closes the fd.
+// https://android.googlesource.com/platform/system/core/+/refs/heads/main/libsync/sync.c
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_matthew_rawlens_VfEglImport_awaitSyncFd(JNIEnv*, jobject, jint fd, jint timeoutMs) {
+    if (fd < 0 || timeoutMs < 0) return JNI_FALSE;
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
+    int remaining = timeoutMs;
+    for (;;) {
+        pollfd pfd{fd, POLLIN, 0};
+        const int result = poll(&pfd, 1, remaining);
+        if (result >= 0)
+            return result > 0 && (pfd.revents & POLLIN) &&
+                !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) ? JNI_TRUE : JNI_FALSE;
+        if (errno != EINTR) return JNI_FALSE;
+        const auto left = deadline - Clock::now();
+        if (left <= Clock::duration::zero()) return JNI_FALSE;
+        remaining = int(std::chrono::duration_cast<std::chrono::milliseconds>(left).count()) + 1;
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
