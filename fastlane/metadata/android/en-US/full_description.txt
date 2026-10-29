@@ -1,33 +1,41 @@
 RawLens is a photography-first, open-source Android camera built around a
 scene-referred RAW pipeline. It captures full-resolution Camera2 sensor data
-as DNG files and develops calibrated RAW JPEG output, with direct exposure
-controls and a minimal portrait-oriented viewfinder. No gallery, cloud sync,
-accounts, ads, or analytics.
+as DNG files, develops calibrated RAW JPEG, JPEG XL and Ultra HDR output, and
+records lossless RAW video and Direct Log video, with direct exposure controls
+and a minimal portrait-oriented viewfinder. No cloud sync, accounts, ads, or
+analytics.
 
 Features:
-- Full-resolution RAW_SENSOR stills saved as DNG, JPEG, or JPEG+DNG
-- Single-frame and six-frame burst release modes
-- AUTO, PROGRAM (custom RAW-driven AE), ZSL, and MANUAL exposure modes
-- Manual ISO, shutter speed, white balance, and exposure compensation
-- Center-weighted, frame-average, and spot AE metering
-- Optional RAW zero-shutter-lag capture from a bounded pre-shutter buffer
-- Tap/drag focus and exposure metering targets, face-priority AF/AE
-- HDR brackets merged into one HDR DNG, plus HDR+ and RAW super-resolution
-- RAW JPEG development with AgX Base, Golden, and Punchy looks
-- Per-camera DNG calibration overrides (levels, noise profile, color matrices)
-- Live histogram, grid, horizon/level guide, timer, torch, OIS toggle
-- Optional GPS geotagging embedded in saved DNG/JPEG files (off by default)
+- Full-resolution RAW_SENSOR stills saved as DNG, JPEG, JPEG+DNG or JPEG XL;
+  optional lossless JPEG XL DNG
+- AUTO, PROGRAM, ZSL and MANUAL modes; single-frame and six-frame bursts
+- PROGRAM auto exposure ported from libcamera's Raspberry Pi AGC; ETTR after
+  Magic Lantern; Active D-Lighting
+- RAW zebras, false colour and a RAW spot meter; focus peaking
+- RAW zero-shutter-lag capture from a bounded pre-shutter buffer
+- MFSR handheld multi-frame super-resolution, HDR+ burst merge, HDR brackets,
+  and offline merges of saved bursts
+- darktable inpaint-opposed highlight reconstruction
+- RAW development with AMaZE or RCD and AgX Base, Golden and Punchy looks
+- RAW video in the lossless .craw (Cinematic RAW Studio) container with
+  32-bit float audio, gyro/accelerometer tracks and optional RGB binning
+- Direct Log video (Rec.709, S-Gamut3.Cine/S-Log3, HLG, ACES) with real-time
+  RCD demosaic and user .cube LUTs for monitoring or baking
+- Wavelet and AI (RawNIND) RAW denoise
+- Tap/drag focus and metering targets, face-priority AF/AE
+- Per-camera DNG calibration overrides and per-lens vendor keys
+- Live histogram/waveform, grid, level guide, timer, torch, OIS toggle
+- Optional GPS geotagging embedded in saved photos (off by default)
 
-Requirements: Android 10 or newer, and a rear camera that advertises the
+Requirements: Android 11 or newer, and a rear camera that advertises the
 Camera2 RAW capability. RAW support is device- and lens-dependent.
 
 F-Droid build note: this build compiles from source only. The optional
-Halide-accelerated viewfinder rung falls back to the legacy engine and the
-HDR/scope meters use their Kotlin fallbacks; the neural features (AI
-denoise, FlowNet alignment, super-resolution kernels) run on CPU instead
-of GPU. Capture, DNG/JPEG output, HDR+, super-resolution, and GALOSH and
-wavelet denoise are fully available. In-app update checks are disabled;
-updates come through F-Droid.
+Halide-accelerated viewfinder rung falls back to another engine and the
+HDR/scope meters use their Kotlin fallbacks; the neural features (AI denoise,
+FlowNet alignment, KernelNet MFSR kernel) run on CPU instead of GPU. Capture,
+DNG/JPEG/JPEG XL output, HDR+, MFSR, wavelet denoise and video are fully
+available. In-app update checks are disabled; updates come through F-Droid.
 
 Source code and issue tracker: https://github.com/matthew777777/RawLens
 License: GNU General Public License v3 or later.

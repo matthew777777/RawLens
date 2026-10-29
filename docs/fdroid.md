@@ -12,8 +12,11 @@ a **source-only** build:
 - The vendored `libncnn.a` / `libglslang.a` archives are ignored; `ncnnMl`
   is compiled against upstream ncnn built from the pinned source archive
   (CPU-only, same pin as the desktop host build). AI denoise, FlowNet
-  alignment, and KernelNet super-resolution kernels all run — on CPU
+  alignment, and the KernelNet MFSR kernel all run — on CPU
   instead of GPU.
+- JPEG XL is built from the `third_party/libjxl` git submodule (libjxl
+  v0.12.0, BSD-3-Clause), so the recipe needs `submodules: true`; no
+  configure-time download is involved.
 - The Halide AOT `.a` filters are ignored; `rawLensBgu`, `rawLensHdrMeter`,
   and `rawLensScopeMeter` are not built. The viewfinder fails over to the
   legacy engine, the HDR/scope meters use their Kotlin fallbacks.
@@ -27,19 +30,19 @@ a **source-only** build:
 - Only `arm64-v8a` + `armeabi-v7a` are packaged; the x86/x86_64 emulator
   ABIs (and their ~18MB-per-ABI from-source ncnn) stay local-only.
 
-Everything else — capture, DNG/JPEG output, HDR+, super-resolution, GALOSH
-and wavelet denoise, video — is identical to the GitHub build. The only
+Everything else — capture, DNG/JPEG/JPEG XL output, HDR+, MFSR, wavelet
+denoise, RAW and Direct Log video — is identical to the GitHub build. The only
 build-time downloads are Maven Central / Google Maven artifacts and the
 pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 
 ## Pre-submission checklist
 
-1. Commit everything, **including `app/version.properties`** (it is currently
-   untracked, and F-Droid reads the version from it) and the updater files.
-2. Make sure the tagged tree builds from a clean clone (clone to /tmp and run
+1. Commit everything, including `app/version.properties` (F-Droid reads the
+   version from it) and the `third_party/libjxl` submodule pointer.
+2. Make sure the tagged tree builds from a clean clone with submodules (clone to /tmp and run
    the command above).
 3. Tag the release with a plain version tag matching `VERSION_NAME`, e.g.
-   `1.0.184` (the in-app updater and F-Droid auto-update both expect this
+   `2.0.0` (the in-app updater and F-Droid auto-update both expect this
    scheme; never reuse or move a tag after pushing).
 4. Push the tag. `UpdateCheckMode: Tags` picks up future releases
    automatically once the metadata below is merged.
@@ -57,7 +60,7 @@ pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 
 File: `metadata/com.matthew.rawlens.yml` in a fork of
 `https://gitlab.com/fdroid/fdroiddata`. Replace `<full-hash>` with the commit
-hash the `1.0.184` tag points to (`git rev-list -n 1 1.0.184`):
+hash the `2.0.0` tag points to (`git rev-list -n 1 2.0.0`):
 
 ```yaml
 Categories:
@@ -75,9 +78,10 @@ RepoType: git
 Repo: https://github.com/matthew777777/RawLens.git
 
 Builds:
-  - versionName: 1.0.184
-    versionCode: 185
+  - versionName: 2.0.0
+    versionCode: 2000
     commit: <full-hash>
+    submodules: true
     timeout: 10800
     gradle:
       - yes
@@ -85,7 +89,7 @@ Builds:
     scanignore:
       - app/src/main/assets/models
       - python/rawnind-train
-      - tools/sr-vulkan/src/main/resources/kernelnet_aniso_v2_2_params.ncnn.bin
+      - tools/sr-pipeline/src/main/resources/kernelnet/kernelnet_aniso_v2_2_params.ncnn.bin
       - app/src/androidTest/assets/amaze_reference.bin
     scandelete:
       - app/src/main/cpp/ncnn
@@ -100,14 +104,14 @@ MaintainerNotes: |-
   Kotlin/legacy fallbacks. scanignore covers only
   trained neural-network weight files (.ncnn.bin), which are data, not
   code; the .spv shaders need no exception (not flagged). Upstream
-  releases are plain version tags (e.g. 1.0.184) with the version
+  releases are plain version tags (e.g. 2.0.0) with the version
   frozen in app/version.properties.
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: app/version.properties|VERSION_CODE=(\d+)|.|VERSION_NAME=(.+)
-CurrentVersion: 1.0.184
-CurrentVersionCode: 185
+CurrentVersion: 2.0.0
+CurrentVersionCode: 2000
 ```
 
 (Order and escaping above match `fdroid rewritemeta` canonical output;
@@ -142,7 +146,7 @@ The actual submission needs a GitLab account, so it is a manual step:
    a wait of days to weeks. The F-Droid client shows the app after the next
    index update once merged.
 
-After merge, each new `1.0.NNN` tag with a bumped `VERSION_CODE` in
+After merge, each new version tag with a bumped `VERSION_CODE` in
 `app/version.properties` is picked up automatically (`AutoUpdateMode:
 Version`). Keep `fastlane/.../changelogs/<VERSION_CODE>.txt` current so the
 listing shows release notes.
@@ -150,13 +154,14 @@ listing shows release notes.
 ## Local verification
 
 ```bash
-git clone https://github.com/matthew777777/RawLens.git /tmp/rawlens-fdroid
+git clone --recurse-submodules https://github.com/matthew777777/RawLens.git /tmp/rawlens-fdroid
 cd /tmp/rawlens-fdroid
-git checkout 1.0.184  # the release tag
+git checkout 2.0.0  # the release tag
+git submodule update --init --recursive
 ./gradlew :app:assembleRelease -PfdroidBuild
 ```
 
-Expected: `app/build/outputs/apk/release/RawLens-1.0.184-release.apk` with
+Expected: `app/build/outputs/apk/release/RawLens-2.0.0-release.apk` with
 `versionCode` equal to the tagged `VERSION_CODE`, no `rawLensBgu` /
 `rawLensHdrMeter` / `rawLensScopeMeter` `.so` files inside, and `ncnnMl`
 built from the stub. `aapt dump badging` on the APK confirms the versions.

@@ -43,11 +43,16 @@ multi-frame super-resolution, and RAW Video in a new container Cinematic RAW Stu
   RGB, so desktop tools no longer show colour fringes.
 - **Direct Log** can record with the RCD demosaic in real time: 4K at 24 fps,
   1440p and 1080p at 30 fps. A new **ACES** look is available.
+- **S-Log3** now uses Sony's S-Gamut3.Cine primaries. Import your own `.cube`
+  LUTs to monitor S-Log3 while recording, or bake one into the file as
+  Rec.709. Direct Log now records with RCD by default.
 
 ## Other
 
-- New UI design, clearer feature tags and lens selector, a video
-  quick panel with torch, and gallery access from the camera screen.
+- New UI design with translucent zebras and overlays, clearer feature tags
+  and lens selector, a video quick panel with torch, and gallery access from
+  the camera screen.
+- JPEG XL is included in F-Droid builds.
 - Many reliability fixes, including an MFSR crash when saving JPEG and DNG
   together, and captures that no longer stop when one frame fails.
 - Removed: the old RAW super-resolution pipeline (replaced by MFSR) and the

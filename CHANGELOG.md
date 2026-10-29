@@ -1,4 +1,4 @@
-  # Changelog
+# Changelog
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
@@ -19,6 +19,9 @@ and MainActivity into focused, tested units.
 - **RAW exposure assist** (Magic Lantern `src/zebra.c`): RAW zebras and false colour on the viewfinder from raw values, a RAW spot meter in EV relative to clipping, average and clipped-area readouts
 - **darktable inpaint-opposed highlight reconstruction** on normalized Bayer data before demosaic (Vulkan + Kotlin reference, pinned to darktable 891e46cd); on a real 12 MP HDR+ DNG the Vulkan path matches the pinned OpenCL kernels bit for bit
 - **Direct Log ACES profile** (Stephen Hill's fitted ACES from BakingLab, Rec.709 / gamma 2.4 display look) and a LOG crop
+- **Sony-exact S-Gamut3.Cine / S-Log3** Direct Log profile: every record path (split/fused MHC, RCD fp32/fp16, Packed RCD, CPU reference) converts linear sRGB to S-Gamut3.Cine before the S-Log3 curve, with Sony's linear toe for signed input
+- **User .cube LUT library** for Direct Log: up to 16 imports through the document picker (`LUT_3D_SIZE` 16–65, `DOMAIN_MIN/MAX`), per-LUT intensity, an analytic S-Log3 → BT.709 display assist, LUT monitoring during a take, and an optional bake into the recording (SDR Rec.709, `_LUT709` file suffix). No vendor LUTs are bundled
+- RAW video frame JSON records the rolling-shutter skew (Camera2 `SENSOR_ROLLING_SHUTTER_SKEW`) for Gyroflow
 - **Packed RCD video**: Direct Log records with RCD demosaic in real time: 3840×2160 at 24 fps, 2560×1440 and 1920×1080 at 30 fps, every second exact over 30 s takes on the Mali-G615 test phone; P010 is written straight into encoder-owned buffers where the device allows it
 - **Truthful capture metadata**: aperture, focal length, focus distance, flash, AE/AWB mode, exposure compensation, digital zoom, lens spec and composite frame counts frozen at capture, so delayed and offline writers (DNG, JPEG, JXL) emit the same EXIF as live saves
 - **32-bit float RAW video audio** (no digital clipping; stereo, falls back to PCM16) with stereo dBFS meters; RAW video lens-shading maps stored once per change in a dedicated LSHD chunk
@@ -30,8 +33,8 @@ and MainActivity into focused, tested units.
 - UI: Exposure settings tab (per-lens PROGRAM / ETTR / D-Lighting; replaces the Lenses tab), feature tags with gold for active/manual, lens discs in a recessed track, shared 3:4 video viewport, video quick panel with torch, quick-panel auto-hide, gallery seat with permission prompt and upright thumbnails, VF engine chip, larger rounded scopes, histogram log scale by default
 
 - RAW video and offline burst takes are recorded as Cinematic RAW Studio `.craw` (replacing the CRS hooks): lossless block-adaptive Golomb-Rice codec per CFA plane with green-difference prediction, CRC32C per chunk and per frame, crash-recoverable streaming container with PCM16 audio, gyro/accelerometer and a seek index. Encoder and decoder are vendored from the Apache-2.0 CinematicRAWStudio repos (`third_party/craw`, `tools/sync_craw.sh`) and run as `rawLensCraw` / `rawLensCrawReader`. On the MT6878 test phone the app path encodes 4080x3060 12-bit at ~40 fps (4 workers, bit-exact round trip). Binning is centre-aligned again (triangle-weighted R/B, ring-weighted green; ported from the type-7 encoder), keeping the binned Bayer grid regular. Pinned by `CrawRoundTripDeviceTest`, `BurstCrawStoreTest`, `StagedVideoRescueTest`
-- JPEG XL still output (Settings → JPEG → JPEG XL output): the same AgX develop saved as `.jxl` up to 16-bit integer (plus 16/32-bit float) with darktable's export options (bit depth, 16-bit pixel type, quality with lossless at 100 on integer depths, effort 1–9, decoding-speed tier 0–4, Display P3) and embedded EXIF/XMP boxes; selectable per capture and per offline merge next to JPEG, frozen at shutter press like every output choice. libjxl bundles automatically at build time when network is available (pinned v0.12.0, encoder-only); offline/source-only builds keep JPEG/DNG with a clear not-bundled error. Pinned by `JxlOutputSettingsTest`/`JxlPixelPackTest`/`JxlMetadataBoxesTest`/`DevelopedFormatTest`
-- Lossless JPEG XL DNG (Settings → General → DNG compression, off by default): TinyDNG now accepts RAW16 pixels directly for single-frame and 16-bit HDR+ mosaics, emits Compression 52546 and missing DNG 1.7 version tags, and retains EXIF/GPS. The separate JNI DNG encoder and compressed-frame staging buffer are removed. Android reuses the existing libjxl target; host builds can discover installed libjxl >=0.8 through pkg-config. Packed input and float-CFA exports retain uncompressed paths. Shared TinyDNG sources match upstream `e1d6442`; native metadata/EXIF/GPS, opcode-list preservation, sequential uncompressed output and allocation cleanup fixes are included. Verified by 58 selected JVM tests (including `NativeJxlDngWriterTest`), the host GainMap verifier and an Android arm64 DNG library build; TinyDNG's 10-test suite also passes with the encoder enabled and under ASan/UBSan.
+- JPEG XL still output (Settings → Photo): the same AgX develop saved as `.jxl` up to 16-bit integer (plus 16/32-bit float) with darktable's export options (bit depth, 16-bit pixel type, quality with lossless at 100 on integer depths, effort 1–9, decoding-speed tier 0–4, Display P3) and embedded EXIF/XMP boxes; selectable per capture and per offline merge next to JPEG, frozen at shutter press like every output choice. libjxl v0.12.0 (encoder-only) is built from the `third_party/libjxl` submodule, or fetched at the same pin when the submodule is absent; `-PdisableJxl` builds keep JPEG/DNG with a clear not-bundled error. Pinned by `JxlOutputSettingsTest`/`JxlPixelPackTest`/`JxlMetadataBoxesTest`/`DevelopedFormatTest`
+- Lossless JPEG XL DNG (Settings → General → DNG compression, off by default): TinyDNG now accepts RAW16 pixels directly for single-frame and 16-bit HDR+ mosaics, emits Compression 52546 and missing DNG 1.7 version tags, and retains EXIF/GPS. The separate JNI DNG encoder and compressed-frame staging buffer are removed. Android reuses the existing libjxl target; host builds can discover installed libjxl >=0.8 through pkg-config. Packed input and float-CFA exports retain uncompressed paths. Shared TinyDNG sources match upstream `4df281b`; native metadata/EXIF/GPS, opcode-list preservation, sequential uncompressed output and allocation cleanup fixes are included. Verified by 58 selected JVM tests (including `NativeJxlDngWriterTest`), the host GainMap verifier and an Android arm64 DNG library build; TinyDNG's 10-test suite also passes with the encoder enabled and under ASan/UBSan.
 
 ### Changed
 
@@ -43,6 +46,10 @@ and MainActivity into focused, tested units.
 - Scopes measure scene-referred exposure through the tone curve and honour dynamic black/white levels
 - BGU viewfinder brought to parity with the Vulkan viewfinder (sRGB-encoded guide fixes shadow haze, highp slice)
 - Direct Log records with the fp32 fused MHC shader (faster than the f16 twin on Mali); centre-aligned superpixel binning and 4:2:0 chroma
+- Direct Log video defaults to RCD demosaic (saved choices are kept; an RCD start failure still falls back to fused MHC); GPU fence waits no longer poll with sleeps
+- RGB binning blends the green estimate at R/B sites by edge weight instead of a hard pick, and the plain-interpolation fallback now covers only blocks holding a clipped sample (edge chroma −14 to −27 %, sharper detail next to bright areas)
+- Zebras (RAW assist and tonemap-shadow), focus/metering, level, framing-guide and spot-meter overlays share one translucent modern style
+- libjxl v0.12.0 is a git submodule at `third_party/libjxl`, so F-Droid source-only builds include JPEG XL
 - R8 shrinking for every release build, with the R8 mapping archived per version
 - Toolchain: Gradle 9.8.2, AGP 9.4.1, compileSdk 37, Kotlin 2.4.21, Gradle on JDK 27; libjxl 0.12.0
 - Camera controller and MainActivity split into focused units (session ladder, frame pairing, ZSL stream health, still chain, save jobs, touch focus, PROGRAM/ETTR loops, settings tabs) after study of AOSP, PhotonCamera, MotionCam and Open Camera
@@ -61,6 +68,9 @@ and MainActivity into focused, tested units.
 - Photo RCD rendered striped output (an unowned hardware buffer was released before import); viewfinder native fixes for GPU state reused before completion, an RCD write-after-write hazard and evicted imports destroyed while in use
 - Direct Log and RAW video leaked threads, codec and muxer when a take failed to start
 - Binned RAW video sat half a pixel off-centre (zig-zag R/B, off-centre green)
+- Pink/magenta specks on small bright details in RGB-binned RAW video
+- RAW video gyro was stored in the burst pipeline's camera frame while the accelerometer stayed in Android axes; both are now Android axes (container META `imuAxes`, `lensFacing`; readers undo the old mapping for earlier takes)
+- The RAW zebra / false-colour toggle did not rotate with the device
 - JPEG XL colour encoding was not zeroed before use
 - Viewfinder lens-shading import lost precision on large sensors (mediump coordinates)
 - Gallery thumbnail showed nothing when the newest capture had no preview; hold-to-lock focus is reliable on the reticle too, with haptic feedback
@@ -72,6 +82,12 @@ and MainActivity into focused, tested units.
 - GALOSH raw denoise
 - The legacy Vulkan HDR merge path and the RawTherapee-style colour-propagation highlight repair (replaced by darktable inpaint opposed)
 - `.crs` RAW video and burst containers, replaced by `.craw`
+
+### Known limitations
+
+- Direct Log baked-LUT recording passes 30-second cadence checks at 4K/24, 1440p/30 and 1080p/30 on the test phone, but a full 60-second 1440p/30 repeat failed cadence; sustained zero-drop recording is unverified
+- Physical Sony colour-chart acceptance is pending; S-Cinetone is deferred
+- The before-record RAW viewfinder does not display the LUT (LUT monitoring is available while recording)
 
 ## [1.0.192] - 2026-10-15
 
