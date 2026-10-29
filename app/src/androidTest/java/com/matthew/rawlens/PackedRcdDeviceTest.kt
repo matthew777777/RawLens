@@ -156,14 +156,14 @@ class PackedRcdDeviceTest {
         assertFusedP010(64, 48)
         assertFusedP010(96, 54)
         assertFusedP010(256, 192)
+        assertFusedP010(128, 96, 192, 144) // production 1440p's 3:2 source mapping
     }
 
-    private fun assertFusedP010(outW: Int, outH: Int) {
+    private fun assertFusedP010(outW: Int, outH: Int, w: Int = 128, h: Int = 96) {
         initialize(16)
         assertEquals(VfVulkan.OK, VfLogGrade.initGradeNative(context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }))
         assertEquals(VfVulkan.OK, VfLogGrade.initGradeYuvNative(context.assets.open(VfLogGrade.recordAsset("shaders/vf/vf_gradeyuv.spv",cube != null)).use { it.readBytes() }))
         assertEquals(VfVulkan.OK, VfLogGrade.gradeLutUploadNative(VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)))
-        val w = 128; val h = 96
         val raw = VfEglImport.createBayerInput(w, h)!!
         val rgb = HardwareBufferRef.create(w, h)
         val split = VfEglImport.createP010(outW, outH)!!
@@ -350,6 +350,49 @@ class PackedRcdDeviceTest {
                 } finally { output.close() }
             }
         } finally { raw.close(); rgb.close(); corrected.close() }
+    }
+
+    @Test fun scaledSlog3LutStageTimings() {
+        initialize(16)
+        assumeTrue("Supply recordLutPath", cube != null)
+        val args = InstrumentationRegistry.getArguments()
+        val baseline = args.getString("baselineOutputPath")?.let { java.io.File(it).readBytes() }
+        val baselineGuide = args.getString("baselineGuidePath")?.let { java.io.File(it).readBytes() }
+        val baselineGreen = args.getString("baselineGreenPath")?.let { java.io.File(it).readBytes() }
+        val stages = arrayOf("guide", "green", "median", "output_yuv_cube").map {
+            context.assets.open("shaders/rcd_packed/rcd_$it.spv").use { stream -> stream.readBytes() }
+        }.toTypedArray()
+        val w = 3840; val h = 2160; val outW = 2560; val outH = 1440
+        val raw = requireNotNull(VfEglImport.createBayerInput(w, h))
+        val output = requireNotNull(VfEglImport.createP010(outW, outH))
+        try {
+            val pitch = VfEglImport.fillBayerPattern(raw, w, h, 0)
+            assertTrue(pitch > 0)
+            val (ip, fp) = VfRcd.packRcd(w, h, 0, 0, intArrayOf(0, 1, 2, 3), pitch,
+                0, floatArrayOf(0f, 0f, 0f, 0f), 1023f)
+            val layout = requireNotNull(VfEglImport.describeP010(output))
+            val strides = intArrayOf(layout[0], layout[1], outW, outH)
+            val (_, grade) = VfLogGrade.packGrade(intArrayOf(outW, outH),
+                floatArrayOf(1f, 1f, 1f, 1f), VfLogGrade.IDENTITY_CCM, 0f, false,
+                profile = DirectLogProfile.SLOG3)
+            for ((localX, localY) in listOf(32 to 32, 32 to 16, 32 to 8, 16 to 16, 16 to 8, 8 to 8))
+                for (original in listOf(true, false)) {
+                if (original && baseline == null) continue
+                val code = stages.copyOf()
+                if (original) {
+                    code[3] = requireNotNull(baseline)
+                    baselineGuide?.let { code[0] = it }
+                    baselineGreen?.let { code[1] = it }
+                }
+                val init = VfPackedRcd.initNative(code, localX, localY, fused = true, tuned = true)
+                if (init == VfVulkan.BAD_ARGUMENT) continue
+                assertEquals(VfVulkan.OK, init)
+                repeat(8) { round ->
+                    assertEquals(VfVulkan.OK, VfPackedRcd.processYuvNative(raw, output, ip, fp, grade, strides))
+                    Log.i("PackedRcd", "1440p SLOG3/LUT baseline=$original local=${localX}x$localY round=$round stageMs=${VfPackedRcd.timingsNative()?.toList()}")
+                }
+            }
+        } finally { raw.close(); output.close() }
     }
 
     @Test fun fusedFullResolutionStageTimings() {

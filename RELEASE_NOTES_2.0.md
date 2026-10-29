@@ -58,8 +58,10 @@ Built with R8; the matching R8 mapping file is attached to this release.
 ## Known validation limits
 
 Physical Sony colour-chart acceptance remains pending; S-Cinetone is deferred.
-In final 30-second checks, RCD with LUT baking off passed 4K/24, 1440p/30 and
-1080p/30. Optional baked LUT passed 4K/24 and 1080p/30, but 1440p/30 showed
-frame timestamp gaps and has not passed the strict zero-drop acceptance gate.
+After the GPU fence-wait fix, final 30-second baked-LUT checks passed
+4K/24, 1440p/30 and 1080p/30 with zero video drops and no missing steady-state
+sensor intervals on the test phone. A subsequent full-file 60-second
+1440p/30 baked-LUT repeat failed cadence. Sustained zero-drop performance
+remains unverified; this is a known release limitation.
 LUT monitoring is available during recording; the before-record RAW viewfinder
 does not display the LUT.

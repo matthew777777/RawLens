@@ -349,7 +349,6 @@ class DirectLogRecordDeviceTest {
                     videoPts.add(ext.sampleTime)
                 } else audioSamples++
                 ext.advance()
-                if (videoSamples + audioSamples > 4000) break
             }
             val durationUs = vfmt.getLong(MediaFormat.KEY_DURATION)
             Log.i(TAG, "SPIKE directlog [$label] muxed video=$videoSamples audio=$audioSamples durationUs=$durationUs")

@@ -190,6 +190,8 @@ class DirectLogRecorder(
     internal var recordLutIntensity: Float = 1f
     /** Test-only timing of submission backpressure; disabled in normal recording. */
     internal var diagnoseFrameStages = false
+    private var diagnosticCaptureTimestamp = 0L
+    private var diagnosticImageTimestamp = 0L
     private var sessionRecordLut: CubeLut? = null
     private var sessionLutIntensity = 1f
     private val outputProfile get() = if (sessionRecordLut != null) DirectLogProfile.BT709 else sessionProfile
@@ -555,6 +557,7 @@ class DirectLogRecorder(
         if (output.exists()) output.delete()
         startRealtimeMs = SystemClock.elapsedRealtime()
         acquired.set(0); graded.set(0); dropped.set(0); resultMiss.set(0)
+        diagnosticCaptureTimestamp = 0L; diagnosticImageTimestamp = 0L
         staleResults.set(0); waitFree.set(0); fallbackWaits.set(0)
         inputStarved.set(0); degradedFrames.set(0); frameErrors.set(0)
         shadedCount.set(0)
@@ -1132,6 +1135,14 @@ class DirectLogRecorder(
                     session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
                 ) {
                     val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    if (diagnoseFrameStages) {
+                        val gap = ts - diagnosticCaptureTimestamp
+                        if (diagnosticCaptureTimestamp != 0L && gap > 1_500_000_000L / fps)
+                            Log.i(TAG, "RCD capture gapUs=${gap / 1000} frame=${result.frameNumber} " +
+                                "durationNs=${result.get(CaptureResult.SENSOR_FRAME_DURATION)} " +
+                                "exposureNs=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}")
+                        diagnosticCaptureTimestamp = ts
+                    }
                     synchronized(resultLock) {
                         captureResults[ts] = result
                         while (captureResults.size > 64) captureResults.pollFirstEntry()
@@ -1727,6 +1738,12 @@ class DirectLogRecorder(
             return false
         }
         val ts = image.timestamp
+        if (diagnoseFrameStages) {
+            val gap = ts - diagnosticImageTimestamp
+            if (diagnosticImageTimestamp != 0L && gap > 1_500_000_000L / fps)
+                Log.i(TAG, "RCD image gapUs=${gap / 1000} acquired=${acquired.get()}")
+            diagnosticImageTimestamp = ts
+        }
         val result = awaitResult(ts)
         if (shouldDropPreresult(result != null, graded.get(), acquired.get())) {
             // Stream warming: no capture result yet, so this frame would
@@ -2390,22 +2407,9 @@ class DirectLogRecorder(
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
         val fenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-        if (!VfEglImport.pollSyncFd(job.fd)) {
-            // Not ready long after submit: pathological. Blocking valve
-            // (rare) instead of corrupting the slot.
-            val deadline = SystemClock.elapsedRealtime() + if (useRcd) 5_000L else 100L
-            var ready = false
-            while (SystemClock.elapsedRealtime() < deadline) {
-                if (VfEglImport.pollSyncFd(job.fd)) {
-                    ready = true
-                    break
-                }
-                Thread.sleep(2)
-            }
-            if (!ready) {
-                Log.w(TAG, "copy job: GPU wedge")
-                return false
-            }
+        if (!VfEglImport.awaitSyncFd(job.fd, if (useRcd) 5_000 else 100)) {
+            Log.w(TAG, "copy job: GPU fence failed or timed out")
+            return false
         }
         val fenceWaitMs = (android.os.SystemClock.elapsedRealtimeNanos() - fenceStartNs) / 1e6f
         fenceWaitMsAvg = if (fenceWaitMsAvg == 0f) fenceWaitMs else fenceWaitMsAvg * 0.9f + fenceWaitMs * 0.1f
@@ -2505,15 +2509,9 @@ class DirectLogRecorder(
         return ReadyQueue(inIdx, inImage, p010Size)
     }
 
-    /** Poll-valve wait on a convert/export fd (true = signaled). No counting; caller owns it. */
+    /** Bounded kernel wait on a convert/export fd; caller retains ownership. */
     private fun waitSyncFd(fd: Int, timeoutMs: Long = 100L): Boolean {
-        if (VfEglImport.pollSyncFd(fd)) return true
-        val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        while (SystemClock.elapsedRealtime() < deadline) {
-            if (VfEglImport.pollSyncFd(fd)) return true
-            Thread.sleep(2)
-        }
-        return false
+        return VfEglImport.awaitSyncFd(fd, timeoutMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
     }
 
     /**

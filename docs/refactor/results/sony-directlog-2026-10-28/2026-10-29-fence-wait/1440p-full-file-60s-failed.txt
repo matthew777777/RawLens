@@ -1,0 +1,23 @@
+
+com.matthew.rawlens.DirectLogRecordDeviceTest:
+Error in recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest):
+java.lang.AssertionError: Unstable one-second frame counts: [29, 30, 29, 28, 29, 28, 29, 30, 28, 29, 29, 29, 29, 29, 27, 29, 28, 29, 28, 29, 28, 28, 29, 28, 29, 29, 29, 29, 28, 29, 29, 29, 28, 29, 25, 28, 28, 28, 29, 28, 30, 28, 29, 29, 28, 28, 29, 28, 30, 28, 29, 29, 28, 30, 28, 28, 29]
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.validateMp4(DirectLogRecordDeviceTest.kt:371)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:260)
+
+
+Time: 75.503
+There was 1 failure:
+1) recordMain10Mp4(com.matthew.rawlens.DirectLogRecordDeviceTest)
+java.lang.AssertionError: Unstable one-second frame counts: [29, 30, 29, 28, 29, 28, 29, 30, 28, 29, 29, 29, 29, 29, 27, 29, 28, 29, 28, 29, 28, 28, 29, 28, 29, 29, 29, 29, 28, 29, 29, 29, 28, 29, 25, 28, 28, 28, 29, 28, 30, 28, 29, 29, 28, 28, 29, 28, 30, 28, 29, 29, 28, 30, 28, 28, 29]
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.validateMp4(DirectLogRecordDeviceTest.kt:371)
+	at com.matthew.rawlens.DirectLogRecordDeviceTest.recordMain10Mp4(DirectLogRecordDeviceTest.kt:260)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+

@@ -1,0 +1,75 @@
+--------- beginning of main
+10-29 09:03:29.266 11892 11918 I DirectLog: SPIKE thermal status=0 (0=none; hot runs grade ~4x slower — foreground-compile + cool down first)
+10-29 09:03:29.288 11892 11918 I DirectLog: SPIKE ladder rungs=open-gate=4080x3060
+10-29 09:03:29.820 11892 11918 I DirectLog: static CCM: baked @5500K [1.630, -0.565, -0.065, -0.138, 1.349, -0.211, 0.010, -0.557, 1.547]
+10-29 09:03:29.820 11892 11918 I DirectLog: lens shading: live HAL map (first frame arms it)
+10-29 09:03:29.830 11892 11918 I DirectLog: stab gyro on (f=6.06mm sensor=9.14x6.88mm)
+10-29 09:03:29.834 11892 11918 I DirectLog: sensor RAW sizes: 4080x3060
+10-29 09:03:29.834 11892 11918 I DirectLog: ladder rung=open-gate selected=4080x3060 (12.48 MP)
+10-29 09:03:29.834 11892 11918 I DirectLog: compute step=2 crop=3840x2160@(120,450) export=1920x1080
+10-29 09:03:29.857 11892 11918 I DirectLog: demosaic path=rcd-packed-p010
+10-29 09:03:29.941 11892 11918 I DirectLog: RCD GPU writer=true
+10-29 09:03:29.942 11892 11918 I DirectLog: output profile=BT709 inputProfile=SLOG3 lutBaked=true codec=OMX.MTK.VIDEO.ENCODER.HEVC input=IMAGE_WRITER cs=1 xfer=3 range=2
+10-29 09:03:29.949 11892 11918 I DirectLog: preview 3840x2160 -> 960x540 box=4
+10-29 09:03:29.952 11892 11918 I DirectLog: ours P010 yStride=7680 uvStride=7680
+10-29 09:03:30.029 11892 11918 I DirectLog: audio AAC 2ch
+10-29 09:03:30.718 11892 12279 I DirectLog: lens-shading live 17x17 active=0,0..4080,3060
+10-29 09:03:30.731 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=11.275385
+10-29 09:03:30.742 11892 11963 I DirectLogPreview: preview GL ready 1249x1666
+10-29 09:03:30.921 11892 12267 I DirectLog: muxer started: video/hevc 3840x2160 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+10-29 09:03:31.948 11892 12279 I DirectLog: RCD phases slotMs=0.017 writerDequeueMs=0.18923 writerFenceMs=0.034077 submitMs=0.985923 previewMs=0.617231
+10-29 09:03:31.975 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.495615
+10-29 09:03:33.186 11892 12279 I DirectLog: RCD phases slotMs=0.035462 writerDequeueMs=0.147307 writerFenceMs=0.027462 submitMs=0.741769 previewMs=0.595385
+10-29 09:03:33.221 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.364308
+10-29 09:03:34.436 11892 12279 I DirectLog: RCD phases slotMs=0.002461 writerDequeueMs=0.112308 writerFenceMs=0.011462 submitMs=0.326384 previewMs=0.008
+10-29 09:03:34.475 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.297846
+10-29 09:03:35.686 11892 12279 I DirectLog: RCD phases slotMs=0.004 writerDequeueMs=0.115693 writerFenceMs=0.009769 submitMs=0.487385 previewMs=0.013538
+10-29 09:03:35.723 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.233769
+10-29 09:03:36.936 11892 12279 I DirectLog: RCD phases slotMs=0.00223 writerDequeueMs=0.133231 writerFenceMs=0.011308 submitMs=0.373538 previewMs=0.016385
+10-29 09:03:36.973 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.289923
+10-29 09:03:38.186 11892 12279 I DirectLog: RCD phases slotMs=0.003692 writerDequeueMs=0.141923 writerFenceMs=0.023923 submitMs=0.768385 previewMs=0.710692
+10-29 09:03:38.222 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.356
+10-29 09:03:39.438 11892 12279 I DirectLog: RCD phases slotMs=0.002846 writerDequeueMs=0.130692 writerFenceMs=0.012385 submitMs=0.464615 previewMs=0.358077
+10-29 09:03:39.473 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.375308
+10-29 09:03:40.683 11892 12279 I DirectLog: RCD phases slotMs=0.001923 writerDequeueMs=0.094692 writerFenceMs=0.009231 submitMs=0.343692 previewMs=0.263077
+10-29 09:03:40.724 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.271616
+10-29 09:03:41.933 11892 12279 I DirectLog: RCD phases slotMs=0.001923 writerDequeueMs=0.095077 writerFenceMs=0.008 submitMs=0.304615 previewMs=0.228308
+10-29 09:03:41.975 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.324
+10-29 09:03:43.187 11892 12279 I DirectLog: RCD phases slotMs=0.002385 writerDequeueMs=0.088077 writerFenceMs=0.014384 submitMs=0.686539 previewMs=1.170077
+10-29 09:03:43.223 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.277
+10-29 09:03:44.433 11892 12279 I DirectLog: RCD phases slotMs=0.00177 writerDequeueMs=0.054538 writerFenceMs=0.007615 submitMs=0.332308 previewMs=0.313
+10-29 09:03:44.476 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.326077
+10-29 09:03:45.684 11892 12279 I DirectLog: RCD phases slotMs=0.003076 writerDequeueMs=0.121231 writerFenceMs=0.009308 submitMs=0.426461 previewMs=0.014693
+10-29 09:03:45.725 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.30677
+10-29 09:03:46.936 11892 12279 I DirectLog: RCD phases slotMs=0.003076 writerDequeueMs=0.146693 writerFenceMs=0.014769 submitMs=0.442846 previewMs=0.634692
+10-29 09:03:46.976 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.234462
+10-29 09:03:48.191 11892 12279 I DirectLog: RCD phases slotMs=0.003154 writerDequeueMs=0.113846 writerFenceMs=0.010077 submitMs=0.490769 previewMs=0.530846
+10-29 09:03:48.226 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.416923
+10-29 09:03:49.438 11892 12279 I DirectLog: RCD phases slotMs=0.003076 writerDequeueMs=0.082154 writerFenceMs=0.010539 submitMs=0.376231 previewMs=0.432384
+10-29 09:03:49.480 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.772924
+10-29 09:03:50.684 11892 12279 I DirectLog: RCD phases slotMs=0.002462 writerDequeueMs=0.077615 writerFenceMs=0.009846 submitMs=0.411308 previewMs=0.006154
+10-29 09:03:50.722 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.236616
+10-29 09:03:51.937 11892 12279 I DirectLog: RCD phases slotMs=0.003077 writerDequeueMs=0.104077 writerFenceMs=0.010462 submitMs=0.395307 previewMs=0.006154
+10-29 09:03:51.973 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.348307
+10-29 09:03:53.185 11892 12279 I DirectLog: RCD phases slotMs=0.002461 writerDequeueMs=0.081769 writerFenceMs=0.021847 submitMs=0.541615 previewMs=0.010461
+10-29 09:03:53.222 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.386846
+10-29 09:03:54.436 11892 12279 I DirectLog: RCD phases slotMs=0.002231 writerDequeueMs=0.085846 writerFenceMs=0.007 submitMs=0.36777 previewMs=0.246692
+10-29 09:03:54.471 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.319154
+10-29 09:03:55.684 11892 12279 I DirectLog: RCD phases slotMs=0.002154 writerDequeueMs=0.088538 writerFenceMs=0.009 submitMs=0.375077 previewMs=0.229231
+10-29 09:03:55.725 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.268308
+10-29 09:03:56.934 11892 12279 I DirectLog: RCD phases slotMs=0.003077 writerDequeueMs=0.643077 writerFenceMs=0.011077 submitMs=0.412846 previewMs=0.267154
+10-29 09:03:56.974 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.293231
+10-29 09:03:58.184 11892 12279 I DirectLog: RCD phases slotMs=0.001846 writerDequeueMs=0.092923 writerFenceMs=0.009462 submitMs=0.426769 previewMs=0.267692
+10-29 09:03:58.227 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.288615
+10-29 09:03:59.436 11892 12279 I DirectLog: RCD phases slotMs=0.002539 writerDequeueMs=0.115385 writerFenceMs=0.013461 submitMs=0.430769 previewMs=0.293
+10-29 09:03:59.473 11892 12279 I DirectLog: RCD timing crop=3840x2160 output=3840x2160 submitMs=0.585461
+10-29 09:04:08.674 11892 11918 I DirectLog: stab sidecar directlog_rcd_4k.stab.json frames=706 gyro=15606
+10-29 09:04:08.712 11892 11918 I DirectLogPreview: preview detached: presented=382 adoptFailed=0 presentFailed=0
+10-29 09:04:08.821 11892 11918 I DirectLog: SPIKE directlog fps=24 label=rcd-4k rung=open-gate step=2 sensor=4080x3060 crop=3840x2160@(120,450) export=3840x2160 acq=707 graded=706 drop=0 miss=1 stale=706 waitFree=706 fallback=0 preview=382 shaded=706 fused=0 heat=false thermal=0 cpuChain=1.1ms chainMax=29.2ms over=0 copy=0.0ms copyMax=0.0ms p010=true starved=0 degraded=0 aChunks=692 aFrames=1417216 aDrop=14 hasAudio=true aacBytes=473283 aOut=1386 outBufs=707 bytes=275943197 file=276430465
+10-29 09:04:09.355 11892 11918 I DirectLog: SPIKE directlog [rcd-4k] eyeball copy: /storage/emulated/0/Android/data/com.matthew.rawlens/files/directlog_rcd_4k.mp4
+10-29 09:04:09.365 11892 11918 I DirectLog: SPIKE directlog-color std=1 transfer=3 range=2
+10-29 09:04:10.007 11892 11918 I DirectLog: SPIKE directlog [rcd-4k] muxed video=706 audio=1386 durationUs=29419200
+10-29 09:04:10.007 11892 11918 I DirectLog: SPIKE directlog [rcd-4k] muxedFps=24.0
+10-29 09:04:10.009 11892 11918 I DirectLog: RCD cadence fullSecondCounts=[24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24] steadyGapUs=min=41666 p50=41667 p95=41667 max=41778
+10-29 09:04:10.009 11892 11918 I DirectLog: SPIKE directlog [rcd-4k] videoPtsGap minUs=41666 maxUs=41778
+10-29 09:04:11.009 11892 11918 I DirectLog: RCD published: content://media/external/video/media/56595 bytes=276430465
