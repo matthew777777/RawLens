@@ -53,7 +53,7 @@ internal object MfsrMerge {
     )
 
     data class MfsrResult(
-        /** Merged linear RGB, pipeline row order (bottom-up), NaN-free. */
+        /** Merged linear RGB in original sensor coordinates, top-down, NaN-free. */
         val rgb: ByteBuffer,
         val width: Int,
         val height: Int,
@@ -216,6 +216,24 @@ internal object MfsrMerge {
             return (h - 1 - i / w) * w + (i % w)
         }
         throw IllegalArgumentException("sharp merge: unsupported CFA pattern ${cfa.toList()}")
+    }
+
+    /** Undo decodeRows' spatial permutation on interleaved RGB, in place. */
+    internal fun restoreSensorCoordinates(rgb: java.nio.FloatBuffer, w: Int, h: Int, pattern: BayerPattern) {
+        require(rgb.capacity() == w * h * 3)
+        val codes = dngCodesFor(pattern)
+        for (dst in 0 until w * h) {
+            val src = flipSrcIndex(dst, w, h, codes)
+            if (src <= dst) continue
+            for (channel in 0..2) {
+                val a = dst * 3 + channel
+                val b = src * 3 + channel
+                val value = rgb.get(a)
+                rgb.put(a, rgb.get(b))
+                rgb.put(b, value)
+            }
+        }
+        rgb.rewind()
     }
 
     private fun flipFloatsToRggb(pixels: FloatArray, w: Int, h: Int, cfa: IntArray): FloatArray {
@@ -500,9 +518,10 @@ internal object MfsrMerge {
             val mergeMs = (System.nanoTime() - t0) / 1_000_000
             VulkanPipeline.nanToBlack(rgb.asFloatBuffer(), w * h * 3)
             rgb.rewind()
-            // Pipeline rows run sensor-bottom-up; consumers (DNG/JPEG)
-            // take native top-down, same as the CLI tail.
-            VulkanPipeline.flipRowsInPlace(rgb.asFloatBuffer(), w, h)
+            // Compute preserves the RGGB-normalized input coordinates.
+            // Undo the Bayer normalization before applying the original
+            // sensor metadata / EXIF orientation in either output tail.
+            restoreSensorCoordinates(rgb.asFloatBuffer(), w, h, pattern)
             rgb.rewind()
             Log.i(LOG_TAG, "sharp merge done ${w}x$h N=$count in ${mergeMs}ms")
             return EngineOut(rgb, w, h, mergeMs)
