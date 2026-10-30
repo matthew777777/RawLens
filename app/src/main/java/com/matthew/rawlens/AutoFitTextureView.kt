@@ -38,6 +38,7 @@ class AutoFitTextureView @JvmOverloads constructor(
         if (width < 0 || height < 0) {
             throw IllegalArgumentException("Size cannot be negative.")
         }
+        if (ratioWidth == width && ratioHeight == height) return
         ratioWidth = width
         ratioHeight = height
         requestLayout()
