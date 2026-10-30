@@ -30,6 +30,7 @@ internal class BguGlSlice {
     private var gridW = 0
     private var gridH = 0
     private var gridZ = 0
+    private var gridUpload: ByteBuffer? = null
     private var uvKey = ""
     private var fittedLowW = 0
     private var fittedLowH = 0
@@ -84,13 +85,15 @@ internal class BguGlSlice {
 
     fun uploadGrid(fitted: BguFittedGrid) {
         val grid = fitted.grid
-        val packed = BguSlice.packGrid(grid)
+        val byteCount = grid.gw * grid.gh * grid.gz * 4 * 2
+        val buf = gridUpload?.takeIf { it.capacity() == byteCount }
+            ?: ByteBuffer.allocateDirect(byteCount).order(ByteOrder.nativeOrder()).also { gridUpload = it }
+        val halves = buf.asShortBuffer()
         for (i in 0..2) {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texGrid[i])
-            val buf = ByteBuffer.allocateDirect(packed[i].size * 2)
-                .order(ByteOrder.nativeOrder())
-            for (s in packed[i]) buf.putShort(s)
-            buf.flip()
+            halves.clear()
+            BguSlice.packGridRowInto(grid, i, halves)
+            buf.position(0)
             if (grid.gw != gridW || grid.gh != gridH || grid.gz != gridZ) {
                 GLES30.glTexImage3D(
                     GLES30.GL_TEXTURE_3D, 0, GLES30.GL_RGBA16F,

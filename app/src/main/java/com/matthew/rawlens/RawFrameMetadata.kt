@@ -118,7 +118,14 @@ data class RawFrameMetadata(
     /** EXIF min/max focal length and maximum apertures, only for a declared fixed lens. */
     val lensSpecification: ImmutableDoubleValues? = null,
     val compositeSourceCount: Int? = null,
-    val compositeUsedCount: Int? = null
+    val compositeUsedCount: Int? = null,
+    /**
+     * True when [neutralColorPoint]/[wbGains] are a gray-world estimate from
+     * the frame because the HAL ran no AWB ([RawWhiteBalanceFallback]). The
+     * platform DngCreator would write the HAL's NaN neutral, so DNG saves
+     * route to TinyDNG, which writes these values.
+     */
+    val whiteBalanceFallback: Boolean = false
 ) {
     fun normalizationOrNull(): RawNormalization? {
         val pattern = cfaPattern ?: return null
@@ -238,11 +245,25 @@ object RawFrameMetadataFactory {
             }
         val hotPixels = sensorKey(CaptureResult.STATISTICS_HOT_PIXEL_MAP)
             ?.map { it.snapshot() }.orEmpty()
-        val gains = sensorKey(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+        val halGains = sensorKey(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
             ImmutableFloatValues(floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue))
         }
-        val neutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+        val halNeutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
             ?.toDoubleValues()
+        // Direct-opened Xiaomi aux lenses run no AWB (unity gains, NaN
+        // neutral): estimate from the frame so JPEG and DNG are not green.
+        val fallbackNeutral = if (RawWhiteBalanceFallback.halAwbMissing(
+                halNeutral?.toDoubleArray(), halGains?.toFloatArray()) &&
+            cfaValue != null && black != null && white != null && plane != null
+        ) {
+            runCatching {
+                RawWhiteBalanceFallback.estimate(plane.buffer, plane.rowStride, plane.pixelStride,
+                    image.width, image.height, cfaValue, black, white,
+                    RawWhiteBalanceFallback.locusFor(characteristics))
+            }.getOrNull()
+        } else null
+        val gains = fallbackNeutral?.let { ImmutableFloatValues(RawWhiteBalanceFallback.gainsFor(it)) } ?: halGains
+        val neutral = fallbackNeutral?.let(::ImmutableDoubleValues) ?: halNeutral
         val noise = sensorKey(CaptureResult.SENSOR_NOISE_PROFILE)?.let { pairs ->
             ImmutableDoubleValues(DoubleArray(pairs.size * 2) { index ->
                 if (index and 1 == 0) pairs[index / 2].first else pairs[index / 2].second
@@ -287,7 +308,7 @@ object RawFrameMetadataFactory {
             else -> null
         }
 
-        return RawFrameMetadata(
+        val metadata = RawFrameMetadata(
             cameraId = cameraId,
             timestampNanos = image.timestamp,
             frameNumber = result.frameNumber,
@@ -381,9 +402,52 @@ object RawFrameMetadataFactory {
                             ImmutableDoubleValues(doubleArrayOf(focal.toDouble(), focal.toDouble(),
                                 aperture.toDouble(), aperture.toDouble()))
                         }
-                }
+                },
+            whiteBalanceFallback = fallbackNeutral != null
         )
+        logColorDiag(cameraId, metadata, physicalId, result)
+        return metadata
     }
+
+    private var lastColorDiagCamera: String? = null
+    private var lastColorDiagNanos = 0L
+
+    /**
+     * One colour line per capture: bursts build metadata for every frame
+     * within a few hundred ms, so repeats on the same camera inside
+     * [COLOR_DIAG_INTERVAL_NANOS] are dropped. Never fails the save.
+     */
+    private fun logColorDiag(
+        cameraId: String,
+        metadata: RawFrameMetadata,
+        physicalId: String?,
+        result: TotalCaptureResult
+    ) {
+        val now = System.nanoTime()
+        synchronized(this) {
+            if (cameraId == lastColorDiagCamera && now - lastColorDiagNanos < COLOR_DIAG_INTERVAL_NANOS) return
+            lastColorDiagCamera = cameraId
+            lastColorDiagNanos = now
+        }
+        runCatching {
+            val statics = SceneLinearColorMetadata.from(metadata)
+            val used = ColorDiagnostics.ResultColor(
+                source = (physicalId?.let { "used(phys:$it,per-key logical fallback)" } ?: "used(logical)") +
+                    if (metadata.whiteBalanceFallback) "+grayWorldWb" else "",
+                gains = metadata.wbGains?.toFloatArray(),
+                neutral = metadata.neutralColorPoint?.toDoubleArray(),
+                ccm = metadata.colorCorrectionTransform?.toDoubleArray(),
+                awbMode = metadata.awbMode,
+                awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
+            )
+            val (physicalHeader, physicalColors) = result.physicalColorDiags()
+            Log.i("RawLensColor", ColorDiagnostics.format(
+                "CAPTURE color", "$cameraId frame=${metadata.frameNumber} $physicalHeader",
+                used, listOf(result.colorDiag("logical")) + physicalColors, statics))
+        }.onFailure { Log.w("RawLensColor", "CAPTURE color diag failed: ${it.message}") }
+    }
+
+    private const val COLOR_DIAG_INTERVAL_NANOS = 1_500_000_000L
 
     private fun Rect?.snapshot(): IntRectSnapshot? = this?.let {
         IntRectSnapshot(it.left, it.top, it.right, it.bottom)

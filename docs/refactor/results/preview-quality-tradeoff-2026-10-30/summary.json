@@ -1,0 +1,22 @@
+{
+  "unit_suites": 19,
+  "unit_tests": 186,
+  "unit_failures": 0,
+  "unit_errors": 0,
+  "device_checks_passed": 5,
+  "renderer": "Mali-G615 MC2",
+  "before_pixels": 1742040,
+  "after_pixels": 780840,
+  "render_pixel_reduction_percent": 55.17668939863608,
+  "baseline_ms": 2.289884625,
+  "current_full_control_ms": 2.275336625,
+  "current_capped_ms": 1.099932625,
+  "batched_render_time_reduction_percent": 51.965587567539565,
+  "timing": "CPU-inclusive saturated offscreen throughput; no pure GPU timer support",
+  "color_math_error_codes": 0,
+  "hue_gamut_branch_retained": false,
+  "preview_spatial_quality_tradeoff": true,
+  "whole_device_current_measured": false,
+  "daily_app_replaced": false,
+  "lint": "excluded after internal tooling crash"
+}

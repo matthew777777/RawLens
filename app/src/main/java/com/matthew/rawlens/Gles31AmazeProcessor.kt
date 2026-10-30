@@ -1173,6 +1173,7 @@ class Gles31AmazeProcessor(
                 finalProgram.ivec2("u_output_size", input.width, input.height)
                 finalProgram.integer("u_display_p3", if (settings.displayP3) 1 else 0)
                 finalProgram.float("u_agx_purity_boost", settings.agxPurityBoost)
+                finalProgram.integer("u_agx_punchy", if (settings.agxLook == AgxLook.PUNCHY) 1 else 0)
                 finalProgram.float("u_agx_contrast", settings.agxContrast)
                 finalProgram.float("u_agx_saturation", settings.agxSaturation)
                 finalProgram.float("u_agx_hue_preservation", settings.agxHuePreservation)

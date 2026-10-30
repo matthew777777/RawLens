@@ -44,7 +44,7 @@ internal object BguLook {
     const val FP_GAMUT = 7
     const val FP_SHOULDER = 8
 
-    /** [iparams] order: jpeg, p3, applyLens, greenRow, qbX, qbY, lowStep, aL, aT, aR, aB. */
+    /** [iparams] order: jpeg (0 RAW, 1 Base, 2 Punchy), p3, applyLens, greenRow, qbX, qbY, lowStep, aL, aT, aR, aB. */
     const val IP_COUNT = 11
     const val IP_JPEG = 0
     const val IP_P3 = 1

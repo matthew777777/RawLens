@@ -10,6 +10,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgxDisplayTransformTest {
+    @Test fun punchyIsOptInAndTracksNeutralScopes() {
+        assertEquals(AgxLook.BASE, JpegOutputSettings().agxLook)
+        assertEquals(AgxLook.BASE, AgxLook.fromPreference(null))
+        assertEquals(AgxLook.BASE, AgxLook.fromPreference("unknown"))
+        assertEquals(AgxLook.PUNCHY, AgxLook.fromPreference("PUNCHY"))
+        val punchy = JpegOutputSettings(agxLook = AgxLook.PUNCHY)
+        for (input in floatArrayOf(0f, 0.01f, 0.18f, 0.5f, 1f, 16f)) {
+            val output = AgxDisplayTransform.acescgToOutputLinearSrgb(FloatArray(3) { input }, punchy)
+            assertTrue(output.all(Float::isFinite))
+            val encoded = AgxDisplayTransform.srgbOetf(output[0].coerceIn(0f, 1f))
+            assertEquals(encoded, AgxDisplayTransform.scopeCurve(input, punchy), 0.0002f)
+        }
+        assertTrue(AgxDisplayTransform.scopeCurve(0.18f, punchy) <
+            AgxDisplayTransform.scopeCurve(0.18f))
+    }
+
     @Test
     fun provenanceIsVersionPinned() {
         assertEquals("2a8018f54d5154ceb1bf7005c6c01b13aa70e7ad", AgxDisplayTransform.REFERENCE_COMMIT)

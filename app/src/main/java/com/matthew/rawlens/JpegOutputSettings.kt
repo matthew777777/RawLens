@@ -14,6 +14,7 @@ data class JpegOutputSettings(
     val chromaSubsampling: JpegChromaSubsampling = JpegChromaSubsampling.YUV_422,
     /** darktable-style post-tone-map AgX primary outset multiplier: 0.0 = none, 1.0 = base, 2.0 = maximum. */
     val agxPurityBoost: Float = 1f,
+    val agxLook: AgxLook = AgxLook.BASE,
     val agxContrast: Float = 1f,
     val agxSaturation: Float = 1f,
     val agxHuePreservation: Float = 0f,

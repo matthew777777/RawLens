@@ -1,0 +1,267 @@
+
+> Configure project :app
+WARNING: The option setting 'android.newDsl=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+RawLens version: 2.0.22 (2022)
+WARNING: API 'applicationVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling applicationVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+Add android.sync.suppressAgpWarnings=DEPRECATED_DSL to the gradle.properties file to suppress this warning.
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preGithubDeviceTestBuild UP-TO-DATE
+> Task :tools:sr-pipeline:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:configureCMakeRelease[arm64-v8a]
+> Task :app:buildCMakeRelease[arm64-v8a][rawLensVfEgl]
+> Task :app:configureCMakeRelease[armeabi-v7a]
+> Task :tools:sr-pipeline:processResources UP-TO-DATE
+> Task :app:buildCMakeRelease[armeabi-v7a][rawLensVfEgl]
+> Task :app:mergeGithubDeviceTestJniLibFolders UP-TO-DATE
+> Task :app:checkGithubDeviceTestDuplicateClasses UP-TO-DATE
+> Task :app:generateGithubDeviceTestBuildConfig
+> Task :app:generateGithubDeviceTestResources UP-TO-DATE
+> Task :app:packageGithubDeviceTestResources UP-TO-DATE
+> Task :app:processGithubDeviceTestNavigationResources UP-TO-DATE
+> Task :app:parseGithubDeviceTestLocalResources UP-TO-DATE
+> Task :app:generateGithubDeviceTestRFile UP-TO-DATE
+> Task :app:javaPreCompileGithubDeviceTest UP-TO-DATE
+> Task :app:checkGithubDeviceTestAarMetadata UP-TO-DATE
+> Task :app:mapGithubDeviceTestSourceSetPaths UP-TO-DATE
+> Task :app:compileGithubDeviceTestNavigationResources UP-TO-DATE
+> Task :app:mergeGithubDeviceTestResources UP-TO-DATE
+> Task :app:createGithubDeviceTestCompatibleScreenManifests
+> Task :app:extractDeepLinksGithubDeviceTest UP-TO-DATE
+> Task :app:processGithubDeviceTestMainManifest
+> Task :app:processGithubDeviceTestManifest
+> Task :app:processGithubDeviceTestManifestForPackage
+> Task :app:processGithubDeviceTestResources
+> Task :app:desugarGithubDeviceTestFileDependencies UP-TO-DATE
+> Task :app:mergeGithubDeviceTestStartupProfile UP-TO-DATE
+> Task :app:mergeExtDexGithubDeviceTest UP-TO-DATE
+> Task :app:mergeGithubDeviceTestArtProfile UP-TO-DATE
+> Task :app:compileSrpShaders UP-TO-DATE
+> Task :app:generateGithubDeviceTestAssets UP-TO-DATE
+> Task :app:mergeGithubDeviceTestAssets UP-TO-DATE
+> Task :app:compressGithubDeviceTestAssets UP-TO-DATE
+> Task :app:extractGithubDeviceTestVersionControlInfo UP-TO-DATE
+> Task :app:optimizeGithubDeviceTestResources
+> Task :app:collectGithubDeviceTestDependencies UP-TO-DATE
+> Task :app:sdkGithubDeviceTestDependencyData UP-TO-DATE
+> Task :app:validateSigningGithubDeviceTest UP-TO-DATE
+> Task :app:writeGithubDeviceTestAppMetadata UP-TO-DATE
+> Task :app:writeGithubDeviceTestSigningConfigVersions UP-TO-DATE
+> Task :app:preGithubDeviceTestAndroidTestBuild SKIPPED
+> Task :app:mergeGithubDeviceTestAndroidTestManifest UP-TO-DATE
+> Task :app:processGithubDeviceTestAndroidTestManifest UP-TO-DATE
+> Task :app:generateGithubDeviceTestAndroidTestBuildConfig UP-TO-DATE
+> Task :app:generateGithubDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:packageGithubDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:processGithubDeviceTestAndroidTestNavigationResources UP-TO-DATE
+> Task :app:parseGithubDeviceTestAndroidTestLocalResources UP-TO-DATE
+> Task :app:generateGithubDeviceTestAndroidTestRFile UP-TO-DATE
+> Task :app:javaPreCompileGithubDeviceTestAndroidTest UP-TO-DATE
+> Task :app:generateGithubDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:mergeGithubDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:compressGithubDeviceTestAndroidTestAssets UP-TO-DATE
+> Task :app:checkGithubDeviceTestAndroidTestDuplicateClasses UP-TO-DATE
+> Task :app:checkGithubDeviceTestAndroidTestAarMetadata UP-TO-DATE
+> Task :app:mapGithubDeviceTestAndroidTestSourceSetPaths UP-TO-DATE
+> Task :app:compileGithubDeviceTestAndroidTestNavigationResources UP-TO-DATE
+> Task :app:mergeGithubDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:processGithubDeviceTestAndroidTestResources UP-TO-DATE
+> Task :app:desugarGithubDeviceTestAndroidTestFileDependencies UP-TO-DATE
+> Task :app:mergeExtDexGithubDeviceTestAndroidTest UP-TO-DATE
+> Task :app:mergeGithubDeviceTestAndroidTestJniLibFolders UP-TO-DATE
+> Task :app:validateSigningGithubDeviceTestAndroidTest UP-TO-DATE
+> Task :app:writeGithubDeviceTestAndroidTestSigningConfigVersions UP-TO-DATE
+
+> Task :tools:sr-pipeline:compileKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/cli/Main.kt:207:35 Unnecessary non-null assertion (!!) on a non-null receiver of type 'String'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/cli/Main.kt:208:37 Unnecessary non-null assertion (!!) on a non-null receiver of type 'String'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/stages/VulkanPipeline.kt:233:23 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Array<FloatArray>'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/stages/VulkanPipeline.kt:355:45 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Array<FloatArray>'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/tools/sr-pipeline/src/main/kotlin/com/rawlens/srpipeline/stages/VulkanPipeline.kt:595:26 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Array<FloatArray>'.
+
+> Task :app:buildDngNativeHost
+built /tmp/rawlens-preview-efficiency-build/_app/dng-native/librawLensDng.dylib
+
+> Task :app:preGithubDebugBuild UP-TO-DATE
+> Task :app:generateGithubDebugBuildConfig
+> Task :app:generateGithubDebugResources
+> Task :app:packageGithubDebugResources
+> Task :app:processGithubDebugNavigationResources
+> Task :tools:sr-pipeline:compileJava NO-SOURCE
+> Task :tools:sr-pipeline:classes UP-TO-DATE
+> Task :tools:sr-pipeline:jar UP-TO-DATE
+> Task :app:mergeGithubDeviceTestNativeLibs UP-TO-DATE
+> Task :app:stripGithubDeviceTestDebugSymbols UP-TO-DATE
+> Task :app:extractGithubDeviceTestNativeSymbolTables UP-TO-DATE
+> Task :app:mergeGithubDeviceTestNativeDebugMetadata UP-TO-DATE
+> Task :app:parseGithubDebugLocalResources
+> Task :app:mergeGithubDeviceTestAndroidTestNativeLibs NO-SOURCE
+> Task :app:stripGithubDeviceTestAndroidTestDebugSymbols NO-SOURCE
+> Task :app:generateGithubDebugRFile
+
+> Task :app:compileGithubDeviceTestKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:175:38 Unnecessary non-null assertion (!!) on a non-null receiver of type 'LensShadingModel'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:175:63 Unnecessary non-null assertion (!!) on a non-null receiver of type 'BayerPattern'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:180:40 Unnecessary non-null assertion (!!) on a non-null receiver of type 'FloatArray'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:205:38 Unnecessary non-null assertion (!!) on a non-null receiver of type 'LensShadingModel'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:205:63 Unnecessary non-null assertion (!!) on a non-null receiver of type 'BayerPattern'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:210:40 Unnecessary non-null assertion (!!) on a non-null receiver of type 'FloatArray'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/WelcomeActivity.kt:331:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:compileGithubDeviceTestJavaWithJavac
+> Task :app:dexBuilderGithubDeviceTest
+> Task :app:mergeDexGithubDeviceTest
+> Task :app:mergeGithubDeviceTestGlobalSynthetics UP-TO-DATE
+> Task :app:compileGithubDeviceTestArtProfile
+> Task :app:processGithubDeviceTestJavaRes UP-TO-DATE
+> Task :app:mergeGithubDeviceTestJavaResource UP-TO-DATE
+> Task :app:packageGithubDeviceTest
+> Task :app:createGithubDeviceTestApkListingFileRedirect
+> Task :app:assembleGithubDeviceTest
+> Task :app:bundleGithubDeviceTestClassesToCompileJar
+
+> Task :app:compileGithubDeviceTestAndroidTestKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/androidTest/java/com/matthew/rawlens/BguImageParityInstrumentedTest.kt:144:54 Java type mismatch: inferred type is 'Any?', but 'Any' was expected.
+
+> Task :app:compileGithubDeviceTestAndroidTestJavaWithJavac UP-TO-DATE
+
+> Task :app:compileGithubDebugKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/BguViewfinder.kt:1383:80 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DeviceImpactProbe.kt:429:75 Unnecessary safe call on a non-null receiver of type 'Result<Long?>'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DeviceImpactProbe.kt:484:49 Unnecessary safe call on a non-null receiver of type 'String'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogColor.kt:95:57 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:397:40 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:476:43 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2290:39 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:2574:51 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3023:22 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraDevice'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogRecorder.kt:3070:26 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraCaptureSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/DirectLogStabilizer.kt:201:31 Unnecessary safe call on a non-null receiver of type 'EglPusher'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:63:60 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:576:29 Elvis operator (?:) always returns the left operand of non-nullable type 'Gles31AmazeProcessor.ProcessingSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:577:60 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:631:13 Elvis operator (?:) always returns the left operand of non-nullable type 'Gles31AmazeProcessor.ProcessingSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:632:60 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:665:13 Elvis operator (?:) always returns the left operand of non-nullable type 'Gles31AmazeProcessor.ProcessingSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:666:60 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31AmazeProcessor.kt:844:47 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31JpegOutputProcessor.kt:194:61 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31JpegOutputProcessor.kt:318:47 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31JxlOutputProcessor.kt:158:61 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31JxlOutputProcessor.kt:235:47 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31MergedDevelopProcessor.kt:228:61 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/Gles31MergedDevelopProcessor.kt:260:47 'val id: Long' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/GpsLocationProvider.kt:40:22 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/HdrPlusAutoSelect.kt:39:37 Unnecessary non-null assertion (!!) on a non-null receiver of type 'List<Float>'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/HistogramView.kt:56:35 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/HlReconstructionStage.kt:427:14 Expected performance impact from inlining is insignificant. Inlining works best for functions with parameters of function types.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/HlReconstructionStage.kt:464:14 Expected performance impact from inlining is insignificant. Inlining works best for functions with parameters of function types.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/LensDiscovery.kt:284:29 Elvis operator (?:) always returns the left operand of non-nullable type '(Mutable)Set<String!>'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/LogcatFileWriter.kt:586:34 Elvis operator (?:) always returns the left operand of non-nullable type 'Uri'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/MainActivity.kt:1086:72 Unnecessary safe call on a non-null receiver of type 'Intent'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/MainActivity.kt:2345:25 Condition is always 'true'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/MemoryLeakDiagnostics.kt:299:41 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/OwnedCaptureJob.kt:21:83 Unnecessary non-null assertion (!!) on a non-null receiver of type 'Throwable'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawExposureAssist.kt:144:51 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawExposureAssist.kt:149:45 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawVideoRecorder.kt:256:40 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawVideoRecorder.kt:321:31 This class is not recommended for use in Kotlin. Use 'kotlin.Any' instead.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawVideoRecorder.kt:1378:22 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraDevice'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/RawVideoRecorder.kt:1425:26 Unnecessary non-null assertion (!!) on a non-null receiver of type 'CameraCaptureSession'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/UltraHdrGainmapMath.kt:44:67 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/UltraHdrGainmapMath.kt:48:81 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VendorSessionOpener.kt:64:32 'fun createCaptureSession(p0: (Mutable)List<Surface!>, p1: CameraCaptureSession.StateCallback, p2: Handler?): Unit' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:175:38 Unnecessary non-null assertion (!!) on a non-null receiver of type 'LensShadingModel'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:175:63 Unnecessary non-null assertion (!!) on a non-null receiver of type 'BayerPattern'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:180:40 Unnecessary non-null assertion (!!) on a non-null receiver of type 'FloatArray'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:205:38 Unnecessary non-null assertion (!!) on a non-null receiver of type 'LensShadingModel'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:205:63 Unnecessary non-null assertion (!!) on a non-null receiver of type 'BayerPattern'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfGpuImport.kt:210:40 Unnecessary non-null assertion (!!) on a non-null receiver of type 'FloatArray'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfLogGrade.kt:84:55 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfLogGrade.kt:119:63 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfLogGrade.kt:206:53 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VfLogGrade.kt:218:61 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/VulkanEncoderBridge.kt:126:28 Elvis operator (?:) always returns the left operand of non-nullable type 'EglPusher'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/WaveformView.kt:46:35 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/java/com/matthew/rawlens/WelcomeActivity.kt:331:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
+
+> Task :app:dexBuilderGithubDeviceTestAndroidTest
+> Task :app:mergeGithubDeviceTestAndroidTestGlobalSynthetics UP-TO-DATE
+> Task :app:processGithubDeviceTestAndroidTestJavaRes UP-TO-DATE
+> Task :app:mergeGithubDeviceTestAndroidTestJavaResource UP-TO-DATE
+> Task :app:javaPreCompileGithubDebug
+> Task :app:compileGithubDebugJavaWithJavac
+> Task :app:mergeDexGithubDeviceTestAndroidTest
+> Task :app:checkGithubDebugAarMetadata
+> Task :app:mapGithubDebugSourceSetPaths
+> Task :app:compileGithubDebugNavigationResources
+> Task :app:packageGithubDeviceTestAndroidTest
+> Task :app:createGithubDeviceTestAndroidTestApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleGithubDeviceTestAndroidTest
+> Task :app:createGithubDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksGithubDebug
+> Task :app:processGithubDebugMainManifest
+> Task :app:processGithubDebugManifest
+> Task :app:processGithubDebugManifestForPackage
+> Task :app:preGithubDebugUnitTestBuild UP-TO-DATE
+> Task :app:javaPreCompileGithubDebugUnitTest
+> Task :app:processGithubDebugJavaRes
+> Task :app:mergeGithubDebugResources
+> Task :app:processGithubDebugResources
+> Task :app:bundleGithubDebugClassesToRuntimeJar
+> Task :app:bundleGithubDebugClassesToCompileJar
+
+> Task :app:compileGithubDebugUnitTestKotlin
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/BurstSharpnessTest.kt:17:83 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/DirectLogPreviewTest.kt:141:64 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HdrBrokenBracketDiagnosisTest.kt:31:36 Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'String?'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HdrBrokenBracketDiagnosisTest.kt:32:13 Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'String?'.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HdrRealBracketValidationTest.kt:44:75 Java type mismatch: inferred type is 'String?', but 'String' was expected.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HdrRealBracketValidationTest.kt:134:87 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HdrRealBracketValidationTest.kt:215:69 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/HlVulkanReconTest.kt:278:32 Java type mismatch: inferred type is 'String?', but 'String' was expected.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:63:27 'var systemUiVisibility: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:88:42 'static field SYSTEM_UI_FLAG_FULLSCREEN: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:89:42 'static field SYSTEM_UI_FLAG_HIDE_NAVIGATION: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:90:42 'static field SYSTEM_UI_FLAG_IMMERSIVE_STICKY: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:91:42 'static field SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:92:42 'static field SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:94:18 'static field SYSTEM_UI_FLAG_IMMERSIVE_STICKY: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:95:22 'static field SYSTEM_UI_FLAG_LAYOUT_STABLE: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:96:22 'static field SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:97:22 'static field SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:98:22 'static field SYSTEM_UI_FLAG_HIDE_NAVIGATION: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/ImmersiveModeTest.kt:99:22 'static field SYSTEM_UI_FLAG_FULLSCREEN: Int' is deprecated. Deprecated in Java.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/VendorKeysTest.kt:75:37 Redundant call of conversion method.
+w: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/java/com/matthew/rawlens/VendorSessionOpenerTest.kt:37:30 'fun createCaptureSession(p0: (Mutable)List<Surface!>, p1: CameraCaptureSession.StateCallback, p2: Handler?): Unit' is deprecated. Deprecated in Java.
+
+> Task :app:compileGithubDebugUnitTestJavaWithJavac
+> Task :app:processGithubDebugUnitTestJavaRes
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::loadLibrary has been called by com.matthew.rawlens.VfCpuNeon in an unnamed module (file:/private/tmp/rawlens-preview-efficiency-build/_app/intermediates/runtime_app_classes_jar/githubDebug/bundleGithubDebugClassesToRuntimeJar/classes.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+> Task :app:testGithubDebugUnitTest
+
+[Incubating] Problems report is available at: file:///tmp/rawlens-preview-efficiency-build/_/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.8.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 51s
+114 actionable tasks: 52 executed, 62 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html

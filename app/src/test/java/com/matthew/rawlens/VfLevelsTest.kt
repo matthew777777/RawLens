@@ -7,6 +7,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VfLevelsTest {
+    @Test fun `cached LUT follows level changes and owns its keys`() {
+        val black = intArrayOf(4096, 4096, 4096, 4096)
+        val den = IntArray(4) { 959 * 64 }
+        val first = VfLevels.lutFor(black, den)
+        assertTrue(first === VfLevels.lutFor(black.copyOf(), den.copyOf()))
+        black[0] += 64
+        val changed = VfLevels.lutFor(black, den)
+        assertFalse(first === changed)
+        for (site in 0..3) for (code in 0..changed.first) {
+            assertEquals(VfLevels.normalizeByte(code, black[site], den[site]),
+                changed.second[site * (changed.first + 1) + code].toInt() and 255)
+        }
+        black[0] -= 64
+        assertTrue(first === VfLevels.lutFor(black, den))
+    }
     @Test fun `canonical quad vectors match the old float bytes`() {
         // Same vectors the on-device CPU test pins (black 0, white 510).
         val (blackQ, denQ) = VfLevels.toFixedQ6(FloatArray(4), 510f)

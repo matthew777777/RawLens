@@ -13,6 +13,7 @@ uniform highp int u_display_p3;
 // before (every HDR branch below is gated on this; unset stays 0).
 uniform highp int u_hdr_pq;
 uniform highp float u_agx_purity_boost;
+uniform highp int u_agx_punchy;
 uniform highp float u_agx_contrast;
 uniform highp float u_agx_saturation;
 uniform highp float u_agx_hue_preservation;
@@ -37,10 +38,7 @@ uniform highp float u_grain_amount;
 uniform highp float u_grain_size;
 uniform highp uint u_grain_seed;
 
-// Google Filament AgX Base. RawLens intentionally exposes only the BASE view transform.
-// Filament's optional GOLDEN/PUNCHY creative looks are applied after the AgX sigmoid and can
-// magnify low-level chroma variation (especially when the log-domain shadow range is extended),
-// so they are deliberately not part of the camera development path.
+// Google Filament AgX Base and Punchy looks.
 // Filament's matrices are Rec.2020. RawLens explicitly converts ACEScg D60 to Rec.2020 D65.
 const highp mat3 ACESCG_TO_REC2020_D65 = mat3(
     1.025877552449, -0.002232441770, -0.005013950857,
@@ -110,6 +108,10 @@ highp vec3 agx_base(highp vec3 acescg) {
     // extend highlights with its white-point slope (monotonic, continuous).
     highp vec3 over = max(v - vec3(1.0), vec3(0.0));
     v = agx_contrast(clamp(v, 0.0, 1.0)) + over * vec3(AGX_SLOPE_AT_WHITE);
+    if (u_agx_punchy != 0) {
+        highp float lookLuma = dot(v, vec3(0.2126, 0.7152, 0.0722));
+        v = vec3(lookLuma) + 1.4 * (pow(max(v, vec3(0.0)), vec3(1.35)) - vec3(lookLuma));
+    }
     // darktable AgX-style master purity control: 100% reproduces the pinned base outset,
     // while 0% bypasses it and 200% extrapolates the post-curve primary recovery.
     v = mix(v, AGX_OUTSET * v, u_agx_purity_boost);

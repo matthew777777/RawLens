@@ -164,8 +164,9 @@ object RawHistogramSampler {
             while (blockX < blocksWide) {
                 // One luminance sample per Bayer quad; the channel traces keep the
                 // existing per-pixel binning untouched.
-                val quad = DoubleArray(4)
-                val quadChannel = IntArray(4)
+                var r = 0.0
+                var gSum = 0.0
+                var b = 0.0
                 var quadSize = 0
                 for (dy in 0..1) for (dx in 0..1) {
                     val x = blockX * 2 + dx
@@ -190,19 +191,16 @@ object RawHistogramSampler {
                         1 -> green[bin]++
                         else -> blue[bin]++
                     }
-                    quad[quadSize] = curved
-                    quadChannel[quadSize] = channelLut[phase]
+                    // Accumulate in the same CFA order as the old quad arrays,
+                    // without two short-lived allocations per sampled block.
+                    when (channelLut[phase]) {
+                        0 -> r = curved
+                        1, 2 -> gSum += curved
+                        else -> b = curved
+                    }
                     quadSize++
                 }
                 if (quadSize == 4) {
-                    var r = 0.0
-                    var gSum = 0.0
-                    var b = 0.0
-                    for (i in 0..3) when (quadChannel[i]) {
-                        0 -> r = quad[i]
-                        1, 2 -> gSum += quad[i]
-                        else -> b = quad[i]
-                    }
                     val lumBin = (luminanceOf(r, gSum / 2.0, b) * (BIN_COUNT - 1))
                         .toInt().coerceIn(0, BIN_COUNT - 1)
                     luminance[lumBin]++

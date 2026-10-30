@@ -1,0 +1,13 @@
+{
+  "unit_suites": 45,
+  "unit_tests": 328,
+  "unit_failures": 0,
+  "unit_errors": 0,
+  "device_tests_passed": 4,
+  "renderer": "Mali-G615 MC2",
+  "tonemap_reference_max_code_error": 0,
+  "lint": "internal FIR crash; excluded from isolated test packaging",
+  "power_current_measured": false,
+  "daily_app_replaced": false,
+  "unit_result_source": "Expanded preview/scope run: 328 tests in 45 suites, verified before a separate filtered run overwrote the shared XML directory."
+}

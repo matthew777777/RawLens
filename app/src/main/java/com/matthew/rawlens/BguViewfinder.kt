@@ -57,7 +57,7 @@ class BguViewfinder @JvmOverloads constructor(
     @Volatile private var previewCenterWeight = 0f
     @Volatile private var previewFocusX: Float? = null
     @Volatile private var previewFocusY: Float? = null
-    @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f)
+    @Volatile private var agx = floatArrayOf(1f, 1f, 1f, 0f, 10f, 6.5f, 0f, 1f, 0f)
     @Volatile private var frameIntervalNs = 1_000_000_000L / 30
     override var onStarvation: (() -> Unit)? = null
     /**
@@ -123,7 +123,7 @@ class BguViewfinder @JvmOverloads constructor(
         val r = settings.resolvedForPlatform()
         agx = floatArrayOf(
             r.agxContrast, r.agxSaturation, r.agxPurityBoost, r.agxHuePreservation,
-            r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder
+            r.effectiveAgxShadowEv, r.agxHighlightEv, r.agxGamutCompression, r.highlightShoulder, if (r.agxLook == AgxLook.PUNCHY) 1f else 0f
         )
         // The VF meter runs the save's tuning, so VF EV == save EV: same
         // derived broad guard and shoulder as AdaptiveExposureTuning.
@@ -286,6 +286,9 @@ class BguViewfinder @JvmOverloads constructor(
     // for CPU guide bytes. One-way latch per session; fresh sessions retry
     // the GPU path. Render keeps one reusable slice-output buffer.
     @Volatile private var cpuFallback = false
+    /** Gray-world WB for streams whose HAL runs no AWB; offer thread only. */
+    private val wbFallback = RawWhiteBalanceFallback.Tracker()
+    private var wbFallbackLogged = false
     // Manual BGU_CPU override (overlay tap): pins the CPU guide path even
     // with a healthy GPU. Sticky across sessions like the global mode.
     @Volatile private var cpuForced = false
@@ -570,6 +573,11 @@ class BguViewfinder @JvmOverloads constructor(
         buf: java.nio.ByteBuffer, rowStride: Int, pixelStride: Int, geo: BguGuideGeo,
         slot: Int, channels: IntArray, levels: FloatArray, white: Float, offerT0: Long
     ): Boolean {
+        // GPU-sized geometry (boosted 2048x1536) reaches here when the
+        // BGU_CPU tap lands between this offer's target and branch reads
+        // (field log 2026-10-29: fatal cpu-guide 3 ms after the override).
+        // Drop the frame; the next offer recomputes the CPU-capped geometry.
+        if (geo.width > VfCpuNeon.MAX_EDGE || geo.height > VfCpuNeon.MAX_EDGE) return false
         val dst = synchronized(exportLock) {
             val cur = cpuGuides[slot]
             if (cur != null && cpuGuideW[slot] == geo.width && cpuGuideH[slot] == geo.height) {
@@ -630,7 +638,6 @@ class BguViewfinder @JvmOverloads constructor(
                     HardwareBuffer.create(
                         geo.width, geo.height, HardwareBuffer.RGBA_8888, 1,
                         HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                            HardwareBuffer.USAGE_GPU_DATA_BUFFER or
                             HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
                     )
                 } catch (_: Exception) {
@@ -656,30 +663,19 @@ class BguViewfinder @JvmOverloads constructor(
         } catch (_: Exception) {
             return false
         }
-        // GL->Vulkan ordering for this slot's export: wait (sleep-poll,
+        // GL->Vulkan ordering for this slot's export: wait in the kernel (
         // 250 ms cap) for the render thread's sample fence before the
         // dispatch reuses the buffer. Instant in the common case; the cap
         // keeps a wedged GL from wedging offers (swap-fail path stays the
         // fatal backstop).
         val fenceFd = synchronized(exportLock) { takeSlotFence(fenceFds, slot) }
         if (fenceFd >= 0) {
-            val fenceT0 = SystemClock.elapsedRealtime()
             var signaled = false
             try {
-                while (SystemClock.elapsedRealtime() - fenceT0 < 250L) {
-                    try {
-                        if (VfEglImport.pollSyncFd(fenceFd)) {
-                            signaled = true
-                            break
-                        }
-                    } catch (_: Exception) {
-                        break
-                    }
-                    try {
-                        Thread.sleep(1)
-                    } catch (_: InterruptedException) {
-                        break
-                    }
+                signaled = try {
+                    VfEglImport.awaitSyncFd(fenceFd, 250)
+                } catch (_: Exception) {
+                    false
                 }
             } finally {
                 if (signaled) {
@@ -1048,7 +1044,25 @@ class BguViewfinder @JvmOverloads constructor(
         } catch (_: Exception) {
             null
         }
-        val freshWb: FloatArray? = halGains?.let { gains ->
+        // Unity gains + NaN neutral (direct-opened Xiaomi aux lenses: no
+        // AWB on the stream) render green: estimate from the frame instead.
+        val fallbackNeutral = wbFallback.update(SystemClock.elapsedRealtime(),
+            RawWhiteBalanceFallback.halAwbMissing(
+                neutralPts?.let { n -> DoubleArray(n.size) { n[it].toDouble() } },
+                halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) })
+        ) {
+            runCatching {
+                RawWhiteBalanceFallback.estimate(buf, rowStride, pixelStride, imgW, imgH, cfa, levels, white,
+                    RawWhiteBalanceFallback.locusFor(c))
+            }.getOrNull()
+        }
+        if (fallbackNeutral != null && !wbFallbackLogged) {
+            wbFallbackLogged = true
+            Log.w(TAG, "HAL reported no white balance; gray-world neutral=" +
+                ColorDiagnostics.values(fallbackNeutral))
+        }
+        val fallbackGains = fallbackNeutral?.let(RawWhiteBalanceFallback::gainsFor)
+        val freshWb: FloatArray? = fallbackGains?.let { g -> floatArrayOf(g[0], 1f, 1f, g[3]) } ?: halGains?.let { gains ->
             val sensor = floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
             val mapped = floatArrayOf(sensor[0], sensor[if (greenRow == 0) 1 else 2],
                 sensor[if (greenRow == 0) 2 else 1], sensor[3])
@@ -1079,10 +1093,10 @@ class BguViewfinder @JvmOverloads constructor(
             }
             out
         }
-        val freshNeutral: DoubleArray? =
-            neutralPts?.takeIf { it.size >= 3 }?.let { n -> DoubleArray(3) { n[it].toDouble() } }
-        val freshGains: FloatArray? =
-            halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+        val freshNeutral: DoubleArray? = fallbackNeutral?.copyOf()
+            ?: neutralPts?.takeIf { it.size >= 3 }?.let { n -> DoubleArray(3) { n[it].toDouble() } }
+        val freshGains: FloatArray? = fallbackGains
+            ?: halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
         if (colorHoldCam !== c) {
             colorHold = null
             levelsHold = null
@@ -1220,7 +1234,7 @@ class BguViewfinder @JvmOverloads constructor(
             snapAgx[4], snapAgx[5], snapAgx[6], snapAgx[7]
         )
         val iparams = intArrayOf(
-            if (renderJpeg) 1 else 0, 0, if (lens != null) 1 else 0, greenRow,
+            if (renderJpeg) (if (snapAgx[8] > 0.5f) 2 else 1) else 0, 0, if (lens != null) 1 else 0, greenRow,
             geo.left, geo.top, geo.step * BguGeometry.LOW_DF, aL, aT, aR, aB
         )
         return LookParams(
@@ -1785,6 +1799,8 @@ class BguViewfinder @JvmOverloads constructor(
     }
 
     override fun invalidateSession() = synchronized(gridExchange) {
+        wbFallback.reset()
+        wbFallbackLogged = false
         fatal = null
         seq = 0
         lastRenderedSeq = 0
@@ -1952,7 +1968,11 @@ class BguViewfinder @JvmOverloads constructor(
             userTarget: Int, surfaceLongEdge: Int, gpuPath: Boolean,
             recordMode: Boolean, powerSave: Boolean
         ): Int {
-            if (!gpuPath || recordMode || powerSave) return userTarget
+            // The NEON guide rejects extents above its edge cap: a 1440/2160
+            // user target on the CPU path would throw every frame (fatal
+            // cpu-guide, BGU dead for the session).
+            if (!gpuPath) return minOf(userTarget, VfCpuNeon.MAX_EDGE)
+            if (recordMode || powerSave) return userTarget
             if (surfaceLongEdge <= 0) return userTarget
             return maxOf(userTarget, minOf(surfaceLongEdge, GPU_TARGET_CAP))
         }

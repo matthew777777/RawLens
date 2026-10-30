@@ -164,8 +164,8 @@ internal object VfVulkan {
     ): Int
 
     /**
-     * GPU-copy twin of [computeNative]: lock+memcpy [inputBuffer] into the
-     * host-visible staging buffer, then the same superpixel dispatch. Same
+     * GPU-copy twin of [computeNative]: lock [inputBuffer] and pack only the
+     * requested Bayer quads into staging, then the same superpixel dispatch. Same
      * fence/export/reap semantics; only the input mechanism differs.
      */
     external fun computeCopyNative(
@@ -175,8 +175,8 @@ internal object VfVulkan {
     ): Int
 
     /**
-     * CPU-plane upload tier: copy the Camera2 plane's direct buffer
-     * ([byteCount] = rowStride * height bytes) into staging and dispatch.
+     * CPU-plane upload tier: pack selected Bayer quads from the direct buffer
+     * ([byteCount] = readable plane bytes) into compact staging and dispatch.
      * No hardware-buffer lock or import, so it covers streams whose
      * allocation cannot be imported (packed or BLOB layouts).
      */

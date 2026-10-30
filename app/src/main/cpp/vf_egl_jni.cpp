@@ -699,6 +699,27 @@ Java_com_matthew_rawlens_VfEglImport_createP010(
     return out;
 }
 
+// App-owned staging is a byte buffer, never a codec/gralloc YUV image.
+// Define its plane layout ourselves: Y immediately followed by interleaved UV.
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_matthew_rawlens_VfEglImport_createLinearP010(
+    JNIEnv* env, jobject, jint width, jint height) {
+    if (width <= 0 || height <= 0 || width % 2 || height % 2) return nullptr;
+    const uint64_t bytes = (uint64_t)width * (uint64_t)height * 3u;
+    if (bytes > UINT32_MAX) return nullptr;
+    AHardwareBuffer_Desc desc{};
+    desc.width = (uint32_t)bytes;
+    desc.height = 1;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_BLOB;
+    desc.usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+    AHardwareBuffer* buf = nullptr;
+    if (AHardwareBuffer_allocate(&desc, &buf) != 0 || !buf) return nullptr;
+    jobject out = AHardwareBuffer_toHardwareBuffer(env, buf);
+    AHardwareBuffer_release(buf);
+    return out;
+}
+
 // [yStrideBytes, uvStrideBytes, 0] or null, from the allocator's describe
 // (luma pixels * 2; interleaved UV rows span the same width). The submit
 // validates tight packing against the measured allocation size, so a wrong

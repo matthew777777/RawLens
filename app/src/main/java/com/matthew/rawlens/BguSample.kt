@@ -42,6 +42,15 @@ internal object BguSample {
         val dx = IntArray(4) { channels[it] % 2 }
         val dy = IntArray(4) { channels[it] / 2 }
         val stepBytes = lowStep * pixelStride
+        // Only two row and column parities exist. Build these once per
+        // frame, rather than allocating three arrays for every sampled row.
+        val phases = Array(4) { parity ->
+            IntArray(4) { k ->
+                val sx = qx0 + (parity and 1) * lowStep + dx[k]
+                val sy = qy0 + (parity shr 1) * lowStep + dy[k]
+                (sy and 1) * 2 + (sx and 1)
+            }
+        }
         for (j in 0 until lowH) {
             val qy = qy0 + j * lowStep
             val rowBase = qy * rowStride + qx0 * pixelStride
@@ -51,18 +60,12 @@ internal object BguSample {
             if (rowBase < 0 || maxOffset + 1 >= limit) return false
             // Phase per channel for even/odd i (sy parity is row-constant;
             // sx parity flips with i only when lowStep is odd).
-            val phases = Array(2) { parity ->
-                IntArray(4) { k ->
-                    val sx = qx0 + parity * lowStep + dx[k]
-                    val sy = qy + dy[k]
-                    (sy and 1) * 2 + (sx and 1)
-                }
-            }
             val outRow = j * lowW
+            val phaseRow = (j and 1) * 2
             for (i in 0 until lowW) {
                 val colBase = rowBase + i * stepBytes
                 val col1Base = row1Base + i * stepBytes
-                val rowPhases = phases[i and 1]
+                val rowPhases = phases[phaseRow + (i and 1)]
                 for (k in 0..3) {
                     val offset = (if (dy[k] == 0) colBase else col1Base) + dx[k] * pixelStride
                     val code = buf.getShort(offset).toInt() and 0xffff

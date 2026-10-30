@@ -98,7 +98,7 @@ class JpegSaver(private val context: Context) {
                     CaptureExifAttributes.writeTo(this, metadata, captureTimeMillis)
                     setAttribute(
                         ExifInterface.TAG_IMAGE_DESCRIPTION,
-                        "RAW_SENSOR -> AMaZE -> ACEScg -> AgX Base -> " +
+                        "RAW_SENSOR -> AMaZE -> ACEScg -> AgX ${developed.settings.agxLook.label} -> " +
                             (if (developed.settings.displayP3) "Display P3" else "sRGB") +
                             if (developed.settings.ultraHdr) " -> Ultra HDR gainmap (JPEG_R)" else ""
                     )

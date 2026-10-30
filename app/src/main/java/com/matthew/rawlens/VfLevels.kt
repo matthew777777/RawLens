@@ -127,9 +127,17 @@ internal object VfLevels {
      * 0xFF), so the shader indexes codes directly with no clamp and no
      * push word.
      */
+    private data class LutEntry(val black: IntArray, val den: IntArray, val table: Pair<Int, ByteArray>)
+    // Shared by both preview engines. Entries own their keys; callers may reuse
+    // their parameter arrays. Returned LUT bytes are immutable to consumers.
+    private val lutCache = ArrayDeque<LutEntry>()
+
+    @Synchronized
     fun lutFor(blackQ: IntArray, denQ: IntArray): Pair<Int, ByteArray> {
         require(blackQ.size == 4 && denQ.size == 4) { "Q6 levels must have 4 entries" }
         require(blackQ.all { it >= 0 } && denQ.all { it > 0 }) { "bad Q6 levels" }
+        lutCache.firstOrNull { it.black.contentEquals(blackQ) && it.den.contentEquals(denQ) }
+            ?.let { return it.table }
         // First code mapping to 255 on site i: ceil((denQ + blackQ) / 64),
         // since num = code * 64 - blackQ >= denQ iff code >= that.
         var bound = 0
@@ -144,6 +152,9 @@ internal object VfLevels {
                 bytes[s * (bound + 1) + code] = normalizeByte(code, blackQ[s], denQ[s]).toByte()
             }
         }
-        return bound to bytes
+        val table = bound to bytes
+        if (lutCache.size == 4) lutCache.removeFirst()
+        lutCache.addLast(LutEntry(blackQ.copyOf(), denQ.copyOf(), table))
+        return table
     }
 }

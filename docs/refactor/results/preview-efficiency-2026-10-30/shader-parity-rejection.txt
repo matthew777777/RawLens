@@ -1,0 +1,2 @@
+--------- beginning of main
+10-30 01:40:07.617   318   377 I PreviewEfficiency: tonemap cases=60 maxCodeError=8 renderer=Mali-G615 MC2

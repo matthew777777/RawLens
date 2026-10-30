@@ -240,6 +240,13 @@ public:
             clamp(pivot + (vn.b - pivot) * agxContrast_, 0.0f, 1.0f),
         };
         Vec3 vs{agxSigmoid(vc.r), agxSigmoid(vc.g), agxSigmoid(vc.b)};
+        // JPEG mode 2 selects Filament Punchy; mode 1 keeps Base.
+        Expr lookLuma = vs.r * 0.2126f + vs.g * 0.7152f + vs.b * 0.0722f;
+        auto punchy = [&](Expr v) {
+            return select(jpeg_ == 2,
+                lookLuma + 1.4f * (pow(max(v, 0.0f), 1.35f) - lookLuma), v);
+        };
+        vs = Vec3{punchy(vs.r), punchy(vs.g), punchy(vs.b)};
         Vec3 vo = matVecConst(AGX_OUTSET, vs);
         Vec3 vp{
             lerp(vs.r, vo.r, agxPurity_),

@@ -107,6 +107,7 @@ class Gles31JxlOutputProcessor(context: Context) {
             // Shared AgX look: identical uniforms to the JPEG path so the
             // JXL still matches the JPEG look at 8-bit-equivalent settings.
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolvedLook.agxPurityBoost)
+            GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolvedLook.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolvedLook.agxContrast)
             GLES31.glUniform1f(location(outputProgram, "u_agx_saturation"), resolvedLook.agxSaturation)
             GLES31.glUniform1f(

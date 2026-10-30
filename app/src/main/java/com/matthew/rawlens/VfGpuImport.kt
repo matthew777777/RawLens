@@ -256,7 +256,7 @@ internal object VfGpuImport {
 
     private const val AGX_UNIFORMS =
         "uniform int u_jpeg;" +
-            "uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
+            "uniform float u_agxPunchy; uniform float u_agxContrast; uniform float u_agxSaturation; uniform float u_agxPurity;" +
             "uniform float u_agxHue; uniform float u_agxShadowEv; uniform float u_agxHighlightEv;" +
             "uniform float u_agxGamut; uniform float u_exposureEv; uniform float u_highlightShoulder;" +
             "uniform mat3 u_camToAces; uniform vec3 u_cameraWhite; uniform int u_displayP3;"
@@ -293,6 +293,7 @@ internal object VfGpuImport {
             " v = clamp((v - vec3(-2.473931188 - u_agxShadowEv)) / vec3(evRange), vec3(0.0), vec3(1.0));" +
             " v = clamp(vec3(pivot) + (v - vec3(pivot)) * u_agxContrast, vec3(0.0), vec3(1.0));" +
             " v = agxSigmoid(v);" +
+            " if (u_agxPunchy > 0.5) { float l = dot(v, vec3(0.2126, 0.7152, 0.0722)); v = vec3(l) + 1.4 * (pow(max(v, vec3(0.0)), vec3(1.35)) - vec3(l)); }" +
             " v = mix(v, agxOutset() * v, u_agxPurity);" +
             " v = pow(max(v, vec3(0.0)), vec3(2.2));" +
             " vec3 lumaW = vec3(0.2627, 0.6780, 0.0593);" +

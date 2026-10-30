@@ -37,6 +37,13 @@ class BguEffectiveTargetTest {
     }
 
     @Test
+    fun cpuPathCapsAtNeonEdge() {
+        // Field log 2026-10-29: a >1080 guide on the CPU path is fatal.
+        assertEquals(VfCpuNeon.MAX_EDGE, eff(1440, 2400, gpu = false))
+        assertEquals(VfCpuNeon.MAX_EDGE, eff(2160, 2400, gpu = false))
+    }
+
+    @Test
     fun recordAndPowerSaveCapsStayAuthoritative() {
         assertEquals(480, eff(480, 2400, record = true))
         assertEquals(480, eff(480, 2400, saver = true))
