@@ -973,9 +973,13 @@ class MainActivity : Activity() {
         }
         viewfinder.addOnLayoutChangeListener { view, left, top, right, bottom,
                                                oldLeft, oldTop, oldRight, oldBottom ->
-            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
-                syncMeteringOverlayToViewfinder(view)
-                syncGuideOverlayToViewfinder(view)
+            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
+                view.post {
+                    if (!isFinishing && !isDestroyed) {
+                        syncMeteringOverlayToViewfinder(view)
+                        syncGuideOverlayToViewfinder(view)
+                    }
+                }
             }
         }
     }
@@ -996,6 +1000,10 @@ class MainActivity : Activity() {
                 // the panel or it ends up behind it.
                 if (isVideoMode) seatScopeSlot() else positionViewfinderOverlays()
             }
+        }
+        val cameraRoot = findViewById<View>(R.id.controlPanel).parent as View
+        cameraRoot.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
+            if (r - l != orr - ol || b - t != ob - ot) positionViewfinderOverlays()
         }
         findViewById<View>(R.id.controlPanel).post {
             positionViewfinderOverlays()
@@ -1075,6 +1083,17 @@ class MainActivity : Activity() {
             updateFlow.onInstallSourcesResult()
             return
         }
+        if (requestCode == RECORDING_TREE_REQUEST) {
+            val tree = data?.data
+            if (resultCode == RESULT_OK && tree != null) {
+                val saved = RecordingFolderAccess.save(this, tree, data?.flags ?: 0)
+                recordingFolderSettingsStatus?.text = recordingFolderText()
+                setStatus(if (saved) "RECORDING FOLDER SAVED" else "FOLDER ACCESS NOT SAVED")
+            } else {
+                setStatus("RECORDING FOLDER UNCHANGED")
+            }
+            return
+        }
         if (requestCode == SIDECAR_TREE_REQUEST && resultCode == RESULT_OK) {
             val tree: Uri? = data?.data
             if (tree != null) {
@@ -1084,12 +1103,27 @@ class MainActivity : Activity() {
             } else {
                 setStatus("SIDECAR FOLDER NOT CHOSEN")
             }
-            folderPickerForVideo = false
-            runVideoExportRetry()
-        } else if (requestCode == SIDECAR_TREE_REQUEST && folderPickerForVideo) {
-            folderPickerForVideo = false
-            setStatus("EXPORT FAILED • LOCAL FILE KEPT")
         }
+    }
+
+    internal fun recordingFolderText(): String {
+        val tree = RecordingFolderAccess.writableTreeUri(this)
+        if (tree != null) {
+            val path = SidecarTreeAccess.displayPath(tree)?.trimEnd('/')
+            val destination = if (path != null && RecordingFolderAccess.needsRawLensChild(path)) "$path/RawLens"
+                else path ?: "Selected folder"
+            return "Recording folder: $destination"
+        }
+        return if (RecordingFolderAccess.savedTreeUri(this) != null)
+            "Recording folder unavailable — reconnect drive or choose a folder"
+        else "Recording folder: Downloads/RawLens"
+    }
+
+    internal fun pickRecordingFolder() {
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(RecordingFolderAccess.pickerIntent(this), RECORDING_TREE_REQUEST)
+        } catch (_: Exception) { setStatus("FOLDER PICKER UNAVAILABLE") }
     }
 
     internal fun sidecarFolderText(): String {
@@ -1248,7 +1282,20 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    private var viewportLayoutPosted = false
+
     private fun positionViewfinderOverlays() {
+        val decor = window.decorView
+        if (decor.isInLayout) {
+            if (!viewportLayoutPosted) {
+                viewportLayoutPosted = true
+                decor.post {
+                    viewportLayoutPosted = false
+                    if (!isFinishing && !isDestroyed) positionViewfinderOverlays()
+                }
+            }
+            return
+        }
         val panel = findViewById<LinearLayout>(R.id.controlPanel)
         val viewfinder = findViewById<AutoFitTextureView>(R.id.viewfinder)
         val topBar = findViewById<ViewGroup>(R.id.topBar)
@@ -1271,7 +1318,17 @@ class MainActivity : Activity() {
         // Reserve real screen space for controls.  The preview and its overlays are measured
         // only in the remaining viewport, so neither the image nor the thirds grid continues
         // behind ISO/shutter controls.
-        val panelHeight = panel.height.takeIf { it > 0 } ?: dp(232)
+        // minimumHeight includes the previous layout's spare space. Derive the
+        // intrinsic vertical stack instead, so resizing can shrink the island too.
+        var contentHeight = panel.paddingTop + panel.paddingBottom
+        for (i in 0 until panel.childCount) {
+            val child = panel.getChildAt(i)
+            if (child.visibility == View.GONE) continue
+            val margins = child.layoutParams as ViewGroup.MarginLayoutParams
+            contentHeight += child.measuredHeight + margins.topMargin + margins.bottomMargin
+        }
+        val naturalPanelHeight = contentHeight.coerceAtLeast(dp(232))
+        var panelHeight = naturalPanelHeight
         // Both islands overlap the preview by exactly their corner radius
         // (16dp, shared top and bottom): the minimum that fills the curves
         // with picture instead of root black.
@@ -1279,7 +1336,7 @@ class MainActivity : Activity() {
         // Photo, RAW video and Direct-Log share one 3:4 viewport between the
         // same two islands, so the frame never moves on the mode switch.
         val noTopIsland = topBar.visibility != View.VISIBLE
-        val viewfinderParams = (viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
+        val viewfinderParams = FrameLayout.LayoutParams(viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
             if (noTopIsland) {
                 // No top island to seat against: full-bleed viewport, only
                 // the bottom island reserves space.
@@ -1290,11 +1347,15 @@ class MainActivity : Activity() {
             } else {
                 // Exact 3:4 viewport between the islands so the
                 // preview matches the saved frame (cover == fit, no side
-                // crop). Full-width on tall portrait screens, bottom-aligned
-                // so the panel overlaps the picture; height-constrained
-                // otherwise. Missing measurements keep full-bleed until
+                // crop). Always full-width and bottom-aligned; excess height
+                // tucks behind the opaque top island instead of leaving side
+                // gutters. Missing measurements keep full-bleed until
                 // layout settles.
                 val topBarHeight = topBar.height.takeIf { it > 0 } ?: dp(72)
+                val initialBox = PhotoViewfinderBox.compute(
+                    root.width, root.height, topBarHeight, naturalPanelHeight, sealOverlap
+                )
+                panelHeight = naturalPanelHeight + (initialBox?.spare ?: 0)
                 val box = PhotoViewfinderBox.compute(
                     root.width, root.height, topBarHeight, panelHeight, sealOverlap
                 )
@@ -1303,14 +1364,6 @@ class MainActivity : Activity() {
                     height = box.height
                     gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                     topMargin = box.topMargin
-                    // Balanced chrome: the bottom panel grows by exactly
-                    // the spare so the picture touches both islands with no
-                    // void anywhere. Idempotent: with no spare left the
-                    // next measure keeps every size and the size guards in
-                    // the island/panel listeners stop the loop. The info
-                    // line stays in the panel in both modes (1:1 structure,
-                    // no jump on switch).
-                    panel.minimumHeight = panelHeight + box.spare
                 } else {
                     width = ViewGroup.LayoutParams.MATCH_PARENT
                     height = (root.height - panelHeight + sealOverlap).coerceAtLeast(0)
@@ -1319,7 +1372,8 @@ class MainActivity : Activity() {
                 }
             }
         }
-        viewfinder.layoutParams = viewfinderParams
+        if (panel.minimumHeight != panelHeight) panel.minimumHeight = panelHeight
+        setFrameLayoutIfChanged(viewfinder, viewfinderParams)
         viewfinder.translationX = 0f
         viewfinder.translationY = 0f
         syncMeteringOverlayToViewfinder(viewfinder)
@@ -1500,6 +1554,10 @@ class MainActivity : Activity() {
      * single deferred pass corrects with real measurements after layout.
      */
     internal fun seatScopeSlot(deferred: Boolean = false) {
+        if (window.decorView.isInLayout) {
+            window.decorView.post { if (!isFinishing && !isDestroyed) seatScopeSlot(deferred) }
+            return
+        }
         if (!::histogramView.isInitialized || !::waveformView.isInitialized ||
             !::manualPanel.isInitialized || !::quickPanel.isInitialized) return
         val quarterTurn = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
@@ -1606,16 +1664,26 @@ class MainActivity : Activity() {
         return Rect(0, 0, boxW.coerceAtLeast(0), boxH.coerceAtLeast(0))
     }
 
+    private fun setFrameLayoutIfChanged(view: View, params: FrameLayout.LayoutParams) {
+        val old = view.layoutParams as? FrameLayout.LayoutParams
+        if (old != null && old.width == params.width && old.height == params.height &&
+            old.gravity == params.gravity && old.leftMargin == params.leftMargin &&
+            old.topMargin == params.topMargin && old.rightMargin == params.rightMargin &&
+            old.bottomMargin == params.bottomMargin && old.marginStart == params.marginStart &&
+            old.marginEnd == params.marginEnd) return
+        view.layoutParams = params
+    }
+
     /** Sizes an overlay to the fitted picture inside the viewfinder box. */
     private fun placeOverlayInContent(view: View, box: View, content: Rect) {
-        val params = (view.layoutParams as? FrameLayout.LayoutParams)
+        val params = (view.layoutParams as? FrameLayout.LayoutParams)?.let { FrameLayout.LayoutParams(it) }
             ?: FrameLayout.LayoutParams(content.width(), content.height(), Gravity.TOP or Gravity.START)
         params.width = content.width()
         params.height = content.height()
         params.gravity = Gravity.TOP or Gravity.START
         params.leftMargin = box.left + content.left
         params.topMargin = box.top + content.top
-        view.layoutParams = params
+        setFrameLayoutIfChanged(view, params)
         view.translationX = 0f
         view.translationY = 0f
     }
@@ -1699,8 +1767,10 @@ class MainActivity : Activity() {
             leftMargin = viewfinder.left
             topMargin = viewfinder.top
         }
-        findViewById<RawViewfinder>(R.id.rawViewfinder).layoutParams = FrameLayout.LayoutParams(boxParams)
-        findViewById<BguViewfinder>(R.id.bguViewfinder)?.layoutParams = FrameLayout.LayoutParams(boxParams)
+        setFrameLayoutIfChanged(findViewById(R.id.rawViewfinder), FrameLayout.LayoutParams(boxParams))
+        findViewById<BguViewfinder>(R.id.bguViewfinder)?.let {
+            setFrameLayoutIfChanged(it, FrameLayout.LayoutParams(boxParams))
+        }
         syncOverlaysToBox(viewfinder)
     }
 
