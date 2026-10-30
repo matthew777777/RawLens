@@ -1,0 +1,124 @@
+{
+  "base_commit": "959b2723a131ce6b69fc063d1e356bd495b7b91f",
+  "sha256": {
+    "app/src/main/assets/spirv/wavelet/UPSTREAM.md": "9890a663c7615385b437946b26f56a656a2e8c5712b99e49c6a437c44d010dda",
+    "app/src/main/assets/spirv/wavelet/denoise_img_atrous.comp": "d909e2a543b99e282738d3e7236c7555fd54186b83fc7976e21bfe0812db4290",
+    "app/src/main/assets/spirv/wavelet/denoise_img_atrous.spv": "7733c2b34a322898d72ad170105d97ed09f43c9cb019c41f3cc70c1fc601b82d",
+    "app/src/main/assets/spirv/wavelet/denoise_img_backtransform.comp": "758f28d6a7686334287703c2daf89ffd9672b71667fc69d627f3f28ce9cfe651",
+    "app/src/main/assets/spirv/wavelet/denoise_img_backtransform.spv": "956ea200d57fd7e46e27a0a57fc22ef0f0b57e7623b6d316df12218000448423",
+    "app/src/main/assets/spirv/wavelet/denoise_img_precondition.comp": "50e6a216e1167975b5c77f3ac161c19286a8afd46b710d6ec290827ac1a908ba",
+    "app/src/main/assets/spirv/wavelet/denoise_img_precondition.spv": "afdfa47dc841e26d2455d10a606e45163a84ded9663237ac423c6c4d124de153",
+    "app/src/main/assets/spirv/wavelet/denoise_img_threshold.comp": "49d9626e0c12c9fa5825c3376c3ea82d60d864fe37ae2c7d6fa049ffd9fca09e",
+    "app/src/main/assets/spirv/wavelet/denoise_img_threshold.spv": "4d6d7ed4f7c94915c6e4ed31aebf75c186a997267bfdaa665e1a7b4a67c9a0ac",
+    "app/src/main/cpp/wavelet/upstream/include/raw_denoise/DenoisePipeline.hpp": "86e49bcf23638aaab3ff3dd02b189133a5f74ceaed177c7d7ece582e0550dfcd",
+    "app/src/main/cpp/wavelet/upstream/src/DenoisePipeline.cpp": "36913dd44c5feb0c67e3b6363e0adaafd2eaf63c8083b6480f6dcba166b9de00",
+    "app/src/main/cpp/wavelet/wavelet_host.cpp": "b258d19ec210479560903214a3143fc438051f6a092c8b05a94aaa602343a9b3",
+    "app/src/main/cpp/wavelet/wavelet_jni.cpp": "13abbe120b47486608d26dfd105f058438e228df512651dc4b212059ab080c27"
+  },
+  "spirv_validation": {
+    "denoise_img_atrous.spv": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "denoise_img_backtransform.spv": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "denoise_img_precondition.spv": {
+      "exit_code": 0,
+      "output": ""
+    },
+    "denoise_img_threshold.spv": {
+      "exit_code": 0,
+      "output": ""
+    }
+  },
+  "supplied_log": {
+    "sha256": "24ec611fb45d4df77ce95dda4d1fd7c66ff301bde925e5df6ae666af751ea21e",
+    "lines": 480,
+    "evidence": [
+      {
+        "line": 2,
+        "text": "package=com.matthew.rawlens model=Xiaomi M2004J19C sdk=30 fingerprint=Redmi/lancelot_id/lancelot:11/RP1A.200720.011/V12.5.4.0.RJCIDXM:user/release-keys"
+      },
+      {
+        "line": 10,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=124ms latency=570ms running=62ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.LaunchActivityItem] lifecycleRequest=android.app.servertransaction.ResumeActivityItem } historyMsgCount=2 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110)"
+      },
+      {
+        "line": 11,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=0ms latency=697ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=3 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110) (msgIndex=3 wall=124ms seq=3 running=62ms runnable=1ms io=9ms late=570ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 39,
+        "text": "10-29 19:50:12.331  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.MainActivity time=0ms latency=336ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=2 (msgIndex=2 wall=324ms seq=9 running=229ms runnable=13ms io=25ms late=12ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 100,
+        "text": "10-29 19:50:12.779  7426  7477 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4208x3120"
+      },
+      {
+        "line": 103,
+        "text": "10-29 19:50:12.784  7426  7477 I RawLensCamera: RAW stream combo raw=4208x3120 preview=176x144 maxImages=22 minFrameNs=33333333 stallNs=33333333 compat=false gpuTrial=false combo=FULL attempt=2/4"
+      },
+      {
+        "line": 123,
+        "text": "logcat: Unexpected EOF!"
+      },
+      {
+        "line": 132,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=124ms latency=570ms running=62ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.LaunchActivityItem] lifecycleRequest=android.app.servertransaction.ResumeActivityItem } historyMsgCount=2 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110)"
+      },
+      {
+        "line": 133,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=0ms latency=697ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=3 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110) (msgIndex=3 wall=124ms seq=3 running=62ms runnable=1ms io=9ms late=570ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 135,
+        "text": "10-29 19:50:12.331  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.MainActivity time=0ms latency=336ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=2 (msgIndex=2 wall=324ms seq=9 running=229ms runnable=13ms io=25ms late=12ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 233,
+        "text": "logcat: Unexpected EOF!"
+      },
+      {
+        "line": 242,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=124ms latency=570ms running=62ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.LaunchActivityItem] lifecycleRequest=android.app.servertransaction.ResumeActivityItem } historyMsgCount=2 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110)"
+      },
+      {
+        "line": 243,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=0ms latency=697ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=3 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110) (msgIndex=3 wall=124ms seq=3 running=62ms runnable=1ms io=9ms late=570ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 245,
+        "text": "10-29 19:50:12.331  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.MainActivity time=0ms latency=336ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=2 (msgIndex=2 wall=324ms seq=9 running=229ms runnable=13ms io=25ms late=12ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 335,
+        "text": "logcat: Unexpected EOF!"
+      },
+      {
+        "line": 344,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=124ms latency=570ms running=62ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.LaunchActivityItem] lifecycleRequest=android.app.servertransaction.ResumeActivityItem } historyMsgCount=2 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110)"
+      },
+      {
+        "line": 345,
+        "text": "10-29 19:50:11.981  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.WelcomeActivity time=0ms latency=697ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=3 (msgIndex=2 wall=568ms seq=2 running=79ms runnable=27ms io=22ms late=11ms h=android.app.ActivityThread$H w=110) (msgIndex=3 wall=124ms seq=3 running=62ms runnable=1ms io=9ms late=570ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 347,
+        "text": "10-29 19:50:12.331  7426  7426 W Looper  : PerfMonitor looperActivity : package=com.matthew.rawlens/.MainActivity time=0ms latency=336ms running=0ms  procState=2 ClientTransaction{ callbacks=[android.app.servertransaction.TopResumedActivityChangeItem] } historyMsgCount=2 (msgIndex=2 wall=324ms seq=9 running=229ms runnable=13ms io=25ms late=12ms h=android.app.ActivityThread$H w=159)"
+      },
+      {
+        "line": 402,
+        "text": "10-29 19:50:24.877  7426  7426 I RawLensPerf: PERF[trim] RUNNING_LOW"
+      }
+    ]
+  },
+  "memory_payload_bytes": {
+    "frame_rgba16f": 105031680,
+    "five_frames": 525158400,
+    "four_extended_tiles": 133693952,
+    "partials": 1048576
+  }
+}

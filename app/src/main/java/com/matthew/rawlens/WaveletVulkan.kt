@@ -10,7 +10,8 @@ import java.nio.ByteBuffer
  * Profiled-wavelet Vulkan host (vendored upstream raw_denoise, itself a port of
  * darktable denoiseprofile): post-demosaic luma+chroma denoise on pre-WB
  * camera-linear RGBA16F. Buffers are direct with at least W*H*8 bytes;
- * alpha is ignored on input and forced to 1 on output.
+ * alpha is ignored on input and forced to 1 on output. Input/output may be
+ * the same writable buffer (native stages input and commits output on success).
  * Native failures throw [RuntimeException] with the core's message.
  */
 object WaveletVulkan {

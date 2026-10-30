@@ -35,7 +35,8 @@ WaveletContext* wavelet_create(char* errmsg, int errlen);
 // Loads the 4 denoise_img_*.spv binaries from assets/spirv/wavelet.
 // Returns the module count (>0) or -1 with errmsg set.
 int wavelet_load_shaders(WaveletContext* ctx, struct AAssetManager* mgr, char* errmsg, int errlen);
-// in/out: w*h*4 half floats (RGBA16F), distinct buffers. Returns 0 or -1.
+// in/out: w*h*4 half floats (RGBA16F); may alias. Input is staged before
+// processing; output is copied back only on success. Returns 0 or -1.
 int wavelet_process(WaveletContext* ctx, const uint8_t* inHalf, uint8_t* outHalf, int w, int h,
                     const WaveletParams* params, char* errmsg, int errlen);
 // GPU milliseconds of the last process() call, or -1 when unavailable.

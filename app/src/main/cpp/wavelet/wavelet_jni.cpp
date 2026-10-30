@@ -64,6 +64,13 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
         throw_runtime(env, "wavelet process needs direct in/out buffers and wb gains");
         return -1;
     }
+    const jlong bytes = jlong(w) * jlong(h) * 8;
+    if (w < 64 || h < 64 || w > 16384 || h > 16384 ||
+        env->GetDirectBufferCapacity(inHalf) < bytes ||
+        env->GetDirectBufferCapacity(outHalf) < bytes) {
+        throw_runtime(env, "wavelet extent or direct buffer capacity invalid");
+        return -1;
+    }
     if (env->GetArrayLength(wb) < 3) {
         throw_runtime(env, "wavelet wb needs 3 gains");
         return -1;

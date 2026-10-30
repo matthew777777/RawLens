@@ -92,7 +92,13 @@ class DenoisePipeline {
     // pipeline's denoiseMs slot). One submit by the caller covers everything.
     void record(VkCommandBuffer command, VkImageView srcView, VkImageView dstView, uint32_t width,
                 uint32_t height, const DenoiseParams& params,
-                VkQueryPool timingPool = VK_NULL_HANDLE);
+                VkQueryPool timingPool = VK_NULL_HANDLE,
+                VkQueryPool passTimingPool = VK_NULL_HANDLE);
+    // Optional diagnostic pool: queries [2, 2 + 2*N), where
+    // N = ceil(width/tile)*ceil(height/tile)*(2 + 3*maxScale).
+    // Pairs follow precondition, then estimate/threshold/apply for each
+    // scale, then backtransform, in tile order. Caller resets/owns the pool.
+    // Use a separate pool from timingPool (whose queries remain 10/11).
 
     // Optional hook run between tiles; the caller may submit and re-begin the
     // same command buffer (with a memory barrier) so one still is not a single

@@ -1,0 +1,12 @@
+{
+  "RAWR_20260926_000415_161_s1_sh1_gpu.f32": {
+    "byte_identical": true,
+    "before_sha256": "b44e3dc061be7ac4606c909202614acb9b4553f7393bf30cba0ea127b142463d",
+    "after_sha256": "b44e3dc061be7ac4606c909202614acb9b4553f7393bf30cba0ea127b142463d"
+  },
+  "RAWR_20260926_000415_161_s1_sh1_gpu_tiled.f32": {
+    "byte_identical": true,
+    "before_sha256": "efcfe3a72638733a5a9d0a6366e23530585a30ee6be2af6bae56c43344d22c45",
+    "after_sha256": "efcfe3a72638733a5a9d0a6366e23530585a30ee6be2af6bae56c43344d22c45"
+  }
+}

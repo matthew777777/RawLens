@@ -49,6 +49,7 @@ class WaveletDenoiser(context: Context) {
      * Runs one denoise. Returns false (leaving [output] untouched) when the
      * native library is unavailable; throws RuntimeException on GPU failure.
      */
+    @Synchronized
     fun process(
         input: ByteBuffer,
         output: ByteBuffer,
