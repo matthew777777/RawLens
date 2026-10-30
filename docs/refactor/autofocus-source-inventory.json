@@ -1,0 +1,148 @@
+{
+  "review_date": "2026-10-29",
+  "scope": "Primary-source research and local audit; not exhaustive; no claim of all-HAL validation.",
+  "code_sources": [
+    {
+      "source": "camerax",
+      "url": "https://github.com/androidx/androidx/blob/8bbb38cd81267b8d41e4e678e8edd52039dbc305/camera/camera-camera2/src/main/java/androidx/camera/camera2/impl/FocusMeteringControl.kt",
+      "reviewed_for": "current metering/lock/timeout behavior",
+      "retrieved_content_sha256": "8845cd0dcf332e8fc9a6590143db3b494116f23e3d5b8c817bde453ff09fc06d",
+      "lines": 712,
+      "revision_url_verified": true
+    },
+    {
+      "source": "camerapipe",
+      "url": "https://github.com/androidx/androidx/blob/8bbb38cd81267b8d41e4e678e8edd52039dbc305/camera/camera-camera2-pipe/src/main/java/androidx/camera/camera2/pipe/graph/Controller3A.kt",
+      "reviewed_for": "3A trigger, convergence, and lock separation",
+      "retrieved_content_sha256": "a30a6d30e274b834e4dd81b80f6b2ed67042c9c903caf1a7583e3404929118b2",
+      "lines": 1076,
+      "revision_url_verified": true
+    },
+    {
+      "source": "camerax-old",
+      "url": "https://android.googlesource.com/platform/frameworks/support/+/092314eadb33e5935b4e36218915979f1d5eea4b/camera/camera-camera2/src/main/java/androidx/camera/camera2/internal/FocusMeteringControl.java",
+      "reviewed_for": "session update identity and focus completion",
+      "retrieved_content_sha256": "b894c78e1cb2b8102e22b0d145706ec8f180bd831383a30c2a160967c33709d2",
+      "lines": 719,
+      "revision_url_verified": true
+    },
+    {
+      "source": "cts",
+      "url": "https://android.googlesource.com/platform/cts/+/refs/heads/main/tests/camera/utils/src/android/hardware/camera2/cts/helpers/Camera2Focuser.java",
+      "reviewed_for": "AF run identity, frame ordering, active versus passive focus",
+      "retrieved_content_sha256": "5989fabdaa22d2a69da7c4a512cf2c9bccd7d8b33f24198fc566d449b9b1741b",
+      "lines": 392,
+      "revision_url_verified": true
+    },
+    {
+      "source": "oc-preview",
+      "url": "https://sourceforge.net/p/opencamera/code/ci/0dd4cbe78872df2c6e4eb6cee3fb0d5637b0f52e/tree/app/src/main/java/net/sourceforge/opencamera/preview/Preview.java",
+      "reviewed_for": "touch AUTO and continuous reset behavior",
+      "retrieved_content_sha256": "8a7e41d5c44f933fab35d73c26e1a9683eeb814fc0005210988094daf2a5f899",
+      "lines": 9364,
+      "revision_url_verified": true
+    },
+    {
+      "source": "oc-controller",
+      "url": "https://sourceforge.net/p/opencamera/code/ci/0dd4cbe78872df2c6e4eb6cee3fb0d5637b0f52e/tree/app/src/main/java/net/sourceforge/opencamera/cameracontroller/CameraController2.java",
+      "reviewed_for": "trigger submission and continuous callback policy",
+      "retrieved_content_sha256": "4cbd01c56938f0cceafaca5aca3653258014c380e7ae4f93a14ff696db63c10c",
+      "lines": 8815,
+      "revision_url_verified": true
+    },
+    {
+      "source": "photon",
+      "url": "https://github.com/eszdman/PhotonCamera/blob/b2eff821a858033515eb2700e7292befecc95225/app/src/main/java/com/particlesdevs/photoncamera/control/TouchFocus.java",
+      "reviewed_for": "acknowledgments, operation membership, bounded fallback",
+      "retrieved_content_sha256": "93059abb3f299fcdcc3ef4557e6d773b640da7727d4b4c2145682d41df75b9ab",
+      "lines": 976,
+      "revision_url_verified": true
+    },
+    {
+      "source": "graphene",
+      "url": "https://github.com/GrapheneOS/Camera/blob/0aa4cb0dccf7f32919a35a431771cec67716dd7e/app/src/main/java/app/grapheneos/camera/ui/activities/MainActivity.kt",
+      "reviewed_for": "CameraX metering point and cancel duration",
+      "retrieved_content_sha256": "a64c0f485d1b138fe669e2946b21d8db314223b356271d81713520bb4606fdc6",
+      "lines": 2113,
+      "revision_url_verified": true
+    },
+    {
+      "source": "aperture",
+      "url": "https://github.com/LineageOS/android_packages_apps_Aperture/blob/7f0c98fbd0d9959a4e22f93116a2e855a97285ac/app/src/main/java/org/lineageos/aperture/viewmodels/CameraViewModel.kt",
+      "reviewed_for": "CameraX controller tap focus state integration",
+      "retrieved_content_sha256": "c437f20eef6749134da5cbfed97d7ed0f022911931a1cfb0d9633db20abc6bce",
+      "lines": 1887,
+      "revision_url_verified": true
+    },
+    {
+      "source": "libcamera",
+      "url": "https://github.com/raspberrypi/libcamera/blob/c682979b50695b93526adb1e66db33743484b63b/src/ipa/rpi/controller/rpi/af.cpp",
+      "reviewed_for": "coarse/fine/settle search and hysteresis",
+      "retrieved_content_sha256": "f92a8d7a7d06511e22224377dcda04ddf7f332da32d8857b6cdd5282289c98c7",
+      "lines": 970,
+      "revision_url_verified": true
+    },
+    {
+      "source": "region-quirk",
+      "url": "https://github.com/androidx/androidx/blob/8bbb38cd81267b8d41e4e678e8edd52039dbc305/camera/camera-camera2/src/main/java/androidx/camera/camera2/compat/quirk/AfRegionFlipHorizontallyQuirk.kt",
+      "reviewed_for": "version-scoped Samsung front AF-region quirk",
+      "retrieved_content_sha256": "3f6e6660ac5089ca67195ba7521412183f735abce38fbba784c438a5608f0c32",
+      "lines": 46,
+      "revision_url_verified": true
+    },
+    {
+      "source": "its-lens",
+      "url": "https://android.googlesource.com/platform/cts/+/refs/heads/main/apps/CameraITS/tests/scene3/test_lens_movement_reporting.py",
+      "reviewed_for": "compare image sharpness with focus-position reporting",
+      "retrieved_content_sha256": "17e3bff2cbd119a7d8ed4cb8f4651ac5a5d42f22b04004c6565eee8cf4e1f924",
+      "lines": 260,
+      "revision_url_verified": true
+    }
+  ],
+  "documentation_and_papers": [
+    {
+      "source": "android-3a",
+      "url": "https://source.android.com/docs/core/camera/camera3_3Amodes"
+    },
+    {
+      "source": "request",
+      "url": "https://developer.android.com/reference/android/hardware/camera2/CaptureRequest"
+    },
+    {
+      "source": "characteristics",
+      "url": "https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics"
+    },
+    {
+      "source": "metering",
+      "url": "https://developer.android.com/reference/android/hardware/camera2/params/MeteringRectangle"
+    },
+    {
+      "source": "xiaomi",
+      "url": "https://dev.mi.com/xiaomihyperos/documentation/detail?pId=1598"
+    },
+    {
+      "source": "pertuz",
+      "url": "https://www.sciencedirect.com/science/article/pii/S0031320312004736"
+    },
+    {
+      "source": "reliability",
+      "url": "https://repositorio.uam.es/bitstream/10486/666450/1/reliability_pertuz_IVC_2013_ps.pdf"
+    },
+    {
+      "source": "revisiting",
+      "url": "https://openaccess.thecvf.com/content_ECCV_2018/html/Abdullah_Abuolaim_Revisiting_Autofocus_for_ECCV_2018_paper.html"
+    },
+    {
+      "source": "learning",
+      "url": "https://research.google/pubs/learning-to-autofocus/"
+    },
+    {
+      "source": "positional",
+      "url": "https://openaccess.thecvf.com/content/ICCV2023/html/Choi_Exploring_Positional_Characteristics_of_Dual-Pixel_Data_for_Camera_Autofocus_ICCV_2023_paper.html"
+    },
+    {
+      "source": "its",
+      "url": "https://source.android.com/docs/compatibility/cts/camera-its-tests"
+    }
+  ]
+}

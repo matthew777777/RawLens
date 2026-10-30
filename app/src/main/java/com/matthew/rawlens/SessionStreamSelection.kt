@@ -48,7 +48,10 @@ internal object SessionStreamSelection {
      * session rebuilds with the smallest preview target, which unlocks
      * full rate on HALs that need any preview request (MediaTek).
      */
-    internal const val ISP_STALL_FPS = 25.0
+    // 24 fps is a legitimate RAW cadence on Xiaomi aux routes. The old
+    // 25 fps gate rebuilt a working 6/4 or 6/5 session into RAW+preview,
+    // which crashes that HAL. Keep margin above the observed 20 fps stall.
+    internal const val ISP_STALL_FPS = 22.5
 
     /** Overlap/lag headroom inside ImageReader maxImages: absorbs result-lag
      * spikes while the ZSL ring streams at full rate (plus the pairing

@@ -84,7 +84,10 @@ data class DiscoveredLens(
      */
     val packedFormats: List<String> = emptyList(),
     /** Open-time verdict from real `openCamera` calls; UNKNOWN until opened. */
-    val verdict: LensVerdict = LensVerdict.UNKNOWN
+    val verdict: LensVerdict = LensVerdict.UNKNOWN,
+    /** A settled session on this route got no AWB from the HAL ([LensVerdicts.noHalAwb]). */
+    val noHalAwb: Boolean = false,
+    val noHalAf: Boolean = false
 )
 
 /** A picker section with a header and an explanatory subtitle. */
@@ -243,7 +246,7 @@ class LensDiscovery(context: Context) {
 
             Log.i(LOG_TAG, "Discovered RAW lenses: ${found.keys}")
             return found.values
-                .map { lens -> applyVerdict(lens, routeVerdict(lens.id, verdicts)) }
+                .map { lens -> applyAwbVerdict(applyVerdict(lens, routeVerdict(lens.id, verdicts)), verdicts) }
                 .sortedWith(compareBy<DiscoveredLens> { it.opticalMetric }.thenBy { it.id })
     }
 
@@ -598,8 +601,10 @@ private fun isUnavailableLens(lens: DiscoveredLens): Boolean =
     lens.kind == LensRouteKind.UNAVAILABLE || "unavailable" in lens.label.lowercase()
 
 private fun routePriority(kind: LensRouteKind): Int = when (kind) {
-    LensRouteKind.STANDALONE -> 0
-    LensRouteKind.LOGICAL_PHYSICAL -> 1
+    // Keep the logical camera's 3A pipeline while binding the selected sensor.
+    // Direct-opened auxiliary sensors can advertise AF/AWB without running it.
+    LensRouteKind.LOGICAL_PHYSICAL -> 0
+    LensRouteKind.STANDALONE -> 1
     LensRouteKind.VENDOR_COMPOSITE -> 2
     LensRouteKind.UNAVAILABLE -> 3
 }
@@ -611,13 +616,26 @@ private fun verdictPriority(verdict: LensVerdict): Int = when (verdict) {
     LensVerdict.DEAD -> 3
 }
 
+/**
+ * Health class ahead of everything else: a route with working HAL AWB beats
+ * one without (direct-opened Xiaomi aux lenses: no AWB, estimated colour),
+ * which still beats a route the service rejected.
+ */
+private fun healthPriority(lens: DiscoveredLens): Int = when {
+    lens.verdict == LensVerdict.DEAD -> 3
+    lens.noHalAf -> 2
+    lens.noHalAwb -> 1
+    else -> 0
+}
+
 private val opticRouteOrder: Comparator<DiscoveredLens> =
-    compareBy<DiscoveredLens> { verdictPriority(it.verdict) }
+    compareBy<DiscoveredLens> { healthPriority(it) }
+        .thenBy { verdictPriority(it.verdict) }
         .thenBy { routePriority(it.kind) }
         .thenBy { it.opticalMetric }
         .thenBy { it.id }
 
-/** Recommended route inside one optic: stream-verified first, then opened, direct, logical, vendor. */
+/** Route health and stream/open evidence first; ties prefer logical-physical, direct, then vendor. */
 fun recommendRoute(lenses: List<DiscoveredLens>): DiscoveredLens =
     lenses.sortedWith(opticRouteOrder).first()
 
@@ -641,6 +659,24 @@ fun verdictNote(verdict: LensVerdict): String? = when (verdict) {
     LensVerdict.OPENABLE -> "Opened OK before"
     LensVerdict.DEAD -> "Open rejected before · try anyway"
     LensVerdict.UNKNOWN -> null
+}
+
+/** Picker note for a route whose HAL runs no AWB. */
+internal const val NO_HAL_AF_NOTE = "Autofocus inactive · use another ID for this lens or manual focus"
+
+internal const val NO_HAL_AWB_NOTE = "No camera white balance · colour estimated by RawLens"
+
+/** Marks a route whose settled session got no HAL AWB, noting it in the picker details. */
+fun applyAwbVerdict(lens: DiscoveredLens, verdicts: LensVerdicts): DiscoveredLens {
+    if (lens.kind == LensRouteKind.UNAVAILABLE) return lens
+    val missingAwb = lens.id in verdicts.noHalAwb
+    val missingAf = lens.id in verdicts.noHalAf
+    val notes = listOfNotNull(
+        NO_HAL_AWB_NOTE.takeIf { missingAwb },
+        NO_HAL_AF_NOTE.takeIf { missingAf }
+    ).filter { it !in lens.details }
+    val details = (listOf(lens.details) + notes).filter { it.isNotBlank() }.joinToString(" · ")
+    return lens.copy(noHalAwb = missingAwb, noHalAf = missingAf, details = details)
 }
 
 /** Attaches an open-time verdict to a lens, keeping the legacy label in sync. */

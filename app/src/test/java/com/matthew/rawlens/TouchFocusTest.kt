@@ -73,6 +73,7 @@ class TouchFocusTest {
             locks += Triple(locked, indefinite, deadlineMs)
         }
         override fun onMeteringReleased() { released++ }
+        override var autoScanDead = false
 
         /** Runs and removes the first pending runnable posted with [delayMs]. */
         fun fire(delayMs: Long) {
@@ -95,6 +96,42 @@ class TouchFocusTest {
     private fun tapAndStart(indefinite: Boolean = false) {
         tf.start(100f, 100f, indefinite)
         host.fire(60L) // START settle
+    }
+
+    @Test
+    fun oldVerdictsDuringSettleCannotCancelNewTapTrigger() {
+        for (oldState in listOf(
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
+            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+        )) {
+            setUp()
+            tf.start(100f, 100f, indefinite = false)
+            tf.onAfState(oldState, 2f)
+            assertFalse("old verdict must not complete the new tap", tf.completed)
+            assertEquals("FOCUSING", host.states.last())
+            assertTrue("START remains queued", host.hasPending(60L))
+            assertTrue(host.triggers.isEmpty())
+            host.fire(60L)
+            assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_START to true), host.triggers)
+            tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN, 2f)
+            tf.onAfState(CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED, 3f)
+            assertEquals("FOCUS LOCKED", host.states.last())
+        }
+    }
+
+    @Test
+    fun scanBeforeRestartCannotValidateStaleContinuousMiss() {
+        host.autoScanDead = true
+        tf.start(100f, 100f, indefinite = false)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 5.95f)
+        host.fire(60L)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 5.95f)
+        assertEquals("FOCUSING", host.states.last())
+        assertTrue(host.hasPending(AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS))
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 4f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED, 2f)
+        assertEquals("FOCUS LOCKED", host.states.last())
     }
 
     @Test
@@ -128,6 +165,127 @@ class TouchFocusTest {
         host.fire(AutoFocusPolicy.FAILURE_HOLD_MS)
         assertNull(host.afRegion)
         assertFalse(tf.active)
+    }
+
+    @Test
+    fun deadAutoScanRetriesTapAsContinuous() {
+        // Xiaomi 14T Pro field log: ACTIVE_SCAN for 2 s with fd pinned.
+        tapAndStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN, 0.33f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED, 0.33f)
+        assertTrue(host.autoScanDead)
+        assertTrue(tf.continuousTap)
+        assertFalse(tf.autoMode)
+        assertFalse("no failure shown for the retried tap", host.states.contains("FOCUS NOT LOCKED"))
+
+        host.fire(60L)
+        assertEquals(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL to true, host.triggers.last())
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED, 0.33f)
+        assertFalse("stale AUTO verdict ignored", host.states.contains("FOCUS NOT LOCKED"))
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 1.96f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED, 6.89f)
+        assertEquals("FOCUS LOCKED", host.states.last())
+        assertEquals(2, host.triggers.size)
+    }
+
+    @Test
+    fun autoScanThatMovesTheLensFailsNormally() {
+        tapAndStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN, 0.33f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN, 2.5f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED, 0.4f)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        assertFalse(host.autoScanDead)
+    }
+
+    @Test
+    fun unknownFocusDistanceNeverConvictsAuto() {
+        tapAndStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        assertFalse(host.autoScanDead)
+    }
+
+    @Test
+    fun savedVerdictTapsRunContinuousFromTheStart() {
+        host.autoScanDead = true
+        tf.start(100f, 100f, indefinite = false)
+        assertTrue(tf.continuousTap)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED, 0.33f)
+        assertFalse("idle verdict before the restart never locks", host.states.contains("FOCUS LOCKED"))
+        host.fire(60L)
+        assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL to true), host.triggers)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 1.0f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 2.0f)
+        assertEquals("FOCUS NOT LOCKED", host.states.last())
+        host.fire(AutoFocusPolicy.FAILURE_HOLD_MS)
+        assertFalse(tf.continuousTap)
+    }
+
+    @Test
+    fun continuousHoldLocksWithStart() {
+        host.autoScanDead = true
+        tapAndStart(indefinite = true)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 1.0f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED, 2.0f)
+        assertEquals(CameraMetadata.CONTROL_AF_TRIGGER_START to true, host.triggers.last())
+    }
+
+    @Test
+    fun sessionStartKickReplaysTouchRelease() {
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        host.fire(1500L)
+        assertTrue("repeating switched to AUTO", tf.autoMode)
+        assertEquals(1, host.repeating)
+        assertTrue(host.triggers.isEmpty())
+
+        host.fire(60L)
+        assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL to true), host.triggers)
+        assertFalse("back to continuous", tf.autoMode)
+        assertEquals(2, host.repeating)
+        assertTrue(host.delayed.isEmpty())
+    }
+
+    @Test
+    fun sessionKickOnlyOnContinuousLenses() {
+        host.modes = intArrayOf(CameraMetadata.CONTROL_AF_MODE_AUTO)
+        tf.kickContinuousAtSessionStart()
+        assertFalse(host.hasPending(1500L))
+    }
+
+    @Test
+    fun tapCancelsPendingSessionKick() {
+        tf.kickContinuousAtSessionStart()
+        tapAndStart()
+        assertFalse(host.hasPending(1500L))
+        assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_START to true), host.triggers)
+    }
+
+    @Test
+    fun tapMidKickTakesOverFromAuto() {
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        host.fire(1500L)
+        tf.start(100f, 100f, indefinite = false)
+        assertEquals("kick's CANCEL step dropped; only the tap's settle remains", 1, host.delayed.count { it.delayMs == 60L })
+        host.fire(60L) // the tap's START settle
+        assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_START to true), host.triggers)
+        assertTrue(tf.autoMode)
+        assertTrue(host.delayed.none { it.delayMs == 60L })
+    }
+
+    @Test
+    fun manualFocusAbandonsKickCancel() {
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        host.fire(1500L)
+        host.selectedFocusDistanceDiopters = 2f
+        host.fire(60L)
+        assertTrue("no CANCEL under manual focus", host.triggers.isEmpty())
+        assertFalse(tf.autoMode)
+        assertEquals("restored repeating", 2, host.repeating)
     }
 
     @Test
@@ -227,4 +385,54 @@ class TouchFocusTest {
         tf.nudgeIdleIfNeeded()
         assertTrue(host.delayed.isEmpty())
     }
+    @Test fun startupDoesNotInterruptContinuousScanOrFocusedLens() {
+        for (state in listOf(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN,
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED)) {
+            setUp()
+            tf.kickContinuousAtSessionStart()
+            tf.onAfState(state, 1.73f)
+            host.fire(1500L)
+            assertEquals(0, host.repeating)
+            assertTrue(host.triggers.isEmpty())
+            assertFalse(tf.autoMode)
+        }
+    }
+
+    @Test fun startupDoesNotKickInactiveOrUnknownAutofocus() {
+        for (state in listOf(null, CaptureResult.CONTROL_AF_STATE_INACTIVE)) {
+            setUp()
+            tf.kickContinuousAtSessionStart()
+            tf.onAfState(state, 0.03f)
+            host.fire(1500L)
+            assertEquals(0, host.repeating)
+            assertTrue(host.triggers.isEmpty())
+        }
+    }
+
+    @Test fun startupDoesNotKickAfterScanEndsUnfocusedOrLensMoves() {
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 0.33f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        host.fire(1500L)
+        assertEquals(0, host.repeating)
+        setUp()
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 1.5f)
+        host.fire(1500L)
+        assertEquals(0, host.repeating)
+    }
+
+    @Test fun scanDuringKickSettleSkipsCancelAndRestoresContinuous() {
+        tf.kickContinuousAtSessionStart()
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED, 0.33f)
+        host.fire(1500L)
+        assertTrue(tf.autoMode)
+        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 0.33f)
+        host.fire(60L)
+        assertTrue(host.triggers.isEmpty())
+        assertFalse(tf.autoMode)
+        assertEquals(2, host.repeating)
+    }
+
 }

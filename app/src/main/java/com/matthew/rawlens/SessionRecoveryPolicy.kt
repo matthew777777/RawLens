@@ -103,9 +103,22 @@ internal object SessionRecoveryPolicy {
      * that opened before and now reports unknown-device means the camera
      * service hiccuped (in the field log every lens failed within 2 ms),
      * so the caller retries instead of excluding a healthy lens.
+     *
+     * The same holds for any ID shortly after a device error or disconnect
+     * ([msSinceDeviceFault] below [HAL_RESTART_GRACE_MS]): the camera
+     * provider is restarting and reports every ID unknown, including ones
+     * this run never opened (field log 2026-10-29: a HAL fault on 6/3, then
+     * 9 rejected 0.4 s later and persisted DEAD for every 9/x route).
      */
     internal fun shouldDenylistOnOpenRejected(
         openId: String,
-        openedOnceOpenIds: Set<String>
-    ): Boolean = openId !in openedOnceOpenIds
+        openedOnceOpenIds: Set<String>,
+        msSinceDeviceFault: Long? = null
+    ): Boolean {
+        if (msSinceDeviceFault != null && msSinceDeviceFault in 0 until HAL_RESTART_GRACE_MS) return false
+        return openId !in openedOnceOpenIds
+    }
+
+    /** Window after a device error/disconnect in which open rejections are transient. */
+    internal const val HAL_RESTART_GRACE_MS = 15_000L
 }

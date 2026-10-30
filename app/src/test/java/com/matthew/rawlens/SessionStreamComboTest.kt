@@ -64,7 +64,7 @@ class SessionStreamComboTest {
     @Test
     fun fpsProbeVerdict() {
         // 45 sensor-timestamped frames: 30 fps streams pass, ~20 fps MTK
-        // stalls trip the preview remedy; the 25 fps gate itself passes.
+        // stalls trip the preview remedy; healthy 24 fps aux streams pass.
         val fullRate = SessionStreamSelection.rawFpsForProbeWindow(44, 44_000_000_000L / 30)
         assertEquals(30.0, fullRate, 0.01)
         assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(fullRate))
@@ -72,6 +72,10 @@ class SessionStreamComboTest {
         assertEquals(20.0, stalled, 0.01)
         assertEquals(true, SessionStreamSelection.previewRequestNeededForFps(stalled))
         assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(25.0))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(24.3))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(24.0))
+        assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(22.5))
+        assertEquals(true, SessionStreamSelection.previewRequestNeededForFps(22.0))
         assertEquals(false, SessionStreamSelection.previewRequestNeededForFps(
             SessionStreamSelection.rawFpsForProbeWindow(44, 0L)
         ))

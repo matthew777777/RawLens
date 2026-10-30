@@ -79,8 +79,8 @@ class LensDiscoveryGroupingTest {
         val groups = groupByOptic(lenses)
         assertEquals(1, groups.size)
         assertEquals(3, groups[0].lenses.size)
-        assertEquals("0", groups[0].recommended.id)
-        assertEquals(listOf("3/0", "3-0"), groups[0].alternates.map { it.id })
+        assertEquals("3/0", groups[0].recommended.id)
+        assertEquals(listOf("0", "3-0"), groups[0].alternates.map { it.id })
     }
 
     @Test
@@ -102,14 +102,14 @@ class LensDiscoveryGroupingTest {
     }
 
     @Test
-    fun recommendedPrefersDirectOverLogicalOverVendor() {
+    fun recommendedPrefersLogicalOverDirectOverVendor() {
         val lenses = listOf(
             opticLens("3-0", LensRouteKind.VENDOR_COMPOSITE),
             opticLens("3/0", LensRouteKind.LOGICAL_PHYSICAL),
             opticLens("0", LensRouteKind.STANDALONE)
         )
-        assertEquals("0", recommendRoute(lenses).id)
-        assertEquals(setOf("0"), recommendedLensIds(lenses))
+        assertEquals("3/0", recommendRoute(lenses).id)
+        assertEquals(setOf("3/0"), recommendedLensIds(lenses))
     }
 
     @Test
@@ -272,4 +272,68 @@ class LensDiscoveryGroupingTest {
         assertEquals(LensRole.SUPER_TELE, LensRole.forEquivalentMm(120f))
         assertEquals(LensRole.UNKNOWN, LensRole.forEquivalentMm(null))
     }
+
+    // Field log 2026-10-29: direct-opened Xiaomi aux lens 4 runs no HAL AWB;
+    // the logical route 6/4 to the same optic has real camera colour.
+    @Test
+    fun noHalAwbRouteLosesRecommendationToHealthySibling() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE).copy(verdict = LensVerdict.VERIFIED)
+        val logical = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL).copy(logicalId = "6", physicalId = "4")
+        val verdicts = LensVerdicts(noHalAwb = setOf("4"))
+        val lenses = listOf(direct, logical).map { applyAwbVerdict(it, verdicts) }
+        assertEquals("6/4", recommendRoute(lenses).id)
+        assertEquals(setOf("6/4"), recommendedLensIds(lenses))
+        assertTrue(lenses.first { it.id == "4" }.details.contains(NO_HAL_AWB_NOTE))
+    }
+
+    @Test
+    fun noHalAwbRouteStillBeatsDeadSibling() {
+        val direct = applyAwbVerdict(opticLens("4", LensRouteKind.STANDALONE), LensVerdicts(noHalAwb = setOf("4")))
+        val dead = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL).copy(verdict = LensVerdict.DEAD)
+        assertEquals("4", recommendRoute(listOf(direct, dead)).id)
+    }
+
+    @Test
+    fun freshInstallRecommendsLogicalRouteWithoutWaitingForAwbFailure() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE)
+        val logical = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
+        val lenses = listOf(direct, logical).map { applyAwbVerdict(it, LensVerdicts.EMPTY) }
+        assertEquals("6/4", recommendRoute(lenses).id)
+        assertEquals(setOf("6/4"), recommendedLensIds(lenses))
+    }
+    @Test fun inactiveAfRouteLosesToSiblingWithEstimatedColour() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE).copy(verdict = LensVerdict.VERIFIED)
+        val routed = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
+        val verdicts = LensVerdicts(noHalAwb = setOf("4", "6/4"), noHalAf = setOf("4"))
+        val lenses = listOf(direct, routed).map { applyAwbVerdict(it, verdicts) }
+        assertEquals("6/4", recommendRoute(lenses).id)
+        assertTrue(lenses.first().details.contains(NO_HAL_AF_NOTE))
+        assertEquals("4", recommendRoute(listOf(lenses.first(), routed.copy(verdict = LensVerdict.DEAD))).id)
+    }
+
+    @Test fun unhealthyLogicalRouteDoesNotDisplaceHealthyDirectRoute() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE)
+        val logical = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
+        for (bad in listOf(
+            logical.copy(verdict = LensVerdict.DEAD),
+            logical.copy(noHalAwb = true),
+            logical.copy(noHalAf = true)
+        )) {
+            assertEquals("4", recommendRoute(listOf(direct, bad)).id)
+        }
+    }
+
+    @Test fun provenDirectRouteStillBeatsUnprovenLogicalRoute() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE).copy(verdict = LensVerdict.VERIFIED)
+        val logical = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
+        assertEquals("4", recommendRoute(listOf(direct, logical)).id)
+        assertEquals("6/4", recommendRoute(listOf(direct, logical.copy(verdict = LensVerdict.VERIFIED))).id)
+    }
+
+    @Test fun directRouteRemainsRecommendedWhenNoLogicalSiblingExists() {
+        val direct = opticLens("4", LensRouteKind.STANDALONE)
+        val vendor = opticLens("6-4", LensRouteKind.VENDOR_COMPOSITE)
+        assertEquals("4", recommendRoute(listOf(vendor, direct)).id)
+    }
+
 }

@@ -218,4 +218,49 @@ class AutoFocusPolicyTest {
         assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS > 0L)
         assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS < AutoFocusPolicy.LOCK_HOLD_MS)
     }
+
+    @Test
+    fun autoScanLeftLensStillNeedsScanAndKnownStillDistance() {
+        assertTrue(AutoFocusPolicy.autoScanLeftLensStill(true, true, 0.33f, lensMoved = false))
+        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true, true, 0.33f, lensMoved = true))
+        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true, false, 0.33f, lensMoved = false))
+        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true, true, null, lensMoved = false))
+        assertFalse(AutoFocusPolicy.lensMoved(0.33f, 0.34f))
+        assertTrue(AutoFocusPolicy.lensMoved(0.33f, 0.48f))
+    }
+
+    @Test
+    fun sessionKickOnlyForContinuousIdle() {
+        assertTrue(AutoFocusPolicy.needsSessionKick(intArrayOf(CaptureRequest.CONTROL_AF_MODE_AUTO, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)))
+        assertFalse(AutoFocusPolicy.needsSessionKick(intArrayOf(CaptureRequest.CONTROL_AF_MODE_AUTO)))
+        assertFalse(AutoFocusPolicy.needsSessionKick(intArrayOf(CaptureRequest.CONTROL_AF_MODE_OFF)))
+    }
+    @Test fun inactiveMotionlessSessionIsEvidenceOfMissingAf() {
+        val evidence = AutoFocusPolicy.SessionEvidence()
+        repeat(100) { evidence.observe(CaptureResult.CONTROL_AF_STATE_INACTIVE, 0.03f) }
+        assertTrue(evidence.inactiveThroughout)
+        assertFalse(evidence.working)
+    }
+
+    @Test fun missingMetadataCannotConvictAf() {
+        val evidence = AutoFocusPolicy.SessionEvidence()
+        repeat(100) { evidence.observe(null, null) }
+        assertFalse(evidence.inactiveThroughout)
+        evidence.observe(CaptureResult.CONTROL_AF_STATE_INACTIVE, null)
+        assertFalse(evidence.inactiveThroughout)
+    }
+
+    @Test fun scanOrLensMotionPreventsInactiveVerdict() {
+        val scanned = AutoFocusPolicy.SessionEvidence()
+        scanned.observe(CaptureResult.CONTROL_AF_STATE_INACTIVE, 0.03f)
+        scanned.observe(CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN, 0.03f)
+        assertFalse(scanned.inactiveThroughout)
+        assertTrue(scanned.working)
+        val moved = AutoFocusPolicy.SessionEvidence()
+        moved.observe(CaptureResult.CONTROL_AF_STATE_INACTIVE, 0.03f)
+        moved.observe(CaptureResult.CONTROL_AF_STATE_INACTIVE, 0.93f)
+        assertFalse(moved.inactiveThroughout)
+        assertTrue(moved.working)
+    }
+
 }

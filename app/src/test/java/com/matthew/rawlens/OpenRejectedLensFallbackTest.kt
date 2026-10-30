@@ -88,4 +88,17 @@ class OpenRejectedLensFallbackTest {
         assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("3", setOf("0", "6")))
         assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("3", emptySet()))
     }
+
+    // Regression (2026-10-29, Xiaomi 24030PN60G HyperOS 3): a HAL fault on
+    // 6/3 restarted the camera provider; 9 (never opened this run) was then
+    // rejected 0.4 s later and persisted DEAD for every 9/x route.
+    @Test
+    fun rejectionShortlyAfterDeviceFaultIsTransient() {
+        assertFalse(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("9", setOf("0", "6"), 400L))
+        assertFalse(SessionRecoveryPolicy.shouldDenylistOnOpenRejected(
+            "9", emptySet(), SessionRecoveryPolicy.HAL_RESTART_GRACE_MS - 1))
+        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected(
+            "9", emptySet(), SessionRecoveryPolicy.HAL_RESTART_GRACE_MS))
+        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenRejected("9", emptySet(), null))
+    }
 }

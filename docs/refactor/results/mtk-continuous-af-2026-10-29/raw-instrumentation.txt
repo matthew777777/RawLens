@@ -1,0 +1,6 @@
+
+com.matthew.rawlens.ContinuousPictureAfDeviceTest:.
+
+Time: 56.303
+
+OK (1 test)
