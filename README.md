@@ -39,7 +39,7 @@ Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) 
 
 ### Video
 
-- **RAW video** in the `.craw` (Cinematic RAW Studio) container: lossless per-CFA-plane Golomb-Rice codec (CRAW-Live v2 default, Live v1, Fast), CRC32C per chunk and frame, crash-recoverable streaming, 32-bit float stereo audio (PCM16 fallback), gyro/accelerometer in Android axes, rolling-shutter skew, lens-shading maps (LSHD chunk) and a seek index
+- **RAW video** in the `.craw` (Cinematic RAW Studio) container: lossless predictive codecs (Live v2 default: codec 3; Live v1: codec 2; Fast/Rice: codec 1), mandatory chunk CRC32C with optional RAW-frame CRC, crash-recoverable streaming, PCM16 audio, gyro/accelerometer in Android axes, rolling-shutter skew, lens-shading maps (LSHD chunk) and a seek index. Float audio is supported by the format, not current capture. See the [CRAW evidence and reproducible JPEG XL comparison](https://github.com/matthew777777/CinematicRAWStudio-Spec/blob/main/BENCHMARKS.md); isolated codec throughput is separate from sustained camera recording.
 - Optional half-resolution binning recorded as demosaiced RGB (best) or CFA (cheap)
 - **Direct Log** video with Rec.709, Sony-exact **S-Gamut3.Cine / S-Log3**, HLG and ACES (BakingLab fit) profiles; RCD (default), MHC or super-pixel demosaic; real-time Packed RCD at 3840×2160 24 fps and 2560×1440 / 1920×1080 30 fps on the test phone
 - User `.cube` LUT library (up to 16 imports, `LUT_3D_SIZE` 16–65) for S-Log3 monitoring during a take, optionally baked into the recording as SDR Rec.709 (`_LUT709`)
