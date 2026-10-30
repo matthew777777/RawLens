@@ -51,6 +51,27 @@ class MfsrMergeTest {
         }
     }
 
+    @Test fun mergedRgbReturnsToSensorCoordinatesForEveryBayerPattern() {
+        val w = 6
+        val h = 4
+        for (pattern in BayerPattern.entries) {
+            // Unique spatial values expose mirrors that constant color tests miss.
+            val sensor = FloatArray(w * h) { it.toFloat() }
+            val cfa = UnpackedRawCfa(w, h, pattern, sensor, RawCrop(0, 0, w, h))
+            val normalized = MfsrMerge.decodeRows(cfa)
+            val rgb = java.nio.FloatBuffer.allocate(w * h * 3)
+            for (y in 0 until h) for (x in 0 until w) for (channel in 0..2) {
+                rgb.put((y * w + x) * 3 + channel, normalized[y][x] * 3 + channel)
+            }
+            MfsrMerge.restoreSensorCoordinates(rgb, w, h, pattern)
+            for (pixel in sensor.indices) for (channel in 0..2) {
+                assertEquals("$pattern pixel=$pixel channel=$channel",
+                    sensor[pixel] * 3 + channel, rgb.get(pixel * 3 + channel), 0f)
+            }
+            assertEquals(0, rgb.position())
+        }
+    }
+
     private fun offlineMetadata(index: Int, gains: FloatArray?): RawFrameMetadata {
         // 16x16 still (black 64, white 1023); a 1x1 map covers the frame
         // with one gain per channel.
