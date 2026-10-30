@@ -1,0 +1,2088 @@
+▗ ▗   ▖ ▖  Claude Code v2.1.312
+           Opus 5.5 · Claude Pro
+ ▘▘   ▝▝   ~/AndroidStudioProjects/RawLens
+
+
+❯ /clear
+
+❯ Read fully logs and fix the issue from this log
+  /Users/monikamalinowska/Downloads/logcat-20261029_152150_486.txt
+  QualityDoesMatter, [29 Oct 2026 at 16:09:09 (29 Oct 2026 at 16:14:01)]:
+  ...ll physical IDs (2,3,4,5) not OK (green tint, black and/or whitelevels
+  wrong)
+
+  VF you mean or images? Share logs please
+
+  Chev Chelioss, [29 Oct 2026 at 16:13:59]:
+  Same. But I changed them for next id's and they are okay. (Not sure is this
+  good solution)
+
+  Physical IDs are wrong but logical work?
+
+  Is it VF okay or both VF and image wrong?
+
+  Chev Chelioss, [29 Oct 2026 at 16:17:34]:
+  Both, VF and Image.
+  Yes recommended id's goes wrong except main 1x ( camera 2)
+  But next id's looks okay, but I don't know are they same productive as
+  recommended
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ The log shows a Xiaomi 24030PN60G opened physical lens 9/5 (10-bit, black=64,
+  white=1023) and logical camera 0 (14-bit, black=1024, white=16383). I'll now
+  check how levels are determined for physical sub-cameras.
+
+  Ran 7 shell commands (ctrl+o to expand)
+
+⏺ I'm checking whether the log contains any session that actually opened the
+  direct IDs 2–5, since the reporters say those are the ones that break.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The log only shows sessions for 9/5 and ID 0 — IDs 2–5 that reporters flagged
+  never opened there, so I'll trace how the viewfinder and DNG pull their levels
+  and white balance via a direct-open route instead.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ I didn't change any code. This log doesn't contain the failure the reporters
+  describe, and I'd rather not guess at a fix for levels/colour without seeing
+  the bad frames.
+
+  What the log covers (Xiaomi 24030PN60G, i.e. 14 Ultra, HyperOS, SDK 34)
+  - Lens discovery: logical 0 = [2, 3]; 6 and 9 = [2, 3, 4, 5]. Direct IDs 2–5
+    can all be queried and report RAW support.
+  - Sessions opened: only two routes.
+    - 9/5 (5x tele through logical 9): black 64, white 1023 (10-bit). The frames
+      are consistent with that: 693–1023 on an overexposed first frame, 62–70
+      on a dark one. Two MFSR DNG+JPEG captures saved normally.
+    - Logical 0: black 1024, white 16383 (14-bit). The frame data fits those
+      levels too.
+  - Direct IDs: no session opened 2, 3, 4 or 5 directly, so there's nothing to
+    diagnose for them.
+
+  What the chat most likely means. The lens picker recommends the direct route
+  for each lens until some other route has been verified on the device
+  (LensDiscovery.kt:600). On a fresh install, the recommended routes on this
+  phone are therefore 2, 3, 4 and 5. "Recommended IDs are wrong except main
+  (camera 2), the next IDs are fine" points at the directly opened aux sensors
+  3, 4 and 5. The routes through a logical camera (9/3, 9/4, 9/5, 6/x) work, and
+  that matches 9/5 being clean here.
+
+  Likely cause. The direct route and the 9/x route read the same static
+  characteristics (the physical camera's), so the difference has to be in the
+  frames or in the per-frame data the HAL sends for a directly opened aux
+  camera. That per-frame data is the dynamic black/white levels, the
+  white-balance gains and the neutral point. The viewfinder
+  (RawViewfinder.kt:883-887) and the DNG metadata (RawFrameMetadata.kt:174-244)
+  both read them first, which would explain why both are wrong. The green tint
+  fits missing or neutral white balance from an aux camera with no 3A of its
+  own.
+
+  What I need. A log from someone who opens 3, 4 or 5 directly. Ask for it like
+  this:
+
+  ▎ Fresh app start → select the recommended ID for the 3.2x or 5x lens (not the
+  ▎ 9/x one) → wait 3 s → take one photo → switch to the working 9/x ID for the
+  ▎ same lens → take one photo → share logs. Please also paste the lens report
+  ▎ from Settings → Lenses.
+
+  In that log, the VF first frame ... black=… white=… dataMin/dataMax line for
+  the direct ID will show whether the levels or the frame data are wrong. Then I
+  can fix it properly: either sanity-check the reported levels against the
+  frame data, or rank the logical-physical route ahead of the direct one for
+  Xiaomi aux lenses.
+
+  Separate issue in the same log. At about 16:03 on camera 0, the RAW forward
+  chain stalled. The capture failed four times with reason 0, the legacy
+  viewfinder fell back to BGU, and the session recovered after consecutive dead
+  chains. It isn't related to the tint, but it may be worth its own look.
+
+✻ Worked for 2m 37s · done 4:29 PM
+
+❯ Separate issue in the same log. At about 16:03 on camera 0, the RAW forward
+  chain stalled. The capture failed four times with reason 0, the legacy
+  viewfinder fell back to BGU, and the session recovered after consecutive dead
+  chains. It isn't related to the tint, but it may be worth its own look. what
+  you mean?
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I meant a second problem in the log, separate from the tint. While the user
+  was on camera 0 (the logical main camera), the viewfinder froze and then no
+  photo was saved from camera 0 at all. Every shutter press on camera 0 in this
+  log failed. The only files saved are the two DNG/JPEG pairs from 9/5 at 15:22.
+
+  What happened, step by step:
+
+  1. 16:03:32, the viewfinder froze. Camera 0 had been streaming normally at
+     about 28 fps. Then RAW frames stopped arriving: the frame count was stuck
+     at images=631 results=607 across five recovery attempts. The app logged
+     "Legacy viewfinder failed; falling back to BGU", which means it switched to
+     its backup preview engine. In the same window the user switched the VF
+     engine override between GPU, CPU and AUTO, probably trying to get the
+     picture back.
+  2. 16:03:48 and 16:04:01, two shutter presses failed. Each time the app sent a
+     one-frame RAW capture, and after 2–7 s the camera returned RAW capture
+     failed ... reason=0. Reason 0 is Camera2's REASON_ERROR: the HAL dropped
+     the frame rather than the app losing it. "Forward chain produced zero
+     frames" means that press produced nothing.
+  3. 16:04:03, the app recovered. After two dead captures in a row it closed and
+     reopened camera 0. The preview came back, but the new session started with
+     zsl=false, so the buffer of recent frames that photos are normally taken
+     from was off.
+  4. 16:04:23 and 16:11:49, two more presses failed the same way, after the
+     reopen.
+
+  So the session-recovery logic did its job for the preview, but captures on
+  camera 0 stayed broken. That's why I said it's worth its own look. Two details
+  fit that: the first stall came right after a run of touch-focus taps that
+  timed out, and the Xiaomi-specific camera settings are re-sent on every
+  request.
+
+  To find the cause I'd go back to the full log around 16:03:30–16:03:33 and
+  16:03:48–16:03:56 for the camera HAL's own error lines, and check how a
+  one-frame capture is built when ZSL is off. Want me to dig into that?
+
+✻ Worked for 20s · done 4:55 PM
+
+❯ What I need. A log from someone who opens 3, 4 or 5 directly. Ask for it like
+  this:
+
+  ▎ Fresh app start → select the recommended ID for the 3.2x or 5x lens (not
+  the 9/x one) → wait 3 s → take one photo → switch to the working 9/x ID for
+  the same lens → take one photo → share logs. Please also paste the lens
+  report from Settings → Lenses. done check
+  here/Users/monikamalinowska/Downloads/logcat-20261029_155326_579\ \(1\).txt
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ This log does have the direct-ID sessions. Levels look sane on every route so
+  far, so next I'm checking captures, warnings and colour metadata.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ I couldn't find the bug in this log either. It has the direct-ID sessions, but
+  no photo, no lens report, and nothing logged about colour.
+
+  What's in it: the user cycled through every route on a Xiaomi 14 Ultra running
+  HyperOS 3 (Android 16, EEA), about 1 s per lens. The first log was HyperOS 1
+  on Android 14, so this is a different phone or firmware. No shutter press and
+  no lens report.
+
+  Direct and routed IDs read the same levels from the camera:
+
+  ┌──────────┬─────────────┬─────┬───────────────┬──────────────────────────┐
+  │   Lens   │    Route    │ CFA │ Black / White │ First-frame data min–max │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │ 3.2x (3) │ 3 direct    │ 3   │ 64 / 1023     │ 54–588                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │          │ 0/3         │ 3   │ 64.06 / 1023  │ 52–523                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │ 4        │ 4 direct    │ 3   │ 64 / 1023     │ 56–440                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │          │ 6/4         │ 3   │ 64 / 1023     │ 55–311                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │ 5x (5)   │ 5 direct    │ 2   │ 64 / 1023     │ 58–229                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │          │ 6/5         │ 2   │ 64 / 1023     │ 58–225                   │
+  ├──────────┼─────────────┼─────┼───────────────┼──────────────────────────┤
+  │ main (2) │ 2, 0/2, 6/2 │ 3   │ 1024 / 16383  │ 960–7184                 │
+  └──────────┴─────────────┴─────┴───────────────┴──────────────────────────┘
+
+  Each pair matches, and the data sits where those levels say it should: the
+  minimum is just under black (normal sensor noise) and nothing clips. So for
+  this device the "black/white levels wrong" report isn't the raw levels. The
+  green tint and the wrong-looking levels are more likely white balance or the
+  colour matrix. The app doesn't log either of those, which is why neither log
+  shows the problem.
+
+  Also in this log:
+  - 6/3 failed with a camera device error.
+  - About 1.5 s later, IDs 9 and 3 both returned "unknown device". Camera 3 had
+    opened fine 4 s earlier. HyperOS seems to hide the aux cameras on the fly,
+    which makes the route list unreliable on this phone. It needs its own look.
+
+  Next steps:
+  1. I add diagnostics (recommended). One log line per session and per capture,
+     with the white-balance gains and neutral point, which result they came
+     from, and the colour-matrix source. The next log would then show the cause
+     directly. It's a small change in RawViewfinder and RawFrameMetadata. Shall
+     I add it?
+  2. Re-ask the reporters. Ask for exactly this: stay 10 s on direct 4, take one
+     photo, then stay 10 s on 6/4 and take one photo. Then share the log, the
+     lens report, and both DNGs. With the DNGs I can compare the white balance
+     and colour matrices each route wrote.
+
+  Doing both is best: add the diagnostics, put out a build, then ask for that
+  capture.
+
+✻ Brewed for 40s · done 4:56 PM
+
+❯ 1. I add diagnostics (recommended). One log line per session and per capture,
+  with the white-balance gains and neutral point, which result they came from,
+  and the colour-matrix source. The next log would then show the cause
+  directly. It's a small change in RawViewfinder and RawFrameMetadata. Shall I
+  add it? yes add it and give me full
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ I'll add a shared formatter plus diagnostic hooks in the viewfinder and
+  capture metadata. First, checking how the viewfinder resets its per-session
+  flags and how Log is wired.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ Writing the diagnostics helper now.
+
+⏺ Write(app/src/main/java/com/matthew/rawlens/ColorDiagnostics.kt)
+  ⎿  Wrote 121 lines to
+     app/src/main/java/com/matthew/rawlens/ColorDiagnostics.kt
+       1 // SPDX-FileCopyrightText: 2026 RawLens contributors
+       2 // SPDX-License-Identifier: GPL-3.0-or-later
+       3
+       4 package com.matthew.rawlens
+       5
+       6 import android.hardware.camera2.CameraCharacteristics
+       7 import android.hardware.camera2.CaptureResult
+       8 import android.hardware.camera2.TotalCaptureResult
+       9 import android.os.Build
+      10 import java.util.Locale
+     … +111 lines (ctrl+o to expand)
+
+❯ here is another thing after you are done here are all logs from someone from
+  today read them fully and fix all the issues you may find
+  /Users/monikamalinowska/Downloads/RawLens/logcat-20261029_145633_858.txt
+  /Users/monikamalinowska/Downloads/RawLens/logcat-20261029_145859_482.txt
+  /Users/monikamalinowska/Downloads/RawLens/logcat-20261029_152102_946.txt
+  /Users/monikamalinowska/Downloads/RawLens/logcat-20261029_155326_579\
+  \(1\).txt
+  /Users/monikamalinowska/Downloads/RawLens/logcat-20261029_155326_579.txt
+
+⏺ I'll finish the diagnostics first, then go through those five logs. Next step
+  is hooking the capture path.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='RawFrameMetadata.kt'…)
+  ⎿  2
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawFrameMetadata.kt (+42
+     -1)
+      287              else -> null
+      288          }
+      289
+      290 -        return RawFrameMetadata(
+      290 +        val metadata = RawFrameMetadata(
+      291              cameraId = cameraId,
+      292              timestampNanos = image.timestamp,
+      293              frameNumber = result.frameNumber,
+     ...
+      383                          }
+      384                  }
+      385          )
+      386 +        logColorDiag(cameraId, metadata, physicalId, result)
+      387 +        return metadata
+      388      }
+      389
+      390 +    private var lastColorDiagCamera: String? = null
+      391 +    private var lastColorDiagNanos = 0L
+      392 +
+      393 +    /**
+      394 +     * One colour line per capture: bursts build metadata for
+          +every frame
+      395 +     * within a few hundred ms, so repeats on the same camera
+          +inside
+      396 +     * [COLOR_DIAG_INTERVAL_NANOS] are dropped. Never fails th
+          +e save.
+      397 +     */
+      398 +    private fun logColorDiag(
+      399 +        cameraId: String,
+      400 +        metadata: RawFrameMetadata,
+      401 +        physicalId: String?,
+      402 +        result: TotalCaptureResult
+      403 +    ) {
+      404 +        val now = System.nanoTime()
+      405 +        synchronized(this) {
+      406 +            if (cameraId == lastColorDiagCamera && now - lastC
+          +olorDiagNanos < COLOR_DIAG_INTERVAL_NANOS) return
+      407 +            lastColorDiagCamera = cameraId
+      408 +            lastColorDiagNanos = now
+      409 +        }
+      410 +        runCatching {
+      411 +            val statics = SceneLinearColorMetadata.from(metada
+          +ta)
+      412 +            val used = ColorDiagnostics.ResultColor(
+      413 +                source = physicalId?.let { "used(phys:$it,per-
+          +key logical fallback)" } ?: "used(logical)",
+      414 +                gains = metadata.wbGains?.toFloatArray(),
+     … 17 more lines (ctrl+o to expand)
+
+⏺ Now the viewfinder side: one line on the first frame and one ~3 s later, once
+  auto white balance has settled.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='RawViewfinder.kt'…)
+  ⎿  1105:        companion object {
+     2769:    companion object {
+     2776:        private const val PREVIEW_EV_INTERVAL_MS = 500L
+     … +4 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+35
+     -0)
+      286      private var stridesLogged = false
+      287      private var vfDiagLogged = false
+      288      private var vfSanitizeLogged = false
+      289 +    /** 0 = nothing yet, 1 = first-frame colour line logged, 2
+          + = settled line logged. */
+      290 +    private var vfColorDiagStage = 0
+      291 +    private var vfColorDiagFirstMs = 0L
+      292      /** True while display levels fall back to the data-driven
+            replacement. Reset per session. */
+      293      @Volatile private var vfLevelsFallbackActive = false
+      294      /** Sticky Vulkan skip after repeated compute failures; re
+           set per session. */
+     ...
+      688          stridesLogged = false
+      689          vfDiagLogged = false
+      690          vfSanitizeLogged = false
+      691 +        vfColorDiagStage = 0
+      692          vfLevelsFallbackActive = false
+      693          vulkanZeroCopyDisabled = false
+      694          vulkanBridgeDisabled = false
+     ...
+      936                  logFirstFrameDiag(plane, image.width, image.he
+           ight, cfaInt, channels,
+      937                      reportedLevels, reportedWhite, levels, whi
+           te, levelsFallback, gpuGeo, inputSample)
+      938              }
+      939 +            // Colour inputs on the first frame and again once
+          + AWB has had
+      940 +            // time to converge: two lines per session, zero c
+          +ost after.
+      941 +            if (vfColorDiagStage == 0) {
+      942 +                vfColorDiagStage = 1
+      943 +                vfColorDiagFirstMs = now
+      944 +                logColorDiag("first", c, result)
+      945 +            } else if (vfColorDiagStage == 1 && now - vfColorD
+          +iagFirstMs >= VF_COLOR_DIAG_SETTLE_MS) {
+      946 +                vfColorDiagStage = 2
+      947 +                logColorDiag("settled", c, result)
+      948 +            }
+      949              // Coarse 2 Hz statistic on the user geometry; the
+            grid stride
+      950              // adapts, so the CPU cap below does not skew it.
+      951              updatePreviewExposure(plane, gpuGeo.left, gpuGeo.t
+           op, gpuGeo.width, gpuGeo.height, gpuGeo.step, levels, white, n
+           ow, lensSnap)
+     ...
+      1018                  "geom=(${geo.left},${geo.top} ${geo.width}x${
+            geo.height} s${geo.step}) $data")
+      1019      }
+      1020
+      1021 +    /**
+      1022 +     * VF colour inputs: the viewfinder renders from the logi
+           +cal result, so
+      1023 +     * that is the used set; physical sub-results are listed
+           +for comparison
+      1024 +     * with the save path, which reads physical-first.
+      1025 +     */
+     … 19 more lines (ctrl+o to expand)
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; sed -n 2780,2784p RawViewfinder.kt; python3 -
+      <<'EOF'
+      p='RawView…)
+  ⎿          private const val NEON_LOG_INTERVAL_MS = 5000L
+             /** VF stats telemetry cadence: one fps/mode line per 10 s of
+     preview. */
+     … +5 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+2 -0)
+      2780          private const val NEON_LOG_INTERVAL_MS = 5000L
+      2781          /** VF stats telemetry cadence: one fps/mode line per
+             10 s of preview. */
+      2782          private const val VF_STATS_LOG_INTERVAL_MS = 10000L
+      2783 +        /** Delay before the second VF colour line: AWB conve
+           +rges within ~1-2 s. */
+      2784 +        private const val VF_COLOR_DIAG_SETTLE_MS = 3000L
+      2785          /** Record-mode offer floor lives in [VfResolution] p
+            ower policy (10 fps). */
+      2786          @Deprecated("Use VfResolution.RATE_RECORD_MS", Replac
+            eWith("VfResolution.RATE_RECORD_MS"))
+      2787          const val RECORD_SAMPLE_INTERVAL_MS = 100L
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Write(app/src/test/java/com/matthew/rawlens/ColorDiagnosticsTest.kt)
+  ⎿  Wrote 57 lines to
+     app/src/test/java/com/matthew/rawlens/ColorDiagnosticsTest.kt
+       1 // SPDX-FileCopyrightText: 2026 RawLens contributors
+       2 // SPDX-License-Identifier: GPL-3.0-or-later
+       3
+       4 package com.matthew.rawlens
+       5
+       6 import org.junit.Assert.assertEquals
+       7 import org.junit.Assert.assertTrue
+       8 import org.junit.Test
+       9
+      10 class ColorDiagnosticsTest {
+     … +47 lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ The diagnostics compile and all 4 new tests pass. Now the five logs. Two of
+  them look like copies of the one I just read, so I'm checking that first.
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+⏺ I found two leads from the first log: the BGU CPU mode crashes instantly with
+  "fatal: cpu-guide" at a 2048×1536 preview grid, and a race between an EGL swap
+  and surface teardown is being misclassified as a GPU failure. Now checking
+  the BGU code.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ Found it: BGU's boosted preview grid hits 2048×1536, but NEON's CPU guide caps
+  edges at 1080px (VfCpuNeon.MAX_EDGE), so enabling the guide while boosted
+  throws and kills BGU. I'll look into fixing this mismatch next.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ I'm applying the BGU fix by capping the CPU guide target at the NEON limit and
+  treating oversized geometry in the CPU branch as a dropped frame instead of a
+  fatal error, which also handles the race condition from mid-frame override
+  flips.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='BguViewfinder.kt'…)
+  ⎿  411:        if (geo == null || geoCacheKey != key) {
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/BguViewfinder.kt (+10
+     -1)
+      570          buf: java.nio.ByteBuffer, rowStride: Int, pixelStride:
+            Int, geo: BguGuideGeo,
+      571          slot: Int, channels: IntArray, levels: FloatArray, whi
+           te: Float, offerT0: Long
+      572      ): Boolean {
+      573 +        // GPU-sized geometry (boosted 2048x1536) reaches here
+          + when the
+      574 +        // BGU_CPU tap lands between this offer's target and b
+          +ranch reads
+      575 +        // (field log 2026-10-29: fatal cpu-guide 3 ms after t
+          +he override).
+      576 +        // Drop the frame; the next offer recomputes the CPU-c
+          +apped geometry.
+      577 +        if (geo.width > VfCpuNeon.MAX_EDGE || geo.height > VfC
+          +puNeon.MAX_EDGE) return false
+      578          val dst = synchronized(exportLock) {
+      579              val cur = cpuGuides[slot]
+      580              if (cur != null && cpuGuideW[slot] == geo.width &&
+            cpuGuideH[slot] == geo.height) {
+     ...
+      1957              userTarget: Int, surfaceLongEdge: Int, gpuPath: B
+            oolean,
+      1958              recordMode: Boolean, powerSave: Boolean
+      1959          ): Int {
+      1955 -            if (!gpuPath || recordMode || powerSave) return u
+           -serTarget
+      1960 +            // The NEON guide rejects extents above its edge
+           +cap: a 1440/2160
+      1961 +            // user target on the CPU path would throw every
+           +frame (fatal
+      1962 +            // cpu-guide, BGU dead for the session).
+      1963 +            if (!gpuPath) return minOf(userTarget, VfCpuNeon.
+           +MAX_EDGE)
+      1964 +            if (recordMode || powerSave) return userTarget
+      1965              if (surfaceLongEdge <= 0) return userTarget
+      1966              return maxOf(userTarget, minOf(surfaceLongEdge, G
+            PU_TARGET_CAP))
+      1967          }
+  ⎿  Updated
+     app/src/test/java/com/matthew/rawlens/BguEffectiveTargetTest.kt (+7
+     -0)
+      36          assertEquals(480, eff(480, 2400, gpu = false))
+      37      }
+      38
+      39 +    @Test
+      40 +    fun cpuPathCapsAtNeonEdge() {
+      41 +        // Field log 2026-10-29: a >1080 guide on the CPU path
+         +is fatal.
+      42 +        assertEquals(VfCpuNeon.MAX_EDGE, eff(1440, 2400, gpu =
+         +false))
+      43 +        assertEquals(VfCpuNeon.MAX_EDGE, eff(2160, 2400, gpu =
+         +false))
+      44 +    }
+      45 +
+      46      @Test
+      47      fun recordAndPowerSaveCapsStayAuthoritative() {
+      48          assertEquals(480, eff(480, 2400, record = true))
+
+⏺ I found the legacy viewfinder race: a queued draw can hit a surface the system
+  already destroyed, triggering EGL_BAD_SURFACE (0x300d), which gets miscounted
+  as a GPU failure and hides the viewfinder for 2 seconds.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; grep -n 'noteGlFailure(' RawViewfinder.kt; python3
+      - <<'EOF'
+      p='…)
+  ⎿  1738:    private fun noteGlFailure(tag: String, failure: Exception) {
+     1776:            noteGlFailure("GL failed", failure)
+     2072:            noteGlFailure("GPU GL failed", failure)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+12
+     -0)
+      1736
+      1737      /** Shared GL-failure handling: hide until retry, keep th
+            e session alive. */
+      1738      private fun noteGlFailure(tag: String, failure: Exception
+            ) {
+      1739 +        // A draw already queued when the SurfaceView went aw
+           +ay (engine
+      1740 +        // override taps toggle its visibility) swaps onto a
+           +dead surface
+      1741 +        // (EGL_BAD_SURFACE). Not a GPU fault: drop GL state
+           +without the
+      1742 +        // retry penalty, the next surfaceCreated starts clea
+           +n.
+      1743 +        if (!hasSurface) {
+      1744 +            Log.i("RawViewfinder", "$tag after surface teardo
+           +wn; ignored (${failure.message})")
+      1745 +            releaseGl()
+      1746 +            return
+      1747 +        }
+      1748          Log.w("RawViewfinder", "$tag; hiding VF until retry (
+            system preview stays hidden)", failure)
+      1749          retryAfterMs = SystemClock.elapsedRealtime() + 2000L
+      1750          statGlActive = false
+     ...
+      2878          // The framework owns the Surface: never release it,
+            just drop GL state. The camera
+      2879          // session (ImageReader targets) is untouched — only
+            VF display pauses.
+      2880          Log.w("RawViewfinder", "VF surface lost; hiding VF un
+            til surface returns")
+      2881 +        // Flag first so a draw already queued on the worker
+           +skips or treats
+      2882 +        // its swap failure as teardown, not as a GPU fault.
+      2883 +        hasSurface = false
+      2884          invalidateSession()
+      2885          worker.post { hasSurface = false; window = null; rele
+            aseGl() }
+      2886      }
+
+⏺ Both fixes are in. Next, the second log (145859).
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ That CPU_FALLBACK label is by design: Opposed highlight reconstruction forces
+  the staged path. Not a bug. Next, the memory-leak warnings.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Memory usage looks bounded—graphics memory fluctuates with the RAW buffer
+  stream and the GL textures are AMaZE's capped cache, so the leak warnings are
+  false alarms. Moving on to the largest log file (152102) next.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ This log is the user flipping between 4, 6/4 and 9/4 with no captures, and the
+  levels match on every route. Now the full 155326 log, which runs past where
+  the (1) copy ends.
+
+  Ran 5 shell commands (ctrl+o to expand)
+
+⏺ I found the bug: opening 6/3 crashed and restarted the camera HAL, briefly
+  making every ID report "unknown device." Since camera 9 had never opened yet,
+  the app misread that transient error as a dead lens, denylisting it and saving
+  permanent DEAD verdicts for 9 and 9/3.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Fixing it: a rejection within 15 s of a camera device error or disconnect is
+  treated as the camera service restarting, so it gets retried instead of
+  denylisted.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      def edit(p, pairs):…)
+  ⎿  1614:    private fun scheduleOpenRejectionRetry(): Boolean {
+     1615-        val attempt = ladder.takeRejectionRetry(OPEN_REJECTION_RE
+     TRY_MAX) ?: return false
+     … +23 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+     (+10 -2)
+      197      @Volatile private var running = false
+      198      @Volatile private var destroyed = false
+      199      @Volatile private var opening = false
+      200 +    /** elapsedRealtime of the last device error/disconnect; 0
+          + = none (HAL-restart grace). */
+      201 +    @Volatile private var lastDeviceFaultMs = 0L
+      202      @Volatile private var lifecycleGeneration = 0
+      203      // Serial worker for JPEG development, HDR merges and AI-d
+           enoised saves: one at a
+      204      // time so full-resolution CPU/GPU allocation peaks never
+           overlap. The physical
+     ...
+      693                  // An ID that opened before reporting unknown-
+           device is a camera
+      694                  // service hiccup, not a bad lens: never denyl
+           ist it, and stop the
+      695                  // cascade (the next lens would fail the same
+           way). Retry instead.
+      694 -                if (!SessionRecoveryPolicy.shouldDenylistOnOpe
+          -nRejected(openCameraId, ladder.openedOnceOpenIds) &&
+      696 +                val msSinceFault = lastDeviceFaultMs.takeIf {
+          +it > 0L }
+      697 +                    ?.let { SystemClock.elapsedRealtime() - it
+          + }
+      698 +                if (!SessionRecoveryPolicy.shouldDenylistOnOpe
+          +nRejected(
+      699 +                        openCameraId, ladder.openedOnceOpenIds
+          +, msSinceFault) &&
+      700                      scheduleOpenRejectionRetry()
+      701                  ) {
+      697 -                    Log.w(LOG_TAG, "Lens $id rejected after op
+          -ening before; treating as transient")
+      702 +                    Log.w(LOG_TAG, "Lens $id rejected after op
+          +ening before or ${msSinceFault ?: "-"}ms " +
+      703 +                        "after a device fault; treating as tra
+          +nsient")
+      704                      return
+      705                  }
+      706                  ladder.denylist(openCameraId)
+     ...
+      766                  device.close()
+      767                  if (camera === device) camera = null
+      768              }
+      769 +            lastDeviceFaultMs = SystemClock.elapsedRealtime()
+      770              if (!isCurrent(generation)) return
+      771              opening = false
+      772              Log.w(LOG_TAG, "Camera device disconnected: ${devi
+           ce.id}")
+     ...
+      777                  device.close()
+      778                  if (camera === device) camera = null
+      779              }
+      780 +            lastDeviceFaultMs = SystemClock.elapsedRealtime()
+      781              if (!isCurrent(generation)) return
+      782              opening = false
+      783              // A device that fails before any session exists c
+           annot be fixed by
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/SessionRecoveryPolicy.kt
+     (+15 -2)
+      103       * that opened before and now reports unknown-device means
+            the camera
+      104       * service hiccuped (in the field log every lens failed wi
+           thin 2 ms),
+      105       * so the caller retries instead of excluding a healthy le
+           ns.
+      106 +     *
+      107 +     * The same holds for any ID shortly after a device error
+          +or disconnect
+      108 +     * ([msSinceDeviceFault] below [HAL_RESTART_GRACE_MS]): th
+          +e camera
+      109 +     * provider is restarting and reports every ID unknown, in
+          +cluding ones
+      110 +     * this run never opened (field log 2026-10-29: a HAL faul
+          +t on 6/3, then
+      111 +     * 9 rejected 0.4 s later and persisted DEAD for every 9/x
+          + route).
+      112       */
+      113      internal fun shouldDenylistOnOpenRejected(
+      114          openId: String,
+      109 -        openedOnceOpenIds: Set<String>
+      110 -    ): Boolean = openId !in openedOnceOpenIds
+      115 +        openedOnceOpenIds: Set<String>,
+      116 +        msSinceDeviceFault: Long? = null
+      117 +    ): Boolean {
+      118 +        if (msSinceDeviceFault != null && msSinceDeviceFault i
+          +n 0 until HAL_RESTART_GRACE_MS) return false
+      119 +        return openId !in openedOnceOpenIds
+      120 +    }
+      121 +
+      122 +    /** Window after a device error/disconnect in which open r
+          +ejections are transient. */
+      123 +    internal const val HAL_RESTART_GRACE_MS = 15_000L
+      124  }
+  ⎿  Updated
+     app/src/test/java/com/matthew/rawlens/OpenRejectedLensFallbackTest.kt
+     (+13 -0)
+       88          assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenR
+           ejected("3", setOf("0", "6")))
+       89          assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenR
+           ejected("3", emptySet()))
+       90      }
+       91 +
+       92 +    // Regression (2026-10-29, Xiaomi 24030PN60G HyperOS 3): a
+          + HAL fault on
+       93 +    // 6/3 restarted the camera provider; 9 (never opened this
+          + run) was then
+       94 +    // rejected 0.4 s later and persisted DEAD for every 9/x r
+          +oute.
+       95 +    @Test
+       96 +    fun rejectionShortlyAfterDeviceFaultIsTransient() {
+       97 +        assertFalse(SessionRecoveryPolicy.shouldDenylistOnOpen
+          +Rejected("9", setOf("0", "6"), 400L))
+       98 +        assertFalse(SessionRecoveryPolicy.shouldDenylistOnOpen
+          +Rejected(
+       99 +            "9", emptySet(), SessionRecoveryPolicy.HAL_RESTART
+          +_GRACE_MS - 1))
+      100 +        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenR
+          +ejected(
+      101 +            "9", emptySet(), SessionRecoveryPolicy.HAL_RESTART
+          +_GRACE_MS))
+      102 +        assertTrue(SessionRecoveryPolicy.shouldDenylistOnOpenR
+          +ejected("9", emptySet(), null))
+      103 +    }
+      104  }
+
+⏺ Now running the full unit-test suite to check all of the changes.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ I've added the colour diagnostics and fixed three bugs from the five logs. All
+  1724 unit tests pass. Nothing is committed, and the green tint itself isn't
+  fixed yet: none of the logs record white balance or colour matrices, which is
+  what the diagnostics add.
+
+  1. Colour diagnostics (what you asked for)
+
+  Every line is tagged RawLensColor, so grep RawLensColor pulls them all out.
+  - Viewfinder: two lines per session, one on the first frame and one about 3 s
+    later, once auto white balance has settled.
+  - Each capture: one line, built from the same metadata the DNG and JPEG are
+    written from. Burst frames of one capture are merged into a single line.
+
+  Each line shows:
+  - the white-balance gains, neutral point, colour transform and AWB mode/state
+    that were actually used;
+  - the same values from the logical result and from every physical sub-result,
+    side by side;
+  - the static colour and forward matrices and calibration, with their
+    illuminants;
+  - what calibrated development ends up with: which white-balance source
+    (as-shot neutral, Camera2 gains, or unity fallback), which matrix path, and
+    any warnings.
+
+  A unity fallback, a missing neutral point, or a different matrix on direct 4
+  versus 6/4 will show up directly. The formatter is new (ColorDiagnostics.kt),
+  with hooks in RawViewfinder.kt and RawFrameMetadata.kt. Diagnostics can never
+  fail a save.
+
+  2. The five logs
+
+  All five are from the same Xiaomi 14 Ultra on HyperOS 3. 155326_579 (1).txt is
+  a cut-off copy of 155326_579.txt.
+
+  Fixed:
+
+  - BGU viewfinder died when switched to its CPU mode (log 1, 14:58:16). BGU
+    enlarges its preview to 2048×1536 when the GPU has spare time, but the CPU
+    path rejects anything over 1080 px a side. Tapping to the BGU-CPU mode at
+    that moment crashed BGU for the session ("fatal: cpu-guide"). The same thing
+    would happen on every frame if the preview resolution setting is above 1080
+    and the CPU path runs. Fix in BguViewfinder.kt: the CPU path is capped at
+    1080, and an oversized frame is skipped instead of killing BGU. There's a
+    new test in BguEffectiveTargetTest.
+  - Viewfinder hidden for 2 s after switching engines (log 1, 14:58:09).
+    Switching engine modes destroys the preview surface. A frame already queued
+    then failed to display (EGL swap failed 0x300d), and that was counted as a
+    GPU failure. Fix in RawViewfinder.kt: a failure after the surface is gone is
+    now ignored.
+  - A camera crash wrongly marked routes as dead (log 5, 15:53:32). Opening 6/3
+    crashed the camera system and it restarted. During the restart every camera
+    ID briefly reported "unknown device". Camera 9 hadn't opened yet in that
+    run, so the app denylisted it and saved permanent DEAD verdicts for 9 and
+    9/3, which push them down the lens picker. Fix in SessionRecoveryPolicy.kt
+    and RawCameraController.kt: a rejection within 15 s of a camera error or
+    disconnect is retried instead of denylisted. There's a new test in
+    OpenRejectedLensFallbackTest. DEAD verdicts already saved on the reporter's
+    phone remain until they re-run lens discovery.
+
+  Checked and left alone:
+  - POTENTIAL_MEMORY_LEAK warnings: false alarms. Graphics memory goes up and
+    down with the 22 RAW buffers (about 25 MB each) and drops back on pause. The
+    220 MB of GL textures is AMaZE's cache, which is capped at 256 MB.
+  - path=CPU_FALLBACK on JPEG development: expected while Opposed highlight
+    reconstruction is on, which forces that path.
+  - The 6/3 camera crash itself: it's inside Xiaomi's camera code and happened
+    once, so there's not enough evidence to block that route.
+  - Levels: black and white levels match between direct and routed IDs for 3, 4
+    and 5 in every log, which confirms the earlier finding.
+
+  RawCameraController.kt already had your own uncommitted changes. Mine there
+  are only the device-fault timestamp in onError/onDisconnected and the
+  rejection check. If you commit, stage paths individually.
+
+  Next: put out a build and ask the reporters to stay 10 s on direct 4, take one
+  photo, then do the same on 6/4, and send the log. The RawLensColor lines from
+  those two captures should show where the green comes from.
+
+✻ Sautéed for 8m 4s · done 5:05 PM
+
+❯ give me full command line signed with my key release
+
+  Ran 2 shell commands (ctrl+o to expand)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ give me full command line signed with my key release
+  cd ~/AndroidStudioProjects/RawLens
+  export RAWLENS_KEYSTORE=/Users/monikamalinowska/Untitled.jks
+  export RAWLENS_KEY_ALIAS='key0'
+  export RAWLENS_KEYSTORE_PASSWORD='[REDACTED]'
+  export RAWLENS_KEY_PASSWORD='[REDACTED]'
+
+  nice -n 19 ./gradlew --max-workers=2 -PfreezeVersion :app:assembleRelease
+  this does not build apk
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Your command worked. The APKs were built at 17:11 and are signed with your
+  key: the certificate SHA-256 CF:7F:BD:B8…A7:69 matches key0 in Untitled.jks.
+
+  They aren't where you looked. Since commit ccdc525 added the github/fdroid
+  product flavors, release APKs go into a folder per flavor instead of
+  app/build/outputs/apk/release/:
+
+  app/build/outputs/apk/github/release/RawLens-2.0.3-release.apk              ←
+  universal
+  app/build/outputs/apk/github/release/RawLens-2.0.3-release-arm64-v8a.apk
+  app/build/outputs/apk/github/release/RawLens-2.0.3-release-armeabi-v7a.apk
+  app/build/outputs/apk/github/release/RawLens-2.0.3-release-mapping.txt.gz
+  app/build/outputs/apk/fdroid/release/…                                      ←
+  F-Droid variant
+
+  Plain assembleRelease builds both flavors. For a GitHub release you only need
+  the github one, which is also faster:
+
+  cd ~/AndroidStudioProjects/RawLens
+  export RAWLENS_KEYSTORE=/Users/monikamalinowska/Untitled.jks
+  export RAWLENS_KEY_ALIAS='key0'
+  export RAWLENS_KEYSTORE_PASSWORD='[REDACTED]'
+  export RAWLENS_KEY_PASSWORD='[REDACTED]'
+
+  nice -n 19 ./gradlew --max-workers=2 -PfreezeVersion
+  :app:assembleGithubRelease
+  open app/build/outputs/apk/github/release/
+
+  Remove -PfreezeVersion when you want the build to bump the version (it's at
+  2.0.3 / 2003 now). With the flag, the version stays the same.
+
+  You pasted the keystore password into this chat, so treat it as exposed.
+  Consider moving it out of your shell history, for example into a file only you
+  can read that you source, or into the macOS Keychain.
+✻ Cooked for 39s · done 5:16 PM
+
+❯ with new key everyone will need to reinstall?
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ You don't need a new key, so nobody has to reinstall.
+
+  Why the key can stay. Only the password was exposed. Someone would also need
+  the file Untitled.jks to sign an APK as you, and that file is only on your
+  Mac. You can change both passwords and keep the same key:
+
+  keytool -storepasswd -keystore ~/Untitled.jks
+  keytool -keypasswd -alias key0 -keystore ~/Untitled.jks
+
+  The certificate doesn't change, so updates install over the existing app as
+  usual. After that, update the two RAWLENS_*_PASSWORD variables.
+
+  What a plain key switch would do. Android only installs an update if it's
+  signed by the same key as the installed app. If you just swapped to a new key,
+  the update would fail with "App not installed" for everyone. Each user would
+  have to uninstall, losing the app's settings and saved lens data, and then
+  reinstall.
+
+  If you ever must change keys (say the .jks itself leaks): Android 9+ supports
+  key rotation through APK Signature Scheme v3. RawLens has minSdk = 30, so
+  every user can take a rotated update in place. You'd create a lineage file
+  that the old key signs over to the new one, and sign each later release with
+  both keys:
+
+  apksigner rotate --out lineage.bin \
+    --old-signer --ks ~/Untitled.jks --ks-key-alias key0 \
+    --new-signer --ks ~/new.jks --ks-key-alias key1
+
+  That needs build changes, because Gradle's signing config alone can't apply a
+  lineage, so it isn't worth doing for a password leak.
+
+  F-Droid builds are signed with F-Droid's own key, so none of this affects
+  F-Droid users.
+
+  Also make sure you have a backup of Untitled.jks. If that file is lost,
+  there's no rotation path at all, and everyone would have to reinstall.
+
+✻ Worked for 18s · done 5:33 PM
+
+❯ Next: put out a build and ask the reporters to stay 10 s on direct 4, take
+  one photo, then do the same on 6/4, and send the log. The RawLensColor lines
+  from those two captures should show where the green comes from.
+  /Users/monikamalinowska/Downloads/logcat-20261029_163428_729\ \(1\).txt
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Confirmed: camera ID 4 returns no white balance (gains 1,1,1,1, neutral NaN,
+  AWB inactive), while 6/4 reports real gains and neutral values with identical
+  color matrices — explaining the green cast under unity white balance. Next
+  I'll check how the DNG writer handles a NaN neutral and whether the app has
+  its own WB estimate to fall back on.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Confirmed the root cause: opening cameras 3/4/5 directly skips Xiaomi's auto
+  white balance step. I'll implement a fallback that estimates white balance
+  from RAW data using a gray-world average when the camera's values are
+  missing/invalid, then apply it to the viewfinder, JPEG, and DNG—checking
+  existing Bayer helpers I can reuse first.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Writing the fallback estimator. It's pure Kotlin so it can be unit-tested, and
+  the viewfinders, the JPEG path and the DNG writer will all share it.
+
+⏺ Write(app/src/main/java/com/matthew/rawlens/RawWhiteBalanceFallback.kt)
+  ⎿  Wrote 143 lines to
+     app/src/main/java/com/matthew/rawlens/RawWhiteBalanceFallback.kt
+       1 // SPDX-FileCopyrightText: 2026 RawLens contributors
+       2 // SPDX-License-Identifier: GPL-3.0-or-later
+       3
+       4 package com.matthew.rawlens
+       5
+       6 import java.nio.ByteBuffer
+       7 import kotlin.math.abs
+       8
+       9 /**
+      10  * Data-driven white balance for HALs that run no AWB on a strea
+     … +134 lines (~6 KB) (ctrl+o to expand)
+
+⏺ Now the capture metadata. When the camera reports no white balance, the
+  estimate goes in as the as-shot neutral.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='RawFrameMetadata.kt'…)
+  ⎿  132:        val black = blackLevels?.toList() ?: return null
+     133:        val white = whiteLevel ?: return null
+     216:        val black = repaired?.first ?: reportedBlack
+     … +2 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawFrameMetadata.kt (+27
+     -5)
+      118      /** EXIF min/max focal length and maximum apertures, only
+           for a declared fixed lens. */
+      119      val lensSpecification: ImmutableDoubleValues? = null,
+      120      val compositeSourceCount: Int? = null,
+      121 -    val compositeUsedCount: Int? = null
+      121 +    val compositeUsedCount: Int? = null,
+      122 +    /**
+      123 +     * True when [neutralColorPoint]/[wbGains] are a gray-worl
+          +d estimate from
+      124 +     * the frame because the HAL ran no AWB ([RawWhiteBalanceF
+          +allback]). The
+      125 +     * platform DngCreator would write the HAL's NaN neutral,
+          +so DNG saves
+      126 +     * route to TinyDNG, which writes these values.
+      127 +     */
+      128 +    val whiteBalanceFallback: Boolean = false
+      129  ) {
+      130      fun normalizationOrNull(): RawNormalization? {
+      131          val pattern = cfaPattern ?: return null
+     ...
+      245              }
+      246          val hotPixels = sensorKey(CaptureResult.STATISTICS_HOT
+           _PIXEL_MAP)
+      247              ?.map { it.snapshot() }.orEmpty()
+      241 -        val gains = sensorKey(CaptureResult.COLOR_CORRECTION_G
+          -AINS)?.let {
+      248 +        val halGains = sensorKey(CaptureResult.COLOR_CORRECTIO
+          +N_GAINS)?.let {
+      249              ImmutableFloatValues(floatArrayOf(it.red, it.green
+           Even, it.greenOdd, it.blue))
+      250          }
+      244 -        val neutral = sensorKey(CaptureResult.SENSOR_NEUTRAL_C
+          -OLOR_POINT)
+      251 +        val halNeutral = sensorKey(CaptureResult.SENSOR_NEUTRA
+          +L_COLOR_POINT)
+      252              ?.toDoubleValues()
+      253 +        // Direct-opened Xiaomi aux lenses run no AWB (unity g
+          +ains, NaN
+      254 +        // neutral): estimate from the frame so JPEG and DNG a
+          +re not green.
+      255 +        val fallbackNeutral = if (RawWhiteBalanceFallback.halA
+          +wbMissing(
+      256 +                halNeutral?.toDoubleArray(), halGains?.toFloat
+          +Array()) &&
+      257 +            cfaValue != null && black != null && white != null
+          + && plane != null
+      258 +        ) {
+      259 +            runCatching {
+      260 +                RawWhiteBalanceFallback.estimate(plane.buffer,
+          + plane.rowStride, plane.pixelStride,
+      261 +                    image.width, image.height, cfaValue, black
+          +, white)
+      262 +            }.getOrNull()
+      263 +        } else null
+      264 +        val gains = fallbackNeutral?.let { ImmutableFloatValue
+          +s(RawWhiteBalanceFallback.gainsFor(it)) } ?: halGains
+      265 +        val neutral = fallbackNeutral?.let(::ImmutableDoubleVa
+          +lues) ?: halNeutral
+      266          val noise = sensorKey(CaptureResult.SENSOR_NOISE_PROFI
+           LE)?.let { pairs ->
+      267              ImmutableDoubleValues(DoubleArray(pairs.size * 2)
+           { index ->
+     … 19 more lines (ctrl+o to expand)
+
+⏺ Checking the DNG path: since the platform DngCreator would write the camera's
+  NaN neutral, frames relying on the fallback will route through TinyDNG instead
+  to write the estimated neutral—same rerouting already used for estimated
+  black/white levels.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='DngSaver.kt'…)
+  ⎿  FloatCfaDngWriter.kt:42:        val neutral = metadata.neutralColorPoi
+     nt?.toDoubleArray()
+     TinyDngMetadata.kt:70:            reals(50728, metadata.neutralColorPo
+     … +7 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/DngSaver.kt (+6 -0)
+      181                  "${metadata.blackLevels?.toList()?.joinToStrin
+           g(",")} white=${metadata.whiteLevel}); " +
+      182                  "forcing TinyDNG backend for $displayName")
+      183              DngWriterBackend.TINY_DNG
+      184 +        } else if (metadata.whiteBalanceFallback && backend !=
+          + DngWriterBackend.TINY_DNG) {
+      185 +            // DngCreator copies the HAL's NaN AsShotNeutral (
+          +no AWB on this
+      186 +            // stream); TinyDNG writes the gray-world estimate
+          + instead.
+      187 +            Log.w(LOG_TAG, "HAL reported no white balance; for
+          +cing TinyDNG backend with estimated " +
+      188 +                "neutral=${metadata.neutralColorPoint?.toDoubl
+          +eArray()?.joinToString(",")} for $displayName")
+      189 +            DngWriterBackend.TINY_DNG
+      190          } else backend
+      191
+      192          // Packed frames cannot enter either Image-direct writ
+           er (DngCreator
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Now the legacy viewfinder.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='RawViewfinder.kt'…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+35
+     -5)
+      289      /** 0 = nothing yet, 1 = first-frame colour line logged, 2
+            = settled line logged. */
+      290      private var vfColorDiagStage = 0
+      291      private var vfColorDiagFirstMs = 0L
+      292 +    /** Gray-world WB for streams whose HAL runs no AWB; camer
+          +a thread only. */
+      293 +    private val wbFallback = RawWhiteBalanceFallback.Tracker()
+      294 +    /** Neutral [snapshotRenderState] renders with instead of
+          +the HAL's, or null. */
+      295 +    private var wbFallbackNeutral: DoubleArray? = null
+      296 +    private var wbFallbackLogged = false
+      297      /** True while display levels fall back to the data-driven
+            replacement. Reset per session. */
+      298      @Volatile private var vfLevelsFallbackActive = false
+      299      /** Sticky Vulkan skip after repeated compute failures; re
+           set per session. */
+     ...
+      694          vfDiagLogged = false
+      695          vfSanitizeLogged = false
+      696          vfColorDiagStage = 0
+      697 +        wbFallback.reset()
+      698 +        wbFallbackNeutral = null
+      699 +        wbFallbackLogged = false
+      700          vfLevelsFallbackActive = false
+      701          vulkanZeroCopyDisabled = false
+      702          vulkanBridgeDisabled = false
+     ...
+      944                  logFirstFrameDiag(plane, image.width, image.he
+           ight, cfaInt, channels,
+      945                      reportedLevels, reportedWhite, levels, whi
+           te, levelsFallback, gpuGeo, inputSample)
+      946              }
+      947 +            // Unity HAL gains + NaN neutral (direct-opened Xi
+          +aomi aux lenses)
+      948 +            // render green: estimate WB from this frame's Bay
+          +er data instead.
+      949 +            val halGains = result?.get(CaptureResult.COLOR_COR
+          +RECTION_GAINS)
+      950 +            val halNeutral = result?.get(CaptureResult.SENSOR_
+          +NEUTRAL_COLOR_POINT)
+      951 +            wbFallbackNeutral = wbFallback.update(now, RawWhit
+          +eBalanceFallback.halAwbMissing(
+      952 +                halNeutral?.let { n -> DoubleArray(n.size) { n
+          +[it].toDouble() } },
+      953 +                halGains?.let { floatArrayOf(it.red, it.greenE
+          +ven, it.greenOdd, it.blue) }
+      954 +            )) {
+      955 +                runCatching {
+      956 +                    RawWhiteBalanceFallback.estimate(plane.buf
+          +fer, plane.rowStride, plane.pixelStride,
+      957 +                        image.width, image.height, cfaInt, lev
+          +els, white)
+      958 +                }.getOrNull()
+      959 +            }
+      960 +            if (wbFallbackNeutral != null && !wbFallbackLogged
+          +) {
+      961 +                wbFallbackLogged = true
+      962 +                Log.w("RawLensColor", "VF HAL reported no whit
+          +e balance; gray-world neutral=" +
+      963 +                    ColorDiagnostics.values(wbFallbackNeutral)
+          +)
+     … 31 more lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Same fallback for the BGU viewfinder.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='BguViewfinder.kt'…)
+  ⎿  5:import android.content.Context
+     6:import android.graphics.PixelFormat
+     7:import android.graphics.Rect
+     … +17 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/BguViewfinder.kt (+27
+     -5)
+      286      // for CPU guide bytes. One-way latch per session; fresh s
+           essions retry
+      287      // the GPU path. Render keeps one reusable slice-output bu
+           ffer.
+      288      @Volatile private var cpuFallback = false
+      289 +    /** Gray-world WB for streams whose HAL runs no AWB; offer
+          + thread only. */
+      290 +    private val wbFallback = RawWhiteBalanceFallback.Tracker()
+      291 +    private var wbFallbackLogged = false
+      292      // Manual BGU_CPU override (overlay tap): pins the CPU gui
+           de path even
+      293      // with a healthy GPU. Sticky across sessions like the glo
+           bal mode.
+      294      @Volatile private var cpuForced = false
+     ...
+      1056          } catch (_: Exception) {
+      1057              null
+      1058          }
+      1056 -        val freshWb: FloatArray? = halGains?.let { gains ->
+      1059 +        // Unity gains + NaN neutral (direct-opened Xiaomi au
+           +x lenses: no
+      1060 +        // AWB on the stream) render green: estimate from the
+           + frame instead.
+      1061 +        val fallbackNeutral = wbFallback.update(SystemClock.e
+           +lapsedRealtime(),
+      1062 +            RawWhiteBalanceFallback.halAwbMissing(
+      1063 +                neutralPts?.let { n -> DoubleArray(n.size) {
+           +n[it].toDouble() } },
+      1064 +                halGains?.let { floatArrayOf(it.red, it.green
+           +Even, it.greenOdd, it.blue) })
+      1065 +        ) {
+      1066 +            runCatching {
+      1067 +                RawWhiteBalanceFallback.estimate(buf, rowStri
+           +de, pixelStride, imgW, imgH, cfa, levels, white)
+      1068 +            }.getOrNull()
+      1069 +        }
+      1070 +        if (fallbackNeutral != null && !wbFallbackLogged) {
+      1071 +            wbFallbackLogged = true
+      1072 +            Log.w(TAG, "HAL reported no white balance; gray-w
+           +orld neutral=" +
+      1073 +                ColorDiagnostics.values(fallbackNeutral))
+      1074 +        }
+      1075 +        val fallbackGains = fallbackNeutral?.let(RawWhiteBala
+           +nceFallback::gainsFor)
+      1076 +        val freshWb: FloatArray? = fallbackGains?.let { g ->
+           +floatArrayOf(g[0], 1f, 1f, g[3]) } ?: halGains?.let { gains -
+           +>
+      1077              val sensor = floatArrayOf(gains.red, gains.greenE
+            ven, gains.greenOdd, gains.blue)
+      1078              val mapped = floatArrayOf(sensor[0], sensor[if (g
+            reenRow == 0) 1 else 2],
+      1079                  sensor[if (greenRow == 0) 2 else 1], sensor[3
+            ])
+     ...
+      1104              }
+      1105              out
+      1106          }
+      1087 -        val freshNeutral: DoubleArray? =
+      1088 -            neutralPts?.takeIf { it.size >= 3 }?.let { n -> D
+           -oubleArray(3) { n[it].toDouble() } }
+      1089 -        val freshGains: FloatArray? =
+     … 16 more lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+2 -1)
+      1060              val used = result.colorDiag("used(logical)")
+      1061              val (physicalHeader, physicalColors) = result.phy
+            sicalColorDiags()
+      1062              Log.i("RawLensColor", ColorDiagnostics.format(
+      1063 -                "VF color $stage", "focal=$focal jpeg=$render
+           -Jpeg $physicalHeader",
+      1063 +                "VF color $stage", "focal=$focal jpeg=$render
+           +Jpeg $physicalHeader " +
+      1064 +                    "grayWorldWb=${ColorDiagnostics.values(wb
+           +FallbackNeutral)}",
+      1065                  used, physicalColors, c.colorStatics(used)))
+      1066          }.onFailure { Log.w("RawLensColor", "VF color diag fa
+            iled: ${it.message}") }
+      1067      }
+
+⏺ Now tests for the estimator.
+
+⏺ Write(app/src/test/java/com/matthew/rawlens/RawWhiteBalanceFallbackTest.kt)
+  ⎿  Wrote 86 lines to
+     app/src/test/java/com/matthew/rawlens/RawWhiteBalanceFallbackTest.kt
+       1 // SPDX-FileCopyrightText: 2026 RawLens contributors
+       2 // SPDX-License-Identifier: GPL-3.0-or-later
+       3
+       4 package com.matthew.rawlens
+       5
+       6 import org.junit.Assert.assertArrayEquals
+       7 import org.junit.Assert.assertEquals
+       8 import org.junit.Assert.assertFalse
+       9 import org.junit.Assert.assertNotNull
+      10 import org.junit.Assert.assertNull
+     … +76 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The test task hit a Gradle file race (perhaps another build was running at the
+  same time). Retrying.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I fixed the green tint on direct-opened aux lenses, using the new log. All
+  1737 unit tests pass, including 7 new ones. It isn't tested on a phone yet and
+  nothing is committed.
+
+  Cause. When Xiaomi's HyperOS 3 opens camera 4 directly, it never runs auto
+  white balance for it. The new RawLensColor lines show it clearly:
+
+  ┌─────────────┬────────────────┬─────────────┬─────────────┬────────────┐
+  │             │ white-balance  │  neutral    │  AWB state  │  colour    │
+  │             │     gains      │    point    │             │  matrices  │
+  ├─────────────┼────────────────┼─────────────┼─────────────┼────────────┤
+  │ direct 4    │                │             │ 0, never    │ identical  │
+  │ (VF and     │ 1,1,1,1        │ NaN,NaN,NaN │ converges   │ to 6/4     │
+  │ photo)      │                │             │             │            │
+  ├─────────────┼────────────────┼─────────────┼─────────────┼────────────┤
+  │ 6/4 (photo) │ 1.15,1,1,3.14  │ 0.87,1,0.32 │ converged   │ identical  │
+  │             │                │             │             │ to 4       │
+  └─────────────┴────────────────┴─────────────┴─────────────┴────────────┘
+
+  The levels and matrices match, and only the white balance is missing. Unity
+  white balance on a Bayer sensor looks green, so the viewfinder and the JPEG
+  turn green. The DNG gets a NaN as-shot neutral from Android's DngCreator, so
+  it also opens green or broken in RAW editors. Lenses 3 and 5 most likely
+  behave the same way.
+
+  Fix. When the camera gives a NaN or missing neutral and unity or missing
+  gains, RawLens now estimates the white balance from the frame's own RAW data.
+  It averages about 3,000 Bayer 2×2 blocks spread across the frame, skipping
+  clipped and very dark ones.
+  - Viewfinder (both engines): it re-estimates twice a second and eases toward
+    each new value, so the preview doesn't flicker. The first time this kicks
+    in, the log gets a line "HAL reported no white balance; gray-world
+    neutral=…".
+  - JPEG and every DNG writer: the estimate is stored as the capture's neutral.
+    A single DNG that would have gone through Android's DngCreator is written
+    with TinyDNG instead, which writes the estimated neutral. That's the same
+    rerouting already used when the black/white levels have to be estimated from
+    the frame. Merges and HDR writers already use this metadata.
+  - No change when the camera's own white balance works, as on 6/4, 0 and 2.
+  - Code: the estimator is new (RawWhiteBalanceFallback.kt, tests in
+    RawWhiteBalanceFallbackTest.kt). The hooks are in RawFrameMetadata.kt,
+    DngSaver.kt, RawViewfinder.kt and BguViewfinder.kt.
+
+  Limitation. This kind of average assumes the scene is roughly neutral overall.
+  A frame filled with one colour (grass, sky, a wall) will be off. It's a big
+  improvement on green, but not as good as the camera's own white balance. The
+  lens picker still recommends the direct IDs, so for best colour on 3/4/5,
+  users should pick the routed IDs (0/3, 6/4, 6/5). Making those the default
+  recommendation on Xiaomi is a separate change I can make if you want it.
+
+  To verify: build with your usual command (:app:assembleGithubRelease) and have
+  the reporter repeat the test on 4 and 6/4. Their capture lines should then
+  end with +grayWorldWb and wb=AS_SHOT_NEUTRAL, and the photos should no longer
+  be green.
+
+✻ Sautéed for 4m 57s · done 5:43 PM
+
+❯ Limitation. This kind of average assumes the scene is roughly neutral
+  overall. A frame filled with one colour (grass, sky, a wall) will be off.
+  It's a big improvement on green, but not as good as the camera's own white
+  balance. The lens picker still recommends the direct IDs, so for best colour
+  on 3/4/5, users should pick the routed IDs (0/3, 6/4, 6/5). Making those the
+  default recommendation on Xiaomi is a separate change I can make if you want
+  it. cover limitation too.
+
+⏺ I'll do both: make the estimator hold up on single-colour scenes, and stop
+  recommending the direct IDs where the camera provides no white balance. First
+  I'm checking which colour-science helpers already exist.
+
+  Ran 4 shell commands (ctrl+o to expand)
+⏺ I'll constrain single-colour scene estimates to the sensor's daylight-tungsten
+  curve so uniform colors like grass or sky can't skew white balance, and have
+  the lens picker recommend routed IDs when no camera white balance exists. Now
+  checking how lens verdicts are stored.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ I'll implement both parts now, starting with the curve-constrained estimator.
+  It needs the existing Camera2 matrix-conversion helper, so I'm making that
+  internal.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; sed -i '' 's/    private fun
+      camera2MatrixOrNull(values: Immutab…)
+  ⎿  320:    internal fun camera2MatrixOrNull(values: ImmutableDoubleValues
+     ?): Matrix3? {
+  ⎿  Updated
+     app/src/main/java/com/matthew/rawlens/SceneLinearColorProcessor.kt (+1
+     -1)
+      317          }
+      318      }
+      319
+      320 -    private fun camera2MatrixOrNull(values: ImmutableDoubleVal
+          -ues?): Matrix3? {
+      320 +    internal fun camera2MatrixOrNull(values: ImmutableDoubleVa
+          +lues?): Matrix3? {
+      321          val frozen = values?.toDoubleArray() ?: return null
+      322          if (frozen.size != 9 || frozen.any { !it.isFinite() })
+            return null
+      323          // Match PhotonCamera Converter.convertColorspaceTrans
+           form and the working DNG tags:
+
+⏺ Now rewriting the estimator with the white-curve constraint.
+
+⏺ Write(app/src/main/java/com/matthew/rawlens/RawWhiteBalanceFallback.kt)
+  ⎿  Added 179 lines, removed 13 lines
+       3
+       4  package com.matthew.rawlens
+       5
+       6 +import android.hardware.camera2.CameraCharacteristics
+       7  import java.nio.ByteBuffer
+       8  import kotlin.math.abs
+       9 +import kotlin.math.exp
+      10 +import kotlin.math.ln
+      11 +import kotlin.math.pow
+      12 +import kotlin.math.sqrt
+      13
+      14  /**
+      15   * Data-driven white balance for HALs that run no AWB on a stre
+          am.
+     ...
+      19   * SENSOR_NEUTRAL_COLOR_POINT and AWB state INACTIVE forever, w
+          hile the same
+      20   * sensor through its logical route (6/4) reports real values w
+          ith identical
+      21   * matrices. Unity WB renders green in the viewfinder, the JPEG
+           and every RAW
+      17 - * editor. When that shape is detected, a gray-world estimate f
+         -rom the frame's
+      18 - * own Bayer data stands in for the missing as-shot neutral.
+      22 + * editor. When that shape is detected, an estimate from the fr
+         +ame's own Bayer
+      23 + * data stands in for the missing as-shot neutral.
+      24 + *
+      25 + * Plain gray-world fails on scenes dominated by one colour (gr
+         +ass, sky, a
+      26 + * painted wall). With the sensor's colour matrices available,
+         +the estimate
+      27 + * is constrained to the camera-space white locus ([Locus]: the
+         + neutrals of
+      28 + * 2300..9000 K blackbody light through this sensor): only quad
+         +s whose
+      29 + * chromaticity lies near the locus vote, weighted toward brigh
+         +ter quads, and
+      30 + * the result is projected onto the locus. A green lawn or a bl
+         +ue sky sits far
+      31 + * off it and cannot drag the white point; when nothing near-ne
+         +utral exists
+      32 + * the whole-frame mean is projected and pulled halfway toward
+         +daylight.
+      33   */
+      34  internal object RawWhiteBalanceFallback {
+      35      /** Quads sampled per axis: 64x48 = 3072 quads, well under
+          a millisecond. */
+     ...
+      40      /** Quads with green below this are noise-dominated: exclud
+          ed. */
+      41      private const val DARK = 0.01
+      42      private const val MIN_QUADS = 64
+      43 +    /** Gray candidates needed before their vote is trusted ove
+         +r the fallback. */
+      44 +    private const val MIN_GRAY_QUADS = 24
+      45 +    /** Log-chroma distance from the locus within which a quad
+         +counts as gray. */
+      46 +    internal const val GRAY_TOLERANCE = 0.12
+      47      /** Plausible camera-space neutral range (R/G and B/G) for
+          daylight..tungsten. */
+      48      private const val NEUTRAL_MIN = 0.1
+      49      private const val NEUTRAL_MAX = 2.0
+      50 +    /** No-gray-evidence fallback pulls the projected point tow
+         +ard this. */
+      51 +    private const val DAYLIGHT_K = 5500.0
+      52
+      53      /**
+      54       * True when the HAL supplied no usable white balance: the
+          neutral point is
+     ...
+       64      }
+       65
+       66      /**
+       47 -     * Gray-world camera-space neutral (R/G, 1, B/G) from a 16
+          --bit Bayer plane,
+       48 -     * or null when the frame offers too little usable signal
+          -or the result is
+       67 +     * Camera-space white locus as a polyline in log chroma
+       68 +     * (u = ln R/G, v = ln B/G), ordered by ascending [kelvin]
+          +.
+       69 +     */
+       70 +    class Locus internal constructor(
+       71 +        internal val kelvin: DoubleArray,
+       72 +        internal val u: DoubleArray,
+       73 +        internal val v: DoubleArray
+       74 +    ) {
+       75 +        init {
+       76 +            require(kelvin.size >= 2 && u.size == kelvin.size
+          +&& v.size == kelvin.size)
+       77 +        }
+       78 +
+       79 +        /** Nearest locus point as (u, v, distance, fractional
+          + index). */
+       80 +        fun project(pu: Double, pv: Double): DoubleArray {
+       81 +            var best = doubleArrayOf(u[0], v[0], Double.MAX_VA
+          +LUE, 0.0)
+       82 +            for (i in 0 until kelvin.size - 1) {
+       83 +                val du = u[i + 1] - u[i]
+       84 +                val dv = v[i + 1] - v[i]
+       85 +                val len2 = du * du + dv * dv
+       86 +                val t = if (len2 <= 0.0) 0.0 else
+       87 +                    (((pu - u[i]) * du + (pv - v[i]) * dv) / l
+          +en2).coerceIn(0.0, 1.0)
+       88 +                val qu = u[i] + du * t
+       89 +                val qv = v[i] + dv * t
+       90 +                val d = sqrt((pu - qu) * (pu - qu) + (pv - qv)
+          + * (pv - qv))
+       91 +                if (d < best[2]) best = doubleArrayOf(qu, qv,
+          +d, i + t)
+       92 +            }
+       93 +            return best
+       94 +        }
+       95 +
+       96 +        /** Locus point at a fractional index (clamped). */
+       97 +        fun at(index: Double): DoubleArray {
+       98 +            val i = index.coerceIn(0.0, (kelvin.size - 1).toDo
+          +uble())
+       99 +            val lo = i.toInt().coerceAtMost(kelvin.size - 2)
+      100 +            val t = i - lo
+      101 +            return doubleArrayOf(u[lo] + (u[lo + 1] - u[lo]) *
+          + t, v[lo] + (v[lo + 1] - v[lo]) * t)
+      102 +        }
+      103 +
+      104 +        /** Fractional index of the locus sample nearest [k] k
+          +elvin. */
+      105 +        fun indexOf(k: Double): Double {
+      106 +            for (i in 0 until kelvin.size - 1) {
+      107 +                if (k <= kelvin[i + 1]) {
+      108 +                    val span = kelvin[i + 1] - kelvin[i]
+      109 +                    return i + if (span > 0) ((k - kelvin[i])
+          +/ span).coerceIn(0.0, 1.0) else 0.0
+      110 +                }
+      111 +            }
+      112 +            return (kelvin.size - 1).toDouble()
+      113 +        }
+      114 +
+      115 +        companion object {
+      116 +            /**
+      117 +             * Locus from Camera2-order colour matrices (XYZ -
+          +> camera) and
+      118 +             * optional calibrations, interpolated in 1/T betw
+          +een the two
+      119 +             * reference illuminants as DNG prescribes. Null w
+          +hen unusable.
+      120 +             */
+      121 +            fun from(
+      122 +                colorMatrix1: ImmutableDoubleValues?, colorMat
+          +rix2: ImmutableDoubleValues?,
+      123 +                calibration1: ImmutableDoubleValues?, calibrat
+          +ion2: ImmutableDoubleValues?,
+      124 +                illuminant1: Int?, illuminant2: Int?
+      125 +            ): Locus? {
+      126 +                fun prepared(cm: ImmutableDoubleValues?, cal:
+          +ImmutableDoubleValues?): Matrix3? {
+      127 +                    val m = SceneLinearColorProcessor.camera2M
+          +atrixOrNull(cm) ?: return null
+      128 +                    val withCal = SceneLinearColorProcessor.ca
+          +mera2MatrixOrNull(cal)?.let { it * m } ?: m
+      129 +                    // Scalar normalization (DNG NormalizeColo
+          +rMatrix): ratios stay intact.
+      130 +                    val d50 = withCal * Vec3(0.96422, 1.0, 0.8
+          +2521)
+      131 +                    val peak = d50.maxComponent()
+      132 +                    if (!peak.isFinite() || peak <= 1e-9) retu
+          +rn null
+      133 +                    return Matrix3(withCal.values().map { it /
+          + peak }.toDoubleArray())
+      134 +                }
+      135 +                val m1 = prepared(colorMatrix1, calibration1)
+          +?: return null
+      136 +                val m2 = prepared(colorMatrix2, calibration2)
+      137 +                val t1 = SceneLinearColorProcessor.ILLUMINANT_
+          +KELVIN[illuminant1]?.toDouble()
+      138 +                val t2 = SceneLinearColorProcessor.ILLUMINANT_
+          +KELVIN[illuminant2]?.toDouble()
+      139 +                val ks = ArrayList<Double>()
+      140 +                val us = ArrayList<Double>()
+      141 +                val vs = ArrayList<Double>()
+      142 +                val steps = 28
+      143 +                for (s in 0..steps) {
+      144 +                    val k = 2300.0 * (9000.0 / 2300.0).pow(s.t
+          +oDouble() / steps)
+      145 +                    val m = if (m2 == null || t1 == null || t2
+          + == null || t1 == t2) m1 else {
+      146 +                        val g = ((1 / k - 1 / t1) / (1 / t2 -
+          +1 / t1)).coerceIn(0.0, 1.0)
+      147 +                        Matrix3.lerp(m1, m2, g)
+      148 +                    }
+      149 +                    val cam = m * planckXyz(k)
+      150 +                    if (!cam.isFinite() || cam.x <= 0 || cam.y
+          + <= 0 || cam.z <= 0) continue
+      151 +                    ks += k; us += ln(cam.x / cam.y); vs += ln
+          +(cam.z / cam.y)
+      152 +                }
+      153 +                if (ks.size < 8) return null
+      154 +                return Locus(ks.toDoubleArray(), us.toDoubleAr
+          +ray(), vs.toDoubleArray())
+      155 +            }
+      156 +
+      157 +            /** Blackbody white (Y = 1) via the Kim et al. cub
+          +ic spline, 1667..25000 K. */
+      158 +            internal fun planckXyz(k: Double): Vec3 {
+      159 +                val x = if (k <= 4000) -0.2661239e9 / k.pow(3)
+          + - 0.2343589e6 / k.pow(2) + 0.8776956e3 / k + 0.179910
+      160 +                    else -3.0258469e9 / k.pow(3) + 2.1070379e6
+          + / k.pow(2) + 0.2226347e3 / k + 0.240390
+      161 +                val y = when {
+      162 +                    k <= 2222 -> -1.1063814 * x.pow(3) - 1.348
+          +11020 * x.pow(2) + 2.18555832 * x - 0.20219683
+      163 +                    k <= 4000 -> -0.9549476 * x.pow(3) - 1.374
+          +18593 * x.pow(2) + 2.09137015 * x - 0.16748867
+      164 +                    else -> 3.0817580 * x.pow(3) - 5.87338670
+          +* x.pow(2) + 3.75112997 * x - 0.37001483
+      165 +                }
+      166 +                return Vec3(x / y, 1.0, (1 - x - y) / y)
+      167 +            }
+      168 +        }
+      169 +    }
+      170 +
+      171 +    /**
+      172 +     * Camera-space neutral (R/G, 1, B/G) from a 16-bit Bayer
+          +plane, or null
+      173 +     * when the frame offers too little usable signal or the r
+          +esult is
+      174       * implausible. [cfa] is the Camera2 arrangement (0..3); [
+           black] is in
+      175       * Camera2 order (TL, TR, BL, BR of each 2x2 quad); reads
+           are absolute and
+       51 -     * bounds-checked against the buffer limit.
+      176 +     * bounds-checked against the buffer limit. With a [locus]
+          + the estimate is
+      177 +     * locus-constrained (see the class doc); without one it i
+          +s gray-world.
+      178       */
+      179      fun estimate(
+      180          buffer: ByteBuffer, rowStride: Int, pixelStride: Int,
+           width: Int, height: Int,
+       55 -        cfa: Int, black: FloatArray, white: Float
+      181 +        cfa: Int, black: FloatArray, white: Float, locus: Locu
+          +s? = null
+      182      ): DoubleArray? {
+      183          if (pixelStride != 2 || rowStride <= 0 || width < 4 ||
+            height < 4) return null
+      184          if (black.size != 4 || !white.isFinite()) return null
+     ...
+      188          val lastReadable = buffer.limit() - 2
+      189          val stepX = maxOf(2, (width / GRID_X) and 1.inv())
+      190          val stepY = maxOf(2, (height / GRID_Y) and 1.inv())
+       65 -        var sumR = 0.0
+       66 -        var sumG = 0.0
+       67 -        var sumB = 0.0
+      191 +        // Whole-frame sums (gray-world) and locus-gray sums s
+          +ide by side.
+      192 +        var sumR = 0.0; var sumG = 0.0; var sumB = 0.0
+      193 +        var grayR = 0.0; var grayG = 0.0; var grayB = 0.0
+      194          var quads = 0
+      195 +        var grayQuads = 0
+      196          val v = DoubleArray(4)
+      197          var y = 0
+      198          while (y + 1 < height) {
+     ...
+      208                      v[i] = n.coerceAtLeast(0.0)
+      209                  }
+      210                  if (usable) {
+       84 -                    var r = 0.0
+       85 -                    var g = 0.0
+       86 -                    var b = 0.0
+      211 +                    var r = 0.0; var g = 0.0; var b = 0.0
+      212                      for (i in 0..3) when (pattern.colorAt(i an
+           d 1, i shr 1)) {
+      213                          CfaColor.RED -> r += v[i]
+      214                          CfaColor.GREEN -> g += v[i] * 0.5
+     ...
+      217                      if (g >= DARK) {
+      218                          sumR += r; sumG += g; sumB += b
+      219                          quads++
+      220 +                        if (locus != null && r > 0.0 && b > 0.
+          +0) {
+      221 +                            val d = locus.project(ln(r / g), l
+          +n(b / g))[2]
+      222 +                            if (d < GRAY_TOLERANCE) {
+      223 +                                // Brighter, closer-to-locus q
+          +uads carry the vote.
+      224 +                                val w = g * (1.0 - d / GRAY_TO
+          +LERANCE)
+      225 +                                grayR += r * w; grayG += g * w
+          +; grayB += b * w
+      226 +                                grayQuads++
+      227 +                            }
+      228 +                        }
+      229                      }
+      230                  }
+      231                  x += stepX
+     ...
+      233              y += stepY
+      234          }
+      235          if (quads < MIN_QUADS || sumG <= 0.0) return null
+      102 -        val neutral = doubleArrayOf(sumR / sumG, 1.0, sumB / s
+          -umG)
+      236 +        val neutral = if (locus == null) {
+      237 +            doubleArrayOf(sumR / sumG, 1.0, sumB / sumG)
+      238 +        } else if (grayQuads >= MIN_GRAY_QUADS && grayG > 0.0
+          +&& grayR > 0.0 && grayB > 0.0) {
+      239 +            val p = locus.project(ln(grayR / grayG), ln(grayB
+          +/ grayG))
+      240 +            doubleArrayOf(exp(p[0]), 1.0, exp(p[1]))
+      241 +        } else if (sumR > 0.0 && sumB > 0.0) {
+      242 +            // No near-neutral evidence (one-colour frame): th
+          +e whole-frame
+      243 +            // mean only picks a direction along the locus, ha
+          +lved toward daylight.
+      244 +            val p = locus.project(ln(sumR / sumG), ln(sumB / s
+          +umG))
+      245 +            val q = locus.at((p[3] + locus.indexOf(DAYLIGHT_K)
+          +) / 2)
+      246 +            doubleArrayOf(exp(q[0]), 1.0, exp(q[1]))
+      247 +        } else return null
+      248          return neutral.takeIf { n -> n.all { it.isFinite() } &
+           &
+      249              n[0] in NEUTRAL_MIN..NEUTRAL_MAX && n[2] in NEUTRA
+           L_MIN..NEUTRAL_MAX }
+      250      }
+     ...
+      253      fun gainsFor(neutral: DoubleArray): FloatArray =
+      254          floatArrayOf((1.0 / neutral[0]).toFloat(), 1f, 1f, (1.
+           0 / neutral[2]).toFloat())
+      255
+      256 +    private var locusCacheKey: CameraCharacteristics? = null
+      257 +    private var locusCache: Locus? = null
+      258 +
+      259 +    /** [Locus] for [c], memoized per characteristics identity
+          + (shared by VF and saves). */
+      260 +    fun locusFor(c: CameraCharacteristics): Locus? = synchroni
+          +zed(this) {
+      261 +        if (c === locusCacheKey) return locusCache
+      262 +        val locus = runCatching {
+      263 +            Locus.from(
+      264 +                c.get(CameraCharacteristics.SENSOR_COLOR_TRANS
+          +FORM1).toImmutableDoubles(),
+      265 +                c.get(CameraCharacteristics.SENSOR_COLOR_TRANS
+          +FORM2).toImmutableDoubles(),
+      266 +                c.get(CameraCharacteristics.SENSOR_CALIBRATION
+          +_TRANSFORM1).toImmutableDoubles(),
+      267 +                c.get(CameraCharacteristics.SENSOR_CALIBRATION
+          +_TRANSFORM2).toImmutableDoubles(),
+      268 +                c.get(CameraCharacteristics.SENSOR_REFERENCE_I
+          +LLUMINANT1),
+      269 +                c.get(CameraCharacteristics.SENSOR_REFERENCE_I
+          +LLUMINANT2)?.toInt()
+      270 +            )
+      271 +        }.getOrNull()
+      272 +        locusCacheKey = c
+      273 +        locusCache = locus
+      274 +        locus
+      275 +    }
+      276 +
+      277      /**
+      278       * Viewfinder-side state: re-estimates at most every [inte
+           rvalMs] while the
+      279       * HAL WB is missing and eases toward each estimate so the
+            preview never
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      import re…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/BguViewfinder.kt (+2 -1)
+      1064                  halGains?.let { floatArrayOf(it.red, it.green
+            Even, it.greenOdd, it.blue) })
+      1065          ) {
+      1066              runCatching {
+      1067 -                RawWhiteBalanceFallback.estimate(buf, rowStri
+           -de, pixelStride, imgW, imgH, cfa, levels, white)
+      1067 +                RawWhiteBalanceFallback.estimate(buf, rowStri
+           +de, pixelStride, imgW, imgH, cfa, levels, white,
+      1068 +                    RawWhiteBalanceFallback.locusFor(c))
+      1069              }.getOrNull()
+      1070          }
+      1071          if (fallbackNeutral != null && !wbFallbackLogged) {
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawFrameMetadata.kt (+2
+     -1)
+      258          ) {
+      259              runCatching {
+      260                  RawWhiteBalanceFallback.estimate(plane.buffer,
+            plane.rowStride, plane.pixelStride,
+      261 -                    image.width, image.height, cfaValue, black
+          -, white)
+      261 +                    image.width, image.height, cfaValue, black
+          +, white,
+      262 +                    RawWhiteBalanceFallback.locusFor(character
+          +istics))
+      263              }.getOrNull()
+      264          } else null
+      265          val gains = fallbackNeutral?.let { ImmutableFloatValue
+           s(RawWhiteBalanceFallback.gainsFor(it)) } ?: halGains
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawViewfinder.kt (+1 -1)
+      954              )) {
+      955                  runCatching {
+      956                      RawWhiteBalanceFallback.estimate(plane.buf
+           fer, plane.rowStride, plane.pixelStride,
+      957 -                        image.width, image.height, cfaInt, lev
+          -els, white)
+      957 +                        image.width, image.height, cfaInt, lev
+          +els, white, RawWhiteBalanceFallback.locusFor(c))
+      958                  }.getOrNull()
+      959              }
+      960              if (wbFallbackNeutral != null && !wbFallbackLogged
+           ) {
+
+⏺ Now the recommendation part. The app will remember routes whose camera gives
+  no white balance, and the lens picker will rank them below a healthy
+  alternative for the same lens.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      def edit(p, pairs):…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/LensDiscovery.kt (+28
+     -3)
+      84       */
+      85      val packedFormats: List<String> = emptyList(),
+      86      /** Open-time verdict from real `openCamera` calls; UNKNOWN
+           until opened. */
+      87 -    val verdict: LensVerdict = LensVerdict.UNKNOWN
+      87 +    val verdict: LensVerdict = LensVerdict.UNKNOWN,
+      88 +    /** A settled session on this route got no AWB from the HAL
+         + ([LensVerdicts.noHalAwb]). */
+      89 +    val noHalAwb: Boolean = false
+      90  )
+      91
+      92  /** A picker section with a header and an explanatory subtitle.
+           */
+     ...
+      245
+      246              Log.i(LOG_TAG, "Discovered RAW lenses: ${found.key
+           s}")
+      247              return found.values
+      246 -                .map { lens -> applyVerdict(lens, routeVerdict
+          -(lens.id, verdicts)) }
+      248 +                .map { lens -> applyAwbVerdict(applyVerdict(le
+          +ns, routeVerdict(lens.id, verdicts)), verdicts) }
+      249                  .sortedWith(compareBy<DiscoveredLens> { it.opt
+           icalMetric }.thenBy { it.id })
+      250      }
+      251
+     ...
+      613      LensVerdict.DEAD -> 3
+      614  }
+      615
+      616 +/**
+      617 + * Health class ahead of everything else: a route with working
+          + HAL AWB beats
+      618 + * one without (direct-opened Xiaomi aux lenses: no AWB, estim
+          +ated colour),
+      619 + * which still beats a route the service rejected.
+      620 + */
+      621 +private fun healthPriority(lens: DiscoveredLens): Int = when {
+      622 +    lens.verdict == LensVerdict.DEAD -> 2
+      623 +    lens.noHalAwb -> 1
+      624 +    else -> 0
+      625 +}
+      626 +
+      627  private val opticRouteOrder: Comparator<DiscoveredLens> =
+      615 -    compareBy<DiscoveredLens> { verdictPriority(it.verdict) }
+      628 +    compareBy<DiscoveredLens> { healthPriority(it) }
+      629 +        .thenBy { verdictPriority(it.verdict) }
+      630          .thenBy { routePriority(it.kind) }
+      631          .thenBy { it.opticalMetric }
+      632          .thenBy { it.id }
+     ...
+      657      LensVerdict.UNKNOWN -> null
+     … 16 more lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/LensVerdictStore.kt (+23
+     -2)
+      20      val openable: Set<String> = emptySet(),
+      21      val dead: Set<String> = emptySet(),
+      22      /** Route identities whose session delivered RAW frames on
+          this device. */
+      23 -    val verified: Set<String> = emptySet()
+      23 +    val verified: Set<String> = emptySet(),
+      24 +    /**
+      25 +     * Route identities whose HAL ran no AWB (unity gains, no n
+         +eutral) for a
+      26 +     * whole settled session: usable, but colour comes from Raw
+         +Lens'
+      27 +     * estimate, so the picker prefers another route to the sam
+         +e lens.
+      28 +     */
+      29 +    val noHalAwb: Set<String> = emptySet()
+      30  ) {
+      31      companion object {
+      32          val EMPTY = LensVerdicts()
+     ...
+      43  class LensVerdictStore(context: Context) {
+      44      private val preferences = context.getSharedPreferences(PREF
+          S_NAME, Context.MODE_PRIVATE)
+      45
+      40 -    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(),
+         -deadIds(), verifiedIds())
+      46 +    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(),
+         +deadIds(), verifiedIds(), noHalAwbIds())
+      47 +
+      48 +    fun noHalAwbIds(): Set<String> =
+      49 +        preferences.getStringSet(KEY_NO_HAL_AWB, emptySet()).or
+         +Empty().toSet()
+      50 +
+      51 +    /**
+      52 +     * Records whether this route's HAL ran AWB in a settled se
+         +ssion. A later
+      53 +     * session with working AWB clears the mark (firmware updat
+         +es do fix it).
+      54 +     */
+      55 +    fun markHalAwb(identity: String, working: Boolean) {
+      56 +        if (identity.isBlank()) return
+      57 +        val current = noHalAwbIds()
+      58 +        val next = if (working) current - identity else capped(
+         +current + identity)
+      59 +        if (next != current) preferences.edit().putStringSet(KE
+         +Y_NO_HAL_AWB, next).apply()
+      60 +    }
+      61
+      62      fun openableIds(): Set<String> =
+      63          preferences.getStringSet(KEY_OPENABLE, emptySet()).orEm
+          pty().toSet()
+     ...
+      114          const val KEY_OPENABLE = "openable_ids"
+      115          const val KEY_DEAD = "dead_ids"
+      116          const val KEY_VERIFIED = "verified_ids"
+      117 +        const val KEY_NO_HAL_AWB = "no_hal_awb_ids"
+     … 3 more lines (ctrl+o to expand)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Now the controller side: decide once per session, about 3 s in, whether the
+  camera's white balance actually works on this route.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/main/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='RawCameraController.kt'…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+     (+39 -0)
+      518       * verified. Volatile because the two sites run on differe
+           nt threads.
+      519       */
+      520      @Volatile private var pendingVerifiedIdentity: String? = n
+           ull
+      521 +    /** Route whose HAL-AWB health this session is judging; nu
+          +ll once judged. Camera thread. */
+      522 +    private var awbVerdictIdentity: String? = null
+      523 +    private var awbVerdictFirstMs = 0L
+      524 +    private var awbVerdictSawWorking = false
+      525      private var sessionPrimaryRoute: CameraRoute? = null
+      526      private var sessionAltRoute: CameraRoute? = null
+      527
+     ...
+      1449                      // Candidate for stream verification: con
+            firmed only when
+      1450                      // this session's first RAW frame actuall
+            y arrives below.
+      1451                      pendingVerifiedIdentity = sessionPrimaryR
+            oute?.identity
+      1452 +                    awbVerdictIdentity = sessionPrimaryRoute?
+           +.identity
+      1453 +                    awbVerdictFirstMs = 0L
+      1454 +                    awbVerdictSawWorking = false
+      1455                      // A fresh session gets fresh RAW-preview
+             retries: starvation
+      1456                      // callbacks during the open gap must not
+             consume them.
+      1457                      rawPreviewFailures = 0
+     ...
+      1613       * generation guard with a longer budget (~30 s) so a bri
+            efly wedged
+      1614       * service recovers without user intervention.
+      1615       */
+      1616 +    /**
+      1617 +     * Judges once per session whether the HAL runs AWB on th
+           +is route: after
+      1618 +     * [AWB_VERDICT_SETTLE_MS] of AUTO-AWB results, a route t
+           +hat never once
+      1619 +     * reported a usable neutral or non-unity gains (logical
+           +or physical) is
+      1620 +     * persisted as no-HAL-AWB, so the lens picker recommends
+           + a sibling route
+      1621 +     * with real camera colour (direct-opened Xiaomi aux lens
+           +es, 2026-10-29).
+      1622 +     */
+      1623 +    private fun noteHalAwbVerdict(result: TotalCaptureResult)
+           + {
+      1624 +        val identity = awbVerdictIdentity ?: return
+      1625 +        if (result.get(CaptureResult.CONTROL_AWB_MODE) != Cap
+           +tureResult.CONTROL_AWB_MODE_AUTO) return
+      1626 +        val now = SystemClock.elapsedRealtime()
+      1627 +        if (awbVerdictFirstMs == 0L) awbVerdictFirstMs = now
+      1628 +        if (!awbVerdictSawWorking) {
+      1629 +            awbVerdictSawWorking = (listOf(result.colorDiag("
+           +logical")) + result.physicalColorDiags().second)
+      1630 +                .any { !RawWhiteBalanceFallback.halAwbMissing
+           +(it.neutral, it.gains) }
+      1631 +        }
+      1632 +        if (now - awbVerdictFirstMs < AWB_VERDICT_SETTLE_MS)
+           +return
+      1633 +        awbVerdictIdentity = null
+     … 29 more lines (ctrl+o to expand)
+
+⏺ Now tests for the curve constraint and the new ranking. Checking the existing
+  discovery tests for fixtures to reuse.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens/app/src/test/jav
+      a/com/matthew/rawlens; python3 - <<'EOF'
+      p='LensDiscoveryGroupingTest.kt'…)
+  ⎿  tests 1747 failures 0 errors 0 []
+  ⎿  Updated
+     app/src/test/java/com/matthew/rawlens/LensDiscoveryGroupingTest.kt
+     (+27 -0)
+      272          assertEquals(LensRole.SUPER_TELE, LensRole.forEquivale
+           ntMm(120f))
+      273          assertEquals(LensRole.UNKNOWN, LensRole.forEquivalentM
+           m(null))
+      274      }
+      275 +
+      276 +    // Field log 2026-10-29: direct-opened Xiaomi aux lens 4 r
+          +uns no HAL AWB;
+      277 +    // the logical route 6/4 to the same optic has real camera
+          + colour.
+      278 +    @Test
+      279 +    fun noHalAwbRouteLosesRecommendationToHealthySibling() {
+      280 +        val direct = opticLens("4", LensRouteKind.STANDALONE).
+          +copy(verdict = LensVerdict.VERIFIED)
+      281 +        val logical = opticLens("6/4", LensRouteKind.LOGICAL_P
+          +HYSICAL).copy(logicalId = "6", physicalId = "4")
+      282 +        val verdicts = LensVerdicts(noHalAwb = setOf("4"))
+      283 +        val lenses = listOf(direct, logical).map { applyAwbVer
+          +dict(it, verdicts) }
+      284 +        assertEquals("6/4", recommendRoute(lenses).id)
+      285 +        assertEquals(setOf("6/4"), recommendedLensIds(lenses))
+      286 +        assertTrue(lenses.first { it.id == "4" }.details.conta
+          +ins(NO_HAL_AWB_NOTE))
+      287 +    }
+      288 +
+      289 +    @Test
+      290 +    fun noHalAwbRouteStillBeatsDeadSibling() {
+      291 +        val direct = applyAwbVerdict(opticLens("4", LensRouteK
+          +ind.STANDALONE), LensVerdicts(noHalAwb = setOf("4")))
+      292 +        val dead = opticLens("6/4", LensRouteKind.LOGICAL_PHYS
+          +ICAL).copy(verdict = LensVerdict.DEAD)
+      293 +        assertEquals("4", recommendRoute(listOf(direct, dead))
+          +.id)
+      294 +    }
+      295 +
+      296 +    @Test
+      297 +    fun withoutAwbVerdictDirectRouteStaysRecommended() {
+      298 +        val direct = opticLens("4", LensRouteKind.STANDALONE)
+      299 +        val logical = opticLens("6/4", LensRouteKind.LOGICAL_P
+          +HYSICAL)
+      300 +        assertEquals("4", recommendRoute(listOf(direct, logica
+          +l).map { applyAwbVerdict(it, LensVerdicts.EMPTY) }).id)
+      301 +    }
+      302  }
+  ⎿  Updated
+     app/src/test/java/com/matthew/rawlens/RawWhiteBalanceFallbackTest.kt
+     (+52 -0)
+       83          assertNull(t.update(700L, false) { calls++; a })
+       84          assertNull(t.neutral)
+       85      }
+       86 +
+       87 +    private val identity = ImmutableDoubleValues(doubleArrayOf
+          +(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
+       88 +    /** XYZ -> camera identity: the camera neutral at T is the
+          + blackbody XYZ itself. */
+       89 +    private val locus = requireNotNull(RawWhiteBalanceFallback
+          +.Locus.from(identity, identity, null, null, 21, 17))
+       90 +
+       91 +    private fun neutralAt(k: Double): DoubleArray {
+       92 +        val xyz = RawWhiteBalanceFallback.Locus.planckXyz(k)
+       93 +        return doubleArrayOf(xyz.x / xyz.y, 1.0, xyz.z / xyz.y
+          +)
+       94 +    }
+       95 +
+       96 +    /** Bayer frame whose left [grayShare] holds a neutral sur
+          +face, the rest one saturated colour. */
+       97 +    private fun mixedFrame(neutral: DoubleArray, other: Double
+          +Array, grayShare: Double): ByteBuffer {
+       98 +        val w = 256; val h = 192
+       99 +        val pattern = BayerPattern.fromCamera2(0)
+      100 +        val buf = ByteBuffer.allocateDirect(w * h * 2).order(B
+          +yteOrder.nativeOrder())
+      101 +        for (y in 0 until h) for (x in 0 until w) {
+      102 +            val rgb = if (x < w * grayShare) neutral.map { it
+          +* 0.3 } else other.toList()
+      103 +            val level = when (pattern.colorAt(x, y)) {
+      104 +                CfaColor.RED -> rgb[0]; CfaColor.GREEN -> rgb[
+          +1]; CfaColor.BLUE -> rgb[2] }
+      105 +            buf.putShort((y * w + x) * 2, (64 + level * (1023
+          +- 64)).toInt().toShort())
+      106 +        }
+      107 +        return buf
+      108 +    }
+      109 +
+      110 +    @Test fun `locus spans tungsten to shade in the expected d
+          +irection`() {
+      111 +        val warm = locus.at(0.0)
+      112 +        val cool = locus.at((locus.kelvin.size - 1).toDouble()
+          +)
+      113 +        assertTrue(warm[0] > cool[0])  // more red at 2300 K
+      114 +        assertTrue(warm[1] < cool[1])  // less blue at 2300 K
+      115 +    }
+      116 +
+      117 +    @Test fun `grass-dominated frame keeps the white point of
+          +its neutral patch`() {
+      118 +        val truth = neutralAt(4500.0)
+      119 +        val grass = doubleArrayOf(0.05, 0.30, 0.04)
+      120 +        val buf = mixedFrame(truth, grass, grayShare = 0.25)
+      121 +        val constrained = RawWhiteBalanceFallback.estimate(buf
+          +, 512, 2, 256, 192, 0, black, white, locus)
+      122 +        assertNotNull(constrained)
+     … 16 more lines (ctrl+o to expand)
+  ⎿  (timeout 10m)
+  ⎿  You've hit your weekly limit · resets Nov 3 at 3am (Europe/Athens)
+     /upgrade or /usage-credits to finish what you’re working on.
+
+✻ Sautéed for 5m 14s · done 5:56 PM

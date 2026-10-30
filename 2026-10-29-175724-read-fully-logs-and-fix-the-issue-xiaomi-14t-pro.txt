@@ -1,0 +1,1010 @@
+▗ ▗   ▖ ▖  Claude Code v2.1.312
+           Opus 5.5 · Claude Pro
+ ▘▘   ▝▝   ~/AndroidStudioProjects/RawLens
+
+
+❯ Read fully logs and fix the issue Xiaomi 14T Pro "it doesnt change the focus
+  i have to do it manually, no matter if moving stuff up close to the lens
+  tapping somewhere on the screen"
+  /Users/monikamalinowska/Downloads/logcat-20261029_141131_776.txt
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The log is short; reading all of it.
+
+  Read 1 file, ran 5 shell commands (ctrl+o to expand)
+
+⏺ Reading through the focus code now; the AF state machine looks fine, so I'm
+  checking how tap/full-frame regions map to sensor coordinates.
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+⏺ Region mapping and the AF state machine check out—the real issue is the
+  RAW-only session lacking an ISP preview stream, which starves the MediaTek AF.
+  I'll now review the policy/test files to add a self-healing verdict.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ Now implementing: a self-healing "AF starved on RAW-only" verdict that reuses
+  the existing ISP preview-target remedy, plus focus distance in the touch AF
+  trace.
+
+⏺ Update(app/src/main/java/com/matthew/rawlens/AutoFocusPolicy.kt)
+  ⎿  Added 7 lines
+      40       * the failure hold still releases quickly once it fires.
+      41       */
+      42      const val AUTOFOCUS_TIMEOUT_MS = 3500L
+      43 +    /**
+      44 +     * Consecutive missed tap scans, with no lock yet this sess
+         +ion, that
+      45 +     * convict the session of starving AF. Xiaomi 14T Pro (Medi
+         +aTek) field
+      46 +     * log: every raw-only tap scanned ~2 s into NOT_FOCUSED_LO
+         +CKED and
+      47 +     * continuous AF sat PASSIVE_UNFOCUSED at a fixed distance.
+      48 +     */
+      49 +    const val STARVED_MISS_STREAK = 2
+      50
+      51      /** Idle AF mode: continuous-picture first, AUTO only where
+           nothing scans. */
+      52      fun defaultAfMode(availableModes: IntArray): Int = when {
+
+⏺ Update(app/src/main/java/com/matthew/rawlens/AutoFocusPolicy.kt)
+  ⎿  Added 13 lines
+      114          !startSent || scanSeen || elapsedSinceStartMs >= floor
+           Ms
+      115
+      116      /**
+      117 +     * True when tap misses say the HAL has no usable AF stati
+          +stics rather
+      118 +     * than a hard scene: [missStreak] consecutive misses and
+          +not a single
+      119 +     * lock this session. One lock proves AF works here, so la
+          +ter misses
+      120 +     * are the scene's fault (too close, featureless) and neve
+          +r convict.
+      121 +     */
+      122 +    fun afLooksStarved(
+      123 +        missStreak: Int,
+      124 +        lockedThisSession: Boolean,
+      125 +        limit: Int = STARVED_MISS_STREAK
+      126 +    ): Boolean =
+      127 +        !lockedThisSession && missStreak >= limit
+      128 +
+      129 +    /**
+      130       * Tap gate: hardware double-fires landing within [bounceM
+           s] at the same
+      131       * spot are accidents and dropped. Anything past the bounc
+           e window is a
+      132       * deliberate user action and always lands — including a s
+           ame-spot retap
+
+⏺ Now TouchFocus.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/TouchFocus.kt'…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/TouchFocus.kt (+26 -3)
+      59          fun onState(state: String)
+      60          fun onFocusLock(locked: Boolean, indefinite: Boolean, d
+          eadlineMs: Long)
+      61          fun onMeteringReleased()
+      62 +        /**
+      63 +         * Tap misses look like starved AF statistics, not a ha
+         +rd scene
+      64 +         * ([AutoFocusPolicy.afLooksStarved]); fires on every m
+         +iss past the
+      65 +         * streak until a lock or [resetForStop]. The host deci
+         +des whether
+      66 +         * a session rebuild can help.
+      67 +         */
+      68 +        fun onTouchAfStarved(misses: Int)
+      69      }
+      70
+      71      /** AF_MODE_AUTO + tap region held in the repeating request
+           (scan or lock). */
+     ...
+      103      private var lockIndefinite = false
+      104      /** Elapsed-realtime expiry of a timed lock; 0 when indefi
+           nite or unlocked. */
+      105      private var lockDeadlineMs = 0L
+      106 +    /** Consecutive missed tap scans this session (any lock re
+          +sets it). */
+      107 +    private var missStreak = 0
+      108 +    /** Any tap lock this session: proves AF statistics flow (
+          +see [AutoFocusPolicy.afLooksStarved]). */
+      109 +    private var lockedThisSession = false
+      110
+      111      fun start(viewX: Float, viewY: Float, indefinite: Boolean,
+            updateAe: Boolean = true) {
+      112          if (!host.isOnCameraThread()) {
+     ...
+      223          }
+      224      }
+      225
+      215 -    /** Feed every preview/one-shot result's CONTROL_AF_STATE
+          -here. */
+      216 -    fun onAfState(state: Int?) {
+      226 +    /**
+      227 +     * Feed every preview/one-shot result's CONTROL_AF_STATE h
+          +ere, with its
+      228 +     * LENS_FOCUS_DISTANCE for the trace (whether the lens mov
+          +ed at all).
+      229 +     */
+      230 +    fun onAfState(state: Int?, focusDiopters: Float? = null) {
+      231          // Transition-only trace: a scan logs a few lines, nev
+           er 30 fps.
+      232          if (active && (!lastLoggedStateValid || state != lastL
+           oggedState)) {
+      233              lastLoggedStateValid = true
+      234              lastLoggedState = state
+      235              val sinceStart = if (startSent)
+      236                  " +${SystemClock.elapsedRealtime() - startElap
+           sedMs}ms" else ""
+      223 -            Log.i(LOG_TAG, "Touch AF -> ${Camera2Names.afState
+          -Name(state)}$sinceStart")
+     … 37 more lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ Good — stop() resets per session. Now the controller side.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/RawCameraController.kt'…)
+  ⎿  4807:                touchFocus.onAfState(
+     4808-                    result.get(CaptureResult.CONTROL_AF_STATE),
+     4809-                    result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+     (+36 -2)
+      479      private var fpsProbeShot = 0
+      480      /** Whether the current ladder offers any preview step to
+           jump to. */
+      481      private var sessionOffersPreview = false
+      482 +    /**
+      483 +     * Cameras whose starved-AF remedy already ran this proces
+          +s: a HAL that
+      484 +     * refuses the preview session falls back raw-only and fli
+          +ps the
+      485 +     * verdict, and must not rebuild again on every later miss
+          +.
+      486 +     */
+      487 +    private val afStarvedRemedyTried = mutableSetOf<String>()
+      488      /**
+      489       * Session-level compat: DEFAULT plan without stream-use-c
+           ase hints and a
+      490       * HAL-default frame rate (no forced 30 fps). Engaged once
+            a repeating RAW
+     ...
+      3320          override fun onFocusLock(locked: Boolean, indefinite:
+             Boolean, deadlineMs: Long) =
+      3321              this@RawCameraController.onFocusLock(locked, inde
+            finite, deadlineMs)
+      3322          override fun onMeteringReleased() = this@RawCameraCon
+            troller.onMeteringReleased()
+      3323 +        override fun onTouchAfStarved(misses: Int) = this@Raw
+           +CameraController.onTouchAfStarved(misses)
+      3324 +    }
+      3325 +
+      3326 +    /**
+      3327 +     * Raw-only sessions can starve the ISP's AF statistics:
+           +Xiaomi 14T Pro
+      3328 +     * (MediaTek) streams RAW at full rate — so the frame-rat
+           +e probe keeps
+      3329 +     * it raw-only — yet every tap scan misses and continuous
+           + AF never
+      3330 +     * moves the lens. Same remedy as the ISP stall: persist
+           +the preview-
+      3331 +     * request verdict and rebuild, so the plan-time check ju
+           +mps to the
+      3332 +     * first preview combo (smallest invisible target). Once
+           +per camera per
+      3333 +     * process; sessions that already carry a preview have no
+           +thing to add.
+      3334 +     */
+      3335 +    private fun onTouchAfStarved(misses: Int) {
+      3336 +        val cameraId = selectedCameraId ?: return
+      3337 +        if (previewSurface != null || !sessionOffersPreview |
+           +| cameraId in afStarvedRemedyTried) return
+      3338 +        if (captureInProgress.get() || cameraCaptureSequenceA
+           +ctive) return
+      3339 +        afStarvedRemedyTried += cameraId
+      3340 +        persistIspPreviewVerdict(cameraId, true)
+      3341 +        Log.w(LOG_TAG, "Touch AF starved raw-only ($misses mi
+           +sses, no lock); adding preview target")
+      3342 +        onState("RECOVERING FOCUS")
+      3343 +        // Posted: the miss is still unwinding inside TouchFo
+           +cus.
+      3344 +        cameraHandler.post { restartCameraForConfigurationCha
+           +nge() }
+      3345      }
+      3346
+      3347      /**
+     … 22 more lines (ctrl+o to expand)
+
+⏺ Now the tests.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt'…)
+  ⎿  import android.hardware.camera2.CaptureRequest
+     import android.hardware.camera2.CaptureResult
+     import org.junit.Assert.*
+     import org.junit.Test
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/AutoFocusPolicyTest.kt
+     (+7 -0)
+      218          assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS > 0L)
+      219          assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS < AutoFocus
+           Policy.LOCK_HOLD_MS)
+      220      }
+      221 +
+      222 +    @Test
+      223 +    fun afLooksStarvedNeedsStreakAndNoLock() {
+      224 +        assertFalse(AutoFocusPolicy.afLooksStarved(1, lockedTh
+          +isSession = false))
+      225 +        assertTrue(AutoFocusPolicy.afLooksStarved(AutoFocusPol
+          +icy.STARVED_MISS_STREAK, lockedThisSession = false))
+      226 +        assertFalse(AutoFocusPolicy.afLooksStarved(5, lockedTh
+          +isSession = true))
+      227 +    }
+      228  }
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt (+34
+     -0)
+      73              locks += Triple(locked, indefinite, deadlineMs)
+      74          }
+      75          override fun onMeteringReleased() { released++ }
+      76 +        val starved = mutableListOf<Int>()
+      77 +        override fun onTouchAfStarved(misses: Int) { starved +=
+         + misses }
+      78
+      79          /** Runs and removes the first pending runnable posted
+          with [delayMs]. */
+      80          fun fire(delayMs: Long) {
+     ...
+      132          assertFalse(tf.active)
+      133      }
+      134
+      135 +    private fun tapAndMiss() {
+      136 +        tapAndStart()
+      137 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCA
+          +N)
+      138 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSE
+          +D_LOCKED)
+      139 +        host.fire(AutoFocusPolicy.FAILURE_HOLD_MS)
+      140 +    }
+      141 +
+      142 +    @Test
+      143 +    fun consecutiveMissesWithoutLockReportStarvedAf() {
+      144 +        tapAndMiss()
+      145 +        assertTrue("one miss is a hard scene", host.starved.is
+          +Empty())
+      146 +        tapAndMiss()
+      147 +        assertEquals(listOf(AutoFocusPolicy.STARVED_MISS_STREA
+          +K), host.starved)
+      148 +    }
+      149 +
+      150 +    @Test
+      151 +    fun lockThisSessionClearsStarvedVerdict() {
+      152 +        tapAndStart()
+      153 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCA
+          +N)
+      154 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_FOCUSED_LO
+          +CKED)
+      155 +        host.fire(AutoFocusPolicy.LOCK_HOLD_MS)
+      156 +        tapAndMiss()
+      157 +        tapAndMiss()
+      158 +        tapAndMiss()
+      159 +        assertTrue("AF proved itself; misses are the scene's",
+          + host.starved.isEmpty())
+      160 +
+      161 +        tf.resetForStop()
+      162 +        tapAndMiss()
+      163 +        tapAndMiss()
+     … 6 more lines (ctrl+o to expand)
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+⏺ I've made a fix, but it's based on my reading of the log and hasn't been tried
+  on the Xiaomi 14T Pro. The unit tests pass, but they can't show whether the
+  phone will actually focus now.
+
+  What the log shows
+
+  - The app sent the right requests. Each tap switched to tap-to-focus mode with
+    the right spot on the sensor, and the camera started scanning.
+  - The camera's autofocus kept failing. The first two tap scans and one
+    tap-and-hold each searched for about 2 seconds and gave up. In between,
+    continuous autofocus sat at the same distance (about 4 m) for more than 14
+    seconds while the user moved things up close.
+  - What these sessions have in common: the main camera (camera 0) was running
+    with only the RAW stream and no preview stream (preview=none, combo RAW ONLY
+    FULL). The app already knows some MediaTek phones misbehave in that setup:
+    there's a check that adds a small hidden preview stream when they drop to
+    about 20 fps. This phone passed that check at 30 fps, so it stayed RAW-only.
+    My reading is that its autofocus doesn't get the data it needs without a
+    preview stream. That fits the log, but I haven't been able to confirm it on
+    the phone.
+  - The first lens it opened (camera 3) only supports autofocus off, so it has
+    no autofocus at all. That's normal for that lens, not a bug.
+
+  The fix
+
+  When the camera fails to focus on two taps in a row and hasn't focused
+  successfully even once in that session, the app now treats the RAW-only
+  session as the cause. It then uses the same remedy as the frame-rate check: it
+  saves a per-camera setting saying this camera needs a preview stream, and
+  restarts the camera session with the smallest hidden preview stream.
+
+  - Changes:
+    - AutoFocusPolicy.kt adds the two-miss rule (afLooksStarved,
+      STARVED_MISS_STREAK = 2).
+    - TouchFocus.kt counts misses in a row and resets the count on any
+      successful focus or when the camera stops.
+    - RawCameraController.kt handles the restart (onTouchAfStarved).
+  - Limits: it only kicks in when the session is RAW-only and a preview option
+    exists. It runs at most once per camera each time the app runs, so a phone
+    that refuses the preview stream can't get stuck restarting. It also waits
+    until no photo is being taken.
+  - Phones where autofocus already works: a single successful focus rules this
+    out for the session. Later misses, like a subject too close or with no
+    detail, never trigger it.
+  - Better logs: the tap-to-focus log lines now include the lens focus distance
+    (fd=). If the problem comes back, the next log will show whether the lens
+    moved at all during a scan.
+
+  On the reporter's phone, this would have triggered at the second miss
+  (14:12:05 in the log). The app would show "RECOVERING FOCUS" once, and after
+  that camera 0 always opens with the preview stream.
+
+  I added tests for the new rule in TouchFocusTest and AutoFocusPolicyTest; both
+  suites pass (15 and 17 tests). Nothing is committed. The next step is a build
+  on the 14T Pro: tap twice on something it can't focus, then check that the
+  log shows "Touch AF starved raw-only… adding preview target" and that focus
+  then works.
+
+✻ Cogitated for 5m 28s · done 4:20 PM
+
+❯ /Users/monikamalinowska/Downloads/logcat-20261029_163304_453.txt tap to focus
+  still fails, the other focus works now also it doesnt auto focus from the
+  beginning
+  I have to make one tap focus fail for it to switch
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The new log reveals the lens stays fixed at fd=0.33D throughout the entire 2s
+  ACTIVE_SCAN during tap scans, yet continuous AF works fine right after the AF
+  CANCEL. I'll check how the repeating request is built to understand why.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+⏺ Found it: the HAL's AUTO-mode scan never actually moves the lens, while
+  continuous AF works fine on its own—so the fix is a CANCEL kick at session
+  start plus using continuous AF with the tap region once AUTO scans are shown
+  to stall. Now checking where the session-start hooks live.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+⏺ Reverting my earlier preview-rebuild remedy first (after checking these files
+  have only my hunks), then building the new approach.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ The user has concurrent edits in RawCameraController.kt (the lastDeviceFaultMs
+  work), so I'll remove only my hunks by hand rather than checking files out.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/RawCameraController.kt'…)
+  ⎿  -    /** Feed every preview/one-shot result's CONTROL_AF_STATE here. *
+     /
+     -    fun onAfState(state: Int?) {
+     … +19 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/AutoFocusPolicy.kt (+0
+     -20)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+     (+0 -28)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/TouchFocus.kt (+0 -19)
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/AutoFocusPolicyTest.kt
+     (+0 -7)
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt (+0
+     -34)
+  ⎿  (a git step in this command can move the working tree, so these may be
+     its changes, not edits) (ctrl+o to expand)
+
+⏺ Now the new approach. Policy helpers first:
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/AutoFocusPolicy.kt'…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/AutoFocusPolicy.kt (+43
+     -0)
+      40       * the failure hold still releases quickly once it fires.
+      41       */
+      42      const val AUTOFOCUS_TIMEOUT_MS = 3500L
+      43 +    /** LENS_FOCUS_DISTANCE change (diopters) that proves the l
+         +ens moved. */
+      44 +    const val LENS_MOVED_EPSILON_D = 0.02f
+      45 +    /**
+      46 +     * Continuous-tap verdict floor: after the CANCEL restart t
+         +he HAL keeps
+      47 +     * reporting the old passive verdict until the new scan beg
+         +ins (~350 ms
+      48 +     * in the Xiaomi 14T Pro field log), so a verdict without a
+         + scan only
+      49 +     * counts past this floor.
+      50 +     */
+      51 +    const val CONTINUOUS_TAP_VERDICT_FLOOR_MS = 1_000L
+      52
+      53      /** Idle AF mode: continuous-picture first, AUTO only where
+           nothing scans. */
+      54      fun defaultAfMode(availableModes: IntArray): Int = when {
+     ...
+       77      fun needsIdleScanNudge(availableModes: IntArray): Boolean
+           =
+       78          defaultAfMode(availableModes) == CaptureRequest.CONTRO
+           L_AF_MODE_AUTO
+       79
+       80 +    /**
+       81 +     * Continuous idle modes that get one CANCEL kick per sess
+          +ion. Xiaomi 14T
+       82 +     * Pro (MediaTek) field logs: a fresh session's CONT_PICTU
+          +RE sat
+       83 +     * PASSIVE_UNFOCUSED at a fixed distance and never scanned
+          + until a
+       84 +     * CANCEL arrived. CANCEL in a passive state just restarts
+          + the passive
+       85 +     * scan, so the kick is harmless where continuous AF alrea
+          +dy runs.
+       86 +     */
+       87 +    fun needsSessionKick(availableModes: IntArray): Boolean =
+       88 +        when (defaultAfMode(availableModes)) {
+       89 +            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+       90 +            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO ->
+          + true
+       91 +            else -> false
+       92 +        }
+       93 +
+       94 +    /** True when two LENS_FOCUS_DISTANCE reports differ by mo
+          +re than [epsilon]. */
+       95 +    fun lensMoved(fromDiopters: Float, toDiopters: Float, epsi
+          +lon: Float = LENS_MOVED_EPSILON_D): Boolean =
+       96 +        kotlin.math.abs(toDiopters - fromDiopters) > epsilon
+       97 +
+       98 +    /**
+       99 +     * True when an AUTO tap scan ran (START sent, scan state
+          +seen) and the
+      100 +     * lens never moved: the HAL reports ACTIVE_SCAN but its A
+          +UTO sweep is
+      101 +     * dead. Xiaomi 14T Pro field log: every AUTO scan held fd
+          +=0.33D for
+     … 15 more lines (ctrl+o to expand)
+
+⏺ Now TouchFocus: continuous-AF tap path, dead-AUTO detection with immediate
+  retry, and the session-start kick.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/TouchFocus.kt'…)
+  ⎿  671:        timeout = Runnable {
+     672-            timeout = null
+     673-            if (!active || completed) return@Runnable
+     … +6 lines (ctrl+o to expand)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/TouchFocus.kt (+163 -5)
+      17   *
+      18   * A tap switches the repeating request to AF_MODE_AUTO with th
+          e tap region,
+      19   * then sends one AF_TRIGGER_START; the AF state in each result
+           drives the
+      20 - * lock / failure verdict (thresholds in [AutoFocusPolicy]). Th
+         -e lock is held
+      20 + * lock / failure verdict (thresholds in [AutoFocusPolicy]). Ca
+         +meras whose
+      21 + * AUTO scan never moves the lens ([Host.autoScanDead]) run the
+         + tap as
+      22 + * continuous AF on the tap region instead: a CANCEL restarts t
+         +he passive
+      23 + * scan there and PASSIVE_FOCUSED is the lock. The lock is held
+      24   * until an explicit release: timer, retap, double-tap/button r
+          eset, manual
+      25   * focus, lens switch, or stop. Trigger semantics follow
+      26   * https://developer.android.com/reference/android/hardware/cam
+          era2/CaptureRequest#CONTROL_AF_TRIGGER.
+     ...
+      62          fun onState(state: String)
+      63          fun onFocusLock(locked: Boolean, indefinite: Boolean, d
+          eadlineMs: Long)
+      64          fun onMeteringReleased()
+      65 +        /**
+      66 +         * Per-camera verdict (persisted by the host): AUTO sca
+         +ns leave this
+      67 +         * lens still, so taps run continuous AF on the tap reg
+         +ion
+      68 +         * ([AutoFocusPolicy.autoScanLeftLensStill]).
+      69 +         */
+      70 +        var autoScanDead: Boolean
+      71      }
+      72
+      73      /** AF_MODE_AUTO + tap region held in the repeating request
+           (scan or lock). */
+     ...
+       82
+       83      val scanning: Boolean get() = active && !completed
+       84
+       85 +    /** This tap cycle runs continuous AF on the region (CANCE
+          +L restart) instead of AUTO + START. */
+       86 +    var continuousTap = false
+       87 +        private set
+       88 +
+       89 +    /** Repeating request wants AF_MODE_AUTO: an AUTO tap cycl
+          +e is in flight. */
+       90 +    val autoMode: Boolean get() = active && !continuousTap
+       91 +
+       92      private var timeout: Runnable? = null
+       93      private var continuousReset: Runnable? = null
+       94      private var pendingStart: Runnable? = null
+       95      private var pendingIdleNudge: Runnable? = null
+       96 +    private var pendingSessionKick: Runnable? = null
+       97      private var startElapsedMs = 0L
+       98      private var startSent = false
+     … 236 more lines (ctrl+o to expand)
+
+⏺ Now the controller: AF mode selection, persisted verdict, and the
+  session-start kick.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/RawCameraController.kt'…)
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/RawCameraController.kt
+     (+29 -1)
+      1470              Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreami
+            ng vf=$rawViewfinderStreaming)")
+      1471              logAfCapabilities()
+      1472              touchFocus.nudgeIdleIfNeeded()
+      1473 +            touchFocus.kickContinuousAtSessionStart()
+      1474              onState(if (rawZslStreaming) "READY • ZSL WARMING
+            " else "READY")
+      1475          }
+      1476          override fun onConfigureFailed(session: CameraCapture
+            Session) {
+     ...
+      3323          override fun onFocusLock(locked: Boolean, indefinite:
+             Boolean, deadlineMs: Long) =
+      3324              this@RawCameraController.onFocusLock(locked, inde
+            finite, deadlineMs)
+      3325          override fun onMeteringReleased() = this@RawCameraCon
+            troller.onMeteringReleased()
+      3326 +        override var autoScanDead: Boolean
+      3327 +            get() = afAutoScanDeadPersisted(selectedCameraId)
+      3328 +            set(value) = persistAfAutoScanDead(selectedCamera
+           +Id, value)
+      3329 +    }
+      3330 +
+      3331 +    /** Persisted dead-AUTO-scan verdict for this camera (see
+           + [TouchFocus.Host.autoScanDead]). */
+      3332 +    private fun afAutoScanDeadPersisted(cameraId: String?): B
+           +oolean = try {
+      3333 +        cameraId != null && context.getSharedPreferences(AF_A
+           +UTO_SCAN_PREFS, Context.MODE_PRIVATE)
+      3334 +            .getBoolean(AF_AUTO_SCAN_DEAD_KEY_PREFIX + camera
+           +Id, false)
+      3335 +    } catch (_: Exception) {
+      3336 +        false
+      3337 +    }
+      3338 +
+      3339 +    private fun persistAfAutoScanDead(cameraId: String?, dead
+           +: Boolean) {
+      3340 +        if (cameraId == null) return
+      3341 +        try {
+      3342 +            context.getSharedPreferences(AF_AUTO_SCAN_PREFS,
+           +Context.MODE_PRIVATE)
+      3343 +                .edit().putBoolean(AF_AUTO_SCAN_DEAD_KEY_PREF
+           +IX + cameraId, dead).apply()
+      3344 +        } catch (_: Exception) {
+      3345 +            // Best effort: without persistence the first tap
+           + each launch re-detects it.
+      3346 +        }
+      3347      }
+      3348
+      3349      /**
+     ...
+      4846          val manualFocus = selectedFocusDistanceDiopters
+      4847          val wantedAfMode = when {
+      4848              manualFocus != null -> CaptureRequest.CONTROL_AF_
+            MODE_OFF
+      4827 -            touchFocus.active -> CaptureRequest.CONTROL_AF_MO
+           -DE_AUTO
+      4849 +            touchFocus.autoMode -> CaptureRequest.CONTROL_AF_
+           +MODE_AUTO
+      4850              else -> continuousPictureAfMode()
+     … 14 more lines (ctrl+o to expand)
+
+⏺ Now tests.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt'…)
+  ⎿  <testsuite name="com.matthew.rawlens.TouchFocusTest" tests="20" skippe
+     d="0" failures="0" errors="0" timestamp="2026-10-29T15:42:41.121Z" hos
+     <testsuite name="com.matthew.rawlens.AutoFocusPolicyTest" tests="18" s
+     kipped="0" failures="0" errors="0" timestamp="2026-10-29T15:42:41.095Z
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/AutoFocusPolicyTest.kt
+     (+17 -0)
+      218          assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS > 0L)
+      219          assertTrue(AutoFocusPolicy.FAILURE_HOLD_MS < AutoFocus
+           Policy.LOCK_HOLD_MS)
+      220      }
+      221 +
+      222 +    @Test
+      223 +    fun autoScanLeftLensStillNeedsScanAndKnownStillDistance()
+          +{
+      224 +        assertTrue(AutoFocusPolicy.autoScanLeftLensStill(true,
+          + true, 0.33f, lensMoved = false))
+      225 +        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true
+          +, true, 0.33f, lensMoved = true))
+      226 +        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true
+          +, false, 0.33f, lensMoved = false))
+      227 +        assertFalse(AutoFocusPolicy.autoScanLeftLensStill(true
+          +, true, null, lensMoved = false))
+      228 +        assertFalse(AutoFocusPolicy.lensMoved(0.33f, 0.34f))
+      229 +        assertTrue(AutoFocusPolicy.lensMoved(0.33f, 0.48f))
+      230 +    }
+      231 +
+      232 +    @Test
+      233 +    fun sessionKickOnlyForContinuousIdle() {
+      234 +        assertTrue(AutoFocusPolicy.needsSessionKick(intArrayOf
+          +(CaptureRequest.CONTROL_AF_MODE_AUTO, CaptureRequest.CONTROL_A
+          +F_MODE_CONTINUOUS_PICTURE)))
+      235 +        assertFalse(AutoFocusPolicy.needsSessionKick(intArrayO
+          +f(CaptureRequest.CONTROL_AF_MODE_AUTO)))
+      236 +        assertFalse(AutoFocusPolicy.needsSessionKick(intArrayO
+          +f(CaptureRequest.CONTROL_AF_MODE_OFF)))
+      237 +    }
+      238  }
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt (+85
+     -0)
+      73              locks += Triple(locked, indefinite, deadlineMs)
+      74          }
+      75          override fun onMeteringReleased() { released++ }
+      76 +        override var autoScanDead = false
+      77
+      78          /** Runs and removes the first pending runnable posted
+          with [delayMs]. */
+      79          fun fire(delayMs: Long) {
+     ...
+      131          assertFalse(tf.active)
+      132      }
+      133
+      134 +    @Test
+      135 +    fun deadAutoScanRetriesTapAsContinuous() {
+      136 +        // Xiaomi 14T Pro field log: ACTIVE_SCAN for 2 s with
+          +fd pinned.
+      137 +        tapAndStart()
+      138 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCA
+          +N, 0.33f)
+      139 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSE
+          +D_LOCKED, 0.33f)
+      140 +        assertTrue(host.autoScanDead)
+      141 +        assertTrue(tf.continuousTap)
+      142 +        assertFalse(tf.autoMode)
+      143 +        assertFalse("no failure shown for the retried tap", ho
+          +st.states.contains("FOCUS NOT LOCKED"))
+      144 +
+      145 +        host.fire(60L)
+      146 +        assertEquals(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL
+          +to true, host.triggers.last())
+      147 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSE
+          +D_LOCKED, 0.33f)
+      148 +        assertFalse("stale AUTO verdict ignored", host.states.
+          +contains("FOCUS NOT LOCKED"))
+      149 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_SC
+          +AN, 1.96f)
+      150 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_PASSIVE_FO
+          +CUSED, 6.89f)
+      151 +        assertEquals("FOCUS LOCKED", host.states.last())
+      152 +        assertEquals(2, host.triggers.size)
+      153 +    }
+      154 +
+      155 +    @Test
+      156 +    fun autoScanThatMovesTheLensFailsNormally() {
+      157 +        tapAndStart()
+      158 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCA
+          +N, 0.33f)
+      159 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_ACTIVE_SCA
+          +N, 2.5f)
+      160 +        tf.onAfState(CaptureResult.CONTROL_AF_STATE_NOT_FOCUSE
+          +D_LOCKED, 0.4f)
+      161 +        assertEquals("FOCUS NOT LOCKED", host.states.last())
+      162 +        assertFalse(host.autoScanDead)
+      163 +    }
+     … 57 more lines (ctrl+o to expand)
+  ⎿  (timeout 10m)
+
+⏺ I've made a second fix, and it replaces the first one. The first theory was
+  wrong, so I removed that change. Unit tests pass, but this still needs the
+  phone to confirm.
+
+  What the new log showed
+
+  My first build added the lens position (fd=) to the tap-to-focus log lines,
+  and that exposed the real problem:
+
+  - Tap to focus: the camera reports it is scanning (ACTIVE_SCAN) for about 2
+    seconds, but the lens never moves (fd=0.33D the whole time), then it gives
+    up. On this phone that tap scan mode seems broken.
+  - Continuous AF works fine. It only starts after the app sends a reset
+    (CANCEL), and a failed tap's cleanup is what happened to send one. That's
+    why you had to make one tap fail first. Right after the failed tap it
+    focused from 0.33 to 6.89 D in under a second.
+  - So the camera does have the data it needs to focus. My earlier idea of
+    rebuilding the session with a hidden preview stream would only have
+    restarted a session that wasn't the problem. It never kicked in anyway,
+    because this log only had one failed tap.
+
+  The fix
+
+  1. Autofocus works from the start. About 0.5 s after each camera session
+     opens, the app sends one reset (CANCEL) to wake continuous AF. On phones
+     where continuous AF already runs, this just restarts it.
+  2. Tap to focus uses continuous AF with the tapped spot. If a tap scan ends
+     with the lens never having moved, the app:
+     - retries the same tap straight away using continuous AF on the tapped
+       spot, without showing "focus failed";
+     - saves that choice for this camera on this device (not included in
+       settings backup), so later taps go straight to the working method.
+
+     With this method, a tap counts as focused once the camera reports it's in
+     focus. A tap-and-hold also locks focus so it doesn't drift.
+  3. Other phones are unaffected: a scan where the lens moves, or where the
+     camera doesn't report lens position, is handled exactly as before.
+
+  The changes are in TouchFocus.kt, AutoFocusPolicy.kt and
+  RawCameraController.kt. In RawCameraController.kt I only removed my own
+  earlier code by hand, so your uncommitted device-fault edits there are
+  untouched. I added tests for the new paths, and both suites pass
+  (TouchFocusTest 20 tests, AutoFocusPolicyTest 18). Nothing is committed.
+
+  One thing I'm not sure of: whether the reset alone wakes continuous AF at
+  session start. Each time it started working in the logs, the camera had also
+  just come out of tap-scan mode. If the next log shows Idle AF kick (CANCEL) at
+  session start but continuous AF still doesn't scan, the kick needs to copy
+  that sequence exactly.
+
+  What to look for in the next log:
+  - At startup: Idle AF kick, followed by Idle AF PASSIVE_SCAN.
+  - On the first tap: AUTO scan left the lens at …D; retrying tap with
+    continuous AF, then Touch focus locked (continuous).
+  - On later taps: AF continuous restart sent instead of AF START sent.
+
+✻ Cooked for 4m 53s · done 5:42 PM
+
+❯ why not now "the kick needs to copy that sequence exactly." ?
+
+⏺ Fair point. The logs already show which sequence works, so there's no reason
+  to wait for another round. I'll copy it now. Checking exactly what the release
+  sends:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ I'll have the kick follow the working release sequence: issue the CANCEL while
+  the repeating request is still in AUTO mode, then switch it back to
+  CONT_PICTURE afterward, with no region, matching how the release after the
+  dropped region worked.
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/main/java/com/matthew/rawlens/TouchFocus.kt'…)
+  ⎿  181:        removeSessionKick()
+     502:        removeSessionKick()
+     516:        removeSessionKick()
+     739:    private fun removeSessionKick() {
+  ⎿  Updated app/src/main/java/com/matthew/rawlens/TouchFocus.kt (+44 -10)
+      86      var continuousTap = false
+      87          private set
+      88
+      89 -    /** Repeating request wants AF_MODE_AUTO: an AUTO tap cycle
+         - is in flight. */
+      90 -    val autoMode: Boolean get() = active && !continuousTap
+      89 +    /** The session-start kick holds AF_MODE_AUTO for one settl
+         +e (see [kickContinuousAtSessionStart]). */
+      90 +    private var kicking = false
+      91 +
+      92 +    /** Repeating request wants AF_MODE_AUTO: an AUTO tap cycle
+         + or the session kick is in flight. */
+      93 +    val autoMode: Boolean get() = (active && !continuousTap) ||
+         + kicking
+      94
+      95      private var timeout: Runnable? = null
+      96      private var continuousReset: Runnable? = null
+     ...
+      177
+      178          val wasTouchActive = active
+      179          dropAfRegionOnRelease = false
+      180 +        // The tap's own repeating rebuild below replaces a ki
+          +ck caught in AUTO.
+      181 +        removeSessionKick()
+      182          removeContinuousReset()
+      183          removeTimeout()
+      184          removePendingStart()
+     ...
+      503      }
+      504
+      505      /**
+      501 -     * One AF CANCEL shortly after a session starts on a conti
+          -nuous-capable
+      502 -     * lens ([AutoFocusPolicy.needsSessionKick]): some HALs le
+          -ave a fresh
+      503 -     * session's continuous AF parked until a trigger arrives.
+          - Skipped when
+      504 -     * a tap, manual focus, or capture got there first.
+      506 +     * Session-start continuous-AF kick on a continuous-capabl
+          +e lens
+      507 +     * ([AutoFocusPolicy.needsSessionKick]): some HALs leave a
+          + fresh
+      508 +     * session's continuous AF parked until it is released fro
+          +m AUTO.
+      509 +     * Replays the touch release that woke it in the Xiaomi 14
+          +T Pro field
+      510 +     * logs, step for step: repeating AUTO (no region), a CANC
+          +EL built in
+      511 +     * AUTO, then repeating continuous again. Skipped or aband
+          +oned when a
+      512 +     * tap, manual focus, or capture gets there first.
+      513       */
+      514      fun kickContinuousAtSessionStart() {
+      515          if (!AutoFocusPolicy.needsSessionKick(host.afAvailable
+           Modes())) return
+      516          removeSessionKick()
+      517          pendingSessionKick = Runnable {
+     … 54 more lines (ctrl+o to expand)
+
+⏺ Updating the kick tests for the three-step sequence:
+
+⏺ Bash(cd /Users/monikamalinowska/AndroidStudioProjects/RawLens; python3 -
+      <<'EOF'
+      p='app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt'…)
+  ⎿  <testsuite name="com.matthew.rawlens.TouchFocusTest" tests="23" skippe
+     d="0" failures="0" errors="0" timestamp="2026-10-29T15:52:47
+     <testsuite name="com.matthew.rawlens.AutoFocusPolicyTest" tests="18" s
+     kipped="0" failures="0" errors="0" timestamp="2026-10-29T15:
+  ⎿  Updated app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt (+36
+     -2)
+      197      }
+      198
+      199      @Test
+      200 -    fun sessionStartKicksContinuousOnce() {
+      200 +    fun sessionStartKickReplaysTouchRelease() {
+      201          tf.kickContinuousAtSessionStart()
+      202          host.fire(500L)
+      203 +        assertTrue("repeating switched to AUTO", tf.autoMode)
+      204 +        assertEquals(1, host.repeating)
+      205 +        assertTrue(host.triggers.isEmpty())
+      206 +
+      207 +        host.fire(60L)
+      208          assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_
+           CANCEL to true), host.triggers)
+      209 +        assertFalse("back to continuous", tf.autoMode)
+      210 +        assertEquals(2, host.repeating)
+      211 +        assertTrue(host.delayed.isEmpty())
+      212 +    }
+      213
+      214 +    @Test
+      215 +    fun sessionKickOnlyOnContinuousLenses() {
+      216          host.modes = intArrayOf(CameraMetadata.CONTROL_AF_MODE
+           _AUTO)
+      217          tf.kickContinuousAtSessionStart()
+      218          assertFalse(host.hasPending(500L))
+      219      }
+      220
+      221      @Test
+      211 -    fun sessionKickSkippedWhenTapGotThereFirst() {
+      222 +    fun tapCancelsPendingSessionKick() {
+      223          tf.kickContinuousAtSessionStart()
+      224          tapAndStart()
+      225 +        assertFalse(host.hasPending(500L))
+      226 +        assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_
+          +START to true), host.triggers)
+      227 +    }
+      228 +
+      229 +    @Test
+      230 +    fun tapMidKickTakesOverFromAuto() {
+      231 +        tf.kickContinuousAtSessionStart()
+      232          host.fire(500L)
+      233 +        tf.start(100f, 100f, indefinite = false)
+      234 +        assertFalse("kick's CANCEL step dropped", host.delayed
+          +.any { it.delayMs == 60L && host.triggers.isNotEmpty() })
+     … 18 more lines (ctrl+o to expand)
+  ⎿  (timeout 10m)
+
+⏺ One assertion in tapMidKickTakesOverFromAuto always passes no matter what, so
+  I'm removing it. The assertions after it already cover that case.
+
+⏺ Update(app/src/test/java/com/matthew/rawlens/TouchFocusTest.kt)
+  ⎿  Added 1 line, removed 1 line
+      231          tf.kickContinuousAtSessionStart()
+      232          host.fire(500L)
+      233          tf.start(100f, 100f, indefinite = false)
+      234 -        assertFalse("kick's CANCEL step dropped", host.delayed
+          -.any { it.delayMs == 60L && host.triggers.isNotEmpty() })
+      234 +        assertEquals("kick's CANCEL step dropped; only the tap
+          +'s settle remains", 1, host.delayed.count { it.delayMs == 60L
+          +})
+      235          host.fire(60L) // the tap's START settle
+      236          assertEquals(listOf(CameraMetadata.CONTROL_AF_TRIGGER_
+           START to true), host.triggers)
+      237          assertTrue(tf.autoMode)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+⏺ No good reason. The logs already showed which sequence works, so I've changed
+  the startup kick to copy it exactly.
+
+  What the working sequence actually is: looking at the code, the cleanup after
+  a failed tap does more than send a reset (CANCEL):
+  1. The camera is held in tap-scan mode (AUTO) for a moment, with no focus
+     point.
+  2. The CANCEL goes out while still in AUTO, because the app hasn't switched
+     modes yet when it builds that request.
+  3. Only then does it switch back to continuous AF.
+
+  My previous kick sent only the CANCEL, with continuous AF already running.
+  That's a different sequence from the one that worked in the logs.
+
+  What the startup kick does now (TouchFocus.kickContinuousAtSessionStart), 0.5
+  s after each session opens on a lens with continuous AF:
+  1. Switch the camera to AUTO with no focus point.
+  2. Wait 60 ms (the same wait a tap uses), then send the CANCEL while still in
+     AUTO.
+  3. Switch back to continuous AF.
+
+  It steps aside if something else gets there first. A tap during the kick takes
+  over directly from AUTO. Manual focus or a photo being taken skips the
+  CANCEL, but the camera still goes back to its normal mode. The brief AUTO
+  moment is about 60 ms, and the photo buffer is kept.
+
+  I added tests for the new sequence and for each of those interruptions. Both
+  test suites pass (TouchFocusTest 23 tests, AutoFocusPolicyTest 18). It still
+  needs a check on the 14T Pro. At startup, look for Idle AF kick (AUTO ->
+  CANCEL -> continuous) at session start followed by Idle AF PASSIVE_SCAN,
+  without tapping anything.
+
+✻ Brewed for 1m 21s · done 5:53 PM
+
+❯ so it is fast so 14t pro will have fast AF working fully ?
+
+⏺ Not yet. Here's what the logs support and what's still unknown.
+
+  Speed I'd expect, based on the logs:
+  - Continuous AF: once it was awake in the second log, it focused from 0.33 to
+    6.89 D in about 1 second. That's the HAL's own speed, and the fix doesn't
+    change it.
+  - Startup: the kick fires 0.5 s after the camera opens, so first focus should
+    come at roughly 1.5 s, assuming the kick works.
+  - Tap to focus, normal case: about 60 ms of setup plus the same ~1 s scan.
+  - Tap to focus, the very first time on each camera: about 3 s. The broken scan
+    wastes ~2.2 s before the app detects it and retries. After that, the choice
+    is saved on the phone, so later taps skip the broken scan.
+
+  What isn't proven yet:
+  1. Whether the startup kick works. It copies the exact sequence that woke
+     continuous AF in the logs. But that sequence came straight after a real tap
+     scan, and I can't rule out that the phone needs something from that scan.
+  2. Whether continuous AF keeps tracking. In the second log it focused once
+     after waking up. Neither log shows what happens afterwards when you move
+     something close, so I don't know if it refocuses or gets stuck again later.
+  3. Speed compared with the stock camera. Xiaomi's camera probably uses its own
+     focusing path that third-party apps don't get. RawLens only gets the
+     standard Android camera interface, running RAW-only. About 1 s is decent,
+     but I wouldn't promise stock-level speed.
+  4. The other lenses. Only the main camera (0) is covered by these logs. The
+     lens it opened first (camera 3) has no autofocus at all, and the others
+     haven't been tested.
+
+  To check, send me one log of this sequence:
+  1. Open the app and don't touch the screen for about 3 s.
+  2. Move something close to the lens, then far away.
+  3. Tap twice in different places.
+
+  That shows the kick, the tracking and the tap path in one go, with the lens
+  position recorded at each step.
+
+✻ Brewed for 14s · done 5:55 PM
