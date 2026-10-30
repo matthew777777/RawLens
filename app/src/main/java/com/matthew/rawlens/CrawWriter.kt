@@ -96,20 +96,30 @@ internal object CrawWriter {
         if (written < 0) throw IllegalStateException("writeFrame failed: code=$written")
     }
 
-    /** CRAW-Fast: smallest files (bursts, archives). */
+    /** CRAW Balanced (legacy CRAW-Fast): size/CPU tradeoff; numeric ID stays 1. */
     const val CODEC_FAST = 1
-    /** CRAW-Live: cheaper prediction/packing; file size depends on the scene. */
+    /** CRAW Live (legacy Live v2): current recording mode, numeric ID 3. */
     const val CODEC_LIVE = 3
-    /** CRAW-Live v1 (codec 2): left-neighbour prediction; slightly cheaper, larger. */
+    /** CRAW Live v1 — Legacy: compatibility mode, numeric ID 2. */
     const val CODEC_LIVE_V1 = 2
 
     fun normalizeCodec(stored: Int): Int =
         if (stored == CODEC_FAST || stored == CODEC_LIVE_V1 || stored == CODEC_LIVE) stored else CODEC_LIVE
 
+    /** Legacy serialization names, retained for recorded frame metadata. */
     fun codecName(codec: Int): String = when (codec) {
         CODEC_FAST -> "CRAW-Fast"
         CODEC_LIVE_V1 -> "CRAW-Live v1"
         else -> "CRAW-Live v2"
+    }
+
+    /** User-facing labels only; do not serialize these in place of [codecName]. */
+    fun codecDisplayName(codec: Int): String = when (codec) {
+        CODEC_FAST -> "CRAW Balanced"
+        CODEC_LIVE_V1 -> "CRAW Live v1 — Legacy"
+        CODEC_LIVE -> "CRAW Live"
+        4 -> "CRAW Compact — Offline"
+        else -> "Unknown CRAW codec ($codec)"
     }
 
     /** Bits needed for samples up to [whiteLevel] (Camera2 SENSOR_INFO_WHITE_LEVEL). */

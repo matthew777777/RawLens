@@ -217,13 +217,13 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         content.addView(Button(this).apply {
             isEnabled = !videoRecording
             fun refresh() {
-                text = "Compression: " + CrawWriter.codecName(
+                text = "Compression: " + CrawWriter.codecDisplayName(
                     CrawWriter.normalizeCodec(lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE)))
             }
             refresh()
             setOnClickListener {
                 val current = CrawWriter.normalizeCodec(lensPreferences().getInt(MainActivity.KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
-                // Live v2 (default) -> Live v1 -> Fast -> Live v2
+                // Live (default) -> Live v1 — Legacy -> Balanced -> Live
                 val next = when (current) {
                     CrawWriter.CODEC_LIVE -> CrawWriter.CODEC_LIVE_V1
                     CrawWriter.CODEC_LIVE_V1 -> CrawWriter.CODEC_FAST
@@ -233,7 +233,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 refresh()
             }
         })
-        content.addView(sectionDesc("All modes preserve every RAW sample. Live v2 (default) balances speed and size; Live v1 is cheapest; Fast makes the smallest files but needs the most CPU. Applies to the next take."))
+        content.addView(sectionDesc("All modes preserve every RAW sample. CRAW Live is the default recording mode. CRAW Balanced trades more CPU for potentially smaller files. CRAW Live v1 — Legacy is retained for compatibility. Speed and size depend on the scene and device. Applies to the next take."))
         content.addView(Button(this).apply {
             fun refresh() {
                 text = if (directLogEnabled) "LOG crop: ${directLogCrop().label}" else "CRAW crop: ${videoCropShort()}"
