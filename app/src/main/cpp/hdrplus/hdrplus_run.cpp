@@ -10,8 +10,8 @@
 // placement and semantics, pass order, the align-slot copy, and the
 // total-mismatch clear. Host-only differences (no effect on output bits):
 // run-scoped allocation instead of the upstream aliasing arena, one descriptor
-// set per dispatch from a run pool, a single command buffer/submission
-// instead of the upstream interleaved chunks, and one whole-run GPU timestamp
+// set per dispatch from a run pool, sequential uploads through one staging
+// frame followed by one compute submission, and one whole-run GPU timestamp
 // pair instead of per-chunk queries.
 //
 // Intentional deviations from upstream toward Burst Photo (hdr-plus-swift
@@ -42,6 +42,76 @@ namespace hdrplus {
 namespace {
 
 constexpr std::uint32_t divUp(std::uint32_t x, std::uint32_t y) { return (x + y - 1u) / y; }
+
+// The fence must complete before the CPU overwrites staging or any resource
+// is freed. The final transfer barrier also makes uploads visible to compute
+// in the later submission on this same queue.
+bool upload_frames(HdrPlusContext* ctx, RunArena& inputsArena,
+                   const std::vector<GpuImage*>& inputs, const uint16_t* const* frames,
+                   VkDeviceSize frameBytes, std::string& err) {
+    RunArena stagingArena(ctx->device, ctx->physical);
+    GpuBuffer* stage = stagingArena.staging(frameBytes, err);
+    if (stage == nullptr) return false;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = ctx->pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkResult result = vkAllocateCommandBuffers(ctx->device, &ai, &cmd);
+    if (result != VK_SUCCESS) {
+        err = "hdrplus: upload command buffer allocation failed";
+        return false;
+    }
+    VkFence fence = VK_NULL_HANDLE;
+    VkFenceCreateInfo fi{};
+    fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    result = vkCreateFence(ctx->device, &fi, nullptr, &fence);
+    for (size_t i = 0; result == VK_SUCCESS && i < inputs.size(); ++i) {
+        std::memcpy(stage->mapped, frames[i], static_cast<size_t>(frameBytes));
+        result = vkResetCommandBuffer(cmd, 0);
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (result == VK_SUCCESS) result = vkBeginCommandBuffer(cmd, &bi);
+        if (result != VK_SUCCESS) break;
+        if (i == 0) inputsArena.transition_all_to_general(cmd);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {inputs[i]->width, inputs[i]->height, 1};
+        vkCmdCopyBufferToImage(cmd, stage->buffer, inputs[i]->image,
+                               VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        VkMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &barrier, 0, nullptr, 0, nullptr);
+        result = vkEndCommandBuffer(cmd);
+        if (result == VK_SUCCESS) result = vkResetFences(ctx->device, 1, &fence);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        if (result == VK_SUCCESS) result = vkQueueSubmit(ctx->queue, 1, &si, fence);
+        if (result == VK_SUCCESS) {
+            result = vkWaitForFences(ctx->device, 1, &fence, VK_TRUE, 60'000'000'000ull);
+            // A timeout does not cancel submitted work. Drain before freeing
+            // the upload resources (device loss also permits cleanup).
+            if (result != VK_SUCCESS) vkDeviceWaitIdle(ctx->device);
+        }
+    }
+    if (fence) vkDestroyFence(ctx->device, fence, nullptr);
+    vkFreeCommandBuffers(ctx->device, ctx->pool, 1, &cmd);
+    if (result != VK_SUCCESS) {
+        err = "hdrplus: frame upload failed (VkResult " + std::to_string(result) + ")";
+        return false;
+    }
+    HP_LOGI("hdrplus upload: %zu frames, staging=%llu bytes (released before merge scratch)",
+            inputs.size(), static_cast<unsigned long long>(frameBytes));
+    return true;
+}
 
 // Push-constant structs mirror the GLSL blocks (copied from the upstream
 // HdrPlusRecorder.cpp anonymous namespace; ivec2 members are 8-byte aligned),
@@ -193,8 +263,8 @@ class Scratch {
     bool hasImage(const std::string& name) const { return images_.count(name) != 0u; }
     bool hasBuffer(const std::string& name) const { return buffers_.count(name) != 0u; }
 
-    // Same resource lists as the upstream makeHdrPlusScratchLayout (lifetimes only
-    // drive the upstream aliasing, which this host skips: one allocation each).
+    // Upstream makeHdrPlusScratchLayout, omitting the unused RGBA output.
+    // Lifetimes drive upstream aliasing; this host uses one allocation each.
     bool buildSpatial(const hp::Geometry& g) {
         const std::uint32_t cellsX = g.width / 2u, cellsY = g.height / 2u;
         if (!addImage("hdrp_ref_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
@@ -205,7 +275,6 @@ class Scratch {
             !addImage("hdrp_diff", VK_FORMAT_R32_SFLOAT, cellsX, cellsY) ||
             !addImage("hdrp_weight", VK_FORMAT_R32_SFLOAT, cellsX, cellsY) ||
             !addImage("hdrp_accum", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
-            !addImage("hdrp_output", VK_FORMAT_R16G16B16A16_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_cfa", VK_FORMAT_R32_SFLOAT, g.width, g.height) ||
             !addImage("hdrp_pyr_tmp_b", VK_FORMAT_R32_SFLOAT, g.levels.front().width,
                       g.levels.front().height))
@@ -226,8 +295,9 @@ class Scratch {
                addBuffer("hdrp_columns", std::uint64_t(cellsX) * 8u) && addBuffer("hdrp_noise", 16u);
     }
 
-    // Same resource lists as the upstream makeHdrPlusFrequencyScratchLayout.
-    bool buildFrequency(const hp::FrequencyGeometry& f, std::uint32_t width, std::uint32_t height) {
+    // Upstream makeHdrPlusFrequencyScratchLayout without the unused RGBA output.
+    bool buildFrequency(const hp::FrequencyGeometry& f, std::uint32_t width, std::uint32_t height,
+                        std::uint32_t frameCount) {
         const auto& g = f.align;
         if (!addImage("hdrp_ref_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
             !addImage("hdrp_comp_padded", VK_FORMAT_R32_SFLOAT, g.paddedWidth, g.paddedHeight) ||
@@ -255,7 +325,6 @@ class Scratch {
             !addImage("hdrq_mismatch", VK_FORMAT_R32_SFLOAT, f.tilesX, f.tilesY) ||
             !addImage("hdrq_total_mismatch", VK_FORMAT_R32_SFLOAT, f.tilesX, f.tilesY) ||
             !addImage("hdrp_accum", VK_FORMAT_R32_SFLOAT, width, height) ||
-            !addImage("hdrp_output", VK_FORMAT_R16G16B16A16_SFLOAT, width, height) ||
             !addImage("hdrp_cfa", VK_FORMAT_R32_SFLOAT, width, height))
             return false;
         const auto& level0 = g.levels.front();
@@ -263,7 +332,9 @@ class Scratch {
                addBuffer("hdrp_align_c", maxTiles * 8u) &&
                addBuffer("hdrp_tile_cost", maxTiles * 25u * 4u) && addBuffer("hdrq_mean", 16u) &&
                addBuffer("hdrq_shift_table", 49u * 64u * 8u) &&
-               addBuffer("hdrq_align_store", hp::kMaxFrequencyFrames *
+               // Slots are indexed by original frame index, including the
+               // reference slot. Retain stride/alignment, allocate N slots.
+               addBuffer("hdrq_align_store", frameCount *
                                                  alignUp256(std::uint64_t(level0.tilesX) *
                                                             level0.tilesY * 8u));
     }
@@ -847,8 +918,7 @@ bool Recorder::recordFinalize() {
     fp.width = std::int32_t(geometry_.width);
     fp.height = std::int32_t(geometry_.height);
     if (!run(Shader::HdrpFinalize,
-             {ib(0, scratch_.image("hdrp_accum")), ib(1, scratch_.image("hdrp_output")),
-              ib(2, scratch_.image("hdrp_cfa"))},
+             {ib(0, scratch_.image("hdrp_accum")), ib(2, scratch_.image("hdrp_cfa"))},
              {}, &fp, sizeof(fp), divUp(geometry_.width, 16), divUp(geometry_.height, 16)))
         return false;
     compute_write_barrier(cmd_);
@@ -1011,30 +1081,30 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
         return fail(std::string("hdrplus geometry: ") + e.what());
     }
 
+    // Upload before allocating merge scratch. One reusable host-visible frame
+    // replaces the N-frame staging copy; input pixels and compute order are
+    // unchanged. Keep inputs in their own arena so the merge's UNDEFINED ->
+    // GENERAL transitions cannot discard the completed uploads.
+    RunArena inputArena(ctx->device, ctx->physical);
+    const VkDeviceSize frameBytes = VkDeviceSize(W) * H * 2u;
+    std::vector<GpuImage*> inputs;
+    for (std::uint32_t i = 0; i < N; ++i) {
+        GpuImage* img = inputArena.image(VK_FORMAT_R16_UINT, W, H, err);
+        if (img == nullptr) return fail(err);
+        inputs.push_back(img);
+    }
+    if (!upload_frames(ctx, inputArena, inputs, frames, frameBytes, err)) return fail(err);
+
     RunArena arena(ctx->device, ctx->physical);
     RunDescriptors desc(ctx->device);
     if (!desc.init(err)) return fail(err);
     Scratch scratch(arena, err);
     if (frequency) {
-        if (!scratch.buildFrequency(freq, W, H)) return fail(err);
+        if (!scratch.buildFrequency(freq, W, H, N)) return fail(err);
     } else {
         if (!scratch.buildSpatial(spatial)) return fail(err);
     }
 
-    // Input frames as R16UI images (same contract as the upstream ring views).
-    const VkDeviceSize frameBytes = VkDeviceSize(W) * H * 2u;
-    std::vector<GpuImage*> inputs;
-    for (std::uint32_t i = 0; i < N; ++i) {
-        GpuImage* img = arena.image(VK_FORMAT_R16_UINT, W, H, err);
-        if (img == nullptr) return fail(err);
-        inputs.push_back(img);
-    }
-    GpuBuffer* upload = arena.staging(frameBytes * N, err);
-    if (upload == nullptr) return fail(err);
-    for (std::uint32_t i = 0; i < N; ++i) {
-        std::memcpy(static_cast<char*>(upload->mapped) + i * frameBytes, frames[i],
-                    static_cast<size_t>(frameBytes));
-    }
     // Hot pixels: flat ivec2 list in a device-local buffer (upstream caps at 2^20 pairs).
     GpuBuffer* hotBuf = nullptr;
     GpuBuffer* hotStage = nullptr;
@@ -1151,15 +1221,6 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
     if (vkBeginCommandBuffer(cmd, &bi) == VK_SUCCESS) {
         vkCmdResetQueryPool(cmd, queryPool, 0, 2);
         arena.transition_all_to_general(cmd);
-        // Uploads.
-        for (std::uint32_t i = 0; i < N; ++i) {
-            VkBufferImageCopy region{};
-            region.bufferOffset = VkDeviceSize(i) * frameBytes;
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.imageExtent = {W, H, 1};
-            vkCmdCopyBufferToImage(cmd, upload->buffer, inputs[i]->image, VK_IMAGE_LAYOUT_GENERAL, 1,
-                                   &region);
-        }
         if (hotBuf != nullptr && hotStage != nullptr) {
             VkBufferCopy hotCopy{0, 0, VkDeviceSize(hotPairs) * 2u * sizeof(std::int32_t)};
             vkCmdCopyBuffer(cmd, hotStage->buffer, hotBuf->buffer, 1, &hotCopy);
@@ -1296,7 +1357,12 @@ int hdrplus_merge(HdrPlusContext* ctx, const uint16_t* const* frames, const floa
     }
     if (ok) {
         ok = vkWaitForFences(ctx->device, 1, &fence, VK_TRUE, 60'000'000'000ull) == VK_SUCCESS;
-        if (!ok) err = "hdrplus: GPU wait timed out";
+        if (!ok) {
+            err = "hdrplus: GPU wait failed";
+            // Timeout leaves work pending; do not free its descriptors,
+            // command buffer, or arena while the GPU can still use them.
+            vkDeviceWaitIdle(ctx->device);
+        }
     }
     if (ok) {
         std::uint64_t stamps[2] = {0, 0};

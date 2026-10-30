@@ -1,0 +1,12 @@
+{
+  "suite": {
+    "bytes": 3604480,
+    "sha256": "99d620ddeb7474c099b0c2a621faab43102c505881acf5f34654a5860e433617",
+    "HEAD_match": true
+  },
+  "sensor": {
+    "bytes": 105031680,
+    "sha256": "91a5a51c5b14fddecc27c6034055790e92790259d4dc3660acb19d4ca7934ebc",
+    "HEAD_match": true
+  }
+}
