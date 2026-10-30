@@ -1,5 +1,24 @@
 # CRAW recording work — 2026-10-27
 
+## Evidence update — 2026-10-30
+
+The synthetic host table below used **Live v1 (codec 2)** and Fast (codec 1).
+Current `CrawWriter.CODEC_LIVE` selects **Live v2 (codec 3)**. Those are distinct
+comparisons; do not use the old Live/Fast result to rank Live v2.
+IDs 1/2/3/4 mean Fast/Live v1/Live v2/Compact; no future rANS ID is allocated.
+“Fast” is a historical name, not a fastest-mode promise.
+
+See the [shared CRAW/JPEG XL benchmark guide](https://github.com/matthew777777/CinematicRAWStudio-Spec/blob/main/BENCHMARKS.md)
+and [2026-10-30 results](https://github.com/matthew777777/CinematicRAWStudio-Spec/tree/main/results/comparison-20261030).
+The new harness uses identical extracted RAW frames, checks exact samples,
+records source hashes, measures image payload size and separate encode/decode
+wall/CPU time and process peak RSS. Sustained phone codec loops are separate
+from the full recorder acceptance below. Existing short Camera2 recording
+tests in `video-study.md` do not constitute a long thermal soak.
+
+The status paragraph that follows describes the original 2026-10-27 session,
+including that session's socket restriction; it is not a current ADB diagnosis.
+
 Status: codec changes validated on host and cross-compiled for Android arm64;
 **sustained phone 30 fps and Resolve import remain unverified**. The current
 session denies local sockets: ADB cannot bind its server and Gradle cannot
