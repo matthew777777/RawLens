@@ -181,7 +181,6 @@ class MainActivity : Activity() {
     private var modeBeforeHdrPlus: CaptureExposureMode? = null
     internal var videoRecorder: RawVideoRecorder? = null
     internal var videoRecording = false
-    private var videoOutputFile: File? = null
     /** Direct-Log take state. Only one of [videoRecorder]/[logRecorder] is ever active. */
     internal var logRecorder: DirectLogRecorder? = null
     /**
@@ -193,7 +192,9 @@ class MainActivity : Activity() {
         private set
     internal var directLogEnabled = false
     /** True when the shared folder picker was opened to rescue staged video. */
+    private var recordingDestination: DirectRecordingOutput? = null
     private var folderPickerForVideo = false
+    internal var recordingFolderSettingsStatus: TextView? = null
     /** Settings JSON awaiting the export picker result; cleared once written or cancelled. */
     internal val settingsTransfer =
         SettingsTransfer(this, SETTINGS_EXPORT_REQUEST, SETTINGS_IMPORT_REQUEST) { setStatus(it) }
@@ -211,7 +212,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         restoreLaunchState()
-        
+
         // Full-screen immersive mode (re-applied on resume/focus: permission
         // dialogs and pickers clear it, which used to leave the status bar
         // over the camera until the app was restarted).
@@ -466,7 +467,7 @@ class MainActivity : Activity() {
 
     /** onCreate stage: The camera controller and its UI callbacks (status, scopes, focus, route). */
     private fun createController(dngInfo: TextView, sensorInfo: TextView, viewfinder: AutoFitTextureView, shutter: View) {
-        controller = RawCameraController(this, viewfinder, 
+        controller = RawCameraController(this, viewfinder,
             { message -> runOnUiThread { setStatus(message) } },
             { iso, shutterSpeed, wb ->
                 runOnUiThread {
@@ -2121,8 +2122,7 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Staged takes live here until export publishes (then deletes) them.
-     * Keep takes out of cache: a failed export must not be evicted.
+     * Legacy recording rescue only. New recordings never use this directory.
      */
     private fun videoStageDir(): File =
         getExternalFilesDir("raw-video") ?: File(filesDir, "raw-video")
@@ -2152,23 +2152,20 @@ class MainActivity : Activity() {
         val recordLocks = videoRecordLocks()
         hideManualControl()
         controller.stop()
-        // Stage in android/data (external files dir): visible under
-        // Android/data/<pkg>/files/raw-video, no MediaStore churn during
-        // capture. Keep takes out of cache: a failed export must not be evicted.
-        // RawVideoSaver copies to DCIM/RawLens and deletes the stage on success.
-        // CRAW hook: RAW video records once the CRAW writer backend lands.
         if (!CrawWriter.available) {
             setStatus("RAW VIDEO: CRAW NOT AVAILABLE")
             controller.start()
             return
         }
-        val dir = videoStageDir()
-        if (!dir.exists() && !dir.mkdirs()) {
-            setStatus("VIDEO DIR FAILED")
+        val file = try {
+            DirectRecordingOutput.create(this,
+                "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw", "application/octet-stream")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Recording destination unavailable", e)
+            setStatus("CANNOT RECORD HERE • ${e.message}")
             controller.start()
             return
         }
-        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}_VID.craw")
         val recorder = RawVideoRecorder(manager, cameraId, size, this).apply {
             crop = videoCrop
             compressionCodec = CrawWriter.normalizeCodec(lensPreferences().getInt(KEY_VIDEO_CODEC, CrawWriter.CODEC_LIVE))
@@ -2199,22 +2196,29 @@ class MainActivity : Activity() {
                 }
             }
         }
+        recorder.onRecordingError = { message -> runOnUiThread {
+            if (videoRecording && videoRecorder === recorder) {
+                stopVideoRecording()
+                setStatus("RECORDING STOPPED • $message")
+            }
+        } }
         try {
             recorder.start(file, videoContainerMeta(manager, cameraId, size))
         } catch (e: Exception) {
+            try { file.finish(false) } catch (_: Exception) {}
             Log.w(LOG_TAG, "video start failed: ${e.message}")
             setStatus(if (e is RawVideoRecorder.StorageFullException) "STORAGE FULL" else "REC FAILED")
             controller.start()
             return
         }
         videoRecorder = recorder
-        videoOutputFile = file
+        recordingDestination = file
         rawExposureOverlay.clear()
         videoRecording = true
         updateQuickControls()
         Log.i(
             LOG_TAG, "video start ${file.name} ${size.width}x${size.height} " +
-                "audio=$withAudio bin=${recorder.binActive}"
+                "audio=$withAudio bin=${recorder.binActive} destination=${file.uri}"
         )
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
         findViewById<View>(R.id.shutter).contentDescription = "Stop RAW video"
@@ -2241,9 +2245,8 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Direct-Log take: sensor RAW -> Vulkan superpixel + log grade ->
-     * HW HEVC Main10 -> MP4. Video-only (no mic prompt), staged like
-     * .craw takes and published to DCIM/RawLens on stop.
+     * Direct-Log take: sensor RAW -> Vulkan demosaic/grade -> HEVC MP4.
+     * Writes directly to the selected destination and finalizes it on stop.
      *
      * Live RAW VF during the take, like .craw: frames fan out to the
      * viewfinder while the camera thread records. Safe because the shared
@@ -2274,17 +2277,20 @@ class MainActivity : Activity() {
         } else null
         hideManualControl()
         controller.stop()
-        val dir = videoStageDir()
-        if (!dir.exists() && !dir.mkdirs()) {
-            setStatus("VIDEO DIR FAILED")
+        val suffix = if (bakedLut != null) "_LUT709" else profile.fileSuffix
+        val file = try {
+            DirectRecordingOutput.create(this,
+                "${CaptureFileNames.stem(System.currentTimeMillis())}$suffix.mp4", "video/mp4")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Recording destination unavailable", e)
+            setStatus("CANNOT RECORD HERE • ${e.message}")
             controller.start()
             return
         }
-        val suffix = if (bakedLut != null) "_LUT709" else profile.fileSuffix
-        val file = File(dir, "${CaptureFileNames.stem(System.currentTimeMillis())}$suffix.mp4")
         val recorder = DirectLogRecorder(manager, cameraId, applicationContext).apply {
             audioEnabled = withAudio
-            stabEnabled = stabOutputMode() != StabOutputMode.OG_ONLY
+            // Direct single-file recording never starts a second re-encode/sidecar.
+            stabEnabled = false
             exposureEv = directLogGainPref()
             fps = directLogFpsPref()
             val res = directLogResPref()
@@ -2305,7 +2311,13 @@ class MainActivity : Activity() {
             } }
             attachPreviewDisplay(findViewById(R.id.recordPreview))
         }
-        // Take monitor: overlay the staged encode pixels (aspect-fit)
+        recorder.onRecordingError = { message -> runOnUiThread {
+            if (videoRecording && logRecorder === recorder) {
+                stopVideoRecording()
+                setStatus("RECORDING STOPPED • $message")
+            }
+        } }
+        // Take monitor: overlay the encode pixels (aspect-fit)
         // instead of a separately-demosaiced viewfinder; the RAW VF idles
         // untouched underneath. Hidden in finishDirectLogStop / on failure.
         showRecordPreview()
@@ -2313,18 +2325,19 @@ class MainActivity : Activity() {
             recorder.start(file)
         } catch (e: Exception) {
             hideRecordPreview()
+            try { file.finish(false) } catch (_: Exception) {}
             Log.w(LOG_TAG, "direct-log start failed: ${e.message}")
             setStatus("LOG FAILED")
             controller.start()
             return
         }
         logRecorder = recorder
-        videoOutputFile = file
+        recordingDestination = file
         rawExposureOverlay.clear()
         videoRecording = true
         updateQuickControls()
         lastDirectLogStats = null
-        Log.i(LOG_TAG, "direct-log start ${file.name}")
+        Log.i(LOG_TAG, "direct-log start ${file.name} destination=${file.uri}")
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
         findViewById<View>(R.id.shutter).contentDescription = "Stop Direct Log video"
         refreshVideoButton()
@@ -2387,34 +2400,23 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Publishes one closed take: MediaStore first, granted-folder SAF
-     * fallback when MediaStore.Video rejects the custom MIME (some OEMs).
+     * Publishes a closed take to the selected recording folder first,
+     * falling back to Downloads if the folder is unavailable or fails.
      * Returns null when nothing could publish; the staged source is always
      * retained on failure. Never throws for copy failures.
      */
     private fun tryExportVideo(source: File): RawVideoSaver.Saved? {
-        try {
-            val saved = RawVideoSaver.save(applicationContext.contentResolver, source)
+        val tree = RecordingFolderAccess.writableTreeUri(applicationContext)
+        return try {
+            val saved = RecordingFolderAccess.export(
+                preferred = tree?.let { { RawVideoSaver.saveViaTree(applicationContext, it, source) } },
+                fallback = { RawVideoSaver.save(applicationContext.contentResolver, source) }
+            )
             Log.i(LOG_TAG, "video exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
-            return saved
-        } catch (mediaStoreFailure: Exception) {
-            Log.w(LOG_TAG, "video MediaStore export failed, trying granted folder", mediaStoreFailure)
-            // Reuse the burst sidecar tree grant (Settings → sidecars) when
-            // MediaStore.Video rejects the custom MIME on some OEMs.
-            val tree = SidecarTreeAccess.savedTreeUri(applicationContext)
-            if (tree != null && SidecarTreeAccess.hasWriteAccess(applicationContext, tree)) {
-                try {
-                    val saved = RawVideoSaver.saveViaTree(applicationContext, tree, source)
-                    Log.i(LOG_TAG, "video exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
-                    return saved
-                } catch (treeFailure: Exception) {
-                    mediaStoreFailure.addSuppressed(treeFailure)
-                    Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath}", mediaStoreFailure)
-                }
-            } else {
-                Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath} (grant photo folder under Settings for SAF fallback)", mediaStoreFailure)
-            }
-            return null
+            saved
+        } catch (failure: Exception) {
+            Log.e(LOG_TAG, "video export failed; original retained at ${source.absolutePath}", failure)
+            null
         }
     }
 
@@ -2424,7 +2426,7 @@ class MainActivity : Activity() {
             return
         }
         val recorder = videoRecorder ?: return
-        val source = videoOutputFile
+        val destination = recordingDestination
         if (!videoRecording) return
         rawExposureOverlay.clear()
         videoRecording = false
@@ -2447,156 +2449,58 @@ class MainActivity : Activity() {
                 Log.w(LOG_TAG, "video stop failed: ${e.message}")
                 null
             }
-            var export: RawVideoSaver.Saved? = null
-            val commited = stats?.containerFrames ?: 0L
-            if (stats != null && source != null && commited > 0 && source.isFile && source.length() > 0) {
-                runOnUiThread { setStatus("SAVING TO DCIM/RAWLENS…") }
-                export = tryExportVideo(source)
-            } else if (stats != null && source != null) {
-                Log.w(LOG_TAG, "video export skipped: committed=$commited file=${source.absolutePath} bytes=${runCatching { source.length() }.getOrDefault(-1L)}")
+            var saved: Uri? = null
+            try {
+                val valid = stats != null && stats.containerFrames > 0
+                if (destination?.finish(valid) == true) {
+                    saved = destination.uri
+                }
+            } catch (failure: Exception) {
+                Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", failure)
             }
-            val saved = export
             runOnUiThread { finishVideoStop(stats, saved, rollingVf, rearmPreview, afterStop) }
         }, "VideoStop").start()
     }
 
-    private fun tryExportDirectLog(source: File): DirectLogSaver.Saved? {
-        try {
-            val saved = DirectLogSaver.save(applicationContext.contentResolver, source)
-            Log.i(LOG_TAG, "direct-log exported uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
-            return saved
-        } catch (mediaStoreFailure: Exception) {
-            Log.w(LOG_TAG, "direct-log MediaStore export failed, trying granted folder", mediaStoreFailure)
-            val tree = SidecarTreeAccess.savedTreeUri(applicationContext)
-            if (tree != null && SidecarTreeAccess.hasWriteAccess(applicationContext, tree)) {
-                try {
-                    val saved = DirectLogSaver.saveViaTree(applicationContext, tree, source)
-                    Log.i(LOG_TAG, "direct-log exported via tree uri=${saved.uri} sourceRemoved=${saved.sourceRemoved}")
-                    return saved
-                } catch (treeFailure: Exception) {
-                    mediaStoreFailure.addSuppressed(treeFailure)
-                    Log.e(LOG_TAG, "direct-log export failed; original retained at ${source.absolutePath}", mediaStoreFailure)
-                }
-            } else {
-                Log.e(LOG_TAG, "direct-log export failed; original retained at ${source.absolutePath} (grant photo folder under Settings for SAF fallback)", mediaStoreFailure)
-            }
-            return null
-        }
-    }
-
     private fun stopDirectLogRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
         val recorder = logRecorder ?: return
-        val source = videoOutputFile
+        val destination = recordingDestination
         if (!videoRecording) return
         rawExposureOverlay.clear()
         videoRecording = false
         setFocusPeakingVisible(false)
         updateQuickControls()
-        Log.i(LOG_TAG, "direct-log stop requested rearm=$rearmPreview")
-        setStatus("STOPPING…")
+        setStatus("FINALIZING…")
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         videoDebugRunnable = null
         Thread({
-            val stats = try {
-                recorder.stop()
-            } catch (e: Exception) {
-                Log.w(LOG_TAG, "direct-log stop failed: ${e.message}")
+            val stats = try { recorder.stop() } catch (e: Exception) {
+                Log.w(LOG_TAG, "direct-log stop failed", e)
                 null
             }
-            var export: DirectLogSaver.Saved? = null
-            var stabExport: DirectLogSaver.Saved? = null
-            var stabNote: String? = null
-            val mode = stabOutputMode()
-            if (stats != null && source != null && stats.framesGraded > 0 &&
-                source.isFile && source.length() > 0
-            ) {
-                // Post-record warp pass (opt-in): OG + gyro sidecar ->
-                // stabilized MP4, still on the stop thread. Any failure
-                // falls through to the OG export below (fail-closed).
-                if (mode != StabOutputMode.OG_ONLY) {
-                    val sidecar = stabSidecarFor(source)
-                    if (stats.hasStabGyro && sidecar.isFile) {
-                        runOnUiThread { setStatus("STABILIZING…") }
-                        val stabFile = stabOutputFor(source)
-                        val report = DirectLogStabilizer(applicationContext).stabilize(
-                            source, sidecar, stabFile, DirectLogProfile.fromName(stats.profile)
-                        ) { done, total ->
-                            runOnUiThread { setStatus("STABILIZING $done/$total") }
-                        }
-                        try {
-                            sidecar.delete()
-                        } catch (_: Exception) {
-                        }
-                        if (report.ok && stabFile.isFile && stabFile.length() > 0) {
-                            runOnUiThread { setStatus("SAVING TO DCIM/RAWLENS…") }
-                            stabExport = tryExportDirectLog(stabFile)
-                            stabNote = "STAB ${report.framesWarped}F"
-                        } else {
-                            stabNote = "STAB FAILED • OG KEPT"
-                            try {
-                                stabFile.delete()
-                            } catch (_: Exception) {
-                            }
-                        }
-                    } else {
-                        stabNote = "NO GYRO • OG KEPT"
-                        try {
-                            sidecar.delete()
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-                // Stabilized-only success drops the staged OG; every other
-                // path exports it (including the stab-failure fallback).
-                if (mode == StabOutputMode.STABILIZED_ONLY && stabExport != null) {
-                    try {
-                        source.delete()
-                    } catch (_: Exception) {
-                        Log.w(LOG_TAG, "staged OG delete failed; local copy kept")
-                    }
-                } else {
-                    runOnUiThread { setStatus("SAVING TO DCIM/RAWLENS…") }
-                    export = tryExportDirectLog(source)
-                }
-            } else if (stats != null && source != null) {
-                Log.w(LOG_TAG, "direct-log export skipped: graded=${stats.framesGraded} file=${source.absolutePath} bytes=${runCatching { source.length() }.getOrDefault(-1L)}")
-                try {
-                    stabSidecarFor(source).delete()
-                } catch (_: Exception) {
-                }
+            var saved: Uri? = null
+            try {
+                val valid = stats != null && stats.framesGraded > 0 && stats.outputBuffers > 0
+                if (destination?.finish(valid) == true) saved = destination.uri
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", e)
             }
-            val saved = export
-            val savedStab = stabExport
-            val note = stabNote
-            runOnUiThread { finishDirectLogStop(stats, saved, savedStab, note, rearmPreview, afterStop) }
+            runOnUiThread { finishDirectLogStop(stats, saved, rearmPreview, afterStop) }
         }, "DirectLogStop").start()
     }
 
-    /** Warp sidecar next to a staged take (written by the recorder). */
-    private fun stabSidecarFor(source: File): File =
-        File(source.parent, source.nameWithoutExtension + StabSidecar.FILE_SUFFIX)
-
-    /** Stabilized re-encode next to a staged take (`<stem>_LOG709_STAB.mp4`). */
-    private fun stabOutputFor(source: File): File =
-        File(source.parent, "${source.nameWithoutExtension}_STAB.mp4")
-
     private fun finishDirectLogStop(
         stats: DirectLogRecorder.Stats?,
-        export: DirectLogSaver.Saved?,
-        stabExport: DirectLogSaver.Saved?,
-        stabNote: String?,
+        saved: Uri?,
         rearmPreview: Boolean,
         afterStop: (() -> Unit)?
     ) {
         logRecorder = null
         updateQuickControls()
-        videoOutputFile = null
+        recordingDestination = null
         lastDirectLogStats = stats
         hideRecordPreview()
         val mb = (stats?.fileBytes ?: 0L) / 1e6
-        // Stabilized-only success never exports the OG: either publish
-        // counts, and the stab note rides the status either way.
-        val primary = export ?: stabExport
         if (isVideoMode) {
             findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
             findViewById<View>(R.id.shutter).contentDescription = "Record Direct Log video"
@@ -2606,17 +2510,14 @@ class MainActivity : Activity() {
             rawBadge.text = logBadgeLabel()
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
-                if (stats == null) "REC FAILED • LOCAL FILE KEPT"
-                else if (primary == null) "EXPORT FAILED • LOCAL FILE KEPT"
-                else if (!primary.sourceRemoved) "SAVED TO DCIM • LOCAL COPY KEPT"
-                else "SAVED TO DCIM • ${stats.framesGraded}F • ${"%.0f".format(mb)}MB" +
+                if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
+                else if (saved == null) "FINALIZATION FAILED • CHECK RECORDING FOLDER"
+                else "SAVED • ${stats.framesGraded}F • ${"%.0f".format(mb)}MB" +
                     " • ${stats.profile}" +
                     (if (stats.hasAudio) "" else " • SILENT") +
                     (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "") +
-                    (if (stats.fallbackWaits > 0) " • FB${stats.fallbackWaits}" else "") +
-                    (if (stabNote != null) " • $stabNote" else "")
+                    (if (stats.fallbackWaits > 0) " • FB${stats.fallbackWaits}" else "")
             )
-            if (stats != null && primary == null) maybePromptVideoFolderGrant()
             Log.i(
                 LOG_TAG, "direct-log saved sensor=${stats?.sensorSize} " +
                     "graded=${stats?.framesGraded} dropped=${stats?.framesDropped} " +
@@ -2637,7 +2538,7 @@ class MainActivity : Activity() {
                     "fenceMax=${"%.1f".format(stats?.fenceWaitMsMax ?: 0f)}ms " +
                     "shaded=${stats?.shadedFrames} " +
                     "stabGyro=${stats?.stabGyroSamples ?: 0} " +
-                    "stab=${stabNote ?: "-"} " +
+                    "destination=$saved " +
                     "file=${"%.1f".format(mb)}MB"
             )
         }
@@ -2647,14 +2548,14 @@ class MainActivity : Activity() {
 
     private fun finishVideoStop(
         stats: RawVideoRecorder.Stats?,
-        export: RawVideoSaver.Saved?,
+        saved: Uri?,
         rollingVf: RawVfStats?,
         rearmPreview: Boolean,
         afterStop: (() -> Unit)?
     ) {
         videoRecorder = null
         updateQuickControls()
-        videoOutputFile = null
+        recordingDestination = null
         val mb = (stats?.fileBytes ?: 0L) / 1e6
         // Viewfinder proof: fps + GPU (Vulkan zero-copy) vs CPU path while rolling.
         val vf = rollingVf
@@ -2667,16 +2568,14 @@ class MainActivity : Activity() {
             rawBadge.text = "CRAW"
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
-                if (stats == null) "REC FAILED • LOCAL FILE KEPT"
-                else if (export == null) "EXPORT FAILED • LOCAL FILE KEPT"
-                else if (!export.sourceRemoved) "SAVED TO DCIM • LOCAL COPY KEPT"
-                else "SAVED TO DCIM • ${stats.containerFrames}F • ${"%.0f".format(mb)}MB" +
+                if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
+                else if (saved == null) "FINALIZATION FAILED • CHECK RECORDING FOLDER"
+                else "SAVED • ${stats.containerFrames}F • ${"%.0f".format(mb)}MB" +
                     (if (stats.hasAudio) "" else " • SILENT") +
                     (if (stats.framesDropped > 0) " • D${stats.framesDropped}" else "")
             )
-            if (stats != null && export == null) maybePromptVideoFolderGrant()
             Log.i(
-                LOG_TAG, "video saved frames=${stats?.framesEncoded} " +
+                LOG_TAG, "video finalized destination=$saved frames=${stats?.framesEncoded} " +
                     "dropped=${stats?.framesDropped} skipped=${stats?.commitSkipped} " +
                     "audio=${stats?.audioFrames}f " +
                     "gyro=${stats?.gyroSamples} accel=${stats?.accelSamples} " +
@@ -2693,29 +2592,12 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Opens the shared photo-folder picker when a take failed to export for
-     * lack of a SAF grant (MediaStore rejects the custom MIME on some OEMs).
-     * The grant result retries every staged take (see onActivityResult), so
-     * one grant rescues the whole backlog. Never prompts when a usable grant
-     * already exists — a failed tree copy must not picker-loop.
+     * Explicit rescue of older app-staged recordings, oldest first.
+     * New recordings already live at their final destination.
      */
-    private fun maybePromptVideoFolderGrant() {
-        if (isFinishing || isDestroyed) return
-        val tree = SidecarTreeAccess.savedTreeUri(this)
-        if (tree != null && SidecarTreeAccess.hasWriteAccess(this, tree)) return
-        folderPickerForVideo = true
-        setStatus("EXPORT FAILED • GRANT FOLDER TO SAVE TAKE")
-        pickSidecarFolder()
-    }
-
-    /**
-     * Exports every staged take (oldest first) after a folder grant arrives.
-     * The actively recording file, if any, is excluded by identity; the
-     * current take's own stop-export handles it at stop time.
-     */
-    private fun runVideoExportRetry() {
+    internal fun runVideoExportRetry() {
         Thread({
-            val staged = RawVideoSaver.stagedTakes(videoStageDir(), videoOutputFile)
+            val staged = RawVideoSaver.stagedTakes(videoStageDir(), null)
             if (staged.isEmpty()) return@Thread
             runOnUiThread { setStatus("SAVING ${staged.size} STAGED TAKE(S)…") }
             var saved = 0
@@ -2724,7 +2606,7 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 setStatus(
-                    if (saved == staged.size) "SAVED TO DCIM • $saved TAKE(S)"
+                    if (saved == staged.size) "SAVED • $saved TAKE(S)"
                     else "SAVED $saved/${staged.size} • REST STAGED"
                 )
             }
@@ -3069,8 +2951,7 @@ class MainActivity : Activity() {
             getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
                 ?: return null
         val (cameraId, size) = runCatching { videoCameraInfo(manager) }.getOrNull() ?: return null
-        val chars = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
-            ?: return null
+        val chars = resolveVideoCameraRoute(manager, cameraId)?.characteristics ?: return null
         val cfa = chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         if (!RawVideoRecorder.binningActive(true, cfa, size.width)) return null
         val r = runCatching { videoCrop.resolve(size.width, size.height, true) }.getOrNull()
@@ -3085,9 +2966,10 @@ class MainActivity : Activity() {
         // shows); fall back to the first RAW-capable back camera.
         val selected = runCatching { controller.lensOptions().firstOrNull { it.selected }?.cameraId }
             .getOrNull()
-        val ids = listOfNotNull(selected) + manager.cameraIdList.filter { it != selected }
+        val ids = (listOfNotNull(selected) + runCatching { manager.cameraIdList.toList() }
+            .getOrDefault(emptyList())).distinct()
         for (id in ids) {
-            val chars = manager.getCameraCharacteristics(id)
+            val chars = resolveVideoCameraRoute(manager, id)?.characteristics ?: continue
             if (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) !=
                 android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
             ) continue
@@ -3105,7 +2987,9 @@ class MainActivity : Activity() {
         cameraId: String,
         size: android.util.Size
     ): String {
-        val chars = manager.getCameraCharacteristics(cameraId)
+        val chars = requireNotNull(resolveVideoCameraRoute(manager, cameraId)) {
+            "RAW video route $cameraId is unavailable"
+        }.characteristics
         val orientation =
             chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val cfa =
@@ -4320,6 +4204,7 @@ class MainActivity : Activity() {
         const val KEY_MEDIA_ASKED = "media_permission_asked"
         const val LOCATION_PERMISSION = 43
         const val SIDECAR_TREE_REQUEST = 44
+        private const val RECORDING_TREE_REQUEST = 0x5246
         const val SETTINGS_EXPORT_REQUEST = 45
         const val SETTINGS_IMPORT_REQUEST = 46
         const val UPDATE_INSTALL_SOURCES = 47

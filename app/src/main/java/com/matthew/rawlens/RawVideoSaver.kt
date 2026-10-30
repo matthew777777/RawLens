@@ -13,7 +13,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 
-/** Publishes a closed CRAW; the private original survives any copy/publish failure. */
+/** Publishes CRAW as a binary download; private originals survive copy/publish failures.
+ * MediaStore.Video rejects this custom container on Xiaomi and other providers.
+ */
 internal object RawVideoSaver {
     data class Saved(val uri: Uri, val sourceRemoved: Boolean)
 
@@ -40,13 +42,13 @@ internal object RawVideoSaver {
         val expected = source.length()
         require(source.isFile && expected > 0) { "Missing or empty RAW video" }
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, source.name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/x-craw")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/RawLens")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(MediaStore.Downloads.DISPLAY_NAME, source.name)
+            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+            put(MediaStore.Downloads.RELATIVE_PATH, "Download/RawLens")
+            put(MediaStore.Downloads.IS_PENDING, 1)
         }
-        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Could not create RAW video in DCIM/RawLens")
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Could not create RAW video in Download/RawLens")
         try {
             val descriptor = resolver.openFileDescriptor(uri, "w")
                 ?: throw IOException("Could not open RAW video destination")
@@ -62,7 +64,7 @@ internal object RawVideoSaver {
                 if (descriptor.statSize != expected) throw IOException("RAW video size mismatch")
             }
             values.clear()
-            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) {
                 throw IOException("Could not publish RAW video")
             }
@@ -77,10 +79,9 @@ internal object RawVideoSaver {
     }
 
     /**
-     * SAF fallback reusing the burst sidecar tree grant (DCIM/RawLens or DCIM).
-     * Used only when the MediaStore.Video copy fails — e.g. OEMs rejecting the
-     * custom `video/x-craw` MIME. Writes the file binary directly under the
-     * granted folder, then deletes the stage on success like [save].
+     * Publishes to the selected recording folder. Standard Documents/DCIM/
+     * Download parents receive a RawLens child; custom folders are used directly.
+     * Deletes the staged source only after a verified durable copy like [save].
      */
     fun saveViaTree(context: Context, treeUri: Uri, source: File): Saved {
         val expected = source.length()
@@ -94,18 +95,15 @@ internal object RawVideoSaver {
         } catch (failure: Exception) {
             throw IOException("Unreadable video folder grant", failure)
         }
-        val suffix = treePath.substringAfter(':', "")
-        // Mirror SidecarTreeAccess.relativeSegments: DCIM -> RawLens/, else root.
+        // Standard parent selections receive a RawLens child.
         var dirId = treePath
-        if (suffix == "DCIM" || suffix == "DCIM/" || suffix.endsWith("/DCIM") ||
-            suffix.endsWith("/DCIM/")
-        ) {
+        if (RecordingFolderAccess.needsRawLensChild(treePath)) {
             dirId = findOrCreateDir(resolver, treeUri, dirId, "RawLens")
         }
         val fileUri = try {
             DocumentsContract.createDocument(
                 resolver, buildDocUri(treeUri, dirId),
-                "video/x-craw", source.name
+                "application/octet-stream", source.name
             ) ?: throw IOException("Could not create RAW video in granted folder")
         } catch (failure: IOException) {
             throw failure

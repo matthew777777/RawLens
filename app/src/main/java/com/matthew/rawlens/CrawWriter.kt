@@ -34,6 +34,14 @@ internal object CrawWriter {
         return handle
     }
 
+    /** Native writer duplicates this descriptor; caller retains ownership. */
+    fun openFd(fd: Int, containerMetadataJson: String): Long {
+        check(available) { "CRAW writer unavailable" }
+        return containerOpenFd(fd, containerMetadataJson).also {
+            check(it != 0L) { "Could not open recording destination" }
+        }
+    }
+
     /**
      * Encode one RAW16 frame into [destination] (position advanced by the
      * payload size). Worker-thread safe. Returns the payload byte count;
@@ -231,6 +239,8 @@ internal object CrawWriter {
         if (written < 0) throw IllegalStateException("writeMotion failed: code=$written")
         return written
     }
+
+    external fun containerOpenFd(fd: Int, metadataJson: String): Long
 
     external fun containerOpen(path: String, metadataJson: String): Long
 

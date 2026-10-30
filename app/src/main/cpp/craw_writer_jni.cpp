@@ -363,6 +363,17 @@ Java_com_matthew_rawlens_CrawWriter_containerOpen(JNIEnv* env, jobject, jstring 
     }
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_matthew_rawlens_CrawWriter_containerOpenFd(JNIEnv* env, jobject, jint fd, jstring metadata) {
+    const int owned = dup(fd);
+    if (owned < 0) return 0;
+    std::FILE* stream = fdopen(owned, "wb");
+    if (!stream) { close(owned); return 0; }
+    try {
+        return reinterpret_cast<jlong>(new craw::Writer(stream, jstr(env, metadata)));
+    } catch (...) { return 0; } // Writer owns/closed stream even if initialization fails.
+}
+
 JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_CrawWriter_containerEncodeFrame(
     JNIEnv* env, jobject, jobject src, jint srcOffset, jint size, jint w, jint h, jint stride,

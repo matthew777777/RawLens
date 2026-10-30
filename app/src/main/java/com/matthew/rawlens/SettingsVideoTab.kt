@@ -75,6 +75,27 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
     fun markActive(active: Button) = p.markActive(active)
     val videoTab = p.tabs[2]
         content.removeAllViews()
+        content.addView(sectionTitle("Recording folder"))
+        recordingFolderSettingsStatus = sectionDesc(recordingFolderText()).also { content.addView(it) }
+        content.addView(sectionDesc("Record directly to Documents, DCIM, or a connected USB drive. One file is written in the selected folder, with no export copy. With no folder selected, record directly to Downloads/RawLens. Reconnect an unavailable drive before recording."))
+        content.addView(Button(this).apply {
+            text = "Choose recording folder"
+            isEnabled = !videoRecording
+            setOnClickListener { pickRecordingFolder() }
+        })
+        content.addView(Button(this).apply {
+            text = "Use Downloads/RawLens"
+            isEnabled = !videoRecording
+            setOnClickListener {
+                RecordingFolderAccess.clear(this@showVideoSettings)
+                recordingFolderSettingsStatus?.text = recordingFolderText()
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Recover older RAW recordings"
+            isEnabled = !videoRecording
+            setOnClickListener { runVideoExportRetry() }
+        })
         content.addView(sectionTitle("Direct Log"))
         content.addView(sectionDesc("ACES fitted is a baked filmic approximation in Rec.709 gamma 2.4, not ACES scene data. S-Log3 uses S-Gamut3.Cine primaries; interpret data levels as Video/limited."))
         content.addView(Button(this).apply {
@@ -300,19 +321,8 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
         })
         content.addView(sectionDesc("Freeze the preview AE/AWB/AF at REC (manual tiles always hold). Off = continuous auto during takes. SS/ISO/WB/focus/EV tiles stay live before and during takes."))
         content.addView(sectionTitle("Stabilization"))
-        content.addView(Button(this).apply {
-            fun refresh() {
-                text = "Stabilized output: ${stabOutputMode().label.uppercase(Locale.US)}"
-            }
-            refresh()
-            setOnClickListener {
-                val next = stabOutputMode().next()
-                lensPreferences().edit().putString(KEY_VIDEO_STAB_OUTPUT, next.name).apply()
-                refresh()
-                setStatus("STAB OUTPUT • ${next.label.uppercase(Locale.US)} — NEXT TAKE")
-            }
-        })
-        content.addView(sectionDesc("Post-record gyro stabilization (Direct Log only): keep the original take, the stabilized re-encode, or both. The warp pass runs on-device right after stop; any failure keeps the original."))
+        content.addView(sectionDesc("Post-record stabilization is unavailable for single-file recording because it creates a second video. Recording keeps the original take."))
+
         markActive(videoTab)
         polish()
 }
