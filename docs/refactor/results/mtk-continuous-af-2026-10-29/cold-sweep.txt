@@ -1,0 +1,33 @@
+device=25080RABDG camera=0 modes=[0, 1, 2, 3, 4]
+ae=1 strategy=region seed=0.0 frames=92 states=[0, 6] fd=0.0..2.325798 final=1.981782
+ae=1 strategy=region seed=10.0 frames=96 states=[0, 6, 2] fd=1.3202124..10.0 final=7.6977396
+ae=1 strategy=cancel seed=0.0 frames=97 states=[0, 6, 2] fd=0.0..2.6168885 final=1.7700806
+ae=1 strategy=cancel seed=10.0 frames=96 states=[0, 6] fd=1.8759308..10.0 final=2.0347075
+ae=1 strategy=start seed=0.0 frames=96 states=[0, 6, 1, 5] fd=0.0..2.325798 final=2.325798
+ae=1 strategy=start seed=10.0 frames=96 states=[0, 6, 1, 5] fd=2.5110373..10.0 final=2.5110373
+ae=1 strategy=cancel-start seed=0.0 frames=103 states=[0, 6, 5] fd=0.0..1.8494682 final=1.5054522
+ae=1 strategy=cancel-start seed=10.0 frames=102 states=[0, 6, 5] fd=10.0..10.29109 final=10.0
+ae=1 strategy=off-reset seed=0.0 frames=103 states=[0, 6, 2] fd=0.0..2.563963 final=1.9553194
+ae=1 strategy=off-reset seed=10.0 frames=102 states=[0, 6, 2] fd=0.87034607..10.0 final=1.5848408
+ae=1 strategy=auto-reset seed=0.0 frames=103 states=[0, 6, 2] fd=0.0..1.9023943 final=1.1614361
+ae=1 strategy=auto-reset seed=10.0 frames=103 states=[0, 6, 2] fd=0.8968086..10.0 final=1.108511
+ae=1 strategy=video-reset seed=0.0 frames=102 states=[0, 6, 2] fd=0.0..2.3522606 final=1.9023943
+ae=1 strategy=video-reset seed=10.0 frames=102 states=[0, 6, 2] fd=0.8968086..10.0 final=2.1670213
+ae=1 strategy=auto-scan seed=0.0 frames=102 states=[0, 3, 5] fd=0.0..11.958244 final=0.6586437
+ae=1 strategy=auto-scan seed=10.0 frames=103 states=[0, 3, 5] fd=0.0..10.0 final=7.3537235
+ae=0 strategy=region seed=0.0 frames=97 states=[0, 6] fd=0.0..3.463697 final=2.7227397
+ae=0 strategy=region seed=10.0 frames=97 states=[0, 6, 1] fd=0.0..12.037633 final=0.63218117
+ae=0 strategy=cancel seed=0.0 frames=97 states=[0, 6, 1] fd=0.0..11.958244 final=0.6586437
+ae=0 strategy=cancel seed=10.0 frames=96 states=[0, 6] fd=9.629521..10.396941 final=10.026463
+ae=0 strategy=start seed=0.0 frames=96 states=[0, 6, 1, 5] fd=0.0..6.6127663 final=6.5333776
+ae=0 strategy=start seed=10.0 frames=97 states=[0, 6, 1, 5] fd=4.6809845..10.0 final=5.607181
+ae=0 strategy=cancel-start seed=0.0 frames=102 states=[0, 6, 5] fd=0.0..0.12938881 final=0.0
+ae=0 strategy=cancel-start seed=10.0 frames=103 states=[0, 6, 5] fd=9.550133..10.0 final=9.920611
+ae=0 strategy=off-reset seed=0.0 frames=103 states=[0, 6, 2] fd=0.0..3.0667553 final=2.7756648
+ae=0 strategy=off-reset seed=10.0 frames=103 states=[0, 6, 2] fd=1.1878996..10.0 final=2.7227397
+ae=0 strategy=auto-reset seed=0.0 frames=103 states=[0, 6] fd=0.0..3.0402927 final=2.8550534
+ae=0 strategy=auto-reset seed=10.0 frames=102 states=[0, 6, 2] fd=1.0820484..10.079389 final=2.8285909
+ae=0 strategy=video-reset seed=0.0 frames=102 states=[0, 6] fd=0.0..3.3313832 final=3.0667553
+ae=0 strategy=video-reset seed=10.0 frames=102 states=[0, 6, 2] fd=1.0820484..10.052925 final=2.6962771
+ae=0 strategy=auto-scan seed=0.0 frames=103 states=[0, 3, 5] fd=0.0..11.984708 final=0.6586437
+ae=0 strategy=auto-scan seed=10.0 frames=102 states=[0, 3, 5] fd=0.0..11.958244 final=8.650399

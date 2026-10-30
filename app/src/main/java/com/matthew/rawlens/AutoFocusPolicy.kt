@@ -40,6 +40,39 @@ object AutoFocusPolicy {
      * the failure hold still releases quickly once it fires.
      */
     const val AUTOFOCUS_TIMEOUT_MS = 3500L
+    /** LENS_FOCUS_DISTANCE change (diopters) that proves the lens moved. */
+    const val LENS_MOVED_EPSILON_D = 0.02f
+    /**
+     * Continuous-tap verdict floor: after the CANCEL restart the HAL keeps
+     * reporting the old passive verdict until the new scan begins (~350 ms
+     * in the Xiaomi 14T Pro field log), so a verdict without a scan only
+     * counts past this floor.
+     */
+    const val CONTINUOUS_TAP_VERDICT_FLOOR_MS = 1_000L
+
+    /**
+     * Evidence from a continuous-AF session. Missing AF metadata is inconclusive;
+     * any scan/verdict or lens motion prevents a no-AF verdict. Only combine
+     * this with missing HAL AWB, so a normal quiet AF session is not convicted.
+     */
+    class SessionEvidence {
+        private var sawInactive = false
+        private var sawActivity = false
+        private var firstDistance: Float? = null
+
+        fun observe(state: Int?, distance: Float?) {
+            if (state == CaptureResult.CONTROL_AF_STATE_INACTIVE) sawInactive = true
+            else if (state != null) sawActivity = true
+            if (distance != null && distance.isFinite() && distance >= 0f) {
+                val first = firstDistance
+                if (first == null) firstDistance = distance
+                else if (lensMoved(first, distance)) sawActivity = true
+            }
+        }
+
+        val inactiveThroughout: Boolean get() = sawInactive && !sawActivity && firstDistance != null
+        val working: Boolean get() = sawActivity
+    }
 
     /** Idle AF mode: continuous-picture first, AUTO only where nothing scans. */
     fun defaultAfMode(availableModes: IntArray): Int = when {
@@ -67,6 +100,40 @@ object AutoFocusPolicy {
      */
     fun needsIdleScanNudge(availableModes: IntArray): Boolean =
         defaultAfMode(availableModes) == CaptureRequest.CONTROL_AF_MODE_AUTO
+
+    /**
+     * Continuous idle modes eligible for a guarded startup recovery. Xiaomi
+     * 14T Pro (MediaTek) field logs: CONT_PICTURE sat PASSIVE_UNFOCUSED at a
+     * fixed distance until CANCEL arrived. TouchFocus must also observe that
+     * stalled state; capability alone never justifies a mode reset, which
+     * can interrupt working AF (Xiaomi 14 Ultra log 2026-10-29 19:34:35).
+     */
+    fun needsSessionKick(availableModes: IntArray): Boolean =
+        when (defaultAfMode(availableModes)) {
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO -> true
+            else -> false
+        }
+
+    /** True when two LENS_FOCUS_DISTANCE reports differ by more than [epsilon]. */
+    fun lensMoved(fromDiopters: Float, toDiopters: Float, epsilon: Float = LENS_MOVED_EPSILON_D): Boolean =
+        kotlin.math.abs(toDiopters - fromDiopters) > epsilon
+
+    /**
+     * True when an AUTO tap scan ran (START sent, scan state seen) and the
+     * lens never moved: the HAL reports ACTIVE_SCAN but its AUTO sweep is
+     * dead. Xiaomi 14T Pro field log: every AUTO scan held fd=0.33D for
+     * ~2 s, then NOT_FOCUSED_LOCKED, while continuous AF on the same
+     * session swept 0.33 -> 6.89 D. Unknown distance (no fd reports)
+     * never convicts.
+     */
+    fun autoScanLeftLensStill(
+        startSent: Boolean,
+        scanSeen: Boolean,
+        scanStartDiopters: Float?,
+        lensMoved: Boolean
+    ): Boolean =
+        startSent && scanSeen && scanStartDiopters != null && !lensMoved
 
     /** Lock states worth a badge, including passive HALs that never emit AUTO locks. */
     fun isLockSuccess(afState: Int?): Boolean =

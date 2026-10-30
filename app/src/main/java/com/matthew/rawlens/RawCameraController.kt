@@ -75,7 +75,7 @@ internal fun vfOverlayEffectBits(
 ): List<String> = buildList {
     if (settings.ultraHdr) add("UHDR")
     if (wavelet) add("WAVELET")
-    if (jpegTonemap && (settings.agxContrast != 1f ||
+    if (jpegTonemap && (settings.agxLook == AgxLook.PUNCHY || settings.agxContrast != 1f ||
         settings.agxSaturation != 1f ||
         settings.agxPurityBoost != 1f ||
         settings.highlightShoulder != 1f)
@@ -197,6 +197,8 @@ class RawCameraController(
     @Volatile private var running = false
     @Volatile private var destroyed = false
     @Volatile private var opening = false
+    /** elapsedRealtime of the last device error/disconnect; 0 = none (HAL-restart grace). */
+    @Volatile private var lastDeviceFaultMs = 0L
     @Volatile private var lifecycleGeneration = 0
     // Serial worker for JPEG development, HDR merges and AI-denoised saves: one at a
     // time so full-resolution CPU/GPU allocation peaks never overlap. The physical
@@ -319,6 +321,7 @@ class RawCameraController(
     private var characteristics: CameraCharacteristics? = null
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
+    private val deviceFaultRecovery = DeviceFaultRecovery()
     private var rawReader: ImageReader? = null
     private val retiredRawReaders = java.util.concurrent.ConcurrentLinkedQueue<ImageReader>()
 
@@ -516,6 +519,12 @@ class RawCameraController(
      * verified. Volatile because the two sites run on different threads.
      */
     @Volatile private var pendingVerifiedIdentity: String? = null
+    /** Route whose HAL-AWB health this session is judging; null once judged. Camera thread. */
+    private var awbVerdictIdentity: String? = null
+    private var awbVerdictFirstMs = 0L
+    private var awbVerdictSawWorking = false
+    private var afSessionEvidence = AutoFocusPolicy.SessionEvidence()
+    private var afVerdictEligible = true
     private var sessionPrimaryRoute: CameraRoute? = null
     private var sessionAltRoute: CameraRoute? = null
 
@@ -651,11 +660,11 @@ class RawCameraController(
             rawHistogramStreaming = false
             faces.resetForSession(characteristics?.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT) ?: 0)
             clampControlsToCamera()
-        
+
             val pixelArraySize = characteristics?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
-            val sensorInfo = String.format(java.util.Locale.US, "RAW\n%s", 
+            val sensorInfo = String.format(java.util.Locale.US, "RAW\n%s",
                 if (pixelArraySize != null) "${pixelArraySize.width}x${pixelArraySize.height}" else "SENSOR")
-        
+
             val maxDepth = characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             lastWhiteLevelBits = whiteLevelBitDepth(maxDepth)
             lastSensorInfo = sensorInfo
@@ -664,7 +673,7 @@ class RawCameraController(
             onInfo(dngInfo, sensorInfo)
             publishControls()
             onActiveCameraChanged(id)
-        
+
             onState("OPENING RAW")
             val ladderRoute = if (ladder.altRouteActive) "direct-physical" else "primary"
             Log.i(LOG_TAG, "Opening camera $openCameraId (selected $id) [$ladderRoute combo ${ladder.comboIndex}]")
@@ -685,10 +694,14 @@ class RawCameraController(
                 // An ID that opened before reporting unknown-device is a camera
                 // service hiccup, not a bad lens: never denylist it, and stop the
                 // cascade (the next lens would fail the same way). Retry instead.
-                if (!SessionRecoveryPolicy.shouldDenylistOnOpenRejected(openCameraId, ladder.openedOnceOpenIds) &&
+                val msSinceFault = lastDeviceFaultMs.takeIf { it > 0L }
+                    ?.let { SystemClock.elapsedRealtime() - it }
+                if (!SessionRecoveryPolicy.shouldDenylistOnOpenRejected(
+                        openCameraId, ladder.openedOnceOpenIds, msSinceFault) &&
                     scheduleOpenRejectionRetry()
                 ) {
-                    Log.w(LOG_TAG, "Lens $id rejected after opening before; treating as transient")
+                    Log.w(LOG_TAG, "Lens $id rejected after opening before or ${msSinceFault ?: "-"}ms " +
+                        "after a device fault; treating as transient")
                     return
                 }
                 ladder.denylist(openCameraId)
@@ -715,7 +728,10 @@ class RawCameraController(
         } catch (failure: CameraAccessException) {
             opening = false
             Log.w(LOG_TAG, "openCamera failed: ${cameraAccessReason(failure)}")
-            if (running) onState("CAMERA UNAVAILABLE")
+            if (failure.reason == CameraAccessException.CAMERA_DISCONNECTED ||
+                failure.reason == CameraAccessException.CAMERA_ERROR) {
+                recoverDeviceFault(generation, "openCamera: ${cameraAccessReason(failure)}")
+            } else if (running) onState("CAMERA UNAVAILABLE")
         } catch (failure: SecurityException) {
             opening = false
             Log.w(LOG_TAG, "openCamera denied", failure)
@@ -755,9 +771,10 @@ class RawCameraController(
                 if (camera === device) camera = null
             }
             if (!isCurrent(generation)) return
+            lastDeviceFaultMs = SystemClock.elapsedRealtime()
             opening = false
             Log.w(LOG_TAG, "Camera device disconnected: ${device.id}")
-            onState("CAMERA DISCONNECTED")
+            recoverDeviceFault(generation, "Camera ${device.id} disconnected")
         }
         override fun onError(device: CameraDevice, error: Int) {
             synchronized(cameraStateLock) {
@@ -765,6 +782,7 @@ class RawCameraController(
                 if (camera === device) camera = null
             }
             if (!isCurrent(generation)) return
+            lastDeviceFaultMs = SystemClock.elapsedRealtime()
             opening = false
             // A device that fails before any session exists cannot be fixed by
             // degrading combos, but a vendor composite may still open through
@@ -777,7 +795,10 @@ class RawCameraController(
                 advancePastFailedOpen(device.id)
             ) return
             Log.w(LOG_TAG, "Camera device error on ${device.id}: $error")
-            onState(if (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE) "CAMERA IN USE" else "CAMERA ERROR")
+            if (error == CameraDevice.StateCallback.ERROR_CAMERA_DEVICE ||
+                error == CameraDevice.StateCallback.ERROR_CAMERA_SERVICE) {
+                recoverDeviceFault(generation, "Camera ${device.id} error $error")
+            } else onState(if (error == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE) "CAMERA IN USE" else "CAMERA ERROR")
         }
         // P4: track clean teardown so a stale device reference can never feed
         // a later session or precapture waiter.
@@ -787,6 +808,38 @@ class RawCameraController(
             }
             if (!isCurrent(generation)) return
             Log.i(LOG_TAG, "Camera device closed: ${device.id}")
+        }
+    }
+
+    /** Both synchronous open failure and onDisconnected can report the same fault. */
+    private fun recoverDeviceFault(generation: Int, reason: String) {
+        cameraHandler.post {
+            if (!isCurrent(generation)) return@post
+            lastDeviceFaultMs = SystemClock.elapsedRealtime()
+            val failed = selectedCameraId ?: return@post
+            val failedOpenId = if (ladder.altRouteActive) sessionAltRoute?.openCameraId
+                else sessionPrimaryRoute?.openCameraId
+            if (session == null && failedOpenId != null && advancePastFailedOpen(failedOpenId)) return@post
+            val verified = runCatching { lensVerdicts.verifiedIds() }.getOrDefault(emptySet())
+            val next = deviceFaultRecovery.next(failed, rawCameraIds.filter { id ->
+                id in verified && resolveOpenCameraId(id) !in ladder.unopenableOpenIds
+            })
+            // Invalidate callbacks and release the dead session before waiting for the HAL.
+            stop()
+            // Keep the foreground controller selectable even after the automatic budget ends.
+            running = true
+            if (next == null) {
+                Log.w(LOG_TAG, "$reason; device recovery exhausted")
+                onState("CAMERA UNAVAILABLE")
+                return@post
+            }
+            selectedCameraId = next
+            val retryGeneration = lifecycleGeneration
+            Log.w(LOG_TAG, "$reason; reopening $next after HAL cooldown")
+            onState("RECOVERING CAMERA")
+            cameraHandler.postDelayed({
+                if (isCurrent(retryGeneration) && camera == null && !opening) open()
+            }, 2000L)
         }
     }
 
@@ -1087,6 +1140,7 @@ class RawCameraController(
                 val image = reader.acquireNextImage() ?: break
                 lastRawImageReceivedMs = SystemClock.elapsedRealtime()
                 if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
+                    deviceFaultRecovery.reset()
                     Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
                     // Frames flowing (not merely a configured session)
                     // is the verification event. Idempotent, so a
@@ -1437,6 +1491,11 @@ class RawCameraController(
                     // Candidate for stream verification: confirmed only when
                     // this session's first RAW frame actually arrives below.
                     pendingVerifiedIdentity = sessionPrimaryRoute?.identity
+                    awbVerdictIdentity = sessionPrimaryRoute?.identity
+                    awbVerdictFirstMs = 0L
+                    awbVerdictSawWorking = false
+                    afSessionEvidence = AutoFocusPolicy.SessionEvidence()
+                    afVerdictEligible = true
                     // A fresh session gets fresh RAW-preview retries: starvation
                     // callbacks during the open gap must not consume them.
                     rawPreviewFailures = 0
@@ -1462,6 +1521,7 @@ class RawCameraController(
             Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             logAfCapabilities()
             touchFocus.nudgeIdleIfNeeded()
+            touchFocus.kickContinuousAtSessionStart()
             onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -1597,6 +1657,68 @@ class RawCameraController(
      * generation guard with a longer budget (~30 s) so a briefly wedged
      * service recovers without user intervention.
      */
+    /**
+     * Judges once per session whether the HAL runs AWB on this route: after
+     * [AWB_VERDICT_SETTLE_MS] of AUTO-AWB results, a route that never once
+     * reported a usable neutral or non-unity gains for the selected sensor is
+     * persisted as no-HAL-AWB, so the lens picker recommends a sibling route
+     * with real camera colour (direct-opened Xiaomi aux lenses, 2026-10-29).
+     */
+    private fun noteHalAwbVerdict(result: TotalCaptureResult) {
+        val identity = awbVerdictIdentity ?: return
+        if (result.get(CaptureResult.CONTROL_AWB_MODE) != CaptureResult.CONTROL_AWB_MODE_AUTO) return
+        val now = SystemClock.elapsedRealtime()
+        // A touch scan, capture or manual focus cannot diagnose idle HAL AF.
+        if (selectedFocusDistanceDiopters != null || touchFocus.active ||
+            captureInProgress.get() || !AutoFocusPolicy.needsSessionKick(
+                characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            )
+        ) afVerdictEligible = false
+        val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
+        if (afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
+            afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+        ) {
+            afSessionEvidence.observe(result.get(CaptureResult.CONTROL_AF_STATE),
+                result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+        }
+        if (awbVerdictFirstMs == 0L) awbVerdictFirstMs = now
+        if (!awbVerdictSawWorking) {
+            // Only the selected sensor can establish this route's health;
+            // another physical camera's AWB says nothing about its RAW stream.
+            val physical = if (Build.VERSION.SDK_INT >= 31) {
+                sessionPrimaryRoute?.physicalCameraId?.let { id ->
+                    runCatching { result.physicalCameraTotalResults[id] }.getOrNull()
+                }
+            } else null
+            val neutral = (physical?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+                ?: result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT))
+                ?.let { values -> DoubleArray(values.size) { values[it].toDouble() } }
+            val gains = (physical?.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                ?: result.get(CaptureResult.COLOR_CORRECTION_GAINS))
+                ?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+            awbVerdictSawWorking = !RawWhiteBalanceFallback.halAwbMissing(neutral, gains)
+        }
+        if (now - awbVerdictFirstMs < AWB_VERDICT_SETTLE_MS) return
+        awbVerdictIdentity = null
+        if (!awbVerdictSawWorking) {
+            Log.w(LOG_TAG, "Route $identity: HAL ran no AWB for ${now - awbVerdictFirstMs}ms; " +
+                "colour estimated from RAW, picker will prefer another route to this lens")
+        }
+        try {
+            lensVerdicts.markHalAwb(identity, awbVerdictSawWorking)
+            if (afVerdictEligible && afSessionEvidence.working) {
+                lensVerdicts.markHalAf(identity, true)
+            } else if (afVerdictEligible && !awbVerdictSawWorking && afSessionEvidence.inactiveThroughout) {
+                lensVerdicts.markHalAf(identity, false)
+                Log.w(LOG_TAG, "Route $identity: AF stayed INACTIVE with no lens motion and no HAL AWB; " +
+                    "use a routed ID for this lens or manual focus")
+                onState("AUTOFOCUS INACTIVE • TRY ANOTHER LENS ID")
+            }
+        } catch (_: Exception) {
+            // Best effort: verdicts never break streaming.
+        }
+    }
+
     private fun scheduleOpenRejectionRetry(): Boolean {
         val attempt = ladder.takeRejectionRetry(OPEN_REJECTION_RETRY_MAX) ?: return false
         Log.w(LOG_TAG, "Open rejected; retry $attempt/$OPEN_REJECTION_RETRY_MAX")
@@ -1691,8 +1813,20 @@ class RawCameraController(
             )
         )
         if (!needed || !sessionOffersPreview) return
-        onState("RECOVERING PREVIEW")
-        restartCameraForConfigurationChange()
+        // Called inside onRawImageAvailable before the current Image is
+        // adopted/consumed. Closing its reader here invalidates that image
+        // mid-callback (field log: "Image is already closed", then a false
+        // maxImages/forward-capture error). Rebuild after the drain returns.
+        val generation = lifecycleGeneration
+        val shot = captureSequence.get()
+        cameraHandler.post {
+            if (isCurrent(generation) && selectedCameraId == cameraId &&
+                captureSequence.get() == shot && !captureInProgress.get()
+            ) {
+                onState("RECOVERING PREVIEW")
+                restartCameraForConfigurationChange()
+            }
+        }
     }
 
     /**
@@ -1739,7 +1873,7 @@ class RawCameraController(
     }
 
     private fun recoverRawPreview(reason: String) {
-        if (!running || captureInProgress.get()) return
+        if (!running || camera == null || session == null || captureInProgress.get()) return
         // A stillborn GPU-usage trial resolves first: the usage axis, not
         // the plan axis, starved this session. Disarm and rebuild with the
         // default reader; the first delivered image persists the verdict.
@@ -1822,7 +1956,7 @@ class RawCameraController(
                 // recovery. Flipping here hides the legacy Surface, whose
                 // teardown (resetNative -> destroyGrade) kills the shared
                 // record pipelines mid-take and freezes the recording.
-                if (!running) return@post
+                if (!running || camera == null || session == null) return@post
                 // Legacy is the first AUTO rung: its GPU->NEON ladder is
                 // exhausted when it starves, so BGU takes over for the
                 // session. A blocked renderer is not a dead camera stream:
@@ -1845,7 +1979,7 @@ class RawCameraController(
             cameraHandler.post {
                 // Same stopped-camera rule as legacy above: never reroute
                 // while a take owns the camera.
-                if (!running) return@post
+                if (!running || camera == null || session == null) return@post
                 // BGU is the last AUTO rung: any persistent failure marks
                 // it dead and routing returns to legacy (last resort).
                 if (!bguDead) {
@@ -3314,6 +3448,27 @@ class RawCameraController(
         override fun onFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) =
             this@RawCameraController.onFocusLock(locked, indefinite, deadlineMs)
         override fun onMeteringReleased() = this@RawCameraController.onMeteringReleased()
+        override var autoScanDead: Boolean
+            get() = afAutoScanDeadPersisted(selectedCameraId)
+            set(value) = persistAfAutoScanDead(selectedCameraId, value)
+    }
+
+    /** Persisted dead-AUTO-scan verdict for this camera (see [TouchFocus.Host.autoScanDead]). */
+    private fun afAutoScanDeadPersisted(cameraId: String?): Boolean = try {
+        cameraId != null && context.getSharedPreferences(AF_AUTO_SCAN_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(AF_AUTO_SCAN_DEAD_KEY_PREFIX + cameraId, false)
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun persistAfAutoScanDead(cameraId: String?, dead: Boolean) {
+        if (cameraId == null) return
+        try {
+            context.getSharedPreferences(AF_AUTO_SCAN_PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(AF_AUTO_SCAN_DEAD_KEY_PREFIX + cameraId, dead).apply()
+        } catch (_: Exception) {
+            // Best effort: without persistence the first tap each launch re-detects it.
+        }
     }
 
     /**
@@ -4313,7 +4468,9 @@ class RawCameraController(
             cameraHandler.post { selectLens(cameraId) }
             return
         }
-        if (cameraId == selectedCameraId || cameraId !in rawCameraIds || captureInProgress.get()) return
+        if ((cameraId == selectedCameraId && (camera != null || opening)) ||
+            cameraId !in rawCameraIds || captureInProgress.get()) return
+        deviceFaultRecovery.reset()
         selectedCameraId = cameraId
         afRegion = null; aeRegion = null
         updateDevelopFocus(null)
@@ -4710,6 +4867,7 @@ class RawCameraController(
                     }
                 }
                 latestPreviewResult = result
+                noteHalAwbVerdict(result)
                 // P0: feed the flash precapture wait with every result's AE state.
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
                 aeState?.let { lastAeState = it }
@@ -4776,7 +4934,10 @@ class RawCameraController(
                 publishPreviewMetadata(displayIso, displayShutter, wb)
                 if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(result)
                 publishDebugState(request, result)
-                touchFocus.onAfState(result.get(CaptureResult.CONTROL_AF_STATE))
+                touchFocus.onAfState(
+                    result.get(CaptureResult.CONTROL_AF_STATE),
+                    result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                )
             }
 
             override fun onCaptureFailed(
@@ -4813,7 +4974,7 @@ class RawCameraController(
         val manualFocus = selectedFocusDistanceDiopters
         val wantedAfMode = when {
             manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
-            touchFocus.active -> CaptureRequest.CONTROL_AF_MODE_AUTO
+            touchFocus.autoMode -> CaptureRequest.CONTROL_AF_MODE_AUTO
             else -> continuousPictureAfMode()
         }
         // P2/P3: never request an AF mode the HAL did not advertise.
@@ -5282,7 +5443,10 @@ class RawCameraController(
                 )
             }
             publishDebugState(request, result, force = true)
-            touchFocus.onAfState(result.get(CaptureResult.CONTROL_AF_STATE))
+            touchFocus.onAfState(
+                result.get(CaptureResult.CONTROL_AF_STATE),
+                result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+            )
         }
     }
 
@@ -6889,7 +7053,14 @@ class RawCameraController(
          * device via settings backup.
          */
         private const val ISP_PREVIEW_REQUEST_PREFS = "raw_isp_preview_request"
-        private const val ISP_PREVIEW_REQUEST_KEY_PREFIX = "needs_preview_request_"
+        // Re-probe old verdicts: v1 misclassified healthy 24 fps aux streams.
+        private const val ISP_PREVIEW_REQUEST_KEY_PREFIX = "needs_preview_request_v2_"
+        /**
+         * Private dead-AUTO-scan verdict store, device-local like the ISP
+         * verdict above (outside [SettingsBackup.KNOWN_STORES]).
+         */
+        private const val AF_AUTO_SCAN_PREFS = "raw_af_auto_scan"
+        private const val AF_AUTO_SCAN_DEAD_KEY_PREFIX = "dead_"
         /**
          * RAW frames counted before the ISP frame-rate probe renders its
          * verdict (~1.5 s at full rate, ~2.25 s on a stalled 20 fps stream).
@@ -6919,6 +7090,8 @@ class RawCameraController(
         private const val OPEN_RETRY_DELAY_MS = 1500L
         /** Longer budget for open rejections: a wedged service needs seconds. */
         private const val OPEN_REJECTION_RETRY_MAX = 15
+        /** AUTO-AWB results needed before a route's HAL-AWB verdict is persisted. */
+        private const val AWB_VERDICT_SETTLE_MS = 3000L
         private const val OPEN_REJECTION_RETRY_DELAY_MS = 2000L
         private const val LOG_TAG = "RawLensCamera"
         private const val DEBUG_UPDATE_INTERVAL_MS = 200L

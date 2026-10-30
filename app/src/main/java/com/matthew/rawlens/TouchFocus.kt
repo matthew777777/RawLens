@@ -17,7 +17,10 @@ import android.os.SystemClock
  *
  * A tap switches the repeating request to AF_MODE_AUTO with the tap region,
  * then sends one AF_TRIGGER_START; the AF state in each result drives the
- * lock / failure verdict (thresholds in [AutoFocusPolicy]). The lock is held
+ * lock / failure verdict (thresholds in [AutoFocusPolicy]). Cameras whose
+ * AUTO scan never moves the lens ([Host.autoScanDead]) run the tap as
+ * continuous AF on the tap region instead: a CANCEL restarts the passive
+ * scan there and PASSIVE_FOCUSED is the lock. The lock is held
  * until an explicit release: timer, retap, double-tap/button reset, manual
  * focus, lens switch, or stop. Trigger semantics follow
  * https://developer.android.com/reference/android/hardware/camera2/CaptureRequest#CONTROL_AF_TRIGGER.
@@ -59,6 +62,12 @@ internal class TouchFocus(private val host: Host) {
         fun onState(state: String)
         fun onFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long)
         fun onMeteringReleased()
+        /**
+         * Per-camera verdict (persisted by the host): AUTO scans leave this
+         * lens still, so taps run continuous AF on the tap region
+         * ([AutoFocusPolicy.autoScanLeftLensStill]).
+         */
+        var autoScanDead: Boolean
     }
 
     /** AF_MODE_AUTO + tap region held in the repeating request (scan or lock). */
@@ -73,14 +82,32 @@ internal class TouchFocus(private val host: Host) {
 
     val scanning: Boolean get() = active && !completed
 
+    /** This tap cycle runs continuous AF on the region (CANCEL restart) instead of AUTO + START. */
+    var continuousTap = false
+        private set
+
+    /** The session-start kick holds AF_MODE_AUTO for one settle (see [kickContinuousAtSessionStart]). */
+    private var kicking = false
+    private var sessionAfProgressSeen = false
+    private var sessionAfState: Int? = null
+    private var sessionFirstFocusDistance: Float? = null
+
+    /** Repeating request wants AF_MODE_AUTO: an AUTO tap cycle or the session kick is in flight. */
+    val autoMode: Boolean get() = (active && !continuousTap) || kicking
+
     private var timeout: Runnable? = null
     private var continuousReset: Runnable? = null
     private var pendingStart: Runnable? = null
     private var pendingIdleNudge: Runnable? = null
+    private var pendingSessionKick: Runnable? = null
     private var startElapsedMs = 0L
     private var startSent = false
     /** True once a scan state proves START reached the HAL (INACTIVE filter). */
     private var scanSeen = false
+    /** First LENS_FOCUS_DISTANCE reported after START; null until one arrives. */
+    private var scanStartFd: Float? = null
+    /** The lens left [scanStartFd] during this scan. */
+    private var lensMoved = false
     /** Last AF state logged while a tap scan/lock is in flight (transition-only trace). */
     private var lastLoggedState: Int? = null
     private var lastLoggedStateValid = false
@@ -153,6 +180,8 @@ internal class TouchFocus(private val host: Host) {
 
         val wasTouchActive = active
         dropAfRegionOnRelease = false
+        // The tap's own repeating rebuild below replaces a kick caught in AUTO.
+        removeSessionKick()
         removeContinuousReset()
         removeTimeout()
         removePendingStart()
@@ -176,6 +205,9 @@ internal class TouchFocus(private val host: Host) {
         completed = false
         startSent = false
         scanSeen = false
+        scanStartFd = null
+        lensMoved = false
+        continuousTap = host.autoScanDead
         lastLoggedStateValid = false
         lockedSharp = false
         lockIndefinite = indefinite
@@ -212,15 +244,36 @@ internal class TouchFocus(private val host: Host) {
         }
     }
 
-    /** Feed every preview/one-shot result's CONTROL_AF_STATE here. */
-    fun onAfState(state: Int?) {
+    /**
+     * Feed every preview/one-shot result's CONTROL_AF_STATE here, with its
+     * LENS_FOCUS_DISTANCE for the trace (whether the lens moved at all).
+     */
+    fun onAfState(state: Int?, focusDiopters: Float? = null) {
+        sessionAfState = state
+        if (AutoFocusPolicy.isScanState(state) || AutoFocusPolicy.isLockSuccess(state)) {
+            sessionAfProgressSeen = true
+        }
+        if (focusDiopters != null && focusDiopters.isFinite() && focusDiopters >= 0f) {
+            val first = sessionFirstFocusDistance
+            if (first == null) sessionFirstFocusDistance = focusDiopters
+            else if (AutoFocusPolicy.lensMoved(first, focusDiopters)) sessionAfProgressSeen = true
+        }
         // Transition-only trace: a scan logs a few lines, never 30 fps.
         if (active && (!lastLoggedStateValid || state != lastLoggedState)) {
             lastLoggedStateValid = true
             lastLoggedState = state
             val sinceStart = if (startSent)
                 " +${SystemClock.elapsedRealtime() - startElapsedMs}ms" else ""
-            Log.i(LOG_TAG, "Touch AF -> ${Camera2Names.afStateName(state)}$sinceStart")
+            val fd = focusDiopters?.let { " fd=${String.format(java.util.Locale.US, "%.2f", it)}D" } ?: ""
+            Log.i(LOG_TAG, "Touch AF -> ${Camera2Names.afStateName(state)}$sinceStart$fd")
+        }
+        if (active && !completed && startSent && focusDiopters != null) {
+            val from = scanStartFd
+            if (from == null) {
+                scanStartFd = focusDiopters
+            } else if (!lensMoved && AutoFocusPolicy.lensMoved(from, focusDiopters)) {
+                lensMoved = true
+            }
         }
         // Late lock after a declared failure (HAL slower than the grace):
         // upgrade to the sharp lock instead of showing FOCUSED_LOCKED with a
@@ -230,7 +283,15 @@ internal class TouchFocus(private val host: Host) {
             return
         }
         if (!active || completed) return
+        // Results while the mode/region settles still belong to the previous
+        // cycle. Letting a passive/locked verdict complete here removes the
+        // pending START, so a tap can appear focused without ever triggering AF.
+        if (!startSent) return
         if (AutoFocusPolicy.isScanState(state)) scanSeen = true
+        if (continuousTap) {
+            onContinuousTapState(state)
+            return
+        }
         when (state) {
             CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
             CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
@@ -252,7 +313,7 @@ internal class TouchFocus(private val host: Host) {
                     publishSharpLock()
                     Log.i(LOG_TAG, "Touch focus locked" + if (lockIndefinite) " ∞" else "")
                 } else {
-                    completeUnlocked("FOCUS NOT LOCKED", "not-focused")
+                    if (autoScanDead()) retryAsContinuous() else completeUnlocked("FOCUS NOT LOCKED", "not-focused")
                     return
                 }
                 // Re-assert the repeating request once so the HAL keeps
@@ -270,6 +331,90 @@ internal class TouchFocus(private val host: Host) {
                     completeUnlocked("FOCUS NOT LOCKED", "inactive")
                 }
             }
+        }
+    }
+
+    /**
+     * Verdicts for a continuous-AF tap. States before the CANCEL restart
+     * belong to the old region and never count. A positive verdict needs a scan
+     * or [AutoFocusPolicy.CONTINUOUS_TAP_VERDICT_FLOOR_MS]; a negative verdict
+     * without a scan waits for the full timeout.
+     */
+    private fun onContinuousTapState(state: Int?) {
+        if (!startSent) return
+        val elapsed = SystemClock.elapsedRealtime() - startElapsedMs
+        val ready = AutoFocusPolicy.verdictReady(
+            true, scanSeen, elapsed, AutoFocusPolicy.CONTINUOUS_TAP_VERDICT_FLOOR_MS
+        )
+        when (state) {
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED,
+            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> {
+                if (!ready) return
+                completed = true
+                removeTimeout()
+                removePendingStart()
+                lockedSharp = true
+                publishSharpLock()
+                Log.i(LOG_TAG, "Touch focus locked (continuous)" + if (lockIndefinite) " ∞" else "")
+                host.updateRepeatingRequest()
+                // A hold must not drift: START in a passive-focused state locks
+                // at once. Timed taps keep tracking the region until release.
+                if (lockIndefinite && host.canSendOneShot()) {
+                    try {
+                        host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_START, aeOnForDynamic = true)
+                    } catch (failure: CameraAccessException) {
+                        Log.w(LOG_TAG, "Continuous AF hold lock failed: ${host.cameraAccessReason(failure)}")
+                    }
+                }
+            }
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED,
+            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> {
+                // A persistent idle miss does not prove the new region was scanned.
+                // Give a delayed scan the full timeout rather than failing at 1 s.
+                if (scanSeen) completeUnlocked("FOCUS NOT LOCKED", "not-focused")
+            }
+            CaptureResult.CONTROL_AF_STATE_INACTIVE -> {
+                if (AutoFocusPolicy.inactiveMeansFailure(startSent, scanSeen, elapsed)) {
+                    completeUnlocked("FOCUS NOT LOCKED", "inactive")
+                }
+            }
+        }
+    }
+
+    private fun autoScanDead(): Boolean =
+        !continuousTap && AutoFocusPolicy.autoScanLeftLensStill(startSent, scanSeen, scanStartFd, lensMoved)
+
+    /**
+     * The AUTO scan never moved the lens: save the camera verdict and run
+     * the same tap again as continuous AF on its region, so the user's tap
+     * still lands instead of failing.
+     */
+    private fun retryAsContinuous() {
+        host.autoScanDead = true
+        Log.i(
+            LOG_TAG,
+            "AUTO scan left the lens at ${String.format(java.util.Locale.US, "%.2f", scanStartFd ?: 0f)}D; " +
+                "retrying tap with continuous AF (camera verdict saved)"
+        )
+        continuousTap = true
+        completed = false
+        startSent = false
+        scanSeen = false
+        scanStartFd = null
+        lensMoved = false
+        lastLoggedStateValid = false
+        removeTimeout()
+        removePendingStart()
+        try {
+            host.updateRepeatingRequest()
+            scheduleTimeout()
+            pendingStart = Runnable {
+                pendingStart = null
+                if (active && !completed) sendStart()
+            }.also { host.handler.postDelayed(it, START_SETTLE_MS) }
+        } catch (failure: CameraAccessException) {
+            Log.w(LOG_TAG, "Continuous tap retry failed: ${host.cameraAccessReason(failure)}")
+            abortOnError()
         }
     }
 
@@ -306,6 +451,7 @@ internal class TouchFocus(private val host: Host) {
         }
         active = false
         completed = false
+        continuousTap = false
         lockedSharp = false
         lockIndefinite = false
         lockDeadlineMs = 0L
@@ -348,12 +494,17 @@ internal class TouchFocus(private val host: Host) {
         host.onFocusLock(false, false, 0L)
         active = false
         completed = false
+        continuousTap = false
     }
 
     /** Camera stop: forget all touch state (timers via [cancelTimers]). */
     fun resetForStop() {
+        sessionAfProgressSeen = false
+        sessionAfState = null
+        sessionFirstFocusDistance = null
         active = false
         completed = false
+        continuousTap = false
         dropAfRegionOnRelease = false
         startSent = false
         scanSeen = false
@@ -370,7 +521,62 @@ internal class TouchFocus(private val host: Host) {
         removeContinuousReset()
         removePendingStart()
         removeIdleNudge()
+        removeSessionKick()
     }
+
+    /**
+     * Session-start continuous-AF kick on a continuous-capable lens
+     * ([AutoFocusPolicy.needsSessionKick]): only when results show a
+     * motionless PASSIVE_UNFOCUSED lens with no scan or focused verdict.
+     * Some HALs leave continuous AF parked until released from AUTO.
+     * Never interrupt a working scan or reset an already focused lens.
+     * Replays the touch release that woke it in the Xiaomi 14T Pro field
+     * logs, step for step: repeating AUTO (no region), a CANCEL built in
+     * AUTO, then repeating continuous again. Skipped or abandoned when a
+     * tap, manual focus, or capture gets there first.
+     */
+    fun kickContinuousAtSessionStart() {
+        if (!AutoFocusPolicy.needsSessionKick(host.afAvailableModes())) return
+        removeSessionKick()
+        pendingSessionKick = Runnable {
+            pendingSessionKick = null
+            if (!kickAllowed() || sessionAfProgressSeen ||
+                sessionAfState != CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
+                sessionFirstFocusDistance == null
+            ) return@Runnable
+            kicking = true
+            try {
+                host.updateRepeatingRequest()
+            } catch (failure: CameraAccessException) {
+                kicking = false
+                Log.w(LOG_TAG, "Idle AF kick failed: ${host.cameraAccessReason(failure)}")
+                return@Runnable
+            }
+            // Same settle as a tap: the AUTO repeating commits before CANCEL.
+            pendingSessionKick = Runnable {
+                pendingSessionKick = null
+                if (!kicking) return@Runnable
+                try {
+                    if (kickAllowed() && !sessionAfProgressSeen) {
+                        host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL, aeOnForDynamic = true)
+                        Log.i(LOG_TAG, "Idle AF kick (AUTO -> CANCEL -> continuous) at session start")
+                    }
+                } catch (failure: CameraAccessException) {
+                    Log.w(LOG_TAG, "Idle AF kick failed: ${host.cameraAccessReason(failure)}")
+                } finally {
+                    kicking = false
+                    try {
+                        host.updateRepeatingRequest()
+                    } catch (failure: CameraAccessException) {
+                        Log.w(LOG_TAG, "Idle AF kick restore failed: ${host.cameraAccessReason(failure)}")
+                    }
+                }
+            }.also { host.handler.postDelayed(it, START_SETTLE_MS) }
+        }.also { host.handler.postDelayed(it, SESSION_KICK_DELAY_MS) }
+    }
+
+    private fun kickAllowed(): Boolean =
+        !active && host.selectedFocusDistanceDiopters == null && !host.captureBusy() && host.canSendOneShot()
 
     /**
      * AUTO-only lenses (no continuous mode advertising): idle parks the focus
@@ -409,8 +615,14 @@ internal class TouchFocus(private val host: Host) {
         try {
             startSent = true
             startElapsedMs = SystemClock.elapsedRealtime()
-            host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_START, aeOnForDynamic = true)
-            Log.i(LOG_TAG, "AF START sent")
+            if (continuousTap) {
+                // Continuous mode: CANCEL restarts the passive scan on the new region.
+                host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_CANCEL, aeOnForDynamic = true)
+                Log.i(LOG_TAG, "AF continuous restart sent")
+            } else {
+                host.sendAfTrigger(CameraMetadata.CONTROL_AF_TRIGGER_START, aeOnForDynamic = true)
+                Log.i(LOG_TAG, "AF START sent")
+            }
         } catch (failure: CameraAccessException) {
             Log.w(LOG_TAG, "AF START failed: ${host.cameraAccessReason(failure)}")
             abortOnError()
@@ -440,6 +652,7 @@ internal class TouchFocus(private val host: Host) {
     /** Clears every touch-focus/lock flag after a failed AF request and restores idle AF. */
     private fun abortOnError() {
         active = false
+        continuousTap = false
         startSent = false
         scanSeen = false
         lockedSharp = false
@@ -516,7 +729,8 @@ internal class TouchFocus(private val host: Host) {
         removeTimeout()
         timeout = Runnable {
             timeout = null
-            if (active && !completed) completeUnlocked("FOCUS NOT LOCKED", "timeout")
+            if (!active || completed) return@Runnable
+            if (autoScanDead()) retryAsContinuous() else completeUnlocked("FOCUS NOT LOCKED", "timeout")
         }.also { host.handler.postDelayed(it, AutoFocusPolicy.AUTOFOCUS_TIMEOUT_MS) }
     }
 
@@ -548,10 +762,19 @@ internal class TouchFocus(private val host: Host) {
         pendingIdleNudge = null
     }
 
+    /** Drops a pending kick; a kick caught in AUTO is left to the caller's next repeating rebuild. */
+    private fun removeSessionKick() {
+        pendingSessionKick?.let(host.handler::removeCallbacks)
+        pendingSessionKick = null
+        kicking = false
+    }
+
     private companion object {
         const val LOG_TAG = "RawLensCamera"
         /** Settle before the idle-AF nudge scan on AUTO-only lenses. */
         const val IDLE_NUDGE_DELAY_MS = 500L
+        /** Settle before the session-start CANCEL kick (first frames are flowing). */
+        const val SESSION_KICK_DELAY_MS = 1500L
         /** Settle between the AUTO repeating commit and the one-shot AF START. */
         const val START_SETTLE_MS = 60L
         /** Retry delay when START is deferred because a still is executing. */

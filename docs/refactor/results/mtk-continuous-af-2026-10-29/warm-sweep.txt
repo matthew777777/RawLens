@@ -1,0 +1,13 @@
+device=25080RABDG camera=0 modes=[0, 1, 2, 3, 4]
+ae=0 strategy=region seed=0.0 frames=96 baseline=Sample(state=6, distance=5.1308513, mode=4) modes=[4] states=[6] fd=5.1043887..5.183777 final=5.157314
+ae=0 strategy=region seed=10.0 frames=96 baseline=Sample(state=6, distance=5.051463, mode=4) modes=[4] states=[6] fd=4.786835..5.0779257 final=5.0779257
+ae=0 strategy=cancel seed=0.0 frames=96 baseline=Sample(state=6, distance=4.7339096, mode=4) modes=[4] states=[6] fd=4.7339096..5.025 final=4.7339096
+ae=0 strategy=cancel seed=10.0 frames=96 baseline=Sample(state=2, distance=4.6280584, mode=4) modes=[4] states=[2] fd=4.6280584..4.8926864 final=4.6280584
+ae=0 strategy=off-reset seed=0.0 frames=103 baseline=Sample(state=2, distance=4.654521, mode=4) modes=[4, 0] states=[2, 0, 6] fd=0.0..4.654521 final=0.0
+ae=0 strategy=off-reset seed=10.0 frames=103 baseline=Sample(state=6, distance=4.6280584, mode=4) modes=[4, 0] states=[6, 0] fd=0.0..4.6280584 final=0.0
+ae=0 strategy=auto-cancel seed=0.0 frames=109 baseline=Sample(state=2, distance=4.5486703, mode=4) modes=[4, 1] states=[2, 0, 6] fd=4.5222073..4.9720745 final=4.5222073
+ae=0 strategy=auto-cancel seed=10.0 frames=109 baseline=Sample(state=6, distance=4.601596, mode=4) modes=[4, 1] states=[6, 0] fd=4.601596..4.919149 final=4.8662233
+ae=0 strategy=video-reset seed=0.0 frames=103 baseline=Sample(state=6, distance=4.8662233, mode=4) modes=[4, 3] states=[6] fd=4.601596..4.8926864 final=4.8662233
+ae=0 strategy=video-reset seed=10.0 frames=103 baseline=Sample(state=2, distance=4.839761, mode=4) modes=[4, 3] states=[2] fd=4.5486703..4.813298 final=4.813298
+ae=0 strategy=ae-pulse seed=0.0 frames=112 baseline=Sample(state=2, distance=4.786835, mode=4) modes=[4] states=[2] fd=4.5222073..4.839761 final=4.813298
+ae=0 strategy=ae-pulse seed=10.0 frames=112 baseline=Sample(state=2, distance=4.7339096, mode=4) modes=[4] states=[2] fd=4.469282..4.7339096 final=4.469282
