@@ -359,7 +359,8 @@ class WaveletHost {
         check(vkAllocateMemory(device_, &ai, nullptr, &b.memory), "wavelet: buffer memory failed");
         check(vkBindBufferMemory(device_, b.buffer, b.memory, 0), "wavelet: buffer bind failed");
         check(vkMapMemory(device_, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "wavelet: map failed");
-        b.size = mr.size;
+        // Buffer capacity is ci.size; the memory allocation may be padded.
+        b.size = size;
     }
 
     void flush(const OwnedBuffer& b) {

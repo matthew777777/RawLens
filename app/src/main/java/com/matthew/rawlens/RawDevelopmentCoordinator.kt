@@ -421,17 +421,18 @@ class RawDevelopmentCoordinator(context: Context) {
         }
         val reconstructed = camera
         val t2 = SystemClock.elapsedRealtime()
-        val denoised = ByteBuffer.allocateDirect(reconstructed.remaining()).order(ByteOrder.nativeOrder())
-        val ok = try {
+        try {
+            // Native stages the complete input before processing, then copies
+            // output back only after a successful GPU wait. Reuse this owned
+            // readback buffer: ~100 MiB less live memory for a 13 MP frame.
             waveletDenoiser.process(
-                reconstructed, denoised, output.width, output.height,
+                reconstructed, reconstructed, output.width, output.height,
                 settings.bounded(), noiseA, noiseB, wb
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
-            false
         }
-        val upload = if (ok) denoised else reconstructed
+        val upload = reconstructed
         val t3 = SystemClock.elapsedRealtime()
         var t4 = 0L
         val result = amaze.transformCameraLinear(

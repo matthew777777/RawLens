@@ -281,12 +281,20 @@ int main(int argc, char** argv) {
             ai.commandBufferCount = 1;
             vktest::ck(vkAllocateCommandBuffers(dev, &ai, &cmd), "bench cmd");
         }
+        // Opt-in per-dispatch timestamps; production never requests these.
+        const bool profilePasses = std::getenv("DENOISE_PROFILE") != nullptr;
+        const uint32_t tile = std::max(c.tile, 256u);
+        const int scales = std::clamp(c.scales, 1, 7);
+        const uint32_t passesPerTile = 2u + 3u * uint32_t(scales);
+        const uint32_t passCount = ((c.w + tile - 1) / tile) *
+                                   ((c.h + tile - 1) / tile) * passesPerTile;
+        const uint32_t queryCount = profilePasses ? 2 + 2 * passCount : 2;
         VkQueryPool tsPool{};
         {
             VkQueryPoolCreateInfo qi{};
             qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-            qi.queryCount = 2;
+            qi.queryCount = queryCount;
             vktest::ck(vkCreateQueryPool(dev, &qi, nullptr, &tsPool), "bench ts");
         }
         auto imgBarrier = [&](VkImage img, VkAccessFlags dst, VkImageLayout next) {
@@ -332,7 +340,7 @@ int main(int argc, char** argv) {
             }
             imgBarrier(outImg, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL);
             if (timed) {
-                vkCmdResetQueryPool(cmd, tsPool, 0, 2);
+                vkCmdResetQueryPool(cmd, tsPool, 0, queryCount);
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool, 0);
             }
             raw_denoise::DenoiseParams p{};
@@ -345,7 +353,8 @@ int main(int argc, char** argv) {
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;
-            pipe.record(cmd, inView, outView, c.w, c.h, p, VK_NULL_HANDLE);
+            pipe.record(cmd, inView, outView, c.w, c.h, p, VK_NULL_HANDLE,
+                        timed && profilePasses ? tsPool : VK_NULL_HANDLE);
             if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool, 1);
             vktest::ck(vkEndCommandBuffer(cmd), "bench end");
             VkSubmitInfo si{};
@@ -451,6 +460,25 @@ int main(int argc, char** argv) {
         }
         std::printf("BENCH_RESULT tile=%u scales=%d w=%u h=%u best_gpu_ms=%.2f\n", c.tile, c.scales,
                     c.w, c.h, best);
+        if (profilePasses) {
+            std::vector<uint64_t> stamps(2 * passCount);
+            vktest::ck(vkGetQueryPoolResults(dev, tsPool, 2, uint32_t(stamps.size()),
+                          stamps.size() * sizeof(uint64_t), stamps.data(), sizeof(uint64_t),
+                          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "bench pass ts");
+            VkPhysicalDeviceProperties prop{};
+            vkGetPhysicalDeviceProperties(ctx.pd, &prop);
+            double sums[5] = {};
+            const char* names[] = {"precondition", "estimate", "threshold", "apply", "backtransform"};
+            for (uint32_t i = 0; i < passCount; ++i) {
+                const uint32_t local = i % passesPerTile;
+                const uint32_t kind = local == 0 ? 0 : local == passesPerTile - 1 ? 4 :
+                                      1 + (local - 1) % 3;
+                sums[kind] += double(stamps[2*i+1] - stamps[2*i]) * prop.limits.timestampPeriod / 1e6;
+            }
+            for (int i = 0; i < 5; ++i)
+                std::printf("BENCH_PASS %s gpu_ms=%.3f (last iteration, all tiles/scales)\n",
+                            names[i], sums[i]);
+        }
         if (!c.dumpPrePath.empty()) {
             // Download the preconditioned first tile (device-local OPTIMAL).
             VkImage fineImg = pipe.debugFineImage();

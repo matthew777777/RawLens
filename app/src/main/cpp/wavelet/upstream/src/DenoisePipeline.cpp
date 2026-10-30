@@ -369,7 +369,7 @@ uint32_t DenoisePipeline::debugFineExtent() const noexcept {
 
 void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkImageView dstView,
                              uint32_t width, uint32_t height, const DenoiseParams& params,
-                             VkQueryPool timingPool) {
+                             VkQueryPool timingPool, VkQueryPool passTimingPool) {
     Impl& im = *impl_;
     VkDevice device = im.device;
     const int maxScale = std::clamp(params.maxScale, 1, 7);
@@ -425,7 +425,9 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
         transitionToGeneral(command, im.coarseA.image);
         transitionToGeneral(command, im.coarseB.image);
         transitionToGeneral(command, im.accum.image);
-        const uint32_t gmax = (extent + 7) / 8;  // fits local sizes down to 8x8
+        // Shipped shaders use kLocal x kLocal workgroups. One vec4 per
+        // dispatched group; allocating for 8x8 wasted three quarters of it.
+        const uint32_t gmax = (extent + kLocal - 1u) / kLocal;
         im.partials = makeBuffer(im.physical, device, (VkDeviceSize)gmax * gmax * 16u);
         im.thrsBuf = makeBuffer(im.physical, device, 8u * 16u);
         im.scratchExtent = extent;
@@ -456,14 +458,19 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
     writeImageSet(device, im.backSet, 1, (maxScale % 2 == 1) ? im.coarseA.view : im.fine.view);
     writeImageSet(device, im.backSet, 2, dstView);
 
+    uint32_t passQuery = 2;
     auto dispatch = [&](VkPipeline pipe, VkPipelineLayout layout, VkDescriptorSet set,
                         const void* push, uint32_t pushSize, uint32_t gx, uint32_t gy) {
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0,
                                 nullptr);
         vkCmdPushConstants(command, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize, push);
+        if (passTimingPool) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                               passTimingPool, passQuery++);
         vkCmdDispatch(command, gx, gy, 1);
         barrier(command);
+        if (passTimingPool) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                               passTimingPool, passQuery++);
     };
 
     if (timingPool) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool,
