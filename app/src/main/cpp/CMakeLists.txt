@@ -393,11 +393,13 @@ add_subdirectory("../../../../tools/sr-pipeline/src/main/cpp" srpipeline)
 # Encoder and decoder are separate libraries: they are independent
 # implementations of the spec and share type names.
 set(CRAW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/craw")
+include("${CMAKE_CURRENT_SOURCE_DIR}/craw_fd_writer.cmake")
 add_library(rawLensCraw SHARED
     ${CRAW_DIR}/encoder/src/Encoder.cpp
-    ${CRAW_DIR}/encoder/src/Writer.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/craw-fd/src/Writer.cpp
     craw_writer_jni.cpp)
-target_include_directories(rawLensCraw PRIVATE "${CRAW_DIR}/encoder/include")
+target_include_directories(rawLensCraw PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/craw-fd/include"
+    "${CRAW_DIR}/encoder/include" "${CRAW_DIR}/encoder/src")
 add_library(rawLensCrawReader SHARED
     ${CRAW_DIR}/decoder/src/Decoder.cpp
     ${CRAW_DIR}/decoder/src/Reader.cpp

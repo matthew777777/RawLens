@@ -22,13 +22,13 @@ internal object DirectLogSaver {
         require(source.isFile && expected > 0) { "Missing or empty Direct-Log video" }
         require(source.extension == "mp4") { "Not an MP4 take: ${source.name}" }
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, source.name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/RawLens")
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(MediaStore.Downloads.DISPLAY_NAME, source.name)
+            put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
+            put(MediaStore.Downloads.RELATIVE_PATH, "Download/RawLens")
+            put(MediaStore.Downloads.IS_PENDING, 1)
         }
-        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Could not create Direct-Log video in DCIM/RawLens")
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Could not create Direct-Log video in Download/RawLens")
         try {
             val descriptor = resolver.openFileDescriptor(uri, "w")
                 ?: throw IOException("Could not open Direct-Log destination")
@@ -43,7 +43,7 @@ internal object DirectLogSaver {
                 if (descriptor.statSize != expected) throw IOException("Direct-Log size mismatch")
             }
             values.clear()
-            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) {
                 throw IOException("Could not publish Direct-Log video")
             }
@@ -57,8 +57,7 @@ internal object DirectLogSaver {
     }
 
     /**
-     * SAF fallback reusing the burst sidecar tree grant, used only when
-     * MediaStore.Video rejects the file on some OEMs.
+     * Publishes into the user-selected recording tree before Downloads fallback.
      */
     fun saveViaTree(context: Context, treeUri: Uri, source: File): Saved {
         val expected = source.length()
@@ -72,11 +71,8 @@ internal object DirectLogSaver {
         } catch (failure: Exception) {
             throw IOException("Unreadable video folder grant", failure)
         }
-        val suffix = treePath.substringAfter(':', "")
         var dirId = treePath
-        if (suffix == "DCIM" || suffix == "DCIM/" || suffix.endsWith("/DCIM") ||
-            suffix.endsWith("/DCIM/")
-        ) {
+        if (RecordingFolderAccess.needsRawLensChild(treePath)) {
             dirId = findOrCreateDir(resolver, treeUri, dirId, "RawLens")
         }
         val fileUri = try {

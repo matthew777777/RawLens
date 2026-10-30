@@ -89,10 +89,9 @@ class DirectLogStabilizer(private val appContext: Context) {
         val warpSpv = appContext.assets.open("shaders/vf/vf_stabwarp.spv").use { it.readBytes() }
         val initRc = VfStab.initStabNative(warpSpv, w, h)
         check(initRc == VfVulkan.OK) { "stab init: ${VfStab.describe(initRc)}" }
-        val staging = VfEglImport.createP010(w, h) ?: error("P010 staging failed")
-        val stagingStrides = VfEglImport.describeP010(staging) ?: error("P010 describe failed")
-        val srcYStrideB = stagingStrides[0]
-        val srcUvStrideB = stagingStrides[1]
+        val staging = VfEglImport.createLinearP010(w, h) ?: error("P010 staging failed")
+        val srcYStrideB = w * 2
+        val srcUvStrideB = w * 2
 
         var extractor: MediaExtractor? = null
         var decoder: MediaCodec? = null

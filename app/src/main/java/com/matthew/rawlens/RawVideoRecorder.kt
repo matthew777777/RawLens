@@ -259,6 +259,21 @@ internal class RawVideoRecorder(
     private var motion: MotionRecorder? = null
     private var writerHandle: Long = 0L
     private var outputFile: File? = null
+    private var directOutput: DirectRecordingOutput? = null
+    @Volatile private var writeFailure: Exception? = null
+    @Volatile var onRecordingError: ((String) -> Unit)? = null
+    private val recordingErrorSent = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun recordingBytes(): Long = runCatching {
+        directOutput?.bytes() ?: outputFile?.length() ?: 0L
+    }.getOrDefault(0L)
+
+    private fun failRecording(error: Exception) {
+        if (!recordingErrorSent.compareAndSet(false, true)) return
+        writeFailure = error
+        accepting = false
+        try { onRecordingError?.invoke(error.message ?: "Recording destination failed") } catch (_: Exception) {}
+    }
     private var startRealtimeMs: Long = 0L
 
     private data class EncodeTask(
@@ -366,13 +381,25 @@ internal class RawVideoRecorder(
     private var lastStatsLogTs = 0L // committer thread only
 
     fun start(output: File, containerMetadataJson: String) {
+        directOutput = null
+        startInternal(output, containerMetadataJson)
+    }
+
+    fun start(output: DirectRecordingOutput, containerMetadataJson: String) {
+        directOutput = output
+        startInternal(null, containerMetadataJson)
+    }
+
+    private fun startInternal(output: File?, containerMetadataJson: String) {
         MemoryLeakDiagnostics.sampleAsync("rawvideo-start")
         check(device == null) { "Already started" }
         require(CrawWriter.available) { "craw native library unavailable" }
         val reserve = storageReserveBytes
-        val free = freeBytes(output)
+        val free = directOutput?.freeBytes() ?: freeBytes(requireNotNull(output))
         if (free < reserve) throw StorageFullException(free, reserve)
         storageLow = false
+        writeFailure = null
+        recordingErrorSent.set(false)
         lastSpaceCheckMs = 0L
         lastStatsLogTs = 0L
         val workers = encodeWorkers.coerceIn(1, MAX_WORKERS)
@@ -415,7 +442,7 @@ internal class RawVideoRecorder(
         workersAlive.set(workers)
         startRealtimeMs = SystemClock.elapsedRealtime()
 
-        val chars = cameraManager.getCameraCharacteristics(cameraId)
+        val chars = videoRoute.characteristics
         vfChars = chars
         val sensorCfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         binActive = binningActive(binning, sensorCfa, frameSize.width)
@@ -478,7 +505,8 @@ internal class RawVideoRecorder(
                 audioChannels, hasMotionStream, orientation,
                 audioFloat = audio?.isFloat == true
             )
-            CrawWriter.open(output.absolutePath, meta)
+            directOutput?.let { CrawWriter.openFd(it.descriptor.fd, meta) }
+                ?: CrawWriter.open(requireNotNull(output).absolutePath, meta)
         } catch (e: Exception) {
             shutdownStreams()
             throw e
@@ -756,6 +784,7 @@ internal class RawVideoRecorder(
         } finally {
             teardown()
         }
+        writeFailure?.let { throw java.io.IOException("Recording write failed", it) }
         // Propagate finalization failures so callers retain, rather than publish,
         // a potentially incomplete local recording.
         // containerFrames = committed in-order frames (footer == encoded - latePurged).
@@ -781,7 +810,7 @@ internal class RawVideoRecorder(
             hasMotion = motionStats != null &&
                 (motionStats.gyroSamples > 0 || motionStats.accelSamples > 0),
             containerFrames = (encodedCount - lateCount).toLong(),
-            fileBytes = outputFile?.length() ?: 0L,
+            fileBytes = recordingBytes(),
         ).also {
             motion = null
             Log.i(
@@ -804,7 +833,7 @@ internal class RawVideoRecorder(
      */
     fun videoControlRange(control: ManualControl): ManualControlRange? {
         val chars = try {
-            vfChars ?: cameraManager.getCameraCharacteristics(cameraId)
+            vfChars ?: videoRoute.characteristics
         } catch (_: Exception) {
             return null
         }
@@ -846,7 +875,7 @@ internal class RawVideoRecorder(
             null
         } ?: return
         val chars = try {
-            vfChars ?: cameraManager.getCameraCharacteristics(cameraId)
+            vfChars ?: videoRoute.characteristics
         } catch (_: Exception) {
             return
         }
@@ -906,7 +935,7 @@ internal class RawVideoRecorder(
         latePurged = latePurged.get(),
         queueDepth = encodeQueue.size,
         reorderDepth = synchronized(reorderLock) { reorder.size },
-        fileBytes = outputFile?.length() ?: 0L,
+        fileBytes = recordingBytes(),
         audioChunks = audioChunks.get(),
         audioFrames = audioFrames.get(),
         gyroSamples = gyroSamples.get(),
@@ -915,7 +944,7 @@ internal class RawVideoRecorder(
     )
 
     fun sensorOrientation(): Int = try {
-        cameraManager.getCameraCharacteristics(cameraId)
+        videoRoute.characteristics
             .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
     } catch (_: Exception) {
         0
@@ -1140,6 +1169,7 @@ internal class RawVideoRecorder(
                 updateCommitFps(pend.timestampNs)
             } catch (e: Exception) {
                 Log.w(TAG, "frame commit failed: ${e.message}")
+                failRecording(e)
             } finally {
                 pend.payload.clear()
                 payloadPool.offer(pend.payload)
@@ -1314,8 +1344,10 @@ internal class RawVideoRecorder(
         val now = SystemClock.elapsedRealtime()
         if (now - lastSpaceCheckMs < STORAGE_CHECK_MS) return
         lastSpaceCheckMs = now
-        val file = outputFile ?: return
-        val free = freeBytes(file)
+        val file = outputFile
+        val free = try { directOutput?.freeBytes() ?: file?.let(::freeBytes) ?: return }
+        catch (e: Exception) { failRecording(e); return }
+        // Direct recording needs only drain/footer headroom, never a second file.
         if (free >= storageReserveBytes) return
         storageLow = true
         // Stop admitting: queued and in-flight frames still commit, and
@@ -1345,11 +1377,17 @@ internal class RawVideoRecorder(
         motion = null
     }
 
+    private val videoRoute: VideoCameraRoute by lazy {
+        requireNotNull(resolveVideoCameraRoute(cameraManager, cameraId)) {
+            "RAW video route $cameraId is unavailable"
+        }
+    }
+
     private fun openCamera(handler: Handler): CameraDevice {
         val latch = CountDownLatch(1)
         var opened: CameraDevice? = null
         var error: String? = null
-        cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+        cameraManager.openCamera(videoRoute.openCameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) {
                 opened = d
                 latch.countDown()
@@ -1377,7 +1415,7 @@ internal class RawVideoRecorder(
         val config = if (Build.VERSION.SDK_INT >= 28) {
             SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(OutputConfiguration(reader!!.surface)),
+                listOf(videoRoute.bind(OutputConfiguration(reader!!.surface))),
                 // Use the camera handler executor for session callbacks.
                 java.util.concurrent.Executor { handler.post(it) },
                 object : CameraCaptureSession.StateCallback() {

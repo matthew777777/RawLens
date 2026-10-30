@@ -485,9 +485,35 @@ class DirectLogRecorder(
      */
     @Volatile private var firstOutNs = 0L
     private var outputFile: File? = null
+    private var directOutput: DirectRecordingOutput? = null
+    @Volatile private var writeFailure: Exception? = null
+    @Volatile var onRecordingError: ((String) -> Unit)? = null
+    private val recordingErrorSent = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastStorageCheckMs = 0L
+
+    private fun recordingBytes(): Long = runCatching {
+        directOutput?.bytes() ?: outputFile?.length() ?: 0L
+    }.getOrDefault(0L)
+
+    private fun failRecording(error: Exception) {
+        if (!recordingErrorSent.compareAndSet(false, true)) return
+        writeFailure = error
+        accepting = false
+        try { onRecordingError?.invoke(error.message ?: "Recording destination failed") } catch (_: Exception) {}
+    }
     private var startRealtimeMs: Long = 0L
 
     fun start(output: File) {
+        directOutput = null
+        startInternal(output)
+    }
+
+    internal fun start(output: DirectRecordingOutput) {
+        directOutput = output
+        startInternal(null)
+    }
+
+    private fun startInternal(output: File?) {
         DirectLogBreadcrumb.mark(appContext, "start")
         MemoryLeakDiagnostics.sampleAsync("directlog-start")
         check(device == null) { "Already started" }
@@ -529,7 +555,7 @@ class DirectLogRecorder(
         DirectLogBreadcrumb.clear(appContext)
     }
 
-    private fun startTake(output: File) {
+    private fun startTake(output: File?) {
         require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
@@ -553,9 +579,15 @@ class DirectLogRecorder(
     )
 
     /** Stage 1: zero every per-take counter and buffer field. */
-    private fun resetTakeState(output: File) {
+    private fun resetTakeState(output: File?) {
         outputFile = output
-        if (output.exists()) output.delete()
+        if (output?.exists() == true) output.delete()
+        writeFailure = null
+        recordingErrorSent.set(false)
+        lastStorageCheckMs = 0L
+        directOutput?.let {
+            check(it.freeBytes() >= RawVideoRecorder.STORAGE_RESERVE_BYTES) { "Recording destination is full" }
+        }
         startRealtimeMs = SystemClock.elapsedRealtime()
         acquired.set(0); graded.set(0); dropped.set(0); resultMiss.set(0)
         diagnosticCaptureTimestamp = 0L; diagnosticImageTimestamp = 0L
@@ -614,7 +646,7 @@ class DirectLogRecorder(
 
     /** Stage 2: characteristics, colour, thermal ladder, crop and export size. */
     private fun resolveGeometry(): TakeGeometry {
-        val c = cameraManager.getCameraCharacteristics(cameraId)
+        val c = videoRoute.characteristics
         chars = c
         // Static CCM floor: per-frame COLOR_CORRECTION results usually miss
         // on the record path, and the old identity fallback rendered as a
@@ -1054,13 +1086,12 @@ class DirectLogRecorder(
     /** Stage 5: P010 staging, demosaic working and monitor buffers. */
     private fun allocateBuffers(export: LogVideoLadder.RawSize) {
         // App-owned P010 staging (GPU-written, CPU-readable): 3 ping-pong
-        // buffers at encode res. Strides come from the allocator and are
-        // re-validated natively per submit (loud -20 on mismatch).
+        // byte buffers at encode res. The app defines tight plane offsets;
+        // gralloc's native P010 images can have padded luma slice heights.
         for (s in slots) {
-            val p010 = VfEglImport.createP010(width, height)
+            val p010 = VfEglImport.createLinearP010(width, height)
                 ?: error("P010 staging allocate failed")
-            val info = VfEglImport.describeP010(p010)
-                ?: error("P010 describe failed")
+            val info = intArrayOf(width * 2, width * 2)
             if (ourYStrideB == 0) {
                 ourYStrideB = info[0]
                 ourUvStrideB = info[1]
@@ -1107,8 +1138,9 @@ class DirectLogRecorder(
     }
 
     /** Stage 6: muxer, drain thread, audio, then the camera session. */
-    private fun startStreams(output: File, c: CameraCharacteristics, size: Size) {
-        muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private fun startStreams(output: File?, c: CameraCharacteristics, size: Size) {
+        muxer = directOutput?.let { MediaMuxer(it.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4) }
+            ?: MediaMuxer(requireNotNull(output).absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         draining.set(true)
         drainThread = Thread(::drainLoop, "DirectLogDrain").apply { start() }
         startAudio()
@@ -1218,7 +1250,7 @@ class DirectLogRecorder(
             framesAcquired = acquired.get(),
             framesGraded = graded.get(),
             framesDropped = dropped.get(),
-            fileBytes = try { outputFile?.length() ?: 0L } catch (_: Exception) { 0L },
+            fileBytes = try { recordingBytes() } catch (_: Exception) { 0L },
             waitFreeFrames = waitFree.get(),
             fallbackWaits = fallbackWaits.get(),
             cpuChainMsAvg = cpuChainMsAvg,
@@ -1250,7 +1282,7 @@ class DirectLogRecorder(
      */
     fun videoControlRange(control: ManualControl): ManualControlRange? {
         val c = try {
-            chars ?: cameraManager.getCameraCharacteristics(cameraId)
+            chars ?: videoRoute.characteristics
         } catch (_: Exception) {
             return null
         }
@@ -1293,7 +1325,7 @@ class DirectLogRecorder(
             null
         } ?: return
         val c = try {
-            chars ?: cameraManager.getCameraCharacteristics(cameraId)
+            chars ?: videoRoute.characteristics
         } catch (_: Exception) {
             return
         }
@@ -1553,7 +1585,7 @@ class DirectLogRecorder(
         muxer = null
         try {
             if (muxerStarted) mux?.stop()
-        } catch (_: Exception) {}
+        } catch (e: Exception) { writeFailure = writeFailure ?: e }
         try { mux?.release() } catch (_: Exception) {}
         muxerStarted = false
         // Copy workers joined inside stopCopyWorker above: the stab frame
@@ -1567,6 +1599,7 @@ class DirectLogRecorder(
         }
         teardown()
         DirectLogBreadcrumb.clear(appContext)
+        writeFailure?.let { throw java.io.IOException("Recording destination failed", it) }
         // stop() runs on the DirectLog stop thread, so a synchronous PSS sample is safe here.
         MemoryLeakDiagnostics.sample(
             "directlog-stop",
@@ -1612,7 +1645,7 @@ class DirectLogRecorder(
             audioOutBufs = audioOutBufs.get(),
             outputBuffers = outBufs.get(),
             outputBytes = outBytes.get(),
-            fileBytes = outputFile?.length() ?: 0L,
+            fileBytes = recordingBytes(),
             thermalStatus = heatThermalStatus,
             heatDegraded = heatDegraded,
             profile = outputProfile.name,
@@ -2873,6 +2906,7 @@ class DirectLogRecorder(
                 (if (audioRequired) " +aac fmt=${audioFormat}" else ""))
         } catch (e: Exception) {
             Log.w(TAG, "muxer start failed: ${e.message}")
+            failRecording(e)
         }
     }
 
@@ -2890,6 +2924,7 @@ class DirectLogRecorder(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "audio write failed: ${e.message}")
+                failRecording(e)
                 break
             }
             chunk = muxAudioQueue.poll()
@@ -2900,6 +2935,15 @@ class DirectLogRecorder(
         val mc = codec ?: return
         val info = MediaCodec.BufferInfo()
         while (draining.get()) {
+            val now = SystemClock.elapsedRealtime()
+            if (directOutput != null && now - lastStorageCheckMs >= 500L) {
+                lastStorageCheckMs = now
+                try {
+                    if (directOutput!!.freeBytes() < RawVideoRecorder.STORAGE_RESERVE_BYTES) {
+                        failRecording(java.io.IOException("Recording destination is full"))
+                    }
+                } catch (e: Exception) { failRecording(e) }
+            }
             val idx = try {
                 mc.dequeueOutputBuffer(info, 2000)
             } catch (e: Exception) {
@@ -2945,6 +2989,7 @@ class DirectLogRecorder(
                         mc.releaseOutputBuffer(idx, false)
                     } catch (e: Exception) {
                         Log.w(TAG, "drain failed: ${e.message}")
+                failRecording(e)
                         try { mc.releaseOutputBuffer(idx, false) } catch (_: Exception) {}
                     }
                 }
@@ -2993,11 +3038,17 @@ class DirectLogRecorder(
 
     // ---- camera plumbing (mirrors RawVideoRecorder session shape) ----
 
+    private val videoRoute: VideoCameraRoute by lazy {
+        requireNotNull(resolveVideoCameraRoute(cameraManager, cameraId)) {
+            "RAW video route $cameraId is unavailable"
+        }
+    }
+
     private fun openCamera(handler: Handler): CameraDevice {
         val latch = CountDownLatch(1)
         var opened: CameraDevice? = null
         var error: String? = null
-        cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+        cameraManager.openCamera(videoRoute.openCameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) {
                 opened = d
                 latch.countDown()
@@ -3026,7 +3077,7 @@ class DirectLogRecorder(
         val config = if (Build.VERSION.SDK_INT >= 28) {
             SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
-                listOf(OutputConfiguration(r.surface)),
+                listOf(videoRoute.bind(OutputConfiguration(r.surface))),
                 java.util.concurrent.Executor { handler.post(it) },
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(s: CameraCaptureSession) {
