@@ -124,6 +124,7 @@ class Gles31JpegOutputProcessor(context: Context) {
             )
             GLES31.glUniform1i(location(outputProgram, "u_display_p3"), if (resolved.displayP3) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_purity_boost"), resolved.agxPurityBoost)
+            GLES31.glUniform1i(location(outputProgram, "u_agx_punchy"), if (resolved.agxLook == AgxLook.PUNCHY) 1 else 0)
             GLES31.glUniform1f(location(outputProgram, "u_agx_contrast"), resolved.agxContrast)
             GLES31.glUniform1f(location(outputProgram, "u_agx_saturation"), resolved.agxSaturation)
             GLES31.glUniform1f(

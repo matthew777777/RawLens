@@ -317,7 +317,7 @@ object SceneLinearColorProcessor {
         }
     }
 
-    private fun camera2MatrixOrNull(values: ImmutableDoubleValues?): Matrix3? {
+    internal fun camera2MatrixOrNull(values: ImmutableDoubleValues?): Matrix3? {
         val frozen = values?.toDoubleArray() ?: return null
         if (frozen.size != 9 || frozen.any { !it.isFinite() }) return null
         // Match PhotonCamera Converter.convertColorspaceTransform and the working DNG tags:

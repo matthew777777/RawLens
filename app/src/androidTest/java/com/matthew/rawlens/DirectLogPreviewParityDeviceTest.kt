@@ -43,11 +43,11 @@ class DirectLogPreviewParityDeviceTest {
         val current = asset("vf_p010preview")
         var compared = 0
         var cases = 0
-        for ((w, h) in listOf(512 to 256, 2560 to 1440))
+        for ((w, h) in listOf(512 to 256, 2560 to 1440, 3840 to 2160))
             for (box in if (w == 512) listOf(2,4,8,128,256) else listOf(4)) for (pattern in 0..2) {
             val input = HardwareBuffer.create(w,h,HardwareBuffer.RGBA_FP16,1,
                 HardwareBuffer.USAGE_CPU_WRITE_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
-            val p010 = requireNotNull(VfEglImport.createP010(w,h))
+            val p010 = requireNotNull(VfEglImport.createLinearP010(w,h))
             val output = HardwareBufferRef.createRgba8(w/box,h/box)
             try {
                 assertTrue(VfEglImport.fillHalfGradient(input,w,h,pattern)>0)
@@ -58,7 +58,7 @@ class DirectLogPreviewParityDeviceTest {
                         assertEquals(0,VfLogGrade.initGradeYuvNative(asset("vf_gradeyuv")))
                         assertEquals(0,VfLogGrade.gradeLutUploadNative(VfLogGrade.bakeLut(1f)))
                         assertEquals(0,VfRecordPreview.initPreviewNative(shader))
-                        val layout = requireNotNull(VfEglImport.describeP010(p010))
+                        val layout = intArrayOf(w * 2, w * 2)
                         val strides = intArrayOf(layout[0],layout[1],w,h)
                         val (dims,grade) = VfLogGrade.packGrade(intArrayOf(w,h),floatArrayOf(1f,1f,1f,1f),
                             VfLogGrade.IDENTITY_CCM,0f,false,profile=DirectLogProfile.BT709)

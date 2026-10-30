@@ -26,7 +26,7 @@ class RawExposureAssistUiTest {
         assumeTrue("Initial lens setup must be complete", prefs.getBoolean("lens_setup_complete", false))
         val videoKeys = listOf("direct_log_res", "direct_log_fps", "direct_log_profile", "video_stab_output", "direct_log_video")
         val savedVideo = prefs.all.filterKeys { it in videoKeys }
-        var ownTakeName: String? = null
+        var ownTakeUri: android.net.Uri? = null
         val old = RawExposureAssistSettings(RawExposureOverlayMode.fromName(prefs.getString(RawExposureAssistSettings.KEY_OVERLAY, null)),
             prefs.getBoolean(RawExposureAssistSettings.KEY_SPOT, true),
             RawExposureMeterMode.fromName(prefs.getString(RawExposureAssistSettings.KEY_METER_MODE, null)))
@@ -143,8 +143,9 @@ class RawExposureAssistUiTest {
                     activity.saveRawExposureAssist(RawExposureAssistSettings())
                     MainActivity::class.java.getDeclaredMethod("doStartDirectLog", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
                     assertTrue("UI recording did not start", activity.videoRecording)
-                    val file = MainActivity::class.java.getDeclaredField("videoOutputFile").apply { isAccessible = true }.get(activity) as File
-                    ownTakeName = file.name
+                    val destination = MainActivity::class.java.getDeclaredField("recordingDestination")
+                        .apply { isAccessible = true }.get(activity) as DirectRecordingOutput
+                    ownTakeUri = destination.uri
                 }
                 SystemClock.sleep(2500)
                 val recorder = requireNotNull(activity.logRecorder)
@@ -182,11 +183,10 @@ class RawExposureAssistUiTest {
                 videoKeys.forEach { remove(it) }
                 savedVideo.forEach { (key, value) -> when (value) { is String -> putString(key, value); is Int -> putInt(key, value); is Boolean -> putBoolean(key, value) } }
             }.commit()
-            ownTakeName?.let { name ->
-                val collection = android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                context.contentResolver.query(collection, arrayOf(android.provider.MediaStore.Video.Media._ID), "${android.provider.MediaStore.Video.Media.DISPLAY_NAME} = ?", arrayOf(name), null)?.use { cursor ->
-                    while (cursor.moveToNext()) context.contentResolver.delete(android.content.ContentUris.withAppendedId(collection, cursor.getLong(0)), null, null)
-                }
+            ownTakeUri?.let { uri ->
+                if (android.provider.DocumentsContract.isDocumentUri(context, uri)) {
+                    android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+                } else context.contentResolver.delete(uri, null, null)
             }
             File(output, "ui-report.txt").writeText(report.toString())
         }

@@ -141,6 +141,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         var displayP3: Boolean
         var jpeg: Boolean
         var exposureEv: Float
+        var agxPunchy: Float
         var agxContrast: Float
         var agxSaturation: Float
         var agxPurity: Float
@@ -201,6 +202,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
+        override var agxPunchy = 0f
         override var agxContrast = 1f
         override var agxSaturation = 1f
         override var agxPurity = 1f
@@ -251,6 +253,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         override var displayP3 = false
         override var jpeg = false
         override var exposureEv = 0f
+        override var agxPunchy = 0f
         override var agxContrast = 1f
         override var agxSaturation = 1f
         override var agxPurity = 1f
@@ -286,6 +289,14 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var stridesLogged = false
     private var vfDiagLogged = false
     private var vfSanitizeLogged = false
+    /** 0 = nothing yet, 1 = first-frame colour line logged, 2 = settled line logged. */
+    private var vfColorDiagStage = 0
+    private var vfColorDiagFirstMs = 0L
+    /** Gray-world WB for streams whose HAL runs no AWB; camera thread only. */
+    private val wbFallback = RawWhiteBalanceFallback.Tracker()
+    /** Neutral [snapshotRenderState] renders with instead of the HAL's, or null. */
+    private var wbFallbackNeutral: DoubleArray? = null
+    private var wbFallbackLogged = false
     /** True while display levels fall back to the data-driven replacement. Reset per session. */
     @Volatile private var vfLevelsFallbackActive = false
     /** Sticky Vulkan skip after repeated compute failures; reset per session. */
@@ -367,6 +378,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     @Volatile var engineMode: VfEngineMode = VfEngineMode.AUTO
         private set
+    @Volatile private var agxPunchy = 0f
     @Volatile private var agxContrast = 1f
     @Volatile private var agxSaturation = 1f
     @Volatile private var agxPurity = 1f
@@ -509,6 +521,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var gpuPositionLoc = -1
     private var gpuUvLoc = -1
     private var gpuJpegLoc = -1
+    private var gpuAgxPunchyLoc = -1
     private var gpuAgxContrastLoc = -1
     private var gpuAgxSaturationLoc = -1
     private var gpuAgxPurityLoc = -1
@@ -539,6 +552,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var positionLoc = -1
     private var uvLoc = -1
     private var jpegLoc = -1
+    private var agxPunchyLoc = -1
     private var agxContrastLoc = -1
     private var agxSaturationLoc = -1
     private var agxPurityLoc = -1
@@ -594,12 +608,38 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private val coordinates = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     private var coordinateRotation = Int.MIN_VALUE
     private var coordinateMirrored = false
+    private var presentBufferWidth = 0
+    private var presentBufferHeight = 0
+    // UI thread only: a fixed-size surface is compositor-scaled to the View.
+    // Avoid tonemapping every physical screen pixel after RAW was downsampled.
+    private val resizePresent = Runnable {
+        if (width > 0 && height > 0) {
+            val edge = VfResolution.effectiveEdge(targetLongEdge, recordMode, powerSave)
+            val size = VfPresentSize.forLayout(width, height, edge)
+            if (size.width != presentBufferWidth || size.height != presentBufferHeight) {
+                presentBufferWidth = size.width
+                presentBufferHeight = size.height
+                holder.setFixedSize(size.width, size.height)
+                Log.i("RawViewfinder", "VF present buffer ${size.width}x${size.height} layout=${width}x$height")
+            }
+        }
+    }
+
+    private fun schedulePresentResize() {
+        removeCallbacks(resizePresent)
+        post(resizePresent)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        resizePresent.run()
+    }
     private val watch = object : Runnable {
         override fun run() {
             val now = SystemClock.elapsedRealtime()
             val limit = max(2000L, expectedIntervalMs * 3)
             if (now - lastDisplayed > limit) {
-                alpha = 0f
+                if (alpha != 0f) alpha = 0f
                 statGlActive = false
                 // The surface layer ignores View alpha: actively clear to black once per
                 // stall episode so a stale frame never masquerades as a live viewfinder.
@@ -626,7 +666,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // overlays and controls draw in the window above the VF surface hole.
         holder.setFormat(PixelFormat.RGBA_8888)
         holder.addCallback(this)
-        alpha = 0f
+        if (alpha != 0f) alpha = 0f
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(watch) }
     override fun onDetachedFromWindow() {
@@ -634,7 +674,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         invalidateSession()
         super.onDetachedFromWindow()
     }
-    override fun dispose() { invalidateSession(); MemoryLeakDiagnostics.sampleAsync("raw-vf-disposed"); worker.post { worker.removeCallbacks(vulkanRecoverRunnable); releaseGl(); thread.quitSafely() } }
+    override fun dispose() { removeCallbacks(resizePresent); invalidateSession(); MemoryLeakDiagnostics.sampleAsync("raw-vf-disposed"); worker.post { worker.removeCallbacks(vulkanRecoverRunnable); releaseGl(); thread.quitSafely() } }
 
     override fun invalidateSession() {
         // A queued draw that never runs (dispose) must not pin the idle gate.
@@ -685,6 +725,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         stridesLogged = false
         vfDiagLogged = false
         vfSanitizeLogged = false
+        vfColorDiagStage = 0
+        wbFallback.reset()
+        wbFallbackNeutral = null
+        wbFallbackLogged = false
         vfLevelsFallbackActive = false
         vulkanZeroCopyDisabled = false
         vulkanBridgeDisabled = false
@@ -711,7 +755,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 // Best effort: native state rebuilds on next use.
             }
         }
-        post { alpha = 0f; recoveryAttempts = 0; recoverySinceMs = SystemClock.elapsedRealtime() }
+        post { if (alpha != 0f) alpha = 0f; recoveryAttempts = 0; recoverySinceMs = SystemClock.elapsedRealtime() }
     }
 
     /** Latest sampled sizes, frame rate and render cost for the debug overlay. */
@@ -743,6 +787,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Selectable VF resolution (long edge, 480/640/960/1080). Applies to the next sampled frame. */
     override fun setTargetLongEdge(longEdge: Int) {
         targetLongEdge = longEdge.coerceIn(VfResolution.MIN, VfResolution.MAX)
+        schedulePresentResize()
     }
 
     /**
@@ -766,6 +811,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             updateRateFloor()
             Log.i("RawViewfinder", "VF record mode off (edge=$targetLongEdge)")
         }
+        schedulePresentResize()
     }
 
     /**
@@ -777,6 +823,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         if (powerSave == active) return
         powerSave = active
         updateRateFloor()
+        schedulePresentResize()
         Log.i("RawViewfinder", "VF power-save ${if (active) "on (<=640p @<=15fps)" else "off"}")
     }
 
@@ -821,6 +868,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     override fun setAgx(settings: JpegOutputSettings) {
         val resolved = settings.resolvedForPlatform()
+        agxPunchy = if (resolved.agxLook == AgxLook.PUNCHY) 1f else 0f
         agxContrast = resolved.agxContrast
         agxSaturation = resolved.agxSaturation
         agxPurity = resolved.agxPurityBoost
@@ -932,6 +980,34 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 logFirstFrameDiag(plane, image.width, image.height, cfaInt, channels,
                     reportedLevels, reportedWhite, levels, white, levelsFallback, gpuGeo, inputSample)
             }
+            // Unity HAL gains + NaN neutral (direct-opened Xiaomi aux lenses)
+            // render green: estimate WB from this frame's Bayer data instead.
+            val halGains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            val halNeutral = result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+            wbFallbackNeutral = wbFallback.update(now, RawWhiteBalanceFallback.halAwbMissing(
+                halNeutral?.let { n -> DoubleArray(n.size) { n[it].toDouble() } },
+                halGains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+            )) {
+                runCatching {
+                    RawWhiteBalanceFallback.estimate(plane.buffer, plane.rowStride, plane.pixelStride,
+                        image.width, image.height, cfaInt, levels, white, RawWhiteBalanceFallback.locusFor(c))
+                }.getOrNull()
+            }
+            if (wbFallbackNeutral != null && !wbFallbackLogged) {
+                wbFallbackLogged = true
+                Log.w("RawLensColor", "VF HAL reported no white balance; gray-world neutral=" +
+                    ColorDiagnostics.values(wbFallbackNeutral))
+            }
+            // Colour inputs on the first frame and again once AWB has had
+            // time to converge: two lines per session, zero cost after.
+            if (vfColorDiagStage == 0) {
+                vfColorDiagStage = 1
+                vfColorDiagFirstMs = now
+                logColorDiag("first", c, result)
+            } else if (vfColorDiagStage == 1 && now - vfColorDiagFirstMs >= VF_COLOR_DIAG_SETTLE_MS) {
+                vfColorDiagStage = 2
+                logColorDiag("settled", c, result)
+            }
             // Coarse 2 Hz statistic on the user geometry; the grid stride
             // adapts, so the CPU cap below does not skew it.
             updatePreviewExposure(plane, gpuGeo.left, gpuGeo.top, gpuGeo.width, gpuGeo.height, gpuGeo.step, levels, white, now, lensSnap)
@@ -970,7 +1046,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             }
         } catch (failure: Exception) {
             retryAfterMs = now + 2000L
-            post { alpha = 0f }
+            post { if (alpha != 0f) alpha = 0f }
             Log.w("RawViewfinder", "RAW sampling failed; hidden system preview stream continues", failure)
         }
     }
@@ -1002,6 +1078,28 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             "VF first frame raw=${width}x$height cfa=$cfa chans=${channels.joinToString(",")} " +
                 "pitch=$pitch $levelNote " +
                 "geom=(${geo.left},${geo.top} ${geo.width}x${geo.height} s${geo.step}) $data")
+    }
+
+    /**
+     * VF colour inputs: the viewfinder renders from the logical result, so
+     * that is the used set; physical sub-results are listed for comparison
+     * with the save path, which reads physical-first.
+     */
+    private fun logColorDiag(stage: String, c: CameraCharacteristics, result: CaptureResult?) {
+        runCatching {
+            val focal = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.joinToString(",") ?: "-"
+            if (result == null) {
+                Log.i("RawLensColor", "VF color $stage focal=$focal jpeg=$renderJpeg result=none")
+                return
+            }
+            val used = result.colorDiag("used(logical)")
+            val (physicalHeader, physicalColors) = result.physicalColorDiags()
+            Log.i("RawLensColor", ColorDiagnostics.format(
+                "VF color $stage", "focal=$focal jpeg=$renderJpeg $physicalHeader " +
+                    "grayWorldWb=${ColorDiagnostics.values(wbFallbackNeutral)}",
+                used, physicalColors, c.colorStatics(used)))
+        }.onFailure { Log.w("RawLensColor", "VF color diag failed: ${it.message}") }
     }
 
     /**
@@ -1360,8 +1458,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun snapshotRenderState(
         c: CameraCharacteristics, result: CaptureResult?, channels: IntArray, out: FrameState, now: Long
     ) {
+        val fallbackNeutral = wbFallbackNeutral
         val gains = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
-        val rawGains = floatArrayOf(
+        val fallbackGains = fallbackNeutral?.let(RawWhiteBalanceFallback::gainsFor)
+        val rawGains = if (fallbackGains != null) fallbackGains.copyOf() else floatArrayOf(
             gains?.red ?: 1f,
             (if (channels[1] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f,
             (if (channels[2] / 2 == 0) gains?.greenEven else gains?.greenOdd) ?: 1f,
@@ -1408,10 +1508,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 calibIlluminant1 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
                 calibIlluminant2 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
             }
-            val neutralNow = result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { rationals ->
-                DoubleArray(rationals.size) { rationals[it].toDouble() }
-            }
-            val gainsSensor = gains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+            val neutralNow = fallbackNeutral?.copyOf()
+                ?: result?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { rationals ->
+                    DoubleArray(rationals.size) { rationals[it].toDouble() }
+                }
+            val gainsSensor = fallbackGains
+                ?: gains?.let { floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue) }
             val calibrated = calibratedColorCache.resolve(
                 calibStaticMats, calibIlluminant1, calibIlluminant2,
                 neutralNow, gainsSensor, out.gains, out.matrix
@@ -1442,6 +1544,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         out.displayP3 = previewP3
         out.lensGreenRow = VfGpuImport.lensGreenRow(channels)
         out.exposureEv = previewExposureEv
+        out.agxPunchy = agxPunchy
         out.agxContrast = agxContrast
         out.agxSaturation = agxSaturation
         out.agxPurity = agxPurity
@@ -1522,7 +1625,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                 statVfWidth, statVfHeight, expectedIntervalMs))
         }
         stallCleared = false
-        post { if (frameEpoch == synchronized(lock) { epoch } && SystemClock.elapsedRealtime() - lastDisplayed < max(2000L, expectedIntervalMs * 3)) alpha = 1f }
+        post { if (frameEpoch == synchronized(lock) { epoch } && SystemClock.elapsedRealtime() - lastDisplayed < max(2000L, expectedIntervalMs * 3) && alpha != 1f) alpha = 1f }
     }
 
     /** CPU-program tonemap uniforms shared by the CPU path and the Vulkan tier. */
@@ -1534,6 +1637,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         glUniform1i(displayP3Loc, if (state.displayP3) 1 else 0)
         glUniform1i(jpegLoc, if (state.jpeg) 1 else 0)
         glUniform1f(exposureEvLoc, state.exposureEv)
+        glUniform1f(agxPunchyLoc, state.agxPunchy)
         glUniform1f(agxContrastLoc, state.agxContrast)
         glUniform1f(agxSaturationLoc, state.agxSaturation)
         glUniform1f(agxPurityLoc, state.agxPurity)
@@ -1701,12 +1805,21 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     /** Shared GL-failure handling: hide until retry, keep the session alive. */
     private fun noteGlFailure(tag: String, failure: Exception) {
+        // A draw already queued when the SurfaceView went away (engine
+        // override taps toggle its visibility) swaps onto a dead surface
+        // (EGL_BAD_SURFACE). Not a GPU fault: drop GL state without the
+        // retry penalty, the next surfaceCreated starts clean.
+        if (!hasSurface) {
+            Log.i("RawViewfinder", "$tag after surface teardown; ignored (${failure.message})")
+            releaseGl()
+            return
+        }
         Log.w("RawViewfinder", "$tag; hiding VF until retry (system preview stays hidden)", failure)
         retryAfterMs = SystemClock.elapsedRealtime() + 2000L
         statGlActive = false
         statStarved = true
         releaseGl()
-        post { alpha = 0f }
+        post { if (alpha != 0f) alpha = 0f }
     }
 
     private val draw = Runnable {
@@ -1980,6 +2093,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     glUniform3fv(gpuCameraWhiteLoc, 1, frame.camWhite, 0)
                     glUniform1i(gpuDisplayP3Loc, if (frame.displayP3) 1 else 0)
                     glUniform1i(gpuJpegLoc, if (frame.jpeg) 1 else 0)
+                    glUniform1f(gpuAgxPunchyLoc, frame.agxPunchy)
                     glUniform1f(gpuAgxContrastLoc, frame.agxContrast)
                     glUniform1f(gpuAgxSaturationLoc, frame.agxSaturation)
                     glUniform1f(gpuAgxPurityLoc, frame.agxPurity)
@@ -2075,6 +2189,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         if (tier == VulkanTier.COPY && vulkanCopyVerified) return true
         val name = vulkanTierName(tier)
         val signal = vfInputSignal ?: return true // input sample not arrived yet: present, keep probing
+        // A dark input cannot convict any output. Keep sampling the input so
+        // probation resumes in light, without draining GL or CPU-locking the
+        // GPU export on every frame behind a lens cap/in a dark scene.
+        if (probeVfTierOutput(signal.dataMax, signal.black, signal.white, 255) == VfTierProbe.INCONCLUSIVE) return true
         // Compute fence already waited; drain queued GL so the export sample
         // cannot race the previous frame's tonemap read. Probation only.
         glFinish()
@@ -2210,7 +2328,6 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
                     frame.width, frame.height,
                     android.hardware.HardwareBuffer.RGBA_8888, 1,
                     android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
-                        android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
                         android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
                         // Tier black-output probe locks the export on probation frames only.
                         android.hardware.HardwareBuffer.USAGE_CPU_READ_RARELY
@@ -2245,7 +2362,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         return try {
             val (blackQ, denQ) = VfLevels.toFixedQ6(frame.levels, frame.white)
             val (lutMax, lutBytes) = VfLevels.lutFor(blackQ, denQ)
-            if (VfVulkan.uploadLutNative(lutMax, lutBytes) != VfVulkan.OK) return VfVulkan.SUBMIT_FAILED
+            val upload = VfVulkan.uploadLutNative(lutMax, lutBytes)
+            if (upload != VfVulkan.OK) return upload
             when (tier) {
                 VulkanTier.IMAGE -> VfVulkan.computeImageNative(frame.buffer, iparams, fparams)
                 VulkanTier.BUFFER -> VfVulkan.computeNative(frame.buffer, iparams, fparams)
@@ -2355,6 +2473,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun probeImageTier(): Boolean {
         if (vulkanImageVerified) return true
         val signal = vfInputSignal ?: return true
+        if (probeVfTierOutput(signal.dataMax, signal.black, signal.white, 255) == VfTierProbe.INCONCLUSIVE) return true
         glFinish()
         val outputMax = try {
             VfVulkan.sampleOutputNative()
@@ -2450,7 +2569,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             statGlActive = false
             statStarved = true
             releaseGl()
-            post { alpha = 0f }
+            post { if (alpha != 0f) alpha = 0f }
         }
     }
 
@@ -2525,6 +2644,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         positionLoc = glGetAttribLocation(program, "position")
         uvLoc = glGetAttribLocation(program, "uv")
         jpegLoc = glGetUniformLocation(program, "u_jpeg")
+        agxPunchyLoc = glGetUniformLocation(program, "u_agxPunchy")
         agxContrastLoc = glGetUniformLocation(program, "u_agxContrast")
         agxSaturationLoc = glGetUniformLocation(program, "u_agxSaturation")
         agxPurityLoc = glGetUniformLocation(program, "u_agxPurity")
@@ -2628,6 +2748,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             gpuPositionLoc = glGetAttribLocation(id, "position")
             gpuUvLoc = glGetAttribLocation(id, "uv")
             gpuJpegLoc = glGetUniformLocation(id, "u_jpeg")
+            gpuAgxPunchyLoc = glGetUniformLocation(id, "u_agxPunchy")
             gpuAgxContrastLoc = glGetUniformLocation(id, "u_agxContrast")
             gpuAgxSaturationLoc = glGetUniformLocation(id, "u_agxSaturation")
             gpuAgxPurityLoc = glGetUniformLocation(id, "u_agxPurity")
@@ -2710,7 +2831,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         surface = EGL14.EGL_NO_SURFACE; eglContext = EGL14.EGL_NO_CONTEXT; display = EGL14.EGL_NO_DISPLAY
         gainsLoc = -1; colorLoc = -1; camToAcesLoc = -1; cameraWhiteLoc = -1; displayP3Loc = -1
         positionLoc = -1; uvLoc = -1
-        jpegLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
+        jpegLoc = -1; agxPunchyLoc = -1; agxContrastLoc = -1; agxSaturationLoc = -1; agxPurityLoc = -1
         agxHueLoc = -1; agxShadowEvLoc = -1; agxHighlightEvLoc = -1; agxGamutLoc = -1
         highlightShoulderLoc = -1
         exposureEvLoc = -1
@@ -2722,7 +2843,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         gpuProgram = 0; gpuBayerTexture = 0; vkTexture = 0
         gpuGainsLoc = -1; gpuColorLoc = -1; gpuCamToAcesLoc = -1; gpuCameraWhiteLoc = -1
         gpuDisplayP3Loc = -1; gpuPositionLoc = -1; gpuUvLoc = -1
-        gpuJpegLoc = -1; gpuAgxContrastLoc = -1; gpuAgxSaturationLoc = -1; gpuAgxPurityLoc = -1
+        gpuJpegLoc = -1; gpuAgxPunchyLoc = -1; gpuAgxContrastLoc = -1; gpuAgxSaturationLoc = -1; gpuAgxPurityLoc = -1
         gpuAgxHueLoc = -1; gpuAgxShadowEvLoc = -1; gpuAgxHighlightEvLoc = -1; gpuAgxGamutLoc = -1
         gpuHighlightShoulderLoc = -1
         gpuExposureEvLoc = -1
@@ -2745,6 +2866,8 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         private const val NEON_LOG_INTERVAL_MS = 5000L
         /** VF stats telemetry cadence: one fps/mode line per 10 s of preview. */
         private const val VF_STATS_LOG_INTERVAL_MS = 10000L
+        /** Delay before the second VF colour line: AWB converges within ~1-2 s. */
+        private const val VF_COLOR_DIAG_SETTLE_MS = 3000L
         /** Record-mode offer floor lives in [VfResolution] power policy (10 fps). */
         @Deprecated("Use VfResolution.RATE_RECORD_MS", ReplaceWith("VfResolution.RATE_RECORD_MS"))
         const val RECORD_SAMPLE_INTERVAL_MS = 100L
@@ -2832,6 +2955,9 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // The framework owns the Surface: never release it, just drop GL state. The camera
         // session (ImageReader targets) is untouched — only VF display pauses.
         Log.w("RawViewfinder", "VF surface lost; hiding VF until surface returns")
+        // Flag first so a draw already queued on the worker skips or treats
+        // its swap failure as teardown, not as a GPU fault.
+        hasSurface = false
         invalidateSession()
         worker.post { hasSurface = false; window = null; releaseGl() }
     }

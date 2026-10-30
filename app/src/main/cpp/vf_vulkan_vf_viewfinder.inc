@@ -396,7 +396,7 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     VkDescriptorImageInfo outputInfo{};
     outputInfo.imageView = g->output.view;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet writes[2]{};
+    VkWriteDescriptorSet writes[3]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = g->descriptorSet;
     writes[0].dstBinding = 0;
@@ -409,7 +409,6 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outputInfo;
-    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
 
     // Shading binding (viewfinder shades in GL: dummy image, enable
     // stays 0).
@@ -425,7 +424,8 @@ static int dispatchSuperpixel(std::unique_lock<std::mutex>& vkGuard, const Super
     shadeWrite.descriptorCount = 1;
     shadeWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     shadeWrite.pImageInfo = &shadeInfo;
-    vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
+    writes[2] = shadeWrite;
+    vkUpdateDescriptorSets(g->device, 3, writes, 0, nullptr);
 
     // Normalize LUT (binding 3): created + bound once; per-frame bytes
     // land via uploadLutNative before compute.
@@ -563,7 +563,7 @@ static int dispatchSuperpixelImage(std::unique_lock<std::mutex>& vkGuard,
     VkDescriptorImageInfo outputInfo{};
     outputInfo.imageView = g->output.view;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet writes[2]{};
+    VkWriteDescriptorSet writes[3]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = g->imgSet;
     writes[0].dstBinding = 0;
@@ -576,7 +576,6 @@ static int dispatchSuperpixelImage(std::unique_lock<std::mutex>& vkGuard,
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outputInfo;
-    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
     if (!ensureShadeSampler(g) || !ensureShadeDummy(g)) return VFVK_SUBMIT_FAILED;
     VkDescriptorImageInfo shadeInfo{};
     shadeInfo.sampler = g->shadeSampler;
@@ -589,7 +588,8 @@ static int dispatchSuperpixelImage(std::unique_lock<std::mutex>& vkGuard,
     shadeWrite.descriptorCount = 1;
     shadeWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     shadeWrite.pImageInfo = &shadeInfo;
-    vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
+    writes[2] = shadeWrite;
+    vkUpdateDescriptorSets(g->device, 3, writes, 0, nullptr);
     if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
 
     vkResetFences(g->device, 1, &g->fence);
@@ -707,7 +707,7 @@ static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
     VkDescriptorImageInfo outputInfo{};
     outputInfo.imageView = g->output.view;
     outputInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet writes[2]{};
+    VkWriteDescriptorSet writes[3]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = g->imgSet;
     writes[0].dstBinding = 0;
@@ -720,7 +720,6 @@ static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[1].pImageInfo = &outputInfo;
-    vkUpdateDescriptorSets(g->device, 2, writes, 0, nullptr);
     if (!ensureShadeSampler(g) || !ensureShadeDummy(g)) return VFVK_SUBMIT_FAILED;
     VkDescriptorImageInfo shadeInfo{};
     shadeInfo.sampler = g->shadeSampler;
@@ -733,7 +732,8 @@ static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
     shadeWrite.descriptorCount = 1;
     shadeWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     shadeWrite.pImageInfo = &shadeInfo;
-    vkUpdateDescriptorSets(g->device, 1, &shadeWrite, 0, nullptr);
+    writes[2] = shadeWrite;
+    vkUpdateDescriptorSets(g->device, 3, writes, 0, nullptr);
     if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
 
     vkResetFences(g->device, 1, &g->fence);
@@ -863,7 +863,7 @@ static int dispatchSuperpixelBridge(std::unique_lock<std::mutex>& vkGuard,
 // tail past lutMax stays 0xFF on first upload and when the bound
 // shrinks (newly exposed strips held stale prefix bytes); a growing
 // bound only overwrites. Runs under vkMutex like every other upload;
-// a torn read only affects a BUSY-skipped (unpresented) dispatch.
+// reap the previous dispatch before touching its LUT or descriptors.
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfVulkan_uploadLutNative(
     JNIEnv* env, jobject, jint lutMax, jbyteArray lut) {
@@ -873,11 +873,26 @@ Java_com_matthew_rawlens_VfVulkan_uploadLutNative(
     const uint32_t row = (uint32_t)lutMax + 1u;
     const jsize want = (jsize)row * (jsize)kLutSites;
     if (env->GetArrayLength(lut) != want) return VFVK_BAD_ARGUMENT;
+    if (g->computeArmed) {
+        const VkResult fs = vkGetFenceStatus(g->device, g->fence);
+        if (fs == VK_ERROR_DEVICE_LOST) return VFVK_DEVICE_LOST;
+        if (fs != VK_SUCCESS) return VFVK_BUSY;
+        g->computeArmed = false;
+    }
     if (ensureLut(g) != VFVK_OK) return VFVK_SUBMIT_FAILED;
-    std::vector<jbyte> tmp((size_t)want);
+    auto& tmp = g->lutUploadScratch;
+    tmp.resize((size_t)want);
     env->GetByteArrayRegion(lut, 0, want, tmp.data());
     if (env->ExceptionCheck()) return VFVK_BAD_ARGUMENT;
     uint8_t* dst = static_cast<uint8_t*>(g->lutMapped);
+    // Tables normally remain identical for the entire preview. Compare on
+    // cached CPU memory: mapped GPU memory may be uncached on mobile drivers.
+    // Compare contents, not Java identity: callers/engines can change.
+    // A failed flush must retry even if the host bytes already match.
+    const bool unchanged = g->lutUploadValid && g->lutRow == row &&
+        tmp == g->lutLastUpload;
+    if (unchanged) return VFVK_OK;
+    g->lutUploadValid = false;
     if (g->lutRow == 0) {
         for (uint32_t s = 0; s < kLutSites; ++s) {
             std::memset(dst + (size_t)s * kLutCodes + row, 0xFF, (size_t)(kLutCodes - row));
@@ -902,6 +917,8 @@ Java_com_matthew_rawlens_VfVulkan_uploadLutNative(
             return VFVK_SUBMIT_FAILED;
         }
     }
+    g->lutLastUpload.swap(tmp);
+    g->lutUploadValid = true;
     return VFVK_OK;
 }
 
@@ -1118,8 +1135,8 @@ Java_com_matthew_rawlens_VfVulkan_computeBridgeNative(
     return r;
 }
 
-// GPU-copy tier (motioncam pattern): lock the input AHB, memcpy into the
-// host-visible staging buffer, flush when not coherent, then the shared
+// GPU-copy tier: lock the input AHB, gather only the preview's Bayer quads
+// into compact host-visible staging, flush when not coherent, then the shared
 // superpixel dispatch with host-write visibility instead of the foreign
 // acquire/release barriers. Same fence, command buffer, export and
 // reap/BUSY semantics as computeNative; only the input mechanism differs.
@@ -1142,8 +1159,10 @@ Java_com_matthew_rawlens_VfVulkan_computeCopyNative(
         g->computeArmed = false;
     }
 
-    // Size the staging upload from the allocation (layout-preserving whole
-    // copy; pitch still comes from the Image planes via push constants).
+    SuperpixelParams params{};
+    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    // Bound CPU reads against the same allocation size the old whole-buffer
+    // upload used. Keep channel permutation and normalization in the shader.
     VkAndroidHardwareBufferPropertiesANDROID ahbProps{};
     ahbProps.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
     VkResult r = g->getAhbProps(g->device, buf, &ahbProps);
@@ -1151,7 +1170,11 @@ Java_com_matthew_rawlens_VfVulkan_computeCopyNative(
         LOGW("vf-vk: copy: ahb-props failed %d", r);
         return VFVK_COPY_UPLOAD_FAILED;
     }
-    int sr = ensureStaging(g, ahbProps.allocationSize);
+    vfcompact::Plan upload{};
+    if (!vfcompact::plan(params.quadBase[0], params.quadBase[1],
+                         params.frameSize[0], params.frameSize[1], params.step, params.pitch,
+                         ahbProps.allocationSize, &upload)) return VFVK_BAD_ARGUMENT;
+    int sr = ensureStaging(g, upload.bytes);
     if (sr != VFVK_OK) return sr;
     void* src = nullptr;
     // Rect null = whole buffer. Fence -1: the caller holds the camera Image
@@ -1161,7 +1184,7 @@ Java_com_matthew_rawlens_VfVulkan_computeCopyNative(
         LOGW("vf-vk: copy: input lock failed");
         return VFVK_COPY_UPLOAD_FAILED;
     }
-    std::memcpy(g->stagingMapped, src, (size_t)ahbProps.allocationSize);
+    vfcompact::copy(src, g->stagingMapped, upload);
     AHardwareBuffer_unlock(buf, nullptr);
     if (!g->stagingCoherent) {
         VkMappedMemoryRange range{};
@@ -1176,13 +1199,14 @@ Java_com_matthew_rawlens_VfVulkan_computeCopyNative(
         }
     }
 
-    SuperpixelParams params{};
-    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    params.quadBase[0] = params.quadBase[1] = 0;
+    params.step = 2;
+    params.pitch = params.frameSize[0] * 2;
     return dispatchSuperpixel(vkGuard, params, g->stagingBuffer, false);
 }
 
-// CPU-plane upload tier: copy the Camera2 plane's direct ByteBuffer into
-// the same staging buffer, then dispatch. This is the fallback for streams
+// CPU-plane upload tier: gather the Camera2 plane's selected RAW16 quads into
+// the same compact staging buffer, then dispatch. This is the fallback for streams
 // whose hardware buffer cannot be imported at all (packed formats, BLOB
 // allocations): the plane is always CPU-readable, so no AHB lock or
 // external-memory import is involved. byteCount is rowStride * height.
@@ -1206,9 +1230,15 @@ Java_com_matthew_rawlens_VfVulkan_computePlaneNative(
         if (fs != VK_SUCCESS) return VFVK_BUSY;
         g->computeArmed = false;
     }
-    int sr = ensureStaging(g, (VkDeviceSize)byteCount);
+    SuperpixelParams params{};
+    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    vfcompact::Plan upload{};
+    if (!vfcompact::plan(params.quadBase[0], params.quadBase[1],
+                         params.frameSize[0], params.frameSize[1], params.step, params.pitch,
+                         (uint64_t)byteCount, &upload)) return VFVK_BAD_ARGUMENT;
+    int sr = ensureStaging(g, upload.bytes);
     if (sr != VFVK_OK) return sr;
-    std::memcpy(g->stagingMapped, src, (size_t)byteCount);
+    vfcompact::copy(src, g->stagingMapped, upload);
     if (!g->stagingCoherent) {
         VkMappedMemoryRange range{};
         range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -1220,8 +1250,9 @@ Java_com_matthew_rawlens_VfVulkan_computePlaneNative(
             return VFVK_COPY_UPLOAD_FAILED;
         }
     }
-    SuperpixelParams params{};
-    if (!readSuperpixelParams(env, iparams, fparams, &params)) return VFVK_BAD_ARGUMENT;
+    params.quadBase[0] = params.quadBase[1] = 0;
+    params.step = 2;
+    params.pitch = params.frameSize[0] * 2;
     return dispatchSuperpixel(vkGuard, params, g->stagingBuffer, false);
 }
 

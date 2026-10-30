@@ -83,6 +83,10 @@ object AgxDisplayTransform {
             value[channel] = (pivot + (normalized - pivot) * settings.agxContrast).coerceIn(0f, 1f)
         }
         value = FloatArray(3) { contrast(value[it]) }
+        if (settings.agxLook == AgxLook.PUNCHY) {
+            val luma = dot(value, SRGB_LUMA)
+            value = FloatArray(3) { luma + 1.4f * (max(0f, value[it]).pow(1.35f) - luma) }
+        }
         val outset = map(AGX_OUTSET, value)
         value = FloatArray(3) { value[it] + settings.agxPurityBoost * (outset[it] - value[it]) }
         value = FloatArray(3) { max(0f, value[it]).pow(2.2f) }
@@ -146,7 +150,10 @@ object AgxDisplayTransform {
         val normalized = ((log2(max(soft, 1e-10f)) - minimumEv) / evRange).coerceIn(0f, 1f)
         val pivot = resolved.effectiveAgxShadowEv / evRange
         val contrasted = (pivot + (normalized - pivot) * resolved.agxContrast).coerceIn(0f, 1f)
-        val displayLinear = max(0f, contrast(contrasted)).pow(2.2f).coerceIn(0f, 1f)
+        val sigmoid = contrast(contrasted)
+        val looked = if (resolved.agxLook == AgxLook.PUNCHY)
+            sigmoid + 1.4f * (max(0f, sigmoid).pow(1.35f) - sigmoid) else sigmoid
+        val displayLinear = max(0f, looked).pow(2.2f).coerceIn(0f, 1f)
         return srgbOetf(displayLinear)
     }
 

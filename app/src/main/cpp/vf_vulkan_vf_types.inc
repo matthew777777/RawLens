@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "vulkan_pipeline_cache.h"
+#include "vf_compact_raw.h"
 
 #define LOG_TAG "RawLensVfVk"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -393,14 +394,17 @@ struct Context {
     // churn); the tail beyond the uploaded prefix is 0xFF (codes above
     // the LUT bound always normalize to 255). Default fill is 0x00
     // (black): a dispatch before the first upload reads black, which the
-    // tier probe catches, instead of garbage. Written under vkMutex; a
-    // torn read only affects a BUSY-skipped (unpresented) dispatch.
+    // tier probe catches, instead of garbage. Written under vkMutex only
+    // after the previous viewfinder dispatch's fence has completed.
     VkBuffer lutBuffer = VK_NULL_HANDLE;
     VkDeviceMemory lutMemory = VK_NULL_HANDLE;
     void* lutMapped = nullptr;
     bool lutCoherent = true;
     bool lutBound = false;
     uint32_t lutRow = 0;
+    std::vector<jbyte> lutUploadScratch;
+    std::vector<jbyte> lutLastUpload;
+    bool lutUploadValid = false;
     // Phase-B grade stage (probe-only; the viewfinder never initializes it):
     // superpixel export -> WB/CCM/log -> graded export. Shares the device,
     // queue, fence and command buffer; imports are cached by AHB pointer
@@ -728,5 +732,6 @@ void destroyLut(Context* ctx) {
     ctx->lutCoherent = true;
     ctx->lutBound = false;
     ctx->lutRow = 0;
+    ctx->lutUploadValid = false;
 }
 

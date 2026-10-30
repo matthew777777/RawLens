@@ -72,13 +72,19 @@ internal object BguSlice {
     fun packGrid(grid: BguGrid): Array<ShortArray> {
         val texels = grid.gw * grid.gh * grid.gz
         return Array(3) { row ->
-            ShortArray(texels * 4) { i ->
-                val texel = i / 4
-                val k = i % 4
-                val x = texel % grid.gw
-                val y = (texel / grid.gw) % grid.gh
-                val z = texel / (grid.gw * grid.gh)
-                floatToHalf(grid.at(x, y, z, row, k))
+            ShortArray(texels * 4).also { packGridRowInto(grid, row, java.nio.ShortBuffer.wrap(it)) }
+        }
+    }
+
+    /** Packs directly into reusable GL upload storage, with no intermediate arrays. */
+    fun packGridRowInto(grid: BguGrid, row: Int, out: java.nio.ShortBuffer) {
+        require(row in 0..2)
+        val texels = grid.gw * grid.gh * grid.gz
+        require(out.remaining() >= texels * 4)
+        val base = row * 4 * texels
+        for (texel in 0 until texels) {
+            for (k in 0..3) {
+                out.put(floatToHalf(grid.coeffs[base + k * texels + texel]))
             }
         }
     }

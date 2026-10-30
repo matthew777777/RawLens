@@ -264,6 +264,7 @@ internal class PhotoSettingsTab(
                 .putString(MainActivity.KEY_JPEG_CHROMA_SUBSAMPLING, resolved.chromaSubsampling.name)
                 .putString(MainActivity.KEY_JPEG_DEMOSAIC, resolved.demosaic.name)
                 .putFloat(MainActivity.KEY_JPEG_AGX_PURITY, resolved.agxPurityBoost)
+                .putString(AgxLook.PREFERENCE_KEY, resolved.agxLook.name)
                 .putFloat(MainActivity.KEY_JPEG_AGX_CONTRAST, resolved.agxContrast)
                 .putFloat(MainActivity.KEY_JPEG_AGX_SATURATION, resolved.agxSaturation)
                 .putFloat(MainActivity.KEY_JPEG_AGX_HUE, resolved.agxHuePreservation)
@@ -435,6 +436,19 @@ internal class PhotoSettingsTab(
                 })
             })
         }
+        kit.content.addView(android.widget.Switch(activity).apply {
+            text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
+            setTextColor(activity.getColor(R.color.text_primary))
+            isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
+            setOnCheckedChangeListener { button, enabled ->
+                val look = if (enabled) AgxLook.PUNCHY else AgxLook.BASE
+                if (look != currentJpegSettings.agxLook &&
+                    !applyJpegOutputSettings(currentJpegSettings.copy(agxLook = look))) {
+                    button.isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
+                }
+                text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
+            }
+        })
         var purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt().coerceIn(0, 200)
         val purityLabel = TextView(activity).apply {
             text = "AgX purity boost: $purityPercent%"

@@ -6,6 +6,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BguSliceTest {
+    @Test fun reusablePackingMatchesScalarGridAcrossAllDimensions() {
+        val grid = BguGrid(3, 4, 5, FloatArray(3 * 4 * 5 * 12) { (it - 360) / 31f })
+        val storage = java.nio.ByteBuffer.allocateDirect(3 * 4 * 5 * 8)
+            .order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
+        for (row in 0..2) {
+            storage.clear()
+            BguSlice.packGridRowInto(grid, row, storage)
+            storage.flip()
+            for (z in 0 until grid.gz) for (y in 0 until grid.gh) for (x in 0 until grid.gw) for (k in 0..3) {
+                assertEquals(BguSlice.floatToHalf(grid.at(x, y, z, row, k)), storage.get())
+            }
+        }
+    }
     @Test fun shadersAreEs3Slice() {
         val vs = BguSlice.vertexShader()
         assertTrue(vs.startsWith("#version 300 es"))

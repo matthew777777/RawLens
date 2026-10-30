@@ -174,6 +174,11 @@ static void refLook(const uint8_t q[4], int x, int y, const Buffer<float> &lensM
         vn[i] = clampD(pivot + (n - pivot) * p.contrast, 0.0, 1.0);
         vn[i] = sigmoidD(vn[i]);
     }
+    if (p.jpeg == 2) {
+        double luma = vn[0] * 0.2126 + vn[1] * 0.7152 + vn[2] * 0.0722;
+        for (int i = 0; i < 3; ++i)
+            vn[i] = luma + 1.4 * (pow(std::max(vn[i], 0.0), 1.35) - luma);
+    }
     double vo[3], vp[3], vpow[3];
     matVecD(OUTSET, vn, vo);
     for (int i = 0; i < 3; i++) {
@@ -346,9 +351,11 @@ int main() {
     };
     memcpy(d.aces, acesReal, sizeof(d.aces));
 
-    const Params looks[4] = {a, b, c, d};
-    const char *names[4] = {"raw-identity", "raw-realistic", "jpeg-default", "jpeg-extreme"};
-    for (int li = 0; li < 4; li++) {
+    Params e = c; e.jpeg = 2;
+    Params f = d; f.jpeg = 2;
+    const Params looks[6] = {a, b, c, d, e, f};
+    const char *names[6] = {"raw-identity", "raw-realistic", "jpeg-default", "jpeg-extreme", "punchy", "punchy-extreme"};
+    for (int li = 0; li < 6; li++) {
         for (int l = 0; l < 4; l++) wb(l) = (float)looks[li].wb[l];
         for (int col = 0; col < 3; col++)
             for (int row = 0; row < 3; row++) {
@@ -378,6 +385,6 @@ int main() {
         printf("FAILED: %d cases\n", failures);
         return 1;
     }
-    printf("look check OK: 8 cases match (guide 1e-6, developed 5e-4)\n");
+    printf("look check OK: 12 cases match (guide 1e-6, developed 5e-4)\n");
     return 0;
 }

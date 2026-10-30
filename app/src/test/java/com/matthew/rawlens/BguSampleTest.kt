@@ -8,6 +8,28 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class BguSampleTest {
+    @Test fun parityMatchesScalarForOddAndEvenStepsAndCrops() {
+        val w = 32
+        val stride = w * 2 + 16
+        val buf = ByteBuffer.allocate(stride * w).order(ByteOrder.LITTLE_ENDIAN)
+        for (y in 0 until w) for (x in 0 until w) buf.putShort(y * stride + x * 2, ((x * 71 + y * 97) % 1024).toShort())
+        val levels = floatArrayOf(10f, 30f, 50f, 70f)
+        val inv = FloatArray(4) { 1f / (1023f - levels[it]) }
+        for (step in 2..5) for (left in 0..1) for (top in 0..1) {
+            for (channels in arrayOf(intArrayOf(0, 1, 2, 3), intArrayOf(3, 2, 1, 0), intArrayOf(1, 0, 3, 2), intArrayOf(2, 3, 0, 1))) {
+                val out = ByteArray(4 * 4 * 4)
+                assertTrue(BguSample.sampleLowFrame(buf, stride, 2, left, top, step, 4, 4, channels, levels, inv, out))
+                for (y in 0..3) for (x in 0..3) for (k in 0..3) {
+                    val sx = left + x * step + channels[k] % 2
+                    val sy = top + y * step + channels[k] / 2
+                    val phase = (sy and 1) * 2 + (sx and 1)
+                    val code = buf.getShort(sy * stride + sx * 2).toInt() and 65535
+                    val expected = (((code - levels[phase]) * inv[phase]).coerceIn(0f, 1f) * 255f + .5f).toInt()
+                    assertEquals(expected, out[k * 16 + y * 4 + x].toInt() and 255)
+                }
+            }
+        }
+    }
     private fun plane8(): ByteBuffer {
         // 8x8 u16 codes: code(x, y) = (x + y * 8) * 16 (0..1008).
         val buf = ByteBuffer.allocate(8 * 8 * 2).order(ByteOrder.LITTLE_ENDIAN)

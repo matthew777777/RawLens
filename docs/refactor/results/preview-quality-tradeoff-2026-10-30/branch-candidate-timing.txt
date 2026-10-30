@@ -1,0 +1,3 @@
+--------- beginning of main
+10-30 07:36:25.311  7858  7881 I PreviewEfficiency: tonemap cases=60 maxCodeError=8 meanCodeError=0.0056464301215277775 p99=0 renderer=Mali-G615 MC2
+10-30 07:36:26.122  7858  7881 I PreviewEfficiency: draw timing=cpu-inclusive baselineFullMs=5.523616 shortcutFullMs=5.869308 cappedMs=4.052307 capped=723x1080 shortcutRatio=0.9411017448735012 totalRatio=1.3630793520826532

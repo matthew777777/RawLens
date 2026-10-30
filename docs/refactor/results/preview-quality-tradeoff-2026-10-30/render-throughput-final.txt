@@ -1,0 +1,2 @@
+10-30 07:44:14.386 11009 11032 I PreviewEfficiency: tonemap cases=60 maxCodeError=0 meanCodeError=0.0 p99=0 renderer=Mali-G615 MC2
+10-30 07:44:16.178 11009 11032 I PreviewEfficiency: batch-draw timing=cpu-inclusive baselineFullMs=2.289884625 currentFullMs=2.275336625 cappedMs=1.099932625 capped=723x1080 shaderRatio=1.0063937792061868 totalRatio=2.081840808204048

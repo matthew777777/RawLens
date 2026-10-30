@@ -181,6 +181,12 @@ class DngSaver(private val context: Context) {
                 "${metadata.blackLevels?.toList()?.joinToString(",")} white=${metadata.whiteLevel}); " +
                 "forcing TinyDNG backend for $displayName")
             DngWriterBackend.TINY_DNG
+        } else if (metadata.whiteBalanceFallback && backend != DngWriterBackend.TINY_DNG) {
+            // DngCreator copies the HAL's NaN AsShotNeutral (no AWB on this
+            // stream); TinyDNG writes the gray-world estimate instead.
+            Log.w(LOG_TAG, "HAL reported no white balance; forcing TinyDNG backend with estimated " +
+                "neutral=${metadata.neutralColorPoint?.toDoubleArray()?.joinToString(",")} for $displayName")
+            DngWriterBackend.TINY_DNG
         } else backend
 
         // Packed frames cannot enter either Image-direct writer (DngCreator

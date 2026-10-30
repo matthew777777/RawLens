@@ -1,0 +1,17 @@
+// Test-only package/output directories: do not replace the user's daily app
+// or collide with another build of this shared workspace.
+gradle.beforeProject { p ->
+    p.layout.buildDirectory.set(new File('/tmp/rawlens-preview-efficiency-build', p.path.replace(':', '_')))
+    p.pluginManager.withPlugin('com.android.application') {
+        p.extensions.getByName('androidComponents').finalizeDsl { dsl ->
+            dsl.defaultConfig.applicationId = 'com.matthew.rawlens.previewefficiencyprobe'
+            dsl.externalNativeBuild.cmake.buildStagingDirectory = new File('/tmp/rawlens-preview-efficiency-native')
+            dsl.defaultConfig.externalNativeBuild.cmake.targets.clear()
+            dsl.defaultConfig.externalNativeBuild.cmake.targets.add('rawLensVfEgl')
+            def cachedJpeg = new File(p.projectDir, '.cxx/Release/1t3w4p4i/arm64-v8a/_deps/libjpeg_turbo_source-src')
+            if (cachedJpeg.isDirectory()) {
+                dsl.defaultConfig.externalNativeBuild.cmake.arguments.add('-DFETCHCONTENT_SOURCE_DIR_LIBJPEG_TURBO_SOURCE=' + cachedJpeg.absolutePath)
+            }
+        }
+    }
+}

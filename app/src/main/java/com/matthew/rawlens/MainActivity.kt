@@ -3628,6 +3628,7 @@ class MainActivity : Activity() {
             lensPreferences().getString(KEY_JPEG_DEMOSAIC, null)
         ),
         agxPurityBoost = lensPreferences().getFloat(KEY_JPEG_AGX_PURITY, 1f),
+        agxLook = AgxLook.fromPreference(lensPreferences().getString(AgxLook.PREFERENCE_KEY, null)),
         agxContrast = lensPreferences().getFloat(KEY_JPEG_AGX_CONTRAST, 1f),
         agxSaturation = lensPreferences().getFloat(KEY_JPEG_AGX_SATURATION, 1f),
         agxHuePreservation = lensPreferences().getFloat(KEY_JPEG_AGX_HUE, 0f),

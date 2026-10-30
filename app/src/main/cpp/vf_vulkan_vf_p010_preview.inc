@@ -51,8 +51,16 @@ static int importP010Out(Context* ctx, AHardwareBuffer* dstBuf, int yStrideB, in
     }
     const uint64_t expect =
         (uint64_t)yStrideB * (uint64_t)fh + (uint64_t)uvStrideB * (uint64_t)(fh / 2);
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(dstBuf, &desc);
+    // BLOB staging has an app-defined linear layout. Driver allocation tail
+    // padding cannot move UV. Native codec P010 retains the strict guard:
+    // allocation size alone cannot tell us where its chroma plane begins.
+    const bool linear = desc.format == AHARDWAREBUFFER_FORMAT_BLOB &&
+        desc.height == 1 && desc.width == expect &&
+        yStrideB == fw * 2 && uvStrideB == fw * 2;
     if (ahbProps.allocationSize < expect ||
-        ahbProps.allocationSize - expect > 4096) {
+        (!linear && ahbProps.allocationSize - expect > 4096)) {
         LOGW("vf-vk: yuv-out not tight P010: alloc=%llu expect=%llu (y=%d uv=%d %dx%d)",
              (unsigned long long)ahbProps.allocationSize, (unsigned long long)expect,
              yStrideB, uvStrideB, fw, fh);

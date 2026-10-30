@@ -111,6 +111,9 @@ internal object VfEglImport {
     /** App-owned P010 staging buffer (GPU-written, CPU-readable). Null on failure. */
     external fun createP010(width: Int, height: Int): HardwareBuffer?
 
+    /** Linear BLOB staging: strides width*2, UV offset width*height*2. */
+    external fun createLinearP010(width: Int, height: Int): HardwareBuffer?
+
     /** [yStrideBytes, uvStrideBytes, 0] from the allocator; null on failure. */
     external fun describeP010(buffer: HardwareBuffer): IntArray?
 
