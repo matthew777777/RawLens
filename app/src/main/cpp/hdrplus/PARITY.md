@@ -71,7 +71,7 @@ undefined values.
 | `hdrp_column_sum` + `hdrp_mean` | `texture_mean` (single value) | FIXED then MATCH (phase-grouped order, exact) |
 | `hdrp_merge_weight` | `compute_merge_weight` | MATCH (incl. robustness-0 bypass) |
 | `hdrp_accumulate` | upsample bilinear + `add_texture_weighted` + `add_texture` | FIXED then MATCH (zero past the edge, divide by N, frame-order accumulation over a cleared accumulator) |
-| `hdrp_finalize` | `convert_float_to_uint16` role | DOCUMENTED: normalized-float CFA output + app DNG writer instead of upstream's raw-units DNG projection (affine map, tested separately) |
+| `hdrp_finalize` | `convert_float_to_uint16` role | DOCUMENTED: normalized-float CFA output + app DNG writer instead of upstream's raw-units DNG projection (affine map, tested separately); unused RGBA16F twin removed, CFA expression unchanged |
 
 ## Kernel verdicts (HQ / frequency path)
 

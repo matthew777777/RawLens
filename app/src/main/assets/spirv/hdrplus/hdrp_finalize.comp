@@ -1,11 +1,8 @@
 #version 450
-// Raw-domain accumulator -> normalized merge output. Every channel carries the
-// site's own value so CFA consumers (project_cfa_u16, prepare_packed_cfa) that
-// read rgb[channelForSite] work for any CFA order. The same value also goes to
-// a full-precision R32F CFA plane for the 16-bit merged DNG projection.
+// Raw-domain accumulator -> full-precision R32F CFA for the merged DNG.
+// The former RGBA16F twin had no consumer; omit its allocation and stores.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D accum;
-layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D outputImage;
 layout(set = 0, binding = 2, r32f) writeonly uniform image2D cfaImage;
 layout(push_constant) uniform P {
     vec4 black;  // reference black per (y&1)*2+(x&1) phase
@@ -18,6 +15,5 @@ void main() {
     if (any(greaterThanEqual(q, p.size))) return;
     float b = p.black[(q.y & 1) * 2 + (q.x & 1)];
     float v = (imageLoad(accum, q).x - b) / max(1.0, p.white - b);
-    imageStore(outputImage, q, vec4(v, v, v, 1.0));
     imageStore(cfaImage, q, vec4(v));
 }

@@ -362,13 +362,20 @@ class HdrPlusMerge(context: Context) {
         val out = HdrPlusVulkan.allocBuffer(crop.width.toLong() * crop.height * U16_BYTES)
             .order(ByteOrder.nativeOrder())
         if (layout.pixelStride == U16_BYTES.toInt()) {
-            val row = ByteArray(crop.width * U16_BYTES.toInt())
-            for (y in 0 until crop.height) {
-                val rowStart = dataOrigin + (crop.top + y) * layout.rowStride +
-                    crop.left * layout.pixelStride
-                input.position(rowStart)
-                input.get(row)
-                out.put(row)
+            val rowBytes = crop.width * U16_BYTES.toInt()
+            val firstByte = dataOrigin + crop.top * layout.rowStride +
+                crop.left * layout.pixelStride
+            if (layout.rowStride == rowBytes) {
+                input.limit(firstByte + crop.height * rowBytes)
+                input.position(firstByte)
+                out.put(input)
+            } else {
+                for (y in 0 until crop.height) {
+                    val rowStart = firstByte + y * layout.rowStride
+                    input.limit(rowStart + rowBytes)
+                    input.position(rowStart)
+                    out.put(input)
+                }
             }
         } else {
             for (y in 0 until crop.height) {

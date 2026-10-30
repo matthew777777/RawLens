@@ -18,6 +18,7 @@
 // Usage: hdrplus_parity <assets-dir>  (e.g. app/src/main/assets)
 // Exit 0 iff every check passes.
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -184,6 +185,18 @@ RunResult runMerge(HdrPlusContext* ctx, const std::vector<std::vector<std::uint1
         r.err = errmsg;
         return r;
     }
+    // Optional raw outputs for byte-for-byte comparison against a HEAD
+    // build. The caller supplies a fresh path for each executable run.
+    if (const char* path = std::getenv("HDRPLUS_PARITY_OUTPUT")) {
+        FILE* f = std::fopen(path, "ab");
+        if (!f) { r.err = "cannot open parity output"; return r; }
+        const size_t written = std::fwrite(r.out.data(), sizeof(float), r.out.size(), f);
+        const int closed = std::fclose(f);
+        if (written != r.out.size() || closed != 0) {
+            r.err = "cannot write parity output";
+            return r;
+        }
+    }
     r.ok = true;
     r.gpuMs = hdrplus_last_gpu_ms(ctx);
     return r;
@@ -209,7 +222,7 @@ int main(int argc, char** argv) {
     std::string only;
     if (argc == 3) only = argv[2];
     if (argc != 2 && argc != 3) {
-        std::fprintf(stderr, "usage: %s <assets-dir> [fast|hq|shift-fast|shift-hq]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <assets-dir> [fast|hq|shift-fast|shift-hq|sensor]\n", argv[0]);
         return 2;
     }
     char errmsg[512] = {};
@@ -225,6 +238,37 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::printf("shaders: %d loaded\n", loaded);
+
+    // Xiaomi M2004J19C geometry from the reported log. Eight distinct
+    // frames exercise staging reuse at sensor resolution in both paths.
+    if (only == "sensor") {
+        constexpr int w = 4208, h = 3120, count = 8;
+        std::vector<std::vector<std::uint16_t>> frames(count);
+        for (int i = 0; i < count; ++i) {
+            frames[i].resize(w * h);
+            Rng rng(1000 + i);
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    const int signal = 160 + ((x / 32 + y / 32) % 600);
+                    const int noise = static_cast<int>(rng.next() % 7) - 3;
+                    frames[i][y * w + x] = static_cast<std::uint16_t>(signal + noise);
+                }
+            }
+        }
+        for (bool hq : {false, true}) {
+            auto r = runMerge(ctx, frames, w, h, hq);
+            check(r.ok && allFinite(r.out), hq ? "Sensor HQ finite" : "Sensor Fast finite", r.err);
+            if (r.ok) {
+                double mean = 0;
+                for (float value : r.out) mean += value;
+                mean /= r.out.size();
+                check(mean > 0.1 && mean < 0.9, "Sensor nonempty output");
+            }
+        }
+        hdrplus_destroy(ctx);
+        std::printf("SENSOR: %s\n", failures ? "FAILED" : "ALL CHECKS PASSED");
+        return failures ? 1 : 0;
+    }
 
     // Small geometry for the cheap checks (single pyramid level).
     constexpr int kSmall = 128;
