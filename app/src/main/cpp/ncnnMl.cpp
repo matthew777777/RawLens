@@ -769,6 +769,22 @@ Java_com_particlesdevs_photoncamera_processing_ml_KernelNetNcnnProcessor_nativeD
 
 struct RawNindCtx {
     ncnn::Net net;
+#if NCNN_VULKAN
+    const ncnn::VulkanDevice* allocatorDevice = nullptr;
+    ncnn::VkAllocator* blobPool = nullptr;
+    ncnn::VkAllocator* stagingPool = nullptr;
+#endif
+    ~RawNindCtx() {
+        // Release tensors/pipelines before returning their allocators. Failed
+        // warmups and repeated enable/disable must not strand device memory.
+        net.clear();
+#if NCNN_VULKAN
+        if (allocatorDevice) {
+            if (blobPool) allocatorDevice->reclaim_blob_allocator(blobPool);
+            if (stagingPool) allocatorDevice->reclaim_staging_allocator(stagingPool);
+        }
+#endif
+    }
     int tileCore = 512;    // packed-px interior advance (~512 gives a 4x3-ish
                            // tile grid at 12MP packed 2000x1500)
     int tileBorder = 32;   // overlap margin per side (packed px, >= RF 23)
@@ -893,8 +909,12 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
         ctx->net.opt.use_fp16_storage = false;
         ctx->net.opt.use_fp16_arithmetic = false;
         ctx->net.opt.lightmode = true;
-        ctx->tileCore = 384;
-        ctx->tileBorder = 64; // 512 packed-pixel input, as in the upstream export
+        // FP32 activations dominate memory, including during the 64x64
+        // startup warmup (which also runs a complete fixed-size tile).
+        // A 256px tile uses one quarter of the old 512px activation storage.
+        // Preserve the overlap/receptive-field margin for capture seams.
+        ctx->tileCore = 128;
+        ctx->tileBorder = 64;
     }
 
 #ifdef __ANDROID__
@@ -944,10 +964,12 @@ Java_com_particlesdevs_photoncamera_processing_ml_RawNindNcnnProcessor_nativeCre
         !(getenv("RN_NOALLOC") && getenv("RN_NOALLOC")[0] == '1')) {
         const ncnn::VulkanDevice* vkdev = ctx->net.vulkan_device();
         if (vkdev != nullptr) {
-            ncnn::VkAllocator* blobPool = vkdev->acquire_blob_allocator();
-            ctx->net.opt.blob_vkallocator = blobPool;
-            ctx->net.opt.workspace_vkallocator = blobPool;
-            ctx->net.opt.staging_vkallocator = vkdev->acquire_staging_allocator();
+            ctx->allocatorDevice = vkdev;
+            ctx->blobPool = vkdev->acquire_blob_allocator();
+            ctx->stagingPool = vkdev->acquire_staging_allocator();
+            ctx->net.opt.blob_vkallocator = ctx->blobPool;
+            ctx->net.opt.workspace_vkallocator = ctx->blobPool;
+            ctx->net.opt.staging_vkallocator = ctx->stagingPool;
             LOGI("rawnind: persistent vk allocators attached (pooled)");
         } else {
             LOGE("rawnind: vulkan_device null, cannot attach pooled allocators");
@@ -1010,6 +1032,7 @@ static jboolean rawnindRunFull(RawNindCtx* ctx, const float* inPtr,
     const int OC = ctx->outChannels;
     const int S = ctx->outScale;
     ncnn::Mat in(w2, h2, C);
+    if (in.empty()) return JNI_FALSE;
     for (int c = 0; c < C; c++) {
         float* ch = (float*)in.channel(c);
         for (int i = 0, n = w2 * h2; i < n; i++) ch[i] = inPtr[C * i + c];
@@ -1107,6 +1130,10 @@ static jboolean rawnindRunTiled(RawNindCtx* ctx, const float* inPtr,
     // Reused deinterleaved tile input: split the interleaved inTile into
     // per-channel planes without reallocating per tile.
     ncnn::Mat tileIn(TILE, TILE, C);
+    if (ctx->inTile.empty() || tileIn.empty()) {
+        LOGE("rawnind tile allocation failed (%dpx)", TILE);
+        return JNI_FALSE;
+    }
 
     for (int iy = 0; iy < ny; iy++) {
         const int ty0 = iy * STEP;
