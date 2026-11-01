@@ -9,9 +9,7 @@ import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import java.util.Locale
 
@@ -49,11 +47,10 @@ internal class PhotoSettingsTab(
         // JPEG XL container options, mirroring darktable's export panel:
         // bit depth, 16-bit pixel type, quality, encoding effort, and
         // decoding-speed tier. The develop look (AgX) is shared with JPEG.
-        kit.content.addView(kit.sectionTitle("Photo format & JPEG XL quality"))
-        kit.content.addView(kit.sectionDesc("Up to 16-bit integer (plus 16/32-bit float), like darktable. Quality 100 is lossless on integer depths. Higher effort compresses better but encodes slower."))
+        kit.content.addView(kit.sectionTitle("File format"))
         kit.content.addView(Button(activity).apply {
             fun refresh() {
-                text = "Developed format: ${host.developedFormat.label}"
+                text = "Format: ${host.developedFormat.label}"
             }
             refresh()
             setOnClickListener {
@@ -67,9 +64,10 @@ internal class PhotoSettingsTab(
                 refresh()
                 host.refreshCaptureFormatControl()
                 host.setStatus("DEVELOPED • ${next.label}")
+                host.reshow()
             }
         })
-        kit.content.addView(kit.sectionDesc("JPEG writes .jpg (8-bit); JXL writes .jxl at the bit depth below. Applies to new captures and offline merges."))
+        if (host.developedFormat == DevelopedFormat.JXL) {
         var currentJxlSettings = host.jxlOutputSettings()
         fun applyJxlOutputSettings(settings: JxlOutputSettings): Boolean {
             val resolved = settings.resolved()
@@ -159,16 +157,16 @@ internal class PhotoSettingsTab(
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
         }
         kit.content.addView(jxlQualityLabel)
-        kit.content.addView(SeekBar(activity).apply {
+        kit.content.addView(SettingsSlider(activity).apply {
             max = JxlOutputSettings.MAX_QUALITY - JxlOutputSettings.MIN_QUALITY
             progress = jxlQuality - JxlOutputSettings.MIN_QUALITY
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                     jxlQuality = progress + JxlOutputSettings.MIN_QUALITY
                     jxlQualityLabel.text = jxlQualityLabel(jxlQuality)
                 }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     if (applyJxlOutputSettings(currentJxlSettings.copy(quality = jxlQuality))) {
                         host.setStatus(
                             if (jxlQuality >= 100) "JXL QUALITY • LOSSLESS"
@@ -197,12 +195,12 @@ internal class PhotoSettingsTab(
                 setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
             }
             kit.content.addView(label)
-            kit.content.addView(SeekBar(activity).apply {
+            kit.content.addView(SettingsSlider(activity).apply {
                 max = maximum
                 progress = selected
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
                     override fun onProgressChanged(
-                        seekBar: SeekBar,
+                        seekBar: SettingsSlider,
                         progress: Int,
                         fromUser: Boolean
                     ) {
@@ -210,9 +208,9 @@ internal class PhotoSettingsTab(
                         label.text = "$title: ${format(selected)}"
                     }
 
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
 
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                         if (applyJxlOutputSettings(update(currentJxlSettings, selected))) {
                             host.setStatus(status(selected))
                         } else {
@@ -235,7 +233,7 @@ internal class PhotoSettingsTab(
             { settings, value -> settings.copy(decodingSpeed = value) },
             { "JXL DECODING SPEED • $it" }
         )
-        kit.content.addView(CheckBox(activity).apply {
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = "Display P3 JXL"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJxlSettings.displayP3
@@ -246,7 +244,8 @@ internal class PhotoSettingsTab(
                 }
             }
         })
-        kit.content.addView(kit.sectionTitle("Photo look & JPEG quality"))
+        }
+        kit.content.addView(kit.sectionTitle("Photo output"))
         kit.content.addView(kit.sectionDesc("Ultra HDR and Display P3 targets, JPEG quality and chroma, AgX look, adaptive exposure and highlight handling."))
         var currentJpegSettings = host.jpegOutputSettings()
         fun applyJpegOutputSettings(settings: JpegOutputSettings): Boolean {
@@ -291,7 +290,8 @@ internal class PhotoSettingsTab(
             }
         })
         kit.content.addView(kit.sectionDesc("Protects highlights in PROGRAM/ETTR and lifts JPEG/JXL shadows and midtones. RAW exposure changes; RAW pixel development stays untouched. Off preserves the existing look."))
-        kit.content.addView(CheckBox(activity).apply {
+        if (host.developedFormat == DevelopedFormat.JPEG) {
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 "Ultra HDR JPEG (Android 14+ gainmap)"
             } else {
@@ -307,7 +307,7 @@ internal class PhotoSettingsTab(
                 }
             }
         })
-        kit.content.addView(CheckBox(activity).apply {
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = "Display P3 JPEG"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJpegSettings.displayP3
@@ -318,7 +318,8 @@ internal class PhotoSettingsTab(
                 }
             }
         })
-        kit.content.addView(CheckBox(activity).apply {
+        }
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = "Highlight reconstruction (inpaint opposed)"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJpegSettings.hlReconstruction
@@ -342,7 +343,7 @@ internal class PhotoSettingsTab(
                 }
             }
         }
-        kit.content.addView(chromaButton)
+        if (host.developedFormat == DevelopedFormat.JPEG) kit.content.addView(chromaButton)
         val demosaicButton = Button(activity).apply {
             fun refresh() {
                 text = "Demosaic: ${currentJpegSettings.demosaic.label}"
@@ -358,6 +359,7 @@ internal class PhotoSettingsTab(
         }
         kit.content.addView(demosaicButton)
         kit.content.addView(kit.sectionDesc("AMaZE (GLES) is the default still demosaic; RCD runs the Vulkan RCD modes and imports the result back. Quad-Bayer always uses AMaZE."))
+        if (host.developedFormat == DevelopedFormat.JPEG) {
         var jpegQuality = currentJpegSettings.jpegQuality.coerceIn(1, 100)
         val jpegQualityLabel = TextView(activity).apply {
             text = "JPEG quality: $jpegQuality%"
@@ -366,16 +368,16 @@ internal class PhotoSettingsTab(
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
         }
         kit.content.addView(jpegQualityLabel)
-        kit.content.addView(SeekBar(activity).apply {
+        kit.content.addView(SettingsSlider(activity).apply {
             max = 99
             progress = jpegQuality - 1
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                     jpegQuality = progress + 1
                     jpegQualityLabel.text = "JPEG quality: $jpegQuality%"
                 }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     if (applyJpegOutputSettings(currentJpegSettings.copy(jpegQuality = jpegQuality))) {
                         host.setStatus("JPEG QUALITY • $jpegQuality%")
                     } else {
@@ -386,11 +388,13 @@ internal class PhotoSettingsTab(
             })
         })
         kit.content.addView(TextView(activity).apply {
+            tag = "settings-description"
             text = "Native libjpeg-turbo is used for SDR JPEG. Ultra HDR uses Android JPEG/R; quality still applies there, while chroma subsampling is controlled by the platform encoder."
             setTextColor(activity.getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(kit.dp(12), kit.dp(4), kit.dp(12), kit.dp(8))
         })
+        }
         fun addAgxSlider(
             title: String,
             maximum: Int,
@@ -406,12 +410,12 @@ internal class PhotoSettingsTab(
                 setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
             }
             kit.content.addView(label)
-            kit.content.addView(SeekBar(activity).apply {
+            kit.content.addView(SettingsSlider(activity).apply {
                 max = maximum
                 progress = selected
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
                     override fun onProgressChanged(
-                        seekBar: SeekBar,
+                        seekBar: SettingsSlider,
                         progress: Int,
                         fromUser: Boolean
                     ) {
@@ -422,9 +426,9 @@ internal class PhotoSettingsTab(
                         if (fromUser) host.controller.previewAgxLive(update(currentJpegSettings, selected))
                     }
 
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
 
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                         if (!applyJpegOutputSettings(update(currentJpegSettings, selected))) {
                             selected = initial.coerceIn(0, maximum)
                             seekBar.progress = selected
@@ -436,7 +440,7 @@ internal class PhotoSettingsTab(
                 })
             })
         }
-        kit.content.addView(android.widget.Switch(activity).apply {
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJpegSettings.agxLook == AgxLook.PUNCHY
@@ -449,6 +453,7 @@ internal class PhotoSettingsTab(
                 text = "AgX look: " + if (currentJpegSettings.agxLook == AgxLook.BASE) "Base (default)" else "Punchy"
             }
         })
+        val advancedLookStart = kit.content.childCount
         var purityPercent = (currentJpegSettings.agxPurityBoost * 100f).toInt().coerceIn(0, 200)
         val purityLabel = TextView(activity).apply {
             text = "AgX purity boost: $purityPercent%"
@@ -457,12 +462,12 @@ internal class PhotoSettingsTab(
             setPadding(kit.dp(12), kit.dp(8), kit.dp(12), 0)
         }
         kit.content.addView(purityLabel)
-        kit.content.addView(SeekBar(activity).apply {
+        kit.content.addView(SettingsSlider(activity).apply {
             max = 200
             progress = purityPercent
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
                 override fun onProgressChanged(
-                    seekBar: SeekBar,
+                    seekBar: SettingsSlider,
                     progress: Int,
                     fromUser: Boolean
                 ) {
@@ -473,9 +478,9 @@ internal class PhotoSettingsTab(
                     )
                 }
 
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
 
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     if (applyJpegOutputSettings(
                         currentJpegSettings.copy(agxPurityBoost = purityPercent / 100f)
                     )) {
@@ -526,7 +531,7 @@ internal class PhotoSettingsTab(
             { "$it%" },
             { settings, value -> settings.copy(agxGamutCompression = value / 100f) }
         )
-        kit.content.addView(CheckBox(activity).apply {
+        kit.content.addView(SettingsSwitch(activity).apply {
             text = "Adaptive development exposure (AUTO and ZSL)"
             setTextColor(activity.getColor(R.color.text_primary))
             isChecked = currentJpegSettings.adaptiveExposureAuto
@@ -544,6 +549,7 @@ internal class PhotoSettingsTab(
             { settings, value -> settings.copy(adaptiveExposureProgramStrength = value / 100f) }
         )
         kit.content.addView(TextView(activity).apply {
+            tag = "settings-description"
             text = "Highlights: headroom caps the p99.5 spike at white; sky protection caps broad p95 skies; shoulder rolls off near-white into AgX."
             setTextColor(activity.getColor(R.color.text_secondary))
             textSize = 12f
@@ -587,6 +593,8 @@ internal class PhotoSettingsTab(
                 }
             }
         })
+        kit.polish()
+        kit.collapseRange(advancedLookStart, kit.content.childCount, "Advanced tone & color")
 
     }
 }

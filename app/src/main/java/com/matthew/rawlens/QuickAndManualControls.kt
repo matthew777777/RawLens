@@ -106,10 +106,10 @@ internal fun MainActivity.showQuickControls() {
     hideManualControl()
     updateQuickControls()
     quickPanel.alpha = 0f
-    quickPanel.translationY = dp(18).toFloat()
     quickPanel.visibility = View.VISIBLE
-    quickPanel.animate().alpha(1f).translationY(0f).setDuration(180L).start()
-    quickPanel.post { updateOverlayStack() }
+    positionQuickPanel()
+    quickPanel.animate().alpha(1f).setDuration(160L).start()
+    quickPanel.post { positionQuickPanel(); updateOverlayStack() }
     armQuickAutoHide()
 }
 
@@ -122,7 +122,8 @@ internal fun MainActivity.closeFloatingPanels() {
 
 internal fun MainActivity.setQuickTileState(tile: TextView, active: Boolean) {
     if (quickTileStates.put(tile, active) == active) return
-    tile.background = getDrawable(if (active) R.drawable.control_chip_active else R.drawable.control_chip)
+    tile.background = getDrawable(if (active) R.drawable.quick_tile_active else R.drawable.quick_tile)
+    tile.isSelected = active
     tile.setTextColor(getColor(if (active) R.color.accent_dark else R.color.text_primary))
 }
 
@@ -317,7 +318,7 @@ internal fun MainActivity.videoRecordLocks(): VideoRecordLocks =
 internal fun MainActivity.manualRangeFor(control: ManualControl): ManualControlRange? {
     if (videoRecording) {
         runCatching { videoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
-        runCatching { logRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
+        runCatching { encodedVideoRecorder?.videoControlRange(control) }.getOrNull()?.let { return it }
         return null
     }
     return runCatching { controller.manualControlRange(control) }.getOrNull()
@@ -330,8 +331,8 @@ internal fun MainActivity.setManualValueFor(control: ManualControl, value: Long?
             refreshVideoChip(control)
             return
         }
-        if (logRecorder != null) {
-            logRecorder?.setVideoManualControl(control, value)
+        if (encodedVideoRecorder != null) {
+            encodedVideoRecorder?.setVideoManualControl(control, value)
             refreshVideoChip(control)
             return
         }
@@ -352,7 +353,7 @@ internal fun MainActivity.refreshVideoChip(control: ManualControl) {
             controlText("AF", if (range.automatic) "AF" else formatFocusDistance(range.current))
         ManualControl.EXPOSURE_COMPENSATION -> {
             val isManualExposure = runCatching {
-                (videoRecorder?.videoManual ?: logRecorder?.videoManual)?.let {
+                (videoRecorder?.videoManual ?: encodedVideoRecorder?.videoManual)?.let {
                     VideoManualPolicy.wantsManualExposure(it)
                 } ?: false
             }.getOrDefault(false)

@@ -2,16 +2,18 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/black"
-    android:fillViewport="true">
+    android:background="@color/surface"
+    android:fillViewport="true"
+    android:scrollbars="none"
+    android:scrollIndicators="none">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
         android:orientation="vertical"
-        android:paddingStart="20dp"
-        android:paddingEnd="20dp"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
         android:paddingTop="24dp"
         android:paddingBottom="24dp">
 
@@ -59,16 +61,16 @@
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
-            <Button
+            <Button style="@style/Widget.RawLens.WelcomeAction"
                 android:id="@+id/permCameraButton"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="10dp"
-                android:background="@drawable/welcome_cta"
+                android:background="@drawable/quick_control_active"
                 android:text="Allow Camera"
                 android:textAllCaps="false"
                 android:textColor="@color/accent_dark"
-                android:textSize="14sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:minHeight="48dp" />
         </LinearLayout>
@@ -108,16 +110,16 @@
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
 
-            <Button
+            <Button style="@style/Widget.RawLens.WelcomeAction"
                 android:id="@+id/permFolderButton"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="10dp"
-                android:background="@drawable/welcome_cta"
+                android:background="@drawable/quick_control_active"
                 android:text="Choose Photo Folder"
                 android:textAllCaps="false"
                 android:textColor="@color/accent_dark"
-                android:textSize="14sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:minHeight="48dp" />
         </LinearLayout>
@@ -140,13 +142,13 @@
                 android:textSize="10sp"
                 android:textStyle="bold" />
 
-            <Switch
+            <com.matthew.rawlens.SettingsSwitch
                 android:id="@+id/locationSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:checked="false"
-                android:text="Tag photos with GPS location"
+                android:text="Tag photos and MP4 videos with GPS location"
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 
@@ -178,7 +180,7 @@
                 android:textSize="10sp"
                 android:textStyle="bold" />
 
-            <Switch
+            <com.matthew.rawlens.SettingsSwitch
                 android:id="@+id/updateSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -197,18 +199,18 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
-        <Button
+        <Button style="@style/Widget.RawLens.WelcomeAction"
             android:id="@+id/permContinueButton"
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="48dp"
             android:layout_marginTop="12dp"
-            android:background="@drawable/welcome_cta"
+            android:background="@drawable/quick_control_active"
             android:text="Find My Lenses  →"
             android:textAllCaps="false"
             android:textColor="@color/accent_dark"
-            android:textSize="16sp"
+            android:textSize="13sp"
             android:textStyle="bold"
-            android:minHeight="52dp" />
+            android:minHeight="48dp" />
 
         <TextView
             android:id="@+id/permStatus"

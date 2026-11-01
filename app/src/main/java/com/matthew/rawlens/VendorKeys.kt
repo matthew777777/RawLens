@@ -203,9 +203,16 @@ data class VendorKeyProfile(
      * through `SessionConfiguration` so early session keys travel with it. OEM values and sensor effects require device verification.
      * `0` keeps the standard session path untouched.
      */
-    val operatingMode: Int = 0
+    val operatingMode: Int = 0,
+    /** Opt-in RAW session/preview target; zero preserves the normal 30 fps policy. */
+    val rawPreviewFps: Int = 0
 ) {
-    fun isEmpty(): Boolean = entries.isEmpty() && operatingMode == 0
+    /** Explicit sensor-mode targets must never silently fall back to a lower FPS. */
+    fun rawPreviewRange(ranges: List<IntRange>): IntRange? =
+        ranges.filter { rawPreviewFps != 0 && it.first <= rawPreviewFps && it.last == rawPreviewFps }
+            .maxByOrNull { it.first }
+
+    fun isEmpty(): Boolean = entries.isEmpty() && operatingMode == 0 && rawPreviewFps == 0
 
     fun activeEntries(): List<VendorKeyEntry> = entries.filter { it.enabled }
 
@@ -222,11 +229,13 @@ data class VendorKeyProfile(
         val names = entries.map { it.identity() }.toSet()
         return VendorKeyProfile(
             (entries + other.entries.filter { it.identity() !in names }).sortedBy { it.name },
-            operatingMode.takeIf { it != 0 } ?: other.operatingMode
+            operatingMode.takeIf { it != 0 } ?: other.operatingMode,
+            rawPreviewFps.takeIf { it != 0 } ?: other.rawPreviewFps
         )
     }
 
     fun validate() {
+        require(rawPreviewFps in setOf(0, 24, 30, 48, 50, 60)) { "Invalid RAW preview FPS" }
         entries.forEach(VendorKeyEntry::validate)
         val names = entries.map { it.identity() }
         require(names.size == names.toSet().size) { "Duplicate vendor key name" }
@@ -235,7 +244,7 @@ data class VendorKeyProfile(
     }
 
     fun toJson(): String = buildString {
-        append("{\"v\":").append(FORMAT_VERSION).append(",\"op\":").append(operatingMode).append(",\"entries\":[")
+        append("{\"v\":").append(FORMAT_VERSION).append(",\"op\":").append(operatingMode).append(",\"rawFps\":").append(rawPreviewFps).append(",\"entries\":[")
         entries.forEachIndexed { index, entry ->
             if (index > 0) append(',')
             append(entry.toJson())
@@ -280,7 +289,9 @@ data class VendorKeyProfile(
             val mode = storedMode?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
                 ?.toInt()?.takeIf(VendorSessionAttempt::validMode)
             require(!strict || !root.containsKey("op") || mode != null) { "Invalid operating mode" }
-            return VendorKeyProfile(kept.values.toList(), mode ?: 0)
+            val fps = (root["rawFps"] as? Long)?.takeIf { it in listOf(0L, 24L, 30L, 48L, 50L, 60L) }?.toInt()
+            require(!strict || !root.containsKey("rawFps") || fps != null) { "Invalid RAW preview FPS" }
+            return VendorKeyProfile(kept.values.toList(), mode ?: 0, fps ?: 0)
         }
 
         /** Pure + host-tested: parses the session operating mode field. */

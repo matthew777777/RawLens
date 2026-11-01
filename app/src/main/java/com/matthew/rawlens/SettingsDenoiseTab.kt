@@ -31,8 +31,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -67,9 +65,38 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
         var settings = denoiseSettings()
         val aiSubordinate = ArrayList<View>()
 
+        content.addView(sectionTitle("Capture sharpening"))
+        val sharpToggle = SettingsSwitch(this).apply {
+            text = "Capture sharpening\nRestores detail lost to the lens and demosaic. Developed photos only."
+            isChecked = settings.captureSharpening.enabled
+        }
+        val sharpChoices = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun refreshSharp() {
+            sharpChoices.removeAllViews()
+            CaptureSharpeningLevel.entries.forEach { level ->
+                sharpChoices.addView(p.kit.settingsButton(level.label, settings.captureSharpening.level == level).apply {
+                    contentDescription = "Capture sharpening ${level.label}"
+                    isEnabled = settings.captureSharpening.enabled
+                    isSelected = settings.captureSharpening.level == level
+                    setOnClickListener {
+                        val next = settings.copy(captureSharpening = settings.captureSharpening.copy(level = level))
+                        if (persistDenoiseSettings(next)) { settings = next; refreshSharp() }
+                    }
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+        }
+        sharpToggle.setOnCheckedChangeListener { button, enabled ->
+            val next = settings.copy(captureSharpening = settings.captureSharpening.copy(enabled = enabled))
+            if (persistDenoiseSettings(next)) { settings = next; refreshSharp() }
+            else button.isChecked = settings.captureSharpening.enabled
+        }
+        content.addView(sharpToggle)
+        content.addView(sharpChoices)
+        refreshSharp()
+
         content.addView(sectionTitle("Profiled wavelet (Vulkan)"))
         val waveSubordinate = ArrayList<View>()
-        val waveMaster = CheckBox(this).apply {
+        val waveMaster = SettingsSwitch(this).apply {
             text = "Wavelet luma+chroma denoise (Vulkan)\nPost-demosaic darktable-profiled wavelets on camera-linear RGB; JPEG only, never the DNG."
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.wavelet.enabled
@@ -100,16 +127,16 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
                 setPadding(dp(12), dp(8), dp(12), 0)
             }
             content.addView(label)
-            val bar = SeekBar(this).apply {
+            val bar = SettingsSlider(this).apply {
                 max = maximum
                 progress = selected
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                    override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                         selected = progress
                         label.text = "$title: ${format(selected)}"
                     }
-                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                    override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                         val proposed = settings.copy(wavelet = update(settings.wavelet, selected))
                         if (persistDenoiseSettings(proposed)) {
                             settings = proposed
@@ -125,14 +152,17 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             waveSubordinate += label
             waveSubordinate += bar
         }
-        addWaveSlider("Strength", 200, (settings.wavelet.strength * 100 + 0.5f).toInt(),
-            { "$it%" }) { s, v -> s.copy(strength = v / 100f) }
-        addWaveSlider("Luma", 100, (settings.wavelet.luma * 100 + 0.5f).toInt(),
-            { "$it%" }) { s, v -> s.copy(luma = v / 100f) }
-        addWaveSlider("Scales", 7, settings.wavelet.maxScale,
-            { if (it <= 1) "$it scale" else "$it scales" }) { s, v -> s.copy(maxScale = v.coerceAtLeast(1)) }
+        addWaveSlider("Strength", 80, (settings.wavelet.strength * 10 + 0.5f).toInt(),
+            { "%.1f".format(Locale.US, it / 10f) }) { s, v -> s.copy(strength = v / 10f) }
+        addWaveSlider("Detail", 36, (settings.wavelet.detail * 20 + 0.5f).toInt(),
+            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(detail = v / 20f) }
+        addWaveSlider("Luma", 20, (settings.wavelet.luma * 20 + 0.5f).toInt(),
+            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(luma = v / 20f) }
+        addWaveSlider("Scales", 6, settings.wavelet.maxScale - 1,
+            { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
+        ) { s, v -> s.copy(maxScale = v + 1) }
         content.addView(TextView(this).apply {
-            text = "Strength 100% and 7 scales are the validated defaults; luma 25% keeps fine detail while chroma (fixed 75%) does the heavy lifting. Noise comes from the sensor profile, so higher ISO denoises harder automatically."
+            text = "RAWR defaults: strength 1.0, detail 1.00, luma 0.25, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Missing sensor noise profiles bypass denoise."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(dp(12), dp(4), dp(12), dp(4))
@@ -147,7 +177,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
             setPadding(dp(12), dp(10), dp(12), 0)
         }
-        val aiMaster = CheckBox(this).apply {
+        val aiMaster = SettingsSwitch(this).apply {
             text = "AI RAW denoise (RawNIND Bayer)\nOn writes a denoised DNG and develops the JPEG from it. Needs the trained model files in assets."
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.aiEnabled
@@ -163,7 +193,7 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
                 }
             }
         }
-        val keepOriginal = CheckBox(this).apply {
+        val keepOriginal = SettingsSwitch(this).apply {
             text = "Save original DNG alongside\nOff halves storage; the untouched sensor DNG is skipped."
             setTextColor(getColor(R.color.text_primary))
             isChecked = settings.saveOriginalDng
@@ -186,16 +216,16 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             setPadding(dp(12), dp(8), dp(12), 0)
         }
         content.addView(aiStrengthLabel)
-        val aiStrengthBar = SeekBar(this).apply {
+        val aiStrengthBar = SettingsSlider(this).apply {
             max = 100
             progress = aiStrengthPct
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                     aiStrengthPct = progress
                     aiStrengthLabel.text = "AI strength: $aiStrengthPct%"
                 }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     val proposed = settings.copy(aiStrength = aiStrengthPct / 100f)
                     if (persistDenoiseSettings(proposed)) {
                         settings = proposed

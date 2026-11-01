@@ -30,8 +30,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView

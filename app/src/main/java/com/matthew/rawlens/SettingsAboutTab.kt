@@ -31,8 +31,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -82,7 +80,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
                 val notices = listOf("raw-exposure-NOTICE.txt", "GPL-2.0.txt", "Apache-2.0.txt",
                     "BSD-2-Clause-libcamera.txt", "bakinglab-aces.txt")
                     .joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
-                AlertDialog.Builder(this@showAboutSettings).setTitle("Open-source licences")
+                RawLensDialogBuilder(this@showAboutSettings).setTitle("Open-source licences")
                     .setMessage(notices).setPositiveButton("Close", null).show()
             }
         })
@@ -90,7 +88,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             text = "View GPLv3 license"
             setOnClickListener {
                 val licenseText = assets.open("LICENSE").bufferedReader().use { it.readText() }
-                AlertDialog.Builder(this@showAboutSettings)
+                RawLensDialogBuilder(this@showAboutSettings)
                     .setTitle("GNU General Public License v3")
                     .setMessage(licenseText)
                     .setPositiveButton("Close", null)
@@ -103,7 +101,7 @@ internal fun MainActivity.showAboutSettings(p: SettingsPage) {
             text = "Check for updates"
             setOnClickListener { updateFlow.checkManually() }
         })
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Check for updates on startup"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(UpdateChecker.KEY_AUTO_CHECK, true)

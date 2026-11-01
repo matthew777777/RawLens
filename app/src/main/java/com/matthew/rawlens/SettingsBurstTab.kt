@@ -41,8 +41,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -70,7 +68,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
     fun sectionTitle(text: String): TextView = p.kit.sectionTitle(text)
     fun sectionDesc(text: String): TextView = p.kit.sectionDesc(text)
     fun settingsButton(label: String, active: Boolean = false): Button = p.kit.settingsButton(label, active)
-    fun settingsCheck(label: String, checked: Boolean): CheckBox = p.kit.settingsCheck(label, checked)
+    fun settingsCheck(label: String, checked: Boolean): SettingsSwitch = p.kit.settingsCheck(label, checked)
     fun polish() = p.kit.polish()
     fun markActive(active: Button) = p.markActive(active)
     val burstTab = p.tabs[4]
@@ -78,12 +76,12 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
         content.addView(sectionTitle("Offline burst merges"))
         content.addView(sectionDesc(
             "Staged IMG_<ts>_BURST.craw takes merge here later via MFSR or HDR+, " +
-                "to DNG, JPEG, or both. RAW video never lists."
+                "to DNG, JPEG, or both. RAW Video never lists."
         ))
         content.addView(settingsButton("OPEN MERGES").apply {
             setOnClickListener { openMerges() }
         })
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Save ZSL bursts to .craw for offline merge"
             setTextColor(getColor(R.color.text_primary))
             isChecked = burstCrawEnabled
@@ -96,7 +94,7 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                 "IMG_<ts>_BURST.craw instead of merging immediately."
         ))
         content.addView(sectionTitle("Zero shutter lag"))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "RAW zero shutter lag"
             setTextColor(getColor(R.color.text_primary))
             isChecked = captureExposureMode == CaptureExposureMode.ZSL
@@ -121,12 +119,12 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             setPadding(dp(12), dp(8), dp(12), 0)
         }
         content.addView(frameCountLabel)
-        content.addView(SeekBar(this).apply {
+        content.addView(SettingsSlider(this).apply {
             max = MAX_RAW_ZSL_FRAMES - MIN_RAW_ZSL_FRAMES
             progress = selectedFrameCount - MIN_RAW_ZSL_FRAMES
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
                 override fun onProgressChanged(
-                    seekBar: SeekBar,
+                    seekBar: SettingsSlider,
                     progress: Int,
                     fromUser: Boolean
                 ) {
@@ -134,9 +132,9 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                     frameCountLabel.text = rawZslFrameCountText(selectedFrameCount)
                 }
 
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
 
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     lensPreferences().edit()
                         .putInt(KEY_RAW_ZSL_FRAME_COUNT, selectedFrameCount)
                         .apply()
@@ -224,12 +222,12 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
             }
         })
         content.addView(strengthLabel)
-        content.addView(SeekBar(this).apply {
+        content.addView(SettingsSlider(this).apply {
             max = HdrPlusSettings.STRENGTH_SLIDER_STEPS
             progress = HdrPlusSettings.strengthToProgress(selectedStrength)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
                 override fun onProgressChanged(
-                    seekBar: SeekBar,
+                    seekBar: SettingsSlider,
                     progress: Int,
                     fromUser: Boolean
                 ) {
@@ -237,9 +235,9 @@ internal fun MainActivity.showBurstSettings(p: SettingsPage) {
                     strengthLabel.text = strengthRowText(selectedStrength)
                 }
 
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
 
-                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) {
                     val applied = applyHdrPlusSettings(
                         hdrPlusSettings.copy(autoStrength = false, strength = selectedStrength)
                     )

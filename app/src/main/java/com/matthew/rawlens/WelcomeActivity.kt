@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.Switch
 import android.widget.TextView
 
 /**
@@ -43,9 +42,9 @@ class WelcomeActivity : Activity() {
     private var cameraStatus: TextView? = null
     private var cameraButton: Button? = null
     private var folderStatus: TextView? = null
-    private var locationSwitch: Switch? = null
+    private var locationSwitch: SettingsSwitch? = null
     private var updateSection: LinearLayout? = null
-    private var updateSwitch: Switch? = null
+    private var updateSwitch: SettingsSwitch? = null
     /** True once setContentView ran, so a decor view exists for immersive mode. */
     private var contentReady = false
     /** True while the optional location request from Continue is outstanding. */

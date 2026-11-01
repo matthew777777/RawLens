@@ -10,11 +10,14 @@
     </style>
     <!-- Quick tiles: compact minimal 3-col grid, still thumb-usable. -->
     <style name="QuickControlTile">
-        <item name="android:layout_width">0dp</item><item name="android:layout_height">54dp</item><item name="android:layout_weight">1</item>
-        <item name="android:background">@drawable/control_chip</item><item name="android:gravity">center</item><item name="android:letterSpacing">0.06</item>
-        <item name="android:textColor">@color/text_primary</item><item name="android:textSize">9sp</item><item name="android:textStyle">bold</item>
-        <item name="android:maxLines">2</item><item name="android:lineSpacingExtra">1dp</item>
-        <item name="android:paddingStart">2dp</item><item name="android:paddingEnd">2dp</item>
+        <item name="android:layout_width">0dp</item><item name="android:layout_height">48dp</item><item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/quick_tile</item><item name="android:gravity">center</item>
+        <item name="android:textColor">@color/text_primary</item><item name="android:textSize">10sp</item>
+        <item name="android:fontFamily">sans-serif</item><item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.02</item><item name="android:includeFontPadding">false</item>
+        <item name="android:maxLines">2</item><item name="android:lineSpacingExtra">2dp</item>
+        <item name="android:paddingStart">4dp</item><item name="android:paddingEnd">4dp</item>
+        <item name="android:clickable">true</item><item name="android:focusable">true</item>
     </style>
     <style name="TopBarButton">
         <item name="android:layout_width">48dp</item><item name="android:layout_height">48dp</item>

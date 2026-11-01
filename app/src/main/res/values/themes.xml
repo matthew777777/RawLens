@@ -12,19 +12,65 @@
 
     <style name="ThemeOverlay.RawLens.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:windowBackground">@drawable/quick_panel</item>
+        <item name="android:windowAnimationStyle">@style/Animation.RawLens.Dialog</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:buttonStyle">@style/Widget.RawLens.DialogButton</item>
+        <item name="android:buttonBarButtonStyle">@style/Widget.RawLens.DialogButton</item>
+        <item name="android:editTextColor">@color/text_primary</item>
+        <item name="android:textColorHint">@color/text_secondary</item>
     </style>
 
     <style name="Widget.RawLens.DialogButton" parent="@android:style/Widget.Material.Button">
-        <item name="android:background">@drawable/control_chip</item>
+        <item name="android:background">@drawable/quick_control</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">13sp</item>
         <item name="android:minHeight">48dp</item>
         <item name="android:minWidth">96dp</item>
         <item name="android:paddingStart">20dp</item>
         <item name="android:paddingEnd">20dp</item>
+    </style>
+    <!-- Scoped to settings widgets so the camera chrome retains its own styling. -->
+    <style name="Theme.RawLens.SettingsControls" parent="Theme.Material3Expressive.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/accent_dark</item>
+        <item name="colorPrimaryContainer">#50432C</item>
+        <item name="colorOnPrimaryContainer">#F8DEAF</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorSecondaryContainer">#30353B</item>
+        <item name="colorOnSecondaryContainer">@color/text_secondary</item>
+        <item name="colorSurface">@color/surface_container</item>
+        <item name="colorSurfaceContainerHighest">#30353B</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/text_muted</item>
+        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="sliderStyle">@style/Widget.RawLens.SettingsSlider</item>
+    </style>
+    <style name="Widget.RawLens.SettingsSlider" parent="Widget.Material3Expressive.Slider.Xsmall">
+        <item name="labelBehavior">floating</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="trackHeight">8dp</item>
+        <item name="thumbHeight">24dp</item>
+        <item name="thumbWidth">4dp</item>
+        <item name="thumbTrackGapSize">4dp</item>
+        <item name="trackStopIndicatorSize">2dp</item>
+        <item name="trackColorActive">@color/accent</item>
+        <item name="trackColorInactive">#30353B</item>
+        <item name="thumbColor">@color/accent</item>
+        <item name="haloColor">@color/accent_soft</item>
+    </style>
+    <style name="Widget.RawLens.WelcomeAction" parent="Widget.RawLens.DialogButton">
+        <item name="android:background">@drawable/quick_control_active</item>
+        <item name="android:textColor">@color/accent_dark</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:gravity">center</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+    <style name="Animation.RawLens.Dialog" parent="@android:style/Animation.Dialog">
+        <item name="android:windowEnterAnimation">@anim/dialog_enter</item>
+        <item name="android:windowExitAnimation">@anim/dialog_exit</item>
     </style>
 </resources>

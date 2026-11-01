@@ -6,6 +6,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VendorKeysTest {
+    @Test fun `explicit RAW target prefers fixed rate and never falls back to 30`() {
+        val profile = VendorKeyProfile(rawPreviewFps = 60)
+        assertEquals(60..60, profile.rawPreviewRange(listOf(15..60, 60..60, 30..30)))
+        assertEquals(15..60, profile.rawPreviewRange(listOf(15..60, 30..30)))
+        assertNull(profile.rawPreviewRange(listOf(30..30, 30..120)))
+        assertNull(VendorKeyProfile().rawPreviewRange(listOf(30..30)))
+    }
+
+    @Test fun `RAW frame rate survives export and preset merge`() {
+        val profile = VendorKeyProfile(rawPreviewFps = 60)
+        assertFalse(profile.isEmpty())
+        assertEquals(profile, VendorKeyProfile.fromJson(profile.toJson(), strict = true))
+        assertEquals(60, VendorKeyProfile().mergedWith(profile).rawPreviewFps)
+        assertEquals(48, VendorKeyProfile(rawPreviewFps = 48).mergedWith(profile).rawPreviewFps)
+        assertEquals(0, VendorKeyProfile.fromJson("""{"v":1,"entries":[]}""").rawPreviewFps)
+    }
+
+    @Test fun `invalid RAW frame rates are rejected on import`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            VendorKeyProfile.fromJson("""{"v":1,"rawFps":120,"entries":[]}""", strict = true)
+        }
+    }
+
     private fun entry(
         name: String = "vivo.control.forceSensorMode",
         type: VendorKeyType = VendorKeyType.INT,

@@ -74,7 +74,7 @@ class MergesActivity : Activity() {
         detailLine = desc("Loading staged takes…")
         root.addView(detailLine)
         listBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val listScroll = ScrollView(this).apply { addView(listBox) }
+        val listScroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; scrollIndicators = 0; addView(listBox) }
         root.addView(listScroll, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 2f))
         root.addView(title("METHOD"))
@@ -115,7 +115,8 @@ class MergesActivity : Activity() {
         }
         root.addView(developedRow)
         runButton = Button(this).apply {
-            text = "RUN MERGE"
+            text = "Run merge"
+            RawLensUi.styleButton(this, active = true)
             setOnClickListener { runSelected() }
         }
         root.addView(runButton)
@@ -317,12 +318,12 @@ class MergesActivity : Activity() {
     }
 
     private fun title(text: String): TextView = TextView(this).apply {
-        this.text = text
-        setTextColor(getColor(R.color.text_primary))
-        textSize = 13f
+        this.text = text.lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }
+        setTextColor(getColor(R.color.accent))
+        textSize = 14f
         setTypeface(typeface, android.graphics.Typeface.BOLD)
-        letterSpacing = 0.08f
-        setPadding(0, dp(12), 0, dp(4))
+        letterSpacing = 0.02f
+        setPadding(dp(4), dp(14), dp(4), dp(6))
     }
 
     private fun desc(text: String): TextView = TextView(this).apply {
@@ -340,10 +341,7 @@ class MergesActivity : Activity() {
         }
 
     private fun stylePick(button: Button, active: Boolean) {
-        button.background = getDrawable(
-            if (active) R.drawable.control_chip_active else R.drawable.control_chip)
-        button.setTextColor(getColor(
-            if (active) R.color.accent_dark else R.color.text_primary))
+        RawLensUi.styleButton(button, active)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

@@ -250,14 +250,7 @@ internal fun MainActivity.showProgramPanel() {
         setPadding(0, dp(4), 0, 0)
     })
     fun styleDialogButton(button: Button, active: Boolean = false) {
-        button.background = getDrawable(
-            if (active) R.drawable.control_chip_active else R.drawable.control_chip
-        )
-        button.setTextColor(
-            getColor(if (active) R.color.accent_dark else R.color.text_primary)
-        )
-        button.textSize = 12f
-        button.setPadding(dp(16), dp(12), dp(16), dp(12))
+        RawLensUi.styleButton(button, active)
     }
     val balanceLabel = TextView(this).apply {
         text = programBalanceText(profile.balance)
@@ -272,23 +265,26 @@ internal fun MainActivity.showProgramPanel() {
         setTextColor(getColor(R.color.text_secondary))
         textSize = 11f
     })
-    val balanceSlider = RuleSliderView(this).apply {
-        label = "BAL"
-        contentRotation = controlRotationDegrees
+    fun bindSlider(slider: SettingsSlider, changed: (Int) -> Unit) {
+        slider.setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+            override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
+                if (fromUser) changed(progress)
+            }
+            override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+            override fun onStopTrackingTouch(seekBar: SettingsSlider) { apply() }
+        })
+    }
+    val balanceSlider = SettingsSlider(this).apply {
         max = 100
-        setProgressFromUser((profile.balance * 100).toInt().coerceIn(0, max), fromUser = false)
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
-        )
+        progress = (profile.balance * 100).toInt().coerceIn(0, max)
+        contentDescription = "PROGRAM ISO and shutter balance"
+        setLabelFormatter { programBalanceText(it / 100f) }
     }
     container.addView(balanceSlider)
-    balanceSlider.onProgressChanged = { progress, fromUser ->
-        if (fromUser) {
-            profile = profile.copy(balance = progress / 100f)
-            balanceLabel.text = programBalanceText(profile.balance)
-        }
+    bindSlider(balanceSlider) { progress ->
+        profile = profile.copy(balance = progress / 100f)
+        balanceLabel.text = programBalanceText(profile.balance)
     }
-    balanceSlider.onStopTracking = { apply() }
     val lockButton = Button(this).also { styleDialogButton(it) }
     val lockedIsoButton = Button(this).also { styleDialogButton(it) }
     val lockedShutterButton = Button(this).also { styleDialogButton(it) }
@@ -428,25 +424,17 @@ internal fun MainActivity.showProgramPanel() {
         setPadding(0, dp(12), 0, 0)
     }
     container.addView(biasLabel)
-    val biasSlider = RuleSliderView(this).apply {
-        label = "EV"
+    val biasSlider = SettingsSlider(this).apply {
         max = 60
-        setProgressFromUser(
-            ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max),
-            fromUser = false
-        )
-        layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, (64f * resources.displayMetrics.density).toInt()
-        )
+        progress = ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max)
+        contentDescription = "PROGRAM exposure bias"
+        setLabelFormatter { programEvBiasText(ProgramAeProfile.MIN_EV_BIAS + it / 20f) }
     }
     container.addView(biasSlider)
-    biasSlider.onProgressChanged = { progress, fromUser ->
-        if (fromUser) {
-            profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
-            biasLabel.text = programEvBiasText(profile.evBias)
-        }
+    bindSlider(biasSlider) { progress ->
+        profile = profile.copy(evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
+        biasLabel.text = programEvBiasText(profile.evBias)
     }
-    biasSlider.onStopTracking = { apply() }
     container.addView(TextView(this).apply {
         text = "ETTR overrides PROGRAM still exposure when converged."
         setTextColor(getColor(R.color.text_secondary))
@@ -468,17 +456,14 @@ internal fun MainActivity.showProgramPanel() {
         text = "Reset per-lens defaults"
         setOnClickListener {
             profile = ProgramAeProfile()
-            balanceSlider.setProgressFromUser((profile.balance * 100).toInt(), fromUser = false)
-            biasSlider.setProgressFromUser(
-                ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, 60),
-                fromUser = false
-            )
+            balanceSlider.progress = (profile.balance * 100).toInt()
+            biasSlider.progress = ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, 60)
             balanceLabel.text = programBalanceText(profile.balance)
             biasLabel.text = programEvBiasText(profile.evBias)
             refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); apply()
         }
     })
-    AlertDialog.Builder(this)
+    RawLensDialogBuilder(this)
         .setTitle("PROGRAM AE • custom")
         .setView(ScrollView(this).apply { addView(container) })
         .setPositiveButton("Done", null)

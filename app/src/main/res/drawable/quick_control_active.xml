@@ -1,0 +1,3 @@
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#33241B0C">
+    <item android:drawable="@drawable/control_chip_active" />
+</ripple>

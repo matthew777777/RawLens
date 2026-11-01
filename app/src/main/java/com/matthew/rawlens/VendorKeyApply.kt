@@ -62,12 +62,27 @@ object VendorKeyApply {
         val applied = mutableListOf<String>()
         val skipped = mutableListOf<String>()
         val entries = profile.sessionEntries()
-        if (entries.isEmpty()) return null to VendorKeyApplyReport(applied, skipped)
+        if (entries.isEmpty() && profile.rawPreviewFps == 0) return null to VendorKeyApplyReport(applied, skipped)
         val builder = try {
             device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         } catch (failure: Exception) {
             log("vendor session: template failed ($failure)")
             return null to VendorKeyApplyReport(emptyList(), entries.map { it.name })
+        }
+        if (profile.rawPreviewFps != 0) {
+            val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            val match = profile.rawPreviewRange(ranges.map { it.lower..it.upper })
+            val range = match?.let { selected ->
+                ranges.firstOrNull { it.lower == selected.first && it.upper == selected.last }
+            }
+            val name = CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE.name
+            if (range != null) {
+                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                applied += name
+            } else {
+                skipped += name
+                log("RAW preview FPS ${profile.rawPreviewFps} not advertised on this lens")
+            }
         }
         for (entry in entries) {
             if (isLevelTag(entry.name)) {

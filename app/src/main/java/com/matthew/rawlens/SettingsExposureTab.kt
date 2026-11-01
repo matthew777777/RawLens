@@ -47,8 +47,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -95,7 +93,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                 .apply()
             controller.setDynamicExposureSettings(dynamicSettings)
         }
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "PROGRAM custom AE (RAW-driven)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = dynamicSettings.enabled
@@ -129,16 +127,16 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
             setPadding(dp(12), dp(4), dp(12), 0)
         }
         content.addView(programBalanceLabel)
-        content.addView(SeekBar(this).apply {
+        content.addView(SettingsSlider(this).apply {
             max = 100
             progress = (programSettings.balance * 100).toInt().coerceIn(0, max)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                     programSettings = programSettings.copy(balance = progress / 100f)
                     programBalanceLabel.text = programBalanceText(programSettings.balance)
                 }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) = applyProgramSettings()
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) = applyProgramSettings()
             })
         })
         val programIsoMinButton = Button(this)
@@ -224,22 +222,22 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         content.addView(programShutterMinButton)
         content.addView(programShutterMaxButton)
         content.addView(programBiasLabel)
-        content.addView(SeekBar(this).apply {
+        content.addView(SettingsSlider(this).apply {
             max = 60
             progress = ((programSettings.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, max)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+            setOnSettingsSliderChangeListener(object : SettingsSlider.OnSettingsSliderChangeListener {
+                override fun onProgressChanged(seekBar: SettingsSlider, progress: Int, fromUser: Boolean) {
                     programSettings = programSettings.copy(
                         evBias = ProgramAeProfile.MIN_EV_BIAS + progress / 20f)
                     programBiasLabel.text = programEvBiasText(programSettings.evBias)
                 }
-                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar) = applyProgramSettings()
+                override fun onStartTrackingTouch(seekBar: SettingsSlider) = Unit
+                override fun onStopTrackingTouch(seekBar: SettingsSlider) = applyProgramSettings()
             })
         })
         var ettr = ettrSettings()
         fun applyEttr() = saveEttrSettings(ettr)
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "ETTR single exposure (RAW-measured)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = ettr.enabled
@@ -277,7 +275,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         content.addView(ettrHeadroomButton)
         content.addView(ettrIsoLimitButton)
         content.addView(sectionTitle("Two-exposure RAW HDR (experimental)"))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Experimental two-exposure RAW HDR"
             setTextColor(getColor(R.color.text_primary))
             isChecked = dualRawEnabled
@@ -304,7 +302,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         })
         content.addView(sectionTitle("HDR brackets"))
         content.addView(sectionDesc("Merged HDR saves one DNG by default; optionally keep every bracket. Frame-level debug output lives under the Debug tab."))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "HDR: save all 3 brackets as separate DNGs (do not merge)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_EACH_BRACKET, false)
@@ -317,7 +315,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                 updateQuickControls()
             }
         })
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "HDR bracket range: −4 / 0 / +4 EV"
             setTextColor(getColor(R.color.text_primary))
             isChecked = hdrBracketStops() == 4
@@ -328,7 +326,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
                 updateQuickControls()
             }
         })
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Sequential trio 0 / −2 / 0 EV (shadow averaging + highlights)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = seqTrioEnabled()
@@ -347,7 +345,7 @@ internal fun MainActivity.showExposureSettings(p: SettingsPage) {
         })
         content.addView(sectionTitle("Face priority"))
         content.addView(sectionDesc("HAL face detection steers AF/AE to the largest face (sand box). Tap targets override faces; manual sensor modes ignore the regions but still show boxes."))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Face-priority AF/AE"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_FACE_PRIORITY, false)

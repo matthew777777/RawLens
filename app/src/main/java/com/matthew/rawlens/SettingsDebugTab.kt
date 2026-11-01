@@ -39,8 +39,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -73,7 +71,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
         sidecarSettingsStatus = null
         content.removeAllViews()
         content.addView(sectionTitle("HDR debug frames"))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Save debug HDR frames"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_HDR_SAVE_DEBUG_FRAMES, false)
@@ -94,13 +92,13 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
         // switches the other off. The guard stops the programmatic
         // uncheck from ping-ponging back through the other listener.
         var overlayExclusionGuard = false
-        var cameraDebugCheckBox: CheckBox? = null
-        var rawVfDebugCheckBox: CheckBox? = null
-        content.addView(CheckBox(this).apply {
+        var cameraDebugSettingsSwitch: SettingsSwitch? = null
+        var rawVfDebugSettingsSwitch: SettingsSwitch? = null
+        content.addView(SettingsSwitch(this).apply {
             text = "Camera2 debug overlay"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_DEBUG_OVERLAY, false)
-            cameraDebugCheckBox = this
+            cameraDebugSettingsSwitch = this
             setOnCheckedChangeListener { _, enabled ->
                 if (overlayExclusionGuard) return@setOnCheckedChangeListener
                 lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, enabled).apply()
@@ -109,7 +107,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
                     overlayExclusionGuard = true
                     try {
                         lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false).apply()
-                        rawVfDebugCheckBox?.isChecked = false
+                        rawVfDebugSettingsSwitch?.isChecked = false
                         rawVfDebugOverlay.visibility = View.GONE
                     } finally {
                         overlayExclusionGuard = false
@@ -118,11 +116,11 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
                 }
             }
         })
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "RAW viewfinder debug overlay"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_RAW_VF_DEBUG_OVERLAY, false)
-            rawVfDebugCheckBox = this
+            rawVfDebugSettingsSwitch = this
             setOnCheckedChangeListener { _, enabled ->
                 if (overlayExclusionGuard) return@setOnCheckedChangeListener
                 lensPreferences().edit().putBoolean(KEY_RAW_VF_DEBUG_OVERLAY, enabled).apply()
@@ -131,7 +129,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
                     overlayExclusionGuard = true
                     try {
                         lensPreferences().edit().putBoolean(KEY_DEBUG_OVERLAY, false).apply()
-                        cameraDebugCheckBox?.isChecked = false
+                        cameraDebugSettingsSwitch?.isChecked = false
                         debugOverlay.visibility = View.GONE
                     } finally {
                         overlayExclusionGuard = false
@@ -141,7 +139,7 @@ internal fun MainActivity.showDebugSettings(p: SettingsPage) {
             }
         })
         content.addView(sectionTitle("App log"))
-        content.addView(CheckBox(this).apply {
+        content.addView(SettingsSwitch(this).apply {
             text = "Save app log to file (survives crashes)"
             setTextColor(getColor(R.color.text_primary))
             isChecked = lensPreferences().getBoolean(KEY_LOGCAT_FILE, true)

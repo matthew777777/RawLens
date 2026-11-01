@@ -149,7 +149,7 @@ class SettingsTransfer(
     }
 
     private fun promptRestart(count: Int) {
-        AlertDialog.Builder(activity)
+        RawLensDialogBuilder(activity)
             .setTitle("Settings imported")
             .setMessage("$count values restored. Restart to apply them?")
             .setPositiveButton("Restart") { _, _ -> activity.recreate() }

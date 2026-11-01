@@ -59,25 +59,17 @@ import android.os.SystemClock
 
 /** Settings chip style shared by the panel and the vendor dialogs. */
 internal fun MainActivity.styleSettingsButton(button: Button, active: Boolean = false) {
-    button.background = getDrawable(
-        if (active) R.drawable.control_chip_active else R.drawable.control_chip
-    )
-    button.setTextColor(
-        getColor(if (active) R.color.accent_dark else R.color.text_primary)
-    )
-    button.textSize = 12f
-    button.isAllCaps = false
-    button.setPadding(dp(14), dp(10), dp(14), dp(10))
+    RawLensUi.styleButton(button, active)
 }
 
 /** Accent section header matching the lens-picker groups. */
 internal fun MainActivity.vendorSectionHeader(text: String): TextView = TextView(this).apply {
-    this.text = text.uppercase(Locale.US)
+    this.text = text
     setTextColor(getColor(R.color.accent))
-    textSize = 12f
+    textSize = 14f
     typeface = Typeface.DEFAULT_BOLD
-    letterSpacing = 0.1f
-    setPadding(0, dp(12), 0, dp(4))
+    letterSpacing = 0.02f
+    setPadding(dp(4), dp(14), dp(4), dp(6))
 }
 
 /** Full-width chip action button. */
@@ -88,7 +80,7 @@ internal fun MainActivity.vendorActionButton(label: String, action: () -> Unit):
         setOnClickListener { action() }
     }
 
-/** Two-line chip row: bold title on top, secondary detail below, left-aligned. */
+/** Two-line chip row: bold title on top, secondary detail below, centered. */
 internal fun MainActivity.twoLineChipButton(title: String, detail: String, active: Boolean, action: () -> Unit): Button =
     Button(this).apply {
         val full = "$title\n$detail"
@@ -96,7 +88,7 @@ internal fun MainActivity.twoLineChipButton(title: String, detail: String, activ
             setSpan(StyleSpan(Typeface.BOLD), 0, title.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         styleSettingsButton(this, active)
-        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        gravity = Gravity.CENTER
         minHeight = dp(56)
         setOnClickListener { action() }
     }
@@ -222,6 +214,24 @@ internal fun MainActivity.showVendorKeysEditor() {
         controller.reopenCamera()
         setStatus("REOPENING")
     })
+    content.addView(twoLineChipButton("RAW preview frame rate",
+        if (profile.rawPreviewFps == 0) "Default (30 FPS)" else "${profile.rawPreviewFps} FPS",
+        profile.rawPreviewFps != 0) {
+        val rates = listOf(0) + controller.vendorRawPreviewFpsOptions()
+        val labels = rates.map { if (it == 0) "Default (30 FPS)" else "$it FPS" }.toTypedArray()
+        RawLensDialogBuilder(this).setTitle("RAW preview frame rate")
+            .setSingleChoiceItems(labels, rates.indexOf(profile.rawPreviewFps)) { dialog, which ->
+                if (updateVendorKeys(cameraId) { it.copy(rawPreviewFps = rates[which]) }) {
+                    dialog.dismiss()
+                    editor?.dismiss()
+                    showVendorKeysEditor()
+                }
+            }.setNegativeButton("Cancel", null).show()
+    })
+    content.addView(TextView(this).apply {
+        text = "RAW frame rate affects sensor mode selection, not LOG recording FPS. Reopen after changing it. Actual RAW cadence depends on the sensor and exposure."
+        setTextColor(getColor(R.color.text_secondary)); textSize = 12f
+    })
     val opmodeDetail = if (profile.operatingMode == 0) "Default (0)" else "${profile.operatingMode} — custom"
     content.addView(twoLineChipButton("Session operating mode", opmodeDetail, profile.operatingMode != 0) {
         showOperatingModeDialog(cameraId, profile) {
@@ -237,7 +247,7 @@ internal fun MainActivity.showVendorKeysEditor() {
         editor?.dismiss()
         showVendorImportDialog(cameraId)
     })
-    editor = AlertDialog.Builder(this).setTitle("Vendor keys • $cameraId")
+    editor = RawLensDialogBuilder(this).setTitle("Vendor keys • $cameraId")
         .setView(ScrollView(this).apply { addView(content) })
         .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
         .show().also { dialog ->
@@ -286,7 +296,7 @@ internal fun MainActivity.showVendorKeyEditDialog(
     refreshType()
     typeButton.setOnClickListener {
         val labels = VendorKeyType.entries.map { it.label }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Value type")
+        RawLensDialogBuilder(this).setTitle("Value type")
             .setSingleChoiceItems(labels, type.ordinal) { choice, which ->
                 type = VendorKeyType.entries[which]
                 refreshType()
@@ -307,7 +317,7 @@ internal fun MainActivity.showVendorKeyEditDialog(
         val labels = options.map {
             if (it == VendorKeyScope.SESSION) "Session (before open)" else "Request (every capture)"
         }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("Scope")
+        RawLensDialogBuilder(this).setTitle("Scope")
             .setSingleChoiceItems(labels, scope.ordinal) { choice, which ->
                 scope = options[which]
                 refreshScope()
@@ -354,7 +364,7 @@ internal fun MainActivity.showVendorKeyEditDialog(
         setSelectAllOnFocus(true)
     }
     container.addView(valueInput)
-    val enabledBox = CheckBox(this).apply {
+    val enabledBox = SettingsSwitch(this).apply {
         text = "Enabled"
         isChecked = existing?.enabled ?: true
         setTextColor(getColor(R.color.text_primary))
@@ -385,7 +395,7 @@ internal fun MainActivity.showVendorKeyEditDialog(
         }
     })
     container.addView(probeLine)
-    val dialog = AlertDialog.Builder(this)
+    val dialog = RawLensDialogBuilder(this)
         .setTitle(if (existing == null) "Add vendor key" else "Edit vendor key")
         .setView(ScrollView(this).apply { addView(container) })
         .setNegativeButton("Cancel", null)
@@ -493,7 +503,7 @@ internal fun MainActivity.showVendorDiscoveryDialog(cameraId: String) {
         override fun afterTextChanged(s: android.text.Editable?) = refreshRows()
     })
     refreshRows()
-    list = AlertDialog.Builder(this).setTitle("Advertised keys • $cameraId")
+    list = RawLensDialogBuilder(this).setTitle("Advertised keys • $cameraId")
         .setView(ScrollView(this).apply { addView(body) })
         .setNegativeButton("Close", null).show()
 }
@@ -517,7 +527,7 @@ internal fun MainActivity.showOperatingModeDialog(cameraId: String, profile: Ven
         })
         addView(opmodeInput)
     }
-    val dialog = AlertDialog.Builder(this).setTitle("Session operating mode")
+    val dialog = RawLensDialogBuilder(this).setTitle("Session operating mode")
         .setView(ScrollView(this).apply { addView(container) })
         .setNegativeButton("Cancel", null)
         .setPositiveButton("Save", null).show()
@@ -545,7 +555,7 @@ internal fun MainActivity.showPresetNameDialog(onName: (String) -> Unit) {
         setPadding(dp(20), 0, dp(20), 0)
         addView(nameInput)
     }
-    val dialog = AlertDialog.Builder(this).setTitle("Save preset")
+    val dialog = RawLensDialogBuilder(this).setTitle("Save preset")
         .setView(container)
         .setNegativeButton("Cancel", null)
         .setPositiveButton("Save", null).show()
@@ -562,7 +572,7 @@ internal fun MainActivity.showPresetNameDialog(onName: (String) -> Unit) {
 }
 
 internal fun MainActivity.showPresetPicker(presets: List<String>, title: String, onPick: (String) -> Unit) {
-    AlertDialog.Builder(this).setTitle(title)
+    RawLensDialogBuilder(this).setTitle(title)
         .setSingleChoiceItems(presets.toTypedArray(), -1) { choice, which ->
             choice.dismiss()
             onPick(presets[which])
@@ -589,7 +599,7 @@ internal fun MainActivity.showVendorExportDialog(profile: VendorKeyProfile) {
         })
         addView(pasteBox)
     }
-    val dialog = AlertDialog.Builder(this).setTitle("Export keys")
+    val dialog = RawLensDialogBuilder(this).setTitle("Export keys")
         .setView(ScrollView(this).apply { addView(container) })
         .setNegativeButton("Close", null)
         .setPositiveButton("Copy", null).show()
@@ -620,7 +630,7 @@ internal fun MainActivity.showVendorImportDialog(cameraId: String) {
         addView(pasteBox)
         addView(resultLine)
     }
-    val dialog = AlertDialog.Builder(this).setTitle("Import keys")
+    val dialog = RawLensDialogBuilder(this).setTitle("Import keys")
         .setView(ScrollView(this).apply { addView(container) })
         .setNegativeButton("Cancel", null)
         .setPositiveButton("Import", null).show()

@@ -390,6 +390,7 @@ tasks.matching { it.name == "processFdroidReleaseMainManifest" }.configureEach {
 }
 
 dependencies {
+    implementation("com.google.android.material:material:1.14.0")
     // Unified SR pipeline (Kotlin stages + SrpBridge JNI facade, single
     // truth with tools/sr-pipeline; its native half builds as
     // libsrpipeline.so from the same sources via app CMake).

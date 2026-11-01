@@ -55,7 +55,7 @@ object UpdateConsent {
             UpdateChecker.PREFS_NAME, Context.MODE_PRIVATE
         )
         if (!shouldShow(true, prefs.getBoolean(KEY_CONSENT_ASKED, false))) return
-        val toggle = Switch(activity).apply {
+        val toggle = SettingsSwitch(activity).apply {
             text = "Check for updates on startup"
             isChecked = true
         }
@@ -77,7 +77,7 @@ object UpdateConsent {
                 setPadding(0, pad / 2, 0, 0)
             })
         }
-        AlertDialog.Builder(activity)
+        RawLensDialogBuilder(activity)
             .setTitle("Keep RawLens up to date?")
             .setView(container)
             .setCancelable(false)

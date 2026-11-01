@@ -69,10 +69,10 @@ object SettingsBackup {
                 if (storeName !is String || storeName !in KNOWN_STORES) continue
                 val entries = storeValue as? Map<*, *>
                     ?: throw IllegalArgumentException("store \"$storeName\" must be an object")
-                put(storeName, entries.map { (key, entry) ->
+                put(storeName, EncodedVideoSettingsMigration.normalizeEntries(entries.map { (key, entry) ->
                     if (key !is String) throw IllegalArgumentException("store \"$storeName\" has a non-string key")
                     key to decodeEntry(storeName, key, entry)
-                }.toMap())
+                }.toMap()))
             }
         }
     }

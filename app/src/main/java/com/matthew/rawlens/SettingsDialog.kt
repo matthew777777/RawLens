@@ -30,8 +30,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.EditText
 import android.widget.HorizontalScrollView
@@ -63,7 +61,7 @@ import android.os.SystemClock
 internal fun MainActivity.showSettings(initialTab: Int = 0) {
     val container = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(20), dp(8), dp(20), dp(8))
+        setPadding(dp(12), dp(4), dp(12), dp(4))
     }
     // Modern chip tab row (mirrors PROGRAM AE panel styling): scrollable so
     // seven tabs fit without squeezing. Active tab uses the accent chip.
@@ -78,11 +76,11 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     }
     fun chipTab(label: String): Button = Button(this).apply {
         text = label
-        styleSettingsButton(this, active = false)
+        RawLensUi.styleTab(this, active = false)
     }.also { button ->
         val params = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        params.marginEnd = dp(8)
+        params.marginEnd = dp(10)
         tabRow.addView(button, params)
     }
     val generalTab = chipTab("General")
@@ -96,29 +94,28 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     val aboutTab = chipTab("About")
     val allTabs = listOf(generalTab, jpegTab, videoTab, exposureTab, burstTab, denoiseTab, lensesTab, debugTab, aboutTab)
     fun markActive(active: Button) {
-        allTabs.forEach { styleSettingsButton(it, active = it === active) }
+        allTabs.forEach {
+            RawLensUi.styleTab(it, active = it === active)
+        }
     }
     val content = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(0, dp(12), 0, dp(8))
+        setPadding(0, dp(4), 0, dp(4))
     }
     val kit = SettingsKit(this, content) { button, active -> styleSettingsButton(button, active) }
     fun sectionTitle(text: String): TextView = kit.sectionTitle(text)
     fun sectionDesc(text: String): TextView = kit.sectionDesc(text)
     fun settingsButton(label: String, active: Boolean = false): Button = kit.settingsButton(label, active)
-    fun settingsCheck(label: String, checked: Boolean): CheckBox = kit.settingsCheck(label, checked)
+    fun settingsCheck(label: String, checked: Boolean): SettingsSwitch = kit.settingsCheck(label, checked)
     fun polish() = kit.polish()
     // MATCH_PARENT so the full chip row scrolls inside the dialog instead of
     // stretching the window beyond the screen edges.
     container.addView(tabScroll, LinearLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-    container.addView(TextView(this).apply {
-        text = "PROGRAM • per-lens editor lives under Lenses; RAW DNG calibration under General; overlays, logs, and HDR debug frames under Debug"
-        setTextColor(getColor(R.color.text_secondary))
-        textSize = 11f
-        setPadding(0, dp(6), 0, 0)
-    })
     val settingsScroll = ScrollView(this).apply {
+        isVerticalScrollBarEnabled = false
+        isHorizontalScrollBarEnabled = false
+        scrollIndicators = 0
         isFillViewport = true
         addView(content)
     }
@@ -176,6 +173,7 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
         val changed = clamped != currentTab
         currentTab = clamped
         tabPages[clamped]()
+        settingsScroll.scrollTo(0, 0)
         if (changed) content.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         // Keep the top tab strip following the page (taps and swipes alike)
         // so the active tab is always visible, centered when possible.
@@ -235,14 +233,13 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     container.setOnTouchListener(swipeTouch)
     tabScroll.contentDescription = "Settings tabs. Swipe left or right anywhere to flip tabs."
     goTab(initialTab)
-    dialog = AlertDialog.Builder(this)
+    dialog = RawLensDialogBuilder(this)
         .setTitle("Settings")
         .setView(container)
         .setNegativeButton("Close", null)
         .create()
     page.dialog = dialog
     dialog.setOnDismissListener { rawZslSettingsStatus = null }
-    dialog.show()
     // Match the island design language: same 16dp panel + stroke as the
     // photo chrome instead of the default dialog frame.
     dialog.window?.setBackgroundDrawableResource(R.drawable.quick_panel)
@@ -250,10 +247,11 @@ internal fun MainActivity.showSettings(initialTab: Int = 0) {
     // and capped height instead of stretching edge to edge.
     dialog.window?.let { window ->
         val metrics = resources.displayMetrics
-        val targetWidth = (metrics.widthPixels - dp(48)).coerceAtLeast(dp(280))
+        val targetWidth = (metrics.widthPixels - dp(24)).coerceAtLeast(dp(280))
         val targetHeight = (metrics.heightPixels * 0.85f).toInt()
         window.setLayout(targetWidth, targetHeight)
     }
+    dialog.show()
 }
 
 internal fun MainActivity.rawZslSettingsText(status: RawZslStatus): String {

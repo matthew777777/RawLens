@@ -108,7 +108,7 @@ class UpdateFlow(
         // A download that finished before e.g. an app restart installs
         // directly instead of downloading again.
         val staged = UpdateInstaller.stagedApk(activity, info.tag)
-        AlertDialog.Builder(activity)
+        RawLensDialogBuilder(activity)
             .setTitle("Update available")
             .setMessage(message.toString())
             .setPositiveButton(if (staged != null) "Install" else "Download") { _, _ ->
@@ -157,7 +157,7 @@ class UpdateFlow(
             addView(statusText)
         }
         var cancelled = false
-        val dialog = AlertDialog.Builder(activity)
+        val dialog = RawLensDialogBuilder(activity)
             .setTitle("Downloading RawLens ${info.tag}")
             .setView(container)
             .setCancelable(false)

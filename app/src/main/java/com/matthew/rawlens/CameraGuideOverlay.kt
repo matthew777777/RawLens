@@ -45,18 +45,19 @@ class CameraGuideOverlay @JvmOverloads constructor(
             field = value
             invalidate()
         }
-    /**
-     * Device orientation in degrees (0/90/180/270 from the orientation
-     * listener). The letterbox stays world-horizontal like the level line:
-     * landscape draws side bars on the portrait-locked canvas, which the
-     * user holding the rotated phone sees as top/bottom. Portrait rendering
-     * is unchanged.
-     */
-    var videoOrientationDegrees: Int = 0
-        set(value) {
-            field = value
-            invalidate()
-        }
+    private var previewFrameWidth = 0
+    private var previewFrameHeight = 0
+    private var previewRotationDegrees = 90
+
+    /** Recorder crops sensor rows; their displayed axis follows the sensor mount, not the phone. */
+    fun setPreviewFrame(frameWidth: Int, frameHeight: Int, rotationDegrees: Int) {
+        if (previewFrameWidth == frameWidth && previewFrameHeight == frameHeight &&
+            previewRotationDegrees == rotationDegrees) return
+        previewFrameWidth = frameWidth
+        previewFrameHeight = frameHeight
+        previewRotationDegrees = rotationDegrees
+        invalidate()
+    }
 
     fun setContentInsets(top: Int, end: Int, bottom: Int) {
         contentTop = top.toFloat()
@@ -82,68 +83,57 @@ class CameraGuideOverlay @JvmOverloads constructor(
         canvas.drawLine(0f, contentTop + thirdY * 2f, right, contentTop + thirdY * 2f, gridPaint)
     }
 
-    /**
-     * Centered cinematic letterbox for the active [videoCrop], kept
-     * world-horizontal like the level line: the canvas is portrait-locked,
-     * so in landscape the bars move to the view's left/right edges. The
-     * preview shows the full sensor frame, so the visible fraction is
-     * `sensorW / ratio / sensorH` approximated from the view aspect:
-     * portrait bars = `(H - W / ratio) / 2`, landscape bars =
-     * `(W - H / ratio) / 2`. Open Gate (ratio null) draws nothing.
-     */
+    /** Map the recorder's crop into the same aspect-fill frame used by the preview. */
     private fun drawVideoLetterbox(canvas: Canvas) {
         val ratio = (videoCrop?.ratio ?: return).toFloat()
         val right = (width - contentEnd).coerceAtLeast(0f)
         val bottom = (height - contentBottom).coerceAtLeast(contentTop)
-        val bars = VideoLetterbox.compute(
-            viewW = right,
-            viewH = bottom - contentTop,
-            ratio = ratio,
-            orientationDegrees = videoOrientationDegrees
-        ) ?: return
+        if (right <= 0f || bottom <= contentTop) return
+        val frame = if (previewFrameWidth > 0 && previewFrameHeight > 0) {
+            VfAspectFit.fill(right.toInt().coerceAtLeast(1), (bottom - contentTop).toInt().coerceAtLeast(1),
+                previewFrameWidth, previewFrameHeight, previewRotationDegrees)
+        } else intArrayOf(0, 0, right.toInt(), (bottom - contentTop).toInt())
+        val bars = VideoLetterbox.compute(frame[2].toFloat(), frame[3].toFloat(), ratio, previewRotationDegrees) ?: return
         if (bars.topBottom) {
-            canvas.drawRect(0f, contentTop, right, contentTop + bars.bar, letterboxPaint)
-            canvas.drawRect(0f, bottom - bars.bar, right, bottom, letterboxPaint)
-            canvas.drawLine(0f, contentTop + bars.bar, right, contentTop + bars.bar, letterboxEdgePaint)
-            canvas.drawLine(0f, bottom - bars.bar, right, bottom - bars.bar, letterboxEdgePaint)
+            val first = contentTop + frame[1] + bars.bar
+            val second = contentTop + frame[1] + frame[3] - bars.bar
+            canvas.drawRect(0f, contentTop, right, first.coerceIn(contentTop, bottom), letterboxPaint)
+            canvas.drawRect(0f, second.coerceIn(contentTop, bottom), right, bottom, letterboxPaint)
+            if (first > contentTop && first < bottom) canvas.drawLine(0f, first, right, first, letterboxEdgePaint)
+            if (second > contentTop && second < bottom) canvas.drawLine(0f, second, right, second, letterboxEdgePaint)
         } else {
-            canvas.drawRect(0f, contentTop, bars.bar, bottom, letterboxPaint)
-            canvas.drawRect(right - bars.bar, contentTop, right, bottom, letterboxPaint)
-            canvas.drawLine(bars.bar, contentTop, bars.bar, bottom, letterboxEdgePaint)
-            canvas.drawLine(right - bars.bar, contentTop, right - bars.bar, bottom, letterboxEdgePaint)
+            val first = frame[0] + bars.bar
+            val second = frame[0] + frame[2] - bars.bar
+            canvas.drawRect(0f, contentTop, first.coerceIn(0f, right), bottom, letterboxPaint)
+            canvas.drawRect(second.coerceIn(0f, right), contentTop, right, bottom, letterboxPaint)
+            if (first > 0f && first < right) canvas.drawLine(first, contentTop, first, bottom, letterboxEdgePaint)
+            if (second > 0f && second < right) canvas.drawLine(second, contentTop, second, bottom, letterboxEdgePaint)
         }
     }
 }
 
-/**
- * Orientation-aware RAW Video letterbox geometry (pure math; the overlay
- * only draws it). The activity is portrait-locked while the phone rotates
- * freely, so fixed top/bottom bars would appear as side bars in landscape.
- * Like the level line, the letterbox stays world-horizontal: a portrait
- * device (0/180 deg) draws top/bottom bars, a landscape device (90/270 deg)
- * draws left/right bars.
- */
+/** Sensor-to-preview crop geometry shared by RAW video and Encoded Video framing guides. */
 object VideoLetterbox {
     /**
-     * @param topBottom true for top/bottom bars (portrait device), false for
-     * left/right bars (landscape device).
+     * @param topBottom true for sensor mounts of 0/180 degrees; false for
+     * 90/270 mounts, which map the sensor's cropped rows to the preview's sides.
      * @param bar bar thickness in px.
      */
     data class Bars(val topBottom: Boolean, val bar: Float)
 
     /**
      * Centered letterbox over a [viewW]x[viewH] full-frame preview for a crop
-     * with width/height [ratio] at [orientationDegrees] device orientation
-     * (any integer; normalized to quadrants). Null when the view is empty or
+     * with sensor width/height [ratio] at [rotationDegrees] preview rotation.
+     * This is sensor orientation, independent of how the phone is held. Null when the view is empty or
      * the crop covers the frame (no bars).
      */
-    fun compute(viewW: Float, viewH: Float, ratio: Float, orientationDegrees: Int): Bars? {
+    fun compute(viewW: Float, viewH: Float, ratio: Float, rotationDegrees: Int): Bars? {
         if (viewW <= 0f || viewH <= 0f || ratio <= 0f) return null
-        val landscape = when ((orientationDegrees % 360 + 360) % 360) {
+        val swappedAxes = when ((rotationDegrees % 360 + 360) % 360) {
             90, 270 -> true
             else -> false
         }
-        return if (!landscape) {
+        return if (!swappedAxes) {
             val bar = (viewH - viewW / ratio) / 2f
             if (bar <= 0f) null else Bars(topBottom = true, bar = bar)
         } else {
