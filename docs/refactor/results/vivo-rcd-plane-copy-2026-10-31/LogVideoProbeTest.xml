@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.matthew.rawlens.LogVideoProbeTest" tests="31" skipped="0" failures="0" errors="0" timestamp="2026-10-31T14:02:47.517Z" hostname="Monikas-MacBook-Air.local" time="0.047">
+  <properties/>
+  <testcase name="selectEncodePlanFallsBackToWriter" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.02"/>
+  <testcase name="encodeCandidatesOffer1440pBelow4K" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="encodeCandidatesTryRequestedThenLadder" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="selectEncodePlanNullWhenNothingSupported" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="bitrateFitsUhdMain10Level5Budget" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="encodeSizeForResHealsTo1080p" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="writerPathNeedsApi33" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="fixedFpsRangePrefersExact" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="fixedFpsRangeFallsBackToNarrowestContainer" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="defaultBitrateHighQualityPerRung" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="encodeCandidatesNeverUpscalePastRequest" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="selectEncodeSizeStopsAt1440pWhenSupported" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="clampedBitrateCapsAtAdvertisedMax" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="framePtsIsMonotonic33ms" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="selectEncodePlanDirectAt1440p" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="qualcommNativeP010UsesPlaneCopy" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.006"/>
+  <testcase name="targetIsHevc10_4k30_75m" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="selectSdrPlanWalksLadder" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.002"/>
+  <testcase name="selectEncodePlanStepsDownRungBeforeWriter" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="selectEncodeSizeKeepsRequestedWhenSupported" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="rungModePrefersDirectThenWriter" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="selectSdrPlanCovers1440p" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="selectEncodePlanPrefersDirect" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="selectEncodeSizeNullWhenNothingSupported" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="formatKeysHonorOverriddenProfile" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.003"/>
+  <testcase name="selectEncodeSizeFallsBackTo1080p" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.001"/>
+  <testcase name="formatKeysCarryHevc10Bt709" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="targetSignalsBt709Sdr" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="selectSdrPlanNeedsBt709" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="profileLabelsCoverForceModes" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <testcase name="selectEncodePlanWriterAt1440p" classname="com.matthew.rawlens.LogVideoProbeTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,183 @@
+RawLens log session logcat-20261031_185252_731.txt
+package=com.matthew.rawlens model=vivo V2562 sdk=36 fingerprint=vivo/V2562/V2562:16/BP2A.250605.031.A3_T1_V000L1/compiler260910152241:user/release-keys
+10-31 18:52:52.768 14678 14678 I RawViewfinder: VF present buffer 491x1080 layout=1440x3168
+10-31 18:52:52.770 14678 14732 I RawViewfinder: VF surface created 491x1080
+10-31 18:52:52.771 14678 14730 I RawLensMemory: MEM[activity-created] pss=16MB dalvikPss=1MB nativePss=6MB otherPss=7MB javaUsed=3MB/512MB nativeAlloc=9MB gfx=0MB rss=149MB rssAnon=34MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=0/0gpu amaze=0 hdr=0 still=0 vf=0 bgu=0 vid=0 dlog=0
+10-31 18:52:52.777 14678 14742 I RawLensMemory: MEM[activity-resumed] pss=39MB dalvikPss=3MB nativePss=8MB otherPss=26MB javaUsed=9MB/512MB nativeAlloc=10MB gfx=18MB rss=152MB rssAnon=36MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=0/0gpu amaze=0 hdr=0 still=0 vf=0 bgu=0 vid=0 dlog=0
+10-31 18:52:52.785 14678 14678 I RawLensCamera: Viewfinder surface ready at start; opening camera
+10-31 18:52:52.801 14678 14678 I RawLensCamera: Opening camera 3 (selected 3) [primary combo 0]
+10-31 18:52:52.851 14678 14738 I RawLensCamera: Camera device opened: 3
+10-31 18:52:52.852 14678 14738 I RawLensCamera: Packed RAW available (1 sizes); session format follows the per-lens preference
+10-31 18:52:52.854 14678 14738 I RawLensCamera: ZSL blur limit 1.5px focal=4129px -> 3.63e-04 rad
+10-31 18:52:52.855 14678 14738 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3064
+10-31 18:52:52.855 14678 14738 I RawLensCamera: RAW stream combo raw=4080x3064 preview=none maxImages=22 minFrameNs=33333333 stallNs=0 compat=false gpuTrial=true combo=RAW ONLY FULL attempt=1/4
+10-31 18:52:52.855 14678 14678 I RawViewfinder: VF present buffer 810x1080 layout=1440x1920
+10-31 18:52:52.855 14678 14738 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 18:52:52.856 14678 14732 I RawViewfinder: VF surface changed 491x1080 -> 810x1080
+10-31 18:52:53.005 14678 14738 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 18:52:53.008 14678 14738 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 18:52:53.008 14678 14738 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE,EDOF] maxAfRegions=1 idle=CONT_PICTURE
+10-31 18:52:53.222 14678 14738 I RawLensCamera: First RAW stream image 4080x3064 ts=929558881734034
+10-31 18:52:53.232 14678 14738 I RawLensCamera: Scope sample: avg lut=3.5ms scan=6.5ms over 1 frames (histogram)
+10-31 18:52:53.254 14678 14738 I RawLensMemory: MEM[raw-vf-preview] pss=94MB dalvikPss=6MB nativePss=37MB otherPss=49MB javaUsed=11MB/512MB nativeAlloc=17MB gfx=37MB rss=195MB rssAnon=64MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=1/0gpu amaze=0 hdr=0 still=0 vf=1 bgu=0 vid=0 dlog=0 vf=0x0 gpu=false engine=AUTO
+10-31 18:52:53.254 14678 14738 I RawViewfinder: VF raw strides pixelStride=2 rowStride=8160 w=4080 h=3064
+10-31 18:52:53.254 14678 14738 I RawViewfinder: VF first frame raw=4080x3064 cfa=0 chans=0,1,2,3 pitch=4080 black=64.0,64.0,64.0,64.0 white=1023.0 geom=(0,0 1020x766 s4) dataMin=63 dataMax=68 dataMean=65
+10-31 18:52:53.255 14678 14738 I RawLensColor: VF color first focal=11.56 jpeg=true result=none
+10-31 18:52:53.276 14678 14732 I RawViewfinder: VF GL ES3 (fences on)
+10-31 18:52:53.276 14678 14732 I RawViewfinder: VF EGL surface 810x1080 matches viewport
+10-31 18:52:53.276 14678 14732 I RawViewfinder: VF vsync-paced present (swapInterval=1)
+10-31 18:52:53.279 14678 14732 I RawViewfinder: VF GPU program ready
+10-31 18:52:53.282 14678 14732 I RawViewfinder: VF Vulkan ready
+10-31 18:52:53.283 14678 14732 I RawViewfinder: VF Vulkan image tier ready
+10-31 18:52:53.285 14678 14732 W RawViewfinder: VF image tier unsupported (image-unsupported); upload tiers cover
+10-31 18:52:53.292 14678 14738 I RawLensCamera: Idle AF INACTIVE mode=CONT_PICTURE fd=0.17D
+10-31 18:52:53.294 14678 14732 I RawViewfinder: VF GPU active (vulkan-zero)
+10-31 18:52:53.294 14678 14732 I RawViewfinder: VF stats: fps=0.0 gpu=true jpeg=true engine=AUTO vf=1020x766 camInterval=33ms
+10-31 18:52:53.294 14678 14732 I RawViewfinder: Slow RAW draw: total=38ms compute=3ms tone=3ms swap=2ms age=23ms
+10-31 18:52:53.388 14678 14738 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=0.17D
+10-31 18:52:53.553 14678 14732 I RawViewfinder: VF zero-copy verified (outputMax=33)
+10-31 18:52:56.252 14678 14738 I RawLensColor: VF color settled route=focal=11.56 jpeg=true activePhys=- physResults=[] grayWorldWb=- used(logical)[gains=2.3330,1.0000,1.0000,1.7129 neutral=0.4287,1.0000,0.5840 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] ill=21/17 cm1=0.9219,-0.4219,-0.1328,-0.3438,1.2578,0.2813,-0.1094,0.1328,0.3984 cm2=1.3516,-0.6641,-0.1172,-0.7031,1.7578,0.2422,-0.2422,-0.0703,0.5781 fm1=0.5391,0.1797,0.0391,0.3516,0.9609,-0.4219,0.0781,-0.1406,1.2109 fm2=0.5547,0.2031,0.0781,0.1563,0.6875,-0.5781,0.2578,0.1172,1.3203 cal1=1.0391,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9766 cal2=1.0234,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9922 -> wb=AS_SHOT_NEUTRAL xyz=FORWARD_MATRIX camWhite=0.4287,1.0000,0.5840
+10-31 18:52:57.715 14678 14678 I RawLensCamera: video enter from AUTO
+10-31 18:52:58.293 14678 14738 I RawLensCamera: Scope sample: avg lut=2.6ms scan=2.2ms over 19 frames (histogram)
+10-31 18:53:01.664 14678 14678 I DirectLogRecorder: stage: start
+10-31 18:53:01.667 14678 14678 I DirectLog: static CCM: baked @5500K [1.371, -0.262, -0.109, -0.176, 1.435, -0.259, 0.060, -0.811, 1.751]
+10-31 18:53:01.667 14678 14678 I DirectLog: lens shading: HAL pre-applied (no map needed)
+10-31 18:53:01.668 14678 14678 I DirectLog: sensor RAW sizes: 4080x3064
+10-31 18:53:01.668 14678 14678 I DirectLog: ladder rung=open-gate selected=4080x3064 (12.50 MP)
+10-31 18:53:01.668 14678 14678 I DirectLog: compute step=2 crop=3840x1920@(120,572) export=1920x960
+10-31 18:53:01.673 14678 14678 I DirectLog: demosaic path=rcd-packed-p010
+10-31 18:53:01.697 14678 15156 I RawLensMemory: MEM[directlog-start] pss=125MB dalvikPss=31MB nativePss=31MB otherPss=61MB javaUsed=37MB/512MB nativeAlloc=29MB gfx=48MB rss=226MB rssAnon=86MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=0/0gpu amaze=0 hdr=0 still=0 vf=250 bgu=0 vid=0 dlog=0
+10-31 18:53:01.751 14678 14678 I DirectLog: RCD GPU writer=true
+10-31 18:53:01.752 14678 14678 I DirectLog: output profile=BT709 inputProfile=BT709 lutBaked=false codec=OMX.qcom.video.encoder.hevc input=IMAGE_WRITER cs=1 xfer=3 range=2
+10-31 18:53:01.768 14678 14678 I DirectLog: preview 3840x1920 -> 960x480 box=4
+10-31 18:53:01.769 14678 14678 I DirectLogRecorder: stage: codec-started
+10-31 18:53:01.769 14678 14678 I DirectLog: ours P010 yStride=7680 uvStride=7680
+10-31 18:53:01.798 14678 14678 I AudioPcmRecorder: mic 2 ch PCM16 -> recording 2 channels
+10-31 18:53:01.816 14678 14678 I DirectLog: audio AAC 2ch
+10-31 18:53:01.867 14678 14678 I VideoFocus: Video AF request CONT_VIDEO (auto) caps=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE,EDOF]
+10-31 18:53:01.868 14678 14678 I DirectLogRecorder: stage: session-repeating
+10-31 18:53:01.869 14678 14678 I RawLensCamera: direct-log start IMG_20261031_185301_651_LOG709.mp4 destination=content://media/external/downloads/138345
+10-31 18:53:01.870 14678 14678 W RawLensPerf: PERF[main-slow] took=257ms >>>>> Dispatching to Handler (android.view.ViewRootImpl$ViewRootHandler) {eeed5bc} android
+10-31 18:53:02.116 14678 15211 I DirectLog: Direct-Log AF INACTIVE mode=CONT_VIDEO fd=0.96D
+10-31 18:53:02.180 14678 15211 I DirectLog: RCD timing crop=3840x1920 output=3840x1920 submitMs=1.988907
+10-31 18:53:02.180 14678 15211 I DirectLogRecorder: stage: first-frame
+10-31 18:53:02.182 14678 14735 I DirectLogPreview: preview GL ready 1440x1920
+10-31 18:53:02.246 14678 15203 I DirectLog: muxer started: video/hevc 3840x1920 +aac fmt={max-bitrate=128000, sample-rate=48000, buffer-batch-max-output-size=0, buffer-batch-threshold-output-size=0, level=0, mime=audio/mp4a-latm, profile=2, channel-count=2, bitrate=128000, csd-0=java.nio.HeapByteBuffer[pos=0 lim=2 cap=2]}
+10-31 18:53:02.278 14678 15211 I DirectLog: Direct-Log AF PASSIVE_FOCUSED mode=CONT_VIDEO fd=0.96D
+10-31 18:53:03.182 14678 15211 I DirectLog: RCD timing crop=3840x1920 output=3840x1920 submitMs=0.230468
+10-31 18:53:04.183 14678 15211 I DirectLog: RCD timing crop=3840x1920 output=3840x1920 submitMs=0.752292
+10-31 18:53:04.477 14678 15332 I DirectLogRecorder: stage: stopping
+10-31 18:53:12.666 14678 15332 I DirectLogPreview: preview detached: presented=69 adoptFailed=0 presentFailed=0
+10-31 18:53:12.721 14678 15332 I RawLensMemory: MEM[directlog-stop] pss=152MB dalvikPss=35MB nativePss=34MB otherPss=82MB javaUsed=8MB/512MB nativeAlloc=31MB gfx=66MB rss=244MB rssAnon=93MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=0/0gpu amaze=0 hdr=0 still=0 vf=250 bgu=0 vid=0 dlog=69 acq=70 graded=69 drop=0
+10-31 18:53:12.752 14678 14678 I RawLensCamera: direct-log saved sensor=4080x3064 graded=69 dropped=0 waitFree=69 fallback=0 cpuChain=1.3ms cpuMax=3.5ms overBudget=0 cycleMax=3.8ms cycleOver=0 head=1 preview=69 previewSkipped=0 maxDepth=0 starved=0 degraded=0 errors=0 resultMiss=1 fused=0 copyAvg=0.0ms copyMax=0.0ms fenceAvg=6.4ms fenceMax=7.0ms shaded=0 stabGyro=0 destination=content://media/external/downloads/138345 file=21.3MB
+10-31 18:53:12.752 14678 14678 I RawLensCamera: Viewfinder surface ready at start; opening camera
+10-31 18:53:12.754 14678 14678 I RawLensCamera: Opening camera 3 (selected 3) [primary combo 0]
+10-31 18:53:12.767 14678 14738 I RawLensCamera: Camera device opened: 3
+10-31 18:53:12.768 14678 14738 I RawLensCamera: Packed RAW available (1 sizes); session format follows the per-lens preference
+10-31 18:53:12.768 14678 14738 I RawLensCamera: ZSL blur limit 1.5px focal=4129px -> 3.63e-04 rad
+10-31 18:53:12.768 14678 14738 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3064
+10-31 18:53:12.768 14678 14738 I RawLensCamera: RAW stream combo raw=4080x3064 preview=none maxImages=22 minFrameNs=33333333 stallNs=0 compat=false gpuTrial=true combo=RAW ONLY FULL attempt=1/4
+10-31 18:53:12.768 14678 14738 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 18:53:12.821 14678 14738 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 18:53:12.821 14678 14738 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE,EDOF] maxAfRegions=1 idle=CONT_PICTURE
+10-31 18:53:13.141 14678 14738 I RawLensCamera: First RAW stream image 4080x3064 ts=929578797387937
+10-31 18:53:13.143 14678 14738 I RawLensCamera: Scope sample: avg lut=3.2ms scan=2.6ms over 13 frames (histogram)
+10-31 18:53:13.144 14678 14738 I RawViewfinder: VF raw strides pixelStride=2 rowStride=8160 w=4080 h=3064
+10-31 18:53:13.144 14678 14738 I RawViewfinder: VF first frame raw=4080x3064 cfa=0 chans=0,1,2,3 pitch=4080 black=64.0,64.0,64.0,64.0 white=1023.0 geom=(0,0 1020x766 s4) dataMin=58 dataMax=644 dataMean=209
+10-31 18:53:13.153 14678 14738 W RawLensColor: VF HAL reported no white balance; gray-world neutral=0.4435,1.0000,0.5870
+10-31 18:53:13.153 14678 14738 I RawLensColor: VF color first focal=11.56 jpeg=true result=none
+10-31 18:53:13.155 14678 14732 W RawViewfinder: VF image tier unsupported (image-unsupported); upload tiers cover
+10-31 18:53:13.156 14678 14732 I RawViewfinder: VF zero-copy verified (outputMax=138)
+10-31 18:53:13.158 14678 14732 I RawViewfinder: VF GPU active (vulkan-zero)
+10-31 18:53:13.158 14678 14732 I RawViewfinder: VF stats: fps=0.0 gpu=true jpeg=true engine=AUTO vf=1020x766 camInterval=16ms
+10-31 18:53:13.211 14678 14738 I RawLensCamera: Idle AF INACTIVE mode=CONT_PICTURE fd=0.84D
+10-31 18:53:13.311 14678 14738 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=0.84D
+10-31 18:53:14.778 14678 14678 I RawLensCamera: video exit to AUTO
+10-31 18:53:16.172 14678 14738 I RawLensColor: VF color settled route=focal=11.56 jpeg=true activePhys=- physResults=[] grayWorldWb=- used(logical)[gains=2.3525,1.0000,1.0000,1.6943 neutral=0.4248,1.0000,0.5898 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] ill=21/17 cm1=0.9219,-0.4219,-0.1328,-0.3438,1.2578,0.2813,-0.1094,0.1328,0.3984 cm2=1.3516,-0.6641,-0.1172,-0.7031,1.7578,0.2422,-0.2422,-0.0703,0.5781 fm1=0.5391,0.1797,0.0391,0.3516,0.9609,-0.4219,0.0781,-0.1406,1.2109 fm2=0.5547,0.2031,0.0781,0.1563,0.6875,-0.5781,0.2578,0.1172,1.3203 cal1=1.0391,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9766 cal2=1.0234,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9922 -> wb=AS_SHOT_NEUTRAL xyz=FORWARD_MATRIX camWhite=0.4248,1.0000,0.5898
+10-31 18:53:18.211 14678 14738 I RawLensCamera: Scope sample: avg lut=2.0ms scan=1.5ms over 19 frames (histogram)
+10-31 18:53:20.993 14678 14678 I RawLensCamera: Shutter mode=SINGLE forceBurst=false
+10-31 18:53:20.993 14678 14738 I RawLensCamera: Capture orientation frozen device=0 exif=6
+10-31 18:53:20.995 14678 14738 I RawLensCamera: Submitting RAW capture id=4 frames=1 (serialized)
+10-31 18:53:20.995 14678 14738 I RawLensCamera: RAW capture submitted id=4 frames=1
+10-31 18:53:21.146 14678 14738 I RawLensCamera: RAW result id=4 frame=1/1 timestamp=929586796637937
+10-31 18:53:21.146 14678 14738 I RawLensCamera: FLASH_RESULT id=4 requestAe=1 requestFlash=0 resultAe=1 aeState=2 flashState=2 iso=682 ns=9999992
+10-31 18:53:21.146 14678 14738 I RawLensCamera: RAW paired timestamp=929586796637937 remaining=0
+10-31 18:53:21.151 14678 14738 I RawLensColor: CAPTURE color route=3 frame=239 activePhys=- physResults=[] used(logical)[gains=2.2920,1.0000,1.0000,1.6660 neutral=0.4365,1.0000,0.6006 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] logical[gains=2.2920,1.0000,1.0000,1.6660 neutral=0.4365,1.0000,0.6006 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] ill=21/17 cm1=0.9219,-0.4219,-0.1328,-0.3438,1.2578,0.2813,-0.1094,0.1328,0.3984 cm2=1.3516,-0.6641,-0.1172,-0.7031,1.7578,0.2422,-0.2422,-0.0703,0.5781 fm1=0.5391,0.1797,0.0391,0.3516,0.9609,-0.4219,0.0781,-0.1406,1.2109 fm2=0.5547,0.2031,0.0781,0.1563,0.6875,-0.5781,0.2578,0.1172,1.3203 cal1=1.0391,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9766 cal2=1.0234,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9922 -> wb=AS_SHOT_NEUTRAL xyz=FORWARD_MATRIX camWhite=0.4365,1.0000,0.6006
+10-31 18:53:21.158 14678 14740 I RawLensCamera: RAW development input timestamp=929586796637937 frame=239 cfa=RGGB geometry=Supported(sensorOriginX=0, sensorOriginY=0, processingCrop=RawCrop(left=0, top=0, width=4080, height=3064), provenance=SCALER_RAW_CROP_REGION + Image.cropRect)
+10-31 18:53:21.187 14678 14740 I RawLensDevelop: Pre-demosaic 4080x3064: lensShading=0ms defects=0ms total=0ms
+10-31 18:53:21.217 14678 15653 I RawLensMemory: MEM[jpeg-service-created] pss=334MB dalvikPss=70MB nativePss=30MB otherPss=233MB javaUsed=55MB/512MB nativeAlloc=27MB gfx=216MB rss=295MB rssAnon=141MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=1/0gpu amaze=0 hdr=0 still=1 vf=492 bgu=0 vid=0 dlog=69
+10-31 18:53:21.280 14678 14740 I RawLensDevelop: Opposed Bayer Vulkan 4080x3064: 50ms
+10-31 18:53:21.325 14678 14740 I RawLensMemory: MEM[amaze-capture-start] pss=397MB dalvikPss=86MB nativePss=30MB otherPss=280MB javaUsed=55MB/512MB nativeAlloc=27MB gfx=263MB rss=294MB rssAnon=140MB glTex=0/0MB glProg=0 fbo=0 egl=0 natBuf=0/0MB vk=0 img=1/0gpu amaze=0 hdr=0 still=1 vf=495 bgu=0 vid=0 dlog=69 4080x3064
+10-31 18:53:21.481 14678 14740 I RawLensDevelop: Demosaic done: 201ms
+10-31 18:53:21.703 14678 14732 I RawViewfinder: Slow RAW draw: total=197ms compute=195ms tone=2ms swap=0ms age=0ms
+10-31 18:53:21.756 14678 14740 I RawLensDevelop: JPEG fused output 4080x3064: baseRead=260ms baseBitmap=14ms gain+attach=0ms total=275ms
+10-31 18:53:21.788 14678 14740 I RawLensMemory: MEM[jpeg-frame-complete] pss=638MB dalvikPss=174MB nativePss=78MB otherPss=384MB javaUsed=150MB/512MB nativeAlloc=78MB gfx=367MB rss=483MB rssAnon=278MB glTex=17/267MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=1/0gpu amaze=0 hdr=0 still=1 vf=509 bgu=0 vid=0 dlog=69
+10-31 18:53:21.789 14678 14740 I RawLensDevelop: AMaZE 4080x3064: prepareCpu=49ms submitCpu=105ms downstream=308ms textureHits=0 textureMisses=18 retained=230809600B
+10-31 18:53:21.820 14678 14740 I RawLensMemory: MEM[amaze-frame-released] pss=638MB dalvikPss=174MB nativePss=78MB otherPss=384MB javaUsed=150MB/512MB nativeAlloc=78MB gfx=367MB rss=483MB rssAnon=278MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=1/0gpu amaze=1 hdr=0 still=1 vf=510 bgu=0 vid=0 dlog=69
+10-31 18:53:21.820 14678 14740 I RawLensDevelop: RAW development 4080x3064: preprocessCpu=28ms path=CPU_FALLBACK demosaic=AMAZE adaptive=21ms color=72ms adaptiveEV=1.1840785053794545 appliedEV=1.1840785053794545 GPU+output=541ms total=662ms
+10-31 18:53:21.976 14678 14740 I RawLensDevelop: JPEG save 4080x3064 q=98 subsampling=4:2:2 encoder=libjpeg-turbo: insert=5ms encode=107ms exif=30ms publish=13ms total=155ms
+10-31 18:53:21.983 14678 14740 I RawLensCamera: Developed JPEG saved name=IMG_20261031_185321_146.jpg pendingSaves=1
+10-31 18:53:22.018 14678 14678 I RawLensPerf: PERF[service] jpeg stopped after=0s
+10-31 18:53:22.060 14678 15687 I RawLensMemory: MEM[jpeg-service-destroyed] pss=591MB dalvikPss=174MB nativePss=30MB otherPss=385MB javaUsed=151MB/512MB nativeAlloc=30MB gfx=367MB rss=437MB rssAnon=230MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=0/0gpu amaze=1 hdr=0 still=1 vf=517 bgu=0 vid=0 dlog=69
+10-31 18:53:22.795 14678 14729 I RawLensMemory: MEM[periodic] pss=592MB dalvikPss=174MB nativePss=31MB otherPss=385MB javaUsed=153MB/512MB nativeAlloc=31MB gfx=367MB rss=437MB rssAnon=230MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=0/0gpu amaze=1 hdr=0 still=1 vf=539 bgu=0 vid=0 dlog=69
+10-31 18:53:23.176 14678 14732 I RawViewfinder: VF stats: fps=30.0 gpu=true jpeg=true engine=AUTO vf=1020x766 camInterval=33ms
+10-31 18:53:23.266 14678 14678 I RawLensPerf: PERF[jank-foreground] frames=361 janky=3(0%) frozen=0 worst=249ms
+10-31 18:53:23.294 14678 14738 I RawLensMemory: MEM[raw-vf-preview] pss=377MB dalvikPss=174MB nativePss=31MB otherPss=171MB javaUsed=155MB/512MB nativeAlloc=31MB gfx=153MB rss=437MB rssAnon=229MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=1/0gpu amaze=1 hdr=0 still=1 vf=553 bgu=0 vid=0 dlog=69 vf=1020x766 gpu=true engine=AUTO
+10-31 18:53:23.295 14678 14738 I RawViewfinder: VF raw strides pixelStride=2 rowStride=8160 w=4080 h=3064
+10-31 18:53:23.295 14678 14738 I RawViewfinder: VF first frame raw=4080x3064 cfa=0 chans=0,1,2,3 pitch=4080 black=63.859375,63.859375,63.859375,63.859375 white=1023.0 geom=(0,0 1020x766 s4) dataMin=62 dataMax=1023 dataMean=104
+10-31 18:53:23.296 14678 14738 I RawLensColor: VF color first route=focal=11.56 jpeg=true activePhys=- physResults=[] grayWorldWb=- used(logical)[gains=2.2852,1.0000,1.0000,1.6670 neutral=0.4375,1.0000,0.5996 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] ill=21/17 cm1=0.9219,-0.4219,-0.1328,-0.3438,1.2578,0.2813,-0.1094,0.1328,0.3984 cm2=1.3516,-0.6641,-0.1172,-0.7031,1.7578,0.2422,-0.2422,-0.0703,0.5781 fm1=0.5391,0.1797,0.0391,0.3516,0.9609,-0.4219,0.0781,-0.1406,1.2109 fm2=0.5547,0.2031,0.0781,0.1563,0.6875,-0.5781,0.2578,0.1172,1.3203 cal1=1.0391,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9766 cal2=1.0234,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9922 -> wb=AS_SHOT_NEUTRAL xyz=FORWARD_MATRIX camWhite=0.4375,1.0000,0.5996
+10-31 18:53:23.297 14678 14738 I RawViewfinder: Slow RAW offer: 55.0ms interval=20ms
+10-31 18:53:23.298 14678 14732 W RawViewfinder: VF image tier unsupported (image-unsupported); upload tiers cover
+10-31 18:53:23.300 14678 14732 I RawViewfinder: VF zero-copy verified (outputMax=255)
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT live glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=0/0gpu amaze=1 hdr=0 still=1 vf=553 bgu=0 vid=0 dlog=69
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[jpeg-service-created] n=1 lastPss=334MB nativeAlloc=27MB gfx=216MB natBuf=0MB img=1
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[directlog-stop] n=1 lastPss=152MB nativeAlloc=31MB gfx=66MB natBuf=0MB img=0
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[activity-resumed] n=1 lastPss=39MB nativeAlloc=10MB gfx=18MB natBuf=0MB img=0
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[activity-created] n=1 lastPss=16MB nativeAlloc=9MB gfx=0MB natBuf=0MB img=0
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[periodic] n=1 lastPss=592MB nativeAlloc=31MB gfx=367MB natBuf=0MB img=0
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[amaze-frame-released] n=1 lastPss=638MB nativeAlloc=78MB gfx=367MB natBuf=0MB img=1
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[raw-vf-preview] n=2 lastPss=377MB nativeAlloc=31MB gfx=153MB natBuf=0MB img=1
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[directlog-start] n=1 lastPss=125MB nativeAlloc=29MB gfx=48MB natBuf=0MB img=0
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[amaze-capture-start] n=1 lastPss=397MB nativeAlloc=27MB gfx=263MB natBuf=0MB img=1
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[jpeg-frame-complete] n=1 lastPss=638MB nativeAlloc=78MB gfx=367MB natBuf=0MB img=1
+10-31 18:53:23.311 14678 14678 I RawLensMemory: REPORT[jpeg-service-destroyed] n=1 lastPss=591MB nativeAlloc=30MB gfx=367MB natBuf=0MB img=0
+10-31 18:53:23.315 14678 14732 I RawViewfinder: VF GPU active (vulkan-zero)
+10-31 18:53:23.320 14678 15752 I RawLensPerf: PERF[bg-now] camera=closed gps=off video=false dlog=false rawvid=false threads=41 [AppEventListener-Def,BguFit,BguRender,CameraDeviceExecutor,CameraManagerGlobal,DirectLogPreview,InsetsAnimations,InteractionJankMonitor-Worker,RawCamera,RawViewfinderGL,SurfaceSyncGroupTimer,Thread-2,TouchMotionHandler,VCameraUtils_postThread,VivoAICreationManagerImpl,event-thread,hwuiTask0,logcat-file,logcat-mirror,main,pool-3-thread-1,pool-6-thread-1,pool-8-thread-1,queued-work-looper] services=none
+10-31 18:53:23.322 14678 15764 I RawLensPerf: PERF[storage] cache=0MB(3 files) files=0MB(2 files) ext=0MB(5 files)
+10-31 18:53:23.356 14678 15750 I RawLensMemory: MEM[activity-paused] pss=400MB dalvikPss=173MB nativePss=31MB otherPss=193MB javaUsed=155MB/512MB nativeAlloc=31MB gfx=177MB rss=434MB rssAnon=229MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=0/0gpu amaze=1 hdr=0 still=1 vf=553 bgu=0 vid=0 dlog=69
+10-31 18:53:24.027 14678 14678 W RawViewfinder: VF surface lost; hiding VF until surface returns
+10-31 18:53:24.055 14678 14678 I RawLensPerf: PERF[trim] UI_HIDDEN
+10-31 18:53:24.605 14678 14678 I RawLensCamera: Viewfinder surface ready at start; opening camera
+10-31 18:53:24.607 14678 14678 I RawLensCamera: Opening camera 3 (selected 3) [primary combo 0]
+10-31 18:53:24.623 14678 14738 I RawLensCamera: Camera device opened: 3
+10-31 18:53:24.623 14678 14738 I RawLensCamera: Packed RAW available (1 sizes); session format follows the per-lens preference
+10-31 18:53:24.623 14678 14738 I RawLensCamera: ZSL blur limit 1.5px focal=4129px -> 3.63e-04 rad
+10-31 18:53:24.623 14678 14738 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3064
+10-31 18:53:24.624 14678 14738 I RawLensCamera: RAW stream combo raw=4080x3064 preview=none maxImages=22 minFrameNs=33333333 stallNs=0 compat=false gpuTrial=true combo=RAW ONLY FULL attempt=1/4
+10-31 18:53:24.624 14678 14738 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 18:53:24.630 14678 14732 I RawViewfinder: VF surface created 810x1080
+10-31 18:53:24.649 14678 15816 I RawLensMemory: MEM[activity-resumed] pss=343MB dalvikPss=173MB nativePss=30MB otherPss=139MB javaUsed=155MB/512MB nativeAlloc=26MB gfx=122MB rss=431MB rssAnon=228MB glTex=16/220MB glProg=13 fbo=1 egl=1 natBuf=0/0MB vk=0 img=0/0gpu amaze=1 hdr=0 still=1 vf=553 bgu=0 vid=0 dlog=69
+10-31 18:53:24.681 14678 14738 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 18:53:24.681 14678 14738 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE,EDOF] maxAfRegions=1 idle=CONT_PICTURE
+10-31 18:53:24.920 14678 14738 I RawLensCamera: First RAW stream image 4080x3064 ts=929590574074396
+10-31 18:53:24.923 14678 14738 I RawLensCamera: Scope sample: avg lut=1.8ms scan=1.5ms over 20 frames (histogram)
+10-31 18:53:24.924 14678 14738 I RawViewfinder: VF raw strides pixelStride=2 rowStride=8160 w=4080 h=3064
+10-31 18:53:24.924 14678 14738 I RawViewfinder: VF first frame raw=4080x3064 cfa=0 chans=0,1,2,3 pitch=4080 black=64.0,64.0,64.0,64.0 white=1023.0 geom=(0,0 1020x766 s4) dataMin=62 dataMax=1023 dataMean=105
+10-31 18:53:24.929 14678 14738 W RawLensColor: VF HAL reported no white balance; gray-world neutral=0.4401,1.0000,0.5927
+10-31 18:53:24.929 14678 14738 I RawLensColor: VF color first focal=11.56 jpeg=true result=none
+10-31 18:53:24.933 14678 14732 I RawViewfinder: VF GL ES3 (fences on)
+10-31 18:53:24.933 14678 14732 I RawViewfinder: VF EGL surface 810x1080 matches viewport
+10-31 18:53:24.933 14678 14732 I RawViewfinder: VF vsync-paced present (swapInterval=1)
+10-31 18:53:24.934 14678 14732 I RawViewfinder: VF GPU program ready
+10-31 18:53:24.935 14678 14732 W RawViewfinder: VF image tier unsupported (image-unsupported); upload tiers cover
+10-31 18:53:24.937 14678 14732 I RawViewfinder: VF zero-copy verified (outputMax=255)
+10-31 18:53:24.944 14678 14732 I RawViewfinder: VF GPU active (vulkan-zero)
+10-31 18:53:24.983 14678 14738 I RawLensCamera: Idle AF INACTIVE mode=CONT_PICTURE fd=0.51D
+10-31 18:53:25.083 14678 14738 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=0.51D
+10-31 18:53:27.950 14678 14738 I RawLensColor: VF color settled route=focal=11.56 jpeg=true activePhys=- physResults=[] grayWorldWb=- used(logical)[gains=2.2988,1.0000,1.0000,1.6670 neutral=0.4346,1.0000,0.5996 awb=1/2 ccm=1.0000,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,1.0000] ill=21/17 cm1=0.9219,-0.4219,-0.1328,-0.3438,1.2578,0.2813,-0.1094,0.1328,0.3984 cm2=1.3516,-0.6641,-0.1172,-0.7031,1.7578,0.2422,-0.2422,-0.0703,0.5781 fm1=0.5391,0.1797,0.0391,0.3516,0.9609,-0.4219,0.0781,-0.1406,1.2109 fm2=0.5547,0.2031,0.0781,0.1563,0.6875,-0.5781,0.2578,0.1172,1.3203 cal1=1.0391,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9766 cal2=1.0234,0.0000,0.0000,0.0000,1.0000,0.0000,0.0000,0.0000,0.9922 -> wb=AS_SHOT_NEUTRAL xyz=FORWARD_MATRIX camWhite=0.4346,1.0000,0.5996
+10-31 18:53:29.987 14678 14738 I RawLensCamera: Scope sample: avg lut=1.0ms scan=1.5ms over 19 frames (histogram)
+10-31 18:53:31.321 14678 15757 I RawLensPerf: PERF[bg-late] camera=closed gps=off video=false dlog=false rawvid=false threads=40 [AppEventListener-Def,BguFit,BguRender,CameraDeviceExecutor,CameraDeviceExecutor,CameraManagerGlobal,DirectLogPreview,InsetsAnimations,InteractionJankMonitor-Worker,RawCamera,RawViewfinderGL,SurfaceSyncGroupTimer,Thread-131,Thread-2,TouchMotionHandler,VCameraUtils_postThread,VivoAICreationManagerImpl,event-thread,hwuiTask0,logcat-file,logcat-mirror,main,pool-3-thread-1,pool-6-thread-1] services=none
+10-31 18:53:33.185 14678 14732 I RawViewfinder: VF stats: fps=30.2 gpu=true jpeg=true engine=AUTO vf=1020x766 camInterval=33ms
+10-31 18:53:35.055 14678 14738 I RawLensCamera: Scope sample: avg lut=1.1ms scan=1.6ms over 19 frames (histogram)
+10-31 18:53:40.118 14678 14738 I RawLensCamera: Scope sample: avg lut=1.5ms scan=1.6ms over 19 frames (histogram)
+10-31 18:53:43.185 14678 14732 I RawViewfinder: VF stats: fps=30.1 gpu=true jpeg=true engine=AUTO vf=1020x766 camInterval=33ms

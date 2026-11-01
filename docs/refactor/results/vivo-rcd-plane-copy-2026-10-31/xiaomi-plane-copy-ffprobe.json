@@ -1,0 +1,28 @@
+{
+    "programs": [
+
+    ],
+    "stream_groups": [
+
+    ],
+    "streams": [
+        {
+            "codec_name": "hevc",
+            "profile": "Main 10",
+            "width": 3840,
+            "height": 2160,
+            "pix_fmt": "yuv420p10le",
+            "color_space": "bt709",
+            "color_transfer": "bt709",
+            "color_primaries": "bt709",
+            "avg_frame_rate": "30625/1354",
+            "nb_frames": "49"
+        },
+        {
+            "codec_name": "aac",
+            "profile": "LC",
+            "avg_frame_rate": "0/0",
+            "nb_frames": "120"
+        }
+    ]
+}

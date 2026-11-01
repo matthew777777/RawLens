@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.matthew.rawlens.DirectLogRecorderTest" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-10-31T14:02:47.481Z" hostname="Monikas-MacBook-Air.local" time="0.031">
+  <properties/>
+  <testcase name="aacBitratePrefersQualityOverSize" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.002"/>
+  <testcase name="constantPtsUsGapsAreUniformWithinOneMicrosecond" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.019"/>
+  <testcase name="wbGainsFallbackMatchesProbe" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.002"/>
+  <testcase name="ccmFallbackIsIdentity" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="packShadingPacksDimsAndGains" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="muxedFpsIsZeroUntilTwoSamples" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.001"/>
+  <testcase name="packShadingRejectsBadShapes" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="constantPtsUsStartsAtZeroOnIdealGrid" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="relativeUsRebasesToRecordingStart" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="constantPtsUsRejectsBadInput" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="preresultGateDropsOnlyTheUnboundedHead" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="packShadingRejectsBadContent" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="muxedFpsPinsThirtyFpsTake" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="floatToHalfBitsPinsKnownValues" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <testcase name="ccmPrefersStaticBakeOverIdentity" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.001"/>
+  <testcase name="muxedFpsExcludesStartupDeadTime" classname="com.matthew.rawlens.DirectLogRecorderTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
