@@ -1,0 +1,10 @@
+{
+  "preset-2-cfa-0-expected.rgba16f": "11a8225719afa663086429df00194bb590a9fbcb1cd642dc9aa9dafb43be3404",
+  "preset-2-cfa-0-input.rgba16f": "83bce9d869e6c768c286766d9efa8b94a6ba2fac5ae6ec4e2aa09e315aacc69d",
+  "preset-3-cfa-1-expected.rgba16f": "54e44f222138795950615c30364a0a995fef49d59a22f99ee4aa56797fd136af",
+  "preset-3-cfa-1-input.rgba16f": "cba948570e4098f88e1888198cf5546943e0cdd203cb302d98e046c9e4bd5930",
+  "preset-4-cfa-2-expected.rgba16f": "5db582f8dd7f4b0bc9f9b1164cd41bd1d7f8021e9f716ca4d8379509d96a3733",
+  "preset-4-cfa-2-input.rgba16f": "caee1842b38e758ddf03fc61c5b7e03a38580e04d986cd9a299ed9ff1bc7c569",
+  "preset-6-cfa-3-expected.rgba16f": "642e01967413b3ad288db28f9e5563c9e7e7285fcee2d6aa9e97a2d4f64ad1b5",
+  "preset-6-cfa-3-input.rgba16f": "4624c60adec95944c8f8b6981d0d2608f9b605c6f6b4c4bf507b5c356759a36f"
+}

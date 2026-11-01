@@ -39,7 +39,8 @@ data class DenoiseSettings(
     val aiEnabled: Boolean = false,
     val saveOriginalDng: Boolean = true,
     val aiStrength: Float = 1f,
-    val wavelet: WaveletSettings = WaveletSettings()
+    val wavelet: WaveletSettings = WaveletSettings(),
+    val captureSharpening: CaptureSharpeningSettings = CaptureSharpeningSettings()
 ) {
     init {
         require(aiStrength.isFinite() && aiStrength in 0f..1f) {

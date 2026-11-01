@@ -1,0 +1,65 @@
+#version 450
+// Auto radius (capturesharpening.cc:134-186 calcRadiusBayer): the largest
+// unclipped ratio between diagonal green neighbours. One invocation per
+// candidate site; each workgroup reduces to one atomicMax on the float bits
+// (ratios are >= 1, so unsigned order equals float order).
+layout(local_size_x = 256) in;
+#include "cs_common.glsl"
+
+shared float groupMax[256];
+
+float candidateRatio(ivec2 rc) {
+    // rc = (row, col) as in RT; sites are (x = col, y = row).
+    int row = rc.x, col = rc.y;
+    float lower = 1000.0;
+    float upper = pc.toRt.g;  // green white in RT units
+    float best = 1.0;
+    float val00 = nativeRt(ivec2(col, row));
+    if (!(val00 > 0.0)) return best;
+    float val1m1 = nativeRt(ivec2(col - 1, row + 1));
+    float val1p1 = nativeRt(ivec2(col + 1, row + 1));
+    float maxVal0 = max(val00, val1m1);
+    if (val1m1 > 0.0 && maxVal0 > lower) {
+        float minVal = min(val00, val1m1);
+        bool clipped;
+        if (maxVal0 == val00)
+            clipped = max(max(nativeRt(ivec2(col - 1, row - 1)), nativeRt(ivec2(col + 1, row - 1))), val1p1) >= upper;
+        else
+            clipped = max(max(max(nativeRt(ivec2(col - 2, row)), val00), nativeRt(ivec2(col - 2, row + 2))),
+                          nativeRt(ivec2(col, row + 2))) >= upper;
+        if (!clipped) best = max(best, maxVal0 / minVal);
+    }
+    float maxVal1 = max(val00, val1p1);
+    if (val1p1 > 0.0 && maxVal1 > lower) {
+        float minVal = min(val00, val1p1);
+        bool clipped;
+        if (maxVal1 == val00)
+            clipped = max(max(nativeRt(ivec2(col - 1, row - 1)), nativeRt(ivec2(col + 1, row - 1))), val1p1) >= upper;
+        else
+            clipped = max(max(max(val00, nativeRt(ivec2(col + 2, row))), nativeRt(ivec2(col, row + 2))),
+                          nativeRt(ivec2(col + 2, row + 2))) >= upper;
+        if (!clipped) best = max(best, maxVal1 / minVal);
+    }
+    return best;
+}
+
+void main() {
+    // Grid: x = candidate index within the row, y = row - 4.
+    uint lid = gl_LocalInvocationID.x;
+    int row = int(gl_WorkGroupID.y) + 4;
+    int k = int(gl_GlobalInvocationID.x);
+    float r = 1.0;
+    if (row < pc.size.y - 4) {
+        // fc & 1 is 1 when the row starts with green (RT: col = 5 + (fc[row & 1] & 1)).
+        int ch0 = rawrCfaChannelAt(pc.pattern, ivec2(0, row));
+        int col = 5 + ((ch0 == 1 || ch0 == 2) ? 1 : 0) + 2 * k;
+        if (col < pc.size.x - 4) r = candidateRatio(ivec2(row, col));
+    }
+    groupMax[lid] = r;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lid < s) groupMax[lid] = max(groupMax[lid], groupMax[lid + s]);
+        barrier();
+    }
+    if (lid == 0u && groupMax[0] > 1.0) atomicMax(params.maxRatioBits, floatBitsToUint(groupMax[0]));
+}

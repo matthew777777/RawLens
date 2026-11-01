@@ -1,0 +1,17 @@
+#version 450
+// Strip mode: saves the original RGB of rows [strip.z, strip.w) into
+// apronImages[mode] before the current strip sharpens them; the next strip
+// reads its context there.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "cs_common.glsl"
+
+void main() {
+    ivec2 a = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 p = a + ivec2(0, pc.strip.z);
+    if (a.x >= pc.size.x || p.y >= pc.strip.w) return;
+    vec4 v = imageLoad(rgbImage, p);
+    if (pc.mode == 0u)
+        imageStore(apronImages[0], a, v);
+    else
+        imageStore(apronImages[1], a, v);
+}

@@ -1,0 +1,61 @@
+#version 450
+// buildBlendMask (rt_algo.cc:380-566), before the blur: per pixel the clip
+// mask times the contrast sigmoid; rows/columns 0-1 and the last two are
+// replicated from their inner neighbours. A zero threshold makes the mask 1
+// everywhere (clip mask ignored, as in RT). L and the per-site clip flags of
+// the tile plus a 2-pixel apron are staged in shared memory once. Written
+// transposed (scratch[x * tStride + local y]) through shared memory so the row
+// blur reads coalesced. Covers the strip context rows.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "cs_common.glsl"
+
+#define APRON 2
+#define SPAN (16 + 2 * APRON)
+shared float tile[16][17];
+shared float lumS[SPAN * SPAN];
+shared uint clipS[SPAN * SPAN];
+
+void main() {
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    // Workgroups launch down the columns (x = row block) so consecutive groups
+    // touch adjacent transposed memory; across rows they would hop pages.
+    ivec2 base = ivec2(gl_WorkGroupID.yx) * 16;  // strip-local
+    const ivec2 toImage = ivec2(0, pc.strip.x);
+    const ivec2 localSize = ivec2(pc.size.x, pc.strip.y);
+    ivec2 origin = base + toImage - APRON;  // image coordinates
+    const bool noMask = params.contrast == 0.0;
+    if (!noMask) {
+        // Every q +- 2 below lies in this span (q is p clamped to [2, size - 3]).
+        for (uint k = gl_LocalInvocationIndex; k < uint(SPAN * SPAN); k += 256u) {
+            ivec2 c = origin + ivec2(int(k) % SPAN, int(k) / SPAN);
+            lumS[k] = lumL(clamp(c, ivec2(0), pc.size - 1));
+            bool inner = all(greaterThanEqual(c, ivec2(2))) && all(lessThan(c, pc.size - 2));
+            clipS[k] = inner && siteClipped(c) ? 1u : 0u;
+        }
+        barrier();
+    }
+    ivec2 lp = base + l;
+    ivec2 p = lp + toImage;
+    if (all(lessThan(lp, localSize))) {
+        float v = 1.0;
+        if (!noMask) {
+            ivec2 q = clamp(p, ivec2(2), pc.size - 3) - origin;
+            int i = q.y * SPAN + q.x;
+            float a = lumS[i + 1] - lumS[i - 1];
+            float b = lumS[i + SPAN] - lumS[i - SPAN];
+            float c = lumS[i + 2] - lumS[i - 2];
+            float d = lumS[i + 2 * SPAN] - lumS[i - 2 * SPAN];
+            float contrast = sqrt(a * a + b * b + c * c + d * d) * (0.0625 / 327.68);
+            uint clipped = 0u;
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx)
+                    if (abs(dy) != 2 || abs(dx) != 2) clipped |= clipS[i + dy * SPAN + dx];
+            v = (clipped != 0u ? 0.0 : 1.0) * blendFactor(contrast, params.contrast);
+        }
+        tile[l.y][l.x] = v;
+    }
+    barrier();
+    // Thread (lx, ly) stores column base.x + ly, row base.y + lx.
+    ivec2 t = ivec2(base.x + l.y, base.y + l.x);
+    if (all(lessThan(t, localSize))) scratch[uint(t.x) * pc.tStride + uint(t.y)] = tile[l.x][l.y];
+}

@@ -1,0 +1,52 @@
+{
+  "normal_package_debug_apk": {
+    "passed": true,
+    "task": ":app:assembleGithubDebug",
+    "log_tail": [
+      "",
+      "[Incubating] Problems report is available at: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/build/reports/problems/problems-report.html",
+      "",
+      "Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.",
+      "",
+      "You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.",
+      "",
+      "For more on this, please refer to https://docs.gradle.org/9.8.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.",
+      "",
+      "BUILD SUCCESSFUL in 15s",
+      "46 actionable tasks: 18 executed, 28 up-to-date",
+      "Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html"
+    ]
+  },
+  "isolated_device_apks": {
+    "passed": true,
+    "tasks": [
+      ":app:assembleGithubDeviceTest",
+      ":app:assembleGithubDeviceTestAndroidTest"
+    ],
+    "log_tail": [
+      "",
+      "[Incubating] Problems report is available at: file:///Users/monikamalinowska/AndroidStudioProjects/RawLens/build/reports/problems/problems-report.html",
+      "",
+      "Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.",
+      "",
+      "You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.",
+      "",
+      "For more on this, please refer to https://docs.gradle.org/9.8.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.",
+      "",
+      "BUILD SUCCESSFUL in 10s",
+      "91 actionable tasks: 11 executed, 80 up-to-date",
+      "Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html"
+    ]
+  },
+  "wavelet_unit_tests": {
+    "tests": 10,
+    "failures": 0,
+    "errors": 0
+  },
+  "instrumentation": {
+    "tests": 2,
+    "failures": 0
+  },
+  "host_gpu_cases": 12,
+  "same_phone_gpu_cases": 4
+}

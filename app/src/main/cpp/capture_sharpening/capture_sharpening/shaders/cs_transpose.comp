@@ -1,0 +1,21 @@
+#version 450
+// Row-blurred mask: transposed scratch -> blendImage (row-major), through
+// shared memory so both sides stay coalesced. Strip-local rows.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "cs_common.glsl"
+
+shared float tile[16][17];
+
+void main() {
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    // Workgroups launch down the columns (x = row block) so consecutive groups
+    // touch adjacent transposed memory; across rows they would hop pages.
+    ivec2 base = ivec2(gl_WorkGroupID.yx) * 16;
+    // Thread (lx, ly) loads column base.x + ly, row base.y + lx.
+    ivec2 s = ivec2(base.x + l.y, base.y + l.x);
+    const ivec2 localSize = ivec2(pc.size.x, pc.strip.y);
+    if (all(lessThan(s, localSize))) tile[l.y][l.x] = scratch[uint(s.x) * pc.tStride + uint(s.y)];
+    barrier();
+    ivec2 p = base + l;
+    if (all(lessThan(p, localSize))) imageStore(blendImage, p, vec4(tile[l.x][l.y]));
+}

@@ -1,0 +1,84 @@
+#version 450
+// Auto-contrast tile scan (rt_algo.cc:382-479): per tile, the mean L
+// (tileAverage) and the normalized variance (tileVariance). Tiles outside the
+// 2000..20000 mean range or with variance < 0.5 report +inf.
+// mode 0: pass-0 grid (tile 80, stride 80); 1: pass-1 grid (tile 40, stride 10),
+// only while state == NEED_PASS1; both from the 10x10 block statistics, one
+// invocation per tile. 2: pass-1 refinement window (not block-aligned), only
+// while state == NEED_REFINE, one workgroup per tile over pixels.
+layout(local_size_x = 256) in;
+#include "cs_common.glsl"
+
+shared float partial[256];
+
+float groupSum(float v) {
+    uint lid = gl_LocalInvocationID.x;
+    partial[lid] = v;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lid < s) partial[lid] += partial[lid + s];
+        barrier();
+    }
+    float total = partial[0];
+    barrier();
+    return total;
+}
+
+void writeVariance(uint index, float avg, float var) {
+    variances[index] = (avg < 2000.0 || avg > 20000.0 || var < 0.5) ? CS_INF : var;
+}
+
+void main() {
+    if (pc.mode == 1u && params.state != CS_STATE_NEED_PASS1) return;
+    if (pc.mode == 2u && params.state != CS_STATE_NEED_REFINE) return;
+    if (pc.mode != 2u) {
+        // Block-aligned grids: one invocation per tile merges its blocks
+        // (Chan et al. parallel variance), 256 tiles per workgroup.
+        uint index = gl_WorkGroupID.x * 256u + gl_LocalInvocationID.x;
+        if (index >= pc.gridW * pc.gridH) return;
+        uint nb = pc.tileSize / 10u, sb = pc.tileSkip / 10u, bw = uint(pc.size.x / 10);
+        uint bx0 = (index % pc.gridW) * sb, by0 = (index / pc.gridW) * sb;
+        float total = 0.0;
+        for (uint j = 0u; j < nb; ++j)
+            for (uint i = 0u; i < nb; ++i) total += blockStats[(by0 + j) * bw + bx0 + i].x;
+        float count = float(nb * nb * 100u);
+        float avg = total / count;
+        float m2 = 0.0;
+        for (uint j = 0u; j < nb; ++j)
+            for (uint i = 0u; i < nb; ++i) {
+                vec2 b = blockStats[(by0 + j) * bw + bx0 + i];
+                float d = b.x / 100.0 - avg;
+                m2 += b.y + 100.0 * d * d;
+            }
+        writeVariance(index, avg, m2 / (count * avg));
+        return;
+    }
+    int tx = int(gl_WorkGroupID.x), ty = int(gl_WorkGroupID.y);
+    ivec2 origin;
+    uint index;
+    if (pc.mode == 2u) {
+        if (tx >= params.refineW || ty >= params.refineH) return;
+        origin = ivec2(params.refineX0 + tx, params.refineY0 + ty);
+        index = uint(ty * params.refineW + tx);
+    } else {
+        if (uint(tx) >= pc.gridW || uint(ty) >= pc.gridH) return;
+        origin = ivec2(tx, ty) * int(pc.tileSkip);
+        index = uint(ty) * pc.gridW + uint(tx);
+    }
+    int n = int(pc.tileSize);
+    int count = n * n;
+    float sum = 0.0;
+    for (int i = int(gl_LocalInvocationID.x); i < count; i += 256) sum += lumL(origin + ivec2(i % n, i / n));
+    float avg = groupSum(sum) / float(count);
+    if (avg < 2000.0 || avg > 20000.0) {
+        if (gl_LocalInvocationID.x == 0u) variances[index] = CS_INF;
+        return;
+    }
+    float sq = 0.0;
+    for (int i = int(gl_LocalInvocationID.x); i < count; i += 256) {
+        float d = lumL(origin + ivec2(i % n, i / n)) - avg;
+        sq += d * d;
+    }
+    float var = groupSum(sq) / (float(count) * avg);
+    if (gl_LocalInvocationID.x == 0u) variances[index] = var < 0.5 ? CS_INF : var;
+}

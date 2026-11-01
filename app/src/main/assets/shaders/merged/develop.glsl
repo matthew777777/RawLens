@@ -34,6 +34,7 @@ uniform highp float u_denoise_blend_max;
 // Accepted frame count; confidence = clamp(rc / u_rc_normalizer, 0, 1).
 uniform highp float u_rc_normalizer;
 uniform int u_denoise_enabled;
+uniform int u_camera_linear;
 
 vec3 loadMerged(ivec2 q) {
     return imageLoad(u_merged, clamp(q, ivec2(0), u_merged_size - 1)).rgb;
@@ -63,6 +64,10 @@ void main() {
         vec3 avg = max(acc / 16.0, vec3(0.0));
         float blend = clamp(u_denoise_blend_max * (1.0 - confidence(q)), 0.0, 1.0);
         base = mix(center, avg, blend);
+    }
+    if (u_camera_linear != 0) {
+        imageStore(u_out, p, vec4(base, 1.0));
+        return;
     }
     vec3 wb = smoothstep(vec3(0.70), vec3(0.99), base);
     float whiteBlend = max(wb.r, max(wb.g, wb.b));

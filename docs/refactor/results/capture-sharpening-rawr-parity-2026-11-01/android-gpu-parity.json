@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "model": "25080RABDG",
+  "cases": [
+    {
+      "case": "preset-2-cfa-0",
+      "identical": true,
+      "reference_sha256": "3ea1fc802cef74282e7dc63252e27b6955b823bcfc4e9142a8c879989c146612",
+      "jni_sha256": "3ea1fc802cef74282e7dc63252e27b6955b823bcfc4e9142a8c879989c146612",
+      "max_error": 0.0
+    },
+    {
+      "case": "preset-3-cfa-1",
+      "identical": true,
+      "reference_sha256": "c54b9096db3150b09a2b10b27534afaef53b128c6b4639e61dfa9dc82cf347f3",
+      "jni_sha256": "c54b9096db3150b09a2b10b27534afaef53b128c6b4639e61dfa9dc82cf347f3",
+      "max_error": 0.0
+    },
+    {
+      "case": "preset-4-cfa-2",
+      "identical": true,
+      "reference_sha256": "d8262774ae644cc9543d8736bff4160888fbc970c43964b3b6dcb92036763064",
+      "jni_sha256": "d8262774ae644cc9543d8736bff4160888fbc970c43964b3b6dcb92036763064",
+      "max_error": 0.0
+    },
+    {
+      "case": "preset-6-cfa-3",
+      "identical": true,
+      "reference_sha256": "8b1f8d02ddb659573c8d8d5aff425ae2d6366be6e6a92ba209722dbac447c8fe",
+      "jni_sha256": "8b1f8d02ddb659573c8d8d5aff425ae2d6366be6e6a92ba209722dbac447c8fe",
+      "max_error": 0.0
+    }
+  ]
+}

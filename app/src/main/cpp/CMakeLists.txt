@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Source-built RAW peaking on all flavors, independent of the optional Halide archives.
+add_library(rawLensFocusPeaking SHARED focus_peaking_jni.cpp)
+target_compile_options(rawLensFocusPeaking PRIVATE -O3 -fno-fast-math -ffp-contract=off)
+target_link_options(rawLensFocusPeaking PRIVATE "-Wl,-z,max-page-size=16384")
+
+
 # Source-only builds (F-Droid): -DRAWLENS_PREBUILT_NATIVE=OFF ignores the
 # vendored ncnn/Halide archives even when present. ncnnMl is then built
 # from the pinned upstream ncnn sources (CPU-only) with the real JNI
@@ -523,3 +529,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         target_link_options(${_t} PRIVATE -flto=thin)
     endforeach()
 endif()
+
+# Byte-identical RAWR capture sharpening, with its embedded SPIR-V build.
+find_program(GLSLC NAMES glslc
+    HINTS "${ANDROID_NDK}/shader-tools/darwin-x86_64"
+          "${ANDROID_NDK}/shader-tools/linux-x86_64"
+          "${ANDROID_NDK}/shader-tools/windows-x86_64"
+    REQUIRED)
+add_subdirectory(capture_sharpening/capture_sharpening)
+target_link_libraries(rawLensWavelet PRIVATE rawr::capture_sharpening)

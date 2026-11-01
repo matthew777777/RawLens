@@ -173,14 +173,20 @@ class RawDevelopmentCoordinator(context: Context) {
         val clipping = cfa.highlightClipping
         if (clipping != null) { if (!clipping.any) return cfa }
         else if (cfa.values.none { it >= OpposedHighlights.CLIP }) return cfa
+        // Opposed references must be achromatic in the same neutral basis as demosaic.
+        // Clipping remains in the unbalanced sensor domain; only reference averages
+        // are balanced and converted back, so WB is not applied twice.
+        val neutral = SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), 0.0)
+            .glslCameraWhiteNormalized()
+        val balance = FloatArray(3) { 1f / neutral[it] }
         val started = SystemClock.elapsedRealtime()
         return try {
-            opposedSession().run(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata), owned).cfa.also {
+            opposedSession().run(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata), owned, balance).cfa.also {
                 Log.i(LOG_TAG, "Opposed Bayer Vulkan ${cfa.width}x${cfa.height}: ${SystemClock.elapsedRealtime() - started}ms")
             }
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Opposed Vulkan failed; using Bayer CPU reference", failure)
-            OpposedHighlights.cpu(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata))
+            OpposedHighlights.cpu(cfa, RawPreDemosaicPipeline.lensShadingModel(metadata), balance)
         }
     }
 
@@ -289,17 +295,20 @@ class RawDevelopmentCoordinator(context: Context) {
         // (the wavelet stage needs the unfused RGBA16F frame).
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        // Only wavelet needs the post-demosaic camera-linear readback.
-        val cameraLinearPlan = waveletPlan
+        // Sharpening and wavelet share the pre-WB camera-linear tap, in that order.
+        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val effectiveFused = if (cameraLinearPlan || !allowOutputFusion) null else fusedOutputSettings
         val consumeOutput: (AmazeGpuOutput) -> T = { output ->
             Log.i(LOG_TAG, "Demosaic done: ${SystemClock.elapsedRealtime() - transformAt}ms")
             if (cameraLinearPlan && output.colorDomain == AmazeColorDomain.CAMERA_LINEAR &&
                 output.internalFormat == AmazeTextureFormat.RGBA16F
             ) {
-                consumeWaveletDenoised(
+                consumeCameraLinearTail(
                     output, metadata, normalization, transform, preDemosaic,
-                    settings.denoise.wavelet, consume
+                    settings.denoise.wavelet, settings.denoise.captureSharpening,
+                    normalization.sensorPattern.shifted(
+                        geometry.sensorOriginX + geometry.processingCrop.left,
+                        geometry.sensorOriginY + geometry.processingCrop.top), consume
                 )
             } else {
                 consume(SceneLinearGpuFrame(output, preDemosaic, transform))
@@ -387,47 +396,55 @@ class RawDevelopmentCoordinator(context: Context) {
     }
 
     /**
-     * Post-demosaic wavelet detour: reads the camera-linear frame back,
-     * runs the profiled wavelet (Vulkan), converts to ACEScg, and hands a
+     * Post-demosaic camera-linear tail: Capture Sharpening, then profiled
+     * wavelet (Vulkan), then the WB/color matrix to ACEScg. Hands a
      * standard scene-linear frame to [consume]. Any wavelet failure falls
      * back to the un-denoised readback (no re-demosaic); the JPEG never
      * fails for denoise reasons. JPEG only — the DNG path is untouched.
      */
-    private fun <T> consumeWaveletDenoised(
+    private fun <T> consumeCameraLinearTail(
         output: AmazeGpuOutput,
         metadata: RawFrameMetadata,
         normalization: RawNormalization,
         transform: ResolvedSceneLinearTransform,
         preDemosaic: PreDemosaicResult,
         settings: WaveletSettings,
+        sharpening: CaptureSharpeningSettings,
+        pattern: BayerPattern,
         consume: (SceneLinearGpuFrame) -> T
     ): T {
         val t0 = SystemClock.elapsedRealtime()
         val camera = try {
             amaze.readbackHalfFloat(output)
         } catch (failure: Exception) {
+            if (sharpening.enabled) throw failure
             Log.w(LOG_TAG, "Wavelet readback failed, developing without denoise", failure)
             return consumeFallbackCameraLinear(output, transform, preDemosaic, consume)
         }
         val t1 = SystemClock.elapsedRealtime()
-        val blackAvg = normalization.blackLevels.average()
-        val (noiseA, noiseB) = WaveletDenoiser.noiseAB(
-            metadata.noiseProfile?.toDoubleArray(),
-            normalization.whiteLevel.toDouble() - blackAvg
+        val greenSites = (0..3).filter {
+            normalization.sensorPattern.colorAt(it and 1, it shr 1) == CfaColor.GREEN
+        }
+        val black = (normalization.blackLevels[greenSites[0]] +
+            normalization.blackLevels[greenSites[1]]) * 0.5f
+        val noise = WaveletDenoiser.noiseAB(
+            metadata.noiseProfile?.toDoubleArray(), normalization.sensorPattern,
+            black, normalization.whiteLevel
         )
         val wb = FloatArray(3) { transform.whiteBalance[it].toFloat() }.let { gains ->
             val g = gains[1].takeIf { it.isFinite() && it > 0f } ?: 1f
             floatArrayOf(gains[0] / g, 1f, gains[2] / g)
         }
+        waveletDenoiser.captureSharpen(camera, output.width, output.height, wb, pattern, sharpening)
         val reconstructed = camera
         val t2 = SystemClock.elapsedRealtime()
         try {
             // Native stages the complete input before processing, then copies
             // output back only after a successful GPU wait. Reuse this owned
             // readback buffer: ~100 MiB less live memory for a 13 MP frame.
-            waveletDenoiser.process(
+            if (settings.enabled && settings.strength > 0f && noise != null) waveletDenoiser.process(
                 reconstructed, reconstructed, output.width, output.height,
-                settings.bounded(), noiseA, noiseB, wb
+                settings.bounded(), noise.first, noise.second, wb
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
@@ -449,6 +466,31 @@ class RawDevelopmentCoordinator(context: Context) {
                 "upload+toAces=${t4 - t3}ms output=${t5 - t4}ms"
         )
         return result
+    }
+
+    private fun capturePattern(metadata: RawFrameMetadata): BayerPattern {
+        val pattern = requireNotNull(metadata.normalizationOrNull()).sensorPattern
+        val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported ?: return pattern
+        return pattern.shifted(geometry.sensorOriginX + geometry.processingCrop.left,
+            geometry.sensorOriginY + geometry.processingCrop.top)
+    }
+
+    /** Shared render-only tail for merged RGB; sharpen before the camera-to-ACEScg matrix. */
+    private fun <T> consumeCaptureSharpened(
+        output: AmazeGpuOutput, transform: ResolvedSceneLinearTransform,
+        pattern: BayerPattern, sharpening: CaptureSharpeningSettings,
+        externalContext: Boolean = false,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        if (!sharpening.enabled) return consume(output)
+        require(output.colorDomain == AmazeColorDomain.CAMERA_LINEAR)
+        val pixels = if (externalContext) amaze.readbackHalfFloatCurrentContext(output) else amaze.readbackHalfFloat(output)
+        val wb = FloatArray(3) { transform.whiteBalance[it].toFloat() }
+        waveletDenoiser.captureSharpen(pixels, output.width, output.height, wb, pattern, sharpening)
+        return if (externalContext) amaze.transformCameraLinearFromExternalContext(
+            pixels, output.width, output.height, transform.glslColumnMajorMatrix(), consume)
+        else amaze.transformCameraLinear(pixels, output.width, output.height,
+            transform.glslColumnMajorMatrix(), consume)
     }
 
     /**
@@ -691,7 +733,7 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan
+        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (outputSettings.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -718,12 +760,12 @@ class RawDevelopmentCoordinator(context: Context) {
                             output, transform.glslColumnMajorMatrix()
                         ) { aces -> finishJpeg(aces, outputSettings) }
                     } else {
-                        consumeWaveletDenoised(
+                        consumeCameraLinearTail(
                             output, metadata, normalization, transform,
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern
                         ) { frame -> finishJpeg(frame.texture, outputSettings) }
                     }
                 } else {
@@ -811,10 +853,14 @@ class RawDevelopmentCoordinator(context: Context) {
                 clipPoint = reconstructed.values.maxOrNull()?.coerceAtLeast(1f) ?: 1f,
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
-                fusedOutputSettings = developOutput,
-                whiteWindow = whiteWindow
+                fusedOutputSettings = if (settings.denoise.captureSharpening.enabled && !metadata.quadBayer) null else developOutput,
+                whiteWindow = whiteWindow,
+                cameraLinear = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
             ) { output ->
-                if (output.internalFormat == AmazeTextureFormat.RGBA8) {
+                if (output.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
+                    consumeCaptureSharpened(output, transform, reconstructed.pattern,
+                        settings.denoise.captureSharpening) { aces -> finishJpeg(aces, developOutput) }
+                } else if (output.internalFormat == AmazeTextureFormat.RGBA8) {
                     jpegOutput.processEncoded(output, developOutput)
                 } else {
                     jpegOutput.process(output, developOutput)
@@ -850,9 +896,12 @@ class RawDevelopmentCoordinator(context: Context) {
         return amaze.processMfsrRgb(
             rgb, width, height,
             transform.glslColumnMajorMatrix(),
-            transform.glslCameraWhiteNormalized()
+            transform.glslCameraWhiteNormalized(),
+            cameraLinear = settings.denoise.captureSharpening.enabled
         ) { output ->
-            jpegOutput.process(output, outputSettings)
+            consumeCaptureSharpened(output, transform,
+                capturePattern(metadata),
+                settings.denoise.captureSharpening) { aces -> jpegOutput.process(aces, outputSettings) }
         }
     }
 
@@ -906,11 +955,18 @@ class RawDevelopmentCoordinator(context: Context) {
     ): DevelopedJpeg {
         // Covers developMergedImagesJpeg too (it delegates here).
         MemoryLeakDiagnostics.stillCapture()
-        return mergedDevelop.develop(input, settings) { scene ->
+        return mergedDevelop.develop(input, settings, cameraLinear = settings.denoise.captureSharpening.enabled) { scene ->
             require(scene.internalFormat == AmazeTextureFormat.RGBA16F) {
                 "Merged develop must emit scene-linear RGBA16F"
             }
-            mergedJpegOutput.process(scene, outputSettings)
+            if (scene.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
+                val metadata = input.referenceMetadata
+                val transform = SceneLinearColorProcessor.resolve(SceneLinearColorMetadata.from(metadata), settings.exposureEv)
+                val pattern = capturePattern(metadata).shifted(input.crop.left, input.crop.top)
+                consumeCaptureSharpened(scene, transform, pattern, settings.denoise.captureSharpening, externalContext = true) {
+                    aces -> jpegOutput.process(aces, outputSettings)
+                }
+            } else mergedJpegOutput.process(scene, outputSettings)
         }
     }
 
@@ -1070,7 +1126,7 @@ class RawDevelopmentCoordinator(context: Context) {
         )
         val waveletPlan = resolveDenoise(settings.denoise, mergedPath = false).wavelet &&
             !metadata.quadBayer
-        val cameraLinearPlan = waveletPlan
+        val cameraLinearPlan = waveletPlan || (settings.denoise.captureSharpening.enabled && !metadata.quadBayer)
         val tapWhiteWindow = if (look.hlReconstruction && !metadata.quadBayer) SceneLinearColorProcessor.WHITE_WINDOW_OFF
         else floatArrayOf(
             SceneLinearColorProcessor.WHITE_WINDOW_LDR_START,
@@ -1097,12 +1153,12 @@ class RawDevelopmentCoordinator(context: Context) {
                             output, transform.glslColumnMajorMatrix()
                         ) { aces -> finishJxl(aces, look, jxl) }
                     } else {
-                        consumeWaveletDenoised(
+                        consumeCameraLinearTail(
                             output, metadata, normalization, transform,
                             PreDemosaicResult(
                                 null, LensShadingStatus.ALREADY_APPLIED, DefectCorrectionStats(0, 0)
                             ),
-                            settings.denoise.wavelet
+                            settings.denoise.wavelet, settings.denoise.captureSharpening, cfa.pattern
                         ) { frame -> finishJxl(frame.texture, look, jxl) }
                     }
                 } else {
@@ -1172,9 +1228,13 @@ class RawDevelopmentCoordinator(context: Context) {
                 cameraToAcescgColumnMajor = transform.glslColumnMajorMatrix(),
                 cameraWhiteNormalized = transform.glslCameraWhiteNormalized(),
                 fusedOutputSettings = null,
-                whiteWindow = whiteWindow
+                whiteWindow = whiteWindow,
+                cameraLinear = settings.denoise.captureSharpening.enabled && !metadata.quadBayer
             ) { output ->
-                finishJxl(output, lookCapped, jxl)
+                if (output.colorDomain == AmazeColorDomain.CAMERA_LINEAR) {
+                    consumeCaptureSharpened(output, transform, reconstructed.pattern,
+                        settings.denoise.captureSharpening) { aces -> finishJxl(aces, lookCapped, jxl) }
+                } else finishJxl(output, lookCapped, jxl)
             }
         }
     }
@@ -1202,9 +1262,12 @@ class RawDevelopmentCoordinator(context: Context) {
         return amaze.processMfsrRgb(
             rgb, width, height,
             transform.glslColumnMajorMatrix(),
-            transform.glslCameraWhiteNormalized()
+            transform.glslCameraWhiteNormalized(),
+            cameraLinear = settings.denoise.captureSharpening.enabled
         ) { output ->
-            finishJxl(output, look, jxl)
+            consumeCaptureSharpened(output, transform,
+                capturePattern(metadata),
+                settings.denoise.captureSharpening) { aces -> finishJxl(aces, look, jxl) }
         }
     }
 
@@ -1258,6 +1321,7 @@ class RawDevelopmentCoordinator(context: Context) {
 
     /** Releases cached programs and the thread-confined EGL session after queued saves finish. */
     fun close() {
+        waveletDenoiser.release()
         // The merged pair runs on the retained develop context (created on
         // the first merged save); make it current before deleting its
         // programs. With no merged save the closes are safe no-ops.
@@ -1266,6 +1330,7 @@ class RawDevelopmentCoordinator(context: Context) {
         mergedDevelop.close()
         mergedEgl?.close()
         mergedEgl = null
+        amaze.makeProcessingContextCurrent()
         jxlOutput.close()
         jpegOutput.close()
         amaze.close()

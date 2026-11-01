@@ -1,0 +1,33 @@
+#version 450
+// Auto-contrast block statistics: per 10x10 block the sum of L and its
+// squared deviations from the block mean, so the 80px and 40px tile scans
+// (both block-aligned) combine blocks instead of re-reading pixels.
+layout(local_size_x = 128) in;
+#include "cs_common.glsl"
+
+shared float partial[128];
+
+float groupSum(float v) {
+    uint lid = gl_LocalInvocationID.x;
+    partial[lid] = v;
+    barrier();
+    for (uint s = 64u; s > 0u; s >>= 1) {
+        if (lid < s) partial[lid] += partial[lid + s];
+        barrier();
+    }
+    float total = partial[0];
+    barrier();
+    return total;
+}
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+    uint bx = gl_WorkGroupID.x, by = gl_WorkGroupID.y;
+    float l = 0.0;
+    if (lid < 100u) l = lumL(ivec2(bx * 10u + lid % 10u, by * 10u + lid / 10u));
+    float sum = groupSum(l);
+    float mean = sum / 100.0;
+    float d = lid < 100u ? l - mean : 0.0;
+    float m2 = groupSum(d * d);
+    if (lid == 0u) blockStats[by * uint(pc.size.x / 10) + bx] = vec2(sum, m2);
+}

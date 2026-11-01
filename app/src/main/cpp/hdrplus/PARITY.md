@@ -173,7 +173,7 @@ equal to `f41e6c2`, are listed in `spirv/hdrplus/UPSTREAM.md`):
   patched host.
 - Unit gate `:app:testDebugUnitTest`: NOT re-run — blocked by a pre-existing
   compile error in a peer session's untracked file
-  (`DirectLogRecorder.kt:1293`, `riparms` typo, not part of this change).
+  (`EncodedVideoRecorder.kt:1293`, `riparms` typo, not part of this change).
   Last green before this audit: HdrPlusSettings 6/6, HdrPlusDngWriter 2/2,
   DngExif 8/8, full suite 1129/1130 (1 pre-existing HdrTileDeghost failure).
   No Kotlin file was touched by this audit, so those results still stand.

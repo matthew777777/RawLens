@@ -1,0 +1,115 @@
+#version 450
+// Single-workgroup decisions between passes.
+// mode 0: finalize the auto radius (sqrt(1 / log(maxRatio)), capped at 2).
+// mode 1: after pass 0, argmin over the pass-0 grid; variance <= 1 picks
+//         that 80px tile, otherwise pass 1 runs.
+// mode 2: after pass 1, argmin over the pass-1 grid sets the refinement window.
+// mode 3: after the refinement, variance <= 8 picks that 40px tile, else
+//         the threshold is 0 (blend 1 everywhere).
+// Ties resolve to the first tile in row-major order, as RT's scan does.
+layout(local_size_x = 256) in;
+#include "cs_common.glsl"
+
+shared float bestVar[256];
+shared uint bestIdx[256];
+
+void argmin(uint count, out float var, out uint idx) {
+    uint lid = gl_LocalInvocationID.x;
+    float v = CS_INF;
+    uint k = 0xffffffffu;
+    for (uint i = lid; i < count; i += 256u) {
+        float x = variances[i];
+        if (x < v) {
+            v = x;
+            k = i;
+        }
+    }
+    bestVar[lid] = v;
+    bestIdx[lid] = k;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lid < s) {
+            float ov = bestVar[lid + s];
+            uint ok = bestIdx[lid + s];
+            if (ov < bestVar[lid] || (ov == bestVar[lid] && ok < bestIdx[lid])) {
+                bestVar[lid] = ov;
+                bestIdx[lid] = ok;
+            }
+        }
+        barrier();
+    }
+    var = bestVar[0];
+    idx = bestIdx[0] == 0xffffffffu ? 0u : bestIdx[0];  // RT keeps (0, 0) when nothing qualifies
+}
+
+void main() {
+    if (pc.mode == 0u) {
+        if (gl_LocalInvocationID.x != 0u) return;
+        if ((pc.flags & CS_FLAG_AUTO_RADIUS) != 0u) {
+            float ratio = max(uintBitsToFloat(params.maxRatioBits), 1.0);
+            float l = log(ratio);
+            params.sigma = l > 0.0 ? min(sqrt(1.0 / l), 2.0) : 2.0;
+        }
+        // Fixed-kernel deconvolution: give workgroups only to the variant
+        // matching sigma (same size rule and border as cs_deconv.comp).
+        float sigma = params.sigma;
+        int n = sigma < 0.6 ? 3 : (sigma <= 0.84 ? 5 : (sigma <= 1.15 ? 7 : (sigma <= 1.5 ? 9 : 13)));
+        int border = n <= 7 ? (pc.iterations <= 30u ? 5 : 7) : 8;
+        uint gx = uint(max(pc.size.x - 2 * border + 31, 0) / 32);
+        uint gy = uint(max(pc.size.y - 2 * border + 31, 0) / 32);
+        // Here tileSize = tile rows per band, tileSkip = entries per variant
+        // (bands, then the full grid last).
+        const int sizes[5] = int[5](3, 5, 7, 9, 13);
+        uint bandRows = max(pc.tileSize, 1u), stride = pc.tileSkip;
+        for (int v = 0; v < 5; ++v) {
+            for (uint e = 0u; e < stride; ++e) {
+                uint first = e * bandRows;
+                uint rows = e + 1u == stride ? gy : (first < gy ? min(bandRows, gy - first) : 0u);
+                deconvDispatch[uint(v) * stride + e] = (sizes[v] == n && rows > 0u) ? uvec4(gx, rows, 1u, 0u)
+                                                                                     : uvec4(0u, 1u, 1u, 0u);
+            }
+        }
+        return;
+    }
+    if (pc.mode == 2u && params.state != CS_STATE_NEED_PASS1) return;
+    if (pc.mode == 3u && params.state != CS_STATE_NEED_REFINE) return;
+    uint count = pc.mode == 3u ? uint(max(params.refineW, 0) * max(params.refineH, 0)) : pc.gridW * pc.gridH;
+    float var;
+    uint idx;
+    argmin(count, var, idx);
+    if (gl_LocalInvocationID.x != 0u) return;
+    if (pc.mode == 1u) {
+        if (var <= 1.0) {
+            params.tileX = int((idx % pc.gridW) * pc.tileSkip);
+            params.tileY = int((idx / pc.gridW) * pc.tileSkip);
+            params.tileSz = pc.tileSize;
+            params.minVar = var;
+            params.state = CS_STATE_CONTRAST_READY;
+        } else {
+            params.state = CS_STATE_NEED_PASS1;
+        }
+    } else if (pc.mode == 2u) {
+        int skip = int(pc.tileSkip), n = int(pc.tileSize);
+        int minX = pc.gridW > 0u ? int(idx % pc.gridW) * skip : 0;
+        int minY = pc.gridW > 0u ? int(idx / pc.gridW) * skip : 0;
+        int y0 = max(minY - skip, 0), x0 = max(minX - skip, 0);
+        int y1 = min(minY + skip, pc.size.y - n), x1 = min(minX + skip, pc.size.x - n);
+        params.refineY0 = y0;
+        params.refineX0 = x0;
+        params.refineH = y1 - y0 + 1;
+        params.refineW = x1 - x0 + 1;
+        params.state = CS_STATE_NEED_REFINE;
+    } else {
+        if (var <= 8.0) {
+            int w = max(params.refineW, 1);
+            params.tileX = params.refineX0 + int(idx) % w;
+            params.tileY = params.refineY0 + int(idx) / w;
+            params.tileSz = pc.tileSize;
+            params.minVar = var;
+            params.state = CS_STATE_CONTRAST_READY;
+        } else {
+            params.contrast = 0.0;
+            params.state = CS_STATE_DONE;
+        }
+    }
+}

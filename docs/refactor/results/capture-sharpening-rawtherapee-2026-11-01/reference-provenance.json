@@ -1,0 +1,28 @@
+{
+  "revision": "b2ee504c47e5e6d5e054395aa12bf1fe43bd1c3c",
+  "files": {
+    "rtengine/capturesharpening.cc": "1c8ed447061d0e6c8fd9ded0a8ce08905a2491870cd36aae71c369ac51d0d84e",
+    "rtengine/rt_algo.cc": "1bcc12953f41609707868d528d9e6d26d262a2d00f51233cc30809c3750a57c5",
+    "rtengine/boxblur.cc": "2ec518170b6696c0f277193aef3b5a404672e530c5c2ab0b79f89b9aa5fd9edf",
+    "rtengine/gauss.cc": "b3dec7585a66298aa2c5755595740845012e746c7a5e264b648e1efe571ec394",
+    "rtengine/color.cc": "4a5a468f4ff5803e08556484f8b11ecc9acda966800eaa03843d3cd025263730",
+    "rtengine/color.h": "782d1191a696a225c07eeee3c1ef32b182b6565c2b8acfd96ec0a8d1906c1fa4",
+    "rtengine/LUT.h": "a98596cdea2f0c59821e24436b6cbfc6872eec5080d58765404e647d6f22b881",
+    "rtengine/params/raw.cc": "9c964e11d8d92b88425af94a12ec79875875b5d43dc02db24ec2a4144249802a",
+    "rtgui/tools/pdsharpening.cc": "30166478ddde6ffbb6b9324bceb1a2bf5fcd6aa85c0f22c19de3c4c75d27f12b"
+  },
+  "harness_sha256": "1b91e79ac0d6dc35fd3ebe4cd5fa543e6d99494ec8ac010dbbf17f107a28d92c",
+  "compiler_flags": [
+    "-std=c++17",
+    "-O2",
+    "-ffp-contract=off",
+    "-fno-fast-math"
+  ],
+  "limitations": [
+    "scalar, single thread, no SIMD/OpenMP",
+    "Bayer path only",
+    "pre/post sharpening noise options disabled",
+    "Lab helper reconstructed from RT LUT source; out-of-range cube root uses std::cbrt rather than SLEEF",
+    "primary results use unmodified RT scratch behaviour; ring-reset variant is a separate diagnostic"
+  ]
+}

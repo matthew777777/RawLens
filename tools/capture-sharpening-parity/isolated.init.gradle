@@ -1,0 +1,8 @@
+// Install parity tests beside the daily app, preserving its signing key and data.
+gradle.beforeProject { p ->
+    p.pluginManager.withPlugin('com.android.application') {
+        p.extensions.getByName('androidComponents').finalizeDsl { dsl ->
+            dsl.defaultConfig.applicationId = 'com.matthew.rawlens.capsharpprobe'
+        }
+    }
+}

@@ -147,6 +147,7 @@ class Gles31MergedDevelopProcessor(context: Context) {
     fun <T> develop(
         input: MergedTextureJpegInput,
         settings: RawDevelopmentSettings = RawDevelopmentSettings(),
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         val startedAt = SystemClock.elapsedRealtime()
@@ -198,13 +199,15 @@ class Gles31MergedDevelopProcessor(context: Context) {
             GLES31.glUniform1f(location(prog, "u_denoise_blend_max"), blendMax)
             GLES31.glUniform1f(location(prog, "u_rc_normalizer"), input.acceptedFrames.toFloat())
             GLES31.glUniform1i(location(prog, "u_denoise_enabled"), if (denoiseOn) 1 else 0)
+            GLES31.glUniform1i(location(prog, "u_camera_linear"), if (cameraLinear) 1 else 0)
             GLES31.glDispatchCompute(
                 (input.crop.width + 7) / 8, (input.crop.height + 7) / 8, 1
             )
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
             checkGl("merged develop dispatch")
             val result = consume(
-                AmazeGpuOutput(outTexture[0], input.crop.width, input.crop.height, AmazeTextureFormat.RGBA16F)
+                AmazeGpuOutput(outTexture[0], input.crop.width, input.crop.height, AmazeTextureFormat.RGBA16F,
+                    colorDomain = if (cameraLinear) AmazeColorDomain.CAMERA_LINEAR else AmazeColorDomain.ACESCG)
             )
             Log.i(
                 LOG_TAG,

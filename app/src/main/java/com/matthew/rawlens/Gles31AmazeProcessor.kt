@@ -468,6 +468,7 @@ class Gles31AmazeProcessor(
         height: Int,
         cameraToAcescgColumnMajor: FloatArray,
         cameraWhiteNormalized: FloatArray,
+        cameraLinear: Boolean = false,
         consume: (AmazeGpuOutput) -> T
     ): T {
         require(width >= 2 && height >= 2) { "Sharp RGB needs positive dimensions" }
@@ -510,7 +511,7 @@ class Gles31AmazeProcessor(
                     GLES31.glUniform1i(
                         GLES31.glGetUniformLocation(program, "u_rgb").also {
                             check(it >= 0) { "rcd_final uniform 'u_rgb' is missing" }
-                        }, 0
+                        }, if (cameraLinear) 1 else 0
                     )
                     GLES31.glUniform2i(
                         GLES31.glGetUniformLocation(program, "u_outsize").also {
@@ -533,7 +534,7 @@ class Gles31AmazeProcessor(
                     GLES31.glUniform1i(
                         GLES31.glGetUniformLocation(program, "u_camera_linear").also {
                             check(it >= 0) { "rcd_final uniform 'u_camera_linear' is missing" }
-                        }, 0
+                        }, if (cameraLinear) 1 else 0
                     )
                     GLES31.glBindImageTexture(
                         0, output.id, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F
@@ -548,7 +549,7 @@ class Gles31AmazeProcessor(
                     consume(
                         AmazeGpuOutput(
                             output.id, width, height, AmazeTextureFormat.RGBA16F,
-                            colorDomain = AmazeColorDomain.ACESCG
+                            colorDomain = if (cameraLinear) AmazeColorDomain.CAMERA_LINEAR else AmazeColorDomain.ACESCG
                         )
                     )
                 } finally {
@@ -577,6 +578,12 @@ class Gles31AmazeProcessor(
         check(processingThreadId == Thread.currentThread().id) {
             "Half-float readback must stay on the AMaZE worker thread"
         }
+        return readbackHalfFloatCurrentContext(output)
+    }
+
+    /** Read the caller-owned current context before switching to the AMaZE worker context. */
+    internal fun readbackHalfFloatCurrentContext(output: AmazeGpuOutput): ByteBuffer {
+        require(output.internalFormat == AmazeTextureFormat.RGBA16F)
         val limits = queryLimits()
         check(limits.halfFloatColorBuffer) {
             "Half-float color buffers unsupported (${limits.versionString})"
@@ -643,6 +650,23 @@ class Gles31AmazeProcessor(
         } finally {
             session.textures.release(output)
             session.textures.release(input)
+        }
+    }
+
+    /** Cross-context bridge for the live merged-image renderer; restores the caller's context. */
+    internal fun <T> transformCameraLinearFromExternalContext(
+        camera: ByteBuffer, width: Int, height: Int, matrix: FloatArray,
+        consume: (AmazeGpuOutput) -> T
+    ): T {
+        val display = EGL14.eglGetCurrentDisplay()
+        val draw = EGL14.eglGetCurrentSurface(EGL14.EGL_DRAW)
+        val read = EGL14.eglGetCurrentSurface(EGL14.EGL_READ)
+        val context = EGL14.eglGetCurrentContext()
+        try {
+            processingSession().egl.makeCurrent()
+            return transformCameraLinear(camera, width, height, matrix, consume)
+        } finally {
+            check(EGL14.eglMakeCurrent(display, draw, read, context)) { "Could not restore merged EGL context" }
         }
     }
 
@@ -726,8 +750,8 @@ class Gles31AmazeProcessor(
         VfVulkan.setPipelineCachePathNative(
             VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "RCD vulkan init failed" }
-        val gradespv = appContext.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "RCD grade init failed" }
+        val gradespv = appContext.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "RCD grade init failed" }
         val rcdspv = appContext.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
         check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "RCD pipeline init failed" }
     }
@@ -839,6 +863,8 @@ class Gles31AmazeProcessor(
             result
         }
     }
+
+    internal fun makeProcessingContextCurrent() { processingSession?.egl?.makeCurrent() }
 
     private fun processingSession(): ProcessingSession {
         val threadId = Thread.currentThread().id

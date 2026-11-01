@@ -1,0 +1,39 @@
+#version 450
+// calcContrastThreshold (rt_algo.cc:177-235) on the tile chosen by the scan:
+// the smallest threshold c / 100 whose summed blend factor over the tile
+// interior is at most 1% of its pixels; result (c + 1) / 100.
+layout(local_size_x = 256) in;
+#include "cs_common.glsl"
+
+shared float contrasts[76 * 76];
+shared float partial[256];
+
+void main() {
+    if (params.state != CS_STATE_CONTRAST_READY) return;
+    uint lid = gl_LocalInvocationID.x;
+    ivec2 origin = ivec2(params.tileX, params.tileY);
+    int n = int(params.tileSz) - 4;
+    int count = n * n;
+    for (int i = int(lid); i < count; i += 256) contrasts[i] = contrastAt(origin + ivec2(2 + i % n, 2 + i / n));
+    barrier();
+    float limit = float(n * n) / 100.0;
+    int c = 1;
+    for (; c < 100; ++c) {
+        float threshold = float(c) / 100.0;
+        float s = 0.0;
+        for (int i = int(lid); i < count; i += 256) s += blendFactor(contrasts[i], threshold);
+        partial[lid] = s;
+        barrier();
+        for (uint k = 128u; k > 0u; k >>= 1) {
+            if (lid < k) partial[lid] += partial[lid + k];
+            barrier();
+        }
+        bool done = partial[0] <= limit;
+        barrier();
+        if (done) break;
+    }
+    if (lid == 0u) {
+        params.contrast = float(c + 1) / 100.0;
+        params.state = CS_STATE_DONE;
+    }
+}

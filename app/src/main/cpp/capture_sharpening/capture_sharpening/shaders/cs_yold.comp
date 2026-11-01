@@ -1,0 +1,13 @@
+#version 450
+// Original luminance Y (Color::RGB2Y in RT units) of the strip context rows,
+// row-major in scratch, for the deconvolution (the RGB image is rewritten in
+// place there).
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "cs_common.glsl"
+
+void main() {
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);
+    if (lp.x >= pc.size.x || lp.y >= pc.strip.y) return;
+    ivec2 p = lp + ivec2(0, pc.strip.x);
+    scratch[scratchRow(p)] = rtY(loadRt(p));
+}

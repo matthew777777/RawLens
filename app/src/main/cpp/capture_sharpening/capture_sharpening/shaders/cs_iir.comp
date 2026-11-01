@@ -1,0 +1,84 @@
+#version 450
+// Young-van Vliet recursive Gaussian with Triggs-Sdika boundaries
+// (gauss.cc:646-690 gaussHorizontal, 1121-1190 gaussVertical), one invocation
+// per line, run in place like RT's temp2 buffer (float here, double in RT).
+// mode 0: rows, on the transposed raw blend in scratch (line y holds its x
+//         samples at scratch[x * tStride + y]; adjacent invocations are adjacent y).
+// mode 1: columns: reads the row-blurred mask from blendImage, keeps the
+//         forward pass in scratch (row-major, now free), writes the result
+//         back to blendImage.
+layout(local_size_x = 64) in;
+#include "cs_common.glsl"
+
+float srcAt(uint line, int k) {
+    if (pc.mode == 0u) return scratch[uint(k) * pc.tStride + line];
+    return imageLoad(blendImage, ivec2(int(line), k)).r;
+}
+uint tmpIndex(uint line, int k) {
+    return pc.mode == 0u ? uint(k) * pc.tStride + line : uint(k) * uint(pc.size.x) + line;
+}
+
+void main() {
+    uint line = gl_GlobalInvocationID.x;
+    // Strip-local: pc.strip.y context rows.
+    uint lines = pc.mode == 0u ? uint(pc.strip.y) : uint(pc.size.x);
+    if (line >= lines) return;
+    int n = pc.mode == 0u ? pc.size.x : pc.strip.y;
+    float B = params.yvvB, b1 = params.yvvB1, b2 = params.yvvB2, b3 = params.yvvB3;
+
+    // Forward pass; mode 0 overwrites its input in place (each sample is read
+    // before it is replaced), mode 1 writes the scratch.
+    float s0 = srcAt(line, 0);
+    float t0 = B * s0 + b1 * s0 + b2 * s0 + b3 * s0;
+    float s1 = srcAt(line, 1);
+    float t1 = B * s1 + b1 * t0 + b2 * s0 + b3 * s0;
+    float s2 = srcAt(line, 2);
+    float t2 = B * s2 + b1 * t1 + b2 * t0 + b3 * s0;
+    scratch[tmpIndex(line, 0)] = t0;
+    scratch[tmpIndex(line, 1)] = t1;
+    scratch[tmpIndex(line, 2)] = t2;
+    float last = s2;
+    float tm3 = t0, tm2 = t1, tm1 = t2;
+    for (int j = 3; j < n; ++j) {
+        float s = srcAt(line, j);
+        float t = B * s + b1 * tm1 + b2 * tm2 + b3 * tm3;
+        scratch[tmpIndex(line, j)] = t;
+        tm3 = tm2;
+        tm2 = tm1;
+        tm1 = t;
+        last = s;
+    }
+    // Boundary at the far end (Triggs-Sdika), from the last input sample.
+    float u0 = tm1 - last, u1 = tm2 - last, u2 = tm3 - last;
+    float tWm1 = last + params.yvvM[0] * u0 + params.yvvM[1] * u1 + params.yvvM[2] * u2;
+    float tW = last + params.yvvM[3] * u0 + params.yvvM[4] * u1 + params.yvvM[5] * u2;
+    float tWp1 = last + params.yvvM[6] * u0 + params.yvvM[7] * u1 + params.yvvM[8] * u2;
+    float r1 = tWm1;
+    float r2 = B * tm2 + b1 * r1 + b2 * tW + b3 * tWp1;
+    float r3 = B * tm3 + b1 * r2 + b2 * r1 + b3 * tW;
+    // Backward pass: r[j] = B t[j] + b1 r[j+1] + b2 r[j+2] + b3 r[j+3].
+    float a1 = r3, a2 = r2, a3 = r1;  // r[j+1], r[j+2], r[j+3]
+    if (pc.mode == 0u) {
+        scratch[tmpIndex(line, n - 1)] = r1;
+        scratch[tmpIndex(line, n - 2)] = r2;
+        scratch[tmpIndex(line, n - 3)] = r3;
+        for (int j = n - 4; j >= 0; --j) {
+            float r = B * scratch[tmpIndex(line, j)] + b1 * a1 + b2 * a2 + b3 * a3;
+            scratch[tmpIndex(line, j)] = r;
+            a3 = a2;
+            a2 = a1;
+            a1 = r;
+        }
+    } else {
+        imageStore(blendImage, ivec2(int(line), n - 1), vec4(r1));
+        imageStore(blendImage, ivec2(int(line), n - 2), vec4(r2));
+        imageStore(blendImage, ivec2(int(line), n - 3), vec4(r3));
+        for (int j = n - 4; j >= 0; --j) {
+            float r = B * scratch[tmpIndex(line, j)] + b1 * a1 + b2 * a2 + b3 * a3;
+            imageStore(blendImage, ivec2(int(line), j), vec4(r));
+            a3 = a2;
+            a2 = a1;
+            a1 = r;
+        }
+    }
+}

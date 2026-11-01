@@ -1,0 +1,261 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// CaptureDeconvSharpening (capturesharpening.cc:299-534): Richardson-Lucy
+// deconvolution of Y with a Gaussian PSF on 32x32 tiles plus a border of
+// 5/7/8 pixels, blended into Y by the blend mask, then applied to RGB as the
+// ratio Ynew / Yold, in place. One workgroup per tile, all state in shared
+// memory. RT processes tiles in row-major order and the last tile of each
+// row/column is shifted inward, overlapping its predecessors, which it blends
+// over their result. pc.mode selects one of four phases recorded in that
+// dependency order: 0 interior tiles, 1 row-end tiles, 2 bottom-row tiles,
+// 3 the corner tile; tiles within a phase never overlap. Difference from RT:
+// the scratch ring is reset per tile (RT keeps it per thread, which only
+// matters with a corner offset).
+//
+// KN (specialization constant) fixes the kernel size: the convolutions then
+// run register-blocked (each invocation computes an RB x CB block, loading
+// every source row segment once). The host records one pipeline per
+// size and the select pass writes indirect dispatch sizes so only the size
+// the GPU-side radius picked gets workgroups. KN = 0 is the generic path for
+// the corner offset, where the size varies per tile.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(constant_id = 0) const int KN = 0;
+const int KA = KN > 0 ? KN : 1;  // array size (the generic variant never uses it)
+#include "cs_common.glsl"
+// Outputs per invocation: RB rows x CB columns. 4x1 left half the 256
+// invocations idle in a second round (38 x 10 items); 8x1 and skipping the
+// zero disc-corner taps were slower on Adreno 840.
+#define RB 4
+#define CB 2
+
+#define TILE 32
+#define MAXF 48
+
+shared float lum0S[MAXF * MAXF];  // original Y of the window
+shared float tmpI[MAXF * MAXF];
+shared float tmpD[MAXF * MAXF];
+// Early-stop threshold per core pixel: Yold * blend * 0.5 (RT iterCheck).
+shared float checkThr[TILE * TILE];
+shared float kernelW[13 * 13];
+shared uint flagBits;
+// Stop flags rotate over three slots: slot it % 3 is set during iteration it's
+// multiply step and read after its barrier; slot (it + 1) % 3 is cleared
+// during iteration it's divide step, two barriers after its last read.
+shared uint stopFlag[3];
+
+float yOldAt(ivec2 p) { return scratch[scratchRow(p)]; }
+
+// Original Y of window index idx. Reading it from the global scratch instead
+// (to halve shared memory for occupancy) was 7-8% slower on Adreno 840.
+float lum0(int idx) { return lum0S[idx]; }
+
+// compute{3,5,7,9,13}x..kernel2 (boxblur.cc:32-136): Gaussian truncated to a
+// disc whose radius depends on the kernel size, normalized.
+void buildKernel(float sigma, int n) {
+    uint lid = gl_LocalInvocationIndex;
+    int r = n / 2;
+    float limit = n == 13 ? 36.0 : (n == 9 ? 20.25 : (n == 7 ? 11.9025 : (n == 5 ? 6.3504 : 1e9)));
+    float temp = -2.0 * sigma * sigma;
+    if (lid < uint(n * n)) {
+        int dy = int(lid) / n - r, dx = int(lid) % n - r;
+        float d = float(dx * dx + dy * dy);
+        kernelW[lid] = d <= limit ? exp(d / temp) : 0.0;
+    }
+    barrier();
+    if (lid == 0u) {
+        float s = 0.0;
+        for (int i = 0; i < n * n; ++i) s += kernelW[i];
+        for (int i = 0; i < n * n; ++i) kernelW[i] /= s;
+    }
+    barrier();
+}
+
+float convolve(bool fromTmpI, int x, int y, int n, int F) {
+    int r = n / 2;
+    float acc = 0.0;
+    for (int dy = -r; dy <= r; ++dy) {
+        int row = (y + dy) * F + x;
+        int krow = (dy + r) * n + r;
+        for (int dx = -r; dx <= r; ++dx) {
+            float w = kernelW[krow + dx];
+            acc += w * (fromTmpI ? tmpI[row + dx] : tmpD[row + dx]);
+        }
+    }
+    return acc;
+}
+
+// One Richardson-Lucy half step on the interior with the fixed KN kernel:
+// divide: tmpD = lum0 / max(G (x) tmpI, 1e-5); else tmpI *= G (x) tmpD.
+// The multiply step also raises stopFlag[slot] when a core pixel falls below
+// its threshold (check = iteration check enabled and not the last iteration).
+void blockedStep(const bool divide, int F, int border, bool check, uint slot) {
+    const int r = KN / 2;
+    const int inner = F - 2 * r;
+    const int blocksX = (inner + CB - 1) / CB;
+    const int blocksY = (inner + RB - 1) / RB;
+    for (uint k = gl_LocalInvocationIndex; k < uint(blocksX * blocksY); k += 256u) {
+        int x0 = r + (int(k) % blocksX) * CB;
+        int y0 = r + (int(k) / blocksX) * RB;
+        float acc[RB][CB];
+        [[unroll]] for (int o = 0; o < RB; ++o)
+            [[unroll]] for (int c = 0; c < CB; ++c) acc[o][c] = 0.0;
+        [[unroll]] for (int sy = 0; sy < RB + 2 * r; ++sy) {
+            int row = y0 - r + sy;
+            if (row < F) {
+                // Source segment for CB adjacent outputs; columns past the
+                // window only feed outputs that are not stored.
+                float v[KA + CB - 1];
+                int base = row * F + x0 - r;
+                [[unroll]] for (int i = 0; i < KN + CB - 1; ++i) {
+                    bool inside = x0 - r + i < F;
+                    v[i] = inside ? (divide ? tmpI[base + i] : tmpD[base + i]) : 0.0;
+                }
+                [[unroll]] for (int o = 0; o < RB; ++o) {
+                    int dy = sy - o;
+                    if (dy >= 0 && dy < KN) {
+                        [[unroll]] for (int i = 0; i < KN; ++i) {
+                            float w = kernelW[dy * KN + i];
+                            [[unroll]] for (int c = 0; c < CB; ++c) acc[o][c] += w * v[i + c];
+                        }
+                    }
+                }
+            }
+        }
+        [[unroll]] for (int o = 0; o < RB; ++o) {
+            int y = y0 + o;
+            [[unroll]] for (int c = 0; c < CB; ++c) {
+                int x = x0 + c;
+                if (y < F - r && x < F - r) {
+                    int idx = y * F + x;
+                    if (divide) {
+                        tmpD[idx] = lum0(idx) / max(acc[o][c], 0.00001);
+                    } else {
+                        float t = tmpI[idx] * acc[o][c];
+                        tmpI[idx] = t;
+                        if (check && x >= border && y >= border && x < F - border && y < F - border &&
+                            t < checkThr[(y - border) * TILE + (x - border)])
+                            stopFlag[slot] = 1u;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void main() {
+    uint lid = gl_LocalInvocationIndex;
+    const int W = pc.size.x, H = pc.size.y;
+    const float sigma = params.sigma;
+    const bool fixedKernel = pc.radiusOffset == 0.0;
+    int n;
+    float sigmaTile = sigma;
+    if (fixedKernel) {
+        n = sigma < 0.6 ? 3 : (sigma <= 0.84 ? 5 : (sigma <= 1.15 ? 7 : (sigma <= 1.5 ? 9 : 13)));
+        if (KN != 0 && n != KN) return;  // indirect sizes already exclude this variant
+    } else {
+        n = 0;  // per tile below
+    }
+    int border = (fixedKernel && n <= 7) ? (pc.iterations <= 30u ? 5 : 7) : 8;
+    int F = TILE + 2 * border;
+    if (W < F || H < F) return;
+    // pc.gridH: first tile row of this band; pc.gridW: tile rows in this
+    // dispatch (the band, or the strip for the edge phases).
+    if (gl_WorkGroupID.y >= pc.gridW) return;
+    int i = border + (int(gl_WorkGroupID.y) + int(pc.gridH)) * TILE;  // tile row (RT i)
+    int j = border + int(gl_WorkGroupID.x) * TILE;  // tile column (RT j)
+    if (i >= H - border || j >= W - border) return;
+
+    if (!fixedKernel) {
+        float cornerRadius = min(2.0, sigma + pc.radiusOffset);
+        float cornerDistance = sqrt(float(W) * 0.5 * float(W) * 0.5 + float(H) * 0.5 * float(H) * 0.5);
+        float distanceFactor = (cornerRadius - sigma) / cornerDistance;
+        int dyc = i + TILE / 2 - H / 2, dxc = j + TILE / 2 - W / 2;
+        float distance = sqrt(float(dyc * dyc + dxc * dxc));
+        sigmaTile = sigma + distanceFactor * distance;
+        // Below 0.4 RT runs no iterations but still blends the unsharpened Y
+        // over earlier tiles.
+        n = sigmaTile < 0.4 ? 0 : (sigmaTile > 1.5 ? 13 : (sigmaTile > 1.15 ? 9 : (sigmaTile > 0.84 ? 7 : 5)));
+    }
+
+    const bool endOfCol = i + TILE + border >= H;
+    const bool endOfRow = j + TILE + border >= W;
+    if (uint(endOfRow ? 1 : 0) + uint(endOfCol ? 2 : 0) != pc.mode) return;
+    const ivec2 origin = ivec2(endOfRow ? W - F : j - border, endOfCol ? H - F : i - border);
+
+    // Load the window; tmpI starts as Y, the divide scratch as 1.
+    for (uint k = lid; k < uint(F * F); k += 256u) {
+        ivec2 w = ivec2(int(k) % F, int(k) / F);
+        float y = yOldAt(origin + w);
+        lum0S[k] = y;
+        tmpI[k] = y;
+        tmpD[k] = 1.0;
+    }
+    if (lid == 0u) {
+        flagBits = 0u;
+        stopFlag[0] = stopFlag[1] = stopFlag[2] = 0u;
+    }
+    barrier();
+    // Blend mask over the RT core (window [border, F - border)).
+    for (uint k = lid; k < uint(TILE * TILE); k += 256u) {
+        ivec2 c = ivec2(int(k) % TILE, int(k) / TILE);
+        float b = blendAt(origin + ivec2(border) + c);
+        checkThr[k] = yOldAt(origin + ivec2(border) + c) * b * 0.5;
+        atomicMax(flagBits, floatBitsToUint(max(b, 0.0)));
+    }
+    barrier();
+    if (uintBitsToFloat(flagBits) < 0.01) return;  // RT skips tiles below minBlend
+    if (n > 0) buildKernel(sigmaTile, n);
+
+    const int r = n / 2;
+    const int inner = F - 2 * r;
+    const bool iterCheck = (pc.flags & CS_FLAG_ITER_CHECK) != 0u;
+    const int iterations = n > 0 ? int(pc.iterations) : 0;
+    for (int it = 0; it < iterations; ++it) {
+        const bool check = iterCheck && it < iterations - 1;
+        const uint slot = uint(it) % 3u;
+        if (lid == 0u) stopFlag[(slot + 1u) % 3u] = 0u;
+        if (KN != 0) {
+            blockedStep(true, F, border, false, slot);
+            barrier();
+            blockedStep(false, F, border, check, slot);
+            barrier();
+        } else {
+            // tmpD = lum0 / max(G (x) tmpI, 1e-5) on the interior.
+            for (uint k = lid; k < uint(inner * inner); k += 256u) {
+                int x = r + int(k) % inner, y = r + int(k) / inner;
+                tmpD[y * F + x] = lum0(y * F + x) / max(convolve(true, x, y, n, F), 0.00001);
+            }
+            barrier();
+            // tmpI *= G (x) tmpD on the interior.
+            for (uint k = lid; k < uint(inner * inner); k += 256u) {
+                int x = r + int(k) % inner, y = r + int(k) / inner;
+                tmpI[y * F + x] *= convolve(false, x, y, n, F);
+            }
+            barrier();
+            if (check) {
+                // Stop once any core pixel falls below half its blended original.
+                for (uint k = lid; k < uint(TILE * TILE); k += 256u) {
+                    int x = border + int(k) % TILE, y = border + int(k) / TILE;
+                    if (tmpI[y * F + x] < checkThr[k]) stopFlag[slot] = 1u;
+                }
+                barrier();
+            }
+        }
+        if (check && stopFlag[slot] != 0u) break;
+    }
+
+    // Blend the core into the current luminance (Y of the image as earlier
+    // phases left it) and rescale RGB by the luminance ratio. Applied over an
+    // earlier tile this chains to RGB_orig * Ynew / Yold, as in RT.
+    for (uint k = lid; k < uint(TILE * TILE); k += 256u) {
+        ivec2 c = ivec2(int(k) % TILE, int(k) / TILE);
+        ivec2 w = c + ivec2(border);
+        ivec2 g = origin + w;
+        vec4 px = imageLoad(rgbImage, g);
+        float yCur = pc.mode == 0u ? lum0(w.y * F + w.x) : rtY(toRt(px.rgb));
+        float b = blendAt(g);
+        float yNew = b * (tmpI[w.y * F + w.x] - yCur) + yCur;
+        float factor = yNew / max(yCur, 0.00001);
+        imageStore(rgbImage, g, vec4(px.rgb * factor, px.a));
+    }
+}
