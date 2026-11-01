@@ -54,3 +54,44 @@ pages, pull-request refs and other third-party copies are separate from normal
 Git refs. Do not claim they have been erased by a force push. Any removal of
 issue attachments or GitHub caches requires a separately reviewed action/support
 request. No issue reply or claim of resolution has been sent by this task.
+
+## History verification and remaining release gates
+
+The rewrite was rehearsed in an isolated mirror, then applied to every local
+ref. Both runs produced the same cleaned branch commit/tree. The current source
+tree remained byte-identical to the validated removal commit. Historical scans
+of 15,706 reachable objects found no disputed shader helper signatures, removed
+file paths, or source calls/state for the deleted native wrapper. Documentation
+may name retired paths as an inventory. No shader implementation is preserved
+in that documentation. See [rewritten refs](results/issue1-removal-2026-11-01/rewritten-refs.json)
+and [history scan](results/issue1-removal-2026-11-01/history-verification.json).
+
+Affected local refs: the active branch, two local backup branches, and tags
+2.0.0/2.0.1/2.0.2/2.0.27. Older refs without the disputed import were unchanged.
+The two original introducing/tuning commit descriptions were corrected to
+withdraw the unsupported license claim and explain removal. Historical
+intermediate builds were not all reconstructed or tested. GitHub Actions
+reported zero downloadable artifacts. Remote updates use an atomic SSH push
+with explicit expected-old-ref leases; no private backup branch is published.
+
+An isolated Xiaomi foreground MHC recording test was attempted. Compilation,
+recording and prior pipeline assertions proceeded, but its final muxed-frame
+count assertion failed. Hardware acceptance is therefore incomplete. Further
+device testing was stopped at the user's request. The failure is retained in
+[the initial test report](results/issue1-removal-2026-11-01/initial-device-smoke-failure.txt).
+It is not reported as a passing recording check or a performance result.
+
+The new cleaned release target is 2.0.68 (versionCode 2068). Build with the
+existing production signing key and `-PfreezeVersion`, verify the signer and
+package contents, and upload fresh APKs/mapping to the new draft before public
+publication. Do not reuse old APKs or debug-key verification candidates. The
+user will perform production signing/upload; no production signing credentials
+were provided to this task.
+
+Rewriting advertised refs cannot certify deletion of GitHub caches, previous
+clones, forks or issue attachments. An archive was attached in the earlier
+issue response; changing Git refs does not remove that hosted upload. A support
+request/evidence inventory is prepared privately. GitHub's sensitive-data cleanup
+policy does not promise removal of non-sensitive copyright-disputed material:
+https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository
+The issue is not declared resolved by these technical actions.

@@ -1,0 +1,23 @@
+
+com.matthew.rawlens.EncodedVideoRecordDeviceTest:.
+Error in recordMain10Mp4(com.matthew.rawlens.EncodedVideoRecordDeviceTest):
+java.lang.AssertionError: [mhc-single] no muxed video
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.validateMp4(EncodedVideoRecordDeviceTest.kt:362)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:267)
+
+
+Time: 14.063
+There was 1 failure:
+1) recordMain10Mp4(com.matthew.rawlens.EncodedVideoRecordDeviceTest)
+java.lang.AssertionError: [mhc-single] no muxed video
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.validateMp4(EncodedVideoRecordDeviceTest.kt:362)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:267)
+
+FAILURES!!!
+Tests run: 2,  Failures: 1
+
+

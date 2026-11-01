@@ -1,0 +1,37 @@
+[
+  {
+    "ref": "refs/heads/backup/2.0-before-final-cadence-order",
+    "old": "2e64c063648c05112de96c0474ba26156eb1c263",
+    "new": "f5c2de968e23994319c348406a8432acfeb7ba32"
+  },
+  {
+    "ref": "refs/heads/backup/pre-rotate-rcd",
+    "old": "ab856fa3bcc5dea7327998db962b953989a8cb8f",
+    "new": "2c16554e4732b72383bec8a2ae02b0d5f5bc4f9f"
+  },
+  {
+    "ref": "refs/heads/refactor/2.0",
+    "old": "f45953f34d67db06ec3b6a742c92c0bcb1635504",
+    "new": "c7ae9a747d83a1d7574c320ea160b7dc16ef3b2d"
+  },
+  {
+    "ref": "refs/tags/2.0.0",
+    "old": "3b9c591f899219e34da333fc1d9f54fd2f2f44e2",
+    "new": "f16d74efe2fb5cd48b9c86dd99a2df62059cab0d"
+  },
+  {
+    "ref": "refs/tags/2.0.1",
+    "old": "959b2723a131ce6b69fc063d1e356bd495b7b91f",
+    "new": "b6f3a189ddcbe00d7cc997832593a53feeb10d54"
+  },
+  {
+    "ref": "refs/tags/2.0.2",
+    "old": "cb1f496b41cca3cf1ecb3474a9884510dbab1911",
+    "new": "cb88c18eec6859b5382a5b3a3a731f3a81d7d5d4"
+  },
+  {
+    "ref": "refs/tags/2.0.27",
+    "old": "54b5d1db542b980a9ba6e80031d729ff82588c0c",
+    "new": "566160dd2c348501740f3a058b4ca680956fef91"
+  }
+]
