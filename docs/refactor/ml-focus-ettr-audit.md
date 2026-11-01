@@ -1,5 +1,7 @@
 # F14 / F15: Magic Lantern source audit (2026-10-25)
 
+The peaking section below is historical. The live/RAW-recording detector was replaced on 2026-10-31; see [current rework and headless evidence](focus-peaking-rework.md). ETTR findings remain separate.
+
 Source review began on 2026-10-25; connected-device acceptance was performed
 on 2026-10-25/26. The measurements below cover the connected Redmi 25080RABDG,
 Android 16 / API 36, camera 0, RAW16 4080x3060. They do not establish support
@@ -35,8 +37,8 @@ All ML files were downloaded and read at commit
 | No peaking blink selector in these settings or focus_found_pixel; blinking comment elsewhere describes zebra palette flags | Static overlay | Keep; do not invent an ML blink requirement. |
 | LiveView scan every 3 rows / 2 columns, initial threshold guessing up to 50 passes | 128 columns, 24..96 rows, 8x8 sensor patches, 250 ms throttle in LiveScopes | Intentional CPU-cost/coverage tradeoff; MF pull responsiveness must be measured at record resolution. |
 | No Halide path | scope_meter generator used **0.5**, Kotlin **0.65** | Fixed native generator and independent scalar check to 0.65; regenerated all four checked-in ABI archives. This is a real implementation disagreement, not an ML difference. |
-| LiveView peaking continues while focusing | Recording transfers the camera from RawCameraController to DirectLogRecorder / RawVideoRecorder | Fixed missing RAW peaking fan-out: RecordingFocusPeaking borrows at most one image, samples off the camera/encoder threads at the shared 250 ms cadence, invalidates pending output on AF, and drains before reader teardown. MainActivity shows/clears the overlay during recording. |
-| Overlay follows displayed picture | Direct-Log monitor fits a cropped sensor region | Carry the sensor crop with the mask; monitorRects uses the same VfAspectFit geometry as the monitor, including rotation/mirror, and clips dots out of letterboxes. Overlay is stacked above both preview surfaces. |
+| LiveView peaking continues while focusing | Recording transfers the camera from RawCameraController to EncodedVideoRecorder / RawVideoRecorder | Fixed missing RAW peaking fan-out: RecordingFocusPeaking borrows at most one image, samples off the camera/encoder threads at the shared 250 ms cadence, invalidates pending output on AF, and drains before reader teardown. MainActivity shows/clears the overlay during recording. |
+| Overlay follows displayed picture | Encoded Video monitor fits a cropped sensor region | Carry the sensor crop with the mask; monitorRects uses the same VfAspectFit geometry as the monitor, including rotation/mirror, and clips dots out of letterboxes. Overlay is stacked above both preview surfaces. |
 
 The Halide path and Kotlin fallback share the energy definition and Kotlin mask
 postprocessing. The separate monitor library's display-luma Sobel/Laplacian
@@ -127,7 +129,7 @@ RAW measurements: [current sweep](results/f14-f15-2026-10-26/raw-sweep.txt),
 ### Recording peaking
 
 Recording checks use the full 4080x3060 RAW source, then exercise the
-available Direct-Log encode resolutions. They pull MF through 0 / 0.5 / 5
+available Encoded Video encode resolutions. They pull MF through 0 / 0.5 / 5
 diopters, require new mask callbacks after each change, switch to AF and
 require a clear with no stale re-publication, return to MF, stop and assert
 zero remaining RAW leases. Baseline and peaking-enabled frame rates are

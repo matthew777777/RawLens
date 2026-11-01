@@ -54,7 +54,12 @@ data class FocusPeakingFrame(
     val sensorWidth: Int = 0,
     val sensorHeight: Int = 0,
     /** Recording monitor sensor crop [left, top, width, height], or full-frame VF. */
-    val monitorCrop: IntArray? = null
+    val monitorCrop: IntArray? = null,
+    /** Optional normalized sensor XY for each cell, on its detected edge. */
+    val sensorPoints: FloatArray? = null,
+    val timestampNanos: Long = 0L,
+    val samplingNanos: Long = 0L,
+    val backend: String = "legacy"
 )
 
 /**
@@ -74,7 +79,7 @@ object FocusPeakingGeometry {
 
     /**
      * Full-sensor cover rectangle and visible clip for an aspect-fit cropped
-     * recording monitor. Uses the same fit as DirectLogPreviewView. All
+     * recording monitor. Uses the same fit as EncodedVideoPreviewView. All
      * coordinates are top-left view pixels, including rotated/mirrored crops.
      */
     internal fun monitorRects(frame: FocusPeakingFrame, width: Int, height: Int): Pair<FloatArray, IntArray>? =
@@ -124,54 +129,9 @@ object FocusPeakingGeometry {
     }
 }
 
-/**
- * F14 reference audit: docs/refactor/ml-focus-ettr-audit.md, Magic Lantern
- * src/zebra.c @ 142472e95054d73640f50789ac0fd66325499d82, calc_peak.
- * Intentional differences: RAW green squared-energy/ratio detector instead of
- * display-luma absolute Laplacian; fixed gates instead of ML's per-mille
- * occupancy servo; static user colour instead of global/local strength colours;
- * no display-filter, grayscale or blinking mode. Thresholds below are RawLens
- * tuning, not ML constants and not calibrated to sensor gain. High-ISO noise
- * can clear both gates; despeckle is a spatial heuristic, not a noise model.
- * Retained for existing-device parity; measured scene gates and remaining
- * platform limits are recorded in the audit.
- *
- * Samples sharpness from the sensor mosaic without demosaicing, on the same
- * repeating RAW stream (and ~4 Hz throttle) as the live histogram.
- *
- * Each grid cell measures HIGH-frequency energy at native pixel resolution: a
- * 4×4 green lattice (stride-2 inside one 8×8 Bayer patch at the cell center)
- * scored with the minimum of mean Tenengrad energy (gx²+gy² from central
- * differences) and mean squared Laplacian (second differences), gated on
- * their ratio ([combinedEnergy]). Tenengrad alone still answers at several
- * px of blur and dots smooth gradients, while the Laplacian answers ~14×
- * weaker at 1.5 px blur than in focus; the minimum keeps Tenengrad's noise
- * floor and recall but retires defocused edges and smooth ramps, and the
- * ratio retires mild blur the minimum still passes (sharp is ~1.0 at any
- * contrast, mild blur ~0.13). Gradients between downsampled cells cannot
- * work — at ~31 px
- * spacing any texture passes whether in focus or not — so the metric never
- * leaves native resolution. Green-only matches what the eye focuses on.
- *
- * Noise discipline: a black-mean floor gates pure-black cells, the threshold
- * is fixed (not gain-calibrated); a one-step wash guard
- * doubles the threshold past [WASH_FRACTION], and [despeckle] drops isolated
- * singles (sensor noise spikes; real edges are contiguous).
- *
- * Sharpness is decided per cell by the Laplacian/Tenengrad ratio
- * ([combinedEnergy]), which is contrast-invariant: a sharp step scores ~1.0
- * at any contrast, so dim-but-sharp texture dots without needing a bright
- * plane anywhere. An earlier design additionally lifted the threshold to a
- * fraction of the frame's robust peak so a sharp plane would suppress its
- * softer background — but that re-introduces the contrast-confounding the
- * ratio exists to remove: with a bright plane present, dim-but-sharp
- * texture fell below the lifted gate while bright mild-blur still cleared
- * it (dots on the blur, none on the sharp texture — the laptop-scene
- * inversion). The gross-blur background the peak gate was built for
- * already scores ratio ~0.1 and dies in [combinedEnergy], so the peak gate
- * only ever acted on mild blur, where the ratio decides more fairly.
- */
-object RawFocusPeakingSampler {
+/** Historical native scope-filter parity reference. Not used for live/record peaking.
+ * Kept until the fused scope ABI's legacy focus outputs are removed or regenerated. */
+internal object LegacyScopeFocusSampler {
     /** Grid columns: dense enough that sharp areas read as sand, not sparse dots. */
     const val COLS = 128
     const val MIN_ROWS = 24

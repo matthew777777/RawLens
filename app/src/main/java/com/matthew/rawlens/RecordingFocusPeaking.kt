@@ -2,20 +2,17 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureResult
 import android.media.Image
 import android.os.SystemClock
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * F14 recording handoff: same RAW detector as LiveScopes, at its 250 ms cadence.
- * One borrowed image at a time, no queue/copy and no sampling on the camera or
- * encoder thread. The recorder must adopt the image before offer and close this
- * sampler before closing its ImageReader. ML differences remain in FocusPeaking.kt.
- */
-internal class RecordingFocusPeaking : AutoCloseable {
-    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "record-peaking") }
+/** Bounded RAW peaking worker shared by photo and recording: one borrowed frame,
+ * no queue, no camera-thread scan, and generation-guarded delivery. */
+internal class RecordingFocusPeaking(threadName: String = "record-peaking") : AutoCloseable {
+    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, threadName) }
     private val busy = AtomicBoolean(false)
     @Volatile private var closed = false
     private var lastSampleMs = Long.MIN_VALUE
@@ -27,7 +24,9 @@ internal class RecordingFocusPeaking : AutoCloseable {
         characteristics: CameraCharacteristics,
         active: Boolean,
         publish: ((FocusPeakingFrame?) -> Unit)?,
-        monitorCrop: IntArray? = null
+        monitorCrop: IntArray? = null,
+        result: CaptureResult? = null,
+        levels: DngMetadataOverrides = DngMetadataOverrides()
     ) {
         if (closed || publish == null) return
         if (!active) {
@@ -46,14 +45,20 @@ internal class RecordingFocusPeaking : AutoCloseable {
         val sampleEpoch = epoch
         worker.execute {
             try {
-                val frame = RawFocusPeakingSampler.sample(image, characteristics)
+                val frame = RawFocusPeakingSampler.sample(image, characteristics, result, levels)
                 if (!closed && epoch == sampleEpoch && frame != null) publish(frame.copy(monitorCrop = monitorCrop))
             } catch (e: Exception) {
-                Log.w("RawLensCamera", "record peaking sample failed", e)
+                Log.w("RawLensCamera", "RAW peaking sample failed", e)
             } finally {
                 try { lease.close() } finally { busy.set(false) }
             }
         }
+    }
+
+    @Synchronized fun invalidate() {
+        epoch++
+        shown = false
+        lastSampleMs = Long.MIN_VALUE
     }
 
     @Synchronized override fun close() {
@@ -62,7 +67,7 @@ internal class RecordingFocusPeaking : AutoCloseable {
         // stop/start-failure teardown runs off the UI thread and must drain
         // the outstanding CPU reader before the recorder closes ImageReader.
         if (!worker.awaitTermination(3, TimeUnit.SECONDS)) {
-            Log.w("RawLensCamera", "record peaking worker still draining")
+            Log.w("RawLensCamera", "RAW peaking worker still draining")
         }
     }
 }

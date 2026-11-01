@@ -70,7 +70,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
         progressOverlay = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(getColor(R.color.surface))
             elevation = 32f
             isClickable = true
             isFocusableInTouchMode = true
@@ -100,7 +100,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
             overlay.requestFocus()
         }
     } else {
-        progressDialog = AlertDialog.Builder(this)
+        progressDialog = RawLensDialogBuilder(this)
             .setTitle("Finding RAW lenses")
             .setMessage("Checking every Camera2 ID for rear RAW support.\nThis usually takes a few seconds…")
             .setCancelable(true)
@@ -118,7 +118,7 @@ internal fun MainActivity.showLensDiscovery(firstRun: Boolean) {
                 // re-hides the bars via onWindowFocusChanged on dismiss).
                 // The deferred first-run consent fires as this alert
                 // leaves, so it never stacks over discovery either.
-                AlertDialog.Builder(this)
+                RawLensDialogBuilder(this)
                     .setTitle("No RAW lenses found")
                     .setMessage("The camera service did not expose a RAW-capable camera ID.")
                     .setPositiveButton("OK", null)
@@ -145,13 +145,10 @@ internal fun MainActivity.blockBackKey(view: View) {
 
 internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstRun: Boolean) {
     val selected = selectedLensIds()
-    val groups = groupByOptic(lenses)
-    val opticCount = groups.count { it.key != "unavailable" }
+    val groups = groupLenses(lenses)
+    val opticCount = groupByOptic(lenses).count { it.key != "unavailable" }
     val routeCount = groups.sumOf { it.lenses.size }
-    // Nothing is pre-checked, including on first launch: the user
-    // explicitly picks what they want. The Recommended button checks
-    // the suggested set in one tap.
-    val recommended = recommendedLensIds(lenses)
+    // Preserve saved choices; new routes remain unchecked.
     val checked = lenses.associate { lens ->
         lens.id to (lens.id in selected)
     }.toMutableMap()
@@ -168,7 +165,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         typeface = Typeface.DEFAULT_BOLD
     })
     container.addView(TextView(this).apply {
-        text = "One card per lens. Checked lenses appear in the viewfinder switcher, widest first."
+        text = "All discovered camera IDs. Checked entries appear in the viewfinder switcher, widest first."
         setTextColor(getColor(R.color.text_secondary))
         textSize = 12f
         setPadding(0, dp(4), 0, dp(8))
@@ -179,24 +176,9 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         setPadding(0, 0, 0, dp(8))
     }
     fun styleQuickButton(button: Button) {
-        button.background = getDrawable(R.drawable.control_chip)
-        button.setTextColor(getColor(R.color.text_primary))
-        button.textSize = 12f
-        button.isAllCaps = false
-        button.setTypeface(button.typeface, Typeface.BOLD)
-        button.letterSpacing = 0.02f
-        // Compact pill: single-line 12sp stays readable while the
-        // slimmer padding keeps secondary actions visually secondary.
-        button.setPadding(dp(12), dp(6), dp(12), dp(6))
-        button.minHeight = dp(36)
-        // One line everywhere: a wrapped label grows its button and the
-        // row next to it looks misaligned on narrow screens.
+        RawLensUi.styleButton(button)
         button.maxLines = 1
         button.ellipsize = android.text.TextUtils.TruncateAt.END
-    }
-    val useRecommended = Button(this).apply {
-        text = "Best"
-        styleQuickButton(this)
     }
     val selectAll = Button(this).apply {
         text = "All"
@@ -206,10 +188,8 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         text = "Clear"
         styleQuickButton(this)
     }
-    val recommendedParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
     val selectParams = LinearLayout.LayoutParams(0, wrapContent(), 1f).apply { marginEnd = dp(8) }
     val clearParams = LinearLayout.LayoutParams(0, wrapContent(), 1f)
-    quickRow.addView(useRecommended, recommendedParams)
     quickRow.addView(selectAll, selectParams)
     quickRow.addView(clear, clearParams)
     container.addView(quickRow)
@@ -267,18 +247,15 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         val values = checked.values
         selectAll.isEnabled = values.any { !it }
         clear.isEnabled = values.any { it }
-        useRecommended.isEnabled = checked.any { (it.value != (it.key in recommended)) }
         selectAll.alpha = if (selectAll.isEnabled) 1f else 0.5f
         clear.alpha = if (clear.isEnabled) 1f else 0.5f
-        useRecommended.alpha = if (useRecommended.isEnabled) 1f else 0.5f
     }
 
-    fun lensCard(lens: DiscoveredLens, recommendedId: String?): LinearLayout {
+    fun lensCard(lens: DiscoveredLens): LinearLayout {
         val dead = lens.verdict == LensVerdict.DEAD
-        val dimmed = lens.kind == LensRouteKind.UNAVAILABLE || dead
+        val dimmed = lens.kind != LensRouteKind.STANDALONE || dead
         val chip = when {
             dead -> "⚠ OPEN FAILED BEFORE"
-            lens.id == recommendedId -> "★ RECOMMENDED"
             else -> null
         }
         val card = LinearLayout(this).apply {
@@ -293,7 +270,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             layoutParams = cardParams
             alpha = if (dimmed) 0.72f else 1f
         }
-        val box = CheckBox(this).apply {
+        val box = SettingsCheckBox(this).apply {
             tag = lens.id
             isChecked = checked[lens.id] == true
             contentDescription = lens.label
@@ -328,7 +305,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
             textSize = 12f
             setPadding(0, dp(2), 0, 0)
         })
-        // One muted line: the route text already says direct/logical,
+        // One muted line: the route text already identifies physical versus logical,
         // so the kind chip only appears for the special states.
         val routeText = lens.route.ifEmpty { lens.kind.sectionTitle }
         textCol.addView(TextView(this).apply {
@@ -349,7 +326,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         val items = (listOf("Auto (RAW_SENSOR)") + formats).toTypedArray()
         val stored = rawFormatPreferenceStore.get(lens.id)
         val checked = stored?.let { formats.indexOf(it) + 1 }?.takeIf { it > 0 } ?: 0
-        AlertDialog.Builder(this)
+        RawLensDialogBuilder(this)
             .setTitle("RAW format · ID ${lens.id}")
             .setSingleChoiceItems(items, checked) { dialog, which ->
                 val picked = if (which == 0) null else formats[which - 1]
@@ -367,8 +344,10 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         val sizes = lens.rawSizes
         val items = (listOf("Auto (largest)") + sizes).toTypedArray()
         val stored = rawSizePreferenceStore.get(lens.id)
-        val checked = stored?.let { sizes.indexOf(it) + 1 }?.takeIf { it > 0 } ?: 0
-        AlertDialog.Builder(this)
+        val checked = stored?.let { wanted ->
+            sizes.indexOfFirst { RawSizePreferenceStore.normalizeSize(it) == wanted } + 1
+        }?.takeIf { it > 0 } ?: 0
+        RawLensDialogBuilder(this)
             .setTitle("RAW size · ID ${lens.id}")
             .setSingleChoiceItems(items, checked) { dialog, which ->
                 val picked = if (which == 0) null else sizes[which - 1]
@@ -384,24 +363,16 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
 
     var firstGroup = true
     groups.forEach { group ->
-        // ---- One card per physical lens ----
-        // No big header: the card title already names the lens, so the
-        // section only gets a small muted line. Same sizes everywhere.
         listBody.addView(TextView(this).apply {
-            text = group.subtitle
+            text = "${group.title}\n${group.subtitle}"
             setTextColor(getColor(R.color.text_muted))
             textSize = 12f
             setPadding(0, if (firstGroup) dp(4) else dp(12), 0, dp(6))
         })
         firstGroup = false
-        if (group.key == "unavailable") {
-            group.lenses.forEach { lens ->
-                listBody.addView(lensCard(lens, null))
-            }
-        } else {
-            val head = group.recommended
-            listBody.addView(lensCard(head, head.id))
-            if (group.lenses.any { it.sensorModeSwitch }) {
+        group.lenses.forEach { head ->
+            listBody.addView(lensCard(head))
+            if (head.sensorModeSwitch) {
                 listBody.addView(TextView(this).apply {
                     text = "Sensor-mode switch advertised here — special modes need a per-lens vendor key in Settings."
                     setTextColor(getColor(R.color.text_muted))
@@ -444,44 +415,16 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
                 formatRow.setOnClickListener { showRawFormatChoice(head, formatRow) }
                 listBody.addView(formatRow)
             }
-            if (group.alternates.isNotEmpty()) {
-                val alternateBody = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    visibility = View.GONE
-                }
-                group.alternates.forEach { lens ->
-                    alternateBody.addView(lensCard(lens, head.id))
-                }
-                val toggle = TextView(this).apply {
-                    text = "＋ ${group.alternates.size} more route${if (group.alternates.size == 1) "" else "s"} (same lens)"
-                    setTextColor(getColor(R.color.accent))
-                    textSize = 12f
-                    typeface = Typeface.DEFAULT_BOLD
-                    setPadding(0, 0, 0, dp(8))
-                }
-                toggle.setOnClickListener {
-                    val open = alternateBody.visibility != View.VISIBLE
-                    alternateBody.visibility = if (open) View.VISIBLE else View.GONE
-                    toggle.text = if (open) "－ hide extra routes"
-                        else "＋ ${group.alternates.size} more route${if (group.alternates.size == 1) "" else "s"} (same lens)"
-                }
-                listBody.addView(toggle)
-                listBody.addView(alternateBody)
-            }
         }
     }
     container.addView(listScroll)
     container.addView(TextView(this).apply {
-        text = "Tip: Recommended is the daily driver. Extra routes are fallbacks for missing lenses or special sensor modes."
+        text = "Use direct physical IDs first. Greyed routes remain selectable for features unavailable directly, such as Xiaomi sensor modes or zoom."
         setTextColor(getColor(R.color.text_muted))
         textSize = 11f
         setPadding(0, dp(8), 0, dp(4))
     })
 
-    useRecommended.setOnClickListener {
-        checkBoxes.forEach { it.isChecked = it.tag in recommended }
-        refreshQuickState()
-    }
     selectAll.setOnClickListener {
         checked.keys.forEach { checked[it] = true }
         checkBoxes.forEach { it.isChecked = true }
@@ -502,18 +445,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         container.setPadding(0, 0, 0, 0)
         fun bottomAction(label: String, primary: Boolean): Button = Button(this).apply {
             text = label
-            background = getDrawable(
-                if (primary) R.drawable.control_chip_active else R.drawable.control_chip
-            )
-            setTextColor(
-                getColor(if (primary) R.color.accent_dark else R.color.text_primary)
-            )
-            textSize = 13f
-            isAllCaps = false
-            setTypeface(typeface, Typeface.BOLD)
-            letterSpacing = 0.04f
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            minHeight = dp(48)
+            RawLensUi.styleButton(this, primary)
         }
         val saveButton = bottomAction("Save", primary = true)
         val defaultButton = bottomAction("Use default", primary = false)
@@ -528,7 +460,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         bottomBar.addView(saveButton, LinearLayout.LayoutParams(0, wrapContent(), 1f))
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(getColor(R.color.surface))
             elevation = 32f
             isClickable = true
             isFocusableInTouchMode = true
@@ -596,7 +528,7 @@ internal fun MainActivity.showLensSelection(lenses: List<DiscoveredLens>, firstR
         return
     }
 
-    val dialog = AlertDialog.Builder(this)
+    val dialog = RawLensDialogBuilder(this)
         .setTitle("Lens discovery")
         .setView(container)
         .setPositiveButton("Save", null)

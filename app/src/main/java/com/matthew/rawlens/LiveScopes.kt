@@ -56,7 +56,7 @@ internal class LiveScopes(
     private var lastScopeLogMs = 0L
     /** Focus-peaking master switch (default on); the auto-show policy gates delivery. */
     @Volatile private var peakingEnabled = initialPeakingEnabled
-    private var lastPeakingSampleMs = Long.MIN_VALUE
+    private val peakingWorker = RecordingFocusPeaking("photo-peaking")
     private var lastPeakingActivePublished = false
 
     /** The next RAW frame is sampled at once (MIN_VALUE sentinel, see RawHistogramThrottle). */
@@ -81,7 +81,7 @@ internal class LiveScopes(
 
     fun setPeakingEnabled(enabled: Boolean) {
         peakingEnabled = enabled
-        if (enabled) lastPeakingSampleMs = Long.MIN_VALUE
+        peakingWorker.invalidate()
         publishPeakingActiveIfChanged()
     }
 
@@ -102,7 +102,7 @@ internal class LiveScopes(
         val active = peakingActive()
         if (active == lastPeakingActivePublished) return
         lastPeakingActivePublished = active
-        if (active) lastPeakingSampleMs = Long.MIN_VALUE
+        peakingWorker.invalidate()
         Log.i(
             LOG_TAG,
             "Focus peaking ${if (active) "SHOWN" else "HIDDEN"} " +
@@ -112,16 +112,27 @@ internal class LiveScopes(
         host.onFocusPeakingActive(active)
     }
 
-    fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics) {
-        if (!peakingActive()) return
-        val now = SystemClock.elapsedRealtime()
-        // The MIN_VALUE sentinel means "sample immediately"; see RawHistogramThrottle.
-        if (!RawHistogramThrottle.shouldSample(now, lastPeakingSampleMs, FOCUS_PEAKING_INTERVAL_MS)) return
-        lastPeakingSampleMs = now
-        guard.run("focus-peaking") {
-            RawFocusPeakingSampler.sample(image, cameraCharacteristics)?.let(host::onFocusPeaking)
-        }
+    fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics,
+                                result: CaptureResult? = null,
+                                levels: DngMetadataOverrides = DngMetadataOverrides()) {
+        peakingWorker.offer(image, cameraCharacteristics, peakingActive(),
+            { frame -> if (frame != null) host.onFocusPeaking(frame) }, result = result, levels = levels)
     }
+
+    fun refreshPeaking() {
+        peakingWorker.invalidate()
+        host.onFocusPeakingActive(false)
+        host.onFocusPeakingActive(peakingActive())
+        lastPeakingActivePublished = peakingActive()
+    }
+
+    fun stopPeaking() {
+        peakingWorker.invalidate()
+        lastPeakingActivePublished = false
+        host.onFocusPeakingActive(false)
+    }
+
+    fun close() = peakingWorker.close()
 
     /**
      * Sampling a full-resolution Bayer buffer is CPU work.  A live scope only needs a few

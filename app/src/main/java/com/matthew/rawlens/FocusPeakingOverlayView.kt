@@ -79,10 +79,14 @@ class FocusPeakingOverlayView @JvmOverloads constructor(
                 // Small centered dot, never a filled block: peaking must read as
                 // points of sharpness over the image, not sand.
                 val t = contentTransform
-                val cx = if (t == null) (cell[0] + cell[2]) / 2f * viewWidth
-                    else (cell[0] + cell[2]) / 2f * t.width() + t.left
-                val cy = if (t == null) (cell[1] + cell[3]) / 2f * viewHeight
-                    else (cell[1] + cell[3]) / 2f * t.height() + t.top
+                val i = row * current.cols + col
+                val points = current.sensorPoints
+                val point = if (points != null && points.size == current.mask.size * 2)
+                    FocusPeakingGeometry.viewPoint(points[i * 2], points[i * 2 + 1],
+                        current.rotation, current.mirrored) else
+                    (cell[0] + cell[2]) / 2f to (cell[1] + cell[3]) / 2f
+                val cx = if (t == null) point.first * viewWidth else point.first * t.width() + t.left
+                val cy = if (t == null) point.second * viewHeight else point.second * t.height() + t.top
                 val radius = minOf(cell[2] - cell[0], cell[3] - cell[1]) *
                     minOf(viewWidth, viewHeight) * DOT_RADIUS_FRACTION
                 if (radius > 0f) canvas.drawCircle(cx, cy, radius, paint)

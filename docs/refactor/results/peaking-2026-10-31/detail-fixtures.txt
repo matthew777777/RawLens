@@ -1,0 +1,1 @@
+PASS on 25080RABDG: smooth/ramp, low-contrast axis/diagonal edges, broad blur, clipped edges, 400 noise patches, isolated hot sample

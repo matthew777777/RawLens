@@ -1,0 +1,13 @@
+DEVICE 25080RABDG SDK=36 camera=0 RAW=4080x3060 PREVIEW=none maxFocus=10.0
+STAGE=0 SAMPLE=0 requestedFocus=0.0 actualFocus=0.0 ISO=6973 ns=20003770 new=6/12288 old=366 supportChecks=1176 newMs=108.771385 referenceMs=466.076846 backend=native
+STAGE=0 SAMPLE=1 requestedFocus=0.0 actualFocus=0.0 ISO=2334 ns=9997740 new=129/12288 old=37 supportChecks=25284 newMs=80.711077 referenceMs=443.244077 backend=native
+STAGE=1 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=722 ns=9997740 new=2094/12288 old=131 supportChecks=410424 newMs=103.094539 referenceMs=460.162154 backend=native
+STAGE=1 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=483 ns=9997740 new=1954/12288 old=64 supportChecks=382984 newMs=99.940923 referenceMs=397.175385 backend=native
+STAGE=2 SAMPLE=0 requestedFocus=4.0 actualFocus=4.0 ISO=438 ns=9997740 new=276/12288 old=0 supportChecks=54096 newMs=90.431923 referenceMs=367.156846 backend=native
+STAGE=2 SAMPLE=1 requestedFocus=4.0 actualFocus=4.0 ISO=431 ns=9997740 new=288/12288 old=2 supportChecks=56448 newMs=93.075385 referenceMs=361.345231 backend=native
+STAGE=3 SAMPLE=0 requestedFocus=10.0 actualFocus=10.0 ISO=425 ns=9997740 new=0/12288 old=0 supportChecks=0 newMs=104.458461 referenceMs=306.647077 backend=native
+STAGE=3 SAMPLE=1 requestedFocus=10.0 actualFocus=10.0 ISO=425 ns=9997740 new=0/12288 old=0 supportChecks=0 newMs=94.217846 referenceMs=337.628077 backend=native
+STAGE=4 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=1721/12288 old=658 supportChecks=337316 newMs=153.971 referenceMs=546.356924 backend=native
+STAGE=4 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=1595/12288 old=550 supportChecks=312620 newMs=141.572 referenceMs=584.152615 backend=native
+STAGE=5 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=305/12288 old=145 supportChecks=59780 newMs=130.92677 referenceMs=396.595924 backend=native
+STAGE=5 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=524/12288 old=200 supportChecks=102704 newMs=117.188077 referenceMs=472.961154 backend=native

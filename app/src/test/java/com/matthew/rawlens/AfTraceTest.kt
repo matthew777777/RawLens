@@ -12,8 +12,8 @@ class AfTraceTest {
             AfTrace.line("Idle", 4, 2, 3.25f)
         )
         assertEquals(
-            "Direct-Log AF ${Camera2Names.afStateName(null)} mode=${Camera2Names.afModeName(null)}",
-            AfTrace.line("Direct-Log", null, null, null)
+            "Encoded Video AF ${Camera2Names.afStateName(null)} mode=${Camera2Names.afModeName(null)}",
+            AfTrace.line("Encoded Video", null, null, null)
         )
     }
 }

@@ -1,0 +1,13 @@
+DEVICE 25080RABDG SDK=36 camera=0 RAW=4080x3060 PREVIEW=none maxFocus=10.0
+STAGE=0 SAMPLE=0 requestedFocus=0.0 actualFocus=0.0 ISO=3641 ns=9997740 new=1/12288 old=0 supportChecks=196 newMs=315.690769
+STAGE=0 SAMPLE=1 requestedFocus=0.0 actualFocus=0.0 ISO=12100 ns=20003770 new=0/12288 old=0 supportChecks=0 newMs=527.094154
+STAGE=1 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=20000 ns=39999250 new=1/12288 old=0 supportChecks=196 newMs=460.877539
+STAGE=1 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=20000 ns=39999250 new=2/12288 old=0 supportChecks=392 newMs=620.354154
+STAGE=2 SAMPLE=0 requestedFocus=4.0 actualFocus=4.0 ISO=20000 ns=39999250 new=0/12288 old=0 supportChecks=0 newMs=709.224923
+STAGE=2 SAMPLE=1 requestedFocus=4.0 actualFocus=4.0 ISO=20000 ns=39999250 new=1/12288 old=0 supportChecks=196 newMs=719.073538
+STAGE=3 SAMPLE=0 requestedFocus=10.0 actualFocus=10.0 ISO=20000 ns=39999250 new=0/12288 old=0 supportChecks=0 newMs=662.430462
+STAGE=3 SAMPLE=1 requestedFocus=10.0 actualFocus=10.0 ISO=20000 ns=39999250 new=1/12288 old=0 supportChecks=196 newMs=681.500616
+STAGE=4 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=0/12288 old=0 supportChecks=0 newMs=191.467154
+STAGE=4 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=0/12288 old=0 supportChecks=0 newMs=174.892923
+STAGE=5 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=94/12288 old=6 supportChecks=18424 newMs=643.783077
+STAGE=5 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=145/12288 old=8 supportChecks=28420 newMs=659.631923

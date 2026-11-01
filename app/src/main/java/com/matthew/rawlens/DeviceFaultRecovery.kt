@@ -13,4 +13,7 @@ internal class DeviceFaultRecovery {
     }
 
     fun reset() = failures.clear()
+
+    /** A working fallback must not re-enable the failing route's exhausted budget. */
+    fun onFrames(cameraId: String) { failures.remove(cameraId) }
 }

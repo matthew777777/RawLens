@@ -27,15 +27,10 @@ internal fun meterCfaGridStep(spanPixels: Long, targetPixels: Int): Int =
     meterGridStep(spanPixels, targetPixels) or 1
 
 /**
- * Native fused scope+meter sampler (Halide AOT, `rawLensScopeMeter`).
- *
- * One call meters a Bayer frame for every live consumer — histogram,
- * waveform, ETTR/PROGRAM metering (main region + full-frame guard), and
- * focus-peaking energy/mean — bitwise identical to the four Kotlin
- * samplers (host gate in tools/halide). All buffers are direct
- * (zero-copy); the plane keeps its HAL row stride, outputs are tight.
- * Missing/failed native code returns null (caller falls back to the
- * Kotlin samplers) — never a crash, never a wrong map.
+ * Native fused histogram/waveform/ETTR sampler and historical focus-grid ABI.
+ * ScopeMeterAB checks the historical focus output against LegacyScopeFocusSampler;
+ * live photo/RAW-recording peaking uses RawFocusPeakingSampler and its source-built
+ * native kernel instead. Buffers are direct and retain the HAL row stride.
  */
 internal object ScopeMeterNative {
     /** iparams layout for [scopeMeterNative] (BguLook packed-array style). */
@@ -398,7 +393,7 @@ internal object ScopeMeterNative {
         mirrored: Boolean
     ): FocusPeakingFrame {
         require(energy.size == FOCUS_COLS * rows && mean.size == FOCUS_COLS * rows)
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, FOCUS_COLS, rows)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, FOCUS_COLS, rows)
         return FocusPeakingFrame(FOCUS_COLS, rows, mask, rotation, mirrored)
     }
 

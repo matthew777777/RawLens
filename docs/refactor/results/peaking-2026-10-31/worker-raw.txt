@@ -1,0 +1,14 @@
+DEVICE 25080RABDG SDK=36 camera=0 RAW=4080x3060 PREVIEW=none maxFocus=10.0
+STAGE=0 SAMPLE=0 requestedFocus=0.0 actualFocus=0.0 ISO=7448 ns=20003770 new=15/12288 old=467 supportChecks=2940 newMs=94.546769 referenceMs=475.516077 backend=native
+STAGE=0 SAMPLE=1 requestedFocus=0.0 actualFocus=0.0 ISO=3613 ns=9997740 new=71/12288 old=18 supportChecks=13916 newMs=83.449308 referenceMs=419.267384 backend=native
+STAGE=1 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=1430 ns=9997740 new=1669/12288 old=214 supportChecks=327124 newMs=100.954385 referenceMs=548.413847 backend=native
+STAGE=1 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=1033 ns=9997740 new=1536/12288 old=81 supportChecks=301056 newMs=145.832616 referenceMs=682.139923 backend=native
+STAGE=2 SAMPLE=0 requestedFocus=4.0 actualFocus=4.0 ISO=972 ns=9997740 new=254/12288 old=0 supportChecks=49784 newMs=150.655615 referenceMs=669.082846 backend=native
+STAGE=2 SAMPLE=1 requestedFocus=4.0 actualFocus=4.0 ISO=972 ns=9997740 new=262/12288 old=0 supportChecks=51352 newMs=136.813846 referenceMs=639.388615 backend=native
+STAGE=3 SAMPLE=0 requestedFocus=10.0 actualFocus=10.0 ISO=1184 ns=9997740 new=0/12288 old=0 supportChecks=0 newMs=146.840924 referenceMs=638.887308 backend=native
+STAGE=3 SAMPLE=1 requestedFocus=10.0 actualFocus=10.0 ISO=1677 ns=9997740 new=0/12288 old=0 supportChecks=0 newMs=141.140615 referenceMs=659.882077 backend=native
+STAGE=4 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=1997/12288 old=960 supportChecks=391412 newMs=165.041462 referenceMs=642.828538 backend=native
+STAGE=4 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=800 ns=100000000 new=1977/12288 old=936 supportChecks=387492 newMs=147.879 referenceMs=654.401 backend=native
+STAGE=5 SAMPLE=0 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=1083/12288 old=457 supportChecks=212268 newMs=147.140308 referenceMs=586.148924 backend=native
+STAGE=5 SAMPLE=1 requestedFocus=2.0 actualFocus=2.0 ISO=1600 ns=250000000 new=1248/12288 old=508 supportChecks=244608 newMs=132.03577 referenceMs=592.991616 backend=native
+WORKER_PASS thread=photo-peaking timestamp=783799411240000 stopHidden=true

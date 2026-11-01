@@ -301,23 +301,12 @@ class LensDiscoveryGroupingTest {
         assertEquals("6/4", recommendRoute(lenses).id)
         assertEquals(setOf("6/4"), recommendedLensIds(lenses))
     }
-    @Test fun inactiveAfRouteLosesToSiblingWithEstimatedColour() {
-        val direct = opticLens("4", LensRouteKind.STANDALONE).copy(verdict = LensVerdict.VERIFIED)
-        val routed = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
-        val verdicts = LensVerdicts(noHalAwb = setOf("4", "6/4"), noHalAf = setOf("4"))
-        val lenses = listOf(direct, routed).map { applyAwbVerdict(it, verdicts) }
-        assertEquals("6/4", recommendRoute(lenses).id)
-        assertTrue(lenses.first().details.contains(NO_HAL_AF_NOTE))
-        assertEquals("4", recommendRoute(listOf(lenses.first(), routed.copy(verdict = LensVerdict.DEAD))).id)
-    }
-
     @Test fun unhealthyLogicalRouteDoesNotDisplaceHealthyDirectRoute() {
         val direct = opticLens("4", LensRouteKind.STANDALONE)
         val logical = opticLens("6/4", LensRouteKind.LOGICAL_PHYSICAL)
         for (bad in listOf(
             logical.copy(verdict = LensVerdict.DEAD),
-            logical.copy(noHalAwb = true),
-            logical.copy(noHalAf = true)
+            logical.copy(noHalAwb = true)
         )) {
             assertEquals("4", recommendRoute(listOf(direct, bad)).id)
         }

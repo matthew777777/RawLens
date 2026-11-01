@@ -86,8 +86,7 @@ data class DiscoveredLens(
     /** Open-time verdict from real `openCamera` calls; UNKNOWN until opened. */
     val verdict: LensVerdict = LensVerdict.UNKNOWN,
     /** A settled session on this route got no AWB from the HAL ([LensVerdicts.noHalAwb]). */
-    val noHalAwb: Boolean = false,
-    val noHalAf: Boolean = false
+    val noHalAwb: Boolean = false
 )
 
 /** A picker section with a header and an explanatory subtitle. */
@@ -623,7 +622,6 @@ private fun verdictPriority(verdict: LensVerdict): Int = when (verdict) {
  */
 private fun healthPriority(lens: DiscoveredLens): Int = when {
     lens.verdict == LensVerdict.DEAD -> 3
-    lens.noHalAf -> 2
     lens.noHalAwb -> 1
     else -> 0
 }
@@ -662,21 +660,17 @@ fun verdictNote(verdict: LensVerdict): String? = when (verdict) {
 }
 
 /** Picker note for a route whose HAL runs no AWB. */
-internal const val NO_HAL_AF_NOTE = "Autofocus inactive · use another ID for this lens or manual focus"
-
 internal const val NO_HAL_AWB_NOTE = "No camera white balance · colour estimated by RawLens"
 
 /** Marks a route whose settled session got no HAL AWB, noting it in the picker details. */
 fun applyAwbVerdict(lens: DiscoveredLens, verdicts: LensVerdicts): DiscoveredLens {
     if (lens.kind == LensRouteKind.UNAVAILABLE) return lens
     val missingAwb = lens.id in verdicts.noHalAwb
-    val missingAf = lens.id in verdicts.noHalAf
     val notes = listOfNotNull(
-        NO_HAL_AWB_NOTE.takeIf { missingAwb },
-        NO_HAL_AF_NOTE.takeIf { missingAf }
+        NO_HAL_AWB_NOTE.takeIf { missingAwb }
     ).filter { it !in lens.details }
     val details = (listOf(lens.details) + notes).filter { it.isNotBlank() }.joinToString(" · ")
-    return lens.copy(noHalAwb = missingAwb, noHalAf = missingAf, details = details)
+    return lens.copy(noHalAwb = missingAwb, details = details)
 }
 
 /** Attaches an open-time verdict to a lens, keeping the legacy label in sync. */

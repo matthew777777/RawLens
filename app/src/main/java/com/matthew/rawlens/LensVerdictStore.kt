@@ -26,9 +26,7 @@ data class LensVerdicts(
      * whole settled session: usable, but colour comes from RawLens'
      * estimate, so the picker prefers another route to the same lens.
      */
-    val noHalAwb: Set<String> = emptySet(),
-    /** Routes with inactive, motionless AF as well as missing HAL AWB. */
-    val noHalAf: Set<String> = emptySet()
+    val noHalAwb: Set<String> = emptySet()
 ) {
     companion object {
         val EMPTY = LensVerdicts()
@@ -45,17 +43,7 @@ data class LensVerdicts(
 class LensVerdictStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(), deadIds(), verifiedIds(), noHalAwbIds(), noHalAfIds())
-
-    fun noHalAfIds(): Set<String> =
-        preferences.getStringSet(KEY_NO_HAL_AF, emptySet()).orEmpty().toSet()
-
-    fun markHalAf(identity: String, working: Boolean) {
-        if (identity.isBlank()) return
-        val current = noHalAfIds()
-        val next = if (working) current - identity else capped(current + identity)
-        if (next != current) preferences.edit().putStringSet(KEY_NO_HAL_AF, next).apply()
-    }
+    fun snapshot(): LensVerdicts = LensVerdicts(openableIds(), deadIds(), verifiedIds(), noHalAwbIds())
 
     fun noHalAwbIds(): Set<String> =
         preferences.getStringSet(KEY_NO_HAL_AWB, emptySet()).orEmpty().toSet()
@@ -127,7 +115,6 @@ class LensVerdictStore(context: Context) {
         const val KEY_DEAD = "dead_ids"
         const val KEY_VERIFIED = "verified_ids"
         const val KEY_NO_HAL_AWB = "no_hal_awb_ids"
-        const val KEY_NO_HAL_AF = "no_hal_af_ids"
         const val MAX_IDS = 64
     }
 }

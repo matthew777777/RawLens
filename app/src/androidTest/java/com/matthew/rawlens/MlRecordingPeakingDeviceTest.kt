@@ -99,7 +99,7 @@ class MlRecordingPeakingDeviceTest {
             File(context.getExternalFilesDir(null), "ml-peaking-craw-device.txt").writeText(report.toString())
         }
     }
-    @Test fun directLogMfPullKeepsSamplingAndClearsOnAuto() {
+    @Test fun encodedVideoMfPullKeepsSamplingAndClearsOnAuto() {
         val id = setup()
         val args = InstrumentationRegistry.getArguments()
         val requestedWidth = args.getString("mlRecordWidth", "1920").toInt()
@@ -109,7 +109,7 @@ class MlRecordingPeakingDeviceTest {
         require(requestedFps == 24 || requestedFps == 30)
         val label = "${requestedWidth}x${requestedHeight}-${requestedFps}"
         val file = File(context.cacheDir, "ml-peaking-log-$label-test.mp4")
-        val recorder = DirectLogRecorder(manager, id, context).apply {
+        val recorder = EncodedVideoRecorder(manager, id, context).apply {
             audioEnabled = false; stabEnabled = false
             width = requestedWidth; height = requestedHeight; fps = requestedFps
             videoManual = VideoManualSnapshot(iso = 1600, shutterNanos = 10_000_000, focusDiopters = 0.5f)

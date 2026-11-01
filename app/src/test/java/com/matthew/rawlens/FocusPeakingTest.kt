@@ -37,10 +37,10 @@ class FocusPeakingTest {
 
     @Test
     fun rowsHoldCellsSquareAndClamp() {
-        assertEquals(96, RawFocusPeakingSampler.rowsFor(4000, 3000))
-        assertEquals(72, RawFocusPeakingSampler.rowsFor(4000, 2250))
-        assertEquals(RawFocusPeakingSampler.MIN_ROWS, RawFocusPeakingSampler.rowsFor(4000, 100))
-        assertEquals(RawFocusPeakingSampler.MAX_ROWS, RawFocusPeakingSampler.rowsFor(1000, 4000))
+        assertEquals(96, LegacyScopeFocusSampler.rowsFor(4000, 3000))
+        assertEquals(72, LegacyScopeFocusSampler.rowsFor(4000, 2250))
+        assertEquals(LegacyScopeFocusSampler.MIN_ROWS, LegacyScopeFocusSampler.rowsFor(4000, 100))
+        assertEquals(LegacyScopeFocusSampler.MAX_ROWS, LegacyScopeFocusSampler.rowsFor(1000, 4000))
     }
 
     @Test
@@ -48,55 +48,55 @@ class FocusPeakingTest {
         // RGGB / BGGR carry green where x-parity != y-parity, GRBG / GBRG
         // where it matches.
         for (y in 0..7) {
-            assertEquals(1 - (y and 1), RawFocusPeakingSampler.greenColStart(0, y))
-            assertEquals(y and 1, RawFocusPeakingSampler.greenColStart(1, y))
-            assertEquals(y and 1, RawFocusPeakingSampler.greenColStart(2, y))
-            assertEquals(1 - (y and 1), RawFocusPeakingSampler.greenColStart(3, y))
+            assertEquals(1 - (y and 1), LegacyScopeFocusSampler.greenColStart(0, y))
+            assertEquals(y and 1, LegacyScopeFocusSampler.greenColStart(1, y))
+            assertEquals(y and 1, LegacyScopeFocusSampler.greenColStart(2, y))
+            assertEquals(1 - (y and 1), LegacyScopeFocusSampler.greenColStart(3, y))
         }
     }
 
     @Test
     fun tenengradFlatIsZero() {
-        assertEquals(0f, RawFocusPeakingSampler.tenengrad(FloatArray(16) { 0.5f }), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.tenengrad(FloatArray(16) { 0.5f }), 0f)
     }
 
     @Test
     fun tenengradStepEdgeEqualsStepSquared() {
         // Vertical step of height a: every interior gx is ±a, gy is 0.
         val step = FloatArray(16) { i -> if (i % 4 < 2) 0f else 0.5f }
-        assertEquals(0.25f, RawFocusPeakingSampler.tenengrad(step), 1e-6f)
+        assertEquals(0.25f, LegacyScopeFocusSampler.tenengrad(step), 1e-6f)
     }
 
     @Test
     fun laplacianFlatIsZero() {
-        assertEquals(0f, RawFocusPeakingSampler.laplacian(FloatArray(16) { 0.5f }), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.laplacian(FloatArray(16) { 0.5f }), 0f)
     }
 
     @Test
     fun laplacianStepEdgeEqualsStepSquared() {
         // Sharp steps match Tenengrad, so the min-combiner keeps full recall.
         val step = FloatArray(16) { i -> if (i % 4 < 2) 0f else 0.5f }
-        assertEquals(0.25f, RawFocusPeakingSampler.laplacian(step), 1e-6f)
+        assertEquals(0.25f, LegacyScopeFocusSampler.laplacian(step), 1e-6f)
     }
 
     @Test
     fun combinedEnergyKeepsSharpAtAnyContrastRetiresBlur() {
         // Sharp steps have ratio ~1.0 whatever the contrast: full recall.
-        assertEquals(0.25f, RawFocusPeakingSampler.combinedEnergy(0.25f, 0.25f), 0f)
-        assertEquals(0.01f, RawFocusPeakingSampler.combinedEnergy(0.01f, 0.01f), 0f)
+        assertEquals(0.25f, LegacyScopeFocusSampler.combinedEnergy(0.25f, 0.25f), 0f)
+        assertEquals(0.01f, LegacyScopeFocusSampler.combinedEnergy(0.01f, 0.01f), 0f)
         // Mild blur of a strong edge (ten 0.13, lap 0.0176, ratio ~0.135):
         // retired even though both clear the absolute floor.
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.13f, 0.0176f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0.13f, 0.0176f), 0f)
         // Moderate blur (ratio ~0.39): retired.
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.1764f, 0.069f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0.1764f, 0.069f), 0f)
         // Bright mild blur at ratio ~0.54 (the laptop-screen case): retired.
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.13f, 0.07f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0.13f, 0.07f), 0f)
         // Boundary ratio exactly 0.65: kept; just below: retired.
-        assertEquals(0.065f, RawFocusPeakingSampler.combinedEnergy(0.1f, 0.065f), 0f)
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0.1f, 0.06f), 0f)
+        assertEquals(0.065f, LegacyScopeFocusSampler.combinedEnergy(0.1f, 0.065f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0.1f, 0.06f), 0f)
         // Flat cells short-circuit to zero, never NaN.
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0f, 0f), 0f)
-        assertEquals(0f, RawFocusPeakingSampler.combinedEnergy(0f, 0.02f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0f, 0f), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.combinedEnergy(0f, 0.02f), 0f)
     }
 
     @Test
@@ -105,13 +105,13 @@ class FocusPeakingTest {
         // Tenengrad answers 0.25 and the old metric would dot it; the
         // Laplacian scores exactly 0, so the minimum retires the cell.
         val ramp = FloatArray(16) { i -> (i % 4) * 0.25f }
-        assertEquals(0.25f, RawFocusPeakingSampler.tenengrad(ramp), 0f)
-        assertEquals(0f, RawFocusPeakingSampler.laplacian(ramp), 0f)
+        assertEquals(0.25f, LegacyScopeFocusSampler.tenengrad(ramp), 0f)
+        assertEquals(0f, LegacyScopeFocusSampler.laplacian(ramp), 0f)
         assertTrue(
             minOf(
-                RawFocusPeakingSampler.tenengrad(ramp),
-                RawFocusPeakingSampler.laplacian(ramp)
-            ) < RawFocusPeakingSampler.EDGE_THRESHOLD
+                LegacyScopeFocusSampler.tenengrad(ramp),
+                LegacyScopeFocusSampler.laplacian(ramp)
+            ) < LegacyScopeFocusSampler.EDGE_THRESHOLD
         )
     }
 
@@ -124,7 +124,7 @@ class FocusPeakingTest {
         val expected = BooleanArray(16)
         expected[6] = true
         expected[7] = true
-        assertArrayEquals(expected, RawFocusPeakingSampler.despeckle(mask, 4, 4))
+        assertArrayEquals(expected, LegacyScopeFocusSampler.despeckle(mask, 4, 4))
     }
 
     @Test
@@ -138,7 +138,7 @@ class FocusPeakingTest {
         energy[12] = 0.02f; mean[12] = 0.5f
         // Sharp but black: gated by the black-mean floor.
         energy[15] = 0.02f; mean[15] = 0f
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, 4, 4)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, 4, 4)
         val expected = BooleanArray(16)
         expected[5] = true
         expected[6] = true
@@ -166,10 +166,10 @@ class FocusPeakingTest {
         ten[50] = 0.015f; lap[50] = 0.015f
         ten[51] = 0.015f; lap[51] = 0.015f
         val energy = FloatArray(cols * rows) { i ->
-            RawFocusPeakingSampler.combinedEnergy(ten[i], lap[i])
+            LegacyScopeFocusSampler.combinedEnergy(ten[i], lap[i])
         }
         val mean = FloatArray(cols * rows) { 0.5f }
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, cols, rows)
         assertTrue(mask[27])
         assertTrue(mask[28])
         assertTrue(mask[50])
@@ -190,7 +190,7 @@ class FocusPeakingTest {
         val mean = FloatArray(cols * rows) { 0.5f }
         energy[27] = 0.015f
         energy[28] = 0.015f
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, cols, rows)
         assertTrue(mask[27])
         assertTrue(mask[28])
         assertEquals(2, mask.count { it })
@@ -214,7 +214,7 @@ class FocusPeakingTest {
         // but the wall still clears it, so coverage is not blanked.
         val energy = FloatArray(16) { 0.05f }
         val mean = FloatArray(16) { 0.5f }
-        assertEquals(16, RawFocusPeakingSampler.maskOf(energy, mean, 4, 4).count { it })
+        assertEquals(16, LegacyScopeFocusSampler.maskOf(energy, mean, 4, 4).count { it })
     }
 
     @Test
@@ -230,7 +230,7 @@ class FocusPeakingTest {
         energy[28] = 0.25f
         energy[50] = 0.015f
         energy[51] = 0.015f
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, cols, rows)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, cols, rows)
         assertTrue(mask[27])
         assertTrue(mask[28])
         assertTrue(mask[50])
@@ -239,7 +239,7 @@ class FocusPeakingTest {
     }
 
     private fun maskOfNone(energy: FloatArray, mean: FloatArray, cols: Int, rows: Int): Boolean =
-        RawFocusPeakingSampler.maskOf(energy, mean, cols, rows).none { it }
+        LegacyScopeFocusSampler.maskOf(energy, mean, cols, rows).none { it }
 
     @Test
     fun washGuardRetiresholdsBusyFrames() {
@@ -247,7 +247,7 @@ class FocusPeakingTest {
         // and nothing passes at 0.016.
         val energy = FloatArray(16) { 0.01f }
         val mean = FloatArray(16) { 0.5f }
-        val mask = RawFocusPeakingSampler.maskOf(energy, mean, 4, 4)
+        val mask = LegacyScopeFocusSampler.maskOf(energy, mean, 4, 4)
         assertTrue(mask.none { it })
     }
 

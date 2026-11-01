@@ -7,7 +7,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.media.Image
 
 /**
- * On-device transfer check: runs the fused native sampler and the four
+ * Historical scope-ABI transfer check (not the live peaking detector):
+ * runs the fused native sampler and the four
  * Kotlin samplers over the same frame, times both, and diffs every output
  * bitwise. The host gate already pins the filter against an independent
  * scalar transcription; this confirms the verdict transfers to the
@@ -16,7 +17,7 @@ import android.media.Image
  *
  * Focus energy/mean grids are NOT compared here (Kotlin's sampler only
  * exposes the mask); the mask derives from them through the pure tested
- * [RawFocusPeakingSampler.maskOf], so mask equality over varied real
+ * [LegacyScopeFocusSampler.maskOf], so mask equality over varied real
  * frames plus the host gate's grid-level pinning is the transfer check.
  */
 internal object ScopeMeterAB {
@@ -208,7 +209,7 @@ internal object ScopeMeterAB {
             if (fullEttr) RawEttrSampler.sample(image, characteristics)
             else RawEttrSampler.sampleProgram(image, characteristics, req.metering)
         }
-        val (focus, focusNs) = timed { RawFocusPeakingSampler.sample(image, characteristics) }
+        val (focus, focusNs) = timed { LegacyScopeFocusSampler.sample(image, characteristics) }
         if (hist == null || wave == null || ettr == null || focus == null) {
             Log.w(TAG, "AB skipped: kotlin sampler null " +
                 "(h=${hist != null} w=${wave != null} e=${ettr != null} f=${focus != null})")

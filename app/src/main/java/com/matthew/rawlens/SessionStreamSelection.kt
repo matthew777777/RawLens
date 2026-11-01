@@ -38,14 +38,9 @@ internal object SessionStreamSelection {
 
     internal const val ASPECT_RATIO_TOLERANCE = 0.015
 
-    /** Fallback preview stays usable as a viewfinder at or above this size. */
-    internal const val FALLBACK_PREVIEW_MIN_WIDTH = 640
-
-    internal const val FALLBACK_PREVIEW_MIN_HEIGHT = 480
-
     /**
      * Below this measured RAW rate the ISP is considered stalled: the
-     * session rebuilds with the smallest preview target, which unlocks
+     * session rebuilds with a normal preview target, which unlocks
      * full rate on HALs that need any preview request (MediaTek).
      */
     // 24 fps is a legitimate RAW cadence on Xiaomi aux routes. The old
@@ -72,23 +67,8 @@ internal object SessionStreamSelection {
 
     internal const val MIN_ACQUIRED_RAW_IMAGES = RawCameraController.BURST_FRAME_COUNT + 2
 
-    /**
-     * Session ladder, RAW-only first: taps, metering, and all overlays
-     * are wired to the RAW viewfinder and the fixed view rect (the
-     * system preview is an alpha-0 stream target only), so the default
-     * attempt carries no preview target at all — full RAW with a
-     * ZSL-capable reader. Some HALs (MediaTek) hold the RAW stream at
-     * ~20 fps until any preview target exists; the ISP frame-rate probe
-     * detects that stall and rebuilds at FULL, persisting the verdict
-     * per camera. HALs that reject the raw-only session outright fall
-     * through the same ladder via the stillborn path. Each later step
-     * degrades exactly one axis: the smallest preview retry, a larger
-     * preview retry, minimal buffers (viewfinder-only, the reader
-     * cannot host a ZSL ring), a half-area RAW size, then RAW-only
-     * sessions (largest RAW first for capture quality, smallest last for
-     * minimum bandwidth). Steps that would retry an identical session are
-     * deduped away. An empty preview list yields only the RAW-only steps.
-     */
+    /** RAW-only first. When a preview is required, retain a normal advertised preview
+     * while reducing reader depth and RAW size on session rejection. */
     internal fun selectSessionStreamCombos(
         rawSizes: List<SessionStreamSize>,
         previewSizes: List<SessionStreamSize>,
@@ -101,16 +81,26 @@ internal object SessionStreamSelection {
             combos += SessionStreamCombo(fullRaw, null, fullReaderMaxImages, RAW_ONLY_FULL_LABEL)
         }
         if (previewSizes.isNotEmpty()) {
-            val fullPreview = selectFullPreviewSize(previewSizes)
+            val fullPreview = selectFullPreviewSize(previewSizes, fullRaw)
             val fallbackPreview = selectFallbackPreviewSize(previewSizes, fullRaw)
             combos += SessionStreamCombo(fullRaw, fullPreview, fullReaderMaxImages, "FULL")
-            combos += SessionStreamCombo(fullRaw, fallbackPreview, fullReaderMaxImages, "MIN PREVIEW")
             combos += SessionStreamCombo(fullRaw, fallbackPreview, reducedReaderMaxImages, "MIN BUFFERS")
             selectSmallerRawSize(rawSizes)?.let { smaller ->
                 combos += SessionStreamCombo(smaller, fallbackPreview, reducedReaderMaxImages, "SMALL RAW")
             }
         }
         combos += SessionStreamCombo(fullRaw, null, reducedReaderMaxImages, "RAW ONLY")
+        // Cropped sensor modes can sit between the largest and smallest sizes
+        // (MCPro's Xiaomi 14 Ultra DCG16 profiles use 4096x2304). The
+        // half-area preview step above skips these, so keep them reachable
+        // both for fallback and for an explicit per-lens size preference.
+        val smallestRaw = rawSizes.minByOrNull { it.area }
+        rawSizes.distinct().sortedByDescending { it.area }
+            .filter { it != fullRaw && it != smallestRaw }
+            .forEach { intermediate ->
+                combos += SessionStreamCombo(intermediate, null, fullReaderMaxImages, "RAW ONLY CROP")
+                combos += SessionStreamCombo(intermediate, null, reducedReaderMaxImages, "RAW ONLY CROP MIN BUFFERS")
+            }
         rawSizes.minByOrNull { it.area }?.let { smallest ->
             combos += SessionStreamCombo(smallest, null, reducedReaderMaxImages, "RAW ONLY MIN")
         }
@@ -126,36 +116,30 @@ internal object SessionStreamSelection {
         return deduped
     }
 
-    /**
-     * Invisible-stream choice: the smallest preview available, requested
-     * only so HALs that need a preview target sustain the 30 fps RAW
-     * stream. No aspect, coverage, or viewfinder requirement applies —
-     * the TextureView is alpha-0 and `fillViewport` ignores aspect.
+    /** Advertised normal preview, bounded by 1080p; prefer the RAW aspect ratio.
+     * Do not request a tiny ISP placeholder when an HD stream is available.
      */
     internal fun selectFullPreviewSize(
-        previewSizes: List<SessionStreamSize>
-    ): SessionStreamSize = previewSizes.minByOrNull { it.area }!!
-
-    /**
-     * Fallback preview: the smallest matching-aspect stream that stays
-     * usable as a viewfinder, else the smallest matching-aspect stream,
-     * else the smallest stream overall.
-     */
-    internal fun selectFallbackPreviewSize(
         previewSizes: List<SessionStreamSize>,
-        rawSize: SessionStreamSize
+        rawSize: SessionStreamSize? = null
     ): SessionStreamSize {
-        val matchingAspect = previewSizes.filter { size ->
-            kotlin.math.abs(
-                size.width.toDouble() / size.height - rawSize.width.toDouble() / rawSize.height
-            ) <= ASPECT_RATIO_TOLERANCE
+        require(previewSizes.isNotEmpty())
+        val bounded = previewSizes.filter { maxOf(it.width, it.height) <= 1920 &&
+            minOf(it.width, it.height) <= 1080 }
+        val hd = bounded.filter { maxOf(it.width, it.height) >= 1280 &&
+            minOf(it.width, it.height) >= 720 }
+        val candidates = hd.ifEmpty { bounded }.ifEmpty { previewSizes }
+        val matching = if (rawSize == null) emptyList() else candidates.filter {
+            kotlin.math.abs(it.width.toDouble() / it.height -
+                rawSize.width.toDouble() / rawSize.height) <= ASPECT_RATIO_TOLERANCE
         }
-        return matchingAspect
-            .filter { it.width >= FALLBACK_PREVIEW_MIN_WIDTH && it.height >= FALLBACK_PREVIEW_MIN_HEIGHT }
-            .minByOrNull { it.area }
-            ?: matchingAspect.minByOrNull { it.area }
-            ?: previewSizes.minByOrNull { it.area }!!
+        return matching.ifEmpty { candidates }.maxBy { it.area }
     }
+
+    /** Buffer/RAW retries retain a normal ISP preview instead of reducing its resolution. */
+    internal fun selectFallbackPreviewSize(
+        previewSizes: List<SessionStreamSize>, rawSize: SessionStreamSize
+    ): SessionStreamSize = selectFullPreviewSize(previewSizes, rawSize)
 
     /**
      * Largest RAW size at most half the sensor area: one decisive bandwidth
@@ -171,7 +155,9 @@ internal object SessionStreamSelection {
      * User size preference as a stable ladder reorder: combos carrying
      * the preferred RAW size move first with their relative order kept,
      * everything else follows untouched, so HAL rejection still degrades
-     * exactly as before. Null (auto) or a size with no combo returns the
+     * exactly as before. An explicit crop first gets a full-depth RAW-only
+     * attempt, even when it only appeared as a minimal-buffer fallback.
+     * Null (auto) or a size with no combo returns the
      * ladder unchanged.
      */
     internal fun orderCombosForPreferredSize(
@@ -180,13 +166,20 @@ internal object SessionStreamSelection {
     ): List<SessionStreamCombo> {
         if (preferred == null || combos.none { it.raw == preferred }) return combos
         val (matching, rest) = combos.partition { it.raw == preferred }
+        // An explicit crop must not inherit a last-resort reader's reduced
+        // capture capacity (Xiaomi DCG16: 4096x2304 is the smallest size).
+        val fullDepth = combos.maxOf { it.readerMaxImages }
+        if (matching.none { it.preview == null && it.readerMaxImages == fullDepth }) {
+            return listOf(SessionStreamCombo(preferred, null, fullDepth, "PREFERRED RAW ONLY FULL")) +
+                matching + rest
+        }
         return matching + rest
     }
 
     /** Pure + host-tested: stored "WxH" into a combo size, else null. */
     internal fun parseRawSizePreference(text: String?): SessionStreamSize? {
-        if (text == null || !RawSizePreferenceStore.isPlausibleSize(text)) return null
-        val (width, height) = text.trim().split('x').map(String::toInt)
+        val normalized = RawSizePreferenceStore.normalizeSize(text) ?: return null
+        val (width, height) = normalized.split('x').map(String::toInt)
         return SessionStreamSize(width, height)
     }
 

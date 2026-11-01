@@ -5,7 +5,7 @@ import android.hardware.camera2.CaptureResult
 
 /**
  * Transition-only AF trace for repeating capture results. The video paths
- * have no [TouchFocus] trace, so without this a "focus never moves" report
+ * have no [PhotoAutoFocus] trace, so without this a "focus never moves" report
  * from a take is undecidable: the log must show which AF mode the HAL ran,
  * whether it ever scanned, and where the lens sat. One instance per
  * session; called from that session's capture-callback thread only.

@@ -46,6 +46,8 @@ class FocusMeteringOverlay @JvmOverloads constructor(
     var onBothDragged: ((Float, Float) -> Unit)? = null
     var onTargetsCleared: (() -> Unit)? = null
     var onOverlayTouched: (() -> Unit)? = null
+    internal var onPanelSwipe: ((PreviewPanelSwipe.Action) -> Unit)? = null
+    var panelGestureOrientationDegrees = 0
     /** Press-and-hold: freeze AE + AF at the point indefinitely (until double-tap/reset). */
     var onAfLockHold: ((Float, Float) -> Unit)? = null
 
@@ -352,6 +354,18 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                 val downMode = dragMode
                 dragMode = DragNone
                 dragging = false
+                // Reticle drags, holds and multi-touch have already been handled.
+                // Finish this preview gesture before opening a panel, so its release cannot click a tile.
+                if (downMode == DragNone && onPanelSwipe != null) {
+                    val action = PreviewPanelSwipe.classify(event.x - touchDownX, event.y - touchDownY,
+                        48f * density, panelGestureOrientationDegrees)
+                    if (action != null) {
+                        lastTapUpMs = 0L
+                        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        onPanelSwipe?.invoke(action)
+                        return true
+                    }
+                }
                 if (hypot(event.x - touchDownX, event.y - touchDownY) > touchSlop) return true
                 val now = System.currentTimeMillis()
                 // Same-spot double-tap releases the lock. A single tap anywhere
@@ -371,23 +385,6 @@ class FocusMeteringOverlay @JvmOverloads constructor(
                     ((focusAreaTime != -1L &&
                         now - focusAreaTime < ViewConfiguration.getDoubleTapTimeout()) ||
                         isDoubleTap)
-                // Bounce gate: the release above always wins, but a refocus
-                // faster than the bounce window is an accidental tap — swallow
-                // it without moving the reticle. The scan-in-flight half of the
-                // gate lives in the controller, which knows the AF state.
-                if (!clearFocusAreas && !AutoFocusPolicy.shouldAcceptTap(
-                        now, lastTapUpMs, lastTapUpX, lastTapUpY,
-                        event.x, event.y,
-                        minOf(width, height).toFloat(),
-                        scanInFlight = false
-                    )
-                ) {
-                    lastTapUpMs = now
-                    lastTapUpX = event.x
-                    lastTapUpY = event.y
-                    Log.i(LOG_TAG, "Touch tap ignored (bounce)")
-                    return true
-                }
                 if (clearFocusAreas) {
                     lastTapUpMs = 0L
                     clearTargets()

@@ -1,0 +1,1 @@
+PASS 12 native/Kotlin cases: all 4 CFA patterns, RAW16/10/12, row padding, nonzero plane origin, mixed-channel clipping, weak edges, noise, truncated buffers

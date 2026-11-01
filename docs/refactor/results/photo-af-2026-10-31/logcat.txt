@@ -1,0 +1,335 @@
+--------- beginning of main
+10-31 08:32:12.921 15817 15817 I RawLensCamera: Viewfinder surface ready at start; opening camera
+10-31 08:32:12.973 15817 15817 I RawLensCamera: Opening camera 0 (selected 0) [primary combo 0]
+10-31 08:32:13.214 15817 15887 I RawLensCamera: Camera device opened: 0
+10-31 08:32:13.237 15817 15887 I RawLensCamera: ZSL blur limit 1.5px focal=2705px -> 5.55e-04 rad
+10-31 08:32:13.238 15817 15887 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3060
+10-31 08:32:13.254 15817 15887 W RawLensCamera: GPU-reader pre-flight refused 4080x3060; CPU-only reader
+10-31 08:32:13.255 15817 15887 I RawLensCamera: RAW stream combo raw=4080x3060 preview=none maxImages=30 minFrameNs=50000000 stallNs=33333333 compat=false gpuTrial=false combo=RAW ONLY FULL attempt=1/4
+10-31 08:32:13.257 15817 15887 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 08:32:13.458 15817 15887 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:32:13.469 15817 15887 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 08:32:13.469 15817 15887 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE] maxAfRegions=1 idle=CONT_PICTURE
+10-31 08:32:13.889 15817 15887 I RawLensCamera: First RAW stream image 4080x3060 ts=771633117030490
+10-31 08:32:13.950 15817 15887 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=7.54D
+10-31 08:32:14.363 15817 15887 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=2.43D
+10-31 08:32:15.003 15817 15887 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:32:15.016 15817 15887 I RawLensCamera: Photo AF run=2 mode=1 START queued
+10-31 08:32:15.017 15817 15887 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:32:15.098 15817 15887 I RawLensCamera: Focus peaking first sample: grid=128x96 passes=625 meanEnergy=0.00385 peakEnergy=0.5143 gate=0.008 ratio=0.65 cfa=2
+10-31 08:32:15.185 15817 15887 I RawLensCamera: Photo AF run=2 START frame=39
+10-31 08:32:15.195 15817 15887 I RawLensCamera: Photo AF run=2 frame=39 ACTIVE_SCAN
+10-31 08:32:15.338 15817 15887 I RawLensCamera: Photo AF run=2 frame=43 FOCUSED_LOCKED
+10-31 08:32:25.341 15817 15887 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:32:25.344 15817 15887 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:32:25.346 15817 15887 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:32:25.354 15817 15887 I RawLensCamera: Photo AF run=4 mode=1 START queued
+10-31 08:32:25.354 15817 15887 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:32:25.552 15817 15887 I RawLensCamera: Photo AF run=4 START frame=350
+10-31 08:32:25.562 15817 15887 I RawLensCamera: Photo AF run=4 frame=350 ACTIVE_SCAN
+10-31 08:32:26.175 15817 15887 I RawLensCamera: Photo AF run=4 frame=368 FOCUSED_LOCKED
+10-31 08:32:36.716 15817 15887 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:32:36.722 15817 15887 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:34:01.083 16394 16394 I RawLensCamera: Viewfinder surface ready at start; opening camera
+10-31 08:34:01.132 16394 16394 I RawLensCamera: Opening camera 0 (selected 0) [primary combo 0]
+10-31 08:34:01.180 16394 16468 I RawLensCamera: Camera device opened: 0
+10-31 08:34:01.205 16394 16468 I RawLensCamera: ZSL blur limit 1.5px focal=2705px -> 5.55e-04 rad
+10-31 08:34:01.208 16394 16468 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3060
+10-31 08:34:01.210 16394 16468 W RawLensCamera: GPU-reader pre-flight refused 4080x3060; CPU-only reader
+10-31 08:34:01.214 16394 16468 I RawLensCamera: RAW stream combo raw=4080x3060 preview=none maxImages=30 minFrameNs=50000000 stallNs=33333333 compat=false gpuTrial=false combo=RAW ONLY FULL attempt=1/4
+10-31 08:34:01.218 16394 16468 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 08:34:01.329 16394 16468 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:34:01.348 16394 16468 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 08:34:01.348 16394 16468 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE] maxAfRegions=1 idle=CONT_PICTURE
+10-31 08:34:01.823 16394 16468 I RawLensCamera: First RAW stream image 4080x3060 ts=771741068615260
+10-31 08:34:01.900 16394 16468 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=1.66D
+10-31 08:34:02.906 16394 16468 I RawLensCamera: Manual focus cleared (AF back to auto)
+10-31 08:34:02.917 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742211 frame=32 mode=4 state=6 fd=3.9135637 ae=1
+10-31 08:34:03.126 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742420 frame=38 mode=4 state=6 fd=4.0723405 ae=1
+10-31 08:34:03.228 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742522 frame=41 mode=4 state=6 fd=1.7171545 ae=1
+10-31 08:34:03.333 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742627 frame=45 mode=4 state=6 fd=1.6113033 ae=1
+10-31 08:34:03.435 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742729 frame=48 mode=4 state=6 fd=1.3466759 ae=1
+10-31 08:34:03.537 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742831 frame=51 mode=4 state=6 fd=2.2993355 ae=1
+10-31 08:34:03.639 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771742933 frame=54 mode=4 state=6 fd=3.3843083 ae=1
+10-31 08:34:03.740 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743034 frame=57 mode=4 state=6 fd=4.6280584 ae=1
+10-31 08:34:03.843 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743137 frame=60 mode=4 state=6 fd=4.442819 ae=1
+10-31 08:34:03.937 16394 16468 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=4.47D
+10-31 08:34:03.945 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743239 frame=63 mode=4 state=2 fd=4.469282 ae=1
+10-31 08:34:04.047 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743341 frame=66 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:04.149 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743443 frame=69 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:04.261 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743555 frame=72 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:04.365 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743659 frame=76 mode=4 state=2 fd=4.1781917 ae=1
+10-31 08:34:04.467 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743761 frame=79 mode=4 state=2 fd=4.469282 ae=1
+10-31 08:34:04.572 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743866 frame=82 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:04.673 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771743967 frame=85 mode=4 state=2 fd=4.469282 ae=1
+10-31 08:34:04.776 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744070 frame=88 mode=4 state=2 fd=4.5222073 ae=1
+10-31 08:34:04.880 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744174 frame=91 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:04.983 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744277 frame=94 mode=4 state=2 fd=4.4957447 ae=1
+10-31 08:34:05.094 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744388 frame=97 mode=4 state=2 fd=4.442819 ae=1
+10-31 08:34:05.195 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744489 frame=100 mode=4 state=2 fd=4.1781917 ae=1
+10-31 08:34:05.301 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744595 frame=104 mode=4 state=2 fd=3.6224732 ae=1
+10-31 08:34:05.403 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744697 frame=107 mode=4 state=2 fd=2.7492023 ae=1
+10-31 08:34:05.506 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744800 frame=109 mode=4 state=2 fd=2.4581118 ae=1
+10-31 08:34:05.608 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771744901 frame=113 mode=4 state=2 fd=2.7227397 ae=1
+10-31 08:34:05.711 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745004 frame=116 mode=4 state=2 fd=2.4051867 ae=1
+10-31 08:34:05.815 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745108 frame=119 mode=4 state=2 fd=1.5848408 ae=1
+10-31 08:34:05.933 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745227 frame=122 mode=4 state=2 fd=1.7700806 ae=1
+10-31 08:34:06.038 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745332 frame=126 mode=4 state=2 fd=1.7171545 ae=1
+10-31 08:34:06.141 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745435 frame=129 mode=4 state=2 fd=1.6642294 ae=1
+10-31 08:34:06.243 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745537 frame=132 mode=4 state=2 fd=1.452527 ae=1
+10-31 08:34:06.346 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745639 frame=135 mode=4 state=2 fd=1.452527 ae=1
+10-31 08:34:06.448 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745741 frame=138 mode=4 state=2 fd=1.9023943 ae=1
+10-31 08:34:06.552 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745846 frame=141 mode=4 state=2 fd=3.4372344 ae=1
+10-31 08:34:06.657 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771745951 frame=144 mode=4 state=2 fd=4.336968 ae=1
+10-31 08:34:06.765 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746059 frame=147 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:06.867 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746161 frame=151 mode=4 state=2 fd=4.7339096 ae=1
+10-31 08:34:06.969 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746263 frame=154 mode=4 state=2 fd=4.7339096 ae=1
+10-31 08:34:07.071 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746365 frame=157 mode=4 state=2 fd=4.7339096 ae=1
+10-31 08:34:07.171 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746465 frame=160 mode=4 state=2 fd=4.7339096 ae=1
+10-31 08:34:07.274 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746568 frame=163 mode=4 state=2 fd=4.469282 ae=1
+10-31 08:34:07.375 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746669 frame=166 mode=4 state=2 fd=4.125266 ae=1
+10-31 08:34:07.478 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746771 frame=169 mode=4 state=2 fd=3.1196814 ae=1
+10-31 08:34:07.581 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746875 frame=172 mode=4 state=2 fd=2.5375004 ae=1
+10-31 08:34:07.694 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771746987 frame=175 mode=4 state=2 fd=2.1934843 ae=1
+10-31 08:34:07.797 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747091 frame=179 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:07.901 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747195 frame=182 mode=4 state=2 fd=2.4051867 ae=1
+10-31 08:34:08.003 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747297 frame=185 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:08.105 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747398 frame=188 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:08.208 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747502 frame=191 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:08.312 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747606 frame=194 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:08.417 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747710 frame=197 mode=4 state=2 fd=2.06117 ae=1
+10-31 08:34:08.519 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747812 frame=200 mode=4 state=2 fd=1.7700806 ae=1
+10-31 08:34:08.627 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771747920 frame=203 mode=4 state=2 fd=2.1405587 ae=1
+10-31 08:34:08.735 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748028 frame=206 mode=4 state=2 fd=3.463697 ae=1
+10-31 08:34:08.837 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748131 frame=210 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:08.940 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748234 frame=213 mode=4 state=2 fd=4.760372 ae=1
+10-31 08:34:09.045 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748338 frame=216 mode=4 state=2 fd=4.813298 ae=1
+10-31 08:34:09.147 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748441 frame=219 mode=4 state=2 fd=4.839761 ae=1
+10-31 08:34:09.251 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748543 frame=222 mode=4 state=2 fd=4.839761 ae=1
+10-31 08:34:09.359 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748653 frame=225 mode=4 state=2 fd=4.813298 ae=1
+10-31 08:34:09.460 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748754 frame=229 mode=4 state=2 fd=4.8926864 ae=1
+10-31 08:34:09.562 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748856 frame=232 mode=4 state=2 fd=4.813298 ae=1
+10-31 08:34:09.664 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771748958 frame=235 mode=4 state=2 fd=4.813298 ae=1
+10-31 08:34:09.764 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749058 frame=238 mode=4 state=2 fd=2.907979 ae=1
+10-31 08:34:09.865 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749159 frame=241 mode=4 state=2 fd=1.8494682 ae=1
+10-31 08:34:09.965 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749259 frame=244 mode=4 state=2 fd=1.5054522 ae=1
+10-31 08:34:10.067 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749360 frame=247 mode=4 state=2 fd=1.5583782 ae=1
+10-31 08:34:10.167 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749461 frame=250 mode=4 state=2 fd=1.5583782 ae=1
+10-31 08:34:10.269 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749563 frame=253 mode=4 state=2 fd=1.8230057 ae=1
+10-31 08:34:10.371 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749665 frame=256 mode=4 state=2 fd=1.7965431 ae=1
+10-31 08:34:10.472 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749766 frame=259 mode=4 state=2 fd=1.3466759 ae=1
+10-31 08:34:10.572 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749866 frame=262 mode=4 state=2 fd=1.3466759 ae=1
+10-31 08:34:10.673 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771749967 frame=265 mode=4 state=2 fd=1.452527 ae=1
+10-31 08:34:10.774 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750068 frame=268 mode=4 state=2 fd=5.4219418 ae=1
+10-31 08:34:10.875 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750169 frame=271 mode=4 state=2 fd=6.401064 ae=1
+10-31 08:34:10.975 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750269 frame=274 mode=4 state=2 fd=6.4275265 ae=1
+10-31 08:34:11.078 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750372 frame=277 mode=4 state=2 fd=6.480452 ae=1
+10-31 08:34:11.179 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750473 frame=280 mode=4 state=2 fd=6.3746014 ae=1
+10-31 08:34:11.280 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750574 frame=283 mode=4 state=2 fd=6.401064 ae=1
+10-31 08:34:11.382 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750676 frame=286 mode=4 state=2 fd=6.4275265 ae=1
+10-31 08:34:11.485 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750778 frame=289 mode=4 state=2 fd=6.5598407 ae=1
+10-31 08:34:11.588 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750882 frame=292 mode=4 state=2 fd=6.1099734 ae=1
+10-31 08:34:11.694 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771750987 frame=295 mode=4 state=2 fd=6.401064 ae=1
+10-31 08:34:11.796 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751090 frame=299 mode=4 state=2 fd=5.686569 ae=1
+10-31 08:34:11.897 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751191 frame=302 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.000 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751292 frame=304 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.101 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751395 frame=308 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.205 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751499 frame=311 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.307 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751600 frame=314 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.409 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751703 frame=317 mode=4 state=2 fd=5.607181 ae=1
+10-31 08:34:12.510 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751804 frame=320 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.612 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771751906 frame=323 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.721 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752015 frame=326 mode=4 state=2 fd=5.2896276 ae=1
+10-31 08:34:12.826 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752120 frame=329 mode=4 state=2 fd=5.5542555 ae=1
+10-31 08:34:12.927 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752221 frame=333 mode=4 state=2 fd=5.5542555 ae=1
+10-31 08:34:13.035 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752329 frame=336 mode=4 state=2 fd=5.5542555 ae=1
+10-31 08:34:13.136 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752430 frame=339 mode=4 state=2 fd=5.580718 ae=1
+10-31 08:34:13.238 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752531 frame=342 mode=4 state=2 fd=4.654521 ae=1
+10-31 08:34:13.340 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752634 frame=345 mode=4 state=2 fd=4.5751333 ae=1
+10-31 08:34:13.443 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752737 frame=348 mode=4 state=2 fd=2.8285909 ae=1
+10-31 08:34:13.546 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752840 frame=351 mode=4 state=2 fd=1.0026598 ae=1
+10-31 08:34:13.648 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771752942 frame=354 mode=4 state=2 fd=1.4789896 ae=1
+10-31 08:34:13.754 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753048 frame=357 mode=4 state=2 fd=1.8230057 ae=1
+10-31 08:34:13.857 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753151 frame=361 mode=4 state=2 fd=1.690692 ae=1
+10-31 08:34:13.966 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753260 frame=363 mode=4 state=2 fd=1.690692 ae=1
+10-31 08:34:14.069 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753363 frame=367 mode=4 state=2 fd=1.690692 ae=1
+10-31 08:34:14.171 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753464 frame=370 mode=4 state=2 fd=1.7700806 ae=1
+10-31 08:34:14.274 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753568 frame=373 mode=4 state=2 fd=4.8662233 ae=1
+10-31 08:34:14.380 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753674 frame=376 mode=4 state=2 fd=4.839761 ae=1
+10-31 08:34:14.487 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753781 frame=379 mode=4 state=2 fd=4.6809845 ae=1
+10-31 08:34:14.600 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753894 frame=382 mode=4 state=2 fd=4.6809845 ae=1
+10-31 08:34:14.701 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771753995 frame=386 mode=4 state=2 fd=5.025 ae=1
+10-31 08:34:14.805 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771754099 frame=389 mode=4 state=2 fd=4.707447 ae=1
+10-31 08:34:14.908 16394 16422 I RawLensCamera: AF acceptance raw-idle-move-target t=771754201 frame=392 mode=4 state=2 fd=4.9985375 ae=1
+10-31 08:34:15.122 16394 16468 I RawLensCamera: Opening camera 0 (selected 0) [primary combo 0]
+10-31 08:34:15.231 16394 16468 I RawLensCamera: Camera device opened: 0
+10-31 08:34:15.256 16394 16468 I RawLensCamera: ZSL blur limit 1.5px focal=2705px -> 5.55e-04 rad
+10-31 08:34:15.264 16394 16468 I RawLensCamera: RAW ZSL FPS target=30 range=[30, 30] raw=4080x3060
+10-31 08:34:15.265 16394 16468 I RawLensCamera: RAW stream combo raw=4080x3060 preview=1440x1080 maxImages=30 minFrameNs=50000000 stallNs=33333333 compat=false gpuTrial=false combo=FULL attempt=2/4
+10-31 08:34:15.268 16394 16468 I RawLensCamera: Submitting vendor session: VendorSessionAttempt(operatingMode=0, parameters=false) legacy=false
+10-31 08:34:15.353 16394 16468 I RawLensCamera: Session ready (zsl=false vf=true)
+10-31 08:34:15.354 16394 16468 I RawLensCamera: AF caps modes=[OFF,AUTO,MACRO,CONT_VIDEO,CONT_PICTURE] maxAfRegions=1 idle=CONT_PICTURE
+10-31 08:34:15.874 16394 16468 I RawLensCamera: First RAW stream image 4080x3060 ts=771755124832260
+10-31 08:34:15.894 16394 16468 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=4.36D
+10-31 08:34:15.945 16394 16422 I RawLensCamera: AF acceptance NORMAL_PREVIEW camera=0 size=1440x1080
+10-31 08:34:15.945 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755239 frame=2 mode=4 state=6 fd=4.363431 ae=1
+10-31 08:34:16.046 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755340 frame=5 mode=4 state=6 fd=3.199069 ae=1
+10-31 08:34:16.147 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755441 frame=8 mode=4 state=6 fd=3.7547874 ae=1
+10-31 08:34:16.254 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755548 frame=11 mode=4 state=6 fd=4.284043 ae=1
+10-31 08:34:16.271 16394 16468 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=4.28D
+10-31 08:34:16.359 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755653 frame=14 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.461 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755755 frame=17 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.562 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755856 frame=20 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.663 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771755957 frame=23 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.767 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756060 frame=27 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.873 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756164 frame=29 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:16.975 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756268 frame=33 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.080 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756373 frame=36 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.182 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756476 frame=39 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.289 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756583 frame=42 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.390 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756684 frame=45 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:17.493 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756787 frame=48 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.594 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756888 frame=51 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:17.695 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771756989 frame=54 mode=4 state=2 fd=2.7227397 ae=1
+10-31 08:34:17.797 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757091 frame=57 mode=4 state=2 fd=2.1140962 ae=1
+10-31 08:34:17.900 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757194 frame=61 mode=4 state=2 fd=2.2728724 ae=1
+10-31 08:34:18.001 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757295 frame=64 mode=4 state=2 fd=2.2728724 ae=1
+10-31 08:34:18.110 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757402 frame=67 mode=4 state=2 fd=1.9553194 ae=1
+10-31 08:34:18.214 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757508 frame=70 mode=4 state=2 fd=2.2199469 ae=1
+10-31 08:34:18.320 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757614 frame=73 mode=4 state=2 fd=1.9553194 ae=1
+10-31 08:34:18.422 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757716 frame=76 mode=4 state=2 fd=1.6377659 ae=1
+10-31 08:34:18.525 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757819 frame=79 mode=4 state=2 fd=3.4901595 ae=1
+10-31 08:34:18.626 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771757920 frame=82 mode=4 state=2 fd=3.6753993 ae=1
+10-31 08:34:18.728 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758021 frame=85 mode=4 state=2 fd=4.098803 ae=1
+10-31 08:34:18.831 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758124 frame=88 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:18.933 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758227 frame=92 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:19.035 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758329 frame=95 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.141 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758435 frame=98 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.243 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758537 frame=101 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.347 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758640 frame=104 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.453 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758747 frame=107 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.555 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758849 frame=110 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.656 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771758950 frame=113 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.758 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759052 frame=116 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.859 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759153 frame=119 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:19.962 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759256 frame=122 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.063 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759357 frame=126 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.165 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759459 frame=128 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:20.269 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759563 frame=132 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.374 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759667 frame=135 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.476 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759770 frame=138 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.579 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759873 frame=141 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:20.703 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771759996 frame=144 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:20.813 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760107 frame=148 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:20.916 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760210 frame=151 mode=4 state=2 fd=4.5751333 ae=1
+10-31 08:34:21.020 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760314 frame=154 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:21.126 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760420 frame=157 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:21.228 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760521 frame=160 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:21.329 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760622 frame=163 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:21.431 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760724 frame=166 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:21.532 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760826 frame=170 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:21.636 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771760930 frame=173 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:21.738 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761032 frame=176 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:21.844 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761138 frame=179 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:21.952 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761246 frame=182 mode=4 state=2 fd=4.5486703 ae=1
+10-31 08:34:22.061 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761355 frame=185 mode=4 state=2 fd=4.654521 ae=1
+10-31 08:34:22.162 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761455 frame=188 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.264 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761558 frame=192 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.366 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761659 frame=195 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.467 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761761 frame=198 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.569 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761863 frame=201 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.675 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771761969 frame=204 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.778 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762071 frame=207 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.880 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762173 frame=210 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:22.984 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762276 frame=213 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.087 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762381 frame=216 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.189 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762483 frame=219 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.291 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762585 frame=222 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.393 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762687 frame=226 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.494 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762788 frame=229 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.596 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762890 frame=232 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.698 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771762991 frame=235 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.799 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771763092 frame=238 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:23.901 16394 16422 I RawLensCamera: AF acceptance isp-idle-move-target t=771763195 frame=241 mode=4 state=2 fd=4.284043 ae=1
+10-31 08:34:25.205 16394 16422 I RawLensCamera: AF acceptance EXPOSURE AUTO
+10-31 08:34:25.218 16394 16468 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:34:25.222 16394 16468 I RawLensCamera: Photo AF run=4 mode=1 START queued
+10-31 08:34:25.223 16394 16468 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:34:25.328 16394 16468 I RawLensCamera: Focus peaking first sample: grid=128x96 passes=310 meanEnergy=0.00083 peakEnergy=0.3375 gate=0.008 ratio=0.65 cfa=2
+10-31 08:34:25.333 16394 16468 I RawLensCamera: Photo AF run=5 mode=1 START queued
+10-31 08:34:25.420 16394 16468 I RawLensCamera: Photo AF run=6 mode=1 START queued
+10-31 08:34:25.605 16394 16468 I RawLensCamera: Photo AF run=6 START frame=293
+10-31 08:34:25.622 16394 16468 I RawLensCamera: Photo AF run=6 frame=293 ACTIVE_SCAN
+10-31 08:34:25.894 16394 16468 I RawLensCamera: Photo AF run=6 frame=301 FOCUSED_LOCKED
+10-31 08:34:25.924 16394 16422 I RawLensCamera: AF acceptance VERDICT AUTO active=true state=4 mode=1
+10-31 08:34:25.924 16394 16422 I RawLensCamera: AF acceptance AUTO-after-taps t=771765218 frame=301 mode=1 state=4 fd=1.5848408 ae=1
+10-31 08:34:26.026 16394 16422 I RawLensCamera: AF acceptance AUTO-after-taps t=771765320 frame=304 mode=1 state=4 fd=1.5848408 ae=1
+10-31 08:34:26.141 16394 16422 I RawLensCamera: AF acceptance AUTO-after-taps t=771765435 frame=308 mode=1 state=4 fd=1.5848408 ae=1
+10-31 08:34:26.246 16394 16422 I RawLensCamera: AF acceptance AUTO-after-taps t=771765539 frame=311 mode=1 state=4 fd=1.5848408 ae=1
+10-31 08:34:26.351 16394 16422 I RawLensCamera: AF acceptance AUTO-after-taps t=771765643 frame=314 mode=1 state=4 fd=1.5848408 ae=1
+10-31 08:34:26.455 16394 16468 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:34:26.458 16394 16468 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:34:26.664 16394 16468 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=1.58D
+10-31 08:34:26.714 16394 16468 I RawLensCamera: PROGRAM start ISO 978 EXP 1/15
+10-31 08:34:27.466 16394 16468 I RawLensCamera: Idle AF PASSIVE_SCAN mode=CONT_PICTURE fd=3.33D
+10-31 08:34:27.869 16394 16422 I RawLensCamera: AF acceptance EXPOSURE PROGRAM
+10-31 08:34:27.871 16394 16468 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:34:27.874 16394 16468 I RawLensCamera: Photo AF run=8 mode=1 START queued
+10-31 08:34:27.874 16394 16468 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:34:27.977 16394 16468 I RawLensCamera: Photo AF run=9 mode=1 START queued
+10-31 08:34:28.077 16394 16468 I RawLensCamera: Photo AF run=10 mode=1 START queued
+10-31 08:34:28.454 16394 16468 I RawLensCamera: Photo AF run=10 START frame=354
+10-31 08:34:28.474 16394 16468 I RawLensCamera: Photo AF run=10 frame=354 ACTIVE_SCAN
+10-31 08:34:28.941 16394 16468 I RawLensCamera: Photo AF run=10 frame=361 FOCUSED_LOCKED
+10-31 08:34:28.992 16394 16422 I RawLensCamera: AF acceptance VERDICT PROGRAM active=true state=4 mode=1
+10-31 08:34:28.993 16394 16422 I RawLensCamera: AF acceptance PROGRAM-after-taps t=771768287 frame=361 mode=1 state=4 fd=1.3202124 ae=0
+10-31 08:34:29.097 16394 16422 I RawLensCamera: AF acceptance PROGRAM-after-taps t=771768391 frame=363 mode=1 state=4 fd=1.3202124 ae=0
+10-31 08:34:29.199 16394 16422 I RawLensCamera: AF acceptance PROGRAM-after-taps t=771768493 frame=364 mode=1 state=4 fd=1.3202124 ae=0
+10-31 08:34:29.301 16394 16422 I RawLensCamera: AF acceptance PROGRAM-after-taps t=771768595 frame=366 mode=1 state=4 fd=1.3202124 ae=0
+10-31 08:34:29.403 16394 16422 I RawLensCamera: AF acceptance PROGRAM-after-taps t=771768697 frame=367 mode=1 state=4 fd=1.3202124 ae=0
+10-31 08:34:29.506 16394 16468 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:34:29.508 16394 16468 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:34:29.880 16394 16468 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=1.32D
+10-31 08:34:31.119 16394 16422 I RawLensCamera: AF acceptance EXPOSURE MANUAL
+10-31 08:34:31.121 16394 16468 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:34:31.127 16394 16468 I RawLensCamera: Photo AF run=12 mode=1 START queued
+10-31 08:34:31.127 16394 16468 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:34:31.230 16394 16468 I RawLensCamera: Photo AF run=13 mode=1 START queued
+10-31 08:34:31.326 16394 16468 I RawLensCamera: Photo AF run=14 mode=1 START queued
+10-31 08:34:31.745 16394 16468 I RawLensCamera: Photo AF run=14 START frame=403
+10-31 08:34:31.766 16394 16468 I RawLensCamera: Photo AF run=14 frame=403 ACTIVE_SCAN
+10-31 08:34:32.033 16394 16468 I RawLensCamera: Photo AF run=14 frame=407 FOCUSED_LOCKED
+10-31 08:34:32.060 16394 16422 I RawLensCamera: AF acceptance VERDICT MANUAL active=true state=4 mode=1
+10-31 08:34:32.062 16394 16422 I RawLensCamera: AF acceptance MANUAL-after-taps t=771771356 frame=407 mode=1 state=4 fd=1.5054522 ae=0
+10-31 08:34:32.165 16394 16422 I RawLensCamera: AF acceptance MANUAL-after-taps t=771771458 frame=408 mode=1 state=4 fd=1.5054522 ae=0
+10-31 08:34:32.268 16394 16422 I RawLensCamera: AF acceptance MANUAL-after-taps t=771771561 frame=410 mode=1 state=4 fd=1.5054522 ae=0
+10-31 08:34:32.381 16394 16422 I RawLensCamera: AF acceptance MANUAL-after-taps t=771771675 frame=412 mode=1 state=4 fd=1.5054522 ae=0
+10-31 08:34:32.485 16394 16422 I RawLensCamera: AF acceptance MANUAL-after-taps t=771771779 frame=413 mode=1 state=4 fd=1.5054522 ae=0
+10-31 08:34:32.589 16394 16468 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:34:32.591 16394 16468 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:34:32.972 16394 16468 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=1.51D
+10-31 08:34:33.024 16394 16468 I RawLensCamera: Manual focus cleared (AF back to auto)
+10-31 08:35:07.364 15245 17064 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:35:07.369 15245 17064 I RawLensCamera: Photo AF run=2 mode=1 START queued
+10-31 08:35:07.369 15245 17064 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:35:07.470 15245 17064 I RawLensCamera: Focus peaking first sample: grid=128x96 passes=3 meanEnergy=0.00042 peakEnergy=0.5745 gate=0.008 ratio=0.65 cfa=2
+10-31 08:35:07.560 15245 17064 I RawLensCamera: Photo AF run=2 START frame=265
+10-31 08:35:07.565 15245 17064 I RawLensCamera: Photo AF run=2 frame=265 ACTIVE_SCAN
+10-31 08:35:07.763 15245 17064 I RawLensCamera: Photo AF run=2 frame=271 FOCUSED_LOCKED
+10-31 08:35:17.766 15245 17064 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:35:17.768 15245 17064 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:35:17.966 15245 17064 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=1.82D
+10-31 08:35:18.002 15245 17064 I RawLensCamera: Idle AF PASSIVE_SCAN mode=CONT_PICTURE fd=3.28D
+10-31 08:35:18.098 15245 17064 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=3.54D
+10-31 08:35:18.343 15245 17064 I RawLensCamera: AF request AUTO reason=touch region=tap
+10-31 08:35:18.347 15245 17064 I RawLensCamera: Photo AF run=4 mode=1 START queued
+10-31 08:35:18.348 15245 17064 I RawLensCamera: Focus peaking SHOWN (manual=false touch=true enabled=true)
+10-31 08:35:18.527 15245 17064 I RawLensCamera: Photo AF run=4 START frame=594
+10-31 08:35:18.532 15245 17064 I RawLensCamera: Photo AF run=4 frame=594 ACTIVE_SCAN
+10-31 08:35:18.741 15245 17064 I RawLensCamera: Photo AF run=4 frame=600 FOCUSED_LOCKED
+10-31 08:36:33.560 15245 17064 I RawLensCamera: Photo AF run=5 mode=1 START queued
+10-31 08:36:33.622 15245 17064 I RawLensCamera: AF request CONT_PICTURE reason=idle region=full-frame
+10-31 08:36:33.625 15245 17064 I RawLensCamera: Focus peaking HIDDEN (manual=false touch=false enabled=true)
+10-31 08:36:33.823 15245 17064 I RawLensCamera: Idle AF PASSIVE_UNFOCUSED mode=CONT_PICTURE fd=4.13D
+10-31 08:36:36.894 15245 17064 I RawLensCamera: Idle AF PASSIVE_SCAN mode=CONT_PICTURE fd=3.73D
+10-31 08:36:37.088 15245 17064 I RawLensCamera: Idle AF PASSIVE_FOCUSED mode=CONT_PICTURE fd=3.54D
