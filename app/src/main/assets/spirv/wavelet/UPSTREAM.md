@@ -1,34 +1,48 @@
 # Upstream provenance: RAWR raw_denoise
 
-Vendored: 2026-10-11, from `native/raw_denoise` (sources + shaders,
-byte-identical) and its validation harness inputs.
+Source: https://github.com/adityawarmanfw/rawr
 
-- Source: https://github.com/adityawarmanfw/rawr
-- Revision: 87c2209 (release 0.3.1, 2026-10-11)
-- License: GPL-3.0-only (compatible with RawLens GPL-3.0-or-later)
+Originally vendored 2026-10-11 at 87c2209. Re-audited and restored to exact
+source parity 2026-11-01 against revision
+`537852ec0e109f78fb4ed54bc6a692d9c7cfca92`.
 
-Rawr's own upstream note (`native/raw_denoise/NOTICE.md`, copied to
-`app/src/main/cpp/wavelet/upstream/NOTICE.md`):
+License: GPL-3.0-only (RawLens is GPL-3.0-or-later). The module itself ports
+[darktable's](https://github.com/darktable-org/darktable) GPL denoiseprofile
+wavelet path; see `app/src/main/cpp/wavelet/upstream/NOTICE.md`.
 
-> GPU port of **darktable's** `denoiseprofile` wavelet path
-> (<https://github.com/darktable-org/darktable>), GPL-3.0-or-later.
+Byte-identical RAWR files:
 
-What RawLens vendors 1:1 (behavior bit-identical):
+- `native/raw_denoise/include/raw_denoise/DenoisePipeline.hpp` →
+  `app/src/main/cpp/wavelet/upstream/include/raw_denoise/DenoisePipeline.hpp`
+- `native/raw_denoise/src/DenoisePipeline.cpp` →
+  `app/src/main/cpp/wavelet/upstream/src/DenoisePipeline.cpp`
+- `native/raw_denoise/NOTICE.md` → the vendored `NOTICE.md`
+- `native/raw_denoise/shaders/denoise_img_*.comp` → the four shaders here.
+  SPIR-V is built with `glslangValidator -V --target-env vulkan1.1`.
 
-- `app/src/main/cpp/wavelet/upstream/`: `DenoisePipeline.hpp` +
-  `DenoisePipeline.cpp`, unmodified.
-- This directory: the 4 `denoise_img_*.comp` shaders, unmodified, plus
-  `.spv` compiled with `glslangValidator -V --target-env vulkan1.1`.
-- `tools/wavelet-parity/`: `denoiseprofile_oracle.py` (float32 darktable
-  port), `verify_denoise_parity.py` (adapted paths only), one frozen
-  fixture set (`RAWR_20260926_000415_161` input + s1 golden) with its
-  manifest row, and the `denoise_bench` host harness (+ the 61-line
-  `vk_test_common.hpp` it needs). The other two fixture sets were not
-  vendored (30 MB total); point the script at a rawr checkout to run them.
+The local atrous apply shortcut, partial-buffer allocation optimization, and
+per-pass query extension were removed to satisfy exact source identity.
 
-RawLens-authored (not upstream):
+RawLens-specific integration remains: `wavelet_host.*`, JNI, Kotlin facade,
+metadata/settings adapters and camera-linear readback/upload. Photo settings
+mirror RAWR: strength 0–8 step 0.1, detail 0–1.8 step 0.05 (VST shadows),
+luma 0–1 step 0.05 (forceY, independent of detail), scales 1–7; chroma 0.75.
+Noise profile selection/normalization follows RAWR's CFA-aware green-site
+average and black-level term; invalid/missing profiles bypass denoise.
 
-- `app/src/main/cpp/wavelet/wavelet_host.*`, `wavelet_jni.cpp`: private
-  Vulkan device, staging upload/download of RGBA16F, JNI.
-- `WaveletDenoiser.kt`, `DenoiseSettings` wavelet fields, `resolve()`,
-  camera-linear tap + post-CCM pass in the AMaZE/JPEG path.
+Reproduce source and same-GPU byte parity:
+
+```sh
+python3 tools/wavelet-parity/prove_rawr_parity.py \
+  --reference /path/to/rawr --out /tmp/rawlens-wavelet-proof
+```
+
+This builds RAWR and RawLens independently, compiles reference shaders, checks
+source/SPIR-V identity, and compares complete output bytes over ten cases.
+The validation harness adapts include paths and probes the host portability
+extension before enabling it; no algorithm changes are made in the harness.
+`run_parity.sh` separately checks the frozen Python oracle with upstream
+float tolerances. Neither test claims bit identity between different GPU
+vendors, or between the complete RAWR and RawLens JPEG pipelines.
+
+See `docs/refactor/wavelet-rawr-parity.md` and its saved JSON evidence.

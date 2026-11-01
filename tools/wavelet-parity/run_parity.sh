@@ -84,6 +84,9 @@ for fx in manifest["fixtures"]:
           f"{'PASS' if ok else 'FAIL'}")
     report["fixtures"].append(stats)
     report["pass"] = report["pass"] and ok
+if not report["fixtures"]:
+    report["pass"] = False
+    report["error"] = "no fixtures selected"
 json.dump(report, open(os.path.join(OUT, "parity.json"), "w"), indent=2)
 print("PARITY_" + ("PASS" if report["pass"] else "FAIL"))
 sys.exit(0 if report["pass"] else 1)

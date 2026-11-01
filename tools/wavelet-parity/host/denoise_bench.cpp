@@ -21,8 +21,8 @@
 #include <tuple>
 #include <vector>
 
-#include "vk_test_common.hpp"  // RAWLENS: local copy, was ../../vk_common/testing/
-#include "raw_denoise/DenoisePipeline.hpp"  // RAWLENS: -I to app cpp/wavelet/upstream/include
+#include "vk_test_common.hpp"
+#include "raw_denoise/DenoisePipeline.hpp"
 
 namespace {
 
@@ -136,23 +136,15 @@ int main(int argc, char** argv) {
             ii.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
             ii.pApplicationInfo = &ai;
 #ifdef __APPLE__
-            // RAWLENS: enable portability enumeration only when the driver
-            // advertises it (direct-linked MoltenVK may not; physical-device
-            // enumeration still works without it).
-            {
-                uint32_t ieCount = 0;
-                vkEnumerateInstanceExtensionProperties(nullptr, &ieCount, nullptr);
-                std::vector<VkExtensionProperties> ieProps(ieCount);
-                vkEnumerateInstanceExtensionProperties(nullptr, &ieCount, ieProps.data());
-                for (const auto& e : ieProps) {
-                    if (std::strcmp(e.extensionName, "VK_KHR_portability_enumeration") == 0) {
-                        ii.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-                        static const char* ie[] = {"VK_KHR_portability_enumeration"};
-                        ii.enabledExtensionCount = 1;
-                        ii.ppEnabledExtensionNames = ie;
-                        break;
-                    }
-                }
+            uint32_t ne = 0;
+            vktest::ck(vkEnumerateInstanceExtensionProperties(nullptr, &ne, nullptr), "extensions");
+            std::vector<VkExtensionProperties> exts(ne);
+            vktest::ck(vkEnumerateInstanceExtensionProperties(nullptr, &ne, exts.data()), "extensions");
+            const char* ie[] = {"VK_KHR_portability_enumeration"};
+            for (const auto& e : exts) if (std::strcmp(e.extensionName, ie[0]) == 0) {
+                ii.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+                ii.enabledExtensionCount = 1;
+                ii.ppEnabledExtensionNames = ie;
             }
 #endif
             vktest::ck(vkCreateInstance(&ii, nullptr, &ctx.inst), "instance");
@@ -183,21 +175,9 @@ int main(int argc, char** argv) {
             di.queueCreateInfoCount = 1;
             di.pQueueCreateInfos = &qi;
 #ifdef __APPLE__
-            // RAWLENS: same advertise-check as the instance extension above.
-            {
-                uint32_t deCount = 0;
-                vkEnumerateDeviceExtensionProperties(ps[0], nullptr, &deCount, nullptr);
-                std::vector<VkExtensionProperties> deProps(deCount);
-                vkEnumerateDeviceExtensionProperties(ps[0], nullptr, &deCount, deProps.data());
-                for (const auto& e : deProps) {
-                    if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0) {
-                        static const char* de[] = {"VK_KHR_portability_subset"};
-                        di.enabledExtensionCount = 1;
-                        di.ppEnabledExtensionNames = de;
-                        break;
-                    }
-                }
-            }
+            const char* de[] = {"VK_KHR_portability_subset"};
+            di.enabledExtensionCount = 1;
+            di.ppEnabledExtensionNames = de;
 #endif
             vktest::ck(vkCreateDevice(ctx.pd, &di, nullptr, &ctx.dev), "device");
             vkGetDeviceQueue(ctx.dev, ctx.qf, 0, &ctx.q);
@@ -281,20 +261,12 @@ int main(int argc, char** argv) {
             ai.commandBufferCount = 1;
             vktest::ck(vkAllocateCommandBuffers(dev, &ai, &cmd), "bench cmd");
         }
-        // Opt-in per-dispatch timestamps; production never requests these.
-        const bool profilePasses = std::getenv("DENOISE_PROFILE") != nullptr;
-        const uint32_t tile = std::max(c.tile, 256u);
-        const int scales = std::clamp(c.scales, 1, 7);
-        const uint32_t passesPerTile = 2u + 3u * uint32_t(scales);
-        const uint32_t passCount = ((c.w + tile - 1) / tile) *
-                                   ((c.h + tile - 1) / tile) * passesPerTile;
-        const uint32_t queryCount = profilePasses ? 2 + 2 * passCount : 2;
         VkQueryPool tsPool{};
         {
             VkQueryPoolCreateInfo qi{};
             qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-            qi.queryCount = queryCount;
+            qi.queryCount = 2;
             vktest::ck(vkCreateQueryPool(dev, &qi, nullptr, &tsPool), "bench ts");
         }
         auto imgBarrier = [&](VkImage img, VkAccessFlags dst, VkImageLayout next) {
@@ -340,7 +312,7 @@ int main(int argc, char** argv) {
             }
             imgBarrier(outImg, VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL);
             if (timed) {
-                vkCmdResetQueryPool(cmd, tsPool, 0, queryCount);
+                vkCmdResetQueryPool(cmd, tsPool, 0, 2);
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool, 0);
             }
             raw_denoise::DenoiseParams p{};
@@ -353,8 +325,7 @@ int main(int argc, char** argv) {
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;
-            pipe.record(cmd, inView, outView, c.w, c.h, p, VK_NULL_HANDLE,
-                        timed && profilePasses ? tsPool : VK_NULL_HANDLE);
+            pipe.record(cmd, inView, outView, c.w, c.h, p, VK_NULL_HANDLE);
             if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool, 1);
             vktest::ck(vkEndCommandBuffer(cmd), "bench end");
             VkSubmitInfo si{};
@@ -460,25 +431,6 @@ int main(int argc, char** argv) {
         }
         std::printf("BENCH_RESULT tile=%u scales=%d w=%u h=%u best_gpu_ms=%.2f\n", c.tile, c.scales,
                     c.w, c.h, best);
-        if (profilePasses) {
-            std::vector<uint64_t> stamps(2 * passCount);
-            vktest::ck(vkGetQueryPoolResults(dev, tsPool, 2, uint32_t(stamps.size()),
-                          stamps.size() * sizeof(uint64_t), stamps.data(), sizeof(uint64_t),
-                          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "bench pass ts");
-            VkPhysicalDeviceProperties prop{};
-            vkGetPhysicalDeviceProperties(ctx.pd, &prop);
-            double sums[5] = {};
-            const char* names[] = {"precondition", "estimate", "threshold", "apply", "backtransform"};
-            for (uint32_t i = 0; i < passCount; ++i) {
-                const uint32_t local = i % passesPerTile;
-                const uint32_t kind = local == 0 ? 0 : local == passesPerTile - 1 ? 4 :
-                                      1 + (local - 1) % 3;
-                sums[kind] += double(stamps[2*i+1] - stamps[2*i]) * prop.limits.timestampPeriod / 1e6;
-            }
-            for (int i = 0; i < 5; ++i)
-                std::printf("BENCH_PASS %s gpu_ms=%.3f (last iteration, all tiles/scales)\n",
-                            names[i], sums[i]);
-        }
         if (!c.dumpPrePath.empty()) {
             // Download the preconditioned first tile (device-local OPTIMAL).
             VkImage fineImg = pipe.debugFineImage();

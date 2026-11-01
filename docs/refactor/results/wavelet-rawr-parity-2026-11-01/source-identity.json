@@ -1,0 +1,48 @@
+{
+  "revision": "537852ec0e109f78fb4ed54bc6a692d9c7cfca92",
+  "files": [
+    {
+      "reference": "native/raw_denoise/include/raw_denoise/DenoisePipeline.hpp",
+      "local": "app/src/main/cpp/wavelet/upstream/include/raw_denoise/DenoisePipeline.hpp",
+      "sha256": "86e49bcf23638aaab3ff3dd02b189133a5f74ceaed177c7d7ece582e0550dfcd",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/src/DenoisePipeline.cpp",
+      "local": "app/src/main/cpp/wavelet/upstream/src/DenoisePipeline.cpp",
+      "sha256": "36913dd44c5feb0c67e3b6363e0adaafd2eaf63c8083b6480f6dcba166b9de00",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/NOTICE.md",
+      "local": "app/src/main/cpp/wavelet/upstream/NOTICE.md",
+      "sha256": "1da3927a68f954d76cd48529d7c08a184598110b5bef42e1636eb5f392ed7ea5",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/shaders/denoise_img_atrous.comp",
+      "local": "app/src/main/assets/spirv/wavelet/denoise_img_atrous.comp",
+      "sha256": "d909e2a543b99e282738d3e7236c7555fd54186b83fc7976e21bfe0812db4290",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/shaders/denoise_img_backtransform.comp",
+      "local": "app/src/main/assets/spirv/wavelet/denoise_img_backtransform.comp",
+      "sha256": "758f28d6a7686334287703c2daf89ffd9672b71667fc69d627f3f28ce9cfe651",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/shaders/denoise_img_precondition.comp",
+      "local": "app/src/main/assets/spirv/wavelet/denoise_img_precondition.comp",
+      "sha256": "50e6a216e1167975b5c77f3ac161c19286a8afd46b710d6ec290827ac1a908ba",
+      "identical": true
+    },
+    {
+      "reference": "native/raw_denoise/shaders/denoise_img_threshold.comp",
+      "local": "app/src/main/assets/spirv/wavelet/denoise_img_threshold.comp",
+      "sha256": "49d9626e0c12c9fa5825c3376c3ea82d60d864fe37ae2c7d6fa049ffd9fca09e",
+      "identical": true
+    }
+  ],
+  "pass": true
+}

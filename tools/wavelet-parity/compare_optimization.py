@@ -35,7 +35,10 @@ def main():
     cases = [
         ('fixture-s6', 512, 512, 1536, 6, 1, 1, .25, .75, frozen),
         ('fixture-s1', 512, 512, 1536, 1, 1, 1, .25, .75, frozen),
-        ('fixture-s7-strong', 512, 512, 1536, 7, 8, 0, .4, 1, frozen),
+        ('fixture-s7-strong', 512, 512, 1536, 7, 8, 1.8, .4, .75, frozen),
+        ('fixture-detail-zero', 512, 512, 1536, 7, 1, 0, .25, .75, frozen),
+        ('fixture-detail-half', 512, 512, 1536, 7, 1, .5, .25, .75, frozen),
+        ('fixture-luma-full', 512, 512, 1536, 7, 1, 1, 1, .75, frozen),
         ('fixture-luma-off', 512, 512, 256, 7, 2, 1, 0, .75, frozen),
         ('partial-tiles', 1544, 1032, 1536, 7, 1, 1, .25, .75, None),
         ('small-tiles', 521, 519, 256, 6, 1, .5, .25, .75, None),

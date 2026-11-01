@@ -1,0 +1,166 @@
+{
+  "cases": [
+    {
+      "name": "fixture-s6",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 6,
+      "baseline_gpu_ms": 54.7,
+      "candidate_gpu_ms": 55.08,
+      "byte_identical": true,
+      "baseline_sha256": "b44e3dc061be7ac4606c909202614acb9b4553f7393bf30cba0ea127b142463d",
+      "candidate_sha256": "b44e3dc061be7ac4606c909202614acb9b4553f7393bf30cba0ea127b142463d",
+      "candidate_finite": true,
+      "speedup": 0.9931009440813363
+    },
+    {
+      "name": "fixture-s1",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 1,
+      "baseline_gpu_ms": 7.8,
+      "candidate_gpu_ms": 7.49,
+      "byte_identical": true,
+      "baseline_sha256": "ff6f70e6aaf7e1b0a1de8cfc4cb35caf894c338fa35170f9fc405561d966748b",
+      "candidate_sha256": "ff6f70e6aaf7e1b0a1de8cfc4cb35caf894c338fa35170f9fc405561d966748b",
+      "candidate_finite": true,
+      "speedup": 1.041388518024032
+    },
+    {
+      "name": "fixture-s7-strong",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 84.3,
+      "candidate_gpu_ms": 85.04,
+      "byte_identical": true,
+      "baseline_sha256": "20906a5bd4cd7001392ba8475504e8b33296e48a4594e1efc034d517e6ae7fdb",
+      "candidate_sha256": "20906a5bd4cd7001392ba8475504e8b33296e48a4594e1efc034d517e6ae7fdb",
+      "candidate_finite": true,
+      "speedup": 0.9912982126058324
+    },
+    {
+      "name": "fixture-detail-zero",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 85.87,
+      "candidate_gpu_ms": 84.81,
+      "byte_identical": true,
+      "baseline_sha256": "1aff775a5213e86d683a106f09abd5837c1898e0e4177ef27ac45b414737427f",
+      "candidate_sha256": "1aff775a5213e86d683a106f09abd5837c1898e0e4177ef27ac45b414737427f",
+      "candidate_finite": true,
+      "speedup": 1.0124985261172033
+    },
+    {
+      "name": "fixture-detail-half",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 85.13,
+      "candidate_gpu_ms": 86.67,
+      "byte_identical": true,
+      "baseline_sha256": "af6bf321f708120238664f947e81a8ac60b38aea012296b28385c2034332cd73",
+      "candidate_sha256": "af6bf321f708120238664f947e81a8ac60b38aea012296b28385c2034332cd73",
+      "candidate_finite": true,
+      "speedup": 0.982231452636437
+    },
+    {
+      "name": "fixture-luma-full",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 85.53,
+      "candidate_gpu_ms": 86.12,
+      "byte_identical": true,
+      "baseline_sha256": "2620f27f458f6ef23d7c72f0b2de55a94aafa9e71c8002466af7a8a0b09d846c",
+      "candidate_sha256": "2620f27f458f6ef23d7c72f0b2de55a94aafa9e71c8002466af7a8a0b09d846c",
+      "candidate_finite": true,
+      "speedup": 0.9931490942870413
+    },
+    {
+      "name": "fixture-luma-off",
+      "extent": [
+        512,
+        512
+      ],
+      "tile": 256,
+      "scales": 7,
+      "baseline_gpu_ms": 50.28,
+      "candidate_gpu_ms": 49.63,
+      "byte_identical": true,
+      "baseline_sha256": "f02a259396675037712f4c5ccb6984698cc341d8881e2fc175a2cc74703954ae",
+      "candidate_sha256": "f02a259396675037712f4c5ccb6984698cc341d8881e2fc175a2cc74703954ae",
+      "candidate_finite": true,
+      "speedup": 1.013096917187185
+    },
+    {
+      "name": "partial-tiles",
+      "extent": [
+        1544,
+        1032
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 175.06,
+      "candidate_gpu_ms": 178.33,
+      "byte_identical": true,
+      "baseline_sha256": "3c7753ca345f5f18a2e31b0c12ee9855e63af07ed00bb056076f384982e696e4",
+      "candidate_sha256": "3c7753ca345f5f18a2e31b0c12ee9855e63af07ed00bb056076f384982e696e4",
+      "candidate_finite": true,
+      "speedup": 0.9816632086581057
+    },
+    {
+      "name": "small-tiles",
+      "extent": [
+        521,
+        519
+      ],
+      "tile": 256,
+      "scales": 6,
+      "baseline_gpu_ms": 43.86,
+      "candidate_gpu_ms": 44.62,
+      "byte_identical": true,
+      "baseline_sha256": "9249c3a38830b92948e1f6404a2996793eaeeb7b230afe5189a267f29be9053a",
+      "candidate_sha256": "9249c3a38830b92948e1f6404a2996793eaeeb7b230afe5189a267f29be9053a",
+      "candidate_finite": true,
+      "speedup": 0.9829672792469745
+    },
+    {
+      "name": "redmi-extent",
+      "extent": [
+        4208,
+        3120
+      ],
+      "tile": 1536,
+      "scales": 7,
+      "baseline_gpu_ms": 809.84,
+      "candidate_gpu_ms": 769.51,
+      "byte_identical": true,
+      "baseline_sha256": "13a6b4acb0646f469e766be5d63f02c1bdccd3a4195ccd2315abee6381ad2b4c",
+      "candidate_sha256": "13a6b4acb0646f469e766be5d63f02c1bdccd3a4195ccd2315abee6381ad2b4c",
+      "candidate_finite": true,
+      "speedup": 1.0524099751790101
+    }
+  ],
+  "pass": true,
+  "scope": "same-GPU bit parity; host GPU timing"
+}

@@ -65,7 +65,7 @@ class WaveletDenoiser(context: Context) {
         val startNs = System.nanoTime()
         WaveletVulkan.process(
             handle, input, output, width, height,
-            settings.strength, settings.shadows, noiseA, noiseB, wbGains,
+            settings.strength, settings.detail, noiseA, noiseB, wbGains,
             settings.maxScale, settings.forceY, settings.forceUv
         )
         lastGpuMs = try {
@@ -80,37 +80,43 @@ class WaveletDenoiser(context: Context) {
         return true
     }
 
-    companion object {
-        /**
-         * Normalized green (a, b) from SENSOR_NOISE_PROFILE. Falls back to
-         * the canonical uncalibrated constants (already normalized) when
-         * the profile or range is unusable — never throws for metadata
-         * reasons, so the capture can still develop.
-         */
-        fun noiseAB(noiseProfile: DoubleArray?, whiteMinusBlack: Double): Pair<Float, Float> {
-            val raw = noiseProfile?.takeIf {
-                it.size == 6 && it.all { v -> v.isFinite() && v >= 0.0 }
-            }
-            if (raw != null && whiteMinusBlack > 0.0 && whiteMinusBlack.isFinite()) {
-                return greenNoiseNormalized(raw[2], raw[3], whiteMinusBlack)
-            }
-            return CfaNoiseModel.FALLBACK_SCALE to CfaNoiseModel.FALLBACK_OFFSET
-        }
+    @Synchronized
+    fun captureSharpen(pixels: ByteBuffer, width: Int, height: Int,
+                       wb: FloatArray, pattern: BayerPattern, settings: CaptureSharpeningSettings) {
+        if (!settings.enabled) return
+        check(ensureInit()) { "Capture sharpening Vulkan initialization failed" }
+        WaveletVulkan.captureSharpen(handle, pixels, width, height, wb, pattern.ordinal, settings.level.iterations)
+        Log.i(TAG, "Capture sharpening ${width}x${height} ${settings.level.label} " +
+            "iterations=${settings.level.iterations} cfa=$pattern gpuMs=${WaveletVulkan.lastGpuMs(handle)}")
+    }
 
+    companion object {
         private const val TAG = "WaveletDenoiser"
 
-        /**
-         * GreenNoiseToNormalized: green-plane (slope, offset) from
-         * SENSOR_NOISE_PROFILE into the normalized variance line
-         * var(x) = a*x + b over black-subtracted, white-normalized data.
+        /** Float operation order mirrors RAWR GreenNoiseToNormalized/CfaNoiseToNormalized.
+         * Camera2 profile is row-major CFA (S0,O0,...,S3,O3). Invalid metadata
+         * bypasses denoise, as in RAWR; no invented fallback noise model.
          */
+        fun noiseAB(
+            noiseProfile: DoubleArray?, pattern: BayerPattern, black: Float, white: Float
+        ): Pair<Float, Float>? {
+            if (noiseProfile == null || noiseProfile.size < 8 ||
+                !(white > black) || !(black >= 0f)) return null
+            val g0 = if (pattern == BayerPattern.GRBG || pattern == BayerPattern.GBRG) 0 else 1
+            val g1 = if (g0 == 0) 3 else 2
+            val slope = (noiseProfile[g0 * 2] + noiseProfile[g1 * 2]).toFloat() * 0.5f
+            val offset = (noiseProfile[g0 * 2 + 1] + noiseProfile[g1 * 2 + 1]).toFloat() * 0.5f
+            if (!slope.isFinite() || !offset.isFinite() || !(slope >= 0f)) return null
+            return greenNoiseNormalized(slope, offset, black, white)
+        }
+
         fun greenNoiseNormalized(
-            slopeRaw: Double, offsetRaw: Double, whiteMinusBlack: Double
+            slopeRaw: Float, offsetRaw: Float, black: Float, white: Float
         ): Pair<Float, Float> {
-            require(whiteMinusBlack > 0.0) { "whiteMinusBlack must be positive" }
-            val a = slopeRaw / whiteMinusBlack
-            val b = offsetRaw / (whiteMinusBlack * whiteMinusBlack)
-            return a.toFloat() to b.toFloat()
+            val range = white - black
+            val a = if (range > 0f) slopeRaw / range else 0f
+            val b = if (range > 0f) (slopeRaw * black + offsetRaw) / (range * range) else 0f
+            return a to b
         }
 
         /**
@@ -131,7 +137,7 @@ class WaveletDenoiser(context: Context) {
 
 /**
  * Wavelet stage settings. Defaults mirror the validated WaveletDenoise
- * (strength/detail 1, luma 0.25, shadows 1, 7 scales, chroma 0.75);
+ * (strength/detail 1, luma 0.25, 7 scales, chroma 0.75);
  * [enabled] stays false until the user opts in.
  */
 data class WaveletSettings(
@@ -139,18 +145,16 @@ data class WaveletSettings(
     val strength: Float = 1.0f,
     val detail: Float = 1.0f,
     val luma: Float = 0.25f,
-    val shadows: Float = 1.0f,
     val maxScale: Int = 7,
     val forceUv: Float = 0.75f
 ) {
-    /** forceY mapping: detail gate × luma. */
-    val forceY: Float get() = if (detail >= 1.0f) luma else 0.0f
+    /** RAWR: luma is independent of Detail (the VST shadow fulcrum). */
+    val forceY: Float get() = luma
 
     fun bounded(): WaveletSettings = copy(
         strength = strength.coerceIn(0.0f, 8.0f),
-        detail = detail.coerceIn(0.0f, 1.0f),
+        detail = detail.coerceIn(0.0f, 1.8f),
         luma = luma.coerceIn(0.0f, 1.0f),
-        shadows = shadows.coerceIn(0.0f, 1.0f),
         maxScale = maxScale.coerceIn(1, 7),
         forceUv = forceUv.coerceIn(0.0f, 1.0f)
     )

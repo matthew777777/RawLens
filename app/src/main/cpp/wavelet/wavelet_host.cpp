@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "raw_denoise/DenoisePipeline.hpp"
+#include "capture_sharpening/CaptureSharpening.h"
 
 #define WAVELET_FENCE_TIMEOUT_NS 30000000000ull
 #define WAVELET_MAX_EDGE 16384
@@ -107,8 +108,14 @@ class WaveletHost {
         di.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         di.queueCreateInfoCount = 1;
         di.pQueueCreateInfos = &qi;
+        VkPhysicalDeviceFeatures supported{};
+        vkGetPhysicalDeviceFeatures(phys_, &supported);
+        VkPhysicalDeviceFeatures enabled{};
+        enabled.shaderStorageImageExtendedFormats = supported.shaderStorageImageExtendedFormats;
+        di.pEnabledFeatures = &enabled;
         check(vkCreateDevice(phys_, &di, nullptr, &device_), "wavelet: vkCreateDevice failed");
         vkGetDeviceQueue(device_, qfi, 0, &queue_);
+        queueFamily_ = qfi;
 
         VkCommandPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -133,6 +140,7 @@ class WaveletHost {
 
     ~WaveletHost() {
         if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+        sharp_.reset();
         pipe_.reset();
         destroy_owned(src_);
         destroy_owned(dst_);
@@ -168,7 +176,7 @@ class WaveletHost {
         return 4;
     }
 
-    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params) {
+    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params, int sharpIterations = 0, int cfa = 0) {
         if (pipe_ == nullptr) throw std::runtime_error("wavelet: shaders not loaded");
         if (inHalf == nullptr || outHalf == nullptr || params == nullptr) {
             throw std::runtime_error("wavelet: null process argument");
@@ -203,7 +211,7 @@ class WaveletHost {
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
         }
         barrier(cmd_, src_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
         if (imagesFresh_) {
             barrier(cmd_, dst_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
@@ -213,6 +221,22 @@ class WaveletHost {
         }
         vkCmdResetQueryPool(cmd_, tsPool_, 0, 2);
         vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool_, 0);
+        VkImage resultImage = dst_.image;
+        if (sharpIterations > 0) {
+            if (!sharp_) sharp_ = std::make_unique<rawr::capsharp::CaptureSharpening>(
+                rawr::vk::GpuContext{phys_, device_, queueFamily_});
+            rawr::capsharp::RecordInfo info{};
+            info.commandBuffer = cmd_;
+            info.width = uint32_t(w);
+            info.height = uint32_t(h);
+            info.image = src_.image;
+            info.view = src_.view;
+            info.cfaPattern = uint32_t(cfa);
+            memcpy(info.whiteBalance, params->wb, sizeof info.whiteBalance);
+            info.params.iterations = uint32_t(sharpIterations);
+            if (!sharp_->record(info)) throw std::runtime_error("capture sharpening rejected input");
+            resultImage = src_.image;
+        } else {
         raw_denoise::DenoiseParams p{};
         p.strength = params->strength;
         p.shadows = params->shadows;
@@ -224,19 +248,20 @@ class WaveletHost {
         p.forceUv = params->forceUv;
         p.tileSize = params->tileSize;
         pipe_->record(cmd_, src_.view, dst_.view, (uint32_t)w, (uint32_t)h, p, VK_NULL_HANDLE);
+        }
         vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool_, 1);
 
-        barrier(cmd_, dst_.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        barrier(cmd_, resultImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
         {
             VkBufferImageCopy r{};
             r.imageExtent = {(uint32_t)w, (uint32_t)h, 1};
             r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            vkCmdCopyImageToBuffer(cmd_, dst_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            vkCmdCopyImageToBuffer(cmd_, resultImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    staging_.buffer, 1, &r);
         }
-        barrier(cmd_, dst_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+        barrier(cmd_, resultImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_ACCESS_TRANSFER_READ_BIT,
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -416,6 +441,8 @@ class WaveletHost {
     VkCommandBuffer cmd_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     VkQueryPool tsPool_ = VK_NULL_HANDLE;
+    uint32_t queueFamily_ = 0;
+    std::unique_ptr<rawr::capsharp::CaptureSharpening> sharp_;
     std::unique_ptr<raw_denoise::DenoisePipeline> pipe_;
     std::vector<std::vector<uint8_t>> spv_;
     OwnedImage src_, dst_;
@@ -487,3 +514,20 @@ double wavelet_last_gpu_ms(WaveletContext* ctx) {
 }
 
 void wavelet_destroy(WaveletContext* ctx) { delete ctx; }
+
+extern "C" int capture_sharpen_process(WaveletContext* ctx, uint8_t* half, int w, int h,
+                                       const float* wb, int cfa, int iterations,
+                                       char* errmsg, int errlen) {
+    try {
+        if (!ctx || !wb || cfa < 0 || cfa > 3 || iterations < 1 || iterations > 250)
+            throw std::runtime_error("invalid capture sharpening arguments");
+        WaveletParams p{};
+        p.strength = 1;
+        memcpy(p.wb, wb, sizeof p.wb);
+        ctx->host.process(half, half, w, h, &p, iterations, cfa);
+        return 0;
+    } catch (const std::exception& e) {
+        set_err(errmsg, errlen, e.what());
+        return -1;
+    }
+}

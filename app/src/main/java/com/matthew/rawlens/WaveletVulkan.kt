@@ -79,6 +79,10 @@ object WaveletVulkan {
     /** Timestamp-derived GPU ms of the last [process] call (-1 unavailable). */
     fun lastGpuMs(handle: Long): Double = nativeLastGpuMs(handle)
 
+    external fun captureSharpen(
+        handle: Long, pixels: ByteBuffer, w: Int, h: Int, wb: FloatArray, cfa: Int, iterations: Int
+    )
+
     private external fun nativeInit(assetManager: AssetManager): Long
     private external fun nativeDestroy(handle: Long)
     private external fun nativeProcess(
