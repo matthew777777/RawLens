@@ -38,7 +38,7 @@ Integration edits:
 - `RawCameraController`: callback, worker and settings API; samples existing
   adopted RAW frames; requests the existing scope stream when assists need
   it even with histogram Off; clears on stop and closes worker on destroy.
-- `RawVideoRecorder` / `DirectLogRecorder`: RAW borrowed-frame callbacks and
+- `RawVideoRecorder` / `EncodedVideoRecorder`: RAW borrowed-frame callbacks and
   worker teardown. Default Off. MainActivity transfers settings to both.
 - `MainActivity`: overlay initialization, geometry, callbacks, preference
   persistence, recording transitions and shared settings updater.
@@ -178,7 +178,7 @@ current lock mismatch is a real race in the unfinished integration.
 4. Finish device coverage: run compiled Canvas/oracle test; add real MainActivity
    cycle/tap/persistence/HUD placement screenshot test. Verify zebras vs false
    colour, independent spot switch and stale/off behaviour at both VF routes.
-5. Add short baseline-vs-enabled DirectLog / RAW recording tests. Existing
+5. Add short baseline-vs-enabled EncodedVideo / RAW recording tests. Existing
    `MlRecordingPeakingDeviceTest.kt` is a useful lifecycle/performance template;
    new workers use the same image lease contract. Test source closure/callbacks
    on stop and Off and verify no leaked `RawImageOwnership` entries. Record

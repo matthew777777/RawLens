@@ -1,12 +1,12 @@
-# Video study (DirectLogRecorder, RawVideoRecorder)
+# Video study (EncodedVideoRecorder, RawVideoRecorder)
 
 References: Android MediaCodec / MediaMuxer API docs (lifecycle: a configured
 or started codec must be release()d; MediaMuxer must be release()d), and
 open-source RAW video recorders (below).
 
-## V1: DirectLogRecorder.start leaked on failure (fixed)
+## V1: EncodedVideoRecorder.start leaked on failure (fixed)
 
-`start()` launches the two copy workers (DirectLogCopyA/B) near the top, then
+`start()` launches the two copy workers (EncodedVideoCopyA/B) near the top, then
 reads camera characteristics, inits Vulkan stages, negotiates the encoder,
 allocates P010 staging, creates the muxer, drain thread and audio. Only the
 final camera-open block called `teardown()` on failure, and `teardown()` never
@@ -19,12 +19,12 @@ Fix: `start()` wraps the body (`startTake`) and on any exception runs
 the drain thread, release the muxer, `teardown()`, delete an empty output
 file, clear the crash breadcrumb (a refused start is not a crash).
 
-Proof (Xiaomi 25080RABDG, DirectLogStartFailureDeviceTest, 3 failed starts):
-- before: FAIL, leaked [DirectLogCopyA x3, DirectLogCopyB x3]
+Proof (Xiaomi 25080RABDG, EncodedVideoStartFailureDeviceTest, 3 failed starts):
+- before: FAIL, leaked [EncodedVideoCopyA x3, EncodedVideoCopyB x3]
 - after: PASS, no threads, no output file
 
 Parity (same phone, same tests, before -> after):
-- DirectLogRecordDeviceTest OK both: open-gate acq 92/graded 91/drop 0 ->
+- EncodedVideoRecordDeviceTest OK both: open-gate acq 92/graded 91/drop 0 ->
   92/91/0; step4 95/94/0 -> 97/96/0 (frame count tracks take timing)
 - RawVideoRecordTest OK both: 4 takes, audio 70-71 chunks each
 
@@ -64,8 +64,8 @@ References studied (local clones, commit in brackets):
   take() forever, committer polling a writer teardown closes). Now
   interrupted and joined first; queued frames released.
 - V3 (fixed): RAW video set CONTROL_AE_TARGET_FPS_RANGE (30,30) without
-  checking it is advertised. Now the same LogVideoProbe.fixedFpsRange pick
-  as Direct-Log: exact (30,30) whenever advertised (identical request on
+  checking it is advertised. Now the same EncodedVideoProbe.fixedFpsRange pick
+  as Encoded Video: exact (30,30) whenever advertised (identical request on
   every device that worked; this phone advertises it), else the narrowest
   range containing 30.
 - V4 (open, owner decision): no free-space guard. At ~220 MB/s (Open Gate,
@@ -86,35 +86,35 @@ References studied (local clones, commit in brackets):
   with request values instead. Count these misses in the soak before
   deciding.
 - V8 (refactor): videoControlRange / applyVideoManualToRequest are
-  duplicated in DirectLogRecorder and RawVideoRecorder (same logic except V3
-  and Direct-Log's lens-shading-map request). Merge into one helper during
+  duplicated in EncodedVideoRecorder and RawVideoRecorder (same logic except V3
+  and Encoded Video's lens-shading-map request). Merge into one helper during
   the split.
 - Note: RAW-only session. OpenMotionFX reports the vivo HAL drops RAW-only
   sessions to ~20 fps; this phone holds 30 fps, so no change, but it is the
   first thing to check on a vivo report.
 
-V2+V3 build, same phone: DirectLogStartFailureDeviceTest OK,
-DirectLogRecordDeviceTest OK (88/87/0 and 94/93/0 acq/graded/drop),
+V2+V3 build, same phone: EncodedVideoStartFailureDeviceTest OK,
+EncodedVideoRecordDeviceTest OK (88/87/0 and 94/93/0 acq/graded/drop),
 RawVideoRecordTest OK at 72 frames, 30.0 fps each. No "Missing capture result", head-skip or
 pool-exhausted line in the baseline, V2 or V3 runs, so the earlier 69-frame
 16:9 take was the capture window, not V7.
 
-## DirectLogRecorder.start split
+## EncodedVideoRecorder.start split
 
 startTake() now calls six stages in order: resetTakeState, resolveGeometry
 (returns TakeGeometry: characteristics, sensor size, crop, export size,
 effective preferMhc), initGpuStages, startEncoder, allocateBuffers,
 startStreams. Moved verbatim: the stage bodies concatenated equal the old
 body token for token (5002 tokens), the rest of the file is unchanged.
-Device (same phone): DirectLogStartFailureDeviceTest OK,
-DirectLogMatrixDeviceTest OK, DirectLogRecordDeviceTest OK with the same
+Device (same phone): EncodedVideoStartFailureDeviceTest OK,
+EncodedVideoMatrixDeviceTest OK, EncodedVideoRecordDeviceTest OK with the same
 paths as baseline (fused-mhcyuv / superpixel-fallback, DIRECT_P010) and
 acq/graded/drop 93/92/0 and 98/97/0.
 
 ## V8, processFrame/teardown split, V4
 
 - V8 (done): VideoManualControls.applyToRequest / controlRange hold the one
-  copy; each recorder keeps its AE fps-range pick (and Direct-Log its
+  copy; each recorder keeps its AE fps-range pick (and Encoded Video its
   lens-shading request). The removed RawVideoRecorder copy was
   token-identical after renames (752 + 449 tokens). Proof on device:
   VideoRequestSnapshotDeviceTest dumps every key/value of both recorders'
@@ -136,13 +136,13 @@ acq/graded/drop 93/92/0 and 98/97/0.
   frames and the stopped take is complete (28 frames, index and
   footer present).
 
-Device (new build 401/403): V8 requests identical; DirectLogStartFailure,
-DirectLogMatrix, RawVideoStorageGuard (2), RawVideoRecordTest OK; four
+Device (new build 401/403): V8 requests identical; EncodedVideoStartFailure,
+EncodedVideoMatrix, RawVideoStorageGuard (2), RawVideoRecordTest OK; four
 RAW takes at 73-74 frames, ~30 fps; DCIM untouched.
 
-### V9 (open, watch): Direct-Log "copy job: GPU wedge"
+### V9 (open, watch): Encoded Video "copy job: GPU wedge"
 
-On 2026-10-21 morning DirectLogRecordDeviceTest failed intermittently with
+On 2026-10-21 morning EncodedVideoRecordDeviceTest failed intermittently with
 "frame exceptions" from awaitGpuFence (GPU > 100 ms behind a frame), on
 the ORIGINAL build as much as the new one, back to back, thermal status 0:
 

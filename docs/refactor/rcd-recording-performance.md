@@ -1,6 +1,6 @@
 # RCD recording performance follow-up
 
-Priority agreed with the user on 2026-10-27: achieve a sustained 33.3 ms frame interval in Direct Log RCD recording (30 fps), including the complete recording pipeline.
+Priority agreed with the user on 2026-10-27: achieve a sustained 33.3 ms frame interval in Encoded Video RCD recording (30 fps), including the complete recording pipeline.
 
 The user subsequently specified stable 24 fps as the minimum acceptable result, with 30 fps preferred. Evaluate cadence as well as the overall average; do not manufacture throughput by duplicating frames or changing sensor-relative RCD timestamps.
 
@@ -14,7 +14,7 @@ Measured so far:
 
 Next trace should compare resolution settings with actual input/crop/output dimensions and per-frame timestamps for camera arrival, queue wait, Vulkan mutex wait, GPU submission/completion, P010 copy, codec input/output, and muxed PTS. Determine which work overlaps and which serializes; do not add overlapping averages as though they were independent elapsed times. Check preview contention, stale frame handling, queue depth, and thermal state. Report both steady-state frame interval and actual muxed fps.
 
-Preserve image quality. Direct Log's RCD option uses Packed RCD; still photos retain the existing RCD. Keep the original approximately 200 ms baseline in `tools/rcd-baseline/fast-20261026/` intact. The 33.3 ms goal has not yet been achieved.
+Preserve image quality. Encoded Video's RCD option uses Packed RCD; still photos retain the existing RCD. Keep the original approximately 200 ms baseline in `tools/rcd-baseline/fast-20261026/` intact. The 33.3 ms goal has not yet been achieved.
 
 ## Optimizations and measurements on 2026-10-27
 

@@ -2,7 +2,7 @@
 
 > Status 2026-10-23: survey only, nothing implemented from this doc yet.
 > Adopted into `docs/refactor/release-2.0-checklist.md` on 2026-10-23:
-> ML rechecks as F14/F15, Nikon as section H, Sony DirectLog as
+> ML rechecks as F14/F15, Nikon as section H, Sony EncodedVideo as
 > section I, the shared/other-maker builds as section J.
 > Scope: Nikon, Canon, Sony, Pentax/Ricoh, Fujifilm, Olympus/OM System,
 > Panasonic Lumix, Leica/Hasselblad/Sigma (checked, mostly nothing).
@@ -35,7 +35,7 @@ Evidence in `app/src/main/java/com/matthew/rawlens/`:
 - Histogram / waveform / scopes (harvest in progress): `HistogramView.kt`, `RawWaveform.kt`, `LiveScopes.kt`, `docs/upstream-harvest.md`
 - HDR bracketing + HDR+ merge: `HdrBracketConfig.kt`, `HdrPlusMerge.kt`
 - Burst merge / multi-frame SR (offline): `BurstMergeRunner.kt`, `MfsrMerge.kt`, `MergesActivity.kt`
-- Log video: `DirectLog*.kt`, `VfLogGrade.kt`; RAW video: `CrsWriter.kt`
+- Log video: `EncodedVideo*.kt`, `VfVideoGrade.kt`; RAW video: `CrsWriter.kt`
 - AgX looks (Base/Golden/Punchy), wavelet + RawNIND denoise, face-priority AF/AE, per-lens DNG calibration
 
 ---
@@ -91,7 +91,7 @@ Android apps that ran inside Sony bodies. Nothing sensor-portable.
 | S-Log3/S-Log2 official LUTs | DATA | TAKE | S | Free Sony `.cube`; user-import via §8 |
 | Dynamic Range Optimizer (DRO) | MIMIC | HAVE | — | Same behaviour as Active D-Lighting (§2); implement once, once only |
 | Zebra with custom IRE range | MIMIC | PARTIAL | S | Scopes harvest has zebra; add user-set range (Sony lets you set e.g. 95+ only) |
-| Gamma Display Assist | MIMIC | TAKE | S | = LUT view assist for DirectLog preview (§8) |
+| Gamma Display Assist | MIMIC | TAKE | S | = LUT view assist for EncodedVideo preview (§8) |
 | Pixel Shift Multi Shooting | MIMIC | PARTIAL | M | See §6 pixel-shift row |
 | Camera Remote API (HTTP/JSON) | CODE | PARK | L | Deprecated by Sony; only for a camera-companion feature we do not have |
 | PMCA/OpenMemories code | CODE | SKIP | — | MIT but targets Sony body Android; reference reading only |
@@ -168,7 +168,7 @@ camera applies it to preview and/or output, with an intensity slider**.
 | Piece | Status | Effort | Notes |
 |---|---|---|---|
 | `.cube` parser (LUT_3D_SIZE 16–65, domain, title) | TAKE | S | Plain text format; trivial parser, host-testable |
-| 3D texture in VfLogGrade/DirectLog preview (view assist) | TAKE | M | Preview-only first: zero stills-pipeline risk |
+| 3D texture in VfVideoGrade/EncodedVideo preview (view assist) | TAKE | M | Preview-only first: zero stills-pipeline risk |
 | LUT applied to recorded video grade | TAKE | M | Second step, after preview proves out |
 | LUT on JPEG develop output | PARK | M | Conflicts with AgX look ownership; decide after §7 |
 | LUT library (slots, rename, delete, intensity per LUT) | TAKE | S | Panasonic's 10-slot library is the UX model (MIMIC) |
@@ -219,7 +219,7 @@ camera applies it to preview and/or output, with an intensity slider**.
 ## Priority shortlist
 
 **P0 — one build, many makers**
-1. `.cube` LUT import + library + DirectLog view assist (§8) — unlocks Nikon/Sony/Fuji/Canon/Panasonic free LUT data
+1. `.cube` LUT import + library + EncodedVideo view assist (§8) — unlocks Nikon/Sony/Fuji/Canon/Panasonic free LUT data
 2. Parameterised look/recipe system (§7) — Nikon/Canon/Fuji/Pentax/Lumix looks in one slot
 3. Highlight-weighted metering (§9) — S effort, Nikon-signature
 

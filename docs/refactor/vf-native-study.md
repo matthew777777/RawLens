@@ -15,7 +15,7 @@ state (and of every `static`), so it is split into ordered `.inc` parts that
 | vf_vulkan_vf_pipelines.inc | compute pipeline creation for every stage |
 | vf_vulkan_vf_shade_lut.inc | lens-shading images, stage teardown, grade LUT; closes the namespace |
 | vf_vulkan_vf_viewfinder.inc | context lifecycle, RAW viewfinder superpixel dispatch |
-| vf_vulkan_vf_grade_twins.inc | Phase-B grade stage, Direct-Log wait-free submit twins |
+| vf_vulkan_vf_grade_twins.inc | Phase-B grade stage, Encoded Video wait-free submit twins |
 | vf_vulkan_vf_p010_preview.inc | true-10-bit P010 stage, record-preview monitor |
 | vf_vulkan_vf_rcd.inc | RCD demosaic, fused RCD finalize + grade |
 | vf_vulkan_vf_mhc_stab.inc | MHC demosaic, fused MHC + grade, stabilization warp |
@@ -64,11 +64,11 @@ via DemosaicBenchHarnessTest ($RAWLENS_DEMOSAIC_BENCH).
 
 ## Findings
 
-- D1 RCD Direct-Log is unusable: 235 ms per 4K frame (dirs 55, green 51,
+- D1 RCD Encoded Video is unusable: 235 ms per 4K frame (dirs 55, green 51,
   opp 59, atG 69 ms) against a 33 ms budget; a 4 s take acquired 94 and
   graded 4 frames. Correct output, wrong performance; offered in the UI as
   a normal choice although VideoDemosaic's KDoc calls it A/B only.
-- D2 (hypothesis, unconfirmed) MHC Direct-Log cyan on sun glints:
+- D2 (hypothesis, unconfirmed) MHC Encoded Video cyan on sun glints:
   vf_mhcyuv desaturates near-clip pixels to the WB neutral BEFORE the
   per-channel lens-shading gains, then the WB-folded CCM runs with no
   clip. A clipped glint therefore takes the colour of the shading map's
@@ -101,7 +101,7 @@ via DemosaicBenchHarnessTest ($RAWLENS_DEMOSAIC_BENCH).
 
 Method: (1) Khronos validation layers 1.4.363.0 on the phone (debuggable
 throwaway build, never committed) over MHC/RCD parity, photo Kodak,
-start-failure, Direct-Log record and a ZSL soak; (2) static scans
+start-failure, Encoded Video record and a ZSL soak; (2) static scans
 (ignored VkResults, queue-submit locking, fence/semaphore lifetimes,
 32-bit size math, unbalanced AHardwareBuffer refs); (3) mechanical
 checks: every C++ param struct vs its shader's SPIR-V member offsets
@@ -134,7 +134,7 @@ Fixed:
   flat 972-975 MB after.
 
 Validation after the fix: zero A3/A4/A5 VUIDs; MHC parity and the ZSL soak
-pass under validation (both failed before). V9 Direct-Log wedges, 5 runs
+pass under validation (both failed before). V9 Encoded Video wedges, 5 runs
 each, same phone: original 10/9/0/5/0, gate 1/0/0/0/0.
 
 Open (logged, not changed):
@@ -155,10 +155,10 @@ Open (logged, not changed):
   read or re-layout mode N-1's rgb/scratch while still being written
   (SYNC-HAZARD-WRITE-AFTER-WRITE; the matching read-after-write has the
   same cause). Harmless on the photo path (CPU waits each mode's fd) but
-  real on Direct-Log, which submits modes 0-2 back to back. All RCD mode
+  real on Encoded Video, which submits modes 0-2 back to back. All RCD mode
   and fused-finalize acquires now wait on COMPUTE_SHADER/SHADER_WRITE.
   Sync validation rerun: zero SYNC-HAZARD; release: RCD/MHC parity, photo
-  RCD scores identical (kodim01n 31.73 dB), Direct-Log record pass.
+  RCD scores identical (kodim01n 31.73 dB), Encoded Video record pass.
 - B3 (fixed) evictOldestInput/Output now vkQueueWaitIdle before destroying
   an evicted import (rare path; the caps cover the live pools).
 - A7 (fixed) orphan shaders/vf/comp.spv removed.
@@ -183,11 +183,11 @@ Open (logged, not changed):
     deviceID, pipelineCacheUUID) before use; stale files are deleted.
     galosh_host / hdrplus_host keep the old loader (excluded components).
 - Device (build 418): RCD/MHC parity, photo RCD scores identical, RAW
-  video, start-failure, ZSL soak, Direct-Log 3 runs (wedges 0/0/1), cache
+  video, start-failure, ZSL soak, Encoded Video 3 runs (wedges 0/0/1), cache
   warms (83155 bytes). MHC perf gate 27-28 ms right after the soak,
   22.5-24.1 ms on 4 cool reruns (thermal, not a regression).
 
-## Future: Direct-Log stabilization rewrite (owner, 2026-10-21)
+## Future: Encoded Video stabilization rewrite (owner, 2026-10-21)
 
 Owner reports the stabilization does not work and wants a sourced
 rewrite, deferred. Starting references: Karpenko, Jacobs, Baek, Levoy,
@@ -196,6 +196,6 @@ Gyroscopes" (Stanford CSTR 2011-03); Gyroflow (github.com/gyroflow/
 gyroflow: gyro/frame sync, lens profiles, smoothing); Android
 SensorManager/Camera2 timestamp bases (SENSOR_INFO_TIMESTAMP_SOURCE),
 LENS_INTRINSIC_CALIBRATION, SENSOR_ROLLING_SHUTTER_SKEW. Current code:
-DirectLogStabilizer, StabTrajectory, StabSidecar, MotionRecorder,
+EncodedVideoStabilizer, StabTrajectory, StabSidecar, MotionRecorder,
 GyroCameraFrameMapper, vf_stabwarp.comp (affine homography only, no
 rolling-shutter term).

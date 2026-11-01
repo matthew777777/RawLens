@@ -81,7 +81,7 @@ Port each against its ML source (cite file + commit), same as A2 ETTR.
 - [x] F2 [2.0] Raw spot meter in EV relative to clipping
       (closed 2026-10-26; compact text beside AUTO/status;
       [audit](raw-exposure-assist-audit.md)) (src/zebra.c
-      spotmeter): extend the current spot meter. Real RAW oracle, UI, DirectLog
+      spotmeter): extend the current spot meter. Real RAW oracle, UI, EncodedVideo
       recording/monitor and lease checks passed. Existing unavailable CRS backend
       is explicitly excluded; rejection/cleanup passed (not a recording pass).
       Average + clipped-area readout extension implemented 2026-10-26;
@@ -209,8 +209,8 @@ and parameter sets are ours to reimplement; no Nikon profiles bundled.
       supplies files (nikonpc.com, Imaging Cloud recipes); nothing
       downloaded or bundled by the app.
 
-## I. From Sony: DirectLog colour correctness (owner 2026-10-23; harvest §3, §8)
-Implementation/evidence 2026-10-28: [Sony DirectLog audit](sony-directlog-audit.md).
+## I. From Sony: EncodedVideo colour correctness (owner 2026-10-23; harvest §3, §8)
+Implementation/evidence 2026-10-28: [Sony EncodedVideo audit](sony-encoded_video-audit.md).
 I1's numeric pipeline and I2's LUT machinery are implemented; their original
 physical-chart/reference-render acceptance remains open. E22 stays parked.
 Owner 2026-10-29: close software work without a chart; retain the physical gate.
@@ -227,17 +227,17 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
       intentionally differs from Sony full-range files; exact code mapping
       and input settings documented. Physical I2 gate, real Sony-file
       metadata comparison and original-build performance parity remain open.
-      Original finding: `DirectLogProfile.SLOG3` applied the Sony curve
+      Original finding: `EncodedVideoProfile.SLOG3` applied the Sony curve
       formula (420 / 261.5 / divisor 0.19 / 95-code pedestal,
-      `VfLogGrade.sonySlog3`, mirrored in `vf_gradeyuv.comp`,
-      `vf_mhcyuv.comp`, `vf_loggrade.comp`) to **linear sRGB**. That
+      `VfVideoGrade.sonySlog3`, mirrored in `vf_gradeyuv.comp`,
+      `vf_mhcyuv.comp`, `vf_videograde.comp`) to **linear sRGB**. That
       is the right curve on the wrong gamut: every official Sony LUT
       expects S-Log3-encoded **S-Gamut3.Cine** (or S-Gamut3)
       primaries, so greens/reds and saturation land wrong before any
       LUT is even applied. Required, all of it:
       - Gamut: developed linear -> XYZ (D65) -> S-Gamut3.Cine matrix
         (Sony-published primaries) before the curve, in CPU golden
-        (`VfLogGrade.encodePixelSlog3`), both record shaders and
+        (`VfVideoGrade.encodePixelSlog3`), both record shaders and
         their f16 twins, and the probe shader. One matrix constant,
         host-tested (white-preserving, known patch conversions).
       - Negative / out-of-gamut handling after the wide-gamut matrix:
@@ -249,10 +249,10 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
         decode; document the exact DaVinci/Premiere input settings
         (S-Gamut3.Cine/S-Log3, data levels) the file is made for.
       - Container signalling audit vs real Sony camera files
-        (`DirectLogProfile.targetColors` currently signals
+        (`EncodedVideoProfile.targetColors` currently signals
         BT.709/SDR/limited for SLOG3): match or document the diff.
       - Kill the ambiguity: the dormant approximate `slog3()`
-        (divisor 0.4625) in `VfLogGrade.developLinear`/`bakeLut`
+        (divisor 0.4625) in `VfVideoGrade.developLinear`/`bakeLut`
         must never feed a Sony-named output; rename it as the
         internal working log or make it Sony-exact.
 - [ ] I2 [2.0.x] **Official Sony LUT acceptance gate** (depends on the
@@ -268,10 +268,10 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
       chart patches within a stated code tolerance of the reference
       render. This gate is the definition of "official LUTs work";
       I1 is not done without it.
-- [ ] I3 [2.0.x] **Full S-Cinetone look for DirectLog** (Sony)
+- [ ] I3 [2.0.x] **Full S-Cinetone look for EncodedVideo** (Sony)
       (owner 2026-10-28: keep open; no Sony/Catalyst reference available;
       no speculative fit/profile added). A new
-      ready-to-watch `DirectLogProfile`, not a LUT and not a curve
+      ready-to-watch `EncodedVideoProfile`, not a LUT and not a curve
       tweak. S-Cinetone = Venice-derived colour rendering in a
       BT.709 deliverable: film-like suppressed highlight contrast
       and soft highlight rolloff, low-contrast midtones, protected
@@ -286,9 +286,9 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
 - [x] I4 [2.0.x] (take-monitor implementation 2026-10-28: analytic BT.709
       assist or imported cube, per-LUT intensity, optional GLES3 3D texture;
       CPU/GPU and real take-monitor integration pass; R8 build passes.
-      Before-record RAW VF is unchanged; [scope/evidence](sony-directlog-audit.md)).
+      Before-record RAW VF is unchanged; [scope/evidence](sony-encoded_video-audit.md)).
       Gamma Display Assist / user-LUT monitoring for
-      DirectLog (Sony): preview shows the I2 LUT (or a built-in
+      EncodedVideo (Sony): preview shows the I2 LUT (or a built-in
       709 assist) while the file stays S-Log3. Depends on J1.
 
 ## J. From the other makers, shared builds (owner 2026-10-23; harvest §4-§8, §10)
@@ -305,7 +305,7 @@ sustained zero-drop acceptance remains OPEN. See the audit for retained evidence
       in the evidence. A full-file 60-second 1440p/30 repeat still fails cadence;
       sustained zero-drop acceptance remains open. Before-record RAW VF has no LUT preview.
       parser (LUT_3D_SIZE 16-65, domain), 3D texture in the
-      DirectLog preview first (view assist, I4), then recorded grade.
+      EncodedVideo preview first (view assist, I4), then recorded grade.
       This one build unlocks the free Nikon RED, Sony, Fuji F-Log,
       Canon Log and Panasonic VariCam LUT packs as user imports.
       Importability alone does not convert their expected source gamuts/log

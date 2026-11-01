@@ -207,7 +207,7 @@ Tap the red shutter mode. Two recorders:
   (default) / CRAW Live v1 — Legacy / CRAW Balanced, crop, binning (half resolution, RGB best or
   CFA cheap), sound (32-bit float stereo, PCM16 fallback). Gyro and
   accelerometer go into the file for desktop stabilization.
-- **Direct Log** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
+- **Encoded Video** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
   HLG / ACES, resolution, frame rate, demosaic RCD (default) / MHC /
   Super pixel, crop, gain. Real time on the test phone: 4K 24 fps,
   1440p and 1080p 30 fps.
@@ -227,13 +227,13 @@ Tap the red shutter mode. Two recorders:
 - Night: M ISO 1600 1/30, histogram right without clipping.
 - Sunset: HDR ±2 (±4 harsh), merged.
 - Landscape: ETTR ON -0.5 ceiling 1600 tripod, let converge.
-- Grading video: Direct Log S-Log3, monitor with a LUT, don't bake.
+- Grading video: Encoded Video S-Log3, monitor with a LUT, don't bake.
 
 Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 ## 10. Files + troubleshooting
 
-- Stills `DCIM/RawLens/<stem>.{dng,jpg,jxl}`, video `.craw` / Direct Log, sidecars next to the DNGs
+- Stills `DCIM/RawLens/<stem>.{dng,jpg,jxl}`, video `.craw` / Encoded Video, sidecars next to the DNGs
   (`burst.json + gyro/*.csv`, photo folder granted on first install;
   `Download/RawLens/<stem>/` fallback until granted).
 - Black preview = dark room ISO 20000 — add light.
@@ -246,7 +246,7 @@ Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 100%/4:2:2/off/off; AgX 100/100/100/0%; +6.5/10.0/0%; Adaptive ON/50%;
 1.00/0.85/100%; P 0.50/NONE/CENTER/+0.0; SENSOR bounds + AUTO HANDHELD;
-ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Direct Log demosaic RCD; RAW video codec CRAW Live.
+ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Encoded Video demosaic RCD; RAW video codec CRAW Live.
 
 Glossary: DNG = sensor + metadata; AgX = filmic mapper; ETTR = brightest
 unclipped; ZSL = pre-press memory; DIRECT = real, LOGICAL = virtual;

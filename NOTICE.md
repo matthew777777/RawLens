@@ -327,9 +327,9 @@ within 2 s, then leave it within 3 s) follows Open Camera's
 `CameraController2` at commit `0dd4cbe`. Open Camera, Copyright Mark Harman,
 GPL-3.0-or-later. https://sourceforge.net/projects/opencamera/
 
-## BakingLab ACES fit (Direct Log ACES profile)
+## BakingLab ACES fit (Encoded Video ACES profile)
 
-The Direct Log ACES look (`VfLogGrade.kt` and the direct-video grade
+The Encoded Video ACES look (`VfVideoGrade.kt` and the direct-video grade
 shaders) uses Stephen Hill's fitted ACES RRT/ODT from TheRealMJP/BakingLab
 `ACES.hlsl`. Copyright (c) 2016 MJP, MIT License; license text bundled as
 `app/src/main/assets/licenses/bakinglab-aces.txt`.
@@ -353,4 +353,29 @@ GPL-3.0-or-later JNI bridges (`craw_writer_jni.cpp`, `craw_reader_jni.cpp`).
 
 ## Packed-ratio RCD variant
 
-The shaders under `app/src/main/assets/shaders/rcd_packed` are adapted from the user-provided packed-ratio RCD source archive (commit e0e284d58f85ae9c4bc1b2cffe0c9722969a7bb8), licensed under GNU GPL v3. Original sources, license, and provenance are preserved in `third_party/rcd-packed-upstream`.
+The shaders under `app/src/main/assets/shaders/rcd_packed` are modified versions
+of the RCD shaders from **Unspektrawesome**, published by GitHub account
+**EkinStrop** at https://github.com/EkinStrop/Unspektrawesome-source,
+archived revision `e0e284d58f85ae9c4bc1b2cffe0c9722969a7bb8`.
+The supplied archive declares **GNU GPL v3.0**; it does not establish an explicit
+"or later" grant for these shaders. Original shaders, the archived README,
+license text, file hashes, and modification details are preserved in
+[third_party/rcd-packed-upstream/SOURCE.md](third_party/rcd-packed-upstream/SOURCE.md).
+Source notices were clarified on 2026-10-31.
+
+The archive does not identify the individual RCD shader author. The publisher's
+authority to license this implementation is disputed in
+https://github.com/matthew777777/RawLens/issues/1; this attribution records the
+immediate source and supplied license declaration without resolving that dispute.
+
+## RAWR Capture Sharpening
+
+`app/src/main/cpp/capture_sharpening/capture_sharpening` is copied from
+adityawarmanfw/rawr commit `537852ec0e109f78fb4ed54bc6a692d9c7cfca92`, including
+its shaders, native implementation, validation tools and NOTICE.md. It is
+RAWR's GPL-3.0-only GPU port of RawTherapee Capture Sharpening (2019 Ingo Weyrich
+and RawTherapee contributors, GPL-3.0-or-later). The accompanying `vk_common`
+helpers and `shader_common/shaders/cfa_common.glsl` come from the same commit.
+The upstream module notice and RAWR license are retained beside the code.
+A typed null handle in DeviceObjects.h is the sole portability adaptation,
+needed for Android armeabi-v7a; sharpening arithmetic is unchanged.

@@ -143,7 +143,7 @@ RawTherapee oracle on the Kodak scenes: max 0.0005-0.0008 (half floats).
 
 The colour/AgX output chain is not a target; HL, wavelet and AMaZE are.
 
-## Direct-Log MHC (real frame IMG_20261019_142925_030_VID_frame0.dng)
+## Encoded Video MHC (real frame IMG_20261019_142925_030_VID_frame0.dng)
 
 Display error vs RawTherapee AMaZE on the frame (camera WB + matrix + sRGB):
 ours (heuristic MHC) 0.0225, textbook MHC 0.0237, RCD 0.0161.
@@ -162,7 +162,7 @@ ours (heuristic MHC) 0.0225, textbook MHC 0.0237, RCD 0.0161.
   fullResFusedProof still misses its 30 ms margin (32.9-33.2 ms vs the
   33.3 ms frame): MHC itself (~26 ms) is the remaining lever.
 
-## Direct-Log binning (superpixel record path), same real frame
+## Encoded Video binning (superpixel record path), same real frame
 
 Reference: RawTherapee AMaZE box-downscaled to the binned grid.
 - Step 2 plain quad put R and B half a pixel apart (opposite quad

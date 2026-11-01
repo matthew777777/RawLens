@@ -35,7 +35,7 @@ produces a **source-only** build:
   ABIs (and their ~18MB-per-ABI from-source ncnn) stay local-only.
 
 Everything else — capture, DNG/JPEG/JPEG XL output, HDR+, MFSR, wavelet
-denoise, RAW and Direct Log video — is identical to the GitHub build. The only
+denoise, RAW and Encoded Video video — is identical to the GitHub build. The only
 build-time downloads are Maven Central / Google Maven artifacts and the
 pinned libjpeg-turbo + ncnn source tarballs (SHA-256 verified in CMake).
 

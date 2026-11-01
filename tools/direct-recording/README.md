@@ -1,6 +1,6 @@
 # Direct recording checks
 
-RAW video and Direct Log create their final file before camera start. The
+RAW video and Encoded Video create their final file before camera start. The
 recorders receive an open descriptor; stopping only closes/finalizes/publishes
 that file. `MainActivity.videoStageDir` is retained solely to rescue recordings
 made by older versions.
@@ -23,7 +23,7 @@ still open after native writer close. These require a connected device.
 Phone/USB acceptance:
 
 1. Select a folder on a connected writable USB drive in Settings → Video.
-2. Record short CRAW and Direct Log takes. Confirm frames advance and both
+2. Record short CRAW and Encoded Video takes. Confirm frames advance and both
    final files are readable at the selected destination. Live logs include
    the destination URI; no new app-private raw-video take should appear.
 3. Compare the selected drive's space before/during/after: one take's growth,

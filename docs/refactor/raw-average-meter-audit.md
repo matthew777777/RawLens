@@ -24,7 +24,7 @@ not processed luminance, an AE control, or highlight headroom: a low average
 can coexist with clipped highlights. Calibration and fresh/stale-frame rules
 are shared with the existing spot meter.
 
-Photo mode covers the RAW frame. DirectLog measures the recorded sensor crop;
+Photo mode covers the RAW frame. EncodedVideo measures the recorded sensor crop;
 CRS passes its resolved crop separately from preview geometry, but its existing
 unimplemented backend still prevents a CRS recording validation.
 
