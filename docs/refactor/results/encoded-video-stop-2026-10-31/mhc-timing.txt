@@ -1,0 +1,1 @@
+label=open-gate stopMs=472 graded=65 output=66

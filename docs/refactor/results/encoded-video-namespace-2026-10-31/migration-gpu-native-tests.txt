@@ -1,0 +1,263 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoSettingsMigrationDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.EncodedVideoSettingsMigrationDeviceTest:
+INSTRUMENTATION_STATUS: test=persistedModeLutAndCrashMarkerSurviveNamespaceUpdate
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoSettingsMigrationDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=persistedModeLutAndCrashMarkerSurviveNamespaceUpdate
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest:
+INSTRUMENTATION_STATUS: test=nativeGridRefusesToGuessCodecImageLayout
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=nativeGridRefusesToGuessCodecImageLayout
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=headlessRecordingLogsComparedSamples
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stack=java.lang.IllegalArgumentException: Recorded LUT input must be S-Gamut3.Cine/S-Log3
+	at com.matthew.rawlens.EncodedVideoRecorder.resetTakeState(EncodedVideoRecorder.kt:643)
+	at com.matthew.rawlens.EncodedVideoRecorder.startTake(EncodedVideoRecorder.kt:566)
+	at com.matthew.rawlens.EncodedVideoRecorder.startInternal(EncodedVideoRecorder.kt:525)
+	at com.matthew.rawlens.EncodedVideoRecorder.start(EncodedVideoRecorder.kt:512)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:157)
+	at com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest.headlessRecordingLogsComparedSamples(EncodedVideoDiagnosticsDeviceTest.kt:21)
+
+INSTRUMENTATION_STATUS: stream=
+Error in headlessRecordingLogsComparedSamples(com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest):
+java.lang.IllegalArgumentException: Recorded LUT input must be S-Gamut3.Cine/S-Log3
+	at com.matthew.rawlens.EncodedVideoRecorder.resetTakeState(EncodedVideoRecorder.kt:643)
+	at com.matthew.rawlens.EncodedVideoRecorder.startTake(EncodedVideoRecorder.kt:566)
+	at com.matthew.rawlens.EncodedVideoRecorder.startInternal(EncodedVideoRecorder.kt:525)
+	at com.matthew.rawlens.EncodedVideoRecorder.start(EncodedVideoRecorder.kt:512)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:157)
+	at com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest.headlessRecordingLogsComparedSamples(EncodedVideoDiagnosticsDeviceTest.kt:21)
+
+INSTRUMENTATION_STATUS: test=headlessRecordingLogsComparedSamples
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=nativeGridMatchesCpuPlaneSamples
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=nativeGridMatchesCpuPlaneSamples
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdPortableDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.PackedRcdPortableDeviceTest:
+INSTRUMENTATION_STATUS: test=portableSharedPreservesRgbBitsAcrossCfaAndCrops
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdPortableDeviceTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=portableSharedPreservesRgbBitsAcrossCfaAndCrops
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdPortableDeviceTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=portableSharedPreservesEveryP010WordAcrossProfilesAndScaling
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdPortableDeviceTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=portableSharedPreservesEveryP010WordAcrossProfilesAndScaling
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.PackedRcdDeviceTest:
+INSTRUMENTATION_STATUS: test=optimizedOutputMatchesSourcePixels
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=optimizedOutputMatchesSourcePixels
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=fullResolutionStageTimings
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=fullResolutionStageTimings
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=scaledP010MatchesSeparateGradeAcrossProfiles
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=scaledP010MatchesSeparateGradeAcrossProfiles
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=flatColorsAcrossPatternsAndPartialTiles
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=flatColorsAcrossPatternsAndPartialTiles
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=fusedFullResolutionStageTimings
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=fusedFullResolutionStageTimings
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=lensShadingUsesSensorCoordinatesBeforeGrade
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=lensShadingUsesSensorCoordinatesBeforeGrade
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=fusedP010MatchesSeparateGradeAcrossProfiles
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=fusedP010MatchesSeparateGradeAcrossProfiles
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=importedRawStrideOverridesPlanePitch
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=importedRawStrideOverridesPlanePitch
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=asynchronousSlotsPreservePixelsAndGrades
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=asynchronousSlotsPreservePixelsAndGrades
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=scaledSlog3LutStageTimings
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.PackedRcdDeviceTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=16
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=scaledSlog3LutStageTimings
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 12.337
+There was 1 failure:
+1) headlessRecordingLogsComparedSamples(com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest)
+java.lang.IllegalArgumentException: Recorded LUT input must be S-Gamut3.Cine/S-Log3
+	at com.matthew.rawlens.EncodedVideoRecorder.resetTakeState(EncodedVideoRecorder.kt:643)
+	at com.matthew.rawlens.EncodedVideoRecorder.startTake(EncodedVideoRecorder.kt:566)
+	at com.matthew.rawlens.EncodedVideoRecorder.startInternal(EncodedVideoRecorder.kt:525)
+	at com.matthew.rawlens.EncodedVideoRecorder.start(EncodedVideoRecorder.kt:512)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:157)
+	at com.matthew.rawlens.EncodedVideoDiagnosticsDeviceTest.headlessRecordingLogsComparedSamples(EncodedVideoDiagnosticsDeviceTest.kt:21)
+
+FAILURES!!!
+Tests run: 16,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

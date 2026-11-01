@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.matthew.rawlens.SettingsBackupTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-31T19:50:45.978Z" hostname="Monikas-MacBook-Air.local" time="0.005">
+  <properties/>
+  <testcase name="knownStoresCoverAllFourPrefsFiles" classname="com.matthew.rawlens.SettingsBackupTest" time="0.0"/>
+  <testcase name="unknownStoresAreSkippedButUnknownKeysAreKept" classname="com.matthew.rawlens.SettingsBackupTest" time="0.0"/>
+  <testcase name="outputIsDeterministicWithSortedKeys" classname="com.matthew.rawlens.SettingsBackupTest" time="0.0"/>
+  <testcase name="rejectsMalformedBackups" classname="com.matthew.rawlens.SettingsBackupTest" time="0.001"/>
+  <testcase name="floatRoundTripIsBitExact" classname="com.matthew.rawlens.SettingsBackupTest" time="0.001"/>
+  <testcase name="roundTripsAllValueTypes" classname="com.matthew.rawlens.SettingsBackupTest" time="0.0"/>
+  <testcase name="rejectsUnsupportedValueTypeOnExport" classname="com.matthew.rawlens.SettingsBackupTest" time="0.003"/>
+  <testcase name="escapesAndUnicodeRoundTrip" classname="com.matthew.rawlens.SettingsBackupTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

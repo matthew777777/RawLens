@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.matthew.rawlens.EncodedVideoSettingsMigrationTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-31T19:50:40.471Z" hostname="Monikas-MacBook-Air.local" time="0.004">
+  <properties/>
+  <testcase name="settingsRetainValuesAndTypesUnderCurrentNames" classname="com.matthew.rawlens.EncodedVideoSettingsMigrationTest" time="0.001"/>
+  <testcase name="previousSettingsBackupsImportWithCurrentKeys" classname="com.matthew.rawlens.EncodedVideoSettingsMigrationTest" time="0.002"/>
+  <testcase name="currentChoicesWinAndMigrationIsIdempotent" classname="com.matthew.rawlens.EncodedVideoSettingsMigrationTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
