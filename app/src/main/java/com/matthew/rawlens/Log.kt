@@ -4,8 +4,8 @@ package com.matthew.rawlens
 /**
  * Drop-in for `android.util.Log` across this package: every call still goes
  * to logcat, and is also teed to [LogcatFileWriter] so the session file
- * keeps RawLens's own lines on ROMs whose logd hands the app nothing back
- * (Xiaomi 14T Pro field report: a session holding only the silence marker).
+ * keeps RawLens's own lines independently of OEM logd restrictions or
+ * a logcat stream that stalls after startup (Vivo V2562 field report).
  * Files in this package resolve `Log` here by not importing android.util.Log.
  */
 internal object Log {

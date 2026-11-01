@@ -6,6 +6,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LogcatFileWriterTest {
+    @Test fun `direct diagnostics survive startup logcat output and later silence`() {
+        val target = LogcatFileWriter
+        fun field(name: String) = target.javaClass.getDeclaredField(name).apply { isAccessible = true }
+        val names = listOf("running", "teeMode", "writer", "bytesWritten", "linesCaptured", "linesSinceFlush")
+        val saved = names.associateWith { field(it).get(target) }
+        val text = java.io.StringWriter()
+        val output = java.io.BufferedWriter(text)
+        try {
+            field("running").set(target, true)
+            field("teeMode").set(target, 3) // Direct app capture, with supplementary logcat.
+            field("writer").set(target, output)
+            field("bytesWritten").set(target, 0L)
+            target.javaClass.getDeclaredMethod("appendLine", String::class.java).apply {
+                isAccessible = true
+            }.invoke(target, "10-31 11:52:06.733 23466 23466 I runtime: startup")
+            target.tee('I', "Camera", "after logcat stopped", null)
+            output.flush()
+            assertTrue(text.toString().contains("runtime: startup"))
+            assertTrue(text.toString().contains("Camera: after logcat stopped"))
+        } finally {
+            for ((name, value) in saved) field(name).set(target, value)
+        }
+    }
+
     @Test fun `session names carry a sortable timestamp stem`() {
         val name = LogcatFileWriter.sessionFileName(1780276800000L)
         assertTrue(name.startsWith("logcat-"))
@@ -71,7 +95,7 @@ class LogcatFileWriterTest {
         // 2-line file with no diagnosis at all).
         assertEquals(
             "----- logcat capture failed to start (IOException: Permission denied); " +
-                "session has headers only, app continues -----",
+                "logcat unavailable, app continues -----",
             LogcatFileWriter.captureSpawnFailedMarker("IOException: Permission denied")
         )
     }
@@ -91,8 +115,8 @@ class LogcatFileWriterTest {
         // Xiaomi 14T Pro field report: logd gave the app nothing, so the
         // fallback writes RawLens's own lines; they must read like logcat.
         assertEquals(
-            "10-29 14:03:05.123 28862 28901 W DirectLogRecorder: stage: open",
-            LogcatFileWriter.teeLine("10-29 14:03:05.123", 28862, 28901, 'W', "DirectLogRecorder", "stage: open")
+            "10-29 14:03:05.123 28862 28901 W EncodedVideoRecorder: stage: open",
+            LogcatFileWriter.teeLine("10-29 14:03:05.123", 28862, 28901, 'W', "EncodedVideoRecorder", "stage: open")
         )
     }
 

@@ -41,12 +41,10 @@ import java.util.TimeZone
  * respawned (bounded), so capture resumes by itself; when respawns give
  * out a truncation marker is written to the file and mirrored, so a short
  * session can never be mistaken for a dead process. The same holds for the
- * two silent failures: a spawn that throws and a logcat that yields zero
- * lines (OEM logd restrictions) are both written into the session as
- * markers and mirrored, so a headers-only file always says why. On silence
- * the session then falls back to RawLens's own lines teed in-process by
- * [Log] (buffered from process start, so nothing before the verdict is
- * lost); native and framework lines are unavailable in that mode.
+ * spawn failure is written into the session as a marker. RawLens's own
+ * diagnostics are always written in-process by [Log], independently of logd.
+ * Native/framework output is supplementary; duplicate app lines can occur.
+ * Downloads mirroring runs on a timer even if logcat stops delivering lines.
  */
 internal object LogcatFileWriter {
     private const val TAG = "LogcatFileWriter"
@@ -73,6 +71,7 @@ internal object LogcatFileWriter {
     private const val TEE_BUFFER = 0
     private const val TEE_OFF = 1
     private const val TEE_ACTIVE = 2
+    private const val TEE_DIRECT = 3
     /** Absolute binary first: PATH lookup is what OEM ROMs break. */
     private const val SYSTEM_LOGCAT = "/system/bin/logcat"
 
@@ -92,12 +91,11 @@ internal object LogcatFileWriter {
     private var linesSinceFlush = 0
     /** Monotonic captured-line count, for the status row. */
     private var linesCaptured = 0L
-    /** Bumped per [start] so a stale silence watchdog never judges a newer session. */
+    /** Bumped per [start] so a stale mirror worker never mirrors a newer session. */
     private var sessionGen = 0
     /**
-     * [Log] tee state: buffer until logcat yields a real line (then off,
-     * logcat has it all) or the silence watchdog fires (then active: the
-     * buffer and every later line are written to the session directly).
+     * Buffer before capture starts, then write directly for the entire
+     * session. TEE_ACTIVE is reserved for crash draining without logcat.
      */
     @Volatile private var teeMode = TEE_BUFFER
     private val teeBuffer = ArrayDeque<TeeEntry>()
@@ -158,7 +156,7 @@ internal object LogcatFileWriter {
      */
     fun captureSpawnFailedMarker(detail: String): String =
         "----- logcat capture failed to start ($detail); " +
-            "session has headers only, app continues -----"
+            "logcat unavailable, app continues -----"
 
     /**
      * File-side marker for a live-but-silent logcat: zero lines [waitedSecs]
@@ -179,9 +177,8 @@ internal object LogcatFileWriter {
         "$stamp ${pid.toString().padStart(5)} ${tid.toString().padStart(5)} $level $tag: $msg"
 
     /**
-     * Called by [Log] for every RawLens log call. Cheap no-op once logcat is
-     * known to work; otherwise buffers (bounded) or writes straight to the
-     * session when the device logd is silent.
+     * Called by [Log] for every RawLens log call. Buffers before startup,
+     * then writes directly regardless of logcat health.
      */
     fun tee(level: Char, tag: String, msg: String, tr: Throwable?) {
         if (teeMode == TEE_OFF) return
@@ -194,7 +191,7 @@ internal object LogcatFileWriter {
                         if (teeBuffer.size >= TEE_BUFFER_LINES) teeBuffer.removeFirst()
                         teeBuffer.addLast(entry)
                     }
-                    TEE_ACTIVE -> writeTeeLocked(entry)
+                    TEE_ACTIVE, TEE_DIRECT -> writeTeeLocked(entry)
                 }
             } catch (failure: Throwable) {
                 Log.w(TAG, "Teeing log line failed", failure)
@@ -303,10 +300,14 @@ internal object LogcatFileWriter {
                 openSessionLocked(dir)
                 pid = android.os.Process.myPid()
                 captureNote = null
-                teeMode = TEE_BUFFER
+                // Never trust startup/framework output as proof that logd will
+                // keep delivering app diagnostics (Vivo V2562 stops after it).
+                teeMode = TEE_DIRECT
+                running = true
+                drainTeeBufferLocked()
                 spawnLocked()
                 running = true
-                startSilenceWatchdogLocked(++sessionGen, pid)
+                startMirrorWorkerLocked(++sessionGen)
                 readerThread = Thread(::pumpLoop, "logcat-file").apply {
                     isDaemon = true
                     start()
@@ -317,7 +318,11 @@ internal object LogcatFileWriter {
                 // into the session file itself; otherwise the orphaned
                 // headers-only session exports as a mysteriously empty log.
                 noteSpawnFailedLocked(failure)
-                closeLocked()
+                if (running && writer != null) {
+                    startMirrorWorkerLocked(++sessionGen)
+                } else {
+                    closeLocked()
+                }
                 spawnFailed = true
             }
         }
@@ -379,62 +384,29 @@ internal object LogcatFileWriter {
     }
 
     /**
-     * Watchdog: if logcat yields no real line within [SILENCE_TIMEOUT_MS],
-     * the device logd is giving nothing for this pid (restriction, not slow
-     * startup). The session is marked, logcat is dropped, the [Log] tee
-     * takes over (buffered lines first), and this thread stays on as the
-     * mirror cadence, since no logcat reader drives it any more. [gen]
-     * keeps a stale watchdog from judging a restarted session.
+     * Mirror on a timer even when logcat is blocked in readLine. RawLens
+     * diagnostics are written directly throughout the session; logcat is
+     * supplementary and may contain duplicates of those app lines.
      */
-    private fun startSilenceWatchdogLocked(gen: Int, sessionPid: Int) {
+    private fun startMirrorWorkerLocked(gen: Int) {
         Thread({
-            try {
-                Thread.sleep(SILENCE_TIMEOUT_MS)
-            } catch (failure: InterruptedException) {
-                return@Thread
-            }
-            fun current() = running && gen == sessionGen && writer != null
-            val marked = synchronized(lock) {
-                if (!current() || teeMode != TEE_BUFFER) false
-                else try {
-                    val waitedSecs = SILENCE_TIMEOUT_MS / 1000
-                    captureNote = "silent ${waitedSecs}s (pid=$sessionPid), in-process fallback"
-                    writer?.let {
-                        it.write(captureSilentMarker(sessionPid, waitedSecs))
-                        it.newLine()
-                    }
-                    // Mode first so the reader exits quietly instead of
-                    // respawning the logcat we are about to kill.
-                    teeMode = TEE_ACTIVE
-                    runCatching { process?.destroy() }
-                    process = null
-                    drainTeeBufferLocked()
-                    flushLocked()
-                    stream?.fd?.sync()
-                    true
-                } catch (failure: Throwable) {
-                    Log.w(TAG, "Recording logcat silence failed", failure)
-                    false
-                }
-            }
-            if (!marked) return@Thread
-            maybeMirror(force = true)
             while (true) {
                 try {
-                    Thread.sleep(MIRROR_INTERVAL_MS)
+                    Thread.sleep(SILENCE_TIMEOUT_MS)
                 } catch (failure: InterruptedException) {
                     return@Thread
                 }
                 val live = synchronized(lock) {
-                    if (current() && teeMode == TEE_ACTIVE) {
+                    if (!running || gen != sessionGen || writer == null) false
+                    else {
                         flushLocked()
                         true
-                    } else false
+                    }
                 }
                 if (!live) return@Thread
-                maybeMirror(force = true)
+                maybeMirror(force = false)
             }
-        }, "logcat-silence-watch").apply {
+        }, "logcat-mirror").apply {
             isDaemon = true
             start()
         }
@@ -444,7 +416,7 @@ internal object LogcatFileWriter {
         synchronized(lock) {
             if (!running) return
             running = false
-            if (teeMode == TEE_ACTIVE) teeMode = TEE_OFF
+            teeMode = TEE_OFF
             try {
                 process?.destroy()
             } catch (failure: Throwable) {
@@ -533,6 +505,7 @@ internal object LogcatFileWriter {
             if (!force && !mirrorDue(lastMirrorMs, System.currentTimeMillis())) return
             val file = currentFile?.takeIf { it.isFile && it.length() > 0L } ?: return
             lastMirrorMs = System.currentTimeMillis()
+            flushLocked()
             file
         }
         val error = mirrorFile(ctx, source)
@@ -680,12 +653,6 @@ internal object LogcatFileWriter {
     private fun appendLine(line: String) {
         synchronized(lock) {
             if (!running || teeMode == TEE_ACTIVE) return
-            // A real line proves logcat works: it already carries everything
-            // the tee buffered, so stop buffering for good.
-            if (teeMode == TEE_BUFFER && !isLogcatDivider(line)) {
-                teeMode = TEE_OFF
-                teeBuffer.clear()
-            }
             appendLineLocked(line)
             maybeMirror(force = false)
         }
