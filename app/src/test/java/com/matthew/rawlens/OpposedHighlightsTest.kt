@@ -24,6 +24,25 @@ class OpposedHighlightsTest {
             for (i in input.values.indices) assertTrue(output.values[i] >= input.values[i])
         }
     }
+    @Test fun clippedGreenRecoversNeutralWithNonUnityWhiteBalance() {
+        val balance = floatArrayOf(2f, 1f, 2.5f)
+        for (pattern in BayerPattern.entries) {
+            val input = cfa(pattern = pattern)
+            for (y in 0 until 48) for (x in 0 until 48) {
+                val c = pattern.colorOrdinalAt(x, y)
+                input.values[y * 48 + x] = minOf(1f, 1.5f / balance[c])
+            }
+            val output = OpposedHighlights.cpu(input, balance = balance)
+            for (y in 2 until 46) for (x in 2 until 46) {
+                val i = y * 48 + x
+                val c = pattern.colorOrdinalAt(x, y)
+                assertEquals("Balanced recovered neutral $pattern ($x,$y)",
+                    1.5f, output.values[i] * balance[c], 0.000003f)
+                if (c != 1) assertEquals(input.values[i].toRawBits(), output.values[i].toRawBits())
+            }
+        }
+    }
+
     @Test fun cropPatternIsAlreadyShifted() {
         val input = cfa(pattern = BayerPattern.GRBG).copy(sensorCropLeft = 1, sensorCropTop = 1)
         assertArrayEquals(intArrayOf(1,0,2,1), OpposedHighlights.cells(input))

@@ -26,8 +26,18 @@ rounding. This replaces the backend-specific OpenCL `cbrt` primitive.
 Positive normal divisions are likewise corrected with exact integer midpoint
 products, avoiding hardware reciprocal approximation in shading normalization.
 
-Clipping multiplier is 0.987. Upstream temperature coefficients and late
-chromatic-adaptation correction are set to identity: input is pre-WB CFA.
+Clipping multiplier is 0.987. Input and clipping eligibility remain pre-WB CFA.
+Production reference averages are multiplied by the reciprocal capture neutral
+before cube roots, and the opposing estimate is divided by the target channel's
+balance before chroma accumulation or reconstruction. This keeps the reference
+achromatic under the downstream white balance without applying WB twice.
+Unity-balance calls retain the pinned temperature-disabled oracle behavior.
+
+The previous production unity reference treated sensor-equal RGB as neutral.
+With non-unity WB, clipped green could remain too low while red/blue were
+amplified downstream, producing pink highlights when recovery disabled the
+ordinary white fallback. The non-unity neutral regression exercises a clipped
+green scene across all four Bayer patterns and preserves measured R/B bits.
 All four Bayer arrangements are supported. `UnpackedRawCfa.pattern` already
 includes its crop shift; sensor origin is used for lens shading, not shifted again.
 

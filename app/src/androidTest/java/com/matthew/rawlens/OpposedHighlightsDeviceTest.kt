@@ -9,6 +9,28 @@ import org.junit.Test
 import kotlin.math.abs
 
 class OpposedHighlightsDeviceTest {
+    @Test fun nonUnityNeutralRecoversClippedGreenOnGpu() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val balance = floatArrayOf(2f, 1f, 2.5f)
+        VulkanHub.openVulkan10().use { vk ->
+            OpposedHighlightsVulkan.Session(vk, context.assets).use { session ->
+                for (pattern in BayerPattern.entries) {
+                    val values = FloatArray(48 * 48) { i ->
+                        minOf(1f, 1.5f / balance[pattern.colorOrdinalAt(i % 48, i / 48)])
+                    }
+                    val input = UnpackedRawCfa(48, 48, pattern, values, RawCrop(0, 0, 48, 48))
+                    val expected = OpposedHighlights.cpu(input, balance = balance)
+                    val actual = session.run(input, balance = balance).cfa
+                    assertArrayEquals(expected.values, actual.values, 0.000003f)
+                    for (y in 2 until 46) for (x in 2 until 46) {
+                        val c = pattern.colorOrdinalAt(x, y)
+                        assertEquals(1.5f, actual.values[y * 48 + x] * balance[c], 0.000003f)
+                    }
+                }
+            }
+        }
+    }
+
     @Test fun compareEveryOutputAndRowStatisticAcrossPatternsAndBorders() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         VulkanHub.openVulkan10().use { vk ->

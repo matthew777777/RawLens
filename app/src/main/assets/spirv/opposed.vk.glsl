@@ -118,7 +118,7 @@ float refavg(int x,int y) {
         }
     for(int c=0;c<3;++c) mean[c]=cnt[c]>0.0 ? cubeRoot(divideRounded(p.correction[c]*mean[c],cnt[c])) : 0.0;
     precise vec3 opp=0.5*vec3(mean.y+mean.z,mean.x+mean.z,mean.x+mean.y);
-    precise float v=opp[color(x,y)]; return (v*v)*v;
+    precise float v=opp[color(x,y)]; return divideRounded((v*v)*v,p.correction[color(x,y)]);
 }
 bool clippedAt(ivec2 q,float value) {
     if(p.sizeMode.w!=0) {

@@ -31,7 +31,7 @@ internal object OpposedHighlightsVulkan {
                 pipeline = 0L
             }
         }
-        fun run(cfa: UnpackedRawCfa, shading: LensShadingModel? = null, owned: Boolean = false): Result {
+        fun run(cfa: UnpackedRawCfa, shading: LensShadingModel? = null, owned: Boolean = false, balance: FloatArray = floatArrayOf(1f, 1f, 1f)): Result {
             check(pipeline != 0L) { "Opposed session is closed" }
             val w = cfa.width; val h = cfa.height
             require(w >= 4 && h >= 4 && cfa.values.size == w * h)
@@ -103,7 +103,7 @@ internal object OpposedHighlightsVulkan {
                     u.putInt(w).putInt(h).putInt(mode).putInt(if (clipping == null) 0 else 1)
                     cells.forEach { u.putInt(it) }
                     repeat(4) { u.putFloat(OpposedHighlights.CLIP) }
-                    repeat(4) { u.putFloat(1f) }
+                    repeat(4) { u.putFloat(balance.getOrElse(it) { 1f }) }
                     repeat(4) { u.putFloat(chroma.getOrElse(it) { 0f }) }
                     u.putInt(cfa.sensorCropLeft).putInt(cfa.sensorCropTop)
                         .putInt(model?.columns ?: 0).putInt(model?.rows ?: 0)
