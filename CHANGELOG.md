@@ -4,7 +4,9 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 
 ## [2.0.69] - 2026-11-01
 
-Changes since 2.0.27. See [full release notes](docs/releases/2.0.69.md).
+Changes since 2.0.27. The [consolidated release notes](docs/releases/2.0.69.md)
+also include the original 2.0.0 feature overview, with later changes and
+removals clearly identified.
 
 ### Added
 
