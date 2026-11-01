@@ -1030,7 +1030,18 @@ internal class RawVideoRecorder(
                     if (waitMs > resultWaitMsMax) waitMs else resultWaitMsMax * 0.999f + waitMs * 0.001f
                 stage = "frame metadata"
                 val frameJson =
-                    CrawMetadata.frame(task.frameJson, result, timeOriginNs)
+                    CrawMetadata.frame(task.frameJson, result, timeOriginNs) {
+                        val chars = videoRoute.characteristics
+                        val cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+                        val black = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+                        val white = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+                        if (cfa == null || black == null || white == null) null else
+                            RawWhiteBalanceFallback.estimate(
+                                task.src.duplicate().order(java.nio.ByteOrder.nativeOrder()), task.stride, 2,
+                                task.width, task.height, cfa,
+                                FloatArray(4) { black.getOffsetForIndex(it % 2, it / 2).toFloat() },
+                                white.toFloat(), RawWhiteBalanceFallback.locusFor(chars))
+                    }
                 buf.flip()
                 synchronized(reorderLock) {
                     reorder[task.seq] =

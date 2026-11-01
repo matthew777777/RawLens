@@ -74,30 +74,45 @@ internal object CrawMetadata {
      * every on-disk timestamp is recording-relative. The result match still uses absolute capture
      * timestamps; only the serialized strings are rebased.
      */
-    fun frame(base: String, result: CaptureResult, originNs: Long): String {
-        val json = JSONObject(base)
-        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-        require(timestamp == json.getLong("timestamp")) { "Mismatched RAW capture metadata" }
-        require(originNs != Long.MIN_VALUE) { "Timestamp origin not set" }
-        val neutral = requireNotNull(result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)) {
-            "RAW capture has no white balance metadata"
+    fun frame(base: String, result: CaptureResult, originNs: Long,
+              estimateNeutral: () -> DoubleArray? = { null }): String {
+        val gains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+            floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue)
         }
-        json.put("asShotNeutral", JSONArray(neutral.map { it.toDouble() }))
-        json.put("exposureTime", result.get(CaptureResult.SENSOR_EXPOSURE_TIME))
-        json.put("iso", result.get(CaptureResult.SENSOR_SENSITIVITY))
-        // Optional EXIF capture facts survive a CRAW dump and later offline development.
-        json.put("aperture", result.get(CaptureResult.LENS_APERTURE))
-        json.put("focalLengthMm", result.get(CaptureResult.LENS_FOCAL_LENGTH))
-        json.put("focusDistanceDiopters", result.get(CaptureResult.LENS_FOCUS_DISTANCE))
-        json.put("flashState", result.get(CaptureResult.FLASH_STATE))
         val controlsOff = result.get(CaptureResult.CONTROL_MODE) == CaptureResult.CONTROL_MODE_OFF
-        json.put("aeMode", if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AE_MODE))
-        json.put("awbMode", if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AWB_MODE))
-        json.put("exposureCompensationSteps", result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION))
-        json.put("digitalZoomRatio", result.get(CaptureResult.CONTROL_ZOOM_RATIO))
-        // Rolling-shutter readout (first to last row, ns): Gyroflow's
-        // frame_readout_time for rolling-shutter correction.
-        result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)?.let { json.put("rollingShutterSkew", it) }
+        return frameValues(base, result.get(CaptureResult.SENSOR_TIMESTAMP), originNs,
+            result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.map { it?.toDouble() ?: Double.NaN }?.toDoubleArray(),
+            gains, mapOf(
+                "exposureTime" to result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                "iso" to result.get(CaptureResult.SENSOR_SENSITIVITY),
+                "aperture" to result.get(CaptureResult.LENS_APERTURE),
+                "focalLengthMm" to result.get(CaptureResult.LENS_FOCAL_LENGTH),
+                "focusDistanceDiopters" to result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                "flashState" to result.get(CaptureResult.FLASH_STATE),
+                "aeMode" to if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AE_MODE),
+                "awbMode" to if (controlsOff) 0 else result.get(CaptureResult.CONTROL_AWB_MODE),
+                "exposureCompensationSteps" to result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION),
+                "digitalZoomRatio" to result.get(CaptureResult.CONTROL_ZOOM_RATIO),
+                "rollingShutterSkew" to result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)
+            ), estimateNeutral)
+    }
+
+    internal fun frameValues(base: String, timestamp: Long?, originNs: Long,
+                             halNeutral: DoubleArray?, gains: FloatArray?,
+                             optional: Map<String, Any?>,
+                             estimateNeutral: () -> DoubleArray? = { null }): String {
+        val json = JSONObject(base)
+        require(timestamp != null && timestamp == json.getLong("timestamp")) { "Mismatched RAW capture metadata" }
+        require(originNs != Long.MIN_VALUE) { "Timestamp origin not set" }
+        val neutral = RecordingWhiteBalance.select(halNeutral, gains, estimateNeutral)
+        json.remove("asShotNeutral")
+        neutral.neutral?.let { json.put("asShotNeutral", JSONArray(it.toList())) }
+        json.put("whiteBalanceSource", neutral.source)
+        // Force the Object overload; never unbox optional nulls or write NaN.
+        optional.forEach { (name, value) ->
+            json.remove(name)
+            if (value != null && (value !is Number || value.toDouble().isFinite())) json.put(name, value)
+        }
         val rel = maxOf(0L, timestamp - originNs).toString()
         json.put("metadataTimestamp", rel)
         json.put("metadataMatched", true)
