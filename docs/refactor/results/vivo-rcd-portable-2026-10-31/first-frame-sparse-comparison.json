@@ -1,0 +1,17 @@
+{
+  "points": 32,
+  "words": 96,
+  "maxCodeDelta": 165,
+  "meanCodeDelta": 9.385416666666666,
+  "wordsWithin4Codes": 41,
+  "expectedFirstYuv": [
+    164,
+    506,
+    522
+  ],
+  "decodedFirstYuv": [
+    173,
+    509,
+    518
+  ]
+}
