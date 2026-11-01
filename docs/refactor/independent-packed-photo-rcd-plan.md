@@ -11,6 +11,28 @@ This is an independent replacement/public-source port plan, not a certification 
 
 Related plan: [Public-reference replacement and distribution cleanup](rcd-public-reference-replacement-plan.md). This document adds the photo-RCD starting point, packed-layout design process, implementation gates and an execution prompt. Where the two differ, establish the verified photo algorithm as the candidate oracle first; do not silently substitute a different public RCD variant.
 
+## Research refinement — 2026-11-01
+
+The disputed current source/dependency closure and affected advertised histories
+have now been removed; old releases were withdrawn to private drafts. See
+[the removal report](issue1-removal.md) for completed work and hosted-copy limits.
+Do not repeat completed history cleanup or restore private archive contents.
+
+Read [the public-source research](rcd-replacement/research-2026-11-01.md) before
+implementation. Use pinned RawTherapee as the primary numerical oracle; current
+photo RCD is a compatibility candidate requiring audit. Prefer an FP32,
+race-free baseline and a tiled-reconstruction experiment before committing to
+any packed layout. Packing must be measured, not assumed to save fourfold work.
+Separate upstream interior correctness, application border handling and HDR
+extensions. Treat vkdt/darktable as documented architectural comparisons unless
+specific source reuse is approved with complete license/provenance records.
+
+The required outcome is defensible reviewed provenance/licensing plus sustained
+1080p30, 1440p30 and 4K24 without duplicated frames, reduced detail or retiming.
+The recommended next task is research milestone M1: provenance, independent
+host oracle and numerical contract. Android device tests remain deferred until
+the user requests them. Later performance acceptance still requires real devices.
+
 ## Operating constraints
 
 - Preserve unrelated working-tree changes. Inventory status before edits, use a separate worktree when practical, and never reset or overwrite the user's work.
@@ -98,7 +120,7 @@ Exit gate: targeted JVM/native/device checks pass and actual replacement recordi
 
 ## Phase 6 — Performance validation
 
-Treat 3840×2160 at 24 fps and 2560×1440 / 1920×1080 at 30 fps as initial targets, subject to confirmation against current product requirements and device evidence. 4K30 is a stretch target. Do not guarantee old-backend performance.
+Required release gates, confirmed by the user on 2026-11-01: stable 3840×2160 at 24 fps and stable 2560×1440 / 1920×1080 at 30 fps. These are mandatory, not optional targets. 4K30 is outside required scope. Follow the explicit stability/provenance acceptance contract in `rcd-replacement/research-2026-11-01.md`. Do not promise performance before measurement or legal clearance without qualified review.
 
 Record release build hash, device/driver, input/crop/output sizes, profile, LUT, preview, precision, battery/thermal conditions and run duration. Measure warm GPU stage median/p95, memory, camera cadence, waits/copies, encoder throughput, muxed PTS, duplicate/missing frames and p95/max gaps. Distinguish overlapping stages from serial costs.
 
