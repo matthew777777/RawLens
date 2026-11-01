@@ -1,5 +1,8 @@
 # Vivo RCD clip / log / RAWR comparison
 
+> Historical report: the video RCD implementation described here was removed on 2026-11-01. These measurements do not describe the current MHC/Super pixel video path.
+
+
 ## Matched field evidence
 
 `IMG_20261031_215213_624_LOG709.mp4` matches the recording named in

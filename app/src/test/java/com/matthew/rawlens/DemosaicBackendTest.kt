@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * JVM gates for the demosaic-backend switches (Video tab MHC/RCD,
+ * JVM gates for the demosaic-backend switches (Video tab MHC/Super pixel,
  * JPEG tab AMaZE/RCD): preference round-trips/defaults plus the
  * Bayer-pattern -> RCD quad-offset map the JPEG bridge packs.
  */
@@ -25,16 +25,16 @@ class DemosaicBackendTest {
         assertEquals(JpegDemosaic.RCD, JpegOutputSettings().copy(demosaic = JpegDemosaic.RCD).demosaic)
     }
 
-    @Test fun videoDemosaicDefaultsToRcd() {
-        assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference(null))
-        assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference("BOGUS"))
+    @Test fun videoDemosaicDefaultsToMhc() {
+        assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference(null))
+        assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference("BOGUS"))
     }
 
-    @Test fun videoDemosaicRoundTrips() {
-        assertEquals(VideoDemosaic.RCD, VideoDemosaic.fromPreference("RCD"))
+    @Test fun videoDemosaicRoundTripsAndRetiredRcdMigrates() {
+        assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference("RCD"))
+        assertEquals(listOf(VideoDemosaic.MHC, VideoDemosaic.SUPER), VideoDemosaic.entries.toList())
         assertEquals(VideoDemosaic.MHC, VideoDemosaic.fromPreference("MHC"))
-        assertEquals(VideoDemosaic.RCD, VideoDemosaic.MHC.next())
-        assertEquals(VideoDemosaic.SUPER, VideoDemosaic.RCD.next())
+        assertEquals(VideoDemosaic.SUPER, VideoDemosaic.MHC.next())
         assertEquals(VideoDemosaic.MHC, VideoDemosaic.SUPER.next())
         assertEquals(VideoDemosaic.SUPER, VideoDemosaic.fromPreference("SUPER"))
     }

@@ -1,0 +1,58 @@
+[
+  {
+    "title": "docs(rcd): record Unspektrawesome archive provenance and replacement process",
+    "files": 27
+  },
+  {
+    "title": "fix(video): support portable packed RCD shaders and document device results",
+    "files": 22
+  },
+  {
+    "title": "fix(highlights): balance opposed reconstruction references in the camera neutral basis",
+    "files": 7
+  },
+  {
+    "title": "fix(wavelet): align photo denoise parameters and native stages with pinned RAWR",
+    "files": 18
+  },
+  {
+    "title": "feat(photo): add RAWR capture sharpening and camera-linear development integration",
+    "files": 77
+  },
+  {
+    "title": "feat(metadata): preserve GPS freshness and improve captured lens identity",
+    "files": 14
+  },
+  {
+    "title": "feat(focus): replace photo AF policy and rebuild RAW focus peaking",
+    "files": 50
+  },
+  {
+    "title": "feat(ui): use Material controls and adaptive quick-panel layouts",
+    "files": 47
+  },
+  {
+    "title": "refactor(video): rename Direct Log code to Encoded Video and preserve compatibility",
+    "files": 106
+  },
+  {
+    "title": "fix(logging): always capture application diagnostics independently of logd",
+    "files": 3
+  },
+  {
+    "title": "fix(camera): normalize RAW preferences and account for capture queue capacity",
+    "files": 9
+  },
+  {
+    "title": "refactor(app): wire photo, UI, metadata and encoded-video changes together",
+    "files": 79
+  },
+  {
+    "title": "docs: synchronize user guidance, audits and release notes with pending features",
+    "files": 20
+  },
+  {
+    "title": "chore(version): preserve the current local build version",
+    "files": 1
+  }
+]

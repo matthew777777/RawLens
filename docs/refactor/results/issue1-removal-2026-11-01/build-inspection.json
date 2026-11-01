@@ -1,0 +1,31 @@
+{
+  "unit_tests": {
+    "tests": 1815,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 6
+  },
+  "apks": [
+    {
+      "file": "app/build/outputs/apk/github/release/RawLens-2.0.68-release-arm64-v8a.apk",
+      "sha256": "df54ef6c6a9e52c9130dee3cfcd2d763e0c71f41383999e0d9860817bdf73572",
+      "bad_paths": [],
+      "bad_symbols": [],
+      "bytes": 81803014
+    },
+    {
+      "file": "app/build/outputs/apk/github/release/RawLens-2.0.68-release.apk",
+      "sha256": "794c18d90f60d25a3612a6f5274af13cdf85686149b8bd27e35feb3d43ded69d",
+      "bad_paths": [],
+      "bad_symbols": [],
+      "bytes": 93123551
+    },
+    {
+      "file": "app/build/outputs/apk/github/release/RawLens-2.0.68-release-armeabi-v7a.apk",
+      "sha256": "0aa400463266b8694b676a5c432a2c2c6ebb927ec958b649b149a626c9fbc248",
+      "bad_paths": [],
+      "bad_symbols": [],
+      "bytes": 65989712
+    }
+  ]
+}

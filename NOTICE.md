@@ -351,22 +351,17 @@ pins in `third_party/craw/SOURCE.md`). They are linked into the separate
 `rawLensCraw` and `rawLensCrawReader` native libraries through RawLens'
 GPL-3.0-or-later JNI bridges (`craw_writer_jni.cpp`, `craw_reader_jni.cpp`).
 
-## Packed-ratio RCD variant
+## Retired video RCD dependency
 
-The shaders under `app/src/main/assets/shaders/rcd_packed` are modified versions
-of the RCD shaders from **Unspektrawesome**, published by GitHub account
-**EkinStrop** at https://github.com/EkinStrop/Unspektrawesome-source,
-archived revision `e0e284d58f85ae9c4bc1b2cffe0c9722969a7bb8`.
-The supplied archive declares **GNU GPL v3.0**; it does not establish an explicit
-"or later" grant for these shaders. Original shaders, the archived README,
-license text, file hashes, and modification details are preserved in
-[third_party/rcd-packed-upstream/SOURCE.md](third_party/rcd-packed-upstream/SOURCE.md).
-Source notices were clarified on 2026-10-31.
-
-The archive does not identify the individual RCD shader author. The publisher's
-authority to license this implementation is disputed in
-https://github.com/matthew777777/RawLens/issues/1; this attribution records the
-immediate source and supplied license declaration without resolving that dispute.
+The Unspektrawesome-derived packed-ratio video RCD implementation and its
+runtime shaders, generated binaries, native backend, test references and
+build tools were removed on 2026-11-01 in response to
+https://github.com/matthew777777/RawLens/issues/1. Encoded Video now offers
+MHC and Super pixel; saved RCD video selections migrate to MHC. Still-photo
+RCD is a separate implementation. Removal does not determine ownership,
+validate the archive publisher's licensing authority, or settle historical
+distribution claims. Future packed-photo-RCD work requires the recorded
+provenance and validation gates.
 
 ## RAWR Capture Sharpening
 

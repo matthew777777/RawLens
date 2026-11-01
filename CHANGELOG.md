@@ -4,6 +4,10 @@ Notable changes to RawLens are documented here. The project follows [Semantic Ve
 
 ## [Unreleased]
 
+### Removed
+
+- Retire the disputed packed video RCD backend and its shader/test/build dependency closure. Saved video RCD choices migrate to MHC; photo RCD is independent. Historical source refs and affected downloads require separate cleanup.
+
 ### Added
 
 - Port RAWR Capture Sharpening with unchanged native algorithm/shaders, all four

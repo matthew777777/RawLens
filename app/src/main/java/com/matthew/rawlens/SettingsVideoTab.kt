@@ -134,7 +134,7 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
                 setStatus("ENCODED VIDEO DEMOSAIC • ${next.label} — NEXT TAKE")
             }
         })
-        content.addView(sectionDesc("RCD (default) favors fine detail and may record below the selected frame rate, depending on the device and resolution; it falls back to MHC if RCD cannot start. MHC favors realtime recording. Super pixel bins each 2x2 Bayer quad into one pixel: faster processing with half the detail."))
+        content.addView(sectionDesc("MHC is the default video demosaic. The former video RCD backend has been removed; saved RCD choices use MHC. Super pixel bins each 2x2 Bayer quad into one pixel: faster processing with half the detail."))
         var encodedVideoGainEv = encodedVideoGainPref()
         val encodedVideoGainLabel = TextView(this).apply {
             text = encodedVideoGainText(encodedVideoGainEv)

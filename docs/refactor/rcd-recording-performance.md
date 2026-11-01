@@ -1,5 +1,8 @@
 # RCD recording performance follow-up
 
+> Historical report: the video RCD implementation described here was removed on 2026-11-01. These measurements do not describe the current MHC/Super pixel video path.
+
+
 Priority agreed with the user on 2026-10-27: achieve a sustained 33.3 ms frame interval in Encoded Video RCD recording (30 fps), including the complete recording pipeline.
 
 The user subsequently specified stable 24 fps as the minimum acceptable result, with 30 fps preferred. Evaluate cadence as well as the overall average; do not manufacture throughput by duplicating frames or changing sensor-relative RCD timestamps.

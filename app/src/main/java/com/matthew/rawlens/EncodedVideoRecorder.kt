@@ -37,26 +37,20 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Direct-video demosaic backend. MHC uses fused demosaic/grade; RCD uses
- * the independent Packed RCD pipeline. SUPER bins each Bayer quad into
- * one RGB pixel before grading. Still-photo RCD is independent of this selection.
- */
+/** Encoded-video demosaic choices. Still-photo RCD is independent. */
 enum class VideoDemosaic(val label: String) {
     MHC("MHC"),
-    RCD("RCD"),
     SUPER("Super pixel");
 
-    /** Settings cycle: MHC -> RCD -> Super pixel -> MHC. */
     fun next(): VideoDemosaic = when (this) {
-        MHC -> RCD
-        RCD -> SUPER
+        MHC -> SUPER
         SUPER -> MHC
     }
 
     companion object {
+        /** Retired RCD selections and unknown values migrate to MHC. */
         fun fromPreference(value: String?): VideoDemosaic =
-            entries.firstOrNull { it.name == value } ?: RCD
+            entries.firstOrNull { it.name == value } ?: MHC
     }
 }
 
@@ -64,8 +58,7 @@ enum class VideoDemosaic(val label: String) {
  * Encoded Video recorder: sensor RAW -> fused Vulkan MHC demosaic + log
  * grade in one dispatch (per-frame WB/CCM from the capture result;
  * superpixel fallback when fused is unavailable) -> HW HEVC Main10 ->
- * MP4. Packed RCD writes directly into encoder-owned P010 buffers when
- * supported; other input paths retain the staging/copy fallback.
+ * MP4. Encoder input uses the independently retained staging/copy path.
  *
  * Ownership per frame mirrors the viewfinder contract: adopt into
  * [RawImageOwnership], borrow a GPU lease, release the camera ref up front
@@ -104,7 +97,7 @@ class EncodedVideoRecorder(
         val fallbackWaits: Int,
         /** Frames via the fused MHC+grade path (vs superpixel fallback). */
         val fusedFrames: Int,
-        /** Frames via the RCD split path (A/B lever; 0 on normal takes). */
+        /** Retired video RCD count; always zero, retained for stats compatibility. */
         val rcdFrames: Int,
         /** Graded frames with the HAL lens-shading (vignetting) map applied. */
         val shadedFrames: Int,
@@ -230,11 +223,11 @@ class EncodedVideoRecorder(
      */
     var preferMhc: Boolean = true
     /**
-     * Demosaic backend for the take (default [VideoDemosaic.RCD]).
+     * Demosaic backend for the take (default [VideoDemosaic.MHC]).
      * Decided at take start like [recordingProfile]; the Video tab applies
-     * to the next take. RCD init failure falls back to fused MHC.
+     * to the next take. MHC initialization failure falls back to superpixel.
      */
-    @Volatile var videoDemosaic: VideoDemosaic = VideoDemosaic.RCD
+    @Volatile var videoDemosaic: VideoDemosaic = VideoDemosaic.MHC
     /**
      * Lens-shading (vignetting) correction (default on): the per-frame
      * HAL gain map multiplies demosaiced RGB pre-WB, like the
@@ -264,7 +257,7 @@ class EncodedVideoRecorder(
 
     private var codec: MediaCodec? = null
     /** True when this take feeds the encoder through a P010 ImageWriter (Surface-only encoders). */
-    internal var preferRcdGpuWriter = true
+    internal var preferRcdGpuWriter = false // Compatibility test lever; GPU writer is retired.
     private var gpuWriterMode = false
     private var writerMode = false
     private var imageWriter: ImageWriter? = null
@@ -414,21 +407,9 @@ class EncodedVideoRecorder(
     private val waitFree = AtomicInteger(0)
     private val fallbackWaits = AtomicInteger(0)
     private val fusedCount = AtomicInteger(0)
-    private val rcdCount = AtomicInteger(0)
     /** Session demosaic path (decided in start; fused unless unavailable). */
     private var useFused = false
-    /** RCD split path (decided in start; needs RCD init + [VideoDemosaic.RCD]). */
-    private var useRcd = false
-    /** Fused RCD finalize + grade (one dispatch replaces mode 3 + grade). */
-    private var useRcdFused = false
     @Volatile private var gpuSessionPinned = false
-    /**
-     * RCD split-path working buffers (crop-sized RGBA_FP16, single shared
-     * pair): GPU-only with same-queue FIFO submit order, so no per-slot
-     * copies are needed (unlike P010, which the copy worker reads back).
-     */
-    private var rcdRgb: HardwareBufferRef? = null
-    private var rcdScratch: HardwareBufferRef? = null
     @Volatile private var heatThermalStatus: Int = 0
     @Volatile private var heatDegraded: Boolean = false
     /** Effective compute step for this take (heat may raise it above [computeStep]). */
@@ -747,10 +728,7 @@ class EncodedVideoRecorder(
         // with grade init). Failure is never fatal: the take falls back
         // to the superpixel path below.
         useFused = false
-        useRcd = false
-        useRcdFused = false
         fusedCount.set(0)
-        rcdCount.set(0)
         fun tryInitFused(): Boolean {
             return try {
                 // fp32 even where f16 math is supported: measured on the
@@ -783,8 +761,6 @@ class EncodedVideoRecorder(
         }
         Log.i(
             TAG, "demosaic path=" + when {
-                useRcd && useRcdFused -> "rcd-fused"
-                useRcd -> "rcd-split"
                 useFused -> "fused-mhcyuv"
                 else -> "superpixel-fallback"
             }
@@ -850,8 +826,7 @@ class EncodedVideoRecorder(
                 if (writerAllowed) {
                     EncodedVideoProbe.preferredHwEncoderAt(cw, ch, fps) ?: forceName
                 } else null
-            val requestGpuWriter = preferRcdGpuWriter && false &&
-                EncodedVideoProbe.gpuWriterStorageLayoutSupported(surfaceTry.orEmpty())
+            val requestGpuWriter = false // Retired backend owned the GPU-writer path.
             var attempt: MediaCodec? = null
             if (directTry != null && !(requestGpuWriter && writerAllowed)) {
                 val configured = MediaCodec.createByCodecName(directTry)
@@ -1027,9 +1002,8 @@ class EncodedVideoRecorder(
                 else ""
         )
         writerMode = inputMode == EncodedVideoProbe.EncoderInputMode.IMAGE_WRITER
-        gpuWriterMode = writerMode && preferRcdGpuWriter && false &&
-            EncodedVideoProbe.gpuWriterStorageLayoutSupported(codecName)
-        Log.i(TAG, "RCD GPU writer=$gpuWriterMode codec=$codecName " +
+        gpuWriterMode = false
+        Log.i(TAG, "Video GPU writer=$gpuWriterMode codec=$codecName " +
             "delivery=${if (gpuWriterMode) "gpu-storage" else if (eightBitMode) "egl" else "plane-copy"} " +
             "nativeLayoutAllowed=${EncodedVideoProbe.gpuWriterStorageLayoutSupported(codecName)}")
         codec = encoder
@@ -1076,11 +1050,11 @@ class EncodedVideoRecorder(
 
         // Ping-pong demosaic working buffers. Fused needs none (CFA
         // straight to P010 staging); the superpixel fallback allocates
-        // quarter-res quad exports here. RCD owns one shared rgb/scratch
+        // quarter-res quad exports here. Slots own their conversion buffers;
         // pair instead (allocated with its init above).
         val expW = export.width
         val expH = export.height
-        if (!useFused && !useRcd) {
+        if (!useFused) {
             for (s in slots) {
                 s.export = HardwareBufferRef.create(expW, expH)
             }
@@ -1144,7 +1118,7 @@ class EncodedVideoRecorder(
                     if (diagnoseFrameStages) {
                         val gap = ts - diagnosticCaptureTimestamp
                         if (diagnosticCaptureTimestamp != 0L && gap > 1_500_000_000L / fps)
-                            Log.i(TAG, "RCD capture gapUs=${gap / 1000} frame=${result.frameNumber} " +
+                            Log.i(TAG, "Video capture gapUs=${gap / 1000} frame=${result.frameNumber} " +
                                 "durationNs=${result.get(CaptureResult.SENSOR_FRAME_DURATION)} " +
                                 "exposureNs=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}")
                         diagnosticCaptureTimestamp = ts
@@ -1189,7 +1163,7 @@ class EncodedVideoRecorder(
         val previewFrames: Int,
         /** Output profile name for this take (BT709/SLOG3/HLG). */
         val profile: String,
-        /** Session demosaic path label (MHC/RCD/SUPER). */
+        /** Session demosaic path label (MHC/SUPER). */
         val demosaic: String,
         /** Encoded output rate (muxed samples since the first muxed sample; 0 until 2+). */
         val outputFps: Float,
@@ -1228,7 +1202,6 @@ class EncodedVideoRecorder(
             previewFrames = previewCount.get(),
             profile = outputProfile.name,
             demosaic = when {
-                useRcd -> "RCD"
                 useFused -> "MHC"
                 else -> "SUPER"
             },
@@ -1591,7 +1564,7 @@ class EncodedVideoRecorder(
             waitFreeFrames = waitFree.get(),
             fallbackWaits = fallbackWaits.get(),
             fusedFrames = fusedCount.get(),
-            rcdFrames = rcdCount.get(),
+            rcdFrames = 0, // Retired video RCD; retained for diagnostic compatibility.
             shadedFrames = shadedCount.get(),
             cpuChainMsAvg = cpuChainMsAvg,
             cpuChainMsMax = cpuChainMsMax,
@@ -1752,7 +1725,7 @@ class EncodedVideoRecorder(
         if (diagnoseFrameStages) {
             val gap = ts - diagnosticImageTimestamp
             if (diagnosticImageTimestamp != 0L && gap > 1_500_000_000L / fps)
-                Log.i(TAG, "RCD image gapUs=${gap / 1000} acquired=${acquired.get()}")
+                Log.i(TAG, "Video image gapUs=${gap / 1000} acquired=${acquired.get()}")
             diagnosticImageTimestamp = ts
         }
         val result = awaitResult(ts)
@@ -1768,16 +1741,13 @@ class EncodedVideoRecorder(
             return false
         }
         if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
-        // RCD is throughput-limited on mobile GPUs: preserve sensor time so
-        // skipped frames do not speed up video or desynchronize microphone audio.
         // Constant frame rate for the real-time paths: PTS comes from the submit-order frame index
         // on the ideal 1/fps grid — never from the sensor timestamp. Sensor
         // jitter and AE exposure wander would otherwise bake uneven PTS
         // into the file (variable frame rate); the grid keeps every sample
         // duration identical. Audio stays sensor-relative against the same
         // origin, so both timelines still start at 0 together.
-        val cfrUs = if (useRcd) (ts - timeOriginNs).coerceAtLeast(0L) / 1_000L
-            else constantPtsUs(frameCounter, fps)
+        val cfrUs = constantPtsUs(frameCounter, fps)
         val (levels, white) = blackWhite(c, result)
         // Same result feeds WB/CCM and shading, so the three never disagree.
         val (shadeD, shadeG) = snapshotShading(result)
@@ -1876,7 +1846,6 @@ class EncodedVideoRecorder(
         val fd: Int = try {
             when {
                 useFused -> submitFused(f)
-                useRcd -> submitRcd(f)
                 else -> submitSuperpixel(f)
             } ?: run {
                 writerBuffer?.close(); writerImage?.close(); return false
@@ -1887,7 +1856,7 @@ class EncodedVideoRecorder(
         if (fd == -20) {
             error("P010 staging layout mismatch (see logcat); aborting take")
         }
-        var gpuComplete = false && false && fd == -1
+        var gpuComplete = false
         val submittedNs = if (diagnoseFrameStages) SystemClock.elapsedRealtimeNanos() else 0L
         if (fd < 0 && !gpuComplete) {
             Log.w(TAG, "grade-yuv submit failed ($fd); dropping frame")
@@ -1908,7 +1877,7 @@ class EncodedVideoRecorder(
         val previewFd = submitPreview(s, slotIndex, writerBuffer, strides)
         if (diagnoseFrameStages && frameCounter % 30L == 0L) {
             val now = SystemClock.elapsedRealtimeNanos()
-            Log.i(TAG, "RCD phases slotMs=${(slotReadyNs-chainStartNs)/1e6} " +
+            Log.i(TAG, "Video phases slotMs=${(slotReadyNs-chainStartNs)/1e6} " +
                 "writerDequeueMs=${(writerReadyNs-slotReadyNs)/1e6} " +
                 "writerFenceMs=${(writerFencedNs-writerReadyNs)/1e6} " +
                 "submitMs=${(submittedNs-writerFencedNs)/1e6} previewMs=${(now-submittedNs)/1e6}")
@@ -1935,9 +1904,8 @@ class EncodedVideoRecorder(
                 if (eightBitMode) s.rgb8 else null, slotIndex, gpuComplete, writerImage
             )
         )
-        // Fused Packed RCD and MHC return completion fds; the delivery
-        // worker retains RAW until completion. RGB fallback RCD waits.
-        if (!useRcd || (false && fd >= 0)) waitFree.incrementAndGet()
+        // Delivery retains the RAW lease until the completion fence signals.
+        waitFree.incrementAndGet()
         val chainMs = (android.os.SystemClock.elapsedRealtimeNanos() - chainStartNs) / 1e6f
         cpuChainMsAvg = if (cpuChainMsAvg == 0f) chainMs else cpuChainMsAvg * 0.9f + chainMs * 0.1f
         if (chainMs > cpuChainMsMax) cpuChainMsMax = chainMs
@@ -1991,99 +1959,6 @@ class EncodedVideoRecorder(
     }
 
     /** Returns a completion fd, or -1 for an already completed GPU batch. */
-    /** processFrame branch: RCD modes 0-2 then fused finalize or mode 3 + grade-YUV (A/B only). Returns the final sync fd, or null on a counted drop. */
-    private fun submitRcd(f: FrameSubmit): Int? {
-        val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
-        val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
-        val slotIndex = f.slotIndex; val shadeD = f.shadeD; val shadeG = f.shadeG; val s = f.s
-        val expW = f.expW; val expH = f.expH
-        val fd: Int
-        // Complete each intermediate stage before handing its RAW lease back
-        // on any later failure. Full-resolution RCD can take hundreds of ms;
-        // it must not use the realtime MHC path's 100 ms completion valve.
-        val rgbBuf = rcdRgb?.buffer
-        val scratchBuf = rcdScratch?.buffer
-        if (rgbBuf == null || scratchBuf == null) {
-            Log.w(TAG, "rcd buffers missing; dropping frame")
-            dropped.incrementAndGet()
-            return null
-        }
-        var rcdOk = true
-        // Modes 0-2 always run split; the fused finalize below
-        // replaces mode 3 (+ grade) when available.
-        for (mode in 0..2) {
-            val (riparams, rfparams) = VfRcd.packRcd(
-                crop.width, crop.height, crop.left, crop.top,
-                channels, pitch, mode, levels, white
-            )
-            val rfd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, riparams, rfparams, slotIndex)
-            if (rfd < 0) {
-                Log.w(TAG, "rcd mode $mode submit failed ($rfd); dropping frame")
-                dropped.incrementAndGet()
-                rcdOk = false
-                break
-            }
-            // A real 4K stage can exceed the MHC path's 100 ms valve.
-            // Complete each submitted stage before reusing its descriptors or
-            // releasing this RAW lease on a later-stage failure.
-            val completed = try { waitSyncFd(rfd, 5_000L) }
-                finally { try { VfEglImport.closeSyncFd(rfd) } catch (_: Exception) {} }
-            check(completed) { "RCD mode $mode GPU completion timed out" }
-        }
-        if (!rcdOk) return null
-        val (gidims, gfparams) = VfVideoGrade.packGrade(
-            intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
-            profile = sessionProfile
-        )
-        if (useRcdFused) {
-            // Fused finalize (mode 3 + grade in one dispatch, no
-            // RGBA16F round trip). The fused fd gates the copy.
-            val (riparams, rfparams) = VfRcd.packRcd(
-                crop.width, crop.height, crop.left, crop.top,
-                channels, pitch, 3, levels, white
-            )
-            fd = VfRcd.rcdFusedYuvSubmitNative(
-                hb, rgbBuf, scratchBuf, p010Buf, riparams, rfparams,
-                gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex
-            )
-            if (fd == -20) {
-                error("P010 staging layout mismatch (see logcat); aborting take")
-            }
-            if (fd < 0) {
-                Log.w(TAG, "rcd fused submit failed ($fd); dropping frame")
-                dropped.incrementAndGet()
-                return null
-            }
-        } else {
-            val (m3iparams, m3fparams) = VfRcd.packRcd(
-                crop.width, crop.height, crop.left, crop.top,
-                channels, pitch, 3, levels, white
-            )
-            val m3fd = VfRcd.rcdSubmitNative(hb, rgbBuf, scratchBuf, m3iparams, m3fparams, slotIndex)
-            if (m3fd < 0) {
-                Log.w(TAG, "rcd mode 3 submit failed ($m3fd); dropping frame")
-                dropped.incrementAndGet()
-                return null
-            }
-            val completed = try { waitSyncFd(m3fd, 5_000L) }
-                finally { try { VfEglImport.closeSyncFd(m3fd) } catch (_: Exception) {} }
-            check(completed) { "RCD mode 3 GPU completion timed out" }
-            fd = VfVideoGrade.gradeYuvSubmitNative(
-                rgbBuf, p010Buf, gidims, intArrayOf(crop.width, crop.height), gfparams, strides, slotIndex, 1
-            )
-            if (fd == -20) {
-                error("P010 staging layout mismatch (see logcat); aborting take")
-            }
-            if (fd < 0) {
-                Log.w(TAG, "rcd grade-yuv submit failed ($fd); dropping frame")
-                dropped.incrementAndGet()
-                return null
-            }
-        }
-        rcdCount.incrementAndGet()
-        return fd
-    }
-
     /** processFrame branch: superpixel export + grade-YUV (session fallback). Returns the final sync fd, or null on a counted drop. */
     private fun submitSuperpixel(f: FrameSubmit): Int? {
         val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
@@ -2251,7 +2126,7 @@ class EncodedVideoRecorder(
         /** Convert target + twin slot for the 8-bit path (null otherwise). */
         val rgb8: HardwareBufferRef? = null,
         val slot: Int = 0,
-        /** Native RCD already proved completion; fd is -1, never an error fd. */
+        /** True only when GPU completion has already been established. */
         val gpuComplete: Boolean = false,
         val writerImage: Image? = null,
     )
@@ -2400,7 +2275,7 @@ class EncodedVideoRecorder(
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
         val fenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-        if (!VfEglImport.awaitSyncFd(job.fd, if (useRcd) 5_000 else 100)) {
+        if (!VfEglImport.awaitSyncFd(job.fd, 100)) {
             Log.w(TAG, "copy job: GPU fence failed or timed out")
             return false
         }
@@ -3174,7 +3049,7 @@ class EncodedVideoRecorder(
         }
     }
 
-    /** teardown step 3: Held fences, slot buffers, RCD buffers, then the shared Vulkan state. */
+    /** teardown step 3: Held fences, slot buffers, then the shared Vulkan state. */
     private fun releaseGpuBuffers() {
         // Release any still-held fds (stop-flush failures).
         for (s in slots) {
@@ -3191,10 +3066,6 @@ class EncodedVideoRecorder(
             try { s.preview?.close() } catch (_: Exception) {}
             s.preview = null
         }
-        try { rcdRgb?.close() } catch (_: Exception) {}
-        rcdRgb = null
-        try { rcdScratch?.close() } catch (_: Exception) {}
-        rcdScratch = null
         if (gpuSessionPinned) {
             try { VfVulkan.setRecordSessionNative(false) } catch (_: Exception) {}
             gpuSessionPinned = false

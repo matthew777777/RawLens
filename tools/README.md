@@ -36,7 +36,6 @@ parity for MFSR is judged by the error envelopes in `sr-pipeline/PARITY.md`.
 | `generate_sgamut3_cine.py` | Derives the D65 linear-sRGB → S-Gamut3.Cine matrix (no third-party modules). |
 | `check_encoded_video_lut.py` | Compares `EncodedVideoLutDeviceTest` artifacts with FFmpeg's independent `lut3d`. |
 | `build_record_cube_shaders.sh` | Builds the `*_cube.spv` record-shader variants that apply a 3D LUT (spirv-val checked). |
-| `build_packed_rcd_shaders.sh`, `verify_packed_rcd_median.py` | Packed RCD shader build and median check. |
 | `rcd-baseline/` | Recorded RCD performance baselines. |
 
 ## Algorithm references and oracles

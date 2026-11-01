@@ -1,5 +1,8 @@
 # Vivo Encoded Video RAW pitch candidate fix
 
+> Historical report: the video RCD implementation described here was removed on 2026-11-01. These measurements do not describe the current MHC/Super pixel video path.
+
+
 ## Evidence (2026-10-31)
 
 The supplied `IMG_20261031_115018_371_LOG709.mp4` and

@@ -208,7 +208,7 @@ Tap the red shutter mode. Two recorders:
   CFA cheap), sound (32-bit float stereo, PCM16 fallback). Gyro and
   accelerometer go into the file for desktop stabilization.
 - **Encoded Video** → video file. Profile Rec.709 / S-Log3 (S-Gamut3.Cine) /
-  HLG / ACES, resolution, frame rate, demosaic RCD (default) / MHC /
+  HLG / ACES, resolution, frame rate, demosaic MHC (default) /
   Super pixel, crop, gain. Real time on the test phone: 4K 24 fps,
   1440p and 1080p 30 fps.
 - **S-Log3 LUT library:** `Import LUT (.cube)` (up to 16), choose assist or
@@ -246,7 +246,7 @@ Never: PROGRAM+ZSL together, ETTR+action, UltraHDR+old editor, Select-all.
 
 100%/4:2:2/off/off; AgX 100/100/100/0%; +6.5/10.0/0%; Adaptive ON/50%;
 1.00/0.85/100%; P 0.50/NONE/CENTER/+0.0; SENSOR bounds + AUTO HANDHELD;
-ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Encoded Video demosaic RCD; RAW video codec CRAW Live.
+ETTR OFF/-0.5/SENSOR MAX; ZSL 8; Encoded Video demosaic MHC; RAW video codec CRAW Live.
 
 Glossary: DNG = sensor + metadata; AgX = filmic mapper; ETTR = brightest
 unclipped; ZSL = pre-press memory; DIRECT = real, LOGICAL = virtual;

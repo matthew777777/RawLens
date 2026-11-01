@@ -119,10 +119,10 @@ class EncodedVideoRecordDeviceTest {
         // the fallback rung, where computeStep applies.
         configs.add(Config("open-gate-step4", EncodedVideoLadder.Rung.FULL, 4, false))
 
-        val rcdOnly = args.getString("rcdOnly") == "true"
-        if (rcdOnly) {
+        val singleMode = args.getString("singleMode") == "true"
+        if (singleMode) {
             configs.clear()
-            configs.add(Config("rcd-4k", EncodedVideoLadder.Rung.FULL, 2, true))
+            configs.add(Config("mhc-single", EncodedVideoLadder.Rung.FULL, 2, true))
         }
         try {
         for ((label, rung, step, fused) in configs) {
@@ -139,9 +139,8 @@ class EncodedVideoRecordDeviceTest {
             rec.computeStep = step
             rec.preferMhc = fused
             rec.videoDemosaic = if (fused) VideoDemosaic.MHC else VideoDemosaic.SUPER
-            if (rcdOnly) {
-                rec.videoDemosaic = VideoDemosaic.RCD
-                rec.preferRcdGpuWriter = args.getString("gpuWriter") != "false"
+            if (singleMode) {
+                rec.videoDemosaic = VideoDemosaic.MHC
                 rec.recordingProfile = EncodedVideoProfile.fromName(args.getString("profile") ?: EncodedVideoProfile.ACES.name)
                 args.getString("recordLutPath")?.let { path ->
                     rec.recordLut = File(path).reader().use { CubeLut.parse(it) }
@@ -157,7 +156,7 @@ class EncodedVideoRecordDeviceTest {
             rec.start(file)
             foreground?.let { activity -> instrumentation.runOnMainSync {
                 activity.findViewById<android.widget.TextView>(R.id.rawBadge).apply {
-                    text = "● RCD TEST • ${rec.width}×${rec.height} • ${rec.fps}FPS"
+                    text = "● MHC TEST • ${rec.width}×${rec.height} • ${rec.fps}FPS"
                     setTextColor(android.graphics.Color.RED)
                 }
             } }
@@ -169,7 +168,7 @@ class EncodedVideoRecordDeviceTest {
                 }
             }
             foreground?.let { activity -> instrumentation.runOnMainSync {
-                activity.findViewById<android.widget.TextView>(R.id.rawBadge).text = "RCD TEST • SAVING"
+                activity.findViewById<android.widget.TextView>(R.id.rawBadge).text = "MHC TEST • SAVING"
             } }
             val stopStartedMs = SystemClock.elapsedRealtime()
             val stats = rec.stop()
@@ -220,11 +219,12 @@ class EncodedVideoRecordDeviceTest {
             // unusable): distinguishes a broken path from normal drops.
             assertTrue(
                 "[$label] graded ${stats.framesGraded}/${stats.framesAcquired} below half",
-                rcdOnly || stats.framesGraded * 2 >= stats.framesAcquired
+                stats.framesGraded * 2 >= stats.framesAcquired
             )
-            if (!rcdOnly) assertTrue("[$label] wait-free path never engaged", stats.waitFreeFrames > 0)
-            if (rcdOnly) {
-                assertTrue("RCD path did not run", stats.rcdFrames > 0)
+            assertTrue("[$label] wait-free path never engaged", stats.waitFreeFrames > 0)
+            if (singleMode) {
+                assertTrue("MHC path did not run", stats.fusedFrames > 0)
+                assertEquals("Retired video MHC must not run", 0, stats.rcdFrames)
                 if (args.getString("requireShading") == "true") {
                     assertTrue("Lens shading was not applied", stats.shadedFrames > 0)
                     assertTrue("Lens shading flapped during recording: ${stats.shadedFrames}/${stats.framesGraded}",
@@ -245,7 +245,7 @@ class EncodedVideoRecordDeviceTest {
             // sit at ~1%). A sustained copy regression trips this.
             val offered = stats.framesAcquired + stats.framesDropped
             val dropPct = if (offered > 0) 100.0 * stats.framesDropped / offered else 0.0
-            assertTrue("[$label] drop ratio too high: $dropPct%", rcdOnly || dropPct <= 15.0)
+            assertTrue("[$label] drop ratio too high: $dropPct%", dropPct <= 15.0)
             // No corrupt wedges: failed copies/queues are visible
             // glitches, not noise.
             assertEquals("[$label] degraded frames", 0, stats.degradedFrames)
@@ -264,19 +264,19 @@ class EncodedVideoRecordDeviceTest {
             )
             file.copyTo(eyeball, overwrite = true)
             Log.i(TAG, "SPIKE encoded_video [$label] eyeball copy: ${eyeball.absolutePath}")
-            validateMp4(file, seconds, label, rcdOnly)
-            if (rcdOnly) {
+            validateMp4(file, seconds, label, singleMode)
+            if (singleMode) {
                 val retriever = android.media.MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(file.absolutePath)
                     val frame = retriever.getFrameAtTime(if (seconds >= 8) 5_000_000L else 1_000_000L,
                         android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                    assertTrue("RCD MP4 could not decode a video frame", frame != null)
+                    assertTrue("MHC MP4 could not decode a video frame", frame != null)
                     frame?.let { bitmap ->
-                        val decoded = File(context.getExternalFilesDir(null), "encoded_video_rcd_decoded.png")
+                        val decoded = File(context.getExternalFilesDir(null), "encoded_video_mhc_decoded.png")
                         if (args.getString("fast") != "true") {
                             decoded.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                            Log.i(TAG, "RCD decoded frame: ${decoded.absolutePath}")
+                            Log.i(TAG, "MHC decoded frame: ${decoded.absolutePath}")
                         }
                         bitmap.recycle()
                     }
@@ -284,9 +284,9 @@ class EncodedVideoRecordDeviceTest {
                 val expectedBytes = file.length()
                 val published = EncodedVideoSaver.save(context.contentResolver, file)
                 context.contentResolver.openFileDescriptor(published.uri, "r")!!.use {
-                    assertEquals("Published RCD MP4 size", expectedBytes, it.statSize)
+                    assertEquals("Published MHC MP4 size", expectedBytes, it.statSize)
                 }
-                Log.i(TAG, "RCD published: ${published.uri} bytes=$expectedBytes")
+                Log.i(TAG, "MHC published: ${published.uri} bytes=$expectedBytes")
             }
             file.delete()
         }
@@ -295,7 +295,7 @@ class EncodedVideoRecordDeviceTest {
         }
     }
 
-    private fun validateMp4(file: File, seconds: Int, label: String, rcd: Boolean = false) {
+    private fun validateMp4(file: File, seconds: Int, label: String, single: Boolean = false) {
         val ext = MediaExtractor()
         try {
             ext.setDataSource(file.absolutePath)
@@ -314,8 +314,8 @@ class EncodedVideoRecordDeviceTest {
             val afmt = ext.getTrackFormat(audioTrack)
             assertEquals(InstrumentationRegistry.getArguments().getString("width")?.toInt() ?: 3840, vfmt.getInteger(MediaFormat.KEY_WIDTH))
             assertEquals(InstrumentationRegistry.getArguments().getString("height")?.toInt() ?: 2160, vfmt.getInteger(MediaFormat.KEY_HEIGHT))
-            if (rcd && vfmt.containsKey(MediaFormat.KEY_PROFILE))
-                assertEquals("RCD output must remain Main10", android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
+            if (single && vfmt.containsKey(MediaFormat.KEY_PROFILE))
+                assertEquals("MHC output must remain Main10", android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
                     vfmt.getInteger(MediaFormat.KEY_PROFILE))
             // Developed-file color signalling: the pixels are sRGB-OETF
             // (see the grade shaders) and the encoder is configured
@@ -359,7 +359,7 @@ class EncodedVideoRecordDeviceTest {
             }
             val durationUs = vfmt.getLong(MediaFormat.KEY_DURATION)
             Log.i(TAG, "SPIKE encoded_video [$label] muxed video=$videoSamples audio=$audioSamples durationUs=$durationUs")
-            assertTrue("[$label] no muxed video", videoSamples > if (rcd) 2 else seconds * 10)
+            assertTrue("[$label] no muxed video", videoSamples > seconds * 10)
             // Telemetry only (no assert): absolute fps belongs to the scene
             // (dim light forces long AE exposures) and the SoC skin temp,
             // not to this pipeline. Steady state on a cool device: ~29fps.
@@ -381,12 +381,12 @@ class EncodedVideoRecordDeviceTest {
                         assertTrue("Missing steady-state sensor interval: ${gaps.last()} us",
                             gaps.last() <= 1_500_000L / stableFps)
                 }
-                Log.i(TAG, "RCD cadence fullSecondCounts=$windows steadyGapUs=" +
+                Log.i(TAG, "MHC cadence fullSecondCounts=$windows steadyGapUs=" +
                     if (gaps.isEmpty()) "none" else "min=${gaps.first()} p50=${gaps[gaps.size / 2]} p95=${gaps[(gaps.size * .95).toInt()]} max=${gaps.last()}")
             }
 
             assertTrue("[$label] no muxed audio", audioSamples > seconds * 10)
-            assertTrue("[$label] duration implausible: $durationUs", durationUs > (seconds - if (rcd) 3 else 2) * 1_000_000L)
+            assertTrue("[$label] duration implausible: $durationUs", durationUs > (seconds - 2) * 1_000_000L)
             // Constant frame rate: every consecutive PTS gap sits on the
             // take grid (33.33ms @30fps, 41.67ms @24fps). Sorted: extractor
             // order is not guaranteed presentation order. The band covers
@@ -402,7 +402,7 @@ class EncodedVideoRecordDeviceTest {
             Log.i(TAG, "SPIKE encoded_video [$label] videoPtsGap minUs=$minGapUs maxUs=$maxGapUs")
             assertTrue(
                 "[$label] video PTS not constant frame rate (min=${minGapUs}us max=${maxGapUs}us)",
-                if (rcd) minGapUs > 0L else minGapUs >= 25_000L && maxGapUs <= 45_000L && maxGapUs - minGapUs <= 2_000L
+                minGapUs >= 25_000L && maxGapUs <= 45_000L && maxGapUs - minGapUs <= 2_000L
             )
         } finally {
             ext.release()
