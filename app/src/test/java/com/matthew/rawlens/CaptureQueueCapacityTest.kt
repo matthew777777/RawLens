@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CaptureQueueCapacityTest {
+    @Test fun `minimal reader admits one photo and waits for its input to close`() {
+        assertTrue(CaptureQueueCapacity.accepts(0, 1, 6, 8, 10))
+        assertFalse(CaptureQueueCapacity.accepts(1, 1, 6, 8, 10))
+        assertFalse(CaptureQueueCapacity.accepts(0, 2, 6, 8, 10))
+        assertFalse(CaptureQueueCapacity.accepts(0, 1, 6, 3, 10))
+        assertFalse(CaptureQueueCapacity.ringFits(0, 1, 8, 10))
+    }
     @Test fun `six individual JPEG inputs fit before saving completes then seventh waits`() {
         var pending = 0
         repeat(6) {

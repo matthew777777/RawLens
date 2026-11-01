@@ -16,12 +16,13 @@ class RawSizePreferenceStore(context: Context) {
 
     /** Stored size for this route identity, or null for auto. */
     fun get(cameraId: String?): String? =
-        cameraId?.let { preferences.getString(key(it), null)?.takeIf(::isPlausibleSize) }
+        cameraId?.let { normalizeSize(preferences.getString(key(it), null)) }
 
     /** Persist a choice; null clears back to auto. */
     fun set(cameraId: String, size: String?) {
         val editor = preferences.edit()
-        if (size != null && isPlausibleSize(size)) editor.putString(key(cameraId), size)
+        val normalized = normalizeSize(size)
+        if (normalized != null) editor.putString(key(cameraId), normalized)
         else editor.remove(key(cameraId))
         editor.apply()
     }
@@ -32,12 +33,15 @@ class RawSizePreferenceStore(context: Context) {
         const val PREFS_NAME = "rawlens_raw_size"
 
         /** Pure + host-tested: "WxH" with positive dimensions. */
-        fun isPlausibleSize(text: String): Boolean {
-            val parts = text.trim().split('x')
-            if (parts.size != 2) return false
-            val width = parts[0].toIntOrNull() ?: return false
-            val height = parts[1].toIntOrNull() ?: return false
-            return width > 0 && height > 0
+        fun isPlausibleSize(text: String): Boolean = normalizeSize(text) != null
+
+        /** Discovery uses × for display; persistence and controller use ASCII x. */
+        fun normalizeSize(text: String?): String? {
+            val parts = text?.trim()?.replace('×', 'x')?.split('x') ?: return null
+            if (parts.size != 2) return null
+            val width = parts[0].trim().toIntOrNull() ?: return null
+            val height = parts[1].trim().toIntOrNull() ?: return null
+            return if (width > 0 && height > 0) "${width}x${height}" else null
         }
     }
 }

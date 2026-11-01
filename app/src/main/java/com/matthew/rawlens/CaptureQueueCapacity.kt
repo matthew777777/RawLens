@@ -5,7 +5,11 @@ package com.matthew.rawlens
 internal object CaptureQueueCapacity {
     fun accepts(pendingFrames: Int, requestedFrames: Int, formatLimit: Int,
                 readerSlots: Int, previewReserve: Int): Boolean {
-        val limit = minOf(formatLimit, (readerSlots - previewReserve).coerceAtLeast(0))
+        // Minimal readers carry no ZSL ring: admit one forward still while
+        // retaining all other slots for preview and outstanding GPU borrows.
+        val readerLimit = if (readerSlots in 4..previewReserve) 1
+            else (readerSlots - previewReserve).coerceAtLeast(0)
+        val limit = minOf(formatLimit, readerLimit)
         return requestedFrames > 0 && pendingFrames >= 0 && requestedFrames <= limit - pendingFrames
     }
 

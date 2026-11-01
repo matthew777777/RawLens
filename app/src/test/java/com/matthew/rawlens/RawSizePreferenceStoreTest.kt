@@ -34,6 +34,14 @@ class RawSizePreferenceStoreTest {
         assertEquals("4080x3072", store.get("0"))
     }
 
+    @Test fun `picker multiplication sign persists as canonical controller size`() {
+        val (store, _, editor) = harness()
+        store.set("0", "4096×2304")
+        verify(editor).putString("size_0", "4096x2304")
+        verify(editor, never()).remove(anyString())
+        assertEquals("4096x2304", harness("4096×2304").first.get("0"))
+    }
+
     @Test fun `get rejects malformed sizes as auto`() {
         val (store, _, _) = harness("huge")
         assertNull(store.get("0"))
