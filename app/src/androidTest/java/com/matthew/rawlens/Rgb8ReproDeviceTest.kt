@@ -44,11 +44,11 @@ class Rgb8ReproDeviceTest {
         // Grade chain first (record/warp order), then rgb8 init must work.
         assertEquals(
             VfVulkan.OK,
-            VfLogGrade.initGradeNative(asset("shaders/vf/vf_loggrade.spv"))
+            VfVideoGrade.initGradeNative(asset("shaders/vf/vf_videograde.spv"))
         )
         assertEquals(
             VfVulkan.OK,
-            VfLogGrade.initGradeYuvNative(asset("shaders/vf/vf_gradeyuv.spv"))
+            VfVideoGrade.initGradeYuvNative(asset("shaders/vf/vf_gradeyuv.spv"))
         )
         val first = VfRgb8Convert.initRgb8Native(rgb8)
         Log.i(TAG, "repro: init-with-grade=$first")

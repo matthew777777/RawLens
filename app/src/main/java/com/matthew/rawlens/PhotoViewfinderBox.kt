@@ -3,7 +3,7 @@
 package com.matthew.rawlens
 
 /**
- * Viewfinder box (photo, RAW video and Direct-Log): the 3:4 portrait viewport seated between the
+ * Viewfinder box (photo, RAW video and Encoded Video): the 3:4 portrait viewport seated between the
  * opaque top island and the bottom control panel, bottom-aligned so the
  * panel's rounded top corners fill with picture. Pure integer math so the
  * geometry is unit-testable. Width always fills the root; on shorter screens

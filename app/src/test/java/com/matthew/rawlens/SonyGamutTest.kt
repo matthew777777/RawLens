@@ -21,8 +21,8 @@ class SonyGamutTest {
         repeat(3) { axis ->
             val rgb = FloatArray(3) { if (it == axis) 1f else 0f }
             assertArrayEquals(expected[axis], SonyGamut.fromLinearSrgb(rgb), 1e-7f)
-            val encoded = VfLogGrade.encodePixelSlog3(rgb)
-            repeat(3) { assertEquals(VfLogGrade.sonySlog3(expected[axis][it]), encoded[it], 1e-7f) }
+            val encoded = VfVideoGrade.encodePixelSlog3(rgb)
+            repeat(3) { assertEquals(VfVideoGrade.sonySlog3(expected[axis][it]), encoded[it], 1e-7f) }
         }
     }
 
@@ -30,7 +30,7 @@ class SonyGamutTest {
         val developed = floatArrayOf(-.1f, .01f, .02f)
         val cine = SonyGamut.fromLinearSrgb(developed)
         assertTrue(cine[0] < 0f)
-        val encoded = VfLogGrade.encodePixelSlog3(developed)
-        repeat(3) { assertEquals(cine[it], VfLogGrade.invSonySlog3(encoded[it]), 2e-7f) }
+        val encoded = VfVideoGrade.encodePixelSlog3(developed)
+        repeat(3) { assertEquals(cine[it], VfVideoGrade.invSonySlog3(encoded[it]), 2e-7f) }
     }
 }

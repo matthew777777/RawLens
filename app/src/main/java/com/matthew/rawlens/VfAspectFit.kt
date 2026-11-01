@@ -19,7 +19,7 @@ data class VfContentGeometry(
 
 /**
  * Aspect-fit geometry shared by every viewfinder present path (RAW
- * viewfinder CPU/GPU draws, BGU slice, Direct-Log monitor). A frame drawn
+ * viewfinder CPU/GPU draws, BGU slice, Encoded Video monitor). A frame drawn
  * fullscreen into a surface of a different aspect stretches (tall-box
  * portrait shows circles as tall ellipses); fitting the fitted rect and
  * clearing the bars keeps the preview WYSIWYG against the saved file.

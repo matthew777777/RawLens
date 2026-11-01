@@ -342,6 +342,12 @@ class BguViewfinder @JvmOverloads constructor(
     // job per worker. Anything unexpected drops the frame; persistent failure
     // degrades to the legacy engine via onStarvation.
 
+    @Volatile private var sensorLevels = DngMetadataOverrides()
+
+    override fun setSensorLevels(overrides: DngMetadataOverrides) {
+        sensorLevels = overrides
+    }
+
     override fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?) {
         if (disposed || fatal != null) return
         val generation = gridExchange.generation
@@ -460,8 +466,7 @@ class BguViewfinder @JvmOverloads constructor(
             LevelsHold(blackLevels(c, null), whiteLevel(c, null))
         )
         if (freshLevels != null) levelsHold = LevelsHold(norm.levels.copyOf(), norm.white)
-        val levels = norm.levels.copyOf()
-        val white = norm.white
+        val (levels, white) = VfLevels.calibrated(norm.levels.copyOf(), norm.white, sensorLevels)
         val inv = FloatArray(4) { i ->
             val den = white - levels[i]
             if (den > 1f) 1f / den else 1f / 1023f

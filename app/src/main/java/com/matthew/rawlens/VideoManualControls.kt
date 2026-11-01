@@ -9,9 +9,9 @@ import android.hardware.camera2.CaptureRequest
 
 /**
  * Manual exposure/focus/WB request keys and slider ranges shared by
- * [DirectLogRecorder] and [RawVideoRecorder] (V8, docs/refactor/video-study.md:
+ * [EncodedVideoRecorder] and [RawVideoRecorder] (V8, docs/refactor/video-study.md:
  * both carried the same copy). The recorders keep their own AE fps-range pick
- * (Direct-Log fails fast, RAW video falls back to fixed FPS) and Direct-Log
+ * (Encoded Video fails fast, RAW video falls back to fixed FPS) and Encoded Video
  * adds the lens-shading map request after this.
  */
 internal object VideoManualControls {

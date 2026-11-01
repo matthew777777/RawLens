@@ -20,10 +20,10 @@ import android.view.Surface
  */
 object VulkanEncoderBridge {
     data class Params(
-        val width: Int = LogVideoProbe.WIDTH,
-        val height: Int = LogVideoProbe.HEIGHT,
-        val fps: Int = LogVideoProbe.FPS,
-        val bitrate: Int = LogVideoProbe.BITRATE,
+        val width: Int = EncodedVideoProbe.WIDTH,
+        val height: Int = EncodedVideoProbe.HEIGHT,
+        val fps: Int = EncodedVideoProbe.FPS,
+        val bitrate: Int = EncodedVideoProbe.BITRATE,
         val frames: Int = 90,
         /** Synthetic sensor size; superpixel export is half-res per axis. */
         val rawWidth: Int = 1920,
@@ -33,14 +33,14 @@ object VulkanEncoderBridge {
         val spv: ByteArray? = null,
         /** vf_superpixel_f16.spv bytes (recorder compute path). */
         val f16spv: ByteArray? = null,
-        /** vf_loggrade.spv bytes; required when [grade] is true. */
+        /** vf_videograde.spv bytes; required when [grade] is true. */
         val gradeSpv: ByteArray? = null,
         /** Phase B: WB/CCM/log grade on GPU; the blit becomes a dumb copy. */
         val grade: Boolean = true,
         /** Pipeline-cache file (null keeps the cache in-memory only). */
         val cachePath: String? = null,
-        val gains: FloatArray = VfLogGrade.PROBE_GAINS,
-        val ccm: FloatArray = VfLogGrade.IDENTITY_CCM,
+        val gains: FloatArray = VfVideoGrade.PROBE_GAINS,
+        val ccm: FloatArray = VfVideoGrade.IDENTITY_CCM,
         val exposureEv: Float = 0f,
     )
 
@@ -91,9 +91,9 @@ object VulkanEncoderBridge {
         var texture = 0
         val slots = arrayOf(Slot(), Slot())
         return try {
-            val name = p.codecName ?: LogVideoProbe.preferredHwEncoder()
+            val name = p.codecName ?: EncodedVideoProbe.preferredHwEncoder()
                 ?: return BridgeReport(error = "no HW HEVC 4K30 Surface encoder")
-            val target = LogVideoProbe.Target(
+            val target = EncodedVideoProbe.Target(
                 width = p.width, height = p.height, fps = p.fps, bitrate = p.bitrate
             )
             p.cachePath?.let(VfVulkan::setPipelineCachePathNative)
@@ -112,14 +112,14 @@ object VulkanEncoderBridge {
                 if (p.gradeSpv == null) {
                     return BridgeReport(codecName = name, error = "grade SPIR-V required")
                 }
-                val gradeRc = VfLogGrade.initGradeNative(p.gradeSpv)
+                val gradeRc = VfVideoGrade.initGradeNative(p.gradeSpv)
                 if (gradeRc != VfVulkan.OK) {
                     return BridgeReport(codecName = name, error = "grade init: ${VfVulkan.describe(gradeRc)}")
                 }
             }
             codec = MediaCodec.createByCodecName(name)
             codec.configure(
-                LogVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                EncodedVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
             )
             surface = codec.createInputSurface()
             egl = EglPusher(surface)
@@ -225,10 +225,10 @@ object VulkanEncoderBridge {
                 if (VfVulkan.computeSubmitNative(ws.raw!!, ws.export!!, wparams, wfparams, slotIdx, null, null) != VfVulkan.OK) {
                     return BridgeReport(codecName = name, error = "warmup compute submit failed")
                 }
-                val (wgparams, wgfparams) = VfLogGrade.packGrade(
+                val (wgparams, wgfparams) = VfVideoGrade.packGrade(
                     intArrayOf(expW, expH), p.gains, p.ccm, p.exposureEv, true
                 )
-                val wfd = VfLogGrade.gradeSubmitNative(ws.export!!, ws.graded!!, wgparams, wgfparams, slotIdx)
+                val wfd = VfVideoGrade.gradeSubmitNative(ws.export!!, ws.graded!!, wgparams, wgfparams, slotIdx)
                 if (wfd < 0) {
                     return BridgeReport(codecName = name, error = "warmup grade submit rc=$wfd")
                 }
@@ -285,11 +285,11 @@ object VulkanEncoderBridge {
                     // Frame 0 and every 45th frame run bypass (bit-exact copy)
                     // as the readback baseline proving the curve does the work.
                     val bypass = i % 45 == 0
-                    val (gparams, gfparams) = VfLogGrade.packGrade(
+                    val (gparams, gfparams) = VfVideoGrade.packGrade(
                         intArrayOf(expW, expH), p.gains, p.ccm, p.exposureEv, bypass
                     )
                     val g0 = android.os.SystemClock.elapsedRealtimeNanos()
-                    val gfd = VfLogGrade.gradeSubmitNative(exp, grd, gparams, gfparams, i % 2)
+                    val gfd = VfVideoGrade.gradeSubmitNative(exp, grd, gparams, gfparams, i % 2)
                     if (gfd < 0) {
                         return BridgeReport(
                             codecName = name,
@@ -349,7 +349,7 @@ object VulkanEncoderBridge {
                     // is reused (fence-waited above), never glFinish-stalled.
                     s.image = image
                 }
-                push.setPresentationTime(LogVideoProbe.framePtsNs(i, p.fps))
+                push.setPresentationTime(EncodedVideoProbe.framePtsNs(i, p.fps))
                 push.swap()
                 s.fence = VfEglImport.createFence()
                 if (s.fence == 0L && !fellBack) {
@@ -409,7 +409,7 @@ object VulkanEncoderBridge {
                 error = when {
                     bufs.get() == 0 -> "no output"
                     outProfile.get() != null && outProfile.get() != MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ->
-                        "output ${LogVideoProbe.profileLabel(outProfile.get()!!)} != Main10"
+                        "output ${EncodedVideoProbe.profileLabel(outProfile.get()!!)} != Main10"
                     else -> null
                 }
             )
@@ -442,7 +442,7 @@ object VulkanEncoderBridge {
 
     private fun dumpOut(fmt: MediaFormat): String {
         fun gi(k: String) = runCatching { fmt.getInteger(k).toString() }.getOrNull() ?: "?"
-        return "profile=${runCatching { LogVideoProbe.profileLabel(fmt.getInteger(MediaFormat.KEY_PROFILE)) }.getOrNull() ?: "?"} " +
+        return "profile=${runCatching { EncodedVideoProbe.profileLabel(fmt.getInteger(MediaFormat.KEY_PROFILE)) }.getOrNull() ?: "?"} " +
             "${gi(MediaFormat.KEY_WIDTH)}x${gi(MediaFormat.KEY_HEIGHT)}"
     }
 

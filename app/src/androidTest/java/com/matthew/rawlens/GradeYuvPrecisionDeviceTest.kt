@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
  *
  * Deterministic by construction: the synthetic ramp hits ~0.5 at its
  * center texel, gains are 1, CCM is identity, so the expected words come
- * from the CPU grade golden ([VfLogGrade.encodePixel709]) through BT.709 + pack10.
+ * from the CPU grade golden ([VfVideoGrade.encodePixel709]) through BT.709 + pack10.
  * This validates the WHOLE content path — FP16 math, P010 packing
  * (shift, ranges), strides, and the interleaved UV offset — with no
  * encoder or rate control involved.
@@ -38,11 +38,11 @@ class GradeYuvPrecisionDeviceTest {
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val f16spv = context.assets.open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
         val yuvspv = context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         check(VfVulkan.initF16Native(f16spv) == VfVulkan.OK) { "f16 init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
         uploadNeutralLut()
 
         // Synthetic sensor (ramp hits exactly 0.5 at its center texel).
@@ -74,13 +74,13 @@ class GradeYuvPrecisionDeviceTest {
             }
             // Warmup pair: first touch of CPU-written imports reads stale on
             // this gralloc; one throwaway submit establishes ownership.
-            val (wgparams, wgfparams) = VfLogGrade.packGrade(
+            val (wgparams, wgfparams) = VfVideoGrade.packGrade(
                 intArrayOf(960, 540),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, true
             )
-            val wfd = VfLogGrade.gradeYuvSubmitNative(
+            val wfd = VfVideoGrade.gradeYuvSubmitNative(
                 exp, p010,
                 intArrayOf(960, 540), intArrayOf(960, 540), wgfparams,
                 intArrayOf(layout[0], layout[1], 960, 540), 1, 0
@@ -92,14 +92,14 @@ class GradeYuvPrecisionDeviceTest {
                 }
                 VfEglImport.closeSyncFd(wfd)
             }
-            val (gparams, gfparams) = VfLogGrade.packGrade(
+            val (gparams, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(960, 540),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val gt0 = System.nanoTime()
-            val fd = VfLogGrade.gradeYuvSubmitNative(
+            val fd = VfVideoGrade.gradeYuvSubmitNative(
                 exp, p010,
                 intArrayOf(960, 540), intArrayOf(960, 540), gfparams,
                 intArrayOf(layout[0], layout[1], 960, 540), 0, 0
@@ -155,11 +155,11 @@ class GradeYuvPrecisionDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val yuvspv = context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val mhcspv = context.assets.open("shaders/vf/vf_mhc.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
         uploadNeutralLut()
         check(VfMhc.initMhcNative(mhcspv) == VfVulkan.OK) { "mhc init failed" }
 
@@ -195,14 +195,14 @@ class GradeYuvPrecisionDeviceTest {
             assumeTrue("mhc submit failed: $mfd", mfd >= 0)
             assumeTrue("mhc never completed", poll(mfd))
             VfEglImport.closeSyncFd(mfd)
-            val (gparams, gfparams) = VfLogGrade.packGrade(
+            val (gparams, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(w, h),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val gt0 = System.nanoTime()
-            val fd = VfLogGrade.gradeYuvSubmitNative(
+            val fd = VfVideoGrade.gradeYuvSubmitNative(
                 rgb, p010,
                 intArrayOf(w, h), intArrayOf(w, h), gfparams,
                 intArrayOf(layout!![0], layout[1], w, h), 0, 1
@@ -246,11 +246,11 @@ class GradeYuvPrecisionDeviceTest {
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         val yuvspv = context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val mhcspv = context.assets.open("shaders/vf/vf_mhc.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
         uploadNeutralLut()
         check(VfMhc.initMhcNative(mhcspv) == VfVulkan.OK) { "mhc init failed" }
 
@@ -288,13 +288,13 @@ class GradeYuvPrecisionDeviceTest {
             assumeTrue("mhc never completed", pollTight(mfd))
             VfEglImport.closeSyncFd(mfd)
             val mhcMs = (System.nanoTime() - t0) / 1e6f
-            val (_, gfparams) = VfLogGrade.packGrade(
+            val (_, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(ow, oh),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
-            val gw = VfLogGrade.gradeYuvSubmitNative(
+            val gw = VfVideoGrade.gradeYuvSubmitNative(
                 rgb, p010,
                 intArrayOf(ow, oh), intArrayOf(cw, ch), gfparams,
                 intArrayOf(layout!![0], layout[1], ow, oh), 1, 1
@@ -304,7 +304,7 @@ class GradeYuvPrecisionDeviceTest {
                 VfEglImport.closeSyncFd(gw)
             }
             val t1 = System.nanoTime()
-            val fd = VfLogGrade.gradeYuvSubmitNative(
+            val fd = VfVideoGrade.gradeYuvSubmitNative(
                 rgb, p010,
                 intArrayOf(ow, oh), intArrayOf(cw, ch), gfparams,
                 intArrayOf(layout[0], layout[1], ow, oh), 0, 1
@@ -343,15 +343,15 @@ class GradeYuvPrecisionDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
         // -e fusedSpv <path>: measurement only (time a candidate SPIR-V).
         val fusedspv = args.getString("fusedSpv")?.let { java.io.File(it).readBytes() }
-            ?: context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
+            ?: context.assets.open(VfVideoGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
         Log.i(TAG, "SPIKE fused f16=${VfVulkan.supportsF16MathNative()} spv=${args.getString("fusedSpv") ?: "asset"}")
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
 
         val cw = 3840
@@ -371,14 +371,14 @@ class GradeYuvPrecisionDeviceTest {
             val layout = VfEglImport.describeP010(p010!!)
             assumeTrue("P010 describe failed", layout != null)
             val (ip, fp) = VfMhc.packMhc(cw, ch, 0, 0, channels, pitch, levels, white)
-            val (_, gfparams) = VfLogGrade.packGrade(
+            val (_, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(ow, oh),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val strides = intArrayOf(layout!![0], layout[1], ow, oh)
-            val warm = VfLogGrade.fusedYuvSubmitNative(
+            val warm = VfVideoGrade.fusedYuvSubmitNative(
                 raw, p010, ip, fp, intArrayOf(ow, oh), gfparams, strides, 1, null, null
             )
             if (warm >= 0) {
@@ -386,7 +386,7 @@ class GradeYuvPrecisionDeviceTest {
                 VfEglImport.closeSyncFd(warm)
             }
             val t0 = System.nanoTime()
-            val fd = VfLogGrade.fusedYuvSubmitNative(
+            val fd = VfVideoGrade.fusedYuvSubmitNative(
                 raw, p010, ip, fp, intArrayOf(ow, oh), gfparams, strides, 0, null, null
             )
             assumeTrue("fused submit failed: $fd", fd >= 0)
@@ -431,12 +431,12 @@ class GradeYuvPrecisionDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
-        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
+        val fusedspv = context.assets.open(VfVideoGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
 
         val cw = 960
@@ -458,10 +458,10 @@ class GradeYuvPrecisionDeviceTest {
             val (ip, fp) = VfMhc.packMhc(cw, ch, 0, 0, channels, pitch, levels, white)
             val strides = intArrayOf(layout!![0], layout[1], ow, oh)
             fun run(gains: FloatArray, ev: Float): IntArray {
-                val (_, gfparams) = VfLogGrade.packGrade(
-                    intArrayOf(ow, oh), gains, VfLogGrade.IDENTITY_CCM, ev, false
+                val (_, gfparams) = VfVideoGrade.packGrade(
+                    intArrayOf(ow, oh), gains, VfVideoGrade.IDENTITY_CCM, ev, false
                 )
-                val fd = VfLogGrade.fusedYuvSubmitNative(
+                val fd = VfVideoGrade.fusedYuvSubmitNative(
                     raw, p010, ip, fp, intArrayOf(ow, oh), gfparams, strides, 0, null, null
                 )
                 assumeTrue("fused submit failed: $fd", fd >= 0)
@@ -521,12 +521,12 @@ class GradeYuvPrecisionDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
         // Capability-gated asset: the query needs the device (false before init).
-        val fusedspv = context.assets.open(VfLogGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
+        val fusedspv = context.assets.open(VfVideoGrade.fusedAsset(f16Math = false)).use { it.readBytes() }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initFusedYuvNative(fusedspv) == VfVulkan.OK) { "fused init failed" }
         uploadNeutralLut()
 
         val cw = 960
@@ -546,15 +546,15 @@ class GradeYuvPrecisionDeviceTest {
             val layout = VfEglImport.describeP010(p010!!)
             assumeTrue("P010 describe failed", layout != null)
             val (ip, fp) = VfMhc.packMhc(cw, ch, 0, 0, channels, pitch, levels, white)
-            val (_, gfparams) = VfLogGrade.packGrade(
+            val (_, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(ow, oh),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val strides = intArrayOf(layout!![0], layout[1], ow, oh)
             fun run(dims: IntArray?, gains: ShortArray?): IntArray {
-                val fd = VfLogGrade.fusedYuvSubmitNative(
+                val fd = VfVideoGrade.fusedYuvSubmitNative(
                     raw, p010, ip, fp, intArrayOf(ow, oh), gfparams, strides, 0,
                     dims, gains
                 )
@@ -570,7 +570,7 @@ class GradeYuvPrecisionDeviceTest {
             val dims = intArrayOf(2, 2, 0, 0, cw, ch)
             fun halfMap(cells: FloatArray): ShortArray {
                 require(cells.size == 2 * 2 * 4)
-                return ShortArray(cells.size) { i -> DirectLogRecorder.floatToHalfBits(cells[i]) }
+                return ShortArray(cells.size) { i -> EncodedVideoRecorder.floatToHalfBits(cells[i]) }
             }
             fun uniformMap(r: Float, gr: Float, gb: Float, b: Float) =
                 halfMap(FloatArray(2 * 2 * 4) { i ->
@@ -663,21 +663,21 @@ class GradeYuvPrecisionDeviceTest {
      * every proof grades neutral unless stated).
      */
     private fun uploadNeutralLut() {
-        val rc = VfLogGrade.gradeLutUploadNative(
-            VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)
+        val rc = VfVideoGrade.gradeLutUploadNative(
+            VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST)
         )
         check(rc == VfVulkan.OK) { "grade lut upload failed: $rc" }
     }
 
     /**
      * Reference BT.709 P010 words for a developed-linear input: the CPU
-     * golden ([VfLogGrade.encodePixel709]) through BT.709 +
+     * golden ([VfVideoGrade.encodePixel709]) through BT.709 +
      * limited-range pack10 (mirror of the shader).
      * Self-calibrating: no magic code numbers, robust to future
      * look-default changes.
      */
     private fun gradeExpectedWords(linear: FloatArray): IntArray {
-        val disp = VfLogGrade.encodePixel709(linear)
+        val disp = VfVideoGrade.encodePixel709(linear)
         val y = 0.2126f * disp[0] + 0.7152f * disp[1] + 0.0722f * disp[2]
         val cb = (disp[2] - y) / (2f * (1f - 0.0722f)) + 0.5f
         val cr = (disp[0] - y) / (2f * (1f - 0.2126f)) + 0.5f

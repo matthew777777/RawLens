@@ -73,11 +73,11 @@ class CubeLutTest {
 
     @Test fun analyticAssistKeepsGreysNeutral() {
         for (gray in listOf(0f,.01f,.18f,.9f)) {
-            val encoded = VfLogGrade.encodePixelSlog3(floatArrayOf(gray,gray,gray))
+            val encoded = VfVideoGrade.encodePixelSlog3(floatArrayOf(gray,gray,gray))
             val out = SonyDisplayAssist.apply(encoded)
             assertEquals(out[0],out[1],2e-6f)
             assertEquals(out[1],out[2],2e-6f)
-            assertEquals(VfLogGrade.bt709Oetf(gray),out[0],2e-6f)
+            assertEquals(VfVideoGrade.bt709Oetf(gray),out[0],2e-6f)
         }
     }
 }

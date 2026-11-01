@@ -90,7 +90,7 @@ class MemoryLeakDiagnosticsTest {
         MemoryLeakDiagnostics.vfFrame()
         MemoryLeakDiagnostics.bguVfFrame()
         MemoryLeakDiagnostics.rawVideoFrame()
-        MemoryLeakDiagnostics.directLogFrame()
+        MemoryLeakDiagnostics.encodedVideoFrame()
         val counters = MemoryLeakDiagnostics.countersForTest()
         assertEquals(2L, counters.amaze)
         assertEquals(1L, counters.hdr)
@@ -98,7 +98,7 @@ class MemoryLeakDiagnosticsTest {
         assertEquals(1L, counters.vf)
         assertEquals(1L, counters.bgu)
         assertEquals(1L, counters.rawVideo)
-        assertEquals(1L, counters.directLog)
+        assertEquals(1L, counters.encodedVideo)
     }
 
     @Test fun `vulkan handle accounting balances`() {

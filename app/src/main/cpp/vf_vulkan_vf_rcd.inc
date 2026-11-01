@@ -1,4 +1,4 @@
-// ---- RCD demosaic (Direct-Log record path): one pipeline, u_mode
+// ---- RCD demosaic (Encoded Video record path): one pipeline, u_mode
 // selects dirs / green / R-B-at-opposite / R-B-at-green. Same
 // fd-exporting convention as the grade submits (the recorder closes
 // the intermediate fds; probes poll them for per-mode GPU timings). ----
@@ -174,7 +174,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     const bool scrRead = mode >= 1;
     // A8 (sync validation, SYNC-HAZARD-WRITE-AFTER-WRITE): each mode's
     // acquire waits on prior compute writes. TOP_OF_PIPE ordered nothing,
-    // and the Direct-Log path submits modes 0-2 back to back with no CPU
+    // and the Encoded Video path submits modes 0-2 back to back with no CPU
     // wait, so mode N could read (or re-layout) mode N-1's images mid-write.
     if (scrWrite) {
         layoutBarrier(cmd, scrImg.image,
@@ -266,7 +266,7 @@ Java_com_matthew_rawlens_VfRcd_rcdSubmitNative(
     return fd;
 }
 
-// ---- Fused RCD finalize + grade (Direct-Log RCD path): modes 0-2 run
+// ---- Fused RCD finalize + grade (Encoded Video RCD path): modes 0-2 run
 // first via rcdSubmitNative, then this replaces mode 3 + gradeYuv with
 // one dispatch (RCD finalize at green sites + direct P010 encode, no
 // RGBA16F round trip). Same fd-exporting convention as the other

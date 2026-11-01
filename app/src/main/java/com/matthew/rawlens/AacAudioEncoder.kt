@@ -9,7 +9,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * PCM16 -> AAC-LC encoder stage for Direct Log. Owns its MediaCodec and
+ * PCM16 -> AAC-LC encoder stage for Encoded Video. Owns its MediaCodec and
  * thread; input chunks arrive from [AudioPcmRecorder], encoded frames leave
  * via [onOutput] (the recorder routes them to the single muxer writer).
  * Codec-config packets are forwarded with their flag so the writer can skip
@@ -183,7 +183,7 @@ class AacAudioEncoder(
                     }
                 }
             }
-        }, "DirectLogAac").apply { start() }
+        }, "EncodedVideoAac").apply { start() }
         return true
     }
 

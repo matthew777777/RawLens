@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log FUSED record stage, float16-math variant of vf_mhcyuv.comp:
+// Encoded Video FUSED record stage, float16-math variant of vf_mhcyuv.comp:
 // identical structure and op order, all computed values in float16_t
 // (GL_EXT_shader_explicit_arithmetic_types_float16; needs the
 // VK_KHR_shader_float16_int8 device feature + shaderFloat16). The fp32
@@ -329,7 +329,7 @@ f16vec3 mhcRgb(ivec2 s) {
 
 // ---- direct-encode record grade: no warp, no saturation ----
 // Identical to the grade-YUV stage: the two record paths agree by
-// construction. CPU goldens are VfLogGrade.encodePixel*.
+// construction. CPU goldens are VfVideoGrade.encodePixel*.
 f16vec3 bt709Encode(f16vec3 v) {
     v = clamp(v, 0.0hf, 1.0hf);
     f16vec3 lo = 4.5hf * v;
@@ -350,7 +350,7 @@ f16vec3 hlgEncode(f16vec3 v2020) {
 }
 
 // Linear sRGB (D65) -> linear BT.2020 (D65), dot form (avoids mat3
-// layout pitfalls); mirrors VfLogGrade.SRGB_TO_BT2020.
+// layout pitfalls); mirrors VfVideoGrade.SRGB_TO_BT2020.
 f16vec3 srgbToBt2020(f16vec3 v) {
     return f16vec3(
         dot(v, f16vec3(0.6274040hf, 0.3292820hf, 0.0433136hf)),
@@ -358,7 +358,7 @@ f16vec3 srgbToBt2020(f16vec3 v) {
         dot(v, f16vec3(0.0163916hf, 0.0880132hf, 0.8955950hf)));
 }
 
-// Sony S-Log3, normalized (same mapping as vf_loggrade.comp):
+// Sony S-Log3, normalized (same mapping as vf_videograde.comp):
 // divisor 0.19, 95-code black pedestal.
 // BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
 f16vec3 srgbToSgamut3Cine(f16vec3 v) {

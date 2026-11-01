@@ -8,10 +8,10 @@ import android.hardware.HardwareBuffer
  * fixed MHC green kernel zippers) plus edge-directed
  * difference-domain chroma (the fixed chroma kernels halo in cyan/red
  * around contrast edges), negatives clamped like RawTherapee,
- * full-res float RGB for the Direct-Log RECORD path at video rate
+ * full-res float RGB for the Encoded Video RECORD path at video rate
  * (single dispatch). The viewfinder never initializes this.
  *
- * Init order (shared device): [VfVulkan.initNative] then [VfLogGrade]
+ * Init order (shared device): [VfVulkan.initNative] then [VfVideoGrade]
  * (twin command buffers live with the grade init, as for RCD/YUV).
  * Submits export a completion fd (grade convention); the recorder runs
  * MHC right before the grade (whose fd carries completion), probes

@@ -4,7 +4,7 @@ package com.matthew.rawlens
 import android.hardware.HardwareBuffer
 
 /**
- * Direct-Log 8-bit SDR fallback convert: staged P010 -> full-res RGBA8
+ * Encoded Video 8-bit SDR fallback convert: staged P010 -> full-res RGBA8
  * for the EGL encoder present (see `vf_p010torgb8.comp` for the 1:1
  * kernel, `vf_vulkan_vf.cpp` for the host side). Shares the [VfVulkan]
  * device; initialized alongside the record pipelines, only on takes

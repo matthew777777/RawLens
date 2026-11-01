@@ -4,7 +4,7 @@
 package com.matthew.rawlens
 
 /**
- * CPU twin of the Direct-Log record superpixel (vf_superpixel_f16.comp,
+ * CPU twin of the Encoded Video record superpixel (vf_superpixel_f16.comp,
  * shading off): step 2 is CENTRE-ALIGNED (R and B bilinearly resampled
  * to the quad centre, green the Gr/Gb mean), larger steps are the block
  * mean of every quad. Same Q6 integer normalize as the shader, same

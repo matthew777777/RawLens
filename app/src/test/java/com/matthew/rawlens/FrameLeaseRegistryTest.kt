@@ -7,7 +7,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 /**
- * Pins the [FrameLeaseRegistry] contract the Direct-Log record path
+ * Pins the [FrameLeaseRegistry] contract the Encoded Video record path
  * relies on: the camera ref releases up front while a GPU borrow keeps
  * the native buffer alive, and the borrow transfers across threads
  * (camera submit -> copy-worker fence) with idempotent close.
@@ -85,7 +85,7 @@ class FrameLeaseRegistryTest {
 
     @Test
     fun recorderProtocolTransfersOneLeaseToFenceClose() {
-        // Mirrors DirectLogRecorder: adopt -> borrow -> camera release on
+        // Mirrors EncodedVideoRecorder: adopt -> borrow -> camera release on
         // the camera thread, then the transferred lease closes on the
         // worker (early fence close + finally backstop).
         var closes = 0

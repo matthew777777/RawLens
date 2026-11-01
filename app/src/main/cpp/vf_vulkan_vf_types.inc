@@ -71,7 +71,7 @@
 #define VFVK_VF_WAIT_NS 500000000ull
 
 // Maximum compute extent per axis. The viewfinder caps its own geometry far
-// below this (preview budgets); the Direct-Log recorder dispatches up to
+// below this (preview budgets); the Encoded Video recorder dispatches up to
 // half sensor res (e.g. 2040x1530 for a 4080x3060 sensor at step 2), so the
 // backstop must admit it. Cost scales linearly with extent; sensors much
 // larger than this device want step 4 or tiling instead (follow-up).
@@ -88,7 +88,7 @@
 namespace {
 
 // Serializes the shared device across threads: the viewfinder GL worker and
-// a Direct-Log recorder camera thread submit interleaved work (each holds the
+// a Encoded Video recorder camera thread submit interleaved work (each holds the
 // lock for one compute+grade pair, ~5-7ms, inside the 33ms budget). Without
 // this, concurrent submits race the shared command buffer, descriptor set,
 // import caches and fence. No entry point nests, so a plain mutex suffices.
@@ -123,7 +123,7 @@ struct SuperpixelParams {
 };
 static_assert(sizeof(SuperpixelParams) == 112, "push constant layout drift");
 
-// Mirrors the push-constant block in vf_loggrade.comp exactly (96 bytes:
+// Mirrors the push-constant block in vf_videograde.comp exactly (96 bytes:
 // ivec2 dims needs 16-byte alignment before the first vec4).
 struct GradeParams {
     int32_t dims[2];
@@ -294,7 +294,7 @@ struct Context {
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
-    // Direct-Log f16 superpixel variant (same bindings + push block, so the
+    // Encoded Video f16 superpixel variant (same bindings + push block, so the
     // shared set layout and recorder descriptor sets are reused as-is; only
     // the shader module (rgba16f store) differs). Viewfinder keeps `pipeline`.
     VkPipeline f16Pipeline = VK_NULL_HANDLE;
@@ -392,7 +392,7 @@ struct Context {
     VkPipeline gradePipeline = VK_NULL_HANDLE;
     VkDescriptorPool gradePool = VK_NULL_HANDLE;
     VkDescriptorSet gradeSet = VK_NULL_HANDLE;
-    // Recorder-isolated state (Direct-Log wait-free twins): the viewfinder
+    // Recorder-isolated state (Encoded Video wait-free twins): the viewfinder
     // keeps the shared single-slot output + descriptor set above. Sharing
     // either across in-flight frames destroys/re-writes objects a queued
     // submit still references (device loss on strict drivers), so the twins
@@ -407,7 +407,7 @@ struct Context {
     VkDescriptorPool recGradePool = VK_NULL_HANDLE;
     VkDescriptorSet recGradeSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> recOuts;
-    // True-10-bit stage (Direct-Log P010): FP16 superpixel export in,
+    // True-10-bit stage (Encoded Video P010): FP16 superpixel export in,
     // codec-input P010 bytes out. STORAGE_IMAGE in + STORAGE_BUFFER out
     // needs its own set layout; sets are per slot (3) like the twins.
     VkDescriptorSetLayout yuvSetLayout = VK_NULL_HANDLE;
@@ -416,7 +416,7 @@ struct Context {
     VkDescriptorPool yuvPool = VK_NULL_HANDLE;
     VkDescriptorSet yuvSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedBuffer> yuvOuts;
-    // Record-preview stage (Direct-Log monitor): staged P010 storage
+    // Record-preview stage (Encoded Video monitor): staged P010 storage
     // buffer in + RGBA8 preview image out. Own set layout + per-slot
     // sets and twins; preview imports are cached by pointer. The P010
     // input reuses the yuvOuts validation (same buffers the encode
@@ -428,7 +428,7 @@ struct Context {
     VkDescriptorSet previewSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkCommandBuffer twinPreviewCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> previewOuts;
-    // 8-bit SDR fallback (Direct-Log): staged P010 in + full-res RGBA8
+    // 8-bit SDR fallback (Encoded Video): staged P010 in + full-res RGBA8
     // out for the EGL encoder present. Own set layout + per-slot sets
     // and twins; imports cached by pointer like the preview path.
     VkDescriptorSetLayout rgb8SetLayout = VK_NULL_HANDLE;
@@ -438,7 +438,7 @@ struct Context {
     VkDescriptorSet rgb8Sets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkCommandBuffer twinRgb8Cmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> rgb8Outs;
-    // RCD demosaic (Direct-Log record path): STORAGE_BUFFER CFA in +
+    // RCD demosaic (Encoded Video record path): STORAGE_BUFFER CFA in +
     // STORAGE_IMAGE rgb (read-write across the 3 mode dispatches). Own
     // set layout + per-slot sets and twin command buffers; rgb imports
     // are cached by pointer like the other recorder maps.
@@ -451,7 +451,7 @@ struct Context {
     VkCommandBuffer twinRcdCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::map<AHardwareBuffer*, ImportedImage> rgbOuts;
     std::map<AHardwareBuffer*, ImportedImage> scratchOuts;
-    // Fused RCD finalize + grade (Direct-Log RCD path): CFA + rgb +
+    // Fused RCD finalize + grade (Encoded Video RCD path): CFA + rgb +
     // scratch in, P010 out. Own set layout + per-slot sets; dynamic
     // per-submit command buffers (see acquireRcdCmd) and the
     // rgb/scratch/P010 import caches.
@@ -492,7 +492,7 @@ struct Context {
     // A1: stabFence has a submit that has not been observed complete (a
     // timed-out wait must not reset it: VUID-vkResetFences-pFences-01123).
     bool stabPending = false;
-    // Malvar-He-Cutler fast demosaic (Direct-Log record path): single
+    // Malvar-He-Cutler fast demosaic (Encoded Video record path): single
     // dispatch, CFA in + write-only rgb out. Own set layout + per-slot
     // sets and twins; rgb imports share the rgbOuts map.
     VkDescriptorSetLayout mhcSetLayout = VK_NULL_HANDLE;

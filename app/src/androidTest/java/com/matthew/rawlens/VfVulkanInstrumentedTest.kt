@@ -74,7 +74,7 @@ class VfVulkanInstrumentedTest {
     }
 
     /**
-     * Direct-Log gate: grade init allocates the 3 recorder twin sets
+     * Encoded Video gate: grade init allocates the 3 recorder twin sets
      * (superpixel compute + grade). Regression: the compute pool held 3
      * STORAGE_BUFFER descriptors but each set needs 2, so set 1 failed and
      * every take aborted with "grade init failed" before the first frame
@@ -91,7 +91,7 @@ class VfVulkanInstrumentedTest {
         }
         val spv = asset("shaders/vf/vf_superpixel.spv")
         val f16spv = asset("shaders/vf/vf_superpixel_f16.spv")
-        val gradespv = asset("shaders/vf/vf_loggrade.spv")
+        val gradespv = asset("shaders/vf/vf_videograde.spv")
         val yuvspv = asset("shaders/vf/vf_gradeyuv.spv")
         val pvspv = asset("shaders/vf/vf_p010preview.spv")
         assumeTrue(
@@ -102,9 +102,9 @@ class VfVulkanInstrumentedTest {
         assumeTrue("vulkan unavailable (${VfVulkan.describe(init)})", init == VfVulkan.OK)
         try {
             assertEquals(VfVulkan.OK, VfVulkan.initF16Native(f16spv!!))
-            val grade = VfLogGrade.initGradeNative(gradespv!!)
-            assertEquals("grade init failed (${VfLogGrade.describe(grade)})", VfVulkan.OK, grade)
-            assertEquals(VfVulkan.OK, VfLogGrade.initGradeYuvNative(yuvspv!!))
+            val grade = VfVideoGrade.initGradeNative(gradespv!!)
+            assertEquals("grade init failed (${VfVideoGrade.describe(grade)})", VfVulkan.OK, grade)
+            assertEquals(VfVulkan.OK, VfVideoGrade.initGradeYuvNative(yuvspv!!))
             assertEquals(VfVulkan.OK, VfRecordPreview.initPreviewNative(pvspv!!))
         } finally {
             VfVulkan.resetNative()
@@ -112,13 +112,13 @@ class VfVulkanInstrumentedTest {
     }
 
     /**
-     * Synthetic end-to-end take: the Direct-Log start sequence from
-     * [DirectLogRecorder.start] (superpixel + f16 + grade + grade-YUV +
+     * Synthetic end-to-end take: the Encoded Video start sequence from
+     * [EncodedVideoRecorder.start] (superpixel + f16 + grade + grade-YUV +
      * record-preview inits, neutral LUT pre-warm), then 4 frames of
      * synthetic Bayer through the recorder's own submits —
      * [VfVulkan.computeSubmitNative] (GPU-copy fallback when the gralloc
      * input is unimportable, mirroring production) ->
-     * [VfLogGrade.gradeYuvSubmitNative] -> [VfRecordPreview.previewSubmitNative]
+     * [VfVideoGrade.gradeYuvSubmitNative] -> [VfRecordPreview.previewSubmitNative]
      * — on the real Vulkan engine, with no camera. The fd twins run first
      * (production path); on drivers without semaphore-fd export they
      * return -1 side-effect-free and the blocking twins (identical pixels,
@@ -142,7 +142,7 @@ class VfVulkanInstrumentedTest {
         }
         val spv = asset("shaders/vf/vf_superpixel.spv")
         val f16spv = asset("shaders/vf/vf_superpixel_f16.spv")
-        val gradespv = asset("shaders/vf/vf_loggrade.spv")
+        val gradespv = asset("shaders/vf/vf_videograde.spv")
         val yuvspv = asset("shaders/vf/vf_gradeyuv.spv")
         val pvspv = asset("shaders/vf/vf_p010preview.spv")
         assumeTrue(
@@ -152,13 +152,13 @@ class VfVulkanInstrumentedTest {
         val init = VfVulkan.initNative(spv!!)
         assumeTrue("vulkan unavailable (${VfVulkan.describe(init)})", init == VfVulkan.OK)
         try {
-            // Direct-log start (same order as the recorder).
+            // Encoded Video start (same order as the recorder).
             assertEquals(VfVulkan.OK, VfVulkan.initF16Native(f16spv!!))
-            val grade = VfLogGrade.initGradeNative(gradespv!!)
-            assertEquals("grade init failed (${VfLogGrade.describe(grade)})", VfVulkan.OK, grade)
-            assertEquals(VfVulkan.OK, VfLogGrade.initGradeYuvNative(yuvspv!!))
+            val grade = VfVideoGrade.initGradeNative(gradespv!!)
+            assertEquals("grade init failed (${VfVideoGrade.describe(grade)})", VfVulkan.OK, grade)
+            assertEquals(VfVulkan.OK, VfVideoGrade.initGradeYuvNative(yuvspv!!))
             assertEquals(VfVulkan.OK, VfRecordPreview.initPreviewNative(pvspv!!))
-            val lut = VfLogGrade.gradeLutUploadNative(VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST))
+            val lut = VfVideoGrade.gradeLutUploadNative(VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST))
             assertEquals("lut upload failed (${VfVulkan.describe(lut)})", VfVulkan.OK, lut)
 
             // Synthetic sensor input, fresh buffer per frame like camera
@@ -306,10 +306,10 @@ class VfVulkanInstrumentedTest {
 
             val outFile = File(context.cacheDir, "synth_record.bin")
             if (outFile.exists()) outFile.delete()
-            val (_, gfparams) = VfLogGrade.packGrade(
+            val (_, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(expW, expH),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             var previewFrames = 0
@@ -336,7 +336,7 @@ class VfVulkanInstrumentedTest {
                             cs = VfVulkan.computeCopyNative(frameRaw, iparams, fparams)
                         }
                         check(cs == VfVulkan.OK) { "compute failed: ${VfVulkan.describe(cs)}" }
-                        val yfd = VfLogGrade.gradeYuvSubmitNative(
+                        val yfd = VfVideoGrade.gradeYuvSubmitNative(
                             expBuf, p010Buf,
                             intArrayOf(expW, expH), intArrayOf(expW, expH), gfparams,
                             intArrayOf(lay[0], lay[1], expW, expH), slot, 0
@@ -347,7 +347,7 @@ class VfVulkanInstrumentedTest {
                         } else {
                             check(yfd == -1) { "grade-yuv submit failed: $yfd" }
                             yuvPath = "blocking"
-                            val yrc = VfLogGrade.gradeYuvBlockingNative(
+                            val yrc = VfVideoGrade.gradeYuvBlockingNative(
                                 expBuf, p010Buf,
                                 intArrayOf(expW, expH), intArrayOf(expW, expH), gfparams,
                                 intArrayOf(lay[0], lay[1], expW, expH), slot, 0

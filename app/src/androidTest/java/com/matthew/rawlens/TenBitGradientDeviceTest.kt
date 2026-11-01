@@ -44,7 +44,7 @@ class TenBitGradientDeviceTest {
             args.getString("rawlensTenBitProof") == "true"
         )
         assumeTrue("rawLensVfEgl native library unavailable", VfEglImport.available)
-        val name = LogVideoProbe.preferredHwEncoder()
+        val name = EncodedVideoProbe.preferredHwEncoder()
         assumeTrue("no HW HEVC 4K30 Surface encoder", name != null)
 
         // Phase A first (pbuffer, no encoder traffic): dither control.
@@ -93,9 +93,9 @@ class TenBitGradientDeviceTest {
      * Returns (bytes differing between dither seeds, plain runs identical).
      */
     private fun ditherControl(): Pair<Int, Boolean> {
-        val target = LogVideoProbe.Target()
+        val target = EncodedVideoProbe.Target()
         val codec = MediaCodec.createByCodecName(
-            LogVideoProbe.preferredHwEncoder() ?: error("no encoder")
+            EncodedVideoProbe.preferredHwEncoder() ?: error("no encoder")
         )
         var surface: Surface? = null
         var egl: EglPusher? = null
@@ -105,7 +105,7 @@ class TenBitGradientDeviceTest {
         var image = 0L
         var ahb: HardwareBuffer? = null
         try {
-            codec.configure(LogVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.configure(EncodedVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             surface = codec.createInputSurface()
             egl = EglPusher(surface)
             val push = egl
@@ -181,7 +181,7 @@ class TenBitGradientDeviceTest {
      */
     private fun encodeRamp(codecName: String, useTexture: HardwareBuffer?, dithered: Boolean): Clip {
         val frames = 45
-        val target = LogVideoProbe.Target()
+        val target = EncodedVideoProbe.Target()
         val codec = MediaCodec.createByCodecName(codecName)
         var surface: Surface? = null
         var egl: EglPusher? = null
@@ -189,7 +189,7 @@ class TenBitGradientDeviceTest {
         var texture = 0
         var image = 0L
         try {
-            codec.configure(LogVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.configure(EncodedVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             surface = codec.createInputSurface()
             egl = EglPusher(surface)
             // Recordable configs top out at 8-bit on this stack (dumped);

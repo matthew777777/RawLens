@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_recordCubeUploadNative(
+Java_com_matthew_rawlens_VfVideoGrade_recordCubeUploadNative(
     JNIEnv* env,jobject,jshortArray data,jint size,jfloatArray parameters) {
     const std::lock_guard<std::mutex> lock(vkMutex);
     if (!g) return VFVK_NOT_INITIALIZED;

@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong
  * pinned by GPU borrows, and Vulkan handles created more than once.
  *
  * Every `MEM[...]` line also carries monotonic event counters (`amaze= hdr= still= vf= bgu=
- * vid= dlog=`), so PSS growth between two samples is attributable to the module that ran
+ * vid= encodedVideo=`), so PSS growth between two samples is attributable to the module that ran
  * between them. The periodic sampler (see [startPeriodic]) plus the per-module start/stop
  * probes mean a plain session log is enough to triage a suspected leak — no repro build.
  *
@@ -50,7 +50,7 @@ object MemoryLeakDiagnostics {
     private val vfFrames = AtomicLong()
     private val bguVfFrames = AtomicLong()
     private val rawVideoFrames = AtomicLong()
-    private val directLogFrames = AtomicLong()
+    private val encodedVideoFrames = AtomicLong()
 
     private val histories = ConcurrentHashMap<String, ArrayDeque<Sample>>()
     @Volatile private var periodicThread: Thread? = null
@@ -95,7 +95,7 @@ object MemoryLeakDiagnostics {
     fun vfFrame() { vfFrames.incrementAndGet() }
     fun bguVfFrame() { bguVfFrames.incrementAndGet() }
     fun rawVideoFrame() { rawVideoFrames.incrementAndGet() }
-    fun directLogFrame() { directLogFrames.incrementAndGet() }
+    fun encodedVideoFrame() { encodedVideoFrames.incrementAndGet() }
 
     /**
      * Whole-app heartbeat: one `MEM[periodic]` line every [PERIODIC_INTERVAL_MS] on a daemon
@@ -145,7 +145,7 @@ object MemoryLeakDiagnostics {
             "${mb(counters.nativeBufferBytes)}MB vk=${counters.vulkanHandles} " +
             "img=${RawImageOwnership.liveCount()}/${RawImageOwnership.gpuOnlyCount()}gpu " +
             "amaze=${counters.amaze} hdr=${counters.hdr} still=${counters.still} " +
-            "vf=${counters.vf} bgu=${counters.bgu} vid=${counters.rawVideo} dlog=${counters.directLog}")
+            "vf=${counters.vf} bgu=${counters.bgu} vid=${counters.rawVideo} encodedVideo=${counters.encodedVideo}")
         histories.forEach { (label, history) ->
             val last = synchronized(history) { history.lastOrNull() } ?: return@forEach
             val size = synchronized(history) { history.size }
@@ -198,7 +198,7 @@ object MemoryLeakDiagnostics {
             vf = counters.vf,
             bgu = counters.bgu,
             rawVideo = counters.rawVideo,
-            directLog = counters.directLog
+            encodedVideo = counters.encodedVideo
         )
 
         Log.i(TAG, buildString {
@@ -235,7 +235,7 @@ object MemoryLeakDiagnostics {
             append("vf=").append(sample.vf).append(' ')
             append("bgu=").append(sample.bgu).append(' ')
             append("vid=").append(sample.rawVideo).append(' ')
-            append("dlog=").append(sample.directLog)
+            append("encodedVideo=").append(sample.encodedVideo)
             if (!extra.isNullOrEmpty()) append(' ').append(extra)
         })
 
@@ -337,7 +337,7 @@ object MemoryLeakDiagnostics {
         val vf: Long,
         val bgu: Long,
         val rawVideo: Long,
-        val directLog: Long
+        val encodedVideo: Long
     )
 
     internal fun countersForTest(): CounterSnapshot = CounterSnapshot(
@@ -355,7 +355,7 @@ object MemoryLeakDiagnostics {
         vf = vfFrames.get(),
         bgu = bguVfFrames.get(),
         rawVideo = rawVideoFrames.get(),
-        directLog = directLogFrames.get()
+        encodedVideo = encodedVideoFrames.get()
     )
 
     /** Test-only reset; production counters are monotonic per boot. */
@@ -374,7 +374,7 @@ object MemoryLeakDiagnostics {
         vfFrames.set(0)
         bguVfFrames.set(0)
         rawVideoFrames.set(0)
-        directLogFrames.set(0)
+        encodedVideoFrames.set(0)
         histories.clear()
     }
 
@@ -422,7 +422,7 @@ object MemoryLeakDiagnostics {
         val vf: Long,
         val bgu: Long,
         val rawVideo: Long,
-        val directLog: Long
+        val encodedVideo: Long
     ) {
         fun trendPoint() = TrendPoint(
             pssKb = totalPssKb.toLong(),

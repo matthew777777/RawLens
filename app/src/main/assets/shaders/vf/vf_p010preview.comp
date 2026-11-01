@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log record preview: staged P010 (the exact bytes queued to the
+// Encoded Video record preview: staged P010 (the exact bytes queued to the
 // encoder) -> small RGBA8 display image, in one tiny dispatch. This is what
 // the take monitor shows INSTEAD of a separately-demosaiced viewfinder: no
 // second WB/CCM/grade, no contended full-res dispatch — the preview IS the

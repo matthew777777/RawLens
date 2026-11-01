@@ -100,7 +100,7 @@ class VideoModeUiTest {
             instrumentation.runOnMainSync {
                 badge = (activity.findViewById<TextView>(R.id.rawBadge)).text.toString()
             }
-            assertEquals("CRAW", badge)
+            assertEquals("RAW Video", badge)
 
             // 2. Shutter starts the take; the video HUD appears.
             val recordStartMs = System.currentTimeMillis() - 2_000

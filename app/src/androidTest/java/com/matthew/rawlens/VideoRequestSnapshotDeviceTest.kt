@@ -68,7 +68,7 @@ class VideoRequestSnapshotDeviceTest {
         try {
             for ((name, case) in cases) {
                 val (manual, locks) = case
-                val log = DirectLogRecorder(manager, id, context).apply {
+                val log = EncodedVideoRecorder(manager, id, context).apply {
                     videoManual = manual; videoLocks = locks
                     videoMeteredIso = 250; videoMeteredShutterNanos = 16_000_000L; videoMeteredFocus = 1.25f
                 }
@@ -77,7 +77,7 @@ class VideoRequestSnapshotDeviceTest {
                     videoMeteredIso = 250; videoMeteredShutterNanos = 16_000_000L; videoMeteredFocus = 1.25f
                 }
                 for ((who, apply, range) in listOf(
-                    Triple("directlog", { b: CaptureRequest.Builder -> log.applyVideoManualToRequest(b, chars) },
+                    Triple("encoded_video", { b: CaptureRequest.Builder -> log.applyVideoManualToRequest(b, chars) },
                         { c: ManualControl -> log.videoControlRange(c) }),
                     Triple("rawvideo", { b: CaptureRequest.Builder -> raw.applyVideoManualToRequest(b, chars) },
                         { c: ManualControl -> raw.videoControlRange(c) }),

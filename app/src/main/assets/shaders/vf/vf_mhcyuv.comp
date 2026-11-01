@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log FUSED record stage: CFA mosaic -> Malvar-He-Cutler demosaic
+// Encoded Video FUSED record stage: CFA mosaic -> Malvar-He-Cutler demosaic
 // (full-res RGB, same 13-tap kernels as vf_mhc.comp) -> WB/CCM/exposure
 // -> DIRECT profile encode (BT.709 OETF / Sony S-Log3 / BT.2020 + HLG,
 // see outMode) -> limited-range YUV -> semi-planar P010 bytes, in ONE
@@ -17,7 +17,7 @@
 // (13 taps, 9 word loads, FMA normalize, edge-directed green +
 // edge-directed difference-domain chroma, all in reference op order)
 // and the grade a direct per-pixel profile encode (CPU goldens are
-// VfLogGrade.encodePixel*).
+// VfVideoGrade.encodePixel*).
 // Keep fused/vf_gradeyuv in sync; the precision probes (reference-
 // computed expects) gate drift. Deliberate differences: no f16 RGB
 // round trip between stages (fused keeps fp32 into the encode),
@@ -340,7 +340,7 @@ vec3 mhcRgb(ivec2 s) {
 
 // ---- direct-encode record grade: no warp, no saturation ----
 // Identical to the grade-YUV stage: the two record paths agree by
-// construction. CPU goldens are VfLogGrade.encodePixel*.
+// construction. CPU goldens are VfVideoGrade.encodePixel*.
 vec3 bt709Encode(vec3 v) {
     v = clamp(v, 0.0, 1.0);
     vec3 lo = 4.5 * v;
@@ -361,7 +361,7 @@ vec3 hlgEncode(vec3 v2020) {
 }
 
 // Linear sRGB (D65) -> linear BT.2020 (D65), dot form (avoids mat3
-// layout pitfalls); mirrors VfLogGrade.SRGB_TO_BT2020.
+// layout pitfalls); mirrors VfVideoGrade.SRGB_TO_BT2020.
 vec3 srgbToBt2020(vec3 v) {
     return vec3(
         dot(v, vec3(0.6274040, 0.3292820, 0.0433136)),
@@ -369,7 +369,7 @@ vec3 srgbToBt2020(vec3 v) {
         dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
 }
 
-// Sony S-Log3, normalized (same mapping as vf_loggrade.comp):
+// Sony S-Log3, normalized (same mapping as vf_videograde.comp):
 // divisor 0.19, 95-code black pedestal.
 // BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
 vec3 srgbToSgamut3Cine(vec3 v) {

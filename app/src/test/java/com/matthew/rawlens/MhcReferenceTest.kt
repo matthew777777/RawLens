@@ -211,7 +211,7 @@ class MhcReferenceTest {
     }
 
     /**
-     * Chroma-halo regression (Direct-Log cyan/red lines around every
+     * Chroma-halo regression (Encoded Video cyan/red lines around every
      * contrast edge): the fixed MHC chroma kernels blur across edges
      * while edge-directed green stays sharp — ±0.19 alternating
      * row-to-row R/B error on a gray step, ~90 sRGB codes after

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log 8-bit SDR fallback: staged P010 (the exact bytes the 10-bit
+// Encoded Video 8-bit SDR fallback: staged P010 (the exact bytes the 10-bit
 // paths would queue) -> full-res RGBA8 for the EGL encoder present. Same
 // sampling and color math as vf_p010preview.comp, but 1:1 (no box): each
 // output pixel reads its own Y plus its half-res UV pair. There is no

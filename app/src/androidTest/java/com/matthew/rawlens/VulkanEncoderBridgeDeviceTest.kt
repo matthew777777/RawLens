@@ -31,7 +31,7 @@ class VulkanEncoderBridgeDeviceTest {
             .open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
         assumeTrue("superpixel SPIR-V missing", spv.isNotEmpty())
         val gradeSpv = instrumentation.targetContext.assets
-            .open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+            .open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         assumeTrue("grade SPIR-V missing", gradeSpv.isNotEmpty())
         val f16spv = instrumentation.targetContext.assets
             .open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
@@ -52,7 +52,7 @@ class VulkanEncoderBridgeDeviceTest {
                 "fenceTimeouts=${rep.fenceTimeouts} fellBack=${rep.fellBackToFinish} " +
                 "bypassLuma=${rep.bypassAvgLuma} gradedLuma=${rep.gradedAvgLuma} " +
                 "readbackSkipped=${rep.readbackSkipped} " +
-                "outProfile=${rep.outputProfile?.let { LogVideoProbe.profileLabel(it) }} " +
+                "outProfile=${rep.outputProfile?.let { EncodedVideoProbe.profileLabel(it) }} " +
                 "outFmt=[${rep.outputFormat}] err=${rep.error}"
         )
         assertTrue("vulkan bridge failed: ${rep.error}", rep.error == null)

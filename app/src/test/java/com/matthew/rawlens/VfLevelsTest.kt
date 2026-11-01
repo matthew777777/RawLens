@@ -7,6 +7,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VfLevelsTest {
+    @Test fun `DCG calibration supersedes stale ten bit HAL levels`() {
+        val overrides = DngMetadataOverrides(blackLevels = List(4) { 1024.0 }, whiteLevel = 16383.0)
+        val (black, white) = VfLevels.calibrated(FloatArray(4) { 64f }, 1023f, overrides)
+        assertEquals(16383f, white, 0f)
+        val (blackQ, denQ) = VfLevels.toFixedQ6(black, white)
+        for (site in 0..3) {
+            assertEquals(1024f, black[site], 0f)
+            assertEquals(0, VfLevels.normalizeByte(1024, blackQ[site], denQ[site]))
+            assertEquals(128, VfLevels.normalizeByte(8704, blackQ[site], denQ[site]))
+            assertEquals(255, VfLevels.normalizeByte(16383, blackQ[site], denQ[site]))
+        }
+        val (resetBlack, resetWhite) = VfLevels.calibrated(FloatArray(4) { 64f }, 1023f, DngMetadataOverrides())
+        assertEquals(64f, resetBlack[0], 0f)
+        assertEquals(1023f, resetWhite, 0f)
+    }
+
     @Test fun `cached LUT follows level changes and owns its keys`() {
         val black = intArrayOf(4096, 4096, 4096, 4096)
         val den = IntArray(4) { 959 * 64 }

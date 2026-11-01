@@ -20,13 +20,16 @@ interface VfEngine {
     /** Called inline on the camera handler. All plane access ends before return. */
     fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?)
 
+    /** Sensor-level calibration shared with saved DNGs; null tags preserve HAL levels. */
+    fun setSensorLevels(overrides: DngMetadataOverrides)
+
     /** Drop all session state (queued frames, caches, stickiness). Any thread. */
     fun invalidateSession()
 
     /** Fired when the engine starves (no presentable frames). */
     var onStarvation: (() -> Unit)?
 
-    /** Direct-Log record throttle. Any thread. */
+    /** Encoded Video record throttle. Any thread. */
     fun setRecordMode(active: Boolean)
 
     /** Sensor cadence hint for the starvation watchdog. Any thread. */

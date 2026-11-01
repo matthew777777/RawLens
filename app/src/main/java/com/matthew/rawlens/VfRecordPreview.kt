@@ -4,7 +4,7 @@ package com.matthew.rawlens
 import android.hardware.HardwareBuffer
 
 /**
- * Direct-Log record preview: staged P010 (the exact bytes queued to the
+ * Encoded Video record preview: staged P010 (the exact bytes queued to the
  * encoder) -> small RGBA8 monitor image (see `vf_p010preview.comp` for the
  * downsample kernel, `vf_vulkan_vf.cpp` for the host side). Shares the
  * [VfVulkan] device; the RAW viewfinder never initializes it.
@@ -57,7 +57,7 @@ internal object VfRecordPreview {
      * of the record stages' `rgbToYuv` + `pack10` (Kr = 0.2126,
      * Kb = 0.0722); the P010 already holds profile-encoded components, so
      * no OETF runs here. The shader must implement this bit-for-bit
-     * (modulo fp32 rounding); [DirectLogPreviewTest] pins the round trip.
+     * (modulo fp32 rounding); [EncodedVideoPreviewTest] pins the round trip.
      */
     fun yuvToRgb709(y: Float, u: Float, v: Float): FloatArray {
         val yn = (y - 64f) / (940f - 64f)

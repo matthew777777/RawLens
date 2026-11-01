@@ -7,7 +7,7 @@ import android.opengl.GLES20
 import android.view.Surface
 
 /**
- * Minimal EGL pusher for encoder input Surfaces (Direct Log chain).
+ * Minimal EGL pusher for encoder input Surfaces (Encoded Video chain).
  *
  * Creates its own display/context/window-surface on top of the MediaCodec
  * input Surface. Prefers a 30-bit (10/10/10/2) recordable config so graded

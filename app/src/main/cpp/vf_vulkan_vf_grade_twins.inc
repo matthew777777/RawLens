@@ -134,7 +134,7 @@ static bool ensureTwinResources(Context* ctx) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_initGradeNative(JNIEnv* env, jobject, jbyteArray spv) {
+Java_com_matthew_rawlens_VfVideoGrade_initGradeNative(JNIEnv* env, jobject, jbyteArray spv) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (g->gradePipeline != VK_NULL_HANDLE) return VFVK_OK;
@@ -156,7 +156,7 @@ Java_com_matthew_rawlens_VfLogGrade_initGradeNative(JNIEnv* env, jobject, jbyteA
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_gradeNative(
+Java_com_matthew_rawlens_VfVideoGrade_gradeNative(
     JNIEnv* env, jobject, jobject inBuffer, jobject outBuffer,
     jintArray idims, jfloatArray fparams) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
@@ -278,7 +278,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeNative(
     return VFVK_OK;
 }
 
-// ---- Wait-free submit twins (Direct-Log): same queue, ordered submits,
+// ---- Wait-free submit twins (Encoded Video): same queue, ordered submits,
 // no vkQueueWaitIdle. The consumer synchronizes via an exported sync fd
 // (grade) or queue order (compute feeding grade). Blocking originals above
 // are untouched (viewfinder + fallback path). ----
@@ -549,7 +549,7 @@ Java_com_matthew_rawlens_VfVulkan_computeSubmitNative(
 // blocking gradeNative). The exported fd owns the signal; the VkSemaphore is
 // destroyed after export.
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_gradeSubmitNative(
+Java_com_matthew_rawlens_VfVideoGrade_gradeSubmitNative(
     JNIEnv* env, jobject, jobject inBuffer, jobject outBuffer,
     jintArray idims, jfloatArray fparams, jint slot) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);

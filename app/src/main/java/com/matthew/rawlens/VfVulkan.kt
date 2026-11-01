@@ -102,7 +102,7 @@ internal object VfVulkan {
     external fun setPipelineCachePathNative(path: String)
 
     /**
-     * Create the Direct-Log f16 superpixel variant (same bindings, rgba16f
+     * Create the Encoded Video f16 superpixel variant (same bindings, rgba16f
      * store) on the shared device. Idempotent. The viewfinder never calls
      * this; wait-free twins bind it via scope swap.
      */
@@ -208,7 +208,7 @@ internal object VfVulkan {
     /**
      * Wait-free twin of [computeNative]: submits without
      * `vkQueueWaitIdle`. Correct only when the consumer submit follows on
-     * the same queue ([VfLogGrade.gradeSubmitNative]) or otherwise carries
+     * the same queue ([VfVideoGrade.gradeSubmitNative]) or otherwise carries
      * completion (fd handoff). [slot] selects the ping-pong command buffer
      * (0/1); reuse must stay gated by the caller's EGL fence. [expBuffer]
      * is imported into recorder-private state (never evicts the
@@ -235,7 +235,7 @@ internal object VfVulkan {
     /**
      * True when the shared device enabled shaderFloat16
      * (VK_KHR_shader_float16_int8): the fused record kernel then runs its
-     * fp16 SPIR-V ([VfLogGrade.fusedAsset]), else the fp32 twin. False
+     * fp16 SPIR-V ([VfVideoGrade.fusedAsset]), else the fp32 twin. False
      * before [initNative].
      */
     external fun supportsF16MathNative(): Boolean

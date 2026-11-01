@@ -17,16 +17,16 @@ import android.view.Surface
  * EGL-imported with the exact [VfEglImport] path the viewfinder uses and
  * textured onto the encoder surface. No camera involved.
  *
- * Proves the AHB->encoder handoff the Direct-Log GPU stage needs; the only
+ * Proves the AHB->encoder handoff the Encoded Video GPU stage needs; the only
  * later swap is filling the AHB from `VfVulkan.computeNative` instead of
  * the CPU pattern.
  */
 object AhbEncoderBridge {
     data class Params(
-        val width: Int = LogVideoProbe.WIDTH,
-        val height: Int = LogVideoProbe.HEIGHT,
-        val fps: Int = LogVideoProbe.FPS,
-        val bitrate: Int = LogVideoProbe.BITRATE,
+        val width: Int = EncodedVideoProbe.WIDTH,
+        val height: Int = EncodedVideoProbe.HEIGHT,
+        val fps: Int = EncodedVideoProbe.FPS,
+        val bitrate: Int = EncodedVideoProbe.BITRATE,
         val frames: Int = 90,
         /** Synthetic export size; blit stretches to encoder size. */
         val ahbWidth: Int = 1920,
@@ -59,14 +59,14 @@ object AhbEncoderBridge {
         var program = 0
         var texture = 0
         return try {
-            val name = p.codecName ?: LogVideoProbe.preferredHwEncoder()
+            val name = p.codecName ?: EncodedVideoProbe.preferredHwEncoder()
                 ?: return BridgeReport(error = "no HW HEVC 4K30 Surface encoder")
-            val target = LogVideoProbe.Target(
+            val target = EncodedVideoProbe.Target(
                 width = p.width, height = p.height, fps = p.fps, bitrate = p.bitrate
             )
             codec = MediaCodec.createByCodecName(name)
             codec.configure(
-                LogVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
+                EncodedVideoProbe.toMediaFormat(target), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE
             )
             surface = codec.createInputSurface()
             egl = EglPusher(surface)
@@ -136,7 +136,7 @@ object AhbEncoderBridge {
                     VfEglImport.destroyEGLImage(image)
                 }
                 val f2 = android.os.SystemClock.elapsedRealtimeNanos()
-                egl.setPresentationTime(LogVideoProbe.framePtsNs(i, p.fps))
+                egl.setPresentationTime(EncodedVideoProbe.framePtsNs(i, p.fps))
                 egl.swap()
                 submitted++
                 val fillMs = (f1 - f0) / 1e6f
@@ -175,7 +175,7 @@ object AhbEncoderBridge {
                     bufs.get() == 0 -> "no output"
                     outProfile.get() != null &&
                         outProfile.get() != android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ->
-                        "output ${LogVideoProbe.profileLabel(outProfile.get()!!)} != Main10"
+                        "output ${EncodedVideoProbe.profileLabel(outProfile.get()!!)} != Main10"
                     else -> null
                 }
             )
@@ -198,7 +198,7 @@ object AhbEncoderBridge {
 
     private fun dumpOut(fmt: MediaFormat): String {
         fun gi(k: String) = runCatching { fmt.getInteger(k).toString() }.getOrNull() ?: "?"
-        return "profile=${runCatching { LogVideoProbe.profileLabel(fmt.getInteger(MediaFormat.KEY_PROFILE)) }.getOrNull() ?: "?"} " +
+        return "profile=${runCatching { EncodedVideoProbe.profileLabel(fmt.getInteger(MediaFormat.KEY_PROFILE)) }.getOrNull() ?: "?"} " +
             "${gi(MediaFormat.KEY_WIDTH)}x${gi(MediaFormat.KEY_HEIGHT)}"
     }
 

@@ -64,7 +64,7 @@ class RefactorDeviceChecksTest {
         assertTrue(label, check())
     }
 
-    private fun touchFocus(): TouchFocus = field(controller, "touchFocus") as TouchFocus
+    private fun touchFocus(): PhotoAutoFocus = field(controller, "touchFocus") as PhotoAutoFocus
 
     @Test
     fun touchFocusReachesVerdictHoldsAndReleases() {
@@ -76,15 +76,128 @@ class RefactorDeviceChecksTest {
         await("tap scan never reached a verdict", 6_000) { touchFocus().completed || !touchFocus().active }
         Log.i(TAG, "tap verdict: active=${touchFocus().active} completed=${touchFocus().completed}")
 
-        SystemClock.sleep(400) // past AutoFocusPolicy.TAP_BOUNCE_MS
+        await("timed tap did not return to continuous AF", 12_000) { !touchFocus().active }
         controller.setFocusAndMeteringHold(cx + 200f, cy)
         await("hold never froze AE", 3_000) { touchFocus().aeLockIndefinite }
         await("hold scan never reached a verdict", 6_000) { touchFocus().completed }
         assertTrue("hold must keep AE locked after its verdict", touchFocus().aeLockIndefinite)
+        SystemClock.sleep(PhotoAutoFocus.LOCK_HOLD_MS + 500L)
+        assertTrue("long press expired like a timed tap", touchFocus().active)
 
         controller.resetMeteringTargets()
         await("reset did not release to continuous AF", 3_000) {
             !touchFocus().active && !touchFocus().aeLockIndefinite
+        }
+    }
+
+    private fun <T> cameraRead(block: () -> T): T {
+        val answer = java.util.concurrent.CompletableFuture<T>()
+        val handler = field(controller, "cameraHandler") as android.os.Handler
+        handler.post {
+            try { answer.complete(block()) } catch (failure: Throwable) {
+                answer.completeExceptionally(failure)
+            }
+        }
+        return answer.get(5, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    /** Opt-in acceptance of the production controller, including a normal ISP preview. */
+    @Test
+    fun photoAfPreviewAndExposureMatrix() {
+        val report = StringBuilder()
+        fun note(line: String) {
+            report.appendLine(line)
+            Log.i("RawLensCamera", "AF acceptance $line")
+        }
+        fun latest() = cameraRead {
+            field(controller, "latestPreviewResult") as? android.hardware.camera2.TotalCaptureResult
+        }
+        fun afMode() = latest()?.get(android.hardware.camera2.CaptureResult.CONTROL_AF_MODE)
+        fun sample(label: String, durationMs: Long) {
+            val end = SystemClock.elapsedRealtime() + durationMs
+            var previousFrame = -1L
+            while (SystemClock.elapsedRealtime() < end) {
+                latest()?.let { r ->
+                    if (r.frameNumber > previousFrame) {
+                        previousFrame = r.frameNumber
+                        note("$label t=${SystemClock.elapsedRealtime()} frame=${r.frameNumber}" +
+                            " mode=${r.get(android.hardware.camera2.CaptureResult.CONTROL_AF_MODE)}" +
+                            " state=${r.get(android.hardware.camera2.CaptureResult.CONTROL_AF_STATE)}" +
+                            " fd=${r.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE)}" +
+                            " ae=${r.get(android.hardware.camera2.CaptureResult.CONTROL_AE_MODE)}")
+                    }
+                }
+                SystemClock.sleep(100)
+            }
+        }
+        val id = cameraRead { field(controller, "selectedCameraId") as String }
+        val originalMode = cameraRead { field(controller, "captureExposureMode") as CaptureExposureMode }
+        val originalFocus = cameraRead { field(controller, "selectedFocusDistanceDiopters") as? Float }
+        val prefs = context.getSharedPreferences("raw_isp_preview_request", Context.MODE_PRIVATE)
+        val key = "needs_preview_request_v2_$id"
+        val hadKey = prefs.contains(key)
+        val originalPreviewRequired = prefs.getBoolean(key, false)
+        val vf = activity.findViewById<android.view.View>(R.id.viewfinder)
+        val cx = vf.width / 2f
+        val cy = vf.height / 2f
+        try {
+            controller.setManualControl(ManualControl.FOCUS_DISTANCE, null)
+            controller.setCaptureExposureMode(CaptureExposureMode.AUTO)
+            await("continuous-picture never appeared", 5_000) {
+                afMode() == android.hardware.camera2.CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            }
+            sample("raw-idle-move-target", 12_000)
+            val oldSession = cameraRead { session() }
+            // Exercise the preview-required branch without persisting a guessed device quirk.
+            prefs.edit().putBoolean(key, true).commit()
+            cameraRead {
+                (field(controller, "ladder") as SessionLadder).comboIndex = 0
+                controller.javaClass.getDeclaredMethod("restartCameraForConfigurationChange")
+                    .apply { isAccessible = true }.invoke(controller)
+            }
+            await("normal-preview session did not configure", 30_000) {
+                cameraRead { session() != null && session() !== oldSession }
+            }
+            await("normal-preview session produced no metadata", 8_000) { latest() != null }
+            val preview = cameraRead { field(controller, "previewSize") as? android.util.Size }
+            assertTrue("preview-required branch fell back to RAW-only", preview != null)
+            assertTrue("ISP preview is a low-resolution placeholder: $preview",
+                maxOf(preview!!.width, preview.height) >= 1280 &&
+                    minOf(preview.width, preview.height) >= 720)
+            note("NORMAL_PREVIEW camera=$id size=$preview")
+            sample("isp-idle-move-target", 8_000)
+            for (mode in listOf(CaptureExposureMode.AUTO, CaptureExposureMode.PROGRAM,
+                CaptureExposureMode.MANUAL)) {
+                controller.resetMeteringTargets()
+                controller.setCaptureExposureMode(mode)
+                SystemClock.sleep(1200)
+                note("EXPOSURE $mode")
+                repeat(3) { i ->
+                    controller.setFocusAndMeteringPoint(cx + (i - 1) * 100f, cy)
+                    SystemClock.sleep(100)
+                }
+                await("retap scan never completed in $mode", 5_000) {
+                    cameraRead { touchFocus().completed || !touchFocus().active }
+                }
+                val result = latest()
+                note("VERDICT $mode active=${cameraRead { touchFocus().active }}" +
+                    " state=${result?.get(android.hardware.camera2.CaptureResult.CONTROL_AF_STATE)}" +
+                    " mode=${result?.get(android.hardware.camera2.CaptureResult.CONTROL_AF_MODE)}")
+                sample("$mode-after-taps", 500)
+                controller.resetMeteringTargets()
+                await("reset did not restore continuous-picture in $mode", 4_000) {
+                    afMode() == android.hardware.camera2.CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                }
+            }
+        } finally {
+            if (hadKey) prefs.edit().putBoolean(key, originalPreviewRequired).commit()
+            else prefs.edit().remove(key).commit()
+            controller.resetMeteringTargets()
+            controller.setCaptureExposureMode(originalMode)
+            controller.setManualControl(ManualControl.FOCUS_DISTANCE,
+                originalFocus?.let { (it * 1000f).toLong() })
+            java.io.File(context.getExternalFilesDir(null), "photo-af-device-acceptance.txt")
+                .writeText(report.toString())
         }
     }
 

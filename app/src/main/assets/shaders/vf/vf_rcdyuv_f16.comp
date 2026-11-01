@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log FUSED RCD record stage, float16-math variant of
+// Encoded Video FUSED RCD record stage, float16-math variant of
 // vf_rcdyuv.comp: identical structure and op order, all computed values
 // in float16_t (GL_EXT_shader_explicit_arithmetic_types_float16; needs
 // the VK_KHR_shader_float16_int8 device feature + shaderFloat16). The

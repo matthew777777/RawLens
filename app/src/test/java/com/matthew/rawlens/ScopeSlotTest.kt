@@ -62,7 +62,7 @@ class ScopeSlotTest {
     }
 
     @Test fun `stacked video seat clears ev row when rotated`() {
-        // DirectLog: scope floats above the 68dp EV slider row (+12 gap);
+        // EncodedVideo: scope floats above the 68dp EV slider row (+12 gap);
         // the rotation inset keeps the rotated visual bottom clear of it.
         val margin = ScopeSlot.bottomMarginPx(true, 124, 64, 232 + 16 + 68 + 12)
         assertEquals(232 + 16 + 68 + 12 + 30, margin)

@@ -559,7 +559,7 @@ void destroyStab(Context* ctx) {
 }
 
 // Baked grade warp LUT: 129-entry 1D RGBA16F over a log2 lattice
-// ([2^-10, 2^4]; see VfLogGrade.bakeLut), stored as a 129x1x1 3D image
+// ([2^-10, 2^4]; see VfVideoGrade.bakeLut), stored as a 129x1x1 3D image
 // so the existing sampler path just works (the v/w fetch at 0.5
 // degrades trilinear to a 1D linear interp, ~0.07% error). Created
 // lazily on first upload (optimal-tiled, device-local, staging

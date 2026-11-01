@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong
  * image from `sensorOrientation` / `lensFacing`. RAW takes recorded before
  * this carry `gyroMapperVersion: 1` and mapped gyro, which readers undo.
  * [mapGyroToCamera] maps gyro with [GyroCameraFrameMapper] for consumers of
- * that pipeline's camera frame (the Direct Log stabilization table).
+ * that pipeline's camera frame (the Encoded Video stabilization table).
  */
 internal class MotionRecorder(
     context: Context,

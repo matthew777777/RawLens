@@ -55,7 +55,7 @@ class VideoScopeSeatTest {
             assertScopeAbovePanel(activity, "photo")
 
             // Enter video; the seat re-settles above the panel (and above
-            // the DirectLog slider row when it shows) after layout.
+            // the EncodedVideo slider row when it shows) after layout.
             instrumentation.runOnMainSync { view(R.id.videoRecordButton).performClick() }
             SystemClock.sleep(1500)
             instrumentation.runOnMainSync {
@@ -102,7 +102,7 @@ class VideoScopeSeatTest {
                 "Scope behind panel in $where: scopeBottom=${scope.bottom} panelTop=${panel.top}",
                 scope.bottom <= panel.top
             )
-            // (The Direct-Log VF slider this also cleared is gone: LOG gain
+            // (The Encoded Video VF slider this also cleared is gone: LOG gain
             // lives in the Settings Video tab now.)
         }
     }

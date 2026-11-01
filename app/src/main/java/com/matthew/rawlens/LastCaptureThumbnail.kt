@@ -22,7 +22,7 @@ import java.util.concurrent.Executors
  * Bottom-panel gallery seat: the newest finished RawLens capture (photo or
  * video under DCIM/RawLens) as a thumbnail, refreshed whenever MediaStore
  * changes. Every saver publishes through MediaStore with IS_PENDING, so one
- * observer covers DNG, developed JPEG/JXL, CRAW and Direct-Log without
+ * observer covers DNG, developed JPEG/JXL, CRAW and Encoded Video without
  * touching the capture paths. Captures exported only to a SAF tree are not
  * indexed and never show here.
  */

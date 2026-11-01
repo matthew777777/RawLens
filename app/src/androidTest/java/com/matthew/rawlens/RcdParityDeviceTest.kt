@@ -32,11 +32,11 @@ class RcdParityDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val rcdspv = args.getString("rcdShaderPath")?.let { java.io.File(it).readBytes() }
             ?: context.assets.open("shaders/vf/vf_rcd.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "rcd init failed" }
 
         if (args.getString("rcdBenchmarkOnly") != "true") {
@@ -69,18 +69,18 @@ class RcdParityDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val yuvspv = context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
         val rcdspv = context.assets.open(VfRcd.rcdAsset(f16)).use { it.readBytes() }
         val rcdyuvspv = context.assets.open(VfRcd.rcdYuvAsset(f16)).use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
         check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "rcd init failed" }
         check(VfRcd.initRcdYuvNative(rcdyuvspv) == VfVulkan.OK) { "rcd-yuv init failed" }
         check(
-            VfLogGrade.gradeLutUploadNative(
-                VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)
+            VfVideoGrade.gradeLutUploadNative(
+                VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST)
             ) == VfVulkan.OK
         ) { "lut upload failed" }
 
@@ -150,10 +150,10 @@ class RcdParityDeviceTest {
             val layout = VfEglImport.describeP010(pSplit!!)
             assumeTrue("P010 describe failed", layout != null)
             val strides = intArrayOf(layout!![0], layout[1], ew, eh)
-            val (gidims, gfparams) = VfLogGrade.packGrade(
+            val (gidims, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(ew, eh),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val src = intArrayOf(cw, ch)
@@ -166,7 +166,7 @@ class RcdParityDeviceTest {
             assumeTrue("split mode 3 failed: $m3fd", m3fd >= 0)
             assumeTrue("split mode 3 never completed", pollFd(m3fd))
             VfEglImport.closeSyncFd(m3fd)
-            val gfd = VfLogGrade.gradeYuvSubmitNative(
+            val gfd = VfVideoGrade.gradeYuvSubmitNative(
                 rgb, pSplit, gidims, src, gfparams, strides, 0, 1
             )
             assumeTrue("split grade failed: $gfd", gfd >= 0)
@@ -251,18 +251,18 @@ class RcdParityDeviceTest {
         val white = 1023f
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val yuvspv = context.assets.open("shaders/vf/vf_gradeyuv.spv").use { it.readBytes() }
         val rcdspv = context.assets.open(VfRcd.rcdAsset(false)).use { it.readBytes() }
         val rcdyuvspv = context.assets.open(VfRcd.rcdYuvAsset(false)).use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
-        check(VfLogGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeYuvNative(yuvspv) == VfVulkan.OK) { "yuv init failed" }
         check(VfRcd.initRcdNative(rcdspv) == VfVulkan.OK) { "rcd init failed" }
         check(VfRcd.initRcdYuvNative(rcdyuvspv) == VfVulkan.OK) { "rcd-yuv init failed" }
         check(
-            VfLogGrade.gradeLutUploadNative(
-                VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)
+            VfVideoGrade.gradeLutUploadNative(
+                VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST)
             ) == VfVulkan.OK
         ) { "lut upload failed" }
 
@@ -446,10 +446,10 @@ class RcdParityDeviceTest {
             val layout = VfEglImport.describeP010(p010!!)
             assumeTrue("P010 describe failed", layout != null)
             val strides = intArrayOf(layout!![0], layout[1], w, h)
-            val (gidims, gfparams) = VfLogGrade.packGrade(
+            val (gidims, gfparams) = VfVideoGrade.packGrade(
                 intArrayOf(w, h),
                 floatArrayOf(1f, 1f, 1f, 1f),
-                VfLogGrade.IDENTITY_CCM,
+                VfVideoGrade.IDENTITY_CCM,
                 0f, false
             )
             val src = intArrayOf(w, h)

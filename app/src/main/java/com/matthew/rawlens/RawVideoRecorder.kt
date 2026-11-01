@@ -275,6 +275,7 @@ internal class RawVideoRecorder(
         try { onRecordingError?.invoke(error.message ?: "Recording destination failed") } catch (_: Exception) {}
     }
     private var startRealtimeMs: Long = 0L
+    private val encodeFailureStreak = java.util.concurrent.atomic.AtomicInteger()
 
     private data class EncodeTask(
         val seq: Long,
@@ -410,6 +411,7 @@ internal class RawVideoRecorder(
         outputFile = output
         acquired.set(0)
         encoded.set(0)
+        encodeFailureStreak.set(0)
         dropped.set(0)
         commitSkipped.set(0)
         latePurged.set(0)
@@ -593,7 +595,8 @@ internal class RawVideoRecorder(
                 if (onFocusPeaking != null) {
                     RawImageOwnership.adopt(img, rd)
                     recordingPeaking.offer(img, chars,
-                        focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking)
+                        focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking,
+                        result = synchronized(resultLock) { captureResults[img.timestamp] })
                 }
                 if (rawExposureSettings.enabled) {
                     RawImageOwnership.adopt(img, rd)
@@ -685,7 +688,7 @@ internal class RawVideoRecorder(
                 addTarget(r.surface)
                 applyVideoManualToRequest(this, charsAtStart)
             }.build()
-            val afTrace = AfTrace(TAG, "RAW video")
+            val afTrace = AfTrace(TAG, "RAW Video")
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(session: CameraCaptureSession,
                     request: CaptureRequest, result: TotalCaptureResult) {
@@ -899,11 +902,11 @@ internal class RawVideoRecorder(
         builder: CaptureRequest.Builder,
         chars: CameraCharacteristics,
     ) {
-        // V3 (docs/refactor/video-study.md): same pick as DirectLogRecorder.
+        // V3 (docs/refactor/video-study.md): same pick as EncodedVideoRecorder.
         // Exact (FPS, FPS) whenever advertised, so every device that worked
         // before gets the identical request; otherwise the narrowest range
         // containing FPS instead of an unadvertised fixed range.
-        val picked = LogVideoProbe.fixedFpsRange(
+        val picked = EncodedVideoProbe.fixedFpsRange(
             FPS,
             chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.map { it.lower to it.upper } ?: emptyList()
@@ -978,6 +981,7 @@ internal class RawVideoRecorder(
             val task = item as EncodeTask
             inflightSeq.set(index, task.seq)
             var buf: java.nio.ByteBuffer? = null
+            var stage = "payload checkout"
             try {
                 // Non-blocking checkout: if every buffer is pinned behind a
                 // missing head, drop this frame instead of wedging forever.
@@ -994,6 +998,7 @@ internal class RawVideoRecorder(
                     continue
                 }
                 val t0 = SystemClock.elapsedRealtimeNanos()
+                stage = "RAW encoding"
                 val bytes = CrawWriter.encodeFrame(
                     task.src, task.size, task.width, task.height, task.stride,
                     task.cropTop, task.cropHeight, buf, binActive, binCfa, crawBitDepth,
@@ -1008,6 +1013,7 @@ internal class RawVideoRecorder(
                 // Image and result callbacks can arrive in either order. Only write
                 // calibration from this exact exposure, never a stale AWB result.
                 val wait0 = SystemClock.elapsedRealtimeNanos()
+                stage = "capture-result pairing"
                 val result = synchronized(resultLock) {
                     val deadline = SystemClock.elapsedRealtime() + 100
                     while (!captureResults.containsKey(task.timestampNs)) {
@@ -1022,6 +1028,7 @@ internal class RawVideoRecorder(
                     if (resultWaitMsAvg == 0f) waitMs else resultWaitMsAvg * 0.95f + waitMs * 0.05f
                 resultWaitMsMax =
                     if (waitMs > resultWaitMsMax) waitMs else resultWaitMsMax * 0.999f + waitMs * 0.001f
+                stage = "frame metadata"
                 val frameJson =
                     CrawMetadata.frame(task.frameJson, result, timeOriginNs)
                 buf.flip()
@@ -1032,10 +1039,21 @@ internal class RawVideoRecorder(
                     reorderLock.notifyAll()
                 }
                 encoded.incrementAndGet()
+                encodeFailureStreak.set(0)
                 MemoryLeakDiagnostics.rawVideoFrame()
             } catch (e: Exception) {
-                Log.w(TAG, "frame encode failed: ${e.message}")
+                val streak = encodeFailureStreak.incrementAndGet()
+                dropped.incrementAndGet()
+                // The Xiaomi report contained only an NPE message, hiding
+                // whether native encoding or optional metadata failed. Keep
+                // the first full stack and stage without flooding each frame.
+                if (streak == 1 || streak % 30 == 0) {
+                    Log.w(TAG, "frame failed at $stage seq=${task.seq} ts=${task.timestampNs}: ${e.message}", e)
+                }
                 buf?.let { it.clear(); payloadPool.offer(it) }
+                if (streak >= 10) {
+                    failRecording(java.io.IOException("RAW Video failed at $stage: ${e.message}", e))
+                }
             } finally {
                 inflightSeq.set(index, -1L)
                 // Registry-aware: closes directly when never adopted for
@@ -1379,7 +1397,7 @@ internal class RawVideoRecorder(
 
     private val videoRoute: VideoCameraRoute by lazy {
         requireNotNull(resolveVideoCameraRoute(cameraManager, cameraId)) {
-            "RAW video route $cameraId is unavailable"
+            "RAW Video route $cameraId is unavailable"
         }
     }
 

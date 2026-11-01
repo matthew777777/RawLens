@@ -174,6 +174,9 @@ class MainActivity : Activity() {
     private val quickAutoHide = Runnable { hideQuickControls() }
     /** True from a dismissing touch-down until its gesture ends. */
     private var swallowQuickDismissGesture = false
+    private var quickDismissDownX = 0f
+    private var quickDismissDownY = 0f
+    private var quickDismissAllowsSwipe = false
     /** Video light (quick-panel TORCH tile); off on every video exit. */
     private var videoTorchOn = false
     private var lastPhotoExposureMode = CaptureExposureMode.AUTO
@@ -181,16 +184,16 @@ class MainActivity : Activity() {
     private var modeBeforeHdrPlus: CaptureExposureMode? = null
     internal var videoRecorder: RawVideoRecorder? = null
     internal var videoRecording = false
-    /** Direct-Log take state. Only one of [videoRecorder]/[logRecorder] is ever active. */
-    internal var logRecorder: DirectLogRecorder? = null
+    /** Encoded Video take state. Only one of [videoRecorder]/[encodedVideoRecorder] is ever active. */
+    internal var encodedVideoRecorder: EncodedVideoRecorder? = null
     /**
-     * Last closed Direct-Log take's stats (null while rolling): lets
+     * Last closed Encoded Video take's stats (null while rolling): lets
      * device tests assert take health (drops, over-budget frames,
      * shading) without parsing logcat. Written on the UI thread.
      */
-    var lastDirectLogStats: DirectLogRecorder.Stats? = null
+    var lastEncodedVideoStats: EncodedVideoRecorder.Stats? = null
         private set
-    internal var directLogEnabled = false
+    internal var encodedVideoEnabled = false
     /** True when the shared folder picker was opened to rescue staged video. */
     private var recordingDestination: DirectRecordingOutput? = null
     private var folderPickerForVideo = false
@@ -393,6 +396,10 @@ class MainActivity : Activity() {
         histogramView = findViewById(R.id.histogramView)
         waveformView = findViewById(R.id.waveformView)
         quickPanel = findViewById(R.id.quickSettingsPanel)
+        quickPanel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            positionQuickPanel()
+            updateOverlayStack()
+        }
         gridQuick = findViewById(R.id.gridQuick)
         histogramQuick = findViewById(R.id.histogramQuick)
         levelQuick = findViewById(R.id.levelQuick)
@@ -704,15 +711,13 @@ class MainActivity : Activity() {
         // (size-guarded, so margin-only layouts never recurse).
         videoDebugOverlay.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob ->
             if ((r - l) != (orr - ol) || (b - t) != (ob - ot)) {
-                if (isVideoMode && (deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270)) {
-                    positionWholeRotatedPanels()
-                }
+                if (isVideoMode) positionWholeRotatedPanels()
             }
         }
         videoCrop = runCatching {
             VideoCrop.valueOf(lensPreferences().getString(KEY_VIDEO_CROP, null) ?: "")
         }.getOrDefault(VideoCrop.OPEN_GATE)
-        directLogEnabled = lensPreferences().getBoolean(KEY_DIRECT_LOG, false)
+        encodedVideoEnabled = lensPreferences().getBoolean(KEY_ENCODED_VIDEO, false)
         // The audio line lives inside the stats box now: tap the box to mute.
         videoDebugOverlay.isClickable = true
         videoDebugOverlay.isFocusable = true
@@ -839,13 +844,13 @@ class MainActivity : Activity() {
         hdrQuick.setOnClickListener { toggleHdrEnabled() }
         timerQuick.setOnClickListener { cycleTimer() }
         releaseQuick.setOnLongClickListener {
-            if (isVideoMode && directLogEnabled) { cycleVideoCrop(); true } else false
+            if (isVideoMode && encodedVideoEnabled) { cycleVideoCrop(); true } else false
         }
         releaseQuick.setOnClickListener {
             if (isVideoMode) {
                 // Tap selects the output profile; hold selects the crop. The tile switches
                 // the output profile instead, like CROP on the CRAW path.
-                if (directLogEnabled) cycleDirectLogProfile() else cycleVideoCrop()
+                if (encodedVideoEnabled) cycleEncodedVideoProfile() else cycleVideoCrop()
             } else toggleReleaseMode()
         }
         findViewById<View>(R.id.resetTargetsQuick).setOnClickListener {
@@ -858,9 +863,7 @@ class MainActivity : Activity() {
             hideQuickControls()
         }
         findViewById<View>(R.id.settingsButton).setOnClickListener {
-            hideManualControl()
-            // Video keeps the photo top island: its gear lands on the Video tab.
-            if (isVideoMode) showSettings(SETTINGS_VIDEO_TAB) else showSettings()
+            openPreviewPanel(PreviewPanelSwipe.Action.SETTINGS)
         }
     }
 
@@ -895,6 +898,7 @@ class MainActivity : Activity() {
         }
         meteringOverlay.onTargetsCleared = controller::resetMeteringTargets
         meteringOverlay.onOverlayTouched = { closeFloatingPanels() }
+        meteringOverlay.onPanelSwipe = ::openPreviewPanel
         manualSlider.max = SLIDER_STEPS
         manualSlider.onProgressChanged = { progress, fromUser ->
             if (fromUser) {
@@ -1033,7 +1037,7 @@ class MainActivity : Activity() {
             val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
             if (videoStartPending) {
                 videoStartPending = false
-                if (directLogEnabled) doStartDirectLog(withAudio = granted)
+                if (encodedVideoEnabled) doStartEncodedVideo(withAudio = granted)
                 else doStartVideo(withAudio = granted)
             } else {
                 setStatus(if (granted) "MIC ON" else "MIC OFF • SILENT")
@@ -1069,8 +1073,8 @@ class MainActivity : Activity() {
     @Deprecated("Use picker intent result for the sidecar folder grant")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == DirectLogLutLibrary.PICK_REQUEST) {
-            handleDirectLogLutResult(resultCode, data)
+        if (requestCode == EncodedVideoLutLibrary.PICK_REQUEST) {
+            handleEncodedVideoLutResult(resultCode, data)
             return
         }
         if (requestCode == SETTINGS_EXPORT_REQUEST) {
@@ -1196,7 +1200,7 @@ class MainActivity : Activity() {
         // The recorder owns the camera while video state exists (rolling or
         // stopping): a stills start here would STEAL the session and kill the
         // take silently (no frames, audio keeps running). Never touch it.
-        if (videoRecording || videoRecorder != null || logRecorder != null) {
+        if (videoRecording || videoRecorder != null || encodedVideoRecorder != null) {
             Log.i(LOG_TAG, "startCameraWhenReady suppressed: video owns camera")
             return
         }
@@ -1250,10 +1254,11 @@ class MainActivity : Activity() {
     private fun citizenshipExtra(): String = runCatching {
         "camera=${if (controller.isRunning()) "open" else "closed"} " +
             "gps=${if (gpsProvider?.isRunning() == true) "on" else "off"} " +
-            "video=$videoRecording dlog=${logRecorder != null} rawvid=${videoRecorder != null}"
+            "video=$videoRecording encodedVideo=${encodedVideoRecorder != null} rawvid=${videoRecorder != null}"
     }.getOrDefault("camera=? gps=?")
 
     override fun onDestroy() {
+        gpsProvider?.close()
         lensDiscovery.close()
         if (::lastCapture.isInitialized) lastCapture.release()
         // Safety net only (onPause already stops cleanly): never leak the
@@ -1265,15 +1270,15 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
         }
         try {
-            logRecorder?.stop()
+            encodedVideoRecorder?.stop()
         } catch (_: Exception) {
         }
         videoRecorder = null
-        logRecorder = null
+        encodedVideoRecorder = null
         controller.destroy()
         findViewById<RawViewfinder>(R.id.rawViewfinder).dispose()
         findViewById<BguViewfinder>(R.id.bguViewfinder)?.dispose()
-        findViewById<DirectLogPreviewView>(R.id.recordPreview)?.dispose()
+        findViewById<EncodedVideoPreviewView>(R.id.recordPreview)?.dispose()
         MemoryLeakDiagnostics.stopPeriodic()
         MemoryLeakDiagnostics.dumpReport()
         MemoryLeakDiagnostics.sample("activity-destroyed")
@@ -1334,7 +1339,7 @@ class MainActivity : Activity() {
         // (16dp, shared top and bottom): the minimum that fills the curves
         // with picture instead of root black.
         val sealOverlap = dp(16)
-        // Photo, RAW video and Direct-Log share one 3:4 viewport between the
+        // Photo, RAW video and Encoded Video share one 3:4 viewport between the
         // same two islands, so the frame never moves on the mode switch.
         val noTopIsland = topBar.visibility != View.VISIBLE
         val viewfinderParams = FrameLayout.LayoutParams(viewfinder.layoutParams as FrameLayout.LayoutParams).apply {
@@ -1428,10 +1433,8 @@ class MainActivity : Activity() {
 
     private fun applyDeviceOrientation(degrees: Int, animate: Boolean) {
         deviceOrientationDegrees = degrees
+        if (::meteringOverlay.isInitialized) meteringOverlay.panelGestureOrientationDegrees = degrees
         if (::controller.isInitialized) controller.onDeviceOrientationChanged(degrees)
-        // World-horizontal video letterbox (the overlay canvas is
-        // portrait-locked, so landscape draws side bars).
-        if (::guideOverlay.isInitialized) guideOverlay.videoOrientationDegrees = degrees
 
         // Keep a single portrait activity/camera session.  Every foreground control rotates
         // around its own center, while its position and touch target remain stable.
@@ -1470,7 +1473,13 @@ class MainActivity : Activity() {
                     controlRotationDegrees
             }
         }
+        positionQuickPanel()
         positionWholeRotatedPanels()
+    }
+
+    internal fun positionQuickPanel() {
+        if (!::quickPanel.isInitialized || quickPanel.width == 0) return
+        QuickPanelLayout.place(quickPanel, controlRotationDegrees)
     }
 
     /** Keep diagnostics and the scope clear of the top controls and capture panel. */
@@ -1505,6 +1514,7 @@ class MainActivity : Activity() {
         }
         if (::videoDebugOverlay.isInitialized) {
             val vdParams = (videoDebugOverlay.layoutParams as? FrameLayout.LayoutParams)
+                ?.let { FrameLayout.LayoutParams(it) }
                 ?: FrameLayout.LayoutParams(wrapContent(), wrapContent())
             if (quarterTurn) {
                 // Landscape: ride the user's top edge (the portrait side edge
@@ -1521,24 +1531,31 @@ class MainActivity : Activity() {
                     if (videoDebugOverlay.width > videoDebugOverlay.height) {
                         (videoDebugOverlay.width - videoDebugOverlay.height) / 2
                     } else 0
-                val vfTop =
-                    if (::guideOverlay.isInitialized && guideOverlay.height > 0) guideOverlay.top
-                    else dp(96)
-                // Fully below the black top band with breathing room (the
-                // guide rect starts slightly above the visible image).
-                vdParams.topMargin = vfTop + dp(20) + vdSideInset
+                val topBar = findViewById<View>(R.id.topBar)
+                val visibleTop = if (topBar.visibility == View.VISIBLE) topBar.bottom else 0
+                vdParams.topMargin = visibleTop + dp(12) + vdSideInset
                 vdParams.bottomMargin = 0
-                vdParams.marginStart = if (onStart) dp(16) - vdSideInset else 0
-                vdParams.marginEnd = if (onStart) 0 else dp(16) - vdSideInset
+                // Keep measurement margins stable. Negative margins change the
+                // available text width and can trigger repeated wrapping/reseating.
+                vdParams.marginStart = dp(16)
+                vdParams.marginEnd = dp(16)
             } else {
                 vdParams.gravity = Gravity.TOP or Gravity.END
-                vdParams.topMargin = dp(96)
+                val topBar = findViewById<View>(R.id.topBar)
+                vdParams.topMargin = (if (topBar.visibility == View.VISIBLE) topBar.bottom else 0) + dp(12)
                 vdParams.bottomMargin = 0
                 vdParams.marginStart = 0
                 vdParams.marginEnd = dp(16)
             }
-            videoDebugOverlay.layoutParams = vdParams
-            videoDebugOverlay.translationX = 0f
+            setFrameLayoutIfChanged(videoDebugOverlay, vdParams)
+            val rotationInset = if (quarterTurn) {
+                (videoDebugOverlay.width - videoDebugOverlay.height) / 2f
+            } else 0f
+            videoDebugOverlay.translationX = when (deviceOrientationDegrees) {
+                90 -> -rotationInset
+                270 -> rotationInset
+                else -> 0f
+            }
             videoDebugOverlay.translationY = 0f
         }
         // The audio line is part of the stats text now: no separate meter seat.
@@ -1607,21 +1624,11 @@ class MainActivity : Activity() {
         // clip to invisible. Keep horizontal so they stay visible in the top bar.
         // flashControl is GONE (torch lives on the top bar) so it never rotates.
         findViewById(R.id.galleryThumb),
-        // Square 48dp zebra / false-colour toggle: its short label fits rotated.
+        // Rotate this square TextView as a whole: canvas-only rotation clips
+        // the single-line text layout in landscape. Its circular background is invariant.
         findViewById(R.id.rawExposureToggle),
         findViewById(R.id.quickButton), findViewById(R.id.modeButton),
         findViewById(R.id.vfEngineButton),
-        findViewById(R.id.quickPanelTitle), findViewById(R.id.quickPanelHint),
-        findViewById(R.id.gridQuick),
-        findViewById(R.id.histogramQuick), findViewById(R.id.levelQuick),
-        findViewById(R.id.aeMeteringQuick),
-        findViewById(R.id.timerQuick), findViewById(R.id.releaseQuick),
-        findViewById(R.id.resetTargetsQuick), findViewById(R.id.hdrQuick),
-        findViewById(R.id.lightQuick),
-        findViewById(R.id.ettrQuick), findViewById(R.id.dLightingQuick),
-        findViewById(R.id.videoModeQuick), findViewById(R.id.videoBinningQuick),
-        findViewById(R.id.directLogCropQuick), findViewById(R.id.videoResolutionQuick),
-        findViewById(R.id.videoFpsQuick),
         findViewById(R.id.manualLimitsButton),
         findViewById(R.id.manualControlSlider),
         findViewById(R.id.manualAutoButton)
@@ -1715,6 +1722,7 @@ class MainActivity : Activity() {
         if (box.width <= 0 || box.height <= 0) return
         val full = Rect(0, 0, box.width, box.height)
         if (::guideOverlay.isInitialized) {
+            if (vfFrameW > 0 && vfFrameH > 0) guideOverlay.setPreviewFrame(vfFrameW, vfFrameH, vfFrameRot)
             placeOverlayInContent(guideOverlay, box, full)
             guideOverlay.setContentInsets(0, 0, 0)
         }
@@ -1990,7 +1998,7 @@ class MainActivity : Activity() {
         Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
         updateQuickControls()
         closeFloatingPanels()
-        guideOverlay.videoCrop = if (directLogEnabled) directLogCrop() else videoCrop
+        guideOverlay.videoCrop = if (encodedVideoEnabled) encodedVideoCrop() else videoCrop
         guideOverlay.videoActive = true
         // Same chrome as photo: the top island stays (its gear opens the
         // Video tab) and the viewport keeps the photo 3:4 box. Exposure chips (SS/ISO/WB/focus/EV) stay visible
@@ -2002,12 +2010,12 @@ class MainActivity : Activity() {
         refreshVideoAudioDescription()
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
         findViewById<View>(R.id.shutter).contentDescription =
-            if (directLogEnabled) "Record Direct Log video" else "Record RAW video"
+            if (encodedVideoEnabled) "Record Encoded Video" else "Record RAW Video"
         refreshVideoButton()
-        rawBadge.text = if (directLogEnabled) logBadgeLabel() else "CRAW"
+        rawBadge.text = if (encodedVideoEnabled) encodedVideoBadgeLabel() else "RAW Video"
         rawBadge.setTextColor(getColor(R.color.danger))
         findViewById<TextView>(R.id.dngInfo)?.text =
-            if (directLogEnabled) "${directLogProfile().hudLabel} • HEVC10" else "CRAW"
+            if (encodedVideoEnabled) "${encodedVideoProfile().hudLabel} • HEVC10" else "CRAW"
         refreshVideoSensorInfo()
         setStatus("VIDEO READY")
         updateQuickControls()
@@ -2081,11 +2089,11 @@ class MainActivity : Activity() {
             isVideoMode -> {
                 button.background = getDrawable(R.drawable.record_ready)
                 button.contentDescription =
-                    "Video mode on. Tap to go back to photo."
+                    "${if (encodedVideoEnabled) "Encoded Video" else "RAW Video"} mode on. Tap to go back to photo."
             }
             else -> {
                 button.background = getDrawable(R.drawable.video_enter)
-                button.contentDescription = "Enter RAW video mode"
+                button.contentDescription = "Enter ${if (encodedVideoEnabled) "Encoded Video" else "RAW Video"} mode"
             }
         }
     }
@@ -2099,7 +2107,7 @@ class MainActivity : Activity() {
         // A stop drains async (up to ~15s); starting over it would race the
         // container close. LOUD reject, never silent: the user must see why
         // the tap did nothing.
-        if (videoRecorder != null || logRecorder != null) {
+        if (videoRecorder != null || encodedVideoRecorder != null) {
             setStatus("STOPPING…")
             return
         }
@@ -2114,8 +2122,8 @@ class MainActivity : Activity() {
             setStatus("MIC PERMISSION…")
             return
         }
-        if (directLogEnabled) {
-            doStartDirectLog(withAudio = wantAudio)
+        if (encodedVideoEnabled) {
+            doStartEncodedVideo(withAudio = wantAudio)
             return
         }
         doStartVideo(withAudio = wantAudio)
@@ -2221,7 +2229,7 @@ class MainActivity : Activity() {
                 "audio=$withAudio bin=${recorder.binActive} destination=${file.uri}"
         )
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
-        findViewById<View>(R.id.shutter).contentDescription = "Stop RAW video"
+        findViewById<View>(R.id.shutter).contentDescription = "Stop RAW Video"
         refreshVideoButton()
         rawBadge.text = "● REC"
         rawBadge.setTextColor(getColor(R.color.danger))
@@ -2245,14 +2253,14 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Direct-Log take: sensor RAW -> Vulkan demosaic/grade -> HEVC MP4.
+     * Encoded Video take: sensor RAW -> Vulkan demosaic/grade -> HEVC MP4.
      * Writes directly to the selected destination and finalizes it on stop.
      *
      * Live RAW VF during the take, like .craw: frames fan out to the
      * viewfinder while the camera thread records. Safe because the shared
      * native Vulkan context is mutex-serialized across the two threads.
      */
-    private fun doStartDirectLog(withAudio: Boolean) {
+    private fun doStartEncodedVideo(withAudio: Boolean) {
         val manager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
         val cameraId = videoCameraInfo(manager)?.first ?: run {
             setStatus("NO RAW VIDEO CAMERA")
@@ -2265,9 +2273,9 @@ class MainActivity : Activity() {
             .getOrDefault(10_000_000L)
         val meteredFocus = runCatching { controller.snapshotVideoMeteredFocus() }.getOrNull()
         val recordLocks = videoRecordLocks()
-        val profile = directLogProfile()
-        val lutLibrary = DirectLogLutLibrary(this)
-        val bakedLut = if (profile == DirectLogProfile.SLOG3 && lutLibrary.bakeIntoRecording) {
+        val profile = encodedVideoProfile()
+        val lutLibrary = EncodedVideoLutLibrary(this)
+        val bakedLut = if (profile == EncodedVideoProfile.SLOG3 && lutLibrary.bakeIntoRecording) {
             try {
                 requireNotNull(lutLibrary.load()) { "Select an imported cube for recording" }
             } catch (failure: Exception) {
@@ -2287,20 +2295,21 @@ class MainActivity : Activity() {
             controller.start()
             return
         }
-        val recorder = DirectLogRecorder(manager, cameraId, applicationContext).apply {
+        val recorder = EncodedVideoRecorder(manager, cameraId, applicationContext).apply {
+            captureGps = currentGpsLocation()
             audioEnabled = withAudio
             // Direct single-file recording never starts a second re-encode/sidecar.
             stabEnabled = false
-            exposureEv = directLogGainPref()
-            fps = directLogFpsPref()
-            val res = directLogResPref()
+            exposureEv = encodedVideoGainPref()
+            fps = encodedVideoFpsPref()
+            val res = encodedVideoResPref()
             width = res.width
             height = res.height
-            bitrate = LogVideoProbe.defaultBitrateFor(res.width, res.height)
-            logProfile = profile
+            bitrate = EncodedVideoProbe.defaultBitrateFor(res.width, res.height)
+            recordingProfile = profile
             recordLut = bakedLut
             recordLutIntensity = lutLibrary.intensity
-            recordingCrop = directLogCrop()
+            recordingCrop = encodedVideoCrop()
             videoDemosaic = videoDemosaic()
             configureVideoManual(videoSnapshot, meteredIso, meteredShutter, meteredFocus, recordLocks)
             focusPeakingEnabled = this@MainActivity.focusPeakingEnabled
@@ -2312,45 +2321,45 @@ class MainActivity : Activity() {
             attachPreviewDisplay(findViewById(R.id.recordPreview))
         }
         recorder.onRecordingError = { message -> runOnUiThread {
-            if (videoRecording && logRecorder === recorder) {
+            if (videoRecording && encodedVideoRecorder === recorder) {
                 stopVideoRecording()
                 setStatus("RECORDING STOPPED • $message")
             }
         } }
         // Take monitor: overlay the encode pixels (aspect-fit)
         // instead of a separately-demosaiced viewfinder; the RAW VF idles
-        // untouched underneath. Hidden in finishDirectLogStop / on failure.
+        // untouched underneath. Hidden in finishEncodedVideoStop / on failure.
         showRecordPreview()
         try {
             recorder.start(file)
         } catch (e: Exception) {
             hideRecordPreview()
             try { file.finish(false) } catch (_: Exception) {}
-            Log.w(LOG_TAG, "direct-log start failed: ${e.message}")
-            setStatus("LOG FAILED")
+            Log.w(LOG_TAG, "encoded-video start failed: ${e.message}")
+            setStatus("ENCODED VIDEO FAILED")
             controller.start()
             return
         }
-        logRecorder = recorder
+        encodedVideoRecorder = recorder
         recordingDestination = file
         rawExposureOverlay.clear()
         videoRecording = true
         updateQuickControls()
-        lastDirectLogStats = null
-        Log.i(LOG_TAG, "direct-log start ${file.name} destination=${file.uri}")
+        lastEncodedVideoStats = null
+        Log.i(LOG_TAG, "encoded-video start ${file.name} destination=${file.uri}")
         findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_active)
-        findViewById<View>(R.id.shutter).contentDescription = "Stop Direct Log video"
+        findViewById<View>(R.id.shutter).contentDescription = "Stop Encoded Video"
         refreshVideoButton()
-        rawBadge.text = logBadgeLabel(recording = true)
+        rawBadge.text = encodedVideoBadgeLabel(recording = true)
         rawBadge.setTextColor(getColor(R.color.danger))
         refreshVideoAudioDescription()
         setStatus("REC • ${profile.hudLabel} • HEVC10")
         scheduleVideoHud()
         window.decorView.postDelayed({
-            if (videoRecording && logRecorder === recorder &&
+            if (videoRecording && encodedVideoRecorder === recorder &&
                 recorder.snapshot().framesGraded == 0
             ) {
-                Log.w(LOG_TAG, "direct-log abort: no frames graded in 2.5s")
+                Log.w(LOG_TAG, "encoded-video abort: no frames graded in 2.5s")
                 stopVideoRecording()
                 setStatus("NO FRAMES • STOPPED")
             }
@@ -2361,7 +2370,7 @@ class MainActivity : Activity() {
         runOnUiThread {
             if (!videoRecording) return@runOnUiThread
             val manual = videoRecorder?.videoManual?.focusDiopters != null ||
-                logRecorder?.videoManual?.focusDiopters != null
+                encodedVideoRecorder?.videoManual?.focusDiopters != null
             val show = focusPeakingEnabled && manual && frame != null
             setFocusPeakingVisible(show)
             if (show && frame != null) {
@@ -2378,13 +2387,13 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Overlay the Direct-Log take monitor on the RAW viewfinder's rect
+     * Overlay the Encoded Video take monitor on the RAW viewfinder's rect
      * (same size/position, so overlays stay aligned; the monitor
      * aspect-fits the 16:9 encode inside it). The RAW VF is never
      * hidden or resized — it simply idles without offers underneath.
      */
     private fun showRecordPreview() {
-        val preview = findViewById<DirectLogPreviewView>(R.id.recordPreview) ?: return
+        val preview = findViewById<EncodedVideoPreviewView>(R.id.recordPreview) ?: return
         val vf = findViewById<RawViewfinder>(R.id.rawViewfinder)
         if (vf != null && vf.width > 0 && vf.height > 0) {
             val params = FrameLayout.LayoutParams(vf.width, vf.height, Gravity.TOP or Gravity.START)
@@ -2396,7 +2405,7 @@ class MainActivity : Activity() {
     }
 
     private fun hideRecordPreview() {
-        findViewById<DirectLogPreviewView>(R.id.recordPreview)?.visibility = View.GONE
+        findViewById<EncodedVideoPreviewView>(R.id.recordPreview)?.visibility = View.GONE
     }
 
     /**
@@ -2421,8 +2430,8 @@ class MainActivity : Activity() {
     }
 
     private fun stopVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
-        if (logRecorder != null) {
-            stopDirectLogRecording(rearmPreview, afterStop)
+        if (encodedVideoRecorder != null) {
+            stopEncodedVideoRecording(rearmPreview, afterStop)
             return
         }
         val recorder = videoRecorder ?: return
@@ -2462,8 +2471,8 @@ class MainActivity : Activity() {
         }, "VideoStop").start()
     }
 
-    private fun stopDirectLogRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
-        val recorder = logRecorder ?: return
+    private fun stopEncodedVideoRecording(rearmPreview: Boolean = true, afterStop: (() -> Unit)? = null) {
+        val recorder = encodedVideoRecorder ?: return
         val destination = recordingDestination
         if (!videoRecording) return
         rawExposureOverlay.clear()
@@ -2475,7 +2484,7 @@ class MainActivity : Activity() {
         videoDebugRunnable = null
         Thread({
             val stats = try { recorder.stop() } catch (e: Exception) {
-                Log.w(LOG_TAG, "direct-log stop failed", e)
+                Log.w(LOG_TAG, "encoded-video stop failed", e)
                 null
             }
             var saved: Uri? = null
@@ -2485,29 +2494,29 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Recording finalization failed at ${destination?.uri}", e)
             }
-            runOnUiThread { finishDirectLogStop(stats, saved, rearmPreview, afterStop) }
-        }, "DirectLogStop").start()
+            runOnUiThread { finishEncodedVideoStop(stats, saved, rearmPreview, afterStop) }
+        }, "EncodedVideoStop").start()
     }
 
-    private fun finishDirectLogStop(
-        stats: DirectLogRecorder.Stats?,
+    private fun finishEncodedVideoStop(
+        stats: EncodedVideoRecorder.Stats?,
         saved: Uri?,
         rearmPreview: Boolean,
         afterStop: (() -> Unit)?
     ) {
-        logRecorder = null
+        encodedVideoRecorder = null
         updateQuickControls()
         recordingDestination = null
-        lastDirectLogStats = stats
+        lastEncodedVideoStats = stats
         hideRecordPreview()
         val mb = (stats?.fileBytes ?: 0L) / 1e6
         if (isVideoMode) {
             findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
-            findViewById<View>(R.id.shutter).contentDescription = "Record Direct Log video"
+            findViewById<View>(R.id.shutter).contentDescription = "Record Encoded Video"
             refreshVideoButton()
             refreshVideoAudioDescription()
             refreshCaptureFormatControl()
-            rawBadge.text = logBadgeLabel()
+            rawBadge.text = encodedVideoBadgeLabel()
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
                 if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
@@ -2519,7 +2528,7 @@ class MainActivity : Activity() {
                     (if (stats.fallbackWaits > 0) " • FB${stats.fallbackWaits}" else "")
             )
             Log.i(
-                LOG_TAG, "direct-log saved sensor=${stats?.sensorSize} " +
+                LOG_TAG, "encoded-video saved sensor=${stats?.sensorSize} " +
                     "graded=${stats?.framesGraded} dropped=${stats?.framesDropped} " +
                     "waitFree=${stats?.waitFreeFrames} fallback=${stats?.fallbackWaits} " +
                     "cpuChain=${"%.1f".format(stats?.cpuChainMsAvg ?: 0f)}ms " +
@@ -2561,11 +2570,11 @@ class MainActivity : Activity() {
         val vf = rollingVf
         if (isVideoMode) {
             findViewById<View>(R.id.shutter).background = getDrawable(R.drawable.record_ready)
-            findViewById<View>(R.id.shutter).contentDescription = "Record RAW video"
+            findViewById<View>(R.id.shutter).contentDescription = "Record RAW Video"
             refreshVideoButton()
             refreshVideoAudioDescription()
             refreshCaptureFormatControl()
-            rawBadge.text = "CRAW"
+            rawBadge.text = "RAW Video"
             rawBadge.setTextColor(getColor(R.color.danger))
             setStatus(
                 if (stats == null) "REC FAILED • CHECK RECORDING FOLDER"
@@ -2618,11 +2627,11 @@ class MainActivity : Activity() {
         val tick = object : Runnable {
             override fun run() {
                 if (!isVideoMode) return
-                val log = logRecorder
+                val encoded = encodedVideoRecorder
                 val rec = videoRecorder
                 when {
-                    log != null -> {
-                        val snap = log.snapshot()
+                    encoded != null -> {
+                        val snap = encoded.snapshot()
                         renderVideoStatsBox(
                             videoTimecode(snap.elapsedMs),
                             String.format(
@@ -2658,12 +2667,12 @@ class MainActivity : Activity() {
      * counter, recording or not.
      */
     private fun renderIdleVideoStats() {
-        if (directLogEnabled) {
+        if (encodedVideoEnabled) {
             renderVideoStatsBox(
                 videoTimecode(0),
                 String.format(
                     Locale.US, "%s %s %dFPS D0 0MB\nMEM 0%% IO 0%% ENC 0%% WF0 FB0 P0 0.0ms",
-                    directLogProfile().name, videoDemosaic().name, directLogFpsPref()
+                    encodedVideoProfile().name, videoDemosaic().name, encodedVideoFpsPref()
                 )
             )
             return
@@ -2718,7 +2727,7 @@ class MainActivity : Activity() {
             videoAudioPeakDb.fill(AudioPcmRecorder.METER_MIN_DB)
             return "AUD MUTED"
         }
-        val db = videoRecorder?.audioLevelsDbfs() ?: logRecorder?.audioLevelsDbfs()
+        val db = videoRecorder?.audioLevelsDbfs() ?: encodedVideoRecorder?.audioLevelsDbfs()
             ?: floatArrayOf(AudioPcmRecorder.METER_MIN_DB, AudioPcmRecorder.METER_MIN_DB)
         // Peak hold in dB: falls 1.5 dB per HUD tick.
         videoAudioPeakDb[0] = maxOf(db[0], videoAudioPeakDb[0] - 1.5f)
@@ -2734,84 +2743,84 @@ class MainActivity : Activity() {
         return bar.append("] ").append(String.format(java.util.Locale.US, "%+3.0f", db)).toString()
     }
 
-    /** Persisted Direct-Log grade gain in EV stops, 0 (= ×1.0 neutral) out of
+    /** Persisted Encoded Video grade gain in EV stops, 0 (= ×1.0 neutral) out of
      * the box. Digital gain folded into the grade — the sensor keeps
      * auto-exposing; the recorder applies 2^value per frame. */
-    internal fun directLogGainPref(): Float =
-        lensPreferences().getFloat(KEY_DIRECT_LOG_GAIN, 0f).coerceIn(-2f, 4f)
+    internal fun encodedVideoGainPref(): Float =
+        lensPreferences().getFloat(KEY_ENCODED_VIDEO_GAIN, 0f).coerceIn(-2f, 4f)
 
-    /** Persisted Direct-Log frame rate: 24 or 30, 30 out of the box. Any
+    /** Persisted Encoded Video frame rate: 24 or 30, 30 out of the box. Any
      * other stored value heals to 30. Applies to the next take (encoder
      * format + AE range are fixed at take start). */
-    internal fun directLogFpsPref(): Int =
-        if (lensPreferences().getInt(KEY_DIRECT_LOG_FPS, LogVideoProbe.FPS) == 24) 24 else 30
+    internal fun encodedVideoFpsPref(): Int =
+        if (lensPreferences().getInt(KEY_ENCODED_VIDEO_FPS, EncodedVideoProbe.FPS) == 24) 24 else 30
 
-    internal fun cycleDirectLogFps() {
+    internal fun cycleEncodedVideoFps() {
         if (videoRecording) return
-        val next = if (directLogFpsPref() == 24) 30 else 24
-        lensPreferences().edit().putInt(KEY_DIRECT_LOG_FPS, next).apply()
+        val next = if (encodedVideoFpsPref() == 24) 30 else 24
+        lensPreferences().edit().putInt(KEY_ENCODED_VIDEO_FPS, next).apply()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         updateQuickControls()
-        setStatus("LOG ${next}FPS — NEXT TAKE")
+        setStatus("ENCODED VIDEO ${next}FPS — NEXT TAKE")
     }
 
-    /** Persisted Direct-Log encode size: 1080p out of the box (RAWR parity:
+    /** Persisted Encoded Video encode size: 1080p out of the box (RAWR parity:
      * the widest-supported rung), 1440p/4K opt-in. Applies to the next take. */
-    internal fun directLogResPref(): LogVideoProbe.EncodeSize =
-        LogVideoProbe.encodeSizeForRes(lensPreferences().getString(KEY_DIRECT_LOG_RES, null))
+    internal fun encodedVideoResPref(): EncodedVideoProbe.EncodeSize =
+        EncodedVideoProbe.encodeSizeForRes(lensPreferences().getString(KEY_ENCODED_VIDEO_RES, null))
 
-    internal fun cycleDirectLogRes() {
+    internal fun cycleEncodedVideoRes() {
         if (videoRecording) return
-        val w = directLogResPref().width
+        val w = encodedVideoResPref().width
         val next = when {
             w > 2560 -> "HD1080"
             w > 1920 -> "UHD4K"
             else -> "QHD1440"
         }
-        lensPreferences().edit().putString(KEY_DIRECT_LOG_RES, next).apply()
+        lensPreferences().edit().putString(KEY_ENCODED_VIDEO_RES, next).apply()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         updateQuickControls()
-        val label = LogVideoProbe.encodeSizeForRes(next)
-        setStatus("LOG ${label.width}x${label.height} — NEXT TAKE")
+        val label = EncodedVideoProbe.encodeSizeForRes(next)
+        setStatus("ENCODED VIDEO ${label.width}x${label.height} — NEXT TAKE")
     }
 
-    /** Persisted Direct-Log output profile: BT709 out of the box. Applies to the next take. */
-    internal fun directLogProfile(): DirectLogProfile =
-        DirectLogProfile.fromName(lensPreferences().getString(KEY_DIRECT_LOG_PROFILE, null))
+    /** Persisted Encoded Video output profile: BT709 out of the box. Applies to the next take. */
+    internal fun encodedVideoProfile(): EncodedVideoProfile =
+        EncodedVideoProfile.fromName(lensPreferences().getString(KEY_ENCODED_VIDEO_PROFILE, null))
 
     /** Persisted stab output mode: OG only out of the box. Applies to the next take. */
     internal fun stabOutputMode(): StabOutputMode =
         StabOutputMode.fromName(lensPreferences().getString(KEY_VIDEO_STAB_OUTPUT, null))
 
-    /** Persisted Direct-Log demosaic backend: MHC out of the box. Applies to the next take. */
+    /** Persisted Encoded Video demosaic backend: MHC out of the box. Applies to the next take. */
     internal fun videoDemosaic(): VideoDemosaic =
         VideoDemosaic.fromPreference(lensPreferences().getString(KEY_VIDEO_DEMOSAIC, null))
 
-    /** LOG-mode badge: mode + live output profile (e.g. `LOG • SLOG3`). */
-    internal fun logBadgeLabel(recording: Boolean = false): String {
-        val profile = directLogProfile()
-        val label = if (profile == DirectLogProfile.SLOG3 && DirectLogLutLibrary(this).bakeIntoRecording)
+    /** Encoded Video badge: mode and live output profile. */
+    internal fun encodedVideoBadgeLabel(recording: Boolean = false): String {
+        val profile = encodedVideoProfile()
+        val label = if (profile == EncodedVideoProfile.SLOG3 && EncodedVideoLutLibrary(this).bakeIntoRecording)
             "LUT709" else profile.hudLabel
-        return (if (recording) "● " else "") + "LOG • $label"
+        return (if (recording) "● " else "") + "Encoded Video • $label"
     }
 
-    internal fun cycleDirectLogProfile() {
+    internal fun cycleEncodedVideoProfile() {
         if (videoRecording) return // encoder format is fixed at take start
-        val next = directLogProfile().next()
-        lensPreferences().edit().putString(KEY_DIRECT_LOG_PROFILE, next.name).apply()
-        if (isVideoMode && directLogEnabled) refreshCaptureFormatControl()
+        val next = encodedVideoProfile().next()
+        lensPreferences().edit().putString(KEY_ENCODED_VIDEO_PROFILE, next.name).apply()
+        if (isVideoMode && encodedVideoEnabled) refreshCaptureFormatControl()
         refreshVideoAudioDescription()
         refreshVideoSensorInfo()
         updateQuickControls()
-        setStatus("LOG ${next.hudLabel} — NEXT TAKE")
+        setStatus("ENCODED VIDEO ${next.hudLabel} — NEXT TAKE")
     }
 
-    internal fun formatDirectLogGain(ev: Float): String =
+    internal fun formatEncodedVideoGain(ev: Float): String =
         "×%.1f".format(Locale.US, Math.pow(2.0, ev.toDouble()))
 
-    internal fun logGainText(ev: Float): String = "LOG gain: ${formatDirectLogGain(ev)}"
+    internal fun encodedVideoGainText(ev: Float): String = "Encoded Video gain: ${formatEncodedVideoGain(ev)}"
 
     private fun videoSoundOn(): Boolean =
         lensPreferences().getBoolean(KEY_VIDEO_AUDIO, true) &&
@@ -2877,26 +2886,26 @@ class MainActivity : Activity() {
         VideoCrop.UNIVISIUM_2_00 -> "2.00"
     }
 
-    internal fun directLogCrop(): VideoCrop =
-        runCatching { VideoCrop.valueOf(lensPreferences().getString("direct_log_crop", null) ?: "") }
+    internal fun encodedVideoCrop(): VideoCrop =
+        runCatching { VideoCrop.valueOf(lensPreferences().getString("encoded_video_crop", null) ?: "") }
             .getOrDefault(VideoCrop.WIDE_16_9).let {
                 if (it == VideoCrop.OPEN_GATE) VideoCrop.WIDE_16_9 else it
             }
 
-    internal fun cycleDirectLogCrop() {
+    internal fun cycleEncodedVideoCrop() {
         if (videoRecording) return
         val crops = listOf(VideoCrop.WIDE_16_9, VideoCrop.SCOPE_2_39, VideoCrop.UNIVISIUM_2_00)
-        val next = crops[(crops.indexOf(directLogCrop()) + 1) % crops.size]
-        lensPreferences().edit().putString("direct_log_crop", next.name).apply()
-        if (directLogEnabled) guideOverlay.videoCrop = next
+        val next = crops[(crops.indexOf(encodedVideoCrop()) + 1) % crops.size]
+        lensPreferences().edit().putString("encoded_video_crop", next.name).apply()
+        if (encodedVideoEnabled) guideOverlay.videoCrop = next
         refreshVideoSensorInfo()
-        setStatus("LOG CROP • ${next.label} • NEXT TAKE")
+        setStatus("ENCODED VIDEO CROP • ${next.label} • NEXT TAKE")
         updateQuickControls()
     }
 
     internal fun cycleVideoCrop() {
-        if (directLogEnabled) {
-            cycleDirectLogCrop()
+        if (encodedVideoEnabled) {
+            cycleEncodedVideoCrop()
             return
         }
         val values = VideoCrop.entries
@@ -2912,9 +2921,9 @@ class MainActivity : Activity() {
 
     internal fun refreshVideoSensorInfo() {
         if (!isVideoMode) return
-        if (directLogEnabled && videoRecorder == null) {
-            findViewById<TextView>(R.id.sensorInfo)?.text = "${directLogResPref().width}x${LogVideoLadder.directLogHeight(directLogResPref().width, directLogCrop())} • ${directLogFpsPref()}FPS"
-            findViewById<TextView>(R.id.dngInfo)?.text = "${directLogProfile().hudLabel} • HEVC10"
+        if (encodedVideoEnabled && videoRecorder == null) {
+            findViewById<TextView>(R.id.sensorInfo)?.text = "${encodedVideoResPref().width}x${EncodedVideoLadder.encodedVideoHeight(encodedVideoResPref().width, encodedVideoCrop())} • ${encodedVideoFpsPref()}FPS"
+            findViewById<TextView>(R.id.dngInfo)?.text = "${encodedVideoProfile().hudLabel} • HEVC10"
             return
         }
         val rec = videoRecorder
@@ -2988,7 +2997,7 @@ class MainActivity : Activity() {
         size: android.util.Size
     ): String {
         val chars = requireNotNull(resolveVideoCameraRoute(manager, cameraId)) {
-            "RAW video route $cameraId is unavailable"
+            "Video camera route $cameraId is unavailable"
         }.characteristics
         val orientation =
             chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
@@ -3361,8 +3370,8 @@ class MainActivity : Activity() {
         // Same authority rule as the info labels: in VIDEO mode the badge
         // follows the video format regardless of stills state updates.
         if (isVideoMode) {
-            rawBadge.text = if (directLogEnabled) logBadgeLabel(videoRecording)
-                else if (videoRecording) "● REC" else "CRAW"
+            rawBadge.text = if (encodedVideoEnabled) encodedVideoBadgeLabel(videoRecording)
+                else if (videoRecording) "● RAW Video" else "RAW Video"
             rawBadge.setTextColor(getColor(R.color.danger))
             return
         }
@@ -3617,12 +3626,14 @@ class MainActivity : Activity() {
     internal fun denoiseSettings(): DenoiseSettings {
         val prefs = lensPreferences()
         return DenoiseSettings(
+            captureSharpening = CaptureSharpeningSettings.read(prefs),
             aiEnabled = prefs.getBoolean(KEY_AI_DENOISE_ENABLED, false),
             saveOriginalDng = prefs.getBoolean(KEY_SAVE_ORIGINAL_DNG, true),
             aiStrength = prefs.getInt(KEY_AI_STRENGTH_PCT, 100).coerceIn(0, 100) / 100f,
             wavelet = WaveletSettings(
                 enabled = prefs.getBoolean(KEY_WAVELET_ENABLED, false),
-                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 200) / 100f,
+                strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 800) / 100f,
+                detail = prefs.getInt(KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
                 luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
                 maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7)
             )
@@ -3635,11 +3646,14 @@ class MainActivity : Activity() {
             return false
         }
         lensPreferences().edit()
+            .putBoolean(CaptureSharpeningSettings.ENABLED_KEY, settings.captureSharpening.enabled)
+            .putString(CaptureSharpeningSettings.LEVEL_KEY, settings.captureSharpening.level.name)
             .putBoolean(KEY_AI_DENOISE_ENABLED, settings.aiEnabled)
             .putBoolean(KEY_SAVE_ORIGINAL_DNG, settings.saveOriginalDng)
             .putInt(KEY_AI_STRENGTH_PCT, (settings.aiStrength * 100 + 0.5f).toInt().coerceIn(0, 100))
             .putBoolean(KEY_WAVELET_ENABLED, settings.wavelet.enabled)
-            .putInt(KEY_WAVELET_STRENGTH_PCT, (settings.wavelet.strength * 100 + 0.5f).toInt().coerceIn(0, 200))
+            .putInt(KEY_WAVELET_STRENGTH_PCT, (settings.wavelet.strength * 100 + 0.5f).toInt().coerceIn(0, 800))
+            .putInt(KEY_WAVELET_DETAIL_PCT, (settings.wavelet.detail * 100 + 0.5f).toInt().coerceIn(0, 180))
             .putInt(KEY_WAVELET_LUMA_PCT, (settings.wavelet.luma * 100 + 0.5f).toInt().coerceIn(0, 100))
             .putInt(KEY_WAVELET_SCALES, settings.wavelet.maxScale.coerceIn(1, 7))
             .apply()
@@ -3698,7 +3712,7 @@ class MainActivity : Activity() {
         } else {
             message
         }
-        AlertDialog.Builder(this)
+        RawLensDialogBuilder(this)
             .setTitle("Vulkan GPU unavailable")
             .setMessage(fullMessage)
             .setPositiveButton("Continue", null)
@@ -3724,7 +3738,7 @@ class MainActivity : Activity() {
         } else {
             "Auto-export failed; the session is still in the app's private log folder."
         }
-        val dialog = AlertDialog.Builder(this)
+        val dialog = RawLensDialogBuilder(this)
             .setTitle("RawLens crashed last run")
             .setMessage("The crash log ($sessionName) was captured. $exportedNote")
             .setPositiveButton(if (exportedUri != null) "Share log" else "OK", null)
@@ -3887,21 +3901,34 @@ class MainActivity : Activity() {
 
     private fun View.containsRaw(x: Float, y: Float): Boolean {
         if (visibility != View.VISIBLE || !isShown) return false
-        val loc = IntArray(2)
-        getLocationOnScreen(loc)
-        return x >= loc[0] && x < loc[0] + width && y >= loc[1] && y < loc[1] + height
+        val bounds = android.graphics.Rect()
+        return getGlobalVisibleRect(bounds) && bounds.contains(x.toInt(), y.toInt())
+    }
+
+    private fun openPreviewPanel(action: PreviewPanelSwipe.Action) {
+        closeFloatingPanels()
+        when (action) {
+            PreviewPanelSwipe.Action.QUICK_CONTROLS -> showQuickControls()
+            PreviewPanelSwipe.Action.SETTINGS ->
+                if (isVideoMode) showSettings(SETTINGS_VIDEO_TAB) else showSettings()
+        }
     }
 
     /**
-     * Quick panel focus: a touch outside it only closes it (the whole
-     * gesture is swallowed, so it never focuses, meters or presses a
-     * control); touches inside keep it open and restart the idle timer.
-     * Its own toggles (quick button, feature tags) pass through.
+     * Outside taps close the quick panel without focusing or pressing another control.
+     * A deliberate preview swipe can then open either panel; touches inside keep the
+     * panel open and restart its idle timer. Quick-button and feature-tag taps pass through.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (swallowQuickDismissGesture) {
+            if (ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN) quickDismissAllowsSwipe = false
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                val action = if (ev.actionMasked == MotionEvent.ACTION_UP && quickDismissAllowsSwipe)
+                    PreviewPanelSwipe.classify(ev.rawX - quickDismissDownX, ev.rawY - quickDismissDownY,
+                        dp(48).toFloat(), deviceOrientationDegrees) else null
                 swallowQuickDismissGesture = false
+                quickDismissAllowsSwipe = false
+                action?.let(::openPreviewPanel)
             }
             return true
         }
@@ -3915,6 +3942,9 @@ class MainActivity : Activity() {
                 findViewById<View>(R.id.quickButton).containsRaw(x, y) ||
                     featureTags.containsRaw(x, y) -> Unit
                 else -> {
+                    quickDismissDownX = x
+                    quickDismissDownY = y
+                    quickDismissAllowsSwipe = ::meteringOverlay.isInitialized && meteringOverlay.containsRaw(x, y)
                     hideQuickControls()
                     swallowQuickDismissGesture = true
                     return true
@@ -3970,7 +4000,7 @@ class MainActivity : Activity() {
         rawExposureOverlay.settings = settings
         controller.setRawExposureAssist(settings)
         videoRecorder?.rawExposureSettings = settings
-        logRecorder?.rawExposureSettings = settings
+        encodedVideoRecorder?.rawExposureSettings = settings
         refreshRawExposureToggle()
     }
 
@@ -4046,13 +4076,14 @@ class MainActivity : Activity() {
         videoTorchOn = !videoTorchOn
         controller.setTorchEnabled(videoTorchOn)
         videoRecorder?.setTorch(videoTorchOn)
-        logRecorder?.setTorch(videoTorchOn)
+        encodedVideoRecorder?.setTorch(videoTorchOn)
         setStatus(if (videoTorchOn) "TORCH ON" else "TORCH OFF")
         updateQuickControls()
     }
 
     internal fun updateQuickControls() {
         if (!::gridQuick.isInitialized || !::levelQuick.isInitialized) return
+        arrangeQuickControlRows()
         val grid = gridQuick
         val histogram = histogramQuick
         val level = levelQuick
@@ -4132,7 +4163,7 @@ class MainActivity : Activity() {
         setQuickTileState(sharp, mfsrSettings.enabled)
         setQuickTileState(hdrPlus, hdrPlusSettings.enabled)
         setQuickTileState(ettr, ettrEnabled)
-        // Video (RAW / Direct-Log) records continuous frames: still-only
+        // Video (RAW / Encoded Video) records continuous frames: still-only
         // tiles (HDR, HDR+, MFSR, timer) go, and LIGHT becomes a
         // torch. Rows left empty collapse so the grid stays tight.
         val stillOnly = listOf(hdr, hdrPlus, sharp, timer)
@@ -4169,15 +4200,15 @@ class MainActivity : Activity() {
         refreshFeatureTags(ettrEnabled)
         // Video crop lives on the RELEASE tile in VIDEO mode only; the mode
         // button itself stays photo-only (video is a separate red button).
-        // LOG tile shows the output profile; hold changes the recording crop.
-        release.contentDescription = null // else the LOG text lingers after mode switches
+        // PROFILE tile shows the output profile; hold changes the recording crop.
+        release.contentDescription = null // else the profile text lingers after mode switches
         if (isVideoMode) {
-            if (directLogEnabled) {
-                val profile = directLogProfile()
-                release.text = "LOG\n${profile.hudLabel}"
+            if (encodedVideoEnabled) {
+                val profile = encodedVideoProfile()
+                release.text = "PROFILE\n${profile.hudLabel}"
                 release.contentDescription =
-                    "Direct Log output profile ${profile.hudLabel}. Tap to switch; hold to change crop."
-                setQuickTileState(release, profile != DirectLogProfile.BT709)
+                    "Encoded Video output profile ${profile.hudLabel}. Tap to switch; hold to change crop."
+                setQuickTileState(release, profile != EncodedVideoProfile.BT709)
             } else {
                 release.text = "CROP\n${videoCropShort()}"
                 setQuickTileState(release, videoCrop != VideoCrop.OPEN_GATE)
@@ -4223,11 +4254,11 @@ class MainActivity : Activity() {
         // chain; the corrected chain meters at 0, so stored v1 values are
         // not carried over.
         // Stored key keeps the legacy name so existing values survive the LOG EV -> LOG gain rename.
-        const val KEY_DIRECT_LOG_GAIN = "direct_log_ev_v2"
-        const val KEY_DIRECT_LOG_FPS = "direct_log_fps"
-        const val KEY_DIRECT_LOG_RES = "direct_log_res"
-        const val KEY_DIRECT_LOG = "direct_log_video"
-        const val KEY_DIRECT_LOG_PROFILE = "direct_log_profile"
+        const val KEY_ENCODED_VIDEO_GAIN = "encoded_video_ev_v2"
+        const val KEY_ENCODED_VIDEO_FPS = "encoded_video_fps"
+        const val KEY_ENCODED_VIDEO_RES = "encoded_video_res"
+        const val KEY_ENCODED_VIDEO = "encoded_video_enabled"
+        const val KEY_ENCODED_VIDEO_PROFILE = "encoded_video_profile"
         const val KEY_SAVE_LOCATION = "save_location_gps"
         const val PREFS_NAME = SettingsBackup.STORE_MAIN
         /** Settings sheet page index of the Video tab (keep in sync with tabPages order). */
@@ -4316,6 +4347,7 @@ class MainActivity : Activity() {
         const val KEY_AI_STRENGTH_PCT = "ai_denoise_strength_pct"
         const val KEY_WAVELET_ENABLED = "wavelet_enabled"
         const val KEY_WAVELET_STRENGTH_PCT = "wavelet_strength_pct"
+        const val KEY_WAVELET_DETAIL_PCT = "wavelet_detail_pct"
         const val KEY_WAVELET_LUMA_PCT = "wavelet_luma_pct"
         const val KEY_WAVELET_SCALES = "wavelet_scales"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"

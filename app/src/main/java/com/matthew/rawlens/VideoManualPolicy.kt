@@ -2,7 +2,7 @@
 package com.matthew.rawlens
 
 /**
- * Shared video manual-exposure policy for RAW (.craw) and Direct-Log takes.
+ * Shared video manual-exposure policy for RAW (.craw) and Encoded Video takes.
  *
  * Photo modes drive ISO/shutter/WB/focus/EV through [RawCameraController]'s
  * live preview; video mode reuses the same tiles. This helper keeps the

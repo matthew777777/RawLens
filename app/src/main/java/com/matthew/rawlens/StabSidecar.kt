@@ -7,7 +7,7 @@ import java.util.Locale
  * Post-record stabilization take sidecar: the full-take gyro log plus the
  * `frameIndex -> SENSOR_TIMESTAMP` table the warp pass needs to align
  * encoded frames (constant CFR grid PTS) with the gyro timeline (boot-time
- * ns). Written by [DirectLogRecorder.stop] next to the staged MP4, consumed
+ * ns). Written by [EncodedVideoRecorder.stop] next to the staged MP4, consumed
  * once by the warp pass, then deleted.
  *
  * Gyro rates are already in the desktop camera frame

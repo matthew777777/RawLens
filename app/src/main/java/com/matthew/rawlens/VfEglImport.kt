@@ -117,6 +117,13 @@ internal object VfEglImport {
     /** [yStrideBytes, uvStrideBytes, 0] from the allocator; null on failure. */
     external fun describeP010(buffer: HardwareBuffer): IntArray?
 
+    /** Allocator descriptor: width, height, stride, format, layers, usage (not proof of linearity). */
+    external fun describeBuffer(buffer: HardwareBuffer): LongArray?
+
+    /** One CPU lock; sparse Y/U/V word grid from app-owned linear BLOB staging only. */
+    external fun sampleLinearP010Grid(buffer: HardwareBuffer, width: Int, height: Int,
+                                      columns: Int, rows: Int): IntArray?
+
     /**
      * Dumb CPU copy: ours semi-planar P010 -> codec planar input planes
      * (direct ByteBuffers + strides + chroma spacing). All color math is

@@ -437,7 +437,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
      */
     @Volatile private var minSampleIntervalMs = VfResolution.RATE_FULL_MS
     /**
-     * True while a Direct-Log take owns the shared Vulkan queue: the VF
+     * True while a Encoded Video take owns the shared Vulkan queue: the VF
      * drops to 480p @<=10 fps so record submits never wait on a VF
      * dispatch (submit-side mutex + shared-queue GPU time are the
      * contention; the VF fence wait itself runs unlocked). Saved edge
@@ -791,7 +791,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     /**
-     * Direct-Log record throttle: 480p + 10 fps ceiling while a take owns
+     * Encoded Video record throttle: 480p + 10 fps ceiling while a take owns
      * the shared Vulkan queue, previous edge restored on exit. Record
      * submits and VF dispatches serialize on one native mutex, so a
      * full-rate VF steals record frames (PTS gaps = visible stutter when
@@ -895,6 +895,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     /** Called inline on the camera handler. All plane access ends before this method returns. */
+    @Volatile private var sensorLevels = DngMetadataOverrides()
+
+    override fun setSensorLevels(overrides: DngMetadataOverrides) {
+        sensorLevels = overrides
+    }
+
     override fun offer(image: Image, c: CameraCharacteristics, result: CaptureResult?) {
         val now = SystemClock.elapsedRealtime()
         if (!hasSurface || now < retryAfterMs) return
@@ -931,9 +937,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             val black = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             val dynamicWhite = result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
-            val reportedWhite = (dynamicWhite
+            val halWhite = (dynamicWhite
                 ?: c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023).toFloat()
-            val reportedLevels = FloatArray(4) { i -> dynamicBlack?.get(i) ?: black?.getOffsetForIndex(i % 2, i / 2)?.toFloat() ?: 0f }
+            val halLevels = FloatArray(4) { i -> dynamicBlack?.get(i) ?: black?.getOffsetForIndex(i % 2, i / 2)?.toFloat() ?: 0f }
+            val (reportedLevels, reportedWhite) = VfLevels.calibrated(halLevels, halWhite, sensorLevels)
             val levelsSane = VfLevels.isSane(reportedLevels, reportedWhite)
             // Tier black-output probation needs a fresh input-signal reading
             // until every Vulkan tier is verified or latched; then sampling

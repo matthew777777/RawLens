@@ -32,7 +32,7 @@ class AhbEncoderBridgeDeviceTest {
                 "outBufs=${rep.outputBuffers} bytes=${rep.outputBytes} " +
                 "elapsed=${rep.elapsedMs}ms submitFps=${"%.1f".format(rep.submitFps)} " +
                 "fillAvg=${"%.1f".format(rep.fillMsAvg)}ms blitAvg=${"%.1f".format(rep.blitMsAvg)}ms " +
-                "outProfile=${rep.outputProfile?.let { LogVideoProbe.profileLabel(it) }} " +
+                "outProfile=${rep.outputProfile?.let { EncodedVideoProbe.profileLabel(it) }} " +
                 "outFmt=[${rep.outputFormat}] err=${rep.error}"
         )
         assertTrue("bridge failed: ${rep.error}", rep.error == null)

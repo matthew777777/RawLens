@@ -32,6 +32,11 @@ package com.matthew.rawlens
  * NaN/Inf bit patterns. Shaders recover the ints with `floatBitsToInt`.
  */
 internal object VfLevels {
+    /** Custom calibration takes precedence over both dynamic and static HAL levels. */
+    fun calibrated(black: FloatArray, white: Float, overrides: DngMetadataOverrides): Pair<FloatArray, Float> =
+        (overrides.blackLevels?.let { values -> FloatArray(4) { values[it].toFloat() } } ?: black) to
+            (overrides.whiteLevel?.toFloat() ?: white)
+
     /** Fixed-point scale: 64ths of a code. */
     const val SCALE = 64
 

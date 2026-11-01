@@ -137,23 +137,23 @@ class RawExposureRecordingDeviceTest {
             File(context.getExternalFilesDir(null), "f12-recording-craw.txt").writeText(report.toString())
         }
     }
-    @Test fun directLogExposureAssistsPreserveRecording() {
+    @Test fun encodedVideoExposureAssistsPreserveRecording() {
         val id = setup()
         val args = InstrumentationRegistry.getArguments()
         val w = args.getString("f12Width", "1920").toInt()
         val h = args.getString("f12Height", "1080").toInt()
         val rate = args.getString("f12Fps", "30").toInt()
         val file = File(context.cacheDir, "f12-recording-audit.mp4")
-        val recorder = DirectLogRecorder(manager, id, context).apply {
+        val recorder = EncodedVideoRecorder(manager, id, context).apply {
             audioEnabled = false; stabEnabled = false; width = w; height = h; fps = rate
-            logProfile = DirectLogProfile.fromName(args.getString("f12Profile", "BT709"))
+            recordingProfile = EncodedVideoProfile.fromName(args.getString("f12Profile", "BT709"))
             videoManual = VideoManualSnapshot(iso = 1600, shutterNanos = 10_000_000, focusDiopters = 0.5f)
             onRawExposureAssist = { events.add(it) }
         }
         var started = false
         try {
             recorder.start(file); started = true
-            report.appendLine("NEGOTIATED encoder=${recorder.width}x${recorder.height} fps=${recorder.fps} profile=${recorder.logProfile}")
+            report.appendLine("NEGOTIATED encoder=${recorder.width}x${recorder.height} fps=${recorder.fps} profile=${recorder.recordingProfile}")
             exercise({ recorder.rawExposureSettings = it }, { recorder.snapshot().let { Counts(it.elapsedMs, it.framesGraded, it.framesDropped) } }, true)
             val stats = recorder.stop(); started = false
             report.appendLine("LOG requested=${w}x$h ${rate}fps STOP $stats")

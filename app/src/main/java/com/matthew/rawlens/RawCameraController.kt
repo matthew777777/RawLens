@@ -423,8 +423,8 @@ class RawCameraController(
     // Face-priority AF/AE (HAL STATISTICS_FACES); see FaceTracking.
     private val faces = FaceTracking(FaceTrackingHost(), initialFacePriorityEnabled)
 
-    // Tap / hold focus and metering (Open Camera continuous-picture AF port).
-    private val touchFocus = TouchFocus(TouchFocusHost())
+    // Camera2 photo continuous AF, tap scan and press-and-hold lock.
+    private val touchFocus = PhotoAutoFocus(PhotoAutoFocusHost())
     /** Last idle continuous-AF state/mode logged (transition-only trace). */
     /**
      * Idle continuous-AF trace (transitions only), fed every repeating
@@ -472,7 +472,7 @@ class RawCameraController(
      * ISP frame-rate probe: armed while a raw-only default session streams
      * with no persisted verdict for this camera. Measures the sensor-
      * timestamp rate over [ISP_PROBE_FRAMES] frames; a ~20 fps stall
-     * rebuilds with the smallest preview target and persists the verdict.
+     * rebuilds with a normal preview target and persists the verdict.
      * Camera-thread only; disarmed by any session rebuild.
      */
     private var fpsProbeArmed = false
@@ -523,8 +523,6 @@ class RawCameraController(
     private var awbVerdictIdentity: String? = null
     private var awbVerdictFirstMs = 0L
     private var awbVerdictSawWorking = false
-    private var afSessionEvidence = AutoFocusPolicy.SessionEvidence()
-    private var afVerdictEligible = true
     private var sessionPrimaryRoute: CameraRoute? = null
     private var sessionAltRoute: CameraRoute? = null
 
@@ -544,6 +542,7 @@ class RawCameraController(
     @Volatile private var lastVendorRequestReport: VendorKeyApplyReport? = null
     @Volatile private var vendorSessionFingerprint: String? = null
     @Volatile private var vendorSessionOpmode: Int? = null
+    @Volatile private var vendorSessionRawFps: Int = 0
     @Volatile private var vendorSessionRoute: String? = null
     @Volatile private var vendorKeyCharacteristics: CameraCharacteristics? = null
     private val previewLayoutListener = View.OnLayoutChangeListener { _, left, top, right, bottom,
@@ -666,7 +665,7 @@ class RawCameraController(
                 if (pixelArraySize != null) "${pixelArraySize.width}x${pixelArraySize.height}" else "SENSOR")
 
             val maxDepth = characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
-            lastWhiteLevelBits = whiteLevelBitDepth(maxDepth)
+            lastWhiteLevelBits = whiteLevelBitDepth(dngMetadataOverrides(selectedCameraId).whiteLevel?.toInt() ?: maxDepth)
             lastSensorInfo = sensorInfo
             val dngInfo = String.format(java.util.Locale.US, "DNG\n%d-bit RAW", lastWhiteLevelBits)
 
@@ -1140,7 +1139,7 @@ class RawCameraController(
                 val image = reader.acquireNextImage() ?: break
                 lastRawImageReceivedMs = SystemClock.elapsedRealtime()
                 if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
-                    deviceFaultRecovery.reset()
+                    selectedCameraId?.let(deviceFaultRecovery::onFrames)
                     Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
                     // Frames flowing (not merely a configured session)
                     // is the verification event. Idempotent, so a
@@ -1184,7 +1183,12 @@ class RawCameraController(
                 characteristics?.let { rawExposureAssist.offer(image, it, developFocusView, result = latestPreviewResult) }
                 // The dual-RAW worker owns these allocations through Vulkan completion;
                 // don't concurrently hand the same AHB to the viewfinder GPU context.
-                if (!activeDualRaw) characteristics?.let { activeVf()?.offer(image, it, latestPreviewResult) }
+                if (!activeDualRaw) characteristics?.let {
+                    activeVf()?.apply {
+                        setSensorLevels(dngMetadataOverrides(selectedCameraId))
+                        offer(image, it, latestPreviewResult)
+                    }
+                }
                 if (pairing.consumePreviewRaw(image.timestamp)) {
                     RawImageOwnership.release(image)
                     continue
@@ -1321,7 +1325,10 @@ class RawCameraController(
             isCurrent = { isCurrent(generation) && camera === device },
             configured = { attempt, legacy, configured ->
                 vendorSessionOpmode = attempt.operatingMode
-                if (!attempt.parameters) vendorSessionFingerprint = VendorKeyApply.fingerprint(emptyList())
+                if (!attempt.parameters) {
+                    vendorSessionFingerprint = VendorKeyApply.fingerprint(emptyList())
+                    vendorSessionRawFps = 0
+                }
                 val detail = "Configured mode ${attempt.operatingMode}" +
                     if (attempt.operatingMode != opmode) " (requested $opmode; fallback)" else ""
                 lastVendorSessionReport = if (attempt.parameters) builtReport.copy(detail = detail)
@@ -1454,7 +1461,8 @@ class RawCameraController(
         } catch (_: Exception) {
             return
         }
-        if (profile.sessionEntries().isEmpty()) {
+        vendorSessionRawFps = profile.rawPreviewFps
+        if (profile.sessionEntries().isEmpty() && profile.rawPreviewFps == 0) {
             lastVendorSessionReport = VendorKeyApplyReport(emptyList(), emptyList())
             vendorSessionFingerprint = VendorKeyApply.fingerprint(emptyList())
             vendorSessionOpmode = profile.operatingMode
@@ -1494,12 +1502,11 @@ class RawCameraController(
                     awbVerdictIdentity = sessionPrimaryRoute?.identity
                     awbVerdictFirstMs = 0L
                     awbVerdictSawWorking = false
-                    afSessionEvidence = AutoFocusPolicy.SessionEvidence()
-                    afVerdictEligible = true
                     // A fresh session gets fresh RAW-preview retries: starvation
                     // callbacks during the open gap must not consume them.
                     rawPreviewFailures = 0
                     rawPreviewRetryUntilMs = 0L
+                    touchFocus.onSessionReady()
                     updateRepeatingRequest()
                     // stop() disables the shutter while the Activity is backgrounded. A new
                     // camera session must explicitly restore it when the Activity resumes.
@@ -1520,8 +1527,6 @@ class RawCameraController(
             }
             Log.i(LOG_TAG, "Session ready (zsl=$rawZslStreaming vf=$rawViewfinderStreaming)")
             logAfCapabilities()
-            touchFocus.nudgeIdleIfNeeded()
-            touchFocus.kickContinuousAtSessionStart()
             onState(if (rawZslStreaming) "READY • ZSL WARMING" else "READY")
         }
         override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -1633,11 +1638,15 @@ class RawCameraController(
         val rawSizes = map.getOutputSizes(effectiveRawFormat(selectedCameraId, map))?.toList().orEmpty()
         val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         if (rawSizes.isEmpty()) return 1
-        return SessionStreamSelection.selectSessionStreamCombos(
-            rawSizes.map { SessionStreamSize(it.width, it.height) },
-            previewSizes.map { SessionStreamSize(it.width, it.height) },
-            fullReaderMaxImages(),
-            SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
+        val mapRawSizes = rawSizes.map { SessionStreamSize(it.width, it.height) }
+        return SessionStreamSelection.orderCombosForPreferredSize(
+            SessionStreamSelection.selectSessionStreamCombos(
+                mapRawSizes,
+                previewSizes.map { SessionStreamSize(it.width, it.height) },
+                fullReaderMaxImages(),
+                SessionStreamSelection.MIN_ACQUIRED_RAW_IMAGES
+            ),
+            preferredRawSize(selectedCameraId, mapRawSizes)
         ).size.coerceAtLeast(1)
     }
 
@@ -1668,19 +1677,6 @@ class RawCameraController(
         val identity = awbVerdictIdentity ?: return
         if (result.get(CaptureResult.CONTROL_AWB_MODE) != CaptureResult.CONTROL_AWB_MODE_AUTO) return
         val now = SystemClock.elapsedRealtime()
-        // A touch scan, capture or manual focus cannot diagnose idle HAL AF.
-        if (selectedFocusDistanceDiopters != null || touchFocus.active ||
-            captureInProgress.get() || !AutoFocusPolicy.needsSessionKick(
-                characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-            )
-        ) afVerdictEligible = false
-        val afMode = result.get(CaptureResult.CONTROL_AF_MODE)
-        if (afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE ||
-            afMode == CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-        ) {
-            afSessionEvidence.observe(result.get(CaptureResult.CONTROL_AF_STATE),
-                result.get(CaptureResult.LENS_FOCUS_DISTANCE))
-        }
         if (awbVerdictFirstMs == 0L) awbVerdictFirstMs = now
         if (!awbVerdictSawWorking) {
             // Only the selected sensor can establish this route's health;
@@ -1706,14 +1702,6 @@ class RawCameraController(
         }
         try {
             lensVerdicts.markHalAwb(identity, awbVerdictSawWorking)
-            if (afVerdictEligible && afSessionEvidence.working) {
-                lensVerdicts.markHalAf(identity, true)
-            } else if (afVerdictEligible && !awbVerdictSawWorking && afSessionEvidence.inactiveThroughout) {
-                lensVerdicts.markHalAf(identity, false)
-                Log.w(LOG_TAG, "Route $identity: AF stayed INACTIVE with no lens motion and no HAL AWB; " +
-                    "use a routed ID for this lens or manual focus")
-                onState("AUTOFOCUS INACTIVE • TRY ANOTHER LENS ID")
-            }
         } catch (_: Exception) {
             // Best effort: verdicts never break streaming.
         }
@@ -3374,15 +3362,8 @@ class RawCameraController(
         touchFocus.start(viewX, viewY, indefinite = false, updateAe = false)
     }
 
-    /**
-     * Coalesced tap-to-focus + tap-to-meter: installs the AF and AE regions
-     * together, issues a single repeating update, then a single AF START.
-     * Same visible behavior as the old split setAePoint()+setAfPoint() pair,
-     * but 2-3 fewer HAL round-trips per tap. Every tap refocuses — including
-     * a single tap while locked, which cancels the old scan/lock and starts
-     * a new one at the new point; the sharp lock auto-releases after
-     * [AutoFocusPolicy.LOCK_HOLD_MS].
-     */
+    /** Tap selects AUTO with AF/AE regions and one CANCEL/START sequence.
+     * A successful lock returns to continuous-picture after [PhotoAutoFocus.LOCK_HOLD_MS]. */
     fun setFocusAndMeteringPoint(viewX: Float, viewY: Float) {
         touchFocus.start(viewX, viewY, indefinite = false, updateAe = true)
     }
@@ -3397,8 +3378,8 @@ class RawCameraController(
         touchFocus.start(viewX, viewY, indefinite = true, updateAe = true)
     }
 
-    /** Camera-side half of [TouchFocus]; every call runs on the camera thread. */
-    private inner class TouchFocusHost : TouchFocus.Host {
+    /** Camera-side half of [PhotoAutoFocus]; every call runs on the camera thread. */
+    private inner class PhotoAutoFocusHost : PhotoAutoFocus.Host {
         override val handler: Handler get() = cameraHandler
         override fun isOnCameraThread() = this@RawCameraController.isOnCameraThread()
         override fun canSendOneShot() =
@@ -3408,6 +3389,8 @@ class RawCameraController(
             characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
         override fun afAvailableModes() =
             characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        override fun isAeLockSupported() =
+            characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
         override fun isAeMeteringSupported() = this@RawCameraController.isAeMeteringSupported()
         override fun meteringRegion(viewX: Float, viewY: Float) =
             this@RawCameraController.meteringRegion(viewX, viewY)
@@ -3422,19 +3405,16 @@ class RawCameraController(
         override var selectedFocusDistanceDiopters: Float?
             get() = this@RawCameraController.selectedFocusDistanceDiopters
             set(value) { this@RawCameraController.selectedFocusDistanceDiopters = value }
-        override fun viewfinderMinSide() = minOf(viewfinder.width, viewfinder.height).toFloat()
         override fun updateRepeatingRequest() =
             this@RawCameraController.updateRepeatingRequest(preserveRawZslBuffer = true)
-        override fun sendAfTrigger(trigger: Int, aeOnForDynamic: Boolean) {
+        override fun sendAfTrigger(trigger: Int, runId: Long) {
             val device = camera ?: return
             val currentSession = session ?: return
             val surface = singleShotTarget() ?: return
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
                 applyCameraControls(this)
-                if (aeOnForDynamic && dynamicExposureSettings.enabled) {
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                }
+                setTag(PhotoAutoFocus.Command(runId, trigger))
                 set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
             }
             currentSession.capture(request.build(), debugCaptureCallback, cameraHandler)
@@ -3442,33 +3422,11 @@ class RawCameraController(
         override fun cameraAccessReason(failure: CameraAccessException) =
             this@RawCameraController.cameraAccessReason(failure)
         override fun publishControls() = this@RawCameraController.publishControls()
-        override fun publishPeakingActiveIfChanged() =
-            this@RawCameraController.publishPeakingActiveIfChanged()
+        override fun publishPeakingActiveIfChanged() = scopes.refreshPeaking()
         override fun onState(state: String) = this@RawCameraController.onState(state)
         override fun onFocusLock(locked: Boolean, indefinite: Boolean, deadlineMs: Long) =
             this@RawCameraController.onFocusLock(locked, indefinite, deadlineMs)
         override fun onMeteringReleased() = this@RawCameraController.onMeteringReleased()
-        override var autoScanDead: Boolean
-            get() = afAutoScanDeadPersisted(selectedCameraId)
-            set(value) = persistAfAutoScanDead(selectedCameraId, value)
-    }
-
-    /** Persisted dead-AUTO-scan verdict for this camera (see [TouchFocus.Host.autoScanDead]). */
-    private fun afAutoScanDeadPersisted(cameraId: String?): Boolean = try {
-        cameraId != null && context.getSharedPreferences(AF_AUTO_SCAN_PREFS, Context.MODE_PRIVATE)
-            .getBoolean(AF_AUTO_SCAN_DEAD_KEY_PREFIX + cameraId, false)
-    } catch (_: Exception) {
-        false
-    }
-
-    private fun persistAfAutoScanDead(cameraId: String?, dead: Boolean) {
-        if (cameraId == null) return
-        try {
-            context.getSharedPreferences(AF_AUTO_SCAN_PREFS, Context.MODE_PRIVATE)
-                .edit().putBoolean(AF_AUTO_SCAN_DEAD_KEY_PREFIX + cameraId, dead).apply()
-        } catch (_: Exception) {
-            // Best effort: without persistence the first tap each launch re-detects it.
-        }
     }
 
     /**
@@ -3499,7 +3457,7 @@ class RawCameraController(
         (characteristics?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0) > 0
 
     private fun continuousPictureAfMode(): Int =
-        AutoFocusPolicy.defaultAfMode(
+        PhotoAutoFocus.idleMode(
             characteristics?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         )
 
@@ -3536,9 +3494,9 @@ class RawCameraController(
             cameraHandler.post(::resetMeteringTargets)
             return
         }
-        // Manual release re-arms the tap gate: the next tap always refocuses.
-        touchFocus.rearmTapGate()
         if (touchFocus.active) {
+            aeRegion = null
+            updateDevelopFocus(null)
             touchFocus.releaseToContinuous()
             return
         }
@@ -3856,7 +3814,8 @@ class RawCameraController(
     private fun publishPeakingActiveIfChanged() = scopes.publishPeakingActiveIfChanged()
 
     private fun publishFocusPeakingIfDue(image: Image, cameraCharacteristics: CameraCharacteristics) =
-        scopes.publishFocusPeakingIfDue(image, cameraCharacteristics)
+        scopes.publishFocusPeakingIfDue(image, cameraCharacteristics, latestPreviewResult,
+            dngMetadataOverrides(selectedCameraId))
 
     /** See [SamplerGuard]: one bad frame must never take down the session. */
     private inline fun <T> sampleSafely(tag: String, block: () -> T?): T? = samplerGuard.run(tag, block)
@@ -3864,8 +3823,8 @@ class RawCameraController(
     private inner class LiveScopesHost : LiveScopes.Host {
         override fun jpegOutputSettings(): JpegOutputSettings = this@RawCameraController.jpegOutputSettings
         override fun vfStats(): RawVfStats? = activeVf()?.snapshot()
-        override fun manualFocusSet(): Boolean = selectedFocusDistanceDiopters != null
-        override fun touchFocusActive(): Boolean = touchFocus.active
+        override fun manualFocusSet(): Boolean = running && selectedFocusDistanceDiopters != null
+        override fun touchFocusActive(): Boolean = running && touchFocus.active
         override fun onRawHistogram(histogram: RgbHistogram) = this@RawCameraController.onRawHistogram(histogram)
         override fun onRawWaveform(waveform: RgbWaveform) = this@RawCameraController.onRawWaveform(waveform)
         override fun onFocusPeaking(frame: FocusPeakingFrame) = this@RawCameraController.onFocusPeaking(frame)
@@ -4328,6 +4287,11 @@ class RawCameraController(
     fun vendorLastApply(): Pair<VendorKeyApplyReport?, VendorKeyApplyReport?> =
         lastVendorSessionReport to lastVendorRequestReport
 
+    fun vendorRawPreviewFpsOptions(): List<Int> {
+        val ranges = vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+        return listOf(24, 30, 48, 50, 60).filter { fps -> ranges.any { it.lower <= fps && it.upper == fps } }
+    }
+
     /** True when saved session keys or opmode differ from what the open session loaded. */
     fun vendorSessionNeedsReopen(): Boolean {
         val route = selectedCameraId ?: return false
@@ -4338,7 +4302,7 @@ class RawCameraController(
             return false
         }
         if (VendorKeyApply.fingerprint(profile.sessionEntries()) != (vendorSessionFingerprint ?: "")) return true
-        return profile.operatingMode != (vendorSessionOpmode ?: 0)
+        return profile.operatingMode != (vendorSessionOpmode ?: 0) || profile.rawPreviewFps != vendorSessionRawFps
     }
 
     /** Throwaway-builder probe of one key against the live HAL. Result posts back on the camera thread. */
@@ -4370,6 +4334,9 @@ class RawCameraController(
         if (!isOnCameraThread()) {
             cameraHandler.post { refreshVendorKeys() }
             return
+        }
+        vendorKeyCharacteristics?.let { chars ->
+            rawReader?.let { rawZslTargetFpsRange = chooseRawZslFpsRange(chars, Size(it.width, it.height)) }
         }
         updateRepeatingRequest()
     }
@@ -4560,12 +4527,12 @@ class RawCameraController(
                         "Manual focus ${String.format(java.util.Locale.US, "%.2f", it)}D (AF off)"
                     } ?: "Manual focus cleared (AF back to auto)"
                 )
-                // Manual focus takes over the held touch lock (see TouchFocus).
+                // Manual focus takes over the held touch lock (see PhotoAutoFocus).
                 if (value != null) touchFocus.dropForManualFocus()
             }
             ManualControl.EXPOSURE_COMPENSATION -> exposureCompensation = value?.toInt() ?: 0
         }
-        if (control == ManualControl.FOCUS_DISTANCE) publishPeakingActiveIfChanged()
+        if (control == ManualControl.FOCUS_DISTANCE) scopes.refreshPeaking()
         clampControlsToCamera()
         controlsChanged()
     }
@@ -4577,7 +4544,7 @@ class RawCameraController(
     }
 
     /**
-     * Video handoff: manual photo selections shared with RAW/Direct-Log takes.
+     * Video handoff: manual photo selections shared with RAW/Encoded Video takes.
      * Called on the UI thread before [stop] takes the camera; reads mirror
      * [manualControlRange] (stale by one frame at worst, same as the chips).
      */
@@ -4704,7 +4671,8 @@ class RawCameraController(
                 // fixed 30 fps the full-resolution RAW readout may not meet.
                 // RAW requests, and every request while the ZSL ring streams, ask for
                 // the best advertised 30 fps range the streams can sustain.
-                if ((includeRaw || useRawZsl) && !rawStreamCompatMode) {
+                if ((includeRaw || useRawZsl) && (!rawStreamCompatMode ||
+                        runCatching { vendorKeys(selectedCameraId).rawPreviewFps != 0 }.getOrDefault(false))) {
                     rawZslTargetFpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 }
                 if (useRawZsl) {
@@ -4724,10 +4692,7 @@ class RawCameraController(
                 // not only the ZSL path.
                 if (includeRaw) requestLensShadingMap(this)
             }.build()
-            // Motion-adaptive CAF needs gyro information even when RAW ZSL is disabled or while
-            // previous DNG/JPEG saves are still queued. The tracker is lightweight and start() is
-            // idempotent, so keep it alive for the whole preview lifetime instead of coupling it
-            // to the RAW ZSL stream.
+            // Keep motion telemetry available throughout preview for burst metadata.
             motionTracker.start(cameraHandler)
             val rawSurface = reader?.surface?.takeIf { useRawStream }
             val callback = previewCaptureCallback(generation, rawSurface, requestEpoch)
@@ -4797,7 +4762,7 @@ class RawCameraController(
                 }
             } else {
                 cancelRawZslWatchdog()
-                // Do not stop the gyro here: CAF motion tracking is independent of RAW ZSL.
+                // Keep motion telemetry running between RAW ZSL requests.
                 publishRawZslStatus()
             }
         } catch (failure: CameraAccessException) {
@@ -4850,21 +4815,14 @@ class RawCameraController(
                 result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { lastPreviewSensorTimestamp = it }
                 if (iso > 0) lastIso = iso
                 if (shutter > 0) lastExposureNanos = shutter
-                // The VF normalizes against dynamic white first: when it
-                // disagrees with the static key the chip was published from,
-                // move the chip so both report the same effective depth.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.let { dynamicWhite ->
-                        val bits = whiteLevelBitDepth(dynamicWhite)
-                        if (bits != lastWhiteLevelBits) {
-                            lastWhiteLevelBits = bits
-                            Log.i(LOG_TAG, "Dynamic white level $dynamicWhite; DNG chip now $bits-bit")
-                            onInfo(
-                                String.format(java.util.Locale.US, "DNG\n%d-bit RAW", bits),
-                                lastSensorInfo
-                            )
-                        }
-                    }
+                // Explicit calibration wins over mode-mismatched HAL metadata, like the VF/DNG.
+                val effectiveWhite = dngMetadataOverrides(selectedCameraId).whiteLevel?.toInt()
+                    ?: result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+                    ?: characteristics?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+                val bits = whiteLevelBitDepth(effectiveWhite)
+                if (bits != lastWhiteLevelBits) {
+                    lastWhiteLevelBits = bits
+                    onInfo(String.format(java.util.Locale.US, "DNG\n%d-bit RAW", bits), lastSensorInfo)
                 }
                 latestPreviewResult = result
                 noteHalAwbVerdict(result)
@@ -4934,10 +4892,8 @@ class RawCameraController(
                 publishPreviewMetadata(displayIso, displayShutter, wb)
                 if (touchFocus.active) idleAfTrace.reset() else idleAfTrace.onResult(result)
                 publishDebugState(request, result)
-                touchFocus.onAfState(
-                    result.get(CaptureResult.CONTROL_AF_STATE),
-                    result.get(CaptureResult.LENS_FOCUS_DISTANCE)
-                )
+                touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
+                    result.get(CaptureResult.CONTROL_AF_STATE))
             }
 
             override fun onCaptureFailed(
@@ -4974,7 +4930,7 @@ class RawCameraController(
         val manualFocus = selectedFocusDistanceDiopters
         val wantedAfMode = when {
             manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
-            touchFocus.autoMode -> CaptureRequest.CONTROL_AF_MODE_AUTO
+            touchFocus.active -> touchFocus.requestedMode
             else -> continuousPictureAfMode()
         }
         // P2/P3: never request an AF mode the HAL did not advertise.
@@ -5049,7 +5005,8 @@ class RawCameraController(
             // CONTROL_AE_LOCK is only meaningful with AE ON; manual/PROGRAM exposure
             // already drives the sensor directly so the lock stays off there.
             builder.set(CaptureRequest.CONTROL_AE_LOCK,
-                flashRepeatingAeModeOverride == null && touchFocus.aeLockIndefinite)
+                flashRepeatingAeModeOverride == null && touchFocus.aeLockIndefinite &&
+                    characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true)
         }
         val kelvin = selectedWbKelvin
         if (kelvin == null) {
@@ -5422,11 +5379,31 @@ class RawCameraController(
     }
 
     private val debugCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(session: CameraCaptureSession, request: CaptureRequest,
+            timestamp: Long, frameNumber: Long) {
+            if (session !== this@RawCameraController.session) return
+            val command = request.tag as? PhotoAutoFocus.Command ?: return
+            if (command.trigger == CaptureRequest.CONTROL_AF_TRIGGER_START)
+                touchFocus.onStartFrame(command.runId, frameNumber)
+        }
+
+        override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest,
+            failure: CaptureFailure) {
+            if (session !== this@RawCameraController.session) return
+            val command = request.tag as? PhotoAutoFocus.Command ?: return
+            touchFocus.onCommandFailed(command.runId)
+        }
+
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
+            if (session !== this@RawCameraController.session) return
+            (request.tag as? PhotoAutoFocus.Command)?.let { command ->
+                if (command.trigger == CaptureRequest.CONTROL_AF_TRIGGER_START)
+                    touchFocus.onStartFrame(command.runId, result.frameNumber)
+            }
             // One-shot 3A results can contain the entire PRECAPTURE transition
             // between repeating results. Feed them to the same waiter.
             flashPrecapture?.let { wait ->
@@ -5443,10 +5420,8 @@ class RawCameraController(
                 )
             }
             publishDebugState(request, result, force = true)
-            touchFocus.onAfState(
-                result.get(CaptureResult.CONTROL_AF_STATE),
-                result.get(CaptureResult.LENS_FOCUS_DISTANCE)
-            )
+            touchFocus.onResult(result.frameNumber, result.get(CaptureResult.CONTROL_AF_MODE),
+                result.get(CaptureResult.CONTROL_AF_STATE))
         }
     }
 
@@ -6292,7 +6267,10 @@ class RawCameraController(
         ).orEmpty()
         // Camera2 only accepts advertised ranges, so map the fixed-rate match back
         // to the exact published Range object.
-        val selected = ZslPolicy.selectRawZslFpsRange(
+        val target = selectedCameraId?.let { runCatching { vendorKeys(it).rawPreviewFps }.getOrDefault(0) } ?: 0
+        val selected = if (target != 0) VendorKeyProfile(rawPreviewFps = target)
+            .rawPreviewRange(ranges.map { it.lower..it.upper })?.let { Range(it.first, it.last) }
+        else ZslPolicy.selectRawZslFpsRange(
             ranges.map { it.lower..it.upper }, RAW_ZSL_TARGET_FPS
         )?.let { match ->
             ranges.firstOrNull { it.lower == match.first && it.upper == match.last }
@@ -6300,7 +6278,7 @@ class RawCameraController(
 
         Log.i(
             LOG_TAG,
-            "RAW ZSL FPS target=$RAW_ZSL_TARGET_FPS " +
+            "RAW ZSL FPS target=${target.takeIf { it != 0 } ?: RAW_ZSL_TARGET_FPS} " +
                 "range=$selected raw=${rawSize.width}x${rawSize.height}"
         )
         return selected
@@ -6579,6 +6557,7 @@ class RawCameraController(
     fun isRunning(): Boolean = running
 
     fun stop() {
+        scopes.stopPeaking()
         rawExposureAssist.clear()
         rawViewfinder?.invalidateSession()
         bguViewfinder?.invalidateSession()
@@ -6630,6 +6609,7 @@ class RawCameraController(
         stop()
         destroyed = true
         rawExposureAssist.close()
+        scopes.close()
         cameraRouteCache.clear()
         rawViewfinder?.onStarvation = null
         bguViewfinder?.onStarvation = null
@@ -7055,12 +7035,6 @@ class RawCameraController(
         private const val ISP_PREVIEW_REQUEST_PREFS = "raw_isp_preview_request"
         // Re-probe old verdicts: v1 misclassified healthy 24 fps aux streams.
         private const val ISP_PREVIEW_REQUEST_KEY_PREFIX = "needs_preview_request_v2_"
-        /**
-         * Private dead-AUTO-scan verdict store, device-local like the ISP
-         * verdict above (outside [SettingsBackup.KNOWN_STORES]).
-         */
-        private const val AF_AUTO_SCAN_PREFS = "raw_af_auto_scan"
-        private const val AF_AUTO_SCAN_DEAD_KEY_PREFIX = "dead_"
         /**
          * RAW frames counted before the ISP frame-rate probe renders its
          * verdict (~1.5 s at full rate, ~2.25 s on a stalled 20 fps stream).

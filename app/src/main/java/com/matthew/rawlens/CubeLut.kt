@@ -24,7 +24,7 @@ internal class CubeLut private constructor(
 
     /** Vulkan RGBA16F upload, x=R/y=G/z=B; opaque alpha is unused by grading. */
     fun rgbaHalfBits(): ShortArray = ShortArray(size * size * size * 4) { i ->
-        VfLogGrade.floatToHalfBits(if (i % 4 == 3) 1f else values[i / 4 * 3 + i % 4]).toShort()
+        VfVideoGrade.floatToHalfBits(if (i % 4 == 3) 1f else values[i / 4 * 3 + i % 4]).toShort()
     }
 
     fun gpuParameters(intensity: Float): FloatArray {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log variant of the superpixel: identical integer core, but the output is
+// Encoded Video variant of the superpixel: identical integer core, but the output is
 // RGBA16F so the log grade downstream keeps >8-bit precision (no banding
 // in the 10-bit encode). The viewfinder keeps its own RGBA8 variant
 // (vf_superpixel); the push-constant layout is shared, so both pipelines
@@ -96,7 +96,7 @@ vec4 quadN(ivec2 k) {
 // fringes on every edge and highlight. R and B are instead bilinearly
 // resampled to the quad centre from their 4 nearest same-colour sites
 // (9/16, 3/16, 3/16, 1/16 on the 2 px colour grid); green is the Gr/Gb
-// mean, already centred. Measured on a real Direct-Log frame vs
+// mean, already centred. Measured on a real Encoded Video frame vs
 // RawTherapee AMaZE box-downscaled 2x: display error 0.0433 -> 0.0332.
 // Steps > 2: BLOCK MEAN of every quad in the step x step block (the
 // point sample skipped 3/4 of the sensor at step 4: aliasing and noise;

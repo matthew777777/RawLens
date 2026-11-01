@@ -2,7 +2,7 @@
 //
 // Malvar-He-Cutler linear demosaic (H. Malvar, L. He, R. Cutler,
 // "High-Quality Linear Interpolation for Demosaicing of Bayer-Patterned
-// Color Images", ICASSP 2004) for the Direct-Log RECORD path: full-res
+// Color Images", ICASSP 2004) for the Encoded Video RECORD path: full-res
 // float RGB out of the 16:9 crop at video rate (single dispatch, gate
 // 20ms at 4K). The grade-YUV stage consumes it in full-RGB mode.
 //

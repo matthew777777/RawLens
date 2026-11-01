@@ -1,9 +1,9 @@
-// ---- True-10-bit stage (Direct-Log P010): superpixel FP16 in, codec P010
+// ---- True-10-bit stage (Encoded Video P010): superpixel FP16 in, codec P010
 // bytes out. Returns the completion sync fd (>= 0) or a negative -VFVK_*
 // code; -20 means the codec buffer layout is not tight P010 (loud abort,
 // never silent corruption). Shares the twin command buffers (per slot).
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_initGradeYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
+Java_com_matthew_rawlens_VfVideoGrade_initGradeYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (g->yuvPipeline != VK_NULL_HANDLE) return VFVK_OK;
@@ -74,7 +74,7 @@ static int importP010Out(Context* ctx, AHardwareBuffer* dstBuf, int yStrideB, in
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
+Java_com_matthew_rawlens_VfVideoGrade_gradeYuvSubmitNative(
     JNIEnv* env, jobject, jobject expBuffer, jobject codecBuffer,
     jintArray idims, jintArray isrc, jfloatArray fparams, jintArray istrides, jint slot,
     jint fullRgb) {
@@ -303,7 +303,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvSubmitNative(
 // documented fallback; the record path keeps the fd twin. Same-queue FIFO
 // still orders this behind a preceding computeSubmitNative.
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
+Java_com_matthew_rawlens_VfVideoGrade_gradeYuvBlockingNative(
     JNIEnv* env, jobject, jobject expBuffer, jobject codecBuffer,
     jintArray idims, jintArray isrc, jfloatArray fparams, jintArray istrides, jint slot,
     jint fullRgb) {
@@ -488,7 +488,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeYuvBlockingNative(
     return VFVK_OK;
 }
 
-// ---- Record preview (Direct-Log monitor): staged P010 in, RGBA8 out.
+// ---- Record preview (Encoded Video monitor): staged P010 in, RGBA8 out.
 // Same-queue ordered after the encode submit, own exported sync fd for
 // the EGL present path. Best-effort: any failure skips the preview for
 // that frame, the encode is unaffected.

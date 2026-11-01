@@ -738,6 +738,51 @@ Java_com_matthew_rawlens_VfEglImport_describeP010(JNIEnv* env, jobject, jobject 
     return out;
 }
 
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_matthew_rawlens_VfEglImport_describeBuffer(JNIEnv* env, jobject, jobject hardwareBuffer) {
+    if (!hardwareBuffer) return nullptr;
+    AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
+    if (!buf) return nullptr;
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(buf, &desc);
+    jlong values[6] = {desc.width, desc.height, desc.stride, desc.format, desc.layers, (jlong)desc.usage};
+    jlongArray result = env->NewLongArray(6);
+    if (result) env->SetLongArrayRegion(result, 0, 6, values);
+    return result;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_com_matthew_rawlens_VfEglImport_sampleLinearP010Grid(
+    JNIEnv* env, jobject, jobject hardwareBuffer, jint width, jint height, jint columns, jint rows) {
+    if (!hardwareBuffer || width < 2 || height < 2 || width > 16384 || height > 16384 ||
+        (width & 1) || (height & 1) || columns < 2 || rows < 2 || columns > 16 || rows > 16) return nullptr;
+    AHardwareBuffer* buf = AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
+    if (!buf) return nullptr;
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(buf, &desc);
+    // Do not infer codec-native plane offsets from its descriptor. Only our
+    // linear BLOB contract defines Y stride=width*2 and UV base=width*height*2.
+    const uint64_t bytes = (uint64_t)width * height * 3;
+    if (desc.format != AHARDWAREBUFFER_FORMAT_BLOB || desc.height != 1 || desc.width < bytes) return nullptr;
+    void* data = nullptr;
+    if (AHardwareBuffer_lock(buf, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &data) != 0 || !data) return nullptr;
+    std::vector<jint> values((size_t)columns * rows * 3);
+    const auto* words = static_cast<const uint16_t*>(data);
+    const auto* uv = words + (size_t)width * height;
+    size_t index = 0;
+    for (int gy = 0; gy < rows; ++gy) for (int gx = 0; gx < columns; ++gx) {
+        const int x = ((width - 2) * gx / (columns - 1)) & ~1;
+        const int y = ((height - 2) * gy / (rows - 1)) & ~1;
+        values[index++] = words[(size_t)y * width + x];
+        values[index++] = uv[(size_t)(y / 2) * width + x];
+        values[index++] = uv[(size_t)(y / 2) * width + x + 1];
+    }
+    AHardwareBuffer_unlock(buf, nullptr);
+    jintArray result = env->NewIntArray((jsize)values.size());
+    if (result) env->SetIntArrayRegion(result, 0, (jsize)values.size(), values.data());
+    return result;
+}
+
 // Dumb CPU copy: OUR semi-planar P010 -> codec planar flexible-YUV input
 // (all math already done on GPU; MotionCam burns CPU on swscale here).
 // Destinations are the codec Image plane ByteBuffers (direct) with their

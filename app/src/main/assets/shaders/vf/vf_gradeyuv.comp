@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log TRUE 10-bit stage: FP16 source (superpixel export OR
+// Encoded Video TRUE 10-bit stage: FP16 source (superpixel export OR
 // full-res MHC demosaic, see fullRgb) -> WB/CCM/exposure -> DIRECT
 // profile encode (BT.709 OETF / Sony S-Log3 / BT.2020 + HLG, see
 // outMode) -> limited-range YUV -> semi-planar P010 bytes in OUR OWN
@@ -77,7 +77,7 @@ vec3 hlgEncode(vec3 v2020) {
 }
 
 // Linear sRGB (D65) -> linear BT.2020 (D65), dot form (avoids mat3
-// layout pitfalls); mirrors VfLogGrade.SRGB_TO_BT2020.
+// layout pitfalls); mirrors VfVideoGrade.SRGB_TO_BT2020.
 vec3 srgbToBt2020(vec3 v) {
     return vec3(
         dot(v, vec3(0.6274040, 0.3292820, 0.0433136)),
@@ -85,7 +85,7 @@ vec3 srgbToBt2020(vec3 v) {
         dot(v, vec3(0.0163916, 0.0880132, 0.8955950)));
 }
 
-// Sony S-Log3, normalized (same mapping as vf_loggrade.comp):
+// Sony S-Log3, normalized (same mapping as vf_videograde.comp):
 // divisor 0.19, 95-code black pedestal.
 // BEGIN generated Sony gamut (tools/generate_sgamut3_cine.py)
 vec3 srgbToSgamut3Cine(vec3 v) {
@@ -121,7 +121,7 @@ vec3 slogEncode(vec3 v) {
 // encode of the developed linear value. CCM arrives WB+exposure-folded
 // on the CPU. outMode (u_misc2.y): 0 = BT.709, 1 = Sony S-Log3
 // (flat), 2 = BT.2020 + HLG. The branch is push-constant-uniform: no
-// divergence. CPU goldens are VfLogGrade.encodePixel*.
+// divergence. CPU goldens are VfVideoGrade.encodePixel*.
 
 // Output is display-linear: encode with inverse BT.1886 (gamma 2.4), not camera OETF.
 // ACES fitted rendering, Stephen Hill's RRT/ODT approximation.

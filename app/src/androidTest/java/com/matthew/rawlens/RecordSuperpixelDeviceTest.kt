@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Direct-Log binning (superpixel record path) on a REAL mosaic:
+ * Encoded Video binning (superpixel record path) on a REAL mosaic:
  * vf_superpixel_f16 -> vf_gradeyuv (superpixel mode, 1:1, identity grade)
  * -> P010, every Y/U/V code vs the CPU twin [RecordSuperpixel] + BT.709
  * golden, at steps 2 and 4; logs the chain time. Opt-in
@@ -36,9 +36,9 @@ class RecordSuperpixelDeviceTest {
         val override = args.getString("spSpv")
         check(VfVulkan.initNative(asset("shaders/vf/vf_superpixel.spv")) == VfVulkan.OK)
         check(VfVulkan.initF16Native(override?.let { File(it).readBytes() } ?: asset("shaders/vf/vf_superpixel_f16.spv")) == VfVulkan.OK)
-        check(VfLogGrade.initGradeNative(asset("shaders/vf/vf_loggrade.spv")) == VfVulkan.OK)
-        check(VfLogGrade.initGradeYuvNative(asset("shaders/vf/vf_gradeyuv.spv")) == VfVulkan.OK)
-        check(VfLogGrade.gradeLutUploadNative(VfLogGrade.bakeLut(VfLogGrade.DEFAULT_CONTRAST)) == VfVulkan.OK)
+        check(VfVideoGrade.initGradeNative(asset("shaders/vf/vf_videograde.spv")) == VfVulkan.OK)
+        check(VfVideoGrade.initGradeYuvNative(asset("shaders/vf/vf_gradeyuv.spv")) == VfVulkan.OK)
+        check(VfVideoGrade.gradeLutUploadNative(VfVideoGrade.bakeLut(VfVideoGrade.DEFAULT_CONTRAST)) == VfVulkan.OK)
         val bytes = file.readBytes()
         val codes = IntArray(sw * sh) { (bytes[2 * it].toInt() and 0xff) or ((bytes[2 * it + 1].toInt() and 0xff) shl 8) }
         val raw = VfEglImport.createBlobBayerInput(sw, sh)!!
@@ -62,13 +62,13 @@ class RecordSuperpixelDeviceTest {
                 try {
                     val lay = VfEglImport.describeP010(p010)!!
                     val (ip, fp) = VfVulkan.packParams(channels, 0, 0, fw, fh, step, sw, levels, white)
-                    val (_, gf) = VfLogGrade.packGrade(intArrayOf(fw, fh), floatArrayOf(1f, 1f, 1f, 1f),
-                        VfLogGrade.IDENTITY_CCM, 0f, false)
+                    val (_, gf) = VfVideoGrade.packGrade(intArrayOf(fw, fh), floatArrayOf(1f, 1f, 1f, 1f),
+                        VfVideoGrade.IDENTITY_CCM, 0f, false)
                     var ms = 0f
                     for (rep in 0 until 3) {  // first run warms imports/pipelines
                         val t0 = System.nanoTime()
                         check(VfVulkan.computeSubmitNative(raw, exp, ip, fp, 0, null, null) == VfVulkan.OK)
-                        val fd = VfLogGrade.gradeYuvSubmitNative(exp, p010, intArrayOf(fw, fh), intArrayOf(fw, fh),
+                        val fd = VfVideoGrade.gradeYuvSubmitNative(exp, p010, intArrayOf(fw, fh), intArrayOf(fw, fh),
                             gf, intArrayOf(lay[0], lay[1], fw, fh), 0, 0)
                         check(fd >= 0) { "grade submit $fd" }
                         while (!VfEglImport.pollSyncFd(fd)) Thread.yield()
@@ -83,7 +83,7 @@ class RecordSuperpixelDeviceTest {
                     val yuv = FloatArray(fw * fh * 3)
                     for (t in 0 until fw * fh) {
                         val lin = floatArrayOf(twin[t * 4], (twin[t * 4 + 1] + twin[t * 4 + 2]) * 0.5f, twin[t * 4 + 3])
-                        val d = VfLogGrade.encodePixel709(lin)
+                        val d = VfVideoGrade.encodePixel709(lin)
                         val y = 0.2126f * d[0] + 0.7152f * d[1] + 0.0722f * d[2]
                         yuv[t * 3] = y
                         yuv[t * 3 + 1] = (d[2] - y) / (2f * (1f - 0.0722f)) + 0.5f

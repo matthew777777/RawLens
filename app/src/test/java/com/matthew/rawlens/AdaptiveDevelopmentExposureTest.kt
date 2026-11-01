@@ -20,12 +20,12 @@ class AdaptiveDevelopmentExposureTest {
         val raw = ByteBuffer.allocate(values.size * 2).order(ByteOrder.nativeOrder())
         values.forEach { raw.putShort((it * 10000).toInt().toShort()) }
         raw.rewind()
-        val direct = AdaptiveDevelopmentExposure.analyzeRaw(raw,
+        val singleFrame = AdaptiveDevelopmentExposure.analyzeRaw(raw,
             RawPlaneLayout(width, height, width * 2, 2),
             RawNormalization(BayerPattern.RGGB, listOf(0f, 0f, 0f, 0f), 10000f),
             RawCrop(0, 0, width, height), null)
         assertEquals("CPU Bayer phase bias", reference.correctionEv, cpu.correctionEv, 0.001)
-        assertEquals("direct RAW Bayer phase bias", reference.correctionEv, direct.correctionEv, 0.001)
+        assertEquals("direct RAW Bayer phase bias", reference.correctionEv, singleFrame.correctionEv, 0.001)
     }
 
     @Test
@@ -382,11 +382,11 @@ class AdaptiveDevelopmentExposureTest {
             RawSensorUnpacker.unpackNormalized(source, layout, normalization, crop), lens
         ).cfa
         val reference = AdaptiveDevelopmentExposure.analyze(cpu)
-        val direct = AdaptiveDevelopmentExposure.analyzeRaw(source, layout, normalization, crop, lens)
+        val singleFrame = AdaptiveDevelopmentExposure.analyzeRaw(source, layout, normalization, crop, lens)
 
-        assertEquals(reference.correctionEv, direct.correctionEv, 1e-12)
-        assertEquals(reference.logAverage, direct.logAverage, 1e-12)
-        assertEquals(reference.highlight, direct.highlight, 1e-12)
+        assertEquals(reference.correctionEv, singleFrame.correctionEv, 1e-12)
+        assertEquals(reference.logAverage, singleFrame.logAverage, 1e-12)
+        assertEquals(reference.highlight, singleFrame.highlight, 1e-12)
     }
 
     private fun cfa(values: FloatArray): UnpackedRawCfa {
@@ -425,9 +425,9 @@ class AdaptiveDevelopmentExposureTest {
         assertTrue("uniform merge keyed low: $resolved", !resolved.lowKey)
         // The resolver must delegate to the single-frame meter bit-exactly:
         // same domain, same statistic, no HDR remapping for uniform merges.
-        val direct = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(direct.correctionEv, resolved.correctionEv, 1e-12)
-        assertEquals(direct.logAverage, resolved.logAverage, 1e-12)
+        val singleFrame = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        assertEquals(singleFrame.correctionEv, resolved.correctionEv, 1e-12)
+        assertEquals(singleFrame.logAverage, resolved.logAverage, 1e-12)
     }
 
     @Test
@@ -461,8 +461,8 @@ class AdaptiveDevelopmentExposureTest {
         val resolved = resolveMergedAdaptive(cfa(values), settings)
         require(resolved != null)
         assertTrue("at-white merge moved: $resolved", resolved.correctionEv in -0.05..0.1)
-        val direct = AdaptiveDevelopmentExposure.analyze(cfa(values))
-        assertEquals(direct.correctionEv, resolved.correctionEv, 1e-12)
+        val singleFrame = AdaptiveDevelopmentExposure.analyze(cfa(values))
+        assertEquals(singleFrame.correctionEv, resolved.correctionEv, 1e-12)
     }
 
     @Test

@@ -24,7 +24,7 @@ class RawExposureAssistUiTest {
         inst.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.CAMERA").close()
         val prefs = context.getSharedPreferences("rawlens_settings", Context.MODE_PRIVATE)
         assumeTrue("Initial lens setup must be complete", prefs.getBoolean("lens_setup_complete", false))
-        val videoKeys = listOf("direct_log_res", "direct_log_fps", "direct_log_profile", "video_stab_output", "direct_log_video")
+        val videoKeys = listOf("encoded_video_res", "encoded_video_fps", "encoded_video_profile", "video_stab_output", "encoded_video_enabled")
         val savedVideo = prefs.all.filterKeys { it in videoKeys }
         var ownTakeUri: android.net.Uri? = null
         val old = RawExposureAssistSettings(RawExposureOverlayMode.fromName(prefs.getString(RawExposureAssistSettings.KEY_OVERLAY, null)),
@@ -97,11 +97,11 @@ class RawExposureAssistUiTest {
             report.appendLine("OFF PASS no stale overlay/readout")
             fun bounds(id: Int): Rect = Rect().also { activity.findViewById<View>(id).getGlobalVisibleRect(it) }
             for (mode in listOf("PHOTO", "LOG", "CRAW")) {
-                val oldLog = activity.directLogEnabled
+                val oldLog = activity.encodedVideoEnabled
                 inst.runOnMainSync {
                     if (mode != "PHOTO") {
                         MainActivity::class.java.getDeclaredMethod("enterVideoMode").apply { isAccessible = true }.invoke(activity)
-                        activity.setDirectLogMode(mode == "LOG")
+                        activity.setEncodedVideoMode(mode == "LOG")
                     }
                 }
                 SystemClock.sleep(250)
@@ -131,24 +131,24 @@ class RawExposureAssistUiTest {
                 inst.runOnMainSync {
                     activity.saveRawExposureAssist(RawExposureAssistSettings(spotMeter = false))
                     if (activity.isVideoMode) MainActivity::class.java.getDeclaredMethod("exitVideoMode").apply { isAccessible = true }.invoke(activity)
-                    activity.setDirectLogMode(oldLog)
+                    activity.setEncodedVideoMode(oldLog)
                 }
             }
             if (InstrumentationRegistry.getArguments().getString("f12UiRecord") == "true") {
                 inst.runOnMainSync {
-                    prefs.edit().putString("direct_log_res", "QHD1440").putInt("direct_log_fps", 30)
-                        .putString("direct_log_profile", "HLG").putString("video_stab_output", "OG_ONLY").commit()
-                    activity.setDirectLogMode(true)
+                    prefs.edit().putString("encoded_video_res", "QHD1440").putInt("encoded_video_fps", 30)
+                        .putString("encoded_video_profile", "HLG").putString("video_stab_output", "OG_ONLY").commit()
+                    activity.setEncodedVideoMode(true)
                     MainActivity::class.java.getDeclaredMethod("enterVideoMode").apply { isAccessible = true }.invoke(activity)
                     activity.saveRawExposureAssist(RawExposureAssistSettings())
-                    MainActivity::class.java.getDeclaredMethod("doStartDirectLog", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                    MainActivity::class.java.getDeclaredMethod("doStartEncodedVideo", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
                     assertTrue("UI recording did not start", activity.videoRecording)
                     val destination = MainActivity::class.java.getDeclaredField("recordingDestination")
                         .apply { isAccessible = true }.get(activity) as DirectRecordingOutput
                     ownTakeUri = destination.uri
                 }
                 SystemClock.sleep(2500)
-                val recorder = requireNotNull(activity.logRecorder)
+                val recorder = requireNotNull(activity.encodedVideoRecorder)
                 inst.runOnMainSync { activity.saveRawExposureAssist(RawExposureAssistSettings(meterMode = RawExposureMeterMode.AVERAGE)) }
                 var top = Rect(); var preview = Rect()
                 inst.runOnMainSync { top = bounds(R.id.topBar); preview = bounds(R.id.viewfinder) }
@@ -170,8 +170,8 @@ class RawExposureAssistUiTest {
                     screenshot("record-${mode.name.lowercase()}")
                 }
                 inst.runOnMainSync { activity.findViewById<View>(R.id.shutter).performClick() }
-                await("Recording stop did not finish") { activity.lastDirectLogStats != null && !activity.videoRecording }
-                val stats = activity.lastDirectLogStats!!
+                await("Recording stop did not finish") { activity.lastEncodedVideoStats != null && !activity.videoRecording }
+                val stats = activity.lastEncodedVideoStats!!
                 report.appendLine("UI STOP $stats")
                 assertEquals(0, stats.frameErrors)
                 inst.runOnMainSync { MainActivity::class.java.getDeclaredMethod("exitVideoMode").apply { isAccessible = true }.invoke(activity) }

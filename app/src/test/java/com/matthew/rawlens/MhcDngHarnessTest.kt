@@ -8,7 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Runs [MhcReference] (the CPU twin of the Direct-Log fused shader) on a
+ * Runs [MhcReference] (the CPU twin of the Encoded Video fused shader) on a
  * dumped mosaic: `<name>_<W>x<H>.u16` (LE codes) in $RAWLENS_MHC_DIR,
  * writing `<name>.mhc.f32` (RGB, normalized, pre-WB) for comparison with
  * reference demosaics. Opt-in via RAWLENS_MHC_DIR; env RAWLENS_MHC_CHANNELS

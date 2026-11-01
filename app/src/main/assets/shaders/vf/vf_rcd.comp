@@ -2,7 +2,7 @@
 //
 // Ratio-Corrected Demosaicing (RCD v2.3) ported from RawTherapee
 // (rtengine/rcd_demosaic.cc, R. Sanz / I. Weyrich, GPL-3.0) for the
-// Direct-Log RECORD path (the viewfinder keeps superpixel). Full-res float
+// Encoded Video RECORD path (the viewfinder keeps superpixel). Full-res float
 // RGB out of the 16:9 crop; the grade-YUV stage consumes it in RCD mode.
 //
 // GPU mapping (4 dispatches, one pipeline, u_mode selects), mirroring

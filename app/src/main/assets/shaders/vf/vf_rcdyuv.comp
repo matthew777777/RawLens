@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Direct-Log FUSED RCD record stage: RCD mode-3 finalize (R/B at green
+// Encoded Video FUSED RCD record stage: RCD mode-3 finalize (R/B at green
 // sites, same math as vf_rcd.comp mode 3 in reference op order) -> per-
 // pixel direct profile encode (same grade as vf_gradeyuv.comp fullRgb
 // mode, no bypass) -> limited-range YUV -> semi-planar P010 bytes, with

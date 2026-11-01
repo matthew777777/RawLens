@@ -40,7 +40,7 @@ internal object RawVideoSaver {
 
     fun save(resolver: ContentResolver, source: File): Saved {
         val expected = source.length()
-        require(source.isFile && expected > 0) { "Missing or empty RAW video" }
+        require(source.isFile && expected > 0) { "Missing or empty RAW Video" }
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, source.name)
             put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
@@ -48,25 +48,25 @@ internal object RawVideoSaver {
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Could not create RAW video in Download/RawLens")
+            ?: throw IOException("Could not create RAW Video in Download/RawLens")
         try {
             val descriptor = resolver.openFileDescriptor(uri, "w")
-                ?: throw IOException("Could not open RAW video destination")
+                ?: throw IOException("Could not open RAW Video destination")
             ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
                 FileInputStream(source).use { input ->
                     // Android selects kernel-assisted copying for regular file descriptors.
                     val copied = FileUtils.copy(input.fd, output.fd)
                     if (copied != expected || source.length() != expected) {
-                        throw IOException("Incomplete RAW video copy ($copied/$expected)")
+                        throw IOException("Incomplete RAW Video copy ($copied/$expected)")
                     }
                 }
                 output.fd.sync()
-                if (descriptor.statSize != expected) throw IOException("RAW video size mismatch")
+                if (descriptor.statSize != expected) throw IOException("RAW Video size mismatch")
             }
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             if (resolver.update(uri, values, null, null) != 1) {
-                throw IOException("Could not publish RAW video")
+                throw IOException("Could not publish RAW Video")
             }
         } catch (failure: Exception) {
             try { resolver.delete(uri, null, null) } catch (cleanup: Exception) {
@@ -85,7 +85,7 @@ internal object RawVideoSaver {
      */
     fun saveViaTree(context: Context, treeUri: Uri, source: File): Saved {
         val expected = source.length()
-        require(source.isFile && expected > 0) { "Missing or empty RAW video" }
+        require(source.isFile && expected > 0) { "Missing or empty RAW Video" }
         if (!SidecarTreeAccess.hasWriteAccess(context, treeUri)) {
             throw IOException("No write access to granted folder")
         }
@@ -104,11 +104,11 @@ internal object RawVideoSaver {
             DocumentsContract.createDocument(
                 resolver, buildDocUri(treeUri, dirId),
                 "application/octet-stream", source.name
-            ) ?: throw IOException("Could not create RAW video in granted folder")
+            ) ?: throw IOException("Could not create RAW Video in granted folder")
         } catch (failure: IOException) {
             throw failure
         } catch (failure: Exception) {
-            throw IOException("Could not create RAW video in granted folder", failure)
+            throw IOException("Could not create RAW Video in granted folder", failure)
         }
         try {
             // Kernel-assisted copy like [save]; a userspace byte pump is far
@@ -119,17 +119,17 @@ internal object RawVideoSaver {
                 FileInputStream(source).use { input ->
                     val copied = FileUtils.copy(input.fd, output.fd)
                     if (copied != expected || source.length() != expected) {
-                        throw IOException("Incomplete RAW video copy ($copied/$expected)")
+                        throw IOException("Incomplete RAW Video copy ($copied/$expected)")
                     }
                 }
                 output.fd.sync()
-                if (descriptor.statSize != expected) throw IOException("RAW video size mismatch")
+                if (descriptor.statSize != expected) throw IOException("RAW Video size mismatch")
             }
         } catch (failure: Exception) {
             try { DocumentsContract.deleteDocument(resolver, fileUri) } catch (_: Exception) {
             }
             if (failure is IOException) throw failure
-            throw IOException("Granted-folder RAW video copy failed", failure)
+            throw IOException("Granted-folder RAW Video copy failed", failure)
         }
         return Saved(fileUri, source.delete())
     }

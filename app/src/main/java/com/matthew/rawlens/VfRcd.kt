@@ -5,12 +5,12 @@ import android.hardware.HardwareBuffer
 
 /**
  * RCD demosaic (RawTherapee v2.3 port, see `vf_rcd.comp`): full-res float
- * RGB for the Direct-Log RECORD path. One pipeline, four mode dispatches
+ * RGB for the Encoded Video RECORD path. One pipeline, four mode dispatches
  * (0 directions + low-pass to scratch, 1 green, 2 R/B at opposite, 3 R/B
  * at green); every mode stages a shared-memory CFA tile first. The
  * viewfinder never initializes this.
  *
- * Init order (shared device): [VfVulkan.initNative] then [VfLogGrade]
+ * Init order (shared device): [VfVulkan.initNative] then [VfVideoGrade]
  * (twin command buffers live with the grade init, as for grade-YUV).
  * Submits export a completion fd each (grade convention); the recorder
  * closes the intermediate fds, probes poll them for per-mode GPU timings.
@@ -74,7 +74,7 @@ internal object VfRcd {
         return iparams to fparams
     }
 
-    /** Asset selector mirroring [VfLogGrade.fusedAsset]: f16 math when available. */
+    /** Asset selector mirroring [VfVideoGrade.fusedAsset]: f16 math when available. */
     fun rcdAsset(f16Math: Boolean): String =
         if (f16Math) "shaders/vf/vf_rcd_f16.spv" else "shaders/vf/vf_rcd.spv"
 
@@ -96,7 +96,7 @@ internal object VfRcd {
      * completion sync fd or a negative code (fall back to mode 3 +
      * grade-YUV). [gradeIdims] is the export size, [gradeIsrc] the crop
      * size (must match the RCD dims), [gradeFparams] the 18 floats from
-     * [VfLogGrade.packGrade], [istrides] the P010 strides.
+     * [VfVideoGrade.packGrade], [istrides] the P010 strides.
      */
     external fun rcdFusedYuvSubmitNative(
         cfaBuffer: HardwareBuffer,

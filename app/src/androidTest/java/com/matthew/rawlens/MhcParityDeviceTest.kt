@@ -30,10 +30,10 @@ class MhcParityDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
 
         val spv = context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
-        val gradespv = context.assets.open("shaders/vf/vf_loggrade.spv").use { it.readBytes() }
+        val gradespv = context.assets.open("shaders/vf/vf_videograde.spv").use { it.readBytes() }
         val mhcspv = context.assets.open("shaders/vf/vf_mhc.spv").use { it.readBytes() }
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "vulkan init failed" }
-        check(VfLogGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
+        check(VfVideoGrade.initGradeNative(gradespv) == VfVulkan.OK) { "grade init failed" }
         check(VfMhc.initMhcNative(mhcspv) == VfVulkan.OK) { "mhc init failed" }
 
         parity64()

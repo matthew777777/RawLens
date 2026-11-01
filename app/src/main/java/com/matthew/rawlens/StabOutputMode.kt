@@ -2,7 +2,7 @@
 package com.matthew.rawlens
 
 /**
- * Direct-Log post-record stabilization output: which MP4s survive a take.
+ * Encoded Video post-record stabilization output: which MP4s survive a take.
  *
  * The gyro sidecar is recorded whenever the mode is not [OG_ONLY]; the
  * Vulkan warp pass runs on the stop path and the staged original is kept

@@ -15,7 +15,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Visual Direct-Log demosaic check (docs/refactor/vf-native-study.md):
+ * Visual Encoded Video demosaic check (docs/refactor/vf-native-study.md):
  * records a short take per [VideoDemosaic] and saves a full-res frame from
  * the middle of each as PNG for inspection on the host. Opt-in:
  * `-e rawlensDemosaicVisual true` (output: files/demosaic-<MHC|RCD>.png).
@@ -37,7 +37,7 @@ class DemosaicVisualDeviceTest {
         val out = context.getExternalFilesDir(null)!!
         for (demosaic in VideoDemosaic.entries) {
             val file = File(context.cacheDir, "visual_${demosaic.name}.mp4").apply { delete() }
-            val rec = DirectLogRecorder(manager, id, context).apply {
+            val rec = EncodedVideoRecorder(manager, id, context).apply {
                 videoDemosaic = demosaic
                 allowThermalDegrade = false
                 stabEnabled = false

@@ -1,4 +1,4 @@
-// ---- Malvar-He-Cutler fast demosaic (Direct-Log record path): single
+// ---- Malvar-He-Cutler fast demosaic (Encoded Video record path): single
 // dispatch, CFA in + write-only rgb out. Same fd-exporting convention
 // as the other submits (the recorder closes the fd when the grade's fd
 // supersedes it... in practice MHC runs right before the grade, whose
@@ -210,7 +210,7 @@ Java_com_matthew_rawlens_VfMhc_mhcSubmitNative(
 // packMhc + packGrade arrays (same semantics) via a per-slot SSBO.
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_initFusedYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
+Java_com_matthew_rawlens_VfVideoGrade_initFusedYuvNative(JNIEnv* env, jobject, jbyteArray spv) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     if (g->fusedPipeline != VK_NULL_HANDLE) return VFVK_OK;
@@ -235,7 +235,7 @@ Java_com_matthew_rawlens_VfLogGrade_initFusedYuvNative(JNIEnv* env, jobject, jby
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_gradeLutUploadNative(JNIEnv* env, jobject, jshortArray halfBits) {
+Java_com_matthew_rawlens_VfVideoGrade_gradeLutUploadNative(JNIEnv* env, jobject, jshortArray halfBits) {
     const std::lock_guard<std::mutex> vkGuard(vkMutex);
     if (g == nullptr) return VFVK_NOT_INITIALIZED;
     // 129 RGBA half words; must match kGradeLutBytes above.
@@ -251,7 +251,7 @@ Java_com_matthew_rawlens_VfLogGrade_gradeLutUploadNative(JNIEnv* env, jobject, j
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_matthew_rawlens_VfLogGrade_fusedYuvSubmitNative(
+Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     JNIEnv* env, jobject, jobject cfaBuffer, jobject p010Buffer,
     jintArray mhcIparams, jfloatArray mhcFparams,
     jintArray gradeIdims, jfloatArray gradeFparams, jintArray istrides, jint slot,
