@@ -2,19 +2,56 @@
 
 Notable changes to RawLens are documented here. The project follows [Semantic Versioning](https://semver.org/) for public releases.
 
-## [Unreleased]
+## [2.0.69] - 2026-11-01
 
-### Removed
-
-- Retire the disputed packed video RCD backend and its shader/test/build dependency closure. Saved video RCD choices migrate to MHC; photo RCD is independent. Historical source refs and affected downloads require separate cleanup.
+Changes since 2.0.27. See [full release notes](docs/releases/2.0.69.md).
 
 ### Added
 
-- Port RAWR Capture Sharpening with unchanged native algorithm/shaders, all four
-  strength presets, and the pre-WB/post-demosaic photo stage. Exact same-GPU
-  parity verified in 12 host and 4 Android JNI cases; JPEG/JXL, merge/SR and
-  settings persistence checks pass. See docs/refactor/capture-sharpening-rawr-parity.md
-  for the Bayer-only and optional sensor-clip-state scope.
+- RAWR Capture Sharpening for supported Bayer photo-development paths, enabled
+  by default, with four strength presets and shared capture/merge settings.
+- Revised RAW focus peaking with native processing, a bounded background worker,
+  improved detail/noise/blur discrimination and clipped-sample masking.
+- Material-styled controls, adaptive quick panels/tiles, text fitting, panel
+  swipes and refreshed welcome/main layouts.
+- Optional fresh-GPS location for MP4 recordings and improved lens EXIF identity.
+- Bounded Encoded Video buffer/copy diagnostics and expanded regression evidence.
+
+### Changed
+
+- Rename Direct Log to Encoded Video, with compatible preference/LUT migrations.
+- Replace photo AF heuristics with request/frame/session-correlated tap/hold AF.
+- Align profiled wavelet math/settings with RAWR: Strength 0–8, Detail 0–1.8,
+  independent Luma, corrected green-site noise/black-level normalization.
+- Prefer advertised HD ISP preview on compatibility fallback, retain cropped
+  RAW session choices, normalize size preferences and refine recovery budgets.
+- Capture application diagnostics independently of OEM logd for the full session.
+
+### Fixed
+
+- Opposed-highlight reference balancing in the camera neutral basis.
+- The redundant second-EOS wait during Encoded Video shutdown.
+- Capture-queue capacity accounting and camera-linear processing/context cleanup.
+- Stale GPS fixes: monotonic two-minute expiry and explicit cache invalidation.
+- Cropped RAW DNG saves rejected by Android DngCreator: select TinyDNG when
+  geometry is incompatible and handle platform metadata assertions recoverably.
+- CRAW recording failures on missing/invalid WB or optional metadata: use valid
+  camera neutral/gains or a same-frame RAW estimate, otherwise omit unavailable
+  neutral; keep strict frame/result pairing.
+
+### Removed
+
+- The disputed packed video RCD implementation and its shader/native/test/build
+  dependency closure. Video now offers MHC (default) and Super pixel; saved RCD
+  video choices migrate to MHC. Still-photo RCD remains available.
+
+### Known limitations
+
+- The replacement video RCD is not included. New sustained RCD performance is
+  not claimed. Device recording acceptance and affected-Xiaomi fix retests are
+  pending; host checks do not replace those tests.
+- Old commit views and an earlier issue archive remain a separate GitHub-hosting
+  cleanup matter. No legal-clearance or issue-resolution claim is made.
 
 ## [2.0.2] - 2026-10-29
 
