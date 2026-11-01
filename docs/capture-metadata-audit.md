@@ -12,10 +12,12 @@ Reference: [comparison workbook, Summary / OfInterest / Full](https://docs.googl
 | ExposureBiasValue | Capture compensation steps multiplied by the characteristics' EV step; signed rational. |
 | ISO | EXIF sensitivity plus full LONG ISOSpeed; values above 65535 use the SHORT saturation convention without losing the full speed. |
 | Timestamps | Original/digitized dates, all three subsecond and offset fields, and modification date from the saver's supplied capture ID. No conversion of boot-time sensor timestamps to Unix dates. Millisecond precision only. |
-| LensModel | Application-generated identifier from device model, physical/camera ID, reported focal length and aperture. Does not claim an OEM marketing lens name. |
+| LensModel / LensMake | Derived device model, camera type, optical 35 mm equivalent and aperture; lens make uses the device manufacturer. Neither identifies an optical supplier. Missing/invalid optics omit the model. |
 | LensSpecification | Fixed focal length and widest available aperture when characteristics declare exactly one focal length. Variable lens endpoint apertures are not guessed. |
 | DigitalZoomRatio | Reported zoom for non-logical cameras only. Logical camera zoom can include optical switching and is omitted. |
 | GPS | Altitude/ref, fix UTC date/time, processing method, horizontal positioning error when available, plus coordinates. Same GPS directory is appended to Android and single-frame TinyDNG output, including lossless JXL DNG. |
+| GPS acquisition | Every fix has a two-minute monotonic age limit. Accuracy-aware selection favors materially newer fixes after 30 seconds. Collection stops and clears the cache on pause/off; access changes invalidate it. Capture reads immutable cached data without querying location services. |
+| Video location | Encoded Video MP4 stores recording-start latitude/longitude through the MPEG-4 ISO-6709 location field. Stabilization copies source MP4/MOV location into its MP4 output. Missing fixes omit the field. RawLens has no MOV recording output. |
 | GPS encodings | JPEG version is four BYTE values rather than ASCII digits; JPEG GPS timestamp uses AndroidX's accepted HH:MM:SS input. Processing method is UNDEFINED with the ASCII character-code prefix; accuracy is explicitly rational. |
 | HDR+ composite metadata | DNG CompositeImage=2 and SourceImageNumberOfCompositeImage=[selected,used]. Both live reference snapshots and provenance-driven/offline HDR+ writers carry counts. |
 | ProfileName | Names the existing embedded matrices "RawLens Camera2 calibration"; preserves a pre-existing platform profile name. No new rendering look or external profile is implied. |
@@ -34,7 +36,7 @@ Merged/float/linear writers serialize EXIF/GPS directly through TinyDNG. Float C
 
 - **GPSImgDirection:** needs a shutter-synchronized, orientation-corrected compass measurement and magnetic/true-north reference. Location bearing is travel direction and is not a substitute.
 - **MeteringMode:** Camera2 AE regions do not reveal the vendor's metering pattern. Omitted rather than claiming spot/average metering.
-- **LensMake / LensSerialNumber:** no dependable public Camera2 source. Device manufacturer is not necessarily lens manufacturer.
+- **LensSerialNumber / optical supplier:** no dependable public Camera2 source. The inferred LensMake is the device manufacturer, which is not necessarily the optical supplier.
 - **35mm equivalent focal length:** needs validated physical-sensor/crop geometry for each capture mode and physical lens; omitted.
 - **Composite exposure times:** not yet emitted; the EXIF tag uses a structured UNDEFINED payload, not a plain exposure array. Need total capture interval and source exposure accounting, including rejected frames. Existing HDR+ ImageDescription preserves used-frame exposures.
 - **JPEG composite count tags:** AndroidX 1.4.2 does not recognize these tags; they are deliberately excluded from `CaptureExifAttributes`. A separate tested APP1 writer would be required. DNG counts are supported.

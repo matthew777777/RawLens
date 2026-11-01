@@ -16,7 +16,7 @@ internal object CaptureExifAttributes {
         37382 to "SubjectDistance", 37385 to "Flash", 37386 to "FocalLength",
         37520 to "SubSecTime", 37521 to "SubSecTimeOriginal", 37522 to "SubSecTimeDigitized",
         41495 to "SensingMethod", 41986 to "ExposureMode", 41987 to "WhiteBalance",
-        41988 to "DigitalZoomRatio", 42034 to "LensSpecification", 42036 to "LensModel"
+        41988 to "DigitalZoomRatio", 42034 to "LensSpecification", 42035 to "LensMake", 42036 to "LensModel"
     )
 
     fun writeTo(exif: ExifInterface, metadata: RawFrameMetadata, timeMillis: Long) {

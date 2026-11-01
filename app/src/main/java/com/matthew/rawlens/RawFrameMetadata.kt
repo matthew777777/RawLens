@@ -113,8 +113,10 @@ data class RawFrameMetadata(
     val awbMode: Int? = null,
     val exposureCompensationEv: Double? = null,
     val digitalZoomRatio: Float? = null,
-    /** App-generated lens identifier, built from reported camera ID/focal length/aperture. */
+    /** Derived device/lens description using the optical 35 mm equivalent and aperture. */
     val lensModel: String? = null,
+    /** Device manufacturer used as the inferred lens make; no optical supplier claim. */
+    val lensMake: String? = null,
     /** EXIF min/max focal length and maximum apertures, only for a declared fixed lens. */
     val lensSpecification: ImmutableDoubleValues? = null,
     val compositeSourceCount: Int? = null,
@@ -389,12 +391,15 @@ object RawFrameMetadataFactory {
             digitalZoomRatio = result.get(CaptureResult.CONTROL_ZOOM_RATIO)
                 ?.takeIf { it.isFinite() && it >= 1f &&
                     capabilities?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) != true },
-            lensModel = sensorKey(CaptureResult.LENS_FOCAL_LENGTH)
-                ?.takeIf { it.isFinite() && it > 0f }?.let { focal ->
-                    val aperture = sensorKey(CaptureResult.LENS_APERTURE)?.takeIf { it.isFinite() && it > 0f }
-                    "${Build.MODEL} camera ${physicalId ?: cameraId} ${focal}mm" +
-                        (aperture?.let { " f/$it" } ?: "")
-                },
+            lensMake = LensExifIdentity.make(Build.MANUFACTURER),
+            lensModel = LensExifIdentity.model(
+                Build.MODEL,
+                sensorKey(CaptureResult.LENS_FOCAL_LENGTH),
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.width,
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.height,
+                sensorKey(CaptureResult.LENS_APERTURE)
+                    ?: characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.singleOrNull()
+            ),
             lensSpecification = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                 ?.singleOrNull()?.takeIf { it.isFinite() && it > 0f }?.let { focal ->
                     characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)

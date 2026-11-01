@@ -104,7 +104,7 @@ internal fun MainActivity.showDngMetadataOverrideEditor() {
         programAeProfileStore.hasProfile(cameraId)) { showProgramPanel() }
     row("Vendor keys", "Session + request tags for this lens",
         vendorKeyStore.get(cameraId).activeEntries().isNotEmpty()) { showVendorKeysEditor() }
-    AlertDialog.Builder(this).setTitle("RAW DNG calibration")
+    RawLensDialogBuilder(this).setTitle("RAW DNG calibration")
         .setView(ScrollView(this).apply { addView(content) })
         .setNeutralButton("Reset all", null).setNegativeButton("Close", null)
         .show().also { dialog ->
@@ -126,7 +126,7 @@ internal fun MainActivity.showDngLevelsEditor(cameraId: String, defaults: DngMet
     } + metadataField("White level", white ?: 0.0)
     showDngGroupDialog(
         "Sensor levels", cameraId, "Uses the camera's declared black RGGB pattern and white level. " +
-            "Custom levels affect how RAW editors decode the file.", available,
+            "Custom levels apply to the RAW viewfinder and how RAW editors decode the file.", available,
         current.blackLevels != null || current.whiteLevel != null, inputs
     ) { custom ->
         if (custom) {
@@ -187,7 +187,7 @@ internal fun MainActivity.showDngGroupDialog(
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
         })
     }
-    val toggle = CheckBox(this).apply {
+    val toggle = SettingsSwitch(this).apply {
         text = "Use custom $title"
         isChecked = customInitially
         isEnabled = available
@@ -206,7 +206,7 @@ internal fun MainActivity.showDngGroupDialog(
     fun updateEnabled() = inputs.forEach { it.isEnabled = toggle.isChecked && available }
     toggle.setOnCheckedChangeListener { _, _ -> updateEnabled() }
     updateEnabled()
-    val dialog = AlertDialog.Builder(this).setTitle(title)
+    val dialog = RawLensDialogBuilder(this).setTitle(title)
         .setView(ScrollView(this).apply { addView(container) })
         .setNegativeButton("Cancel", null).setPositiveButton("Save", null).show()
     dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {

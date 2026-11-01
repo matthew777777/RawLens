@@ -18,7 +18,8 @@ import kotlin.math.log2
  * [captureTimeMillis]; anything unknown is omitted, never fabricated.
  * Sub-IFD layout (sorting, offsets, blobs) is owned by the writer.
  *
- * Metering pattern and lens branding are not exposed by Camera2 and are omitted.
+ * Metering pattern is not exposed by Camera2 and is omitted.
+ * Lens identity is derived at capture; it does not identify an optical supplier.
  * AE/AWB modes come from the frozen controls, never their convergence states.
  * ISO/ExposureTime are also written here for EXIF readers; legacy IFD0 copies
  * are retained by the existing DNG writers.
@@ -49,7 +50,7 @@ object DngExifDirectory {
             subject == null && flash == null && whenMs == null &&
             metadata.sensitivityIso == null && metadata.aeMode == null &&
             metadata.awbMode == null && metadata.exposureCompensationEv == null &&
-            metadata.digitalZoomRatio == null && metadata.lensModel == null &&
+            metadata.digitalZoomRatio == null && metadata.lensModel == null && metadata.lensMake == null &&
             metadata.lensSpecification == null && metadata.compositeUsedCount == null
         ) {
             return null
@@ -62,6 +63,7 @@ object DngExifDirectory {
                 shorts(42080, 2) // General composite; no claim that field of view stayed constant.
                 shorts(42081, total, used)
             }
+            metadata.lensMake?.let { ascii(42035, it) }
             metadata.lensModel?.let { ascii(42036, it) }
             metadata.lensSpecification?.toDoubleArray()?.takeIf {
                 it.size == 4 && it.all { value -> value.isFinite() && value > 0.0 }

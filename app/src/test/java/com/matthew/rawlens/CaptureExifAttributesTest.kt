@@ -23,6 +23,8 @@ class CaptureExifAttributesTest {
                 `when`(metadata.awbMode).thenReturn(1)
                 `when`(metadata.exposureTimeNanos).thenReturn(2_000_000_000L)
                 `when`(metadata.exposureCompensationEv).thenReturn(-1.5)
+                `when`(metadata.lensMake).thenReturn("OPPO")
+                `when`(metadata.lensModel).thenReturn("Find X9 Ultra ultra wide camera 14mm f/2.0")
                 ExifInterface(file).apply {
                     CaptureExifAttributes.writeTo(this, metadata, 1_700_000_000_123L)
                     GpsLocation(51.0, -1.0, -4.5, 1780276800000L, accuracyMeters = 3f).writeTo(this)
@@ -34,6 +36,8 @@ class CaptureExifAttributesTest {
                 assertEquals(-1.0, read.getAttributeDouble("ShutterSpeedValue", 0.0), 1e-6)
                 assertEquals(-1.5, read.getAttributeDouble("ExposureBiasValue", 0.0), 1e-6)
                 assertEquals("123", read.getAttribute("SubSecTimeOriginal"))
+                assertEquals("OPPO", read.getAttribute("LensMake"))
+                assertEquals("Find X9 Ultra ultra wide camera 14mm f/2.0", read.getAttribute("LensModel"))
                 assertArrayEquals(byteArrayOf(2, 3, 0, 0), read.getAttributeBytes("GPSVersionID"))
                 assertEquals("01:20:00", read.getAttribute("GPSTimeStamp"))
                 assertEquals(-4.5, read.getAltitude(0.0), 1e-6)
