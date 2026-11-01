@@ -1,0 +1,35 @@
+{
+  "ssh_push": "successful atomic update with expected-old-ref leases",
+  "branch": "refactor/2.0",
+  "release_source_tag": "2.0.68",
+  "release_source_commit": "3df17a5c3bc5ba21748520a207ae6dd55e6e9f19",
+  "old_releases": [
+    {
+      "tag": "2.0.0",
+      "id": 427565653,
+      "draft": true,
+      "asset_count": 4
+    },
+    {
+      "tag": "2.0.27",
+      "id": 428859551,
+      "draft": true,
+      "asset_count": 4
+    }
+  ],
+  "new_release": {
+    "tag": "2.0.68",
+    "id": 430452678,
+    "draft": true,
+    "asset_count": 0,
+    "production_signing_upload": "user handoff"
+  },
+  "anonymous_old_release_api_status": {
+    "2.0.0": 404,
+    "2.0.27": 404
+  },
+  "old_commit_api_status": 200,
+  "earlier_issue_attachment_status": 200,
+  "device_acceptance": "incomplete; stopped at user request",
+  "issue_status": "open; no legal resolution asserted"
+}

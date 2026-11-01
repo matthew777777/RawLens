@@ -95,3 +95,28 @@ request/evidence inventory is prepared privately. GitHub's sensitive-data cleanu
 policy does not promise removal of non-sensitive copyright-disputed material:
 https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository
 The issue is not declared resolved by these technical actions.
+
+## Remote completion verification
+
+The atomic SSH push succeeded for `refactor/2.0`, rewritten tags
+`2.0.0`, `2.0.1`, `2.0.2`, `2.0.27`, and new source tag `2.0.68`.
+A fresh mirror cloned from GitHub contained 13,019 reachable objects and passed
+the same historical-path, shader-signature and backend-reference scan. Local
+upstream tracking uses SSH and matches the cleaned branch. Private local
+backup branches were rewritten but were not published.
+
+The new private release draft is `2.0.68` (release ID 430452678), source commit
+`3df17a5c3bc5ba21748520a207ae6dd55e6e9f19`, with no APKs uploaded. Both old
+release records remain drafts with four assets each; unauthenticated API
+requests to their release tags returned 404. No new release was published.
+
+Confirmed outstanding GitHub-hosted copies: an unauthenticated request to the
+original introducing commit API returned HTTP 200, and a HEAD request to the
+earlier issue ZIP attachment returned HTTP 200. These copies are outside normal
+advertised branch/tag history. They have not been removed, and no claim of
+complete hosted-copy removal is made. The private support-request draft records
+the exact object/attachment identifiers. The repository issue remains open.
+
+See [distribution status](results/issue1-removal-2026-11-01/distribution-status.json),
+[remote refs](results/issue1-removal-2026-11-01/remote-refs-after.txt), and
+[remote history scan](results/issue1-removal-2026-11-01/remote-history-verification.json).
