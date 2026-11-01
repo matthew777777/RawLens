@@ -176,7 +176,15 @@ class DngSaver(private val context: Context) {
         val levelsSampled = metadata.blackLevelSource == BlackLevelSource.SAMPLED ||
             metadata.whiteLevelSource == WhiteLevelSource.SAMPLED
         val userPinnedLevels = overrides.blackLevels != null && overrides.whiteLevel != null
-        val effectiveBackend = if (levelsSampled && !userPinnedLevels && backend != DngWriterBackend.TINY_DNG) {
+        val preCorrection = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+        val pixelArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val platformGeometryMatches = PlatformDngCompatibility.matches(
+            image.width, image.height, preCorrection?.width(), preCorrection?.height(),
+            pixelArray?.width, pixelArray?.height)
+        val effectiveBackend = if (!platformGeometryMatches && backend != DngWriterBackend.TINY_DNG) {
+            Log.w(LOG_TAG, "RAW ${image.width}x${image.height} differs from platform DNG sensor dimensions; forcing TinyDNG for $displayName")
+            DngWriterBackend.TINY_DNG
+        } else if (levelsSampled && !userPinnedLevels && backend != DngWriterBackend.TINY_DNG) {
             Log.w(LOG_TAG, "HAL black/white levels unusable (sampled black=" +
                 "${metadata.blackLevels?.toList()?.joinToString(",")} white=${metadata.whiteLevel}); " +
                 "forcing TinyDNG backend for $displayName")
@@ -303,11 +311,18 @@ class DngSaver(private val context: Context) {
         orientation: Int,
         gps: GpsLocation?
     ) {
-        DngCreator(characteristics, result).use { creator ->
-            creator.setOrientation(orientation)
-            creator.setDescription("RawLens • Android Camera2 DngCreator")
-            gps?.let { creator.setLocation(it.toAndroidLocation()) }
-            creator.writeImage(output, image)
+        // Some OEM DngCreator implementations throw AssertionError for rejected
+        // metadata. Convert only that platform assertion to a recoverable save error;
+        // AUTO can then retry in its fresh output, and explicit ANDROID cannot kill the app.
+        try {
+            DngCreator(characteristics, result).use { creator ->
+                creator.setOrientation(orientation)
+                creator.setDescription("RawLens • Android Camera2 DngCreator")
+                gps?.let { creator.setLocation(it.toAndroidLocation()) }
+                creator.writeImage(output, image)
+            }
+        } catch (failure: AssertionError) {
+            throw IOException("Android DNG writer rejected RAW metadata: ${failure.message}", failure)
         }
     }
 
