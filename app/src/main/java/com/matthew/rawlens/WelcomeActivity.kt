@@ -326,7 +326,7 @@ class WelcomeActivity : Activity() {
         refreshFolderRow()
     }
 
-    @Suppress("DEPRECATION")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         if (step == WelcomeFlow.Step.PERMISSIONS) {
             showWelcomePage()
