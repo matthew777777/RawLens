@@ -46,11 +46,11 @@ def shrink(rule, d, sb2, scale, prm):
     e = loo if mode == "all" else e9.copy()
     if mode == "uv": e[..., 1:] = loo[..., 1:]
     s2 = np.maximum(e - n2, 0)                          # stage-1 signal var
-    if rule in ("wiener2", "wiener2g"):
+    if rule in ("wiener2", "wiener2g", "guided"):  # guided = shipped shader: 2nd stage + guide
         # closed-form 2nd stage: energy of the stage-1 estimate
         # E[(g d)^2] ~= s2^2/(s2+n2)  -> gain from a cleaner signal estimate
         s2 = (s2 * s2 / (s2 + n2 + 1e-12)).astype(F32)
-    if rule == "wiener2g":
+    if rule in ("wiener2g", "guided"):
         # luma guidance for chroma: real luma structure here => keep chroma
         # multiplicative: luma structure only amplifies chroma's OWN evidence
         s2 = s2.copy()
@@ -88,6 +88,11 @@ def guided_chroma(d, g, n2, prm):
         dc = d[..., c:c + 1]
         mc = boxk(dc, k); cov = boxk(yd * dc, k) - my * mc
         a = cov / (vy + prm.get("eps", 1.0) * n2[0])
+        if prm.get("slope_k"):
+            # Shrink the slope by its own reliability: OLS slope noise variance
+            # ~ n2_c / (k*k * var_y). James-Stein style: a *= max(0, 1 - K var_a / a^2).
+            var_a = n2[c] / (k * k * (vy + prm.get("eps", 1.0) * n2[0]))
+            a = a * np.maximum(0, 1 - prm["slope_k"] * var_a / np.maximum(a * a, 1e-20))
         bb = mc - a * my
         if not prm.get("cheap"):
             a, bb = boxk(a, k), boxk(bb, k)              # guided-filter averaging
@@ -191,3 +196,154 @@ if __name__ == "__main__":
         res["wiener2g_grain"] = metrics(denoise(noisy, a_g, b_g, wb, "wiener2g", prm), clean, wb)
     for k, v in res.items():
         print(f"{k:34s} " + " ".join(f"{m}={x:.4f}" for m, x in v.items()))
+
+
+# ------------------------------------------------------- steps 1-3 (2026-11-03)
+from scipy.ndimage import maximum_filter as _maxf, median_filter as _medf, zoom as _zoom
+
+_RING = np.ones((3, 3, 1), bool); _RING[1, 1, 0] = False
+
+
+def impulse_filter(img, A, B, T=3.0, halo=1.0):
+    """Step 3: isolated single-pixel specks (hot/impulse pixels survive demosaic).
+    Score per channel = (v - max of 8 neighbours) / sigma(median), averaged over
+    RGB. Impulse if score > T and the neighbours show no PSF halo
+    ((max8 - med8)/sigma averaged < halo): real point lights spread."""
+    med = _medf(img, footprint=_RING, mode="nearest")
+    mx = _maxf(img, footprint=_RING, mode="nearest")
+    sig = np.sqrt(np.maximum(A * np.maximum(med, 0) + B, 1e-12))
+    s = ((img - mx) / sig).mean(-1)
+    spread = ((mx - med) / sig).mean(-1)
+    hit = (s > T) & (spread < halo)
+    out = img.copy(); out[hit] = med[hit]
+    return out.astype(F32), int(hit.sum())
+
+
+# Noise variance after the app's RCD relative to the clipped raw samples
+# (flat-field, RawTherapee RCD oracle, 2026-11-03): mean is preserved.
+RCD_KAPPA = (0.82, 0.71, 0.84)
+
+
+def exact_inverse_luts(a, b, p, A, B, n=1024, nodes=48, kappa=RCD_KAPPA, target="truth"):
+    """Step 2: exact unbiased inverse (Makitalo-Foi idea) of the whole shadow
+    chain: raw z ~ N(x, A x + B) clipped at 0 (photo_rcd_input), RCD (mean kept,
+    variance x kappa_c), then the generalized-Anscombe VST incl. max(y+b,0).
+    Per channel y = E[f(RCD out)] for true scene level x, inverted onto a
+    uniform y grid. Recovers x (unclipped truth). Returns (y0, dy, table[n])."""
+    from scipy.stats import norm as _n
+    # Fixed quadrature (C++ host mirrors it): z in [-6, 6] step 0.125, normal pdf.
+    gh_x = np.linspace(-6.0, 6.0, 97); gh_w = np.exp(-0.5 * gh_x * gh_x); gh_w = gh_w / gh_w.sum()
+    xs = np.concatenate([np.linspace(0, 0.02, 1500), np.linspace(0.02, 1.5, 1500)[1:]])
+    sd = np.sqrt(np.maximum(A * xs + B, 1e-14)); t = xs / sd
+    m = xs * _n.cdf(t) + sd * _n.pdf(t)                         # E[max(z,0)]
+    m2 = (xs * xs + sd * sd) * _n.cdf(t) + xs * sd * _n.pdf(t)  # E[max(z,0)^2]
+    v = np.maximum(m2 - m * m, 1e-14)
+    luts = []
+    for c in range(3):
+        pc = float(p[c]); e = 1 - pc / 2; sc = 2 / ((2 - pc) * np.sqrt(a))
+        y = m[:, None] + np.sqrt(kappa[c] * v)[:, None] * gh_x[None, :]
+        F = (np.maximum(np.maximum(y, 0) + b, 0) ** e * sc) @ gh_w
+        F = np.maximum.accumulate(F)
+        y0, y1 = F[0], F[-1]
+        yg = np.linspace(y0, y1, n)
+        # target "input": the denoiser preserves the local mean of its input
+        # (robust: does not try to undo the raw clip, which is sensitive to the
+        # read-noise floor); "truth": recover the unclipped scene level.
+        tgt = m if target == "input" else xs
+        luts.append((y0, (y1 - y0) / (n - 1), np.interp(yg, F, tgt)))
+    return luts
+
+
+def backtransform_exact(yuv, to_rgb_f, luts, a, p, b, gate=None):
+    """Backtransform with the exact unbiased inverse; algebraic above the table."""
+    t = yuv @ to_rgb_f.T
+    out = np.empty_like(t)
+    for c in range(3):
+        y0, dy, tab = luts[c]
+        pc = float(p[c]); e = 1 - pc / 2
+        alg = (np.maximum(t[..., c], 0) * (2 - pc) * np.sqrt(a) / 2) ** (1 / e) - b
+        u = (t[..., c] - y0) / dy
+        i = np.clip(np.floor(u), 0, len(tab) - 2).astype(int); fr = u - i
+        lut = tab[i] * (1 - fr) + tab[i + 1] * fr
+        slope0 = (tab[1] - tab[0])                              # extrapolate below y0
+        lut = np.where(u < 0, tab[0] + u * slope0, lut)
+        ex = np.where(u > len(tab) - 1, alg, lut)
+        if gate is not None:
+            # Fade the correction out where clipping dominates (x < ~2 sigma):
+            # there the clip bias depends on the shaky read-noise floor.
+            xa = np.maximum(alg, 0)
+            r = xa / np.sqrt(np.maximum(gate[0] * xa + gate[1], 1e-14))
+            w = np.clip((r - 1.5) / 1.5, 0, 1); w = w * w * (3 - 2 * w)
+            ex = alg + w * (ex - alg)
+        out[..., c] = ex
+    return out.astype(F32)
+
+
+def lowres_chroma(yuv, n2y, k=4, r=4, eps=1.0, weight=1.0):
+    """Step 1: luma-guided chroma at 1/k resolution (guided filter, radius r),
+    correction added bilinearly. Targets 3-50 px chroma mottle the per-band
+    shrink leaves. n2y: luma noise variance of a k x k mean (regulariser).
+    Same semantics as denoise_img_lowres_chroma.comp: global grid of
+    ceil(W/k) blocks (partial edge blocks average in-frame pixels), boxes clamp
+    to the frame's blocks, bilinear with block centres at k*i + (k-1)/2."""
+    H, W, _ = yuv.shape; h, w = -(-H // k), -(-W // k)
+    pad = np.pad(yuv.astype(np.float64), ((0, h * k - H), (0, w * k - W), (0, 0)))
+    cnt = np.pad(np.ones((H, W)), ((0, h * k - H), (0, w * k - W)))
+    lo = pad.reshape(h, k, w, k, 3).sum((1, 3)) / cnt.reshape(h, k, w, k).sum((1, 3))[..., None]
+    box = lambda x: uniform_filter(x, size=2 * r + 1, mode="nearest")
+    Y = lo[..., 0]; my = box(Y); vy = np.maximum(box(Y * Y) - my * my, 0)
+    d = np.zeros((h, w, 2))
+    for i, c in enumerate((1, 2)):
+        C = lo[..., c]; mc = box(C); cov = box(Y * C) - my * mc
+        aa = cov / (vy + eps * n2y); bb = mc - aa * my
+        d[..., i] = box(aa) * Y + box(bb) - C
+    uy = (np.arange(H) - (k - 1) / 2) / k; ux = (np.arange(W) - (k - 1) / 2) / k
+    y0 = np.floor(uy).astype(int); x0 = np.floor(ux).astype(int)
+    fy = (uy - y0)[:, None, None]; fx = (ux - x0)[None, :, None]
+    cy0, cy1 = np.clip(y0, 0, h - 1), np.clip(y0 + 1, 0, h - 1)
+    cx0, cx1 = np.clip(x0, 0, w - 1), np.clip(x0 + 1, 0, w - 1)
+    up = ((d[cy0][:, cx0] * (1 - fx) + d[cy0][:, cx1] * fx) * (1 - fy)
+          + (d[cy1][:, cx0] * (1 - fx) + d[cy1][:, cx1] * fx) * fy)
+    res = yuv.astype(np.float64).copy(); res[..., 1:] += weight * up
+    return res.astype(F32)
+
+
+def noise_gates(a, b, median_x):
+    """Noise-dependent switches (host mirrors this): relative noise at the
+    median exposure -> low-res chroma weight (0.04..0.10 smoothstep) and the
+    impulse threshold (4 sigma at rel >= 0.10, else off)."""
+    x = max(median_x, 1e-3)
+    rel = np.sqrt(max(a * x + b, 0)) / x
+    t = np.clip((rel - 0.04) / 0.06, 0, 1)
+    return float(t * t * (3 - 2 * t)), (4.0 if rel >= 0.10 else 0.0), float(rel)
+
+
+def denoise2(img, a_g, b_g, wb, prm, steps=(1, 2, 3), scales=7, strength=1.0):
+    """RawLens production rule (guided, cheap) + steps 1-3."""
+    wb = np.asarray(wb, F32)
+    p = np.maximum(1.0 + 0.1 * np.log(1 / wb), 0).astype(F32)
+    to_yuv, to_rgb = O.setup_conversion_matrices(wb.copy())
+    f = F32(strength * 2.5)
+    nimp = 0
+    if 3 in steps:
+        if prm.get("imp_T", 4.0) > 0:
+            img, nimp = impulse_filter(img, a_g, b_g, prm.get("imp_T", 4.0), prm.get("imp_halo", 1.0))
+    buf = O.precondition_y0u0v0(img, F32(a_g), p, F32(b_g), (to_yuv / f).astype(F32))
+    out = np.zeros_like(buf)
+    for s in range(scales):
+        sb2 = F32(O.VARF ** s) ** 2
+        coarse = np.empty_like(buf); det = np.empty_like(buf)
+        O.dn_decompose(coarse, np.ascontiguousarray(buf), det, s, F32(1 / sb2))
+        out += shrink("guided", det, sb2, s, prm)
+        buf = coarse
+    out += buf
+    if 1 in steps:
+        rowy = (to_yuv / f)[0]
+        out = lowres_chroma(out, float(rowy @ rowy) / 16.0, eps=prm.get("lr_eps", 1.0),
+                            weight=prm.get("lr_weight", 1.0))
+    if 2 in steps:
+        luts = exact_inverse_luts(float(a_g), float(b_g), p, float(a_g), float(b_g),
+                                  target=prm.get("inv_target", "truth"))
+        gate = (float(a_g), float(b_g)) if prm.get("inv_gate", True) else None
+        return backtransform_exact(out, (to_rgb * f).astype(F32), luts, float(a_g), p, float(b_g), gate), nimp
+    return O.backtransform_y0u0v0(out, F32(a_g), p, F32(b_g), F32(0), (to_rgb * f).astype(F32)), nimp

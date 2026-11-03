@@ -72,6 +72,8 @@ struct Cfg {
     int algorithm = 0;
     float grain = 0.0f;
     float lumaScale = 1.0f;
+    float impulseT = 0.0f, lowresWeight = 0.0f;
+    bool exactInverse = false;
 };
 
 Cfg parse(int argc, char** argv) {
@@ -101,6 +103,9 @@ Cfg parse(int argc, char** argv) {
         else if (k == "--algorithm") c.algorithm = std::stoi(need());
         else if (k == "--grain") c.grain = std::strtof(need().c_str(), nullptr);
         else if (k == "--luma-scale") c.lumaScale = std::strtof(need().c_str(), nullptr);
+        else if (k == "--impulse") c.impulseT = std::strtof(need().c_str(), nullptr);
+        else if (k == "--lowres") c.lowresWeight = std::strtof(need().c_str(), nullptr);
+        else if (k == "--exact-inverse") c.exactInverse = true;
         else throw std::runtime_error("unknown arg " + k);
     }
     if (c.spvDir.empty() || c.inPath.empty() || !c.w || !c.h) throw std::runtime_error("missing args");
@@ -197,8 +202,16 @@ int main(int argc, char** argv) {
         shaders.threshold = spv("denoise_img_threshold");
         shaders.backtransform = spv("denoise_img_backtransform");
 #ifdef RAW_DENOISE_RAWLENS_EXT
-        if (c.algorithm == 1) shaders.wienerApply = spv("denoise_img_wiener_apply");
+        // RawLens mode writes through the buffer backtransform, like the app.
+        if (c.algorithm == 1) {
+            shaders.wienerApply = spv("denoise_img_wiener_apply");
+            shaders.backtransformBuffer = spv("denoise_img_backtransform_buffer");
+            shaders.lowresChroma = spv("denoise_img_lowres_chroma");
+            shaders.preconditionRawLens = spv("denoise_img_precondition_rl");
+            shaders.backtransformBufferRawLens = spv("denoise_img_backtransform_buffer_rl");
+        }
 #endif
+        const bool bufferOut = c.algorithm == 1;
 
         raw_denoise::DenoisePipeline pipe(ctx.pd, dev, shaders);
 
@@ -243,6 +256,8 @@ int main(int argc, char** argv) {
         };
         auto [inImg, inMem, inView] = mkImage(false);
         auto [outImg, outMem, outView] = mkImage(false);
+        Buf outBuf = vktest::mkBuf(ctx.pd, dev, (VkDeviceSize)c.w * c.h * 8u, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         Buf staging = vktest::mkBuf(ctx.pd, dev, hostIn.size() * sizeof(float),
                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -335,10 +350,18 @@ int main(int argc, char** argv) {
             p.algorithm = c.algorithm;
             p.grain = c.grain;
             p.lumaScale = c.lumaScale;
+            p.impulseT = c.impulseT;
+            p.lowresWeight = c.lowresWeight;
+            p.exactInverse = c.exactInverse;
 #endif
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;
+#ifdef RAW_DENOISE_RAWLENS_EXT
+            if (bufferOut)
+                pipe.recordToBuffer(cmd, inView, outBuf.b, (VkDeviceSize)c.w * c.h * 8u, c.w, c.h, p, VK_NULL_HANDLE);
+            else
+#endif
             pipe.record(cmd, inView, outView, c.w, c.h, p, VK_NULL_HANDLE);
             if (timed) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool, 1);
             vktest::ck(vkEndCommandBuffer(cmd), "bench end");
@@ -489,7 +512,15 @@ int main(int argc, char** argv) {
             f.write(reinterpret_cast<const char*>(preHost.data()), preHost.size() * sizeof(float));
             std::printf("BENCH_DUMP_PRE %s extent=%u\n", c.dumpPrePath.c_str(), fe);
         }
-        if (!c.dumpPath.empty()) {
+        if (!c.dumpPath.empty() && bufferOut) {
+            std::vector<float> out(hostIn.size());
+            const auto* src = static_cast<const uint16_t*>(mapBuf(dev, outBuf));
+            for (size_t i = 0; i < out.size(); ++i) out[i] = vktest::halfToFloat(src[i]);
+            vkUnmapMemory(dev, outBuf.m);
+            std::ofstream f(c.dumpPath, std::ios::binary);
+            f.write(reinterpret_cast<const char*>(out.data()), out.size() * sizeof(float));
+            std::printf("BENCH_DUMP %s\n", c.dumpPath.c_str());
+        } else if (!c.dumpPath.empty()) {
             std::vector<float> out(hostIn.size());
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;

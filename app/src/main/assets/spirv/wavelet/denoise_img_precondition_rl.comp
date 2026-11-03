@@ -1,0 +1,92 @@
+#version 450
+
+// RawLens variant of denoise_img_precondition.comp (+ step 3 impulse filter).
+// Kept separate so RAWR mode runs the unchanged shader (byte-identical).
+//
+// Tiled VST precondition + Y0U0V0 conversion for production stills.
+// Reads the full-frame pre-WB linear source image (clamped global reads give
+// exact tile halos, including DT edge behavior at frame borders) and writes
+// the extended tile buffer. The Y0U0V0 matrix already folds
+// strength/compensate_strength scaling (host-side, like process_wavelets).
+
+#ifndef LOCAL_X
+#define LOCAL_X 16
+#endif
+#ifndef LOCAL_Y
+#define LOCAL_Y 16
+#endif
+
+layout(local_size_x = LOCAL_X, local_size_y = LOCAL_Y) in;
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D srcImage;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D tileImage;
+
+layout(push_constant) uniform Parameters {
+    uint srcW;
+    uint srcH;
+    int originX; // extended-tile origin in source pixels (may be < 0, clamped)
+    int originY;
+    uint tileEW; // extended tile extent (cropped per tile)
+    uint tileEH;
+    float a; // a_green * compensate_p
+    float p0;
+    float p1;
+    float p2;
+    float b; // b_green
+    float impT; // RawLens: isolated-speck threshold in sigma (0 = off, RAWR)
+    mat3 toYuv; // WB-adaptive, strength-scaled, GLSL column order
+}
+p;
+
+// RawLens step 3: a single pixel brighter than all 8 neighbours by > impT
+// sigma (mean over RGB, sigma from the noise model at the neighbour median)
+// whose neighbours show no PSF halo ((max8 - med8) < 1 sigma) is an impulse
+// that survived demosaic: replace it by the neighbour median (rank 4 of 8,
+// matching scipy median_filter on an 8-tap footprint).
+vec3 srcAt(ivec2 q) {
+    q.x = clamp(q.x, 0, int(p.srcW) - 1);
+    q.y = clamp(q.y, 0, int(p.srcH) - 1);
+    return imageLoad(srcImage, q).rgb;
+}
+
+vec3 despeckle(ivec2 q, vec3 c) {
+    vec3 n[8];
+    int k = 0;
+    for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++)
+            if (i != 0 || j != 0) n[k++] = srcAt(q + ivec2(i, j));
+    vec3 mx = n[0];
+    for (int i = 1; i < 8; i++) mx = max(mx, n[i]);
+    vec3 med;
+    for (int ch = 0; ch < 3; ch++) {
+        float m = 0.0;
+        for (int i = 0; i < 8; i++) {
+            int below = 0, same = 0;
+            for (int j = 0; j < 8; j++) {
+                below += n[j][ch] < n[i][ch] ? 1 : 0;
+                same += (n[j][ch] == n[i][ch] && j < i) ? 1 : 0;
+            }
+            if (below + same == 4) m = n[i][ch];
+        }
+        med[ch] = m;
+    }
+    vec3 sig = sqrt(max(p.a * max(med, vec3(0.0)) + p.b, vec3(1e-12)));
+    float score = dot((c - mx) / sig, vec3(1.0 / 3.0));
+    float spread = dot((mx - med) / sig, vec3(1.0 / 3.0));
+    return (score > p.impT && spread < 1.0) ? med : c;
+}
+
+void main() {
+    uint lx = gl_GlobalInvocationID.x;
+    uint ly = gl_GlobalInvocationID.y;
+    if (lx >= p.tileEW || ly >= p.tileEH) return;
+    ivec2 q = ivec2(p.originX + int(lx), p.originY + int(ly));
+    vec3 rgb = srcAt(q);
+    if (p.impT > 0.0) rgb = despeckle(q, rgb);
+    vec3 pv = vec3(p.p0, p.p1, p.p2);
+    vec3 expon = 1.0 - pv * 0.5;
+    vec3 scale = 2.0 / ((2.0 - pv) * sqrt(p.a));
+    vec3 tmp = pow(max(rgb + p.b, vec3(0.0)), expon) * scale;
+    vec3 yuv = p.toYuv * tmp;
+    imageStore(tileImage, ivec2(lx, ly), vec4(yuv, 0.0));
+}

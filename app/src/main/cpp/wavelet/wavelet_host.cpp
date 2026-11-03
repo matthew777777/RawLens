@@ -163,13 +163,16 @@ class WaveletHost {
     WaveletHost& operator=(const WaveletHost&) = delete;
 
     int load_shaders(AAssetManager* mgr) {
-        static const char* kNames[6] = {
+        static const char* kNames[9] = {
             "spirv/wavelet/denoise_img_precondition.spv",
             "spirv/wavelet/denoise_img_atrous.spv",
             "spirv/wavelet/denoise_img_threshold.spv",
             "spirv/wavelet/denoise_img_backtransform.spv",
             "spirv/wavelet/denoise_img_backtransform_buffer.spv",
             "spirv/wavelet/denoise_img_wiener_apply.spv",
+            "spirv/wavelet/denoise_img_lowres_chroma.spv",
+            "spirv/wavelet/denoise_img_precondition_rl.spv",
+            "spirv/wavelet/denoise_img_backtransform_buffer_rl.spv",
         };
         for (const char* name : kNames) spv_.push_back(read_asset(mgr, name));
         raw_denoise::DenoiseShaders shaders{};
@@ -183,8 +186,11 @@ class WaveletHost {
         shaders.backtransform = bin(3);
         shaders.backtransformBuffer = bin(4);
         shaders.wienerApply = bin(5);
+        shaders.lowresChroma = bin(6);
+        shaders.preconditionRawLens = bin(7);
+        shaders.backtransformBufferRawLens = bin(8);
         pipe_ = std::make_unique<raw_denoise::DenoisePipeline>(phys_, device_, shaders);
-        return 6;
+        return 9;
     }
 
     void begin_commands() {
@@ -400,12 +406,18 @@ class WaveletHost {
                 p.noiseB = e.b;
             }
             p.lumaScale = rawlens_noise::lumaScaleFor(p.noiseA, p.noiseB, e.medianX);
+            const auto g = rawlens_noise::gatesFor(p.noiseA, p.noiseB, e.medianX);
+            p.lowresWeight = g.lowresWeight;
+            p.impulseT = g.impulseT;
         } else if (!haveProfile) {
             throw std::runtime_error("wavelet: no noise profile and blind estimate failed");
         }
+        p.exactInverse = true;
         __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",
-                            "noise %s: a=%.3g b=%.3g (estimate ok=%d a=%.3g b=%.3g bins=%d median=%.4f) lumaScale=%.2f",
-                            source, p.noiseA, p.noiseB, e.ok, e.a, e.b, e.bins, e.medianX, p.lumaScale);
+                            "noise %s: a=%.3g b=%.3g (estimate ok=%d a=%.3g b=%.3g bins=%d median=%.4f) "
+                            "lumaScale=%.2f lowres=%.2f impulse=%.0f",
+                            source, p.noiseA, p.noiseB, e.ok, e.a, e.b, e.bins, e.medianX, p.lumaScale,
+                            p.lowresWeight, p.impulseT);
     }
 
    private:

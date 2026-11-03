@@ -37,6 +37,11 @@ struct DenoiseShaders {
     DenoiseSpirv backtransformBuffer;
     // Required for algorithm 1 (RawLens Wiener): denoise_img_wiener_apply.
     DenoiseSpirv wienerApply;
+    // Optional (RawLens steps 1-3): RawLens-only shader variants, so RAWR mode
+    // keeps running the unchanged (byte-identical) precondition/backtransform.
+    DenoiseSpirv lowresChroma;
+    DenoiseSpirv preconditionRawLens;
+    DenoiseSpirv backtransformBufferRawLens;
 };
 
 struct DenoiseParams {
@@ -65,10 +70,18 @@ struct DenoiseParams {
     // adaptive strength; 1 = unchanged).
     float lumaScale = 1.0f;
     // Tile range [tileBegin, tileEnd) in row-major tile order, so callers can
-    // split one frame over several submits (Mali kills very long submits).
-    // Tiles are independent; the default records every tile.
+    // split one frame over several short submits. Tiles are independent; the
+    // default records every tile.
     uint32_t tileBegin = 0;
     uint32_t tileEnd = 0xFFFFFFFFu;
+    // RawLens Wiener only (all off = previous RawLens output):
+    // step 3: isolated-speck threshold in sigma before the VST (0 = off).
+    float impulseT = 0.0f;
+    // step 2: exact unbiased inverse VST (clip + RCD-aware tables, gated).
+    bool exactInverse = false;
+    // step 1: low-res luma-guided chroma correction weight (0 = off).
+    float lowresWeight = 0.0f;
+    float lowresEps = 1.0f;
 };
 
 // Maps a Camera2 SENSOR_NOISE_PROFILE (S,O) pair to the normalized domain:

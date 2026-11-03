@@ -1,0 +1,99 @@
+#version 450
+
+// RawLens step 1: luma-guided chroma at 1/4 resolution (guided filter), per
+// tile. Targets the 3-50 px chroma mottle the per-band wavelet shrink leaves.
+// Mirrors lowres_chroma() in tools/wavelet-parity/rawlens_denoise_proto.py.
+//
+// The 1/4 grid is global: block (I,J) covers frame pixels [4I,4I+4) x
+// [4J,4J+4) clipped to the frame; box windows clamp to the frame's blocks
+// (scipy mode="nearest"). Tile origins and halos are multiples of 4, so every
+// tile sees the same blocks and inner pixels are exact (halo covers 2r+2
+// blocks). Values are the denoised Y0U0V0 (accum + residue) in VST units.
+//
+// mode 0 (down):  block means of accum + residue        -> lrImg  (Y,U,V)
+// mode 1 (stats): r-box regression of U,V on Y          -> abImg  (aU,bU,aV,bV)
+// mode 2 (corr):  r-box mean of a,b; d = a*Y + b - C     -> corrImg (dU,dV)
+
+#ifndef LOCAL_X
+#define LOCAL_X 16
+#endif
+#ifndef LOCAL_Y
+#define LOCAL_Y 16
+#endif
+
+layout(local_size_x = LOCAL_X, local_size_y = LOCAL_Y) in;
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D accumImg;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D residueImg;
+layout(set = 0, binding = 2, rgba32f) uniform image2D lrImg;
+layout(set = 0, binding = 3, rgba32f) uniform image2D abImg;
+layout(set = 0, binding = 4, rgba32f) writeonly uniform image2D corrImg;
+
+layout(push_constant) uniform Parameters {
+    uint lrW;    // tile-local 1/4 extent
+    uint lrH;
+    int lrOX;    // global block index of local (0,0)
+    int lrOY;
+    int lrNW;    // frame blocks: ceil(frame/4)
+    int lrNH;
+    int pixOX;   // global pixel of extended-tile (0,0) (= 4 * lrOX)
+    int pixOY;
+    uint frameW;
+    uint frameH;
+    uint mode;
+    int r;       // box radius in blocks
+    float epsN2; // slope regulariser: eps * luma noise variance of a block mean
+}
+p;
+
+// Global block -> tile-local texel, clamped to the frame's blocks and the tile.
+ivec2 local(ivec2 g) {
+    g = clamp(g, ivec2(0), ivec2(p.lrNW - 1, p.lrNH - 1));
+    return clamp(g - ivec2(p.lrOX, p.lrOY), ivec2(0), ivec2(int(p.lrW) - 1, int(p.lrH) - 1));
+}
+
+void main() {
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= int(p.lrW) || l.y >= int(p.lrH)) return;
+    ivec2 g = l + ivec2(p.lrOX, p.lrOY);
+    if (p.mode == 0u) {
+        vec3 s = vec3(0.0);
+        int n = 0;
+        for (int j = 0; j < 4; j++) {
+            int py = 4 * g.y + j;
+            if (py < 0 || py >= int(p.frameH)) continue;
+            for (int i = 0; i < 4; i++) {
+                int px = 4 * g.x + i;
+                if (px < 0 || px >= int(p.frameW)) continue;
+                ivec2 t = ivec2(px - p.pixOX, py - p.pixOY);
+                s += imageLoad(accumImg, t).rgb + imageLoad(residueImg, t).rgb;
+                n++;
+            }
+        }
+        imageStore(lrImg, l, vec4(n > 0 ? s / float(n) : vec3(0.0), 0.0));
+        return;
+    }
+    const float inv = 1.0 / float((2 * p.r + 1) * (2 * p.r + 1));
+    if (p.mode == 1u) {
+        float my = 0.0, myy = 0.0;
+        vec2 mc = vec2(0.0), myc = vec2(0.0);
+        for (int j = -p.r; j <= p.r; j++)
+            for (int i = -p.r; i <= p.r; i++) {
+                vec3 v = imageLoad(lrImg, local(g + ivec2(i, j))).rgb;
+                my += v.x; myy += v.x * v.x; mc += v.yz; myc += v.x * v.yz;
+            }
+        my *= inv; myy *= inv; mc *= inv; myc *= inv;
+        float vy = max(myy - my * my, 0.0);
+        vec2 a = (myc - my * mc) / (vy + p.epsN2);
+        vec2 b = mc - a * my;
+        imageStore(abImg, l, vec4(a.x, b.x, a.y, b.y));
+        return;
+    }
+    vec4 m = vec4(0.0);
+    for (int j = -p.r; j <= p.r; j++)
+        for (int i = -p.r; i <= p.r; i++) m += imageLoad(abImg, local(g + ivec2(i, j)));
+    m *= inv;
+    vec3 v = imageLoad(lrImg, l).rgb;
+    vec2 d = vec2(m.x * v.x + m.y - v.y, m.z * v.x + m.w - v.z);
+    imageStore(corrImg, l, vec4(d, 0.0, 0.0));
+}

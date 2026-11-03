@@ -157,8 +157,36 @@ On the ISO 1442 frame with corrected noise, RAWR removes visible structure
    - Validate: replay the 18 test DNGs (Redmi, vivo, other phone); Redmi
      model must reproduce the ~10x base-ISO correction and keep the ISO 4523
      profile; measure estimator CPU time on device (GPU histogram if > ~30 ms).
-5. RawLens speed on Mali (load-bound): fused estimate/apply with ping-pong
+5. **Compare against PhotonCamera ESD3D2** (after step 4, before speed work).
+   Same DNGs (night 181122_683, the 18 test DNGs, own tripod clean/noisy
+   pairs ISO 50 vs high ISO as reference) through ESD3D2 and RawLens Wiener;
+   metrics: PSNR/SSIM vs clean pair, per-band chroma residual, shadow bias,
+   grain look (side-by-side crops), GPU time. Close any quality gap before
+   moving on.
+6. RawLens speed on Mali (load-bound): fused estimate/apply with ping-pong
    detail, fp16 apply math, skip regression at coarse scales.
-6. Two-pass luma (WHT pilot) if night luma still needs it.
-7. Own clean/noisy tripod pairs (ISO 50 vs high ISO) as the benchmark.
-8. Later: pre-demosaic denoise; learned non-local model.
+7. Two-pass luma (WHT pilot) if night luma still needs it; learned non-local
+   model if the ESD3D2 comparison shows it is worth it.
+8. Last, maybe: pre-demosaic (Bayer, GALOSH-RAW style) denoise, only after
+   the post-demosaic denoiser is pushed to its limit. Packed RGGB half-res,
+   reuse VST/a-trous/Wiener; fixes the clip-before-RCD shadow bias; decide
+   placement vs MFSR (per frame vs merged). Python prototype first, port
+   only on a clear win.
+
+## Steps 1-3 (2026-11-03, Mac-verified; device run pending)
+Night DNG (IMG_20261102_181122_683), production chain clip01 -> RCD oracle -> denoise.
+- Step 1 low-res chroma (1/4 grid guided filter, `denoise_img_lowres_chroma.comp`):
+  road chroma mid/coarse 0.0031/0.0019 -> 0.0025/0.0007 (RAWR 0.0016/0.0005),
+  palm luma detail kept. Weight fades in over relative noise 0.04..0.10
+  (synthetic: +3-6% edge chroma error at low noise, nothing to gain there).
+- Step 2 exact inverse VST (clip + RCD-aware tables, RCD kappa R/G/B
+  0.82/0.71/0.84 from the oracle), faded out below ~2 sigma: mid-shadow bias
+  -1.8/-1.4/-3.5% -> +0.1/+0.1/-2.4%; robust to the read-noise floor.
+  Remaining deep-shadow blue +13% is in the input (raw clipped at 0 before
+  RCD, photo_rcd_input.h): separate future item.
+- Step 3 impulse (precondition_rl): 4 sigma, no-PSF-halo test, only at
+  relative noise >= 0.10; low-ISO files would otherwise lose real detail.
+- RAWR byte-identical 10/10 (RawLens uses separate `_rl` shader variants);
+  RawLens tiles 256 vs 1536 byte-identical; GPU == prototype to fp16 level.
+- Prototype fix: `guided` rule now applies the 2nd Wiener stage + luma guide
+  like the shipped shader (earlier prototype numbers were slightly off).

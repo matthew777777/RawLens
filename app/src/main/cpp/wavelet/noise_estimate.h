@@ -146,4 +146,25 @@ inline float lumaScaleFor(float a, float b, float medianX) {
     return std::clamp(rel / 0.08f, 0.4f, 1.0f);
 }
 
+// Noise-dependent switches (mirrors noise_gates() in
+// tools/wavelet-parity/rawlens_denoise_proto.py). Relative noise at the median
+// exposure: low-res chroma fades in over 0.04..0.10 (it only costs edge colour
+// at low noise), the isolated-speck filter (4 sigma) runs from 0.10 (below
+// that, fine real detail also passes a 3-4 sigma test).
+struct Gates {
+    float lowresWeight = 0.0f;
+    float impulseT = 0.0f;
+    float rel = 0.0f;
+};
+
+inline Gates gatesFor(float a, float b, float medianX) {
+    Gates g;
+    const float x = std::max(medianX, 1e-3f);
+    g.rel = std::sqrt(std::max(a * x + b, 0.0f)) / x;
+    const float t = std::clamp((g.rel - 0.04f) / 0.06f, 0.0f, 1.0f);
+    g.lowresWeight = t * t * (3.0f - 2.0f * t);
+    g.impulseT = g.rel >= 0.10f ? 4.0f : 0.0f;
+    return g;
+}
+
 }  // namespace rawlens_noise
