@@ -73,7 +73,7 @@ internal class HdrBracketSaveJob(
                 val overrides = captureDngOverrides
                 val names = pending.mapIndexed { index, frame ->
                     val metadata = RawFrameMetadataFactory.capture(
-                        cameraId, frame.image, c, frame.result, orientation
+                        cameraId, frame.image, c, frame.result, orientation, levelOverrides = captureDngOverrides
                     )
                     // The same Image is unpacked for merging next. Do not let a writer
                     // backend's buffer cursor changes alter the RAW plane origin.
@@ -99,7 +99,7 @@ internal class HdrBracketSaveJob(
                 if (saveEachBracket) return
             }
             val snapshots = pending.map { frame ->
-                val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
+                val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = captureDngOverrides)
                 val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
                     ?: throw UnsupportedOperationException("HDR RAW geometry is not supported")
                 val normalization = metadata.normalizationOrNull()

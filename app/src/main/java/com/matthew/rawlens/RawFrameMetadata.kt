@@ -38,8 +38,8 @@ data class LensShadingSnapshot(
     val gains: ImmutableFloatValues
 )
 
-enum class BlackLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED }
-enum class WhiteLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED }
+enum class BlackLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED, USER_OVERRIDE }
+enum class WhiteLevelSource { DYNAMIC, STATIC, MISSING, SAMPLED, USER_OVERRIDE }
 
 /**
  * Frozen metadata from the exact TotalCaptureResult paired to one RAW_SENSOR Image timestamp.
@@ -154,7 +154,8 @@ object RawFrameMetadataFactory {
         image: Image,
         characteristics: CameraCharacteristics,
         result: TotalCaptureResult,
-        exifOrientation: Int
+        exifOrientation: Int,
+        levelOverrides: DngMetadataOverrides = DngMetadataOverrides()
     ): RawFrameMetadata {
         val cfaValue = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
         val cfaResult = runCatching { cfaValue?.let(BayerPattern::fromCamera2) }
@@ -186,8 +187,8 @@ object RawFrameMetadataFactory {
             ?.let { pattern -> FloatArray(4) { index ->
                 pattern.getOffsetForIndex(index and 1, index shr 1).toFloat()
             } }
-        val reportedBlack = dynamicBlack ?: staticBlack
         val reportedBlackSource = when {
+            levelOverrides.blackLevels != null -> BlackLevelSource.USER_OVERRIDE
             dynamicBlack != null -> BlackLevelSource.DYNAMIC
             staticBlack != null -> BlackLevelSource.STATIC
             else -> BlackLevelSource.MISSING
@@ -197,8 +198,11 @@ object RawFrameMetadataFactory {
             ?.takeIf { it > 0 }?.toFloat()
         val staticWhite = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
             ?.takeIf { it > 0 }?.toFloat()
-        val reportedWhite = dynamicWhite ?: staticWhite
+        val (reportedBlack, reportedWhite) = levelOverrides.captureSensorLevels(
+            dynamicBlack ?: staticBlack, dynamicWhite ?: staticWhite
+        )
         val reportedWhiteSource = when {
+            levelOverrides.whiteLevel != null -> WhiteLevelSource.USER_OVERRIDE
             dynamicWhite != null -> WhiteLevelSource.DYNAMIC
             staticWhite != null -> WhiteLevelSource.STATIC
             else -> WhiteLevelSource.MISSING
@@ -219,6 +223,12 @@ object RawFrameMetadataFactory {
         val white = repaired?.second ?: reportedWhite
         val blackSource = if (repaired != null) BlackLevelSource.SAMPLED else reportedBlackSource
         val whiteSource = if (repaired != null) WhiteLevelSource.SAMPLED else reportedWhiteSource
+
+        if (levelOverrides.blackLevels != null || levelOverrides.whiteLevel != null) {
+            android.util.Log.i("RawLensLevels", "CAPTURE_LEVELS route=$cameraId frame=${result.frameNumber} " +
+                "black=${black?.joinToString()} source=$blackSource white=$white source=$whiteSource " +
+                "halWhite=${dynamicWhite ?: staticWhite}")
+        }
 
         val pixelSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val imageCrop = image.cropRect.snapshot()!!

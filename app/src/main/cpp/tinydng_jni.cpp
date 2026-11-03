@@ -1,5 +1,6 @@
 #include <jni.h>
 #include "tinydng.h"
+#include "raw_dng_stream.h"
 #include <algorithm>
 #include <climits>
 #include <cstdint>
@@ -7,6 +8,35 @@
 #include <memory>
 #include <stdexcept>
 #include <vector>
+
+namespace {
+struct RawDngSink {
+    JNIEnv* env;
+    jobject output;
+    jmethodID write;
+    jbyteArray chunk;
+    uint64_t position = 0;
+};
+size_t rawDngWrite(tinydng_write_io* io, uint64_t offset, const void* data, size_t size) {
+    auto* sink = static_cast<RawDngSink*>(io->backend);
+    if (offset != sink->position || sink->env->ExceptionCheck()) return 0;
+    const auto* bytes = static_cast<const jbyte*>(data);
+    size_t done = 0;
+    while (done < size) {
+        const jsize n = static_cast<jsize>(std::min<size_t>(256 * 1024, size - done));
+        sink->env->SetByteArrayRegion(sink->chunk, 0, n, bytes + done);
+        if (sink->env->ExceptionCheck()) break;
+        sink->env->CallVoidMethod(sink->output, sink->write, sink->chunk, 0, n);
+        if (sink->env->ExceptionCheck()) break;
+        done += n;
+        sink->position += n;
+    }
+    return done;
+}
+uint64_t rawDngSize(tinydng_write_io* io) {
+    return static_cast<RawDngSink*>(io->backend)->position;
+}
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_matthew_rawlens_NativeDngWriter_writeNative(
@@ -54,6 +84,24 @@ Java_com_matthew_rawlens_NativeDngWriter_writeNative(
         image.photometric = 32803;
         image.data = data; image.data_size = static_cast<size_t>(bytes);
         image.fields = fields.data(); image.field_count = fields.size();
+        if (!jxl) {
+            jclass cls = env->GetObjectClass(output);
+            if (!cls) return;
+            jmethodID write = env->GetMethodID(cls, "write", "([BII)V");
+            env->DeleteLocalRef(cls);
+            if (!write) return;
+            jbyteArray chunk = env->NewByteArray(256 * 1024);
+            if (!chunk) return;
+            RawDngSink state{env, output, write, chunk};
+            tinydng_write_io sink{};
+            sink.write = rawDngWrite;
+            sink.size = rawDngSize;
+            sink.backend = &state;
+            const auto status = rawlens_stream_raw_dng(context.get(), sink, &image, &error);
+            env->DeleteLocalRef(chunk);
+            if (status != TINYDNG_OK) throw std::runtime_error(error.message);
+            return;
+        }
         tinydng_write_options options{};
         options.compression = jxl ? TINYDNG_COMPRESSION_JPEG_XL : 1;
         uint8_t* encoded = nullptr;

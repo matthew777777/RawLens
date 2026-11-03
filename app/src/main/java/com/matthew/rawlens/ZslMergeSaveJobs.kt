@@ -72,7 +72,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             val overrides = saveSettings.dngOverrides
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
-                    cameraId, frame.image, c, frame.result, orientation
+                    cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
                 )
                 val buffer = frame.image.planes.single().buffer
                 val position = buffer.position()
@@ -92,7 +92,7 @@ internal class HdrPlusZslSaveJob(private val context: Context, private val host:
             }
         }
         val inputs = selected.map { frame ->
-            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
+            val metadata = RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
             val geometry = metadata.bufferGeometry as? RawBufferGeometry.Supported
                 ?: throw UnsupportedOperationException("HDR+ RAW geometry is not supported")
             val normalization = metadata.normalizationOrNull()
@@ -291,7 +291,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
             val overrides = saveSettings.dngOverrides
             selected.forEachIndexed { index, frame ->
                 val metadata = RawFrameMetadataFactory.capture(
-                    cameraId, frame.image, c, frame.result, orientation
+                    cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides
                 )
                 val buffer = frame.image.planes.single().buffer
                 val position = buffer.position()
@@ -314,7 +314,7 @@ internal class MfsrZslSaveJob(private val context: Context, private val host: Ra
         val tMerge0 = android.os.SystemClock.elapsedRealtime()
         val ordered = try {
             MfsrMerge.prepare(selected) { frame ->
-                RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation)
+                RawFrameMetadataFactory.capture(cameraId, frame.image, c, frame.result, orientation, levelOverrides = saveSettings.dngOverrides)
             }
         } finally {
             // Images stay open for the just-in-time decode inside merge.

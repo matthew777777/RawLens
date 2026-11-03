@@ -1,10 +1,67 @@
 /* Host regression for the exact vendored v3 writer used by Android. */
 #include "tinydng.h"
+#include "../app/src/main/cpp/raw_dng_stream.h"
+#include <stdlib.h>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 static void be32(unsigned char *p, unsigned v) {
     p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=v;
+}
+typedef struct stream_sink { FILE* file; uint64_t position; int fail; } stream_sink;
+static size_t stream_write(tinydng_write_io* io, uint64_t offset, const void* data, size_t size) {
+    stream_sink* sink = (stream_sink*)io->backend;
+    assert(offset == sink->position);
+    if (sink->fail && sink->position > 0) return 0;
+    size_t written = fwrite(data, 1, size, sink->file);
+    sink->position += written;
+    return written;
+}
+static uint64_t stream_size(tinydng_write_io* io) {
+    return ((stream_sink*)io->backend)->position;
+}
+static void verify_stream(const tinydng_write_image* image, int failure) {
+    tinydng_error error = {0};
+    tinydng_context* ctx = tinydng_context_create(NULL, &error);
+    assert(ctx);
+    stream_sink state = {tmpfile(), 0, failure};
+    assert(state.file);
+    tinydng_write_io io = {0};
+    io.backend = &state; io.write = stream_write; io.size = stream_size;
+    tinydng_status status = rawlens_stream_raw_dng(ctx, io, image, &error);
+    if (failure) {
+        assert(status != TINYDNG_OK);
+    } else {
+        assert(status == TINYDNG_OK);
+        size_t peak = tinydng_context_memory_peak(ctx);
+        printf("Streaming %ux%u writer peak: %zu bytes\n", image->width, image->height, peak);
+        /* Excludes caller-owned source and the OS file cache; includes writer workspace. */
+        assert(peak < 2 * 1024 * 1024);
+        assert(tinydng_context_memory_used(ctx) == 0);
+        unsigned char* bytes = malloc((size_t)state.position);
+        assert(bytes); rewind(state.file);
+        assert(fread(bytes, 1, (size_t)state.position, state.file) == state.position);
+        tinydng_document* doc = NULL;
+        assert(tinydng_open_memory(ctx, bytes, (size_t)state.position, NULL, &doc, &error) == TINYDNG_OK);
+        const tinydng_image_info* info = tinydng_image_get(doc, 0);
+        assert(info && info->width == image->width && info->height == image->height);
+        if (image->field_count) {
+            assert(info->raw.noise_profile_count == 6 && info->raw.gainmap_count == 4);
+            const double* noise = (const double*)image->fields[2].data;
+            const unsigned* active = (const unsigned*)image->fields[1].data;
+            for (unsigned i = 0; i < 6; ++i) assert(info->raw.noise_profile[i] == noise[i]);
+            for (unsigned i = 0; i < 4; ++i) {
+                assert(info->raw.active_area[i] == active[i]);
+                assert(info->raw.gainmaps[i].top == i/2 && info->raw.gainmaps[i].left == i%2);
+            }
+        }
+        tinydng_pixels decoded = {0};
+        assert(tinydng_decode_image(ctx, doc, 0, NULL, &decoded, &error) == TINYDNG_OK);
+        assert(memcmp(decoded.data, image->data, image->data_size) == 0);
+        tinydng_pixels_free(ctx, &decoded); tinydng_document_destroy(ctx, doc); free(bytes);
+    }
+    assert(tinydng_context_memory_used(ctx) == 0);
+    fclose(state.file); tinydng_context_destroy(ctx);
 }
 int main(int argc, char **argv) {
     assert(argc == 2);
@@ -57,6 +114,26 @@ int main(int argc, char **argv) {
     tinydng_document_destroy(ctx,doc);
     tinydng_buffer_free(ctx,encoded);
     assert(tinydng_context_memory_used(ctx)==0);
+    verify_stream(&img, 0);
+    verify_stream(&img, 1);
+    /* Xiaomi-sized RAW, with a partial final strip and full 16-bit sample range. */
+    tinydng_write_image large = img;
+    large.width = 4096; large.height = 2305;
+    large.fields = NULL; large.field_count = 0;
+    large.data_size = (size_t)large.width * large.height * 2;
+    unsigned short* large_pixels = malloc(large.data_size); assert(large_pixels);
+    for (size_t i = 0; i < large.data_size / 2; ++i) large_pixels[i] = (unsigned short)(i * 313);
+    large.data = (const unsigned char*)large_pixels;
+    tinydng_context* baseline = tinydng_context_create(NULL, &err); assert(baseline);
+    unsigned char* full_file = NULL; size_t full_size = 0;
+    assert(tinydng_write_memory(baseline, &large, &opts, &full_file, &full_size, &err) == TINYDNG_OK);
+    printf("Whole-file %ux%u writer peak: %zu bytes\n", large.width, large.height,
+           tinydng_context_memory_peak(baseline));
+    assert(tinydng_context_memory_peak(baseline) > large.data_size);
+    tinydng_buffer_free(baseline, full_file);
+    assert(tinydng_context_memory_used(baseline) == 0);
+    tinydng_context_destroy(baseline);
+    verify_stream(&large, 0); verify_stream(&large, 1); free(large_pixels);
     /* Duplicate structural tags and malformed lengths must fail cleanly. */
     fields[0].tag=256;
     assert(tinydng_write_memory(ctx,&img,&opts,&encoded,&size,&err)!=TINYDNG_OK);
