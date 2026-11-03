@@ -1,0 +1,12 @@
+IMG_20261101_133913_600.dng 0.0015
+  noisy-ref              y_rmse=0.0182 c_rmse=0.0357 c_rmse_edge=0.0382 c_noise_flat=0.0349 chroma_detail=1.5692 y_fine_frac=0.7024
+  rawr                   y_rmse=0.0103 c_rmse=0.0159 c_rmse_edge=0.0264 c_noise_flat=0.0136 chroma_detail=0.8954 y_fine_frac=0.5017
+  wiener g0.1            y_rmse=0.0104 c_rmse=0.0136 c_rmse_edge=0.0184 c_noise_flat=0.0125 chroma_detail=0.8993 y_fine_frac=0.7059
+  wiener g0.2            y_rmse=0.0103 c_rmse=0.0141 c_rmse_edge=0.0189 c_noise_flat=0.0129 chroma_detail=0.9593 y_fine_frac=0.7380
+  wiener g0.2 grain.3    y_rmse=0.0112 c_rmse=0.0142 c_rmse_edge=0.0190 c_noise_flat=0.0130 chroma_detail=0.9606 y_fine_frac=0.7918
+IMG_20261101_133820_634.dng 0.0001
+  noisy-ref              y_rmse=0.0047 c_rmse=0.0104 c_rmse_edge=0.0108 c_noise_flat=0.0103 chroma_detail=1.1074 y_fine_frac=0.8854
+  rawr                   y_rmse=0.0030 c_rmse=0.0066 c_rmse_edge=0.0115 c_noise_flat=0.0057 chroma_detail=0.9904 y_fine_frac=0.5333
+  wiener g0.1            y_rmse=0.0029 c_rmse=0.0053 c_rmse_edge=0.0068 c_noise_flat=0.0051 chroma_detail=0.9699 y_fine_frac=0.7869
+  wiener g0.2            y_rmse=0.0029 c_rmse=0.0052 c_rmse_edge=0.0064 c_noise_flat=0.0050 chroma_detail=0.9778 y_fine_frac=0.8003
+  wiener g0.2 grain.3    y_rmse=0.0032 c_rmse=0.0053 c_rmse_edge=0.0064 c_noise_flat=0.0050 chroma_detail=0.9785 y_fine_frac=0.8563
