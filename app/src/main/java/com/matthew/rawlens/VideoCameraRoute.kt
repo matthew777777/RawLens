@@ -5,6 +5,9 @@ package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.os.Build
 import android.hardware.camera2.params.OutputConfiguration
 
 /** A lens-row identity is not necessarily a Camera2 device ID (e.g. 6/5). */
@@ -13,6 +16,21 @@ internal data class VideoCameraRoute(
     val physicalCameraId: String?,
     val characteristics: CameraCharacteristics
 ) {
+    /** Pair physical buffers with that sensor's timestamp and calibration, including API 30. */
+    @Suppress("DEPRECATION")
+    fun frameResult(result: TotalCaptureResult): CaptureResult {
+        if (physicalCameraId == null) return result
+        val physicalResults = if (Build.VERSION.SDK_INT >= 31) {
+            result.physicalCameraTotalResults
+        } else {
+            result.physicalCameraResults
+        }
+        return frameResult(result, physicalResults)
+    }
+
+    internal fun frameResult(result: CaptureResult, physicalResults: Map<String, CaptureResult>): CaptureResult =
+        physicalCameraId?.let { physicalResults[it] } ?: result
+
     fun bind(output: OutputConfiguration): OutputConfiguration = output.apply {
         physicalCameraId?.let(::setPhysicalCameraId)
     }

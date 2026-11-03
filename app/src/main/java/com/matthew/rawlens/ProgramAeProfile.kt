@@ -33,6 +33,16 @@ enum class ProgramMetering {
     }
 }
 
+/** Scene-relative tuning, persisted per lens. Adaptive curves are initial, uncalibrated values. */
+enum class ProgramBrightnessTuning(val label: String) {
+    FIXED("Fixed"), NATURAL("Natural"), HIGHLIGHTS("Protect highlights");
+
+    companion object {
+        fun fromName(name: String?): ProgramBrightnessTuning =
+            values().firstOrNull { it.name == name } ?: FIXED
+    }
+}
+
 /**
  * Per-lens PROGRAM AE profile.
  *
@@ -53,7 +63,8 @@ data class ProgramAeProfile(
     val lockedIso: Int = 0,
     val lockedShutterNanos: Long = 0L,
     val evBias: Float = 0f,
-    val metering: ProgramMetering = ProgramMetering.CENTER_WEIGHTED
+    val metering: ProgramMetering = ProgramMetering.CENTER_WEIGHTED,
+    val brightnessTuning: ProgramBrightnessTuning = ProgramBrightnessTuning.FIXED
 ) {
     fun validated(): ProgramAeProfile {
         require(balance.isFinite()) { "Balance must be finite" }
@@ -81,6 +92,7 @@ data class ProgramAeProfile(
         append("\"lockedShutterNanos\":").append(lockedShutterNanos).append(",")
         append("\"evBias\":").append(evBias).append(",")
         append("\"metering\":\"").append(metering.name).append("\"")
+        append(",\"brightnessTuning\":\"").append(brightnessTuning.name).append("\"")
         append("}")
     }
 
@@ -125,7 +137,8 @@ data class ProgramAeProfile(
                     lockedIso = number("lockedIso")?.toDoubleOrNull()?.toInt() ?: 0,
                     lockedShutterNanos = number("lockedShutterNanos")?.toDoubleOrNull()?.toLong() ?: 0L,
                     evBias = number("evBias")?.toFloatOrNull() ?: 0f,
-                    metering = ProgramMetering.fromName(text("metering"))
+                    metering = ProgramMetering.fromName(text("metering")),
+                    brightnessTuning = ProgramBrightnessTuning.fromName(text("brightnessTuning"))
                 ).validated()
             }.getOrNull() ?: ProgramAeProfile()
         }

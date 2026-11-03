@@ -63,6 +63,7 @@ import android.os.SystemClock
  * Uses the same bottom transparent ruler as MANUAL (tick-only; values in chips).
  */
 internal fun MainActivity.showProgramAxisSlider(isIso: Boolean) {
+    recordingTools.hide()
     hideQuickControls()
     // While rolling the take request owns the sensor: PROGRAM editor needs preview.
     if (videoRecording) {
@@ -452,6 +453,22 @@ internal fun MainActivity.showProgramPanel() {
         setStatus("PROGRAM METER ${profile.metering.name}")
     }
     container.addView(meteringButton)
+    val brightnessButton = Button(this).also { styleDialogButton(it) }
+    fun refreshBrightness() {
+        brightnessButton.text = "Scene brightness: ${profile.brightnessTuning.label} • tap to switch"
+    }
+    refreshBrightness()
+    brightnessButton.setOnClickListener {
+        val modes = ProgramBrightnessTuning.values()
+        profile = profile.copy(brightnessTuning = modes[(profile.brightnessTuning.ordinal + 1) % modes.size])
+        refreshBrightness(); apply()
+    }
+    container.addView(brightnessButton)
+    container.addView(TextView(this).apply {
+        text = "Natural preserves darker scenes. Protect highlights also limits bright areas. Adaptive curves are experimental."
+        setTextColor(getColor(R.color.text_secondary))
+        textSize = 11f
+    })
     container.addView(Button(this).also { styleDialogButton(it) }.apply {
         text = "Reset per-lens defaults"
         setOnClickListener {
@@ -460,7 +477,7 @@ internal fun MainActivity.showProgramPanel() {
             biasSlider.progress = ((profile.evBias - ProgramAeProfile.MIN_EV_BIAS) * 20f).toInt().coerceIn(0, 60)
             balanceLabel.text = programBalanceText(profile.balance)
             biasLabel.text = programEvBiasText(profile.evBias)
-            refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); apply()
+            refreshLock(); refreshLockedButtons(); refreshBounds(); refreshMetering(); refreshBrightness(); apply()
         }
     })
     RawLensDialogBuilder(this)

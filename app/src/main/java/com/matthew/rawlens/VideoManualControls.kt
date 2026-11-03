@@ -39,6 +39,7 @@ internal object VideoManualControls {
         meteredIso: Int,
         meteredShutterNanos: Long,
         meteredFocus: Float?,
+        streamMinFrameDurationNanos: Long = 0L,
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         if (c.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
@@ -113,6 +114,10 @@ internal object VideoManualControls {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, shutter)
+            builder.set(CaptureRequest.SENSOR_FRAME_DURATION, VideoManualPolicy.frameDuration(
+                frameFps, shutter, streamMinFrameDurationNanos,
+                c.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION),
+            ))
         } else {
             val aeModes = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: intArrayOf()
             val aeMode = if (aeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON)) {
@@ -139,29 +144,17 @@ internal object VideoManualControls {
             }
             return awbModes.firstOrNull() ?: mode
         }
-        if (manualWb != null) {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_OFF))
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_MODE,
-                CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
-            )
-            val gains = VideoManualPolicy.wbGainsForKelvin(manualWb)
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_GAINS,
-                android.hardware.camera2.params.RggbChannelVector(
-                    gains[0], gains[1], gains[2], gains[3],
-                ),
-            )
+        val setting = manualWb?.let { CameraWhiteBalance.setting(c, it) }
+        if (setting != null) {
+            CameraWhiteBalance.apply(builder, setting)
         } else {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(CaptureRequest.CONTROL_AWB_MODE_AUTO))
-            if (VideoManualPolicy.resolveAwbLock(null, locks.lockWb) &&
-                c.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
-            ) {
-                try {
-                    builder.set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                } catch (_: IllegalArgumentException) {
-                }
-            }
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwb(manual.wbPreset))
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+            builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, null)
+            builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, null)
+            builder.set(CaptureRequest.CONTROL_AWB_LOCK,
+                manual.wbPreset == CaptureRequest.CONTROL_AWB_MODE_AUTO && locks.lockWb &&
+                    c.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true)
         }
     }
 
@@ -201,7 +194,7 @@ internal object VideoManualControls {
             ManualControl.WHITE_BALANCE -> {
                 val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                     ?: intArrayOf()
-                if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) {
+                if (CameraWhiteBalance.setting(c, 5500) == null) {
                     return null
                 }
                 ManualControlRange(

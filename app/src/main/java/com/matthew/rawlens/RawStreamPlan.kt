@@ -45,7 +45,7 @@ internal data class RawStreamPlan(
 
     companion object {
         fun plan(i: Inputs): RawStreamPlan {
-            val readerReady = i.zslCapacity > 0 && i.readerPresent && i.rawRetryReady
+            val readerReady = i.readerPresent && i.rawRetryReady
             // Split gate: a reserved capture slot (ZSL burst being assembled in the
             // retry wait) must NOT block the ZSL ring itself; only a physically
             // executing still sequence blocks it, since interleaved repeating RAW
@@ -53,7 +53,7 @@ internal data class RawStreamPlan(
             // Metering streams keep the strict gate: they stay down across any held
             // capture so forward captures keep full reader headroom.
             val zsl = i.allowRawZsl && i.zslRestartFitsReader && run(
-                i.zslRequested, i.zslBlocked, readerReady, i.captureInProgress && i.stillExecuting
+                i.zslRequested, i.zslBlocked, readerReady && i.zslCapacity > 0, i.captureInProgress && i.stillExecuting
             )
             // Live RAW scope for every capture mode. Never competes with the ZSL
             // ring: scope-only frames are sampled and closed.

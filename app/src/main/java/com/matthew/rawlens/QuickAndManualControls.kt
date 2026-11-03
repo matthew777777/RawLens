@@ -163,9 +163,9 @@ internal fun MainActivity.activeScopeView(): View =
 
 internal fun MainActivity.syncScopeVisibility() {
     histogramView.visibility =
-        if (histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
+        if (!recordingTools.isPreviewSleeping && histogramEnabled && scopeMode == ScopeMode.HISTOGRAM) View.VISIBLE else View.GONE
     waveformView.visibility =
-        if (histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
+        if (!recordingTools.isPreviewSleeping && histogramEnabled && scopeMode == ScopeMode.WAVEFORM) View.VISIBLE else View.GONE
     // A GONE -> VISIBLE scope has no measured size yet: seat it now from
     // the fixed slot (plus a deferred measured correction) so showing it
     // in landscape never parks it behind the panel until next rotation.
@@ -324,8 +324,10 @@ internal fun MainActivity.manualRangeFor(control: ManualControl): ManualControlR
     return runCatching { controller.manualControlRange(control) }.getOrNull()
 }
 
-internal fun MainActivity.setManualValueFor(control: ManualControl, value: Long?) {
+internal fun MainActivity.setManualValueFor(control: ManualControl, value: Long?, fromFocusPull: Boolean = false) {
+    if (control == ManualControl.FOCUS_DISTANCE && !fromFocusPull) recordingTools.cancelFocusPull()
     if (videoRecording) {
+        if (control == ManualControl.WHITE_BALANCE) controller.setManualControl(control, value)
         if (videoRecorder != null) {
             videoRecorder?.setVideoManualControl(control, value)
             refreshVideoChip(control)
@@ -348,7 +350,7 @@ internal fun MainActivity.refreshVideoChip(control: ManualControl) {
         ManualControl.SHUTTER -> shutterControl.text =
             controlText("S", formatShutter(range.current))
         ManualControl.WHITE_BALANCE -> wbControl.text =
-            controlText("WB", "${range.current}K")
+            controlText("WB", if (range.automatic) "Auto" else "${range.current} K")
         ManualControl.FOCUS_DISTANCE -> focusControl.text =
             controlText("AF", if (range.automatic) "AF" else formatFocusDistance(range.current))
         ManualControl.EXPOSURE_COMPENSATION -> {
@@ -379,6 +381,7 @@ internal fun MainActivity.formatVideoEvStops(index: Long): String {
 }
 
 internal fun MainActivity.showManualControl(control: ManualControl, allowToggle: Boolean = true) {
+    recordingTools.wakePreview()
     hideQuickControls()
     if (allowToggle && activeManualControl == control && manualPanel.visibility == View.VISIBLE) {
         hideManualControl()
@@ -402,6 +405,7 @@ internal fun MainActivity.showManualControl(control: ManualControl, allowToggle:
     manualAuto.isEnabled = !range.automatic
     refreshRuleSliderAccessibility()
     manualPanel.visibility = View.VISIBLE
+    recordingTools.show()
     updateOverlayStack()
     manualPanel.post { updateOverlayStack() }
     scheduleManualPanelHide()
@@ -527,7 +531,7 @@ internal fun MainActivity.shortControlName(control: ManualControl): String = whe
 internal fun MainActivity.formatManualValue(control: ManualControl, value: Long): String = when (control) {
     ManualControl.ISO -> "ISO $value"
     ManualControl.SHUTTER -> formatShutter(value)
-    ManualControl.WHITE_BALANCE -> "${value}K"
+    ManualControl.WHITE_BALANCE -> "${value} K"
     ManualControl.FOCUS_DISTANCE -> formatFocusDistance(value)
     ManualControl.EXPOSURE_COMPENSATION -> String.format(
         Locale.US, "%+.1f EV", controller.exposureCompensationStops(value)
@@ -555,4 +559,26 @@ internal fun MainActivity.cycleQuickDLighting() {
     lensPreferences().edit().putString(ActiveDLighting.PREFERENCE_KEY, next.name).apply()
     updateQuickControls()
     setStatus("D-LIGHTING • ${next.label.uppercase(Locale.US)}")
+}
+
+internal fun MainActivity.openWhiteBalanceControl() {
+    if (!controller.wbPresetsEnabled) {
+        showManualControl(ManualControl.WHITE_BALANCE)
+        return
+    }
+    hideManualControl()
+    val options = controller.whiteBalancePresets()
+    if (options.isEmpty()) { setStatus("WB PRESETS N/A"); return }
+    AlertDialog.Builder(this).setTitle("White balance presets")
+        .setItems(options.map { it.second }.toTypedArray()) { _, index ->
+            controller.setWhiteBalancePreset(options[index].first) { runOnUiThread { syncRecordingWhiteBalance() } }
+        }.setNegativeButton("Cancel", null).show()
+}
+
+internal fun MainActivity.syncRecordingWhiteBalance() {
+    if (!videoRecording) return
+    val selection = controller.snapshotVideoManual()
+    videoRecorder?.setVideoWhiteBalance(selection.wbKelvin, selection.wbPreset)
+    encodedVideoRecorder?.setVideoWhiteBalance(selection.wbKelvin, selection.wbPreset)
+    wbControl.text = controlText("WB", controller.whiteBalanceLabel())
 }

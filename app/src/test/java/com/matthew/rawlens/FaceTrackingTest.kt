@@ -71,6 +71,20 @@ class FaceTrackingTest {
         t.onPreviewFaces(listOf(face(1000)), active, SensorActiveArray(2000, 0, 4000, 3000))
         assertNull(t.region)
         assertEquals(2, host.pushes)
+        host.now += 1000
+        t.onPreviewFaces(listOf(face(1000)), active, SensorActiveArray(2000, 0, 4000, 3000))
+        assertTrue(host.published.last().isEmpty())
+    }
+
+    @Test fun overlayNormalizesAgainstTheZoomedCropInsteadOfTheFullArray() {
+        val host = FakeHost(); val t = tracker(host)
+        t.onPreviewFaces(listOf(HalFace(1500, 1000, 2500, 2000, 90)), active,
+            SensorActiveArray(1000, 750, 3000, 2250))
+        val box = host.published.last().single()
+        assertEquals(250f, box.left, .01f)
+        assertEquals(750f, box.right, .01f)
+        assertEquals(125f, box.top, .01f)
+        assertEquals(625f, box.bottom, .01f)
     }
 
     @Test fun intersectMatchesAndroidRect() {

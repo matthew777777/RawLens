@@ -34,6 +34,7 @@ object PhotoViewfinderBox {
         topBarH: Int,
         panelH: Int,
         sealOverlap: Int,
+        wide: Boolean = false,
     ): Box? {
         if (rootW <= 0 || rootH <= 0) return null
         val availH = rootH - topBarH - panelH + 2 * sealOverlap
@@ -42,8 +43,9 @@ object PhotoViewfinderBox {
         // when larger controls make the available space slightly too short.
         // Keep 3:4 (rounded up to a pixel) and tuck excess height behind the
         // opaque top island instead of narrowing or stretching the image.
-        val boxW = rootW
-        val boxH = ((rootW.toLong() * 4 + 2) / 3).toInt()
+        val boxW = if (wide) minOf(rootW, (availH.toLong() * 9 / 16).toInt()) else rootW
+        val boxH = if (wide) ((boxW.toLong() * 16 + 8) / 9).toInt()
+            else ((rootW.toLong() * 4 + 2) / 3).toInt()
         val spare = (availH - boxH).coerceAtLeast(0)
         return Box(boxW, boxH, (rootH - panelH + sealOverlap - boxH).coerceAtLeast(0), spare)
     }

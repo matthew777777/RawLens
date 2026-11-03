@@ -126,8 +126,10 @@ internal object ProgramAgc {
         histogram: Histogram,
         evGain: Double,
         mode: ConstraintMode,
+        brightnessTarget: Double = Y_TARGET,
+        constraintScale: Double = 1.0,
     ): Gain {
-        var targetY = minOf(Y_TARGET_LIMIT, Y_TARGET * evGain)
+        var targetY = minOf(Y_TARGET_LIMIT, brightnessTarget * evGain)
         var gain = 1.0
         for (i in 0 until GAIN_ITERATIONS) {
             val initialY = meteredY(meteredMean, histogram, gain)
@@ -137,7 +139,7 @@ internal object ProgramAgc {
         }
         if (histogram.total > 0L) {
             for (c in mode.constraints) {
-                val newTargetY = minOf(Y_TARGET_LIMIT, c.yTarget * evGain)
+                val newTargetY = minOf(Y_TARGET_LIMIT, c.yTarget * constraintScale * evGain)
                 val iqm = histogram.interQuantileMean(c.qLo, c.qHi)
                 val newGain = newTargetY * histogram.bins / iqm
                 if (c.bound == Bound.LOWER && newGain > gain ||

@@ -20,6 +20,16 @@ class ProgramAeLoopTest {
             intArrayOf(1000, 1000, 1000, 1000), centerWeightedGreen = green)
     }
 
+    @Test fun targetUsesSampledExposureEvenWhenLivePairHasAdvanced() {
+        val oldFrame = ProgramAeLoop()
+        oldFrame.iso = 800
+        oldFrame.shutterNanos = 30_000_000L
+        oldFrame.onSample(sample(0.04f), profile, limits, 100, 10_000_000L, 0L)
+        val control = ProgramAeLoop()
+        control.onSample(sample(0.04f), profile, limits, 100, 10_000_000L, 0L)
+        assertEquals(control.targetTotal, oldFrame.targetTotal, 0.0)
+    }
+
     @Test fun startAppliesTheTargetAtOnce() {
         val loop = ProgramAeLoop()
         assertEquals(ProgramAeLoop.Step.START,

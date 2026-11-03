@@ -129,6 +129,12 @@ internal fun MainActivity.showVendorKeysEditor() {
             setTextColor(getColor(R.color.text_secondary)); textSize = 12f
             setPadding(0, 0, 0, dp(8))
         })
+        addView(TextView(this@showVendorKeysEditor).apply {
+            text = controller.vendorRawFpsDiagnostic()
+            setTextColor(getColor(if (text.contains("NOT APPLIED")) R.color.danger else R.color.text_secondary))
+            textSize = 12f
+            setPadding(0, 0, 0, dp(8))
+        })
         fun reportLine(name: String, report: VendorKeyApplyReport?): String? =
             report?.takeIf { it.applied.isNotEmpty() || it.skipped.isNotEmpty() || it.detail != null }?.let {
                 "$name ${it.applied.size} accepted / ${it.skipped.size} skipped" +

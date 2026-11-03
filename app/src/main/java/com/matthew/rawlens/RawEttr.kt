@@ -4,6 +4,7 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureResult
 import android.media.Image
 import java.nio.ByteOrder
 import kotlin.math.ln
@@ -222,11 +223,11 @@ object RawEttrSampler {
      */
     internal const val GUARD_PIXELS = 16_384
 
-    fun sample(image: Image, characteristics: CameraCharacteristics): EttrRawSample? {
-        val s = sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height))
+    fun sample(image: Image, characteristics: CameraCharacteristics, result: CaptureResult? = null): EttrRawSample? {
+        val s = sampleGrid(image, characteristics, TARGET_BLOCKS * 4, fullFrame(image.width, image.height), result)
             ?: return null
         return EttrRawSample(s.levels, s.bins, s.saturated, s.totals, s.centerWeightedGreen,
-            s.spotGreen, s.guardHottest, s.frameBins, sampleQuads(image, characteristics, TARGET_QUADS))
+            s.spotGreen, s.guardHottest, s.frameBins, sampleQuads(image, characteristics, TARGET_QUADS, result))
     }
 
     /**
@@ -234,7 +235,7 @@ object RawEttrSampler {
      * LiveView at ~720x480 / 4): max(R, G, B) as a log-EV histogram and
      * average-RGB clipping (see [EttrQuadStats]); G is the Gr/Gb mean.
      */
-    internal fun sampleQuads(image: Image, characteristics: CameraCharacteristics, targetQuads: Int): EttrQuadStats? {
+    internal fun sampleQuads(image: Image, characteristics: CameraCharacteristics, targetQuads: Int, result: CaptureResult? = null): EttrQuadStats? {
         val plane = image.planes.singleOrNull() ?: return null
         val width = image.width and 1.inv()
         val height = image.height and 1.inv()
@@ -242,7 +243,8 @@ object RawEttrSampler {
         val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: return null
         if (cfa !in 0..3) return null
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-        val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.coerceAtLeast(1) ?: return null
+        val white = (result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+            ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))?.coerceAtLeast(1) ?: return null
         val buffer = plane.buffer.duplicate().order(ByteOrder.nativeOrder())
         val packed = if (plane.pixelStride < 2) {
             val format = PackedRawFormat.ofInt(image.format) ?: return null
@@ -255,8 +257,10 @@ object RawEttrSampler {
         val rowStride = plane.rowStride
         val pixelStride = plane.pixelStride
         val limit = buffer.limit()
-        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
-        val invLut = FloatArray(4) { i -> invRange(white, blackLut[i]) }
+        val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+            ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
+        val blackLut = FloatArray(4) { i -> dynamicBlack?.get(i) ?: (black?.getOffsetForIndex(i % 2, i / 2) ?: 0).toFloat() }
+        val invLut = FloatArray(4) { i -> 1f / (white - blackLut[i]).coerceAtLeast(1f) }
         val channelLut = phaseChannelLut(cfa)
         val quadCount = (width / 2).toLong() * (height / 2)
         val step = meterGridStep(quadCount, targetQuads)
@@ -279,7 +283,7 @@ object RawEttrSampler {
                         buffer.getShort(offset).toInt() and 0xffff
                     }
                     level[channelLut[phase]] =
-                        ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase]).coerceIn(0f, 1f)
+                        ((value - blackLut[phase]).coerceAtLeast(0f) * invLut[phase]).coerceIn(0f, 1f)
                 }
                 if (ok) {
                     val g = 0.5f * (level[1] + level[2])
@@ -305,13 +309,14 @@ object RawEttrSampler {
     fun sampleProgram(
         image: Image,
         characteristics: CameraCharacteristics,
-        metering: ProgramMetering
+        metering: ProgramMetering,
+        result: CaptureResult? = null
     ): EttrRawSample? {
         val region = meteringScanRegion(image.width, image.height, metering)
-        val sample = sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4, region)
+        val sample = sampleGrid(image, characteristics, TARGET_BLOCKS_PROGRAM * 4, region, result)
             ?: return null
         if (metering == ProgramMetering.AVERAGE || metering == ProgramMetering.HIGHLIGHT_WEIGHTED) return sample
-        val frame = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height))
+        val frame = sampleGrid(image, characteristics, GUARD_PIXELS, fullFrame(image.width, image.height), result)
         return EttrRawSample(
             sample.levels, sample.bins, sample.saturated, sample.totals,
             sample.centerWeightedGreen, sample.spotGreen,
@@ -351,7 +356,8 @@ object RawEttrSampler {
         image: Image,
         characteristics: CameraCharacteristics,
         targetPixels: Int,
-        region: IntArray
+        region: IntArray,
+        result: CaptureResult? = null
     ): EttrRawSample? {
         val plane = image.planes.singleOrNull() ?: return null
         if (image.width < 2 || image.height < 2) return null
@@ -360,7 +366,8 @@ object RawEttrSampler {
             ?: return null
         if (cfa !in 0..3) return null
         val black = characteristics.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
-        val white = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+        val white = (result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
+            ?: characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL))
             ?.coerceAtLeast(1) ?: return null
         val width = image.width
         val height = image.height
@@ -387,8 +394,10 @@ object RawEttrSampler {
         val shortCapacity = shortView.capacity()
         val bulkRows = pixelStride == 2 && rowStride % 2 == 0
         val rowSamples = if (bulkRows) ShortArray(width) else null
-        val blackLut = IntArray(4) { i -> black?.getOffsetForIndex(i % 2, i / 2) ?: 0 }
-        val invLut = FloatArray(4) { i -> invRange(white, blackLut[i]) }
+        val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+            ?.takeIf { it.size == 4 && it.all(Float::isFinite) }
+        val blackLut = FloatArray(4) { i -> dynamicBlack?.get(i) ?: (black?.getOffsetForIndex(i % 2, i / 2) ?: 0).toFloat() }
+        val invLut = FloatArray(4) { i -> 1f / (white - blackLut[i]).coerceAtLeast(1f) }
         val channelLut = phaseChannelLut(cfa)
         val bins = Array(4) { IntArray(BIN_COUNT) }
         val saturated = IntArray(4)
@@ -442,7 +451,7 @@ object RawEttrSampler {
                     }
                     buffer.getShort(offset).toInt() and 0xffff
                 }
-                    val normalized = ((value - blackLut[phase]).coerceAtLeast(0) * invLut[phase])
+                    val normalized = ((value - blackLut[phase]).coerceAtLeast(0f) * invLut[phase])
                         .coerceIn(0f, 1f)
                     val channel = channelLut[phase]
                     if (value >= white) saturated[channel]++

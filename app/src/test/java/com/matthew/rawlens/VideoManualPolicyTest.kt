@@ -8,6 +8,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoManualPolicyTest {
+    @Test fun manualCadenceUsesRequestedRateAndStreamLimits() {
+        assertEquals(33_333_333L, VideoManualPolicy.frameDuration(30, 10_000_000, 0, 1_000_000_000))
+        assertEquals(16_666_666L, VideoManualPolicy.frameDuration(60, 10_000_000, 0, null))
+        assertEquals(50_000_000L, VideoManualPolicy.frameDuration(30, 10_000_000, 50_000_000, 1_000_000_000))
+        assertEquals(40_000_000L, VideoManualPolicy.frameDuration(30, 40_000_000, 0, 1_000_000_000))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun impossibleManualCadenceIsRejected() {
+        VideoManualPolicy.frameDuration(30, 10_000_000, 50_000_000, 40_000_000)
+    }
+
     @Test
     fun locksDefaultOff() {
         val locks = VideoRecordLocks.load { false }
@@ -56,12 +68,30 @@ class VideoManualPolicyTest {
     }
 
     @Test
-    fun wbGainsRampWithKelvin() {
-        val warm = VideoManualPolicy.wbGainsForKelvin(2000)
-        val cold = VideoManualPolicy.wbGainsForKelvin(10000)
-        // Warmer (low K) boosts blue, cooler boosts red.
-        assertTrue(warm[3] > cold[3])
-        assertTrue(cold[0] > warm[0])
-        assertEquals(1f, warm[1], 0f)
+    fun calibratedWhiteIsNeutralAfterGainsAndTransform() {
+        // An ideal XYZ sensor makes the expected neutral independent of a phone vendor.
+        val identity = doubleArrayOf(1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0)
+        for (k in listOf(2000,3200,5500,6500,10000)) {
+            val setting = CameraWhiteBalance.calculate(identity,null,null,null,null,null,k)!!
+            val white = RawWhiteBalanceFallback.Locus.planckXyz(k.toDouble())
+            val g = setting.gains
+            val rgb = Matrix3(setting.transform) * Vec3(white.x*g[0],white.y*g[1],white.z*g[3])
+            assertEquals(rgb.x,rgb.y,0.0001)
+            assertEquals(rgb.y,rgb.z,0.0001)
+            assertTrue(g.all { it.isFinite() && it >= 1f })
+        }
+    }
+
+    @Test
+    fun singularCalibrationCannotSupplyKelvin() {
+        assertEquals(null,CameraWhiteBalance.calculate(DoubleArray(9),null,null,null,null,null,5500))
+    }
+
+    @Test
+    fun calibratedTemperatureChangesBlueGain() {
+        val identity = doubleArrayOf(1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0)
+        val warm = CameraWhiteBalance.calculate(identity,null,null,null,null,null,2000)!!
+        val cold = CameraWhiteBalance.calculate(identity,null,null,null,null,null,10000)!!
+        assertTrue(warm.gains[3] > cold.gains[3])
     }
 }

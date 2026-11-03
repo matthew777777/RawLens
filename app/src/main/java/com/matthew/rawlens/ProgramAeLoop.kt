@@ -90,7 +90,15 @@ internal class ProgramAeLoop {
         // Feeding the highlight statistic to the grey-target AGC would darken it to 16%.
         val subject = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED)
             RawProgramMeter.meanBrightness(sample).toDouble() else metered
-        val gain = ProgramAgc.computeGain(subject, histogram, Math.pow(2.0, profile.evBias.toDouble()), mode)
+        val tuning = ProgramBrightnessCurve.evaluate(
+            profile.brightnessTuning, subject, currentIso, currentShutterNanos
+        )
+        val constraintMode = if (profile.brightnessTuning == ProgramBrightnessTuning.HIGHLIGHTS)
+            ProgramAgc.ConstraintMode.HIGHLIGHT else mode
+        val gain = ProgramAgc.computeGain(
+            subject, histogram, Math.pow(2.0, profile.evBias.toDouble()), constraintMode,
+            tuning.target, tuning.constraintScale
+        )
         val protectedGain = if (profile.metering == ProgramMetering.HIGHLIGHT_WEIGHTED || lighting != ActiveDLighting.OFF)
             RawProgramMeter.protectedGain(sample, gain.gain, lighting) else gain.gain
         val current = currentIso.toDouble() * currentShutterNanos

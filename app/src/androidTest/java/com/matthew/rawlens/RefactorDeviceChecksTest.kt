@@ -101,6 +101,41 @@ class RefactorDeviceChecksTest {
         return answer.get(5, java.util.concurrent.TimeUnit.SECONDS)
     }
 
+    @Test
+    fun previewMemoryReaderBudgetAndZslUpgrade() {
+        val oldMode = cameraRead { field(controller, "captureExposureMode") as CaptureExposureMode }
+        try {
+            controller.setCaptureExposureMode(CaptureExposureMode.AUTO)
+            val oldSession = cameraRead { session() }
+            controller.reopenCamera()
+            await("forward session not rebuilt", 30_000) {
+                cameraRead { session() != null && session() !== oldSession }
+            }
+            assertEquals(16, cameraRead { field(controller, "rawReaderMaxImages") as Int })
+            await("lean preview produced no results", 10_000) {
+                cameraRead { field(controller, "latestPreviewResult") != null }
+            }
+            MemoryLeakDiagnostics.sample("memory-forward-reader")
+            val forwardSession = cameraRead { session() }
+            controller.setCaptureExposureMode(CaptureExposureMode.ZSL)
+            await("ZSL reader never expanded", 30_000) {
+                cameraRead { session() != null && session() !== forwardSession &&
+                    (field(controller, "rawReaderHasZslBudget") as Boolean) }
+            }
+            assertTrue(cameraRead { (field(controller, "rawReaderMaxImages") as Int) >= 20 })
+            await("ZSL ring did not stream", 15_000) {
+                cameraRead { field(controller, "rawZslStreaming") as Boolean }
+            }
+            MemoryLeakDiagnostics.sample("memory-zsl-reader")
+            controller.setCaptureExposureMode(CaptureExposureMode.AUTO)
+            await("forward preview did not resume", 10_000) {
+                cameraRead { !(field(controller, "rawZslStreaming") as Boolean) }
+            }
+        } finally {
+            controller.setCaptureExposureMode(oldMode)
+        }
+    }
+
     /** Opt-in acceptance of the production controller, including a normal ISP preview. */
     @Test
     fun photoAfPreviewAndExposureMatrix() {

@@ -330,7 +330,10 @@ class RawCameraController(
             if (RawImageOwnership.count(reader) == 0 && retiredRawReaders.remove(reader)) reader.close()
         }
     }
+    private var vendorModeRawArrived = false
+    private var vendorModeStartupLogged = false
     private var rawReaderMaxImages = 0
+    private var rawReaderHasZslBudget = true
     private var previewSurface: Surface? = null
     private var previewSize: Size? = null
     private var selectedCameraId: String? = null
@@ -339,6 +342,9 @@ class RawCameraController(
     private var selectedIso: Int? = null
     private var selectedExposureNanos: Long? = null
     private var selectedWbKelvin: Int? = null
+    @Volatile private var selectedWbPreset: Int = CaptureRequest.CONTROL_AWB_MODE_AUTO
+    @Volatile var wbPresetsEnabled: Boolean = false
+        private set
     private var selectedFocusDistanceDiopters: Float? = null
     private var exposureCompensation = 0
     @Volatile private var dynamicExposureSettings = initialDynamicExposureSettings
@@ -405,6 +411,7 @@ class RawCameraController(
     private var lastIso = 100
     private var lastExposureNanos = 10_000_000L
     private var lastWbKelvin: Int? = null
+    private var metadataFrameCount = 0
     /** Published DNG bit depth + sensor label, so per-frame dynamic white can move the chip when it disagrees with the static key. */
     private var lastWhiteLevelBits = 10
     private var lastSensorInfo = ""
@@ -640,6 +647,8 @@ class RawCameraController(
             lastWbKelvin = null
             lastPreviewSensorTimestamp = Long.MIN_VALUE
             latestPreviewResult = null
+            clearPendingMetering()
+            meteringResults.clear()
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
             rawPreviewRetryUntilMs = 0L
@@ -941,6 +950,9 @@ class RawCameraController(
             Log.w(LOG_TAG, "Preview remedy refused by HAL; raw-only verdict persisted")
         }
         val rawSize = Size(combo.raw.width, combo.raw.height)
+        viewfinder.post {
+            onCaptureSurfaceSize?.invoke(rawSize.width, rawSize.height)
+        }
         rawZslCapacity = SessionStreamSelection.clampZslCapacityForReader(calculateRawZslCapacity(rawSize), combo.readerMaxImages)
         if (rawZslRequested && rawZslCapacity == 0 && calculateRawZslCapacity(rawSize) > 0) {
             // Degraded combo: the reduced reader cannot host a ZSL ring, so this
@@ -968,6 +980,8 @@ class RawCameraController(
 
         val previewSize = combo.preview?.let { Size(it.width, it.height) }
         this.previewSize = previewSize
+        vendorModeRawArrived = false
+        vendorModeStartupLogged = false
         rawZslTargetFpsRange = chooseRawZslFpsRange(c, rawSize)
         // RAW-only sessions leave the (never-displayed) TextureView alone.
         previewSize?.let { ps ->
@@ -1026,6 +1040,7 @@ class RawCameraController(
             )
         }.also {
             rawReaderMaxImages = readerMaxImages
+            rawReaderHasZslBudget = rawZslRequested
             it.setOnImageAvailableListener({ reader -> onRawImageAvailable(reader, generation) }, cameraHandler)
         }
         rawStreamImages = 0
@@ -1138,6 +1153,18 @@ class RawCameraController(
                 drained++
                 val image = reader.acquireNextImage() ?: break
                 lastRawImageReceivedMs = SystemClock.elapsedRealtime()
+                if (!vendorModeRawArrived) {
+                    vendorModeRawArrived = true
+                    val staged = runCatching { vendorKeys(selectedCameraId).let { profile ->
+                        profile.entries.any { VendorSensorModePolicy.deferred(it, profile.rawPreviewFps) }
+                    } }.getOrDefault(false)
+                    if (staged) cameraHandler.post {
+                        if (isCurrent(generation) && rawReader === reader) {
+                            Log.i(LOG_TAG, "VENDOR_MODE_BOOTSTRAP route=$selectedCameraId first RAW received; applying mode on live requests")
+                            updateRepeatingRequest(preserveRawZslBuffer = false)
+                        }
+                    }
+                }
                 if (activeFramesRemaining.get() <= 0 && rawStreamImages++ == 0) {
                     selectedCameraId?.let(deviceFaultRecovery::onFrames)
                     Log.i(LOG_TAG, "First RAW stream image ${image.width}x${image.height} ts=${image.timestamp}")
@@ -1326,6 +1353,7 @@ class RawCameraController(
             configured = { attempt, legacy, configured ->
                 vendorSessionOpmode = attempt.operatingMode
                 if (!attempt.parameters) {
+                    if (vendorSessionRawFps != 0) rawFpsDiagnostic += "; session FPS parameters NOT APPLIED (fallback)"
                     vendorSessionFingerprint = VendorKeyApply.fingerprint(emptyList())
                     vendorSessionRawFps = 0
                 }
@@ -1480,7 +1508,7 @@ class RawCameraController(
         if (params == null) return
         try {
             config.setSessionParameters(params)
-            Log.i(LOG_TAG, "Vendor session parameters attached for $routeId")
+            Log.i(LOG_TAG, "Vendor session parameters attached for $routeId entries=${profile.sessionEntries().joinToString { it.summary() }}")
         } catch (failure: IllegalArgumentException) {
             lastVendorSessionReport = report.rejected("Session parameter attachment rejected")
             Log.w(LOG_TAG, "Vendor session parameters rejected for $routeId", failure)
@@ -1656,7 +1684,8 @@ class RawCameraController(
      * the HAL queue hard cap so deep rings degrade to a smaller effective
      * ring instead of a rejected session or a dead process.
      */
-    private fun fullReaderMaxImages(): Int = SessionStreamSelection.fullReaderMaxImagesFor(rawZslFrameCount)
+    private fun fullReaderMaxImages(): Int =
+        SessionStreamSelection.readerMaxImagesFor(rawZslFrameCount, rawZslRequested)
 
     /**
      * Bounded reopen after an open rejection that smells transient: an ID
@@ -3218,6 +3247,10 @@ class RawCameraController(
                     requestLensShadingMap(this)
                 }.build()
             }
+            requests.firstOrNull()?.let { request ->
+                Log.i(LOG_TAG, "STILL_REQUEST route=$selectedCameraId fps=${request.get(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE)} " +
+                    "intent=${request.get(CaptureRequest.CONTROL_CAPTURE_INTENT)} exposureNs=${request.get(CaptureRequest.SENSOR_EXPOSURE_TIME)}")
+            }
             onState(if (frameCount == 1) "CAPTURING" else "BURST ×$frameCount")
             // Serialized chains take frameCount × exposure instead of one pipeline
             // burst: scale the timeout up from the 8s base (never down), so slow
@@ -3417,7 +3450,11 @@ class RawCameraController(
                 setTag(PhotoAutoFocus.Command(runId, trigger))
                 set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
             }
-            currentSession.capture(request.build(), debugCaptureCallback, cameraHandler)
+            val built = request.build()
+            Log.i(LOG_TAG, "AF_TRIGGER route=$selectedCameraId run=$runId trigger=$trigger " +
+                "mode=${built.get(CaptureRequest.CONTROL_AF_MODE)} focusD=${built.get(CaptureRequest.LENS_FOCUS_DISTANCE)} " +
+                "regions=${built.get(CaptureRequest.CONTROL_AF_REGIONS)?.contentToString()}")
+            currentSession.capture(built, debugCaptureCallback, cameraHandler)
         }
         override fun cameraAccessReason(failure: CameraAccessException) =
             this@RawCameraController.cameraAccessReason(failure)
@@ -3510,28 +3547,47 @@ class RawCameraController(
         onState("AE/AF RESET")
     }
 
+    private fun Rect.sensorBounds() = SensorActiveArray(left, top, right, bottom)
+    private fun SensorActiveArray.rect() = Rect(left, top, right, bottom)
+
+    /** RAW is uncorrected: keep HAL regions/faces in the matching sensor space. */
+    private fun rawMeteringDistortionMode(): Int? = CameraMetadata.DISTORTION_CORRECTION_MODE_OFF.takeIf {
+        activeVf() != null && characteristics?.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
+            ?.contains(it) == true
+    }
+
+    private fun meteringActiveArray(result: CaptureResult? = latestPreviewResult): SensorActiveArray? {
+        val c = characteristics ?: return null
+        val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.sensorBounds() ?: return null
+        return MeteringGeometry.activeArray(active,
+            c.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)?.sensorBounds(),
+            c.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)?.isNotEmpty() == true,
+            (result?.get(CaptureResult.DISTORTION_CORRECTION_MODE) ?: rawMeteringDistortionMode()) ==
+                CameraMetadata.DISTORTION_CORRECTION_MODE_OFF)
+    }
+
+    /** UI already removes aspect-fill overflow; only the stream's sensor crop belongs here. */
+    private fun meteringCrop(result: CaptureResult? = latestPreviewResult): SensorActiveArray? {
+        val active = meteringActiveArray(result) ?: return null
+        val reported = result?.get(CaptureResult.SCALER_CROP_REGION)?.sensorBounds() ?: active
+        val crop = SensorActiveArray(maxOf(active.left, reported.left), maxOf(active.top, reported.top),
+            minOf(active.right, reported.right), minOf(active.bottom, reported.bottom))
+            .takeIf { it.width > 0 && it.height > 0 } ?: active
+        // RAW engines explicitly render the result crop. ISP outputs apply an additional
+        // centered aspect crop in the HAL before the buffer reaches the TextureView.
+        val size = previewSize
+        return if (activeVf() == null && size != null)
+            MeteringGeometry.streamCrop(crop, size.width, size.height) else crop
+    }
+
     private fun meteringRegion(viewX: Float, viewY: Float): MeteringRectangle? {
-        val active = latestPreviewResult?.get(CaptureResult.SCALER_CROP_REGION)
-            ?: characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
-        if (viewfinder.width == 0 || viewfinder.height == 0) return null
-        val x = (viewX / viewfinder.width).coerceIn(0f, 1f)
-        val y = (viewY / viewfinder.height).coerceIn(0f, 1f)
-        val relativeRotation = characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        val mirrored = characteristics?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-        val sensorPoint = RawPreviewGeometry.sensorPoint(x, y, relativeRotation, mirrored)
-        val centerX = active.left + (sensorPoint.first * active.width()).toInt()
-        val centerY = active.top + (sensorPoint.second * active.height()).toInt()
-        // Open Camera uses a 100x100 area in its -1000..1000 coordinate system: 5% of
-        // each sensor dimension either side of the touched point.
-        val halfWidth = (active.width() * 0.05f).toInt().coerceAtLeast(1)
-        val halfHeight = (active.height() * 0.05f).toInt().coerceAtLeast(1)
-        val rect = Rect(
-            (centerX - halfWidth).coerceIn(active.left, active.right - 1),
-            (centerY - halfHeight).coerceIn(active.top, active.bottom - 1),
-            (centerX + halfWidth).coerceIn(active.left + 1, active.right),
-            (centerY + halfHeight).coerceIn(active.top + 1, active.bottom)
-        )
-        return MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX)
+        val crop = meteringCrop() ?: return null
+        if (viewfinder.width <= 0 || viewfinder.height <= 0) return null
+        val region = MeteringGeometry.tap(viewX / viewfinder.width, viewY / viewfinder.height, crop,
+            characteristics?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+            characteristics?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT)
+        return MeteringRectangle(Rect(region.left, region.top, region.right, region.bottom),
+            MeteringRectangle.METERING_WEIGHT_MAX)
     }
 
     /**
@@ -3605,14 +3661,14 @@ class RawCameraController(
      */
     private fun handlePreviewFaces(result: TotalCaptureResult) {
         if (!faces.enabled || faces.maxFaceCount <= 0 || faces.rejected) return
-        val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-        val crop = result.get(CaptureResult.SCALER_CROP_REGION) ?: active
+        val active = meteringActiveArray(result)?.rect() ?: return
+        val crop = meteringCrop(result) ?: return
         val halFaces = result.get(CaptureResult.STATISTICS_FACES)
             ?.mapNotNull { halFaceIn(it, active) } ?: emptyList()
         faces.onPreviewFaces(
             halFaces,
             SensorActiveArray(active.left, active.top, active.right, active.bottom),
-            SensorActiveArray(crop.left, crop.top, crop.right, crop.bottom)
+            crop
         )
     }
 
@@ -3665,6 +3721,7 @@ class RawCameraController(
             onState("WB N/A")
             return
         }
+        wbPresetsEnabled = false
         selectedWbKelvin = nextValue(selectedWbKelvin, WB_STEPS)
         controlsChanged()
     }
@@ -3921,7 +3978,56 @@ class RawCameraController(
      * closed immediately instead of queueing, bounding held gralloc buffers to one.
      * Stale results (lens switch, mode change, stop) are dropped by generation.
      */
+    // Camera-thread only. One waiting image bounds gralloc ownership if results lag.
+    private val meteringResults = MeteringResultWindow<TotalCaptureResult>()
+    private var meteringPending: Image? = null
+    private var meteringPendingCharacteristics: CameraCharacteristics? = null
+    private val meteringPairTimeout = Runnable { clearPendingMetering() }
+
+    private fun clearPendingMetering() {
+        cameraHandler.removeCallbacks(meteringPairTimeout)
+        meteringPending?.let(RawImageOwnership::release)
+        meteringPending = null
+        meteringPendingCharacteristics = null
+    }
+
+    private fun noteMeteringResult(result: TotalCaptureResult) {
+        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        meteringResults.put(timestamp, result)
+        val image = meteringPending ?: return
+        if (image.timestamp != timestamp) return
+        val c = meteringPendingCharacteristics ?: return
+        meteringPending = null
+        meteringPendingCharacteristics = null
+        cameraHandler.removeCallbacks(meteringPairTimeout)
+        dispatchMatchedMeteringSample(image, c, result)
+    }
+
     private fun dispatchMeteringSample(image: Image, cameraCharacteristics: CameraCharacteristics) {
+        val result = meteringResults[image.timestamp]
+        if (result != null) {
+            dispatchMatchedMeteringSample(image, cameraCharacteristics, result)
+        } else if (meteringPending == null && !meteringInFlight.get()) {
+            meteringPending = image
+            meteringPendingCharacteristics = cameraCharacteristics
+            cameraHandler.postDelayed(meteringPairTimeout, 250L)
+        } else RawImageOwnership.release(image)
+    }
+
+    private fun dispatchMatchedMeteringSample(
+        image: Image, cameraCharacteristics: CameraCharacteristics, result: TotalCaptureResult
+    ) {
+        // Physical metadata belongs to the RAW route when available.
+        val physicalId = sessionPrimaryRoute?.physicalCameraId
+        val frameResult: CaptureResult = if (Build.VERSION.SDK_INT >= 31 && physicalId != null)
+            result.physicalCameraTotalResults[physicalId] ?: result else result
+        val baselineIso = frameResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
+        val baselineShutter = frameResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+        if (baselineIso <= 0 || baselineShutter <= 0L) {
+            RawImageOwnership.release(image)
+            return
+        }
+
         if (captureInProgress.get()) {
             RawImageOwnership.release(image)
             return
@@ -3951,6 +4057,8 @@ class RawCameraController(
         if (programDue) program.lastUpdateMs = now
         if (ettrDue) ettr.lastUpdateMs = now
         val generation = lifecycleGeneration
+        val sampleTimestamp = image.timestamp
+        val meteringMode = programAeProfile.metering
         try {
         meteringExecutor.execute {
             try {
@@ -3959,9 +4067,9 @@ class RawCameraController(
                 // sparse region-cropped path, which shares one sample when both
                 // loops are due.
                 val sample = sampleSafely("metering") {
-                    if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics)
+                    if (ettrDue) RawEttrSampler.sample(image, cameraCharacteristics, frameResult)
                     else RawEttrSampler.sampleProgram(
-                        image, cameraCharacteristics, programAeProfile.metering
+                        image, cameraCharacteristics, meteringMode, frameResult
                     )
                 }
                     val sampleMs = SystemClock.elapsedRealtime() - sampleStartMs
@@ -3975,8 +4083,12 @@ class RawCameraController(
                     if (sample != null) {
                         cameraHandler.post {
                             if (generation == lifecycleGeneration && running && !destroyed) {
-                                if (programDue) updateProgramFromSample(sample)
-                                if (ettrDue) updateEttrFromSample(sample)
+                                if (Log.isLoggable(LOG_TAG, Log.DEBUG)) {
+                                    Log.d(LOG_TAG, "Metering timestamp=$sampleTimestamp resultFrame=${result.frameNumber} " +
+                                        "ISO=$baselineIso exposureNs=$baselineShutter latestISO=$lastIso latestExposureNs=$lastExposureNanos")
+                                }
+                                if (programDue) updateProgramFromSample(sample, baselineIso, baselineShutter, frameResult)
+                                if (ettrDue) updateEttrFromSample(sample, baselineIso, baselineShutter, frameResult)
                             }
                         }
                     }
@@ -4010,7 +4122,7 @@ class RawCameraController(
      * Runs on the camera thread; callers must sample off-thread (see
      * [dispatchMeteringSample]) and post the result here.
      */
-    private fun updateProgramFromSample(sample: EttrRawSample) {
+    private fun updateProgramFromSample(sample: EttrRawSample, baselineIso: Int, baselineShutter: Long, frameResult: CaptureResult) {
         if (!programCustomActive() || ettrCaptureActive()) return
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
@@ -4019,10 +4131,10 @@ class RawCameraController(
         val limits = ProgramAeSolver.resolveLimits(
             profile, isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper
         ) { resolveDynamicShutterLimit(DynamicExposureSettings(enabled = true), shutterRange.upper) } ?: return
-        // The sampled frame's own exposure (latest result), as libcamera's
+        // The sampled frame's timestamp-matched exposure, as libcamera's
         // AGC measures against the device status of the frame it meters.
         val step = program.onSample(
-            sample, profile, limits, lastIso, lastExposureNanos, sceneFlickerPeriodNanos(),
+            sample, profile, limits, baselineIso, baselineShutter, sceneFlickerPeriodNanos(frameResult),
             lighting = jpegOutputSettings.activeDLighting
         ) ?: return
         if (step == ProgramAeLoop.Step.START) {
@@ -4034,8 +4146,8 @@ class RawCameraController(
     }
 
     /** Camera2 scene flicker (50/60 Hz) period for the AGC, 0 when none or unknown. */
-    private fun sceneFlickerPeriodNanos(): Long =
-        when (latestPreviewResult?.get(CaptureResult.STATISTICS_SCENE_FLICKER)) {
+    private fun sceneFlickerPeriodNanos(result: CaptureResult? = latestPreviewResult): Long =
+        when (result?.get(CaptureResult.STATISTICS_SCENE_FLICKER)) {
             CaptureResult.STATISTICS_SCENE_FLICKER_50HZ -> 10_000_000L
             CaptureResult.STATISTICS_SCENE_FLICKER_60HZ -> 8_333_333L
             else -> 0L
@@ -4098,19 +4210,17 @@ class RawCameraController(
 
     /**
      * One ETTR iteration from a shared RAW sample. The baseline is always the actual
-     * sensor exposure ([lastIso]/[lastExposureNanos]): when ETTR is active the
+     * sensor exposure from its matching capture result: when ETTR is active the
      * repeating preview already runs its pair, and PROGRAM is frozen, so the live
      * PROGRAM pair would be a stale value that was never applied.
      *
      * Runs on the camera thread; callers must sample off-thread (see
      * [dispatchMeteringSample]) and post the result here.
      */
-    private fun updateEttrFromSample(sample: EttrRawSample) {
+    private fun updateEttrFromSample(sample: EttrRawSample, baselineIso: Int, baselineShutter: Long, frameResult: CaptureResult) {
         if (!ettr.settings.enabled || !ettrModeAvailable()) return
         if (captureInProgress.get()) return
         val levels = sample.levels
-        val baselineIso = lastIso
-        val baselineShutter = lastExposureNanos
         if (baselineIso <= 0 || baselineShutter <= 0L || captureInProgress.get()) return
         val c = characteristics ?: return
         val isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) ?: return
@@ -4119,7 +4229,7 @@ class RawCameraController(
             sample, baselineIso, baselineShutter,
             isoRange.lower, isoRange.upper, shutterRange.lower, shutterRange.upper,
             ettrSafeShutterCeiling(shutterRange.upper),
-            sensorDynamicRangeEv(), lighting = jpegOutputSettings.activeDLighting
+            sensorDynamicRangeEv(frameResult), lighting = jpegOutputSettings.activeDLighting
         )
     }
 
@@ -4128,8 +4238,8 @@ class RawCameraController(
      * limits: white over the read-noise floor sqrt(O), O averaged over the
      * Camera2 noise profile's channels (normalized units). NaN without one.
      */
-    private fun sensorDynamicRangeEv(): Double {
-        val profile = latestPreviewResult?.get(CaptureResult.SENSOR_NOISE_PROFILE) ?: return Double.NaN
+    private fun sensorDynamicRangeEv(result: CaptureResult? = latestPreviewResult): Double {
+        val profile = result?.get(CaptureResult.SENSOR_NOISE_PROFILE) ?: return Double.NaN
         val offset = profile.map { it.second }.filter { it > 0.0 }.average()
         return MagicLanternEttr.dynamicRangeEv(offset)
     }
@@ -4184,7 +4294,7 @@ class RawCameraController(
             rawZslDisabledForSession = false
             rawZslFallbackDetail = null
             zslHealth.clearLatches()
-            if (rawZslCapacity == 0) {
+            if (rawZslCapacity == 0 && rawReaderHasZslBudget) {
                 publishRawZslStatus(
                     RawZslState.FALLBACK,
                     ControllerDebugText.ZSL_NO_CAPACITY_DETAIL
@@ -4286,6 +4396,10 @@ class RawCameraController(
     /** Last session/request apply outcome for the editor readout. */
     fun vendorLastApply(): Pair<VendorKeyApplyReport?, VendorKeyApplyReport?> =
         lastVendorSessionReport to lastVendorRequestReport
+
+    @Volatile private var rawFpsDiagnostic = "RAW preview FPS: waiting for camera"
+    @Volatile private var measuredRawFpsDiagnostic = ""
+    fun vendorRawFpsDiagnostic(): String = rawFpsDiagnostic + measuredRawFpsDiagnostic
 
     fun vendorRawPreviewFpsOptions(): List<Int> {
         val ranges = vendorKeyCharacteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
@@ -4479,7 +4593,8 @@ class RawCameraController(
             )
         }
         ManualControl.WHITE_BALANCE -> {
-            if (!supportsCapability(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING)) return null
+            if (wbPresetsEnabled) return ManualControlRange(0, 0, 0, selectedWbPreset == CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            if (characteristics?.let { CameraWhiteBalance.setting(it, 5500) } == null) return null
             ManualControlRange(
                 MIN_WB_KELVIN.toLong(), MAX_WB_KELVIN.toLong(),
                 (selectedWbKelvin ?: 5500).toLong(), selectedWbKelvin == null
@@ -4513,7 +4628,10 @@ class RawCameraController(
         when (control) {
             ManualControl.ISO -> selectedIso = value?.toInt()
             ManualControl.SHUTTER -> selectedExposureNanos = value
-            ManualControl.WHITE_BALANCE -> selectedWbKelvin = value?.toInt()
+            ManualControl.WHITE_BALANCE -> {
+                wbPresetsEnabled = false
+                selectedWbKelvin = value?.toInt()?.coerceIn(MIN_WB_KELVIN, MAX_WB_KELVIN)
+            }
             ManualControl.FOCUS_DISTANCE -> {
                 val minimumDistance = characteristics?.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
                 selectedFocusDistanceDiopters = value?.let { raw ->
@@ -4551,7 +4669,8 @@ class RawCameraController(
     fun snapshotVideoManual(): VideoManualSnapshot = VideoManualSnapshot(
         iso = selectedIso,
         shutterNanos = selectedExposureNanos,
-        wbKelvin = selectedWbKelvin,
+        wbKelvin = selectedWbKelvin.takeUnless { wbPresetsEnabled },
+        wbPreset = if (wbPresetsEnabled) selectedWbPreset else CaptureRequest.CONTROL_AWB_MODE_AUTO,
         focusDiopters = selectedFocusDistanceDiopters,
         evIndex = exposureCompensation.takeIf { it != 0 },
         torch = torchEnabled,
@@ -4596,6 +4715,12 @@ class RawCameraController(
         }
         val device = camera ?: return
         val currentSession = session ?: return
+        if (SessionStreamSelection.needsZslReaderUpgrade(rawZslRequested, rawReaderHasZslBudget,
+                captureInProgress.get(), pendingSaveCount.get())) {
+            Log.i(LOG_TAG, "Expanding forward-capture RAW reader for requested ZSL ring")
+            restartCameraForConfigurationChange()
+            return
+        }
         // Null in RAW-only sessions: the repeating request then carries the
         // RAW target alone and the RAW viewfinder is the only display.
         val surface = previewSurface
@@ -4802,12 +4927,26 @@ class RawCameraController(
 
     private fun previewCaptureCallback(generation: Int, rawSurface: Surface?, requestEpoch: Long) =
         object : CameraCaptureSession.CaptureCallback() {
+            private val diagnostics = CameraResultDiagnostics(selectedCameraId.orEmpty(), "photo-preview")
+            private val displayCadence = SensorCadence()
+            private var resultFpsWarned = false
             override fun onCaptureCompleted(
                 session: CameraCaptureSession,
                 request: CaptureRequest,
                 result: TotalCaptureResult
             ) {
                 if (!isCurrent(generation) || requestEpoch != rawZslRequestEpoch) return
+                diagnostics.result(request, result)
+                displayCadence.add(result.get(CaptureResult.SENSOR_TIMESTAMP))?.let { fps ->
+                    measuredRawFpsDiagnostic = "\nMeasured sensor: %.2f FPS".format(java.util.Locale.US, fps)
+                }
+                val askedRange = request.get(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE)
+                val reportedRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)
+                if (!resultFpsWarned && askedRange != null && reportedRange != null && askedRange != reportedRange) {
+                    resultFpsWarned = true
+                    rawFpsDiagnostic = "Requested FPS range $askedRange NOT APPLIED AS REQUESTED — HAL reports $reportedRange"
+                    Log.w(LOG_TAG, "RAW_FPS_MISMATCH route=$selectedCameraId requested=$askedRange returned=$reportedRange")
+                }
                 val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
                 val shutter = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
                 rawViewfinder?.expectFrameInterval(maxOf(shutter, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L))
@@ -4825,6 +4964,7 @@ class RawCameraController(
                     onInfo(String.format(java.util.Locale.US, "DNG\n%d-bit RAW", bits), lastSensorInfo)
                 }
                 latestPreviewResult = result
+                noteMeteringResult(result)
                 noteHalAwbVerdict(result)
                 // P0: feed the flash precapture wait with every result's AE state.
                 val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
@@ -4866,8 +5006,8 @@ class RawCameraController(
                         }
                     }
                 }
-                val wb = result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let(::estimateKelvin)
-                    ?: (selectedWbKelvin ?: 0)
+                val wb = if (wbPresetsEnabled) 0 else selectedWbKelvin ?:
+                    (if (metadataFrameCount++ % 30 == 0) result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let(::estimateKelvin) else lastWbKelvin) ?: 0
                 hasPreviewMetadata = hasPreviewMetadata || (iso > 0 && shutter > 0L)
                 if (wb > 0) lastWbKelvin = wb
                 if (request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_ON) {
@@ -4927,6 +5067,13 @@ class RawCameraController(
         applyDynamicCurve: Boolean = false
     ) {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        rawMeteringDistortionMode()?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
+        // Our viewfinders own rotation; framework auto-rotation must not remap regions/faces.
+        if (Build.VERSION.SDK_INT >= 31 && characteristics
+                ?.get(CameraCharacteristics.SCALER_AVAILABLE_ROTATE_AND_CROP_MODES)
+                ?.contains(CameraMetadata.SCALER_ROTATE_AND_CROP_NONE) == true) {
+            builder.set(CaptureRequest.SCALER_ROTATE_AND_CROP, CameraMetadata.SCALER_ROTATE_AND_CROP_NONE)
+        }
         val manualFocus = selectedFocusDistanceDiopters
         val wantedAfMode = when {
             manualFocus != null -> CaptureRequest.CONTROL_AF_MODE_OFF
@@ -5008,14 +5155,15 @@ class RawCameraController(
                 flashRepeatingAeModeOverride == null && touchFocus.aeLockIndefinite &&
                     characteristics?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true)
         }
-        val kelvin = selectedWbKelvin
-        if (kelvin == null) {
-            // P2/P3: AUTO only when advertised; the Kelvin path below owns OFF.
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwbMode(CaptureRequest.CONTROL_AWB_MODE_AUTO))
+        val wbSetting = selectedWbKelvin?.let { k -> characteristics?.let { CameraWhiteBalance.setting(it, k) } }
+        if (!wbPresetsEnabled && wbSetting != null) {
+            CameraWhiteBalance.apply(builder, wbSetting)
         } else {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwbMode(CaptureRequest.CONTROL_AWB_MODE_OFF))
-            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-            builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gainsForKelvin(kelvin))
+            builder.set(CaptureRequest.CONTROL_AWB_LOCK, false)
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, coerceAwbMode(if (wbPresetsEnabled) selectedWbPreset else CaptureRequest.CONTROL_AWB_MODE_AUTO))
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+            builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, null)
+            builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, null)
         }
         // Repeating preview carries continuous torch assist only. Still
         // requests override this below in applyStillFlash (SINGLE or
@@ -5031,6 +5179,14 @@ class RawCameraController(
                 else CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF
             )
         }
+        // An explicit sensor-mode FPS is part of the mode, not just preview pacing.
+        // Keep it on still/AF/precapture builders too; template defaults may select
+        // another readout and fail the mode-8 capture. Do not override shutter or
+        // frame-duration controls, including intentional long/manual exposures.
+        val explicitFps = runCatching { vendorKeys(selectedCameraId).rawPreviewFps }.getOrDefault(0)
+        if (explicitFps != 0) rawZslTargetFpsRange?.let {
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+        }
         // Step 2 vendor REQUEST keys ride every builder (preview, still, HDR,
         // flash, AF) after the standard controls. Individually guarded: a bad
         // key skips itself and never fails capture.
@@ -5045,15 +5201,21 @@ class RawCameraController(
             return
         }
         val chars = vendorKeyCharacteristics ?: return
+        if (!vendorModeRawArrived && !vendorModeStartupLogged &&
+            profile.entries.any { VendorSensorModePolicy.deferred(it, profile.rawPreviewFps) }) {
+            vendorModeStartupLogged = true
+            Log.i(LOG_TAG, "VENDOR_MODE_BOOTSTRAP route=$routeId deferring mode 8 until first RAW; FPS=${profile.rawPreviewFps}")
+        }
         try {
             val report = VendorKeyApply.applyRequestKeys(
-                builder, profile, chars, activePhysicalCameraId
+                builder, VendorSensorModePolicy.startupProfile(profile, vendorModeRawArrived), chars, activePhysicalCameraId
             ) { message ->
                 Log.i(LOG_TAG, message)
             }
             lastVendorRequestReport = report
             if (report.applied.isNotEmpty()) {
-                Log.i(LOG_TAG, "Vendor request keys applied for $routeId: ${report.applied}")
+                Log.i(LOG_TAG, "Vendor request keys applied for $routeId: ${report.applied} sensorModes=" +
+                    profile.requestEntries().filter { it.name.endsWith(".current_mode") || it.name.endsWith(".forceSensorMode") }.joinToString { it.summary() })
             }
         } catch (failure: Exception) {
             lastVendorRequestReport = VendorKeyApplyReport(emptyList(), profile.requestEntries().map { it.name }, failure.toString())
@@ -5345,8 +5507,7 @@ class RawCameraController(
     }
 
     private fun standardAeMeteringRegions(): Array<MeteringRectangle>? {
-        val active = characteristics?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-            ?: return null
+        val active = meteringCrop()?.rect() ?: return null
         return when (aeMeteringMode) {
             AeMeteringMode.AUTO -> null
             AeMeteringMode.CENTER_WEIGHTED -> {
@@ -5391,6 +5552,7 @@ class RawCameraController(
             failure: CaptureFailure) {
             if (session !== this@RawCameraController.session) return
             val command = request.tag as? PhotoAutoFocus.Command ?: return
+            Log.w(LOG_TAG, "AF_TRIGGER_FAILED route=$selectedCameraId run=${command.runId} trigger=${command.trigger} frame=${failure.frameNumber} reason=${failure.reason}")
             touchFocus.onCommandFailed(command.runId)
         }
 
@@ -5401,6 +5563,7 @@ class RawCameraController(
         ) {
             if (session !== this@RawCameraController.session) return
             (request.tag as? PhotoAutoFocus.Command)?.let { command ->
+                CameraResultDiagnostics(selectedCameraId.orEmpty(), "af-trigger").result(request, result, true)
                 if (command.trigger == CaptureRequest.CONTROL_AF_TRIGGER_START)
                     touchFocus.onStartFrame(command.runId, result.frameNumber)
             }
@@ -5915,6 +6078,7 @@ class RawCameraController(
         }
         val orientation = activeOutputOrientation
         publishRawScopeIfDue(image, c, force = true, result = result)
+        val captureDngOverrides = dngMetadataOverrides(selectedCameraId)
         // Freeze the exact paired result before crossing to the writer thread. Future JPEG
         // development consumes this snapshot, never a later preview result or mutable HAL array.
         val frameMetadata = try {
@@ -5923,7 +6087,8 @@ class RawCameraController(
                 image,
                 c,
                 result,
-                orientation
+                orientation,
+                levelOverrides = captureDngOverrides
             )
         } catch (failure: Exception) {
             ownership.close()
@@ -5942,7 +6107,6 @@ class RawCameraController(
         val captureDevelopedFormat = activeDevelopedFormat
         val captureJxlSettings = activeJxlOutputSettings
         val captureFocusView = developFocusView
-        val captureDngOverrides = dngMetadataOverrides(selectedCameraId)
         val captureDngBackend = dngWriterBackend()
         val captureDngCompression = dngCompression()
         val sharedAdaptiveExposure = activeAdaptiveExposure
@@ -6202,6 +6366,11 @@ class RawCameraController(
 
     private fun resumeRawZslIfIdle() {
         if (!running || session == null || captureInProgress.get()) return
+        if (SessionStreamSelection.needsZslReaderUpgrade(rawZslRequested, rawReaderHasZslBudget,
+                false, pendingSaveCount.get())) {
+            updateRepeatingRequest()
+            return
+        }
         // Refill while prior images save only when the complete ring and preview
         // headroom still fit. JPEG admission remains bounded independently at six.
         val wantZsl = rawZslRequested && !rawZslDisabledForSession && !zslHealth.streamBroken &&
@@ -6276,6 +6445,11 @@ class RawCameraController(
             ranges.firstOrNull { it.lower == match.first && it.upper == match.last }
         }
 
+        measuredRawFpsDiagnostic = ""
+        rawFpsDiagnostic = if (target != 0 && selected == null)
+            "$target FPS NOT APPLIED — this camera does not advertise a matching range; using camera defaults"
+        else "RAW preview requested ${target.takeIf { it != 0 } ?: RAW_ZSL_TARGET_FPS} FPS • range ${selected ?: "camera default"}"
+        Log.i(LOG_TAG, "RAW_FPS_SELECTION route=$selectedCameraId $rawFpsDiagnostic advertised=${ranges.contentToString()}")
         Log.i(
             LOG_TAG,
             "RAW ZSL FPS target=${target.takeIf { it != 0 } ?: RAW_ZSL_TARGET_FPS} " +
@@ -6582,6 +6756,8 @@ class RawCameraController(
             // Close outstanding Images before the ImageReader: closing the reader
             // with acquired gralloc buffers still held wedges Mali/Adreno queues
             // into "unlock() on a buffer locked with invalid write locks".
+            clearPendingMetering()
+            meteringResults.clear()
             pairing.clearForTeardown(ignoreReleaseFailures = true)
             rawReader?.setOnImageAvailableListener(null, null)
             session?.close(); camera?.close(); previewSurface?.release()
@@ -6647,6 +6823,10 @@ class RawCameraController(
 
     private fun clampControlsToCamera() {
         val c = characteristics ?: return
+        if (c.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.contains(selectedWbPreset) != true) {
+            selectedWbPreset = CaptureRequest.CONTROL_AWB_MODE_AUTO
+        }
+        if (selectedWbKelvin != null && CameraWhiteBalance.setting(c, selectedWbKelvin!!) == null) selectedWbKelvin = null
         c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let { range ->
             selectedIso = selectedIso?.coerceIn(range.lower, range.upper)
         } ?: run { selectedIso = null }
@@ -6677,9 +6857,7 @@ class RawCameraController(
                 ?: if (hasPreviewMetadata) "ISO $lastIso" else "ISO A",
             selectedExposureNanos?.let(::formatExposure)
                 ?: if (hasPreviewMetadata) formatExposure(lastExposureNanos) else "S A",
-            selectedWbKelvin?.let { "${it}K" }
-                ?: lastWbKelvin?.let { "${it}K" }
-                ?: "WB A",
+            whiteBalanceLabel(),
             selectedFocusDistanceDiopters?.let(::formatFocusDistance) ?: "AF",
             if (selectedIso != null || selectedExposureNanos != null) "EV --"
             else String.format(java.util.Locale.US, "EV %+.1f", evStops),
@@ -6718,20 +6896,33 @@ class RawCameraController(
         return if (includeAuto) null else values.first()
     }
 
-    private fun gainsForKelvin(kelvin: Int): RggbChannelVector {
-        val t = ((kelvin.coerceIn(MIN_WB_KELVIN, MAX_WB_KELVIN) - MIN_WB_KELVIN) /
-            (MAX_WB_KELVIN - MIN_WB_KELVIN).toFloat())
-        val red = 1f + 1.2f * t
-        val blue = 2.6f - 1.5f * t
-        return RggbChannelVector(red, 1f, 1f, blue)
+    fun whiteBalanceLabel(): String = if (wbPresetsEnabled) CameraWhiteBalance.presets[selectedWbPreset] ?: "Auto"
+        else selectedWbKelvin?.let { "$it K" } ?: lastWbKelvin?.let { "Auto · ~$it K" } ?: "Auto"
+
+    fun whiteBalancePresets(): List<Pair<Int, String>> = CameraWhiteBalance.presets.entries
+        .filter { characteristics?.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.contains(it.key) == true }
+        .map { it.key to it.value }
+
+    fun setWhiteBalancePreset(mode: Int, onChanged: () -> Unit = {}) {
+        cameraHandler.post {
+            if (whiteBalancePresets().none { it.first == mode }) return@post
+            wbPresetsEnabled = true
+            selectedWbPreset = mode
+            controlsChanged()
+            onChanged()
+        }
     }
 
-    private fun estimateKelvin(gains: RggbChannelVector): Int {
-        val fromBlue = (2.6f - gains.blue) / 1.5f
-        val fromRed = (gains.red - 1f) / 1.2f
-        val normalized = ((fromBlue + fromRed) * 0.5f).coerceIn(0f, 1f)
-        return (MIN_WB_KELVIN + normalized * (MAX_WB_KELVIN - MIN_WB_KELVIN)).toInt()
+    fun toggleWhiteBalanceInterface(onChanged: () -> Unit) {
+        cameraHandler.post {
+            wbPresetsEnabled = !wbPresetsEnabled
+            controlsChanged()
+            onChanged()
+        }
     }
+
+    private fun estimateKelvin(gains: RggbChannelVector): Int =
+        characteristics?.let { CameraWhiteBalance.estimate(it, gains) } ?: 0
 
     private fun formatExposure(nanos: Long): String = ControllerDebugText.formatExposure(nanos)
 
@@ -6871,6 +7062,8 @@ class RawCameraController(
      * against the live stream map so a stale choice degrades to auto
      * instead of wedging the session.
      */
+    var onCaptureSurfaceSize: ((Int, Int) -> Unit)? = null
+
     private fun preferredRawSize(
         cameraId: String?,
         mapSizes: List<SessionStreamSize>

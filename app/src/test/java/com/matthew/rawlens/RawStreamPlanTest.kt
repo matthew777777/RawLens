@@ -44,8 +44,18 @@ class RawStreamPlanTest {
             idle.copy(allowRawZsl = false), idle.copy(zslCapacity = 0))) {
             val p = RawStreamPlan.plan(inputs)
             assertFalse(p.zsl)
-            assertEquals(inputs.zslCapacity > 0, p.histogram)
+            assertTrue(p.histogram)
         }
+    }
+
+    @Test
+    fun forwardReaderWithoutRingKeepsHistogramAndExposureMetering() {
+        val p = RawStreamPlan.plan(idle.copy(zslRequested = false, zslCapacity = 0))
+        assertTrue(p.viewfinder && p.histogram && p.ettr && p.program)
+        assertFalse(p.zsl)
+        val held = RawStreamPlan.plan(idle.copy(zslRequested = false, zslCapacity = 0,
+            captureInProgress = true))
+        assertFalse(held.histogram || held.ettr || held.program)
     }
 
     @Test

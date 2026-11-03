@@ -233,6 +233,17 @@ internal object SessionStreamSelection {
         READER_MAXIMAGES_HARD_CAP
     )
 
+    /** Forward capture needs save slots + live-consumer reserve, not a ZSL ring/rearm. */
+    internal fun readerMaxImagesFor(frameCount: Int, zslRequested: Boolean): Int =
+        if (zslRequested) fullReaderMaxImagesFor(frameCount) else
+            maxOf(MIN_ACQUIRED_RAW_IMAGES,
+                RawCameraController.MAX_IN_FLIGHT_JPEG_SAVES + RAW_PREVIEW_RESERVED_SLOTS)
+
+    /** Expand only at an idle boundary; never tear down save-owned Images. */
+    internal fun needsZslReaderUpgrade(zslRequested: Boolean, ringBudget: Boolean,
+                                      captureActive: Boolean, pendingSaves: Int): Boolean =
+        zslRequested && !ringBudget && !captureActive && pendingSaves == 0
+
     /**
      * Inverse of the reader sizing in [createSession]: the forward formula
      * keeps `max(capacity, RawCameraController.MAX_IN_FLIGHT_JPEG_SAVES)` plus pairing,

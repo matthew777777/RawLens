@@ -3,12 +3,38 @@
 package com.matthew.rawlens
 
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.OutputConfiguration
 import org.junit.Assert.*
 import org.junit.Test
 import org.mockito.Mockito.*
 
 class VideoCameraRouteTest {
+    @Test fun physicalFrameUsesSelectedSensorOnAndroid12AndLater() {
+        val logical = mock(TotalCaptureResult::class.java)
+        val selected = mock(TotalCaptureResult::class.java)
+        val other = mock(TotalCaptureResult::class.java)
+        `when`(logical.physicalCameraTotalResults).thenReturn(mapOf("5" to selected, "4" to other))
+        val route = VideoCameraRoute("6", "5", camera())
+        assertSame(selected, route.frameResult(logical, logical.physicalCameraTotalResults))
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun physicalFrameUsesAndroid11Metadata() {
+        val logical = mock(TotalCaptureResult::class.java)
+        val selected = mock(CaptureResult::class.java)
+        `when`(logical.physicalCameraResults).thenReturn(mapOf("5" to selected))
+        assertSame(selected, VideoCameraRoute("6", "5", camera()).frameResult(logical, logical.physicalCameraResults))
+    }
+
+    @Test fun missingPhysicalResultFallsBackToLogicalWithoutChoosingAnotherSensor() {
+        val logical = mock(TotalCaptureResult::class.java)
+        `when`(logical.physicalCameraTotalResults).thenReturn(mapOf("4" to mock(TotalCaptureResult::class.java)))
+        assertSame(logical, VideoCameraRoute("6", "5", camera()).frameResult(logical, logical.physicalCameraTotalResults))
+        assertSame(logical, VideoCameraRoute("6", null, camera()).frameResult(logical))
+    }
+
     private val rawCameras = mutableSetOf<CameraCharacteristics>()
     private fun camera(raw: Boolean = true): CameraCharacteristics =
         mock(CameraCharacteristics::class.java).also { if (raw) rawCameras += it }

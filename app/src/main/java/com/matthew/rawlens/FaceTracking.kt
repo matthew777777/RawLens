@@ -119,7 +119,7 @@ internal class FaceTracking(private val host: Host, initialEnabled: Boolean) {
                 }
             }
         }
-        publish(faces, selected, active)
+        publish(faces, selected, crop)
     }
 
     private fun publish(faces: List<HalFace>, selected: HalFace?, active: SensorActiveArray) {
@@ -132,7 +132,7 @@ internal class FaceTracking(private val host: Host, initialEnabled: Boolean) {
         // viewfinder size, so boxes land where a tap at the same spot meters.
         val rotation = host.sensorOrientation()
         val mirrored = host.frontFacing()
-        host.publish(faces.map { face ->
+        host.publish(faces.filter { intersect(it, active) != null }.map { face ->
             val box = FacePriority.mapToView(face, active, rotation, mirrored)
             FaceOverlayBox(
                 box.left * width, box.top * height,

@@ -1,6 +1,8 @@
 
 package com.matthew.rawlens
 
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -8,6 +10,25 @@ import com.matthew.rawlens.SessionStreamCombo
 import com.matthew.rawlens.SessionStreamSize
 
 class SessionStreamComboTest {
+    @Test fun `forward reader excludes unused ring and rearm while preserving six saves`() {
+        val size = SessionStreamSelection.readerMaxImagesFor(8, false)
+        assertEquals(16, size)
+        assertEquals(size, SessionStreamSelection.readerMaxImagesFor(59, false))
+        assertTrue(CaptureQueueCapacity.accepts(0, 6, 6, size,
+            SessionStreamSelection.RAW_PREVIEW_RESERVED_SLOTS))
+        assertEquals(0, SessionStreamSelection.clampZslCapacityForReader(8, size))
+        assertEquals(22, SessionStreamSelection.readerMaxImagesFor(8, true))
+        assertEquals(61, SessionStreamSelection.readerMaxImagesFor(59, true))
+    }
+
+    @Test fun `ZSL upgrade waits for capture and all save owners to finish`() {
+        assertTrue(SessionStreamSelection.needsZslReaderUpgrade(true, false, false, 0))
+        assertFalse(SessionStreamSelection.needsZslReaderUpgrade(true, false, true, 0))
+        assertFalse(SessionStreamSelection.needsZslReaderUpgrade(true, false, false, 1))
+        assertFalse(SessionStreamSelection.needsZslReaderUpgrade(true, true, false, 0))
+        assertFalse(SessionStreamSelection.needsZslReaderUpgrade(false, false, false, 0))
+    }
+
     private fun size(width: Int, height: Int) = SessionStreamSize(width, height)
 
     private val rawSizes = listOf(size(4096, 3072), size(2048, 1536))

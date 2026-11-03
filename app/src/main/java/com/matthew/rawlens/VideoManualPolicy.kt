@@ -14,6 +14,7 @@ data class VideoManualSnapshot(
     val iso: Int? = null,
     val shutterNanos: Long? = null,
     val wbKelvin: Int? = null,
+    val wbPreset: Int = 1,
     val focusDiopters: Float? = null,
     /** Null = auto (AE compensation only applies with AE ON). */
     val evIndex: Int? = null,
@@ -52,6 +53,17 @@ data class VideoRecordLocks(
 object VideoManualPolicy {
     const val MIN_WB_KELVIN = 2000
     const val MAX_WB_KELVIN = 10000
+
+    /** A slower configured stream wins over the requested rate; never truncate exposure. */
+    fun frameDuration(fps: Int, exposureNanos: Long, streamMinNanos: Long,
+                      sensorMaxNanos: Long?): Long {
+        require(fps > 0)
+        val duration = maxOf(1_000_000_000L / fps, exposureNanos, streamMinNanos)
+        require(sensorMaxNanos == null || sensorMaxNanos <= 0 || duration <= sensorMaxNanos) {
+            "Video frame duration $duration exceeds sensor maximum $sensorMaxNanos"
+        }
+        return duration
+    }
 
     /** True when the take must drive the sensor manually (AE OFF). */
     fun wantsManualExposure(snapshot: VideoManualSnapshot): Boolean =
@@ -106,10 +118,4 @@ object VideoManualPolicy {
         return shutterNanos.coerceIn(min, cappedMax)
     }
 
-    /** Mirrors RawCameraController's Kelvin -> RGGB gain ramp (pure). */
-    fun wbGainsForKelvin(kelvin: Int): FloatArray {
-        val t = ((kelvin.coerceIn(MIN_WB_KELVIN, MAX_WB_KELVIN) - MIN_WB_KELVIN) /
-            (MAX_WB_KELVIN - MIN_WB_KELVIN).toFloat())
-        return floatArrayOf(1f + 1.2f * t, 1f, 1f, 2.6f - 1.5f * t)
-    }
 }
