@@ -23,7 +23,7 @@ class WaveletDenoiseDeviceTest {
     private val noiseB = 1e-6f
 
     /** Smooth colour gradients + edges + Poisson-Gaussian noise, RGBA16F. */
-    private fun frame(w: Int, h: Int, seed: Long): ByteArray {
+    private fun frame(w: Int, h: Int, seed: Long, gain: Float = 1f): ByteArray {
         val rnd = Random(seed)
         val out = ByteBuffer.allocate(w * h * 8).order(ByteOrder.nativeOrder())
         for (y in 0 until h) for (x in 0 until w) {
@@ -31,7 +31,7 @@ class WaveletDenoiseDeviceTest {
             val base = floatArrayOf(0.05f + 0.25f * x / w, 0.12f * edge, 0.04f + 0.2f * y / h)
             for (c in 0 until 3) {
                 val clean = base[c] * (if (c == 1) 1f else edge)
-                val v = clean + rnd.nextGaussian().toFloat() * sqrt(noiseA * clean + noiseB)
+                val v = clean + rnd.nextGaussian().toFloat() * sqrt(gain * noiseA * clean + gain * gain * noiseB)
                 out.putShort(Half.toHalf(v))
             }
             out.putShort(Half.toHalf(1f))
@@ -100,6 +100,33 @@ class WaveletDenoiseDeviceTest {
                 }
                 Log.i(TAG, "TIMING $algorithm ${w}x$h wall/gpu ms = $times")
             }
+        } finally {
+            stage.release()
+        }
+    }
+
+    /** Learned noise model: samples accumulate per key, then the model drives the shot. */
+    @Test fun learnedNoiseModelStoresSamplesAndApplies() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val stage = WaveletDenoiser(context)
+        val dir = java.io.File(context.filesDir, "wavelet-noise")
+        val source = { iso: Int -> WaveletDenoiser.NoiseSource(iso, "device-test-${System.nanoTime() / 1000000000}") }
+        val key = source(0).rawModeKey
+        try {
+            val w = 1024; val h = 768
+            val settings = WaveletSettings(enabled = true, algorithm = WaveletAlgorithm.RAWLENS)
+            val before = dir.listFiles()?.toSet() ?: emptySet()
+            for ((i, iso) in listOf(100, 200, 400, 800, 1600, 3200, 1000).withIndex()) {
+                val buf = direct(frame(w, h, 20L + i, iso / 400f))
+                assertTrue(stage.process(buf, buf, w, h, settings, noiseA, noiseB, wb,
+                    noiseSource = WaveletDenoiser.NoiseSource(iso, key)))
+            }
+            val created = (dir.listFiles()?.toSet() ?: emptySet()) - before
+            assertTrue("one store file per key", created.size == 1)
+            val lines = created.single().readLines()
+            Log.i(TAG, "noise store ${lines.size} lines: ${lines.take(3)}")
+            assertTrue("header + samples", lines.first() == "rawlens-noise v1" && lines.size >= 7)
+            created.forEach { it.delete() }
         } finally {
             stage.release()
         }

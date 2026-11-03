@@ -37,6 +37,10 @@ typedef struct WaveletParams {
     // RawLens Wiener: CFA ordinal of the frame origin (RGGB, GRBG, GBRG, BGGR)
     // for the blind noise estimate. noiseA = noiseB = 0 means no usable profile.
     int cfa;
+    // RawLens learned noise model (step 4): capture ISO (0 = unknown) and the
+    // per-camera-key sample store path (null/empty = don't learn or use).
+    float iso;
+    const char* noiseStorePath;
 } WaveletParams;
 
 struct AAssetManager;

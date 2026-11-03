@@ -4,7 +4,10 @@
 package com.matthew.rawlens
 
 import android.content.Context
+import android.os.Build
+import java.io.File
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 
 /**
  * Post-demosaic profiled-wavelet denoise (luma + chroma) via the vendored
@@ -15,6 +18,7 @@ import java.nio.ByteBuffer
  */
 class WaveletDenoiser(context: Context) {
     private val assets = context.applicationContext.assets
+    private val noiseDir = File(context.applicationContext.filesDir, "wavelet-noise")
     private var handle = 0L
 
     /** Last native GPU time in ms (-1 when unavailable). */
@@ -60,7 +64,8 @@ class WaveletDenoiser(context: Context) {
         noiseB: Float,
         wbGains: FloatArray,
         sharpen: SharpenRequest? = null,
-        pattern: BayerPattern? = null
+        pattern: BayerPattern? = null,
+        noiseSource: NoiseSource? = null
     ): Boolean {
         require(settings.algorithm == WaveletAlgorithm.RAWLENS || noiseA > 0f || noiseB > 0f) {
             "RAWR denoise needs a noise profile"
@@ -75,7 +80,9 @@ class WaveletDenoiser(context: Context) {
             settings.algorithm.ordinal, settings.grain,
             sharpen?.settings?.level?.iterations ?: 0, sharpen?.pattern?.ordinal ?: 0,
             sharpen?.clipState?.directBuffer(),
-            (pattern ?: sharpen?.pattern ?: BayerPattern.RGGB).ordinal
+            (pattern ?: sharpen?.pattern ?: BayerPattern.RGGB).ordinal,
+            iso = noiseSource?.iso ?: 0,
+            noiseStorePath = noiseSource?.let { noiseStorePath(it) }
         )
         lastGpuMs = try {
             WaveletVulkan.lastGpuMs(handle)
@@ -103,6 +110,23 @@ class WaveletDenoiser(context: Context) {
             clipState?.directBuffer())
         Log.i(TAG, "Capture sharpening ${width}x${height} ${settings.level.label} " +
             "iterations=${settings.level.iterations} cfa=$pattern gpuMs=${WaveletVulkan.lastGpuMs(handle)}")
+    }
+
+    /**
+     * RawLens learned noise model input: capture ISO and the raw mode key.
+     * Samples are stored per key (camera, physical camera, pixel mode,
+     * quad Bayer, raw size) and per build fingerprint, so a firmware update
+     * (HAL raw NR may change) starts a fresh model.
+     */
+    data class NoiseSource(val iso: Int, val rawModeKey: String)
+
+    private fun noiseStorePath(source: NoiseSource): String? {
+        if (source.iso <= 0) return null
+        if (!noiseDir.isDirectory && !noiseDir.mkdirs()) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("${source.rawModeKey}|${Build.FINGERPRINT}".toByteArray())
+        val name = digest.take(12).joinToString("") { "%02x".format(it) }
+        return File(noiseDir, "$name.txt").absolutePath
     }
 
     /** Capture sharpening fused into the same GPU submit as [process]. */

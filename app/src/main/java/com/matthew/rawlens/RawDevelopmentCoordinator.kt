@@ -463,7 +463,12 @@ class RawDevelopmentCoordinator(context: Context) {
                 reconstructed, reconstructed, output.width, output.height,
                 settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb!!,
                 if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
-                pattern
+                pattern,
+                metadata.sensitivityIso?.let {
+                    WaveletDenoiser.NoiseSource(it, "${metadata.cameraId}/${metadata.activePhysicalCameraId}/" +
+                        "${metadata.sensorPixelMode}/${metadata.quadBayer}/${metadata.rawBinningFactorUsed}/" +
+                        "${metadata.imageWidth}x${metadata.imageHeight}")
+                }
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)

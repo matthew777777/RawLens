@@ -8,6 +8,8 @@
 #include <jni.h>
 #include <stdint.h>
 
+#include <string>
+
 #include "wavelet_host.h"
 
 #define WAVELET_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "rawLensWavelet", __VA_ARGS__)
@@ -52,7 +54,8 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
     JNIEnv* env, jobject /*thiz*/, jlong handle, jobject inHalf, jobject outHalf, jint w, jint h,
     jfloat strength, jfloat shadows, jfloat noiseA, jfloat noiseB, jfloatArray wb, jint maxScale,
     jfloat forceY, jfloat forceUv, jint tileSize, jint algorithm, jfloat grain,
-    jint sharpIterations, jint sharpCfa, jobject sharpClipState, jint cfa) {
+    jint sharpIterations, jint sharpCfa, jobject sharpClipState, jint cfa, jint iso,
+    jstring noiseStorePath) {
     WaveletContext* ctx = (WaveletContext*)(uintptr_t)handle;
     if (ctx == nullptr) {
         throw_runtime(env, "null wavelet context");
@@ -93,6 +96,16 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
     params.algorithm = algorithm;
     params.grain = grain;
     params.cfa = cfa;
+    params.iso = iso > 0 ? (float)iso : 0.0f;
+    std::string storePath;
+    if (noiseStorePath != nullptr) {
+        const char* c = env->GetStringUTFChars(noiseStorePath, nullptr);
+        if (c != nullptr) {
+            storePath = c;
+            env->ReleaseStringUTFChars(noiseStorePath, c);
+        }
+    }
+    params.noiseStorePath = storePath.c_str();
     params.sharpIterations = 0;
     params.sharpCfa = 0;
     params.sharpClipState = nullptr;

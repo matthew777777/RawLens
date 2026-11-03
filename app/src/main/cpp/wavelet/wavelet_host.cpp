@@ -7,6 +7,7 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include "raw_denoise/DenoisePipeline.hpp"
 #include "capture_sharpening/CaptureSharpening.h"
 #include "noise_estimate.h"
+#include "noise_model.h"
 #include <android/log.h>
 
 #define WAVELET_FENCE_TIMEOUT_NS 30000000000ull
@@ -321,7 +323,9 @@ class WaveletHost {
         p.tileSize = params->tileSize;
         p.algorithm = params->algorithm;
         p.grain = params->grain;
-        if (p.algorithm == 1) choose_noise(inHalf, w, h, params->cfa, p);
+        if (p.algorithm == 1)
+            choose_noise(inHalf, w, h, params->cfa, params->iso,
+                         params->noiseStorePath ? params->noiseStorePath : "", p);
         // One tile per submit keeps each GPU job short (~0.5 s instead of ~3 s
         // for RawLens at 12 MP on Mali-G615), so the shared GPU stays responsive
         // for the viewfinder. Tiles are independent and the scratch persists
@@ -393,11 +397,36 @@ class WaveletHost {
     // profile when it agrees within 2.5x (variance at the median exposure);
     // otherwise (missing, or e.g. 10x overstated at base ISO) use the estimate.
     // Then scale luma strength by noise visibility at that exposure.
-    static void choose_noise(const uint8_t* in, int w, int h, int cfa, raw_denoise::DenoiseParams& p) {
+    static void choose_noise(const uint8_t* in, int w, int h, int cfa, float iso,
+                             const std::string& store, raw_denoise::DenoiseParams& p) {
+        const auto t0 = std::chrono::steady_clock::now();
         const auto e = rawlens_noise::estimate(in, w, h, cfa);
+        const double estMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         const bool haveProfile = p.noiseA > 0.0f || p.noiseB > 0.0f;
         const char* source = "profile";
-        if (e.ok) {
+        // Learned model: prior from earlier shots of this camera key (fit
+        // before adding this shot, so the shot stays independent evidence).
+        rawlens_noise::Model model;
+        float mixW = 0.0f;
+        if (iso > 0.0f && !store.empty()) {
+            auto samples = rawlens_noise::loadSamples(store);
+            model = rawlens_noise::fit(samples);
+            if (e.ok && e.bins >= rawlens_noise::kMinBins) {
+                samples.push_back({iso, e.a, e.b, e.bins});
+                if (!rawlens_noise::saveSamples(store, samples))
+                    __android_log_print(ANDROID_LOG_WARN, "WaveletNoise", "noise store write failed");
+            }
+            __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",
+                                "model ok=%d samples=%d isos=%d A=%.4g B=%.4g C=%.4g D=%.4g iso=%.0f",
+                                model.ok, model.samples, model.isos, model.A, model.B, model.C, model.D, iso);
+        }
+        if (model.ok) {
+            const auto c = rawlens_noise::combine(model, iso, e.a, e.b, e.bins, e.ok);
+            p.noiseA = c.a;
+            p.noiseB = c.b;
+            mixW = c.w;
+            source = "model";
+        } else if (e.ok) {
             const float x = std::max(e.medianX, 1e-3f);
             const float ratio = haveProfile ? (e.a * x + e.b) / std::max(p.noiseA * x + p.noiseB, 1e-12f) : 0.0f;
             if (!haveProfile || ratio < 0.4f || ratio > 2.5f) {
@@ -405,19 +434,21 @@ class WaveletHost {
                 p.noiseA = e.a;
                 p.noiseB = e.b;
             }
+        } else if (!haveProfile) {
+            throw std::runtime_error("wavelet: no noise profile and blind estimate failed");
+        }
+        if (e.ok) {
             p.lumaScale = rawlens_noise::lumaScaleFor(p.noiseA, p.noiseB, e.medianX);
             const auto g = rawlens_noise::gatesFor(p.noiseA, p.noiseB, e.medianX);
             p.lowresWeight = g.lowresWeight;
             p.impulseT = g.impulseT;
-        } else if (!haveProfile) {
-            throw std::runtime_error("wavelet: no noise profile and blind estimate failed");
         }
         p.exactInverse = true;
         __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",
                             "noise %s: a=%.3g b=%.3g (estimate ok=%d a=%.3g b=%.3g bins=%d median=%.4f) "
-                            "lumaScale=%.2f lowres=%.2f impulse=%.0f",
+                            "lumaScale=%.2f lowres=%.2f impulse=%.0f estWeight=%.2f estMs=%.1f",
                             source, p.noiseA, p.noiseB, e.ok, e.a, e.b, e.bins, e.medianX, p.lumaScale,
-                            p.lowresWeight, p.impulseT);
+                            p.lowresWeight, p.impulseT, mixW, estMs);
     }
 
    private:

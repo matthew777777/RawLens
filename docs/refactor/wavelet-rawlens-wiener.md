@@ -190,3 +190,38 @@ Night DNG (IMG_20261102_181122_683), production chain clip01 -> RCD oracle -> de
   RawLens tiles 256 vs 1536 byte-identical; GPU == prototype to fp16 level.
 - Prototype fix: `guided` rule now applies the 2nd Wiener stage + luma guide
   like the shipped shader (earlier prototype numbers were slightly off).
+
+## Step 4: learned per-device noise model (2026-11-03, verified on device)
+`app/src/main/cpp/wavelet/noise_model.h`, used by `choose_noise` in RawLens mode.
+- Every shot with a usable blind estimate (>= 3 brightness bins) appends
+  (ISO, a, b, bins) to a per-key store, `filesDir/wavelet-noise/<sha>.txt`,
+  where the key is camera id, physical id, pixel mode, quad Bayer, binning,
+  raw size and the build fingerprint (a firmware update starts a fresh model).
+  The newest 400 samples are kept; the file is rewritten atomically.
+- Fit (once >= 6 samples over >= 3 ISOs spanning >= 2x): a = A*ISO + B,
+  b = C*ISO^2 + D, by relative-error weighted LS, non-negative, with 3-MAD
+  log-residual outlier rejection. Max analog ISO isn't plumbed, so digital
+  gain is folded into the ISO^2 term.
+- Per shot: the model (fitted before adding this shot) is the prior, and the
+  shot's estimate is evidence with weight bins / (bins + 8), mixed in log
+  space and clamped to 0.5-2x of the model. Until the model is ready, the old
+  estimate-or-profile rule applies. Logged as `WaveletNoise model ...`, plus
+  `estWeight`.
+- Real DNG estimates support the linear a(ISO): Redmi ISO 50 a = 1.21e-5 and
+  ISO 4523 a = 1.40e-3 (ratio 116 vs ISO ratio 90). Motorola ISO 1463/1600
+  agree (3.9e-4 / 3.8e-4). One vivo ISO 50 frame estimates 8x the other five
+  (a busy frame), which is exactly what the outlier rejection and the mixing
+  handle.
+- Synthetic ISO sweep (Redmi ISO 50 frame, noise added to an a/b truth,
+  ISO 50-6400, plus an injected 8x outlier): fitted a within 1-2% of truth at
+  ISO 50/400/4523, outlier rejected. b at high ISO is about 40% low, but that
+  comes from the per-shot estimator (it inherits the b bias of the
+  estimates); it only matters in the deepest shadows.
+- Device (Redmi Note 15 Pro): `learnedNoiseModelStoresSamplesAndApplies`
+  passes. The store fills, and the model turns on at the 7th shot (6 samples,
+  6 ISOs) with estimate weight 0.38. All wavelet device tests pass; RAWR and
+  RawLens timings are unchanged.
+- Blind estimate CPU cost: 8 ms at 1 MP and 125 ms at 12 MP, which is over the
+  30 ms budget.
+- Open: make the estimator cheaper (block subsampling, or a GPU histogram)
+  once a calibrated model exists; max analog ISO (dGain^2 term).
