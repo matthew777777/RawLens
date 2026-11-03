@@ -226,3 +226,31 @@ Night DNG (IMG_20261102_181122_683), production chain clip01 -> RCD oracle -> de
 - Blind estimate CPU cost: 8 ms at 1 MP and 125 ms at 12 MP, which is over the
   30 ms budget.
 - Open: estimator cost (moved to step 6); max analog ISO (dGain^2 term).
+
+## Step 5: RawLens vs PhotonCamera ESD3D2 (2026-11-03, Mac)
+`tools/wavelet-parity/esd3d2_port.py` ports ESD3D2 to NumPy: the default
+"steered" shader, the scale-down colour pass and the guided upsample, with
+default tunables. It gets the same noise a/b as RawLens.
+`esd3d2_compare.py` drives the chain clip01 -> RCD oracle -> {RAWR, RawLens
+(steps 1-3 + host gates), ESD3D2}. PNGs: `~/Downloads/*_esd3d2_compare.png`.
+
+| frame | crop | colour noise (in / RawLens / ESD3D2) | grain in flat areas (RawLens / ESD3D2) | texture kept (RawLens / ESD3D2) |
+|---|---|---|---|---|
+| night ISO 4523 | region | 0.0553 / 0.0439 / 0.0431 | 0.0226 / 0.0157 | 0.92 / 0.79 |
+| other phone ISO 1442 | flat | 0.0131 / 0.0050 / 0.0016 | 0.0092 / 0.0067 | 0.79 / 0.57 |
+| other phone ISO 3210 | flat | 0.0051 / 0.0025 / 0.0017 | 0.0038 / 0.0024 | 0.88 / 0.58 |
+| motorola ISO 1463 | flat | 0.0137 / 0.0044 / 0.0013 | 0.0074 / 0.0065 | 0.66 / 0.55 |
+| vivo ISO 72 | flat | 0.0172 / 0.0109 / 0.0103 | 0.0109 / 0.0057 | 0.94 / 0.79 |
+| Redmi ISO 50 | flat | 0.0035 / 0.0023 / 0.0020 | 0.0025 / 0.0013 | 0.95 / 0.54 |
+
+Findings:
+- ESD3D2 is smoother everywhere: it removes 30-50% more fine luma and keeps
+  much less texture (wood grain, gravel). RawLens keeps grain by design.
+- **Gap to close: chroma at mid noise (relative noise 0.04-0.10).** ESD3D2
+  leaves 2-3x less colour noise on flat areas of the ISO 1442/3210/1463
+  frames. Our low-res chroma pass is gated off or weak there (weight
+  0.0-0.4); at high noise (night) the two are equal.
+- ESD3D2 artefacts: a magenta fringe along the bright edge (ISO 1442 detail),
+  and a hue shift on the night road (warm -> grey-purple). Both come from its
+  luma-renormalized colour upsample.
+- RAWR with the wrong Motorola profile wipes all texture (texture kept 0.006).
