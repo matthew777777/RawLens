@@ -933,3 +933,24 @@ Java_com_matthew_rawlens_VfEglImport_sampleP010Center(
     return out;
 }
 
+
+// Independent color-downsampling fixture, not an algorithm reference import.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_matthew_rawlens_VfEglImport_fillHalfChromaRows(
+    JNIEnv* env, jobject, jobject hardwareBuffer, jint width, jint height, jint phase) {
+    if(!hardwareBuffer || width<1 || height<1 || uint64_t(width)*height>16000000) return -1;
+    auto* buffer=AHardwareBuffer_fromHardwareBuffer(env,hardwareBuffer);
+    if(!buffer) return -1;
+    AHardwareBuffer_Desc desc{};AHardwareBuffer_describe(buffer,&desc);
+    if(desc.width!=uint32_t(width) || desc.height!=uint32_t(height) || desc.layers!=1 ||
+       desc.stride<desc.width || desc.format!=AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT) return -2;
+    void* mapped=nullptr;
+    if(AHardwareBuffer_lock(buffer,AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,-1,nullptr,&mapped)!=0 || !mapped) return -3;
+    for(int y=0;y<height;++y) for(int x=0;x<width;++x) {
+        auto* pixel=static_cast<uint16_t*>(mapped)+(size_t(y)*desc.stride+x)*4;
+        bool blue=((y+phase)&1)!=0;
+        pixel[0]=floatToHalf(blue?.125f:.75f);pixel[1]=floatToHalf(.25f);
+        pixel[2]=floatToHalf(blue?.75f:.125f);pixel[3]=floatToHalf(1.f);
+    }
+    return AHardwareBuffer_unlock(buffer,nullptr)==0?jint(desc.stride):-4;
+}

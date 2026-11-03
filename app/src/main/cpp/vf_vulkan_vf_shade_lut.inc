@@ -307,6 +307,9 @@ bool ensureShadeDummy(Context* ctx) {
 
 void destroyFused(Context* ctx) {
     for (int i = 0; i < 3; ++i) {
+        if(ctx->fusedGreenBufs[i]!=VK_NULL_HANDLE) vkDestroyBuffer(ctx->device,ctx->fusedGreenBufs[i],nullptr);
+        if(ctx->fusedGreenMems[i]!=VK_NULL_HANDLE) vkFreeMemory(ctx->device,ctx->fusedGreenMems[i],nullptr);
+        ctx->fusedGreenBufs[i]=VK_NULL_HANDLE;ctx->fusedGreenMems[i]=VK_NULL_HANDLE;ctx->fusedGreenBytes[i]=0;
         if (ctx->fusedParamMaps[i] != nullptr && ctx->fusedParamMems[i] != VK_NULL_HANDLE) {
             vkUnmapMemory(ctx->device, ctx->fusedParamMems[i]);
         }
@@ -318,6 +321,8 @@ void destroyFused(Context* ctx) {
             vkFreeMemory(ctx->device, ctx->fusedParamMems[i], nullptr);
         ctx->fusedParamMems[i] = VK_NULL_HANDLE;
     }
+    if(ctx->fusedGreenPipeline!=VK_NULL_HANDLE) vkDestroyPipeline(ctx->device,ctx->fusedGreenPipeline,nullptr);
+    ctx->fusedGreenPipeline=VK_NULL_HANDLE;
     if (ctx->fusedPipeline != VK_NULL_HANDLE) vkDestroyPipeline(ctx->device, ctx->fusedPipeline, nullptr);
     if (ctx->fusedPipelineLayout != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(ctx->device, ctx->fusedPipelineLayout, nullptr);

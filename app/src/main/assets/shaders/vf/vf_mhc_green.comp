@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Coherent MHC-family green plane. One invocation packs two half-float
+// greens in a uint: universally available Vulkan storage, no fp16 ALU or
+// 16-bit storage feature required. Measured greens are retained.
+#version 450
+layout(local_size_x=16,local_size_y=16) in;
+layout(binding=0) readonly buffer Bayer { uint codes[]; };
+layout(binding=5) writeonly buffer Green { uint greenWords[]; };
+struct FusedParams {
+    ivec2 cDims;      // crop W/H (MHC domain, full res)
+    ivec2 cOrigin;    // crop left/top in sensor pixels (CFA phase)
+    ivec4 cChans;     // quad-offset map, channels[] convention
+    vec4 cNormBias;   // per-quad-pos -black * invRange (FMA bias)
+    vec4 cInvRange;   // per-quad-pos 1/(white-black)
+    int cPitch;       // sensor row stride in pixels
+    int _pad0;
+    ivec2 oDims;      // output W/H (encode res)
+    vec4 gGains;      // R, G, B white-balance gains (+1 spare, folded: unused)
+    vec4 gCcmR;
+    vec4 gCcmG;
+    vec4 gCcmB;
+    vec4 gMisc;       // exposureEV, yStrideW, uvStrideW, uvBaseOffB
+    ivec4 sDims;      // shade rows, cols, enable, outMode
+    vec4 sActive;     // shade active l, t, 1/w, 1/h (sensor pixels)
+};
+layout(binding = 2) readonly buffer Fused { FusedParams u; };
+
+int mir(int i,int n) { if(i<0)i=-i; if(i>=n)i=2*n-2-i; return i; }
+float tap(ivec2 s) {
+    ivec2 m=ivec2(mir(s.x,u.cDims.x),mir(s.y,u.cDims.y));
+    ivec2 p=m+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    uint idx=uint(p.y*u.cPitch+p.x);
+    uint word=codes[idx>>1u];
+    uint code=(word>>((idx&1u)*16u))&65535u;
+    return clamp(fma(float(code),u.cInvRange[q],u.cNormBias[q]),0.0,1.0);
+}
+float green(ivec2 s) {
+    ivec2 p=s+u.cOrigin;
+    int q=((p.y&1)<<1)|(p.x&1);
+    float c=tap(s);
+    if(q==u.cChans.y || q==u.cChans.z) return c;
+    float n=tap(s+ivec2(0,-1));float so=tap(s+ivec2(0,1));
+    float w=tap(s+ivec2(-1,0));float e=tap(s+ivec2(1,0));
+    float n2=tap(s+ivec2(0,-2));float s2=tap(s+ivec2(0,2));
+    float w2=tap(s+ivec2(-2,0));float e2=tap(s+ivec2(2,0));
+    float ch=2.0*c-w2-e2;float cv=2.0*c-n2-s2;
+    float gh=0.5*(w+e)+0.25*ch;float gv=0.5*(n+so)+0.25*cv;
+    float dh=abs(w-e)+0.5*abs(ch);float dv=abs(n-so)+0.5*abs(cv);
+    float hh=dh*dh+1e-8;float vv=dv*dv+1e-8;
+    return max(0.0,(gh*vv+gv*hh)/(hh+vv));
+}
+void main() {
+    ivec2 s=ivec2(gl_GlobalInvocationID.xy)*ivec2(2,1);
+    if(any(greaterThanEqual(s,u.cDims))) return;
+    float a=green(s);
+    float b=(s.x+1<u.cDims.x) ? green(s+ivec2(1,0)) : a;
+    greenWords[s.y*((u.cDims.x+1)/2)+s.x/2]=packHalf2x16(vec2(a,b));
+}

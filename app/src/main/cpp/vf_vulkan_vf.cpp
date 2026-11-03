@@ -7,6 +7,7 @@
 // file the same way. Split for navigation only; the preprocessed source is
 // unchanged (docs/refactor/vf-native-study.md).
 
+#include "vf_linear_sample.h"
 #include "vf_vulkan_vf_types.inc"  // Includes, logging, push-constant layouts and the shared Vulkan Context.
 #include "vf_vulkan_vf_resources.inc"  // Context-owned buffers: LUT, staging, bridge, and AHardwareBuffer imports.
 #include "vf_vulkan_vf_record_cube.inc"  // Optional take-constant 3D LUT and descriptor set.

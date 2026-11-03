@@ -373,6 +373,31 @@ void main() {
             b = mix(ewOut, vr, gg);
         }
     }
+    // Clipped samples invalidate the cross-channel curvature/ratio model.
+    // Fade to positive same-channel interpolation over the existing stencil;
+    // this suppresses complementary rings without another fetch or dispatch.
+    // Keep all measured CFA samples, including highlight cores, unchanged.
+    float peak = max(max(max(c, n), max(s, w)),
+                     max(max(e, n2), max(s2, w2)));
+    peak = max(peak, max(max(e2, nw), max(max(ne, sw), se)));
+    float clipBlend = smoothstep(0.90, 0.99, peak);
+    float axisEW = 0.5 * (w + e);
+    float axisNS = 0.5 * (n + s);
+    float diagonal = 0.25 * (nw + ne + sw + se);
+    float cardinal = 0.25 * (n + s + w + e);
+    if (col == 0) {
+        g = mix(g, cardinal, clipBlend);
+        b = mix(b, diagonal, clipBlend);
+    } else if (col == 2) {
+        r = mix(r, diagonal, clipBlend);
+        g = mix(g, cardinal, clipBlend);
+    } else if (colorAt(ij + ivec2(1, 0)) == 0) {
+        r = mix(r, axisEW, clipBlend);
+        b = mix(b, axisNS, clipBlend);
+    } else {
+        r = mix(r, axisNS, clipBlend);
+        b = mix(b, axisEW, clipBlend);
+    }
     // Clamp negatives like RawTherapee (a camera matrix turns edge
     // undershoot into complementary fringes); overshoot clamps at
     // OUTPUT_CLAMP_HI (3x any legit ringing; past that is ratio

@@ -51,7 +51,7 @@ class VfGpuImportTest {
         assertTrue(shader.contains("gl_FragColor"))
     }
 
-    @Test fun `GPU shader is ESSL 3 with integer Q6 fetch and mediump tail`() {
+    @Test fun `GPU shader is ESSL 3 with Q6 levels and high precision linear fetch`() {
         val shader = VfGpuImport.gpuFragmentShader()
         assertTrue(shader.startsWith("#version 300 es"))
         assertTrue(shader.contains("usampler2D u_bayer"))
@@ -59,8 +59,8 @@ class VfGpuImportTest {
         assertTrue(shader.contains("in highp vec2 tex"))
         assertTrue(shader.contains("uniform highp ivec4 u_blackQ"))
         assertTrue(shader.contains("uniform highp ivec4 u_denQ"))
-        assertTrue(shader.contains("vfFetchByte"))
-        assertTrue(shader.contains("precision mediump float"))
+        assertTrue(shader.contains("vfFetchLinear"))
+        assertTrue(shader.contains("precision highp float"))
         assertFalse(shader.contains("uniform highp vec4 u_black"))
         assertFalse(shader.contains("uniform highp vec4 u_invRange"))
         assertTrue(shader.contains("out vec4 fragColor"))
@@ -68,11 +68,11 @@ class VfGpuImportTest {
         assertFalse(shader.contains("texture2D"))
     }
 
-    @Test fun `both shaders run the tonemap in mediump with a pinned dither`() {
+    @Test fun `both shaders keep color processing high precision with final dither`() {
         // fp16-class ALU for the whole tail; only the IGN hash keeps highp
         // (VFHP), where mediump intermediates would coarsen into banding.
         for (shader in listOf(VfGpuImport.cpuFragmentShader(), VfGpuImport.gpuFragmentShader())) {
-            assertTrue(shader.contains("precision mediump float"))
+            assertTrue(shader.contains("precision highp float"))
             assertTrue(shader.contains("VFHP float ign(VFHP vec2"))
             assertTrue(shader.contains("VFHP float d0 = ign(gl_FragCoord.xy, 0.0)"))
         }

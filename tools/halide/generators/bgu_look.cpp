@@ -88,7 +88,7 @@ Expr srgbOetfCh(Expr l) {
 class BguLook : public Halide::Generator<BguLook> {
 public:
     // Low-res quad texels (R, Gr, Gb, B), normalized u8 like the VF export.
-    Input<Buffer<uint8_t>> quad_{"quad", 3};
+    Input<Buffer<float>> quad_{"quad", 3};
     // HAL lens-shading map, Camera2 order (R, G-even, G-odd, B) floats.
     Input<Buffer<float>> lens_{"lens", 3};
     // RAW branch: sanitized WB gains [R, Gr, Gb, B] + HAL CCM [col][row].
@@ -127,7 +127,7 @@ public:
     void generate() {
         Var x("x"), y("y"), c("c");
 
-        auto qch = [&](int ch) { return cast<float>(quad_(x, y, ch)) / 255.0f; };
+        auto qch = [&](int ch) { return quad_(x, y, ch); };
         Expr qr = qch(0), qgr = qch(1), qgb = qch(2), qb = qch(3);
 
         // Guide: unlensed quad with merged greens. The lens gain is part of

@@ -117,7 +117,7 @@ internal class BguGlSlice {
     }
 
     /**
-     * CPU-fallback guide upload: RGBA8 bytes into the dedicated texture
+     * CPU-fallback guide upload: RGBA16F half floats into the dedicated texture
      * (reallocates only on size change). Same sampling contract as the
      * EGL-imported Vulkan export, so the slice shader is untouched.
      */
@@ -126,15 +126,15 @@ internal class BguGlSlice {
         if (w != cpuGuideW || h != cpuGuideH || w <= 0 || h <= 0) {
             if (w <= 0 || h <= 0) return
             GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0,
-                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf
+                GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, w, h, 0,
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, buf
             )
             cpuGuideW = w
             cpuGuideH = h
         } else {
             GLES30.glTexSubImage2D(
                 GLES30.GL_TEXTURE_2D, 0, 0, 0, w, h,
-                GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf
+                GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, buf
             )
         }
     }

@@ -1,30 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Encoded Video FUSED record stage: CFA mosaic -> Malvar-He-Cutler demosaic
-// (full-res RGB, same 13-tap kernels as vf_mhc.comp) -> WB/CCM/exposure
-// -> DIRECT profile encode (BT.709 OETF / Sony S-Log3 / BT.2020 + HLG,
-// see outMode) -> limited-range YUV -> semi-planar P010 bytes, in ONE
-// dispatch. No contrast curve, no saturation.
-//
-// Why fused: MHC and grade share one Vulkan queue (strictly serial), so
-// record throughput is the SUM (measured 20.9 + 17.6 = 38.6ms > the
-// 33.3ms frame). The split stages also round-trip 150MB of RGBA16F
-// through DRAM. Fusing removes the round trip, one dispatch, and the
-// queue-family transfers on the 75MB RGB image. UV is the output pair's
-// mean (zero extra taps; see vf_gradeyuv.comp for the rationale).
-//
-// Source-of-truth note: the MHC tap math below is a copy of vf_mhc.comp
-// (13 taps, 9 word loads, FMA normalize, edge-directed green +
-// edge-directed difference-domain chroma, all in reference op order)
-// and the grade a direct per-pixel profile encode (CPU goldens are
-// VfVideoGrade.encodePixel*).
-// Keep fused/vf_gradeyuv in sync; the precision probes (reference-
-// computed expects) gate drift. Deliberate differences: no f16 RGB
-// round trip between stages (fused keeps fp32 into the encode),
-// no bypass flag (the recorder never bypasses), and sensor-white
-// desaturation pre-shade (vf_gradeyuv carries no WB gains, so the
-// test-only split path cannot white-protect; the fused record path
-// must, or clipped white renders magenta).
+// Coherent-green video reconstruction + grade + P010 finalize.
+// A preceding packed-green pass reconstructs green with continuous
+// gradient weights. This pass interpolates color differences at actual
+// chroma samples, preserving measured CFA channels. No white-glint blur.
+// Complete 2x2 encoded cells contribute to each P010 chroma sample.
+// CPU twin: MhcReference.demosaicCoherent. This is not exact RCD.
 //
 // Params arrive as a 192-byte SSBO (FusedParams in vf_vulkan_vf.cpp).
 //
@@ -119,14 +100,14 @@ float normIdx(int idx, int q) {
     uint uu = uint(idx);
     uint word = codes[uu >> 1u];
     uint code = ((uu & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
-    return fma(float(code), u.cInvRange[q], u.cNormBias[q]);
+    return clamp(fma(float(code), u.cInvRange[q], u.cNormBias[q]),0.0,1.0);
 }
 
 // Unpack + normalize from an already-loaded word (the caller
 // guarantees word == codes[idx >> 1]) with a precomputed shift.
 float normShift(uint word, uint shift, int q) {
     uint code = (word >> shift) & 0xFFFFu;
-    return fma(float(code), u.cInvRange[q], u.cNormBias[q]);
+    return clamp(fma(float(code), u.cInvRange[q], u.cNormBias[q]),0.0,1.0);
 }
 
 // Edge path: mirror into range first (phase preserving), then unpack.
@@ -137,205 +118,49 @@ float normEdge(ivec2 s) {
     return normIdx(idx, q);
 }
 
-// Level ratio for chroma rescaling (see MhcReference.levelRatio):
-// (num + eps)/(den + eps) with both terms floored at eps. Taps here
-// are unclipped FMA (sub-black noise reaches -0.067), so the floors
-// bar division by ~zero (no INF/NaN speckle); the CPU computes the
-// identical expression (no-op there: its taps clip at 0).
-float levelRatio(float num, float den) {
-    return max(num + LEVEL_EPS, LEVEL_EPS) / max(den + LEVEL_EPS, LEVEL_EPS);
+// Green is reconstructed once in a preceding compact pass. Chroma uses
+// green at each actual chroma sample, avoiding the old raw-side level ratios.
+layout(binding = 5) readonly buffer CoherentGreen { uint greenWords[]; };
+float greenAt(ivec2 s) {
+    ivec2 m = ivec2(mir(s.x,u.cDims.x),mir(s.y,u.cDims.y));
+    uint word = greenWords[m.y * ((u.cDims.x + 1) / 2) + m.x / 2];
+    vec2 pair = unpackHalf2x16(word);
+    return ((m.x & 1) == 0) ? pair.x : pair.y;
 }
-
-// Edge-directed green at R/B sites (reference op order): the two
-// second-order directional estimates steered by gradient + same-color
-// curvature, corner-blended to the symmetric MHC mean. (gh + gv) / 2
-// IS the old MHC kernel, so flat fields and ramps are bit-identical.
-float greenDir(float c, float n, float so, float w, float e,
-               float n2, float s2, float w2, float e2) {
-    float ch = 2.0 * c - w2 - e2;
-    float cv = 2.0 * c - n2 - s2;
-    float gh = 0.5 * (w + e) + 0.25 * ch;
-    float gv = 0.5 * (n + so) + 0.25 * cv;
-    float dh = abs(w - e) + 0.5 * abs(ch);
-    float dv = abs(n - so) + 0.5 * abs(cv);
-    float gd = (dh < dv) ? gh : gv;
-    float gm = 0.5 * (gh + gv);
-    float t = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
-    return mix(gd, gm, t);
-}
-
-// Full MHC interpolate at crop pixel s (13 taps, reference op order).
 vec3 mhcRgb(ivec2 s) {
-    float c;
-    float n;
-    float so;
-    float w;
-    float e;
-    float n2;
-    float s2;
-    float w2;
-    float e2;
-    float nw;
-    float ne;
-    float sw;
-    float se;
-    if (all(greaterThanEqual(s, ivec2(2))) && all(lessThan(s, u.cDims - ivec2(2)))) {
-        int sx = s.x + u.cOrigin.x;
-        int sy = s.y + u.cOrigin.y;
-        int q0 = ((sy & 1) << 1) | (sx & 1);
-        int qE = q0 ^ 1;
-        int qS = q0 ^ 2;
-        int qD = q0 ^ 3;
-        int P = u.cPitch;
-        int base = sy * P + sx;
-        uint wN2 = codes[uint(base - 2 * P) >> 1u];
-        uint wNm = codes[uint(base - P - 1) >> 1u];
-        uint wNp = codes[uint(base - P + 1) >> 1u];
-        uint wCm = codes[uint(base - 2) >> 1u];
-        uint wC0 = codes[uint(base) >> 1u];
-        uint wCp = codes[uint(base + 2) >> 1u];
-        uint wSm = codes[uint(base + P - 1) >> 1u];
-        uint wSp = codes[uint(base + P + 1) >> 1u];
-        uint wS2 = codes[uint(base + 2 * P) >> 1u];
-        uint wN = (((base - P) & 1) == 0) ? wNp : wNm;
-        uint wS = (((base + P) & 1) == 0) ? wSp : wSm;
-        uint wW = ((base & 1) == 0) ? wCm : wC0;
-        uint wE = ((base & 1) == 0) ? wC0 : wCp;
-        uint s0 = uint(base & 1) * 16u;
-        uint s1 = 16u - s0;
-        uint sP = ((P & 1) == 0) ? s0 : s1;
-        uint sD = ((P & 1) == 0) ? s1 : s0;
-        c = normShift(wC0, s0, q0);
-        n = normShift(wN, sP, qS);
-        so = normShift(wS, sP, qS);
-        w = normShift(wW, s1, qE);
-        e = normShift(wE, s1, qE);
-        n2 = normShift(wN2, s0, q0);
-        s2 = normShift(wS2, s0, q0);
-        w2 = normShift(wCm, s0, q0);
-        e2 = normShift(wCp, s0, q0);
-        nw = normShift(wNm, sD, qD);
-        ne = normShift(wNp, sD, qD);
-        sw = normShift(wSm, sD, qD);
-        se = normShift(wSp, sD, qD);
+    float c=normEdge(s);
+    int col=colorAt(s);
+    float g=(col==1) ? c : greenAt(s);
+    float r; float b;
+    if (col==1) {
+        float n=normEdge(s+ivec2(0,-1)); float so=normEdge(s+ivec2(0,1));
+        float w=normEdge(s+ivec2(-1,0)); float e=normEdge(s+ivec2(1,0));
+        float w2=normEdge(s+ivec2(-2,0)); float e2=normEdge(s+ivec2(2,0));
+        float n2=normEdge(s+ivec2(0,-2)); float s2=normEdge(s+ivec2(0,2));
+        float gw=greenAt(s+ivec2(-1,0)); float ge=greenAt(s+ivec2(1,0));
+        float gn=greenAt(s+ivec2(0,-1)); float gs=greenAt(s+ivec2(0,1));
+        float ww=0.001+abs(g-ge)+abs(c-e2);
+        float we=0.001+abs(g-gw)+abs(c-w2);
+        float wn=0.001+abs(g-gs)+abs(c-s2);
+        float ws=0.001+abs(g-gn)+abs(c-n2);
+        float ew=g+(ww*(w-gw)+we*(e-ge))/(ww+we);
+        float ns=g+(wn*(n-gn)+ws*(so-gs))/(wn+ws);
+        bool redEW=colorAt(s+ivec2(1,0))==0;
+        r=redEW ? ew : ns; b=redEW ? ns : ew;
     } else {
-        c = normEdge(s);
-        n = normEdge(s + ivec2(0, -1));
-        so = normEdge(s + ivec2(0, 1));
-        w = normEdge(s + ivec2(-1, 0));
-        e = normEdge(s + ivec2(1, 0));
-        n2 = normEdge(s + ivec2(0, -2));
-        s2 = normEdge(s + ivec2(0, 2));
-        w2 = normEdge(s + ivec2(-2, 0));
-        e2 = normEdge(s + ivec2(2, 0));
-        nw = normEdge(s + ivec2(-1, -1));
-        ne = normEdge(s + ivec2(1, -1));
-        sw = normEdge(s + ivec2(-1, 1));
-        se = normEdge(s + ivec2(1, 1));
+        float nw=normEdge(s+ivec2(-1,-1)); float ne=normEdge(s+ivec2(1,-1));
+        float sw=normEdge(s+ivec2(-1,1)); float se=normEdge(s+ivec2(1,1));
+        float gnw=greenAt(s+ivec2(-1,-1)); float gne=greenAt(s+ivec2(1,-1));
+        float gsw=greenAt(s+ivec2(-1,1)); float gse=greenAt(s+ivec2(1,1));
+        float wnw=1.0/(0.001+abs(g-gnw)+abs(nw-se));
+        float wse=1.0/(0.001+abs(g-gse)+abs(nw-se));
+        float wne=1.0/(0.001+abs(g-gne)+abs(ne-sw));
+        float wsw=1.0/(0.001+abs(g-gsw)+abs(ne-sw));
+        float opposite=g+(wnw*(nw-gnw)+wne*(ne-gne)+wsw*(sw-gsw)+wse*(se-gse))/(wnw+wne+wsw+wse);
+        r=(col==0) ? c : opposite;
+        b=(col==2) ? c : opposite;
     }
-    // Edge-gate bank shared by green and chroma (see vf_mhc.comp).
-    float ch = 2.0 * c - w2 - e2;
-    float cv = 2.0 * c - n2 - s2;
-    float dh = abs(w - e) + 0.5 * abs(ch);
-    float dv = abs(n - so) + 0.5 * abs(cv);
-    float gt = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0, 1.0);
-    float gf = clamp((GREEN_EDGE_T0 - max(dh, dv)) / GREEN_EDGE_T0, 0.0, 1.0);
-    float gg = max(gt, gf);
-    bool hEdge = dh < dv;
-    int col = colorAt(s);
-    float r;
-    float g;
-    float b;
-    if (col == 0) {
-        r = c;
-        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
-        float dw = 0.5 * (nw + sw) - w;
-        float de = 0.5 * (ne + se) - e;
-        float dn = 0.5 * (nw + ne) - n;
-        float ds = 0.5 * (sw + se) - so;
-        float oppDir;
-        if (hEdge) {
-            float wN = BILATERAL_EPS + abs(c - s2);
-            float wS = BILATERAL_EPS + abs(c - n2);
-            float rN = levelRatio(g, n);
-            float rS = levelRatio(g, so);
-            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
-        } else {
-            float wW = BILATERAL_EPS + abs(c - e2);
-            float wE = BILATERAL_EPS + abs(c - w2);
-            float rW = levelRatio(g, w);
-            float rE = levelRatio(g, e);
-            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
-        }
-        float v = 6.0 * c;
-        v += 2.0 * (nw + ne + sw + se);
-        v -= 1.5 * (n2 + s2 + w2 + e2);
-        b = mix(oppDir, v * 0.125, gg);
-    } else if (col == 2) {
-        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
-        float dw = 0.5 * (nw + sw) - w;
-        float de = 0.5 * (ne + se) - e;
-        float dn = 0.5 * (nw + ne) - n;
-        float ds = 0.5 * (sw + se) - so;
-        float oppDir;
-        if (hEdge) {
-            float wN = BILATERAL_EPS + abs(c - s2);
-            float wS = BILATERAL_EPS + abs(c - n2);
-            float rN = levelRatio(g, n);
-            float rS = levelRatio(g, so);
-            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
-        } else {
-            float wW = BILATERAL_EPS + abs(c - e2);
-            float wE = BILATERAL_EPS + abs(c - w2);
-            float rW = levelRatio(g, w);
-            float rE = levelRatio(g, e);
-            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
-        }
-        float v = 6.0 * c;
-        v += 2.0 * (nw + ne + sw + se);
-        v -= 1.5 * (n2 + s2 + w2 + e2);
-        r = mix(oppDir, v * 0.125, gg);
-        b = c;
-    } else {
-        g = c;
-        float gwW = hEdge ? 0.5 * (c + w2) : 0.5 * (nw + sw);
-        float gwE = hEdge ? 0.5 * (c + e2) : 0.5 * (ne + se);
-        float wW = BILATERAL_EPS + abs(c - e2);
-        float wE = BILATERAL_EPS + abs(c - w2);
-        float rW = levelRatio(c, gwW);
-        float rE = levelRatio(c, gwE);
-        float ewOut = c + (wW * (w - gwW) * rW + wE * (e - gwE) * rE) / (wW + wE);
-        float gnN = hEdge ? 0.5 * (nw + ne) : 0.5 * (c + n2);
-        float gnS = hEdge ? 0.5 * (sw + se) : 0.5 * (c + s2);
-        float wN = BILATERAL_EPS + abs(c - s2);
-        float wS = BILATERAL_EPS + abs(c - n2);
-        float rN = levelRatio(c, gnN);
-        float rS = levelRatio(c, gnS);
-        float nsOut = c + (wN * (n - gnN) * rN + wS * (so - gnS) * rS) / (wN + wS);
-        float vr = 5.0 * c;
-        vr += 4.0 * (w + e);
-        vr -= w2 + e2;
-        vr -= nw + ne + sw + se;
-        vr += 0.5 * (n2 + s2);
-        vr *= 0.125;
-        float vc = 5.0 * c;
-        vc += 4.0 * (n + so);
-        vc -= n2 + s2;
-        vc -= nw + ne + sw + se;
-        vc += 0.5 * (w2 + e2);
-        vc *= 0.125;
-        if (colorAt(s + ivec2(1, 0)) == 0) {
-            r = mix(ewOut, vr, gg);
-            b = mix(nsOut, vc, gg);
-        } else {
-            r = mix(nsOut, vc, gg);
-            b = mix(ewOut, vr, gg);
-        }
-    }
-    // Clamp negatives like RawTherapee (a camera matrix turns edge
-    // undershoot into complementary fringes); overshoot clamps at
-    // OUTPUT_CLAMP_HI (see vf_mhc.comp).
-    return vec3(clamp(r, 0.0, OUTPUT_CLAMP_HI), clamp(g, 0.0, OUTPUT_CLAMP_HI), clamp(b, 0.0, OUTPUT_CLAMP_HI));
+    return clamp(vec3(r,g,b),vec3(0.0),vec3(OUTPUT_CLAMP_HI));
 }
 
 // ---- direct-encode record grade: no warp, no saturation ----
@@ -459,8 +284,9 @@ vec3 desatWhite(vec3 rgb) {
 
 // Display RGB for one output texel (nearest src cover + MHC + grade).
 vec3 pixelLog(ivec2 ij) {
-    vec2 suv = (vec2(ij) + 0.5) * vec2(u.cDims) / vec2(u.oDims);
-    ivec2 s = ivec2(suv);
+    ivec2 s;
+    if (all(equal(u.cDims, u.oDims))) s = ij;
+    else s = ivec2((vec2(ij) + 0.5) * vec2(u.gCcmR.w,u.gCcmG.w));
     vec3 rgb = desatWhite(mhcRgb(s));
     if (u.sDims.z != 0) {
         // Vignetting, pre-WB like the viewfinder: the map is ~17x17 over
@@ -492,34 +318,30 @@ uint pack10(float v, float low, float high) {
 }
 
 void main() {
-    // One invocation owns one horizontal P010 pair. The old dispatch
-    // launched an extra odd-x invocation that returned without writing.
-    // Pixel coordinates and all demosaic/grade/packing arithmetic stay identical.
-    // Mapping: Khronos GLSL builtins, gl_GlobalInvocationID.
-    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * ivec2(2, 1);
+    // Own a complete 2x2 P010 cell: all four encoded pixels contribute
+    // to 4:2:0 chroma. Sampling only the top row aliases Bayer-phase
+    // color errors into cyan stripes on subpixel specular highlights.
+    // Four pixels / half as many invocations: no extra demosaic work.
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * 2;
     if (any(greaterThanEqual(ij, u.oDims))) return;
-    int yStride = int(u.gMisc.y);  // u16 words per Y row
+    int yStride = int(u.gMisc.y);
     int outMode = u.sDims.w;
-    vec3 lg0 = pixelLog(ij);
-    vec3 lg1 = (ij.x + 1 < u.oDims.x) ? pixelLog(ij + ivec2(1, 0)) : lg0;
-    vec3 yuv0 = rgbToYuv(lg0, outMode);
-    vec3 yuv1 = rgbToYuv(lg1, outMode);
-    uint yCode0 = pack10(yuv0.x, 64.0, 940.0);
-    uint yCode1 = pack10(yuv1.x, 64.0, 940.0);
-    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);  // u16 units
-    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
-    if ((ij.y & 1) == 0) {
-        // Chroma is this pair's mean (zero extra taps; rgbToYuv is
-        // linear so the mean of converts equals the convert of the
-        // mean). See vf_gradeyuv.comp for the rationale.
-        vec3 muv = (yuv0 + yuv1) * 0.5;
-        uint uCode = pack10(muv.g, 64.0, 960.0);
-        uint vCode = pack10(muv.b, 64.0, 960.0);
-        // u16-unit pair address (always even: strides/height are even,
-        // so >>1 below is exact).
-        uint pairIdx = uint(u.gMisc.w) / 2u
-            + uint(ij.y / 2) * uint(u.gMisc.z)
-            + uint(ij.x / 2) * 2u;
-        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    vec3 yuv0 = rgbToYuv(pixelLog(ij), outMode);
+    vec3 yuv1 = rgbToYuv(pixelLog(min(ij + ivec2(1, 0), u.oDims - 1)), outMode);
+    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);
+    buf_out.words[yIdx >> 1u] = pack10(yuv0.x, 64.0, 940.0)
+        | (pack10(yuv1.x, 64.0, 940.0) << 16u);
+    vec3 sumTop = yuv0 + yuv1;
+    vec3 yuv2 = rgbToYuv(pixelLog(min(ij + ivec2(0, 1), u.oDims - 1)), outMode);
+    vec3 yuv3 = rgbToYuv(pixelLog(min(ij + ivec2(1, 1), u.oDims - 1)), outMode);
+    if (ij.y + 1 < u.oDims.y) {
+        uint nextIdx = yIdx + uint(yStride);
+        buf_out.words[nextIdx >> 1u] = pack10(yuv2.x, 64.0, 940.0)
+            | (pack10(yuv3.x, 64.0, 940.0) << 16u);
     }
+    vec3 meanUV = (sumTop + (yuv2 + yuv3)) * 0.25;
+    uint pairIdx = uint(u.gMisc.w) / 2u
+        + uint(ij.y / 2) * uint(u.gMisc.z) + uint(ij.x);
+    buf_out.words[pairIdx >> 1u] = pack10(meanUV.g, 64.0, 960.0)
+        | (pack10(meanUV.b, 64.0, 960.0) << 16u);
 }

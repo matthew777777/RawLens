@@ -160,6 +160,8 @@ internal object VfEglImport {
      * Ten-bit proof: CPU-fill an RGBA_FP16 buffer with a smooth ramp.
      * Returns row stride in pixels, negative on failure.
      */
+    /** Headless chroma fixture: red/blue rows, exactly representable half values. */
+    external fun fillHalfChromaRows(buffer: HardwareBuffer, width: Int, height: Int, phase: Int): Int
     external fun fillHalfGradient(buffer: HardwareBuffer, width: Int, height: Int, frameIndex: Int): Int
 
     /**

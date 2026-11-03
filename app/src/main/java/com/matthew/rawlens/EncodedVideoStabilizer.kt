@@ -82,7 +82,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
         val fps = take.header.fps
 
         // Vulkan warp stage (device persists from the take; init is idempotent).
-        val devSpv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        val devSpv = appContext.assets.open("shaders/vf/vf_superpixel_linear.spv").use { it.readBytes() }
         VfVulkan.setPipelineCachePathNative(
             VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(devSpv) == VfVulkan.OK) { "vulkan init failed" }
@@ -198,7 +198,7 @@ class EncodedVideoStabilizer(private val appContext: Context) {
                 val surface = encoder.createInputSurface()
                 try {
                     sdrEgl = EglPusher(surface)
-                    if (sdrEgl?.makeCurrent() != true) error("egl makeCurrent failed")
+                    if (!sdrEgl.makeCurrent()) error("egl makeCurrent failed")
                     sdrProgram = GlBlit.buildProgram()
                     sdrTexture = GlBlit.genTexture()
                     sdrQuad = GlBlit.quadBuffer()

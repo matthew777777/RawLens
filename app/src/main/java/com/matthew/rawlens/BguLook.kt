@@ -96,11 +96,21 @@ internal object BguLook {
     }
 
     /**
-     * Zero-alloc look into caller buffers (fit hot loop reuses them).
+     * Float sensor-domain look into caller buffers (fit hot loop reuses them).
+     * The ByteArray convenience overload converts legacy fixtures to floats.
      * [guideOut]/[devOut] must be w*h*3. Returns the filter status (0 = ok).
      */
     fun runInto(
         quad: ByteArray, w: Int, h: Int,
+        lens: FloatArray, lensCols: Int, lensRows: Int,
+        wb: FloatArray, ccm: FloatArray, aces: FloatArray, white: FloatArray,
+        fparams: FloatArray, iparams: IntArray,
+        guideOut: FloatArray, devOut: FloatArray
+    ): Int = runInto(FloatArray(quad.size) { (quad[it].toInt() and 255) / 255f },
+        w, h, lens, lensCols, lensRows, wb, ccm, aces, white, fparams, iparams, guideOut, devOut)
+
+    fun runInto(
+        quad: FloatArray, w: Int, h: Int,
         lens: FloatArray, lensCols: Int, lensRows: Int,
         wb: FloatArray, ccm: FloatArray, aces: FloatArray, white: FloatArray,
         fparams: FloatArray, iparams: IntArray,
@@ -124,7 +134,7 @@ internal object BguLook {
     }
 
     private external fun lookIntoNative(
-        quad: ByteArray, w: Int, h: Int,
+        quad: FloatArray, w: Int, h: Int,
         lens: FloatArray, lensCols: Int, lensRows: Int,
         wb: FloatArray, ccm: FloatArray, aces: FloatArray, white: FloatArray,
         fparams: FloatArray, iparams: IntArray,

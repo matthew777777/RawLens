@@ -1,0 +1,2 @@
+vf_mhcyuv max10BitError=0
+vf_mhcyuv_f16 max10BitError=1

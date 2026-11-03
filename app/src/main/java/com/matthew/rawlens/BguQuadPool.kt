@@ -29,3 +29,31 @@ internal class BguQuadPool(private val capacity: Int = 6) {
         free.addLast(frame)
     }
 }
+
+/** Bounded low-frame leases: queued or fitting arrays cannot be sampled again. */
+internal class BguFloatQuadPool(private val capacity: Int = 6) {
+    private val free = ArrayDeque<FloatArray>()
+    private val leased = java.util.Collections.newSetFromMap(
+        java.util.IdentityHashMap<FloatArray, Boolean>()
+    )
+
+    @Synchronized fun acquire(size: Int): FloatArray? {
+        if (leased.size >= capacity) return null
+        val matching = free.firstOrNull { it.size == size }
+        val frame = if (matching != null) {
+            free.remove(matching)
+            matching
+        } else {
+            // Retire an idle buffer when geometry changes; keep memory bounded.
+            if (free.size + leased.size >= capacity) free.removeFirst()
+            FloatArray(size)
+        }
+        check(leased.add(frame))
+        return frame
+    }
+
+    @Synchronized fun release(frame: FloatArray) {
+        check(leased.remove(frame))
+        free.addLast(frame)
+    }
+}

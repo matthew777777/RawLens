@@ -1,0 +1,10 @@
+{
+  "image": true,
+  "gpu": false,
+  "1920x1080-30fps": true,
+  "1920x1080-30fps-cadence": true,
+  "2560x1440-30fps": false,
+  "2560x1440-30fps-cadence": false,
+  "3840x2160-24fps": true,
+  "3840x2160-24fps-cadence": true
+}

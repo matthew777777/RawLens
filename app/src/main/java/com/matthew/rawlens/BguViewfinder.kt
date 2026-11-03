@@ -159,7 +159,7 @@ class BguViewfinder @JvmOverloads constructor(
 
     private data class LowJob(
         val seq: Long, val generation: Long,
-        val quad: ByteArray, val lowW: Int, val lowH: Int,
+        val quad: FloatArray, val lowW: Int, val lowH: Int,
         val lens: FloatArray, val lensCols: Int, val lensRows: Int,
         val wb: FloatArray, val ccm: FloatArray, val aces: FloatArray, val white: FloatArray,
         val fparams: FloatArray, val iparams: IntArray
@@ -299,7 +299,7 @@ class BguViewfinder @JvmOverloads constructor(
 
     // Stats (render-owned, read by snapshot()).
     @Volatile private var statFps = 0f
-    private val quadPool = BguQuadPool()
+    private val quadPool = BguFloatQuadPool()
     @Volatile private var guideBoost = false
     private var boostOffers = 0L
     @Volatile private var statSharp = 0f
@@ -476,12 +476,12 @@ class BguViewfinder @JvmOverloads constructor(
         var transferred = false
         try {
             val smpT0 = SystemClock.elapsedRealtimeNanos()
-            val sampled = BguSample.sampleLowFrame(
+            val sampled = BguSample.sampleLowFrameLinear(
                 buf, rowStride, pixelStride, geo.left, geo.top, geo.step * BguGeometry.LOW_DF,
                 lowW, lowH, channels, levels, inv, quad
             )
             if (!sampled) return
-            val sharp = BguSample.guideSharpness(quad, lowW, lowH)
+            val sharp = BguSample.guideSharpnessLinear(quad, lowW, lowH)
             statSharp = if (statSharp == 0f) sharp else statSharp * 0.9f + sharp * 0.1f
             val smpMs = (SystemClock.elapsedRealtimeNanos() - smpT0) / 1e6f
             statSmpMs = if (statSmpMs == 0f) smpMs else statSmpMs * 0.9f + smpMs * 0.1f
@@ -588,7 +588,7 @@ class BguViewfinder @JvmOverloads constructor(
             if (cur != null && cpuGuideW[slot] == geo.width && cpuGuideH[slot] == geo.height) {
                 cur
             } else {
-                val fresh = java.nio.ByteBuffer.allocateDirect(geo.width * geo.height * 4)
+                val fresh = java.nio.ByteBuffer.allocateDirect(geo.width * geo.height * 8)
                 cpuGuides[slot] = fresh
                 cpuGuideW[slot] = geo.width
                 cpuGuideH[slot] = geo.height
@@ -606,7 +606,7 @@ class BguViewfinder @JvmOverloads constructor(
             src.rewind()
             VfCpuNeon.copy(
                 src, rowStride, pixelStride, geo.left, geo.top,
-                geo.width, geo.height, geo.step, channels, levels, white, dst
+                geo.width, geo.height, geo.step, channels, levels, white, dst, halfOutput = true
             )
         } catch (_: Exception) {
             fail("cpu-guide")
@@ -641,7 +641,7 @@ class BguViewfinder @JvmOverloads constructor(
                 // destroying their images (close() is idempotent anyway).
                 val fresh = try {
                     HardwareBuffer.create(
-                        geo.width, geo.height, HardwareBuffer.RGBA_8888, 1,
+                        geo.width, geo.height, HardwareBuffer.RGBA_FP16, 1,
                         HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
                             HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
                     )
@@ -703,7 +703,7 @@ class BguViewfinder @JvmOverloads constructor(
         }
         if (!vulkanReady) {
             val spv = try {
-                context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+                context.assets.open("shaders/vf/vf_superpixel_linear.spv").use { it.readBytes() }
             } catch (_: Exception) {
                 enterCpuFallback("spv-missing")
                 return false
@@ -718,7 +718,7 @@ class BguViewfinder @JvmOverloads constructor(
         }
         if (vulkanReady && !imagePipelineReady && !imageTierDead) {
             val imgSpv = try {
-                context.assets.open("shaders/vf/vf_superpixel_img.spv").use { it.readBytes() }
+                context.assets.open("shaders/vf/vf_superpixel_img_linear.spv").use { it.readBytes() }
             } catch (_: Exception) {
                 null
             }
@@ -1385,7 +1385,7 @@ class BguViewfinder @JvmOverloads constructor(
                     mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
                 ),
                 try {
-                    c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt()
+                    c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
                 } catch (_: Exception) {
                     null
                 },

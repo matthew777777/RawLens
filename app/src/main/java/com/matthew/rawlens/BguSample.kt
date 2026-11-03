@@ -28,9 +28,30 @@ internal object BguSample {
         channels: IntArray, levels: FloatArray, invRange: FloatArray,
         out: ByteArray
     ): Boolean {
+        require(out.size == lowW * lowH * 4)
+        return sampleLowFrameCore(buf, rowStride, pixelStride, qx0, qy0, lowStep, lowW, lowH,
+            channels, levels, invRange) { index, n -> out[index] = ((n * 255f + 0.5f).toInt().coerceIn(0, 255)).toByte() }
+    }
+
+    fun sampleLowFrameLinear(
+        buf: ByteBuffer, rowStride: Int, pixelStride: Int,
+        qx0: Int, qy0: Int, lowStep: Int, lowW: Int, lowH: Int,
+        channels: IntArray, levels: FloatArray, invRange: FloatArray,
+        out: FloatArray
+    ): Boolean {
+        require(out.size == lowW * lowH * 4)
+        return sampleLowFrameCore(buf, rowStride, pixelStride, qx0, qy0, lowStep, lowW, lowH,
+            channels, levels, invRange) { index, n -> out[index] = n }
+    }
+
+    private inline fun sampleLowFrameCore(
+        buf: ByteBuffer, rowStride: Int, pixelStride: Int,
+        qx0: Int, qy0: Int, lowStep: Int, lowW: Int, lowH: Int,
+        channels: IntArray, levels: FloatArray, invRange: FloatArray,
+        store: (Int, Float) -> Unit
+    ): Boolean {
         require(lowW > 0 && lowH > 0 && lowStep >= 2)
         require(channels.size == 4 && levels.size == 4 && invRange.size == 4)
-        require(out.size == lowW * lowH * 4)
         if (rowStride <= 0 || pixelStride <= 0) return false
         val limit = buf.limit()
         val plane = lowW * lowH
@@ -73,7 +94,7 @@ internal object BguSample {
                     var n = (code - levels[phase]) * invRange[phase]
                     if (!n.isFinite()) n = 0f
                     n = n.coerceIn(0f, 1f)
-                    out[k * plane + outRow + i] = ((n * 255f + 0.5f).toInt().coerceIn(0, 255)).toByte()
+                    store(k * plane + outRow + i, n)
                 }
             }
         }
@@ -111,5 +132,29 @@ internal object BguSample {
         }
         if (count == 0L) return 0f
         return (sum.toDouble() / count / 255.0).toFloat()
+    }
+
+    fun guideSharpnessLinear(quad: FloatArray, lowW: Int, lowH: Int): Float {
+        if (lowW < 2 || lowH < 2 || quad.size < lowW * lowH * 4) return 0f
+        val plane = lowW * lowH
+        val base = plane // Gr plane (canonical R, Gr, Gb, B order)
+        var sum = 0.0
+        var count = 0L
+        for (j in 0 until lowH) {
+            val row = base + j * lowW
+            for (i in 0 until lowW) {
+                val v = quad[row + i]
+                if (i + 1 < lowW) {
+                    sum += kotlin.math.abs(v - (quad[row + i + 1]))
+                    count++
+                }
+                if (j + 1 < lowH) {
+                    sum += kotlin.math.abs(v - (quad[row + lowW + i]))
+                    count++
+                }
+            }
+        }
+        if (count == 0L) return 0f
+        return (sum / count).toFloat()
     }
 }

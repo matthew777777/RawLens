@@ -48,7 +48,7 @@ class Gles31AmazeProcessor(
     // this session there avoids recreating EGL and recompiling all thirteen AMaZE programs for
     // every JPEG, while executor-owned full-resolution textures remain per-frame.
     private var processingSession: ProcessingSession? = null
-    private var processingThreadId: Long? = null
+    private var processingThread: Thread? = null
 
     fun probe(width: Int, height: Int): AmazeCapability = EglComputeContext().use {
         AmazePipelineContract.evaluate(queryLimits(), width, height, maxGpuBytes)
@@ -60,7 +60,7 @@ class Gles31AmazeProcessor(
         rcdCfa = null
         releaseRcdOutputs()
         val session = processingSession ?: return
-        check(processingThreadId == Thread.currentThread().id) {
+        check(processingThread === Thread.currentThread()) {
             "AMaZE processing session must be closed by its owning worker thread"
         }
         session.egl.makeCurrent()
@@ -69,7 +69,7 @@ class Gles31AmazeProcessor(
         session.programs.close()
         session.egl.close()
         processingSession = null
-        processingThreadId = null
+        processingThread = null
         MemoryLeakDiagnostics.sample("amaze-session-closed")
     }
 
@@ -574,8 +574,8 @@ class Gles31AmazeProcessor(
         require(output.internalFormat == AmazeTextureFormat.RGBA16F) {
             "Half-float readback needs an RGBA16F output"
         }
-        processingSession() ?: throw IllegalStateException("AMaZE session is not running")
-        check(processingThreadId == Thread.currentThread().id) {
+        processingSession()
+        check(processingThread === Thread.currentThread()) {
             "Half-float readback must stay on the AMaZE worker thread"
         }
         return readbackHalfFloatCurrentContext(output)
@@ -635,8 +635,7 @@ class Gles31AmazeProcessor(
     ): T {
         require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
         val session = processingSession()
-            ?: throw IllegalStateException("AMaZE session is not running")
-        check(processingThreadId == Thread.currentThread().id) {
+        check(processingThread === Thread.currentThread()) {
             "Camera-linear transform must stay on the AMaZE worker thread"
         }
         val input = session.textures.acquire(width, height, GLES30.GL_RGBA16F)
@@ -686,8 +685,7 @@ class Gles31AmazeProcessor(
         }
         require(cameraToAcescgColumnMajor.size == 9) { "Camera-to-ACEScg matrix needs 9 values" }
         val session = processingSession()
-            ?: throw IllegalStateException("AMaZE session is not running")
-        check(processingThreadId == Thread.currentThread().id) {
+        check(processingThread === Thread.currentThread()) {
             "Camera-linear transform must stay on the AMaZE worker thread"
         }
         val output = session.textures.acquire(camera.width, camera.height, GLES30.GL_RGBA16F)
@@ -746,7 +744,7 @@ class Gles31AmazeProcessor(
 
     /** Idempotent Vulkan RCD bring-up (viewfinder usually already owns the device). */
     private fun ensureRcdVulkan() {
-        val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        val spv = appContext.assets.open("shaders/vf/vf_superpixel_linear.spv").use { it.readBytes() }
         VfVulkan.setPipelineCachePathNative(
             VulkanPipelineCache.pathFor(appContext.cacheDir, VulkanPipelineCache.HOST_VF))
         check(VfVulkan.initNative(spv) == VfVulkan.OK) { "RCD vulkan init failed" }
@@ -867,9 +865,9 @@ class Gles31AmazeProcessor(
     internal fun makeProcessingContextCurrent() { processingSession?.egl?.makeCurrent() }
 
     private fun processingSession(): ProcessingSession {
-        val threadId = Thread.currentThread().id
-        val previousThreadId = processingThreadId
-        check(previousThreadId == null || previousThreadId == threadId) {
+        val thread = Thread.currentThread()
+        val previousThread = processingThread
+        check(previousThread == null || previousThread === thread) {
             "AMaZE processing session must stay on its owning worker thread"
         }
         return processingSession ?: ProcessingSession(
@@ -878,7 +876,7 @@ class Gles31AmazeProcessor(
             TexturePool(MAX_RETAINED_TEXTURE_BYTES),
             UploadBuffers()
         ).also {
-            processingThreadId = threadId
+            processingThread = thread
             processingSession = it
         }
     }

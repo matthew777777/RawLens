@@ -179,56 +179,27 @@ uint pack10(float v, float low, float high) {
 }
 
 void main() {
-    ivec2 ij = ivec2(gl_GlobalInvocationID.xy);
+    // One invocation owns both luma pairs and chroma of a complete 2x2 cell.
+    // Every source pixel is graded once; no row is omitted from chroma.
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * 2;
     if (any(greaterThanEqual(ij, p.u_dims))) return;
-    // Storage is u32 words but P010 codes are u16: every store packs a
-    // pair (storing one u16 per u32 word wrote at 2x byte offsets with a
-    // zero high half — half-scale aliasing plus zero words, caught by the
-    // precision probe). Y pairs go to even-x invocations (odd-x has no
-    // unique word, so it early-outs); UV pairs are naturally (U, V).
-    if ((ij.x & 1) != 0) return;
-    int yStride = int(p.u_misc.y);  // u16 words per Y row
+    int yStride = int(p.u_misc.y);
     int outMode = int(p.u_misc2.y + 0.5);
-    vec3 lg0 = pixelLog(ij);
-    vec3 lg1 = (ij.x + 1 < p.u_dims.x) ? pixelLog(ij + ivec2(1, 0)) : lg0;
-    vec3 yuv0 = rgbToYuv(lg0, outMode);
-    vec3 yuv1 = rgbToYuv(lg1, outMode);
-    uint yCode0 = pack10(yuv0.x, 64.0, 940.0);
-    uint yCode1 = pack10(yuv1.x, 64.0, 940.0);
-    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);  // u16 units
-    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
-    if ((ij.y & 1) == 0) {
-        vec3 muv;
-        if (p.u_misc2.x > 0.5) {
-            // Full-RGB: chroma is this pair's mean (zero extra taps).
-            // The 4-tap stride-2 lowpass below would triple the grade
-            // cost for single-queue 30fps (measured 17.6ms -> the MHC +
-            // grade sum missed the frame); the pair mean keeps full
-            // horizontal chroma with single-row vertical support, which
-            // 4:2:0 subsamples vertically anyway. rgbToYuv is linear,
-            // so the mean of converts equals the convert of the mean.
-            muv = (yuv0 + yuv1) * 0.5;
-        } else {
-            // UV pair: average this 2x2 output quad (the 4:2:0 cell):
-            // (x, y), (x+1, y) — already graded as lg0/lg1 — and the row
-            // below. The old taps at +2 skipped the cell's own
-            // neighbours and read the NEXT cell (chroma shifted ~1 texel
-            // and aliased; at the right/bottom edge they read past the
-            // image as zeros). Same 2 extra grades as before.
-            ivec2 below = ivec2(ij.x, min(ij.y + 1, p.u_dims.y - 1));
-            vec3 g2 = pixelLog(below);
-            vec3 g3 = (ij.x + 1 < p.u_dims.x) ? pixelLog(below + ivec2(1, 0)) : g2;
-            vec3 mean = (lg0 + lg1 + g2 + g3) * 0.25;
-            muv = rgbToYuv(mean, outMode);
-        }
-        uint uCode = pack10(muv.g, 64.0, 960.0);
-        uint vCode = pack10(muv.b, 64.0, 960.0);
-        // u16-unit pair address (always even: strides/height are even, so
-        // >>1 below is exact). Multiplying the sum instead of the row
-        // wrote ~0.5MB past the allocation (silent zeros, caught by probe).
-        uint pairIdx = uint(p.u_misc.w) / 2u
-            + uint(ij.y / 2) * uint(p.u_misc.z)
-            + uint(ij.x / 2) * 2u;
-        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    vec3 yuv0 = rgbToYuv(pixelLog(ij), outMode);
+    vec3 yuv1 = rgbToYuv(pixelLog(min(ij + ivec2(1,0), p.u_dims - 1)), outMode);
+    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);
+    buf_out.words[yIdx >> 1u] = pack10(yuv0.x,64.0,940.0)
+        | (pack10(yuv1.x,64.0,940.0) << 16u);
+    vec3 sumTop = yuv0 + yuv1;
+    vec3 yuv2 = rgbToYuv(pixelLog(min(ij + ivec2(0,1), p.u_dims - 1)), outMode);
+    vec3 yuv3 = rgbToYuv(pixelLog(min(ij + ivec2(1,1), p.u_dims - 1)), outMode);
+    if (ij.y + 1 < p.u_dims.y) {
+        uint nextIdx = yIdx + uint(yStride);
+        buf_out.words[nextIdx >> 1u] = pack10(yuv2.x,64.0,940.0)
+            | (pack10(yuv3.x,64.0,940.0) << 16u);
     }
+    vec3 mean = (sumTop + (yuv2 + yuv3)) * 0.25;
+    uint pairIdx = uint(p.u_misc.w) / 2u + uint(ij.y / 2) * uint(p.u_misc.z) + uint(ij.x);
+    buf_out.words[pairIdx >> 1u] = pack10(mean.g,64.0,960.0)
+        | (pack10(mean.b,64.0,960.0) << 16u);
 }

@@ -1,0 +1,14 @@
+{
+  "crop": [
+    0,
+    1000,
+    1500,
+    900
+  ],
+  "clipped_support_pixels": 28796,
+  "before_negative_channels_in_clipped_support": 1724,
+  "after_negative_channels_in_clipped_support": 0,
+  "before_over_one_channels_in_clipped_support": 4439,
+  "after_over_one_channels_in_clipped_support": 0,
+  "unchanged_below_90_percent": true
+}

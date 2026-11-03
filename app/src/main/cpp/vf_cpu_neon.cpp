@@ -15,6 +15,7 @@
 // (caller + 3 workers, created once, no per-frame spawn). Bands are
 // disjoint by construction. All plane access ends before return.
 #include <jni.h>
+#include "vf_linear_sample.h"
 
 #include <android/log.h>
 #include <algorithm>
@@ -66,6 +67,7 @@ struct SuperpixelJob {
     int blackQ[4];
     int denQ[4];
     uint8_t* dst;
+    bool halfOutput;
 };
 
 // Q6 normalize (VfLevels.normalizeByte): num = code*64 - blackQ;
@@ -76,6 +78,14 @@ inline uint8_t normalizeInt(uint16_t code, int blackQ, int denQ) {
     if (num <= 0) return 0;
     if (num >= denQ) return 255;
     return static_cast<uint8_t>((num * 255 + denQ / 2) / denQ);
+}
+
+// Keep sensor precision until lens/WB/CCM. The legacy byte API is retained
+// for callers that explicitly request bytes; the live VF requests half floats.
+inline void storeSample(uint8_t* px, int c, uint16_t code, int blackQ, int denQ, bool halfOutput) {
+    if (!halfOutput) { px[c] = normalizeInt(code, blackQ, denQ); return; }
+    const uint16_t half = vflinear::toHalf(vflinear::normalize(code, blackQ, denQ));
+    memcpy(px + c * 2, &half, sizeof(half));
 }
 
 // Packed band [y0, y1): pixelStride == 2, rowStride even. Each output row
@@ -93,7 +103,7 @@ void packedBand(const SuperpixelJob& job, int y0, int y1) {
         const int quadTop = top + y * step;
         const uint16_t* row0 = src + static_cast<ptrdiff_t>(quadTop) * shortsPerRow;
         const uint16_t* row1 = row0 + shortsPerRow;
-        uint8_t* outRow = dst + static_cast<ptrdiff_t>(y) * width * 4;
+        uint8_t* outRow = dst + static_cast<ptrdiff_t>(y) * width * (job.halfOutput ? 8 : 4);
         for (int x = 0; x < width; ++x) {
             if ((x & 7) == 0) {
                 // ~512 B ahead on both source rows, streaming hint: each
@@ -104,11 +114,11 @@ void packedBand(const SuperpixelJob& job, int y0, int y1) {
                 __builtin_prefetch(row1 + left + x * step + 256, 0, 0);
             }
             const int ql = left + x * step;
-            uint8_t* px = outRow + x * 4;
+            uint8_t* px = outRow + x * (job.halfOutput ? 8 : 4);
             for (int c = 0; c < 4; ++c) {
                 const uint16_t* row = (job.dy[c] == 0) ? row0 : row1;
                 const int ch = job.ch[c];
-                px[c] = normalizeInt(row[ql + job.dx[c]], job.blackQ[ch], job.denQ[ch]);
+                storeSample(px, c, row[ql + job.dx[c]], job.blackQ[ch], job.denQ[ch], job.halfOutput);
             }
         }
     }
@@ -127,10 +137,10 @@ void genericBand(const SuperpixelJob& job, int y0, int y1) {
     uint8_t* dst = job.dst;
     for (int y = y0; y < y1; ++y) {
         const int quadTop = top + y * step;
-        uint8_t* outRow = dst + static_cast<ptrdiff_t>(y) * width * 4;
+        uint8_t* outRow = dst + static_cast<ptrdiff_t>(y) * width * (job.halfOutput ? 8 : 4);
         for (int x = 0; x < width; ++x) {
             const int ql = left + x * step;
-            uint8_t* px = outRow + x * 4;
+            uint8_t* px = outRow + x * (job.halfOutput ? 8 : 4);
             for (int c = 0; c < 4; ++c) {
                 const int sx = ql + job.dx[c];
                 const int sy = quadTop + job.dy[c];
@@ -142,7 +152,7 @@ void genericBand(const SuperpixelJob& job, int y0, int y1) {
                 // Sensor planes are little-endian; NDK targets are LE.
                 // No byteswap needed (verified on arm64/armv7/x86_64).
                 const int ch = job.ch[c];
-                px[c] = normalizeInt(code, job.blackQ[ch], job.denQ[ch]);
+                storeSample(px, c, code, job.blackQ[ch], job.denQ[ch], job.halfOutput);
             }
         }
     }
@@ -243,7 +253,7 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_VfCpuNeon_copyNative(
     JNIEnv* env, jobject, jobject srcBuf, jint srcOffset, jint rowStride,
     jint pixelStride, jint left, jint top, jint width, jint height, jint step,
-    jintArray channels, jintArray levels, jobject dstBuf, jint dstOffset) {
+    jintArray channels, jintArray levels, jobject dstBuf, jint dstOffset, jboolean halfOutput) {
     if (!srcBuf || !dstBuf || !channels || !levels) return VF_CPU_BAD_ARGUMENT;
     if (env->GetArrayLength(channels) != 4 ||
         env->GetArrayLength(levels) != 8) {
@@ -296,10 +306,11 @@ Java_com_matthew_rawlens_VfCpuNeon_copyNative(
     if (lastX < 0 || lastY < 0) return VF_CPU_BAD_ARGUMENT;
     const long long needOut =
         static_cast<long long>(dstOffset) +
-        static_cast<long long>(width) * height * 4;
+        static_cast<long long>(width) * height * (halfOutput ? 8 : 4);
     if (needOut > dstCap) return VF_CPU_OVERFLOW;
 
     vfcpu::SuperpixelJob job{};
+    job.halfOutput = halfOutput;
     job.left = left;
     job.top = top;
     job.width = width;

@@ -135,7 +135,8 @@ Java_com_matthew_rawlens_VfVideoGrade_gradeYuvSubmitNative(
     // Anything else aborts loudly (-20) rather than misplacing chroma.
     const int yStrideB = st[0], uvStrideB = st[1];
     const int fw = st[2], fh = st[3];
-    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+    if (fw <= 0 || fh <= 0 || fw != params.dims[0] || fh != params.dims[1] ||
+        (fw % 2) != 0 || (fh % 2) != 0 || yStrideB < fw * 2 || uvStrideB < fw * 2 ||
         (yStrideB % 2) != 0 || (uvStrideB % 4) != 0) {
         LOGW("vf-vk: yuv strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
         return -VFVK_BAD_ARGUMENT;
@@ -238,8 +239,8 @@ Java_com_matthew_rawlens_VfVideoGrade_gradeYuvSubmitNative(
     bindRecordCube(g, cmd, g->yuvPipelineLayout);
     vkCmdPushConstants(cmd, g->yuvPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(params), &params);
-    const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;
-    const uint32_t gy = (uint32_t)(params.dims[1] + 7) / 8;
+    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
     vkCmdDispatch(cmd, gx, gy, 1);
     // Release for the codec (GL/EGL-free path): ownership back to FOREIGN;
     // completion in wall time rides the exported sync fd, which the caller
@@ -357,7 +358,8 @@ Java_com_matthew_rawlens_VfVideoGrade_gradeYuvBlockingNative(
     }
     const int yStrideB = st[0], uvStrideB = st[1];
     const int fw = st[2], fh = st[3];
-    if (yStrideB < fw * 2 || uvStrideB < fw * 2 || fw <= 0 || fh <= 0 || (fh % 2) != 0 ||
+    if (fw <= 0 || fh <= 0 || fw != params.dims[0] || fh != params.dims[1] ||
+        (fw % 2) != 0 || (fh % 2) != 0 || yStrideB < fw * 2 || uvStrideB < fw * 2 ||
         (yStrideB % 2) != 0 || (uvStrideB % 4) != 0) {
         LOGW("vf-vk: yuv strides implausible y=%d uv=%d %dx%d", yStrideB, uvStrideB, fw, fh);
         return VFVK_BAD_ARGUMENT;
@@ -445,8 +447,8 @@ Java_com_matthew_rawlens_VfVideoGrade_gradeYuvBlockingNative(
     bindRecordCube(g, cmd, g->yuvPipelineLayout);
     vkCmdPushConstants(cmd, g->yuvPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(params), &params);
-    const uint32_t gx = (uint32_t)(params.dims[0] + 7) / 8;
-    const uint32_t gy = (uint32_t)(params.dims[1] + 7) / 8;
+    const uint32_t gx = (uint32_t)(params.dims[0] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.dims[1] + 15) / 16;
     vkCmdDispatch(cmd, gx, gy, 1);
     layoutBarrier(cmd, inImg.image,
                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,

@@ -36,6 +36,35 @@ class VfCpuNeonInstrumentedTest {
         }
     }
 
+    @Test fun halfOutputPreservesShadowSensorStepsForPackedAndGenericStrides() {
+        assumeTrue("vf native library unavailable", VfCpuNeon.available)
+        for (pixelStride in intArrayOf(2, 4)) for (cfa in 0..3) {
+            val width = 16
+            val rowStride = width * 2 * pixelStride + 8
+            val source = direct(rowStride * 2)
+            val channels = RawPreviewGeometry.channels(cfa)
+            val black = floatArrayOf(64f, 65.25f, 66.5f, 67.75f)
+            val (blackQ, denQ) = VfLevels.toFixedQ6(black, 4095f)
+            for (x in 0 until width) for (ch in 0..3) {
+                source.putShort((ch / 2) * rowStride + (x * 2 + ch % 2) * pixelStride,
+                    (128 + x + ch).toShort())
+            }
+            val output = direct(width * 8)
+            VfCpuNeon.copy(source, rowStride, pixelStride, 0, 0, width, 1, 2,
+                channels, black, 4095f, output, halfOutput = true)
+            assertEquals(width * 8, output.remaining())
+            val previous = FloatArray(4) { -1f }
+            for (x in 0 until width) for (c in 0..3) {
+                val ch = channels[c]
+                val expected = ((128 + x + ch) * 64 - blackQ[ch]).toFloat() / denQ[ch]
+                val actual = android.util.Half.toFloat(output.short)
+                assertEquals("stride=$pixelStride CFA=$cfa x=$x ch=$c", expected, actual, 0.000016f)
+                org.junit.Assert.assertTrue("shadow steps must survive", actual > previous[c])
+                previous[c] = actual
+            }
+        }
+    }
+
     @Test fun blackWhiteAndClippingUseEachSensorSiteLevel() {
         assumeTrue("vf native library unavailable", VfCpuNeon.available)
         val source = direct(8)

@@ -309,6 +309,9 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     params.oDims[1] = gi[1];
     for (int i = 0; i < 4; ++i) params.gGains[i] = gf[i];
     foldGradeCcm(gf, params.gCcm);
+    // Spare row components hold coverage scales, avoiding per-pixel division.
+    params.gCcm[0][3]=float(params.cDims[0])/float(params.oDims[0]);
+    params.gCcm[1][3]=float(params.cDims[1])/float(params.oDims[1]);
     params.gMisc[0] = gf[13];
     // gf[15]/gf[16] (contrast/saturation) are reserved: the record path
     // is direct-encode, no look. gGains.w still carries gf[16] (the
@@ -362,6 +365,7 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
         int r = importP010Out(g, dstBuf, yStrideB, uvStrideB, fw, fh, &dstImg);
         if (r != VFVK_OK) return (r == -20) ? -20 : -r;
     }
+    if(!ensureFusedGreen(g,slot,params.cDims[0],params.cDims[1])) return -VFVK_DEVICE_FAILED;
     // Params in (per-slot coherent SSBO; flush for good measure).
     memcpy(g->fusedParamMaps[slot], &params, sizeof(params));
     {
@@ -396,7 +400,9 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     shadeInfo.sampler = g->shadeSampler;
     shadeInfo.imageView = shadeView;
     shadeInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkWriteDescriptorSet writes[5]{};
+    VkDescriptorBufferInfo greenInfo{};
+    greenInfo.buffer=g->fusedGreenBufs[slot];greenInfo.offset=0;greenInfo.range=VK_WHOLE_SIZE;
+    VkWriteDescriptorSet writes[6]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = g->fusedSets[slot];
     writes[0].dstBinding = 0;
@@ -427,7 +433,11 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
     writes[4].descriptorCount = 1;
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[4].pImageInfo = &shadeInfo;
-    vkUpdateDescriptorSets(g->device, 5, writes, 0, nullptr);
+    writes[5].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[5].dstSet=g->fusedSets[slot];writes[5].dstBinding=5;
+    writes[5].descriptorCount=1;writes[5].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].pBufferInfo=&greenInfo;
+    vkUpdateDescriptorSets(g->device, 6, writes, 0, nullptr);
 
     VkExportSemaphoreCreateInfo exportInfo{};
     exportInfo.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
@@ -472,15 +482,24 @@ Java_com_matthew_rawlens_VfVideoGrade_fusedYuvSubmitNative(
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &acquire, 0, nullptr);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g->fusedPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            g->fusedPipelineLayout, 0, 1, &g->fusedSets[slot], 0, nullptr);
+    vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,
+                           g->fusedPipelineLayout,0,1,&g->fusedSets[slot],0,nullptr);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,g->fusedGreenPipeline);
+    vkCmdDispatch(cmd,(uint32_t(params.cDims[0])+31)/32,(uint32_t(params.cDims[1])+15)/16,1);
+    VkBufferMemoryBarrier greenBarrier{};
+    greenBarrier.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    greenBarrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;greenBarrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+    greenBarrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;greenBarrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+    greenBarrier.buffer=g->fusedGreenBufs[slot];greenBarrier.offset=0;greenBarrier.size=VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0,0,nullptr,1,&greenBarrier,0,nullptr);
+    vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,g->fusedPipeline);
     bindRecordCube(g, cmd, g->fusedPipelineLayout);
-    // vf_mhcyuv: 16x16 invocations, each owning two horizontal pixels.
+    // vf_mhcyuv: 16x16 invocations, each owning a complete 2x2 cell.
     // https://docs.vulkan.org/spec/latest/chapters/dispatch.html
     const uint32_t pairs = (uint32_t)(params.oDims[0] + 1) / 2;
     const uint32_t gx = (pairs + 15) / 16;
-    const uint32_t gy = (uint32_t)(params.oDims[1] + 15) / 16;
+    const uint32_t gy = (uint32_t)(params.oDims[1] + 31) / 32;
     vkCmdDispatch(cmd, gx, gy, 1);
     inBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     inBarrier.dstAccessMask = 0;

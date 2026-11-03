@@ -507,6 +507,10 @@ struct Context {
     VkDescriptorSetLayout fusedSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout fusedPipelineLayout = VK_NULL_HANDLE;
     VkPipeline fusedPipeline = VK_NULL_HANDLE;
+    VkPipeline fusedGreenPipeline = VK_NULL_HANDLE;
+    VkBuffer fusedGreenBufs[3] = {VK_NULL_HANDLE,VK_NULL_HANDLE,VK_NULL_HANDLE};
+    VkDeviceMemory fusedGreenMems[3] = {VK_NULL_HANDLE,VK_NULL_HANDLE,VK_NULL_HANDLE};
+    VkDeviceSize fusedGreenBytes[3] = {0,0,0};
     VkDescriptorPool fusedPool = VK_NULL_HANDLE;
     VkDescriptorSet fusedSets[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkCommandBuffer twinFusedCmd[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};

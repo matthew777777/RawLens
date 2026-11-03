@@ -2,6 +2,7 @@
 package com.matthew.rawlens
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import kotlin.math.abs
 
@@ -429,16 +430,7 @@ class MhcReferenceTest {
         assertTrue("RGGB ref empty", ref.any { it != 0f })
     }
 
-    /**
-     * Ratio-explosion guard: mirrors the device parity pattern (R
-     * horizontal, Gr vertical, Gb/B diagonal ramps + saturated bar). At
-     * pixel (61,1) the side green is ~0 against a bright anchor, sending
-     * the level ratio to 243x and R to 220 pre-clamp; both sides clamp
-     * identically at [MhcReference.OUTPUT_CLAMP_HI], so the parity gate
-     * sees 0 diff instead of fp noise on garbage. Legit pixels (all
-     * others here) sit far below the cap: the clamp never fires on real
-     * content.
-     */
+    /** Hue-inconsistent ramps must stay finite, including the clipping blend. */
     @Test fun hueViolatingPixelStaysBounded() {
         val w = 64
         val h = 64
@@ -466,11 +458,57 @@ class MhcReferenceTest {
             maxV = maxOf(maxV, v)
         }
         assertTrue("MHC output $maxV exceeds clamp", maxV <= MhcReference.OUTPUT_CLAMP_HI)
-        // The explosion pixel clamps exactly (pre-clamp value: 219.68).
-        val r61_1 = out[(1 * w + 61) * 3]
-        assertTrue(
-            "pixel (61,1) R=$r61_1 (expect clamped at ${MhcReference.OUTPUT_CLAMP_HI})",
-            r61_1 == MhcReference.OUTPUT_CLAMP_HI
-        )
+    }
+
+    /** Clipped subpixel glints must not inject negative-lobe cyan rings. */
+    @Test fun clippedImpulseUsesPositiveInterpolationInEveryBayerPhase() {
+        val w = 16
+        for (phase in arrayOf(intArrayOf(0,1,2,3), intArrayOf(2,0,3,1),
+            intArrayOf(1,0,3,2), intArrayOf(3,1,2,0))) {
+            for (cx in 6..7) for (cy in 6..7) {
+                val codes = IntArray(w*w) { 102 }
+                codes[cy*w+cx] = 1023
+                val out = MhcReference.demosaic(codes,w,w,w,0,0,w,w,phase,zeros,1023f)
+                for (y in 3..10) for (x in 3..10) {
+                    fun at(dx: Int, dy: Int) = codes[(y+dy)*w+x+dx] / 1023f
+                    val q = (y%2)*2+x%2
+                    val col = if (phase[0] == q) 0 else if (phase[3] == q) 2 else 1
+                    val ew = (at(-1,0)+at(1,0))*.5f
+                    val ns = (at(0,-1)+at(0,1))*.5f
+                    val diag = (at(-1,-1)+at(1,-1)+at(-1,1)+at(1,1))*.25f
+                    val expected = when (col) {
+                        0 -> floatArrayOf(at(0,0),.5f*(ew+ns),diag)
+                        2 -> floatArrayOf(diag,.5f*(ew+ns),at(0,0))
+                        else -> if (phase[0] == (q xor 1)) floatArrayOf(ew,at(0,0),ns)
+                            else floatArrayOf(ns,at(0,0),ew)
+                    }
+                    for (k in 0..2) assertEquals("phase=${phase.toList()} ($x,$y) ch=$k",
+                        expected[k],out[(y*w+x)*3+k],1e-5f)
+                }
+            }
+        }
+    }
+    @Test fun coherentDemosaicRetainsMeasuredSamplesAndColoredGlints() {
+        val w=16
+        for(phase in arrayOf(intArrayOf(0,1,2,3),intArrayOf(2,0,3,1),intArrayOf(1,0,3,2),intArrayOf(3,1,2,0))) {
+            val codes=IntArray(w*w) { i -> 50+((i*173)%800) }
+            val out=MhcReference.demosaicCoherent(codes,w,w,w,0,0,w,w,phase,zeros,1023f)
+            for(y in 0 until w) for(x in 0 until w) {
+                val q=(y%2)*2+x%2
+                val col=if(q==phase[0])0 else if(q==phase[3])2 else 1
+                assertEquals("measured CFA changed",codes[y*w+x]/1023f,out[(y*w+x)*3+col],1e-7f)
+            }
+            assertTrue(out.all { it.isFinite() && it>=0f && it<=MhcReference.OUTPUT_CLAMP_HI })
+        }
+    }
+
+    @Test fun coherentDemosaicPreservesFlatColors() {
+        val w=16;val values=intArrayOf(700,205,205,410)
+        val codes=IntArray(w*w) { i -> values[((i/w)%2)*2+i%2] }
+        val out=MhcReference.demosaicCoherent(codes,w,w,w,0,0,w,w,channels,zeros,1023f)
+        for(i in 0 until w*w) for(k in 0..2) {
+            val expected=values[intArrayOf(0,1,3)[k]]/1023f
+            assertEquals("flat color changed",expected,out[i*3+k],.001f)
+        }
     }
 }

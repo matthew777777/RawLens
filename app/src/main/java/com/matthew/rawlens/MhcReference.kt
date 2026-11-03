@@ -91,6 +91,16 @@ object MhcReference {
         ).run()
     }
 
+    /** CPU twin of the coherent-green recording path; no WB/color neutralization. */
+    fun demosaicCoherent(
+        codes: IntArray, sensorWidth: Int, sensorHeight: Int, pitch: Int,
+        left: Int, top: Int, width: Int, height: Int,
+        channels: IntArray, levels: FloatArray, white: Float,
+    ): FloatArray {
+        require(channels.size==4 && levels.size==4)
+        return Engine(codes,sensorWidth,sensorHeight,pitch,left,top,width,height,channels,levels,white).runCoherent()
+    }
+
     /**
      * Sensor-domain white-point protection (CPU mirror of the fused
      * shader's pre-shade step; same formula as the AMaZE final stage).
@@ -144,6 +154,12 @@ object MhcReference {
      */
     fun levelRatio(num: Float, den: Float): Float =
         max(num + LEVEL_EPS, LEVEL_EPS) / max(den + LEVEL_EPS, LEVEL_EPS)
+
+    private val CLIP_TAPS = arrayOf(
+        -1 to 0, 1 to 0, 0 to -1, 0 to 1,
+        -2 to 0, 2 to 0, 0 to -2, 0 to 2,
+        -1 to -1, 1 to -1, -1 to 1, 1 to 1,
+    )
 
     private class Engine(
         private val codes: IntArray,
@@ -395,6 +411,68 @@ object MhcReference {
             return dir * (1f - gate.g) + kernelOpp(x, y) * gate.g
         }
 
+        // Bounded nonnegative green, rounded exactly to binary16 storage.
+        private fun halfGreen(v: Float): Float {
+            if(v<0.00006103515625f) return kotlin.math.round(v*16777216f)/16777216f
+            val b=v.toRawBits()
+            return Float.fromBits((b+0xfff+((b ushr 13) and 1)) and -8192)
+        }
+
+        fun runCoherent(): FloatArray {
+            val green=FloatArray(width*height)
+            for(y in 0 until height) for(x in 0 until width) {
+                val c=fetchN(x,y)
+                val g=if(colorAt(x,y)==1) c else {
+                    val n=fetchN(x,y-1);val south=fetchN(x,y+1)
+                    val w=fetchN(x-1,y);val e=fetchN(x+1,y)
+                    val ch=2f*c-fetchN(x-2,y)-fetchN(x+2,y)
+                    val cv=2f*c-fetchN(x,y-2)-fetchN(x,y+2)
+                    val gh=.5f*(w+e)+.25f*ch;val gv=.5f*(n+south)+.25f*cv
+                    val dh=abs(w-e)+.5f*abs(ch);val dv=abs(n-south)+.5f*abs(cv)
+                    val hh=dh*dh+1e-8f;val vv=dv*dv+1e-8f
+                    max(0f,(gh*vv+gv*hh)/(hh+vv))
+                }
+                green[y*width+x]=halfGreen(g)
+            }
+            fun gAt(x: Int,y: Int)=green[mirrorY(y)*width+mirrorX(x)]
+            val out=FloatArray(width*height*3)
+            for(y in 0 until height) for(x in 0 until width) {
+                val col=colorAt(x,y);val c=fetchN(x,y)
+                val g=if(col==1)c else gAt(x,y)
+                var red: Float;var blue: Float
+                if(col==1) {
+                    val w=fetchN(x-1,y);val e=fetchN(x+1,y)
+                    val n=fetchN(x,y-1);val south=fetchN(x,y+1)
+                    val gw=gAt(x-1,y);val ge=gAt(x+1,y)
+                    val gn=gAt(x,y-1);val gs=gAt(x,y+1)
+                    val ww=.001f+abs(g-ge)+abs(c-fetchN(x+2,y))
+                    val we=.001f+abs(g-gw)+abs(c-fetchN(x-2,y))
+                    val wn=.001f+abs(g-gs)+abs(c-fetchN(x,y+2))
+                    val ws=.001f+abs(g-gn)+abs(c-fetchN(x,y-2))
+                    val ew=g+(ww*(w-gw)+we*(e-ge))/(ww+we)
+                    val ns=g+(wn*(n-gn)+ws*(south-gs))/(wn+ws)
+                    val redEW=colorAt(x+1,y)==0
+                    red=if(redEW)ew else ns;blue=if(redEW)ns else ew
+                } else {
+                    val nw=fetchN(x-1,y-1);val ne=fetchN(x+1,y-1)
+                    val sw=fetchN(x-1,y+1);val se=fetchN(x+1,y+1)
+                    val gnw=gAt(x-1,y-1);val gne=gAt(x+1,y-1)
+                    val gsw=gAt(x-1,y+1);val gse=gAt(x+1,y+1)
+                    val wnw=1f/(.001f+abs(g-gnw)+abs(nw-se))
+                    val wse=1f/(.001f+abs(g-gse)+abs(nw-se))
+                    val wne=1f/(.001f+abs(g-gne)+abs(ne-sw))
+                    val wsw=1f/(.001f+abs(g-gsw)+abs(ne-sw))
+                    val opposite=g+(wnw*(nw-gnw)+wne*(ne-gne)+wsw*(sw-gsw)+wse*(se-gse))/(wnw+wne+wsw+wse)
+                    red=if(col==0)c else opposite;blue=if(col==2)c else opposite
+                }
+                val o=(y*width+x)*3
+                out[o]=red.coerceIn(0f,OUTPUT_CLAMP_HI)
+                out[o+1]=g.coerceIn(0f,OUTPUT_CLAMP_HI)
+                out[o+2]=blue.coerceIn(0f,OUTPUT_CLAMP_HI)
+            }
+            return out
+        }
+
         fun run(): FloatArray {
             val out = FloatArray(width * height * 3)
             for (y in 0 until height) {
@@ -407,13 +485,13 @@ object MhcReference {
                         0 -> {
                             out[o] = fetchN(x, y)
                             val g = kernelGreen(x, y)
-                            out[o + 1] = g.coerceIn(0f, OUTPUT_CLAMP_HI)
-                            out[o + 2] = kernelOppDir(x, y, g, gateOf(x, y)).coerceIn(0f, OUTPUT_CLAMP_HI)
+                            out[o + 1] = g
+                            out[o + 2] = kernelOppDir(x, y, g, gateOf(x, y))
                         }
                         2 -> {
                             val g = kernelGreen(x, y)
-                            out[o] = kernelOppDir(x, y, g, gateOf(x, y)).coerceIn(0f, OUTPUT_CLAMP_HI)
-                            out[o + 1] = g.coerceIn(0f, OUTPUT_CLAMP_HI)
+                            out[o] = kernelOppDir(x, y, g, gateOf(x, y))
+                            out[o + 1] = g
                             out[o + 2] = fetchN(x, y)
                         }
                         else -> {
@@ -424,17 +502,38 @@ object MhcReference {
                             out[o + 1] = fetchN(x, y)
                             if (colorAt(x + 1, y) == 0) {
                                 val dir = kernelChromaEW(x, y, gate)
-                                out[o] = (dir * (1f - gate.g) + kernelRow(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
+                                out[o] = (dir * (1f - gate.g) + kernelRow(x, y) * gate.g)
                                 val dirB = kernelChromaNS(x, y, gate)
-                                out[o + 2] = (dirB * (1f - gate.g) + kernelCol(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
+                                out[o + 2] = (dirB * (1f - gate.g) + kernelCol(x, y) * gate.g)
                             } else {
                                 val dir = kernelChromaNS(x, y, gate)
-                                out[o] = (dir * (1f - gate.g) + kernelCol(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
+                                out[o] = (dir * (1f - gate.g) + kernelCol(x, y) * gate.g)
                                 val dirB = kernelChromaEW(x, y, gate)
-                                out[o + 2] = (dirB * (1f - gate.g) + kernelRow(x, y) * gate.g).coerceIn(0f, OUTPUT_CLAMP_HI)
+                                out[o + 2] = (dirB * (1f - gate.g) + kernelRow(x, y) * gate.g)
                             }
                         }
                     }
+                    // Same clipping fallback as all three MHC shaders. The
+                    // measured CFA channel is retained by the bilinear estimate.
+                    var peak = fetchN(x, y)
+                    for ((dx, dy) in CLIP_TAPS) peak = max(peak, fetchN(x + dx, y + dy))
+                    val clipBlend = smoothstep(0.90f, 0.99f, peak)
+                    if (clipBlend > 0f) {
+                        val ew = 0.5f * (fetchN(x - 1, y) + fetchN(x + 1, y))
+                        val ns = 0.5f * (fetchN(x, y - 1) + fetchN(x, y + 1))
+                        val diag = 0.25f * (fetchN(x - 1, y - 1) + fetchN(x + 1, y - 1) +
+                            fetchN(x - 1, y + 1) + fetchN(x + 1, y + 1))
+                        val c = fetchN(x, y)
+                        val target = when (colorAt(x, y)) {
+                            0 -> floatArrayOf(c, 0.5f * (ew + ns), diag)
+                            2 -> floatArrayOf(diag, 0.5f * (ew + ns), c)
+                            else -> if (colorAt(x + 1, y) == 0) floatArrayOf(ew, c, ns)
+                                else floatArrayOf(ns, c, ew)
+                        }
+                        for (k in 0..2) out[o + k] += (target[k] - out[o + k]) * clipBlend
+                    }
+                    for (k in 0..2) out[o + k] = out[o + k].coerceIn(0f, OUTPUT_CLAMP_HI)
+
                 }
             }
             return out

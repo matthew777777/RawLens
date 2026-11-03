@@ -172,12 +172,12 @@ internal object VfGpuImport {
                         if (applyLens) {
                             val sx = sensorOriginX + quadLeft + dx
                             val sy = sensorOriginY + quadTop + dy
-                            n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
+                            n *= lens.gainAt(sx, sy, pattern.colorAt(sx, sy))
                         }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
                             samples[count] = n
                             if (useWeights) {
-                                weights!![count] = AdaptiveDevelopmentExposure.spatialWeight(
+                                weights[count] = AdaptiveDevelopmentExposure.spatialWeight(
                                     quadLeft + dx - left, quadTop + dy - top,
                                     spanW, spanH, center, focusX, focusY
                                 )
@@ -202,12 +202,12 @@ internal object VfGpuImport {
                         if (applyLens) {
                             val sx = sensorOriginX + quadLeft + dx
                             val sy = sensorOriginY + quadTop + dy
-                            n *= lens!!.gainAt(sx, sy, pattern!!.colorAt(sx, sy))
+                            n *= lens.gainAt(sx, sy, pattern.colorAt(sx, sy))
                         }
                         if (n.isFinite() && n > AdaptiveDevelopmentExposure.SHADOW_FLOOR) {
                             samples[count] = n
                             if (useWeights) {
-                                weights!![count] = AdaptiveDevelopmentExposure.spatialWeight(
+                                weights[count] = AdaptiveDevelopmentExposure.spatialWeight(
                                     quadLeft + dx - left, quadTop + dy - top,
                                     spanW, spanH, center, focusX, focusY
                                 )
@@ -271,7 +271,9 @@ internal object VfGpuImport {
             "  vec3 rgb = max(color * vec3(bg.r, (bg.g + bg.b) * 0.5, bg.a), vec3(0.0));" +
             "  rgb *= 2.0;" +
             "  rgb = rgb / (vec3(1.0) + rgb);" +
-            "  @OUT@ = vec4(pow(rgb, vec3(1.0 / 2.2)), 1.0); return; }" +
+            "  vec3 encRaw = pow(rgb, vec3(1.0 / 2.2));" +
+            "  vec3 noiseRaw = vec3(ign(gl_FragCoord.xy, 0.0), ign(gl_FragCoord.xy, 1.0), ign(gl_FragCoord.xy, 2.0));" +
+            "  @OUT@ = vec4(encRaw + (noiseRaw - vec3(0.5)) / 255.0, 1.0); return; }" +
             // JPEG: the save-path sequence on the superpixel (highlight
             // neutralize -> preview EV -> calibrated camera-to-ACEScg -> AgX ->
             // sRGB/P3 -> gamut -> clip -> OETF -> one-LSB dither). Only the
@@ -328,7 +330,7 @@ internal object VfGpuImport {
     // (u_quadBase/u_frameSize/u_step) is in sensor coordinates; u_lensActive is
     // SENSOR_INFO_ACTIVE_ARRAY_SIZE.
     private const val LENS_UNIFORMS_COMMON =
-        "uniform sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
+        "uniform VFHP sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
             "uniform int u_applyLens; uniform VFHP ivec2 u_quadBase; uniform VFHP ivec2 u_frameSize;" +
             "uniform int u_step; uniform int u_lensGreenRow;"
 
@@ -355,7 +357,7 @@ internal object VfGpuImport {
     // ESSL 3.00 variant: single hardware-filtered texture() fetch. Integer
     // bitwise ops are available here (unavailable in ESSL 1.00). Float math
     // uses highp for sensor geometry: mediump loses odd rows above 2048
-    // and can move floor() across a quad boundary. Gains and tonemap stay mediump.
+    // and can move floor() across a quad boundary. Gains, sampler results and tonemapping retain highp precision.
     private const val LENS_GAIN_ES3 =
         "vec4 vfLensGain(VFHP vec2 t) {" +
             " if (u_applyLens == 0) return vec4(1.0);" +
@@ -434,14 +436,13 @@ internal object VfGpuImport {
     }
 
     /**
-     * ESSL 1.00 fragment shader for the CPU-sampled RGBA path. Color math
-     * stays mediump; sensor geometry, UVs and dither use highp (VFHP)
-     * where available. Lens correction is disabled on the ES2 fallback.
+     * ESSL 1.00 fragment shader for the CPU/Vulkan RGBA16F path. Color math,
+     * sampled values, geometry and dither use highp where available. Lens correction is disabled on the ES2 fallback.
      */
     fun cpuFragmentShader(): String =
-        "precision mediump float;\n" +
+        "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
             "#ifdef GL_FRAGMENT_PRECISION_HIGH\n#define VFHP highp\n#else\n#define VFHP mediump\n#endif\n" +
-            "varying VFHP vec2 tex; uniform sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
+            "varying VFHP vec2 tex; uniform VFHP sampler2D raw; uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
             LENS_UNIFORMS_COMMON +
             TONEMAP_HELPERS +
@@ -458,18 +459,18 @@ internal object VfGpuImport {
     /**
      * ESSL 3.00 fragment shader for the zero-copy path. Each display texel fetches its
      * Bayer quad from the imported `R16UI` texture with the same channel mapping and
-     * Q6 fixed-point normalization as [VfCpuNeon.copy] (pure integer, exact tier
-     * parity), then runs the shared tonemap tail in mediump (fp16 on mobile:
-     * the 8-bit dithered output needs no finer).
+     * Q6 black/white calibration as [VfCpuNeon.copy], preserving the sensor
+     * fraction through shading and the shared highp tonemap. Only final display
+     * conversion is quantized to dithered 8-bit.
      */
     fun gpuFragmentShader(): String =
         "#version 300 es\n" +
             "#define VFHP highp\n" +
-            "precision mediump float; precision highp int; precision highp sampler2D;" +
+            "precision highp float; precision highp int; precision highp sampler2D;" +
             "uniform highp usampler2D u_bayer;" +
             "uniform VFHP ivec2 u_quadBase; uniform VFHP ivec2 u_frameSize; uniform int u_step;" +
             "uniform ivec4 u_chans; uniform highp ivec4 u_blackQ; uniform highp ivec4 u_denQ;" +
-            "uniform mediump sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
+            "uniform highp sampler2D u_lens; uniform VFHP ivec2 u_lensSize; uniform VFHP ivec4 u_lensActive;" +
             "uniform int u_applyLens; uniform int u_lensGreenRow;" +
             "uniform vec4 gains; uniform mat3 color;" +
             AGX_UNIFORMS +
@@ -481,19 +482,19 @@ internal object VfGpuImport {
             // baked into Q6 ints on the CPU ([VfLevels]), so the shader is a single
             // straight-line fetch + integer MAD with dynamic uniform indexing and
             // no per-channel branches. All intermediates fit highp int (32-bit).
-            "highp int vfFetchByte(highp ivec2 q, int ch) {" +
+            "highp float vfFetchLinear(highp ivec2 q, int ch) {" +
             " highp ivec2 p = q + ivec2(ch & 1, (ch >> 1) & 1);" +
             " highp int code = int(texelFetch(u_bayer, p, 0).r);" +
             " highp int bq = u_blackQ[ch];" +
             " highp int dq = u_denQ[ch];" +
             " highp int num = code * 64 - bq;" +
-            " if (num <= 0) return 0;" +
-            " if (num >= dq) return 255;" +
-            " return (num * 255 + dq / 2) / dq; }" +
+            " if (num <= 0) return 0.0;" +
+            " if (num >= dq) return 1.0;" +
+            " return float(num) / float(dq); }" +
             "void main() { highp ivec2 q = u_quadBase + ivec2(floor(tex * vec2(u_frameSize))) * u_step;" +
-            " highp ivec4 n = ivec4(vfFetchByte(q, u_chans.x), vfFetchByte(q, u_chans.y)," +
-            " vfFetchByte(q, u_chans.z), vfFetchByte(q, u_chans.w));" +
-            " highp vec4 bf = vec4(n) / 255.0;" +
+            " highp vec4 n = vec4(vfFetchLinear(q, u_chans.x), vfFetchLinear(q, u_chans.y)," +
+            " vfFetchLinear(q, u_chans.z), vfFetchLinear(q, u_chans.w));" +
+            " highp vec4 bf = n;" +
             " vec4 b = vec4(bf);" +
             " b *= vfLensGain(tex);" +
             TONEMAP_TAIL_TEMPLATE.replace("@OUT@", "fragColor")

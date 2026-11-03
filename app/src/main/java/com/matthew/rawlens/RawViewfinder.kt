@@ -234,11 +234,12 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         // GPU-only sessions never use CPU pixels. Keep the same fallback capacity,
         // but avoid retaining three unused 4.45 MiB direct buffers at startup.
         val pixels: ByteBuffer by lazy {
-            ByteBuffer.allocateDirect(VfCpuNeon.MAX_EDGE * VfCpuNeon.MAX_EDGE * 4)
+            ByteBuffer.allocateDirect(VfCpuNeon.MAX_EDGE * VfCpuNeon.MAX_EDGE * 8)
                 .order(ByteOrder.nativeOrder())
         }
         var width = 0
         var height = 0
+        var halfOutput = false
         var epoch = 0L
         override var timestamp = 0L
         override var rotation = 0
@@ -590,6 +591,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     private var lensRecheckMs = 0L
     private var lensRecheckChars: CameraCharacteristics? = null
     // Allocated RGBA storage: reuse via glTexSubImage2D when size is unchanged.
+    private var texHalfOutput = false
     private var texWidth = 0
     private var texHeight = 0
     private var viewportWidth = 1
@@ -634,10 +636,25 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
         super.onSizeChanged(w, h, oldw, oldh)
         resizePresent.run()
     }
+    @Volatile private var monitoringSuspended = false
+
+    override fun setMonitoringSuspended(active: Boolean) {
+        monitoringSuspended = active
+        if (!active) {
+            lastDisplayed = SystemClock.elapsedRealtime()
+            recoverySinceMs = lastDisplayed
+            recoveryAttempts = 0
+        }
+    }
+
     private val watch = object : Runnable {
         override fun run() {
             val now = SystemClock.elapsedRealtime()
             val limit = max(2000L, expectedIntervalMs * 3)
+            if (monitoringSuspended) {
+                if (isAttachedToWindow) postDelayed(this, 250)
+                return
+            }
             if (now - lastDisplayed > limit) {
                 if (alpha != 0f) alpha = 0f
                 statGlActive = false
@@ -1367,9 +1384,10 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             frame.width = width
             frame.height = height
             frame.pixels.clear()
+            frame.halfOutput = glEs3
             val copyStartedNs = System.nanoTime()
             VfCpuNeon.copy(plane.buffer, plane.rowStride, plane.pixelStride, left, top,
-                width, height, step, channels, levels, white, frame.pixels)
+                width, height, step, channels, levels, white, frame.pixels, halfOutput = frame.halfOutput)
             noteNeonSample(copyStartedNs, width, height)
             snapshotRenderState(c, result, channels, frame, now)
             frame.applyLens(lens, left, top, step)
@@ -1843,12 +1861,13 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             glBindTexture(GL_TEXTURE_2D, texture)
             // Reuse storage when size is unchanged: avoids per-frame realloc stalls.
             // Uses GLES20 glTexSubImage2D / glTexImage2D via static imports.
-            if (frame.width != texWidth || frame.height != texHeight) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame.width, frame.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame.pixels)
+            if (frame.width != texWidth || frame.height != texHeight || frame.halfOutput != texHalfOutput) {
+                glTexImage2D(GL_TEXTURE_2D, 0, if (frame.halfOutput) GLES30.GL_RGBA16F else GL_RGBA, frame.width, frame.height, 0, GL_RGBA, if (frame.halfOutput) GLES30.GL_HALF_FLOAT else GL_UNSIGNED_BYTE, frame.pixels)
+                texHalfOutput = frame.halfOutput
                 texWidth = frame.width
                 texHeight = frame.height
             } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGBA, GL_UNSIGNED_BYTE, frame.pixels)
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, frame.width, frame.height, GL_RGBA, if (frame.halfOutput) GLES30.GL_HALF_FLOAT else GL_UNSIGNED_BYTE, frame.pixels)
             }
             applyCpuTonemap(frame, frame.width, frame.height)
             bindQuadAttribs(positionLoc, uvLoc, frame.rotation, frame.mirrored)
@@ -2333,7 +2352,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
             vulkanExport = try {
                 android.hardware.HardwareBuffer.create(
                     frame.width, frame.height,
-                    android.hardware.HardwareBuffer.RGBA_8888, 1,
+                    android.hardware.HardwareBuffer.RGBA_FP16, 1,
                     android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or
                         android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
                         // Tier black-output probe locks the export on probation frames only.
@@ -2470,7 +2489,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     private fun loadVulkanImageSpv(): ByteArray? = try {
-        context.assets.open("shaders/vf/vf_superpixel_img.spv").use { it.readBytes() }
+        context.assets.open("shaders/vf/vf_superpixel_img_linear.spv").use { it.readBytes() }
     } catch (e: Exception) {
         Log.w("RawViewfinder", "VF Vulkan image SPIR-V missing", e)
         null
@@ -2522,7 +2541,7 @@ class RawViewfinder @JvmOverloads constructor(context: Context, attrs: Attribute
 
     /** SPIR-V bytes for Vulkan bring-up; null when the asset is missing. GL worker only. */
     private fun loadVulkanSpv(): ByteArray? = try {
-        context.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        context.assets.open("shaders/vf/vf_superpixel_linear.spv").use { it.readBytes() }
     } catch (e: Exception) {
         Log.w("RawViewfinder", "VF Vulkan SPIR-V missing", e)
         null

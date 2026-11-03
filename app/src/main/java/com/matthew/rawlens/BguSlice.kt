@@ -17,7 +17,7 @@ internal object BguSlice {
             "void main() { tex = uv; gl_Position = vec4(position, 0.0, 1.0); }\n"
 
     /**
-     * Slice + present. Samples the RGBA8 guide quad, merges greens, looks up
+     * Slice + present. Samples the RGBA16F guide quad, merges greens, looks up
      * the fitted 3x4 affine model by trilinear (x, y, luma), applies it, and
      * adds one-LSB interleaved-gradient-noise dither in display space.
      *
@@ -32,7 +32,7 @@ internal object BguSlice {
         "#version 300 es\n" +
             "precision highp float;\n" +
             "precision highp int;\n" +
-            "uniform lowp sampler2D uGuide;\n" +
+            "uniform highp sampler2D uGuide;\n" +
             "uniform highp sampler3D uGrid0;\n" +
             "uniform highp sampler3D uGrid1;\n" +
             "uniform highp sampler3D uGrid2;\n" +

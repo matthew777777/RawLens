@@ -1,3 +1,4 @@
+#include "vf_mhc_green_spv.h"
 // Sampled-image twin of createPipeline: binding 0 is the R16 raw sampler,
 // bindings 1-3 (storage output, shading sampler, LUT) match the buffer
 // pipeline so push packing and the export path are shared.
@@ -952,7 +953,7 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
         LOGW("vf-vk: fused shader module failed");
         return false;
     }
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    VkDescriptorSetLayoutBinding bindings[6]{};
     for (int i = 0; i < 3; ++i) {
         bindings[i].binding = (uint32_t)i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -969,7 +970,11 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
     bindings[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setInfo.bindingCount = 5;
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    setInfo.bindingCount = 6;
     setInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(ctx->device, &setInfo, nullptr, &ctx->fusedSetLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(ctx->device, module, nullptr);
@@ -1000,10 +1005,18 @@ bool createFusedPipeline(Context* ctx, const uint32_t* code, size_t words) {
         LOGW("vf-vk: fused compute pipeline failed %d", r);
         return false;
     }
+    // The private green prepass uses the same layout/slot descriptors.
+    modInfo.codeSize = sizeof(kMhcGreenSpv);
+    modInfo.pCode = kMhcGreenSpv;
+    if (vkCreateShaderModule(ctx->device,&modInfo,nullptr,&module)!=VK_SUCCESS) return false;
+    pipeInfo.stage.module=module;
+    r=vkCreateComputePipelines(ctx->device,pipelineCacheFor(ctx),1,&pipeInfo,nullptr,&ctx->fusedGreenPipeline);
+    vkDestroyShaderModule(ctx->device,module,nullptr);
+    if(r!=VK_SUCCESS) return false;
     savePipelineCache(ctx);
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[0].descriptorCount = 9;
+    poolSizes[0].descriptorCount = 12;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 6;
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -1206,3 +1219,23 @@ bool ensureShadeSampler(Context* ctx) {
     return true;
 }
 
+
+bool ensureFusedGreen(Context* ctx,int slot,int width,int height) {
+    const VkDeviceSize bytes=((VkDeviceSize(width)+1)/2)*VkDeviceSize(height)*4;
+    if(ctx->fusedGreenBufs[slot]!=VK_NULL_HANDLE && ctx->fusedGreenBytes[slot]==bytes) return true;
+    if(ctx->fusedGreenBufs[slot]!=VK_NULL_HANDLE) vkDestroyBuffer(ctx->device,ctx->fusedGreenBufs[slot],nullptr);
+    if(ctx->fusedGreenMems[slot]!=VK_NULL_HANDLE) vkFreeMemory(ctx->device,ctx->fusedGreenMems[slot],nullptr);
+    ctx->fusedGreenBufs[slot]=VK_NULL_HANDLE;ctx->fusedGreenMems[slot]=VK_NULL_HANDLE;ctx->fusedGreenBytes[slot]=0;
+    VkBufferCreateInfo info{};info.sType=VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size=bytes;info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;info.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
+    if(vkCreateBuffer(ctx->device,&info,nullptr,&ctx->fusedGreenBufs[slot])!=VK_SUCCESS) return false;
+    VkMemoryRequirements req{};vkGetBufferMemoryRequirements(ctx->device,ctx->fusedGreenBufs[slot],&req);
+    VkPhysicalDeviceMemoryProperties props{};vkGetPhysicalDeviceMemoryProperties(ctx->gpu,&props);
+    uint32_t type=pickMemoryTypeProps(req.memoryTypeBits,props,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if(type==UINT32_MAX) type=pickMemoryTypeProps(req.memoryTypeBits,props,0);
+    VkMemoryAllocateInfo alloc{};alloc.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize=req.size;alloc.memoryTypeIndex=type;
+    if(type==UINT32_MAX || vkAllocateMemory(ctx->device,&alloc,nullptr,&ctx->fusedGreenMems[slot])!=VK_SUCCESS) return false;
+    if(vkBindBufferMemory(ctx->device,ctx->fusedGreenBufs[slot],ctx->fusedGreenMems[slot],0)!=VK_SUCCESS) return false;
+    ctx->fusedGreenBytes[slot]=bytes;return true;
+}

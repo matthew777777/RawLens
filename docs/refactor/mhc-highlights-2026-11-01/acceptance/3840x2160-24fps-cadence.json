@@ -1,0 +1,4 @@
+{
+  "valid": false,
+  "reason": "test failed before copying output; prior cadence report read stale 1440p artifact and is invalid"
+}

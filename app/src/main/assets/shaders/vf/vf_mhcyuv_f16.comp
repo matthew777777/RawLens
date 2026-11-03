@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Encoded Video FUSED record stage, float16-math variant of vf_mhcyuv.comp:
-// identical structure and op order, all computed values in float16_t
+// mixed precision: MHC reconstruction uses fp32, grade/packing float16_t
 // (GL_EXT_shader_explicit_arithmetic_types_float16; needs the
 // VK_KHR_shader_float16_int8 device feature + shaderFloat16). The fp32
 // original stays as the fallback SPIR-V for devices without the feature.
 //
 // Deliberate differences from the fp32 twin beyond precision:
-//  - normalize is a plain f16 multiply-add (no fma() call; the compiler
-//    fuses it back — the ±8-code grade gate absorbs the rounding);
-//  - the resample coverage suv is pure integer (exact floor; fp16 would
-//    round 4K coordinates to even and mis-cover edge texels).
+//  - MHC normalization/edge decisions stay fp32: quantized gradients
+//    can pick different chroma directions on near-tied water glints;
+//  - source coverage stays fp32; fp16 coordinates would round 4K
+//    positions to even and mis-cover edge texels.
 //
 // Params arrive as a 192-byte SSBO (FusedParams in vf_vulkan_vf.cpp),
 // still fp32 words (16-bit storage would churn the layout for 192 bytes);
-// values convert to f16 on load.
+// grading values convert to f16 on load; MHC keeps fp32 sensor values.
 //
 // Regenerate the SPIR-V with:
 //   glslangValidator -V --target-env vulkan1.1 vf_mhcyuv_f16.comp -o vf_mhcyuv_f16.spv
@@ -66,18 +66,18 @@ layout(binding = 4) uniform sampler2D shadeMap;
 // ---- MHC (port of vf_mhcyuv.comp; see its header) ----
 
 // Green edge-gate band, mirrors MhcReference.GREEN_EDGE_T0/T1.
-const float16_t GREEN_EDGE_T0 = 0.03hf;
-const float16_t GREEN_EDGE_T1 = 0.08hf;
+const float GREEN_EDGE_T0 = 0.03;
+const float GREEN_EDGE_T1 = 0.08;
 // Chroma side floor + level-ratio regularizer, mirrors
 // MhcReference.BILATERAL_EPS/LEVEL_EPS.
-const float16_t BILATERAL_EPS = 1.0e-3hf;
-const float16_t LEVEL_EPS = 0.002hf;
+const float BILATERAL_EPS = 1.0e-3;
+const float LEVEL_EPS = 0.002;
 // Sensor-white desaturation band, mirrors MhcReference.DESAT_LO/HI
 // (same anchors as the AMaZE JPEG path).
-const float16_t DESAT_LO = 0.70hf;
-const float16_t DESAT_HI = 0.99hf;
+const float DESAT_LO = 0.70;
+const float DESAT_HI = 0.99;
 // Demosaiced output ceiling, mirrors MhcReference.OUTPUT_CLAMP_HI.
-const float16_t OUTPUT_CLAMP_HI = 4.0hf;
+const float OUTPUT_CLAMP_HI = 4.0;
 
 // Phase-preserving edge mirror (single reflection covers our +-2
 // stencil on any dims >= 8).
@@ -104,227 +104,71 @@ int colorAt(ivec2 s) {
 // Unpack + normalize one sensor pixel from a precomputed plane index
 // with precomputed quad phase. Single multiply-add, unclipped (kernel
 // outputs are unclipped anyway; the grade packs clamped codes downstream).
-float16_t normIdx(int idx, int q) {
+float normIdx(int idx, int q) {
     uint uu = uint(idx);
     uint word = codes[uu >> 1u];
     uint code = ((uu & 1u) == 0u) ? (word & 0xFFFFu) : (word >> 16u);
-    return float16_t(code) * float16_t(u.cInvRange[q]) + float16_t(u.cNormBias[q]);
+    return clamp(fma(float(code), u.cInvRange[q], u.cNormBias[q]),0.0,1.0);
 }
 
 // Unpack + normalize from an already-loaded word (the caller
 // guarantees word == codes[idx >> 1]) with a precomputed shift.
-float16_t normShift(uint word, uint shift, int q) {
+float normShift(uint word, uint shift, int q) {
     uint code = (word >> shift) & 0xFFFFu;
-    return float16_t(code) * float16_t(u.cInvRange[q]) + float16_t(u.cNormBias[q]);
+    return clamp(fma(float(code), u.cInvRange[q], u.cNormBias[q]),0.0,1.0);
 }
 
 // Edge path: mirror into range first (phase preserving), then unpack.
-float16_t normEdge(ivec2 s) {
+float normEdge(ivec2 s) {
     ivec2 m = ivec2(mir(s.x, u.cDims.x), mir(s.y, u.cDims.y));
     int q = quadOf(m);
     int idx = (m.y + u.cOrigin.y) * u.cPitch + (m.x + u.cOrigin.x);
     return normIdx(idx, q);
 }
 
-// Level ratio for chroma rescaling (see MhcReference.levelRatio):
-// (num + eps)/(den + eps) with both terms floored at eps. Taps here
-// are unclipped FMA (sub-black noise reaches -0.067), so the floors
-// bar division by ~zero (no INF/NaN speckle); the CPU computes the
-// identical expression (no-op there: its taps clip at 0).
-float16_t levelRatio(float16_t num, float16_t den) {
-    return max(num + LEVEL_EPS, LEVEL_EPS) / max(den + LEVEL_EPS, LEVEL_EPS);
+// Green is reconstructed once in a preceding compact pass. Chroma uses
+// green at each actual chroma sample, avoiding the old raw-side level ratios.
+layout(binding = 5) readonly buffer CoherentGreen { uint greenWords[]; };
+float greenAt(ivec2 s) {
+    ivec2 m = ivec2(mir(s.x,u.cDims.x),mir(s.y,u.cDims.y));
+    uint word = greenWords[m.y * ((u.cDims.x + 1) / 2) + m.x / 2];
+    vec2 pair = unpackHalf2x16(word);
+    return ((m.x & 1) == 0) ? pair.x : pair.y;
 }
-
-// Edge-directed green at R/B sites (reference op order): the two
-// second-order directional estimates steered by gradient + same-color
-// curvature, corner-blended to the symmetric MHC mean. (gh + gv) / 2
-// IS the old MHC kernel, so flat fields and ramps are bit-identical.
-float16_t greenDir(float16_t c, float16_t n, float16_t so, float16_t w, float16_t e,
-                   float16_t n2, float16_t s2, float16_t w2, float16_t e2) {
-    float16_t ch = 2.0hf * c - w2 - e2;
-    float16_t cv = 2.0hf * c - n2 - s2;
-    float16_t gh = 0.5hf * (w + e) + 0.25hf * ch;
-    float16_t gv = 0.5hf * (n + so) + 0.25hf * cv;
-    float16_t dh = abs(w - e) + 0.5hf * abs(ch);
-    float16_t dv = abs(n - so) + 0.5hf * abs(cv);
-    float16_t gd = (dh < dv) ? gh : gv;
-    float16_t gm = 0.5hf * (gh + gv);
-    float16_t t = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0hf, 1.0hf);
-    return mix(gd, gm, t);
-}
-
-// Full MHC interpolate at crop pixel s (13 taps, reference op order).
-f16vec3 mhcRgb(ivec2 s) {
-    float16_t c;
-    float16_t n;
-    float16_t so;
-    float16_t w;
-    float16_t e;
-    float16_t n2;
-    float16_t s2;
-    float16_t w2;
-    float16_t e2;
-    float16_t nw;
-    float16_t ne;
-    float16_t sw;
-    float16_t se;
-    if (all(greaterThanEqual(s, ivec2(2))) && all(lessThan(s, u.cDims - ivec2(2)))) {
-        int sx = s.x + u.cOrigin.x;
-        int sy = s.y + u.cOrigin.y;
-        int q0 = ((sy & 1) << 1) | (sx & 1);
-        int qE = q0 ^ 1;
-        int qS = q0 ^ 2;
-        int qD = q0 ^ 3;
-        int P = u.cPitch;
-        int base = sy * P + sx;
-        uint wN2 = codes[uint(base - 2 * P) >> 1u];
-        uint wNm = codes[uint(base - P - 1) >> 1u];
-        uint wNp = codes[uint(base - P + 1) >> 1u];
-        uint wCm = codes[uint(base - 2) >> 1u];
-        uint wC0 = codes[uint(base) >> 1u];
-        uint wCp = codes[uint(base + 2) >> 1u];
-        uint wSm = codes[uint(base + P - 1) >> 1u];
-        uint wSp = codes[uint(base + P + 1) >> 1u];
-        uint wS2 = codes[uint(base + 2 * P) >> 1u];
-        uint wN = (((base - P) & 1) == 0) ? wNp : wNm;
-        uint wS = (((base + P) & 1) == 0) ? wSp : wSm;
-        uint wW = ((base & 1) == 0) ? wCm : wC0;
-        uint wE = ((base & 1) == 0) ? wC0 : wCp;
-        uint s0 = uint(base & 1) * 16u;
-        uint s1 = 16u - s0;
-        uint sP = ((P & 1) == 0) ? s0 : s1;
-        uint sD = ((P & 1) == 0) ? s1 : s0;
-        c = normShift(wC0, s0, q0);
-        n = normShift(wN, sP, qS);
-        so = normShift(wS, sP, qS);
-        w = normShift(wW, s1, qE);
-        e = normShift(wE, s1, qE);
-        n2 = normShift(wN2, s0, q0);
-        s2 = normShift(wS2, s0, q0);
-        w2 = normShift(wCm, s0, q0);
-        e2 = normShift(wCp, s0, q0);
-        nw = normShift(wNm, sD, qD);
-        ne = normShift(wNp, sD, qD);
-        sw = normShift(wSm, sD, qD);
-        se = normShift(wSp, sD, qD);
+vec3 mhcRgb(ivec2 s) {
+    float c=normEdge(s);
+    int col=colorAt(s);
+    float g=(col==1) ? c : greenAt(s);
+    float r; float b;
+    if (col==1) {
+        float n=normEdge(s+ivec2(0,-1)); float so=normEdge(s+ivec2(0,1));
+        float w=normEdge(s+ivec2(-1,0)); float e=normEdge(s+ivec2(1,0));
+        float w2=normEdge(s+ivec2(-2,0)); float e2=normEdge(s+ivec2(2,0));
+        float n2=normEdge(s+ivec2(0,-2)); float s2=normEdge(s+ivec2(0,2));
+        float gw=greenAt(s+ivec2(-1,0)); float ge=greenAt(s+ivec2(1,0));
+        float gn=greenAt(s+ivec2(0,-1)); float gs=greenAt(s+ivec2(0,1));
+        float ww=0.001+abs(g-ge)+abs(c-e2);
+        float we=0.001+abs(g-gw)+abs(c-w2);
+        float wn=0.001+abs(g-gs)+abs(c-s2);
+        float ws=0.001+abs(g-gn)+abs(c-n2);
+        float ew=g+(ww*(w-gw)+we*(e-ge))/(ww+we);
+        float ns=g+(wn*(n-gn)+ws*(so-gs))/(wn+ws);
+        bool redEW=colorAt(s+ivec2(1,0))==0;
+        r=redEW ? ew : ns; b=redEW ? ns : ew;
     } else {
-        c = normEdge(s);
-        n = normEdge(s + ivec2(0, -1));
-        so = normEdge(s + ivec2(0, 1));
-        w = normEdge(s + ivec2(-1, 0));
-        e = normEdge(s + ivec2(1, 0));
-        n2 = normEdge(s + ivec2(0, -2));
-        s2 = normEdge(s + ivec2(0, 2));
-        w2 = normEdge(s + ivec2(-2, 0));
-        e2 = normEdge(s + ivec2(2, 0));
-        nw = normEdge(s + ivec2(-1, -1));
-        ne = normEdge(s + ivec2(1, -1));
-        sw = normEdge(s + ivec2(-1, 1));
-        se = normEdge(s + ivec2(1, 1));
+        float nw=normEdge(s+ivec2(-1,-1)); float ne=normEdge(s+ivec2(1,-1));
+        float sw=normEdge(s+ivec2(-1,1)); float se=normEdge(s+ivec2(1,1));
+        float gnw=greenAt(s+ivec2(-1,-1)); float gne=greenAt(s+ivec2(1,-1));
+        float gsw=greenAt(s+ivec2(-1,1)); float gse=greenAt(s+ivec2(1,1));
+        float wnw=1.0/(0.001+abs(g-gnw)+abs(nw-se));
+        float wse=1.0/(0.001+abs(g-gse)+abs(nw-se));
+        float wne=1.0/(0.001+abs(g-gne)+abs(ne-sw));
+        float wsw=1.0/(0.001+abs(g-gsw)+abs(ne-sw));
+        float opposite=g+(wnw*(nw-gnw)+wne*(ne-gne)+wsw*(sw-gsw)+wse*(se-gse))/(wnw+wne+wsw+wse);
+        r=(col==0) ? c : opposite;
+        b=(col==2) ? c : opposite;
     }
-    // Edge-gate bank shared by green and chroma (see vf_mhc.comp).
-    float16_t ch = 2.0hf * c - w2 - e2;
-    float16_t cv = 2.0hf * c - n2 - s2;
-    float16_t dh = abs(w - e) + 0.5hf * abs(ch);
-    float16_t dv = abs(n - so) + 0.5hf * abs(cv);
-    float16_t gt = clamp((min(dh, dv) - GREEN_EDGE_T0) / (GREEN_EDGE_T1 - GREEN_EDGE_T0), 0.0hf, 1.0hf);
-    float16_t gf = clamp((GREEN_EDGE_T0 - max(dh, dv)) / GREEN_EDGE_T0, 0.0hf, 1.0hf);
-    float16_t gg = max(gt, gf);
-    bool hEdge = dh < dv;
-    int col = colorAt(s);
-    float16_t r;
-    float16_t g;
-    float16_t b;
-    if (col == 0) {
-        r = c;
-        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
-        float16_t dw = 0.5hf * (nw + sw) - w;
-        float16_t de = 0.5hf * (ne + se) - e;
-        float16_t dn = 0.5hf * (nw + ne) - n;
-        float16_t ds = 0.5hf * (sw + se) - so;
-        float16_t oppDir;
-        if (hEdge) {
-            float16_t wN = BILATERAL_EPS + abs(c - s2);
-            float16_t wS = BILATERAL_EPS + abs(c - n2);
-            float16_t rN = levelRatio(g, n);
-            float16_t rS = levelRatio(g, so);
-            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
-        } else {
-            float16_t wW = BILATERAL_EPS + abs(c - e2);
-            float16_t wE = BILATERAL_EPS + abs(c - w2);
-            float16_t rW = levelRatio(g, w);
-            float16_t rE = levelRatio(g, e);
-            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
-        }
-        float16_t v = 6.0hf * c;
-        v += 2.0hf * (nw + ne + sw + se);
-        v -= 1.5hf * (n2 + s2 + w2 + e2);
-        b = mix(oppDir, v * 0.125hf, gg);
-    } else if (col == 2) {
-        g = greenDir(c, n, so, w, e, n2, s2, w2, e2);
-        float16_t dw = 0.5hf * (nw + sw) - w;
-        float16_t de = 0.5hf * (ne + se) - e;
-        float16_t dn = 0.5hf * (nw + ne) - n;
-        float16_t ds = 0.5hf * (sw + se) - so;
-        float16_t oppDir;
-        if (hEdge) {
-            float16_t wN = BILATERAL_EPS + abs(c - s2);
-            float16_t wS = BILATERAL_EPS + abs(c - n2);
-            float16_t rN = levelRatio(g, n);
-            float16_t rS = levelRatio(g, so);
-            oppDir = g + (wN * dn * rN + wS * ds * rS) / (wN + wS);
-        } else {
-            float16_t wW = BILATERAL_EPS + abs(c - e2);
-            float16_t wE = BILATERAL_EPS + abs(c - w2);
-            float16_t rW = levelRatio(g, w);
-            float16_t rE = levelRatio(g, e);
-            oppDir = g + (wW * dw * rW + wE * de * rE) / (wW + wE);
-        }
-        float16_t v = 6.0hf * c;
-        v += 2.0hf * (nw + ne + sw + se);
-        v -= 1.5hf * (n2 + s2 + w2 + e2);
-        r = mix(oppDir, v * 0.125hf, gg);
-        b = c;
-    } else {
-        g = c;
-        float16_t gwW = hEdge ? 0.5hf * (c + w2) : 0.5hf * (nw + sw);
-        float16_t gwE = hEdge ? 0.5hf * (c + e2) : 0.5hf * (ne + se);
-        float16_t wW = BILATERAL_EPS + abs(c - e2);
-        float16_t wE = BILATERAL_EPS + abs(c - w2);
-        float16_t rW = levelRatio(c, gwW);
-        float16_t rE = levelRatio(c, gwE);
-        float16_t ewOut = c + (wW * (w - gwW) * rW + wE * (e - gwE) * rE) / (wW + wE);
-        float16_t gnN = hEdge ? 0.5hf * (nw + ne) : 0.5hf * (c + n2);
-        float16_t gnS = hEdge ? 0.5hf * (sw + se) : 0.5hf * (c + s2);
-        float16_t wN = BILATERAL_EPS + abs(c - s2);
-        float16_t wS = BILATERAL_EPS + abs(c - n2);
-        float16_t rN = levelRatio(c, gnN);
-        float16_t rS = levelRatio(c, gnS);
-        float16_t nsOut = c + (wN * (n - gnN) * rN + wS * (so - gnS) * rS) / (wN + wS);
-        float16_t vr = 5.0hf * c;
-        vr += 4.0hf * (w + e);
-        vr -= w2 + e2;
-        vr -= nw + ne + sw + se;
-        vr += 0.5hf * (n2 + s2);
-        vr *= 0.125hf;
-        float16_t vc = 5.0hf * c;
-        vc += 4.0hf * (n + so);
-        vc -= n2 + s2;
-        vc -= nw + ne + sw + se;
-        vc += 0.5hf * (w2 + e2);
-        vc *= 0.125hf;
-        if (colorAt(s + ivec2(1, 0)) == 0) {
-            r = mix(ewOut, vr, gg);
-            b = mix(nsOut, vc, gg);
-        } else {
-            r = mix(nsOut, vc, gg);
-            b = mix(ewOut, vr, gg);
-        }
-    }
-    // Clamp negatives like RawTherapee (a camera matrix turns edge
-    // undershoot into complementary fringes); overshoot clamps at
-    // OUTPUT_CLAMP_HI.
-    return f16vec3(clamp(r, 0.0hf, OUTPUT_CLAMP_HI), clamp(g, 0.0hf, OUTPUT_CLAMP_HI), clamp(b, 0.0hf, OUTPUT_CLAMP_HI));
+    return clamp(vec3(r,g,b),vec3(0.0),vec3(OUTPUT_CLAMP_HI));
 }
 
 // ---- direct-encode record grade: no warp, no saturation ----
@@ -451,8 +295,10 @@ f16vec3 pixelLog(ivec2 ij) {
     // Integer coverage: floor((ij + 0.5) * cDims / oDims) as
     // floor((2*ij + 1) * cDims / (2*oDims)) — exact, where fp16 would
     // round 4K coordinates to even and mis-cover edge texels.
-    ivec2 s = ((ij * 2 + 1) * u.cDims) / (2 * u.oDims);
-    f16vec3 rgb = desatWhite(mhcRgb(s));
+    ivec2 s;
+    if (all(equal(u.cDims, u.oDims))) s = ij;
+    else s = ivec2((vec2(ij) + 0.5) * vec2(u.gCcmR.w,u.gCcmG.w));
+    f16vec3 rgb = desatWhite(f16vec3(mhcRgb(s)));
     if (u.sDims.z != 0) {
         // Vignetting, pre-WB like the viewfinder: the map is ~17x17 over
         // the sensor, so one gain per output texel (not per MHC tap) is
@@ -483,34 +329,30 @@ uint pack10(float16_t v, float16_t low, float16_t high) {
 }
 
 void main() {
-    // One invocation owns one horizontal P010 pair. The old dispatch
-    // launched an extra odd-x invocation that returned without writing.
-    // Pixel coordinates and all demosaic/grade/packing arithmetic stay identical.
-    // Mapping: Khronos GLSL builtins, gl_GlobalInvocationID.
-    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * ivec2(2, 1);
+    // Own a complete 2x2 P010 cell: all four encoded pixels contribute
+    // to 4:2:0 chroma. Sampling only the top row aliases Bayer-phase
+    // color errors into cyan stripes on subpixel specular highlights.
+    // Four pixels / half as many invocations: no extra demosaic work.
+    ivec2 ij = ivec2(gl_GlobalInvocationID.xy) * 2;
     if (any(greaterThanEqual(ij, u.oDims))) return;
-    int yStride = int(u.gMisc.y);  // u16 words per Y row
+    int yStride = int(u.gMisc.y);
     int outMode = u.sDims.w;
-    f16vec3 lg0 = pixelLog(ij);
-    f16vec3 lg1 = (ij.x + 1 < u.oDims.x) ? pixelLog(ij + ivec2(1, 0)) : lg0;
-    f16vec3 yuv0 = rgbToYuv(lg0, outMode);
-    f16vec3 yuv1 = rgbToYuv(lg1, outMode);
-    uint yCode0 = pack10(yuv0.x, 64.0hf, 940.0hf);
-    uint yCode1 = pack10(yuv1.x, 64.0hf, 940.0hf);
-    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);  // u16 units
-    buf_out.words[yIdx >> 1u] = yCode0 | (yCode1 << 16u);
-    if ((ij.y & 1) == 0) {
-        // Chroma is this pair's mean (zero extra taps; rgbToYuv is
-        // linear so the mean of converts equals the convert of the
-        // mean).
-        f16vec3 muv = (yuv0 + yuv1) * 0.5hf;
-        uint uCode = pack10(muv.g, 64.0hf, 960.0hf);
-        uint vCode = pack10(muv.b, 64.0hf, 960.0hf);
-        // u16-unit pair address (always even: strides/height are even,
-        // so >>1 below is exact).
-        uint pairIdx = uint(u.gMisc.w) / 2u
-            + uint(ij.y / 2) * uint(u.gMisc.z)
-            + uint(ij.x / 2) * 2u;
-        buf_out.words[pairIdx >> 1u] = uCode | (vCode << 16u);
+    f16vec3 yuv0 = rgbToYuv(pixelLog(ij), outMode);
+    f16vec3 yuv1 = rgbToYuv(pixelLog(min(ij + ivec2(1, 0), u.oDims - 1)), outMode);
+    uint yIdx = uint(ij.y) * uint(yStride) + uint(ij.x);
+    buf_out.words[yIdx >> 1u] = pack10(yuv0.x, 64.0hf, 940.0hf)
+        | (pack10(yuv1.x, 64.0hf, 940.0hf) << 16u);
+    f16vec3 sumTop = yuv0 + yuv1;
+    f16vec3 yuv2 = rgbToYuv(pixelLog(min(ij + ivec2(0, 1), u.oDims - 1)), outMode);
+    f16vec3 yuv3 = rgbToYuv(pixelLog(min(ij + ivec2(1, 1), u.oDims - 1)), outMode);
+    if (ij.y + 1 < u.oDims.y) {
+        uint nextIdx = yIdx + uint(yStride);
+        buf_out.words[nextIdx >> 1u] = pack10(yuv2.x, 64.0hf, 940.0hf)
+            | (pack10(yuv3.x, 64.0hf, 940.0hf) << 16u);
     }
+    f16vec3 meanUV = (sumTop + (yuv2 + yuv3)) * 0.25hf;
+    uint pairIdx = uint(u.gMisc.w) / 2u
+        + uint(ij.y / 2) * uint(u.gMisc.z) + uint(ij.x);
+    buf_out.words[pairIdx >> 1u] = pack10(meanUV.g, 64.0hf, 960.0hf)
+        | (pack10(meanUV.b, 64.0hf, 960.0hf) << 16u);
 }

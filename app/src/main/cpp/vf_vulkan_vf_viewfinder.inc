@@ -1282,9 +1282,16 @@ Java_com_matthew_rawlens_VfVulkan_sampleOutputNative(JNIEnv*, jobject) {
         for (uint32_t y = 0; y < desc.height && maxByte < 255; y += (uint32_t)stepY) {
             const uint8_t* row = base + (size_t)y * (size_t)rowStride;
             for (uint32_t x = 0; x < desc.width && maxByte < 255; x += (uint32_t)stepX) {
-                const uint8_t* px = row + (size_t)x * 4u;
+                const bool halfOutput = desc.format == AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT;
+                const uint8_t* px = row + (size_t)x * (halfOutput ? 8u : 4u);
                 for (int c = 0; c < 4; ++c) {
-                    if (px[c] > maxByte) maxByte = px[c];
+                    int value = px[c];
+                    if (halfOutput) {
+                        uint16_t h;
+                        memcpy(&h, px + c * 2, sizeof(h));
+                        value = std::max(0, std::min(255, static_cast<int>(vflinear::fromHalf(h) * 255.0f + 0.5f)));
+                    }
+                    if (value > maxByte) maxByte = value;
                 }
             }
         }

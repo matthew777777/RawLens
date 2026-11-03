@@ -16,18 +16,6 @@
 
 namespace {
 
-halide_buffer_t makeU8(int w, int h, int c, uint8_t *host, halide_dimension_t *shape) {
-    shape[0] = halide_dimension_t(0, w, 1);
-    shape[1] = halide_dimension_t(0, h, w);
-    shape[2] = halide_dimension_t(0, c, w * h);
-    halide_buffer_t buf = {};
-    buf.host = host;
-    buf.type = halide_type_t(halide_type_uint, 8);
-    buf.dimensions = 3;
-    buf.dim = shape;
-    return buf;
-}
-
 halide_buffer_t makeF32(int w, int h, int c, float *host, halide_dimension_t *shape) {
     shape[0] = halide_dimension_t(0, w, 1);
     shape[1] = halide_dimension_t(0, h, w);
@@ -67,7 +55,7 @@ extern "C" int halide_set_num_threads(int n);
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_matthew_rawlens_BguLook_lookIntoNative(
-    JNIEnv *env, jobject /*thiz*/, jbyteArray quad, jint w, jint h, jfloatArray lens,
+    JNIEnv *env, jobject /*thiz*/, jfloatArray quad, jint w, jint h, jfloatArray lens,
     jint lensCols, jint lensRows, jfloatArray wb, jfloatArray ccm, jfloatArray aces,
     jfloatArray white, jfloatArray fparams, jintArray iparams, jfloatArray guideOut,
     jfloatArray devOut) {
@@ -93,7 +81,7 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
         env->GetArrayLength(devOut) != bguElementCount({w, h, 3})) {
         return -1;
     }
-    jbyte *quadPtr = env->GetByteArrayElements(quad, nullptr);
+    float *quadPtr = env->GetFloatArrayElements(quad, nullptr);
     float *lensPtr = env->GetFloatArrayElements(lens, nullptr);
     float *wbPtr = env->GetFloatArrayElements(wb, nullptr);
     float *ccmPtr = env->GetFloatArrayElements(ccm, nullptr);
@@ -103,7 +91,7 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
     jint *ipPtr = env->GetIntArrayElements(iparams, nullptr);
     if (quadPtr == nullptr || lensPtr == nullptr || wbPtr == nullptr || ccmPtr == nullptr ||
         acesPtr == nullptr || whitePtr == nullptr || fpPtr == nullptr || ipPtr == nullptr) {
-        if (quadPtr != nullptr) env->ReleaseByteArrayElements(quad, quadPtr, JNI_ABORT);
+        if (quadPtr != nullptr) env->ReleaseFloatArrayElements(quad, quadPtr, JNI_ABORT);
         if (lensPtr != nullptr) env->ReleaseFloatArrayElements(lens, lensPtr, JNI_ABORT);
         if (wbPtr != nullptr) env->ReleaseFloatArrayElements(wb, wbPtr, JNI_ABORT);
         if (ccmPtr != nullptr) env->ReleaseFloatArrayElements(ccm, ccmPtr, JNI_ABORT);
@@ -121,7 +109,7 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
         halide_dimension_t quadShape[3], lensShape[3], guideShape[3], devShape[3];
         halide_dimension_t wbShape[1], whiteShape[1], ccmShape[2], acesShape[2];
         halide_buffer_t quadBuf =
-            makeU8(w, h, 4, reinterpret_cast<uint8_t *>(quadPtr), quadShape);
+            makeF32(w, h, 4, quadPtr, quadShape);
         halide_buffer_t lensBuf = makeF32(lensCols, lensRows, 4, lensPtr, lensShape);
         halide_buffer_t wbBuf = makeF32Vec(4, wbPtr, wbShape);
         halide_buffer_t ccmBuf = makeF32Mat(ccmPtr, ccmShape);
@@ -136,7 +124,7 @@ Java_com_matthew_rawlens_BguLook_lookIntoNative(
                       &devBuf);
     }
 
-    env->ReleaseByteArrayElements(quad, quadPtr, JNI_ABORT);
+    env->ReleaseFloatArrayElements(quad, quadPtr, JNI_ABORT);
     env->ReleaseFloatArrayElements(lens, lensPtr, JNI_ABORT);
     env->ReleaseFloatArrayElements(wb, wbPtr, JNI_ABORT);
     env->ReleaseFloatArrayElements(ccm, ccmPtr, JNI_ABORT);

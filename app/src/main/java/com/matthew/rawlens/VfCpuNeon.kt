@@ -51,7 +51,9 @@ internal object VfCpuNeon {
 
     /**
      * Copy one aligned Bayer quad per display texel into [destination] as
-     * canonical R/Gr/Gb/B bytes. Mirrors the old sampler contract:
+     * canonical R/Gr/Gb/B samples (bytes, or IEEE half floats when
+     * [halfOutput] is true). Live viewfinders use half floats so shading and WB
+     * do not amplify early byte rounding. Mirrors the sampler geometry:
      * even [left]/[top]/[step], [step] >= 2, 1..[MAX_EDGE] extents.
      *
      * @throws IllegalArgumentException on bad geometry, short buffers, or
@@ -62,7 +64,7 @@ internal object VfCpuNeon {
     fun copy(
         source: ByteBuffer, rowStride: Int, pixelStride: Int, left: Int, top: Int,
         width: Int, height: Int, step: Int, channels: IntArray, black: FloatArray,
-        white: Float, destination: ByteBuffer
+        white: Float, destination: ByteBuffer, halfOutput: Boolean = false
     ) {
         require(left % 2 == 0 && top % 2 == 0 && step >= 2 && step % 2 == 0) {
             "Unaligned quad geometry left=$left top=$top step=$step"
@@ -77,7 +79,7 @@ internal object VfCpuNeon {
             "Bad levels white=$white"
         }
         require(source.isDirect && destination.isDirect) { "VfCpuNeon needs direct buffers" }
-        val needOut = width * height * 4
+        val needOut = width * height * (if (halfOutput) 8 else 4)
         require(destination.remaining() >= needOut) {
             "destination holds ${destination.remaining()}, needs $needOut"
         }
@@ -105,7 +107,7 @@ internal object VfCpuNeon {
             copyNative(
                 source, srcOffset, rowStride, pixelStride, left, top,
                 width, height, step, channels, levels,
-                destination, dstOffset
+                destination, dstOffset, halfOutput
             )
         } catch (e: UnsatisfiedLinkError) {
             throw IllegalStateException("vf native sampler missing", e)
@@ -123,6 +125,6 @@ internal object VfCpuNeon {
         source: ByteBuffer, srcOffset: Int, rowStride: Int, pixelStride: Int,
         left: Int, top: Int, width: Int, height: Int, step: Int,
         channels: IntArray, levels: IntArray,
-        destination: ByteBuffer, dstOffset: Int
+        destination: ByteBuffer, dstOffset: Int, halfOutput: Boolean = false
     ): Int
 }

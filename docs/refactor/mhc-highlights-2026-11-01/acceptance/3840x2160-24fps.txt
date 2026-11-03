@@ -1,0 +1,44 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoRecordDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.EncodedVideoRecordDeviceTest:
+INSTRUMENTATION_STATUS: test=recordMain10Mp4
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.EncodedVideoRecordDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: [mhc-single] frame exceptions: 1 expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:239)
+
+INSTRUMENTATION_STATUS: stream=
+Error in recordMain10Mp4(com.matthew.rawlens.EncodedVideoRecordDeviceTest):
+java.lang.AssertionError: [mhc-single] frame exceptions: 1 expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:239)
+
+INSTRUMENTATION_STATUS: test=recordMain10Mp4
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 62.156
+There was 1 failure:
+1) recordMain10Mp4(com.matthew.rawlens.EncodedVideoRecordDeviceTest)
+java.lang.AssertionError: [mhc-single] frame exceptions: 1 expected:<0> but was:<1>
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at com.matthew.rawlens.EncodedVideoRecordDeviceTest.recordMain10Mp4(EncodedVideoRecordDeviceTest.kt:239)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

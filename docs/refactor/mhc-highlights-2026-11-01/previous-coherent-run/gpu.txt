@@ -1,0 +1,41 @@
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MhcHighlightDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.matthew.rawlens.MhcHighlightDeviceTest:
+INSTRUMENTATION_STATUS: test=sustainedHeadlessFrameBudgets
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.matthew.rawlens.MhcHighlightDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Headless budget misses: 2560x1440@30 variant=vf_mhcyuv frames=1000 mean=31.007843672000032 p50=30.953615 p95=31.751769 p99=32.504846 max=37.167924 budget=33.333333333333336 over=3
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.MhcHighlightDeviceTest.sustainedHeadlessFrameBudgets(MhcHighlightDeviceTest.kt:138)
+
+INSTRUMENTATION_STATUS: stream=
+Error in sustainedHeadlessFrameBudgets(com.matthew.rawlens.MhcHighlightDeviceTest):
+java.lang.AssertionError: Headless budget misses: 2560x1440@30 variant=vf_mhcyuv frames=1000 mean=31.007843672000032 p50=30.953615 p95=31.751769 p99=32.504846 max=37.167924 budget=33.333333333333336 over=3
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.MhcHighlightDeviceTest.sustainedHeadlessFrameBudgets(MhcHighlightDeviceTest.kt:138)
+
+INSTRUMENTATION_STATUS: test=sustainedHeadlessFrameBudgets
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 90.681
+There was 1 failure:
+1) sustainedHeadlessFrameBudgets(com.matthew.rawlens.MhcHighlightDeviceTest)
+java.lang.AssertionError: Headless budget misses: 2560x1440@30 variant=vf_mhcyuv frames=1000 mean=31.007843672000032 p50=30.953615 p95=31.751769 p99=32.504846 max=37.167924 budget=33.333333333333336 over=3
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.matthew.rawlens.MhcHighlightDeviceTest.sustainedHeadlessFrameBudgets(MhcHighlightDeviceTest.kt:138)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

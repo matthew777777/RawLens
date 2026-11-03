@@ -1,0 +1,22 @@
+{
+  "standard-MHC": {
+    "raw_rgb_mae_to_RCD": 0.0035633884835988283,
+    "raw_green_mae_to_RCD": 0.0022647182922810316
+  },
+  "soft-green-MHC": {
+    "raw_rgb_mae_to_RCD": 0.0032727739308029413,
+    "raw_green_mae_to_RCD": 0.0013928745174780488
+  },
+  "coherent-green-difference": {
+    "raw_rgb_mae_to_RCD": 0.0018017146503552794,
+    "raw_green_mae_to_RCD": 0.0013929294655099511
+  },
+  "RCD-reference": {
+    "raw_rgb_mae_to_RCD": 0.0,
+    "raw_green_mae_to_RCD": 0.0
+  },
+  "RCD-green-coherent-difference": {
+    "raw_rgb_mae_to_RCD": 0.0008775151218287647,
+    "raw_green_mae_to_RCD": 6.9701814027212095e-06
+  }
+}

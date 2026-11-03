@@ -61,6 +61,9 @@ interface VfEngine {
     /** Switch the tonemap without touching the stream. Any thread. */
     fun setRenderJpeg(jpeg: Boolean)
 
+    /** Intentional monitor sleep must not trigger starvation recovery. */
+    fun setMonitoringSuspended(active: Boolean) {}
+
     /** System battery-saver throttle. Any thread. */
     fun setPowerSave(active: Boolean)
 

@@ -88,9 +88,9 @@ static void matVecD(const double m[3][3], const double v[3], double o[3]) {
 }
 
 // Reference look for one quad. lensMap is [row][col][ch] (rows x cols x 4).
-static void refLook(const uint8_t q[4], int x, int y, const Buffer<float> &lensMap,
+static void refLook(const float q[4], int x, int y, const Buffer<float> &lensMap,
                     const Params &p, double guide[3], double out[3]) {
-    double qr = q[0] / 255.0, qgr = q[1] / 255.0, qgb = q[2] / 255.0, qb = q[3] / 255.0;
+    double qr = q[0], qgr = q[1], qgb = q[2], qb = q[3];
     guide[0] = oetfD(qr);
     guide[1] = oetfD((qgr + qgb) * 0.5);
     guide[2] = oetfD(qb);
@@ -216,7 +216,7 @@ static uint32_t nextRand() {
 static int failures = 0;
 static double maxAbsErr = 0.0;
 
-static void checkCase(const char *name, Buffer<uint8_t> &quad, Buffer<float> &lens,
+static void checkCase(const char *name, Buffer<float> &quad, Buffer<float> &lens,
                       Buffer<float> &wb, Buffer<float> &ccm, Buffer<float> &aces,
                       Buffer<float> &white, const Params &p) {
     Buffer<float> guide(quad.width(), quad.height(), 3);
@@ -234,7 +234,7 @@ static void checkCase(const char *name, Buffer<uint8_t> &quad, Buffer<float> &le
     int bad = 0;
     for (int y = 0; y < quad.height(); y++) {
         for (int x = 0; x < quad.width(); x++) {
-            uint8_t q[4] = {quad(x, y, 0), quad(x, y, 1), quad(x, y, 2), quad(x, y, 3)};
+            float q[4] = {quad(x, y, 0), quad(x, y, 1), quad(x, y, 2), quad(x, y, 3)};
             double gref[3], oref[3];
             refLook(q, x, y, lens, p, gref, oref);
             for (int ch = 0; ch < 3; ch++) {
@@ -264,7 +264,7 @@ static void checkCase(const char *name, Buffer<uint8_t> &quad, Buffer<float> &le
 int main() {
     // Odd, non-multiple-of-8 extents to exercise GuardWithIf tails.
     const int W = 24, H = 17;
-    Buffer<uint8_t> quad(W, H, 4);
+    Buffer<float> quad(W, H, 4);
     quad.for_each_element([&](int x, int y, int ch) {
         // Mix: ramps, edges, saturated corners, seeded noise.
         uint8_t v;
@@ -279,7 +279,7 @@ int main() {
         } else {
             v = (uint8_t)(nextRand() >> 24);
         }
-        quad(x, y, ch) = v;
+        quad(x, y, ch) = pick == 3 ? ((nextRand() >> 20) / 4095.0f) : v / 255.0f;
     });
 
     // Synthetic smooth lens map 6x5 with per-channel variation (dome 1.0..1.35).
