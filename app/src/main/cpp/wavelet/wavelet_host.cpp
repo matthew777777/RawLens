@@ -14,6 +14,8 @@
 
 #include "raw_denoise/DenoisePipeline.hpp"
 #include "capture_sharpening/CaptureSharpening.h"
+#include "noise_estimate.h"
+#include <android/log.h>
 
 #define WAVELET_FENCE_TIMEOUT_NS 30000000000ull
 #define WAVELET_MAX_EDGE 16384
@@ -112,6 +114,10 @@ class WaveletHost {
         vkGetPhysicalDeviceFeatures(phys_, &supported);
         VkPhysicalDeviceFeatures enabled{};
         enabled.shaderStorageImageExtendedFormats = supported.shaderStorageImageExtendedFormats;
+        // Mali-G615: without robust buffer access, RAWR then RawLens at 12 MP on
+        // one device reproducibly lost the device (layout-dependent; no OOB found
+        // in our shaders). Measured cost: none.
+        enabled.robustBufferAccess = supported.robustBufferAccess;
         di.pEnabledFeatures = &enabled;
         check(vkCreateDevice(phys_, &di, nullptr, &device_), "wavelet: vkCreateDevice failed");
         vkGetDeviceQueue(device_, qfi, 0, &queue_);
@@ -143,7 +149,6 @@ class WaveletHost {
         sharp_.reset();
         pipe_.reset();
         destroy_owned(src_);
-        destroy_owned(dst_);
         destroy_owned(sharpClip_);
         destroy_buffer(sharpClipStaging_);
         destroy_buffer(staging_);
@@ -158,11 +163,13 @@ class WaveletHost {
     WaveletHost& operator=(const WaveletHost&) = delete;
 
     int load_shaders(AAssetManager* mgr) {
-        static const char* kNames[4] = {
+        static const char* kNames[6] = {
             "spirv/wavelet/denoise_img_precondition.spv",
             "spirv/wavelet/denoise_img_atrous.spv",
             "spirv/wavelet/denoise_img_threshold.spv",
             "spirv/wavelet/denoise_img_backtransform.spv",
+            "spirv/wavelet/denoise_img_backtransform_buffer.spv",
+            "spirv/wavelet/denoise_img_wiener_apply.spv",
         };
         for (const char* name : kNames) spv_.push_back(read_asset(mgr, name));
         raw_denoise::DenoiseShaders shaders{};
@@ -174,11 +181,39 @@ class WaveletHost {
         shaders.atrous = bin(1);
         shaders.threshold = bin(2);
         shaders.backtransform = bin(3);
+        shaders.backtransformBuffer = bin(4);
+        shaders.wienerApply = bin(5);
         pipe_ = std::make_unique<raw_denoise::DenoisePipeline>(phys_, device_, shaders);
-        return 4;
+        return 6;
     }
 
-    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params, int sharpIterations = 0, int cfa = 0, const uint8_t* clipState = nullptr) {
+    void begin_commands() {
+        check(vkResetFences(device_, 1, &fence_), "wavelet: fence reset failed");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(cmd_, &bi), "wavelet: begin failed");
+    }
+
+    void submit_and_wait() {
+        check(vkEndCommandBuffer(cmd_), "wavelet: end failed");
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_;
+        check(vkQueueSubmit(queue_, 1, &si, fence_), "wavelet: submit failed");
+        VkResult wr = vkWaitForFences(device_, 1, &fence_, VK_TRUE, WAVELET_FENCE_TIMEOUT_NS);
+        if (wr == VK_TIMEOUT) throw std::runtime_error("wavelet: GPU wait timed out");
+        if (wr != VK_SUCCESS)
+            throw std::runtime_error("wavelet: fence wait failed (VkResult " + std::to_string((int)wr) + ")");
+    }
+
+    // Optional capture sharpening (in place on the staged frame) followed by
+    // optional denoise, in ONE submit: no intermediate download/upload. The
+    // denoiser writes straight into the staging buffer (no output image).
+    void process(const uint8_t* inHalf, uint8_t* outHalf, int w, int h, const WaveletParams* params,
+                 int sharpIterations = 0, int cfa = 0, const uint8_t* clipState = nullptr,
+                 bool denoise = true) {
         if (pipe_ == nullptr) throw std::runtime_error("wavelet: shaders not loaded");
         if (inHalf == nullptr || outHalf == nullptr || params == nullptr) {
             throw std::runtime_error("wavelet: null process argument");
@@ -187,11 +222,13 @@ class WaveletHost {
             h > WAVELET_MAX_EDGE) {
             throw std::runtime_error("wavelet: extent out of range");
         }
-        if (!(params->strength > 0.0f)) throw std::runtime_error("wavelet: strength bypasses");
+        if (denoise && !(params->strength > 0.0f)) throw std::runtime_error("wavelet: strength bypasses");
+        if (!denoise && sharpIterations <= 0) throw std::runtime_error("wavelet: nothing to process");
         ensure_images(w, h);
         const VkDeviceSize bytes = VkDeviceSize(w) * VkDeviceSize(h) * 8u;
         ensure_buffer(staging_, bytes,
-                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         memcpy(staging_.mapped, inHalf, (size_t)bytes);
         flush(staging_);
         if (sharpIterations > 0 && clipState) {
@@ -205,11 +242,7 @@ class WaveletHost {
             }
         }
 
-        check(vkResetFences(device_, 1, &fence_), "wavelet: fence reset failed");
-        VkCommandBufferBeginInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(cmd_, &bi), "wavelet: begin failed");
+        begin_commands();
 
         barrier(cmd_, src_.image, imagesFresh_ ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -225,15 +258,9 @@ class WaveletHost {
         barrier(cmd_, src_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-        if (imagesFresh_) {
-            barrier(cmd_, dst_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0,
-                    VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-            imagesFresh_ = false;
-        }
+        imagesFresh_ = false;
         vkCmdResetQueryPool(cmd_, tsPool_, 0, 2);
         vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool_, 0);
-        VkImage resultImage = dst_.image;
         if (sharpIterations > 0) {
             if (!sharp_) sharp_ = std::make_unique<rawr::capsharp::CaptureSharpening>(
                 rawr::vk::GpuContext{phys_, device_, queueFamily_});
@@ -265,8 +292,17 @@ class WaveletHost {
             info.params.iterations = uint32_t(sharpIterations);
             info.deconvBandRows = 16;
             if (!sharp_->record(info)) throw std::runtime_error("capture sharpening rejected input");
-            resultImage = src_.image;
-        } else {
+            if (denoise) {
+                // Sharpened src_ feeds the denoiser in the same submit.
+                VkMemoryBarrier mb{};
+                mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+            }
+        }
+        if (denoise) {
         raw_denoise::DenoiseParams p{};
         p.strength = params->strength;
         p.shadows = params->shadows;
@@ -277,9 +313,44 @@ class WaveletHost {
         p.forceY = params->forceY;
         p.forceUv = params->forceUv;
         p.tileSize = params->tileSize;
-        pipe_->record(cmd_, src_.view, dst_.view, (uint32_t)w, (uint32_t)h, p, VK_NULL_HANDLE);
+        p.algorithm = params->algorithm;
+        p.grain = params->grain;
+        if (p.algorithm == 1) choose_noise(inHalf, w, h, params->cfa, p);
+        // One tile per submit keeps each GPU job short (~0.5 s instead of ~3 s
+        // for RawLens at 12 MP on Mali-G615), so the shared GPU stays responsive
+        // for the viewfinder. Tiles are independent and the scratch persists
+        // across submits: output is unchanged; measured wall cost none.
+        const uint32_t tile = std::max(p.tileSize, 256u);
+        const uint32_t tiles = ((uint32_t)w + tile - 1) / tile * (((uint32_t)h + tile - 1) / tile);
+        for (uint32_t t = 0; t < tiles; t++) {
+            if (t > 0) {
+                submit_and_wait();
+                begin_commands();
+                // Previous tile's backtransform wrote staging; scratch reuse.
+                VkMemoryBarrier mb{};
+                mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+            }
+            p.tileBegin = t;
+            p.tileEnd = t + 1;
+            pipe_->recordToBuffer(cmd_, src_.view, staging_.buffer, staging_.size, (uint32_t)w,
+                                  (uint32_t)h, p, VK_NULL_HANDLE);
+        }
         }
         vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, tsPool_, 1);
+        if (denoise) {
+            // Denoiser wrote the staging buffer directly; make it host-visible.
+            VkMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                                 0, 1, &mb, 0, nullptr, 0, nullptr);
+        } else {
+        const VkImage resultImage = src_.image;
 
         barrier(cmd_, resultImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -295,16 +366,9 @@ class WaveletHost {
                 VK_ACCESS_TRANSFER_READ_BIT,
                 VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        }
 
-        check(vkEndCommandBuffer(cmd_), "wavelet: end failed");
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd_;
-        check(vkQueueSubmit(queue_, 1, &si, fence_), "wavelet: submit failed");
-        VkResult wr = vkWaitForFences(device_, 1, &fence_, VK_TRUE, WAVELET_FENCE_TIMEOUT_NS);
-        if (wr == VK_TIMEOUT) throw std::runtime_error("wavelet: GPU wait timed out");
-        check(wr, "wavelet: fence wait failed");
+        submit_and_wait();
 
         uint64_t ts[2] = {0, 0};
         if (vkGetQueryPoolResults(device_, tsPool_, 0, 2, sizeof(ts), ts, sizeof(uint64_t),
@@ -318,6 +382,31 @@ class WaveletHost {
     }
 
     double last_gpu_ms() const { return lastGpuMs_; }
+
+    // RawLens: blind noise estimate from native green sites. Keep the Camera2
+    // profile when it agrees within 2.5x (variance at the median exposure);
+    // otherwise (missing, or e.g. 10x overstated at base ISO) use the estimate.
+    // Then scale luma strength by noise visibility at that exposure.
+    static void choose_noise(const uint8_t* in, int w, int h, int cfa, raw_denoise::DenoiseParams& p) {
+        const auto e = rawlens_noise::estimate(in, w, h, cfa);
+        const bool haveProfile = p.noiseA > 0.0f || p.noiseB > 0.0f;
+        const char* source = "profile";
+        if (e.ok) {
+            const float x = std::max(e.medianX, 1e-3f);
+            const float ratio = haveProfile ? (e.a * x + e.b) / std::max(p.noiseA * x + p.noiseB, 1e-12f) : 0.0f;
+            if (!haveProfile || ratio < 0.4f || ratio > 2.5f) {
+                source = haveProfile ? "estimate (profile disagrees)" : "estimate (no profile)";
+                p.noiseA = e.a;
+                p.noiseB = e.b;
+            }
+            p.lumaScale = rawlens_noise::lumaScaleFor(p.noiseA, p.noiseB, e.medianX);
+        } else if (!haveProfile) {
+            throw std::runtime_error("wavelet: no noise profile and blind estimate failed");
+        }
+        __android_log_print(ANDROID_LOG_INFO, "WaveletNoise",
+                            "noise %s: a=%.3g b=%.3g (estimate ok=%d a=%.3g b=%.3g bins=%d median=%.4f) lumaScale=%.2f",
+                            source, p.noiseA, p.noiseB, e.ok, e.a, e.b, e.bins, e.medianX, p.lumaScale);
+    }
 
    private:
     static std::vector<uint8_t> read_asset(AAssetManager* mgr, const char* name) {
@@ -439,10 +528,8 @@ class WaveletHost {
     void ensure_images(int w, int h) {
         if (w == curW_ && h == curH_) return;
         destroy_owned(src_);
-        destroy_owned(dst_);
         destroy_owned(sharpClip_);
         src_ = make_image((uint32_t)w, (uint32_t)h);
-        dst_ = make_image((uint32_t)w, (uint32_t)h);
         imagesFresh_ = true;
         curW_ = w;
         curH_ = h;
@@ -476,7 +563,7 @@ class WaveletHost {
     std::unique_ptr<rawr::capsharp::CaptureSharpening> sharp_;
     std::unique_ptr<raw_denoise::DenoisePipeline> pipe_;
     std::vector<std::vector<uint8_t>> spv_;
-    OwnedImage src_, dst_, sharpClip_;
+    OwnedImage src_, sharpClip_;
     OwnedBuffer sharpClipStaging_;
     bool sharpClipFresh_ = true;
     OwnedBuffer staging_;
@@ -526,7 +613,8 @@ int wavelet_process(WaveletContext* ctx, const uint8_t* inHalf, uint8_t* outHalf
         return -1;
     }
     try {
-        ctx->host.process(inHalf, outHalf, w, h, params);
+        ctx->host.process(inHalf, outHalf, w, h, params, params->sharpIterations, params->sharpCfa,
+                          params->sharpClipState, params->strength > 0.0f);
         return 0;
     } catch (const std::exception& e) {
         set_err(errmsg, errlen, e.what());
@@ -557,7 +645,7 @@ extern "C" int capture_sharpen_process(WaveletContext* ctx, uint8_t* half, int w
         WaveletParams p{};
         p.strength = 1;
         memcpy(p.wb, wb, sizeof p.wb);
-        ctx->host.process(half, half, w, h, &p, iterations, cfa, clipState);
+        ctx->host.process(half, half, w, h, &p, iterations, cfa, clipState, false);
         return 0;
     } catch (const std::exception& e) {
         set_err(errmsg, errlen, e.what());

@@ -58,15 +58,24 @@ class WaveletDenoiser(context: Context) {
         settings: WaveletSettings,
         noiseA: Float,
         noiseB: Float,
-        wbGains: FloatArray
+        wbGains: FloatArray,
+        sharpen: SharpenRequest? = null,
+        pattern: BayerPattern? = null
     ): Boolean {
+        require(settings.algorithm == WaveletAlgorithm.RAWLENS || noiseA > 0f || noiseB > 0f) {
+            "RAWR denoise needs a noise profile"
+        }
         if (!ensureInit()) return false
         require(wbGains.size >= 3) { "wbGains needs 3 entries" }
         val startNs = System.nanoTime()
         WaveletVulkan.process(
             handle, input, output, width, height,
             settings.strength, settings.detail, noiseA, noiseB, wbGains,
-            settings.maxScale, settings.forceY, settings.forceUv
+            settings.maxScale, settings.forceY, settings.forceUv,
+            settings.algorithm.ordinal, settings.grain,
+            sharpen?.settings?.level?.iterations ?: 0, sharpen?.pattern?.ordinal ?: 0,
+            sharpen?.clipState?.directBuffer(),
+            (pattern ?: sharpen?.pattern ?: BayerPattern.RGGB).ordinal
         )
         lastGpuMs = try {
             WaveletVulkan.lastGpuMs(handle)
@@ -76,6 +85,8 @@ class WaveletDenoiser(context: Context) {
         val wallMs = (System.nanoTime() - startNs) / 1e6
         Log.i(TAG, "wavelet ${width}x${height} strength=${settings.strength} " +
             "detail=${settings.detail} luma=${settings.forceY} chroma=${settings.forceUv} " +
+            "algorithm=${settings.algorithm} grain=${settings.grain} " +
+            "sharpen=${sharpen?.settings?.level?.label ?: "off"} " +
             "noiseA=$noiseA noiseB=$noiseB scales=${settings.maxScale} wall=${"%.0f".format(wallMs)}ms " +
             "gpu=${if (lastGpuMs >= 0) "%.0f".format(lastGpuMs) + "ms" else "n/a"}")
         return true
@@ -93,6 +104,13 @@ class WaveletDenoiser(context: Context) {
         Log.i(TAG, "Capture sharpening ${width}x${height} ${settings.level.label} " +
             "iterations=${settings.level.iterations} cfa=$pattern gpuMs=${WaveletVulkan.lastGpuMs(handle)}")
     }
+
+    /** Capture sharpening fused into the same GPU submit as [process]. */
+    class SharpenRequest(
+        val settings: CaptureSharpeningSettings,
+        val pattern: BayerPattern,
+        val clipState: CaptureSharpeningClipState?
+    )
 
     companion object {
         private const val TAG = "WaveletDenoiser"
@@ -139,10 +157,22 @@ class WaveletDenoiser(context: Context) {
     }
 }
 
+/** Wavelet shrinkage rule. Ordinal is the native `algorithm` value. */
+enum class WaveletAlgorithm {
+    /** RAWR soft-threshold BayesShrink; output byte-identical to RAWR. */
+    RAWR,
+    /** RawLens local Wiener: luma-guided chroma, fine-scale grain retention. */
+    RAWLENS;
+
+    companion object {
+        fun fromOrdinal(value: Int): WaveletAlgorithm = entries.getOrElse(value) { RAWLENS }
+    }
+}
+
 /**
- * Wavelet stage settings. Defaults mirror the validated WaveletDenoise
- * (strength/detail 1, luma 0.25, 7 scales, chroma 0.75);
- * [enabled] stays false until the user opts in.
+ * Wavelet stage settings. Strength/detail/luma/scales/chroma defaults mirror
+ * RAWR (1, 1, 0.25, 7, 0.75); RawLens Wiener is the default rule, with a
+ * little fine luma grain kept. [enabled] stays false until the user opts in.
  */
 data class WaveletSettings(
     val enabled: Boolean = false,
@@ -150,8 +180,14 @@ data class WaveletSettings(
     val detail: Float = 1.0f,
     val luma: Float = 0.25f,
     val maxScale: Int = 7,
-    val forceUv: Float = 0.75f
+    val forceUv: Float = 0.75f,
+    val algorithm: WaveletAlgorithm = WaveletAlgorithm.RAWLENS,
+    val grain: Float = DEFAULT_GRAIN
 ) {
+    companion object {
+        const val DEFAULT_GRAIN = 0.25f
+    }
+
     /** RAWR: luma is independent of Detail (the VST shadow fulcrum). */
     val forceY: Float get() = luma
 
@@ -160,6 +196,7 @@ data class WaveletSettings(
         detail = detail.coerceIn(0.0f, 1.8f),
         luma = luma.coerceIn(0.0f, 1.0f),
         maxScale = maxScale.coerceIn(1, 7),
-        forceUv = forceUv.coerceIn(0.0f, 1.0f)
+        forceUv = forceUv.coerceIn(0.0f, 1.0f),
+        grain = grain.coerceIn(0.0f, 1.0f)
     )
 }

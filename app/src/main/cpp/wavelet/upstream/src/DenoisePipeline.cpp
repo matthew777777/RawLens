@@ -147,6 +147,17 @@ struct DenoisePipeline::Impl {
                      thrPipeLayout = VK_NULL_HANDLE, backPipeLayout = VK_NULL_HANDLE;
     VkPipeline prePipe = VK_NULL_HANDLE, atrPipe = VK_NULL_HANDLE, thrPipe = VK_NULL_HANDLE,
                backPipe = VK_NULL_HANDLE;
+    // Optional buffer-output backtransform (recordToBuffer).
+    VkShaderModule backBuf = VK_NULL_HANDLE;
+    VkDescriptorSetLayout backBufLayout = VK_NULL_HANDLE;
+    VkPipelineLayout backBufPipeLayout = VK_NULL_HANDLE;
+    VkPipeline backBufPipe = VK_NULL_HANDLE;
+    // Optional RawLens Wiener apply (shares the atrous layout and sets).
+    VkShaderModule wap = VK_NULL_HANDLE;
+    VkPipeline wapPipe = VK_NULL_HANDLE;
+    VkDescriptorSet backBufSet = VK_NULL_HANDLE;
+    VkBuffer outBuffer = VK_NULL_HANDLE;
+    VkDeviceSize outSize = 0;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     // Tile scratch (max size, reused across tiles/frames).
     TileImage fine{}, coarseA{}, coarseB{}, accum{};
@@ -305,8 +316,8 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
                               &im.prePipeLayout);
     im.atrLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE},
                                        {3, STORAGE_BUFFER}, {4, STORAGE_BUFFER}, {5, STORAGE_IMAGE}},
-                              36, &im.atrPipeLayout);
-    im.thrLayout = makeLayout(device, {{0, STORAGE_BUFFER}, {1, STORAGE_BUFFER}}, 24,
+                              68, &im.atrPipeLayout);
+    im.thrLayout = makeLayout(device, {{0, STORAGE_BUFFER}, {1, STORAGE_BUFFER}}, 36,
                               &im.thrPipeLayout);
     im.backLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE}},
                                96, &im.backPipeLayout);
@@ -316,14 +327,14 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
     im.backPipe = makePipe(device, im.back, im.backPipeLayout);
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    ps.descriptorCount = 2 + 4 * 7 + 3;
+    ps.descriptorCount = 2 + 4 * 7 + 3 + 2;  // + buffer-backtransform set
     VkDescriptorPoolSize ps2{};
     ps2.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps2.descriptorCount = 2 * 7 + 2;
+    ps2.descriptorCount = 2 * 7 + 2 + 1;
     VkDescriptorPoolSize sizes[2] = {ps, ps2};
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 1 + 7 + 1 + 1;
+    pi.maxSets = 1 + 7 + 1 + 1 + 1;
     pi.poolSizeCount = 2;
     pi.pPoolSizes = sizes;
     check(vkCreateDescriptorPool(device, &pi, nullptr, &im.pool), "denoise pool");
@@ -331,19 +342,31 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
     for (auto& set : im.atrSets) set = allocSet(device, im.pool, im.atrLayout);
     im.thrSet = allocSet(device, im.pool, im.thrLayout);
     im.backSet = allocSet(device, im.pool, im.backLayout);
+    if (shaders.wienerApply.words) {
+        im.wap = makeModule(device, shaders.wienerApply, "denoise wiener apply");
+        im.wapPipe = makePipe(device, im.wap, im.atrPipeLayout);
+    }
+    if (shaders.backtransformBuffer.words) {
+        im.backBuf = makeModule(device, shaders.backtransformBuffer, "denoise back buffer");
+        im.backBufLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_BUFFER}},
+                                      96, &im.backBufPipeLayout);
+        im.backBufPipe = makePipe(device, im.backBuf, im.backBufPipeLayout);
+        im.backBufSet = allocSet(device, im.pool, im.backBufLayout);
+    }
 }
 
 DenoisePipeline::~DenoisePipeline() {
     Impl& im = *impl_;
     VkDevice device = im.device;
     if (device) {
-        for (auto p : {im.prePipe, im.atrPipe, im.thrPipe, im.backPipe})
+        for (auto p : {im.prePipe, im.atrPipe, im.thrPipe, im.backPipe, im.backBufPipe, im.wapPipe})
             if (p) vkDestroyPipeline(device, p, nullptr);
-        for (auto l : {im.prePipeLayout, im.atrPipeLayout, im.thrPipeLayout, im.backPipeLayout})
+        for (auto l : {im.prePipeLayout, im.atrPipeLayout, im.thrPipeLayout, im.backPipeLayout,
+                       im.backBufPipeLayout})
             if (l) vkDestroyPipelineLayout(device, l, nullptr);
-        for (auto s : {im.preLayout, im.atrLayout, im.thrLayout, im.backLayout})
+        for (auto s : {im.preLayout, im.atrLayout, im.thrLayout, im.backLayout, im.backBufLayout})
             if (s) vkDestroyDescriptorSetLayout(device, s, nullptr);
-        for (auto m : {im.pre, im.atr, im.thr, im.back})
+        for (auto m : {im.pre, im.atr, im.thr, im.back, im.backBuf, im.wap})
             if (m) vkDestroyShaderModule(device, m, nullptr);
         if (im.pool) vkDestroyDescriptorPool(device, im.pool, nullptr);
         freeTileImage(device, im.fine);
@@ -367,13 +390,33 @@ uint32_t DenoisePipeline::debugFineExtent() const noexcept {
     return impl_->scratchExtent;
 }
 
+void DenoisePipeline::recordToBuffer(VkCommandBuffer command, VkImageView srcView, VkBuffer dstBuffer,
+                                     VkDeviceSize dstSize, uint32_t width, uint32_t height,
+                                     const DenoiseParams& params, VkQueryPool timingPool) {
+    if (!impl_->backBufPipe) throw std::runtime_error("denoise: no buffer backtransform shader");
+    if (!dstBuffer || dstSize < (VkDeviceSize)width * height * 8u)
+        throw std::runtime_error("denoise: output buffer too small");
+    impl_->outBuffer = dstBuffer;
+    impl_->outSize = dstSize;
+    try {
+        record(command, srcView, VK_NULL_HANDLE, width, height, params, timingPool);
+    } catch (...) {
+        impl_->outBuffer = VK_NULL_HANDLE;
+        throw;
+    }
+    impl_->outBuffer = VK_NULL_HANDLE;
+}
+
 void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkImageView dstView,
                              uint32_t width, uint32_t height, const DenoiseParams& params,
                              VkQueryPool timingPool) {
     Impl& im = *impl_;
     VkDevice device = im.device;
     const int maxScale = std::clamp(params.maxScale, 1, 7);
-    const uint32_t halo = 2u * ((1u << (uint32_t)maxScale) - 1u);
+    const bool wiener = params.algorithm == 1;
+    if (wiener && !im.wapPipe) throw std::runtime_error("denoise: no wiener apply shader");
+    // Wiener apply adds 3 pixels of window support per scale.
+    const uint32_t halo = 2u * ((1u << (uint32_t)maxScale) - 1u) + (wiener ? 3u * (uint32_t)maxScale : 0u);
     const uint32_t tile = std::max(params.tileSize, 256u);
     const uint32_t extent = tile + 2u * halo;
 
@@ -410,30 +453,50 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
     }
 
     // ---- tile scratch (grow-once, reused) ----
-    if (im.scratchExtent < extent) {
+    // Tile scratch never exceeds the frame: a frame smaller than one tile only
+    // needs (frame + 2H). Grow-once; the detail image and statistics buffers
+    // exist only once the RAWR algorithm is used (Wiener needs neither).
+    // Size for the larger (Wiener) halo whatever the algorithm, so switching
+    // RAWR <-> RawLens never reallocates scratch. RAWR output is unaffected
+    // (allocation extent only, +4% scratch in RAWR mode).
+    const uint32_t haloMax = 2u * ((1u << (uint32_t)maxScale) - 1u) + 3u * (uint32_t)maxScale;
+    const uint32_t needExtent = std::min(tile + 2u * haloMax, std::max(width, height) + 2u * haloMax);
+    if (im.scratchExtent < needExtent) {
         freeTileImage(device, im.fine);
         freeTileImage(device, im.coarseA);
         freeTileImage(device, im.coarseB);
         freeTileImage(device, im.accum);
         freeBuffer(device, im.partials);
-        freeBuffer(device, im.thrsBuf);
-        im.fine = makeTileImage(im.physical, device, extent);
-        im.coarseA = makeTileImage(im.physical, device, extent);
-        im.coarseB = makeTileImage(im.physical, device, extent);
-        im.accum = makeTileImage(im.physical, device, extent);
+        im.fine = makeTileImage(im.physical, device, needExtent);
+        im.coarseA = makeTileImage(im.physical, device, needExtent);
+        im.accum = makeTileImage(im.physical, device, needExtent);
         transitionToGeneral(command, im.fine.image);
         transitionToGeneral(command, im.coarseA.image);
-        transitionToGeneral(command, im.coarseB.image);
         transitionToGeneral(command, im.accum.image);
-        const uint32_t gmax = (extent + 7) / 8;  // fits local sizes down to 8x8
-        im.partials = makeBuffer(im.physical, device, (VkDeviceSize)gmax * gmax * 16u);
-        im.thrsBuf = makeBuffer(im.physical, device, 8u * 16u);
-        im.scratchExtent = extent;
+        im.scratchExtent = needExtent;
     }
+    if (!wiener && im.partials.buffer &&
+        im.partials.size < (VkDeviceSize)((extent + 7) / 8) * ((im.scratchExtent + 7) / 8) * 16u)
+        freeBuffer(device, im.partials);
+    if (!im.coarseB.image) {  // detail image (both algorithms)
+        im.coarseB = makeTileImage(im.physical, device, im.scratchExtent);
+        transitionToGeneral(command, im.coarseB.image);
+    }
+    if (!wiener && !im.partials.buffer) {
+        // Rows use the full-extent stride (see threshold pass); columns/rows
+        // dispatched never exceed the scratch extent. Fits local sizes >= 8x8.
+        const uint32_t gStride = (extent + 7) / 8, gRows = (im.scratchExtent + 7) / 8;
+        im.partials = makeBuffer(im.physical, device, (VkDeviceSize)gStride * gRows * 16u);
+    }
+    if (!im.thrsBuf.buffer) im.thrsBuf = makeBuffer(im.physical, device, 8u * 16u);
+    // Detail/partials bindings must be valid even when unused (Wiener).
+    const VkImageView detailView = im.coarseB.view ? im.coarseB.view : im.accum.view;
+    const VkBuffer partialsBuf = im.partials.buffer ? im.partials.buffer : im.thrsBuf.buffer;
+    const VkDeviceSize partialsSize = im.partials.buffer ? im.partials.size : im.thrsBuf.size;
     // Rebind tile views (scratch may have been reallocated).
     writeImageSet(device, im.preSet, 0, srcView);
     writeImageSet(device, im.preSet, 1, im.fine.view);
-    writeBufferSet(device, im.thrSet, 0, im.partials.buffer, im.partials.size);
+    writeBufferSet(device, im.thrSet, 0, partialsBuf, partialsSize);
     writeBufferSet(device, im.thrSet, 1, im.thrsBuf.buffer, im.thrsBuf.size);
     // Ping-pong alternates (fine, coarse): even scales read fine/write coarseA,
     // odd scales read coarseA/write fine (overwriting consumed
@@ -445,16 +508,24 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
         writeImageSet(device, set, 0, even ? im.fine.view : im.coarseA.view);
         writeImageSet(device, set, 1, even ? im.coarseA.view : im.fine.view);
         writeImageSet(device, set, 2, im.accum.view);
-        writeBufferSet(device, set, 3, im.partials.buffer, im.partials.size);
+        writeBufferSet(device, set, 3, partialsBuf, partialsSize);
         writeBufferSet(device, set, 4, im.thrsBuf.buffer, im.thrsBuf.size);
-        writeImageSet(device, set, 5, im.coarseB.view);
+        writeImageSet(device, set, 5, detailView);
     }
     // Backtransform folds the residue: (accum, residue) -> out. Writes
     // alternate coarseA, fine, coarseA... from scale 0, so the last write
     // (scale maxScale-1) sits in (maxScale odd ? coarseA : fine).
     writeImageSet(device, im.backSet, 0, im.accum.view);
     writeImageSet(device, im.backSet, 1, (maxScale % 2 == 1) ? im.coarseA.view : im.fine.view);
-    writeImageSet(device, im.backSet, 2, dstView);
+    const bool toBuffer = im.outBuffer != VK_NULL_HANDLE;
+    const VkImageView residueView = (maxScale % 2 == 1) ? im.coarseA.view : im.fine.view;
+    if (toBuffer) {
+        writeImageSet(device, im.backBufSet, 0, im.accum.view);
+        writeImageSet(device, im.backBufSet, 1, residueView);
+        writeBufferSet(device, im.backBufSet, 2, im.outBuffer, im.outSize);
+    } else {
+        writeImageSet(device, im.backSet, 2, dstView);
+    }
 
     auto dispatch = [&](VkPipeline pipe, VkPipelineLayout layout, VkDescriptorSet set,
                         const void* push, uint32_t pushSize, uint32_t gx, uint32_t gy) {
@@ -468,34 +539,33 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
 
     if (timingPool) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool,
                                         10);
+    uint32_t tileIndex = 0;
     const float varf = std::sqrt(2.0f + 2.0f * 16.0f + 36.0f) / 16.0f;
     for (uint32_t ty = 0; ty < height; ty += tile) {
         for (uint32_t tx = 0; tx < width; tx += tile) {
+            const uint32_t thisTile = tileIndex++;
+            if (thisTile < params.tileBegin || thisTile >= params.tileEnd) continue;
             const uint32_t tw = std::min(tile, width - tx);
             const uint32_t th = std::min(tile, height - ty);
-            // Clear the accum tile (read-modify-write below). The barrier
-            // after the previous tile's backtransform orders it after that read.
-            {
-                VkClearColorValue clear{};
-                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(command, im.accum.image, VK_IMAGE_LAYOUT_GENERAL, &clear,
-                                     1, &range);
-                barrier(command);
-            }
+            // Crop the extended tile to inner+2H: inner pixels depend only on
+            // positions inside it, so partial edge tiles are exact with less work.
+            const uint32_t ew = tw + 2u * halo, eh = th + 2u * halo;
+            const uint32_t gx = (ew + kLocal - 1u) / kLocal, gy = (eh + kLocal - 1u) / kLocal;
             // Precondition: extended tile from source image.
             {
                 struct PP {
                     uint32_t srcW, srcH;
                     int32_t ox, oy;
-                    uint32_t tileE;
-                    float a, p0, p1, p2, b, pad0, pad1;
+                    uint32_t tileEW, tileEH;
+                    float a, p0, p1, p2, b, pad0;
                     float m[12];
                 } pp{};
                 pp.srcW = width;
                 pp.srcH = height;
                 pp.ox = (int32_t)tx - (int32_t)halo;
                 pp.oy = (int32_t)ty - (int32_t)halo;
-                pp.tileE = extent;
+                pp.tileEW = ew;
+                pp.tileEH = eh;
                 pp.a = a;
                 pp.p0 = p[0];
                 pp.p1 = p[1];
@@ -505,36 +575,53 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 // the row-major yuvM, i.e. upload the transpose.
                 for (int col = 0; col < 3; col++)
                     for (int row = 0; row < 3; row++) pp.m[col * 4 + row] = yuvM[row * 3 + col];
-                dispatch(im.prePipe, im.prePipeLayout, im.preSet, &pp, sizeof(pp),
-                         (extent + kLocal - 1u) / kLocal, (extent + kLocal - 1u) / kLocal);
+                dispatch(im.prePipe, im.prePipeLayout, im.preSet, &pp, sizeof(pp), gx, gy);
             }
-            // Per-scale estimate -> threshold -> apply.
+            // Statistics rows keep the full-extent stride so the threshold
+            // reduction sums partials in exactly RAWR's order.
             const uint32_t groupsX = (extent + kLocal - 1u) / kLocal;
-            const uint32_t groupsY = groupsX;
+            struct PA {
+                uint32_t tileEW, tileEH, innerW, innerH, halo;
+                uint32_t mult;
+                float inv;
+                uint32_t mode, scaleIdx, groupsX, applyPrev, accumFirst;
+                float noiseY, noiseUv, guide, keepY, eps;
+            };
             for (int scale = 0; scale < maxScale; scale++) {
                 const float sb = std::pow(varf, (float)scale);
                 const float sb2 = sb * sb;
-                const uint32_t mult = 1u << (uint32_t)scale;
-                const VkPipeline atrPipe = im.atrPipe;
-                VkDescriptorSet atrSet = im.atrSets[scale];
-                struct PA {
-                    uint32_t tileE, innerW, innerH, halo;
-                    uint32_t mult;
-                    float inv;
-                    uint32_t mode, scaleIdx, groupsX;
-                } pa{extent, tw, th, halo, mult, 1.0f / sb2, 0u, (uint32_t)scale, groupsX};
-                dispatch(atrPipe, im.atrPipeLayout, atrSet, &pa, sizeof(pa), groupsX, groupsY);
-                {
-                    struct PT {
-                        uint32_t partialCount, innerPixels;
-                        float sb2, forceY, forceUv;
-                        uint32_t scaleIdx;
-                    } pt{groupsX * groupsY, tw * th, sb2, params.forceY, params.forceUv,
-                         (uint32_t)scale};
-                    dispatch(im.thrPipe, im.thrPipeLayout, im.thrSet, &pt, sizeof(pt), 1, 1);
+                PA pa{ew, eh, tw, th, halo, 1u << (uint32_t)scale, 1.0f / sb2, 0u, (uint32_t)scale,
+                      groupsX, scale > 0 ? 1u : 0u, scale == 1 ? 1u : 0u, 0, 0, 0, 0, 0};
+                if (wiener) {
+                    // Effective noise variance per band; Luma/Chroma sliders
+                    // scale it (defaults 0.25/0.75 -> 1.0 / 1.5 fine, 3.0 coarse).
+                    pa.mode = 2u;
+                    pa.applyPrev = 0u;
+                    pa.eps = 4.0f;
+                    pa.accumFirst = scale == 0 ? 1u : 0u;
+                    pa.noiseY = sb2 * std::max(4.0f * params.forceY * params.lumaScale, 1e-3f);
+                    pa.noiseUv = sb2 * std::max((scale < 2 ? 2.0f : 4.0f) * params.forceUv, 1e-3f);
+                    pa.guide = 1.0f;
+                    const float g = std::clamp(params.grain, 0.0f, 1.0f);
+                    pa.keepY = scale == 0 ? g : (scale == 1 ? 0.4f * g : 0.0f);
+                    dispatch(im.atrPipe, im.atrPipeLayout, im.atrSets[scale], &pa, sizeof(pa), gx, gy);
+                    dispatch(im.wapPipe, im.atrPipeLayout, im.atrSets[scale], &pa, sizeof(pa), gx, gy);
+                    continue;
                 }
-                pa.mode = 1u;
-                dispatch(atrPipe, im.atrPipeLayout, atrSet, &pa, sizeof(pa), groupsX, groupsY);
+                dispatch(im.atrPipe, im.atrPipeLayout, im.atrSets[scale], &pa, sizeof(pa), gx, gy);
+                struct PT {
+                    uint32_t partialCount, innerPixels;
+                    float sb2, forceY, forceUv;
+                    uint32_t scaleIdx, stride, dispGX, dispGY;
+                } pt{groupsX * groupsX, tw * th, sb2, params.forceY, params.forceUv,
+                     (uint32_t)scale, groupsX, gx, gy};
+                dispatch(im.thrPipe, im.thrPipeLayout, im.thrSet, &pt, sizeof(pt), 1, 1);
+            }
+            if (!wiener) {
+                // Last scale's apply (earlier ones are fused into the next estimate).
+                PA pa{ew, eh, tw, th, halo, 1u, 1.0f, 1u, (uint32_t)(maxScale - 1), groupsX, 0u,
+                      maxScale == 1 ? 1u : 0u, 0, 0, 0, 0, 0};
+                dispatch(im.atrPipe, im.atrPipeLayout, im.atrSets[maxScale - 1], &pa, sizeof(pa), gx, gy);
             }
             {
                 struct PB {
@@ -553,9 +640,13 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 pb.p2 = p[2];
                 pb.b = b;
                 pb.bias = 0.0f;
+                pb.pad = 0.0f;
+                if (toBuffer) std::memcpy(&pb.pad, &width, sizeof width);  // outStride
                 for (int col = 0; col < 3; col++)
                     for (int row = 0; row < 3; row++) pb.m[col * 4 + row] = rgbM[row * 3 + col];
-                dispatch(im.backPipe, im.backPipeLayout, im.backSet, &pb, sizeof(pb),
+                dispatch(toBuffer ? im.backBufPipe : im.backPipe,
+                         toBuffer ? im.backBufPipeLayout : im.backPipeLayout,
+                         toBuffer ? im.backBufSet : im.backSet, &pb, sizeof(pb),
                          (tw + kLocal - 1u) / kLocal, (th + kLocal - 1u) / kLocal);
             }
             if (tileBoundary_ && !(ty + tile >= height && tx + tile >= width)) tileBoundary_();

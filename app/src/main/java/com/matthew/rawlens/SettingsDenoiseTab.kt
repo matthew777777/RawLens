@@ -152,17 +152,22 @@ internal fun MainActivity.showDenoiseSettings(p: SettingsPage) {
             waveSubordinate += label
             waveSubordinate += bar
         }
+        addWaveSlider("Algorithm", 1, settings.wavelet.algorithm.ordinal,
+            { if (it == 0) "RAWR (exact)" else "RawLens Wiener" }
+        ) { s, v -> s.copy(algorithm = WaveletAlgorithm.fromOrdinal(v)) }
         addWaveSlider("Strength", 80, (settings.wavelet.strength * 10 + 0.5f).toInt(),
             { "%.1f".format(Locale.US, it / 10f) }) { s, v -> s.copy(strength = v / 10f) }
         addWaveSlider("Detail", 36, (settings.wavelet.detail * 20 + 0.5f).toInt(),
             { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(detail = v / 20f) }
         addWaveSlider("Luma", 20, (settings.wavelet.luma * 20 + 0.5f).toInt(),
             { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(luma = v / 20f) }
+        addWaveSlider("Grain", 20, (settings.wavelet.grain * 20 + 0.5f).toInt(),
+            { "%.2f".format(Locale.US, it / 20f) }) { s, v -> s.copy(grain = v / 20f) }
         addWaveSlider("Scales", 6, settings.wavelet.maxScale - 1,
             { val scales = it + 1; if (scales == 1) "1 scale" else "$scales scales" }
         ) { s, v -> s.copy(maxScale = v + 1) }
         content.addView(TextView(this).apply {
-            text = "RAWR defaults: strength 1.0, detail 1.00, luma 0.25, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. Missing sensor noise profiles bypass denoise."
+            text = "RawLens Wiener (default) removes chroma blotches while keeping colour edges, and turns luma noise into fine, even grain; Grain sets how much of that fine grain stays (RawLens only). RAWR (exact) reproduces RAWR output bit for bit. Defaults: strength 1.0, detail 1.00, luma 0.25, grain 0.25, 7 scales; chroma is fixed at 0.75. Strength supports 0–8; Detail supports 0–1.80 and controls shadow texture preservation independently of Luma. RawLens measures the noise from each photo: it falls back to that when the sensor profile is missing or implausible, and denoises luma more gently when noise is barely visible (base ISO). RAWR (exact) bypasses denoise without a valid sensor profile."
             setTextColor(getColor(R.color.text_secondary))
             textSize = 12f
             setPadding(dp(12), dp(4), dp(12), dp(4))

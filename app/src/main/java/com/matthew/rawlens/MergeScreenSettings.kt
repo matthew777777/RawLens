@@ -70,7 +70,9 @@ internal object MergeScreenSettings {
             strength = prefs.getInt(MainActivity.KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 800) / 100f,
             detail = prefs.getInt(MainActivity.KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
             luma = prefs.getInt(MainActivity.KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
-            maxScale = prefs.getInt(MainActivity.KEY_WAVELET_SCALES, 7).coerceIn(1, 7)
+            maxScale = prefs.getInt(MainActivity.KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
+            algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(MainActivity.KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWLENS.ordinal)),
+            grain = prefs.getInt(MainActivity.KEY_WAVELET_GRAIN_PCT, (WaveletSettings.DEFAULT_GRAIN * 100).toInt()).coerceIn(0, 100) / 100f
         )
     )
 }

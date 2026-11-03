@@ -8,6 +8,9 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+// RawLens extensions over RAWR (algorithm/grain, wienerApply, recordToBuffer).
+#define RAW_DENOISE_RAWLENS_EXT 1
+
 namespace raw_denoise {
 
 // Profiled wavelet denoise for production stills (DT-denoiseprofile
@@ -30,6 +33,10 @@ struct DenoiseShaders {
     DenoiseSpirv atrous;
     DenoiseSpirv threshold;
     DenoiseSpirv backtransform;
+    // Optional (RawLens): buffer-output backtransform for recordToBuffer().
+    DenoiseSpirv backtransformBuffer;
+    // Required for algorithm 1 (RawLens Wiener): denoise_img_wiener_apply.
+    DenoiseSpirv wienerApply;
 };
 
 struct DenoiseParams {
@@ -48,6 +55,20 @@ struct DenoiseParams {
     float forceUv = 0.75f;
     // Inner tile extent; extended buffers are (tile+2H)^2.
     uint32_t tileSize = 1536;
+    // RawLens: 0 = RAWR soft-threshold BayesShrink (output byte-identical to
+    // RAWR), 1 = RawLens local Wiener (single pass per scale, no statistics).
+    int algorithm = 0;
+    // RawLens Wiener only: fraction of removed fine-scale luma noise kept as
+    // grain at scale 0 (scale 1 keeps 0.4x, coarser scales none). 0..1.
+    float grain = 0.0f;
+    // RawLens Wiener only: multiplies the luma noise prior (noise-visibility
+    // adaptive strength; 1 = unchanged).
+    float lumaScale = 1.0f;
+    // Tile range [tileBegin, tileEnd) in row-major tile order, so callers can
+    // split one frame over several submits (Mali kills very long submits).
+    // Tiles are independent; the default records every tile.
+    uint32_t tileBegin = 0;
+    uint32_t tileEnd = 0xFFFFFFFFu;
 };
 
 // Maps a Camera2 SENSOR_NOISE_PROFILE (S,O) pair to the normalized domain:
@@ -93,6 +114,12 @@ class DenoisePipeline {
     void record(VkCommandBuffer command, VkImageView srcView, VkImageView dstView, uint32_t width,
                 uint32_t height, const DenoiseParams& params,
                 VkQueryPool timingPool = VK_NULL_HANDLE);
+
+    // Same as record(), but writes packed RGBA16F texels (w*h*8 bytes, row
+    // major) into dstBuffer instead of an image. Needs backtransformBuffer.
+    void recordToBuffer(VkCommandBuffer command, VkImageView srcView, VkBuffer dstBuffer,
+                        VkDeviceSize dstSize, uint32_t width, uint32_t height,
+                        const DenoiseParams& params, VkQueryPool timingPool = VK_NULL_HANDLE);
 
     // Optional hook run between tiles; the caller may submit and re-begin the
     // same command buffer (with a memory barrier) so one still is not a single

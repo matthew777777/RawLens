@@ -27,6 +27,16 @@ typedef struct WaveletParams {
     float forceY;      // luma force, default 0.25
     float forceUv;     // chroma force, default 0.75
     uint32_t tileSize;  // inner tile extent, default 1536
+    int algorithm;     // 0 RAWR soft threshold (bit-exact), 1 RawLens local Wiener
+    float grain;       // RawLens Wiener: fine luma grain kept, 0..1
+    // Optional capture sharpening run first in the same submit (0 = off).
+    // strength <= 0 with sharpIterations > 0 sharpens only.
+    int sharpIterations;
+    int sharpCfa;
+    const uint8_t* sharpClipState;  // (w/2)*(h/2) uint16, or null
+    // RawLens Wiener: CFA ordinal of the frame origin (RGGB, GRBG, GBRG, BGGR)
+    // for the blind noise estimate. noiseA = noiseB = 0 means no usable profile.
+    int cfa;
 } WaveletParams;
 
 struct AAssetManager;

@@ -436,10 +436,22 @@ class RawDevelopmentCoordinator(context: Context) {
             black, normalization.whiteLevel
         )
         val denoiseWb = WaveletDenoiser.rawrWhiteBalance(metadata.wbGains?.toFloatArray())
-        if (sharpening.enabled) {
+        // RawLens estimates noise from the frame itself when the profile is
+        // missing or implausible; RAWR (exact) needs the Camera2 profile.
+        val rawLens = settings.algorithm == WaveletAlgorithm.RAWLENS
+        if (settings.enabled && settings.strength > 0f && ((noise == null && !rawLens) || denoiseWb == null)) {
+            Log.w(LOG_TAG, "Wavelet bypass: missing or invalid RAWR noise profile/WB gains " +
+                "entries=${metadata.noiseProfile?.size ?: 0}")
+        }
+        val denoise = settings.enabled && settings.strength > 0f && (noise != null || rawLens) && denoiseWb != null
+        val sharpenWb = CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray())
+        // Sharpening alone keeps its own call. With denoise it runs first in the
+        // same GPU submit (no extra 8 B/px download/upload); the sharpening WB is
+        // the same RAWR collapse of the capture gains as the denoise WB.
+        val fused = denoise && sharpening.enabled && denoiseWb != null && denoiseWb.contentEquals(sharpenWb)
+        if (sharpening.enabled && !fused) {
             waveletDenoiser.captureSharpen(camera, output.width, output.height,
-                CaptureSharpeningSettings.whiteBalance(metadata.wbGains?.toFloatArray()),
-                pattern, sharpening, clipState)
+                sharpenWb, pattern, sharpening, clipState)
         }
         val reconstructed = camera
         val t2 = SystemClock.elapsedRealtime()
@@ -447,16 +459,18 @@ class RawDevelopmentCoordinator(context: Context) {
             // Native stages the complete input before processing, then copies
             // output back only after a successful GPU wait. Reuse this owned
             // readback buffer: ~100 MiB less live memory for a 13 MP frame.
-            if (settings.enabled && settings.strength > 0f && (noise == null || denoiseWb == null)) {
-                Log.w(LOG_TAG, "Wavelet bypass: missing or invalid RAWR noise profile/WB gains " +
-                    "entries=${metadata.noiseProfile?.size ?: 0}")
-            }
-            if (settings.enabled && settings.strength > 0f && noise != null && denoiseWb != null) waveletDenoiser.process(
+            if (denoise) waveletDenoiser.process(
                 reconstructed, reconstructed, output.width, output.height,
-                settings.bounded(), noise.first, noise.second, denoiseWb
+                settings.bounded(), noise?.first ?: 0f, noise?.second ?: 0f, denoiseWb!!,
+                if (fused) WaveletDenoiser.SharpenRequest(sharpening, pattern, clipState) else null,
+                pattern
             )
         } catch (failure: Exception) {
             Log.w(LOG_TAG, "Wavelet denoise failed, developing without denoise", failure)
+            // Native leaves the buffer untouched on failure: still sharpen
+            // (its own failures propagate, as on the unfused path).
+            if (fused) waveletDenoiser.captureSharpen(camera, output.width, output.height,
+                sharpenWb, pattern, sharpening, clipState)
         }
         val upload = reconstructed
         val t3 = SystemClock.elapsedRealtime()

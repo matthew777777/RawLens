@@ -22,6 +22,9 @@ layout(push_constant) uniform Parameters {
     float forceY;
     float forceUv;
     uint scaleIdx;
+    uint stride;  // partials row stride (full-extent groupsX)
+    uint dispGX;  // dispatched (cropped) workgroup grid; other entries are
+    uint dispGY;  // stale and stood for all-zero groups, so they are skipped
 }
 p;
 
@@ -31,7 +34,7 @@ void main() {
     uint lid = gl_LocalInvocationID.x;
     vec3 acc = vec3(0.0);
     for (uint i = lid; i < p.partialCount; i += 256u) {
-        acc += sums[i].xyz;
+        if (i % p.stride < p.dispGX && i / p.stride < p.dispGY) acc += sums[i].xyz;
     }
     sdata[lid] = acc;
     barrier();

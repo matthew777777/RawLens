@@ -3706,7 +3706,9 @@ class MainActivity : Activity() {
                 strength = prefs.getInt(KEY_WAVELET_STRENGTH_PCT, 100).coerceIn(0, 800) / 100f,
                 detail = prefs.getInt(KEY_WAVELET_DETAIL_PCT, 100).coerceIn(0, 180) / 100f,
                 luma = prefs.getInt(KEY_WAVELET_LUMA_PCT, 25).coerceIn(0, 100) / 100f,
-                maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7)
+                maxScale = prefs.getInt(KEY_WAVELET_SCALES, 7).coerceIn(1, 7),
+                algorithm = WaveletAlgorithm.fromOrdinal(prefs.getInt(KEY_WAVELET_ALGORITHM, WaveletAlgorithm.RAWLENS.ordinal)),
+                grain = prefs.getInt(KEY_WAVELET_GRAIN_PCT, (WaveletSettings.DEFAULT_GRAIN * 100).toInt()).coerceIn(0, 100) / 100f
             )
         )
     }
@@ -3727,6 +3729,8 @@ class MainActivity : Activity() {
             .putInt(KEY_WAVELET_DETAIL_PCT, (settings.wavelet.detail * 100 + 0.5f).toInt().coerceIn(0, 180))
             .putInt(KEY_WAVELET_LUMA_PCT, (settings.wavelet.luma * 100 + 0.5f).toInt().coerceIn(0, 100))
             .putInt(KEY_WAVELET_SCALES, settings.wavelet.maxScale.coerceIn(1, 7))
+            .putInt(KEY_WAVELET_ALGORITHM, settings.wavelet.algorithm.ordinal)
+            .putInt(KEY_WAVELET_GRAIN_PCT, (settings.wavelet.grain * 100 + 0.5f).toInt().coerceIn(0, 100))
             .apply()
         return true
     }
@@ -4423,6 +4427,8 @@ class MainActivity : Activity() {
         const val KEY_WAVELET_DETAIL_PCT = "wavelet_detail_pct"
         const val KEY_WAVELET_LUMA_PCT = "wavelet_luma_pct"
         const val KEY_WAVELET_SCALES = "wavelet_scales"
+        const val KEY_WAVELET_ALGORITHM = "wavelet_algorithm"
+        const val KEY_WAVELET_GRAIN_PCT = "wavelet_grain_pct"
         const val KEY_AE_METERING_MODE = "ae_metering_mode"
         const val SLIDER_STEPS = 10_000
         const val SLIDER_UPDATE_DELAY_MS = 32L

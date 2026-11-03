@@ -69,6 +69,9 @@ struct Cfg {
     float a = 0.0f, b = 0.0f;
     float strength = 1.0f, shadows = 1.0f;
     float forceY = 0.25f, forceUv = 0.75f;
+    int algorithm = 0;
+    float grain = 0.0f;
+    float lumaScale = 1.0f;
 };
 
 Cfg parse(int argc, char** argv) {
@@ -95,6 +98,9 @@ Cfg parse(int argc, char** argv) {
         else if (k == "--shadows") c.shadows = std::strtof(need().c_str(), nullptr);
         else if (k == "--force-y") c.forceY = std::strtof(need().c_str(), nullptr);
         else if (k == "--force-uv") c.forceUv = std::strtof(need().c_str(), nullptr);
+        else if (k == "--algorithm") c.algorithm = std::stoi(need());
+        else if (k == "--grain") c.grain = std::strtof(need().c_str(), nullptr);
+        else if (k == "--luma-scale") c.lumaScale = std::strtof(need().c_str(), nullptr);
         else throw std::runtime_error("unknown arg " + k);
     }
     if (c.spvDir.empty() || c.inPath.empty() || !c.w || !c.h) throw std::runtime_error("missing args");
@@ -190,6 +196,9 @@ int main(int argc, char** argv) {
         shaders.atrous = spv("denoise_img_atrous");
         shaders.threshold = spv("denoise_img_threshold");
         shaders.backtransform = spv("denoise_img_backtransform");
+#ifdef RAW_DENOISE_RAWLENS_EXT
+        if (c.algorithm == 1) shaders.wienerApply = spv("denoise_img_wiener_apply");
+#endif
 
         raw_denoise::DenoisePipeline pipe(ctx.pd, dev, shaders);
 
@@ -322,6 +331,11 @@ int main(int argc, char** argv) {
             p.noiseB = c.b;
             p.forceY = c.forceY;
             p.forceUv = c.forceUv;
+#ifdef RAW_DENOISE_RAWLENS_EXT
+            p.algorithm = c.algorithm;
+            p.grain = c.grain;
+            p.lumaScale = c.lumaScale;
+#endif
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;

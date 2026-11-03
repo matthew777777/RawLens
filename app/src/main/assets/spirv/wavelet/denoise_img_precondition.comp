@@ -23,14 +23,14 @@ layout(push_constant) uniform Parameters {
     uint srcH;
     int originX; // extended-tile origin in source pixels (may be < 0, clamped)
     int originY;
-    uint tileE; // extended tile extent (square)
+    uint tileEW; // extended tile extent (cropped per tile)
+    uint tileEH;
     float a; // a_green * compensate_p
     float p0;
     float p1;
     float p2;
     float b; // b_green
     float _pad0;
-    float _pad1;
     mat3 toYuv; // WB-adaptive, strength-scaled, GLSL column order
 }
 p;
@@ -38,7 +38,7 @@ p;
 void main() {
     uint lx = gl_GlobalInvocationID.x;
     uint ly = gl_GlobalInvocationID.y;
-    if (lx >= p.tileE || ly >= p.tileE) return;
+    if (lx >= p.tileEW || ly >= p.tileEH) return;
     ivec2 q = ivec2(p.originX + int(lx), p.originY + int(ly));
     q.x = clamp(q.x, 0, int(p.srcW) - 1);
     q.y = clamp(q.y, 0, int(p.srcH) - 1);

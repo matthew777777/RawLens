@@ -70,10 +70,17 @@ object WaveletVulkan {
         maxScale: Int,
         forceY: Float,
         forceUv: Float,
+        algorithm: Int = 0,
+        grain: Float = 0f,
+        sharpIterations: Int = 0,
+        sharpCfa: Int = 0,
+        sharpClipState: ByteBuffer? = null,
+        cfa: Int = 0,
         tileSize: Int = TILE_SIZE
     ): Int = nativeProcess(
         handle, input, output, width, height, strength, shadows,
-        noiseA, noiseB, wbGains, maxScale, forceY, forceUv, tileSize
+        noiseA, noiseB, wbGains, maxScale, forceY, forceUv, tileSize,
+        algorithm, grain, sharpIterations, sharpCfa, sharpClipState, cfa
     )
 
     /** Timestamp-derived GPU ms of the last [process] call (-1 unavailable). */
@@ -88,7 +95,9 @@ object WaveletVulkan {
     private external fun nativeProcess(
         handle: Long, inHalf: ByteBuffer, outHalf: ByteBuffer, w: Int, h: Int,
         strength: Float, shadows: Float, noiseA: Float, noiseB: Float,
-        wb: FloatArray, maxScale: Int, forceY: Float, forceUv: Float, tileSize: Int
+        wb: FloatArray, maxScale: Int, forceY: Float, forceUv: Float, tileSize: Int,
+        algorithm: Int, grain: Float, sharpIterations: Int, sharpCfa: Int, sharpClipState: ByteBuffer?,
+        cfa: Int
     ): Int
     private external fun nativeLastGpuMs(handle: Long): Double
 }

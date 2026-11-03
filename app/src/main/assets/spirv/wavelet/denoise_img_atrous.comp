@@ -1,20 +1,24 @@
 #version 450
 
-// Tiled edge-aware a-trous, dual mode (mirrors eaw_dn_decompose + accumulate).
-// B3-spline 5x5, stride 2^scale, clamped
-// tile-local reads. The tile carries a halo H >= 2*sum(mult) so the inner
-// tile region is bit-exact vs full frame.
+// Tiled edge-aware a-trous (mirrors eaw_dn_decompose + accumulate).
+// B3-spline 5x5, stride 2^scale, clamped tile-local reads. The tile carries a
+// halo H >= 2*sum(mult) (+3*maxScale for modes 2/3) so inner pixels are exact.
 //
-// LOCAL_X/Y: workgroup size (default 16x16).
+// RawLens optimization of the RAWR shader. Modes 0/1 produce output
+// byte-identical to RAWR (verified by tools/wavelet-parity/compare_optimization.py):
 //
-// mode 0 (estimate): write coarse + detail + per-workgroup detail^2
-//   partials, no accumulate. A follow-up threshold pass reduces partials
-//   to thresh[scale].
-// mode 1 (apply): read stored detail + thresh[scaleIdx], soft-threshold
-//   accumulate. No taps, no coarse rewrite (estimate already wrote it).
-//   Splitting estimate/apply around the threshold pass saves re-reading the
-//   25-tap neighborhood: ~45% traffic at cache-miss-dominated coarse scales.
-//   The detail buffer reuses an idle tile image (zero extra memory).
+// mode 0 (estimate): taps -> coarse, detail, per-workgroup detail^2 partials.
+//   applyPrev=1 first soft-thresholds the PREVIOUS scale's stored detail at
+//   this pixel (thresh[scaleIdx-1]) into accum, before overwriting it. This
+//   fuses RAWR's separate apply pass (which recomputed all 25 taps) into the
+//   next estimate: same values, same accumulation order.
+// mode 1 (apply only): no taps. Soft-threshold stored detail into accum.
+//   Used once per tile, for the last scale.
+// mode 2 (RawLens Wiener estimate): coarse + detail only, no statistics; the
+//   apply step is denoise_img_wiener_apply.comp (separate pipeline so its
+//   shared memory never lowers occupancy of these passes).
+//
+// accumFirst=1 writes accum instead of read-modify-write (replaces the clear).
 
 #ifndef LOCAL_X
 #define LOCAL_X 16
@@ -37,15 +41,23 @@ layout(set = 0, binding = 4, std430) readonly buffer Thresholds {
 layout(set = 0, binding = 5, rgba16f) uniform image2D detailImg;
 
 layout(push_constant) uniform Parameters {
-    uint tileE;
+    uint tileEW; // extended tile extent (cropped per tile, >= inner+2H)
+    uint tileEH;
     uint innerW;
     uint innerH;
     uint halo;
     uint mult; // 1u << scale
     float invSigma2;
-    uint mode; // 0 estimate, 1 apply (thresholds from thresh[scaleIdx])
+    uint mode;
     uint scaleIdx;
     uint groupsX;
+    uint applyPrev;
+    uint accumFirst;
+    float noiseY;   // mode 3: effective noise variance, luma
+    float noiseUv;  // mode 3: effective noise variance, chroma
+    float guide;    // mode 3: luma structure amplifies chroma's own signal evidence
+    float keepY;    // mode 3: fraction of removed luma noise kept (grain)
+    float eps;      // mode 3: chroma-on-luma slope regulariser (x luma noise)
 }
 p;
 
@@ -57,46 +69,79 @@ float b3tap(int i) {
     return 6.0 / 16.0;
 }
 
+vec3 coarseAt(ivec2 q, out vec3 c0) {
+    const int mult = int(p.mult);
+    c0 = imageLoad(fineImg, q).rgb;
+    vec3 wgt = vec3(0.0);
+    vec3 acc = vec3(0.0);
+    for (int jj = 0; jj < 5; jj++) {
+        int yy = clamp(q.y + mult * (jj - 2), 0, int(p.tileEH) - 1);
+        for (int ii = 0; ii < 5; ii++) {
+            int xx = clamp(q.x + mult * (ii - 2), 0, int(p.tileEW) - 1);
+            vec3 v = imageLoad(fineImg, ivec2(xx, yy)).rgb;
+            vec3 d = c0 - v;
+            float e = dot(d, d) * p.invSigma2 * 0.02 - 9.0;
+            float w = b3tap(jj) * b3tap(ii) * (e > 20.0 ? 0.0 : exp2(-max(e, 0.0)));
+            wgt += vec3(w);
+            acc += w * v;
+        }
+    }
+    return acc / wgt;
+}
+
+void accumulate(ivec2 q, vec3 amt) {
+    if (p.accumFirst != 0u) {
+        imageStore(accumImg, q, vec4(amt, 0.0));
+    } else {
+        vec3 prev = imageLoad(accumImg, q).rgb;
+        imageStore(accumImg, q, vec4(prev + amt, 0.0));
+    }
+}
+
+vec3 softApply(ivec2 q, uint idx) {
+    vec3 d = imageLoad(detailImg, q).rgb;
+    vec3 t = thresh[idx].xyz;
+    return max(d - t, vec3(0.0)) + min(d + t, vec3(0.0));
+}
+
+// Mode 2: plain estimate (coarse + detail), no statistics.
+void wienerEstimate() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(p.tileEW) || q.y >= int(p.tileEH)) return;
+    vec3 c0;
+    vec3 cavg = coarseAt(q, c0);
+    imageStore(coarseImg, q, vec4(cavg, 0.0));
+    imageStore(detailImg, q, vec4(c0 - cavg, 0.0));
+}
+
 void main() {
+    if (p.mode == 2u) {
+        wienerEstimate();
+        return;
+    }
     uint lx = gl_GlobalInvocationID.x;
     uint ly = gl_GlobalInvocationID.y;
     uint lid = gl_LocalInvocationID.y * uint(LOCAL_X) + gl_LocalInvocationID.x;
-    const int mult = int(p.mult);
-    vec3 det = vec3(0.0);
-    if (lx < p.tileE && ly < p.tileE) {
-        vec3 c0 = imageLoad(fineImg, ivec2(lx, ly)).rgb;
-        vec3 wgt = vec3(0.0);
-        vec3 acc = vec3(0.0);
-        for (int jj = 0; jj < 5; jj++) {
-            int yy = clamp(int(ly) + mult * (jj - 2), 0, int(p.tileE) - 1);
-            for (int ii = 0; ii < 5; ii++) {
-                int xx = clamp(int(lx) + mult * (ii - 2), 0, int(p.tileE) - 1);
-                vec3 v = imageLoad(fineImg, ivec2(xx, yy)).rgb;
-                vec3 d = c0 - v;
-                float e = dot(d, d) * p.invSigma2 * 0.02 - 9.0;
-                float w = b3tap(jj) * b3tap(ii) * (e > 20.0 ? 0.0 : exp2(-max(e, 0.0)));
-                wgt += vec3(w);
-                acc += w * v;
-            }
-        }
-        vec3 cavg = acc / wgt;
-        det = c0 - cavg;
-        imageStore(coarseImg, ivec2(lx, ly), vec4(cavg, 0.0));
-        if (p.mode == 0u) {
-            imageStore(detailImg, ivec2(lx, ly), vec4(det, 0.0));
-        } else {
-            vec3 d = imageLoad(detailImg, ivec2(lx, ly)).rgb;
-            vec3 t = thresh[p.scaleIdx].xyz;
-            vec3 amt = max(d - t, vec3(0.0)) + min(d + t, vec3(0.0));
-            vec3 prev = imageLoad(accumImg, ivec2(lx, ly)).rgb;
-            imageStore(accumImg, ivec2(lx, ly), vec4(prev + amt, 0.0));
-        }
+    const bool inside = lx < p.tileEW && ly < p.tileEH;
+    ivec2 q = ivec2(lx, ly);
+    if (p.mode == 1u) {
+        if (inside) accumulate(q, softApply(q, p.scaleIdx));
+        return;
     }
-    // Per-workgroup detail^2 partials (estimate mode). Threads outside the
-    // inner exact region contribute zero so halo data never biases sums.
+    vec3 det = vec3(0.0);
+    if (inside) {
+        vec3 c0;
+        vec3 cavg = coarseAt(q, c0);
+        det = c0 - cavg;
+        imageStore(coarseImg, q, vec4(cavg, 0.0));
+        if (p.applyPrev != 0u) accumulate(q, softApply(q, p.scaleIdx - 1u));
+        imageStore(detailImg, q, vec4(det, 0.0));
+    }
+    // Per-workgroup detail^2 partials. Threads outside the inner exact region
+    // contribute zero so halo data never biases sums.
     vec3 mine = vec3(0.0);
-    if (p.mode == 0u && lx < p.tileE && ly < p.tileE && lx >= p.halo &&
-        lx < p.halo + p.innerW && ly >= p.halo && ly < p.halo + p.innerH) {
+    if (inside && lx >= p.halo && lx < p.halo + p.innerW && ly >= p.halo &&
+        ly < p.halo + p.innerH) {
         mine = det * det;
     }
     sdata[lid] = mine;
@@ -105,7 +150,7 @@ void main() {
         if (lid < stride) sdata[lid] += sdata[lid + stride];
         barrier();
     }
-    if (p.mode == 0u && lid == 0u) {
+    if (lid == 0u) {
         uint wg = gl_WorkGroupID.y * p.groupsX + gl_WorkGroupID.x;
         sums[wg] = vec4(sdata[0], 0.0);
     }

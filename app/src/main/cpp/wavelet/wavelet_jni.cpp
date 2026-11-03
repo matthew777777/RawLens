@@ -51,7 +51,8 @@ JNIEXPORT void JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeDestroy(JNIE
 JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
     JNIEnv* env, jobject /*thiz*/, jlong handle, jobject inHalf, jobject outHalf, jint w, jint h,
     jfloat strength, jfloat shadows, jfloat noiseA, jfloat noiseB, jfloatArray wb, jint maxScale,
-    jfloat forceY, jfloat forceUv, jint tileSize) {
+    jfloat forceY, jfloat forceUv, jint tileSize, jint algorithm, jfloat grain,
+    jint sharpIterations, jint sharpCfa, jobject sharpClipState, jint cfa) {
     WaveletContext* ctx = (WaveletContext*)(uintptr_t)handle;
     if (ctx == nullptr) {
         throw_runtime(env, "null wavelet context");
@@ -89,6 +90,25 @@ JNIEXPORT jint JNICALL Java_com_matthew_rawlens_WaveletVulkan_nativeProcess(
     params.forceY = forceY;
     params.forceUv = forceUv;
     params.tileSize = (uint32_t)tileSize;
+    params.algorithm = algorithm;
+    params.grain = grain;
+    params.cfa = cfa;
+    params.sharpIterations = 0;
+    params.sharpCfa = 0;
+    params.sharpClipState = nullptr;
+    if (sharpIterations > 0) {
+        const auto* clip = sharpClipState
+            ? static_cast<const uint8_t*>(env->GetDirectBufferAddress(sharpClipState)) : nullptr;
+        if (sharpCfa < 0 || sharpCfa > 3 || sharpIterations > 250 ||
+            (sharpClipState && (!clip || (w & 1) || (h & 1) ||
+             env->GetDirectBufferCapacity(sharpClipState) != jlong(w / 2) * (h / 2) * 2))) {
+            throw_runtime(env, "invalid capture sharpening arguments");
+            return -1;
+        }
+        params.sharpIterations = sharpIterations;
+        params.sharpCfa = sharpCfa;
+        params.sharpClipState = clip;
+    }
     char errmsg[512];
     const int rc =
         wavelet_process(ctx, inPtr, outPtr, w, h, &params, errmsg, sizeof(errmsg));

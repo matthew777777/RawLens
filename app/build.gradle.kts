@@ -311,6 +311,7 @@ android {
             if (project.hasProperty("photoRcdHeadless")) applicationIdSuffix = ".rcdcheck"
             if (project.hasProperty("mhcHeadless")) applicationIdSuffix = ".mhccheck"
             if (project.hasProperty("recordingToolsAudit")) applicationIdSuffix = ".recordingcheck"
+            if (project.hasProperty("waveletCheck")) applicationIdSuffix = ".waveletcheck"
             isMinifyEnabled = false
             // Resource shrinking requires code shrinking (AGP enforces
             // the pair); tests keep the full resource set instead.

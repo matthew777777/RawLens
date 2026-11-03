@@ -1,0 +1,134 @@
+#version 450
+
+// RawLens Wiener apply (one pass per scale, after atrous mode 2), no taps.
+// Same descriptor layout and push constants as denoise_img_atrous.comp.
+// Loads a 3-px apron of detail into shared memory, then:
+//  - luma: local Wiener gain (3x3 energy incl. centre, known per-band noise,
+//    closed-form second stage) plus fine-scale grain retention;
+//  - chroma: luma-guided local regression (GALOSH-style, per band): slope of
+//    chroma on denoised luma over 5x5 (regularised by eps * luma noise); the
+//    unexplained remainder Wiener-shrunk by chroma's own evidence (leave-one-
+//    out energy, amplified by luma structure); clamped to the local 3x3 noisy
+//    chroma range so no colour is invented at edges.
+
+#ifndef LOCAL_X
+#define LOCAL_X 16
+#endif
+#ifndef LOCAL_Y
+#define LOCAL_Y 16
+#endif
+
+layout(local_size_x = LOCAL_X, local_size_y = LOCAL_Y) in;
+
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D fineImg;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D coarseImg;
+layout(set = 0, binding = 2, rgba16f) uniform image2D accumImg;
+layout(set = 0, binding = 3, std430) buffer Partials {
+    vec4 sums[];
+};
+layout(set = 0, binding = 4, std430) readonly buffer Thresholds {
+    vec4 thresh[];
+};
+layout(set = 0, binding = 5, rgba16f) uniform image2D detailImg;
+
+layout(push_constant) uniform Parameters {
+    uint tileEW; // extended tile extent (cropped per tile, >= inner+2H)
+    uint tileEH;
+    uint innerW;
+    uint innerH;
+    uint halo;
+    uint mult; // 1u << scale
+    float invSigma2;
+    uint mode;
+    uint scaleIdx;
+    uint groupsX;
+    uint applyPrev;
+    uint accumFirst;
+    float noiseY;   // mode 3: effective noise variance, luma
+    float noiseUv;  // mode 3: effective noise variance, chroma
+    float guide;    // mode 3: luma structure amplifies chroma's own signal evidence
+    float keepY;    // mode 3: fraction of removed luma noise kept (grain)
+    float eps;      // mode 3: chroma-on-luma slope regulariser (x luma noise)
+}
+p;
+
+
+void accumulate(ivec2 q, vec3 amt) {
+    if (p.accumFirst != 0u) {
+        imageStore(accumImg, q, vec4(amt, 0.0));
+    } else {
+        vec3 prev = imageLoad(accumImg, q).rgb;
+        imageStore(accumImg, q, vec4(prev + amt, 0.0));
+    }
+}
+
+// Mode 3 apron radius: 2 (5x5 regression window) + 1 (3x3 energy per window pixel).
+#define GR 3
+#define GW (LOCAL_X + 2 * GR)
+#define GH (LOCAL_Y + 2 * GR)
+shared vec3 sD[GW * GH];                       // noisy detail
+shared vec3 sYG[(LOCAL_X + 4) * (LOCAL_Y + 4)]; // x: denoised luma detail, yz: chroma gains
+
+// Wiener gains at shared-memory index i (needs its 3x3 ring in sD).
+vec3 wienerGain(int cx, int cy) {
+    vec3 ring = vec3(0.0);
+    for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+            if (i == 0 && j == 0) continue;
+            vec3 v = sD[(cy + j) * GW + cx + i];
+            ring += v * v;
+        }
+    vec3 c = sD[cy * GW + cx];
+    // Chroma: leave-one-out energy (isolated spikes cannot vouch for themselves).
+    vec3 e = vec3((ring.x + c.x * c.x) * (1.0 / 9.0), ring.yz * (1.0 / 8.0));
+    vec3 n2 = vec3(p.noiseY, p.noiseUv, p.noiseUv);
+    vec3 s2 = max(e - n2, vec3(0.0));
+    s2 = s2 * s2 / (s2 + n2);                        // closed-form 2nd stage
+    s2.yz *= 1.0 + p.guide * s2.x / p.noiseY;         // luma structure amplifies chroma evidence
+    return s2 / (s2 + n2);
+}
+
+// Mode 3: luma Wiener (+grain) and luma-guided chroma regression
+// (GALOSH-style, per wavelet band): chroma = a * Y_denoised over a 5x5 window
+// (slope regularised by eps * luma noise), the unexplained remainder Wiener-
+// shrunk by chroma's own evidence, clamped to the local 3x3 noisy chroma range.
+void wienerApply() {
+    ivec2 last = ivec2(p.tileEW, p.tileEH) - ivec2(1);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * ivec2(LOCAL_X, LOCAL_Y) - ivec2(GR);
+    uint lid = gl_LocalInvocationID.y * uint(LOCAL_X) + gl_LocalInvocationID.x;
+    for (uint i = lid; i < uint(GW * GH); i += uint(LOCAL_X * LOCAL_Y)) {
+        ivec2 q = clamp(base + ivec2(int(i) % GW, int(i) / GW), ivec2(0), last);
+        sD[i] = imageLoad(detailImg, q).rgb;
+    }
+    barrier();
+    const int YW = LOCAL_X + 4;
+    for (uint i = lid; i < uint(YW * (LOCAL_Y + 4)); i += uint(LOCAL_X * LOCAL_Y)) {
+        int cx = int(i) % YW + 1, cy = int(i) / YW + 1;   // sD coords (apron 3 -> 2)
+        vec3 g = wienerGain(cx, cy);
+        sYG[i] = vec3(g.x * sD[cy * GW + cx].x, g.yz);
+    }
+    barrier();
+    ivec2 gq = ivec2(gl_GlobalInvocationID.xy);
+    if (gq.x > last.x || gq.y > last.y) return;
+    ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    vec3 d = sD[(l.y + GR) * GW + l.x + GR];
+    vec3 yg = sYG[(l.y + 2) * YW + l.x + 2];
+    float my = 0.0, myy = 0.0;
+    vec2 mc = vec2(0.0), myc = vec2(0.0), lo = vec2(1e30), hi = vec2(-1e30);
+    for (int j = -2; j <= 2; j++)
+        for (int i = -2; i <= 2; i++) {
+            float y = sYG[(l.y + 2 + j) * YW + l.x + 2 + i].x;
+            vec2 c = sD[(l.y + GR + j) * GW + l.x + GR + i].yz;
+            my += y; myy += y * y; mc += c; myc += y * c;
+            if (abs(i) <= 1 && abs(j) <= 1) { lo = min(lo, c); hi = max(hi, c); }
+        }
+    my *= 1.0 / 25.0; myy *= 1.0 / 25.0; mc *= 1.0 / 25.0; myc *= 1.0 / 25.0;
+    float vy = max(myy - my * my, 0.0);
+    vec2 slope = (myc - my * mc) / (vy + p.eps * p.noiseY);
+    vec2 reg = slope * yg.x;
+    vec2 chroma = clamp(reg + yg.yz * (d.yz - reg), lo, hi);
+    float luma = yg.x + p.keepY * (d.x - yg.x);         // fine-scale grain
+    accumulate(gq, vec3(luma, chroma));
+}
+
+void main() { wienerApply(); }
