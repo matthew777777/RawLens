@@ -82,3 +82,63 @@ baselines keep rising, capture a heap/native allocation profile and graphics
 buffer/import counts on that Xiaomi before changing buffer ownership or cache
 limits. Keep current warning thresholds; do not hide the signals merely because
 this observed growth was reversible.
+
+## Implemented memory reduction: streaming uncompressed TinyDNG
+
+The uncompressed single-frame JNI writer previously serialized the entire DNG
+into a growing native memory sink, then copied that file through JNI to the
+OutputStream. It now writes header-first, 32-row uncompressed strips directly
+to the existing output stream. One reusable 256 KiB JNI array handles transfers;
+there is no second full-file output allocation. JPEG XL retains its existing
+lossless compression path.
+
+This changes TIFF strip layout, not RAW precision, pixel values, sensor extent,
+black/white levels, or requested metadata. The source Image and any necessary
+row-repacking buffer retain their existing ownership. Graphics import caches,
+reader limits, and recording queue sizes are unchanged: reducing those blindly
+could harm cadence or increase imports without evidence of a leak.
+
+Host regression (`python3 tools/verify_tinydng.py`, ASan + UBSan) exercises the
+same streaming helper used by JNI. A 4096x2305 RAW16 fixture covers multiple
+strips and a partial final strip. Peak allocations tracked by the TinyDNG
+context during writing are 34,081,616 bytes for the old memory writer versus
+528,296 bytes for streaming (about 32.5 MiB versus 0.5 MiB). These figures exclude
+the caller-owned source raster, Android JNI/driver allocations, and OS file
+cache; they are not whole-process PSS measurements. The new JNI transfer array
+adds 256 KiB on Android.
+
+The test decodes output and compares all RAW bytes, checks noise/ActiveArea/
+GainMap metadata, rejects malformed fields, injects output failures, and verifies
+writer allocations return to zero. Android debug APK compilation passes for
+both configured ABIs. A Xiaomi retest is still required for actual PSS and save
+latency; no on-device speed improvement is claimed from this host measurement.
+
+## Preview/recording allocation follow-up
+
+Forward-capture sessions now budget 16 ImageReader slots instead of the default
+22-slot ZSL-capable budget. Six save slots and the existing ten-slot preview /
+pairing / transition reserve remain. ZSL retains its original depth and grows
+back at an idle boundary before streaming; pending saves and active captures
+block that rebuild. Histogram/ETTR/PROGRAM readiness no longer incorrectly
+requires a ZSL-ring capacity when a forward reader is active. Disabling ZSL in
+an already-expanded session does not force a disruptive shrink; the lean budget
+applies at the next normal session creation.
+
+Six fewer RAW16 slots correspond to 108 MiB at 4096x2304 or 144 MiB at
+4096x3072 if all six would otherwise be allocated. ImageReader limits are not
+allocation measurements: actual gralloc/PSS savings depend on HAL buffer demand
+and cannot be claimed as those exact amounts from the old logs.
+
+CRAW output buffers now allocate on demand up to the same workers+2 ceiling,
+rather than preallocating every full-frame payload. Returned buffers are reused.
+Teardown clears pool/metadata/queued ownership only after encoder and committer
+threads have stopped. Timed-out workers retain their resources until completion.
+No pixel format, compression codec, dimensions or sample precision changes.
+
+Validation: reader sizing, six-frame capture admission, deferred ZSL expansion,
+non-ZSL metering, concurrent lazy-pool reuse and capacity pass host regressions;
+Android debug APK builds. An isolated on-device test on connected Xiaomi
+25080RABDG confirms the 16-slot forward preview delivers metadata and expands
+successfully into a streaming ZSL session, then returns to forward preview
+(1 test, passed). This is a different model from the supplied 24030PN60G logs;
+its result does not establish memory savings or cadence on the affected phone.
