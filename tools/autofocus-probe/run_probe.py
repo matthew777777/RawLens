@@ -15,6 +15,12 @@ def main():
     parser.add_argument('--test-apk', type=Path, required=True)
     parser.add_argument('--sdk', type=Path, default=Path(os.environ.get('ANDROID_HOME', Path.home() / 'Library/Android/sdk')))
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--manual-latency', action='store_true', help='Run timestamp-paired manual lens latency sweep')
+    parser.add_argument('--focus-step', type=float)
+    parser.add_argument('--focus-start', type=float, default=1.0)
+    parser.add_argument('--focus-end', type=float, default=5.0)
+    parser.add_argument('--dwell-ms', type=int, default=900)
+    parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--warm', action='store_true')
     parser.add_argument('--raw', action='store_true', help='Add the largest RAW stream to repeating requests')
     parser.add_argument('--ae', choices=['0', '1'])
@@ -69,8 +75,14 @@ android:targetPackage="com.matthew.afprobe"/></manifest>''')
         run(adb + ['install', '-r', str(apk)])
         run(adb + ['shell', 'pm', 'grant', 'com.matthew.afprobe', 'android.permission.CAMERA'])
         command = adb + ['shell', 'am', 'instrument', '-w', '-e', 'rawlensAfProbe', 'true',
-                         '-e', 'class', 'com.matthew.rawlens.ContinuousPictureAfDeviceTest',
+                         '-e', 'class', ('com.matthew.rawlens.ManualFocusLatencyDeviceTest' if args.manual_latency else 'com.matthew.rawlens.ContinuousPictureAfDeviceTest'),
                          '-e', 'cameraId', args.camera_id]
+        if args.manual_latency:
+            command += ['-e', 'manualFocusProbe', 'true']
+            if args.focus_step is not None:
+                command += ['-e', 'focusStep', str(args.focus_step), '-e', 'focusStart', str(args.focus_start),
+                            '-e', 'focusEnd', str(args.focus_end), '-e', 'dwellMs', str(args.dwell_ms),
+                            '-e', 'repeats', str(args.repeats)]
         if args.warm:
             command += ['-e', 'warm', 'true']
         if args.raw:
@@ -87,7 +99,11 @@ android:targetPackage="com.matthew.afprobe"/></manifest>''')
         args.output.with_suffix('.instrumentation.txt').write_text(result.stdout + result.stderr)
         if 'OK (1 test)' not in result.stdout:
             raise SystemExit('Probe failed; see instrumentation output')
-        run(adb + ['pull', '/sdcard/Android/data/com.matthew.afprobe/files/continuous-af-probe.txt', str(args.output)])
+        name = 'manual-focus-latency.jsonl' if args.manual_latency else 'continuous-af-probe.txt'
+        run(adb + ['pull', '/sdcard/Android/data/com.matthew.afprobe/files/' + name, str(args.output)])
+        if args.manual_latency:
+            run(adb + ['pull', '/sdcard/Android/data/com.matthew.afprobe/files/manual-focus-crops.f32',
+                       str(args.output.with_suffix('.f32'))])
 
 
 if __name__ == '__main__':

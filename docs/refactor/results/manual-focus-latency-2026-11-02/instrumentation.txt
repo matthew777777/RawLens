@@ -1,0 +1,8 @@
+
+com.matthew.rawlens.ManualFocusLatencyDeviceTest:.
+
+Time: 24.027
+
+OK (1 test)
+
+
