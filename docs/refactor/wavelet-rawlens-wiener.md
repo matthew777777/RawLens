@@ -165,6 +165,8 @@ On the ISO 1442 frame with corrected noise, RAWR removes visible structure
    moving on.
 6. RawLens speed on Mali (load-bound): fused estimate/apply with ping-pong
    detail, fp16 apply math, skip regression at coarse scales.
+   Also the CPU blind noise estimate (125 ms at 12 MP): block subsampling
+   (~4x) or moving it to a GPU histogram.
 7. Two-pass luma (WHT pilot) if night luma still needs it; learned non-local
    model if the ESD3D2 comparison shows it is worth it.
 8. Last, maybe: pre-demosaic (Bayer, GALOSH-RAW style) denoise, only after
@@ -223,5 +225,4 @@ Night DNG (IMG_20261102_181122_683), production chain clip01 -> RCD oracle -> de
   RawLens timings are unchanged.
 - Blind estimate CPU cost: 8 ms at 1 MP and 125 ms at 12 MP, which is over the
   30 ms budget.
-- Open: make the estimator cheaper (block subsampling, or a GPU histogram)
-  once a calibrated model exists; max analog ISO (dGain^2 term).
+- Open: estimator cost (moved to step 6); max analog ISO (dGain^2 term).
