@@ -228,6 +228,28 @@ class EncodedVideoRecorder(
      * to the next take. MHC initialization failure falls back to superpixel.
      */
     @Volatile var videoDemosaic: VideoDemosaic = VideoDemosaic.MHC
+    /** Internal validation only; deliberately absent from preferences and the UI.
+     * Requires later Android quality/cadence acceptance before public selection.
+     */
+    internal var validatePublicPhotoRcd: Boolean = false
+    internal var validatePublicPhotoRcdOptimized: Boolean = false
+    internal var validatePublicPhotoRcdResponseCache: Boolean = false
+    internal var validatePublicPhotoRcdTiled: Boolean = false
+    internal var validatePublicPhotoRcdImages: Boolean = false
+    internal var validatePhotoRcdRecordingCandidate: Boolean = false
+    internal var validatePhotoRcdBakedStages: Boolean = false
+    internal var validatePhotoRcdPackedCells: Boolean = false
+    internal var validatePhotoRcdDirectRaw: Boolean = false
+    internal var validatePhotoRcdRequirementsInput: Boolean = false
+    internal var validatePhotoRcdGpuWriter: Boolean = false
+    internal var validatePhotoRcdNormalizeOnce: Boolean = false
+    internal var validatePhotoRcdSharedFinal: Boolean = false
+    internal var validatePhotoRcdTileLocal: Boolean = false
+    internal var validatePhotoRcdGpuImage: Boolean = false
+    internal var validatePhotoRcdReconstructionScale: Int = 1
+    internal var photoRcdTrace: PhotoRcdRecordingTrace? = null
+    private var photoRcdRenderer: PhotoRcdRenderer? = null
+    private val publicPhotoRcdFrames = AtomicInteger(0)
     /**
      * Lens-shading (vignetting) correction (default on): the per-frame
      * HAL gain map multiplies demosaiced RGB pre-WB, like the
@@ -270,7 +292,6 @@ class EncodedVideoRecorder(
     private var sdrTexture = 0
     private var sdrQuad: java.nio.FloatBuffer? = null
     @Volatile private var sdrEglCurrent = false
-    @Volatile private var sdrEglThread = -1L
     @Volatile private var sdrConvertFailed = false
     private var muxer: MediaMuxer? = null
     private var videoTrack: Int = -1
@@ -297,6 +318,7 @@ class EncodedVideoRecorder(
      * Set before [start] via [configureVideoManual]; live tweaks go through
      * [setVideoManualControl] which rebuilds the repeating request.
      */
+    @Volatile var monitoringSuspended: Boolean = false
     @Volatile var focusPeakingEnabled: Boolean = false
     @Volatile var onFocusPeaking: ((FocusPeakingFrame?) -> Unit)? = null
     private val recordingPeaking = RecordingFocusPeaking()
@@ -352,6 +374,7 @@ class EncodedVideoRecorder(
 
     private data class Slot(
         var export: HardwareBufferRef? = null,
+        var rawUpload: HardwareBufferRef? = null,
         var p010: HardwareBufferRef? = null,
         var preview: HardwareBufferRef? = null,
         /** Full-res RGBA8 convert target (8-bit SDR fallback takes only). */
@@ -369,6 +392,7 @@ class EncodedVideoRecorder(
         var previewDone: CountDownLatch = CountDownLatch(0),
     )
     private val slots = arrayOf(Slot(), Slot(), Slot())
+    private var rawImportFallback = EncodedRawImportFallback()
     // OUR P010 staging layout (allocator-described, submit-validated).
     private var ourYStrideB: Int = 0
     private var ourUvStrideB: Int = 0
@@ -391,9 +415,11 @@ class EncodedVideoRecorder(
     private var lastQueuedPts: Long = Long.MIN_VALUE
     private var queues: Int = 0
 
-    private val resultLock = java.lang.Object()
-    private val captureResults = java.util.TreeMap<Long, TotalCaptureResult>()
-    private var lastResult: TotalCaptureResult? = null
+    private val captureResults = VideoResultWindow<CaptureResult>()
+    private data class PendingResultFrame(val reader: ImageReader, val image: Image, val deadlineMs: Long)
+    // Camera-thread owned; two held images leave room in the eight-buffer reader for GPU work.
+    private val pendingResultFrames = java.util.ArrayDeque<PendingResultFrame>()
+    private val resultDrain = Runnable { drainPendingResults() }
     /** Reused by [refreshVideoRequest]; a null callback there silently ended result pairing. */
     private var repeatingCallback: CameraCaptureSession.CaptureCallback? = null
 
@@ -456,7 +482,7 @@ class EncodedVideoRecorder(
      * drain thread reads+removes; capped: full takes must not grow it).
      */
     private val queuedPtsNs = LinkedHashMap<Long, Long>()
-    private val queuedPtsLock = java.lang.Object()
+    private val queuedPtsLock = Any()
     @Volatile private var true10Bit = false
     private val outBufs = AtomicInteger(0)
     private val outBytes = AtomicLong(0)
@@ -542,6 +568,18 @@ class EncodedVideoRecorder(
         require(fps == 24 || fps == 30) { "take fps must be 24 or 30 (got $fps)" }
         require(VfEglImport.available) { "rawLensVfEgl native library unavailable" }
         require(VfVulkan.available) { "Vulkan bridge unavailable" }
+        synchronized(retainedWriterJobs) {
+            val iterator=retainedWriterJobs.iterator()
+            while(iterator.hasNext()) {
+                val job=iterator.next()
+                if(VfEglImport.awaitSyncFd(job.fd,0)) {
+                    VfEglImport.closeSyncFd(job.fd)
+                    runCatching { job.rawLease.close() };runCatching { job.writerImage?.close() };runCatching { job.p010.close() }
+                    iterator.remove()
+                }
+            }
+            check(retainedWriterJobs.isEmpty()) { "Previous encoder writer GPU work remains incomplete" }
+        }
         resetTakeState(output)
         val geometry = resolveGeometry()
         VfVulkan.setRecordSessionNative(true)
@@ -590,6 +628,7 @@ class EncodedVideoRecorder(
         wyPxStrideB = 0; wuvPxStrideB = 0; wvPxStrideB = 0
         ourYStrideB = 0; ourUvStrideB = 0
         p010Size = 0; frameCounter = 0L
+        rawImportFallback = EncodedRawImportFallback()
         lastQueuedPts = Long.MIN_VALUE; queues = 0
         copyMsAvg = 0f
         copyMsMax = 0f
@@ -623,8 +662,7 @@ class EncodedVideoRecorder(
             "Recorded LUT input must be S-Gamut3.Cine/S-Log3"
         }
         require(sessionLutIntensity.isFinite() && sessionLutIntensity in 0f..1f)
-        synchronized(resultLock) { captureResults.clear() }
-        lastResult = null
+        captureResults.clear()
         eosSeen = CountDownLatch(1)
     }
 
@@ -708,7 +746,7 @@ class EncodedVideoRecorder(
     /** Stage 3: Vulkan demosaic/grade pipelines and the take monitor. */
     private fun initGpuStages(crop: EncodedVideoLadder.Crop, effPreferMhc: Boolean) {
         // Vulkan pipelines (idempotent; shared device with the viewfinder).
-        val spv = appContext.assets.open("shaders/vf/vf_superpixel.spv").use { it.readBytes() }
+        val spv = appContext.assets.open("shaders/vf/vf_superpixel_linear.spv").use { it.readBytes() }
         val f16spv = appContext.assets.open("shaders/vf/vf_superpixel_f16.spv").use { it.readBytes() }
         val bakeLut = sessionRecordLut != null
         val yuvspv = appContext.assets.open(VfVideoGrade.recordAsset("shaders/vf/vf_gradeyuv.spv", bakeLut)).use { it.readBytes() }
@@ -729,6 +767,7 @@ class EncodedVideoRecorder(
         // to the superpixel path below.
         useFused = false
         fusedCount.set(0)
+        publicPhotoRcdFrames.set(0)
         fun tryInitFused(): Boolean {
             return try {
                 // fp32 even where f16 math is supported: measured on the
@@ -759,8 +798,23 @@ class EncodedVideoRecorder(
         } else {
             tryInitFused()
         }
+        if (validatePublicPhotoRcd && effPreferMhc && videoDemosaic == VideoDemosaic.MHC && useFused) {
+            photoRcdRenderer = try {
+                PhotoRcdRenderer.open(appContext, validatePublicPhotoRcdOptimized,validatePublicPhotoRcdResponseCache,validatePublicPhotoRcdTiled,validatePublicPhotoRcdImages,validatePhotoRcdRecordingCandidate,validatePhotoRcdBakedStages,validatePhotoRcdPackedCells,validatePhotoRcdDirectRaw,validatePhotoRcdRequirementsInput,validatePhotoRcdReconstructionScale,validatePhotoRcdNormalizeOnce,validatePhotoRcdSharedFinal,validatePhotoRcdTileLocal,validatePhotoRcdGpuImage)
+            } catch (e: Exception) {
+                Log.w(TAG, "public photo RCD unavailable; retaining ${if (useFused) "MHC" else "SUPER"} (${e.message})")
+                null
+            } catch (e: LinkageError) {
+                Log.w(TAG, "public photo RCD native unavailable; retaining MHC/SUPER", e)
+                null
+            }
+            if (photoRcdRenderer != null) {
+                Log.i(TAG, "public photo RCD validation: synchronous FP32 baseline + separate grade/P010; performance unqualified")
+            }
+        }
         Log.i(
             TAG, "demosaic path=" + when {
+                photoRcdRenderer != null -> "public-photo-rcd-validation"
                 useFused -> "fused-mhcyuv"
                 else -> "superpixel-fallback"
             }
@@ -826,7 +880,8 @@ class EncodedVideoRecorder(
                 if (writerAllowed) {
                     EncodedVideoProbe.preferredHwEncoderAt(cw, ch, fps) ?: forceName
                 } else null
-            val requestGpuWriter = false // Retired backend owned the GPU-writer path.
+            val requestGpuWriter = validatePublicPhotoRcd && validatePhotoRcdGpuWriter &&
+                writerAllowed && surfaceTry != null && EncodedVideoProbe.gpuWriterStorageLayoutSupported(surfaceTry)
             var attempt: MediaCodec? = null
             if (directTry != null && !(requestGpuWriter && writerAllowed)) {
                 val configured = MediaCodec.createByCodecName(directTry)
@@ -875,6 +930,7 @@ class EncodedVideoRecorder(
                         .setUsage(if (requestGpuWriter)
                             android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER or
                                 android.hardware.HardwareBuffer.USAGE_VIDEO_ENCODE or
+                                android.hardware.HardwareBuffer.USAGE_CPU_WRITE_OFTEN or
                                 android.hardware.HardwareBuffer.USAGE_CPU_READ_OFTEN
                             else EncodedVideoProbe.WRITER_P010_USAGE)
                         .build()
@@ -1016,6 +1072,16 @@ class EncodedVideoRecorder(
         Log.i(TAG, "output profile=${outputProfile.name} inputProfile=${sessionProfile.name} lutBaked=${sessionRecordLut != null} codec=$codecName input=$inputLabel " +
             "cs=${target.colorStandard} xfer=${target.colorTransfer} range=${target.colorRange}")
         encoder.start()
+        if (validatePublicPhotoRcd && validatePhotoRcdGpuWriter && writerMode &&
+            EncodedVideoProbe.gpuWriterStorageLayoutSupported(codecName)) {
+            gpuWriterMode = try {
+                PhotoRcdWriterProbe.verify(appContext,checkNotNull(imageWriter),width,height)
+            } catch (e: Exception) {
+                Log.w(TAG,"Independent encoder layout/content probe rejected GPU delivery; retaining plane copy",e)
+                false
+            }
+            Log.i(TAG,"Independent encoder content probe GPU writer=$gpuWriterMode ${width}x$height")
+        }
         if (previewEnabled) {
             val dims = VfRecordPreview.previewDims(width, height)
             previewWidth = dims[0]
@@ -1114,7 +1180,9 @@ class EncodedVideoRecorder(
                     session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
                 ) {
                     afTrace.onResult(result)
-                    val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    val frameResult = videoRoute.frameResult(result)
+                    val ts = frameResult.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    photoRcdTrace?.record(1, ts, result.frameNumber, result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0)
                     if (diagnoseFrameStages) {
                         val gap = ts - diagnosticCaptureTimestamp
                         if (diagnosticCaptureTimestamp != 0L && gap > 1_500_000_000L / fps)
@@ -1123,12 +1191,8 @@ class EncodedVideoRecorder(
                                 "exposureNs=${result.get(CaptureResult.SENSOR_EXPOSURE_TIME)}")
                         diagnosticCaptureTimestamp = ts
                     }
-                    synchronized(resultLock) {
-                        captureResults[ts] = result
-                        while (captureResults.size > 64) captureResults.pollFirstEntry()
-                        resultLock.notifyAll()
-                    }
-                    lastResult = result
+                    captureResults.offer(ts, frameResult)
+                    drainPendingResults()
                 }
             }
             repeatingCallback = callback
@@ -1202,6 +1266,7 @@ class EncodedVideoRecorder(
             previewFrames = previewCount.get(),
             profile = outputProfile.name,
             demosaic = when {
+                photoRcdRenderer != null -> "PHOTO_RCD_VALIDATION"
                 useFused -> "MHC"
                 else -> "SUPER"
             },
@@ -1242,7 +1307,7 @@ class EncodedVideoRecorder(
         when (control) {
             ManualControl.ISO -> videoManual = videoManual.copy(iso = value?.toInt())
             ManualControl.SHUTTER -> videoManual = videoManual.copy(shutterNanos = value)
-            ManualControl.WHITE_BALANCE -> videoManual = videoManual.copy(wbKelvin = value?.toInt())
+            ManualControl.WHITE_BALANCE -> videoManual = videoManual.copy(wbKelvin = value?.toInt(), wbPreset = 1)
             ManualControl.FOCUS_DISTANCE -> videoManual = videoManual.copy(
                 focusDiopters = value?.let { it.toFloat() / 1_000f },
             )
@@ -1250,6 +1315,11 @@ class EncodedVideoRecorder(
                 evIndex = value?.toInt(),
             )
         }
+        refreshVideoRequest()
+    }
+
+    fun setVideoWhiteBalance(kelvin: Int?, preset: Int) {
+        videoManual = videoManual.copy(wbKelvin = kelvin, wbPreset = preset)
         refreshVideoRequest()
     }
 
@@ -1304,6 +1374,8 @@ class EncodedVideoRecorder(
         VideoManualControls.applyToRequest(
             builder, c, frameFps, picked, videoManual, videoLocks,
             videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
+            streamMinFrameDurationNanos = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, requireNotNull(rawSize)) ?: 0L,
         )
         // Lens-shading map (LOG needs it; mirrors the stills path).
         try {
@@ -1564,7 +1636,7 @@ class EncodedVideoRecorder(
             waitFreeFrames = waitFree.get(),
             fallbackWaits = fallbackWaits.get(),
             fusedFrames = fusedCount.get(),
-            rcdFrames = 0, // Retired video RCD; retained for diagnostic compatibility.
+            rcdFrames = publicPhotoRcdFrames.get(), // New public-source route only; never the retired backend.
             shadedFrames = shadedCount.get(),
             cpuChainMsAvg = cpuChainMsAvg,
             cpuChainMsMax = cpuChainMsMax,
@@ -1623,7 +1695,7 @@ class EncodedVideoRecorder(
         val first = try { rd.acquireNextImage() } catch (_: Exception) { null } ?: return
         val second = try { rd.acquireNextImage() } catch (_: Exception) { null }
         if (second == null) {
-            processOne(rd, first)
+            queueForResult(rd, first)
             return
         }
         val backlog = ArrayList<Image>(8)
@@ -1647,8 +1719,38 @@ class EncodedVideoRecorder(
                 }
                 return
             }
-            processOne(rd, backlog[i])
+            queueForResult(rd, backlog[i])
             i++
+        }
+    }
+
+    /** Let result callbacks run before grading; never wait inside the camera callback. */
+    private fun queueForResult(rd: ImageReader, image: Image) {
+        if (pendingResultFrames.size >= 2) {
+            val oldest = pendingResultFrames.removeFirst()
+            processOne(oldest.reader, oldest.image)
+        }
+        val waitMs = (VideoResultWindow.maxAgeNanos(fps) + 999_999L) / 1_000_000L
+        pendingResultFrames.addLast(PendingResultFrame(rd, image, SystemClock.elapsedRealtime() + waitMs))
+        drainPendingResults()
+    }
+
+    private fun drainPendingResults() {
+        camHandler?.removeCallbacks(resultDrain)
+        while (pendingResultFrames.isNotEmpty()) {
+            val head = pendingResultFrames.first
+            if (!accepting) {
+                pendingResultFrames.removeFirst()
+                try { head.image.close() } catch (_: Exception) {}
+                continue
+            }
+            val remaining = head.deadlineMs - SystemClock.elapsedRealtime()
+            if (!captureResults.hasExact(head.image.timestamp) && remaining > 0) {
+                camHandler?.postDelayed(resultDrain, remaining)
+                return
+            }
+            pendingResultFrames.removeFirst()
+            processOne(head.reader, head.image)
         }
     }
 
@@ -1659,12 +1761,19 @@ class EncodedVideoRecorder(
         // overruns that silently drop the next camera image).
         val cycleStartNs = android.os.SystemClock.elapsedRealtimeNanos()
         acquired.incrementAndGet()
+        val result = awaitResult(image.timestamp)
+        if (result == null) {
+            // No trustworthy calibration: drop instead of baking unrelated/static colour.
+            if (graded.get() == 0) headDropped.incrementAndGet() else dropped.incrementAndGet()
+            try { image.close() } catch (_: Exception) {}
+            return
+        }
         RawImageOwnership.adopt(image, rd)
-        chars?.let { c -> recordingPeaking.offer(image, c,
+        if (!monitoringSuspended) chars?.let { c -> recordingPeaking.offer(image, c,
             focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking,
-            cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = lastResult) }
-        chars?.let { c -> recordingExposure.offer(image, c,
-            monitorCrop = cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = lastResult) }
+            cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = result) }
+        if (!monitoringSuspended) chars?.let { c -> recordingExposure.offer(image, c,
+            monitorCrop = cropRect?.let { intArrayOf(it.left, it.top, it.width, it.height) }, result = result) }
         val hb = try {
             image.hardwareBuffer
         } catch (_: Exception) {
@@ -1688,7 +1797,7 @@ class EncodedVideoRecorder(
         RawImageOwnership.release(image)
         var leaseTransferred = false
         try {
-            leaseTransferred = processFrame(image, hb, lease)
+            leaseTransferred = processFrame(image, hb, lease, result)
         } catch (e: Exception) {
             Log.w(TAG, "frame failed", e)
             frameErrors.incrementAndGet()
@@ -1714,6 +1823,7 @@ class EncodedVideoRecorder(
         image: Image,
         hb: android.hardware.HardwareBuffer,
         lease: AutoCloseable,
+        result: CaptureResult,
     ): Boolean {
         val c = chars ?: return false
         val plane = image.planes[0]
@@ -1722,23 +1832,12 @@ class EncodedVideoRecorder(
             return false
         }
         val ts = image.timestamp
+        photoRcdTrace?.record(2, ts)
         if (diagnoseFrameStages) {
             val gap = ts - diagnosticImageTimestamp
             if (diagnosticImageTimestamp != 0L && gap > 1_500_000_000L / fps)
                 Log.i(TAG, "Video image gapUs=${gap / 1000} acquired=${acquired.get()}")
             diagnosticImageTimestamp = ts
-        }
-        val result = awaitResult(ts)
-        if (shouldDropPreresult(result != null, graded.get(), acquired.get())) {
-            // Stream warming: no capture result yet, so this frame would
-            // bake probe WB + static CCM (+ no lens shading) while every
-            // later frame uses live values — a first-frame color pop.
-            // Drop; PTS stays contiguous (frameCounter only advances on
-            // graded frames) and the A/V origin arms below on the first
-            // recorded frame. Counted apart from mid-take drops: warm-up
-            // is expected (and timing-dependent), not a health signal.
-            headDropped.incrementAndGet()
-            return false
         }
         if (timeOriginNs == Long.MIN_VALUE) timeOriginNs = ts
         // Constant frame rate for the real-time paths: PTS comes from the submit-order frame index
@@ -1747,7 +1846,9 @@ class EncodedVideoRecorder(
         // into the file (variable frame rate); the grid keeps every sample
         // duration identical. Audio stays sensor-relative against the same
         // origin, so both timelines still start at 0 together.
-        val cfrUs = constantPtsUs(frameCounter, fps)
+        // RCD acceptance must retain real capture elapsed time. Missing frames
+        // remain timestamp gaps, never compressed onto an ideal CFR timeline.
+        val cfrUs = if (validatePublicPhotoRcd) (ts - timeOriginNs) / 1000L else constantPtsUs(frameCounter, fps)
         val (levels, white) = blackWhite(c, result)
         // Same result feeds WB/CCM and shading, so the three never disagree.
         val (shadeD, shadeG) = snapshotShading(result)
@@ -1841,10 +1942,11 @@ class EncodedVideoRecorder(
         }
         val f = FrameSubmit(
             hb, p010Buf, crop, pitch, levels, white, result, strides, slotIndex,
-            shadeD, shadeG, s, expW, expH,
+            shadeD, shadeG, s, expW, expH, image,
         )
         val fd: Int = try {
             when {
+                photoRcdRenderer != null -> submitPhotoRcd(image, f)
                 useFused -> submitFused(f)
                 else -> submitSuperpixel(f)
             } ?: run {
@@ -1864,6 +1966,7 @@ class EncodedVideoRecorder(
             return false
         }
         s.fd = fd
+        if (photoRcdRenderer != null) photoRcdTrace?.record(3, ts, result.frameNumber, cfrUs)
         s.ptsUs = cfrUs
         frameCounter++
         if (graded.incrementAndGet() == 1) {
@@ -1921,7 +2024,7 @@ class EncodedVideoRecorder(
         val pitch: Int,
         val levels: FloatArray,
         val white: Float,
-        val result: TotalCaptureResult?,
+        val result: CaptureResult?,
         val strides: IntArray,
         val slotIndex: Int,
         val shadeD: IntArray?,
@@ -1929,9 +2032,81 @@ class EncodedVideoRecorder(
         val s: Slot,
         val expW: Int,
         val expH: Int,
+        val image: Image,
     )
 
     /** processFrame branch: fused MHC+grade, one dispatch (the record path). Returns the final sync fd, or null on a counted drop. */
+    private fun submitPhotoRcd(image: Image, f: FrameSubmit): Int? {
+        val renderer = checkNotNull(photoRcdRenderer)
+        val renderStarted = SystemClock.elapsedRealtimeNanos()
+        val rgb = try {
+            renderer.render(image, f.slotIndex, f.crop.left, f.crop.top, f.crop.width, f.crop.height,
+                channels, f.levels, f.white, wbGains(f.result).copyOf(3), f.shadeD, f.shadeG)
+        } catch (e: Exception) {
+            if (e is PhotoRcdRenderer.IncompleteGrade) {
+                // The older grade can still own this slot's P010 destination.
+                // Neither fallback nor another submission may reuse it yet.
+                failRecording(e)
+                throw e
+            }
+            // Rendering failure occurs before any new grade submission. Fail
+            // visibly to the retained MHC path; never count that frame as RCD.
+            Log.w(TAG, "public photo RCD frame failed; MHC fallback", e)
+            renderer.close(); photoRcdRenderer = null
+            return submitFused(f)
+        }
+        val (dims, parameters) = VfVideoGrade.packGrade(intArrayOf(width, height),
+            wbGains(f.result), ccmMatrix(f.result, staticCcm), exposureEv, false, profile = sessionProfile)
+        photoRcdTrace?.record(6, image.timestamp, f.slotIndex.toLong(), SystemClock.elapsedRealtimeNanos() - renderStarted)
+        if (photoRcdTrace != null) renderer.frameCosts().forEachIndexed { i, ms -> photoRcdTrace?.record(10+i,image.timestamp,value=(ms*1e6).toLong()) }
+        val fd = VfVideoGrade.gradeYuvSubmitNative(rgb, f.p010Buf, dims,
+            intArrayOf(rgb.width, rgb.height), parameters, f.strides, f.slotIndex, 1)
+        if (fd < 0) {
+            if (fd == -20) error("P010 staging layout mismatch; aborting take")
+            Log.w(TAG, "public photo RCD grade failed ($fd)"); dropped.incrementAndGet(); return null
+        }
+        val deliveryFd = try {
+            renderer.gradeSubmitted(f.slotIndex, fd)
+        } catch (e: Exception) {
+            // Grade is already queued. The renderer retains its original fd,
+            // but no delivery job owns P010 yet. Stop rather than reuse this
+            // destination on a subsequent frame (e.g. fd exhaustion at dup).
+            failRecording(e)
+            throw e
+        }
+        publicPhotoRcdFrames.incrementAndGet()
+        return deliveryFd
+    }
+
+    /** Retry only a failed RAW import, before any dispatch owns the slot.
+     * jobDone was joined before entry, so its upload cannot still be read by GPU.
+     * Keep the plane pitch and full sensor origin: MHC samples beyond the crop.
+     */
+    private fun submitRaw(f: FrameSubmit, importFailure: Int = -VfVulkan.INPUT_IMPORT_FAILED, submit: (android.hardware.HardwareBuffer) -> Int): Int =
+        rawImportFallback.submit(importFailure, { submit(f.hb) }) {
+            if (f.s.rawUpload == null) Log.w(TAG, "RAW GPU import unavailable; using RAW plane upload slot=${f.slotIndex}")
+            val plane = f.image.planes[0]
+            val bytes = Math.multiplyExact(plane.rowStride, f.image.height)
+            val src = plane.buffer.duplicate().apply { rewind() }.slice()
+            val required = (f.image.height - 1L) * plane.rowStride + f.image.width * 2L
+            check(src.isDirect && src.remaining() >= required) { "RAW plane too short for upload" }
+            var staging = f.s.rawUpload
+            if (staging == null) {
+                staging = HardwareBufferRef(android.hardware.HardwareBuffer.create(
+                    bytes, 1, android.hardware.HardwareBuffer.BLOB, 1,
+                    android.hardware.HardwareBuffer.USAGE_CPU_WRITE_OFTEN or
+                        android.hardware.HardwareBuffer.USAGE_GPU_DATA_BUFFER))
+                f.s.rawUpload = staging
+            }
+            check(staging.buffer.width == bytes) { "RAW upload geometry changed during recording" }
+            // Camera2 may omit padding after the final row. Shaders only read active pixels.
+            check(VfEglImport.blitBytesToBlob(staging.buffer, src, minOf(bytes, src.remaining())) == 0) {
+                "RAW plane upload failed"
+            }
+            submit(staging.buffer)
+        }
+
+    /** Existing independent MHC fallback. */
     private fun submitFused(f: FrameSubmit): Int? {
         val hb = f.hb; val p010Buf = f.p010Buf; val crop = f.crop; val pitch = f.pitch
         val levels = f.levels; val white = f.white; val result = f.result; val strides = f.strides
@@ -1944,10 +2119,12 @@ class EncodedVideoRecorder(
             intArrayOf(width, height), wbGains(result), ccmMatrix(result, staticCcm), exposureEv, false,
             profile = sessionProfile
         )
-        val fd = VfVideoGrade.fusedYuvSubmitNative(
-            hb, p010Buf, miparams, mfparams, gidims, gfparams, strides, slotIndex,
-            shadeD, shadeG
-        )
+        val fd = submitRaw(f) { input ->
+            VfVideoGrade.fusedYuvSubmitNative(
+                input, p010Buf, miparams, mfparams, gidims, gfparams, strides, slotIndex,
+                shadeD, shadeG
+            )
+        }
         if (fd < 0) {
             if (fd == -20) error("P010 staging layout mismatch (see logcat); aborting take")
             Log.w(TAG, "fused submit failed ($fd); dropping frame")
@@ -1974,7 +2151,9 @@ class EncodedVideoRecorder(
         val (iparams, fparams) = VfVulkan.packParams(
             channels, crop.left, crop.top, expW, expH, sessionStep, pitch, levels, white
         )
-        val computeRc = VfVulkan.computeSubmitNative(hb, expBuf, iparams, fparams, slotIndex, shadeD, shadeG)
+        val computeRc = submitRaw(f, VfVulkan.INPUT_IMPORT_FAILED) { input ->
+            VfVulkan.computeSubmitNative(input, expBuf, iparams, fparams, slotIndex, shadeD, shadeG)
+        }
         if (computeRc != VfVulkan.OK) {
             Log.w(TAG, "compute submit failed (rc=$computeRc); dropping frame")
             dropped.incrementAndGet()
@@ -2009,7 +2188,7 @@ class EncodedVideoRecorder(
      */
     private fun submitPreview(s: Slot, slotIndex: Int,
         source: android.hardware.HardwareBuffer? = null, sourceStrides: IntArray? = null): Int {
-        if (!previewEnabled) return -1
+        if (!previewEnabled || monitoringSuspended) return -1
         // This frame's latch once replaced (counted down here if the
         // offer never takes it; countDown is idempotent, so a racing
         // view release double-counts harmlessly).
@@ -2129,6 +2308,7 @@ class EncodedVideoRecorder(
         /** True only when GPU completion has already been established. */
         val gpuComplete: Boolean = false,
         val writerImage: Image? = null,
+        var retainGpuResources: Boolean = false,
     )
 
     /** A filled codec input awaiting its ordered turn at queueInputBuffer. */
@@ -2151,6 +2331,8 @@ class EncodedVideoRecorder(
      * parallel, but queueInputBuffer retires strictly in submit order
      * (C2 silently discards out-of-order works). Guarded by [queueGate].
      */
+    // Java monitor methods are needed for ordered worker handoff.
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private val queueGate = java.lang.Object()
     private var nextQueueSeq = 0L
 
@@ -2187,10 +2369,10 @@ class EncodedVideoRecorder(
         // poison). The queue gate keeps the drain in submit order.
         copyPoisoned = true
         try {
-            copyThread?.join(10_000)
+            copyThread?.join(if(gpuWriterMode) 120_000 else 10_000)
         } catch (_: InterruptedException) {}
         try {
-            copyThread2?.join(10_000)
+            copyThread2?.join(if(gpuWriterMode) 120_000 else 10_000)
         } catch (_: InterruptedException) {}
         if (copyThread?.isAlive == true || copyThread2?.isAlive == true) {
             Log.w(TAG, "copy worker stuck; tail frames lost")
@@ -2226,7 +2408,7 @@ class EncodedVideoRecorder(
                 frameErrors.incrementAndGet()
                 ready = null
             } finally {
-                if (job.fd >= 0) {
+                if (job.fd >= 0 && !job.retainGpuResources) {
                     // Clear the slot before releasing its latch: teardown must
                     // never close a stale fd number later reused by the codec.
                     if (slots[job.slot].fd == job.fd) slots[job.slot].fd = -1
@@ -2234,8 +2416,8 @@ class EncodedVideoRecorder(
                 }
                 // Backstop: normally already released right after the
                 // fence wait in processCopyJob (idempotent).
-                try { job.rawLease.close() } catch (_: Exception) {}
-                if (job.writerImage != null && ready == null) {
+                if (!job.retainGpuResources) try { job.rawLease.close() } catch (_: Exception) {}
+                if (job.writerImage != null && ready == null && !job.retainGpuResources) {
                     try { job.writerImage.close() } catch (_: Exception) {}
                 }
                 if (!eightBitMode || ready == null) job.done.countDown()
@@ -2245,7 +2427,7 @@ class EncodedVideoRecorder(
                 try {
                     if (ready != null) queueReady(job, ready)
                 } finally {
-                    if (job.writerImage != null) job.p010.close()
+                    if (job.writerImage != null && !job.retainGpuResources) job.p010.close()
                     nextQueueSeq++
                     queueGate.notifyAll()
                     if (eightBitMode && ready != null) job.done.countDown()
@@ -2275,7 +2457,15 @@ class EncodedVideoRecorder(
         // arrives (submit-to-signal minus travel): sustained high here
         // means the GPU, not the CPU, is the bottleneck.
         val fenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
-        if (!VfEglImport.awaitSyncFd(job.fd, 100)) {
+        if (!VfEglImport.awaitSyncFd(job.fd, if(job.writerImage != null) 30_000 else 100)) {
+            if (job.writerImage != null) {
+                job.retainGpuResources=true
+                // Preserve this fd/RAW lease/image/AHB across teardown; a later
+                // take collects only jobs whose original fence proves completion.
+                synchronized(retainedWriterJobs) { retainedWriterJobs.add(job) }
+                if(slots[job.slot].fd==job.fd) slots[job.slot].fd=-1
+                failRecording(IllegalStateException("Encoder writer GPU completion unproved; resources retained"))
+            }
             Log.w(TAG, "copy job: GPU fence failed or timed out")
             return false
         }
@@ -2480,7 +2670,6 @@ class EncodedVideoRecorder(
             // present and release immediately after.
             if (!e.makeCurrent()) return false
             sdrEglCurrent = true
-            sdrEglThread = Thread.currentThread().id
             try {
                 val image = VfEglImport.createEGLImage(rgb8.buffer)
                 if (image == 0L) return false
@@ -2667,6 +2856,7 @@ class EncodedVideoRecorder(
      * encode-latency arm (the drain matches outputs by PTS).
      */
     private fun noteQueuedOk(job: CopyJob, queuedOk: Boolean) {
+        if (queuedOk) photoRcdTrace?.record(4, job.sensorTsNs, job.seq, job.ptsUs)
         if (queuedOk && stabTableArmed) stabFrameTs.add(job.sensorTsNs)
         if (queuedOk) {
             synchronized(queuedPtsLock) {
@@ -2689,7 +2879,7 @@ class EncodedVideoRecorder(
      * previous take state (usually null = unshaded frame 1, then armed).
      * Camera thread only.
      */
-    private fun snapshotShading(result: TotalCaptureResult?): Pair<IntArray?, ShortArray?> {
+    private fun snapshotShading(result: CaptureResult?): Pair<IntArray?, ShortArray?> {
         if (!correctShading || shadeHalApplied) return null to null
         val c = chars ?: return shadeDims to shadeGains
         val map = try {
@@ -2733,33 +2923,15 @@ class EncodedVideoRecorder(
         return shadeDims to shadeGains
     }
 
-    /**
-     * Non-blocking result lookup. WB/CCM drift slowly frame-to-frame, so a
-     * one-frame-old result is harmless for log — but blocking the camera
-     * thread on the exact timestamp caps throughput at ~7fps (measured).
-     * Exact hit preferred, previous frame's result as stale fallback, miss
-     * only when nothing exists yet (recording start).
-     */
-    private fun awaitResult(ts: Long): TotalCaptureResult? {
-        val hit = synchronized(resultLock) {
-            // Entries older than this frame can never match (timestamps are
-            // capture-ordered on one thread); purge so the map stays tiny.
-            val it = captureResults.entries.iterator()
-            while (it.hasNext()) {
-                if (it.next().key < ts) it.remove()
-            }
-            captureResults.remove(ts)
+    /** Exact result preferred; fallback is past-only and at most one frame / 50 ms old. */
+    private fun awaitResult(ts: Long): CaptureResult? {
+        val match = captureResults.match(ts, if (validatePublicPhotoRcd) 0L else VideoResultWindow.maxAgeNanos(fps))
+        if (match == null) resultMiss.incrementAndGet()
+        else if (!match.exact) {
+            staleResults.incrementAndGet()
+            degradedFrames.incrementAndGet()
         }
-        if (hit != null) {
-            lastResult = hit
-            return hit
-        }
-        // Opportunistic drain of already-arrived results keeps the map small
-        // and makes the next exact hit more likely; never waits.
-        val observer = lastResult
-        if (observer == null) resultMiss.incrementAndGet()
-        else staleResults.incrementAndGet()
-        return observer
+        return match?.value
     }
 
     // ---- drain thread -> muxer ----
@@ -2849,6 +3021,7 @@ class EncodedVideoRecorder(
                             muxWriteMsAvg = if (muxWriteMsAvg == 0f) writeMs
                             else muxWriteMsAvg * 0.9f + writeMs * 0.1f
                             outBufs.incrementAndGet()
+                            photoRcdTrace?.record(5, identity = info.presentationTimeUs, value = info.size.toLong())
                             outBytes.addAndGet(info.size.toLong())
                         }
                         // Encode latency: queue -> drained output by PTS.
@@ -2944,7 +3117,7 @@ class EncodedVideoRecorder(
         }, handler)
         check(latch.await(10, TimeUnit.SECONDS)) { "Camera open timed out" }
         if (opened == null) throw IllegalStateException("Camera open failed: $error")
-        return opened!!
+        return opened
     }
 
     private fun createSession(handler: Handler): CameraCaptureSession {
@@ -2991,7 +3164,7 @@ class EncodedVideoRecorder(
         if (config != null) device!!.createCaptureSession(config)
         check(latch.await(10, TimeUnit.SECONDS)) { "Session configure timed out" }
         if (configured == null) throw IllegalStateException("Session failed: $error")
-        return configured!!
+        return configured
     }
 
     private fun teardown() {
@@ -3024,6 +3197,10 @@ class EncodedVideoRecorder(
         reader = null
         try { camThread?.quitSafely() } catch (_: Exception) {}
         try { camThread?.join(5_000) } catch (_: InterruptedException) {}
+        while (pendingResultFrames.isNotEmpty()) {
+            try { pendingResultFrames.removeFirst().image.close() } catch (_: Exception) {}
+        }
+        captureResults.clear()
         camThread = null
         camHandler = null
     }
@@ -3051,12 +3228,16 @@ class EncodedVideoRecorder(
 
     /** teardown step 3: Held fences, slot buffers, then the shared Vulkan state. */
     private fun releaseGpuBuffers() {
+        try { photoRcdRenderer?.close() } catch (e: Exception) { Log.w(TAG, "photo RCD shutdown", e) }
+        photoRcdRenderer = null
         // Release any still-held fds (stop-flush failures).
         for (s in slots) {
             if (s.fd != -1) {
                 try { VfEglImport.closeSyncFd(s.fd) } catch (_: Exception) {}
                 s.fd = -1
             }
+            try { s.rawUpload?.close() } catch (_: Exception) {}
+            s.rawUpload = null
             try { s.export?.close() } catch (_: Exception) {}
             s.export = null
             try { s.p010?.close() } catch (_: Exception) {}
@@ -3113,6 +3294,7 @@ class EncodedVideoRecorder(
 
     companion object {
         private const val TAG = "EncodedVideo"
+        private val retainedWriterJobs = mutableListOf<CopyJob>()
 
         /**
          * Recorded backlog bound (frames): the callback collects what's
@@ -3122,26 +3304,6 @@ class EncodedVideoRecorder(
          * slots leave headroom for stalls mid-catch-up.
          */
         private const val QUEUE_DEPTH = 6
-
-        /**
-         * Pre-result drop budget (frames): result-less frames are dropped
-         * only before the first graded frame and only up to this many —
-         * the first capture callback lands within a frame or two of
-         * stream start, so this is generous; past it a HAL that never
-         * delivers results still records (with fallback colors) instead
-         * of wedging the take behind the no-frames watchdog.
-         */
-        internal const val MAX_PRERESULT_DROPS = 10
-
-        /**
-         * Pre-result gate: true while a result-less frame must be dropped
-         * instead of recorded with probe-WB fallback colors. [resultPresent]
-         * is false only before the first capture callback; [graded] is the
-         * take's graded count; [acquired] (1-based, current frame included)
-         * bounds the wait.
-         */
-        internal fun shouldDropPreresult(resultPresent: Boolean, graded: Int, acquired: Int): Boolean =
-            !resultPresent && graded == 0 && acquired <= MAX_PRERESULT_DROPS
 
         /** Recording-relative presentation time in microseconds. */
         fun relativeUs(sensorTsNs: Long, originNs: Long): Long = (sensorTsNs - originNs) / 1000L
@@ -3175,7 +3337,7 @@ class EncodedVideoRecorder(
          * for the demosaiced-by-average green). Falls back to the probe
          * gains when the result carries none.
          */
-        fun wbGains(result: TotalCaptureResult?): FloatArray {
+        fun wbGains(result: CaptureResult?): FloatArray {
             val g = result?.get(CaptureResult.COLOR_CORRECTION_GAINS)
             if (g == null) return VfVideoGrade.PROBE_GAINS.copyOf()
             return floatArrayOf(g.red, (g.greenEven + g.greenOdd) / 2f, g.blue, 1f)
@@ -3188,7 +3350,7 @@ class EncodedVideoRecorder(
          * Android applies WB gains first and the transform second, so a
          * constant matrix stays consistent with the dynamic gains.
          */
-        fun ccmMatrix(result: TotalCaptureResult?, staticFallback: FloatArray?): FloatArray {
+        fun ccmMatrix(result: CaptureResult?, staticFallback: FloatArray?): FloatArray {
             val live = result?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             if (live != null) return ccmFromTransform(live)
             return staticFallback?.copyOf() ?: ccmFromTransform(null)
@@ -3277,7 +3439,7 @@ class EncodedVideoRecorder(
         }
 
         /** Black levels (dynamic ?: static pattern) + white (dynamic ?: static). */
-        fun blackWhite(c: CameraCharacteristics, result: TotalCaptureResult?): Pair<FloatArray, Float> {
+        fun blackWhite(c: CameraCharacteristics, result: CaptureResult?): Pair<FloatArray, Float> {
             val black = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
             val dynamicBlack = result?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
             val white = (result?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)
@@ -3331,5 +3493,19 @@ internal class HardwareBufferRef(val buffer: android.hardware.HardwareBuffer) {
                     android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
             )
         )
+    }
+}
+
+/** Import errors happen before dispatch; other failures must never retry GPU work. */
+internal class EncodedRawImportFallback {
+    private var upload = false
+
+    fun submit(importFailure: Int, direct: () -> Int, uploaded: () -> Int): Int {
+        if (!upload) {
+            val rc = direct()
+            if (rc != importFailure) return rc
+            upload = true
+        }
+        return uploaded()
     }
 }

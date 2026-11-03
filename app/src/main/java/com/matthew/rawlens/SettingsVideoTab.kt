@@ -73,6 +73,13 @@ internal fun MainActivity.showVideoSettings(p: SettingsPage) {
     fun markActive(active: Button) = p.markActive(active)
     val videoTab = p.tabs[2]
         content.removeAllViews()
+        content.addView(sectionTitle("Recording monitor"))
+        content.addView(Button(this).apply {
+            fun refresh() { text = recordingTools.sleepSettingLabel() }
+            refresh()
+            setOnClickListener { recordingTools.chooseSleepDelay { refresh() } }
+        })
+        content.addView(sectionDesc("Preview sleep pauses monitoring and assist analysis during a take. Recording and audio continue. Tap the black preview to wake; the Preview button sleeps immediately. A/B focus: tap an empty mark to save, hold to replace, tap a saved mark to pull."))
         content.addView(sectionTitle("Encoded Video · recording format"))
         content.addView(Button(this).apply {
             isEnabled = !videoRecording

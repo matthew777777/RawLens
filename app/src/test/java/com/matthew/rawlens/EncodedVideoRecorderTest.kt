@@ -59,19 +59,6 @@ class EncodedVideoRecorderTest {
     }
 
     @Test
-    fun preresultGateDropsOnlyTheUnboundedHead() {
-        // Result-less head frames drop (no probe-WB color pop in the file).
-        assertTrue(EncodedVideoRecorder.shouldDropPreresult(false, 0, 1))
-        assertTrue(EncodedVideoRecorder.shouldDropPreresult(false, 0, EncodedVideoRecorder.MAX_PRERESULT_DROPS))
-        // Past the budget a result-less HAL still records (fallback colors).
-        assertTrue(!EncodedVideoRecorder.shouldDropPreresult(false, 0, EncodedVideoRecorder.MAX_PRERESULT_DROPS + 1))
-        // A present result (exact or stale) always records.
-        assertTrue(!EncodedVideoRecorder.shouldDropPreresult(true, 0, 1))
-        // Once grading, never gate (result-less cannot recur anyway).
-        assertTrue(!EncodedVideoRecorder.shouldDropPreresult(false, 1, 1))
-    }
-
-    @Test
     fun ccmFallbackIsIdentity() {
         assertArrayEquals(
             VfVideoGrade.IDENTITY_CCM, EncodedVideoRecorder.ccmMatrix(null, null), 0f

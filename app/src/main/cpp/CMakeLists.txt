@@ -1,6 +1,17 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(dngCreator)
 
+# Independently implemented FP32 public-source RCD validation route. No retired
+# backend or optional FP16 arithmetic. Tile-local product fusion is gated against
+# the separate public baseline. Shader source is generated
+# into assets by CompilePhotoRcdShader; source/attribution accompany that asset.
+add_library(rawLensPhotoRcd SHARED
+    photo_rcd/photo_rcd_engine.cpp photo_rcd/photo_rcd_jni.cpp)
+target_compile_features(rawLensPhotoRcd PRIVATE cxx_std_17)
+target_compile_options(rawLensPhotoRcd PRIVATE -fno-fast-math -ffp-contract=off)
+target_link_libraries(rawLensPhotoRcd PRIVATE android vulkan)
+target_link_options(rawLensPhotoRcd PRIVATE "-Wl,-z,max-page-size=16384")
+
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -538,3 +549,19 @@ find_program(GLSLC NAMES glslc
     REQUIRED)
 add_subdirectory(capture_sharpening/capture_sharpening)
 target_link_libraries(rawLensWavelet PRIVATE rawr::capture_sharpening)
+
+# Coherent video MHC green prepass: source -> pinned NDK SPIR-V -> native
+# constant. Building from source cannot silently reuse a stale blob.
+set(MHC_GREEN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../assets/shaders/vf/vf_mhc_green.comp")
+set(MHC_GREEN_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/mhc-green")
+file(MAKE_DIRECTORY "${MHC_GREEN_GENERATED}")
+add_custom_command(OUTPUT "${MHC_GREEN_GENERATED}/vf_mhc_green_spv.h"
+    COMMAND "${GLSLC}" --target-env=vulkan1.1 -fshader-stage=compute "${MHC_GREEN_SOURCE}" -o "${MHC_GREEN_GENERATED}/vf_mhc_green.spv"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/mhc-highlights/embed_spirv.py" "${MHC_GREEN_GENERATED}/vf_mhc_green.spv" "${MHC_GREEN_GENERATED}/vf_mhc_green_spv.h"
+    DEPENDS "${MHC_GREEN_SOURCE}" "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/mhc-highlights/embed_spirv.py"
+    VERBATIM)
+add_custom_target(rawLensMhcGreenSpirv DEPENDS "${MHC_GREEN_GENERATED}/vf_mhc_green_spv.h")
+foreach(_mhc_target rawLensVfEgl rawLensDualRaw)
+    add_dependencies(${_mhc_target} rawLensMhcGreenSpirv)
+    target_include_directories(${_mhc_target} PRIVATE "${MHC_GREEN_GENERATED}")
+endforeach()

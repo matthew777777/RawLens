@@ -9,6 +9,8 @@ internal fun MainActivity.setEncodedVideoMode(enabled: Boolean) {
         setStatus("STOP RECORDING TO SWITCH VIDEO FORMAT")
         return
     }
+    recordingTools.cancelFocusPull()
+    recordingTools.wakePreview()
     encodedVideoEnabled = enabled
     lensPreferences().edit().putBoolean(MainActivity.KEY_ENCODED_VIDEO, enabled).apply()
     if (isVideoMode) {

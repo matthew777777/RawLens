@@ -206,6 +206,11 @@ internal class RawVideoRecorder(
      * Set before [start] via [configureVideoManual]; live tweaks go through
      * [setVideoManualControl] which rebuilds the repeating request.
      */
+    /** Monitor offers, separate from frames committed to the take. */
+    @Volatile internal var previewFramesOffered: Int = 0
+        private set
+    @Volatile var monitoringSuspended: Boolean = false
+        set(value) { field = value; vfView?.setMonitoringSuspended(value) }
     @Volatile var focusPeakingEnabled: Boolean = false
     @Volatile var onFocusPeaking: ((FocusPeakingFrame?) -> Unit)? = null
     private val recordingPeaking = RecordingFocusPeaking()
@@ -254,7 +259,7 @@ internal class RawVideoRecorder(
     private var encodeThreads: Array<Thread?> = emptyArray()
     private var commitThread: Thread? = null
     private val resultLock = java.lang.Object()
-    private val captureResults = java.util.TreeMap<Long, TotalCaptureResult>()
+    private val captureResults = java.util.TreeMap<Long, CaptureResult>()
     private var audio: AudioPcmRecorder? = null
     private var motion: MotionRecorder? = null
     private var writerHandle: Long = 0L
@@ -332,7 +337,7 @@ internal class RawVideoRecorder(
     private val encodeQueue = ArrayBlockingQueue<Any>(QUEUE_CAP)
     private val audioQueue =
         ArrayBlockingQueue<AudioPcmRecorder.Chunk>(AUDIO_QUEUE_CAP)
-    private lateinit var payloadPool: ArrayBlockingQueue<java.nio.ByteBuffer>
+    private lateinit var payloadPool: LazyResourcePool<java.nio.ByteBuffer>
     private val reorder = java.util.TreeMap<Long, PendingFrame>()
     private val reorderLock = Object()
     private val workersAlive = AtomicInteger(0)
@@ -410,6 +415,7 @@ internal class RawVideoRecorder(
         takeCodec = compressionCodec
         outputFile = output
         acquired.set(0)
+        previewFramesOffered = 0
         encoded.set(0)
         encodeFailureStreak.set(0)
         dropped.set(0)
@@ -544,12 +550,12 @@ internal class RawVideoRecorder(
         val payloadBound =
             (ew.toLong() * boundH * 2 + ew * boundH / 4 + 65536)
                 .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        payloadPool = ArrayBlockingQueue(workers + 2)
-        repeat(workers + 2) {
-            payloadPool.offer(
-                java.nio.ByteBuffer.allocateDirect(payloadBound)
-                    .order(java.nio.ByteOrder.nativeOrder())
-            )
+        // Logs show only 1-2 payloads in flight on a healthy 30 fps take.
+        // Keep the full concurrency ceiling for slow storage/reordering, but
+        // do not allocate five full-resolution buffers before any are needed.
+        payloadPool = LazyResourcePool(workers + 2) {
+            java.nio.ByteBuffer.allocateDirect(payloadBound)
+                .order(java.nio.ByteOrder.nativeOrder())
         }
         workerCount = workers
         for (i in 0 until MAX_WORKERS) {
@@ -580,11 +586,12 @@ internal class RawVideoRecorder(
                 // release the camera ref after encoding; native close fires
                 // when the GPU lease (if any) also returns. Never blocks,
                 // never copies.
-                vfView?.let { view ->
+                vfView?.takeUnless { monitoringSuspended }?.let { view ->
                     try {
                         RawImageOwnership.adopt(img, rd)
                         try {
                             view.offer(img, chars, null)
+                            previewFramesOffered++
                         } catch (e: Exception) {
                             Log.w(TAG, "vf offer failed: ${e.message}")
                         }
@@ -592,13 +599,13 @@ internal class RawVideoRecorder(
                         Log.w(TAG, "vf adopt failed: ${e.message}")
                     }
                 }
-                if (onFocusPeaking != null) {
+                if (!monitoringSuspended && onFocusPeaking != null) {
                     RawImageOwnership.adopt(img, rd)
                     recordingPeaking.offer(img, chars,
                         focusPeakingEnabled && videoManual.focusDiopters != null, onFocusPeaking,
                         result = synchronized(resultLock) { captureResults[img.timestamp] })
                 }
-                if (rawExposureSettings.enabled) {
+                if (!monitoringSuspended && rawExposureSettings.enabled) {
                     RawImageOwnership.adopt(img, rd)
                     val meteredCrop = crop.resolve(img.width, img.height, binActive)
                     recordingExposure.offer(img, chars, result = synchronized(resultLock) { captureResults[img.timestamp] },
@@ -690,12 +697,15 @@ internal class RawVideoRecorder(
             }.build()
             val afTrace = AfTrace(TAG, "RAW Video")
             val callback = object : CameraCaptureSession.CaptureCallback() {
+                private val diagnostics = CameraResultDiagnostics(cameraId, "raw-video")
                 override fun onCaptureCompleted(session: CameraCaptureSession,
                     request: CaptureRequest, result: TotalCaptureResult) {
+                    diagnostics.result(request, result)
                     afTrace.onResult(result)
-                    val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    val frameResult = videoRoute.frameResult(result)
+                    val ts = frameResult.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
                     synchronized(resultLock) {
-                        captureResults[ts] = result
+                        captureResults[ts] = frameResult
                         while (captureResults.size > 64) captureResults.pollFirstEntry()
                         resultLock.notifyAll()
                     }
@@ -851,7 +861,7 @@ internal class RawVideoRecorder(
         when (control) {
             ManualControl.ISO -> videoManual = videoManual.copy(iso = value?.toInt())
             ManualControl.SHUTTER -> videoManual = videoManual.copy(shutterNanos = value)
-            ManualControl.WHITE_BALANCE -> videoManual = videoManual.copy(wbKelvin = value?.toInt())
+            ManualControl.WHITE_BALANCE -> videoManual = videoManual.copy(wbKelvin = value?.toInt(), wbPreset = 1)
             ManualControl.FOCUS_DISTANCE -> videoManual = videoManual.copy(
                 focusDiopters = value?.let { it.toFloat() / 1_000f },
             )
@@ -859,6 +869,11 @@ internal class RawVideoRecorder(
                 evIndex = value?.toInt(),
             )
         }
+        refreshVideoRequest()
+    }
+
+    fun setVideoWhiteBalance(kelvin: Int?, preset: Int) {
+        videoManual = videoManual.copy(wbKelvin = kelvin, wbPreset = preset)
         refreshVideoRequest()
     }
 
@@ -914,6 +929,8 @@ internal class RawVideoRecorder(
         VideoManualControls.applyToRequest(
             builder, chars, FPS, picked, videoManual, videoLocks,
             videoMeteredIso, videoMeteredShutterNanos, videoMeteredFocus,
+            streamMinFrameDurationNanos = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputMinFrameDuration(android.graphics.ImageFormat.RAW_SENSOR, frameSize) ?: 0L,
         )
     }
 
@@ -1503,6 +1520,20 @@ internal class RawVideoRecorder(
         } catch (_: Exception) {
         }
         reader = null
+        // Direct payload buffers otherwise remain strongly reachable until the
+        // stopped recorder itself is collected. Clear only once all users exited;
+        // a timed-out worker must retain its storage until it finishes.
+        if (encodeThreads.none { it?.isAlive == true } && commitThread?.isAlive != true) {
+            if (::payloadPool.isInitialized) payloadPool.clear()
+            synchronized(reorderLock) { reorder.clear() }
+            synchronized(resultLock) { captureResults.clear() }
+            while (true) {
+                val task = encodeQueue.poll() ?: break
+                if (task is EncodeTask) RawImageOwnership.release(task.image)
+            }
+            audioQueue.clear()
+            lastShading = null
+        }
         encodeThreads = emptyArray()
         commitThread = null
         shutdownStreams()

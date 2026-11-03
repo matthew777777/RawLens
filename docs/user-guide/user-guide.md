@@ -215,6 +215,24 @@ Tap the red shutter mode. Two recorders:
   LUT, intensity. The LUT shows while recording; tick *Bake selected LUT*
   to record Rec.709 (`_LUT709` file). The before-record viewfinder does not
   show the LUT.
+- **Recording health:** the video HUD reports OK, busy, warm/hot, recent frame
+  drops, low space, slow cadence, or stalled output. The drop total stays visible
+  after a recent-drop warning clears. Free space refers to the active recording
+  destination; unavailable storage readings are omitted.
+- **Preview sleep:** open Quick controls and tap Preview during a take to pause monitoring and show a
+  black preview; tap the black area or Wake to resume. Capture and sound continue.
+  Hold Preview in Quick controls, or open Settings → Video → Preview sleep, to select Never
+  (default), 5, 10, 30, or 60 seconds of inactivity. Recording controls and audio
+  meters stay available. Sleep pauses preview rendering and assist analysis.
+- **A/B rack focus:** tap the focus chip to open the focus slider and its A/B controls.
+  Set focus with the slider, then tap Set A or
+  Set B to remember that position. Tap a saved mark to pull to it; hold a mark to
+  replace it with the current position. Tap the duration to cycle 0.5, 1.2, 2.5,
+  and 5 seconds (also stops an active pull); hold it to clear both marks. Manual
+  focus adjustments, lens changes, recording start/stop, and leaving the app
+  cancel a pull. Marks reset on lens changes. Fixed-focus lenses disable these
+  controls. Pull duration describes the requested movement; actual lens response
+  depends on the device.
 - **Locks on record:** AE / AF / AWB lock or stay continuous during takes.
 - First video press asks for the microphone; deny = silent video.
 
@@ -253,3 +271,25 @@ unclipped; ZSL = pre-press memory; DIRECT = real, LOGICAL = virtual;
 gainmap = HDR layer; P3 = wide gamut; p99.5/p95 = brightest pixels;
 MFSR = multi-frame super-resolution; `.craw` = lossless RAW video;
 S-Log3 = Sony log curve; LUT = colour look-up table.
+
+
+### White balance: Kelvin and Camera2 presets
+
+Tap WB to adjust the active white balance control. Press and hold WB to switch
+between the Kelvin slider and the Camera2 preset picker, and hold again to switch
+back. Presets include Auto, Incandescent, Fluorescent, Warm fluorescent, Daylight,
+Cloudy daylight, Twilight and Shade when the selected camera advertises them.
+Video recording inherits the selected white balance; both Kelvin and presets
+can also be changed while recording.
+
+Kelvin values use the selected camera's color and calibration matrices, a
+Planckian white point, reciprocal-temperature interpolation and a matching color
+correction transform. The range is 2000–10000 K. Cameras without usable manual
+color calibration do not offer a Kelvin slider. Automatic readings are estimated
+correlated color temperatures (shown with `~`); colored light, LEDs, fluorescent
+lamps and manufacturer calibration errors can limit their accuracy. Presets use
+the manufacturer's settings and are not represented as exact Kelvin values.
+
+Implementation references: [Camera2 requests](https://developer.android.com/reference/android/hardware/camera2/CaptureRequest),
+[camera calibration matrices](https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics),
+and [Android AWB modes](https://source.android.com/docs/core/camera/camera3_3Amodes).

@@ -183,6 +183,7 @@ class MainActivity : Activity() {
     /** Photo mode before HDR+ pulled the camera into ZSL; restored on toggle-off. */
     private var modeBeforeHdrPlus: CaptureExposureMode? = null
     internal var videoRecorder: RawVideoRecorder? = null
+    internal val recordingTools by lazy { RecordingTools(this) }
     internal var videoRecording = false
     /** Encoded Video take state. Only one of [videoRecorder]/[encodedVideoRecorder] is ever active. */
     internal var encodedVideoRecorder: EncodedVideoRecorder? = null
@@ -488,7 +489,7 @@ class MainActivity : Activity() {
                     val shutterLabel = if (lock == ProgramLockMode.SHUTTER_LOCK) "S🔒" else "S"
                     isoControl.setTextIfChanged(controlText(isoLabel, iso.toString()))
                     shutterControl.setTextIfChanged(controlText(shutterLabel, formatShutter(shutterSpeed)))
-                    if (wb > 0) wbControl.setTextIfChanged(controlText("WB", "${wb}K"))
+                    wbControl.setTextIfChanged(controlText("WB", controller.whiteBalanceLabel()))
                     updateAutomaticPanelValue(iso, shutterSpeed, wb)
                 }
             },
@@ -737,8 +738,19 @@ class MainActivity : Activity() {
         isoControl.setOnLongClickListener { toggleProgramAxisLock(isIso = true); true }
         shutterControl.setOnClickListener { openShutterControl() }
         shutterControl.setOnLongClickListener { toggleProgramAxisLock(isIso = false); true }
-        wbControl.setOnClickListener { showManualControl(ManualControl.WHITE_BALANCE) }
-        focusControl.setOnClickListener { showManualControl(ManualControl.FOCUS_DISTANCE) }
+        wbControl.contentDescription = "White balance. Hold to switch Kelvin and presets."
+        wbControl.setOnClickListener { openWhiteBalanceControl() }
+        wbControl.setOnLongClickListener {
+            hideManualControl()
+            controller.toggleWhiteBalanceInterface { runOnUiThread { syncRecordingWhiteBalance(); openWhiteBalanceControl() } }
+            wbControl.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            true
+        }
+        recordingTools.bind()
+        focusControl.setOnClickListener {
+            recordingTools.cancelFocusPull()
+            showManualControl(ManualControl.FOCUS_DISTANCE)
+        }
         evControl.setOnClickListener { showManualControl(ManualControl.EXPOSURE_COMPENSATION) }
         flashControl.setOnClickListener {
             hideManualControl()
@@ -1091,7 +1103,7 @@ class MainActivity : Activity() {
         if (requestCode == RECORDING_TREE_REQUEST) {
             val tree = data?.data
             if (resultCode == RESULT_OK && tree != null) {
-                val saved = RecordingFolderAccess.save(this, tree, data?.flags ?: 0)
+                val saved = RecordingFolderAccess.save(this, tree, data.flags)
                 recordingFolderSettingsStatus?.text = recordingFolderText()
                 setStatus(if (saved) "RECORDING FOLDER SAVED" else "FOLDER ACCESS NOT SAVED")
             } else {
@@ -1170,6 +1182,7 @@ class MainActivity : Activity() {
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
         if (levelEnabled) levelTracker?.start()
         scheduleScope()
+        if (isVideoMode) scheduleVideoHud()
         applyPowerSave()
         registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
     }
@@ -1226,6 +1239,9 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         activityResumed = false
+        recordingTools.stop()
+        videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
+        videoDebugRunnable = null
         if (::lastCapture.isInitialized) lastCapture.stop()
         DeviceImpactProbe.setForeground(false)
         DeviceImpactProbe.stopFrameTracking(window)
@@ -1258,6 +1274,7 @@ class MainActivity : Activity() {
     }.getOrDefault("camera=? gps=?")
 
     override fun onDestroy() {
+        recordingTools.close()
         gpsProvider?.close()
         lensDiscovery.close()
         if (::lastCapture.isInitialized) lastCapture.release()
@@ -1288,6 +1305,7 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    private var wideCaptureViewport = false
     private var viewportLayoutPosted = false
 
     private fun positionViewfinderOverlays() {
@@ -1320,7 +1338,14 @@ class MainActivity : Activity() {
         // is opened so a cold start (including phone flat/upside-down) never gets measured first
         // as an unconstrained tall TextureView. Camera stream selection can then use stable 4:3
         // portrait geometry from its very first frame.
-        viewfinder.setAspectRatio(3, 4)
+        controller.onCaptureSurfaceSize = { width, height ->
+            val wide = kotlin.math.abs(width.toDouble() / height - 16.0 / 9.0) < 0.02
+            if (wideCaptureViewport != wide) {
+                wideCaptureViewport = wide
+                positionViewfinderOverlays()
+            }
+        }
+        viewfinder.setAspectRatio(if (wideCaptureViewport) 9 else 3, if (wideCaptureViewport) 16 else 4)
         // Reserve real screen space for controls.  The preview and its overlays are measured
         // only in the remaining viewport, so neither the image nor the thirds grid continues
         // behind ISO/shutter controls.
@@ -1359,11 +1384,11 @@ class MainActivity : Activity() {
                 // layout settles.
                 val topBarHeight = topBar.height.takeIf { it > 0 } ?: dp(72)
                 val initialBox = PhotoViewfinderBox.compute(
-                    root.width, root.height, topBarHeight, naturalPanelHeight, sealOverlap
+                    root.width, root.height, topBarHeight, naturalPanelHeight, sealOverlap, wideCaptureViewport
                 )
                 panelHeight = naturalPanelHeight + (initialBox?.spare ?: 0)
                 val box = PhotoViewfinderBox.compute(
-                    root.width, root.height, topBarHeight, panelHeight, sealOverlap
+                    root.width, root.height, topBarHeight, panelHeight, sealOverlap, wideCaptureViewport
                 )
                 if (box != null) {
                     width = box.width
@@ -1619,6 +1644,8 @@ class MainActivity : Activity() {
         findViewById(R.id.isoControl),
         findViewById(R.id.shutterControl), findViewById(R.id.wbControl),
         findViewById(R.id.focusControl), findViewById(R.id.evControl),
+        findViewById(R.id.focusMarkA), findViewById(R.id.focusMarkB),
+        findViewById(R.id.focusPullDuration), findViewById(R.id.recordingPreviewSleep),
         // dngInfo/sensorInfo intentionally fixed: wide thin singleLine labels
         // cannot fit 90-degree canvas-rotated text in their bounds and would
         // clip to invisible. Keep horizontal so they stay visible in the top bar.
@@ -1995,6 +2022,7 @@ class MainActivity : Activity() {
     private fun enterVideoMode() {
         lastPhotoExposureMode = captureExposureMode
         isVideoMode = true
+        recordingTools.show()
         Log.i(LOG_TAG, "video enter from $lastPhotoExposureMode")
         updateQuickControls()
         closeFloatingPanels()
@@ -2012,8 +2040,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.shutter).contentDescription =
             if (encodedVideoEnabled) "Record Encoded Video" else "Record RAW Video"
         refreshVideoButton()
-        rawBadge.text = if (encodedVideoEnabled) encodedVideoBadgeLabel() else "RAW Video"
-        rawBadge.setTextColor(getColor(R.color.danger))
+        refreshCaptureFormatControl()
         findViewById<TextView>(R.id.dngInfo)?.text =
             if (encodedVideoEnabled) "${encodedVideoProfile().hudLabel} • HEVC10" else "CRAW"
         refreshVideoSensorInfo()
@@ -2038,6 +2065,8 @@ class MainActivity : Activity() {
         }
         Log.i(LOG_TAG, "video exit to $lastPhotoExposureMode")
         isVideoMode = false
+        recordingTools.stop()
+        recordingTools.hide()
         // The video light never follows the user back into photo.
         if (videoTorchOn) {
             videoTorchOn = false
@@ -2104,6 +2133,7 @@ class MainActivity : Activity() {
 
     private fun startVideoRecording() {
         if (videoRecording) return
+        recordingTools.cancelFocusPull()
         // A stop drains async (up to ~15s); starting over it would race the
         // container close. LOUD reject, never silent: the user must see why
         // the tap did nothing.
@@ -2186,7 +2216,7 @@ class MainActivity : Activity() {
             onFocusPeaking = this@MainActivity::publishRecordingFocusPeaking
             rawExposureSettings = this@MainActivity.rawExposureSettings
             onRawExposureAssist = { frame -> runOnUiThread {
-                if (videoRecording) rawExposureOverlay.update(frame)
+                if (videoRecording && !recordingTools.isPreviewSleeping) rawExposureOverlay.update(frame)
             } }
             // Live RAW VF during the take: frames fan out to the same routed
             // engine visibility shows (Vulkan zero-copy lease) while the
@@ -2223,6 +2253,7 @@ class MainActivity : Activity() {
         recordingDestination = file
         rawExposureOverlay.clear()
         videoRecording = true
+        recordingTools.start()
         updateQuickControls()
         Log.i(
             LOG_TAG, "video start ${file.name} ${size.width}x${size.height} " +
@@ -2316,7 +2347,7 @@ class MainActivity : Activity() {
             onFocusPeaking = this@MainActivity::publishRecordingFocusPeaking
             rawExposureSettings = this@MainActivity.rawExposureSettings
             onRawExposureAssist = { frame -> runOnUiThread {
-                if (videoRecording) rawExposureOverlay.update(frame)
+                if (videoRecording && !recordingTools.isPreviewSleeping) rawExposureOverlay.update(frame)
             } }
             attachPreviewDisplay(findViewById(R.id.recordPreview))
         }
@@ -2344,6 +2375,7 @@ class MainActivity : Activity() {
         recordingDestination = file
         rawExposureOverlay.clear()
         videoRecording = true
+        recordingTools.start()
         updateQuickControls()
         lastEncodedVideoStats = null
         Log.i(LOG_TAG, "encoded-video start ${file.name} destination=${file.uri}")
@@ -2371,9 +2403,9 @@ class MainActivity : Activity() {
             if (!videoRecording) return@runOnUiThread
             val manual = videoRecorder?.videoManual?.focusDiopters != null ||
                 encodedVideoRecorder?.videoManual?.focusDiopters != null
-            val show = focusPeakingEnabled && manual && frame != null
+            val show = !recordingTools.isPreviewSleeping && focusPeakingEnabled && manual && frame != null
             setFocusPeakingVisible(show)
-            if (show && frame != null) {
+            if (show) {
                 val rects = FocusPeakingGeometry.monitorRects(frame,
                     focusPeakingOverlay.width, focusPeakingOverlay.height)
                 if (rects != null) {
@@ -2438,6 +2470,7 @@ class MainActivity : Activity() {
         val destination = recordingDestination
         if (!videoRecording) return
         rawExposureOverlay.clear()
+        recordingTools.stop()
         videoRecording = false
         setFocusPeakingVisible(false)
         updateQuickControls()
@@ -2476,6 +2509,7 @@ class MainActivity : Activity() {
         val destination = recordingDestination
         if (!videoRecording) return
         rawExposureOverlay.clear()
+        recordingTools.stop()
         videoRecording = false
         setFocusPeakingVisible(false)
         updateQuickControls()
@@ -2622,16 +2656,21 @@ class MainActivity : Activity() {
         }, "VideoExportRetry").start()
     }
 
+    internal fun recordingStorageProbe(): (() -> Long)? =
+        recordingDestination?.let { destination -> { destination.freeBytes() } }
+
     private fun scheduleVideoHud() {
         videoDebugRunnable?.let { videoDebugOverlay.removeCallbacks(it) }
         val tick = object : Runnable {
             override fun run() {
                 if (!isVideoMode) return
+                recordingTools.tick()
                 val encoded = encodedVideoRecorder
                 val rec = videoRecorder
                 when {
                     encoded != null -> {
                         val snap = encoded.snapshot()
+                        recordingTools.updateHealth(snap)
                         renderVideoStatsBox(
                             videoTimecode(snap.elapsedMs),
                             String.format(
@@ -2645,6 +2684,7 @@ class MainActivity : Activity() {
                     }
                     rec != null -> {
                         val snap = rec.snapshot()
+                        recordingTools.updateHealth(snap)
                         // Viewfinder proof, live: fps + GPU (Vulkan zero-copy) vs CPU.
                         val vf = controller.vfSnapshot()
                         renderVideoStatsBox(
@@ -2702,12 +2742,22 @@ class MainActivity : Activity() {
      */
     private fun renderVideoStatsBox(timecode: String, body: String) {
         val head = (if (videoRecording) "● " else "") + timecode
-        val full = "$head\n$body\n${audioMeterLine()}"
+        val health = recordingTools.healthLine.takeIf { videoRecording }
+        val full = listOfNotNull(head, health, body, audioMeterLine()).joinToString("\n")
         val spanned = SpannableString(full)
         spanned.setSpan(
             ForegroundColorSpan(getColor(if (videoRecording) R.color.danger else R.color.text_primary)),
             0, head.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
+        if (health != null) {
+            val color = when {
+                listOf("LOW SPACE", "NO OUTPUT", "HOT", "FRAME DROPS").any(health::contains) -> R.color.danger
+                listOf("BUSY", "WARM", "SLOW").any(health::contains) -> R.color.accent
+                else -> R.color.text_primary
+            }
+            spanned.setSpan(ForegroundColorSpan(getColor(color)), head.length + 1,
+                head.length + 1 + health.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
         videoDebugOverlay.text = spanned
     }
 
@@ -2836,7 +2886,7 @@ class MainActivity : Activity() {
 
     /** Blackmagic-style timecode HH:MM:SS:FF at the record rate. */
     private fun videoTimecode(elapsedMs: Long): String {
-        val fps = RawVideoRecorder.FPS
+        val fps = if (encodedVideoEnabled) encodedVideoFpsPref() else RawVideoRecorder.FPS
         val frames = elapsedMs * fps / 1000
         val ff = (frames % fps).toInt()
         val totalSeconds = frames / fps
@@ -3367,6 +3417,7 @@ class MainActivity : Activity() {
     }
 
     internal fun refreshCaptureFormatControl() {
+        refreshCaptureHeaderLayout()
         // Same authority rule as the info labels: in VIDEO mode the badge
         // follows the video format regardless of stills state updates.
         if (isVideoMode) {
@@ -3387,6 +3438,26 @@ class MainActivity : Activity() {
             "Capture format ${captureBadgeLabel()}. $zslLabel. Tap to change format. ${rawZslStatus.detail}"
         rawBadge.contentDescription = description
         rawStatusGroup.contentDescription = description
+    }
+
+    private fun refreshCaptureHeaderLayout() {
+        // Video needs flexible metadata space for its longer format badge.
+        // Photo keeps its short labels together at the trailing edge.
+        for (id in intArrayOf(R.id.captureHeaderMetadataRow, R.id.captureStatusRow)) {
+            findViewById<LinearLayout>(id).gravity =
+                Gravity.CENTER_VERTICAL or if (isVideoMode) Gravity.START else Gravity.END
+        }
+        for (id in intArrayOf(R.id.sensorInfo, R.id.dngInfo, R.id.featureTags, R.id.status)) {
+            val view = findViewById<View>(id)
+            val params = view.layoutParams as LinearLayout.LayoutParams
+            val width = if (isVideoMode) 0 else LinearLayout.LayoutParams.WRAP_CONTENT
+            val weight = if (isVideoMode) 1f else 0f
+            if (params.width != width || params.weight != weight) {
+                params.width = width
+                params.weight = weight
+                view.layoutParams = params
+            }
+        }
     }
 
     internal fun applyCaptureExposureMode(mode: CaptureExposureMode) {
@@ -3888,6 +3959,7 @@ class MainActivity : Activity() {
         }
         pendingSliderUpdate = null
         manualPanel.visibility = View.GONE
+        recordingTools.hide()
         activeManualControl = null
         activeProgramAxis = null
         updateOverlayStack()
@@ -3920,6 +3992,7 @@ class MainActivity : Activity() {
      * panel open and restart its idle timer. Quick-button and feature-tag taps pass through.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (isVideoMode && ev.actionMasked == MotionEvent.ACTION_DOWN) recordingTools.onInteraction()
         if (swallowQuickDismissGesture) {
             if (ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN) quickDismissAllowsSwipe = false
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {

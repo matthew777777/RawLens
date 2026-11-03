@@ -1,0 +1,68 @@
+{
+  "build": "passed",
+  "build_log": "/tmp/rawlens-recording-tools-isolated-build.log",
+  "unit_tests": [
+    {
+      "name": "com.matthew.rawlens.EncodedVideoRecorderTest",
+      "tests": "16",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.matthew.rawlens.RawVideoBinningTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.matthew.rawlens.RecordingHealthTest",
+      "tests": "5",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.matthew.rawlens.ScopeUiStateTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.matthew.rawlens.SettingsBackupTest",
+      "tests": "8",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.matthew.rawlens.VideoManualPolicyTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "device_test": "passed: RecordingToolsDeviceTest.recordingContinuesThroughSleepAndFocusPulls",
+  "test_package": "com.matthew.rawlens.recordingcheck",
+  "file_format_changes": false,
+  "device": "25080RABDG (lapis)",
+  "recording_continuity": {
+    "raw": {
+      "frames_before": 173,
+      "frames_after": 248,
+      "preview_before": 153,
+      "preview_after": 153
+    },
+    "encoded": {
+      "frames_before": 152,
+      "frames_after": 227,
+      "preview_before": 121,
+      "preview_after": 121
+    },
+    "sleep_interval_ms": 2500
+  },
+  "device_evidence": "/tmp/rawlens-recording-tools-device-final"
+}

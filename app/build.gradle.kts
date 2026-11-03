@@ -58,6 +58,47 @@ val compileSrpShaders by tasks.registering(CompileSrpShaders::class) {
     outputDirectory.set(layout.buildDirectory.dir("generated/srpspv"))
 }
 
+abstract class CompilePhotoRcdShader : DefaultTask() {
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val source: RegularFileProperty
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val compiler: RegularFileProperty
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val upstreamLicense: RegularFileProperty
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE)
+    abstract val notice: RegularFileProperty
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val generators: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+    @get:Inject abstract val execOperations: ExecOperations
+    @TaskAction fun compile() {
+        val root = outputDirectory.get().asFile
+        val shaders = root.resolve("shaders/photo_rcd").apply { mkdirs() }
+        execOperations.exec {
+            commandLine("python3", source.get().asFile.parentFile.resolve("write_app_shaders.py").absolutePath,
+                shaders.absolutePath, compiler.get().asFile.absolutePath)
+        }
+        val licenses = root.resolve("licenses/photo-rcd").apply { mkdirs() }
+        upstreamLicense.get().asFile.copyTo(licenses.resolve("GPL-3.0.txt"), overwrite = true)
+        notice.get().asFile.copyTo(licenses.resolve("NOTICE.txt"), overwrite = true)
+    }
+}
+val compilePhotoRcdShader by tasks.registering(CompilePhotoRcdShader::class) {
+    source.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/baseline.comp"))
+    upstreamLicense.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/upstream/RawTherapee/LICENSE"))
+    notice.set(rootProject.layout.projectDirectory.file("tools/photo-rcd/NOTICE.txt"))
+    generators.from("${rootProject.projectDir}/tools/photo-rcd/write_app_shaders.py",
+        "${rootProject.projectDir}/tools/photo-rcd/build_variants.py",
+        "${rootProject.projectDir}/tools/photo-rcd/requirements_input_shaders.py",
+        "${rootProject.projectDir}/tools/photo-rcd/tile_local.py",
+        "${rootProject.projectDir}/tools/photo-rcd/raw_cell_pack.comp",
+        "${rootProject.projectDir}/tools/photo-rcd/build_oracle.py",
+        "${rootProject.projectDir}/tools/photo-rcd/prepare_recording_candidate.py",
+        "${rootProject.projectDir}/tools/rcd-baseline/fast-20261026/vf_rcd_measured_200ms.comp")
+    compiler.set(compileSrpShaders.flatMap { it.compiler })
+    outputDirectory.set(layout.buildDirectory.dir("generated/photo-rcd-assets"))
+}
+
 // Version source of truth is version.properties. Every real assemble/bundle
 // invocation bumps patch (2.0.99 -> 2.1.0) and versionCode by one, before the
 // android block below consumes the values, so the APK just built already
@@ -262,6 +303,11 @@ android {
         // a smoke run per release instead.
         create("deviceTest") {
             initWith(getByName("release"))
+            // Isolated opt-in package for synthetic headless RCD correctness;
+            // installs cannot replace the user's normal camera application.
+            if (project.hasProperty("photoRcdHeadless")) applicationIdSuffix = ".rcdcheck"
+            if (project.hasProperty("mhcHeadless")) applicationIdSuffix = ".mhccheck"
+            if (project.hasProperty("recordingToolsAudit")) applicationIdSuffix = ".recordingcheck"
             isMinifyEnabled = false
             // Resource shrinking requires code shrinking (AGP enforces
             // the pair); tests keep the full resource set instead.
@@ -409,6 +455,9 @@ dependencies {
 // Register the producer with AGP so every variant's asset consumers wait
 // for shader compilation, including packaging and lint on clean builds.
 androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+        compilePhotoRcdShader, CompilePhotoRcdShader::outputDirectory
+    )
     variant.sources.assets?.addGeneratedSourceDirectory(
         compileSrpShaders, CompileSrpShaders::outputDirectory
     )

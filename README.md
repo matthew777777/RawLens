@@ -44,6 +44,9 @@ Current release: **2.0.0** (versionCode 2000). See [CHANGELOG.md](CHANGELOG.md) 
 - **Encoded Video** with Rec.709, Sony-exact **S-Gamut3.Cine / S-Log3**, HLG and ACES (BakingLab fit) profiles; MHC (default) or super-pixel demosaic; the former video RCD backend has been removed
 - User `.cube` LUT library (up to 16 imports, `LUT_3D_SIZE` 16–65) for S-Log3 monitoring during a take, optionally baked into the recording as SDR Rec.709 (`_LUT709`)
 - Locks on record (AE / AF / AWB), stabilization output, stereo dBFS meters
+- Recording health HUD with recent-drop, pressure, thermal, stalled-output and low-space warnings
+- Optional preview sleep during recording (tap to wake; manual or 5/10/30/60-second idle timer)
+- A/B rack-focus marks with 0.5/1.2/2.5/5-second pulls on manual-focus lenses
 
 ### Viewfinder and UI
 

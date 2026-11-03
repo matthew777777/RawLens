@@ -75,6 +75,19 @@
         android:layout_height="match_parent" />
 
     <TextView
+        android:id="@+id/recordingSleepOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:gravity="center"
+        android:text="Preview asleep · tap to wake"
+        android:textColor="@color/text_secondary"
+        android:textSize="14sp"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <TextView
         android:id="@+id/rawVfDebugOverlay"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -143,19 +156,20 @@
          capture info line lives in the bottom panel in both modes so the
          panel keeps one exact structure photo/video (no jump on switch).
          Hidden in video for full-bleed framing. -->
-    <LinearLayout android:id="@+id/topBar" android:clipChildren="false" android:clipToPadding="false" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@drawable/top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="16dp" android:paddingTop="16dp" android:paddingEnd="16dp" android:paddingBottom="10dp">
+    <LinearLayout android:id="@+id/topBar" android:clipChildren="true" android:clipToPadding="true" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:background="@drawable/top_bar" android:gravity="center_vertical" android:orientation="horizontal" android:minHeight="48dp" android:paddingStart="16dp" android:paddingTop="16dp" android:paddingEnd="16dp" android:paddingBottom="10dp">
         <com.matthew.rawlens.RotatingImageButton android:id="@+id/settingsButton" style="@style/TopBarButton" android:contentDescription="Settings" android:src="@drawable/ic_settings" />
-        <Space android:id="@+id/topSpacer" android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+        <Space android:id="@+id/topSpacer" android:layout_width="8dp" android:layout_height="1dp" />
 
         <LinearLayout
             android:id="@+id/rawStatusGroup"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
+            android:layout_weight="1"
             android:layout_height="wrap_content"
             android:minHeight="48dp"
             android:minWidth="96dp"
             android:clickable="true"
-            android:clipChildren="false"
-            android:clipToPadding="false"
+            android:clipChildren="true"
+            android:clipToPadding="true"
             android:focusable="true"
             android:gravity="end|center_vertical"
             android:orientation="vertical"
@@ -164,10 +178,11 @@
             android:paddingEnd="4dp"
             android:paddingBottom="4dp">
 
-            <!-- Capture format line: sensor + bit depth beside the format
-                 badge, one row so the top island never grows. -->
+            <!-- Bounded capture row: keep the format badge visible; secondary
+                 sensor/codec labels share the remaining width and ellipsize. -->
             <LinearLayout
-                android:layout_width="wrap_content"
+                android:id="@+id/captureHeaderMetadataRow"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end"
                 android:gravity="center_vertical"
@@ -175,7 +190,8 @@
 
                 <com.matthew.rawlens.RotatingTextView
                     android:id="@+id/sensorInfo"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
                     android:layout_height="wrap_content"
                     android:ellipsize="end"
                     android:letterSpacing="0.06"
@@ -187,7 +203,8 @@
 
                 <com.matthew.rawlens.RotatingTextView
                     android:id="@+id/dngInfo"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
                     android:ellipsize="end"
@@ -201,6 +218,8 @@
                 <TextView
                     android:id="@+id/rawBadge"
                     android:layout_width="wrap_content"
+                    android:maxWidth="180dp"
+                    android:ellipsize="end"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
                     android:background="@drawable/raw_badge"
@@ -216,7 +235,8 @@
                  timer) as gold tags; tap opens quick controls. Same line
                  as the status so the top island never grows. -->
             <LinearLayout
-                android:layout_width="wrap_content"
+                android:id="@+id/captureStatusRow"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end"
                 android:layout_marginTop="4dp"
@@ -225,7 +245,8 @@
 
             <TextView
                 android:id="@+id/featureTags"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:ellipsize="end"
@@ -251,7 +272,8 @@
 
             <TextView
                 android:id="@+id/status"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:gravity="end"
@@ -297,6 +319,11 @@
     <LinearLayout android:id="@+id/manualControlPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="16dp" android:layout_marginEnd="16dp" android:layout_marginBottom="248dp" android:background="@android:color/transparent" android:orientation="vertical" android:visibility="gone">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical|end" android:orientation="horizontal" android:paddingStart="4dp" android:paddingEnd="4dp" android:paddingBottom="8dp">
             <com.matthew.rawlens.RotatingButton android:id="@+id/manualLimitsButton" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_marginEnd="8dp" android:background="@drawable/control_chip" android:minWidth="0dp" android:minHeight="48dp" android:paddingStart="16dp" android:paddingEnd="16dp" android:text="LIMITS" android:textColor="@color/text_primary" android:textSize="10sp" android:textStyle="bold" android:visibility="gone" />
+            <LinearLayout android:id="@+id/recordingToolsRow" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:layout_marginEnd="8dp" android:orientation="horizontal" android:visibility="gone">
+                <com.matthew.rawlens.RotatingTextView android:id="@+id/focusMarkA" style="@style/ExposureControl" android:text="Set A" />
+                <com.matthew.rawlens.RotatingTextView android:id="@+id/focusMarkB" style="@style/ExposureControl" android:text="Set B" android:layout_marginStart="8dp" />
+                <com.matthew.rawlens.RotatingTextView android:id="@+id/focusPullDuration" style="@style/ExposureControl" android:text="1.2s" android:layout_marginStart="8dp" />
+            </LinearLayout>
             <com.matthew.rawlens.RotatingButton android:id="@+id/manualAutoButton" android:layout_width="wrap_content" android:layout_height="48dp" android:background="@drawable/control_chip_active" android:minWidth="88dp" android:minHeight="48dp" android:paddingStart="16dp" android:paddingEnd="16dp" android:text="AUTO" android:textColor="@color/accent_dark" android:textSize="10sp" android:textStyle="bold" />
         </LinearLayout>
         <com.matthew.rawlens.RuleSliderView android:id="@+id/manualControlSlider" android:layout_width="match_parent" android:layout_height="68dp" />
@@ -309,6 +336,7 @@
         </LinearLayout>
         <LinearLayout android:id="@+id/videoModeQuickRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal" android:visibility="gone">
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoModeQuick" style="@style/QuickControlTile" android:layout_marginStart="0dp" android:text="VIDEO" />
+            <com.matthew.rawlens.QuickControlTileView android:id="@+id/recordingPreviewSleep" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="PREVIEW" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/encodedVideoCropQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="CROP" android:visibility="gone" />
             <com.matthew.rawlens.QuickControlTileView android:id="@+id/videoBinningQuick" style="@style/QuickControlTile" android:layout_marginStart="8dp" android:text="BINNING" />
         </LinearLayout>
