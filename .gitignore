@@ -44,3 +44,8 @@ trajectory-*.json
 
 # R8 mappings archived per release (attach to each GitHub release)
 release-mappings/
+
+# Local Python caches and Codex session exports
+__pycache__/
+*.py[cod]
+codex-session-*.md
